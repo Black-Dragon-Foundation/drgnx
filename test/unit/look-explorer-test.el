@@ -42,7 +42,49 @@ section header shows its title in the heading face."
         (should-not (let ((case-fold-search nil)) (string-match-p "[A-Z][A-Z]" s))))
       (let* ((header (drgnx-wb-section-header "Files")) (i (string-search "Files" header)))
         (should i)
-        (should (memq 'drgnx-ui-heading (ensure-list (get-text-property i 'face header))))))))
+        (should (memq 'drgnx-wb-section (ensure-list (get-text-property i 'face header))))))))
+
+(ert-deftest drgnx-look-explorer/a-section-header-is-a-chevron-and-its-title ()
+  "Pattern D: window-dark.html `.sec': a section's header is its chevron and its title, nothing else: no close button
+\(Close Sidebar is on the island's ⋯) and no text buttons."
+  (dolist (title (list "Files" (drgnx-buffers--current-title)))
+    (let ((header (drgnx-wb-section-header title)))
+      (should (string-search (drgnx-face-glyph 'chevron-down) header))
+      (should-not (string-search (drgnx-face-glyph 'close) header))
+      (should (equal (list (drgnx-face-glyph 'chevron-down) title)
+                     (split-string (substring-no-properties header) " " t))))))
+
+(ert-deftest drgnx-look-explorer/the-island-header-names-the-folder ()
+  "Pattern D: window-dark.html `.ph': the sidebar is one island whose top window carries the header in its tab line:
+the first root's name, then New File, Find and ⋯; no other dock window has one.  ⋯'s menu holds Close Sidebar."
+  (drgnx-explorer-edge--with root
+    (drgnx-buffers-setup)
+    (drgnx-wb-show-sidebar)
+    (let* ((windows (drgnx-wb--dock-windows)) (head (window-parameter (car windows) 'tab-line-format))
+           (actions nil))
+      (should (stringp head))
+      (should (string-search (file-name-nondirectory (directory-file-name root)) head))
+      (dotimes (i (length head))
+        (when-let* ((a (get-text-property i 'drgnx-island-action head))) (cl-pushnew a actions :test #'equal)))
+      (should (equal '((explorer . explorer-new-file) (explorer . explorer-find) menu) (nreverse actions)))
+      (dolist (w (cdr windows)) (should-not (stringp (window-parameter w 'tab-line-format))))
+      (should (rassq 'toggle-sidebar drgnx-wb-island-menu))
+      (should (equal "Close Sidebar" (car (rassq 'toggle-sidebar drgnx-wb-island-menu))))
+      ;; a new root renames it
+      (let ((other (file-name-as-directory (make-temp-file "drgnx-island" t))))
+        (unwind-protect
+            (progn (drgnx-explorer-set-roots (list other))
+                   (should (string-search (file-name-nondirectory (directory-file-name other))
+                                          (window-parameter (car (drgnx-wb--dock-windows)) 'tab-line-format))))
+          (delete-directory other t))))))
+
+(ert-deftest drgnx-look-explorer/the-dock-is-on-the-panel-surface ()
+  "Pattern D: window-dark.html `.card.ex' is `--panel', not the editor's colour: the dock's buffers draw `default' on
+`drgnx-surface-panel'."
+  (drgnx-explorer-edge--with root
+    (drgnx-buffers-setup)
+    (dolist (buf (list (drgnx-explorer--buffer) (drgnx-buffers--buffer)))
+      (should (memq 'drgnx-surface-panel (flatten-tree (buffer-local-value 'face-remapping-alist buf)))))))
 
 (ert-deftest drgnx-look-explorer/marks-coloured-and-pixel-aligned ()
   "Pattern D: a modified file's mark is `M' in the warning status face, behind a spacer placed in columns worked out
@@ -173,8 +215,8 @@ the right edge; an ignored file is the one whose name changes (dimmed, `.row.dim
                                                         'face)))))))))
 
 (ert-deftest drgnx-look-explorer/the-icon-stands-off-its-name ()
-  "Pattern D, window-dark.html `.row' (gap 6px): where icons are images, a row's icon is followed by 6 logical
-pixels of room before the name."
+  "Pattern D, window-dark.html `.row' (gap 6px): where icons are images, a row's icon has 6 logical pixels of room
+either side (the image's own margin: an image inside a display string is not drawn)."
   (drgnx-explorer-edge--with root
     (cl-letf (((symbol-function 'drgnx-look-icon)
                (lambda (name &rest _) (propertize "i" 'display `(image :type svg :data "<svg/>" :name ,name)))))
@@ -183,9 +225,20 @@ pixels of room before the name."
           (with-current-buffer (drgnx-explorer--buffer)
             (let* ((name (drgnx-look-explorer-test--at row "README"))
                    (icon (get-text-property (1- name) 'display)))
-              (should (stringp icon))
-              (should (eq 'image (car-safe (get-text-property 0 'display icon))))
-              (should (equal `(space :width (,(drgnx-px 6))) (get-text-property 1 'display icon))))))))))
+              (should (eq 'image (car-safe icon)))
+              (should (equal (cons (drgnx-px 6) 0) (plist-get (cdr icon) :margin))))))))))
+
+(ert-deftest drgnx-look-explorer/the-hidden-root-row-draws-no-icon ()
+  "Pattern D: the one root's row is invisible, and Emacs draws a `display' image even on invisible text, so the row
+gets no chevron or icon (they showed before the first folder's own)."
+  (drgnx-explorer-edge--with root
+    (cl-letf (((symbol-function 'drgnx-look-icon)
+               (lambda (name &rest _) (propertize "i" 'display `(image :type svg :data "<svg/>" :name ,name)))))
+      (drgnx-look-explorer-test--as 'gui nil
+        (with-current-buffer (drgnx-explorer--buffer)
+          (drgnx-explorer--fontify (point-min) (point-max))
+          (should (invisible-p (point-min)))
+          (should-not (text-property-not-all (point-min) (pos-eol 1) 'display nil)))))))
 
 (ert-deftest drgnx-look-explorer/one-root-has-no-root-row ()
   "Pattern D, window-dark.html: with one root the tree starts at its entries (the island's header names the

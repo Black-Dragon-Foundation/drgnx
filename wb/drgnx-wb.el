@@ -69,29 +69,127 @@ so the whole row is the bar's colour and not the header line's.  FILLED: STRING 
   (let ((button (apply #'drgnx-wb-close-button command help props)))
     (drgnx-wb-bar (concat title (propertize " " 'display `(space :align-to (- right ,(1+ (string-width button))))) " " button) t)))
 
-(defun drgnx-wb--close-dock-click (event)
-  "A click on a dock section's ✕: hide the sidebar."
-  (interactive "e")
-  (ignore event)
-  (drgnx-wb-hide-sidebar))
+(defface drgnx-wb-section '((t :inherit (drgnx-text-muted drgnx-ui-caption) :weight semibold))
+  "A dock section's title (window-dark.html `.sec': 12 px, semibold, muted)." :group 'drgnx)
 
 (defun drgnx-wb-section-header (title)
-  "A dock section's header: the ✕ that hides the sidebar, then TITLE (nil: a section without one, such as a pane
-kind defined with no `:title').
-The ✕ comes first: a title with buttons (Buffers) fills the dock's width, so one at the end would be clipped.  A
-space before it keeps it off the frame's edge."
-  (drgnx-wb-bar (concat " " (drgnx-wb-close-button #'drgnx-wb--close-dock-click "Close sidebar")
-                        " " (let ((chevron (drgnx-look-icon 'chevron-down 'drgnx-ui-heading)))
-                              (if (string-empty-p chevron) "" (concat chevron " ")))
-                        (drgnx-wb--heading (string-trim-left (or title ""))))))
+  "A dock section's header, window-dark.html `.sec': the chevron and TITLE (nil: a section without one, such as a
+pane kind defined with no `:title') in `drgnx-wb-section', on the island's surface.  Hiding the sidebar is on the
+island header's ⋯ (`drgnx-wb-island-menu')."
+  (let ((room (lambda (px) (if (display-graphic-p) (propertize " " 'display `(space :width (,(drgnx-px px))))  " "))))
+    (drgnx-wb-bar (concat (funcall room 6)
+                          (let ((chevron (drgnx-look-icon 'chevron-down 'drgnx-wb-section 14)))
+                            (if (string-empty-p chevron) "" (concat chevron (funcall room 4))))
+                          (drgnx-wb--heading (string-trim-left (or title "")))))))
 
 (defun drgnx-wb--heading (title)
-  "TITLE in the heading face, keeping the faces and properties it has (the buttons of a title with some)."
+  "TITLE in the section face, keeping the faces and properties it has."
   (let ((s (copy-sequence title)))
-    (add-face-text-property 0 (length s) 'drgnx-ui-heading t s)
+    (add-face-text-property 0 (length s) 'drgnx-wb-section t s)
     s))
 
+;;;; The island header: the sidebar's name and its buttons (window-dark.html `.ph')
+
+(defface drgnx-wb-island-title '((t :inherit drgnx-ui-heading))
+  "The sidebar island's name (window-dark.html `.ph b': 13 px, semibold, the text colour)." :group 'drgnx)
+(defface drgnx-wb-island-control '((t :inherit drgnx-text-subtle))
+  "The island header's icon buttons (window-dark.html `.ib')." :group 'drgnx)
+
+(defvar drgnx-wb-island-buttons
+  '((plus "New File…" explorer . explorer-new-file) (search "Find in Explorer…" explorer . explorer-find))
+  "The island header's buttons before its ⋯: (ICON HELP SECTION . COMMAND), COMMAND a registry id run with SECTION's
+window selected.")
+
+(defvar drgnx-wb-island-menu
+  '(("Close Sidebar" . toggle-sidebar) ("Save All" . save-all) ("Close Saved Editors" . close-saved)
+    ("Close All Editors" . close-all))
+  "The island header's ⋯ menu: (LABEL . COMMAND), COMMAND a registry id.")
+
+(defun drgnx-wb--island-title ()
+  "The island's name: the Explorer's first folder, or Explorer."
+  (if-let* ((root (car (and (fboundp 'drgnx-explorer-roots) (drgnx-explorer-roots)))))
+      (file-name-nondirectory (directory-file-name root))
+    "Explorer"))
+
+(defvar drgnx-wb--island-map
+  (let ((m (make-sparse-keymap))) (define-key m [tab-line mouse-1] #'drgnx-wb-island-click) m)
+  "The keymap of the island header's buttons.")
+
+(defun drgnx-wb--island-button (icon help action graphic)
+  "ICON as the island header's button that runs ACTION (see `drgnx-wb-island-click'), with HELP; GRAPHIC: on a
+graphical frame, 4 px of room either side (a 24 px button around a 16 px icon, `.ib')."
+  (let ((pad (if graphic (propertize " " 'display `(space :width (,(drgnx-px 4)))) "")))
+    (propertize (concat pad (drgnx-look-icon icon 'drgnx-wb-island-control) pad)
+                'drgnx-island-action action 'help-echo help 'mouse-face 'drgnx-hover
+                'local-map drgnx-wb--island-map 'pointer 'hand)))
+
+(defun drgnx-wb-island-header (&optional frame)
+  "The sidebar island's header on FRAME, window-dark.html `.ph': 34 px tall, the name 12 px in, the buttons New
+File, Find and ⋯ at the right, 8 px from the edge.  Built when the sidebar shows or its folder changes, never while
+drawing."
+  (let* ((graphic (display-graphic-p frame))
+         (gap (if graphic (propertize " " 'display `(space :width (,(drgnx-px 6 frame)))) " "))
+         (buttons (mapconcat (lambda (b) (drgnx-wb--island-button (nth 0 b) (nth 1 b) (nthcdr 2 b) graphic))
+                             drgnx-wb-island-buttons gap))
+         (all (concat buttons gap (drgnx-wb--island-button 'ellipsis "More actions" 'menu graphic)))
+         (end (if graphic (list (drgnx-px 8 frame)) 1))
+         (width (if graphic
+                    (list (+ (* 3 (drgnx-px 24 frame)) (* 2 (drgnx-px 6 frame)) (car end)))
+                  (+ (string-width all) 1)))
+         (lead (if graphic
+                   (let* ((height (drgnx-px 34 frame))
+                          (extent (drgnx-pixels-font-extent 'drgnx-wb-island-title frame))
+                          (below (and extent (+ (cdr extent) (/ (- height (car extent) (cdr extent)) 2)))))
+                     (propertize " " 'display `(space :width (,(drgnx-px 12 frame))
+                                                      ,@(and extent `(:height (,height)
+                                                                              :ascent ,(min 100 (max 0 (ceiling (* 100.0 (- height below)) height))))))))
+                 " ")))
+    (drgnx-wb-bar (concat lead (propertize (drgnx-wb--island-title) 'face 'drgnx-wb-island-title)
+                          (propertize " " 'display `(space :align-to (- right ,width)))
+                          all
+                          (propertize " " 'display `(space :align-to (- right ,end))))
+                  t)))
+
+(defun drgnx-wb-island-click (event)
+  "A click on a button of the sidebar's island header: run what it stands for."
+  (interactive "e")
+  (when-let* ((s (posn-string (event-start event)))
+              (action (get-text-property (cdr s) 'drgnx-island-action (car s))))
+    (if (eq action 'menu)
+        (drgnx-wb-island-show-menu event)
+      (drgnx-wb-focus-section (car action))
+      (drgnx-ui--run (cdr action)))))
+
+(defun drgnx-wb-island-show-menu (&optional event)
+  "The island header's ⋯ menu (`drgnx-wb-island-menu') at EVENT, or at point; run the chosen command."
+  (when-let* ((choice (x-popup-menu (or event t) (list "Sidebar" (cons "" drgnx-wb-island-menu)))))
+    (drgnx-ui--run choice)))
+
+(defun drgnx-wb-island-refresh (&optional frame)
+  "Put the island header on the top window of FRAME's dock (and on no other dock window): its tab line, and the
+window parameter `drgnx-wb-island' the chrome reads.  Call it when the sidebar shows or the Explorer's folder changes."
+  (let ((windows (drgnx-wb--dock-windows frame)))
+    (when windows
+      (let ((head (drgnx-wb-island-header (window-frame (car windows)))))
+        (dolist (w windows)
+          (let ((value (and (eq w (car windows)) head)))
+            (set-window-parameter w 'drgnx-wb-island value)
+            (set-window-parameter w 'tab-line-format (or value 'none))))))))
+
 ;;;; Rows: the UI font, git marks at the right edge, the selected row, the hover-revealed ⋯
+
+(defvar drgnx-wb--icon-gaps (make-hash-table :test #'equal)
+  "(IMAGE . PX) → the icon IMAGE with PX pixels of margin, shared by the rows.  Bounded: cleared past 64 entries (a
+scale or icon change adds a set).")
+
+(defun drgnx-wb-icon-gap (image)
+  "IMAGE (an icon's display spec) with window-dark.html `.row' gap 6px either side, as the image's own margin (an
+image inside a display string is not drawn): made once per icon and scale (the Explorer's and the Buffers panel's
+rows)."
+  (let ((key (cons image (drgnx-px 6))))
+    (or (gethash key drgnx-wb--icon-gaps)
+        (progn (when (> (hash-table-count drgnx-wb--icon-gaps) 64) (clrhash drgnx-wb--icon-gaps))
+               (puthash key (append image (list :margin (cons (cdr key) 0))) drgnx-wb--icon-gaps)))))
 
 (defconst drgnx-wb--control "⋯" "A row's menu control; `drgnx-look-hover-control' hides it until the row is hovered.")
 
@@ -132,9 +230,11 @@ no gap or padding."
     ((or 'deleted 'conflict) 'drgnx-status-fail)
     (_ 'drgnx-status-info)))
 
-(defun drgnx-wb-row-tail (mark face shown)
-  "The string at a row's right edge: MARK (a string or nil) in FACE and the code face, then the ⋯ control, SHOWN in
-its real face or hidden until the row is hovered.  Both are placed from the window's right edge, so the marks of
+(defun drgnx-wb-row-tail (mark face shown &optional control)
+  "The string at a row's right edge: MARK (a string or nil) in FACE and the code face, then the control, SHOWN in
+its real face or hidden until the row is hovered.  CONTROL is the ⋯ by default; a CONTROL with a face of its own (the
+Buffers panel's ● of a modified file) is always shown in it.  The control carries `drgnx-row-control', so a click
+can tell it from the row.  Both are placed from the window's right edge, so the marks of
 all rows line up; the whole string carries the row's mouse face.
 The places are in columns (the measured pixels over the cell), not pixels: the overlay is painted once into a
 buffer that graphical and terminal frames may both show, and each frame reads a column as its own cell, where a
@@ -149,16 +249,19 @@ painted it."
     (propertize (concat (propertize " " 'display `(space :align-to (- right ,at-mark)))
                         (if mark (propertize mark 'face (list face 'drgnx-code-small)) "")
                         (propertize " " 'display `(space :align-to (- right ,at-dots)))
-                        (drgnx-look-hover-control drgnx-wb--control shown)
+                        (let ((c (or control drgnx-wb--control)))
+                          (propertize (if (get-text-property 0 'face c) c (drgnx-look-hover-control c shown))
+                                      'drgnx-row-control t))
                         (propertize " " 'display `(space :align-to (- right ,end))))
                 'mouse-face 'drgnx-hover-row)))
 
-(defun drgnx-wb-row-tail-overlay (eol mark face shown)
-  "Put the tail (see `drgnx-wb-row-tail') of the row ending at EOL in an overlay that remembers MARK and FACE."
+(defun drgnx-wb-row-tail-overlay (eol mark face shown &optional control)
+  "Put the tail (see `drgnx-wb-row-tail') of the row ending at EOL in an overlay that remembers MARK, FACE and
+CONTROL."
   (let ((o (make-overlay eol eol)))
     (overlay-put o 'drgnx-git t)
-    (overlay-put o 'drgnx-row-tail (cons mark face))
-    (overlay-put o 'after-string (drgnx-wb-row-tail mark face shown))
+    (overlay-put o 'drgnx-row-tail (list mark face control))
+    (overlay-put o 'after-string (drgnx-wb-row-tail mark face shown control))
     o))
 
 (defvar-local drgnx-wb--selected-overlay nil "The overlay on the selected row (point's).")
@@ -167,8 +270,8 @@ painted it."
 (defun drgnx-wb--set-tail-shown (o shown)
   "Redraw the tail overlay O with its ⋯ SHOWN or hidden."
   (when (overlayp o)
-    (pcase-let ((`(,mark . ,face) (overlay-get o 'drgnx-row-tail)))
-      (overlay-put o 'after-string (drgnx-wb-row-tail mark face shown)))))
+    (pcase-let ((`(,mark ,face ,control) (overlay-get o 'drgnx-row-tail)))
+      (overlay-put o 'after-string (drgnx-wb-row-tail mark face shown control)))))
 
 (defun drgnx-wb-selection-sync ()
   "Mark point's row as the selected one: `drgnx-selected' with the focus ring while this buffer's window is the
@@ -209,7 +312,8 @@ change, a scale change and the buffer's first showing on a graphical frame fit t
 The remap costs a font spec copy at every face lookup of the buffer; the UI face put under the rows' own faces as text
 properties instead was measured dearer still (the perf lab's explorer allocation p50: 9984 objects, 7913 with the
 remap)."
-  (face-remap-add-relative 'default 'drgnx-ui-text)
+  ;; the island's surface (window-dark.html `.card.ex': `--panel'), under the UI font
+  (face-remap-add-relative 'default 'drgnx-ui-text 'drgnx-surface-panel)
   (setq-local drgnx-wb--selected-overlay nil drgnx-wb--tail-shown nil drgnx-wb--rows-key nil)
   (add-hook 'post-command-hook #'drgnx-wb-selection-sync nil t)
   (unless (memq (current-buffer) drgnx-wb--rows-buffers) (push (current-buffer) drgnx-wb--rows-buffers))
@@ -352,6 +456,7 @@ It is `explorer' unless another view with sections was chosen (a stale choice fa
         (set-window-scroll-bars w nil nil nil nil t)        ; a clean sidebar, like VS Code's
         ;; After the scroll bars: Emacs keeps the width only while it equals the body width it recorded (I11)
         (window-preserve-size w t t))
+      (drgnx-wb-island-refresh)
       (unless (eq (selected-window) selected) (select-window selected 'norecord))
       (pcase-dolist (`(,name . ,spec) drgnx-wb--sections)
         (when-let* ((fn (plist-get spec :on-show)) (w (drgnx-wb-section-window name)))

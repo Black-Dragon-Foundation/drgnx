@@ -4,7 +4,8 @@
 
 ;;; Commentary:
 ;; The files you have open, in the order you opened them — switching never re-sorts, so a row
-;; never moves under the pointer.  Each row: × (close), ● when modified, the name and its folder.
+;; never moves under the pointer.  Each row: the file's icon and its name; at the right edge the git letter and the
+;; close button (hidden until the row is hovered), or ● in its place while the buffer has unsaved changes.
 ;; The panel listens to the change bus and re-renders only when its signature (the rows and
 ;; their modified flags) changed; the view and the selection are restored by buffer identity,
 ;; and the title lives in the window, where no mode can erase it.  The active editor's row is
@@ -22,7 +23,6 @@
 
 (defface drgnx-buffers-close '((t :inherit shadow)) "The × of each row." :group 'drgnx)
 (defface drgnx-buffers-modified '((t :inherit warning)) "The ● of a modified buffer." :group 'drgnx)
-(defface drgnx-buffers-dir '((t :inherit shadow)) "The folder after each name." :group 'drgnx)
 (defface drgnx-buffers-active '((t :inherit bold)) "The row of the buffer shown in the active editor." :group 'drgnx)
 
 (defconst drgnx-buffers-buffer-name " *drgnx buffers*" "Internal (a leading space): not in C-x b or ibuffer.")
@@ -32,7 +32,7 @@
 (defvar drgnx-buffers--renders 0 "How many times the panel was rendered (tests read it).")
 (defvar drgnx-buffers--active nil "Overlay on the active editor's row.")
 (defvar drgnx-buffers--filter nil "Show only buffers whose names contain this text (any case), or nil.")
-(defvar drgnx-buffers--title)          ; defined below, with its buttons
+(defvar drgnx-buffers--title)          ; defined below
 
 (defvar drgnx-buffers-all-windows nil
   "With several windows open: nil lists the buffers of the window you work in, t all of them.")
@@ -72,21 +72,11 @@
 (defvar-local drgnx-buffers--rows []
   "The buffer of each line, in order (a virtual list: the panel holds plain text).")
 
-(defvar drgnx-buffers--dirs nil
-  "During a render: folder → its abbreviated text (computed once per folder).")
-
-(defun drgnx-buffers--dir (b)
-  (let ((dir (file-name-directory (or (buffer-file-name b) (buffer-local-value 'default-directory b)))))
-    (or (and drgnx-buffers--dirs (gethash dir drgnx-buffers--dirs))
-        (let ((text (abbreviate-file-name (directory-file-name dir))))
-          (when drgnx-buffers--dirs (puthash dir text drgnx-buffers--dirs))
-          text))))
-
 (defun drgnx-buffers--row (b)
-  "Buffer B's row as plain text: × ● name  folder (faces come from jit-lock, for visible rows).
-The × is the kit's `close' glyph (x on a terminal that is not UTF-8); the row's columns assume it is one character."
-  (concat (drgnx-face-glyph 'close) " " (if (buffer-modified-p b) "●" " ") " " (drgnx-wb-display-name (buffer-name b)) "  "
-          (drgnx-wb-display-name (drgnx-buffers--dir b)) "\n"))
+  "Buffer B's row as plain text: two characters of room, then the name (window-dark.html's Open rows).  The first
+lines the icon up with the Explorer's top files, the second shows the icon on a graphical frame; faces, the icon and
+the right edge come from jit-lock, for visible rows."
+  (concat "  " (drgnx-wb-display-name (buffer-name b)) "\n"))
 
 (defun drgnx-buffers--index (pos) (1- (line-number-at-pos pos t)))
 
@@ -96,9 +86,11 @@ The × is the kit's `close' glyph (x on a terminal that is not UTF-8); the row's
     (let ((i (drgnx-buffers--index pos)))
       (and (< -1 i (length drgnx-buffers--rows)) (aref drgnx-buffers--rows i)))))
 
-(defun drgnx-buffers--close-p (pos)
-  "Non-nil if POS is on a row's × (its first character)."
-  (and (drgnx-buffers-buffer-at pos) (save-excursion (goto-char pos) (bolp))))
+(defun drgnx-buffers--on-control-p (posn)
+  "Non-nil if POSN (a mouse position) is on a row's close button or ● at its right edge."
+  (when-let* ((s (posn-string posn)))
+    (and (stringp (car s)) (integerp (cdr s)) (< (cdr s) (length (car s)))
+         (get-text-property (cdr s) 'drgnx-row-control (car s)))))
 
 (defun drgnx-buffers--row-pos (b)
   "Start of buffer B's row, or nil."
@@ -106,33 +98,31 @@ The × is the kit's `close' glyph (x on a terminal that is not UTF-8); the row's
     (save-excursion (goto-char (point-min)) (forward-line i) (point))))
 
 (defun drgnx-buffers--fontify (beg end)
-  "Paint the rows between BEG and END (jit-lock): ×, ●, the name's hover highlight, the folder, the
-git status (the name's colour and its letter at the right edge)."
+  "Paint the rows between BEG and END (jit-lock): the icon, the hover highlight, and at the right edge the git
+letter and the close button (`drgnx-wb-row-tail-overlay': shown on the row at point, else hidden until hovered), or
+an always shown ● while the buffer has unsaved changes.  The name keeps the text colour; an ignored file is dimmed."
   (let ((point (point)))
     (save-excursion
       (goto-char beg)
       (forward-line 0)
       (let ((inhibit-read-only t) (end (save-excursion (goto-char end) (pos-eol))))
-        (remove-overlays (point) end 'drgnx-git t)
+        (remove-overlays (point) (min (1+ end) (point-max)) 'drgnx-git t)
         (with-silent-modifications
           (while (< (point) end)
-            (let* ((bol (point)) (eol (pos-eol)) (b (drgnx-buffers-buffer-at bol))
-                   ;; The name's end from its length (a name may hold two spaces), past the two after it.
-                   (name-end (if (buffer-live-p b) (min eol (+ bol 4 (length (drgnx-wb-display-name (buffer-name b))) 2)) eol)))
-              (when (< (+ bol 4) eol)
-                ;; the × is drawn in the row's background until the row is hovered; the row at point shows it
-                (add-text-properties bol (1+ bol) `(face ,(get-text-property 0 'face (drgnx-look-hover-control "×" (<= bol point eol)))
-                                                         help-echo "Close"))
+            (let* ((bol (point)) (eol (pos-eol)) (b (drgnx-buffers-buffer-at bol)))
+              (when (and (buffer-live-p b) (< (+ bol 2) eol))
                 (put-text-property bol eol 'mouse-face 'drgnx-hover-row)
-                (put-text-property (+ bol 2) (+ bol 3) 'face 'drgnx-buffers-modified)
-                (put-text-property (- name-end 2) eol 'face 'drgnx-buffers-dir)
-                (when-let* (((buffer-live-p b)) (file (buffer-file-name b))
-                            (status (drgnx-git-status file)) (letter (car (drgnx-git-look status))))
-                  ;; The letter right after the name: the folder hint after it is cut at the panel's edge.
-                  (let ((face (drgnx-wb-git-mark-face status)) (o (make-overlay (- name-end 2) (- name-end 2))))
-                    (add-face-text-property (+ bol 4) (- name-end 2) (cadr (drgnx-git-look status)))
-                    (overlay-put o 'drgnx-git t)
-                    (overlay-put o 'after-string (concat " " (propertize letter 'face face)))))))
+                (when-let* ((icon (get-text-property 0 'display (drgnx-look-icon (drgnx-look-file-name-icon-name
+                                                                                  (or (buffer-file-name b) (buffer-name b)))))))
+                  (put-text-property (1+ bol) (+ bol 2) 'display (drgnx-wb-icon-gap icon)))
+                (let* ((file (buffer-file-name b)) (status (and file (drgnx-git-status file)))
+                       (letter (and status (car (drgnx-git-look status)))))
+                  (when (eq status 'ignored) (add-face-text-property (+ bol 2) eol (cadr (drgnx-git-look status))))
+                  (drgnx-wb-row-tail-overlay eol letter (and letter (drgnx-wb-git-mark-face status)) (<= bol point eol)
+                                             (if (buffer-modified-p b)
+                                                 (propertize (drgnx-face-glyph 'dot) 'face 'drgnx-buffers-modified
+                                                             'help-echo "Unsaved changes")
+                                               (propertize (drgnx-face-glyph 'close) 'help-echo "Close"))))))
             (forward-line 1))))))
   `(jit-lock-bounds ,beg . ,end))
 
@@ -173,9 +163,8 @@ While a button is held in the panel, wait for the release: rows never move under
         (let ((inhibit-read-only t))
           (drgnx-view-with-kept-windows (:key-at #'drgnx-buffers-buffer-at :pos-of #'drgnx-buffers--row-pos)
             (erase-buffer)
-            (let ((drgnx-buffers--dirs (make-hash-table :test #'equal)))
-              ;; One insertion of plain text (faces: jit-lock, for the visible rows only).
-              (insert (mapconcat #'drgnx-buffers--row shown "")))
+            ;; One insertion of plain text (faces: jit-lock, for the visible rows only).
+            (insert (mapconcat #'drgnx-buffers--row shown ""))
             (setq drgnx-buffers--rows (vconcat shown)))
           (when hl-line-mode (hl-line-highlight))
           (drgnx-buffers--mark-active))))))
@@ -275,12 +264,14 @@ While a button is held in the panel, wait for the release: rows never move under
       (when (integer-or-marker-p pos) (goto-char pos)))))
 
 (defun drgnx-buffers-mouse-click (event)
-  "Release: × closes that row's buffer; elsewhere on the row, show it in the editor."
+  "Release: the close button (or ●) at the row's right edge closes that row's buffer; elsewhere on the row, show it
+in the editor."
   (interactive "e")
-  (let ((pos (posn-point (event-end event))))
+  (let* ((posn (event-end event)) (pos (posn-point posn)) (w (posn-window posn)))
     ;; Act on the rows the user saw, then run a refresh that waited for the release.
-    (when (integer-or-marker-p pos)
-      (if (drgnx-buffers--close-p pos) (drgnx-buffers-close-at pos) (drgnx-buffers-open-at pos))))
+    (when (and (integer-or-marker-p pos) (window-live-p w))
+      (with-current-buffer (window-buffer w)
+        (if (drgnx-buffers--on-control-p posn) (drgnx-buffers-close-at pos) (drgnx-buffers-open-at pos)))))
   (drgnx-buffers--release))
 
 (defun drgnx-buffers-mouse-ignore (_event) (interactive "e") (drgnx-buffers--release))
@@ -305,30 +296,10 @@ While a button is held in the panel, wait for the release: rows never move under
   (setq-local scroll-margin 0 make-cursor-line-fully-visible nil)
   (hl-line-mode 1)
   (drgnx-wb-rows-setup)
-  (add-hook 'post-command-hook #'drgnx-buffers--point-moved nil t)
   (jit-lock-register #'drgnx-buffers--fontify))
 
-(defvar-local drgnx-buffers--point-row nil "Start of the row point was on at the last command.")
-
-(defun drgnx-buffers--point-moved ()
-  "Point moved to another row: paint it again, with its × shown, and the row it left, with its × hidden."
-  (let ((bol (pos-bol)))
-    (unless (eql bol drgnx-buffers--point-row)
-      (dolist (row (list drgnx-buffers--point-row bol))
-        (when (and row (<= (point-min) row (point-max)))
-          (jit-lock-refontify (min row (point-max)) (min (1+ (save-excursion (goto-char row) (pos-eol))) (point-max)))))
-      (setq drgnx-buffers--point-row bol))))
-
-(defun drgnx-buffers--button (label command)
-  "LABEL as a header-line button running COMMAND."
-  (let ((map (make-sparse-keymap)))
-    (keymap-set map "<header-line> <mouse-1>" (lambda (_e) (interactive "e") (call-interactively command)))
-    (propertize label 'mouse-face 'highlight 'help-echo (documentation command) 'local-map map)))
-
-(defvar drgnx-buffers--title
-  (concat "Open   " (drgnx-buffers--button "save all" #'drgnx-buffers-save-all)
-          " · " (drgnx-buffers--button "close saved" #'drgnx-buffers-close-saved))
-  "The panel's title, with buttons.")
+(defvar drgnx-buffers--title "Open"
+  "The panel's title (window-dark.html `.sec'); Save All and Close Saved are on the island header's ⋯.")
 
 (defun drgnx-buffers-setup ()
   "Put the Buffers panel in the dock (above the Explorer) and keep it current."

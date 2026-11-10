@@ -327,20 +327,6 @@ A row of a repository whose status is not read yet asks for it (`drgnx-explorer-
     (drgnx-wb-row-tail-overlay eol mark (and mark (drgnx-wb-git-mark-face status))
                                (and drgnx-explorer--fontify-point (<= bol drgnx-explorer--fontify-point eol)))))
 
-(defvar drgnx-explorer--icon-gaps (make-hash-table :test #'equal)
-  "(IMAGE . PX) → the icon IMAGE followed by PX pixels of room, shared by the rows.  Bounded: cleared past 64
-entries (a scale or icon change adds a set).")
-
-(defun drgnx-explorer--icon-gap (image)
-  "IMAGE (an icon's display spec) followed by the room before the name, window-dark.html `.row' gap 6px: a display
-string, made once per icon and scale."
-  (let ((key (cons image (drgnx-px 6))))
-    (or (gethash key drgnx-explorer--icon-gaps)
-        (progn (when (> (hash-table-count drgnx-explorer--icon-gaps) 64) (clrhash drgnx-explorer--icon-gaps))
-               (puthash key (concat (propertize " " 'display image)
-                                    (propertize " " 'display `(space :width (,(cdr key)))))
-                        drgnx-explorer--icon-gaps)))))
-
 (defun drgnx-explorer--icons (bol depth name-start dirp name)
   "Draw the row's chevron and file or folder icon over the two characters of its prefix, and the indent of each
 level as `tree-indent' pixels, when icons are drawn as images (graphical frames).  The text stays as it is."
@@ -350,7 +336,7 @@ level as `tree-indent' pixels, when icons are drawn as images (graphical frames)
     (when-let* ((file (funcall img (if dirp (if open 'folder-open 'folder) (drgnx-look-file-name-icon-name name)))))
       (when (and dirp (funcall img 'chevron-down))
         (put-text-property chevron (1+ chevron) 'display (funcall img (if open 'chevron-down 'chevron-right))))
-      (put-text-property (1+ chevron) (+ chevron 2) 'display (drgnx-explorer--icon-gap file))
+      (put-text-property (1+ chevron) (+ chevron 2) 'display (drgnx-wb-icon-gap file))
       (when (and (fboundp 'drgnx-look-density-value) (> depth 1))
         (let ((px (round (* (drgnx-pixels-scale) (drgnx-look-density-value 'tree-indent)))) (p bol))
           (while (< p chevron)
@@ -377,7 +363,8 @@ name's face, the hover highlight, the icons, the git status and the ⋯ control.
                                                    (t 'drgnx-explorer-file))))
             (unless (or (drgnx-explorer--placeholder-p v) (equal (aref v 0) drgnx-explorer--reading-row))
               (put-text-property (point) (pos-eol) 'mouse-face 'drgnx-hover-row)
-              (drgnx-explorer--icons (point) depth name-start (aref v 2) (aref v 0))
+              ;; not on the hidden root row: Emacs draws a `display' image even on invisible text
+              (unless (invisible-p (point)) (drgnx-explorer--icons (point) depth name-start (aref v 2) (aref v 0)))
               (drgnx-explorer--git-decorate (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start)
               (dolist (d drgnx-explorer-decorators)
                 (condition-case nil (funcall d (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start)
@@ -807,7 +794,8 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
   ;; a command of the user lists a remote root now; `drgnx open' (emacsclient -e, in the server's process filter) and
   ;; other automatic callers do not
   (let ((drgnx-explorer--remote-reads (or drgnx-explorer--remote-reads (not inhibit-quit))))
-    (if (get-buffer drgnx-explorer-buffer-name) (drgnx-explorer--render) (drgnx-explorer--buffer))))   ; a new one renders itself
+    (if (get-buffer drgnx-explorer-buffer-name) (drgnx-explorer--render) (drgnx-explorer--buffer)))   ; a new one renders itself
+  (dolist (f (frame-list)) (drgnx-wb-island-refresh f)))       ; the island is named after the first folder
 
 (defun drgnx-explorer-roots () drgnx-explorer--roots)
 
