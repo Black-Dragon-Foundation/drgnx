@@ -4,6 +4,19 @@ The palette runs any command by name: **View: Command Palette**, or the key your
 Type part of a label (words in any order, when `extra/completion` is on) and press Return. `#` followed by words is a
 Semantic Search question. `C-g` cancels.
 
+The rows come in three groups (palette.html):
+
+- **Commands**: every command you can run here, its category, when you last ran it and its keys.
+- **Files**: the files of the current project (the ones open in buffers first, at most 5000), each with its folder.
+  Return visits the file; `Tab` shows it in the window you came from without leaving the palette, and closing the
+  palette without choosing it puts that window back.
+- **Agents**: with `tools/agents` on, "Ask an agent" with what you typed, the default profile's model beside it.
+  Return on it, `Ctrl+Return` from any row, or `@` before your words starts an agent of the default profile in this
+  project, opens its panel and gives it your words (**Agents: Ask an Agent…** does the same from anywhere).
+
+The hint at the input row's right edge names them: Commands, `#` code, `@` agents. The footer shows the keys: move,
+run, preview, close.
+
 ## Floating under Glitnir
 
 With the `extra/completion` module on, on Nidhogg with Glitnir active, the palette floats: the prompt, the text you

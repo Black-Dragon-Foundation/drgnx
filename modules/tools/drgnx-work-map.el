@@ -21,6 +21,7 @@
 (require 'drgnx-view-nav)
 (require 'drgnx-pixels)
 (require 'drgnx-work-client)
+(require 'drgnx-hooks)
 (unless (featurep 'drgnx-decor)
   (load (expand-file-name "../ui/drgnx-decor" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
@@ -1270,6 +1271,17 @@ leg, counted in `drgnx-work-map-motion-stats')."
       (set-window-parameter w 'glitnir-layout-capture nil)
       (set-window-parameter w 'glitnir-layout-motion nil)))
   (setq drgnx-work-map--motion-windows nil))
+
+(defun drgnx-work-map--frame-replaced (old new)
+  "`drgnx-frame-replaced-functions': a map whose motion has windows on OLD stops it, on their counterparts in NEW
+too (they were made with the capture and motion parameters)."
+  (dolist (b (drgnx-work-map-buffers))
+    (with-current-buffer b
+      (when (seq-some (lambda (w) (and (window-live-p w) (eq (window-frame w) old))) drgnx-work-map--motion-windows)
+        (setq drgnx-work-map--motion-windows
+              (append (delq nil (mapcar (lambda (w) (drgnx-frame-replaced-window w new)) drgnx-work-map--motion-windows))
+                      drgnx-work-map--motion-windows))
+        (drgnx-work-map-motion-clear b)))))
 
 (defun drgnx-work-map--motion-end (buffer)
   "The timer function at a leg's end: BUFFER's windows lose their capture and motion, unless a new layout waits."

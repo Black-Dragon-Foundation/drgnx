@@ -33,6 +33,7 @@
         (agents-panel "SPC a p")
         (agents-panel-toggle "TAB")
         (agents-panel-older :none "scrolling to the top of the panel; the palette")
+        (agents-ask :none "the palette: type a question, or @")
         (agents-panel-next-tool "]")
         (agents-panel-previous-tool "[")
         (agents-panel-next-change "}")

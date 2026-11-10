@@ -294,6 +294,9 @@ per token; Kimi's coding membership is a different endpoint these profiles do no
 
 ## Durable sessions
 
+**Ask an Agent…** (palette; or type in the palette and press `Ctrl+Return`, or start with `@`) starts an agent of the
+default profile in this project, opens its panel and gives it your words.
+
 **New Durable Agent Session…** (palette) starts an agent in the **hub** instead of this Emacs: it keeps working when
 you close Emacs, and the next Emacs shows it again in the Agents tab — its whole transcript, pending permission
 requests and edits to review — and drives it the same way (send, Stop, answer, review). Emacs mirrors the hub's

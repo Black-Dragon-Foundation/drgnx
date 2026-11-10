@@ -24,6 +24,11 @@
 (require 'drgnx-pixels)                 ; `drgnx-px'
 
 (declare-function drgnx-surfaces-run "drgnx-surfaces")
+(declare-function project-files "project" (project &optional dirs))
+(declare-function project-root "project" (project))
+
+(defconst drgnx-palette--ask-prefix "Agents: Ask an agent: \""
+  "The start of the row that asks an agent; the typed text and a closing quote follow.")
 
 ;;;; Keycaps
 
@@ -70,6 +75,19 @@ frame; on a terminal, which draws no ring, the name alone (a 4 px space is 4 col
 
 ;;;; Rows
 
+(defvar drgnx-palette--file-rows nil
+  "While the palette reads: a hash LABEL → FILE of the Files group's rows (`drgnx-palette-files').")
+
+(defun drgnx-palette--file-table (rows)
+  "A hash LABEL → FILE of ROWS, an alist of `drgnx-palette-files'."
+  (let ((h (make-hash-table :test #'equal :size (max 1 (length rows)))))
+    (pcase-dolist (`(,label . ,file) rows) (puthash label file h))
+    h))
+
+(defun drgnx-palette--file (label)
+  "The file of the Files row LABEL, or nil when LABEL is no file's row."
+  (and drgnx-palette--file-rows (gethash (substring-no-properties label) drgnx-palette--file-rows)))
+
 (defface drgnx-palette-group '((t :inherit (drgnx-ui-caption drgnx-text-subtle) :weight semibold :slant normal))
   "A group's title in the palette: Commands, Files, Agents."
   :group 'drgnx-look)
@@ -97,11 +115,131 @@ frame; on a terminal, which draws no ring, the name alone (a 4 px space is 4 col
     (and i (substring-no-properties label 0 i))))
 
 (defun drgnx-palette--shown (label)
-  "The row the list shows for LABEL: the category's icon and the title."
+  "The row the list shows for LABEL: the category's icon and the title; a file's icon and name for a file's row; the
+bot and the typed text in the accent colour for the row that asks an agent."
+  (cond
+   ((drgnx-palette--file label)
+    (concat (drgnx-look-icon 'file 'drgnx-text-muted) " " (file-name-nondirectory (drgnx-palette--title label))))
+   ((string-prefix-p drgnx-palette--ask-prefix label)
+    (concat (drgnx-look-icon 'bot 'drgnx-text-muted) " Ask an agent: "
+            (propertize (concat "“" (truncate-string-to-width (drgnx-palette--asked label) 40) "…”")
+                        'face 'drgnx-palette-asked)))
+   (t (drgnx-palette--command-shown label))))
+
+(defun drgnx-palette--command-shown (label)
+  "A command's row for LABEL: the category's icon and the title."
   (concat (drgnx-look-icon (alist-get (drgnx-palette--category label) drgnx-palette--category-icons
                                       'chevron-right nil #'equal)
                            'drgnx-text-muted)
           " " (drgnx-palette--title label)))
+
+(defface drgnx-palette-asked '((t :inherit drgnx-accent))
+  "The typed text in the row that asks an agent (palette.html: the quoted words in the accent colour)."
+  :group 'drgnx-look)
+
+(defconst drgnx-palette-files-max 5000
+  "How many of the project's files the Files group offers (the files open in buffers first).")
+
+(defun drgnx-palette-files ()
+  "(\"File: RELATIVE\" . FILE) for the files of the current project, those visited in buffers first, at most
+`drgnx-palette-files-max'; outside a project, the files visited in buffers, relative to their folder's parent."
+  (let* ((pr (and (fboundp 'project-current) (project-current)))
+         (root (and pr (expand-file-name (project-root pr))))
+         (open (delq nil (mapcar #'buffer-file-name (buffer-list))))
+         (open (if root (seq-filter (lambda (f) (file-in-directory-p f root)) open) open))
+         (all (delete-dups (append open (and pr (ignore-errors (project-files pr))))))
+         (rows nil) (n 0))
+    (while (and all (< n drgnx-palette-files-max))
+      (let ((f (expand-file-name (pop all))))
+        (push (cons (concat "File: " (if root (file-relative-name f root)
+                                       (file-relative-name f (file-name-directory
+                                                              (directory-file-name (file-name-directory f))))))
+                    f)
+              rows)
+        (setq n (1+ n))))
+    (nreverse rows)))
+
+(defun drgnx-palette--file-annotation (label)
+  "A file row's annotation: its folder in the subtle colour."
+  (let ((dir (file-name-directory (drgnx-palette--title label))))
+    (concat "  " (propertize (directory-file-name (or dir "./")) 'face 'drgnx-text-subtle))))
+
+(defun drgnx-palette--ask-command ()
+  "The `agents-ask' command when it can run, else nil."
+  (when-let* ((c (drgnx-commands-get 'agents-ask))) (and (drgnx-commands-available-p c) c)))
+
+(defun drgnx-palette-ask-label (text)
+  "The row that asks an agent with TEXT, or nil when no agent can be asked or TEXT is empty or a code question."
+  (let ((text (string-trim (or text ""))))
+    (and (drgnx-palette--ask-command) (not (string-empty-p text)) (not (string-prefix-p "#" text))
+         (concat drgnx-palette--ask-prefix (string-remove-prefix "@" text) "\""))))
+
+(defun drgnx-palette--asked (label)
+  "The text the row LABEL asks an agent with."
+  (string-remove-suffix "\"" (substring-no-properties label (length drgnx-palette--ask-prefix))))
+
+(defun drgnx-palette--ask-annotation ()
+  "The agent row's annotation: the default profile's model and where it runs, then Ctrl ↵ at the right edge."
+  (let* ((name (and (fboundp 'drgnx-agents-default-profile) (drgnx-agents-default-profile)))
+         (model (or (and name (fboundp 'drgnx-agents-profile) (plist-get (drgnx-agents-profile name) :model)) name))
+         (caps (concat (drgnx-palette-keycap "Ctrl") " " (drgnx-palette-keycap "↵"))))
+    (concat "  " (propertize (string-join (delq nil (list model "this project")) " · ") 'face 'drgnx-text-subtle)
+            (drgnx-palette--right caps) caps)))
+
+(defun drgnx-palette--ask (text)
+  "Ask an agent with TEXT through the `agents-ask' command."
+  (let ((c (or (drgnx-palette--ask-command) (user-error "No agent to ask (module tools/agents)"))))
+    (drgnx-palette-record 'agents-ask)
+    (setq this-command (drgnx-cmd-command c))
+    (funcall (drgnx-cmd-command c) text)))
+
+(defvar drgnx-palette--ask-now nil "Set by Ctrl+Return in the palette: the typed text, asked of an agent at once.")
+
+(defun drgnx-palette-ask-now ()
+  "In the palette: ask an agent with what is typed."
+  (interactive)
+  (setq drgnx-palette--ask-now (minibuffer-contents-no-properties))
+  (exit-minibuffer))
+
+(defvar drgnx-palette--preview nil "(WINDOW BUFFER . MADE) while Tab previews a file: the window, what it showed, the buffer made.")
+
+(defun drgnx-palette--candidate ()
+  "The palette's current row: the completion UI's selected one (vertico), else the typed text."
+  (or (and (fboundp 'vertico--candidate) (ignore-errors (vertico--candidate)))
+      (minibuffer-contents-no-properties)))
+
+(defun drgnx-palette-preview ()
+  "In the palette: show the current file row's file in the window the palette was opened from, without leaving it.
+Closing the palette without choosing the file puts the window back."
+  (interactive)
+  (when-let* ((file (drgnx-palette--file (drgnx-palette--candidate)))
+              (win (minibuffer-selected-window)))
+    (let* ((old (get-file-buffer file)) (b (or old (find-file-noselect file))))
+      (unless drgnx-palette--preview (setq drgnx-palette--preview (list win (window-buffer win))))
+      (when (and (not old) (not (memq b (cddr drgnx-palette--preview))))
+        (setcdr (cdr drgnx-palette--preview) (cons b (cddr drgnx-palette--preview))))
+      (set-window-buffer win b))))
+
+(defun drgnx-palette--preview-end (chosen)
+  "Put back the window Tab previewed in, unless CHOSEN (a file) is what it shows; kill the buffers it made."
+  (when-let* ((p drgnx-palette--preview))
+    (setq drgnx-palette--preview nil)
+    (pcase-let ((`(,win ,was . ,made) p))
+      (when (and (window-live-p win) (buffer-live-p was)
+                 (not (and chosen (equal (buffer-file-name (window-buffer win)) chosen))))
+        (set-window-buffer win was))
+      (dolist (b made)
+        (unless (or (get-buffer-window b t) (buffer-modified-p b)) (kill-buffer b))))))
+
+(defvar-keymap drgnx-palette-minibuffer-map
+  :doc "The palette's own keys, over the completion UI's: Ctrl+Return asks an agent, Tab previews a file."
+  "C-<return>" #'drgnx-palette-ask-now
+  "C-RET" #'drgnx-palette-ask-now
+  "TAB" #'drgnx-palette-preview)
+
+(defun drgnx-palette--keys ()
+  "On the palette's `minibuffer-setup-hook', after the completion UI's: its keys over the UI's."
+  (use-local-map (make-composed-keymap drgnx-palette-minibuffer-map (current-local-map))))
 
 (defun drgnx-palette--group-title (group)
   "The title line of GROUP: its name in `drgnx-palette-group', in from the left as a row's text is."
@@ -192,7 +330,8 @@ no comparison runs: the labels with a rank are placed by it and the others follo
 
 (defun drgnx-palette-group (label)
   "The group of the candidate LABEL (\"Category: Title\"): Agents, Files or Commands."
-  (cond ((string-match-p "\\`\\(Agents?\\|Work\\): " label) "Agents")
+  (cond ((drgnx-palette--file label) "Files")
+        ((string-match-p "\\`\\(Agents?\\|Work\\): " label) "Agents")
         ((string-match-p "\\`\\(Files?\\|Go\\): " label) "Files")
         (t "Commands")))
 
@@ -231,17 +370,25 @@ runs it; several is an \"Ambiguous\" error naming up to three; none is \"No comm
   (interactive)
   (let* ((cands (drgnx-palette-candidates))
          (ids (drgnx-palette--ids cands))
+         (file-rows (drgnx-palette-files))
+         (drgnx-palette--file-rows (drgnx-palette--file-table file-rows))
+         (drgnx-palette--ask-now nil)
+         (rows (append cands file-rows))
          ;; the keys are the ones this terminal can send, asked from the buffer the command would run in
          ;; (the annotations are made with the minibuffer current)
          (origin (current-buffer))
          (annotate (lambda (label)
-                     (when-let* ((c (drgnx-commands-get (cdr (assoc label cands)))))
-                       (let ((key (with-current-buffer (if (buffer-live-p origin) origin (current-buffer))
-                                    (drgnx-surfaces-key c))))
-                         (drgnx-palette--annotation (drgnx-cmd-category c)
-                                                    (drgnx-palette-recent-age (cdr (assoc label cands)))
-                                                    (and (not (string-empty-p key))
-                                                         (car (split-string key " (" t))))))))
+                     (cond
+                      ((drgnx-palette--file label) (drgnx-palette--file-annotation label))
+                      ((string-prefix-p drgnx-palette--ask-prefix label) (drgnx-palette--ask-annotation))
+                      (t
+                       (when-let* ((c (drgnx-commands-get (cdr (assoc label cands)))))
+                         (let ((key (with-current-buffer (if (buffer-live-p origin) origin (current-buffer))
+                                      (drgnx-surfaces-key c))))
+                           (drgnx-palette--annotation (drgnx-cmd-category c)
+                                                      (drgnx-palette-recent-age (cdr (assoc label cands)))
+                                                      (and (not (string-empty-p key))
+                                                           (car (split-string key " (" t))))))))))
          (table (lambda (string pred action)
                   (if (eq action 'metadata)
                       `(metadata (annotation-function . ,annotate) (category . drgnx-command)
@@ -249,10 +396,23 @@ runs it; several is an \"Ambiguous\" error naming up to three; none is \"No comm
                                  (group-function . ,(lambda (label transform)
                                                       (if transform (drgnx-palette--shown label)
                                                         (drgnx-palette--group-title (drgnx-palette-group label))))))
-                    (complete-with-action action cands string pred))))
-         (choice (string-trim (completing-read "Command (# for a code question): " table nil nil initial))))
-    (cond ((string-empty-p choice))
+                    ;; the row that asks an agent carries what is typed (a completion style may pass no prefix)
+                    (let ((ask (and (minibufferp) (drgnx-palette-ask-label (minibuffer-contents-no-properties)))))
+                      (complete-with-action action (if ask (cons (list ask) rows) rows) string pred)))))
+         (choice nil) (file nil))
+    (unwind-protect
+        (setq choice (string-trim (minibuffer-with-setup-hook (:append #'drgnx-palette--keys)
+                                    (completing-read "Command (# for a code question): " table nil nil initial)))
+              file (drgnx-palette--file choice))
+      (drgnx-palette--preview-end file))
+    (cond (drgnx-palette--ask-now
+           (let ((text (string-trim (string-remove-prefix "@" (string-trim drgnx-palette--ask-now)))))
+             (unless (string-empty-p text) (drgnx-palette--ask text))))
+          ((string-empty-p choice))
           ((assoc choice cands) (drgnx-palette--run (cdr (assoc choice cands))))
+          (file (find-file file))
+          ((string-prefix-p drgnx-palette--ask-prefix choice) (drgnx-palette--ask (drgnx-palette--asked choice)))
+          ((string-prefix-p "@" choice) (drgnx-palette--ask (string-trim (substring choice 1))))
           ((string-prefix-p "#" choice) (drgnx-palette--search (string-trim (substring choice 1))))
           (t (let ((labels (drgnx-palette--complete choice cands)))
                (pcase (length labels)

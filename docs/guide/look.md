@@ -299,7 +299,7 @@ rounded and shadowed, with values per variant:
 | | Dark | Light | High Contrast |
 |---|---|---|---|
 | Popups | radius 8, shadow blur 16 down 6, opacity 0.35 | the same at 0.14 | no shadow, a 1 px `drgnx-border-strong` ring |
-| Palette | radius 12, shadow blur 48 down 16 at 0.50, 90 % opaque, blur 12 behind | shadow 0.22 | opaque, no shadow, no blur, a 2 px ring |
+| Palette | radius 12, shadow blur 48 down 16 at 0.50, 98 % opaque, no blur (90 % with a blur once Glitnir's blur shows) | shadow 0.22 | opaque, no shadow, no blur, a 2 px ring |
 
 The values follow the theme when it changes. `drgnx-look-chrome` and `drgnx-look-palette` hold them as frame
 parameter lists; a value you set (Customize or `settings.el`) stands in every variant. In the popup lane, descriptions
@@ -310,6 +310,22 @@ preference, `full` always moves, `reduced` never does: popups, the palette and n
 blur and shadows stay. A change applies at once. It sets Glitnir's own `glitnir-reduced-motion` (`auto`, `nil` or
 `t`) as the module, so a value you gave that option stays, and turning ui/look off gives it back. Where Glitnir is
 off, nothing floats and nothing moves: popups and the palette use the plain frames and notices go to the echo area.
+
+## The echo area
+
+A graphical frame has no echo row at the bottom (`drgnx-look-echo-row`, a setting: `float`, the default). When
+something asks, a box shows top-centre in the frame, as wide as the palette and in its look: a minibuffer
+(`find-file`, `yes-or-no-p`, a password), a question read a key at a time (`y-or-n-p`, `read-key`, `read-char`,
+`query-replace`'s), and the prompts Emacs's own commands show (`interactive` "c" and "k"; Nidhogg says which echo
+messages are prompts with `nidhogg-echo-prompt`). The box hides once the prompt is answered. Messages show in the
+status bar for `drgnx-look-echo-status-seconds` (5) or until the next one, a command's error in the error face, and
+so do the keys of a prefix (`C-x-`); clicking the message opens `*Messages*`, which still logs them all.
+
+A frame cannot gain or lose its echo row once it is made, so drgnx's `early-init.el` reads `settings.el` (as data)
+before Emacs makes the first frame: unless it says `classic` or turns ui/look off, that frame is born with the box,
+and a start swaps nothing. `classic` gives the row back. The change applies at once: each graphical frame is swapped for a new one with the same
+windows, buffers, selected window, size and place (a frame whose minibuffer is in use waits until it ends). A terminal
+frame keeps its row either way, and turning ui/look off gives every frame its row back.
 
 ## Icons
 

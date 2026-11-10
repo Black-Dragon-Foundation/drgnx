@@ -562,6 +562,18 @@ Work that need not happen at startup hangs on a stage and runs once, when the st
 runs under its own error guard; an error is a `warn` event of notice source `hooks` (id `(HOOK . FN)`), never shown
 as a prompt.
 
+A frame cannot gain or lose its minibuffer, so turning the echo box on or off (`drgnx-look-echo-row`) replaces each
+graphical frame with one like it: the same windows, buffers, points, window and frame parameters, size and selection.
+`drgnx-frame-replaced-functions` runs with OLD and NEW after NEW is up and before OLD is deleted. Whoever keeps a frame
+or a window in a variable moves it there (`drgnx-frame-replaced-window` finds a window's counterpart in NEW) or lets
+it go, from its module's setup through `drgnx-module-hook`, so the teardown removes it. The main window stays main
+(the swap clears OLD's role first, so `drgnx-frames--deleted` hands it to no other window). Today's owners: the panes'
+last buffers (`drgnx-pane--last`, moved), the popup lanes (their `quit-restore` moved; a floating popup ends, as its
+child frame goes with OLD), the agent follow window (moved), the Work map's layout motion (stopped on both frames)
+and the side-by-side diffs' saved layout (`drgnx-work-code--saved-windows`: a window configuration cannot move to
+another frame, so it is let go and closing the diffs leaves the windows as they are). A swap waits while the platform
+moves the frame (`drgnx-platform-moving`), since the window manager may still be looking for it by its title.
+
 ## No prompts in automatic paths (`drgnx-guard.el`)
 
 A prompt asked from a timer, a hook or while the daemon starts has nobody to answer it, and the daemon freezes.

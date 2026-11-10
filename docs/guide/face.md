@@ -185,6 +185,7 @@ while the caption's height is absolute, as ui/look writes it: a relative one (ui
 | `modal` | the modal-editing state (`NORMAL`, `INSERT` …), when that module is loaded | |
 | `mode` | the buffer's `mode-name`: the bar of Magit, Help and the other read-only buffers (`drgnx-statusbar-other`) | |
 | `misc` | what stock Emacs shows beside the file: evil's state tag (`<N>`, when evil runs without drgnx's `editor/evil` module; with it, `modal` shows the state), the last key and command of **Show Keys As I Type** (keycast), a keyboard macro being recorded (`● Rec`), `Narrowed`, `Remote: host`, the buffer's process (`:run`), the function point is in (`which-function-mode`), and what other packages add to `mode-line-misc-info` and `global-mode-string` (the clock, a battery, other modules' marks) without the job badge | |
+| `echo` | the last message, while graphical frames have no echo row (ui/look's `drgnx-look-echo-row` `float`): for a few seconds or until the next, a command's error in the error face, the keys of a prefix (`C-x-`) | `*Messages*` |
 
 | Right | Shows | Click |
 |---|---|---|
@@ -291,7 +292,7 @@ and a segment of your own that has not called `(drgnx-statusbar-refresh t)`.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `drgnx-statusbar-left` | `(branch trust problems tests jobs agents needs-you drgnx toasts modal misc)` | segments on the left, in order |
+| `drgnx-statusbar-left` | `(branch trust problems tests jobs agents needs-you drgnx toasts modal misc echo)` | segments on the left, in order |
 | `drgnx-statusbar-right` | `(lsp position indent encoding eol language)` | segments on the right, in order |
 | `drgnx-statusbar-drop-order` | `(eol indent encoding lsp language misc tests jobs toasts drgnx trust)` | dropped first to last when the window is narrow; `needs-you` is never dropped |
 | `drgnx-statusbar-compact` | `(position language)` | what the other editor groups show |
