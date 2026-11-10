@@ -1302,12 +1302,7 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `jobs-recount`, `tools/ai` the `ai-probe` one-shot; the
   ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, the Search view's typing pause
   and its pause after a listed file changed are debounces `(replace-pause . BUFFER)` and `(replace-refresh . BUFFER)`
-  owned by the view's buffer (its rows are a view: below); a search's output is parsed `drgnx-replace-parse-lines`
-  (64) lines at a time, the rest by `drgnx-timer-soon` `(replace-parse . PROCESS)` at `(drgnx-timer-chain-delay)`
-  (a chain that yields to input: The primitives) owned by the search's stderr
-  buffer (killed when the search ends; `drgnx-replace-cancel` also cancels the key, since that buffer runs no
-  kill hook). A line that does not parse is left out, and the first such error reaches the callback as `(:error
-  REASON)`; a partial line's pieces are joined once, at its newline. And an Ask's search limit
+  owned by the view's buffer (its rows are a view: below; the text search itself is the hub's). And an Ask's search limit
   `(ai-grep . PROCESS)` by the search process (its sentinel cancels it). With no run of the owner nothing starts.
   Core process timeouts are keyed by their process and owned by it, so the layer drops them when it dies: a check's
   limit `(agent-check-limit . PROC)` with its 3 s backstop and tree kill, the hung `systemctl` kill, a `claude` command's
@@ -1426,7 +1421,7 @@ Four calls cover the idioms a hand-written timer used to. Each takes a KEY, an `
   `unread-command-events`), so a chain at 0 starved input queued there (a key read again, the harness's typing)
   until the chain ended: the keys then ran in one burst with no redisplay between them. One link's wait lets the
   wait find no ripe timer and return, and the command loop reads the input first
-  (`drgnx-timer-prim/a-chain-yields-to-pending-input`; the `replace-typing` workload measured it, perf.md).
+  (`drgnx-timer-prim/a-chain-yields-to-pending-input`; the `replace-typing` workload, since removed, measured it).
   The same wait reads sockets and process output only once no timer is ripe, so a chain at 0 also held back an
   emacsclient, a search's output and agent streams until it ended. Links that run back to back for
   `drgnx-timer-chain-span` (100 ms) make the next one wait `drgnx-timer-chain-yield` too, and every chain's link
@@ -1892,12 +1887,11 @@ work. Without VIEW it sums every live view (`:max-slice-rows`: the largest).
 
 ### Consumers
 
-- **The Search view** (`modules/tools/drgnx-replace.el`, type `replace-results`, defined with its sidebar section): DELAY 0,
-  SLICE `drgnx-view-slice`, `eq` keys. A match's key is its plist; a file's header is `(drgnx-replace-file . FILE)`,
-  made once per search. Arrivals append (a new file after its header) or insert after the file's last row; a new
-  replacement text marks every match row dirty (headers stay); a file searched again removes its old rows and inserts
-  the new ones after its header, marked dirty for its box; a new search resets the view. PATCHED updates the status
-  line. Tests: `drgnx-replace/` in `test/unit/mod-replace-view-test.el`, `drgnx-view-ui/` in `test/ui/view-ui-test.el`.
+- **The Search view in Symbol mode** (`modules/tools/drgnx-replace.el`, type `replace-results`, defined with its sidebar
+  section; a text search is the hub's rows): DELAY 0, SLICE `drgnx-view-slice`, `eq` keys. A match's key is its plist;
+  a file's header is `(drgnx-replace-file . FILE)`, made once per search. Arrivals append (a new file after its header)
+  or insert after the file's last row; a new replacement text marks every match row dirty (headers stay); a new search
+  resets the view. PATCHED updates the status line. Tests: `drgnx-replace/` in `test/unit/mod-replace-view-test.el`.
 
 - **The model keeps streamed text as chunks** (`core/drgnx-agents.el`): a running `agent` or `thought` entry has `:chunks`
   (newest first) and `:length`, so appending a chunk costs a cons whatever the answer's size
@@ -1992,7 +1986,7 @@ carry them. `drgnx-view-apply-patch` (on `drgnx-hub-event-functions` while a hub
 and marks the view (`reset`, `insert`, `dirty`, `remove`), so the throttle and the 4 ms slices stay the view core's.
 Hub-fed views do not call `drgnx-view-sync-rows`.
 `(drgnx-view-patch-detach)` makes the buffer no longer hub-fed (its pair forgotten, its Sjá instance closed) and leaves its
-view and rows; the Search view uses it to go back to the Lisp engine's rows for a symbol search.
+view and rows; the Search view uses it to go back to rows of its own for a symbol search (the server's edits).
 `(drgnx-view-patch-pause BUFFER ON)` stops applying patches to a buffer (a terminal's copy mode): they are kept, at
 most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past that the resume sends `view/resync`.
 
@@ -3387,7 +3381,7 @@ timer; when nothing can run and nothing is left to wait for it fails at once, wi
   calls `drgnx-test-wait`, or another such wrapper) that waits for `(not (process-live-p P))`.
 - **A chain of timers runs back to back.** One `accept-process-output` runs one link of a chain of zero-delay
   timers (a view drawing in slices) however long it waits, so while a timer is due the wait polls without a timeout.
-  A 20 ms poll per link starved the Search view's 10,100 rows (`drgnx-view-ui/replace-retype-has-no-jank`).
+  A 20 ms poll per link starved the Search view's 10,100 rows (a GUI test of the Search view's old path, since removed).
 - **A wait for a frame.** A GUI test waits for what the frame shows with
   `(drgnx-test-wait-presented &key frame value (frames 2) (secs 30))`, never a short pause after `redisplay`. Each
   sample redisplays and takes `drgnx-uitest-snapshot`: `glitnir-snapshot` presents what was drawn, forces a paint and

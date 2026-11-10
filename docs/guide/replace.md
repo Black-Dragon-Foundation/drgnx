@@ -15,14 +15,15 @@ brings it back) with the word at point, or the selected text, in **Find**. It ha
 - **Include** and **Exclude**: globs, comma-separated (`src/**, *.el`); a glob without a slash matches at any depth;
 - **Replace All** and **Undo**, then a status line (how many results, what the last replacement did).
 
-The search runs a quarter of a second after you stop typing (`RET` in a field searches at once): ripgrep when it is
-installed, else `git grep` or grep, in the background. Results stream in, grouped by file. Each match is a row with
+The search runs a quarter of a second after you stop typing (`RET` in a field searches at once), in drgnx's hub, in
+the background. Results stream in, grouped by file. A search typed before the hub is up (the first seconds after
+drgnx starts, or while it restarts) says "Waiting for the hub" and starts when the hub comes; an Emacs without
+Nidhogg's view model (Sjá) says it cannot search text (Symbol still works). Each match is a row with
 a tick box and shows the change as old → new (the old text struck through). A file's box ticks or unticks all its
 matches. A click or `RET` on a row opens the file at the match.
 
 The results update in place: typing a replacement redraws each match's row with its new preview (the rows the window
-shows first), a file searched again changes only its own rows, and a new search takes the old rows out a few hundred
-at a time, never in one go; typing is never kept waiting, even over 10,000 matches. The list keeps its place: rows
+shows first), and a new search replaces the rows without keeping typing waiting, even over 10,000 matches. The list keeps its place: rows
 changing above the ones you look at do not scroll them away. While the Search view is hidden (another sidebar view,
 the sidebar closed) it draws nothing; it catches up when it is shown again.
 
@@ -48,12 +49,10 @@ Replace All the list holds what it skipped, each match with why after its text; 
 
 ## The list stays current
 
-When a listed file changes — you edit its buffer (saved or not), or something writes it on disk (an agent, a
-checkout) — its rows are searched again half a second later, from the buffer when it is open, so unsaved edits count.
-A file that no buffer visits is read off the main thread when Nidhogg's workers are on (`nidhogg-workers-framing`); a read
-that lands after the file changed again, after a new search started or after a replace is dropped. Replace itself always
-reads the files at once, and checks them, before it writes. A match that was unticked stays unticked when the text around it is the same. Changes on disk are noticed for the
-first 200 listed files (`drgnx-replace-watch-limit`); with more, the view searches again when it is shown. A symbol
+When a listed file changes on disk (an agent, a checkout, a save) the search runs again half a second later; a
+buffer with unsaved edits is searched from the buffer, so its edits count. Replace always reads the files at once, and
+checks them, before it writes. Changes on disk are noticed for the first 200 listed files
+(`drgnx-replace-watch-limit`). A symbol
 list is never re-asked of the server by itself: when the code changes, the status line says so; run Rename Symbol
 again.
 
@@ -90,13 +89,12 @@ palette, category Search.
 
 ## Tests
 
-`test/unit/mod-replace-engine-test.el` (the engine: ripgrep, git grep and grep, stale matches, symbol edits, undo) and
-`test/unit/mod-replace-view-test.el` (the view, the find bar; on the virtual clock, 10k matches streaming and a
-replacement patching their rows in slices of at most 576, a rescanned file, a new search, a hidden view, no marker per
-file); `test/ui/view-ui-test.el` (`drgnx test --ui`)
-types a replacement over 10k rows and checks the jank guard saw nothing; `test/ui/editor-m11c1-test.el` walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each. The perf workload
-`replace-typing` types in a file while the Search view lists 10k matches, and `replace-retype` types a replacement
-over them ([perf.md](../develop/perf.md)).
+`test/unit/mod-replace-engine-test.el` (writing: stale matches, symbol edits, undo) and
+`test/unit/mod-replace-view-test.el` (the view, the find bar; on the virtual clock, the view's own rows Symbol mode
+uses: 10k rows streaming and a replacement patching them in slices of at most 576, a new search, a hidden view, no
+marker per file); `test/ui/editor-m11c1-test.el` walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each. The perf workload
+`replace-typing-rows` types in a file while the hub lists 10k matches, and `search-window` walks Next Match across the
+model's window of a 30k-match search ([perf.md](../develop/perf.md)).
 
 When the hub builds the results (`search/grep`, [hub.md](../develop/hub.md)), they also arrive as a model of files and
 their matches, and the keys answer from it in Emacs (`drgnx-replace-rows-attached`): Next Match and Previous Match walk
@@ -115,15 +113,15 @@ hub's 16 MiB per client, and it dropped the editor); when the gap row is in sigh
 (`fill`), and the gap row goes when they meet the block.  Replace All and the tick boxes read the model, so they act on every
 match, not only the rows sent; the file watches follow the model's files too.
 
-With the hub up, the search itself goes to the hub too: a text search is `search/grep` (the view `search`, the fields' text and
+A text search is the hub's `search/grep` (the view `search`, the fields' text and
 toggles, the folder or file, the include and exclude globs, the replacement), and the results are the hub's rows, a
 reset and then each file's header and matches, inserted below the fields by `drgnx-view-apply-patch`.  A new search
 makes the hub send a reset and drop the old search's late rows, and the editor drops one that still arrives by its
 base.  `search-grep-done` ends the search and gives the count the status line shows; the status line shows
 "Searching…" until then.  Typing in the Replace field is `search/grep-replace`: the hub patches the previews and
-nothing is searched again.  Symbol mode (the language server's edits), a hub that is down and
-`drgnx-view-old-path` keep the Lisp engine and its rows, and the view changes between the two with each search.  The
-file watches stay Lisp: a listed file that changes on disk is searched again through the hub after half a second.  The hub reads the disk, so a file whose buffer has unsaved edits is rescanned by Emacs from the buffer
+nothing is searched again.  Symbol mode (the language server's edits) keeps rows of Emacs's own (the `replace-results`
+view type), and the view changes between the two with each search; `drgnx-view-old-path` has no Search path of its
+own any more (plan sja-complete S2 removed the Lisp text engine).  The file watches stay Lisp: a listed file that changes on disk is searched again through the hub after half a second.  The hub reads the disk, so a file whose buffer has unsaved edits is rescanned by Emacs from the buffer
 (`drgnx-replace--scan`, after each search and half a second after an edit), also when the hub found nothing in the file:
 those matches take the place of the hub's rows of the file, are counted and are what Replace All and Replace This
 write.  Next Match and Previous Match walk them after the hub's matches; they have no tick boxes (they are not in the hub's model); a new search forgets them.  `test/unit/replace-rows-test.el` covers the stream with no hub.

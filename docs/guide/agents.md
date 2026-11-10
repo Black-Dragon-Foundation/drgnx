@@ -954,8 +954,8 @@ condition clears. A silent session also gets a `stalled` step on the timeline.
   npm, no agent): the maintained package wins wherever it is on the `PATH`, the deprecated one still runs and says so
   once with its fix, an old version, a copy instead of a link, a program of no known package, other commands left
   alone, and the doctor's fact.
-- `test/unit/agent-panel-test.el` (the panel, the agents list, the panel opened from a card), `test/ui/view-ui-test.el`
-  (typing beside a streaming view), `test/unit/plans-sync-test.el`.
+- `test/unit/agent-panel-test.el` (the panel, the agents list, the panel opened from a card),
+  `test/unit/plans-sync-test.el`.
 
 The mock agent (`test/fixtures/mock-acp.el`) is a batch Emacs whose turns are chosen by words in the prompt
 (`slow`, `stream N`, `tool`, `plan`, `subagent`, `permission`, `write PATH`, `crash`, `/compact`, `meta`: the `_meta`

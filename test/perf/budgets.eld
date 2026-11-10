@@ -17,9 +17,6 @@
  (code-scrolling (:input :p95) 16) (code-scrolling (:input :max) 50)
  (typing-with-ghost (:input :p95) 16) (typing-with-ghost (:input :max) 50)
  (diff-scrolling (:input :p95) 16) (diff-scrolling (:input :max) 50)
- (replace-typing (:input :p95) 16) (replace-typing (:input :max) 50) (replace-typing (:slice_ms :max) 16)   ; the view draws while 10k matches stream (was a :timing unit test, PERF-MAC-1)
- ;; replace-retype (render pipeline Task 6): a view slice is 4 ms of rows plus the 8-row grain; 6 ms leaves the rest
- (replace-retype (:input :p95) 16) (replace-retype (:input :max) 50) (replace-retype (:slice_ms :max) 6)
  (live-view (:input :p95) 16) (live-view (:input :max) 50)
  (agent-settings-open (:draw_ms) 150) (agent-settings-open (:processes) 0)
  ;; the unified settings layer (design 16): read+apply of a 200-entry settings.el 2 ms; the page open 100 ms and a search
@@ -87,8 +84,6 @@
  ;; :rows = exact (equal in both runs); :cpu_ms :p90 = the larger of the runs' p90 x 2 (scaled by DRGNX_PERF_CPU_FACTOR; 2
  ;; on hosted runners).  Workloads that could not run in the container are in `drgnx-perf-run-unseeded'.  Raise a row only
  ;; in the commit that needs it, with the reason.
- ;; replace-typing :alloc :p50 41340 = 33072 x 1.25 (CI's GUI-container run of 83e460be; the seed run was 25252): the number is
- ;; timing-coupled, not a code cost (docs/develop/perf.md, "Allocation that follows the wall clock").
  ;; The typing workloads' CPU rows (typing, typing-with-ghost, remote-typing) were 350-420 ms at p90 while one key in ten
  ;; spent 100-200 ms (the typing fixture's open list scanned to the end of the file, and Nidhogg's full redisplay after an
  ;; insertion, both fixed).  Seeded again 2026-11-05 from two source runs in the GUI container on the desktop island
@@ -102,10 +97,8 @@
  (code-scrolling (:alloc :p50) 15439) (code-scrolling (:cpu_ms :p90) 26.9) (code-scrolling (:rows) 0)
  (diff-scrolling (:alloc :p50) 6027) (diff-scrolling (:cpu_ms :p90) 26.7) (diff-scrolling (:rows) 0)
  (typing-with-ghost (:alloc :p50) 18385) (typing-with-ghost (:cpu_ms :p50) 12) (typing-with-ghost (:cpu_ms :p90) 17) (typing-with-ghost (:rows) 1)
- (replace-typing (:alloc :p50) 41340) (replace-typing (:cpu_ms :p90) 183.7) (replace-typing (:rows) 1)
- ;; replace-retype seeded 2026-10-20 from two GUI-container runs at --cpus 2 (alloc 4097 / 4097, cpu p90 4.97 / 5.93,
- ;; rows 0 / 0; a third at --cpus 1 gave 4097, 6.22, 0): the keys only edit the field, the rows are patched by timers
- ;; replace-typing-rows: the same workload with the hub searching and streaming the rows.  alloc 4134 is the render offload's
+ ;; replace-typing-rows: typing while the hub searches and streams the rows (its old-path pair, replace-typing, and
+ ;; replace-retype went with the Search view's old path, plan sja-complete S2).  alloc 4134 is the render offload's
  ;; target, a tenth of replace-typing's 41340; measured once (2026-11-08, Nidhogg's line image, pinned to 4 CPUs): 5996 objects
  ;; per command (replace-typing in the same session: 6073, the 41340 follows a slow runner's wall clock), cpu p90 3.21 ms, rows 1.
  ;; All three are report-only until the combined pass reads them.
@@ -119,9 +112,7 @@
  ;; Model lists as splices and the line height once per pass (2026-11-08, pinned, +nidhogg-workers-framing, three runs): 15249-15410 kB,
  ;; 330-337 ms; the budgets sit at 16800 kB (10 % over, so a return to 17771 fails) and 400 ms.  Without framing (the default until
  ;; gate 26) the same run is 26910 kB, 448 ms, so these rows stay report-only until the combined pass decides the path.
- (replace-typing (:complete-kb) 95300 :report-only rro-scan) (replace-typing (:complete-cpu_ms) 500 :report-only rro-scan)
  (replace-typing-rows (:complete-kb) 16800 :report-only rro-scan) (replace-typing-rows (:complete-cpu_ms) 400 :report-only rro-scan)
- (replace-retype (:alloc :p50) 5122) (replace-retype (:cpu_ms :p90) 11.9) (replace-retype (:rows) 0)
  (remote-typing (:alloc :p50) 17300) (remote-typing (:cpu_ms :p50) 8) (remote-typing (:cpu_ms :p90) 11) (remote-typing (:rows) 1)
  (window-switch (:alloc :p50) 29638) (window-switch (:cpu_ms :p90) 43.6) (window-switch (:rows) 0)
  ;; Watchdog rows, REPORTED until seeded (`drgnx-perf-watchdog-gated'): no stall in any input
@@ -135,8 +126,6 @@
  (code-scrolling (:stalls) 0) (code-scrolling (:gc :max) 250) (code-scrolling (:gc :p95) 50)
  (typing-with-ghost (:stalls) 0) (typing-with-ghost (:gc :max) 250) (typing-with-ghost (:gc :p95) 50)
  (diff-scrolling (:stalls) 0) (diff-scrolling (:gc :max) 250) (diff-scrolling (:gc :p95) 50)
- (replace-typing (:stalls) 0) (replace-typing (:gc :max) 250) (replace-typing (:gc :p95) 50)
- (replace-retype (:stalls) 0) (replace-retype (:gc :max) 250) (replace-retype (:gc :p95) 50)
  (live-view (:stalls) 0) (live-view (:gc :max) 250) (live-view (:gc :p95) 50)
  (remote-typing (:stalls) 0) (remote-typing (:gc :max) 250) (remote-typing (:gc :p95) 50)
  (window-switch (:stalls) 0) (window-switch (:gc :max) 250) (window-switch (:gc :p95) 50)
