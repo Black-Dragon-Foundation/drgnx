@@ -194,6 +194,41 @@ impl Sent {
         Some(self.send(vec![json!({ "nodes": changed })]))
     }
 
+    /// The editor's model gains NODES (id, wire object), new, and their IDS at the end of list NAME: the ops the diff
+    /// would send for that change (the nodes by id, then a splice), made from it alone, so a builder that only appends
+    /// pays for what it adds, not for the whole model. None (the builder publishes the whole) when nothing was sent, a
+    /// reset is due, or NAME is a window of a longer list.
+    pub fn append(
+        &mut self,
+        nodes: Vec<(String, Value)>,
+        name: &str,
+        ids: Vec<String>,
+    ) -> Option<Out> {
+        if self.reset_due {
+            return None;
+        }
+        let doc = self.doc.as_mut()?;
+        if doc.windows.contains_key(name) {
+            return None;
+        }
+        let list = doc.lists.get_mut(name)?;
+        let at = list.len();
+        list.extend(ids.iter().cloned());
+        let mut nodes = nodes;
+        nodes.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut ops = Vec::new();
+        if !nodes.is_empty() {
+            ops.push(json!({ "nodes": nodes.iter().map(|(_, n)| n).collect::<Vec<_>>() }));
+        }
+        if !ids.is_empty() {
+            ops.push(json!({"splice": {"name": name, "at": at, "remove": 0, "ids": ids}}));
+        }
+        for (id, n) in nodes {
+            doc.nodes.insert(id, n);
+        }
+        Some(self.send(ops))
+    }
+
     /// The editor's replica asked again: a reset of what it was last sent (none before the first send).
     pub fn resync(&mut self) -> Option<Out> {
         let reset = self.doc.as_ref()?.reset();
@@ -358,6 +393,51 @@ mod tests {
             proptest::collection::vec(0u8..12, 0..40),
             any::<bool>(),
         )
+    }
+
+    fn node(id: &str) -> (String, Value) {
+        (id.to_owned(), json!({"id": id, "kind": "match"}))
+    }
+
+    /// An append is the ops the diff would send for the same change, made from the change alone; refused with no model
+    /// sent, a reset due, or a windowed list (the builder publishes the whole).
+    #[test]
+    fn an_append_sends_what_the_diff_would() {
+        let mut sent = Sent::default();
+        assert!(
+            sent.append(vec![node("n:0")], "order", vec!["n:0".into()])
+                .is_none()
+        );
+        let mut old = doc(ids(0..3), None);
+        old.nodes = ids(0..3).iter().map(|i| node(i)).collect();
+        sent.publish(old.clone()).unwrap();
+        let mut new = old.clone();
+        let added = ["n:9", "n:10"];
+        for id in added {
+            new.nodes.insert(id.into(), node(id).1);
+            new.lists.get_mut("order").unwrap().push(id.into());
+        }
+        let out = sent
+            .append(
+                added.iter().map(|i| node(i)).collect(),
+                "order",
+                added.iter().map(|i| (*i).to_owned()).collect(),
+            )
+            .unwrap();
+        assert_eq!(out.model, json!({ "ops": new.diff(&old) }));
+        assert!(sent.publish(new).is_none(), "the sent model is the new one");
+        sent.reset_due();
+        assert!(
+            sent.append(vec![node("n:11")], "order", vec!["n:11".into()])
+                .is_none()
+        );
+        let mut windowed = Sent::default();
+        windowed.publish(doc(ids(0..3), Some((9, 0)))).unwrap();
+        assert!(
+            windowed
+                .append(vec![node("n:3")], "order", vec!["n:3".into()])
+                .is_none()
+        );
     }
 
     proptest! {

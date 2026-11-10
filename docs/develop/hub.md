@@ -2360,16 +2360,22 @@ the search itself is `hrafn::grep`).
   Match went to a match beyond them): the rows up to it and 100 after it. A search still streaming fills the room a
   look made. The answer is `false` when the view has no search. A replacement's preview (`search/grep-replace`) patches
   the rows sent only.
-- **The model's cadence:** once the rows' window is full the model is sent when the search has doubled it, and whole
-  before `search-grep-done`; while rows go out it is sent with each file. A send carries only what changed: the `order`
-  list grew at its end, so the diff against what the editor holds is one `splice` there (`Doc::diff` sends any changed
-  list as the splice of what lies between its common prefix and suffix, or whole when that is shorter, when its window's
-  `from` moved, or when its total moved by other than the ids added less those removed, which is how Sjá moves a
-  window's total). Past 20,000 entries the list is a window whose total grows with no id to carry it, so each send is
-  the window whole. A send per file batch (101 sends for 10k matches) was measured twice. Rebuilt and diffed whole per
-  batch it cost the hub seconds, so the models reached the editor over 4.7 s instead of 0.9 s. Appended per batch (the
-  batch's nodes and a splice, made from it alone) it was faster end to end, but each line still woke the editor for a
-  redisplay pass (about 1 ms, redrawing no window), 1.3 times the editor CPU with framing on, so the cadence stays.
+- **The model's cadence:** a file's batch adds its nodes and ids to what waits, and the model goes out with each file
+  while rows go out (the rows name the model they were built from), else at most once per 100 ms (`MODEL_EVERY`, the
+  editor's throttle `drgnx-view-delay`: it applies a model no row names one throttle after it comes, and every line it
+  reads costs it a redisplay pass), and before `search-grep-done` when anything waits. A send is what waited appended to
+  what the editor holds (`Sent::append`: the nodes by id and one `splice` at the end of `order`, the ops `Doc::diff`
+  would send, made from the batches alone, so the hub never rebuilds and diffs the whole model per send). The whole is
+  sent, and diffed, for a run's first batch and when the editor's model is not this run's up to what waits (a reset
+  due, a class's env that arrived); `Doc::diff` sends any changed list as the splice of what lies between its common
+  prefix and suffix, or whole when that is shorter, when its window's `from` moved, or when its total moved by other
+  than the ids added less those removed, which is how Sjá moves a window's total. Past 20,000 entries the list is a
+  window whose total grows with no id to carry it, so each send is the window whole, sent when the search has doubled
+  it, while rows go out and at the end. What waits goes with the next batch or at the end: a search whose files come
+  more than 100 ms apart sends each with the next. Measured at 10k matches in 100 files (pinned lab): six model lines;
+  rebuilt and diffed per batch the hub took seconds and the models came over 4.7 s instead of 0.9 s; appended per batch
+  with no throttle each line woke the editor for a pass that redrew nothing, 1.3 times the editor CPU with framing on;
+  coalesced, 0.84 times the doubling cadence's CPU with framing on and 0.82 times off.
 - `search/grep-replace {view, replace}` changes the replacement the rows preview: the hub patches the rows that
   change (`replace` ops) and searches nothing again.
 - `ignore` is `index` (no dot paths, no secret-looking names, the filters of the index) or `real` (only what
