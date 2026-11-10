@@ -450,13 +450,20 @@ pub fn search_text(q: &Query, file: &str, text: &str) -> Result<Vec<Match>, Stri
     Ok(text
         .split('\n')
         .zip(1..)
-        .flat_map(|(line, n)| {
-            let line = line.strip_suffix('\r').unwrap_or(line);
-            re.find_iter(line)
-                .map(|m| make(file, n, line, m.start(), m.end()))
-                .collect::<Vec<_>>()
-        })
+        .flat_map(|(line, n)| line_matches(&re, file, n, line.strip_suffix('\r').unwrap_or(line)))
         .collect())
+}
+
+/// RE's matches in TEXT, line N of FILE (without its newline).
+pub fn line_matches(re: &regex::Regex, file: &str, n: u32, text: &str) -> Vec<Match> {
+    re.find_iter(text)
+        .map(|m| make(file, n, text, m.start(), m.end()))
+        .collect()
+}
+
+/// The match at bytes `[from, to)` of TEXT, line N of FILE, with its context.
+pub fn match_at(file: &str, n: u32, text: &str, from: usize, to: usize) -> Match {
+    make(file, n, text, from, to)
 }
 
 /// Search Q with the backend its root has.

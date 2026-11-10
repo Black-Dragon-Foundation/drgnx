@@ -28722,7 +28722,7 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`search/run`: run SEARCH over ROOT and send its matches to VIEW as rows (the event `view-patch`): a reset at once,\nthen each file's header and matches as it is complete. A newer search of the same view stops this one. The rows\npreview SEARCH's `replace` (old struck out, new beside it; a regexp search's `\\1` are the groups). Text mode, and\nthe scopes Project and File (`scope.files`, the one file), so far.",
+        "description": "`search/run`: run SEARCH over ROOT and send its matches to VIEW as rows (the event `view-patch`): a reset at once,\nthen each file's header and matches as it is complete. A newer search of the same view stops this one. The rows\npreview SEARCH's `replace` (old struck out, new beside it; a regexp search's `\\1` are the groups). Text mode with\nthe scopes Project and File (`scope.files`, the one file), so far; Symbol (a name's definitions, then its uses) and\nMeaning (the chunks a question finds, each with its symbol and score) ask the index, all their files at once, and\nare read-only: a `replace` is refused.",
         "properties": {
           "ignore": {
             "anyOf": [

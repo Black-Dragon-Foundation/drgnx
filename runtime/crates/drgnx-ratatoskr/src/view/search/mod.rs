@@ -11,6 +11,7 @@
 //!
 //! `rows.rs` builds the rows and the model, `run.rs` keeps a run's records (numbers, snapshots, remap keys).
 
+mod modes;
 mod rows;
 mod run;
 
@@ -19,6 +20,7 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use drgnx_rows::{Op, Patch, Row};
 use hrafn::grep::{self, Match, Query};
+use modes::Mode;
 use rows::{MODEL_WINDOW, entries_of, gap_row, grep_doc, row_index, rows_in, rows_upto, window_of};
 use run::{Buffer, Found, Snap};
 use runstav::methods::search::{
@@ -751,19 +753,43 @@ fn invalid(path: &str, message: &str) -> Error {
     }
 }
 
-/// P's text search as hrafn's query, or why it is refused.
-fn query_of(f: &Front, p: &RunParams) -> Result<Query, Error> {
-    let FindQuery::Text {
-        text,
-        case,
-        word,
-        regexp,
-    } = &p.search.query
-    else {
-        return Err(invalid(
-            "search.query.mode",
-            "this hub runs text searches only",
-        ));
+/// P's search as hrafn's query and its mode, or why it is refused. Symbol and Meaning are read-only (no replacement);
+/// their query holds the root and what was typed (the rows read it).
+fn query_of(f: &Front, p: &RunParams) -> Result<(Query, Mode), Error> {
+    let root = std::path::PathBuf::from(p.root.as_str());
+    if !root.is_dir() {
+        return Err(invalid("root", "an existing folder"));
+    }
+    let (text, case, word, regexp) = match &p.search.query {
+        FindQuery::Text {
+            text,
+            case,
+            word,
+            regexp,
+        } => (text, case, word, regexp),
+        other => {
+            if p.search.replace.as_deref().is_some_and(|r| !r.is_empty()) {
+                return Err(invalid(
+                    "search.replace",
+                    "Symbol and Meaning searches are read-only",
+                ));
+            }
+            let mode = match other {
+                FindQuery::Symbol { name, case } => Mode::Symbol {
+                    name: name.clone(),
+                    case: case.unwrap_or(true),
+                },
+                _ => Mode::Meaning {
+                    question: other.typed().to_owned(),
+                },
+            };
+            let q = Query {
+                root,
+                text: other.typed().to_owned(),
+                ..Query::default()
+            };
+            return Ok((q, mode));
+        }
     };
     let file = match p.search.scope.as_ref() {
         None => None,
@@ -786,11 +812,7 @@ fn query_of(f: &Front, p: &RunParams) -> Result<Query, Error> {
             }
         },
     };
-    let root = std::path::PathBuf::from(p.root.as_str());
-    if !root.is_dir() {
-        return Err(invalid("root", "an existing folder"));
-    }
-    Ok(Query {
+    let q = Query {
         root,
         file,
         text: text.clone(),
@@ -800,17 +822,19 @@ fn query_of(f: &Front, p: &RunParams) -> Result<Query, Error> {
         include: p.search.include.clone().unwrap_or_default(),
         exclude: p.search.exclude.clone().unwrap_or_default(),
         ignore: super::files::ignore_for(f, p.ignore),
-    })
+    };
+    Ok((q, Mode::Text))
 }
 
-/// `search/run`: stop VIEW's search, send its classes a reset, and search on a thread of its own. The search is
-/// offered to the project's recent searches (kept once it stood for the typing pause).
+/// `search/run`: stop VIEW's search, send its classes a reset, and search on a thread of its own (Text), or ask the
+/// index on a task of its own (Symbol, Meaning: all their files at once). The search is offered to the project's
+/// recent searches (kept once it stood for the typing pause).
 pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
     let views = &f.core.views;
     if p.view.is_empty() || p.view.len() > runstav::methods::view::VIEW_MAX {
         return Err(invalid("view", "a view id of 1 to 64 bytes"));
     }
-    let query = query_of(f, &p)?;
+    let (query, mode) = query_of(f, &p)?;
     f.search
         .offer_recent(&query.root, &p.view, p.search.clone());
     let (conn, view) = (c.conn_id, p.view);
@@ -826,6 +850,26 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
     let Some(front) = views.front.get().cloned() else {
         return Err(invalid("view", "the hub is starting"));
     };
+    if !matches!(mode, Mode::Text) {
+        let root = p.root.clone();
+        tokio::spawn(async move {
+            let Some(f) = front.upgrade() else { return };
+            let found = modes::batches(&f, &root, &mode).await;
+            let error = match found {
+                Ok(files) => {
+                    for (file, ms) in files {
+                        if !f.core.views.grep_batch(&f, conn, &view, id, file, ms, None) {
+                            return;
+                        }
+                    }
+                    None
+                }
+                Err(e) => Some(e),
+            };
+            f.core.views.grep_done(&f, conn, &view, id, error);
+        });
+        return Ok(RunStarted { run: id });
+    }
     std::thread::Builder::new()
         .name("grep".into())
         .spawn(move || {

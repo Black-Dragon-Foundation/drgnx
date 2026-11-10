@@ -349,8 +349,10 @@ pub enum GrepIgnore {
 
 /// `search/run`: run SEARCH over ROOT and send its matches to VIEW as rows (the event `view-patch`): a reset at once,
 /// then each file's header and matches as it is complete. A newer search of the same view stops this one. The rows
-/// preview SEARCH's `replace` (old struck out, new beside it; a regexp search's `\1` are the groups). Text mode, and
-/// the scopes Project and File (`scope.files`, the one file), so far.
+/// preview SEARCH's `replace` (old struck out, new beside it; a regexp search's `\1` are the groups). Text mode with
+/// the scopes Project and File (`scope.files`, the one file), so far; Symbol (a name's definitions, then its uses) and
+/// Meaning (the chunks a question finds, each with its symbol and score) ask the index, all their files at once, and
+/// are read-only: a `replace` is refused.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RunParams {

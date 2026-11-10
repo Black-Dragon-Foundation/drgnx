@@ -1,4 +1,4 @@
-{"scenario": "search/run-streams-rows", "requires": ["v1", "test-hooks"], "doc": "search/run sends a view a reset of no rows at once, then each file's header and matches as rows (match ids m:RUN:N); search/grep-replace patches the rows' preview of a replacement without a new search; search-run-done names the run, the files and the matches; a run again with a match unticked names that match's new id in off; Symbol mode is refused here."}
+{"scenario": "search/run-streams-rows", "requires": ["v1", "test-hooks"], "doc": "search/run sends a view a reset of no rows at once, then each file's header and matches as rows (match ids m:RUN:N); search/grep-replace patches the rows' preview of a replacement without a new search; search-run-done names the run, the files and the matches; a run again with a match unticked names that match's new id in off; Symbol and Meaning are read-only (a replacement is refused)."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "e", "hub": "h"}
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
@@ -17,5 +17,7 @@
 {"do": "write_file", "path": "$ROOT/proj/a.txt", "text": "added\none needle\nneedle two\nnothing\n"}
 {"do": "send", "conn": "e", "json": {"id": 5, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "text", "text": "needle"}}, "off": ["m:1:1"]}}}
 {"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": 2, "files": 1, "matches": 2, "off": ["m:2:1"]}}, "within_ms": 10000}
-{"do": "send", "conn": "e", "json": {"id": 6, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "symbol", "name": "needle"}}}}}
-{"do": "expect", "conn": "e", "json": {"id": 6, "error": {"code": "invalid-params", "path": "search.query.mode"}}}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "symbol", "name": "needle"}, "replace": "pin"}}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "error": {"code": "invalid-params", "path": "search.replace"}}}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "meaning", "question": "where are needles"}, "replace": "pin"}}}}
+{"do": "expect", "conn": "e", "json": {"id": 7, "error": {"code": "invalid-params", "path": "search.replace"}}}

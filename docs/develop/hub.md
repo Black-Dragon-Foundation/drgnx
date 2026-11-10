@@ -2362,7 +2362,7 @@ The Search view's results are a row stream under the rules above (`runtime/crate
 snapshots; the search itself is `hrafn::grep`).
 
 - `search/run {view, root, search, ignore?, off?}` takes a `SearchSpec` (as the saved searches below): a Text query
-  (`{mode: "text", text, case?, word?, regexp?}`; Symbol and Meaning are refused, at `search.query.mode`), `replace?`,
+  (`{mode: "text", text, case?, word?, regexp?}`; Symbol and Meaning below), `replace?`,
   `scope?` (none or `project`, or `file` with one file in `files`; another kind is refused, at `search.scope.kind`),
   `include?`, `exclude?`; `root` must be a folder. It stops the view's earlier search, records the search as recent,
   sends every class of `view` a `reset` of no rows at once, and answers `{run}`, the run's number. A thread then runs
@@ -2374,6 +2374,15 @@ snapshots; the search itself is `hrafn::grep`).
   `reset` of every row so far instead. The event `search-run-done {view, run, files, matches, error?, off?}` ends the
   search; a search a newer one stopped sends neither rows nor the event, so a late row of an old query never reaches
   the view (and the editor drops one by `base` as well).
+- **Symbol and Meaning** (`view/search/modes.rs`) ask the index on a task of their own and send all their files when
+  it answers, then `search-run-done` (its `error` is the index's refusal, e.g. no index yet). Symbol (`{mode:
+  "symbol", name, case?}`, case on by default) is `search/usages`' answer: the files that define the name first, each
+  definition's line and then the file's uses, then the files that use it in the index's rank (at most 100), each
+  line's whole-word occurrences of the name a match (the line read from disk; a definition whose line lacks the name
+  is a match of nothing at its start). Meaning (`{mode: "meaning", question}`) is `search/query`'s hits (code scope, at
+  most 100): one match per hit under its file, the hit's symbol as the match (else its first line), its first line
+  and score after it. Both are read-only: a non-empty `replace` is refused at `search.replace`; scopes, globs and the
+  open buffers do not apply.
 - **Unticks carried across runs:** `off` is the ids of the last run's matches the editor's user unticked. The hub
   turns each into its match's key, a digest of the file, the text before and after the match, the match, its column
   and end; not its line, so a line added above a match keeps it. A key two matches of a run share is dropped, and
