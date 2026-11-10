@@ -155,3 +155,61 @@
       (should (equal modes '(1)))
       (drgnx-palette-frame-buffer -1)
       (should (equal modes '(-1 1))))))
+
+;;;; Files and Agents (palette.html): a project's files in the Files group, a row that asks an agent in Agents
+
+(defmacro drgnx-test--palette-in-project (&rest body)
+  "BODY in a temp git-less project (a `.project' file marks it) holding test/unit/gateway-test.el and README.md,
+with an empty registry; `dir' is its root."
+  (declare (indent 0))
+  `(let* ((dir (file-name-as-directory (make-temp-file "palette-files" t)))
+          (default-directory dir)
+          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+          (project-vc-extra-root-markers '(".project")))
+     (unwind-protect
+         (progn (make-directory (expand-file-name "test/unit" dir) t)
+                (dolist (f '(".project" "README.md" "test/unit/gateway-test.el"))
+                  (write-region "" nil (expand-file-name f dir) nil 'silent))
+                ,@body)
+       (delete-directory dir t))))
+
+(ert-deftest drgnx-palette/the-files-group-lists-the-projects-files ()
+  "Each file of the project is a row of the Files group: the file's name, its folder beside it."
+  (drgnx-test--palette-in-project
+    (let ((files (drgnx-palette-files)))
+      (should (assoc "File: test/unit/gateway-test.el" files))
+      (should (equal (cdr (assoc "File: test/unit/gateway-test.el" files))
+                     (expand-file-name "test/unit/gateway-test.el" dir)))
+      (let ((drgnx-palette--file-rows (drgnx-palette--file-table files)))
+        (should (equal (drgnx-palette-group "File: test/unit/gateway-test.el") "Files"))
+        (should (string-match-p "gateway-test\\.el\\'"
+                                (substring-no-properties (drgnx-palette--shown "File: test/unit/gateway-test.el"))))
+        (should (string-match-p "test/unit"
+                                (substring-no-properties (drgnx-palette--file-annotation "File: test/unit/gateway-test.el"))))))))
+
+(ert-deftest drgnx-palette/choosing-a-file-row-visits-it ()
+  (drgnx-test--palette-in-project
+    (let (visited)
+      (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "File: test/unit/gateway-test.el"))
+                ((symbol-function 'find-file) (lambda (f &rest _) (setq visited f))))
+        (drgnx-palette))
+      (should (equal visited (expand-file-name "test/unit/gateway-test.el" dir))))))
+
+(ert-deftest drgnx-palette/the-agents-row-asks-with-what-is-typed ()
+  "With an `agents-ask' command, the typed text is a row of the Agents group; choosing it, Ctrl+Return, or `@' first
+asks an agent with that text."
+  (drgnx-test--palette-in-project
+    (let (asked)
+      (drgnx-command-define 'agents-ask :title "Ask an Agent…" :category "Agents"
+                            :command (lambda (text) (interactive (list "prompted")) (push text asked)))
+      (should (equal (drgnx-palette-ask-label "run te") "Agents: Ask an agent: \"run te\""))
+      (should (equal (drgnx-palette-group (drgnx-palette-ask-label "run te")) "Agents"))
+      (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Agents: Ask an agent: \"run te\"")))
+        (drgnx-palette))
+      (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "@ fix the flaky test ")))
+        (drgnx-palette))
+      (should (equal asked '("fix the flaky test" "run te"))))))
+
+(ert-deftest drgnx-palette/no-agents-row-without-the-command ()
+  (drgnx-test--palette-in-project
+    (should-not (drgnx-palette-ask-label "run te"))))

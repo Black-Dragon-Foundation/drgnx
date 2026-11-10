@@ -64,6 +64,16 @@ exists is connected to (asynchronously)."
   (let ((s (drgnx-agents-mirror-start profile (drgnx-agents-session--cwd))))
     (when-let* ((id (drgnx-agent-session-remote s))) (drgnx-agent-panel-open id))))
 
+(defun drgnx-agents-session-ask (text)
+  "Start an agent of the default profile in this project, open its panel and give it TEXT (the palette's Agents row:
+what you typed, Ctrl+Return or `@' first)."
+  (interactive (list (read-string "Ask an agent: ")))
+  (when (string-empty-p (string-trim text)) (user-error "Nothing to ask"))
+  (require 'drgnx-agents-mirror)
+  (let ((s (drgnx-agents-mirror-start (drgnx-agents-default-profile) (drgnx-agents-session--cwd))))
+    (drgnx-agents-send s (string-trim text))
+    (when-let* ((id (drgnx-agent-session-remote s))) (drgnx-agent-panel-open id))))
+
 (defun drgnx-agents-session-answer ()
   "Answer what an agent asks (permission to run a tool)."
   (interactive)
@@ -107,6 +117,8 @@ notice source, so its set is emptied: what waits there cannot be answered once t
                        (when (fboundp 'drgnx-wb-place) (drgnx-wb-place "\\`\\*job: " 'editor))
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((agents-new "New Agent Session…" drgnx-agents-session-new "Start an agent (a profile) in this project")
+                                        (agents-ask "Ask an Agent…" drgnx-agents-session-ask
+                                                    "Start an agent of the default profile here and give it a message")
                                         (agents-new-durable "New Durable Agent Session…" drgnx-agents-session-new-durable
                                                             "An agent held by the hub: it keeps working when Emacs closes")
                                         (agents-answer "Answer Agent…" drgnx-agents-session-answer "Allow or reject what the agent asks")
