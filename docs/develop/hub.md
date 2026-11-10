@@ -2275,7 +2275,8 @@ and version it last sent (`view::Store`'s models, `view::model`), and sends what
 - **One line, unparsed by the editor.** The line starts `{"event":"view-model"` (the event writer, `runstav::wire::Event`,
   puts `event` first) and `model` is a JSON object, `{"ops": [...]}`. The editor routes the line by that prefix,
   before any parse, and hands it whole to Sjá (`nidhogg-view-push`), which reads the envelope and the model; the editor
-  never makes Lisp data of it. Every publisher (the map, the trail, the board, the panel, Search, the Explorer, agents
+  never makes Lisp data of it. Unframed, the line's chunks are held as they came until its newline and joined once
+  (a model of megabytes is not copied chunk by chunk). Every publisher (the map, the trail, the board, the panel, Search, the Explorer, agents
   here, extensions, a terminal's Find) writes it through `view::model` or as an object. The ops are Sjá's wire: `reset {descriptor, nodes, edges, lists}`, then `edges
   {remove}`, `remove [id]`, `nodes [node]`, `edges {add}`, `list {name, ids}` (a list that went is sent empty). A
   changed descriptor is a reset.
