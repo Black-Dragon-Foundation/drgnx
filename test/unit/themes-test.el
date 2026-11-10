@@ -129,6 +129,16 @@ high contrast, where tints are black, they are ringed in their own colour."
                        (list face (drgnx-face-color face :foreground 'gui) (drgnx-face-color face :background 'gui))))
         (should (eq (eq variant 'hc) (and (plist-get (drgnx-faces--clause-plist face 'gui) :box) t)))))))
 
+;; The manager's ruling (look step 5b): the inactive selection is clearly visible
+(ert-deftest drgnx-themes/the-inactive-selection-stands-off-the-panel ()
+  "The selected row of a list without the focus (`sel-inactive') is at least 1.25:1 against the panel, and above the
+hover, so the state ladder reads rest < hover < inactive selection in every variant."
+  (dolist (variant '(dark light hc))
+    (let ((panel (drgnx-look-token 'panel variant)))
+      (should (>= (drgnx-color-contrast (drgnx-look-token 'sel-inactive variant) panel) 1.25))
+      (should (> (drgnx-color-contrast (drgnx-look-token 'sel-inactive variant) panel)
+                 (drgnx-color-contrast (drgnx-look-token 'hover variant) panel))))))
+
 ;; Design §3.5: a button is a quiet fill in a 1 px hairline (radius 6), the primary one the accent's fill; a keycap is
 ;; subtle text in a strong hairline (radius 4)
 (ert-deftest drgnx-themes/buttons-and-keycaps ()

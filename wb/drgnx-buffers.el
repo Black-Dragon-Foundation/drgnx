@@ -16,7 +16,6 @@
 (require 'seq)
 (require 'subr-x)
 (require 'text-property-search)
-(require 'hl-line)
 (require 'drgnx-wb)
 (require 'drgnx-view)                   ; `drgnx-view-with-kept-windows'
 (require 'drgnx-git)
@@ -99,31 +98,30 @@ the right edge come from jit-lock, for visible rows."
 
 (defun drgnx-buffers--fontify (beg end)
   "Paint the rows between BEG and END (jit-lock): the icon, the hover highlight, and at the right edge the git
-letter and the close button (`drgnx-wb-row-tail-overlay': shown on the row at point, else hidden until hovered), or
+letter and the close button (`drgnx-wb-row-tail-overlay': hidden until the row is hovered), or
 an always shown ● while the buffer has unsaved changes.  The name keeps the text colour; an ignored file is dimmed."
-  (let ((point (point)))
-    (save-excursion
-      (goto-char beg)
-      (forward-line 0)
-      (let ((inhibit-read-only t) (end (save-excursion (goto-char end) (pos-eol))))
-        (remove-overlays (point) (min (1+ end) (point-max)) 'drgnx-git t)
-        (with-silent-modifications
-          (while (< (point) end)
-            (let* ((bol (point)) (eol (pos-eol)) (b (drgnx-buffers-buffer-at bol)))
-              (when (and (buffer-live-p b) (< (+ bol 2) eol))
-                (put-text-property bol eol 'mouse-face 'drgnx-hover-row)
-                (when-let* ((icon (get-text-property 0 'display (drgnx-look-icon (drgnx-look-file-name-icon-name
-                                                                                  (or (buffer-file-name b) (buffer-name b)))))))
-                  (put-text-property (1+ bol) (+ bol 2) 'display (drgnx-wb-icon-gap icon)))
-                (let* ((file (buffer-file-name b)) (status (and file (drgnx-git-status file)))
-                       (letter (and status (car (drgnx-git-look status)))))
-                  (when (eq status 'ignored) (add-face-text-property (+ bol 2) eol (cadr (drgnx-git-look status))))
-                  (drgnx-wb-row-tail-overlay eol letter (and letter (drgnx-wb-git-mark-face status)) (<= bol point eol)
-                                             (if (buffer-modified-p b)
-                                                 (propertize (drgnx-face-glyph 'dot) 'face 'drgnx-buffers-modified
-                                                             'help-echo "Unsaved changes")
-                                               (propertize (drgnx-face-glyph 'close) 'help-echo "Close"))))))
-            (forward-line 1))))))
+  (save-excursion
+    (goto-char beg)
+    (forward-line 0)
+    (let ((inhibit-read-only t) (end (save-excursion (goto-char end) (pos-eol))))
+      (remove-overlays (point) (min (1+ end) (point-max)) 'drgnx-git t)
+      (with-silent-modifications
+        (while (< (point) end)
+          (let* ((bol (point)) (eol (pos-eol)) (b (drgnx-buffers-buffer-at bol)))
+            (when (and (buffer-live-p b) (< (+ bol 2) eol))
+              (put-text-property bol eol 'mouse-face 'drgnx-hover-row)
+              (when-let* ((icon (get-text-property 0 'display (drgnx-look-icon (drgnx-look-file-name-icon-name
+                                                                                (or (buffer-file-name b) (buffer-name b)))))))
+                (put-text-property (1+ bol) (+ bol 2) 'display (drgnx-wb-icon-gap icon)))
+              (let* ((file (buffer-file-name b)) (status (and file (drgnx-git-status file)))
+                     (letter (and status (car (drgnx-git-look status)))))
+                (when (eq status 'ignored) (add-face-text-property (+ bol 2) eol (cadr (drgnx-git-look status))))
+                (drgnx-wb-row-tail-overlay eol letter (and letter (drgnx-wb-git-mark-face status))
+                                           (if (buffer-modified-p b)
+                                               (propertize (drgnx-face-glyph 'dot) 'face 'drgnx-buffers-modified
+                                                           'help-echo "Unsaved changes")
+                                             (propertize (drgnx-face-glyph 'close) 'help-echo "Close"))))))
+          (forward-line 1)))))
   `(jit-lock-bounds ,beg . ,end))
 
 (defun drgnx-buffers--buffer ()
@@ -166,7 +164,7 @@ While a button is held in the panel, wait for the release: rows never move under
             ;; One insertion of plain text (faces: jit-lock, for the visible rows only).
             (insert (mapconcat #'drgnx-buffers--row shown ""))
             (setq drgnx-buffers--rows (vconcat shown)))
-          (when hl-line-mode (hl-line-highlight))
+          (drgnx-wb-selection-sync)
           (drgnx-buffers--mark-active))))))
 
 (defun drgnx-buffers--mark-active (&rest _)
@@ -291,10 +289,8 @@ in the editor."
 (define-derived-mode drgnx-buffers-mode nil "Buffers"
   "The drgnx Buffers panel (open editors)."
   (setq buffer-read-only t buffer-undo-list t truncate-lines t cursor-type nil mode-line-format nil)
-  (setq-local hl-line-sticky-flag t)
   ;; A press on a partly visible row must not scroll: the row would move under the pointer.
   (setq-local scroll-margin 0 make-cursor-line-fully-visible nil)
-  (hl-line-mode 1)
   (drgnx-wb-rows-setup)
   (jit-lock-register #'drgnx-buffers--fontify))
 

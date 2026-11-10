@@ -45,6 +45,10 @@
 (defface drgnx-selected '((t :inherit region)) "The selection." :group 'drgnx-look)
 (defface drgnx-selected-quiet '((t :inherit drgnx-surface-raised)) "The selection in a pane that has not the focus."
   :group 'drgnx-look)
+(defface drgnx-selected-inactive '((t :inherit drgnx-selected-quiet))
+  "The selected row of a list whose window has not the focus (Explorer, Open, Outline), as VS Code's inactive
+selection: at least 1.25:1 against the panel, above the hover."
+  :group 'drgnx-look)
 (defface drgnx-focus '((t :box (:line-width (-2 . -2)))) "The keyboard focus ring.  Themes and derive set its colour."
   :group 'drgnx-look)
 

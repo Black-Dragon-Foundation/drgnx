@@ -31,7 +31,7 @@
 (defcustom drgnx-outline-delay 0.5 "Idle seconds after an edit before the Outline follows it."
   :type 'number :group 'drgnx)
 
-(defface drgnx-outline-current '((t :inherit highlight :weight bold))
+(defface drgnx-outline-current '((t :inherit drgnx-selected-inactive :weight bold))
   "The definition the editor's point is in." :group 'drgnx)
 
 (defconst drgnx-outline-title "Outline" "The Outline section's title.")
@@ -50,7 +50,6 @@
 (define-derived-mode drgnx-outline-mode special-mode "Outline"
   "The editor's definitions."
   (setq-local truncate-lines t cursor-type nil mode-line-format nil)
-  (hl-line-mode 1)
   (drgnx-wb-rows-setup))
 
 (defun drgnx-outline--buffer ()
@@ -183,9 +182,15 @@ Outline's point and window are not touched, except by the first draw of a new fi
                     (start (drgnx-view-row-start drgnx-view (aref best 3))))
           (save-excursion
             (goto-char start)
-            (let ((o (make-overlay (pos-bol) (pos-eol))))
+            (let ((o (make-overlay (pos-bol) (pos-eol)))
+                  ;; a row's rounded inside box, its fill to the right edge (`drgnx-wb-row-face')
+                  (face (list 'drgnx-outline-current (list :box (plist-get (drgnx-wb-row-face nil) :box)))))
               (overlay-put o 'drgnx-outline-current t)
-              (overlay-put o 'face 'drgnx-outline-current)))
+              (overlay-put o 'face face)
+              (overlay-put o 'drgnx-row-end (drgnx-wb--row-end face))
+              (overlay-put o 'after-string (overlay-get o 'drgnx-row-end))))
+          ;; one end per row: the selection's, when it is on this row (`drgnx-wb--tail-paint')
+          (when (overlayp drgnx-wb--selected-overlay) (drgnx-wb-selection-sync))
           (when reveal (drgnx-outline--reveal-row window start)))))))
 
 (defun drgnx-outline--reveal-row (window start)

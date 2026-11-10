@@ -65,6 +65,29 @@ row that is not its background, scanning the row from the window's right edge in
     (cl-loop for x from (round (* s (- (nth 2 e) 2))) downto (round (* s (nth 0 e)))
              unless (equal bg (cdr (drgnx-uitest-pixel snap x y))) return x)))
 
+(ert-deftest drgnx-ui-look-explorer/a-section-shows-whole-rows ()
+  "Pattern D: a dock section with another below it ends at a whole row, so no part of a row (a glyph fragment) is
+drawn at its foot; the section below takes the pixels left over, and a second fit changes nothing."
+  (skip-unless (display-graphic-p))
+  (drgnx-ui-look-explorer--with root
+    (let* ((top (selected-window))
+           (below (split-window top (+ 7 (round (/ (window-pixel-height top) 2))) 'below t)))
+      (dolist (w (list top below))                 ; as the dock's sections are
+        (set-window-parameter w 'drgnx-role 'dock)
+        (set-window-parameter w 'no-other-window t))
+      (unwind-protect
+          (let ((total (+ (window-pixel-height top) (window-pixel-height below)))
+                (row (- (drgnx-ui-look-explorer--row-y 3) (drgnx-ui-look-explorer--row-y 2))))   ; drawn, not the font's
+            (drgnx-wb--rows-whole (selected-frame))
+            (should (= 0 (mod (window-body-height top t) row)))
+            (should (= total (+ (window-pixel-height top) (window-pixel-height below))))
+            (let ((h (window-pixel-height top)))
+              (drgnx-wb--rows-whole (selected-frame))
+              (should (= h (window-pixel-height top)))))
+        (delete-window below)
+        (set-window-parameter top 'drgnx-role nil)
+        (set-window-parameter top 'no-other-window nil)))))
+
 (ert-deftest drgnx-ui-look-explorer/row-height ()
   "Pattern D: a row of the Explorer is round (26 x scale) device pixels high at the comfortable density."
   (skip-unless (display-graphic-p))
@@ -133,6 +156,35 @@ the row, and again after the pointer leaves."
       (drgnx-test-wait-presented)
       (skip-unless (cadr (mouse-pixel-position)))
       (should (funcall has-fg)))))
+
+(ert-deftest drgnx-ui-look-explorer/the-selected-row-is-one-inset-run ()
+  "Pattern D, window-dark.html `.row.sel.focus': the focused selection is one fill from the card's inset to the inset
+on the right (the tail does not open a gap, and nothing runs past the row), the fringes either side in the panel's
+colour, 6 logical pixels wide; under Glitnir its corners are rounded (the corner pixel is not the fill)."
+  (skip-unless (display-graphic-p))
+  (drgnx-ui-look-explorer--with root
+    (with-current-buffer drgnx-explorer-buffer-name
+      (goto-char (point-min)) (forward-line 2) (drgnx-wb-selection-sync))
+    (drgnx-test-wait-presented)
+    (let* ((snap (drgnx-uitest-snapshot)) (s (drgnx-uitest-device-scale (selected-frame)))
+           (e (window-body-pixel-edges))
+           (top (with-current-buffer drgnx-explorer-buffer-name
+                  (save-excursion (goto-char (point-min)) (forward-line 2)
+                                  (cadr (pos-visible-in-window-p (point) nil t)))))
+           ;; the row's middle: clear of the rounded corners and the ring (no text so near either edge)
+           (y (round (* s (+ (nth 1 e) (drgnx-ui-look-explorer--row-y 3)))))
+           (rgb (lambda (token) (mapcar (lambda (c) (round (* 255 c))) (drgnx-color-rgb (drgnx-look-token token 'dark)))))
+           (near (lambda (x yy token) (cl-every (lambda (p c) (<= (abs (- p c)) 6))
+                                                (cdr (drgnx-uitest-pixel snap x yy)) (funcall rgb token))))
+           (left (round (* s (nth 0 e)))) (right (round (* s (nth 2 e)))))
+      (should (= (drgnx-px 6) (car (window-fringes))))
+      (should (= (drgnx-px 6) (cadr (window-fringes))))
+      (should (funcall near (- left 2) y 'panel))                        ; the left fringe
+      (should (funcall near (+ left (round (* 3 s))) y 'sel))            ; the fill starts at the inset
+      (should (funcall near (- right (round (* 3 s))) y 'sel))           ; and reaches the right inset: no tail gap
+      (should (funcall near (+ right 1) y 'panel))                       ; the right fringe
+      (when (and (fboundp 'glitnir-active-p) (glitnir-active-p))
+        (should-not (funcall near left (round (* s (+ (nth 1 e) top))) 'sel))))))
 
 (provide 'look-explorer-gui-test)
 ;;; look-explorer-gui-test.el ends here

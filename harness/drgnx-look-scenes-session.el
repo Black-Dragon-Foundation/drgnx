@@ -400,18 +400,37 @@ marks; a diff with a refined pair beside it; a hovered row in the Explorer and i
         (save-excursion
           (goto-char (point-min)) (forward-line 224) (move-to-column 1)
           (let ((beg (point))) (forward-line 2) (move-to-column 20) (drgnx-look-scene--hl-put beg (point) 'region)))))
-    ;; a hovered row in Open and in the Explorer (the pointer's `mouse-face', drawn as its face)
+    ;; a hovered row in Open and in the Explorer (the pointer's `mouse-face', drawn as its face: the row's text and
+    ;; its tail at the right edge, which the pointer lights with it)
     (dolist (w (window-list nil 'never))
       (when (window-parameter w 'window-side)
         (with-current-buffer (window-buffer w)
           (remove-overlays (point-min) (point-max) 'drgnx-hl-scene t)
-          (save-excursion (goto-char (point-min)) (forward-line 2)
-                          (drgnx-look-scene--hl-put (pos-bol) (1+ (pos-eol)) 'drgnx-hover-row))))))
+          (save-excursion
+            (goto-char (point-min)) (forward-line 2)
+            (let ((tail (seq-find (lambda (o) (overlay-get o 'drgnx-row-tail)) (overlays-in (pos-bol) (pos-eol))))
+                  (hover (drgnx-wb-row-hover-face)))
+              (drgnx-look-scene--hl-put (pos-bol) (pos-eol) hover)
+              (when tail (drgnx-wb--tail-paint tail hover))))))))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-highlights-dark () (drgnx-look-scene--highlights 'drgnx-dark))
 (defun drgnx-look-scene-highlights-light () (drgnx-look-scene--highlights 'drgnx-light))
 (defun drgnx-look-scene-highlights-hc () (drgnx-look-scene--highlights 'drgnx-high-contrast))
+
+(defun drgnx-look-scene--explorer-focused (theme)
+  "The window scene under THEME with the Explorer focused: its selected row with the focus ring, the other
+sections' with the inactive selection."
+  (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--editor)
+  (when-let* ((w (get-buffer-window drgnx-explorer-buffer-name)))
+    (select-window w)
+    (drgnx-wb--selected-changed nil))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-explorer-focused-dark () (drgnx-look-scene--explorer-focused 'drgnx-dark))
+(defun drgnx-look-scene-explorer-focused-light () (drgnx-look-scene--explorer-focused 'drgnx-light))
+(defun drgnx-look-scene-explorer-focused-hc () (drgnx-look-scene--explorer-focused 'drgnx-high-contrast))
 
 (defun drgnx-look-scene-start-page ()
   "The start page in the editor, dark (no mockup: its buttons, keycaps and shield are the components of design §3.5)."
@@ -439,6 +458,11 @@ chrome faces, frame metrics, windows, modules."
                   :windows (mapcar (lambda (w) (list (buffer-name (window-buffer w)) :x (window-pixel-left w)
                                                      :y (window-pixel-top w) :w (window-pixel-width w)
                                                      :h (window-pixel-height w)
+                                                     ;; the text area and its line: whole rows or a part of one
+                                                     :body (window-body-height w t)
+                                                     :header (window-header-line-height w)
+                                                     :line (window-default-line-height w)
+                                                     :end (cdr (posn-x-y (posn-at-point (window-end w t) w)))
                                                      :mode (buffer-local-value 'major-mode (window-buffer w))))
                                    (window-list f 'no-mini))
                   :children (cl-count-if (lambda (c) (and (frame-visible-p c) (frame-parent c))) (frame-list))
