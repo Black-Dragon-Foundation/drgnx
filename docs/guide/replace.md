@@ -20,7 +20,8 @@ The search runs a quarter of a second after you stop typing (`RET` in a field se
 the background. Results stream in, grouped by file. A search typed before the hub is up (the first seconds after
 drgnx starts, or while it restarts) says "Waiting for the hub" and starts when the hub comes; an Emacs without
 Nidhogg's view model (Sjá) says it cannot search (Rename still works). Each match is a row with
-a tick box and shows the change as old → new (the old text struck through). A file's box ticks or unticks all its
+a tick box and shows the change as old → new: only the characters that change are tinted, the old ones struck
+through (`foo` → `foobar` shows `foo` with `bar` added). A file's box ticks or unticks all its
 matches. A click or `RET` on a row opens the file at the match.
 
 The results update in place: typing a replacement redraws each match's row with its new preview (the rows the window

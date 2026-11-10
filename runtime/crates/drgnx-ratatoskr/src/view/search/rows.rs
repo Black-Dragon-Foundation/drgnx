@@ -259,8 +259,29 @@ pub(super) fn match_row(q: &Query, replace: &str, id: String, m: &Match, why: Op
     b.push(" ", None).push(&flat(&before), None);
     match new {
         Some(n) => {
-            b.push(&flat(&m.text), Some("drgnx-replace-old"));
-            b.push(&flat(&n), Some("drgnx-replace-new"));
+            // what the match and its replacement share at either end shows once, untinted
+            let (old, new): (Vec<char>, Vec<char>) =
+                (m.text.chars().collect(), n.chars().collect());
+            let pre = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+            let room = old.len().min(new.len()) - pre;
+            let suf = old
+                .iter()
+                .rev()
+                .zip(new.iter().rev())
+                .take(room)
+                .take_while(|(a, b)| a == b)
+                .count();
+            let part = |cs: &[char]| flat(&cs.iter().collect::<String>());
+            b.push(&part(&old[..pre]), None);
+            let gone = &old[pre..old.len() - suf];
+            if !gone.is_empty() {
+                b.push(&part(gone), Some("drgnx-replace-old"));
+            }
+            let added = &new[pre..new.len() - suf];
+            if !added.is_empty() {
+                b.push(&part(added), Some("drgnx-replace-new"));
+            }
+            b.push(&part(&old[old.len() - suf..]), None);
         }
         None => {
             b.push(&flat(&m.text), Some("drgnx-replace-match"));

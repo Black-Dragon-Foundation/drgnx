@@ -325,6 +325,29 @@ fn replace_preview_runs() {
     assert_eq!(rows[0].runs, vec![(10, 16, "drgnx-replace-match".into())]);
 }
 
+/// [D] The old and new tints cover the changed characters only: what the match and its replacement share at the
+/// start and the end shows once, untinted.
+#[test]
+fn a_preview_tints_only_the_changed_characters() {
+    let mt = m("/r/a.txt", 1, "let ", "needle", ";");
+    let row = |new: &str| rows::match_row(&query(), new, "m:1:0".into(), &mt, None);
+    let r = row("needles");
+    assert_eq!(r.text, "  [x] let needles;");
+    assert_eq!(r.runs, vec![(16, 17, "drgnx-replace-new".into())]);
+    let r = row("noodle");
+    assert_eq!(r.text, "  [x] let neeoodle;");
+    assert_eq!(
+        r.runs,
+        vec![
+            (11, 13, "drgnx-replace-old".into()),
+            (13, 15, "drgnx-replace-new".into())
+        ]
+    );
+    let r = row("need");
+    assert_eq!(r.text, "  [x] let needle;");
+    assert_eq!(r.runs, vec![(14, 16, "drgnx-replace-old".into())]);
+}
+
 #[test]
 fn an_env_after_rows_gets_all_of_them_as_a_reset() {
     let mut s = store();

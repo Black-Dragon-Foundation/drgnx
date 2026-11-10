@@ -2410,8 +2410,9 @@ snapshots; the search itself is `hrafn::grep`).
   searched on disk" to its header. Neither forgets the buffer (saved or killed): the next run reads the file. A
   view's buffers go when the view closes or its connection ends.
 - **Row text:** a header is `[x] name` and, below the root, the folder in `drgnx-replace-dim`; a match is `  [x] ` and
-  the text around it, with the match in `drgnx-replace-match`, or, when `replace` is not empty, struck out
-  (`drgnx-replace-old`) with the replacement after it (`drgnx-replace-new`); after a regexp search `\1`, `\&` and
+  the text around it, with the match in `drgnx-replace-match`, or, when `replace` is not empty, the changed characters
+  only: what the match and the replacement share at the start and the end shows once, untinted, and between them the
+  match's part struck out (`drgnx-replace-old`) then the replacement's (`drgnx-replace-new`); after a regexp search `\1`, `\&` and
   `\\` in `replace` are the groups. Props: `drgnx-replace-box` on the box (the file, or the match as an object),
   `drgnx-replace-file` on a header, `drgnx-replace-match` (the match: `file`, `line`, `col`, `end`, `text`,
   `before`, `after`; positions in characters, `line` from 1) on a match row, and `drgnx-work-id` (the row's node id)
