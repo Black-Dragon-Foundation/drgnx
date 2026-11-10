@@ -24,7 +24,7 @@ pub const CHUNKER_VERSION: u32 = 2;
 
 /// Bump it when what a parse derives besides the chunks changes (a symbol's lines or signature, a new language, the
 /// references): tier 1 parses every stored file again, and the chunks keep their content keys, so no vector changes.
-pub const PARSE_VERSION: u32 = 1;
+pub const PARSE_VERSION: u32 = 6;
 
 /// The text of a chunk's FTS columns. `symbols` is raw: the store encodes it (`encode_symbol`) on write.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -81,7 +81,18 @@ pub(crate) fn signature(text: &str, start: usize, end: usize, name: &str) -> Str
         .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
-    if let Some(i) = sig.find('{') {
+    // the body's `{`: the first outside parentheses and brackets (a destructured parameter is not a body)
+    let mut depth = 0i32;
+    let body = sig.char_indices().find_map(|(i, c)| {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            '{' if depth <= 0 => return Some(i),
+            _ => {}
+        }
+        None
+    });
+    if let Some(i) = body {
         sig.truncate(i);
     }
     let sig = sig.trim_end();
@@ -105,6 +116,12 @@ pub fn chunk_file(
         Lang::Rust => tree_sitter(ts::Kind::Rust),
         Lang::C => tree_sitter(ts::Kind::C),
         Lang::Shell => tree_sitter(ts::Kind::Shell),
+        Lang::Python => tree_sitter(ts::Kind::Python),
+        Lang::JavaScript => tree_sitter(ts::Kind::JavaScript),
+        Lang::TypeScript => tree_sitter(ts::Kind::TypeScript),
+        Lang::Tsx => tree_sitter(ts::Kind::Tsx),
+        Lang::Go => tree_sitter(ts::Kind::Go),
+        Lang::Java => tree_sitter(ts::Kind::Java),
         Lang::Org => Some(outline::chunk(
             outline::Flavor::Org,
             path,

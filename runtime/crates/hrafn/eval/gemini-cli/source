@@ -1,0 +1,5 @@
+url https://github.com/google-gemini/gemini-cli
+commit 1930f25394c4b6338b64ffdb43083fca41614798
+language TypeScript + TSX
+licence Apache-2.0
+fetched at test time by commit; never vendored

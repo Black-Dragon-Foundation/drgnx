@@ -211,8 +211,8 @@ pub(crate) fn kind_rank(kind: &str) -> u8 {
     match kind {
         "function" | "defun" | "fn" => 0,
         "macro" => 1,
-        "method" => 2,
-        "struct" | "class" | "type" | "enum" | "trait" => 3,
+        "method" | "constructor" => 2,
+        "struct" | "class" | "type" | "enum" | "trait" | "interface" | "record" => 3,
         "variable" | "const" | "static" => 4,
         _ => 5,
     }

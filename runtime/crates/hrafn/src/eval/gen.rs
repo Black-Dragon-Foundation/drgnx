@@ -64,15 +64,7 @@ async fn head_of(store: &CodeStore) -> Result<Head, String> {
                     "docs" => Class::Docs,
                     _ => Class::Code,
                 };
-                let lang = match lang.as_str() {
-                    "elisp" => Lang::Elisp,
-                    "rust" => Lang::Rust,
-                    "c" => Lang::C,
-                    "shell" => Lang::Shell,
-                    "org" => Lang::Org,
-                    "markdown" => Lang::Markdown,
-                    _ => Lang::Text,
-                };
+                let lang = Lang::parse(&lang);
                 files.insert(path, (class, lang));
             }
             let names = by_name.keys().cloned().collect();

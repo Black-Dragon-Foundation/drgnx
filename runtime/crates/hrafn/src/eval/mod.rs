@@ -3,8 +3,8 @@
 //!
 //! - `gen` makes the questions: each commit subject is a behaviour question whose answer is the top-level forms the
 //!   commit changed, found again at HEAD through the symbol table. The sets are frozen once made (`write_sets`).
-//! - `metrics` scores a run (MRR@10 and nDCG@10 at chunk level, recall@5 and @10 at file level, bootstrap intervals
-//!   per stratum) and compares two runs pairwise.
+//! - `metrics` scores a run (MRR@10 and nDCG@10 at chunk level, file MRR@10 and recall@5 and @10 at file level,
+//!   bootstrap intervals per stratum) and compares two runs pairwise, on chunk or file MRR@10.
 //! - [`run`] asks the questions through a closure, so the caller decides how a query is embedded and which model
 //!   answers; this crate has no model.
 
@@ -13,8 +13,8 @@ mod metrics;
 
 pub use r#gen::{HISTORY_LIMIT, clean_subject, generate, read_set, write_sets};
 pub use metrics::{
-    Delta, Judged, OVERALL_FLOOR, Report, RowScore, STRATUM_FLOOR, Summary, Verdict, ci, compare,
-    judge,
+    Delta, GATED_STRATUM_ROWS, Gate, Judged, OVERALL_FLOOR, Report, RowScore, STRATUM_FLOOR,
+    Summary, Verdict, ci, compare, compare_on, judge,
 };
 
 use crate::query::{Answer, Hit, Query, Scope};

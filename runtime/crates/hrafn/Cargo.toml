@@ -26,6 +26,11 @@ tree-sitter-elisp.workspace = true
 tree-sitter-rust.workspace = true
 tree-sitter-c.workspace = true
 tree-sitter-bash.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-javascript.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter-go.workspace = true
+tree-sitter-java.workspace = true
 
 # inotify directly on Linux and Android (a mask of our own, no IN_OPEN); notify's FSEvents on macOS
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
