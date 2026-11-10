@@ -95,6 +95,20 @@
       (add (drgnx-lint-contrast--pairs text '(default) '(diff-changed diff-refine-changed)))
       (add (drgnx-lint-contrast--pairs text drgnx-lint-contrast--syntax
                                        '(diff-added diff-removed diff-refine-added diff-refine-removed)))
+      ;; a refined run is the line's hue, stronger: it stands 1.25:1 off its line's tint, or it has an edge of its
+      ;; own (the line's hue) at 3:1 on that tint
+      (pcase-dolist (`(,refine . ,line) '((diff-refine-added . diff-added) (diff-refine-removed . diff-removed)
+                                          (diff-refine-changed . diff-changed)))
+        (let* ((fill (drgnx-lint-contrast--bg refine)) (under (drgnx-lint-contrast--bg line))
+               (box (face-attribute refine :box nil t)) (edge (and (consp box) (plist-get box :color))))
+          (if (and (stringp edge) (not (equal edge fill)))
+              (let ((ratio (drgnx-color-contrast edge under)))
+                (unless (>= ratio 3.0)
+                  (push (format "%s edge (%s) on %s (%s): %.2f, needs 3" refine edge line under ratio) fails)))
+            (let ((ratio (drgnx-color-contrast fill under)))
+              (unless (>= ratio 1.25)
+                (push (format "%s (%s) on %s (%s): %.2f, needs 1.25 or an edge" refine fill line under ratio)
+                      fails))))))
       ;; a non-current match's outline, where it has one of its own colour, shows inside a selection: 3:1 on it
       (let ((c (face-attribute 'lazy-highlight :box nil t)))
         (when-let* ((c (and (consp c) (plist-get c :color))) ((stringp c))

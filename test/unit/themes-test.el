@@ -164,7 +164,7 @@ ringed in the strong border, with no fill of its own."
 in a box of `match-edge'; `isearch' is that tint ringed 1 px in the accent, and keeps the text's own colour.  Every box is drawn
 inside the glyphs (negative widths), so it never moves text or grows a row; under Glitnir it is rounded 3 (logical; the
 decoration faces scale it per frame).  The region stops at the line's end: no square block past it.  A diff's
-refined words are their `refine-*' tint in the same kind of box as the region: rounded in-text runs."
+refined words are their `refine-*' tint (over the line's tint) in a box of `refine-*-edge': rounded in-text runs."
   (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
     (drgnx-themes-test--with theme
       (let ((tint (drgnx-color-over (drgnx-look-token 'accent variant) (drgnx-look-token 'editor variant)
@@ -175,11 +175,11 @@ refined words are their `refine-*' tint in the same kind of box as the region: r
                                                    (lazy-highlight ,tint nil ,edge)
                                                    (isearch ,tint nil ,(drgnx-look-token 'accent variant))
                                                    (diff-refine-added ,(drgnx-look-token 'refine-add variant)
-                                                                      flat-button nil)
+                                                                      nil ,(drgnx-look-token 'refine-add-edge variant))
                                                    (diff-refine-removed ,(drgnx-look-token 'refine-del variant)
-                                                                        flat-button nil)
+                                                                        nil ,(drgnx-look-token 'refine-del-edge variant))
                                                    (diff-refine-changed ,(drgnx-look-token 'refine-chg variant)
-                                                                        flat-button nil)))
+                                                                        nil ,(drgnx-look-token 'refine-chg-edge variant))))
           (let* ((p (drgnx-faces--clause-plist face 'gui)) (box (plist-get p :box)))
             (should (equal (list face bg '(-1 . -1) style ring (and (featurep 'glitnir) 3))
                            (list face (drgnx-face-color face :background 'gui) (plist-get box :line-width)
