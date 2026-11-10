@@ -39,15 +39,17 @@ From the active drgnx theme; with none, from the frame's background mode (`hc' o
 
 (defun drgnx-look-token (name &optional variant)
   "The colour of token NAME as \"#rrggbb\", in VARIANT (`dark', `light' or `hc'; default the active one).
-A tint is composited over the variant's `editor'."
+A tint is composited over the variant's `editor', an `over' over its BASE token; a symbol is another token's colour."
   (let* ((variant (or variant (drgnx-look-variant)))
          (v (alist-get name (alist-get variant (drgnx-theme--read)))))
-    (cond ((stringp v) v)
-          ((eq (car-safe v) 'tint)
-           (drgnx-color-over (if (stringp (cadr v)) (cadr v) (drgnx-look-token (cadr v) variant))
-                             (drgnx-look-token 'editor variant)
-                             (cddr v)))
-          (t (error "drgnx: no colour token `%s' in the %s variant" name variant)))))
+    (cl-flet ((colour (c) (if (stringp c) c (drgnx-look-token c variant))))
+      (cond ((stringp v) v)
+            ((and v (symbolp v)) (drgnx-look-token v variant))
+            ((eq (car-safe v) 'tint)
+             (drgnx-color-over (colour (cadr v)) (drgnx-look-token 'editor variant) (cddr v)))
+            ((eq (car-safe v) 'over)                ; (over BASE COLOUR . ALPHA)
+             (drgnx-color-over (colour (nth 2 v)) (drgnx-look-token (nth 1 v) variant) (nthcdr 3 v)))
+            (t (error "drgnx: no colour token `%s' in the %s variant" name variant))))))
 
 (defconst drgnx-theme--ansi
   '((black . gap) (red . error) (green . ok) (yellow . warn) (blue . info) (magenta . kw) (cyan . ty) (white . fg))
@@ -203,9 +205,16 @@ A tint is composited over the variant's `editor'."
        `((diff-added :foreground ,(c 'add-fg) :background ,(c 'add-bg))
          (diff-removed :foreground ,(c 'del-fg) :background ,(c 'del-bg))
          (diff-changed :background ,(c 'warn-tint))
-         (diff-refine-added :background ,(drgnx-color-over (c 'ok) (c 'editor) 0.25))
-         (diff-refine-removed :background ,(drgnx-color-over (c 'error) (c 'editor) 0.25))
-         (diff-refine-changed :background ,(drgnx-color-over (c 'warn) (c 'editor) 0.25))
+         ;; refined words: rounded in-text runs, as the region (boxes inside the glyphs)
+         (diff-refine-added :background ,(c 'refine-add) :extend nil
+                            :box (:line-width (-1 . -1) :color ,(c 'refine-add-edge)
+                                              ,@(and (featurep 'glitnir) '(:corner-radius 3))))
+         (diff-refine-removed :background ,(c 'refine-del) :extend nil
+                              :box (:line-width (-1 . -1) :color ,(c 'refine-del-edge)
+                                                ,@(and (featurep 'glitnir) '(:corner-radius 3))))
+         (diff-refine-changed :background ,(c 'refine-chg) :extend nil
+                              :box (:line-width (-1 . -1) :color ,(c 'refine-chg-edge)
+                                                ,@(and (featurep 'glitnir) '(:corner-radius 3))))
          (diff-header :foreground ,(c 'muted) :background ,(c 'raised))
          (diff-file-header :foreground ,(c 'fg) :weight bold)
          (diff-hunk-header :foreground ,(c 'info))

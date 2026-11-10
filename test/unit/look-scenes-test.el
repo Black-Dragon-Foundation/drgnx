@@ -44,6 +44,22 @@ ignored, on main two commits ahead of its remote; drgnx-gateway.el's line 216 is
                                   (with-temp-buffer (call-process "git" nil t nil "status" "-sb") (buffer-string)))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-look-scenes/the-diff-has-a-refined-pair ()
+  "The highlights scene's hunk is a valid one (its header counts its lines), so `diff-refine-hunk' marks the changed
+words of its line pairs: `when' against `if', the faces `diff-refine-removed' and `diff-refine-added'."
+  (require 'diff-mode)
+  (with-temp-buffer
+    (insert drgnx-look-scene--diff)
+    (diff-mode)
+    (goto-char (point-min))
+    (diff-hunk-next)
+    (diff-refine-hunk)
+    (let ((fine (mapcar (lambda (o) (list (overlay-get o 'face) (buffer-substring (overlay-start o) (overlay-end o))))
+                        (seq-filter (lambda (o) (eq (overlay-get o 'diff-mode) 'fine))
+                                    (overlays-in (point-min) (point-max))))))
+      (should (member '(diff-refine-removed "when") fine))
+      (should (member '(diff-refine-added "if") fine)))))
+
 (ert-deftest drgnx-look-scenes/a-limit-is-named-not-hidden ()
   "What the line cannot show of a mockup is written to the scene's facts."
   (should (assq 'window-dark drgnx-look-scene-limits)))
