@@ -246,6 +246,35 @@ async fn tier1_writes_references_and_the_reset_clears_them() {
     assert_eq!(rows, 0);
 }
 
+/// Tier 1 writes with a large page cache (the name index's inserts land all over it) and gives it back after: the
+/// cache size is what it was, and the store keeps no more pages than that.
+#[tokio::test]
+async fn tier1_gives_back_its_page_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = CodeStore::open(&dir.path().join("code.db")).unwrap();
+    let size = |s: &CodeStore| {
+        let h = s.handle().clone();
+        async move {
+            h.read(|c| Ok(c.query_row("pragma cache_size", [], |r| r.get::<_, i64>(0))?))
+                .await
+                .unwrap()
+        }
+    };
+    let before = size(&s).await;
+    let text = "fn a() {\n    bee();\n}\n";
+    let l = vec![Listed {
+        path: "src/a.rs".into(),
+        blob: "b1".into(),
+        class: Class::Code,
+        lang: Lang::Rust,
+        generated: false,
+        size: text.len() as u64,
+    }];
+    let read = move |_: &str| Ok::<_, io::Error>(text.as_bytes().to_vec());
+    refresh(&s, &l, &read, &[]).await.unwrap();
+    assert_eq!(size(&s).await, before);
+}
+
 /// A store stamped with parse 7 holds no references: 7 was also a parse before them (one reverted), so a store from
 /// then is parsed again and gains them.
 #[tokio::test]

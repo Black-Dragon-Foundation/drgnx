@@ -247,6 +247,10 @@ linear in tokens, so throughput is in tokens.
 | One question embedded | 50 ms (95th percentile) |
 | A query, warm, 50,000 chunks | 100 ms (95th percentile) |
 | A query, warm, 100,000 chunks | 200 ms (95th percentile) |
+| The repo map, 50,000 chunks: first after a change (the graph built) / then | 1 s / 150 ms (95th percentile) |
+| Usages of a name, 50,000 chunks | 50 ms (95th percentile) |
+| Symbols / a file's outline, 50,000 chunks | 20 ms / 10 ms (95th percentile) |
+| The reference graphs kept between maps | 64 MB |
 | The editor's main thread per answer | 16 ms (it only renders) |
 | The embed worker's memory | 1.5 GiB, unloaded after 5 idle minutes |
 

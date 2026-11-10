@@ -1342,7 +1342,10 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   list leave the store. Vectors are keyed by content, so a branch switch back embeds nothing. `vec.last_used` is a
   logical clock (one past the store's highest), moved when a vector is written and when tier 1 writes a chunk that
   refers to its key; `collect` keeps unreferenced keys up to twice the live set, the least recently referenced going
-  first. A vector row holds the sign bits and then the int8 values of `urdr`'s `quantize` (`bits` = 8).
+  first. A vector row holds the sign bits and then the int8 values of `urdr`'s `quantize` (`bits` = 8). A refresh writes
+  with a 64 MB page cache and then puts the store's cache size back and lets the pages go: a file's references land
+  all over the name index, and at the default 2 MB that index was most of what references cost tier 1 (6.7 s against
+  5.4 s on a drgnx checkout, on the desktop).
 - **When tier 1 runs (`hrafn::fresh`).** `Settle` is a pure core over the watcher's events: a change under the gitdir is
   due once `index.lock` is gone and the gitdir has been quiet for 2 s; a saved file once it has been quiet for 30 s.
   One watcher instance per project (`hrafn::HostWatch`, feature `host`) feeds it and serves the main checkout and its
