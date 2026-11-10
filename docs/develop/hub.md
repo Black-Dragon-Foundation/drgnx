@@ -2366,8 +2366,10 @@ the search itself is `hrafn::grep`).
   list as the splice of what lies between its common prefix and suffix, or whole when that is shorter, when its window's
   `from` moved, or when its total moved by other than the ids added less those removed, which is how Sjá moves a
   window's total). Past 20,000 entries the list is a window whose total grows with no id to carry it, so each send is
-  the window whole. A send per file batch was measured (101 sends for 10k matches) and cost five times the editor CPU
-  of nine, so the cadence stays.
+  the window whole. A send per file batch (101 sends for 10k matches) was measured twice. Rebuilt and diffed whole per
+  batch it cost the hub seconds, so the models reached the editor over 4.7 s instead of 0.9 s. Appended per batch (the
+  batch's nodes and a splice, made from it alone) it was faster end to end, but each line still woke the editor for a
+  redisplay pass (about 1 ms, redrawing no window), 1.3 times the editor CPU with framing on, so the cadence stays.
 - `search/grep-replace {view, replace}` changes the replacement the rows preview: the hub patches the rows that
   change (`replace` ops) and searches nothing again.
 - `ignore` is `index` (no dot paths, no secret-looking names, the filters of the index) or `real` (only what
