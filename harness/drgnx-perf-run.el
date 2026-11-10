@@ -763,10 +763,10 @@ held more than the window."
           (unless (drgnx-perf--wait 20 (lambda () (equal (nidhogg-view-get (drgnx-perf--sw-h) 'window "order") '(0 20000 30300))))
             (error "Premise: the window did not go back to the first 20,000 (%S)"
                    (nidhogg-view-get (drgnx-perf--sw-h) 'window "order")))
-          ;; the rows grow from the first as the view scrolls (`search/grep-look'), 1,000 at a time, to the window's
-          ;; end: one far `upto' would send ~20,000 rows in one patch, over the hub's 16 MiB per client, which drops it
+          ;; the rows grow from the first as the view scrolls (`search/grep-look'), 300 at a time, to the window's end:
+          ;; every row before the start held, as before S1 (an `upto' more than 400 rows on is a block after a gap row)
           (let ((ids (nidhogg-view-get (drgnx-perf--sw-h) 'list "order")))
-            (cl-loop for k from 999 below 20000 by 1000
+            (cl-loop for k from 299 below 20000 by 300
                      do (drgnx-replace--look (list :upto (nth k ids)))
                      unless (drgnx-perf--wait 30 (lambda () (> (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)) k)))
                      do (error "Premise: the rows did not grow past %d (%d rows)" k
