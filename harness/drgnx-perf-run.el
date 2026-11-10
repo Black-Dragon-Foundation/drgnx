@@ -89,7 +89,50 @@ font-lock (`lisp--el-funcall-position-p', through `forward-sexp') scanned the re
           (select-window editor))
         (setq drgnx-perf--replace-started nil drgnx-perf--replace-typed 0 drgnx-perf--slices nil)
         (advice-add 'drgnx-view--draw-buffer :around #'drgnx-perf--slice-timed)
+        (drgnx-perf--passes-arm)
         (add-hook 'post-command-hook #'drgnx-perf--replace-key))
+      ;; the model's cadence while the view streams (the Cadence rows of plan sja-complete D3): the redisplay passes, those
+      ;; whose last hub input was a model line alone and the windows they redrew (a model the rows don't show redraws
+      ;; none), the model lines, and each model's lag from its line to the drain that applied it
+      (defvar drgnx-perf--cad nil "While armed: (PASSES MODEL-PASSES MODEL-WINDOWS LINES BYTES), counts since the arm.")
+      (defvar drgnx-perf--cad-last nil "`model' after a model line, `other' after any other hub line, nil after a pass.")
+      (defvar drgnx-perf--cad-queued nil "When the oldest model line not yet drained came (`float-time'), or nil.")
+      (defvar drgnx-perf--cad-lags nil "Each drain's lag in ms: from the oldest model line it applied to the drain.")
+      (defun drgnx-perf--cad-model (line)
+        (setq drgnx-perf--cad-last 'model)
+        (when drgnx-perf--cad
+          (cl-incf (nth 3 drgnx-perf--cad))
+          (cl-incf (nth 4 drgnx-perf--cad) (length line))
+          (unless drgnx-perf--cad-queued (setq drgnx-perf--cad-queued (float-time)))))
+      (defun drgnx-perf--cad-other (&rest _) (setq drgnx-perf--cad-last 'other))
+      (defun drgnx-perf--cad-drained (_state r)
+        (when (and drgnx-perf--cad drgnx-perf--cad-queued r (> (nth 0 r) 0))
+          (push (* 1000 (- (float-time) drgnx-perf--cad-queued)) drgnx-perf--cad-lags)
+          (setq drgnx-perf--cad-queued nil)))
+      (defun drgnx-perf--cad-pass (wins)
+        (when drgnx-perf--cad
+          (cl-incf (car drgnx-perf--cad))
+          (when (eq drgnx-perf--cad-last 'model)
+            (cl-incf (nth 1 drgnx-perf--cad))
+            (cl-incf (nth 2 drgnx-perf--cad) (if (listp wins) (length wins) (length (window-list-1 nil nil t))))))
+        (setq drgnx-perf--cad-last nil))
+      (defun drgnx-perf--passes-arm ()
+        (setq drgnx-perf--cad (list 0 0 0 0 0) drgnx-perf--cad-last nil drgnx-perf--cad-queued nil drgnx-perf--cad-lags nil)
+        (advice-add 'drgnx-hub--model-line :before #'drgnx-perf--cad-model)
+        (advice-add 'drgnx-hub--client-line :before #'drgnx-perf--cad-other)
+        (advice-add 'drgnx-view-model--drained :before #'drgnx-perf--cad-drained)
+        (advice-add 'redisplay--pre-redisplay-functions :before #'drgnx-perf--cad-pass))
+      (defun drgnx-perf--passes-done ()
+        "The cadence counts since the arm, as measure keys (none when not armed)."
+        (advice-remove 'drgnx-hub--model-line #'drgnx-perf--cad-model)
+        (advice-remove 'drgnx-hub--client-line #'drgnx-perf--cad-other)
+        (advice-remove 'drgnx-view-model--drained #'drgnx-perf--cad-drained)
+        (advice-remove 'redisplay--pre-redisplay-functions #'drgnx-perf--cad-pass)
+        (prog1 (when-let* ((c drgnx-perf--cad))
+                 (list :model_lag_ms (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--cad-lags))
+                       :cadence (list :passes (nth 0 c) :model_passes (nth 1 c) :model_windows (nth 2 c)
+                                      :model_lines (nth 3 c) :model_bytes (nth 4 c))))
+          (setq drgnx-perf--cad nil drgnx-perf--cad-lags nil)))
       (defun drgnx-perf--replace-key ()
         "After a key: the first starts the search (from a timer, as the view's own typing pause does); the next
 ones are counted while the view streams."
@@ -121,6 +164,7 @@ typing workloads, whose cost from the first key to here is `:complete-kb' and `:
       (defun drgnx-perf--replace-teardown ()
         (remove-hook 'post-command-hook #'drgnx-perf--replace-key)
         (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--slice-timed)
+        (drgnx-perf--passes-done)
         (when-let* ((v (drgnx-perf--replace-view)))
           (with-current-buffer v (drgnx-replace-cancel drgnx-replace--handle)))
         (ignore-errors (drgnx-wb-show-view 'explorer))
@@ -156,10 +200,11 @@ chain without reading any socket, finished them while the harness's next call go
         (setq drgnx-perf--slices nil)
         (advice-add 'drgnx-view--draw-buffer :around #'drgnx-perf--slice-timed))
       (defun drgnx-perf--retype-measure ()
-        "The redraw finished: each view draw's wall time since the arm."
+        "The redraw finished: each view draw's wall time since the arm, and the model's cadence (rows path only)."
         (drgnx-perf--replace-idle)
         (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--slice-timed)
-        (list :slice_ms (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--slices))))
+        (append (list :slice_ms (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--slices)))
+                (drgnx-perf--passes-done)))
       (defun drgnx-perf--retype-check ()
         "No full draw, and the rows are what a fresh render of the view's keys gives."
         (with-current-buffer (drgnx-perf--replace-view)

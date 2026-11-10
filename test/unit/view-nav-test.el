@@ -74,6 +74,39 @@ sending captured, the notice method \"t/set\".  `h' is the buffer's instance in 
     (should (equal '(drgnx-view-selected) (drgnx-view-nav-test--face-at (+ (point-min) 4))))
     (should (= (point) (+ (point-min) 4)))))
 
+(defun drgnx-view-nav-test--drawn ()
+  "What a redisplay of this buffer would show: its text ticks and its overlays with their properties."
+  (list (buffer-modified-tick) (buffer-chars-modified-tick)
+        (sort (mapcar (lambda (o) (list (overlay-start o) (overlay-end o) (overlay-properties o)))
+                      (overlays-in (point-min) (point-max)))
+              (lambda (x y) (< (car x) (car y))))))
+
+(defun drgnx-view-nav-test--label (view version label)
+  "VIEW's model VERSION: a's label is LABEL, a field the rows don't show (no row patch names it)."
+  (drgnx-view-model-event
+   (list :view view :hub 7 :base (1- version) :version version
+         :model (json-serialize
+                 (list :ops (vector (list :nodes (vector (list :id "a" :kind "card" :nav (list :right "b")
+                                                               :fields (vector (vector "label" label)))))))))))
+
+(ert-deftest drgnx-view-nav/a-model-that-moves-no-class-changes-nothing-drawn ()
+  "Pattern B (SJA-MODEL-CADENCE-1): a model no row patch names whose apply moves no class changes neither the text nor
+an overlay of the view's buffer when its timer applies it; one applied after a class moved puts that class on."
+  (drgnx-view-nav-test--with
+    (should (equal "a" (drgnx-view-nav 'select "a")))
+    (let ((before (drgnx-view-nav-test--drawn)))
+      (should (nth 2 before))
+      (cl-loop for label in '("A2" "A3" "A4") for version from 2
+               do (drgnx-view-nav-test--label view version label)
+               (drgnx-view-model--due view)
+               (should (equal label (nidhogg-view-get h 'field "label" "a")))
+               (should (equal before (drgnx-view-nav-test--drawn))))
+      (nidhogg-view-set h 'select "b")
+      (drgnx-view-nav-test--label view 5 "A5")
+      (drgnx-view-model--due view)
+      (should (equal '(drgnx-view-selected) (drgnx-view-nav-test--face-at (+ (point-min) 4))))
+      (should (equal (nth 1 before) (buffer-chars-modified-tick))))))
+
 (ert-deftest drgnx-view-nav/replaced-row-keeps-its-class ()
   "Pattern A: the row holding the selected card is replaced (rows naming the same model); in every order of the
 patch, the draw and the key, once all have run, a's span has the selected face and b's the dim one."
