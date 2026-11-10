@@ -1,7 +1,7 @@
 ;;; history-perf-test.el --- batch tests: the drain tick does not grow with the buffer -*- lexical-binding: t -*-
 ;; The drain runs on the typing path (a 10 Hz timer): a tick may not cost more than a fixed bound however large the
-;; buffer is.  A large buffer is drained only when Emacs is idle, so the hash of its whole text (the hub's check) never
-;; sits between two keystrokes.  Skips on a Nidhogg built without `--with-nidhogg-history'
+;; buffer is.  A large buffer is drained only when Emacs is idle, and the hash of its whole text (the hub's check) is made
+;; by a worker over a copy, so it never sits between two keystrokes.  Skips on a Nidhogg built without `--with-nidhogg-history'
 ;; (fails there under DRGNX_NIDHOGG_STRICT=1).
 ;; test-class: timing
 (require 'ert)
@@ -23,8 +23,16 @@
           ;; typing is not stalled, and nothing is lost: the changes go once Emacs is idle
           (should (= sent 0))
           (should (nidhogg-history-pending-p))
-          (cl-letf (((symbol-function 'drgnx-history--idle-time) (lambda () 1.0)))
-            (drgnx-history--drain))
+          ;; the idle drain copies the text (a memcpy) and a worker hashes it: a key pressed meanwhile waits for the
+          ;; copy only (it was the whole `secure-hash', about 80 ms at this size)
+          (let (idle-drain)
+            (cl-letf (((symbol-function 'drgnx-history--idle-time) (lambda () 1.0)))
+              (let ((t0 (float-time)))
+                (drgnx-history--drain)
+                (setq idle-drain (- (float-time) t0))))
+            (should (< idle-drain 0.012))
+            (message "history-huge: idle drain of 20 MB took %.1f ms" (* 1000 idle-drain)))
+          (should (nidhogg-workers--test-await-landed 'nh-save 10000))
           (should (> sent 0))
           (should-not (nidhogg-history-pending-p)))
       (drgnx-history--forget b)

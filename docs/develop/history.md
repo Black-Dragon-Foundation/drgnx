@@ -308,8 +308,12 @@ records each change to the buffer's text in a ring, outside the command's own wo
 0.1 s, through `drgnx-timer-*`) does nothing unless `nidhogg-history-pending-p`; otherwise it sends each tracked buffer's
 ring as `history/batch`es with the SHA-256 of the buffer's whole text. A change that inserts more than 1 MiB is split into
 pieces of at most a quarter of that many characters, and batches are filled up to the cap. The hub checks every batch
-against the hash of the buffer's whole text, which costs time in proportion to the buffer (about 4 ms per MB), so a
-buffer over 256 K characters is drained only after 0.3 s of idleness and its changes wait in the ring meanwhile. When the hub answers
+against the hash of the buffer's whole text. Nidhogg makes it (`nidhogg-buffer-sha256`: exactly the bytes `secure-hash`
+hashed of the buffer with `utf-8-unix`, narrowing ignored). A buffer over 256 K characters is drained only after 0.3 s of
+idleness (its changes wait in the ring meanwhile), and its text is copied (about 5 ms at 20 MB) and hashed on a worker
+thread (`nidhogg-buffer-sha256-async`): its batches go when the hash lands, its ring waits until then, and a `resync` in
+between drops that drain (the whole text goes instead). A buffer under that size is hashed at once, as is a drain asked
+for by `drgnx-history-drain-now`. With the workers off the same job runs on the main thread. When the hub answers
 `resync` (or Nidhogg drains the symbol `resync`), the ring is dropped and the whole text goes as `history/resync`. A hub
 that goes drops every registration; the next connection registers the buffers again. After a drain that sent changes,
 `drgnx-history-drained-functions` runs with `(BUFFER COUNTER CHANGES)`: the buffer, the number of its drains that sent
