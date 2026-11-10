@@ -2,7 +2,7 @@
 //! the wizard and the doctor show, the consented model download, and the typing signal that holds the vectors back.
 //!
 //! All are the user's: they take the caller's `root`. An agent has no search method; its way in is the MCP search
-//! tools (`search`, `symbols`, `outline`) on its session's `search.sock`, pinned to its job's root (runtime design §5.8).
+//! tools (`search`, `symbols`, `outline`, `repo_map`, `find_usages`) on its session's `search.sock`, pinned to its job's root (runtime design §5.8).
 
 use super::{Empty, method};
 use crate::registry::Method;
@@ -584,6 +584,100 @@ pub struct OutlineAnswer {
     pub fresh: Fresh,
 }
 
+/// What a repo map ranks: code only, or tests and docs too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MapScope {
+    Code,
+    All,
+}
+
+/// `search/map`: the most-referenced definitions of ROOT's view, cut to a token budget.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MapParams {
+    pub root: AbsPath,
+    /// Tokens the map may take (an estimate: characters ÷ 4), 256 to 32,000; default 2,000.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<u32>,
+    /// Files to centre on, relative to ROOT and inside it, at most 50; they are left out of the listing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus: Option<Vec<String>>,
+    /// Identifiers whose definitions rank higher, at most 50.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub names: Option<Vec<String>>,
+    /// Default `code`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<MapScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<bool>,
+}
+
+/// One file of a map: its rank and the definitions shown.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MapFile {
+    pub path: String,
+    pub rank: f64,
+    pub defs: Vec<OutlineEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MapAnswer {
+    /// The map as the agent reads it; its last line gives the counts and the estimate.
+    pub text: String,
+    pub files: Vec<MapFile>,
+    /// The estimate of `text` (characters ÷ 4).
+    pub tokens: u32,
+    /// The files ranked.
+    pub files_total: u32,
+    pub fresh: Fresh,
+}
+
+/// `search/usages`: where a name is used in ROOT's view, by name only.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UsagesParams {
+    pub root: AbsPath,
+    /// 1 to 200 characters.
+    pub name: String,
+    /// Default `all`; tests are ranked after code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Scope>,
+    /// 1 to 100; default 20.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub k: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<bool>,
+}
+
+/// One file's use of the name.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Usage {
+    pub path: String,
+    /// The first line it is used on.
+    pub line: u32,
+    /// The first lines it is used on, at most 8.
+    pub lines: Vec<u32>,
+    /// How often the file uses it.
+    pub n: u32,
+    /// The innermost definition holding `line`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enclosing: Option<String>,
+    pub rank: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UsagesAnswer {
+    /// Where the name is defined (exact).
+    pub defined: Vec<SymbolHit>,
+    pub usages: Vec<Usage>,
+    pub fresh: Fresh,
+}
+
 /// `search/files`'s answer: QUERY numbers the query.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -670,6 +764,16 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/outline", SearchOutline(OutlineParams) -> OutlineAnswer,
             classes: [User], writes: false,
             doc: "one indexed file's definitions in file order with their lines, signatures and nesting, from the index alone; an error for a file the view does not index",
+        ),
+        method!(
+            "search/map", SearchMap(MapParams) -> MapAnswer,
+            classes: [User], writes: false,
+            doc: "a map of a project's view for a first look: the most-referenced definitions (signatures and lines) ranked by PageRank over the files' references, optionally centred on focus files and names, cut to a token budget (an estimate)",
+        ),
+        method!(
+            "search/usages", SearchUsages(UsagesParams) -> UsagesAnswer,
+            classes: [User], writes: false,
+            doc: "where a name is used in a project's view, by name only (no type resolution): the files and first lines, under the definition that uses it, ranked by the using file; its definitions first",
         ),
         method!(
             "search/grep-replace", SearchGrepReplace(GrepReplaceParams) -> bool,

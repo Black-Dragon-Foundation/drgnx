@@ -27495,6 +27495,250 @@
       "classes": [
         "user"
       ],
+      "doc": "a map of a project's view for a first look: the most-referenced definitions (signatures and lines) ranked by PageRank over the files' references, optionally centred on focus files and names, cut to a token budget (an estimate)",
+      "name": "search/map",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "MapScope": {
+            "description": "What a repo map ranks: code only, or tests and docs too.",
+            "enum": [
+              "code",
+              "all"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/map`: the most-referenced definitions of ROOT's view, cut to a token budget.",
+        "properties": {
+          "base": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "budget": {
+            "description": "Tokens the map may take (an estimate: characters ÷ 4), 256 to 32,000; default 2,000.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "focus": {
+            "description": "Files to centre on, relative to ROOT and inside it, at most 50; they are left out of the listing.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "names": {
+            "description": "Identifiers whose definitions rank higher, at most 50.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MapScope"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default `code`."
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "MapParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Fresh": {
+            "additionalProperties": false,
+            "description": "How current a structural answer is: the files tier 1 has still to index, and the view that answered.",
+            "properties": {
+              "files_pending": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "view": {
+                "$ref": "#/$defs/QueryView"
+              }
+            },
+            "required": [
+              "files_pending",
+              "view"
+            ],
+            "type": "object"
+          },
+          "MapFile": {
+            "additionalProperties": false,
+            "description": "One file of a map: its rank and the definitions shown.",
+            "properties": {
+              "defs": {
+                "items": {
+                  "$ref": "#/$defs/OutlineEntry"
+                },
+                "type": "array"
+              },
+              "path": {
+                "type": "string"
+              },
+              "rank": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "path",
+              "rank",
+              "defs"
+            ],
+            "type": "object"
+          },
+          "OutlineEntry": {
+            "additionalProperties": false,
+            "description": "One definition of an outline; DEPTH counts the definitions around it.",
+            "properties": {
+              "depth": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "doc1": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string"
+              },
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "sig": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "line_start",
+              "line_end",
+              "sig",
+              "depth"
+            ],
+            "type": "object"
+          },
+          "QueryView": {
+            "additionalProperties": false,
+            "description": "Which view answered: the base, or a linked worktree's rows over it.",
+            "properties": {
+              "differing_files": {
+                "description": "The paths where the worktree differs from the base (tombstones too); 0 in the base view.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "state": {
+                "description": "`base`; or the tree's `seeding` (the base answered meanwhile), `live`, `stale` or `unwatched` (the stored rows\nanswered and a check runs).",
+                "type": "string"
+              },
+              "worktree": {
+                "description": "The worktree's key (history's worktree id); absent in the base view.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "differing_files",
+              "state"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/$defs/MapFile"
+            },
+            "type": "array"
+          },
+          "files_total": {
+            "description": "The files ranked.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fresh": {
+            "$ref": "#/$defs/Fresh"
+          },
+          "text": {
+            "description": "The map as the agent reads it; its last line gives the counts and the estimate.",
+            "type": "string"
+          },
+          "tokens": {
+            "description": "The estimate of `text` (characters ÷ 4).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "text",
+          "files",
+          "tokens",
+          "files_total",
+          "fresh"
+        ],
+        "title": "MapAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "download the built-in model after the user agreed to its size; nothing downloads without this consent",
       "name": "search/model-download",
       "params": {
@@ -28925,6 +29169,269 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
         "title": "Empty",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "where a name is used in a project's view, by name only (no type resolution): the files and first lines, under the definition that uses it, ranked by the using file; its definitions first",
+      "name": "search/usages",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "Scope": {
+            "description": "Which files a query looks in.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tests",
+                  "docs",
+                  "all"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "code",
+                "description": "Code, and tests below it.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/usages`: where a name is used in ROOT's view, by name only.",
+        "properties": {
+          "base": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "k": {
+            "description": "1 to 100; default 20.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "1 to 200 characters.",
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Scope"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default `all`; tests are ranked after code."
+          }
+        },
+        "required": [
+          "root",
+          "name"
+        ],
+        "title": "UsagesParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Fresh": {
+            "additionalProperties": false,
+            "description": "How current a structural answer is: the files tier 1 has still to index, and the view that answered.",
+            "properties": {
+              "files_pending": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "view": {
+                "$ref": "#/$defs/QueryView"
+              }
+            },
+            "required": [
+              "files_pending",
+              "view"
+            ],
+            "type": "object"
+          },
+          "QueryView": {
+            "additionalProperties": false,
+            "description": "Which view answered: the base, or a linked worktree's rows over it.",
+            "properties": {
+              "differing_files": {
+                "description": "The paths where the worktree differs from the base (tombstones too); 0 in the base view.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "state": {
+                "description": "`base`; or the tree's `seeding` (the base answered meanwhile), `live`, `stale` or `unwatched` (the stored rows\nanswered and a check runs).",
+                "type": "string"
+              },
+              "worktree": {
+                "description": "The worktree's key (history's worktree id); absent in the base view.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "differing_files",
+              "state"
+            ],
+            "type": "object"
+          },
+          "SymbolHit": {
+            "additionalProperties": false,
+            "description": "One definition.",
+            "properties": {
+              "class": {
+                "description": "`code`, `test` or `docs`.",
+                "type": "string"
+              },
+              "container": {
+                "description": "The definition around it in the same file (a method's impl or class).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "doc1": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string"
+              },
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "sig": {
+                "description": "The definition's head (its lines up to the one that names it, before a `{`).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "name",
+              "kind",
+              "line_start",
+              "line_end",
+              "sig",
+              "class"
+            ],
+            "type": "object"
+          },
+          "Usage": {
+            "additionalProperties": false,
+            "description": "One file's use of the name.",
+            "properties": {
+              "enclosing": {
+                "description": "The innermost definition holding `line`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line": {
+                "description": "The first line it is used on.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "lines": {
+                "description": "The first lines it is used on, at most 8.",
+                "items": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "n": {
+                "description": "How often the file uses it.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "type": "string"
+              },
+              "rank": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "path",
+              "line",
+              "lines",
+              "n",
+              "rank"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "defined": {
+            "description": "Where the name is defined (exact).",
+            "items": {
+              "$ref": "#/$defs/SymbolHit"
+            },
+            "type": "array"
+          },
+          "fresh": {
+            "$ref": "#/$defs/Fresh"
+          },
+          "usages": {
+            "items": {
+              "$ref": "#/$defs/Usage"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "defined",
+          "usages",
+          "fresh"
+        ],
+        "title": "UsagesAnswer",
         "type": "object"
       },
       "writes": false
