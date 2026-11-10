@@ -3,9 +3,11 @@
 ;; a "#rrggbb", or (tint COLOUR . ALPHA): COLOUR (a token of the same variant, or a "#rrggbb") at ALPHA over `editor'.
 ;; `overlay' is `raised'; the palette's 0.90 is the palette's own alpha.  Values are the design's palette
 ;; (docs/guide/look.md); high contrast adds `sel-fg', the foreground of text on the selection, and has no tints.
+;; `sel-inactive' is drgnx's, not the design's: the selected row of a list without the focus, at least 1.25:1 against
+;; the panel (the design's `sel-quiet' is 1.15 there, too faint; it stays for buttons and chips).
 ((dark
   (gap . "#0a0b0d") (editor . "#15161a") (panel . "#18191e") (raised . "#1e1f25") (overlay . "#1e1f25")
-  (hover . "#202128") (sel . "#243150") (sel-quiet . "#23252c") (current-line . "#1a1b20")
+  (hover . "#202128") (sel . "#243150") (sel-quiet . "#23252c") (sel-inactive . "#2b2d35") (current-line . "#1a1b20")
   (fg . "#e4e5ea") (muted . "#a2a5b2") (subtle . "#878b98") (disabled . "#4f525d")
   (border . "#2b2d35") (border-subtle . "#212228") (border-strong . "#3b3e49")
   (accent . "#7aa5ff") (accent-fill . "#3d6fe0") (on-accent . "#ffffff") (focus . "#7aa5ff")
@@ -18,7 +20,7 @@
   (a1 . "#80b6ff") (a2 . "#f2ac7e") (a3 . "#a3dba3") (a4 . "#c6a0ff") (a5 . "#f592bb") (a6 . "#7fd6d1"))
  (light
   (gap . "#dfe0e6") (editor . "#ffffff") (panel . "#f6f6f8") (raised . "#ffffff") (overlay . "#ffffff")
-  (hover . "#eeeff2") (sel . "#dbe5fb") (sel-quiet . "#ececf0") (current-line . "#f7f8fa")
+  (hover . "#eeeff2") (sel . "#dbe5fb") (sel-quiet . "#ececf0") (sel-inactive . "#dadbe1") (current-line . "#f7f8fa")
   (fg . "#1c1e23") (muted . "#545866") (subtle . "#656977") (disabled . "#a9adb8")
   (border . "#dcdee4") (border-subtle . "#e9eaee") (border-strong . "#c2c5ce")
   (accent . "#2c5fd4") (accent-fill . "#2c5fd4") (on-accent . "#ffffff") (focus . "#2c5fd4")
@@ -31,7 +33,8 @@
   (a1 . "#2255c2") (a2 . "#a5501a") (a3 . "#2b7339") (a4 . "#7a3ccf") (a5 . "#b0306c") (a6 . "#0b7470"))
  (hc
   (gap . "#000000") (editor . "#000000") (panel . "#000000") (raised . "#0b0b0b") (overlay . "#0b0b0b")
-  (hover . "#1a1a1a") (sel . "#1f3a7a") (sel-fg . "#ffffff") (sel-quiet . "#1a1a1a") (current-line . "#0d0d0d")
+  (hover . "#1a1a1a") (sel . "#1f3a7a") (sel-fg . "#ffffff") (sel-quiet . "#1a1a1a") (sel-inactive . "#242424")
+  (current-line . "#0d0d0d")
   (fg . "#ffffff") (muted . "#d6d8de") (subtle . "#bfc2ca") (disabled . "#8c909a")
   (border . "#8c909a") (border-subtle . "#6b6f78") (border-strong . "#c9ccd3")
   (accent . "#a8c6ff") (accent-fill . "#a8c6ff") (on-accent . "#000000") (focus . "#ffd36b")

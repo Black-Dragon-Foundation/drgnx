@@ -79,7 +79,7 @@
       (let* ((tail (drgnx-buffers-test--tail a)) (i (string-search (drgnx-face-glyph 'dot) tail)))
         (should i)
         (should (get-text-property i 'drgnx-row-control tail))
-        (should (eq 'drgnx-buffers-modified (get-text-property i 'face tail)))
+        (should (memq 'drgnx-buffers-modified (ensure-list (get-text-property i 'face tail))))
         (should-not (string-search (drgnx-face-glyph 'close) tail))))))
 
 (defun drgnx-buffers-test--tail (b)
@@ -226,11 +226,11 @@ conses (a refresh of 500 rows made 20,000 conses interpreted, 4,000 compiled)."
     (let ((a (drgnx-buffers-test--open dir "a.txt")) (b (drgnx-buffers-test--open dir "b.txt")))
       (with-current-buffer drgnx-buffers-buffer-name
         (goto-char (drgnx-buffers--row-pos b))
-        (hl-line-highlight))
+        (drgnx-wb-selection-sync))
       (with-current-buffer a (insert "x"))           ; ● on a: a re-render
       (drgnx-signal--flush)
       (with-current-buffer drgnx-buffers-buffer-name
-        (should (= (overlay-start hl-line-overlay) (drgnx-buffers--row-pos b)))))))
+        (should (= (overlay-start drgnx-wb--selected-overlay) (drgnx-buffers--row-pos b)))))))
 
 (ert-deftest drgnx-buffers/no-re-render-while-a-button-is-held ()
   (drgnx-buffers-test--with dir

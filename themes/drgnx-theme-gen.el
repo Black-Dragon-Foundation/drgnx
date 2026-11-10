@@ -73,6 +73,7 @@ A tint is composited over the variant's `editor'."
          (drgnx-hover :background ,(c 'hover) :box (:line-width (-2 . -2) :style flat-button))
          (drgnx-selected :background ,(c 'sel) ,@(and hc `(:foreground ,(c 'sel-fg))))
          (drgnx-selected-quiet :background ,(c 'sel-quiet))
+         (drgnx-selected-inactive :background ,(c 'sel-inactive))
          (drgnx-focus :box (:line-width (-2 . -2) :color ,(c 'focus)))
          (drgnx-status-attention :foreground ,(c 'attention))
          (drgnx-status-ok :foreground ,(c 'ok))

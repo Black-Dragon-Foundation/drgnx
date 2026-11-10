@@ -33,9 +33,15 @@
     (magit)
     (shell-heredoc)
     (work-space-dark)
-    (start-page))
+    (start-page)
+    (highlights-dark)
+    (highlights-light)
+    (highlights-hc)
+    (explorer-focused-dark)
+    (explorer-focused-light)
+    (explorer-focused-hc))
   "The scenes in the order they are drawn: (NAME . PLIST).  NAME is the mockup's (docs/specs, the-look/NAME.png; the
-start page has none: it is judged against the components' spec) and the session's `drgnx-look-scene-NAME' sets it
+start page, the highlights and the focused Explorer have none: they are judged against the components' spec and the tokens) and the session's `drgnx-look-scene-NAME' sets it
 up.  :agent t starts the mock agent first; :keys and :type are typed after the setup and before the shot, :then after
 it.")
 

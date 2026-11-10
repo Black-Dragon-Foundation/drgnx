@@ -527,7 +527,8 @@ look it describes.
 | `drgnx-border-subtle` | `drgnx-border` | the fainter hairline under a tab row |
 | `drgnx-accent` | `link` (no underline) | the focus and the current thing |
 | `drgnx-hover` | `highlight` | a hovered row; its box has the widths of the focus ring |
-| `drgnx-selected`, `drgnx-selected-quiet` | `region`, `drgnx-surface-raised` | the selection, and the selection without the focus |
+| `drgnx-selected`, `drgnx-selected-quiet` | `region`, `drgnx-surface-raised` | the selection, and the quiet fill of buttons and chips |
+| `drgnx-selected-inactive` | `drgnx-selected-quiet` | the selected row of a list without the focus (the sidebar's sections), at least 1.25:1 against the panel and above the hover; a theme derive colours gets it by moving the raised colour toward the text until it meets that |
 | `drgnx-focus` | none (a box) | the keyboard focus ring; the theme sets its colour |
 | `drgnx-status-attention` | `error` | something waits for you (`drgnx-status-needs-you` inherits it) |
 | `drgnx-agent-1` to `drgnx-agent-6` | `default` | the agents' colours |

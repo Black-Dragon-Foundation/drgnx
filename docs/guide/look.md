@@ -35,6 +35,7 @@ setup.
 | | Dark | Light | High Contrast |
 |---|---|---|---|
 | Selection | blue-grey | pale blue | deep blue, text on it is white |
+| Selection without the focus (a list's selected row) | grey, 1.28:1 on the panel | grey, 1.28:1 | grey, 1.35:1 |
 | Tints (status chips, diff lines) | 11 to 15 % of the status colour | 8 to 14 % | none |
 
 High Contrast has no tints and no shadow faces; every text pair is at least 7:1.
