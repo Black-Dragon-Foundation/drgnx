@@ -6,6 +6,7 @@
 ;; minibuffer it leaves in `minibuffer-inactive-mode', which resets its buffer-local variables).
 
 (require 'ert)
+(require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
@@ -29,7 +30,7 @@
                (`(,l ,tp ,r ,b) (mapcar (lambda (e) (round (* s e))) (window-pixel-edges w))))
     (drgnx-uitest-pixel (drgnx-uitest-snapshot) (+ l (floor (* 0.97 (- r l)))) (+ tp (floor (* 0.5 (- b tp)))))))
 
-(ert-deftest drgnx-ui-look-palette/echo-area-on-the-gap ()
+(drgnx-look-gui-deftest drgnx-ui-look-palette/echo-area-on-the-gap ()
   "Pattern D: with the echo area on the gap, the empty part of the echo area's window is the `gap' token under the
 dark theme while a message shows, with none, and after a prompt has come and gone."
   (skip-unless (display-graphic-p))

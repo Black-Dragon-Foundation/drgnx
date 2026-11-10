@@ -4,6 +4,7 @@
 ;; (comfortable), 19 compact and 23 roomy, at whatever scale the run has (DRGNX_UI_SCALE: 1, 1.25, 2).
 
 (require 'ert)
+(require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
@@ -27,7 +28,7 @@
     (goto-char (point-min))
     (line-pixel-height)))
 
-(ert-deftest drgnx-ui-look-density/code-line-is-21 ()
+(drgnx-look-gui-deftest drgnx-ui-look-density/code-line-is-21 ()
   "Pattern D: `line-pixel-height' in a code buffer is round (21 x scale) when comfortable, and 19 / 23 for compact
 and roomy after a setting change, with no restart."
   (skip-unless (display-graphic-p))
@@ -43,7 +44,7 @@ and roomy after a setting change, with no restart."
       (drgnx-look-density-off)
       (set-window-buffer (selected-window) was))))
 
-(ert-deftest drgnx-ui-look-density/a-new-frame-gets-the-code-line ()
+(drgnx-look-gui-deftest drgnx-ui-look-density/a-new-frame-gets-the-code-line ()
   "Pattern D: a frame made after the density is on (as `C-x 5 2', `emacsclient -c' and a daemon's first graphical
 frame make one: the store's `frame-added') has round (21 x scale) lines too, not the font's own."
   (skip-unless (display-graphic-p))

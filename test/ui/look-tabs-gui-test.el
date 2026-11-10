@@ -7,6 +7,7 @@
 ;; passed.  The tabs are put on a window by their parameters, through chrome's own setter.
 
 (require 'ert)
+(require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
@@ -67,7 +68,7 @@ shown), under the dark theme.  Everything undone after."
 (defun drgnx-ui-look-tabs--near (px rgb)
   (cl-every (lambda (a b) (<= (abs (- a b)) 2)) (cdr px) rgb))
 
-(ert-deftest drgnx-ui-look-tabs/active-tab-joins-the-editor ()
+(drgnx-look-gui-deftest drgnx-ui-look-tabs/active-tab-joins-the-editor ()
   "Pattern D: the shown tab is on the `editor' colour down to the text: a pixel in its last row and a pixel of the
 text area just below the tab line are both the `editor' token, and the tab line's empty part is `panel'."
   (skip-unless (display-graphic-p))
@@ -85,7 +86,7 @@ text area just below the tab line are both the `editor' token, and the tab line'
       (should (drgnx-ui-look-tabs--near (drgnx-uitest-pixel snap (- (round (* s (nth 2 edges))) 40) (+ top 2))
                                         (drgnx-ui-look-tabs--rgb 'panel))))))
 
-(ert-deftest drgnx-ui-look-tabs/the-row-has-its-hairline-and-the-shown-tab-is-lifted ()
+(drgnx-look-gui-deftest drgnx-ui-look-tabs/the-row-has-its-hairline-and-the-shown-tab-is-lifted ()
   "Pattern D: window-dark.html `.tabs': the row's last pixel row is the subtle border, except under the shown tab,
 which is the `editor' colour down to the text and starts 4 logical pixels below the row's top (the row's `panel'
 above it).  Writes the tab row to the session's evidence folder when there is one."
@@ -113,7 +114,7 @@ above it).  Writes the tab row to the session's evidence folder when there is on
       (should (drgnx-ui-look-tabs--near (drgnx-uitest-pixel snap shown-x (+ top (drgnx-px 6)))
                                         (drgnx-ui-look-tabs--rgb 'editor))))))
 
-(ert-deftest drgnx-ui-look-tabs/hover-reveals-the-close ()
+(drgnx-look-gui-deftest drgnx-ui-look-tabs/hover-reveals-the-close ()
   "Pattern D (sway): the close mark of a tab that is not shown is drawn in the tab's own background until the pointer
 is on the tab, then in a foreground colour, and again in the background after the pointer leaves."
   (skip-unless (display-graphic-p))

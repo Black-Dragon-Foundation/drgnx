@@ -26,11 +26,9 @@
 
 (defmacro drgnx-ui-look-explorer--with (root &rest body)
   "BODY with the Explorer rooted at ROOT (a temporary folder with a.txt, b.txt and c.txt, all `modified' in git) shown
-in the selected window of a bare frame under the dark theme, after checking that the session is clean
-\(`drgnx-look-gui-check-clean').  Everything undone after."
+in the selected window of a bare frame under the dark theme.  Everything undone after."
   (declare (indent 1))
-  `(let* ((_ (drgnx-look-gui-check-clean))          ; a row before this one left nothing behind
-          (,root (file-name-as-directory (make-temp-file "look-explorer" t)))
+  `(let* ((,root (file-name-as-directory (make-temp-file "look-explorer" t)))
           (drgnx-explorer--roots nil) (drgnx-explorer-compact-folders nil))
      (dolist (n '("a.txt" "b.txt" "c.txt")) (write-region "" nil (expand-file-name n ,root) nil 'silent))
      (drgnx-uitest-bare-frame)
@@ -68,7 +66,7 @@ row that is not its background, scanning the row from the window's right edge in
     (cl-loop for x from (round (* s (- (nth 2 e) 2))) downto (round (* s (nth 0 e)))
              unless (equal bg (cdr (drgnx-uitest-pixel snap x y))) return x)))
 
-(ert-deftest drgnx-ui-look-explorer/a-section-shows-whole-rows ()
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/a-section-shows-whole-rows ()
   "Pattern D: a dock section with another below it ends at a whole row, so no part of a row (a glyph fragment) is
 drawn at its foot; the section below takes the pixels left over, and a second fit changes nothing."
   (skip-unless (display-graphic-p))
@@ -91,7 +89,7 @@ drawn at its foot; the section below takes the pixels left over, and a second fi
         (set-window-parameter top 'drgnx-role nil)
         (set-window-parameter top 'no-other-window nil)))))
 
-(ert-deftest drgnx-ui-look-explorer/a-section-header-is-one-colour-to-the-edge ()
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/a-section-header-is-one-colour-to-the-edge ()
   "Pattern D, window-dark.html `.sec': a section's header row is the bar's colour over the right fringe too (the
 rows' inset), not a strip of the header line's own colour at its right end."
   (skip-unless (display-graphic-p))
@@ -110,7 +108,7 @@ rows' inset), not a strip of the header line's own colour at its right end."
             (should (funcall near (round (* s (- (nth 2 e) (cadr (window-fringes)) 2)))))))
       (set-window-parameter nil 'header-line-format nil))))
 
-(ert-deftest drgnx-ui-look-explorer/row-height ()
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/row-height ()
   "Pattern D: a row of the Explorer is round (26 x scale) device pixels high at the comfortable density."
   (skip-unless (display-graphic-p))
   (drgnx-ui-look-explorer--with root
@@ -120,7 +118,7 @@ rows' inset), not a strip of the header line's own colour at its right end."
                         'line-spacing (buffer-local-value 'line-spacing (get-buffer drgnx-explorer-buffer-name))
                         'info (font-info (face-font 'drgnx-ui-text nil ?x)) 'cell (frame-char-height)))))))
 
-(ert-deftest drgnx-ui-look-explorer/row-height-follows-the-density ()
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/row-height-follows-the-density ()
   "Pattern D: after a density change, with no restart, a row of the Explorer is round (H x scale) device pixels high,
 H the density's `tree-row' (22 compact, 30 roomy)."
   (skip-unless (display-graphic-p))
@@ -143,7 +141,7 @@ H the density's `tree-row' (22 compact, 30 roomy)."
       (should (equal (mapcar (lambda (r) (list (nth 0 r) (nth 1 r))) got)
                      (mapcar (lambda (r) (list (nth 0 r) (nth 2 r))) got))))))
 
-(ert-deftest drgnx-ui-look-explorer/marks-line-up ()
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/marks-line-up ()
   "Pattern D: the right edges of the git marks of two rows agree within one device pixel."
   (skip-unless (display-graphic-p))
   (drgnx-ui-look-explorer--with root
@@ -154,7 +152,7 @@ H the density's `tree-row' (22 compact, 30 roomy)."
       (should a) (should b)
       (should (<= (abs (- a b)) 1)))))
 
-(ert-deftest drgnx-ui-look-explorer/hover-reveals-the-ellipsis ()
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/hover-reveals-the-ellipsis ()
   "Pattern D (sway): the ⋯ of a row that is not at point is drawn in the row's background until the pointer is on
 the row, and again after the pointer leaves."
   (skip-unless (display-graphic-p))
@@ -179,7 +177,7 @@ the row, and again after the pointer leaves."
       (skip-unless (cadr (mouse-pixel-position)))
       (should (funcall has-fg)))))
 
-(ert-deftest drgnx-ui-look-explorer/the-selected-row-is-one-inset-run ()
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/the-selected-row-is-one-inset-run ()
   "Pattern D, window-dark.html `.row.sel.focus': the focused selection is one fill from the card's inset to the inset
 on the right (the tail does not open a gap, and nothing runs past the row), the fringes either side in the panel's
 colour, 6 logical pixels wide; under Glitnir its corners are rounded (the corner pixel is not the fill)."
@@ -208,7 +206,7 @@ colour, 6 logical pixels wide; under Glitnir its corners are rounded (the corner
       (when (and (fboundp 'glitnir-active-p) (glitnir-active-p))
         (should-not (funcall near left (round (* s (+ (nth 1 e) top))) 'sel))))))
 
-(ert-deftest drgnx-ui-look-explorer/the-focused-row-is-ringed ()
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/the-focused-row-is-ringed ()
   "Pattern D, window-dark.html `.row.sel.focus' (`box-shadow: inset 0 0 0 1px var(--focus)'): with the Explorer
 focused, the selected row is ringed in the focus colour on its left, top and right (the right side at the text
 area's edge, after the tail), and the ring has no seam where the row's text meets its tail (the fill there, above the

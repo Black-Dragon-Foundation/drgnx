@@ -34,7 +34,9 @@ rows turn on, off; no theme; the default height; the global hooks and mode lines
                                                              global-mode-string after-make-frame-functions))
           :focus (format "%S" after-focus-change-function)
           :sel (list (selected-window) (frame-focus-state f))
-          :window-params (seq-remove (lambda (c) (null (cdr c))) (window-parameters (frame-selected-window f)))
+          ;; the harness's own label of a window it drove keys in (`drgnx-uitest-id') draws nothing
+          :window-params (seq-remove (lambda (c) (or (null (cdr c)) (eq (car c) 'drgnx-uitest-id)))
+                                     (window-parameters (frame-selected-window f)))
           :scale (list (and (fboundp 'frame-scale-factor) (frame-scale-factor f))
                        (and (fboundp 'glitnir-active-p) (glitnir-active-p))
                        (frame-parameter f 'drgnx-ui-scale)))))
@@ -52,6 +54,15 @@ rows turn on, off; no theme; the default height; the global hooks and mode lines
                         (list k :was v :now (plist-get now k)))
                       diffs))
     (when diffs (ert-fail (cons 'session-left-changed (nreverse diffs))))))
+
+(defmacro drgnx-look-gui-deftest (name args &rest body)
+  "`ert-deftest' NAME ARGS BODY for a look GUI row: the row starts with `drgnx-look-gui-check-clean', so a row that
+an earlier one left something for fails naming it, before it reads a pixel.  BODY's docstring and keywords stay first."
+  (declare (indent 2) (doc-string 3))
+  (let (head)
+    (when (and (stringp (car body)) (cdr body)) (push (pop body) head))
+    (while (keywordp (car body)) (push (pop body) head) (push (pop body) head))
+    `(ert-deftest ,name ,args ,@(nreverse head) (drgnx-look-gui-check-clean) ,@body)))
 
 (provide 'drgnx-look-gui-fixture)
 ;;; look-gui-fixture.el ends here
