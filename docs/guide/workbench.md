@@ -7,14 +7,18 @@ click lands where you clicked, a row you selected stays selected, docks and pane
 trace. Editor groups split the editor, several windows each keep their own workbench, and the layout survives a
 restart.
 
-**How the dock looks.** The three sections are headed **Open** (the Buffers panel), **Files** (the Explorer) and
-**Outline**, in the heading face with a chevron, in sentence case. Their rows are drawn in the UI font at the density's
+**How the dock looks.** The sidebar is one island on the panel surface (`drgnx-surface-panel`). Its top row is the
+island header: the Explorer's first folder's name, then **+** (New File), a magnifier (Find in Explorer) and **⋯**, a
+menu with Close Sidebar, Save All, Close Saved Editors and Close All Editors (`drgnx-wb-island-menu`). The three sections
+below it are headed **Open** (the Buffers panel), **Files** (the Explorer) and **Outline**: a chevron and the title in
+`drgnx-wb-section` (small, semibold, muted), in sentence case, with nothing else on the row. Their rows are drawn in the UI font at the density's
 row height (26 px comfortable; `drgnx-look-density`), with a line icon for each folder and file kind and the density's
 indent for each level; on a terminal the plain `▾ ▸` stay. A git mark sits at the right edge, in a position that
 is the same on every row (worked out in pixels, kept in columns, so a terminal showing the same Explorer keeps it and the
 `⋯` off its last two columns, whichever frame drew the rows): `M` and `R` in the warning colour, `U` and `A` in the success colour, `D` and conflicts in the
-failure colour, and `●` on a folder with changes. A `⋯` follows it in the Explorer. The `⋯` (and the Buffers panel's `×`)
-is drawn in the row's own colour, so it is invisible, until the pointer is on the row; the row at point always shows it,
+failure colour, and `●` on a folder with changes. A `⋯` follows it in the Explorer, a `×` (close) in the Buffers panel,
+where a file with unsaved changes shows `●` there instead, always. The `⋯` and the `×`
+are drawn in the row's own colour, so it is invisible, until the pointer is on the row; the row at point always shows it,
 and so does every row on a terminal. The row at point is the selection: with the focus ring while the panel has the
 focus, quiet while another window has it.
 
@@ -166,7 +170,9 @@ repositories are kept.  `test/unit/git-letters-test.el` covers the rows with no 
 Save All (`C-k s` · palette — `C-x s` stays Emacs' asking save · `SPC f S`), Close Saved (`C-k u` · palette · `SPC b u`), Close All (`C-k C-w` · palette ·
 `SPC b A`), Close Others (right-click · `o` · `O`) — the three close only rows shown, never buffers the filter
 hides —, a live name filter (`C-M-f` · `/` · `/`), middle-click closes a
-row, and "save all · close saved" buttons in the title. Git letters show after the names. The right-click menu has
+row, and so does a click on the `×` (or `●`) at its right edge. A row is the file's icon and its name, no folder (two
+files of one name are told apart by their buffer names). Git letters sit at the right edge. Save All and Close Saved
+are also on the island header's ⋯. The right-click menu has
 Open, Close, Close Others, Save All, and for the row's buffer Save, Copy Path, Diff with File and Reveal in Explorer.
 The Explorer's right-click menu also has Reveal in Buffers, Open Folder in Dired and Open in Other Window.
 On a folder's top row it has **Remove Folder from Workspace** (also in the palette): the folder leaves the Explorer,
@@ -467,6 +473,10 @@ While `ui/look` runs under Glitnir, the Explorer, the panel, the right dock and 
 1 px ring just outside in the `drgnx-border` colour and a soft shadow, on a gap that comes from the density
 ([The look](look.md#density): 4, 6 or 8 logical pixels). The ring is 60 % opaque in the dark theme, 80 % in the light one
 and solid in High Contrast; the shadow is 45 % in the dark theme, 8 % in the light one and absent in High Contrast.
+The sidebar's sections (Open, Files, Outline) are **one** card: every left-dock window has the window parameter
+`card-group` `(drgnx-sidebar . drgnx-surface-panel)`, and Glitnir draws one card around the windows of a group while
+they tile a rectangle, with the gaps between them in the panel surface. Opening or closing a section, or dragging the
+line between two, re-forms the card at once; windows of a group that tile no rectangle are separate cards.
 `drgnx-look-card` holds the radius and the shape (logical pixels; the ring is a face and an opacity, never a colour).The gap is the frame's `right-divider-width` and `bottom-divider-width` (set in device pixels, so the gap is the same
 number of logical pixels at any display scale, and set again when the scale or the density changes, at once); the
 frame's edge gets the same gap (`internal-border-width`), so the outer cards have their corners, ring and shadow
@@ -504,16 +514,15 @@ area stays one line (`resize-mini-windows` is off), so a tall message never take
 type in the minibuffer it may grow (icomplete-vertical, fido-vertical).
 
 **Closing.** Every help pane, popup and side pane has a **×** in its header: at the right end of the panel's and the
-right dock's tab row and of the popup lane's header, at the start of each left-dock section's title (a long title
-cannot push it out of the dock); `x` where the terminal is not UTF-8,
+right dock's tab row and of the popup lane's header; the left dock has Close Sidebar on its island header's ⋯; `x` where the terminal is not UTF-8,
 and the panel, the right dock and the popup lane close with `Esc` or `q` (**Close Pane**, bound in all three key
 profiles): the panel and the right dock hide (size and tabs kept), a popup ends, and focus goes to the editor you
 used last. The keys only act where you read, not where you type: in a buffer you can edit `q` types a `q`, `Esc` is the Meta
 prefix (`Esc x` is `M-x`) and, in the Vim profile, still leaves insert state, and a terminal tab (`comint`,
 `eshell`, `term`, `vterm`; `drgnx-close-input-modes`), a live page you are driving and the minibuffer keep
 both keys. A mode that takes the keyboard for itself joins by adding a predicate to `drgnx-close-input-functions`. In a terminal frame `Esc` stays the Meta prefix, so use
-`q` or the × there. The left dock's sections keep `Esc` as Back to the Editor (the sidebar stays); its ×, or Close
-Pane in the palette, hides the sidebar. In the Vim profile the two keys close a read-only pane in normal and motion
+`q` or the × there. The left dock's sections keep `Esc` as Back to the Editor (the sidebar stays); Close Sidebar on its
+⋯, or Close Pane in the palette, hides it. In the Vim profile the two keys close a read-only pane in normal and motion
 state too (Close Pane's keys come before evil's, `drgnx-modal-front-alists`); in visual state `Esc` stays evil's and
 leaves the selection.
 

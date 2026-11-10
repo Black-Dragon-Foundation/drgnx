@@ -71,22 +71,20 @@
 
 ;;;; M12f A7: the ✕
 
-(ert-deftest drgnx-wb/a-section-title-closes-the-sidebar ()
+(ert-deftest drgnx-wb/the-island-menu-closes-the-sidebar ()
+  "window-dark.html: a section's title has no ✕; Close Sidebar is in the island header's ⋯ menu."
   (drgnx-wb-test--with-sections
    (drgnx-wb-show-sidebar)
    (dolist (section '(top bottom))
      (let* ((w (drgnx-wb-section-window section)) (title (window-parameter w 'header-line-format)))
        (should (stringp title))
-       ;; the ✕ comes first (a long title cannot clip it), one space in from the frame's edge
-       (should (string-prefix-p (concat " " (drgnx-wb-close-glyph)) title))
-       (should (string-search (upcase (symbol-name section)) title))
-       (should (equal (get-text-property 1 'help-echo title) "Close sidebar"))
-       (should (eq (get-text-property 1 'mouse-face title) 'highlight))))
-   (let* ((w (drgnx-wb-section-window 'bottom)) (title (window-parameter w 'header-line-format)) (i 1))
-     (funcall (lookup-key (get-text-property i 'local-map title) [header-line mouse-1])
-              (list 'mouse-1 (list w 'header-line '(0 . 0) 0 (cons title i))))
-     (should-not (drgnx-wb-sidebar-showing-p))
-     (should (= 1 (length (window-list nil 'nomini)))))))
+       (should-not (string-search (drgnx-wb-close-glyph) title))
+       (should (string-search (upcase (symbol-name section)) title))))
+   (should (eq (cdr (assoc "Close Sidebar" drgnx-wb-island-menu)) 'toggle-sidebar))
+   (cl-letf (((symbol-function 'x-popup-menu) (lambda (&rest _) 'drgnx-wb-toggle-sidebar)))
+     (drgnx-wb-island-show-menu))
+   (should-not (drgnx-wb-sidebar-showing-p))
+   (should (= 1 (length (window-list nil 'nomini))))))
 
 (ert-deftest drgnx-wb/the-close-glyph-has-an-ascii-form ()
   (let ((drgnx-face-glyphs '((close "✕" . "x"))))

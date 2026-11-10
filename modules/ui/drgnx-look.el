@@ -195,6 +195,11 @@ An editor group is an ordinary window: not the minibuffer, a package's side wind
 (defconst drgnx-look--card-parameters '(corner-radius shadow ring)
   "The window parameters of `drgnx-look-card' that make a card.")
 
+(defconst drgnx-look--sidebar-group '(drgnx-sidebar . drgnx-surface-panel)
+  "The left dock's card group (window parameter `card-group'): its sections are one island (window-dark.html
+`.card.ex'), Glitnir drawing one card around them while they tile a rectangle, the dividers between them in the
+panel surface.")
+
 (defun drgnx-look--card-frames ()
   "The graphical root frames."
   (seq-filter (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list)))
@@ -231,12 +236,14 @@ window's ring is the accent when it is one of several editor groups (`drgnx-look
                  '(drgnx-accent . 1.0)
                (drgnx-look--card-value p))))
       (unless (equal (window-parameter window p) v) (set-window-parameter window p v))))
+  (let ((group (and (eq (window-parameter window 'drgnx-role) 'dock) drgnx-look--sidebar-group)))
+    (unless (equal (window-parameter window 'card-group) group) (set-window-parameter window 'card-group group)))
   (unless (window-parameter window 'drgnx-look-card) (set-window-parameter window 'drgnx-look-card t)))
 
 (defun drgnx-look--card-unset (window)
   "Take the card parameters off WINDOW, when this module put them on."
   (when (window-parameter window 'drgnx-look-card)
-    (dolist (p (cons 'drgnx-look-card drgnx-look--card-parameters)) (set-window-parameter window p nil))))
+    (dolist (p (cons 'drgnx-look-card (cons 'card-group drgnx-look--card-parameters))) (set-window-parameter window p nil))))
 
 (defun drgnx-look--card-gap-px (frame)
   "The gap in FRAME's own pixels: the density's `gap' logical pixels times the frame's scale (a frame pixel is a

@@ -75,9 +75,49 @@
     (let ((a (drgnx-buffers-test--open dir "a.txt")))
       (with-current-buffer a (insert "change"))
       (drgnx-signal--flush)
+      ;; the dot takes the close button's place at the right edge, always shown
+      (let* ((tail (drgnx-buffers-test--tail a)) (i (string-search (drgnx-face-glyph 'dot) tail)))
+        (should i)
+        (should (get-text-property i 'drgnx-row-control tail))
+        (should (eq 'drgnx-buffers-modified (get-text-property i 'face tail)))
+        (should-not (string-search (drgnx-face-glyph 'close) tail))))))
+
+(defun drgnx-buffers-test--tail (b)
+  "The string at the right edge of buffer B's row, painted."
+  (with-current-buffer drgnx-buffers-buffer-name
+    (drgnx-buffers--fontify (point-min) (point-max))
+    (let ((row (drgnx-buffers--row-pos b)))
+      (seq-some (lambda (o) (and (overlay-get o 'drgnx-row-tail) (overlay-get o 'after-string)))
+                (overlays-in row (1+ (save-excursion (goto-char row) (pos-eol))))))))
+
+(ert-deftest drgnx-buffers/a-row-is-the-icon-and-the-name ()
+  ;; window-dark.html's Open rows: the file's icon and name; no folder, no close column at the start; the close
+  ;; button is the control at the right edge, hidden until the row is hovered (a terminal always shows it)
+  (drgnx-buffers-test--with dir
+    (let ((a (drgnx-buffers-test--open dir "sub/a.el")))     ; no x in it: an ASCII terminal's close glyph is x
       (with-current-buffer drgnx-buffers-buffer-name
-        (goto-char (drgnx-buffers--row-pos a))
-        (should (string-search "●" (buffer-substring (pos-bol) (pos-eol))))))))
+        (let* ((row (drgnx-buffers--row-pos a))
+               (text (buffer-substring-no-properties row (save-excursion (goto-char row) (pos-eol)))))
+          (should (equal "a.el" (string-trim text)))
+          (should-not (string-search "sub" text))
+          (should-not (string-search (drgnx-face-glyph 'close) text))))
+      (let* ((tail (drgnx-buffers-test--tail a)) (i (string-search (drgnx-face-glyph 'close) tail)))
+        (should i)
+        (should (get-text-property i 'drgnx-row-control tail))))))
+
+(ert-deftest drgnx-buffers/a-click-on-the-control-closes-the-row ()
+  ;; a click on the right edge's × closes that row's buffer; a click elsewhere on the row opens it
+  (drgnx-buffers-test--with dir
+    (let ((a (drgnx-buffers-test--open dir "a.txt")) (b (drgnx-buffers-test--open dir "b.txt")))
+      (let* ((tail (drgnx-buffers-test--tail b)) (i (string-search (drgnx-face-glyph 'close) tail))
+             (w (drgnx-wb-section-window 'buffers))
+             (eol (with-current-buffer drgnx-buffers-buffer-name
+                    (save-excursion (goto-char (drgnx-buffers--row-pos b)) (pos-eol))))
+             (posn (list w eol '(0 . 0) 0 (cons tail i) eol)))
+        (should (drgnx-buffers--on-control-p posn))
+        (drgnx-buffers-mouse-click (list 'mouse-1 posn posn)))
+      (should (buffer-live-p a))
+      (should-not (buffer-live-p b)))))
 
 (ert-deftest drgnx-buffers/view-and-selection-stay-by-identity ()
   (drgnx-buffers-test--with dir
@@ -122,9 +162,7 @@
     (let ((a (drgnx-buffers-test--open dir "a.txt")) (b (drgnx-buffers-test--open dir "b.txt"))
           (c (drgnx-buffers-test--open dir "c.txt")))
       (with-current-buffer drgnx-buffers-buffer-name
-        (let ((x (save-excursion (goto-char (drgnx-buffers--row-pos b)) (search-forward (drgnx-face-glyph 'close) (pos-eol)) (match-beginning 0))))
-          (should (drgnx-buffers--close-p x))
-          (drgnx-buffers-close-at x)))
+        (drgnx-buffers-close-at (drgnx-buffers--row-pos b)))
       (should (buffer-live-p a))
       (should-not (buffer-live-p b))
       (should (buffer-live-p c)))))

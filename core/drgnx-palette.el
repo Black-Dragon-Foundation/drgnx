@@ -55,11 +55,12 @@ the ring's colour), radius 4 where the compositor rounds."
   "The room inside a keycap at either end (design §3.5 `kbd': 5 px with the 1 px ring).")
 
 (defun drgnx-palette-keycaps (key)
-  "The key description KEY as keycaps: each key in `drgnx-keycap' with 4 px of room inside at either end, one space
-between."
-  (mapconcat (lambda (name)
-               (propertize (concat drgnx-palette--keycap-pad name drgnx-palette--keycap-pad) 'face 'drgnx-keycap))
-             (drgnx-palette-keycap-names key) " "))
+  "The key description KEY as keycaps: each key in `drgnx-keycap' with 4 px of room inside at either end on a
+graphical frame, one space between.  A terminal draws no ring, so its caps are the names alone (a 4 px space is 4
+columns there)."
+  (let ((pad (if (display-graphic-p) drgnx-palette--keycap-pad "")))
+    (mapconcat (lambda (name) (propertize (concat pad name pad) 'face 'drgnx-keycap))
+               (drgnx-palette-keycap-names key) " ")))
 
 ;;;; Recent commands
 
