@@ -8,7 +8,7 @@ Semantic Search question. `C-g` cancels.
 
 With the `extra/completion` module on, on Nidhogg with Glitnir active, the palette floats: the prompt, the text you
 type and the candidates all show in one box, top-centre in the editor frame, 640 logical pixels wide (less in a narrow
-frame). It is rounded, shadowed and blurs what lies behind it, and it fades and pops in and out.
+frame). It is rounded and shadowed, hides what lies behind it, and fades and pops in and out.
 
 Everywhere else (a terminal, another Emacs, `extra/completion` off) the palette stays in the minibuffer, as before.
 The keys, Return, `C-g` and `#` search work the same either way. A question that opens on top of the palette leaves it
@@ -30,9 +30,12 @@ open: when you have answered, the palette is there as you left it.
 |---|---|---|
 | `corner-radius` | 12 | logical pixels |
 | `shadow` | `(:blur 48 :offset (0 . 16) :spread 0 :opacity 0.5)` | 0.22 in the light theme, none in High Contrast; colour comes from the `child-frame-shadow` face |
-| `alpha-background` | 0.90 | 1.0 in High Contrast |
-| `backdrop-blur` | 12 | logical pixels of blur radius behind the box; none in High Contrast |
+| `alpha-background` | 0.98 | 1.0 in High Contrast; near opaque, see below |
+| `backdrop-blur` | none | logical pixels of blur radius behind the box, when you set it |
 | `transition` | `pop` | fade and pop in and out |
+
+The design's box is 90 % opaque with a blur of what lies behind it. Until that blur shows on Nidhogg, a box at 90 %
+would let the text behind read through, so the box is near opaque instead.
 
 `drgnx-palette-frame-width` (640 logical pixels, at any display scale) and `drgnx-palette-frame-top` (0.12, the fraction
 of the frame's height above the box) place it. No colours are set here: the theme's faces colour everything.

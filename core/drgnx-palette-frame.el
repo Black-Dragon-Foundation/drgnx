@@ -162,6 +162,7 @@ echo area keeps the minibuffer as it is."
     (overlay-put prompt 'before-string
                  (concat (drgnx-palette-frame--lead) (drgnx-look-icon 'search 'drgnx-text-subtle) " "))
     (set-window-parameter win 'mode-line-format (drgnx-palette-frame--footer))
+    (add-hook 'pre-redisplay-functions #'drgnx-palette-frame--keep-count 90 t)
     (setq drgnx-palette-frame--dressing
           (cons prompt (cons (drgnx-palette-frame--hint)
                              (list (face-remap-add-relative 'mode-line 'drgnx-palette-footer)
@@ -169,20 +170,31 @@ echo area keeps the minibuffer as it is."
 
 (defvar vertico--candidates-ov)
 
-(defun drgnx-palette-frame-hint-candidates ()
-  "After vertico draws the candidates (its overlay's string: a space that takes the cursor, then the rows), put the
-hint between that space and the rows, so it ends the input row and the cursor stays after the typed text.  Only in
-the minibuffer the palette's frame shows."
+(defun drgnx-palette-frame-after-candidates (lines)
+  "After vertico draws LINES (its overlay's string: a space that takes the cursor, then the rows): put the hint between
+that space and the rows, so it ends the input row and the cursor stays after the typed text; and fit the box to its
+rows, the input row and the footer (at most `vertico-count' rows, the height it opened at).  Only in the minibuffer
+the palette's frame shows."
   (when-let* ((d drgnx-palette-frame--dressing)
               ((eq (current-buffer) (overlay-buffer (car d))))
               (ov (bound-and-true-p vertico--candidates-ov))
               (s (overlay-get ov 'before-string))
               ((> (length s) 0)))
-    (overlay-put ov 'before-string (concat (substring s 0 1) (cadr d) (substring s 1)))))
+    (overlay-put ov 'before-string (concat (substring s 0 1) (cadr d) (substring s 1)))
+    (when (frame-live-p drgnx-palette-frame--frame)
+      (let ((h (* (default-line-height) (+ (min (length lines) (default-value 'vertico-count)) 2))))
+        (unless (= h (frame-text-height drgnx-palette-frame--frame))
+          (set-frame-size drgnx-palette-frame--frame (frame-text-width drgnx-palette-frame--frame) h t))))))
+
+(defun drgnx-palette-frame--keep-count (_window)
+  "On the dressed minibuffer's `pre-redisplay-functions', after `vertico-buffer''s: `vertico-count' stays the most
+rows the box shows, not the rows of a box fitted to fewer."
+  (setq-local vertico-count (default-value 'vertico-count)))
 
 (defun drgnx-palette-frame--undress ()
   "Take the input row's overlay and the footer's remaps off the current minibuffer buffer."
   (when drgnx-palette-frame--dressing
+    (remove-hook 'pre-redisplay-functions #'drgnx-palette-frame--keep-count t)
     (delete-overlay (car drgnx-palette-frame--dressing))
     (mapc #'face-remap-remove-relative (cddr drgnx-palette-frame--dressing))
     (setq drgnx-palette-frame--dressing nil)))

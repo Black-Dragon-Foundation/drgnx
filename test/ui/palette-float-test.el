@@ -34,9 +34,9 @@
 (defun drgnx-palette-float-test--run-it () (interactive) (setq drgnx-palette-float-test--ran 'it))
 (defun drgnx-palette-float-test--run-other () (interactive) (setq drgnx-palette-float-test--ran 'other))
 
-(defun drgnx-palette-float-test--hint (&rest _)
-  "The completion module's advice: the hint inside vertico's candidates string."
-  (drgnx-palette-frame-hint-candidates))
+(defun drgnx-palette-float-test--hint (lines)
+  "The completion module's advice: the hint inside vertico's candidates string, the box fitted to its rows."
+  (drgnx-palette-frame-after-candidates lines))
 
 (defmacro drgnx-palette-float-test--with-palette (&rest body)
   "BODY with the palette as the completion module sets it up: vertico, multiform's entry, the exit hook."
@@ -182,6 +182,9 @@ of keys; those belong to the box's window alone, and C-g takes them all off the 
            (drgnx-palette-float-test--wait-shown f)
            (setq mb (current-buffer) win (frame-root-window f))
            (should (string-search "move" (format "%s" (window-parameter win 'mode-line-format))))
+           ;; the box fits its rows: the group's title and the two commands, the input row and the footer
+           (should (= (window-pixel-height win) (* (default-line-height) (+ 3 2))))
+           (should (< (+ 3 2) (+ (default-value 'vertico-count) 2)))
            (let ((ovs (seq-filter (lambda (o) (eq (overlay-get o 'window) win))
                                   (overlays-in (point-min) (point-max)))))
              (should (seq-find (lambda (o) (overlay-get o 'invisible)) ovs))
@@ -254,6 +257,61 @@ of keys; those belong to the box's window alone, and C-g takes them all off the 
        (list 'return))
       ;; the typed answer reached the minibuffer window: the command ran
       (should (eq drgnx-palette-float-test--ran 'other)))))
+
+;; The editor under the box is a block of solid glyphs; a strip of the box's input row where the box draws nothing
+;; (between the typed text and the hint) must be one surface, every channel within this many levels: what lies behind
+;; shows through neither crisp (alpha alone) nor as stripes.
+(defconst drgnx-palette-float-test--frost-delta 8)
+
+(defun drgnx-palette-float-test--spread (snap xs y)
+  "The widest range of one colour channel over SNAP's pixels XS on row Y."
+  (let ((px (mapcar (lambda (x) (cdr (drgnx-uitest-pixel snap x y))) xs)))
+    (cl-loop for c from 0 below 3
+             maximize (- (apply #'max (mapcar (lambda (p) (nth c p)) px))
+                         (apply #'min (mapcar (lambda (p) (nth c p)) px))))))
+
+(ert-deftest palette-float-hides-what-lies-behind ()
+  "palette.html's box is frosted (90 % with a blur) or, where the blur does not reach the picture, opaque: the text
+behind it never reads through.  Behind the box: solid glyphs and spaces in turn, so a strip across them is striped;
+in the box (its input row, between the typed text and the hint, where it draws nothing) the strip is one surface."
+  (skip-unless (drgnx-uitest-glitnir-p))
+  (let ((buf (get-buffer-create "*palette-frost*")) (root (drgnx-uitest-root-frame)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (erase-buffer)
+            (dotimes (_ 60) (insert (apply #'concat (make-list 100 "█ ")) "\n"))
+            (goto-char (point-min)))
+          (with-selected-frame root (delete-other-windows) (switch-to-buffer buf))
+          (drgnx-palette-float-test--with-palette
+            (let ((none (progn (drgnx-test-wait-presented) (drgnx-uitest-snapshot root))))
+              (drgnx-palette-float-test--reading
+               "Test"
+               (lambda ()
+                 (let ((f (drgnx-test-wait (lambda () (drgnx-palette-float-test--palette-frame))
+                                           :what "the palette's frame")))
+                   (drgnx-palette-float-test--wait-shown f)
+                   (drgnx-test-wait-presented)
+                   (let* ((snap (drgnx-uitest-snapshot root))
+                          (k (if (featurep 'nidhogg-wayland) 1 (frame-scale-factor root)))
+                          (e (mapcar (lambda (v) (round (* k v))) (drgnx-palette-float-test--edges f)))
+                          (w (- (nth 2 e) (nth 0 e)))
+                          ;; the input row's middle: the frame's border, then half a row
+                          (y (+ (nth 1 e) (round (* k (+ (frame-internal-border-width f)
+                                                         (/ (with-current-buffer (window-buffer (frame-root-window f))
+                                                              (default-line-height))
+                                                            2))))))
+                          (xs (number-sequence (+ (nth 0 e) (round (* 0.40 w))) (+ (nth 0 e) (round (* 0.62 w)))))
+                          (behind (drgnx-palette-float-test--spread none xs y))
+                          (inside (drgnx-palette-float-test--spread snap xs y)))
+                     (when (drgnx-uitest-region-equal-p snap none e)
+                       (ert-skip "the snapshot of a root does not hold child frames yet (nsnap): no pixel check"))
+                     (should (> behind 60))           ; the stripes are there to hide
+                     (unless (<= inside drgnx-palette-float-test--frost-delta)
+                       (ert-fail (list :inside inside :behind behind :at y :from (car xs) :to (car (last xs))
+                                       :alpha (frame-parameter f 'alpha-background)
+                                       :blur (frame-parameter f 'backdrop-blur)))))))))))
+      (kill-buffer buf))))
 
 (ert-deftest palette-float-screenshots ()
   "Screenshots of the open palette at the session's scale (1.25 and 2 for the P3 sign-off), and, when the snapshot
