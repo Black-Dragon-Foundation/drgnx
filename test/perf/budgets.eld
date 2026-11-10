@@ -113,6 +113,13 @@
  ;; 330-337 ms; the budgets sit at 16800 kB (10 % over, so a return to 17771 fails) and 400 ms.  Without framing (the default until
  ;; gate 26) the same run is 26910 kB, 448 ms, so these rows stay report-only until the combined pass decides the path.
  (replace-typing-rows (:complete-kb) 16800 :report-only rro-scan) (replace-typing-rows (:complete-cpu_ms) 400 :report-only rro-scan)
+ ;; search-retype: retyping the Search view's query over 10k matches on the hub's rows path, a search per key (plan
+ ;; sja-complete S2, the hub-path pair of the retired replace-retype): its keys within the input budget; what the user
+ ;; sees: a search's first rows drawn within 50 ms of its start (115 ms while a quiet view's first draw waited the whole
+ ;; throttle; 33-35 ms p95 after it waits one frame, 2026-11-10, release hub, pinned, two runs), and the key to the
+ ;; search's end with its rows drawn (the 250 ms typing pause included): 337-356 ms p95 then, x 1.25
+ (search-retype (:input :p95) 16) (search-retype (:input :max) 50)
+ (search-retype (:search_first_ms :p95) 50) (search-retype (:settle_ms :p95) 450)
  (remote-typing (:alloc :p50) 17300) (remote-typing (:cpu_ms :p50) 8) (remote-typing (:cpu_ms :p90) 11) (remote-typing (:rows) 1)
  (window-switch (:alloc :p50) 29638) (window-switch (:cpu_ms :p90) 43.6) (window-switch (:rows) 0)
  ;; Watchdog rows, REPORTED until seeded (`drgnx-perf-watchdog-gated'): no stall in any input

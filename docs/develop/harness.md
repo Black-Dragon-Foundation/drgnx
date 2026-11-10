@@ -612,9 +612,11 @@ bin/drgnx ui look-scenes OUT                     # the look's scenes as PNGs (se
 Input commands wait until the session settles and print the jank report. `click` takes X and Y as non-negative
 integers (pixels) and fails on anything else, never clicking at 0,0 instead. In `measure`, each action is
 delivered before the next one is resolved, so a click after `C-x 3` is aimed at the layout the keys produced. An
-action that fails (a bad key, a target not on screen) ends the measurement — the session's recorder stops — and
-the error names it: `action 2 (:keys "bad"): …`; later actions are not sent. `bin/drgnx` passes arguments after
-`--`, so options Emacs itself knows (`--title`, `-nw`, …) cannot be swallowed by Emacs.
+action `{"pause": SECS}` (`(:pause SECS)`) waits SECS seconds with no input before the next action is sent, so a
+workload can let a typing pause run out between keys. An action that fails (a bad key, a target not on screen)
+ends the measurement — the session's recorder stops — and the error names it: `action 2 (:keys "bad"): …`; later
+actions are not sent. `bin/drgnx` passes arguments after `--`, so options Emacs itself knows (`--title`, `-nw`, …)
+cannot be swallowed by Emacs.
 
 ## Ownership and cleanup
 
