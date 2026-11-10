@@ -31,14 +31,13 @@
 (require 'drgnx-modules)
 (require 'drgnx-view)
 (require 'drgnx-hub-client)
+(require 'drgnx-panes)                   ; the right island the panel opens in
 (require 'drgnx-view-nav)                ; the moves between steps of a kind, through the replica
 (require 'text-property-search)          ; the moves look through the drawn rows
 
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-view-env-register "drgnx-view-env")
 (declare-function drgnx-view-env-update "drgnx-view-env")
-(declare-function drgnx-pane-define-kind "drgnx-panes")
-(declare-function drgnx-pane-show "drgnx-panes")
 (defvar drgnx-hub--events)
 
 (defgroup drgnx-agent-panel nil "The agent panel." :group 'drgnx)
@@ -587,9 +586,7 @@ signal when no hub serves)."
   "Show SESSION's panel in the right dock, one tab for each open agent."
   (interactive (list (drgnx-agent-panel--read-session)))
   (let ((buf (drgnx-agent-panel-buffer session)))
-    (if (fboundp 'drgnx-pane-show)
-        (drgnx-pane-show 'agent-panel :buffer buf :select t)
-      (pop-to-buffer buf))
+    (drgnx-pane-show 'agent-panel :buffer buf :select t)
     (with-current-buffer buf
       (drgnx-agent-panel-sync-windows)
       (drgnx-agent-panel-explain-load-grants))
@@ -690,8 +687,7 @@ stays in it.  Every fifth update opens a new block, the others grow the last one
                                              "Go to your previous message in the panel, wrapping")))
     (drgnx-command-define (nth 0 c) :category "Agents" :title (nth 1 c) :command (nth 2 c)
                           :map 'drgnx-agent-panel-mode-map :doc (nth 3 c)))
-  (when (fboundp 'drgnx-pane-define-kind)
-    (drgnx-pane-define-kind 'agent-panel :title " AGENT" :home 'right :buffer #'drgnx-agent-panel--current-buffer))
+  (drgnx-pane-define-kind 'agent-panel :title " AGENT" :home 'right :buffer #'drgnx-agent-panel--current-buffer)
   (drgnx-module-hook 'drgnx-hub-event-functions panel-event (event data) (drgnx-agent-panel--event event data))
   (drgnx-module-hook 'drgnx-hub-connected-functions panel-resubscribe () (drgnx-agent-panel--resubscribe))
   (drgnx-module-hook 'window-buffer-change-functions panel-windows (frame) (drgnx-agent-panel-sync-windows frame))

@@ -1,6 +1,6 @@
 # The agent panel
 
-The agent panel shows one agent session in the right dock: who it is and what it is doing, a row of chips, and the
+The agent panel shows one agent session in the right dock, beside the editor and never as one of its tabs: who it is and what it is doing, a row of chips, and the
 conversation as rows. Open it with **Agents: Open the Agent Panel** (`C-k p` in the VS Code profile, `SPC a p` in Vim).
 There is one tab for each open agent.
 

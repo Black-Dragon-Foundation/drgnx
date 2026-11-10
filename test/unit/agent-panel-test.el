@@ -841,3 +841,12 @@ nothing: the subscription went with the connection, and a kill hook never signal
           (with-current-buffer buf (setq drgnx-agent-panel--subscribed t))
           (kill-buffer buf))
         (should (zerop calls))))))
+
+;; The audit's G1: the panel opened as a tab of the editor, because nothing loaded the pane kinds' library and the
+;; setup's `fboundp' guard skipped the kind
+(ert-deftest drgnx-agent-panel/opens-in-the-right-island ()
+  "The module's setup defines the pane kind `agent-panel' with its home on the right, so opening a session shows the
+panel in the right island (agent-panel.html), not as a tab of the editor."
+  (drgnx-test-with-modules '(tools/agent-panel)
+    (should (fboundp 'drgnx-pane-show))
+    (should (eq 'right (plist-get (drgnx-pane-kind 'agent-panel) :home)))))

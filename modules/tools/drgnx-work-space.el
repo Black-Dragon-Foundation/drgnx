@@ -17,6 +17,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-state)
+(require 'drgnx-panes)                   ; the detail's right pane
 (require 'drgnx-view)
 (require 'drgnx-pixels)
 (require 'drgnx-work-client)
@@ -72,8 +73,6 @@
 (declare-function drgnx-work-job-log "drgnx-work-detail")
 (declare-function drgnx-work-huddle-overlap "drgnx-work-detail")
 (declare-function drgnx-work-map--huddles-changed "drgnx-work-map")
-(declare-function drgnx-pane-define-kind "drgnx-panes")
-(declare-function drgnx-pane-show "drgnx-panes")
 
 (declare-function drgnx-hub-ensure "drgnx-hub-client")
 (declare-function drgnx-wb-place "drgnx-rules")
@@ -426,8 +425,7 @@ follows the windows; the commands."
   (drgnx-command-define 'work-who-is-here :category "Work" :title "Who Is in This File"
                         :command #'drgnx-work-who-is-here
                         :doc "Name the agents in the file you are visiting, with their lines, and select it on the map")
-  (when (fboundp 'drgnx-pane-define-kind)
-    (drgnx-pane-define-kind 'work-detail :title " WORK DETAIL" :home 'right :buffer #'drgnx-work-space--detail-buffer))
+  (drgnx-pane-define-kind 'work-detail :title " WORK DETAIL" :home 'right :buffer #'drgnx-work-space--detail-buffer)
   (pcase-dolist (`(,id ,title ,fn ,doc)
                  '((work-left "Select the Previous Item" drgnx-work-map-left "Along the layer, to the left")
                    (work-right "Select the Next Item" drgnx-work-map-right "Along the layer, to the right")
