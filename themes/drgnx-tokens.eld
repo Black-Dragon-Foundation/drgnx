@@ -11,7 +11,8 @@
 ;; ruling of 2026-11-10); light and high contrast keep the design's 25 %, unoutlined (the edge is the fill).
 ;; `refine-add', `refine-del' and `refine-chg' are a diff's refined words: the line's hue over the line's tint, as
 ;; strong as every syntax colour on it allows; where that stands under 1.25:1 off the line, the run has an edge of the
-;; hue at 3:1 on the line (`refine-*-edge'; elsewhere the edge is the fill).  The user's ruling of 2026-11-10.
+;; hue at 3:1 on the line (`refine-*-edge'; elsewhere the edge is the fill), and in high contrast always (rings
+;; over tints).  The rulings of 2026-11-10.
 ((dark
   (gap . "#0a0b0d") (editor . "#15161a") (panel . "#18191e") (raised . "#1e1f25") (overlay . "#1e1f25")
   (hover . "#202128") (sel . "#243150") (sel-quiet . "#23252c") (sel-inactive . "#2b2d35") (current-line . "#1a1b20")
@@ -60,5 +61,6 @@
   (comment . "#bfc2ca") (punct . "#d6d8de")
   (match tint accent . 0.25) (match-edge tint accent . 0.25)
   (refine-add over add-bg ok . 0.06) (refine-del over del-bg error . 0.14) (refine-chg over warn-tint warn . 0.24)
-  (refine-add-edge over add-bg ok . 0.42) (refine-del-edge . refine-del) (refine-chg-edge . refine-chg)
+  (refine-add-edge over add-bg ok . 0.42) (refine-del-edge over del-bg error . 0.50)
+  (refine-chg-edge over warn-tint warn . 0.42)
   (a1 . "#a8c6ff") (a2 . "#ffc49c") (a3 . "#b9f0b9") (a4 . "#dcc0ff") (a5 . "#ffb0d3") (a6 . "#96ece6")))

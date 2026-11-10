@@ -44,11 +44,12 @@ setup.
 | Selection | blue-grey | pale blue | deep blue, text on it is white |
 | Selection without the focus (a list's selected row) | grey, 1.28:1 on the panel | grey, 1.28:1 | grey, 1.35:1 |
 | Tints (status chips, diff lines) | 11 to 15 % of the status colour | 8 to 14 % | none |
-| A diff's refined words (`diff-refine-*`) over the line's tint | 6 % added, 11 % removed, 3 % changed, each edged | 19 %, 16 %, 17 % | 6 % added (edged), 14 % removed, 24 % changed |
+| A diff's refined words (`diff-refine-*`) over the line's tint | 6 % added, 11 % removed, 3 % changed, each edged | 19 %, 16 %, 17 % | 6 %, 14 %, 24 %, each edged |
 
 A refined word is its line's colour, stronger: the status colour over the line's tint, as strong as it can be with
 every syntax colour still readable on it (4.5:1, 7:1 in High Contrast), since a hunk keeps its code's colours. Where
-that stands less than 1.25:1 off the line, the word also gets a 1 px edge in the line's colour, 3:1 on the line's tint.
+that stands less than 1.25:1 off the line, and always in High Contrast, the word also gets a 1 px edge in the line's
+colour, 3:1 on the line's tint.
 
 High Contrast has no tints and no shadow faces; every text pair is at least 7:1.
 

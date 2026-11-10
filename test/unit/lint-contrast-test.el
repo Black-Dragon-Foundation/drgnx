@@ -96,7 +96,7 @@
       (add (drgnx-lint-contrast--pairs text drgnx-lint-contrast--syntax
                                        '(diff-added diff-removed diff-refine-added diff-refine-removed)))
       ;; a refined run is the line's hue, stronger: it stands 1.25:1 off its line's tint, or it has an edge of its
-      ;; own (the line's hue) at 3:1 on that tint
+      ;; own (the line's hue) at 3:1 on that tint; in high contrast it always has the edge (rings over tints)
       (pcase-dolist (`(,refine . ,line) '((diff-refine-added . diff-added) (diff-refine-removed . diff-removed)
                                           (diff-refine-changed . diff-changed)))
         (let* ((fill (drgnx-lint-contrast--bg refine)) (under (drgnx-lint-contrast--bg line))
@@ -106,6 +106,7 @@
                 (unless (>= ratio 3.0)
                   (push (format "%s edge (%s) on %s (%s): %.2f, needs 3" refine edge line under ratio) fails)))
             (let ((ratio (drgnx-color-contrast fill under)))
+              (when hc (push (format "%s has no edge: high contrast rings every refined run" refine) fails))
               (unless (>= ratio 1.25)
                 (push (format "%s (%s) on %s (%s): %.2f, needs 1.25 or an edge" refine fill line under ratio)
                       fails))))))
