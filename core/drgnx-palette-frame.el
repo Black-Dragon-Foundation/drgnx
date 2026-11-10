@@ -34,9 +34,11 @@
   "The plain buffer the palette's window shows between uses.")
 
 (defconst drgnx-palette-frame-multiform
-  '(drgnx-palette-frame-buffer (vertico-buffer-display-action drgnx-palette-frame--display (drgnx-explicit . t)))
+  '(drgnx-palette-frame-buffer (vertico-buffer-display-action drgnx-palette-frame--display (drgnx-explicit . t))
+                               (vertico-count-format) (vertico-group-format . "%s"))
   "The settings `vertico-multiform-categories' holds for the palette's category, `drgnx-command'.  The action is
-marked explicit, so the workbench's placement rules leave it to the palette's frame.")
+marked explicit, so the workbench's placement rules leave it to the palette's frame.  No count, and a group's title
+is the palette's own (`drgnx-palette--group-title'): no rule line.")
 
 (defun drgnx-palette-frame-wanted-p ()
   "Non-nil when the palette floats: Glitnir is active on a graphical frame."
@@ -120,6 +122,75 @@ the palette's frame shows it, whichever of the two ran first)."
   (drgnx-palette-frame--rows (if drgnx-palette-frame--floats drgnx-palette-frame-row-px
                                drgnx-palette-frame-minibuffer-row-px)))
 
+(declare-function drgnx-palette-keycap "drgnx-palette")
+(declare-function drgnx-look-icon "drgnx-icons")
+(declare-function drgnx-px "drgnx-pixels")
+(defvar drgnx-palette-row-padding)
+
+(defvar drgnx-palette-frame--dressing nil
+  "(PROMPT-OVERLAY HINT . FACE-REMAP-COOKIES) of the minibuffer the palette's frame shows, while it shows it.")
+
+(defun drgnx-palette-frame--lead ()
+  "The room before the input row's icon and the footer: a row's inset and padding."
+  (propertize " " 'display `(space :width (,(drgnx-px (+ 6 drgnx-palette-row-padding))))))
+
+(defun drgnx-palette-frame--hint ()
+  "The input row's hint at the right edge: what the palette searches, and `#' for a code question."
+  (let ((s (concat (propertize "Commands · " 'face 'drgnx-text-subtle) (drgnx-palette-keycap "#")
+                   (propertize " code" 'face 'drgnx-text-subtle))))
+    (concat (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width s (current-buffer))
+                                                                     (drgnx-px (+ 6 drgnx-palette-row-padding)))))))
+            s)))
+
+(defun drgnx-palette-frame--footer ()
+  "The footer's keys (palette.html `.foot'): move, run, close."
+  (let ((gap (propertize "   " 'face 'drgnx-text-subtle)))
+    (concat (drgnx-palette-frame--lead)
+            (drgnx-palette-keycap "↑") " " (drgnx-palette-keycap "↓") (propertize " move" 'face 'drgnx-text-subtle) gap
+            (drgnx-palette-keycap "↵") (propertize " run" 'face 'drgnx-text-subtle) gap
+            (drgnx-palette-keycap "Esc") (propertize " close" 'face 'drgnx-text-subtle))))
+
+(defun drgnx-palette-frame--dress (win)
+  "In the palette's window WIN only: the prompt shows as the search icon, the hint follows the typed text at the right
+edge (`drgnx-palette-frame-hint-candidates'), and the mode line is the footer of keys on the box's own surface.  The
+echo area keeps the minibuffer as it is."
+  (drgnx-palette-frame--undress)
+  (let ((prompt (make-overlay (point-min) (minibuffer-prompt-end) nil t nil)))
+    ;; an image inside an overlay's `display' string is not drawn: the prompt is hidden and the icon is a before-string
+    (overlay-put prompt 'window win)
+    (overlay-put prompt 'invisible t)
+    (overlay-put prompt 'before-string
+                 (concat (drgnx-palette-frame--lead) (drgnx-look-icon 'search 'drgnx-text-subtle) " "))
+    (set-window-parameter win 'mode-line-format (drgnx-palette-frame--footer))
+    (setq drgnx-palette-frame--dressing
+          (cons prompt (cons (drgnx-palette-frame--hint)
+                             (list (face-remap-add-relative 'mode-line 'drgnx-palette-footer)
+                                   (face-remap-add-relative 'mode-line-inactive 'drgnx-palette-footer)))))))
+
+(defvar vertico--candidates-ov)
+
+(defun drgnx-palette-frame-hint-candidates ()
+  "After vertico draws the candidates (its overlay's string: a space that takes the cursor, then the rows), put the
+hint between that space and the rows, so it ends the input row and the cursor stays after the typed text.  Only in
+the minibuffer the palette's frame shows."
+  (when-let* ((d drgnx-palette-frame--dressing)
+              ((eq (current-buffer) (overlay-buffer (car d))))
+              (ov (bound-and-true-p vertico--candidates-ov))
+              (s (overlay-get ov 'before-string))
+              ((> (length s) 0)))
+    (overlay-put ov 'before-string (concat (substring s 0 1) (cadr d) (substring s 1)))))
+
+(defun drgnx-palette-frame--undress ()
+  "Take the input row's overlay and the footer's remaps off the current minibuffer buffer."
+  (when drgnx-palette-frame--dressing
+    (delete-overlay (car drgnx-palette-frame--dressing))
+    (mapc #'face-remap-remove-relative (cddr drgnx-palette-frame--dressing))
+    (setq drgnx-palette-frame--dressing nil)))
+
+(defface drgnx-palette-footer '((t :inherit (drgnx-ui-caption default) :box nil :overline nil :underline nil))
+  "The floating palette's footer of keys: the caption size on the box's own surface, not a mode line's."
+  :group 'drgnx-face)
+
 (defun drgnx-palette-frame--display (_buffer _alist)
   "The display action of `vertico-buffer-display-action' for the palette: the frame's window, frame shown.
 `vertico-buffer' puts the minibuffer buffer in it (the buffer given here is a stand-in it kills at once), so the
@@ -133,6 +204,7 @@ counts in it (`default-line-height'), so the list is `vertico-count' long."
          (parent (window-frame (minibuffer-selected-window)))
          (frame (drgnx-palette-frame--ensure parent)))
     (drgnx-palette-frame--place frame parent lh)
+    (with-current-buffer mb (drgnx-palette-frame--dress (frame-root-window frame)))
     (make-frame-visible frame)
     (frame-root-window frame)))
 
@@ -144,6 +216,8 @@ not deleted), so the dedication and the window parameters it set are cleared her
   (when (frame-live-p drgnx-palette-frame--frame)
     (let ((win (frame-root-window drgnx-palette-frame--frame)))
       (when (eq (window-buffer win) (window-buffer (active-minibuffer-window)))
+        (drgnx-palette-frame--undress)
+        (set-window-parameter win 'mode-line-format nil)
         (set-window-parameter win 'no-other-window nil)
         (set-window-parameter win 'no-delete-other-windows nil)
         (set-window-dedicated-p win nil)

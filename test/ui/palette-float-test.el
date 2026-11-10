@@ -22,6 +22,7 @@
 
 (defvar vertico-multiform-categories)
 (defvar vertico-count)
+(defvar vertico--candidates-ov)
 (declare-function drgnx-look-palette-current "drgnx-look" ())
 (defvar drgnx-palette-float-test--ran nil "The command the palette ran.")
 (declare-function glitnir-active-p "glitnir")
@@ -32,6 +33,10 @@
 
 (defun drgnx-palette-float-test--run-it () (interactive) (setq drgnx-palette-float-test--ran 'it))
 (defun drgnx-palette-float-test--run-other () (interactive) (setq drgnx-palette-float-test--ran 'other))
+
+(defun drgnx-palette-float-test--hint (&rest _)
+  "The completion module's advice: the hint inside vertico's candidates string."
+  (drgnx-palette-frame-hint-candidates))
 
 (defmacro drgnx-palette-float-test--with-palette (&rest body)
   "BODY with the palette as the completion module sets it up: vertico, multiform's entry, the exit hook."
@@ -48,11 +53,13 @@
        (drgnx-command-define 'it :title "Do It" :category "Test" :command #'drgnx-palette-float-test--run-it)
        (drgnx-command-define 'other :title "Do That" :category "Test" :command #'drgnx-palette-float-test--run-other)
        (add-hook 'minibuffer-exit-hook #'drgnx-palette-frame-hide)
+       (advice-add 'vertico--display-candidates :after #'drgnx-palette-float-test--hint)
        (vertico-mode 1) (vertico-multiform-mode 1)
        (unwind-protect
            (cl-letf (((symbol-function 'glitnir-active-p) (lambda (&optional _frame) t)))
              ,@body)
          (remove-hook 'minibuffer-exit-hook #'drgnx-palette-frame-hide)
+         (advice-remove 'vertico--display-candidates #'drgnx-palette-float-test--hint)
          (unless was-multiform (vertico-multiform-mode -1))
          (unless was-vertico (vertico-mode -1))
          (drgnx-palette-frame-delete)))))
@@ -162,6 +169,29 @@ and the probe runs from that minibuffer's `post-command-hook' once the last of t
                                          :what "the palette's frame")))
                  (drgnx-palette-float-test--wait-shown f)))))
         (unless was (drgnx-rules-mode -1))))))
+
+(ert-deftest palette-float-dresses-only-its-own-window ()
+  "palette.html: in the box the prompt is a search icon, a hint follows the typed text and the mode line is a footer
+of keys; those belong to the box's window alone, and C-g takes them all off the minibuffer."
+  (drgnx-palette-float-test--with-palette
+    (let ((mb nil) (win nil))
+      (drgnx-palette-float-test--reading
+       "Test"
+       (lambda ()
+         (let ((f (drgnx-test-wait (lambda () (drgnx-palette-float-test--palette-frame)) :what "the palette's frame")))
+           (drgnx-palette-float-test--wait-shown f)
+           (setq mb (current-buffer) win (frame-root-window f))
+           (should (string-search "move" (format "%s" (window-parameter win 'mode-line-format))))
+           (let ((ovs (seq-filter (lambda (o) (eq (overlay-get o 'window) win))
+                                  (overlays-in (point-min) (point-max)))))
+             (should (seq-find (lambda (o) (overlay-get o 'invisible)) ovs))
+             ;; the hint ends the input row: after vertico's cursor space, before the rows
+             (should (string-search "code" (substring (overlay-get vertico--candidates-ov 'before-string) 1
+                                                      (string-search "Do " (overlay-get vertico--candidates-ov
+                                                                                        'before-string)))))))))
+      (should-not (window-parameter win 'mode-line-format))
+      (with-current-buffer mb
+        (should-not (seq-find (lambda (o) (eq (overlay-get o 'window) win)) (overlays-in (point-min) (point-max))))))))
 
 (ert-deftest palette-float-typing-and-ret-runs-command ()
   (drgnx-palette-float-test--with-palette

@@ -39,12 +39,19 @@ of the frame's height above the box) place it. No colours are set here: the them
 
 ## Rows
 
-Rows are in the UI font, 32 logical pixels high in the floating palette and 24 in the minibuffer. The letters you
-typed are in the accent colour, semibold; the current row is the selection colour, one rounded fill 6 pixels in from the list's sides (as the sidebar's rows; every row keeps the same left inset, so nothing moves as the selection does). Each row shows its key as keycaps
-(`Ctrl` `Shift` `P`; in a terminal the names alone, `Ctrl Shift P`), from the key profile you use, and, for a command you ran lately, when ("used 2 min ago"). On the current row the
+Rows are in the UI font, 32 logical pixels high in the floating palette and 24 in the minibuffer. A row shows its
+category's icon and the command's title, then the category and, for a command you ran lately, when ("Tests · used 2
+min ago") in the faint secondary colour, and its key as keycaps at the right edge. Each group (Commands, Files, Agents)
+has its name above its rows, with no count. The letters you
+typed are in the accent colour, semibold; the current row is the selection colour, one rounded fill 6 pixels in from the list's sides (as the sidebar's rows; every row keeps the same left inset, so nothing moves as the selection does). The keycaps
+(`Ctrl` `Shift` `P`; in a terminal the names alone, `Ctrl Shift P`) come from the key profile you use. On the current row the
 keycaps and hints turn from the faint secondary colour to the muted one, so they stay readable on the selection.
 The commands you ran from the palette come first, newest first, then the rest in their usual order; the list is grouped
 Commands, Files and Agents, and is kept in `palette-history.eld` in drgnx's state folder (200 commands at most).
+
+In the floating palette the prompt is a search icon, a hint at the right of what you type says what it searches
+(`Commands · # code`), and a footer shows the keys: `↑` `↓` move, `↵` run, `Esc` close. The minibuffer in the echo area
+is not changed by any of this.
 
 ## The echo area
 
