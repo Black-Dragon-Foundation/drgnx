@@ -84,7 +84,7 @@
   "BODY in a MODE buffer on the rows path holding MODEL (a JSON string) and ROWS, nothing selected, sending dropped."
   (declare (indent 3))
   `(progn
-     (skip-unless (fboundp 'nidhogg-view--call))
+     (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
      (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
            (drgnx-view-model--views (make-hash-table :test #'equal))
            (drgnx-view-patch--hooked nil)

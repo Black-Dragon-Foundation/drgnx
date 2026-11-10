@@ -272,8 +272,10 @@ drgnx app is installed (fix: `drgnx macos-app`), that Homebrew is there (also lo
 your shell's profile, `~/.zprofile` for zsh or, with `SHELL` unset, when it exists; else `~/.profile`) — each only a warning. `portable-config` warns when the config dir holds a key in plain text (it names the file,
 never the key) or a machine-local file such as the old `emacs` record, and says which `projects.eld` roots are not
 cloned on this machine (info only; [second-machine.md](second-machine.md#the-doctors-check)). `view-model` fails on an
-Emacs without Sjá, Nidhogg's native view model (`nidhogg-view--call`), which the Work views' keys answer from; `views`
-fails while a hub-fed view is broken (its model broke twice; closing its buffer and opening it again clears it). The `modules`, `display-rules`, `views` and `key-problems` checks (and the problems under the Terminal group's keys row) are
+Emacs without Sjá, Nidhogg's native view model (`nidhogg-view-push`), which the Work views' keys answer from, and on a
+Nidhogg older than the one drgnx pins (`drgnx update` brings it up to date); `views` fails while a hub-fed view is
+broken (its model broke twice; closing its buffer and opening it again clears it) and after a view model came to an
+Emacs without Sjá. The `modules`, `display-rules`, `views` and `key-problems` checks (and the problems under the Terminal group's keys row) are
 what the running drgnx says as notices (see below); `modules-report.eld` and `wb-report.eld` are no longer written, and
 `key-conflicts` still reads the conflict table of `keys-report.eld`. With Vim keys the `modal` check warns when the stack needs evil and it is not
 installed or not running (fix: `drgnx sync`, then restart, or choose another Keyboard Profile…), says when Vim waits for `drgnx sync`, and on

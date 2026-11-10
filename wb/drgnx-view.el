@@ -1667,7 +1667,8 @@ every row is drawn again, with no message to the hub."
 ;; draw's first slice (the type's SYNC) drains every queued model up to the highest `model' its buffer's row patches
 ;; named (`nidhogg-view-drain'), so a key answers from the model that is drawn.  A model no row patch names (a change
 ;; the rows don't show) applies on the view's own timer one throttle later (`nidhogg-view-due').  Lisp keeps only what
-;; talks to the hub: an outstanding `view/resync'.  Without Sjá (an Emacs that is not Nidhogg) the lines are dropped.
+;; talks to the hub: an outstanding `view/resync'.  Without Sjá's queue (an Emacs that is not Nidhogg, or a Nidhogg
+;; older than it) the lines are dropped and the first one fails a `render' notice that says why and how to fix it.
 
 (require 'nidhogg-views nil t)          ; Nidhogg's, not preloaded; `nidhogg-view--call' is the C door
 (declare-function nidhogg-view-push "nidhogg-views" (line))
@@ -1677,6 +1678,7 @@ every row is drawn again, with no message to the hub."
 (declare-function nidhogg-view-open "nidhogg-views" (view &optional group))
 (declare-function nidhogg-view-close "nidhogg-views" (h))
 (declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest keys))
 (declare-function nidhogg-view-hub-lost "nidhogg-views" ())
 
 (cl-defstruct (drgnx-view-model (:constructor drgnx-view-model--make) (:copier nil))
@@ -1693,15 +1695,32 @@ for a model and got the answer first takes it here (Find in Terminal).")
   "VIEW → its `drgnx-view-model', while a buffer of VIEW lives (pruned with the last: `drgnx-view-patch--killed').")
 
 (defsubst drgnx-view-model--sja-p ()
-  "Non-nil when this Emacs has Sjá."
-  (fboundp 'nidhogg-view--call))
+  "Non-nil when this Emacs has Sjá with its queue (`nidhogg-view-push' and the drains): a Nidhogg older than the queue
+has `nidhogg-view--call' without it."
+  (fboundp 'nidhogg-view-push))
+
+(defvar drgnx-view-model--said-missing nil
+  "Non-nil once a model line found no Sjá queue and said so (`drgnx-view-model--missing'): once a session.")
+
+(defun drgnx-view-model--missing ()
+  "A model line came and this Emacs has no Sjá queue: the hub-fed views draw their rows but their keys have no model.
+Fails one `render' condition a session (the doctor's `views' row shows it), never an error per line."
+  (unless drgnx-view-model--said-missing
+    (setq drgnx-view-model--said-missing t)
+    (require 'drgnx-notice)
+    (drgnx-notify 'render 'fail
+                  (if (fboundp 'nidhogg-view--call)
+                      "this Nidhogg is older than drgnx: it has no nidhogg-view-push, so the views' keys have no model"
+                    "this Emacs has no Sjá (nidhogg-view-push): the views' keys have no model")
+                  :id 'view-model-missing :life 'condition
+                  :fix "update Nidhogg to the version drgnx pins: drgnx update")))
 
 (defun drgnx-view-model-line (line)
   "A hub's whole `view-model' LINE, unparsed, to Sjá (`nidhogg-view-push'), which decides by its envelope and queues
 its model for the draw.  A gap or a full queue asks the hub for a reset; a queued model arms the view's timer and runs
 `drgnx-view-model-functions'.  Returns Sjá's decision (`queue', `reset', `drop', `resync', `none'), or nil without
-Sjá."
-  (when-let* (((drgnx-view-model--sja-p)) (r (nidhogg-view-push line)))
+Sjá's queue (`drgnx-view-model--missing' says so once)."
+  (when-let* (((or (drgnx-view-model--sja-p) (ignore (drgnx-view-model--missing)))) (r (nidhogg-view-push line)))
     (let ((view (nth 0 r)) (what (nth 2 r)))
       (when-let* ((state (gethash view drgnx-view-model--views)))
         (pcase what

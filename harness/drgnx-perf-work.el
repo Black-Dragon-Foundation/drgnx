@@ -531,13 +531,19 @@ the draw alone made."
         (unless (equal "agent:00" (drgnx-view-nav 'select "agent:00")) (error "Premise: no model in Sjá"))
         t)
       (defun drgnx-perf--nr-apply-us (model times)
-        "Microseconds per `nidhogg-view-apply' of MODEL (a function of the version), TIMES times on one fresh view."
-        (let ((view (format "perf-apply-%s" (random))) out)
-          (dotimes (v times)
-            (let ((json (funcall model (1+ v))) (t0 (float-time)))
-              (unless (eq 'applied (nidhogg-view-apply view "perf/1" (1+ v) json)) (error "Premise: apply %d" v))
-              (push (round (* 1e6 (- (float-time) t0))) out)))
-          (nidhogg-view-close (nidhogg-view-open view))   ; the view goes with its last instance
+        "Microseconds per model of MODEL (its JSON, a function of the version) into Sjá as the hub's line comes: the line
+pushed (`nidhogg-view-push') and drained (`nidhogg-view-drain'), TIMES times on one fresh view."
+        (let* ((view (format "perf-apply-%s" (random))) (h (nidhogg-view-open view)) out) ; Sjá queues for a shown view
+          (unwind-protect
+              (dotimes (v times)
+                (let* ((line (concat "{\"event\":\"view-model\",\"data\":{\"view\":\"" view "\",\"hub\":1,"
+                                     (format "\"base\":%d,\"version\":%d,%s\"model\":" v (1+ v) (if (= v 0) "\"reset\":true," ""))
+                                     (funcall model (1+ v)) "}}"))
+                       (t0 (float-time)))
+                  (nidhogg-view-push line)
+                  (unless (eql 1 (car (nidhogg-view-drain view))) (error "Premise: apply %d" v))
+                  (push (round (* 1e6 (- (float-time) t0))) out)))
+            (nidhogg-view-close h))   ; the view goes with its last instance
           out))
       (defun drgnx-perf--nr-measure ()
         "(:alloc STATS :classed STATS :hub_calls N :reset_us STATS :field_us STATS): 100 keys held (no time passes

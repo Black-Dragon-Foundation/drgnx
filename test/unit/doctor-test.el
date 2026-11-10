@@ -1027,7 +1027,7 @@ AGE seconds ago (default WRITTEN).  The pid in the data is NAME's number."
     (should-not (alist-get 'wb drgnx-doctor--checks))))
 
 (ert-deftest drgnx-doctor/view-model-needs-sja ()
-  "Pattern D: an Emacs without `nidhogg-view--call' fails the view-model row; with it, ok."
+  "Pattern D: an Emacs without `nidhogg-view-push' fails the view-model row; with it, ok."
   (should (eq (drgnx-doctor-test--status 'view-model (drgnx-doctor-test--facts :view-model nil)) 'fail))
   (should (eq (drgnx-doctor-test--status 'view-model (drgnx-doctor-test--facts :view-model t)) 'ok)))
 

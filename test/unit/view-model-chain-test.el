@@ -14,18 +14,22 @@
 (ert-deftest drgnx-view-model/chain-matches-vegvisir ()
   "Pattern D: with each shown item selected in turn, the nodes Sjá classes `chain' are exactly that item's chain in
 vegvisir (up and down), and the selected node is `selected'."
-  (skip-unless (fboundp 'nidhogg-view--call))
-  (require 'nidhogg-views)
+  (require 'nidhogg-views nil t)        ; the doors are Lisp, not preloaded
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
   (let* ((golden (with-temp-buffer
                    (insert-file-contents (expand-file-name "test/fixtures/work-space/model-thirty.json" drgnx-dir))
                    (json-parse-buffer :object-type 'hash-table :array-type 'list)))
          (chains (gethash "chains" golden))
          (view "vmc-test-thirty")
          (h nil))
-    (should (eq 'applied (nidhogg-view-apply view "golden/1" 1 (gethash "model" golden))))
-    (setq h (nidhogg-view-open view))
+    (setq h (nidhogg-view-open view))   ; Sjá queues a view's model only while an instance shows it
     (unwind-protect
-        (let* ((names (nidhogg-view-get h 'class-names))
+        (let* ((_pushed (should (eq 'reset (nth 2 (nidhogg-view-push
+                                                   (concat "{\"event\":\"view-model\",\"data\":{\"view\":\"" view
+                                                           "\",\"hub\":1,\"base\":0,\"version\":1,\"reset\":true,\"model\":"
+                                                           (gethash "model" golden) "}}"))))))
+               (_drained (should (eql 1 (car (nidhogg-view-drain view)))))
+               (names (nidhogg-view-get h 'class-names))
                (chain (cl-position "chain" names :test #'equal))
                (selected (cl-position "selected" names :test #'equal))
                (ids (hash-table-keys chains))

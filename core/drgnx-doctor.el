@@ -473,7 +473,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
                               (fboundp 'nidhogg-history-pending-p) t)
            :native-compiles (if native (drgnx-doctor--native-compiles) "not built with native compilation")
            :treesit (and (fboundp 'treesit-available-p) (treesit-available-p))
-           :view-model (fboundp 'nidhogg-view--call)
+           :view-model (fboundp 'nidhogg-view-push)
            :gui (cond ((featurep 'pgtk) 'pgtk) ((featurep 'ns) 'ns) ((featurep 'x) 'x)
                       (t (drgnx-doctor--gui-from-features system-configuration-features)))
            :git (and (executable-find "git") t)
@@ -705,10 +705,10 @@ severity, the fix the first `:fix'."
                                 (list 'warn "this Emacs has no tree-sitter support" drgnx-doctor-install-hint))))
 
 (drgnx-doctor-define 'view-model :group "Emacs"
-                     :doc "Sjá, Nidhogg's native view model: the hub-fed views' keys answer from it (nidhogg-view--call)"
+                     :doc "Sjá, Nidhogg's native view model: the hub-fed views' keys answer from it (nidhogg-view-push)"
                      :check (lambda (f)
-                              (if (plist-get f :view-model) (list 'ok "nidhogg-view--call is there" nil)
-                                (list 'fail "this Emacs has no nidhogg-view--call: the Work views' keys need Sjá"
+                              (if (plist-get f :view-model) (list 'ok "nidhogg-view-push is there" nil)
+                                (list 'fail "this Emacs has no nidhogg-view-push (no Sjá, or a Nidhogg older than drgnx): the views' keys need it"
                                       drgnx-doctor-nidhogg-hint))))
 
 (drgnx-doctor-define 'gui :group "Emacs" :doc "A graphical build (pgtk on Wayland, X11 or macOS), or a terminal-only one"

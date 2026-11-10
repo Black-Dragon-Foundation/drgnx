@@ -2088,7 +2088,11 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   `drgnx-view-delay` while a key is held (`drgnx-timer-soon`, owned by the buffer).
 - **A broken view** (Sjá's breaker tripped after two panics): a key answers nil and the buffer posts a `render` `fail`
   condition keyed `(view-broken . VIEW)`, which the doctor's `views` row fails on; the view's last instance closing
-  clears it. The doctor's `view-model` row fails on an Emacs without `nidhogg-view--call`.
+  clears it. The doctor's `view-model` row fails on an Emacs without `nidhogg-view-push` (no Sjá, or a Nidhogg older
+  than its queue, which has `nidhogg-view--call` alone).
+- **No Sjá queue:** a `view-model` line that comes to such an Emacs is dropped (`drgnx-view-model-line` answers nil);
+  the first fails one `render` condition, `view-model-missing`, naming `nidhogg-view-push` and `drgnx update`, so the
+  views' keys never go dead silently and the filter never errors per line.
 - Tests: `test/unit/view-nav-test.el` (the class on the card, a replaced row in every order of patch, draw and key,
   a held key's notices on the test clock, the clear notice, the hook on a move only, the broken view).
 - **The Explorer on the rows path** (`drgnx-explorer-rows-attach VIEW CLASS`): the hub lists the roots and the open

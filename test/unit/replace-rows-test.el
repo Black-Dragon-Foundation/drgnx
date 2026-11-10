@@ -32,7 +32,7 @@
   "BODY in the Search view's buffer (`buf', view `view') with a hub that is up: its calls are recorded, nothing is sent."
   (declare (indent 0))
   `(progn
-     (skip-unless (fboundp 'nidhogg-view--call))
+     (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
      (should-not (get-buffer drgnx-replace-buffer-name))
      (let* ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
             (drgnx-view-model--views (make-hash-table :test #'equal))

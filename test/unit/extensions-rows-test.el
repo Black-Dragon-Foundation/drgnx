@@ -42,7 +42,7 @@
   "On the rows path the list asks `extensions/list' once (every section, each with its page), never a search per
 section; the hub's rows are inserted as they come, with no key list built and no `drgnx-view-sync-rows'; a row's data
 and point's row come from the model; the answer's totals give the Updates count."
-  (skip-unless (fboundp 'nidhogg-view--call))
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
   (let ((drgnx-view-old-path nil) (drgnx-view-patch--buffers (make-hash-table :test #'equal))
         (drgnx-view-model--views (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
         (calls nil) (keys 0) (syncs 0))
