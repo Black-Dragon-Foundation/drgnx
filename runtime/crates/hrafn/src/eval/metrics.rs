@@ -181,6 +181,89 @@ pub struct Report {
     pub exact_symbol_r1: Option<f64>,
 }
 
+/// How much of a question's answer a fixed-budget context holds (the map's yield, after the budget-constrained yield of
+/// Agent Retrieval Bench): the share of its target definitions shown, over the targets that name a symbol (none when no
+/// target does), and the share of its target files shown.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MapYield {
+    pub def: Option<f64>,
+    pub file: f64,
+}
+
+/// The yield of SHOWN (`(path, symbol)` of the definitions a context holds) against TARGETS (`(path, symbol)`; an
+/// empty symbol is any chunk of the file, and counts for files only).
+pub fn map_yield(targets: &[(String, String)], shown: &[(String, String)]) -> MapYield {
+    let defs: BTreeSet<&(String, String)> = targets.iter().filter(|t| !t.1.is_empty()).collect();
+    let shown_defs: BTreeSet<&(String, String)> = shown.iter().collect();
+    let files: BTreeSet<&str> = targets.iter().map(|t| t.0.as_str()).collect();
+    let shown_files: BTreeSet<&str> = shown.iter().map(|s| s.0.as_str()).collect();
+    let share = |got: usize, of: usize| if of == 0 { 0.0 } else { got as f64 / of as f64 };
+    MapYield {
+        def: (!defs.is_empty()).then(|| {
+            share(
+                defs.iter().filter(|d| shown_defs.contains(*d)).count(),
+                defs.len(),
+            )
+        }),
+        file: share(files.intersection(&shown_files).count(), files.len()),
+    }
+}
+
+/// The search baseline's context: HITS in rank order, each as a `path:start-end` line and its chunk (CHARS of it),
+/// until the next would take the estimate (characters ÷ 4, rounded up) past BUDGET tokens. Gives the `(path, symbol)`
+/// of the hits packed.
+pub fn pack(hits: &[Hit], budget: usize, chars: &dyn Fn(&Hit) -> usize) -> Vec<(String, String)> {
+    let mut total = 0usize;
+    let mut out = Vec::new();
+    for h in hits {
+        let head = format!("{}:{}-{}\n", h.path, h.line_start, h.line_end).len();
+        if (total + head + chars(h)).div_ceil(4) > budget {
+            break;
+        }
+        total += head + chars(h);
+        out.push((h.path.clone(), h.symbol.clone().unwrap_or_default()));
+    }
+    out
+}
+
+/// Yields of some questions: means with bootstrap intervals; def-yield over the `def_n` questions that have one (0
+/// when none does).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct YieldSummary {
+    pub n: usize,
+    pub def_n: usize,
+    pub def: f64,
+    pub def_ci: (f64, f64),
+    pub file: f64,
+    pub file_ci: (f64, f64),
+}
+
+/// ROWS (`(stratum, yield)`) summarised overall, under `all`, and per stratum.
+pub fn summarize_yield(rows: &[(String, MapYield)]) -> BTreeMap<String, YieldSummary> {
+    let one = |rows: Vec<&MapYield>| {
+        let defs: Vec<f64> = rows.iter().filter_map(|y| y.def).collect();
+        let files: Vec<f64> = rows.iter().map(|y| y.file).collect();
+        YieldSummary {
+            n: rows.len(),
+            def_n: defs.len(),
+            def: mean(&defs),
+            def_ci: ci(&defs),
+            file: mean(&files),
+            file_ci: ci(&files),
+        }
+    };
+    let mut out = BTreeMap::new();
+    out.insert("all".to_string(), one(rows.iter().map(|r| &r.1).collect()));
+    let strata: BTreeSet<&str> = rows.iter().map(|r| r.0.as_str()).collect();
+    for s in strata {
+        out.insert(
+            s.to_string(),
+            one(rows.iter().filter(|r| r.0 == s).map(|r| &r.1).collect()),
+        );
+    }
+    out
+}
+
 /// A mean difference with its interval.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Delta {

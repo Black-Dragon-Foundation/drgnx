@@ -558,8 +558,7 @@ fn decode_map(args: &Value) -> Result<MapArgs, ArgsError> {
     if a.budget.is_some_and(|b| !(256..=32_000).contains(&b)) {
         return Err(arg_err("budget", "256 to 32,000 tokens"));
     }
-    if a
-        .focus
+    if a.focus
         .as_ref()
         .is_some_and(|f| f.len() > 50 || !f.iter().all(|p| rel_ok(p)))
     {

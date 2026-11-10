@@ -404,3 +404,85 @@ fn coverage_failure_fails_gate() {
     cand.exact_symbol_r1 = Some(1.0);
     assert!(compare(&base, &cand).unwrap().pass);
 }
+
+fn pairs(v: &[(&str, &str)]) -> Vec<(String, String)> {
+    v.iter()
+        .map(|(p, s)| (p.to_string(), s.to_string()))
+        .collect()
+}
+
+/// Pattern D. The map yield on hand-made maps: the share of target definitions shown, and of target files.
+#[test]
+fn map_yield_on_hand_made_maps() {
+    use hrafn::eval::map_yield;
+    let targets = pairs(&[("a.rs", "f"), ("a.rs", "g"), ("b.rs", "h")]);
+    let shown = pairs(&[("a.rs", "f"), ("b.rs", "h"), ("c.rs", "f"), ("a.rs", "x")]);
+    let y = map_yield(&targets, &shown);
+    assert!((y.def.unwrap() - 2.0 / 3.0).abs() < 1e-9, "{y:?}");
+    assert_eq!(y.file, 1.0);
+    let y = map_yield(&targets, &pairs(&[("a.rs", "x")]));
+    assert_eq!(
+        (y.def, y.file),
+        (Some(0.0), 0.5),
+        "a file shown without its target definition"
+    );
+    // a target that names no symbol (any chunk of the file) counts for files only
+    let y = map_yield(
+        &pairs(&[("docs/a.md", "")]),
+        &pairs(&[("docs/a.md", "Intro")]),
+    );
+    assert_eq!((y.def, y.file), (None, 1.0));
+}
+
+/// Pattern D. The search baseline packs hits in rank order, each with its header line, until the next would pass the
+/// budget's estimate (characters ÷ 4).
+#[test]
+fn search_hits_pack_until_the_budget() {
+    use hrafn::eval::pack;
+    let hits = vec![hit("a.rs", "f"), hit("b.rs", "g"), hit("c.rs", "h")];
+    // "a.rs:1-2\n" is 9 characters; each chunk is 391: 400 characters, 100 tokens a hit
+    let chars = |_: &Hit| 391;
+    assert_eq!(
+        pack(&hits, 250, &chars),
+        pairs(&[("a.rs", "f"), ("b.rs", "g")])
+    );
+    assert_eq!(pack(&hits, 300, &chars).len(), 3);
+    assert!(pack(&hits, 99, &chars).is_empty());
+}
+
+/// Pattern D. Yields summarised per stratum and overall, def-yield over the rows that have one.
+#[test]
+fn yields_summarise_per_stratum() {
+    use hrafn::eval::{MapYield, summarize_yield};
+    let rows = vec![
+        (
+            "symbol".to_string(),
+            MapYield {
+                def: Some(1.0),
+                file: 1.0,
+            },
+        ),
+        (
+            "symbol".to_string(),
+            MapYield {
+                def: Some(0.0),
+                file: 0.5,
+            },
+        ),
+        (
+            "docs".to_string(),
+            MapYield {
+                def: None,
+                file: 0.0,
+            },
+        ),
+    ];
+    let s = summarize_yield(&rows);
+    assert_eq!((s["all"].n, s["all"].def_n), (3, 2));
+    assert!(
+        (s["all"].def - 0.5).abs() < 1e-9 && (s["all"].file - 0.5).abs() < 1e-9,
+        "{s:?}"
+    );
+    assert_eq!(s["symbol"].file, 0.75);
+    assert_eq!((s["docs"].def_n, s["docs"].def), (0, 0.0));
+}
