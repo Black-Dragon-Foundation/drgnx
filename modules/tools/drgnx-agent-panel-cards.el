@@ -100,27 +100,27 @@ box would cut the card's ring."
     (propertize label 'face face 'mouse-face 'drgnx-hover 'keymap map 'help-echo help)))
 
 (defun drgnx-agent-panel-cards--numbered (header body)
-  "BODY's lines (a hunk's, under HEADER \"@@ -A,B +C,D @@\") each after its line number: the new file's, a removed
-line the old file's; each line in the panel's code faces."
+  "BODY's lines (a hunk's, under HEADER \"@@ -A,B +C,D @@\") as (TEXT . FACE): each after its line number (the new
+file's, a removed line the old file's), FACE the panel's code face for its kind."
   (let ((old (if (string-match "-\\([0-9]+\\)" header) (string-to-number (match-string 1 header)) 1))
         (new (if (string-match "\\+\\([0-9]+\\)" header) (string-to-number (match-string 1 header)) 1)))
     (mapcar (lambda (l)
               (let* ((c (and (not (string-empty-p l)) (aref l 0)))
-                     (n (if (eq c ?-) (prog1 old (cl-incf old)) (prog1 new (cl-incf new) (unless (eq c ?+) (cl-incf old)))))
-                     (face (pcase c (?+ 'drgnx-agent-panel-added) (?- 'drgnx-agent-panel-removed)
-                                  (_ 'drgnx-agent-panel-context))))
-                (concat (propertize (format "%4d " n) 'face '(drgnx-text-subtle drgnx-agent-panel-context))
-                        (propertize (truncate-string-to-width (concat (if (memq c '(?+ ?-)) (string c) " ")
-                                                                      (if (memq c '(?+ ?- ?\s)) (substring l 1) l))
-                                                              100 nil nil "…")
-                                    'face face))))
+                     (n (if (eq c ?-) (prog1 old (cl-incf old)) (prog1 new (cl-incf new) (unless (eq c ?+) (cl-incf old))))))
+                (cons (concat (format "%4d " n)
+                              (truncate-string-to-width (concat (if (memq c '(?+ ?-)) (string c) " ")
+                                                                (if (memq c '(?+ ?- ?\s)) (substring l 1) l))
+                                                        100 nil nil "…"))
+                      (pcase c (?+ 'drgnx-agent-panel-added) (?- 'drgnx-agent-panel-removed) (_ 'drgnx-agent-panel-context)))))
             body)))
 
 (defun drgnx-agent-panel-cards--diff-row (path i)
-  "Hunk I of PATH as a card (agent-panel.html `.acard'): the file's icon and name, its lines and which hunk, Reject and
-Accept; then the hunk's lines, numbered."
+  "Hunk I of PATH (agent-panel.html `.acard'): a header with the file's icon and name, its lines and which hunk, Reject
+and Accept; under it the hunk's lines, numbered, as a card.  The header sits over the card, not in it: a box is drawn
+per run of one face, so its several faces would cut the ring; each card line is one face for the same reason."
   (let* ((hunks (drgnx-agent-panel-cards--hunks path)) (hunk (nth i hunks))
-         (body (and hunk (seq-take (split-string (string-trim-right (plist-get hunk :text)) "\n") 30))))
+         (body (and hunk (seq-take (split-string (string-trim-right (plist-get hunk :text)) "\n") 30)))
+         (props (list 'drgnx-agent-panel-hunk (cons path i))))
     (if (not hunk) "\n"
       (let* ((header (plist-get hunk :header))
              (start (if (string-match "\\+\\([0-9]+\\)\\(?:,\\([0-9]+\\)\\)?" header) (string-to-number (match-string 1 header)) 1))
@@ -130,27 +130,24 @@ Accept; then the hunk's lines, numbered."
                               "  "
                               (drgnx-agent-panel-cards--action "Accept" #'drgnx-agent-panel-accept 'drgnx-accent
                                                                "a: keep the change")))
-             (head (concat (drgnx-look-icon 'file-code 'drgnx-text-muted) " "
+             (head (concat " " (drgnx-look-icon 'file-code 'drgnx-text-muted) " "
                            (propertize (drgnx-agent-panel--one-line path 50) 'face 'bold) " "
                            (propertize (format "%d–%d · hunk %d of %d" start (+ start (max 0 (1- len))) (1+ i) (length hunks))
                                        'face 'drgnx-agent-panel-subtle)
                            (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width actions) (drgnx-px 20))))))
-                           actions)))
-        (drgnx-agent-panel-cards--box-kept (cons head (drgnx-agent-panel-cards--numbered header body))
-                                           (list 'drgnx-agent-panel-hunk (cons path i)))))))
-
-(defun drgnx-agent-panel-cards--box-kept (lines props)
-  "LINES as a card, as `drgnx-agent-panel-cards--box' draws one, each line's own faces kept over the card's."
-  (let ((n (length lines)) (i -1))
-    (mapconcat (lambda (l)
-                 (cl-incf i)
-                 (let ((s (concat " " l " " (propertize " " 'display `(space :align-to (- right (,(drgnx-px 12))))) "\n"))
-                       (card (cond ((= n 1) 'drgnx-card-single) ((= i 0) 'drgnx-card-top)
-                                   ((= i (1- n)) 'drgnx-card-bottom) (t 'drgnx-card-mid))))
-                   (add-face-text-property 0 (1- (length s)) card t s)
-                   (add-text-properties 0 (length s) props s)
-                   s))
-               lines "")))
+                           actions "\n"))
+             (lines (drgnx-agent-panel-cards--numbered header body)) (n (length lines)) (k -1))
+        (add-text-properties 0 (length head) props head)
+        (concat head
+                (mapconcat (lambda (line)
+                             (cl-incf k)
+                             (let ((card (cond ((= n 1) 'drgnx-card-single) ((= k 0) 'drgnx-card-top)
+                                               ((= k (1- n)) 'drgnx-card-bottom) (t 'drgnx-card-mid))))
+                               (concat (apply #'propertize
+                                              (concat " " (car line) (propertize " " 'display `(space :align-to (- right (,(drgnx-px 12))))))
+                                              'face (list (cdr line) card) props)
+                                       "\n")))
+                           lines ""))))))
 
 (defun drgnx-agent-panel-cards--request (id)
   (seq-find (lambda (p) (equal (plist-get p :id) id)) (drgnx-agent-panel-cards--permissions)))
