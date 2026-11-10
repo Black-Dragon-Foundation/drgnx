@@ -379,3 +379,18 @@ run of sources measures the interpreter); a compiled tree is not."
       (delete-directory root t))))
 
 ;;; perf-run-test.el ends here
+
+(ert-deftest drgnx-perf-run/a-wait-times-the-change-and-leaves-no-advice ()
+  "The agent workloads' wait (`drgnx-perf--wait', from the hub form): a condition a timer makes true is timed at that
+timer, not at the poll that sees it; an error inside the wait still takes its advice off `timer-event-handler' and the
+hub batch."
+  (eval (car (read-from-string (drgnx-perf-run--hub-form))) t)
+  (let* ((set-at nil) (flag nil)
+         (timer (run-at-time 0.01 nil (lambda () (setq flag t set-at (float-time)))))
+         (met (unwind-protect (funcall 'drgnx-perf--wait 2 (lambda () flag)) (cancel-timer timer))))
+    (should met)
+    (should (< (abs (- met set-at)) 0.005)))
+  (let ((n 0))
+    (should-error (funcall 'drgnx-perf--wait 2 (lambda () (when (> (cl-incf n) 1) (error "Inside the wait")))))
+    (should-not (advice-member-p 'drgnx-perf--wait-check 'timer-event-handler))
+    (should-not (advice-member-p 'drgnx-perf--wait-check 'drgnx-hub--client-batch))))
