@@ -51,7 +51,7 @@
     (drgnx-wb-hide-sidebar)
     (drgnx-wb-show-sidebar)
     (should-not (string-search "alp" (drgnx-buffers-edge--header 'buffers)))
-    (should (string-search "save all" (drgnx-buffers-edge--header 'buffers)))))   ; the buttons are back
+    (should (string-search "Open" (drgnx-buffers-edge--header 'buffers)))))   ; the plain title is back
 
 (ert-deftest drgnx-buffers/the-explorer-find-title-survives-hide-and-show ()
   (drgnx-test-with-state
@@ -101,11 +101,11 @@
       (drgnx-buffers--refresh)
       (with-current-buffer drgnx-buffers-buffer-name
         (drgnx-buffers--fontify (point-min) (point-max))
-        (let* ((bol (drgnx-buffers--row-pos b)) (b-pos (+ bol 4 3)))     ; the "b" of "a  b.txt"
+        (let* ((bol (drgnx-buffers--row-pos b)) (b-pos (+ bol 2 3)))     ; the "b" of "a  b.txt"
           (should (equal (buffer-substring-no-properties b-pos (1+ b-pos)) "b"))
           (should (eq (get-text-property b-pos 'mouse-face) 'drgnx-hover-row))
-          (should-not (eq (get-text-property b-pos 'face) 'drgnx-buffers-dir))
-          (should (eq (get-text-property (+ bol 4 (length "a  b.txt") 2) 'face) 'drgnx-buffers-dir)))))))
+          (should (equal (buffer-substring-no-properties (+ bol 2) (save-excursion (goto-char bol) (pos-eol)))
+                         "a  b.txt")))))))
 
 (defun drgnx-buffers-edge--fake-files (n)
   "N user buffers (visiting files that need not exist), oldest first."

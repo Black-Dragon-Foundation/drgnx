@@ -21,6 +21,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-surfaces)
 (require 'drgnx-icons)
+(require 'drgnx-pixels)
 (require 'drgnx-ui-kit)
 
 (declare-function glitnir-active-p "glitnir")
@@ -123,8 +124,8 @@ thing waiting on you)."
 ;;;; Drawing
 
 (defun drgnx-notice-toast--px (parent logical)
-  "LOGICAL pixels in PARENT's own pixels (a frame of Nidhogg's Wayland shell counts device pixels)."
-  (if (featurep 'nidhogg-wayland) (round (* logical (frame-scale-factor parent))) logical))
+  "LOGICAL pixels in PARENT's own pixels (`drgnx-px': device pixels on Nidhogg's native shells, rounded half up)."
+  (drgnx-px logical parent))
 
 (defun drgnx-notice-toast--parent ()
   "The graphical root frame the toasts float over, or nil."
@@ -172,7 +173,8 @@ thing waiting on you)."
       (undecorated . t) (no-accept-focus . t) (no-focus-on-map . t) (no-other-frame . t) (skip-taskbar . t)
       (unsplittable . t) (no-special-glyphs . t) (desktop-dont-save . t)
       (internal-border-width . ,(drgnx-notice-toast--px parent 10)) (border-width . 0)
-      (child-frame-border-width . ,(drgnx-notice-toast--px parent ring))
+      ;; a line: whole device pixels (`drgnx-px-line'), none when the chrome has no ring
+      (child-frame-border-width . ,(if (> ring 0) (drgnx-px-line ring parent) 0))
       (menu-bar-lines . 0) (tool-bar-lines . 0) (tab-bar-lines . 0) (left-fringe . 0) (right-fringe . 0)
       (vertical-scroll-bars) (horizontal-scroll-bars) (cursor-type . nil) (visibility . nil)
       ,@(seq-remove (lambda (p) (memq (car p) '(child-frame-border-width transition))) chrome)

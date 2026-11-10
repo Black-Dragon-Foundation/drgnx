@@ -39,7 +39,9 @@
     (drgnx-amenities-test--fresh
      (let ((pkgs (seq-mapcat (lambda (m) (nth 2 m)) drgnx-amenities-test--modules)) (orig (symbol-function 'featurep)))
        (cl-letf (((symbol-function 'locate-library) (lambda (&rest _) nil))
-                 ((symbol-function 'featurep) (lambda (f &rest r) (and (not (memq f pkgs)) (apply orig f r)))))
+                 ((symbol-function 'featurep) (lambda (f &rest r) (and (not (memq f pkgs)) (apply orig f r))))
+                 ;; each one chosen on (extra/guides is off until chosen)
+                 ((symbol-function 'drgnx-module-disabled-p) #'ignore))
          (drgnx-modules-run 'startup) (drgnx-modules-run 'idle)
          (drgnx-modules-run 'first-frame)))
      (pcase-dolist (`(,_ ,mod ,_ ,cmds) drgnx-amenities-test--modules)
@@ -51,7 +53,8 @@
   (skip-unless (seq-some (lambda (m) (seq-every-p #'drgnx-amenities-test--installed-p (nth 2 m)))
                          drgnx-amenities-test--modules))
   (let ((load-path (append load-path (drgnx-amenities-test--elpa-path))) (ran 0))
-    (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))   ; no booster binary, no formatters
+    (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil))   ; no booster binary, no formatters
+              ((symbol-function 'drgnx-module-disabled-p) #'ignore))        ; each one chosen on (guides is off until chosen)
       (drgnx-test-with-modules (mapcar #'cadr drgnx-amenities-test--modules) :strict t
                                (pcase-dolist (`(,_ ,mod ,pkgs ,cmds) drgnx-amenities-test--modules)
                                  (when (seq-every-p #'drgnx-amenities-test--installed-p pkgs)

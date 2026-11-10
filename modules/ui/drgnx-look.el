@@ -23,6 +23,8 @@
   (load (expand-file-name "drgnx-look-fonts" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-look-density)
   (load (expand-file-name "drgnx-look-density" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-look-scale)
+  (load (expand-file-name "drgnx-look-scale" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 ;; and the colours it derives from other themes
 (unless (featurep 'drgnx-look-derive)
   (load (expand-file-name "drgnx-look-derive" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -38,10 +40,16 @@
 (declare-function drgnx-look-derive-on "drgnx-look-derive" ())
 (declare-function drgnx-look-derive-off "drgnx-look-derive" ())
 (declare-function drgnx-look-density-on "drgnx-look-density" ())
+(declare-function drgnx-look-scale-on "drgnx-look-scale" ())
+(declare-function drgnx-look-scale-off "drgnx-look-scale" ())
+(declare-function drgnx-look-scale-choose "drgnx-look-scale" (percent))
+(declare-function drgnx-look-scale-monitor-choose "drgnx-look-scale" (percent))
 (declare-function drgnx-look-density-off "drgnx-look-density" ())
 (declare-function drgnx-look-fonts-on "drgnx-look-fonts" ())
 (declare-function drgnx-look-fonts-off "drgnx-look-fonts" ())
 (declare-function drgnx-decor-faces-on "drgnx-decor" ())
+(declare-function drgnx-decor-scale-on "drgnx-decor" ())
+(declare-function drgnx-decor-scale-off "drgnx-decor" ())
 (declare-function drgnx-decor-activate "drgnx-decor" ())
 
 ;;;; Chrome (Glitnir, the compositor)
@@ -195,6 +203,11 @@ An editor group is an ordinary window: not the minibuffer, a package's side wind
 (defconst drgnx-look--card-parameters '(corner-radius shadow ring)
   "The window parameters of `drgnx-look-card' that make a card.")
 
+(defconst drgnx-look--sidebar-group '(drgnx-sidebar . drgnx-surface-panel)
+  "The left dock's card group (window parameter `card-group'): its sections are one island (window-dark.html
+`.card.ex'), Glitnir drawing one card around them while they tile a rectangle, the dividers between them in the
+panel surface.")
+
 (defun drgnx-look--card-frames ()
   "The graphical root frames."
   (seq-filter (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list)))
@@ -231,17 +244,18 @@ window's ring is the accent when it is one of several editor groups (`drgnx-look
                  '(drgnx-accent . 1.0)
                (drgnx-look--card-value p))))
       (unless (equal (window-parameter window p) v) (set-window-parameter window p v))))
+  (let ((group (and (eq (window-parameter window 'drgnx-role) 'dock) drgnx-look--sidebar-group)))
+    (unless (equal (window-parameter window 'card-group) group) (set-window-parameter window 'card-group group)))
   (unless (window-parameter window 'drgnx-look-card) (set-window-parameter window 'drgnx-look-card t)))
 
 (defun drgnx-look--card-unset (window)
   "Take the card parameters off WINDOW, when this module put them on."
   (when (window-parameter window 'drgnx-look-card)
-    (dolist (p (cons 'drgnx-look-card drgnx-look--card-parameters)) (set-window-parameter window p nil))))
+    (dolist (p (cons 'drgnx-look-card (cons 'card-group drgnx-look--card-parameters))) (set-window-parameter window p nil))))
 
 (defun drgnx-look--card-gap-px (frame)
-  "The gap in FRAME's own pixels: the density's `gap' logical pixels times the frame's scale (a frame pixel is a
-device pixel on the native shell)."
-  (round (* (drgnx-look-density-value 'gap) (frame-scale-factor frame))))
+  "The gap in FRAME's own pixels: the density's `gap' logical pixels (`drgnx-px')."
+  (drgnx-px (drgnx-look-density-value 'gap) frame))
 
 (defun drgnx-look--card-follow-scale (frame)
   "Give FRAME's dividers the gap again when its scale changed under it (a frame that is a card frame only)."
@@ -434,6 +448,7 @@ else enabled since stays)."
   (when (frame-parameter nil 'drgnx-look-zen) (drgnx-look-zen))
   (drgnx-look-follow-off)
   (drgnx-look-echo-area-off)
+  (drgnx-look-scale-off)
   (drgnx-look-density-off)
   (drgnx-look-fonts-off)
   (drgnx-look-derive-off)
@@ -521,16 +536,6 @@ only the one remap is reapplied."
   (dolist (b (buffer-list))
     (when (buffer-local-value 'drgnx-look--gap-cookie b) (with-current-buffer b (drgnx-look--gap-off)))))
 
-;;;; Zoom
-
-(defun drgnx-look--zoom (key)
-  "Zoom every frame's text as the key KEY (+, - or 0) of global-text-scale-adjust; then +, - or 0 repeat."
-  (let ((last-command-event key)) (global-text-scale-adjust 1)))
-
-(defun drgnx-look-zoom-in () "Bigger text everywhere; then +, - or 0." (interactive) (drgnx-look--zoom ?=))
-(defun drgnx-look-zoom-out () "Smaller text everywhere; then +, - or 0." (interactive) (drgnx-look--zoom ?-))
-(defun drgnx-look-zoom-reset () "The text size back to normal." (interactive) (drgnx-look--zoom ?0))
-
 ;;;; Zen
 
 (defvar drgnx-look-zen-width 100 "Text width in zen mode, in columns.")
@@ -580,6 +585,8 @@ only the one remap is reapplied."
                        (drgnx-state-subscribe 'selected-changed #'drgnx-look--cards-selected-changed :lane 'now)
                        (drgnx-modules-push-undo "island faces" #'drgnx-look--islands-off)
                        (drgnx-look--islands-on)
+                       (drgnx-modules-push-undo "boxes at each frame's scale" #'drgnx-decor-scale-off)
+                       (drgnx-decor-scale-on)
                        ;; a card's side edge is a fringe beside the gap: pressing it drags the gap too
                        (drgnx-module-define-key 'global-map [right-fringe down-mouse-1] #'drgnx-look-edge-drag)
                        (drgnx-module-define-key 'global-map [left-fringe down-mouse-1] #'drgnx-look-edge-drag)
@@ -587,14 +594,22 @@ only the one remap is reapplied."
                        (drgnx-look-derive-on)
                        (drgnx-look-fonts-on)
                        (drgnx-look-density-on)
+                       (drgnx-look-scale-on)
                        (drgnx-look-echo-area-on)
                        (drgnx-command-define 'preferences-theme :category "Preferences" :title "Color Theme"
                                              :command #'drgnx-look-choose-theme :menu '("Options") :doc "Pick the colour theme (remembered)")
                        (drgnx-command-define 'view-zen :category "View" :title "Zen Mode" :scope 'window
                                              :command #'drgnx-look-zen :doc "Only the text; again to give the sidebar and panel back")
-                       (pcase-dolist (`(,id ,title ,fn) '((view-zoom-in "Zoom In" drgnx-look-zoom-in) (view-zoom-out "Zoom Out" drgnx-look-zoom-out)
-                                                          (view-zoom-reset "Reset Zoom" drgnx-look-zoom-reset)))
-                         (drgnx-command-define id :category "View" :title title :command fn :doc "The text size in every window; then +, - or 0"))
+                       (pcase-dolist (`(,id ,title ,fn) '((view-zoom-in "Zoom In" drgnx-look-scale-zoom-in)
+                                                          (view-zoom-out "Zoom Out" drgnx-look-scale-zoom-out)
+                                                          (view-zoom-reset "Reset Zoom" drgnx-look-scale-zoom-reset)))
+                         (drgnx-command-define id :category "View" :title title :command fn
+                                               :doc "The UI scale, 10 % a step (every size and font); then +, - or 0"))
+                       (drgnx-command-define 'view-ui-scale :category "View" :title "UI Scale…" :command #'drgnx-look-scale-choose
+                                             :doc "Set the UI scale, 100 to 200 % (every size and font, at once)")
+                       (drgnx-command-define 'view-ui-scale-monitor :category "View" :title "UI Scale for This Monitor…"
+                                             :command #'drgnx-look-scale-monitor-choose
+                                             :doc "Set this monitor's own UI scale, or \"default\" to follow the global one")
                        (drgnx-command-define 'decor-activate :category "View" :title "Activate Button" :command #'drgnx-decor-activate
                                              :map 'drgnx-decor-button-map :when (lambda () (get-text-property (point) 'drgnx-decor-action))
                                              :doc "Run the decoration button at point")

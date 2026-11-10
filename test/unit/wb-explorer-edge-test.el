@@ -284,7 +284,7 @@
     (drgnx-explorer--find-apply "main")
     (drgnx-explorer-set-roots (list root))
     (let ((title (window-parameter (drgnx-wb-section-window 'explorer) 'header-line-format)))
-      (should (string-prefix-p (concat " " (drgnx-wb-close-glyph) " ") title))                  ; the ✕, then the title
+      (should-not (string-search (drgnx-wb-close-glyph) title))                 ; no close button: the island's ⋯ has it
       (should (string-search " Files " title))
       (should-not (string-search "—" title)))))
 

@@ -18,6 +18,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-state)
 (require 'drgnx-view)
+(require 'drgnx-pixels)
 (require 'drgnx-work-client)
 (require 'drgnx-history)
 (unless (featurep 'drgnx-work-map)
@@ -204,7 +205,7 @@ buffer, a folder outside git, a remote folder).  ROOTS: `drgnx-work-space-roots'
 labels' margin (84 px) and 12 px of padding, in logical pixels.  A terminal frame has no pixels: 226 units."
   (if (not (display-graphic-p))
       226
-    (let* ((scale (or (and (fboundp 'frame-scale-factor) (frame-scale-factor)) 1))
+    (let* ((scale (drgnx-pixels-scale))
            (px (/ (window-body-width (or window (selected-window)) t) (float scale))))
       (max 0 (floor (- px 96) 4)))))
 

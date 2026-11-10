@@ -291,6 +291,8 @@
         (view-zoom-in :none "in the palette")
         (view-zoom-out :none "in the palette")
         (view-zoom-reset :none "in the palette")
+        (view-ui-scale :none "in the palette")
+        (view-ui-scale-monitor :none "in the palette")
         (view-escape :none "<escape> is Vim's")
         (buffers-save :none "the Buffers right-click menu")
         (buffers-copy-path :none "the Buffers right-click menu")

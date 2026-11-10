@@ -471,6 +471,20 @@ D."
         (drgnx-look--card-set other)
         (should (equal (window-parameter other 'ring) (drgnx-look--card-value 'ring)))))))
 
+(ert-deftest drgnx-wb-chrome/the-sidebar-is-one-card-group ()
+  "window-dark.html `.card.ex': the sidebar's sections are one island, so every dock window names the same card group
+\(Glitnir draws one card around windows of a group that tile a rectangle), filled with the panel surface; an editor
+group names none, and taking the card off takes the group too.  Race-proof pattern D."
+  (drgnx-chrome-test--with _dir
+    (let* ((editor (selected-window)) (top (split-window editor nil 'left)) (low (split-window top nil 'below)))
+      (dolist (w (list top low)) (set-window-parameter w 'drgnx-role 'dock))
+      (dolist (w (list editor top low)) (drgnx-look--card-set w))
+      (should (equal (window-parameter top 'card-group) '(drgnx-sidebar . drgnx-surface-panel)))
+      (should (equal (window-parameter low 'card-group) (window-parameter top 'card-group)))
+      (should-not (window-parameter editor 'card-group))
+      (drgnx-look--card-unset top)
+      (should-not (window-parameter top 'card-group)))))
+
 (ert-deftest drgnx-wb-chrome/gap-follows-density ()
   "The dividers and the frame's edge are the density's gap in device pixels, and a density change gives them again
 at once (the density's changed hook).  Race-proof pattern D (the scale is stubbed)."
