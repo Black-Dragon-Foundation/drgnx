@@ -77,7 +77,7 @@ already on screen is never drawn again, and rows are drawn in slices of 4 ms or 
 ## What opens
 
 The strip under the chips reads **Open:** and has a pill for each step type (thinking, read, search, edit, execute,
-fetch, other), raised when it is on; **make default** is at its right end. In a narrow panel the pills go on as
+fetch, other), a ring, filled when it is on; **make default** is at its right end. In a narrow panel the pills go on as
 many lines as they need, and they follow the panel's width when you resize it. A type that is on shows the detail of its
 steps; a click on its pill or `T` flips one, `TAB` opens or folds the step at point whatever the toggles say.
 A step that failed opens by itself. `1`, `2` and `3` (or a click on the header's lens) are presets: **watch** (titles only), **review** (edits and
