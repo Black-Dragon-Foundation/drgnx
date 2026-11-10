@@ -120,17 +120,27 @@ once: each graphical frame is swapped for a new one with the same windows, buffe
     (kill-local-variable 'line-prefix)
     (kill-local-variable 'line-spacing)))
 
+(defun drgnx-look-echo--under-palette-p ()
+  "Non-nil when the floating palette shows the active minibuffer: the palette is the prompt, the box stays hidden."
+  (when-let* ((mw (active-minibuffer-window)))
+    (and (frame-live-p drgnx-palette-frame--frame) (frame-visible-p drgnx-palette-frame--frame)
+         (eq (window-buffer (frame-root-window drgnx-palette-frame--frame)) (window-buffer mw)))))
+
 (defun drgnx-look-echo--show (box)
-  "Dress the echo area, place BOX and show it."
+  "Dress the echo area, place BOX and show it, unless the floating palette is the prompt."
   (dolist (name drgnx-look-echo--buffers)
     (with-current-buffer (get-buffer-create name) (drgnx-look-echo--dress)))
   (drgnx-look-echo--place box)
-  (unless (frame-visible-p box) (make-frame-visible box)))
+  (if (drgnx-look-echo--under-palette-p)
+      (when (frame-visible-p box) (make-frame-invisible box))
+    (unless (frame-visible-p box) (make-frame-visible box))))
 
 (defun drgnx-look-echo--hide (&optional frame)
-  "Hide FRAME's box when nothing asks: no minibuffer is active and no caller waits for a key."
+  "Hide FRAME's box when nothing asks: no minibuffer is active, or the floating palette shows it, and no caller waits
+for a key."
   (when-let* ((box (drgnx-look-echo-box frame)))
-    (unless (or drgnx-look-echo--waiting drgnx-look-echo--prompting (active-minibuffer-window))
+    (unless (or drgnx-look-echo--waiting drgnx-look-echo--prompting
+                (and (active-minibuffer-window) (not (drgnx-look-echo--under-palette-p))))
       (when (frame-visible-p box) (make-frame-invisible box)))))
 
 (defun drgnx-look-echo--fit (box)
@@ -165,7 +175,8 @@ a key, or with a minibuffer active) shows in the box (nil: the echo area, which 
 the status bar (t: handled).  Emacs makes the box visible before it asks (`message3_nolog' shows a hidden minibuffer
 frame first), so a message taken here hides it again, before anything is drawn, unless a prompt still shows."
   (when-let* ((box (drgnx-look-echo-box)))
-    (if (or (eq (bound-and-true-p nidhogg-echo-prompt) 'prompt) drgnx-look-echo--waiting (active-minibuffer-window))
+    (if (or (eq (bound-and-true-p nidhogg-echo-prompt) 'prompt) drgnx-look-echo--waiting
+            (and (active-minibuffer-window) (not (drgnx-look-echo--under-palette-p))))
         (progn (when (eq (bound-and-true-p nidhogg-echo-prompt) 'prompt) (setq drgnx-look-echo--prompting t))
                (drgnx-look-echo--show box)
                nil)

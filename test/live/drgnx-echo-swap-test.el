@@ -7,6 +7,7 @@
 ;; card group of the docks.  It is swapped to the classic row and back; after each swap every part is where it was,
 ;; draws, and still answers its keys.  Frames need a graphical session: batch Emacs cannot make them.
 (require 'ert)
+(require 'cl-lib)
 (require 'drgnx-ui)
 
 (defun drgnx-echo-swap-test--eval (sess form)
@@ -147,6 +148,51 @@ window is not its own).")
           (should (eql 0 (plist-get (drgnx-ui-new-frame sess 60) :exit)))
           (drgnx-ui-measure sess nil)
           (should (equal (drgnx-echo-swap-test--eval sess drgnx-echo-swap-test--born) '(:swaps 0 :box t :no-row t))))
+      (drgnx-ui-stop (plist-get s :name))
+      (delete-directory root t))))
+
+(ert-deftest drgnx-live/the-palette-over-the-box-signals-nothing ()
+  "With the echo box, the floating palette is the prompt: the box stays hidden under it, and its minibuffer window (the
+box's root, which cannot be resized) gives no error at redisplay.  A question asked on top of the palette shows in the
+box, which hides again when the question ends."
+  (let* ((root (make-temp-file "drgnx-echo-palette" t))
+         (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
+         (s (drgnx-ui-start "drgnx" "1200x800" 60))
+         (sess (drgnx-ui-own-session (plist-get s :name))))
+    (unwind-protect
+        (progn
+          (drgnx-ui-measure sess nil)
+          (should (equal (drgnx-echo-swap-test--eval sess drgnx-echo-swap-test--born) '(:swaps 0 :box t :no-row t)))
+          ;; the palette floats with vertico, from the packages the scenes use (a session has none of its own)
+          (let ((elpa (getenv "DRGNX_LOOK_ELPA")))
+            (unless (and elpa (file-directory-p elpa)) (ert-skip "no DRGNX_LOOK_ELPA: no vertico, no floating palette"))
+            (drgnx-echo-swap-test--eval
+             sess (format "(progn (load (expand-file-name \"harness/drgnx-look-scenes-session\" drgnx-dir) nil t)
+                                  (drgnx-look-scene--packages %S) t)"
+                          elpa)))
+          (should (cl-loop repeat 60
+                           thereis (drgnx-echo-swap-test--eval sess "(bound-and-true-p vertico-mode)")
+                           do (drgnx-ui-measure sess nil)))
+          (drgnx-echo-swap-test--eval sess "(with-current-buffer (messages-buffer) (let ((inhibit-read-only t)) (erase-buffer)) t)")
+          (drgnx-ui-measure sess (list (list :keys "C-S-p") (list :type "run te")))
+          (should (drgnx-echo-swap-test--eval sess "(and (active-minibuffer-window) t)"))
+          (let ((state "(let ((mw (active-minibuffer-window)))
+                          (list :floats (and (frame-live-p drgnx-palette-frame--frame)
+                                             (frame-visible-p drgnx-palette-frame--frame) t)
+                                :box (and (frame-visible-p (window-frame mw)) t)))"))
+            ;; the palette is the prompt: the box stays hidden under it
+            (should (equal (drgnx-echo-swap-test--eval sess state) '(:floats t :box nil)))
+            (let ((messages (drgnx-echo-swap-test--eval sess "(with-current-buffer (messages-buffer) (buffer-string))")))
+              (should-not (string-search "Cannot resize" messages)))
+            ;; a question asked on top of the open palette shows in the box: M-x from inside it
+            (drgnx-echo-swap-test--eval sess "(setq enable-recursive-minibuffers t)")
+            (drgnx-ui-measure sess (list (list :keys "M-x")))
+            (should (equal (drgnx-echo-swap-test--eval sess "(minibuffer-depth)") 2))
+            (should (equal (drgnx-echo-swap-test--eval sess state) '(:floats t :box t)))
+            (drgnx-ui-measure sess (list (list :keys "C-g")))
+            (should (equal (drgnx-echo-swap-test--eval sess state) '(:floats t :box nil)))
+            (drgnx-ui-measure sess (list (list :keys "C-g")))
+            (should (equal (drgnx-echo-swap-test--eval sess "(minibuffer-depth)") 0))))
       (drgnx-ui-stop (plist-get s :name))
       (delete-directory root t))))
 

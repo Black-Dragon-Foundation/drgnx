@@ -13,6 +13,7 @@
 (require 'cl-lib)
 
 (defvar vertico-count)
+(defvar vertico-buffer-hide-prompt)
 (defvar drgnx-look-palette)
 (declare-function vertico-buffer-mode "vertico-buffer")
 (declare-function glitnir-active-p "glitnir")
@@ -212,6 +213,10 @@ counts in it (`default-line-height'), so the list is `vertico-count' long."
   (let* ((mb (window-buffer (active-minibuffer-window)))
          (lh (with-current-buffer mb
                (setq-local drgnx-palette-frame--floats t)
+               ;; In the echo box the minibuffer window is its frame's root, which cannot shrink: `vertico-buffer'
+               ;; would signal at every redisplay.  The box is hidden while the palette floats (below).
+               (when (frame-root-window-p (active-minibuffer-window))
+                 (setq-local vertico-buffer-hide-prompt nil))
                (drgnx-palette-frame--rows drgnx-palette-frame-row-px)
                (default-line-height)))
          (parent (window-frame (minibuffer-selected-window)))
@@ -219,6 +224,10 @@ counts in it (`default-line-height'), so the list is `vertico-count' long."
     (drgnx-palette-frame--place frame parent lh)
     (with-current-buffer mb (drgnx-palette-frame--dress (frame-root-window frame)))
     (make-frame-visible frame)
+    ;; a minibuffer in a box of its own (a child frame whose root it is): the palette is the prompt now
+    (let ((box (window-frame (active-minibuffer-window))))
+      (when (and (frame-parent box) (frame-visible-p box) (frame-root-window-p (active-minibuffer-window)))
+        (make-frame-invisible box)))
     (frame-root-window frame)))
 
 (defun drgnx-palette-frame-hide ()

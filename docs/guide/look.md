@@ -317,7 +317,9 @@ A graphical frame has no echo row at the bottom (`drgnx-look-echo-row`, a settin
 something asks, a box shows top-centre in the frame, as wide as the palette and in its look: a minibuffer
 (`find-file`, `yes-or-no-p`, a password), a question read a key at a time (`y-or-n-p`, `read-key`, `read-char`,
 `query-replace`'s), and the prompts Emacs's own commands show (`interactive` "c" and "k"; Nidhogg says which echo
-messages are prompts with `nidhogg-echo-prompt`). The box hides once the prompt is answered. Messages show in the
+messages are prompts with `nidhogg-echo-prompt`). The box hides once the prompt is answered. The floating command
+palette is a prompt of its own: while it is open the box stays hidden, and a question asked on top of it shows in the
+box. Messages show in the
 status bar for `drgnx-look-echo-status-seconds` (5) or until the next one, a command's error in the error face, and
 so do the keys of a prefix (`C-x-`); clicking the message opens `*Messages*`, which still logs them all.
 
