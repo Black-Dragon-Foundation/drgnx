@@ -586,23 +586,26 @@ field patch."
    '(progn
       (require 'drgnx-view-nav)
       (defvar drgnx-perf--tl-buf nil "The trail of the 2,000-step session, on the rows path.")
+      (defvar drgnx-perf--tl-line nil "When the hub's last model line came (`float-time').")
+      (defun drgnx-perf--tl-line-ad (&rest _) (setq drgnx-perf--tl-line (float-time)))
       (defun drgnx-perf--tl-h () (drgnx-view-patch-handle (buffer-local-value 'drgnx-view-patch drgnx-perf--tl-buf)))
       (defun drgnx-perf--tl-up ()
-        "A hub whose store holds session s1's 2,000 steps (seeded), and its trail open on the rows path, the model's
+        "A hub whose store holds session perf-long's 2,000 steps (seeded), and its trail open on the rows path, the model's
 window the last 500."
-        (drgnx-perf--hub-start nil t)
-        (let ((db (sqlite-open (expand-file-name "data/work.db" drgnx-perf--hub-dir))))
+        (drgnx-perf--hub-start nil)
+        ;; the session's data folder is the hub's (the harness sets DRGNX_DATA_DIR for both)
+        (let ((db (sqlite-open (expand-file-name "work.db" (drgnx-paths-dir 'data)))))
           (unwind-protect
               (sqlite-execute db (concat "insert into step (session, seq, class, start, end) with recursive n(i) as"
                                          " (select 1 union all select i + 1 from n where i < 2000)"
-                                         " select 'session:s1', i, 'tool', i, i + 1 from n"))
+                                         " select 'session:perf-long', i, 'tool', i, i + 1 from n"))
             (sqlite-close db)))
-        (setq drgnx-perf--tl-buf (get-buffer-create "*drgnx work trail: s1*"))
+        (setq drgnx-perf--tl-buf (get-buffer-create "*drgnx work trail: perf-long*"))
         (switch-to-buffer drgnx-perf--tl-buf)
         (with-current-buffer drgnx-perf--tl-buf
           (drgnx-work-trail-mode)
-          (setq drgnx-work-trail--session "s1" drgnx-work-lens-nav #'drgnx-work-trail--nav)
-          (drgnx-work-trail--rows-attach "trail/s1" (list :session "s1")))
+          (setq drgnx-work-trail--session "perf-long" drgnx-work-lens-nav #'drgnx-work-trail--nav)
+          (drgnx-work-trail--rows-attach "trail/perf-long" (list :session "perf-long")))
         (unless (drgnx-perf--wait 30 (lambda () (equal (ignore-errors (nidhogg-view-get (drgnx-perf--tl-h) 'window "steps"))
                                                        '(1500 500 2000))))
           (error "Premise: the trail's model is not the last 500 of 2,000 steps (window %S)"
@@ -614,25 +617,39 @@ step: each key's time, and for a key that stopped at the window's edge the time 
 window (one `view/window' round trip and the model's apply); the longest list Sjá held.  An error when the first
 step is not reached or Sjá held more than the window."
         (with-current-buffer drgnx-perf--tl-buf
-          (let ((h (drgnx-perf--tl-h)) keys pages (most 0) (n 0))
-            (drgnx-view-nav 'select "step:2000")
-            (while (and (< n 2100) (not (equal (drgnx-view-nav-selection) "step:1")))
+          (advice-add 'drgnx-hub--model-line :before #'drgnx-perf--tl-line-ad)
+          (let ((h (drgnx-perf--tl-h)) keys pages lines (most 0) (n 0))
+            ;; each run starts from the last 500 (the run before paged to the first)
+            (funcall drgnx-view-patch-send-function "view/window" (list :view (drgnx-view-patch-view drgnx-view-patch)
+                                                                        :list "steps" :from 1500))
+            (unless (drgnx-perf--wait 20 (lambda () (equal (nidhogg-view-get h 'window "steps") '(1500 500 2000))))
+              (error "Premise: the window did not go back to the last 500 (%S)" (nidhogg-view-get h 'window "steps")))
+            (drgnx-view-nav 'select (car (last (nidhogg-view-get h 'list "steps"))))
+            (unless (eql (drgnx-view-nav-field "seq") 2000)
+              (error "Premise: the newest step is not selected (%S, seq %S; the list from %S to %S)"
+                     (drgnx-view-nav-selection) (drgnx-view-nav-field "seq")
+                     (car (nidhogg-view-get h 'list "steps")) (car (last (nidhogg-view-get h 'list "steps")))))
+            (while (and (< n 2100) (not (eql (drgnx-view-nav-field "seq") 1)))
               (let ((t0 (float-time)))
                 (drgnx-work-trail--nav 'up)
                 (push (* 1000 (- (float-time) t0)) keys)
                 (when (drgnx-view-nav-paging-p)
-                  (unless (drgnx-perf--wait 5 (lambda () (not (drgnx-view-nav-paging-p))))
+                  (setq drgnx-perf--tl-line nil)
+                  (unless (drgnx-perf--wait 20 (lambda () (not (drgnx-view-nav-paging-p))))
                     (error "Premise: the window asked at %s did not come" (drgnx-view-nav-selection)))
-                  (push (* 1000 (- (float-time) t0)) pages)))
+                  (push (* 1000 (- (float-time) t0)) pages)
+                  (when drgnx-perf--tl-line (push (* 1000 (- drgnx-perf--tl-line t0)) lines))))
               (setq most (max most (length (nidhogg-view-get h 'list "steps"))) n (1+ n)))
             ;; the rows: every step reachable, and Sjá never holds more than the window
-            (unless (equal (drgnx-view-nav-selection) "step:1")
-              (error "Premise: %d keys up reached %s, not the first step" n (drgnx-view-nav-selection)))
+            (unless (eql (drgnx-view-nav-field "seq") 1)
+              (error "Premise: %d keys up reached %s (seq %S), not the first step" n (drgnx-view-nav-selection)
+                     (drgnx-view-nav-field "seq")))
             (when (> most 500) (error "Premise: Sjá held %d steps, more than the window's 500" most))
             (list :key_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats keys))
                   :page_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats pages))
+                  :line_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats (prog1 lines (advice-remove 'drgnx-hub--model-line #'drgnx-perf--tl-line-ad))))
                   :pages (length pages) :list_max most :keys n
-                  :reached (equal (drgnx-view-nav-selection) "step:1")))))
+                  :reached t))))
       (defun drgnx-perf--tl-down ()
         (when (buffer-live-p drgnx-perf--tl-buf) (kill-buffer drgnx-perf--tl-buf))
         (setq drgnx-perf--tl-buf nil)
