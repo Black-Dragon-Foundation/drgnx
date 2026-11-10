@@ -1184,7 +1184,8 @@ before), which is where a hit opens and what `reanchor` compares against. Versio
 version 1 is chunked again at the next refresh, whether or not a file changed (and, the version being in every
 vector's key, embedded again).
 
-`PARSE_VERSION` covers what a parse derives besides the chunks (a symbol's lines and signature, the languages parsed).
+`PARSE_VERSION` covers what a parse derives besides the chunks (a symbol's lines and signature, the languages parsed;
+1: lines and signatures, 2: Python, JavaScript, TypeScript and TSX).
 When the store's `parse_version` is older, the next refresh parses every file again as for a new chunker, but the
 chunks' keys do not change, so no vector is embedded again; worktrees re-seed lazily. `tests/chunk_golden.rs` pins the
 chunks and symbols of Rust, C, shell, Lisp, Org and Markdown as the chunker made them before version 1: a change there
@@ -1218,6 +1219,19 @@ pipeline over their top-level items. Definitions are `function_item`, `impl_item
 methods of an `impl`, trait or module as symbols of their own; `function_definition`, the struct, union and enum
 specifiers, typedefs and `#define`s in C; `function_definition` in shell. The comment lines directly above an item
 (`///`, `//`, `#`) are its docstring. An oversized item is cut before the members of its body.
+
+Python, JavaScript, TypeScript and TSX (`tree-sitter-python` 0.25, `tree-sitter-javascript` 0.25,
+`tree-sitter-typescript` 0.23 for both TypeScript grammars; MIT) use the same pipeline. Their wrappers are looked
+through: `export` (and `export default`), Python decorators (the symbol spans them) and a TypeScript `namespace`
+statement. Python defines functions and classes, with a class's functions as methods; its docstring is the string its
+body starts with, else the `#` lines above. JavaScript and TypeScript define function declarations, classes (abstract
+ones too) with their methods, a `const`/`let`/`var` whose value is an arrow function or a function expression, and in
+TypeScript interfaces, type aliases, enums and namespaces (whose declarations are members); the doc is a `/** … */`
+comment directly above, else the `//` lines. Files: `.py .pyi`, `.js .mjs .cjs .jsx`, `.ts .mts .cts`, `.tsx`, and
+extensionless files whose `#!` line runs `python…` or `node`. Tests also by name: `test_*.py`, `*_test.py` and
+`*.test.*`/`*.spec.*` scripts. A member without a doc of its own takes its class's, as a Rust method takes its
+`impl`'s. A signature is cut at the body's `{`: the first outside parentheses and brackets, so a destructured
+parameter stays in it.
 
 Org and Markdown chunk by the heading tree (`chunk/outline.rs`): a chunk's header is its outline path (`A > B`), a
 heading with nothing under it joins the next one, source blocks and fences stay whole under the budget, property

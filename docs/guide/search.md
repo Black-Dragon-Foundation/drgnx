@@ -126,6 +126,9 @@ An agent has no other way in: the hub's `search/*` methods are the editor's.
   catches up after a branch switch once git's lock is gone. Tier 2 makes the vectors, with the built-in model and with
   each server that answers, in the background: capped in memory, at low priority, paced so that typing keeps its
   frame, and held back on battery until AC (Index Project with `--now` overrides that).
+- **Languages.** Emacs Lisp, Rust, C, shell, Python, JavaScript, TypeScript and TSX are parsed: their chunks follow
+  definitions, and their definitions are what `symbols` and `outline` list. Org and Markdown follow headings; other
+  text is cut into windows of lines, with no definitions.
 - **Content-keyed.** A vector belongs to the text of its chunk (and the chunker's version), so a file that changed only
   re-embeds the chunks that changed, and switching to another branch and back embeds nothing.
 - **Which model answers.** A running server whose vectors cover at least 95 % of the project's chunks is used; else
