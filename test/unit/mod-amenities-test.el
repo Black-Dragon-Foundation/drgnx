@@ -123,6 +123,11 @@
     (should (string-search "(debug-start \"<f5>\")" vs))
     (should (string-search "(debug-step-in \"<f11>\" :map drgnx-debug-session-map)" vs))))
 
+(ert-deftest drgnx-guides/off-until-chosen ()
+  "The approved look's code has no indent guides (the mockups): the module is off until you choose it."
+  (load (expand-file-name "modules/extra/drgnx-guides" drgnx-dir) nil t)
+  (should (drgnx-module-default-off-p 'extra/guides)))
+
 (ert-deftest drgnx-guides/colour-comes-from-shadow-not-highlight ()
   (with-temp-buffer
     (insert-file-contents (expand-file-name "modules/extra/drgnx-guides.el" drgnx-dir))

@@ -60,6 +60,7 @@ text is one block on the `region' face.  Everything undone after."
          (progn
            (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore))
              (drgnx-state-mode 1)
+             (drgnx-state-define-role 'statusbar)     ; as the module's setup does
              (drgnx-statusbar-mode 1))
            (set-window-parameter (selected-window) 'mode-line-format drgnx-statusbar--host)
            (drgnx-test-wait-presented)
@@ -81,20 +82,25 @@ text is one block on the `region' face.  Everything undone after."
     ;; the window's edge is where its mode line ends: a right divider belongs to the gap, not to the bar
     (- (round (* s (- (nth 2 edges) (window-right-divider-width w)))) (1+ (cdr span)))))
 
+(defun drgnx-ui-look-bars--end-room ()
+  "Device pixels from the last segment's text to the bar's right edge in the design (window-dark.png): the bar's
+padding 8 and the segment's own room 6, in logical pixels."
+  (round (* 14 (if (fboundp 'frame-scale-factor) (frame-scale-factor) 1.0))))
+
 (ert-deftest drgnx-ui-look-bars/right-edge-in-pixels ()
-  "Pattern D: the rightmost status segment ends within 1 device pixel of the window's right edge minus the panel
-padding (12 logical pixels at the comfortable density)."
+  "Pattern D: the rightmost status segment's text ends within 1 device pixel of the window's right edge minus the
+design's room (`drgnx-ui-look-bars--end-room')."
   (skip-unless (display-graphic-p))
   (drgnx-ui-look-bars--with-bar
-    (let ((want (drgnx-ui-look-bars--logical 'panel-padding)))
+    (let ((want (drgnx-ui-look-bars--end-room)))
       (should (member (drgnx-ui-look-bars--right-gap) (list (1- want) want (1+ want)))))))
 
 (ert-deftest drgnx-ui-look-bars/right-edge-after-zoom ()
   "Pattern D: after `global-text-scale-adjust' +2 and a change of the code font size, the bar is laid out again:
-the segment still ends one padding from the edge."
+the segment still ends the design's room from the edge."
   (skip-unless (display-graphic-p))
   (drgnx-ui-look-bars--with-bar
-    (let ((want (drgnx-ui-look-bars--logical 'panel-padding))
+    (let ((want (drgnx-ui-look-bars--end-room))
           (height (face-attribute 'default :height)))
       ;; `(global-text-scale-adjust 0)' from Lisp recurses in this Emacs, so the height is put back by hand
       (unwind-protect
@@ -153,6 +159,38 @@ density's `status-bar' (22, 24, 28): an odd difference between the row and its t
       (should (equal (mapcar (lambda (r) (list (nth 0 r) (nth 1 r))) got)
                      (mapcar (lambda (r) (list (nth 0 r) (nth 2 r))) got))))))
 
+(ert-deftest drgnx-ui-look-bars/one-bar-across-the-window ()
+  "Design §4 (window-dark.png): with two editors side by side there is one bar, the frame's bottom row as wide as the
+frame, the density's `status-bar' high; the editors have no mode line; the bar shows the `edge' block of the editor
+you are in, 14 logical pixels from the frame's right edge."
+  (skip-unless (display-graphic-p))
+  (drgnx-ui-look-bars--with-bar
+    (let ((drgnx-statusbar-place 'frame) (editor (selected-window)))
+      (set-window-parameter editor 'mode-line-format nil)
+      (unwind-protect
+          (progn
+            (drgnx-statusbar--frame-apply)
+            (split-window editor nil 'right)
+            (drgnx-statusbar--frame-ensure (selected-frame))
+            (drgnx-chrome-apply (selected-frame))          ; the editors' mode line, as the mode's switch does
+            (drgnx-test-wait-presented)
+            (let* ((bars (seq-filter (lambda (w) (eq (window-parameter w 'drgnx-role) 'statusbar)) (window-list nil 'nomini)))
+                   (bar (car bars)) (s (drgnx-ui-look-bars--scale)))
+              (should (= 1 (length bars)))
+              (should (eq (window-parent bar) (frame-root-window)))
+              (should-not (window-next-sibling bar))
+              (should (= (window-pixel-width bar) (window-pixel-width (frame-root-window))))
+              (should (= (drgnx-ui-look-bars--logical 'status-bar) (window-mode-line-height bar)))
+              (should (= 0 (window-mode-line-height editor)))
+              (let* ((edges (window-pixel-edges bar))
+                     (y (round (* s (- (nth 3 edges) (/ (window-mode-line-height bar) 2.0)))))
+                     (span (drgnx-ui-look-bars--span (drgnx-uitest-snapshot) y (drgnx-ui-look-bars--rgb 'region)))
+                     (want (drgnx-ui-look-bars--end-room)))
+                (should span)
+                (should (member (- (round (* s (nth 2 edges))) (1+ (cdr span))) (list (1- want) want (1+ want)))))))
+        (let ((drgnx-statusbar-place 'editors)) (drgnx-statusbar--frame-apply) (drgnx-chrome-apply (selected-frame)))
+        (delete-other-windows editor)))))
+
 (ert-deftest drgnx-ui-look-bars/double-click-on-the-title-row-is-bound ()
   "Pattern D: with the top line on, a double click in the tab bar finds Maximize or Restore Window in the keymap Emacs
 builds for the bar (the harness's synthetic clicks do not reach the tab bar's own prefix, so the binding is read, not
@@ -172,23 +210,125 @@ clicked)."
       (kill-buffer buf))))
 
 (ert-deftest drgnx-ui-look-bars/hint-centred ()
-  "Pattern D: the top line's hint (a block on the `region' face, as wide as a hint) is centred on the frame within
-1 device pixel."
+  "Pattern D: the title row's search box (a block on the `region' face, as wide as the box) is drawn where the row's
+layout puts it (after the left items and the first gap, within 1 device pixel), and the same with the design's chips
+shown as without them: it never moves when a chip comes or goes."
   (skip-unless (display-graphic-p))
   (drgnx-uitest-bare-frame)
-  (let ((buf (get-buffer-create "*look-bars-top*")))
+  (let ((buf (get-buffer-create "*look-bars-top*")) (spans nil))
     (switch-to-buffer buf)
     (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-topline--hint)
+        (cl-letf (((symbol-function 'drgnx-topline--search-box)
                    (lambda ()
-                     (list (drgnx-topline--item 'drgnx-topline-search (propertize "                  " 'face 'region))))))
+                     (drgnx-topline--item 'drgnx-topline-search (propertize "                  " 'face 'region)))))
+          (drgnx-topline-setup)
+          (dolist (counts '((1 . 2) (0 . 0)))
+            (cl-letf (((symbol-function 'drgnx-topline--attention-count) (lambda () (car counts)))
+                      ((symbol-function 'drgnx-topline--agents-count) (lambda () (cdr counts))))
+              (drgnx-memo-forget 'topline)
+              (force-mode-line-update t)
+              (drgnx-test-wait-presented)
+              (let* ((snap (drgnx-uitest-snapshot)) (s (drgnx-ui-look-bars--scale))
+                     (y (/ (round (* s (tab-bar-height nil t))) 2))
+                     (span (drgnx-ui-look-bars--span snap y (drgnx-ui-look-bars--rgb 'region)))
+                     (items (drgnx-topline--line)) (measure (drgnx-statusbar--measure-fn nil 'tab-bar))
+                     (before (seq-take items (cl-position 'drgnx-topline-search (mapcar #'car items)))))
+                (should span)
+                (should (<= (abs (- (car span) (round (* s (drgnx-topline--width before measure))))) 1))
+                (push span spans))))
+          (should (<= (abs (- (car (nth 0 spans)) (car (nth 1 spans)))) 1)))
+      (drgnx-topline--off)
+      (kill-buffer buf))))
+
+(ert-deftest drgnx-ui-look-bars/title-row-is-38-px-on-the-gap ()
+  "Design §4: the title row is the `title-row' density's height (38 px at the default) and, where nothing is drawn,
+the `gap' token's colour."
+  (skip-unless (display-graphic-p))
+  (drgnx-uitest-bare-frame)
+  (let ((buf (get-buffer-create "*look-bars-title*")))
+    (switch-to-buffer buf)
+    (unwind-protect
+        (progn
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme 'drgnx-dark t)
           (drgnx-topline-setup)
           (drgnx-test-wait-presented)
-          (let* ((snap (drgnx-uitest-snapshot))
-                 (y (/ (round (* (drgnx-ui-look-bars--scale) (tab-bar-height nil t))) 2))
-                 (span (drgnx-ui-look-bars--span snap y (drgnx-ui-look-bars--rgb 'region))))
-            (should span)
-            (should (<= (abs (- (nth 0 snap) (+ (car span) (cdr span) 1))) 2))))
+          (should (= (drgnx-ui-look-bars--logical 'title-row) (tab-bar-height nil t)))
+          (let* ((s (drgnx-ui-look-bars--scale)) (snap (drgnx-uitest-snapshot))
+                 (px (cdr (drgnx-uitest-pixel snap (round (* s 300)) (round (* s 3))))))
+            (should (cl-every (lambda (a b) (<= (abs (- a b)) 2)) px (drgnx-ui-look-bars--token-rgb 'gap 'dark)))))
+      (drgnx-topline--off)
+      (mapc #'disable-theme custom-enabled-themes)
+      (kill-buffer buf))))
+
+(ert-deftest drgnx-ui-look-bars/title-row-controls-take-a-real-click ()
+  "Design §4: the title row's window controls are buttons.  A real pointer (mutter's virtual one, through the
+compositor and the shell as a mouse's motion and buttons go; `drgnx-uitest-pointer-click') on Minimise runs its
+registry command, Minimize Window.  On Nidhogg's native shell this needs its line from 0f89eff4 (the tab bar takes a
+real press with its item: NH-TITLE-CLICK-1); the .6 tarball predates it."
+  (skip-unless (display-graphic-p))
+  (skip-unless (drgnx-uitest-pointer-available-p))
+  (drgnx-uitest-bare-frame)
+  (let ((buf (get-buffer-create "*look-bars-controls*")) (frame (selected-frame)) (ran nil)
+        (was drgnx-face-title-bar))
+    (switch-to-buffer buf)
+    (unwind-protect
+        (cl-letf (((symbol-function 'iconify-frame) (lambda (&optional _f) (interactive) (setq ran t)))
+                  ;; as on GNOME (the session's mutter names no desktop)
+                  ((symbol-function 'drgnx-face--drawn-wanted-p) (lambda (_f) (eq drgnx-face-title-bar 'drgnx))))
+          ;; drgnx draws the title: the frame is undecorated, so no system title bar takes the press
+          (setq drgnx-face-title-bar 'drgnx)
+          (drgnx-face--apply-title frame)
+          (should (drgnx-face-drawn-title-p frame))
+          (drgnx-topline-setup)
+          (should (eq 'iconify-frame (drgnx-cmd-command (drgnx-commands-get 'title-row-minimize))))
+          (drgnx-test-wait-presented)
+          (let* ((items (drgnx-topline--line)) (keys (mapcar #'car items))
+                 (measure (drgnx-statusbar--measure-fn nil 'tab-bar))
+                 (before (drgnx-topline--width (seq-take items (cl-position 'drgnx-topline-minimize keys)) measure))
+                 (x (+ before (round (* (drgnx-pixels-scale frame) (+ 4 13)))))   ; the 4 px gap, then the middle
+                 (y (/ (tab-bar-height frame t) 2)))
+            (let ((got (drgnx-uitest-pointer-click x y (lambda () ran))))
+              (ert-info ((format "keys %S" drgnx-uitest-pointer-keys))
+                (should (eq t got))))))
+      (setq drgnx-face-title-bar was)
+      (cl-letf (((symbol-function 'drgnx-face--drawn-wanted-p) #'ignore)) (drgnx-face--apply-title frame))
+      (drgnx-topline--off)
+      (kill-buffer buf))))
+
+(ert-deftest drgnx-ui-look-bars/title-row-control-hover-is-a-circle ()
+  "Design §4 (`.wctl span:hover'): a real pointer (mutter's virtual one) resting on Close lights a 26 px circle in the
+hover colour: about 26 px across through its middle, and a chord of about 14 px 11 px above it (a square would be 26)."
+  (skip-unless (display-graphic-p))
+  (skip-unless (drgnx-uitest-pointer-available-p))
+  (drgnx-uitest-bare-frame)
+  (let ((buf (get-buffer-create "*look-bars-hover*")) (frame (selected-frame)) (was drgnx-face-title-bar))
+    (switch-to-buffer buf)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-face--drawn-wanted-p) (lambda (_f) (eq drgnx-face-title-bar 'drgnx))))
+          (setq drgnx-face-title-bar 'drgnx)
+          (drgnx-face--apply-title frame)
+          (drgnx-topline-setup)
+          (drgnx-test-wait-presented)
+          (let* ((items (drgnx-topline--line)) (keys (mapcar #'car items))
+                 (measure (drgnx-statusbar--measure-fn nil 'tab-bar))
+                 (sc (drgnx-pixels-scale frame))
+                 (before (drgnx-topline--width (seq-take items (cl-position 'drgnx-topline-close keys)) measure))
+                 (x (+ before (round (* sc (+ 4 13)))))
+                 (y (/ (tab-bar-height frame t) 2))
+                 (hover (drgnx-ui-look-bars--rgb 'drgnx-topline-hover)))
+            (should-not (equal hover (drgnx-ui-look-bars--rgb 'drgnx-topline)))
+            (drgnx-uitest-pointer-move x y)
+            (drgnx-test-wait-presented)
+            (let* ((snap (drgnx-uitest-snapshot)) (s (drgnx-ui-look-bars--scale))
+                   (mid (drgnx-ui-look-bars--span snap (round (* s y)) hover))
+                   (chord (drgnx-ui-look-bars--span snap (round (* s (- y (* 11 sc)))) hover))
+                   (px (lambda (span) (and span (- (cdr span) (car span) -1)))))
+              (ert-info ((format "spans: middle %S, chord %S" mid chord))
+                (should (and mid (<= (* 22 sc s) (funcall px mid) (* 27 sc s))))
+                (should (and chord (< (funcall px chord) (* 18 sc s))))))))
+      (setq drgnx-face-title-bar was)
+      (cl-letf (((symbol-function 'drgnx-face--drawn-wanted-p) #'ignore)) (drgnx-face--apply-title frame))
       (drgnx-topline--off)
       (kill-buffer buf))))
 

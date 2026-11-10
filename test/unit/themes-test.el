@@ -96,11 +96,114 @@
     (dotimes (i 8)
       (should (eql 1.0 (plist-get (drgnx-faces--clause-plist (intern (format "outline-%d" (1+ i))) 'gui) :height))))))
 
+(ert-deftest drgnx-themes/chrome-text-is-in-the-ui-font ()
+  "Design §3.1, 'Where the UI font goes': the tab bar, the tab lines, header lines and the status bar take the UI
+roles (the status bar the caption), in every theme, the tabs' own faces included (a theme spec replaces the
+defface's `:inherit')."
+  (pcase-dolist (`(,_ . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (pcase-dolist (`(,role . ,faces)
+                     '((drgnx-ui-text tab-bar tab-bar-tab tab-bar-tab-inactive tab-line tab-line-tab
+                                      tab-line-tab-current tab-line-tab-inactive tab-line-tab-special header-line)
+                       (drgnx-ui-caption mode-line mode-line-active mode-line-inactive drgnx-keycap)))
+        (dolist (face faces)
+          (should (equal (list face role)
+                         (list face (let ((i (plist-get (drgnx-faces--clause-plist face 'gui) :inherit)))
+                                      (if (consp i) (car i) i))))))))))
+
+(ert-deftest drgnx-themes/header-lines-are-on-the-editor ()
+  "A header line belongs to its card (the breadcrumb under the tabs, a package's own header): the editor's colour."
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (should (equal (drgnx-look-token 'editor variant) (drgnx-face-color 'header-line :background 'gui))))))
+
+(ert-deftest drgnx-themes/title-row-and-chips ()
+  "Design §4 \"The window frame\": the title row (the tab bar) is on the gap; the chips are on their tints, and in
+high contrast, where tints are black, they are ringed in their own colour."
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (should (equal (drgnx-look-token 'gap variant) (drgnx-face-color 'tab-bar :background 'gui)))
+      (pcase-dolist (`(,face ,fg ,bg) '((drgnx-chip-quiet muted sel-quiet) (drgnx-chip-attention attention attention-tint)
+                                        (drgnx-chip-accent accent accent-tint)))
+        (should (equal (list face (drgnx-look-token fg variant) (drgnx-look-token bg variant))
+                       (list face (drgnx-face-color face :foreground 'gui) (drgnx-face-color face :background 'gui))))
+        (should (eq (eq variant 'hc) (and (plist-get (drgnx-faces--clause-plist face 'gui) :box) t)))))))
+
+;; Design §3.5: a button is a quiet fill in a 1 px hairline (radius 6), the primary one the accent's fill; a keycap is
+;; subtle text in a strong hairline (radius 4)
+(ert-deftest drgnx-themes/buttons-and-keycaps ()
+  "Design §3.5 (`.btn', `.btn.pri', `kbd'): `drgnx-control' is the text colour on the quiet selection, ringed 1 px in
+the border colour; `drgnx-control-primary' is on-accent text on the accent's fill; `drgnx-keycap' is subtle text
+ringed in the strong border, with no fill of its own."
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (pcase-dolist (`(,face ,fg ,bg ,ring) '((drgnx-control fg sel-quiet border)
+                                              (drgnx-control-primary on-accent accent-fill accent-fill)
+                                              (drgnx-keycap subtle nil border-strong)))
+        (let ((box (plist-get (drgnx-faces--clause-plist face 'gui) :box)))
+          (should (equal (list face (drgnx-look-token fg variant) (and bg (drgnx-look-token bg variant))
+                               (drgnx-look-token ring variant) '(1 . 1))
+                         (list face (drgnx-face-color face :foreground 'gui) (drgnx-face-color face :background 'gui)
+                               (plist-get box :color) (plist-get box :line-width)))))))))
+
 (ert-deftest drgnx-themes/variant-follows-the-theme ()
   (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
     (drgnx-themes-test--with theme (should (eq variant (drgnx-look-variant)))))
   (mapc #'disable-theme custom-enabled-themes)
   (should (eq 'dark (drgnx-look-variant))))
+
+(defun drgnx-themes-test--defface-inherits ()
+  "(FACE . INHERITS) for every `defface' at the top level of drgnx's Lisp whose spec's first clause inherits: read,
+not loaded, so a module's faces count without its setup."
+  (let (found)
+    (dolist (dir '("core" "wb" "modules"))
+      (dolist (file (directory-files-recursively (expand-file-name dir drgnx-dir) "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (condition-case nil
+              (while t
+                (let ((form (read (current-buffer))))
+                  (when (and (eq (car-safe form) 'defface) (eq (car-safe (nth 2 form)) 'quote))
+                    (let* ((clause (car (cadr (nth 2 form))))
+                           (plist (if (consp (cadr clause)) (cadr clause) (cdr clause)))
+                           (inherit (plist-get plist :inherit)))
+                      (when inherit (push (cons (nth 1 form) (ensure-list inherit)) found))))))
+            ((end-of-file invalid-read-syntax) nil)))))
+    found))
+
+(defconst drgnx-themes-test--inherited-attrs
+  '(:family :height :weight :slant :width :foreground :background :underline :overline :strike-through :box
+            :inverse-video :extend)
+  "The attributes a dropped parent face could have given.")
+
+(defconst drgnx-themes-test--dropped-on-purpose
+  '(;; the defface inherits `region' for a theme that is not drgnx's colour; a button ends with its label
+    (drgnx-control-primary region :extend)
+    ;; how far the selection reaches is the look's highlight step's (drgnx-selected is a row's colour, not the region)
+    (drgnx-selected region :extend))
+  "(FACE PARENT ATTRIBUTE): what drgnx's themes drop from a defface's parent on purpose.")
+
+(ert-deftest drgnx-themes/a-theme-spec-keeps-the-defface-inherit ()
+  "A theme's spec for a face replaces the defface's whole, its `:inherit' too (the keycaps lost the caption role
+that way and fell back to the code font).  So for every face drgnx's themes set whose defface inherits, each
+attribute a parent gave (`default' aside) is still given: by the theme's spec, by a parent it keeps, or it is
+dropped on purpose (`drgnx-themes-test--dropped-on-purpose')."
+  (let ((inherits (drgnx-themes-test--defface-inherits)) (lost nil))
+    (should (assq 'drgnx-keycap inherits))           ; the reader finds the faces
+    (pcase-dolist (`(,_ . ,theme) drgnx-themes-test--themes)
+      (drgnx-themes-test--with theme
+        (pcase-dolist (`(,face . ,want) inherits)
+          (when (assq theme (get face 'theme-face))
+            (let* ((spec (drgnx-faces--clause-plist face 'gui))
+                   (have (ensure-list (plist-get spec :inherit))))
+              (dolist (parent (cl-remove-if (lambda (f) (or (eq f 'default) (memq f have))) want))
+                (dolist (attr drgnx-themes-test--inherited-attrs)
+                  (when (and (drgnx-faces--attribute parent attr 'gui 0)
+                             (not (plist-member spec attr))
+                             (not (cl-some (lambda (p) (drgnx-faces--attribute p attr 'gui 0)) have))
+                             (not (member (list face parent attr) drgnx-themes-test--dropped-on-purpose)))
+                    (push (list theme face parent attr) lost)))))))))
+    (should (equal nil (nreverse lost)))))
 
 (provide 'themes-test)
 ;;; themes-test.el ends here

@@ -401,6 +401,35 @@ together; wait for all under a 30 s bound.  Fails the test unless every child ex
         (inhibit-file-name-operation op))
     (apply op args)))
 
+(ert-deftest drgnx-trust/the-shield-explains-and-offers-the-project ()
+  "A click on Restricted Mode's shield says what it is and offers to trust the project's folder (Trust This
+Folder, which shows the folder's code first); a no trusts nothing.  Home as a whole (or a shared folder) is never
+offered: it says so and asks nothing."
+  (drgnx-trust-test--with (dir)
+    (let* ((asked nil) (trusted nil) (answer nil)
+           (b (find-file-noselect (drgnx-trust-test--file dir "a.txt" "text\n"))))
+      (let ((drgnx-commands--table (make-hash-table :test #'eq)))   ; the command the shield's click is
+        (cl-letf (((symbol-function 'drgnx-trust-mode) #'ignore)
+                  ((symbol-function 'drgnx-settings-review-setup) #'ignore))
+          (drgnx-trust-setup))
+        (should (eq 'drgnx-trust-explain (drgnx-cmd-command (drgnx-commands-get 'restricted-mode)))))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt) (push prompt asked) answer))
+                ((symbol-function 'drgnx-settings-trust-this-folder)
+                 (lambda (&optional root _shown) (interactive) (push (or root 'this) trusted))))
+        (with-current-buffer b
+          (drgnx-trust-explain)
+          (should (string-match-p "Restricted Mode" (car asked)))
+          (should (string-match-p (regexp-quote (abbreviate-file-name (directory-file-name dir))) (car asked)))
+          (should-not trusted)                                     ; no: nothing trusted
+          (setq answer t)
+          (drgnx-trust-explain)
+          (should (equal trusted '(this)))
+          (setq asked nil trusted nil)
+          (cl-letf (((symbol-function 'drgnx-trust--folder) (lambda () (expand-file-name "~/"))))
+            (let ((said (drgnx-trust-explain)))
+              (should-not asked) (should-not trusted)
+              (should (string-match-p "never trusted" said)))))))))
+
 (ert-deftest drgnx-trust/restricted-mark-only-for-untrusted-local-files ()
   (drgnx-trust-test--with (dir)
     (should (member drgnx-trust--mark-segment global-mode-string))

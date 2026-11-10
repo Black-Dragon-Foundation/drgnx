@@ -28,6 +28,9 @@
 (require 'drgnx-frame-kind)
 (require 'drgnx-memo)
 (require 'drgnx-paths)
+(require 'drgnx-ui-kit)                 ; `drgnx-ui-button-pad'
+(require 'drgnx-palette)                ; `drgnx-palette-keycaps'
+(require 'drgnx-pixels)                 ; `drgnx-px', `drgnx-look-pixel-width'
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function drgnx-surfaces-key-label "drgnx-surfaces")
 (defvar drgnx-surfaces-starter-commands)
@@ -50,7 +53,7 @@
   :group 'drgnx-start)
 
 (defface drgnx-start-key '((t :inherit (drgnx-ui-heading bold)))
-  "The keys on the start page: the heading type face."
+  "The keys on the start page on a terminal (a graphical frame shows them as keycaps)."
   :group 'drgnx-start)
 
 (defface drgnx-start-quiet '((t :inherit (drgnx-ui-text drgnx-text-muted shadow)))
@@ -115,10 +118,31 @@ display's scaling), lower when that would make it wider than WINDOW's text area.
                         (drgnx-cache-put 'drgnx-start--logos key
                                          (or (and (> height 0) (file-readable-p file)
                                                   (ignore-errors
-                                                    (create-image file 'jpeg nil :height height :scale 1
-                                                                  :ascent 'center)))
+                                                    (if (image-type-available-p 'svg)
+                                                        (drgnx-start--rounded file height frame)
+                                                      (create-image file 'jpeg nil :height height :scale 1
+                                                                    :ascent 'center))))
                                              'none)))))
         (unless (eq image 'none) image)))))
+
+(defun drgnx-start--rounded (file height frame)
+  "FILE (the JPEG logo) HEIGHT pixels tall as an SVG image clipped to a rectangle with the card radius (look.css
+`--r-card', 10 logical pixels on FRAME), so the logo's dark background is not a hard-edged box."
+  (let* ((width (round (* height drgnx-start--logo-ratio))) (r (drgnx-px 10 frame))
+         (data (with-temp-buffer
+                 (set-buffer-multibyte nil)
+                 (insert-file-contents-literally file)
+                 (base64-encode-region (point-min) (point-max) t)
+                 (buffer-string))))
+    (create-image (format (concat "<svg xmlns=\"http://www.w3.org/2000/svg\""
+                                  " xmlns:xlink=\"http://www.w3.org/1999/xlink\""
+                                  " width=\"%d\" height=\"%d\" viewBox=\"0 0 %d %d\">"
+                                  "<defs><clipPath id=\"r\">"
+                                  "<rect width=\"%d\" height=\"%d\" rx=\"%d\"/></clipPath></defs>"
+                                  "<image width=\"%d\" height=\"%d\" clip-path=\"url(#r)\" preserveAspectRatio=\"none\""
+                                  " xlink:href=\"data:image/jpeg;base64,%s\"/></svg>")
+                          width height width height width height r width height data)
+                  'svg t :scale 1 :ascent 'center)))
 
 (defun drgnx-start--top-padding (&optional logo)
   "Blank lines above the name: the page sits in the upper third of the editor window that shows it.
@@ -137,41 +161,85 @@ LOGO non-nil: the logo above the name takes `drgnx-start--logo-lines' and a blan
 (define-button-type 'drgnx-start-button
   'action #'drgnx-start--press 'follow-link t)
 
-(defun drgnx-start--insert-button (id label help)
-  "Insert the button LABEL for ID (a registry command ID or `dismiss'), resting on HELP, on a line of its own."
-  (insert-text-button label :type 'drgnx-start-button 'drgnx-start-id id 'help-echo help)
-  (insert "\n"))
+(defun drgnx-start--insert-button (id label help &optional primary graphic)
+  "Insert the button LABEL for ID (a registry command ID or `dismiss'), resting on HELP: the look's control (design
+§3.5) in the UI font; PRIMARY: filled with the accent.  On a GRAPHIC frame it has room inside it at either end
+\(`drgnx-ui-button-pad'); a terminal shows the label alone."
+  (let* ((face (if primary 'drgnx-ui-button-primary 'drgnx-ui-button))
+         (pad (if graphic (propertize " " 'display (drgnx-ui-button-pad face)) "")))
+    (insert-text-button (concat pad label pad) :type 'drgnx-start-button 'face face 'mouse-face 'highlight
+                        'drgnx-start-id id 'help-echo help)))
+
+(defun drgnx-start--key-column (keycaps)
+  "Where the descriptions start, in pixels from the keys' left edge: 16 px past the widest of KEYCAPS (strings of
+keycaps, `drgnx-palette-keycaps'), measured in their own faces (the spaces between the caps are in the page's font)."
+  (+ (apply #'max (mapcar #'drgnx-look-pixel-width keycaps)) (drgnx-px 16)))
 
 (defun drgnx-start--render ()
   "Fill the current buffer: the name, two lines on what drgnx is, the three keys, the buttons.
-The keys are read from the registry now, so a changed profile shows when the page shows again."
+The keys are read from the registry now, so a changed profile shows when the page shows again.  On a graphical frame
+the keys are a table of keycaps and descriptions (the descriptions start at one place, 16 px after the widest keys)
+and the buttons one row, 8 px apart; a terminal has a bullet per key and a button per line."
   (let* ((inhibit-read-only t) (search (drgnx-start--glyph))
          (window (drgnx-start--window (selected-frame)))
-         (logo (drgnx-start--logo (if (window-live-p window) window (selected-window)))))
+         (logo (drgnx-start--logo (if (window-live-p window) window (selected-window))))
+         (graphic (display-graphic-p (window-frame (if (window-live-p window) window (selected-window)))))
+         (keys (delq nil (mapcar (pcase-lambda (`(,id ,what))
+                                   (when-let* ((key (drgnx-surfaces-key-label id :any t :short t)))
+                                     (cons (if graphic (drgnx-palette-keycaps key) key) what)))
+                                 drgnx-surfaces-starter-commands)))
+         (column (and graphic keys (drgnx-start--key-column (mapcar #'car keys))))
+         (to (and column `(space :align-to (+ (- (0.5 . text) ,(/ drgnx-start--width 2.0)) (,column))))))
     (erase-buffer)
+    (setq-local cursor-type (not graphic))  ; a graphical page shows where TAB is with a ring (`drgnx-start--focus')
     (insert (make-string (drgnx-start--top-padding logo) ?\n))
     (when logo (insert (propertize " " 'display logo 'drgnx-start-logo t) "\n\n"))
     (insert (propertize "drgnx" 'face 'drgnx-start-title) "\n\n")
-    (insert (propertize "A workbench for Emacs: your files, your agents and your work, side by side." 'face 'drgnx-start-quiet) "\n")
-    (insert (propertize "Everything it does is a command, and the keys below find all of them." 'face 'drgnx-start-quiet) "\n\n")
-    (pcase-dolist (`(,id ,what) drgnx-surfaces-starter-commands)
-      (when-let* ((key (drgnx-surfaces-key-label id :any t :short t)))
+    (insert (propertize "A workbench for Emacs: your files, your agents and your work, side by side."
+                        'face 'drgnx-start-quiet)
+            "\n")
+    (insert (propertize "Everything it does is a command, and the keys below find all of them."
+                        'face 'drgnx-start-quiet)
+            "\n\n")
+    (pcase-dolist (`(,key . ,what) keys)
+      (if graphic
+          (insert key (propertize " " 'display to) (propertize what 'face 'drgnx-start-quiet) "\n")
         (insert (propertize search 'face 'drgnx-start-quiet) " "
                 (propertize (format "%-10s" key) 'face 'drgnx-start-key)
                 (propertize what 'face 'drgnx-start-quiet) "\n")))
     (insert "\n")
-    (pcase-dolist (`(,id ,label ,help) drgnx-start--buttons)
-      (when (or (eq id 'dismiss) (drgnx-commands-get id))
-        (drgnx-start--insert-button id label help)))
+    (let ((first t))
+      (pcase-dolist (`(,id ,label ,help) drgnx-start--buttons)
+        (when (or (eq id 'dismiss) (drgnx-commands-get id))
+          (unless first (insert (if graphic (propertize " " 'display `(space :width (,(drgnx-px 8)))) "\n")))
+          (drgnx-start--insert-button id label help first graphic)
+          (setq first nil))))
+    (insert "\n")
     (add-text-properties (point-min) (point-max)
                          (list 'line-prefix drgnx-start--centre 'wrap-prefix drgnx-start--centre))
     (goto-char (point-min))
     (when-let* ((b (next-button (point)))) (goto-char (button-start b)))
     (set-buffer-modified-p nil)))
 
+(defvar-local drgnx-start--ring nil "The overlay that rings the button TAB moved to, or nil.")
+
+(defun drgnx-start--focus ()
+  "On the page's `post-command-hook': ring the button at point (`drgnx-focus') after TAB or S-TAB moved to it; any
+other command leaves the ring where it is, a command that leaves the buttons takes it away."
+  (let ((b (button-at (point))))
+    (cond ((and b (memq this-command '(forward-button backward-button)))
+           (if drgnx-start--ring
+               (move-overlay drgnx-start--ring (button-start b) (button-end b))
+             (setq drgnx-start--ring (make-overlay (button-start b) (button-end b)))
+             (overlay-put drgnx-start--ring 'face 'drgnx-focus)))
+          ((and (not b) drgnx-start--ring)
+           (delete-overlay drgnx-start--ring)
+           (setq drgnx-start--ring nil)))))
+
 (define-derived-mode drgnx-start-mode special-mode "drgnx-start"
   "Major mode of the start page: read-only, with buttons.  TAB and S-TAB move between the buttons, RET presses one."
   (buffer-disable-undo)
+  (add-hook 'post-command-hook #'drgnx-start--focus nil t)
   (setq-local revert-buffer-function (lambda (&rest _) (drgnx-start--render))))
 
 ;; Emacs's own keys between buttons (TAB, S-TAB), on top of `special-mode's

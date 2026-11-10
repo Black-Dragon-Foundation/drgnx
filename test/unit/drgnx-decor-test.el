@@ -49,11 +49,52 @@
     (should (eq 'drgnx-badge (get-text-property 1 'face (drgnx-decor-chip "ok" 'drgnx-badge))))))
 
 (ert-deftest drgnx-decor/chip-icon-gets-boxed-space ()
-  (let* ((icon '(image :type xpm :data "x")) (c (drgnx-decor-chip "ok" nil icon)))
-    (should (equal '(space :width 2) (get-text-property 1 'display c)))
-    (should (eq 'drgnx-chip (get-text-property 1 'face c)))
-    (should (eq icon (get-text-property 2 'display c)))
-    (should-not (get-text-property 0 'face c))))
+  "`.chip': the icon comes first inside the chip's room, 5 px before the text, all in the chip's face."
+  (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t)))
+    (let* ((icon '(image :type xpm :data "x")) (c (drgnx-decor-chip "ok" nil icon)))
+      (should (equal '(space :width (6)) (get-text-property 1 'display c)))
+      (should (eq icon (get-text-property 2 'display c)))
+      (should (equal '(space :width (5)) (get-text-property 3 'display c)))
+      (should (seq-every-p (lambda (i) (eq 'drgnx-chip (get-text-property i 'face c))) (number-sequence 1 (1- (length c)))))
+      (should-not (get-text-property 0 'face c)))))
+
+(ert-deftest drgnx-decor/chips-and-buttons-are-the-looks-components ()
+  "Design §3.5: a chip is the quiet chip's tint with room inside it (a flat box in its own background: no ring in
+the text colour), in the caption role; a button is the look's control (`drgnx-control': its fill and hairline), in
+the UI text role, and keeps them under the pointer and pressed (only the fill changes)."
+  (let ((box (face-attribute 'drgnx-chip :box nil nil)))
+    (should (eq 'flat-button (plist-get box :style)))
+    (should-not (plist-get box :color)))
+  (should (equal '(drgnx-ui-caption drgnx-chip-quiet) (face-attribute 'drgnx-chip :inherit nil nil)))
+  (dolist (face '(drgnx-button drgnx-button-hover drgnx-button-pressed))
+    (should (memq 'drgnx-control (ensure-list (face-attribute face :inherit nil nil))))
+    (should (eq 'unspecified (face-attribute face :box nil nil)))))
+
+(ert-deftest drgnx-decor/high-contrast-chips-keep-their-ring ()
+  "look.css `.t-hc .chip': in high contrast a chip is ringed in its text colour (1 px), in the other variants it is
+not; the room inside it is the same in both (6 px stretches either side on a graphical frame, plain spaces on a
+terminal, plus the box's 1 px).  Pattern D (the frame's kind is stubbed)."
+  (unwind-protect
+      (progn
+        (load-theme 'drgnx-high-contrast t)
+        (dolist (face '(drgnx-chip drgnx-badge))
+          (let ((box (face-attribute face :box nil t)))
+            (should (equal (list face '(1 . 1)) (list face (plist-get box :line-width))))
+            (should-not (plist-get box :style))
+            (should-not (plist-get box :color))))
+        (disable-theme 'drgnx-high-contrast)
+        (load-theme 'drgnx-dark t)
+        (should (eq 'flat-button (plist-get (face-attribute 'drgnx-chip :box nil t) :style))))
+    (mapc #'disable-theme '(drgnx-high-contrast drgnx-dark)))
+  (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t)))
+    (let ((chip (drgnx-decor-chip "sandboxed")))
+      (should (equal " sandboxed " (substring-no-properties chip 1)))
+      (should (equal '(space :width (6)) (get-text-property 1 'display chip)))
+      (should (equal '(space :width (6)) (get-text-property (1- (length chip)) 'display chip)))
+      (should (eq 'drgnx-chip (get-text-property 1 'face chip)))))
+  (let ((chip (drgnx-decor-chip "sandboxed")))
+    (should (equal " sandboxed " (substring-no-properties chip 1)))
+    (should-not (get-text-property 1 'display chip))))
 
 (ert-deftest drgnx-decor/button-has-hover-face-and-keymap ()
   (let ((b (drgnx-decor-button "Go" #'ignore)))

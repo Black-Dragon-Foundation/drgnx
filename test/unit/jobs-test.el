@@ -206,6 +206,16 @@
                                (drgnx-module-teardown 'tools/jobs)
                                (should-not (gethash 'jobs drgnx-statusbar--segments))))))
 
+(ert-deftest drgnx-jobs/a-pixel-bar-shows-the-layers-icon ()
+  "Design §4: in a graphical bar the running jobs are the layers icon and their count; a terminal keeps its glyph."
+  (cl-letf (((symbol-function 'drgnx-jobs--source-p) (lambda () t))
+            ((symbol-function 'drgnx-look-icon) (lambda (name &rest _) (format "<%s>" name))))
+    (let ((drgnx-jobs--running 1) (drgnx-statusbar--measure (lambda (s) (* 10 (string-width s)))))
+      (should (equal (drgnx-jobs--segment) "<layers> 1 job")))
+    (let ((drgnx-jobs--running 2) (drgnx-statusbar--measure #'string-width))
+      (should (string-suffix-p " 2 jobs" (drgnx-jobs--segment)))
+      (should-not (string-prefix-p "<layers>" (drgnx-jobs--segment))))))
+
 (ert-deftest drgnx-jobs/note-jobs-is-quiet-while-the-module-is-off ()
   ;; the recount calls it whether or not tools/jobs is on
   (drgnx-notice-test-with-model

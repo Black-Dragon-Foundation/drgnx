@@ -615,7 +615,7 @@ bar and scroll bars, and the status bar's segments and commands.  Idempotent."
                                  (drgnx-statusbar-right . "status bar segments on the right, in order")
                                  (drgnx-statusbar-drop-order . "segments dropped first when the window is narrow")
                                  (drgnx-statusbar-compact . "segments the other editor groups show")
-                                 (drgnx-statusbar-place . "editors (default) or frame: where the status bar is")
+                                 (drgnx-statusbar-place . "frame (default: one bar across the window) or editors: where the status bar is")
                                  (drgnx-statusbar-indent-vars . "variables the indentation segment reads")
                                  (drgnx-statusbar-modes . "modes (besides file buffers) that get the status bar")
                                  (drgnx-statusbar-quiet-modes . "modes that get the quiet bar (the start page)")

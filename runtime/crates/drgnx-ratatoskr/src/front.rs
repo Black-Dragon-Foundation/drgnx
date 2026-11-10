@@ -856,6 +856,8 @@ impl Front {
             | Params::SearchServerStart(_)
             | Params::SearchServerStop(_)
             | Params::SearchSymbolAt(_)
+            | Params::SearchSymbols(_)
+            | Params::SearchOutline(_)
             | Params::SearchTyping(_)) => crate::search::methods::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),

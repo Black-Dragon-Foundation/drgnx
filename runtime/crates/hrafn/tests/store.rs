@@ -39,7 +39,7 @@ fn file(path: &str) -> FileRow {
 async fn open_creates_v1() {
     let dir = tempfile::tempdir().unwrap();
     let s = CodeStore::open(&dir.path().join("p.db")).unwrap();
-    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("3"));
+    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("4"));
     for t in [
         "tree",
         "file",
@@ -83,7 +83,7 @@ async fn reopen_is_idempotent() {
         .unwrap();
     let s = CodeStore::open(&p).unwrap();
     assert_eq!(count(&s, "select count(*) from file").await, 1);
-    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("3"));
+    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("4"));
     assert_eq!(
         s.meta_get("chunker_version").await.unwrap().as_deref(),
         Some("1")
@@ -175,6 +175,7 @@ async fn fts_row_deleted_with_chunk() {
         chunk: 0,
         definer: "defun".into(),
         doc1: None,
+        ..SymbolIn::default()
     };
     s.replace_chunks("a.el", "b", vec![chunk("x", "foo-bar", "alpha")], vec![sym])
         .await

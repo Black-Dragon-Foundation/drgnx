@@ -44,6 +44,8 @@
      (unwind-protect
          (progn
            (drgnx-test-with-modules '(extra/blame extra/keycast extra/guides) :strict t
+                                    (drgnx-modules-set-enabled 'extra/guides t)   ; off until chosen
+                                    (drgnx-modules-run 'first-frame)
                                     (with-current-buffer buf
                                       (emacs-lisp-mode)
                                       (drgnx-blame-mode 1)

@@ -6,7 +6,7 @@
 //! on write and whenever tier 1 writes a chunk that refers to the key; unreferenced keys are kept up to twice the live
 //! set, the least recently referenced going first.
 
-use crate::chunk::{BUDGET, CHUNKER_VERSION, chunk_file};
+use crate::chunk::{BUDGET, CHUNKER_VERSION, PARSE_VERSION, chunk_file};
 use crate::files::Listed;
 use crate::memo;
 use crate::store::{
@@ -23,6 +23,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const FILE_BATCH: usize = 64;
 
 const META_CHUNKER: &str = "chunker_version";
+/// The parse whose symbols (and later references) the stored rows hold ([`PARSE_VERSION`]).
+const META_PARSE: &str = "parse_version";
 /// The commit the index was last built from (the hub writes it).
 pub const META_BUILT_FROM: &str = "built_from";
 /// Files known changed on disk and not yet rebuilt (the hub writes it).
@@ -139,9 +141,18 @@ pub(crate) fn build(l: &Listed, bytes: &[u8]) -> Built {
                 chunk: s.chunk as usize,
                 definer: s.definer,
                 doc1: s.doc1,
+                line_start: s.line_start,
+                line_end: s.line_end,
+                sig: s.sig,
             })
             .collect(),
     }
+}
+
+/// A listed file's chunks and symbols as tier 1 writes them (what a worktree's overlay writes too).
+pub fn built(l: &Listed, bytes: &[u8]) -> (Vec<ChunkIn>, Vec<SymbolIn>) {
+    let b = build(l, bytes);
+    (b.chunks, b.symbols)
 }
 
 /// Tier 1: rows rebuilt only for the files of `listed` whose blob changed (all of them after a chunker change), and
@@ -158,11 +169,19 @@ pub async fn refresh(
     read: &(dyn Fn(&str) -> io::Result<Vec<u8>> + Sync),
     models: &[(&str, usize)],
 ) -> Result<Refresh, StoreError> {
-    let (known, chunker) = store
+    let (known, chunker, parse) = store
         .handle()
-        .read(|c| Ok((known_blobs(c)?, urdr::meta(c, META_CHUNKER)?)))
+        .read(|c| {
+            Ok((
+                known_blobs(c)?,
+                urdr::meta(c, META_CHUNKER)?,
+                urdr::meta(c, META_PARSE)?,
+            ))
+        })
         .await?;
-    let rebuild = chunker.as_deref() != Some(CHUNKER_VERSION.to_string().as_str());
+    // a new parse rebuilds like a new chunker; the chunks' keys stay, so the vectors do too
+    let rebuild = chunker.as_deref() != Some(CHUNKER_VERSION.to_string().as_str())
+        || parse.as_deref() != Some(PARSE_VERSION.to_string().as_str());
     let names: HashSet<&str> = listed.iter().map(|l| l.path.as_str()).collect();
     let mut gone: Vec<String> = known
         .keys()
@@ -254,6 +273,9 @@ pub async fn refresh(
     if rebuild {
         store
             .meta_set(META_CHUNKER, &CHUNKER_VERSION.to_string())
+            .await?;
+        store
+            .meta_set(META_PARSE, &PARSE_VERSION.to_string())
             .await?;
     }
     let models: Vec<String> = models.iter().map(|(m, _)| m.to_string()).collect();
@@ -413,8 +435,8 @@ pub async fn reset(store: &CodeStore) -> Result<(), StoreError> {
                 [],
             )?;
             c.execute(
-                "delete from meta where key in (?1, ?2)",
-                [META_CHUNKER, META_BUILT_FROM],
+                "delete from meta where key in (?1, ?2, ?3)",
+                [META_CHUNKER, META_BUILT_FROM, META_PARSE],
             )?;
             Ok(())
         })

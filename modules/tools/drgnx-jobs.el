@@ -78,7 +78,9 @@ The `jobs' segment of the status bar shows it.")
 (defun drgnx-jobs--segment ()
   "The `jobs' segment: `◎ 2 jobs' while jobs run (what waits on you is the `needs-you' segment's).  Reads the cached count."
   (when-let* (((drgnx-jobs--source-p)) (n drgnx-jobs--running) ((> n 0)))
-    (format "%s %d job%s" (or (drgnx-face-glyph 'busy (window-frame (drgnx-statusbar-source-window))) "")
+    ;; a pixel bar: the design's layers icon; a terminal: the busy glyph
+    (format "%s %d job%s" (if (fboundp 'drgnx-statusbar--icon) (drgnx-statusbar--icon 'layers 'busy)
+                            (or (drgnx-face-glyph 'busy (window-frame (drgnx-statusbar-source-window))) ""))
             n (if (= n 1) "" "s"))))
 
 (defun drgnx-jobs-note-jobs (jobs)

@@ -397,7 +397,8 @@ every root-frame window — buffer, `window-start`, point, pixel edges, header-l
 selected — plus the minibuffer height, and also records `window-scroll-functions` calls, redisplays and GC.
 It snapshots the signatures **just before and right after every command** (`pre-`/`post-command-hook`) and
 **every timer** (advice on `timer-event-handler`), and polls once per tick, so each change is attributed to its
-cause: the innermost command or timer running when it happened (`command:NAME`, `timer:FUNCTION` — a timer
+cause: the innermost command or timer running when it happened (`command:NAME`, or `command:<lambda>` /
+`command:<keymap>` for a command that is not a symbol, never its printed form; `timer:FUNCTION` — a timer
 that runs inside another timer's or a command's `sit-for` keeps its own changes), or `other` when neither ran
 (process output — filters and sentinels are called from C and cannot be intercepted — or redisplay). An `other`
 change seen while the frame's pixel size changed is `wm:resize`: the window manager resized the frame; a resize
@@ -514,8 +515,41 @@ a radius, go through `drgnx-px` ([core.md](core.md#logical-and-device-pixels-drg
 | `(drgnx-uitest-darker-p A B X Y)` | A's pixel has the lower luma (0.2126 R + 0.7152 G + 0.0722 B) |
 | `(drgnx-uitest-bare-frame)` | scroll bars, tool bar, menu bar and `blink-cursor-mode` off, so a snapshot and an export can be equal |
 | `(drgnx-uitest-pointer-set X Y)` | moves the compositor's pointer to the layout position X, Y (logical pixels): `t` when it moved, `failed` when sway refused, `unsupported` anywhere but sway (`swaymsg "seat - cursor set X Y"`), so a row that needs a real pointer (hover) skips there; a hover row runs in the `--compositor sway` pass. Headless sway has no input devices, so its seat has no pointer and `cursor set` reaches no client: the first call makes a virtual pointer (`zwlr_virtual_pointer_manager_v1`, the Wayland wire protocol spoken from Lisp over the session's socket, kept open for the session), which gives the seat a pointer; `failed` when the compositor offers none |
+| `(drgnx-uitest-pointer-available-p)` | non-nil when the session's compositor is mutter with its RemoteDesktop service on the session bus, so a real pointer can be driven |
+| `(drgnx-uitest-pointer-move X Y)` | moves mutter's virtual pointer to the frame position X, Y: to the top-left corner, then relative motion, corrected up to four times from `mouse-pixel-position` |
+| `(drgnx-uitest-pointer-click X Y &optional UNTIL TIMEOUT)` | a real press and release of the left button at X, Y through mutter's RemoteDesktop (`NotifyPointerButton` 272), then reads the key sequences the clicks make and runs their commands, as the command loop would (a nested `recursive-edit` reads no real events in a test run from the server); the keys are kept in `drgnx-uitest-pointer-keys`; it stops when UNTIL returns non-nil or after TIMEOUT seconds |
 
 The export is decoded in Lisp (zlib and a PNG unfilter), so it needs an Emacs with zlib.
+
+## Look scenes
+
+`drgnx ui look-scenes OUT` draws the look's scenes and saves them as PNGs in OUT. Each PNG is named after the approved
+mockup it is compared with (`window-dark-s1.png`, `palette-s2.png`, …). The command runs in a container on the
+Nidhogg build under test, once with `DRGNX_UI_SCALE=1` and once with `2`.
+
+How it works:
+- It starts a session with the drgnx configuration at 1440×900 logical pixels, the mockups' window.
+- It loads `harness/drgnx-look-scenes-session.el` into the session. The session makes the mockups' project at
+  `~/code/drgnx` (in the session's own HOME), on branch `main`: the files the mockups name, `drgnx-gateway.el` and
+  `gateway-test.el` modified, `jobs-test.el` untracked, the lock file ignored, and a shell script with a Python
+  heredoc. It opens what the mockups have open: `drgnx-gateway.el` at line 216, `gateway-test.el` with unsaved text,
+  `drgnx-job.el`, Magit's status and the Explorer.
+- It calls each scene's `drgnx-look-scene-NAME`. The scenes, in order, are listed in `drgnx-look-scenes`. The last,
+  `start-page`, has no mockup: it is judged against the components' spec (buttons, keycaps, the shield).
+- It writes `NAME-sN-facts.eld` beside each shot: the themes, the fonts the chrome faces got, the windows, the
+  modules, and `:limits`, what the line cannot show of that mockup yet (`drgnx-look-scene-limits`). A limit is
+  written down, never hidden by changing the scene. It also writes `scenes-sN.eld`, with the shots and each scene's
+  errors.
+
+What it reads from the environment:
+- `DRGNX_LOOK_ELPA`: a package directory to activate (Magit, Vertico, diff-hl, …). A session has no packages of its
+  own, and the user's install does.
+- `DRGNX_RATATOSKR_BIN`: a `test-hooks` ratatoskr with `ratatoskr-mock` beside it, for the agent panel. Without it, the
+  agent scenes record what is missing.
+
+Nothing in the command asserts a pixel. **A look change is done only when its scene sits beside its mockup at scales 1
+and 2, someone has looked at both, and the remaining differences are written down.** `test/unit/look-scenes-test.el`
+checks that every mockup has a scene and that the project is set up correctly.
 
 ## Emacs-side API
 
@@ -556,6 +590,7 @@ bin/drgnx ui keys drgnx-ui-1-3f9a0c "C-x b"             # kbd syntax
 bin/drgnx ui type drgnx-ui-1-3f9a0c "hello"
 bin/drgnx ui measure drgnx-ui-1-3f9a0c '[{"keys":"C-x 2"},{"x":10,"y":10}]'
 bin/drgnx ui stop drgnx-ui-1-3f9a0c | bin/drgnx ui reap
+bin/drgnx ui look-scenes OUT                     # the look's scenes as PNGs (see Look scenes)
 ```
 
 Input commands wait until the session settles and print the jank report. `click` takes X and Y as non-negative

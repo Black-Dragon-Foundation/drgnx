@@ -39,8 +39,8 @@
 (autoload 'drgnx-settings-trust-untrust "drgnx-settings-trust" nil t)
 (autoload 'drgnx-settings-trust-untrustable-p "drgnx-settings-trust")
 
-(defface drgnx-trust-restricted '((t :inherit shadow))
-  "The \"restricted\" mark in the mode line." :group 'drgnx)
+(defface drgnx-trust-restricted '((t :inherit warning :weight normal))
+  "The Restricted Mode mark: the status bar's shield, the mode line's words; the warning colour." :group 'drgnx)
 
 ;;;; The trusted set
 
@@ -162,10 +162,27 @@ is a `user-error', left as it is."
   (setq drgnx-trust--state (and buffer-file-name (not (file-remote-p buffer-file-name))
                                 (if (trusted-content-p) 'trusted 'restricted))))
 
+(defun drgnx-trust-explain ()
+  "Say what Restricted Mode is and offer to trust this file's project folder (Trust This Folder, which shows the
+folder's code first).  Home as a whole, `/' and the shared temp folders are never trusted: for those it says so and
+asks nothing.  Returns what it said (the question or the refusal).  A command: the shield's click runs it."
+  (interactive)
+  (let* ((folder (drgnx-trust--folder)) (shown (abbreviate-file-name (directory-file-name folder))))
+    (if (or (file-remote-p folder) (drgnx-trust--broad-p (drgnx-trust--entry folder)))
+        (let ((said (format "Restricted Mode: Flymake checkers and symbol shorthands from %s are off. %s is never trusted \
+as a whole: open a project folder inside it and trust that" shown shown)))
+          (message "%s" said)
+          said)
+      (let ((said (format "Restricted Mode: Flymake checkers and symbol shorthands from this folder's files are off. \
+Trust %s? " shown)))
+        (when (y-or-n-p said)
+          (call-interactively #'drgnx-settings-trust-this-folder))
+        said))))
+
 (defun drgnx-trust-folder-at-click (event)
-  "Trust the folder of the buffer whose \"restricted\" mark was clicked (EVENT)."
+  "A click (EVENT) on the Restricted Mode mark of a buffer: `drgnx-trust-explain' there."
   (interactive "e")
-  (with-selected-window (posn-window (event-start event)) (drgnx-trust-folder)))
+  (with-selected-window (posn-window (event-start event)) (drgnx-trust-explain)))
 
 (defvar drgnx-trust-mark-map
   (let ((m (make-sparse-keymap))) (define-key m [mode-line mouse-1] #'drgnx-trust-folder-at-click) m)
@@ -173,7 +190,7 @@ is a `user-error', left as it is."
 
 (defconst drgnx-trust--mark-help
   "Restricted Mode: this folder is not trusted, so Flymake checkers and symbol shorthands from its files are off.
-Click, or run Trust This Folder, to trust it."
+Click to trust it, or run Trust This Folder."
   "What Restricted Mode is and how to leave it: the mark's help text.")
 
 (defconst drgnx-trust--mark-text
@@ -492,6 +509,9 @@ is remote and SOURCE is not: a remote name taken from local text is never visite
   (drgnx-command-define 'trust-folder :category "File" :title "Trust This Folder"
                         :command #'drgnx-settings-trust-this-folder :when (lambda () buffer-file-name)
                         :doc "Trust this project's folder: its settings and the code shown apply, its Flymake checkers and symbol shorthands run")
+  (drgnx-command-define 'restricted-mode :category "File" :title "About Restricted Mode"
+                        :command #'drgnx-trust-explain :when (lambda () (eq drgnx-trust--state 'restricted))
+                        :doc "What Restricted Mode is here, and an offer to trust this project's folder")
   (drgnx-command-define 'untrust-folder :category "File" :title "Untrust This Folder"
                         :command #'drgnx-settings-trust-untrust :when #'drgnx-settings-trust-untrustable-p
                         :doc "Stop trusting this file's workspace (a folder you trusted, or one below a trusted location)")

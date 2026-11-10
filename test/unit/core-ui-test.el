@@ -160,7 +160,11 @@
   (drgnx-ui-kit-test--with-registry
    (let* ((seen nil) (drgnx-surfaces-run-functions (list (lambda (id) (push id seen))))
           (b (drgnx-ui-button "Go" 'kit-cmd :help "Run it")))
-     (should (equal (substring-no-properties b) "Go"))
+     (should (equal (string-trim (substring-no-properties b)) "Go"))
+     ;; room inside the button: a 12 px stretch at either end, in the button's face (design §3.5 `.btn')
+     (should (equal '(space :width (11)) (get-text-property 0 'display b)))
+     (should (equal '(space :width (11)) (get-text-property (1- (length b)) 'display b)))
+     (should (eq (get-text-property (1- (length b)) 'face b) 'drgnx-ui-button))
      (should (eq (get-text-property 0 'face b) 'drgnx-ui-button))
      (should (equal (get-text-property 0 'help-echo b) "Run it"))
      (should (eq (get-text-property 0 'mouse-face b) 'highlight))
@@ -170,7 +174,8 @@
      ;; run as typed (interactively), through `drgnx-surfaces-run': the run hook (the usage count) sees the id
      (should (equal drgnx-ui-kit-test--ran '(1 1)))
      (should (equal seen '(kit-cmd kit-cmd))))
-   (should (equal (face-attribute 'drgnx-ui-button :inherit nil nil) 'button))))
+   ;; the look's control (a fill in a hairline), never an underlined link
+   (should (equal (face-attribute 'drgnx-ui-button :inherit nil nil) '(drgnx-ui-text drgnx-control)))))
 
 (ert-deftest drgnx-ui-kit/button-runs-a-command-or-a-function ()
   (drgnx-ui-kit-test--with-registry
@@ -204,7 +209,7 @@
    (with-temp-buffer
      (insert "a ")
      (drgnx-ui-insert-button "Go" 'kit-cmd :help "Run it")
-     (should (equal (buffer-string) "a Go"))
+     (should (equal (substring-no-properties (buffer-string)) "a  Go "))     ; the label with room either side
      (should (equal (get-text-property 3 'help-echo) "Run it"))
      (goto-char 3)
      (call-interactively (key-binding (kbd "RET")))

@@ -33,6 +33,7 @@ fn sym(name: &str) -> SymbolIn {
         chunk: 0,
         definer: "defun".into(),
         doc1: None,
+        ..SymbolIn::default()
     }
 }
 
@@ -161,7 +162,7 @@ async fn v2_store_migrates_keeping_rows_and_vectors() {
     std::thread::spawn(move || store.shutdown()).join().unwrap();
 
     let s = CodeStore::open(&path).unwrap();
-    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("3"));
+    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("4"));
     for (q, b) in KEPT.iter().zip(&before) {
         assert_eq!(&rows(s.handle(), q).await, b, "{q}");
     }

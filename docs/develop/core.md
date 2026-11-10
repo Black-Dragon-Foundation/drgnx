@@ -2891,7 +2891,10 @@ surfaces (for buttons that run registry commands), so the status bar, the lists 
   through `drgnx-surfaces-run`, so `drgnx-surfaces-run-functions` count its use and the key tip shows), else a
   command (`call-interactively`), else a function of no arguments. WHERE is `text` (the default: `mouse-1` and RET,
   `follow-link`), `header-line`, `mode-line` or `tab-line` (`mouse-1` there, through `local-map`). FACE defaults to
-  `drgnx-ui-button` (inherits `button`); HELP is the `help-echo`; PROPS are more text properties. The keymap is built
+  `drgnx-ui-button` (the look's control, `drgnx-control`, in the UI text role; `drgnx-ui-button-primary` for a
+  group's main action); HELP is the `help-echo`; PROPS are more text properties. In text the label gets 12 px of room
+  at either end and, on a graphical frame, the button's 26 px height (`drgnx-ui-button-pad`): a stretch in the
+  button's face, so the text is the label with a space either side. The keymap is built
   once per (ACTION . WHERE) in `drgnx-ui--button-maps`, a table weak on ACTION, so drawing a named action builds
   nothing and a closure's keymaps go with it. `(drgnx-ui-insert-button LABEL ACTION &rest KEYS)` inserts it at point.
 - `(drgnx-ui-close-button COMMAND HELP &key where props)`: the `close` glyph in face `drgnx-ui-close` (inherits

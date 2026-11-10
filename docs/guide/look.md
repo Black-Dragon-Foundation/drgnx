@@ -22,6 +22,12 @@ setup.
   diffs, version-control state, diagnostics and the language server's faces, `outline-1` to `outline-8` (colour only,
   no size change) and the terminal's sixteen `ansi-color-*` colours come from the same table, so a package that
   inherits standard faces looks right with no work of its own.
+- **Controls.** Buttons (`drgnx-control`: the quiet selection's fill in a 1 px ring of the border colour, radius 6;
+  `drgnx-control-primary`: the accent's fill) and keycaps (`drgnx-keycap`: subtle text in a 1 px ring of the strong
+  border, radius 4). A ring's colour cannot be inherited, so the theme gives it; chips need none (a tint with room
+  inside it), except in high contrast, which has no tints: there a chip is ringed in its own text colour, with the
+  same room. Hairlines come in three strengths: `drgnx-border-subtle` (under the tab row), `drgnx-border` (cards,
+  dividers) and `drgnx-border-strong` (inputs, popups). See [face.md](face.md#faces).
 - **Native title strip.** `nidhogg-title-bar` and `nidhogg-title-bar-inactive` follow the theme.
 
 ### The three variants
@@ -121,6 +127,10 @@ Every piece of text has a **role**, and every role is one setting holding a plis
 | `drgnx-look-font-code-small` | diffs and output inside cards | the code font, 12 px, 19 px lines |
 | `drgnx-look-font-agent` | the agent panel's prose | the UI font |
 | `drgnx-look-font-terminal` | the terminal's text | the code font |
+
+drgnx's three themes give Emacs's own chrome faces these roles: `tab-bar`, `tab-line` (and their tab faces) and
+`header-line` take the UI font, and `mode-line` takes the caption. So a package's mode line, a Magit header or a tab
+from another package is in the UI font too. A theme from elsewhere keeps its own chrome fonts.
 
 A role's plist has these keys, and you give only the ones you want to change:
 
@@ -286,7 +296,8 @@ drgnx draws its marks with [Lucide](https://lucide.dev) line icons: tree rows, t
 status bar, the palette's rows, the agent panel's steps and notices (never inside code). About 60 SVG files sit in
 `etc/icons/`, each drawn with `currentColor`, so an icon takes the colour of the text around it: in a
 `drgnx-text-subtle` run it is subtle, in any theme, and no colour is written in the files. They are 16 px (14 px in
-dense rows) with a 1.6 px stroke at any size.
+dense rows) with Lucide's stroke of 1.6 in its 24-unit box, as the design draws them: about 1.07 px at 16 px. The sizes are logical pixels: on a display scaled to 2 an icon is
+drawn at twice the device pixels, sharp, whatever the font size (Emacs's own `image-scaling-factor` is not used).
 
 `drgnx-look-icons` chooses how they are drawn:
 

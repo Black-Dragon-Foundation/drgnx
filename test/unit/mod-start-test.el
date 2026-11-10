@@ -79,7 +79,7 @@ window showing `*scratch*'.  `y-or-n-p' and every `read-*' fail: nothing here ma
   (with-current-buffer "*drgnx start*"
     (goto-char (point-min))
     (let ((b (cl-loop for pos = (next-button (point)) then (next-button (button-end pos))
-                      while pos when (string= (button-label pos) label) return pos)))
+                      while pos when (string= (string-trim (button-label pos)) label) return pos)))
       (should b)
       (push-button (button-start b)))))
 
@@ -119,6 +119,46 @@ window showing `*scratch*'.  `y-or-n-p' and every `read-*' fail: nothing here ma
       (should (equal (get-text-property (point-min) 'line-prefix) drgnx-start--centre))
       (should (equal (get-text-property (1- (point-max)) 'wrap-prefix) drgnx-start--centre))
       (should (equal (car drgnx-start--centre) 'space)))))
+
+(ert-deftest drgnx-start/actions-are-buttons-and-keys-are-keycaps ()
+  "Design §3.5: the start page's actions are the look's buttons (the first, Open a folder, the primary one, filled
+with the accent), never underlined links; on a graphical frame the keys are keycaps."
+  (drgnx-start-test--with 'vscode
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t)))
+      (drgnx-start-maybe-show))
+    (with-current-buffer "*drgnx start*"
+      (let ((faces nil) (b (next-button (point-min))))
+        (while b (push (button-get b 'face) faces) (setq b (next-button (button-end b))))
+        (should (equal '(drgnx-ui-button-primary drgnx-ui-button drgnx-ui-button) (nreverse faces)))
+        ;; in the UI font, not the buffer's code font (the start page scene, s4e)
+        (dolist (f '(drgnx-ui-button-primary drgnx-ui-button))
+          (should (memq 'drgnx-ui-text (ensure-list (face-attribute f :inherit nil nil))))))
+      (goto-char (point-min))
+      (search-forward "Ctrl")
+      (should (eq 'drgnx-keycap (get-text-property (1- (point)) 'face))))))
+
+(ert-deftest drgnx-start/a-graphical-page-is-laid-out-as-the-components ()
+  "Design §3.5 on a graphical frame: the keys are a two-column table (the keycaps, then the description, which starts
+at the same place on every row) with no bullets; the buttons are one row, 8 px apart; the page has no cursor (the
+button at point is ringed only once TAB moves to it)."
+  (drgnx-start-test--with 'vscode
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t)))
+      (drgnx-start-maybe-show))
+    (with-current-buffer "*drgnx start*"
+      (should-not cursor-type)
+      (let ((bullet (drgnx-face-glyph 'bullet nil)) (aligns nil))
+        (dolist (what '("Open a file" "Run any command" "See every key"))
+          (goto-char (point-min))
+          (search-forward what)
+          (let ((bol (pos-bol)))
+            (should-not (string-search bullet (buffer-substring-no-properties bol (point))))
+            (push (get-text-property (- (match-beginning 0) 1) 'display) aligns)))
+        (should (eq :align-to (cadr (car aligns))))
+        (should (equal 1 (length (delete-dups aligns)))))
+      (goto-char (point-min))
+      (let* ((first (next-button (point-min))) (second (next-button (button-end first))))
+        (should (= (line-number-at-pos (button-start first)) (line-number-at-pos (button-start second))))
+        (should (equal `(space :width (,(drgnx-px 8))) (get-text-property (button-end first) 'display)))))))
 
 (defvar drgnx-start-test--width 1600 "The editor window's text width in pixels, as `drgnx-start-test--graphical' says.")
 
@@ -189,6 +229,18 @@ window showing `*scratch*'.  `y-or-n-p' and every `read-*' fail: nothing here ma
       (should (equal-including-properties tty no-jpeg))
       (should-not (text-property-not-all 0 (length tty) 'display nil tty))
       (should (string-match-p "\\`\n+drgnx\n\n" (substring-no-properties tty))))))
+
+(ert-deftest drgnx-start/the-logo-has-the-card-radius-where-svg-draws ()
+  "look.css `--r-card' (10 px): where the frame draws SVG the logo is the JPEG inside an SVG clipped to a rounded
+rectangle, the same height; without SVG it is the JPEG as it is."
+  (drgnx-start-test--with 'vscode
+    (drgnx-start-test--graphical
+      (cl-letf (((symbol-function 'image-type-available-p) (lambda (type) (memq type '(jpeg svg)))))
+        (drgnx-start-maybe-show)
+        (let ((image (drgnx-start-test--logo)))
+          (should (eq 'svg (image-property image :type)))
+          (should (string-match-p (format "rx=\"%s\"" (drgnx-px 10)) (image-property image :data)))
+          (should (string-match-p "height=\"180\"" (image-property image :data))))))))
 
 (ert-deftest drgnx-start/a-missing-logo-file-leaves-the-logo-out ()
   (drgnx-start-test--with 'vscode

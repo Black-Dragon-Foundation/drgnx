@@ -31,6 +31,14 @@ names no other colour: the text's face colours it."
             (should (member (match-string 2 text) '("none" "currentColor" "currentcolor")))
             (setq start (match-end 0))))))))
 
+(ert-deftest drgnx-icons/the-stroke-is-the-mockups ()
+  "The design's icons (look.css `svg.i'): Lucide's stroke 1.6 in its 24-unit box at every size, about 1.07 px at
+16 px and 0.93 px at 14 px; the file's own 2 never shows."
+  (dolist (size '(16 14))
+    (let ((data (plist-get (cdr (drgnx-icons--make 'x size 1.0)) :data)))
+      (should (string-match-p "stroke-width=\"1.6\"" data))
+      (should-not (string-match-p "stroke-width=\"2\"" data)))))
+
 (ert-deftest drgnx-icons/every-icon-has-a-glyph ()
   "Pattern D: every icon file has a glyph of the same name in the table, for a terminal and for the setting
 `glyphs'."
