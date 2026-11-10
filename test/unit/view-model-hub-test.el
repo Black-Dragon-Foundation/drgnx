@@ -85,7 +85,11 @@ and is never parsed in Lisp nor seen as an event."
     (should (= 0 drgnx-view-model-hub-test--parsed))))
 
 (ert-deftest drgnx-view-model/reaches-sja-unparsed-framed ()
-  (skip-unless (and (drgnx-test-ratatoskr-bin) (fboundp 'nidhogg-set-process-framing)))
+  (skip-unless (drgnx-test-ratatoskr-bin))
+  ;; framing with `:raw-prefix' came with Sjá's queue: an older nh-io refuses the keyword and the client stays unframed
+  (require 'nidhogg-views nil t)
+  (drgnx-test-require-nidhogg (and (fboundp 'nidhogg-set-process-framing) (fboundp 'nidhogg-view-push))
+                              ":raw-prefix framing (with nidhogg-view-push)")
   (drgnx-view-model-hub-test--unparsed t))
 
 (ert-deftest drgnx-view-model/reaches-sja-unparsed-unframed ()
