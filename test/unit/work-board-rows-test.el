@@ -122,6 +122,49 @@ asks `work/board/subscribe' for it (the map view whose agents go on the cards) a
       (drgnx-work-board-refresh board)
       (should (= 2 (length calls))))))
 
+(ert-deftest drgnx-work-board/off-the-rows-path-it-says-so ()
+  "Pattern D: the Board is drawn only from the hub's rows.  Beside a map that is not on the rows path (no Sjá, or
+`drgnx-view-old-path') it says so instead of drawing, asks the hub for nothing, and its keys move nothing."
+  (let ((calls nil)
+        (map (generate-new-buffer "*drgnx work: wbr-off*"))
+        (board nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (method &rest _) (push method calls))))
+          (with-current-buffer map (drgnx-work-map-mode))
+          (setq board (drgnx-work-board-open map))
+          (with-current-buffer board
+            (should (string-match-p "needs Sjá" (buffer-string)))
+            (should-not drgnx-view)
+            (should-not drgnx-view-patch)
+            (drgnx-work-board--nav 'down)
+            (drgnx-work-board-refresh board))
+          (should-not calls))
+      (dolist (b (list board map))
+        (when (buffer-live-p b) (let ((kill-buffer-query-functions nil)) (kill-buffer b)))))))
+
+(ert-deftest drgnx-work-board/a-cards-bar-is-two-sized-spaces ()
+  "Pattern D: a card's progress bar comes as a row of `spaces' (`work::trail::board'): each is shown as a space of
+its width and height in device px, `(space :width (W) :height (H))', in its run's face, the done part
+`drgnx-work-bar' and the rest `drgnx-work-bar-rest'; the bar holds its card's id."
+  (drgnx-work-board-rows-test--with
+    (with-current-buffer board
+      (drgnx-view-apply-patch
+       (list :view bview :class "c" :hub 7 :base 1 :version 2 :env_epoch 1 :model 1
+             :ops (list (list :insert (list :after "cards:0:1"
+                                            :rows (list (list :key "cards:0:2" :text "  "
+                                                              :runs '((0 1 "drgnx-work-bar") (1 2 "drgnx-work-bar-rest"))
+                                                              :props '((0 2 "drgnx-work-id" "task:a"))
+                                                              :spaces '((0 46 4) (1 138 4)))))))))
+      (drgnx-view-draw-now drgnx-view)
+      (goto-char (point-min))
+      (forward-line 3)
+      (should (equal "  " (buffer-substring-no-properties (point) (line-end-position))))
+      (should (equal '(space :width (46) :height (4)) (get-text-property (point) 'display)))
+      (should (memq 'drgnx-work-bar (ensure-list (get-text-property (point) 'face))))
+      (should (equal '(space :width (138) :height (4)) (get-text-property (1+ (point)) 'display)))
+      (should (memq 'drgnx-work-bar-rest (ensure-list (get-text-property (1+ (point)) 'face))))
+      (should (equal "task:a" (get-text-property (1+ (point)) 'drgnx-work-id))))))
+
 (ert-deftest drgnx-work-board/board-form-moves-across-columns ()
   "Pattern D: the Board's keys follow its model's `board' form: down within a column, right across to the next column
 with cards, left back; the agent keys walk the cards an agent works on; open opens the selected card's agent."

@@ -120,6 +120,10 @@
  ;; search's end with its rows drawn (the 250 ms typing pause included): 337-356 ms p95 then, x 1.25
  (search-retype (:input :p95) 16) (search-retype (:input :max) 50)
  (search-retype (:search_first_ms :p95) 50) (search-retype (:settle_ms :p95) 450)
+ ;; work-board: 40 moves over a Board of 200 cards on the hub's rows path (plan sja-complete B1).  Its allocation is held
+ ;; to its old-path pair's, work-board-old (4750-4752 objects a key; the rows path 1932-1944 before and after the bar,
+ ;; 2026-11-10, pinned, two runs each); cpu p90 6.8-11.5 ms (the most, 11.48, before the bar), x 1.25
+ (work-board (:input :p95) 16) (work-board (:alloc :p50) 4750) (work-board (:cpu_ms :p90) 14.4) (work-board (:rows) 0)
  (remote-typing (:alloc :p50) 17300) (remote-typing (:cpu_ms :p50) 8) (remote-typing (:cpu_ms :p90) 11) (remote-typing (:rows) 1)
  (window-switch (:alloc :p50) 29638) (window-switch (:cpu_ms :p90) 43.6) (window-switch (:rows) 0)
  ;; Watchdog rows, REPORTED until seeded (`drgnx-perf-watchdog-gated'): no stall in any input

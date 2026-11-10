@@ -12,6 +12,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-palette)                ; the palette scene's commands and history
+(declare-function drgnx-pane-show "drgnx-panes")
 
 (declare-function drgnx-uitest--json "drgnx-uitest")
 (declare-function drgnx-trust-folder "drgnx-trust")
@@ -287,9 +288,8 @@ from 201."
     (unless (buffer-live-p drgnx-look-scene--panel) (error "No agent panel (the mock agent did not run)"))
     (if-let* ((w (get-buffer-window drgnx-look-scene--panel)))
         (select-window w)
-      ;; where the line puts it today: a tab of the editor (the limit says so)
-      (drgnx-wb-focus-editor)
-      (drgnx-look-scene--show drgnx-look-scene--panel)))
+      ;; an earlier scene put the editor back: the panel opens again where opening it puts it, the right island
+      (drgnx-pane-show 'agent-panel :buffer drgnx-look-scene--panel :select t)))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene--palette-commands ()

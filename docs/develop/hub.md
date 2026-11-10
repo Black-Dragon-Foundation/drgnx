@@ -2147,7 +2147,10 @@ rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display 
   each card naming the agent of the connection's map view `map` that works on it (the agent whose task title is the
   card's). It is read again after each write like a trail; `work/trail/close` ends it. Rows: `head` (each column's
   heading and count at a sixth of the width, at least 120 px), then `cards:I:0` (the titles at height I) and
-  `cards:I:1` (state · agent · steps done), or `none`. Its model is its own, not the map's: a `card` node per task
+  `cards:I:1` (state · agent · steps done) and `cards:I:2` (the progress bar: on a GUI two `spaces` 4 px high from
+  4 px in, the steps done in `drgnx-work-bar` and the rest in `drgnx-work-bar-rest`, together the column less 16 px,
+  in device px at the env's `scale`, rounded half up as `drgnx-px` does; on a terminal the card's text width of `▰`
+  and `▱` in those faces), or `none`. Its model is its own, not the map's: a `card` node per task
   (fields `label status column plan agent agent-label`) whose links are the `board` form's (`navs.board`: up and down
   in its column, left and right to the nearest column with cards, at the same height or its last card), lists
   `cards` (column by column) and `team` (the cards an agent works on).
@@ -2190,9 +2193,10 @@ its builder, the fitter and the SVG writer are in the crate `drgnx-rows` (no I/O
 it builds for Android too).
 
 - **A row** `{key, text, runs: [[start, end, face]], props: [[start, end, name, value]], stops: [[pos, px]], images:
-  [[pos, image_id, alt]], height: {lines, unit}?}`. `face` is a registered drgnx face name (Lisp drops one it does
+  [[pos, image_id, alt]], spaces: [[pos, width, height]], height: {lines, unit}?}`. `face` is a registered drgnx face name (Lisp drops one it does
   not know and never interns it); a stop is one placeholder character at POS, displayed as the space up to PX
-  (`(space :align-to (PX))`); an image takes one placeholder character too. Empty lists are left out. Runs may
+  (`(space :align-to (PX))`); an image takes one placeholder character too, and so does a space, shown as WIDTH x
+  HEIGHT device px (`(space :width (W) :height (H))`, a card's progress bar) in its run's face. Empty lists are left out. Runs may
   overlap: the editor adds them in order, each below those before it (a card's box face under its text's faces).
 - **Positions** are Unicode scalar indices into `text`, which is what Lisp's string indices are after
   `json-parse-string`; never bytes or UTF-16 units. `RowBuilder` counts them and merges adjacent runs of one face.
@@ -2484,8 +2488,10 @@ the rows themselves are `agents/session/rows.rs`, pure).
   and its time and cost right-aligned, in `drgnx-agent-panel-warn` past 10 s or $0.50); `e:I/p:N` the lines under a
   step (each hook's verdict that refused, changed, failed or was busy, `hooked at the hub's server`, and `allowed by
   your Always`); `e:I/t`, `e:I/t:N` its thinking, folded to a line count or open (40 lines); `e:I/d:N` its output
-  when open (12 lines, or a large one's first and last 10 around a count of the hidden lines); `e:I/h:N` its diff
-  hunks when open (ACP `diff` items, or a paired chat's `edit_file` old and new text), at most 30 lines a row;
+  when open (12 lines, or a large one's first and last 10 around a count of the hidden lines), in
+  `drgnx-agent-panel-output`; `e:I/h:N` its diff hunks when open (ACP `diff` items, or a paired chat's `edit_file` old
+  and new text), at most 30 lines a row, unchanged lines in `drgnx-agent-panel-context` (the panel's own text is in the
+  UI font, so every code line names a code face);
   `b:I:N` block N of an agent message, its Markdown spans as runs; `more` above the first row when earlier entries
   are not shown. A subagent's step is indented and drawn in one of the six agent faces, by its `Task` call.
 - **Props.** Every row carries `drgnx-agent-panel-entry` (the entry's index); a step that can be reverted to

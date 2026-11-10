@@ -16,6 +16,8 @@
 (require 'subr-x)
 (require 'drgnx-view)
 (require 'drgnx-registry)
+(require 'drgnx-ui-kit)                 ; the bar's buttons
+(require 'drgnx-pixels)
 
 (defvar drgnx-agent-panel--session)
 (defvar drgnx-agent-panel--snap)
@@ -59,11 +61,47 @@
                                            (t "")))
                   'face 'drgnx-agent-panel-chip))))
 
+(defun drgnx-agent-panel-composer--click (text command face &optional help)
+  "TEXT in FACE (nil: its own faces) that runs COMMAND (a registry command) when clicked."
+  (let ((map (make-sparse-keymap)) (s (copy-sequence text)))
+    (define-key map [mouse-1] command)
+    (when face (add-face-text-property 0 (length s) face nil s))
+    (add-text-properties 0 (length s) (list 'mouse-face 'drgnx-hover 'keymap map 'help-echo help) s)
+    s))
+
+(defun drgnx-agent-panel-composer--field ()
+  "The composer's field: one card line to the panel's right edge (12 px in), in one face, since a box is drawn per run
+of one face; a click writes to the agent."
+  (let ((s (concat " Steer the agent…  (@ file, / command)"
+                   (propertize " " 'display `(space :align-to (- right (,(drgnx-px 12))))))))
+    (add-face-text-property 0 (length s) '(drgnx-agent-panel-subtle drgnx-card-single) nil s)
+    (concat (drgnx-agent-panel-composer--click s #'drgnx-agent-panel-send nil "s: write to the agent") "\n")))
+
 (defun drgnx-agent-panel-composer--row ()
-  (let ((pair (drgnx-agent-panel-composer--pair-chip)))
-    (concat (propertize "  ▍ s write to the agent · x stop · p stop after this step · u resume" 'face 'drgnx-agent-panel-subtle)
-            (if pair (concat "  " pair) "")
-            "\n")))
+  "The composer (agent-panel.html `.composer'): the field's card, where a click writes to the agent, and under it the
+bar: the model and the mode as chips that switch them, Pair when it is a command, and Stop after this step and Send.
+The bar sits under the card, not in it: its chips and buttons have boxes of their own."
+  (let* ((snap drgnx-agent-panel--snap) (model (plist-get snap :model)) (mode (plist-get snap :mode))
+         (pair (drgnx-agent-panel-composer--pair-chip))
+         (buttons (concat (drgnx-agent-panel-composer--click " Stop after this step " #'drgnx-agent-panel-pause
+                                                             'drgnx-ui-button "p: hold the agent after its current step")
+                          " "
+                          (drgnx-agent-panel-composer--click " Send " #'drgnx-agent-panel-send 'drgnx-ui-button-primary
+                                                             "s: write to the agent; while it works it is queued")))
+         (bar (concat (if (stringp model)
+                          (concat (drgnx-agent-panel-composer--click (concat " " model " ") #'drgnx-agent-panel-switch-model
+                                                                     'drgnx-agent-panel-chip "Switch the model")
+                                  " ")
+                        "")
+                      (if mode
+                          (concat (drgnx-agent-panel-composer--click (format " %s ▾ " mode) #'drgnx-agent-panel-switch-mode
+                                                                     'drgnx-agent-panel-chip "Switch the mode")
+                                  " ")
+                        "")
+                      (or pair "")
+                      (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width buttons) (drgnx-px 20))))))
+                      buttons)))
+    (concat (drgnx-agent-panel-composer--field) " " bar "\n")))
 
 ;;;; Completion in the composer
 

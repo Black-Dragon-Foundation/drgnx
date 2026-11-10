@@ -68,6 +68,10 @@ pub struct Row {
     /// `[pos, id, alt]`: the image ID is shown at POS (ALT on a terminal).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<(u32, ImageId, String)>,
+    /// `[pos, width, height]`: the text at POS is a space WIDTH x HEIGHT device px (`(space :width (W) :height (H))`),
+    /// such as a card's progress bar; its face is a run's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spaces: Vec<(u32, u32, u32)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<RowHeight>,
 }

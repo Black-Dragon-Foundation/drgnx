@@ -23,12 +23,13 @@
 (defface drgnx-wb-tab '((t :inherit tab-line-tab-inactive)) "A tab in an area's tab row." :group 'drgnx)
 (defface drgnx-wb-tab-current '((t :inherit tab-line-tab-current)) "The shown tab in an area's tab row." :group 'drgnx)
 
-(defvar drgnx-wb--areas nil "Alist AREA → plist (:side SIDE :size N :tabs ((TAB . PLIST) …)).")
+(defvar drgnx-wb--areas nil "Alist AREA → plist (:side SIDE :size N :lone LONE :tabs ((TAB . PLIST) …)).")
 
-(cl-defun drgnx-wb-define-area (area &key side size)
-  "Define AREA on SIDE (`bottom' or `right'), SIZE lines or columns the first time it shows."
+(cl-defun drgnx-wb-define-area (area &key side size lone)
+  "Define AREA on SIDE (`bottom' or `right'), SIZE lines or columns the first time it shows.  LONE non-nil: no tab
+row while the shown tab is the only one with content (`drgnx-area--lone-p')."
   (setf (alist-get area drgnx-wb--areas)
-        (list :side side :size size :tabs (plist-get (alist-get area drgnx-wb--areas) :tabs)))
+        (list :side side :size size :lone lone :tabs (plist-get (alist-get area drgnx-wb--areas) :tabs)))
   area)
 
 (cl-defun drgnx-wb-define-tab (area tab &key title placeholder)
@@ -131,13 +132,29 @@ Returns non-nil when TAB was defined."
             (list (window-buffer window) (window-start window) (window-point window)))
       (drgnx-area--set-state area (plist-put (copy-sequence state) :tabs tabs)))))
 
+(defvar-local drgnx-area--placeholder-p nil "Non-nil in a buffer an area shows for a tab that has none of its own.")
+(put 'drgnx-area--placeholder-p 'permanent-local t)
+
 (defun drgnx-area--placeholder (area tab)
-  (let ((fn (plist-get (alist-get tab (plist-get (alist-get area drgnx-wb--areas) :tabs)) :placeholder)))
-    (if fn (funcall fn)
-      (or (get-buffer (format " *drgnx %s*" (or tab area)))
-          (with-current-buffer (get-buffer-create (format " *drgnx %s*" (or tab area)) t)
-            (special-mode)
-            (current-buffer))))))
+  (let* ((fn (plist-get (alist-get tab (plist-get (alist-get area drgnx-wb--areas) :tabs)) :placeholder))
+         (buf (if fn (funcall fn)
+                (or (get-buffer (format " *drgnx %s*" (or tab area)))
+                    (with-current-buffer (get-buffer-create (format " *drgnx %s*" (or tab area)) t)
+                      (special-mode)
+                      (current-buffer))))))
+    (with-current-buffer buf (setq drgnx-area--placeholder-p t))
+    buf))
+
+(defun drgnx-area--content-p (buffer)
+  (and (buffer-live-p buffer) (not (buffer-local-value 'drgnx-area--placeholder-p buffer))))
+
+(defun drgnx-area--lone-p (area)
+  "Whether AREA's shown tab is the only one with content: its window shows a buffer of its own (not a placeholder)
+and no other tab left one."
+  (let ((shown (drgnx-wb-area-tab area)) (w (drgnx-wb-area-window area)))
+    (and w (drgnx-area--content-p (window-buffer w))
+         (not (seq-some (lambda (saved) (and (not (eq (car saved) shown)) (drgnx-area--content-p (nth 1 saved))))
+                        (plist-get (drgnx-area--state area) :tabs))))))
 
 ;;;; The tab row
 
@@ -159,16 +176,18 @@ Returns non-nil when TAB was defined."
     (drgnx-wb-area-hide area)))
 
 (defun drgnx-area--tab-row (area)
-  "AREA's tab row, ending in the ✕ that hides it; set as a window parameter, so it is built when the tab changes."
+  "AREA's tab row, ending in the ✕ that hides it; set as a window parameter, so it is built when the tab changes.
+`none' (no row) in an area defined with LONE while its shown tab is the only one with content."
   (let ((shown (drgnx-wb-area-tab area)))
-    (drgnx-wb-header-with-close
-     (mapconcat (lambda (tab)
-                  (propertize (format " %s " (plist-get (cdr tab) :title))
-                              'face (if (eq (car tab) shown) 'drgnx-wb-tab-current 'drgnx-wb-tab)
-                              'drgnx-tab (cons area (car tab)) 'mouse-face 'highlight
-                              'local-map drgnx-area--tab-map 'help-echo "Show this tab"))
-                (plist-get (alist-get area drgnx-wb--areas) :tabs) " ")
-     #'drgnx-area--close-click "Close (Esc, q)" 'drgnx-area area)))
+    (if (and (plist-get (alist-get area drgnx-wb--areas) :lone) (drgnx-area--lone-p area)) 'none
+      (drgnx-wb-header-with-close
+       (mapconcat (lambda (tab)
+                    (propertize (format " %s " (plist-get (cdr tab) :title))
+                                'face (if (eq (car tab) shown) 'drgnx-wb-tab-current 'drgnx-wb-tab)
+                                'drgnx-tab (cons area (car tab)) 'mouse-face 'highlight
+                                'local-map drgnx-area--tab-map 'help-echo "Show this tab"))
+                  (plist-get (alist-get area drgnx-wb--areas) :tabs) " ")
+       #'drgnx-area--close-click "Close (Esc, q)" 'drgnx-area area))))
 
 ;;;; Show, hide
 
@@ -290,7 +309,7 @@ area, so its size and tabs are kept."
 (drgnx-wb-define-place 'right (drgnx-area--place 'right))
 
 (drgnx-wb-define-area 'panel :side 'bottom :size 12)
-(drgnx-wb-define-area 'right :side 'right :size 50)
+(drgnx-wb-define-area 'right :side 'right :size 50 :lone t)
 (dolist (tab '(problems output results terminal help)) (drgnx-wb-define-tab 'panel tab))
 
 (pcase-dolist (`(,matcher ,tab)

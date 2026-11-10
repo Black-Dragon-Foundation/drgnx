@@ -47,6 +47,32 @@ fn adjacent_equal_runs_merge() {
     );
 }
 
+/// A space is one placeholder character shown as WIDTH x HEIGHT device px (`(space :width (W) :height (H))`), its face
+/// a run like any text's; the list is left out when empty.
+#[test]
+fn a_space_is_one_placeholder_of_a_size() {
+    let mut b = RowBuilder::new("k");
+    b.push("a", None)
+        .space(30, 4, "drgnx-work-bar")
+        .space(10, 4, "drgnx-work-bar-rest");
+    let r = b.finish();
+    assert_eq!(r.text, "a  ");
+    assert_eq!(r.spaces, vec![(1, 30, 4), (2, 10, 4)]);
+    assert_eq!(
+        r.runs,
+        vec![
+            (1, 2, "drgnx-work-bar".into()),
+            (2, 3, "drgnx-work-bar-rest".into())
+        ]
+    );
+    assert_eq!(
+        serde_json::to_value(&r).unwrap()["spaces"],
+        json!([[1, 30, 4], [2, 10, 4]])
+    );
+    let empty = serde_json::to_value(RowBuilder::new("e").finish()).unwrap();
+    assert!(empty.get("spaces").is_none(), "{empty}");
+}
+
 fn keys(v: &Value, out: &mut BTreeSet<String>) {
     match v {
         Value::Object(m) => {
