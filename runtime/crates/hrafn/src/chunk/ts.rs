@@ -482,9 +482,42 @@ fn analyse(kind: Kind, n: Node, text: &str) -> Form {
     form
 }
 
-/// An oversized item is cut before the members of its body (a wrapper's declaration's body).
-fn cuts(n: Node) -> Vec<(usize, usize)> {
-    let Some(body) = inner(n).child_by_field_name("body") else {
+/// The body of a JavaScript or TypeScript statement that has none of its own: the last callback's in the call it holds
+/// (`describe("…", function () { … })`), looked for a few levels down.
+fn callback_body(n: Node) -> Option<Node> {
+    let mut level = vec![n];
+    for _ in 0..5 {
+        let mut next = Vec::new();
+        for m in level {
+            let mut cursor = m.walk();
+            next.extend(m.named_children(&mut cursor));
+        }
+        let found = next.iter().rev().find_map(|c| {
+            matches!(
+                c.kind(),
+                "arrow_function" | "function_expression" | "function"
+            )
+            .then(|| c.child_by_field_name("body"))
+            .flatten()
+            .filter(|b| b.kind() == "statement_block")
+        });
+        if found.is_some() {
+            return found;
+        }
+        level = next;
+    }
+    None
+}
+
+/// An oversized item is cut before the members of its body (a wrapper's declaration's body; in JavaScript and
+/// TypeScript, a callback's body when the statement has none).
+fn cuts(kind: Kind, n: Node) -> Vec<(usize, usize)> {
+    let body = match inner(n).child_by_field_name("body") {
+        Some(b) => Some(b),
+        None if matches!(kind, Kind::JavaScript | Kind::TypeScript | Kind::Tsx) => callback_body(n),
+        None => None,
+    };
+    let Some(body) = body else {
         return Vec::new();
     };
     let mut cursor = body.walk();
@@ -531,6 +564,6 @@ pub(super) fn chunk(
             None => Form::plain(s, e),
         },
         heading: &|_, _| None,
-        cuts: &|f| node_at(f.start).map(cuts).unwrap_or_default(),
+        cuts: &|f| node_at(f.start).map(|n| cuts(kind, n)).unwrap_or_default(),
     }))
 }

@@ -217,6 +217,16 @@ fn an_oversized_class_is_cut_before_its_members() {
     for l in &inside {
         assert!([29, 31, 33, 34, 38].contains(l), "a cut at line {l}");
     }
+    // a test file is one `describe(…, function () { it(…) … })` call: cut before the callback's statements
+    let (_, cs, _) = run("app.test.js", 150);
+    let starts: Vec<u32> = cs.iter().map(|c| c.line_start).collect();
+    assert!(starts.len() > 2, "{starts:?}");
+    for l in &starts[1..] {
+        assert!(
+            [3, 4, 7, 8, 11, 12, 15, 16].contains(l),
+            "a cut at line {l}: {starts:?}"
+        );
+    }
     let (_, cs, _) = run("shapes.py", 80);
     let inside: Vec<u32> = cs
         .iter()

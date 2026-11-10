@@ -1185,7 +1185,7 @@ version 1 is chunked again at the next refresh, whether or not a file changed (a
 vector's key, embedded again).
 
 `PARSE_VERSION` covers what a parse derives besides the chunks (a symbol's lines and signature, the languages parsed;
-1: lines and signatures, 2: Python, JavaScript, TypeScript and TSX, 3: Go and Java).
+1: lines and signatures, 2: Python, JavaScript, TypeScript and TSX, 3: Go and Java, 4: JavaScript callbacks' cuts).
 When the store's `parse_version` is older, the next refresh parses every file again as for a new chunker, but the
 chunks' keys do not change, so no vector is embedded again; worktrees re-seed lazily. `tests/chunk_golden.rs` pins the
 chunks and symbols of Rust, C, shell, Lisp, Org and Markdown as the chunker made them before version 1: a change there
@@ -1231,7 +1231,8 @@ comment directly above, else the `//` lines. Files: `.py .pyi`, `.js .mjs .cjs .
 extensionless files whose `#!` line runs `python…` or `node`. Tests also by name: `test_*.py`, `*_test.py` and
 `*.test.*`/`*.spec.*` scripts. A member without a doc of its own takes its class's, as a Rust method takes its
 `impl`'s. A signature is cut at the body's `{`: the first outside parentheses and brackets, so a destructured
-parameter stays in it.
+parameter stays in it. A JavaScript or TypeScript statement over the budget with no body of its own (a test file's
+`describe("…", function () { it(…) … })`) is cut before the statements of its last callback's body.
 
 Go and Java (`tree-sitter-go` 0.25, `tree-sitter-java` 0.23; MIT) too. Go defines functions, methods (the receiver
 is in the signature; a method is top-level, so it has no container), types (`struct`, `interface`, other types and
