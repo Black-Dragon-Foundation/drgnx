@@ -139,7 +139,7 @@ Returns the mirrors."
       drgnx-agents-five--mirrors)))
 
 (defun drgnx-agents-five-visit ()
-  "Visit the user's file in the selected window, with diff-hl on when it is installed; the buffer."
+  "Visit the user's file in the selected window, with the change marks on when the module is loaded; the buffer."
   (drgnx-agents-five--note "visit")
   ;; the keys a workload types go to the editor window, never to a follow window (its keys stop and take the wheel)
   (unless (window-live-p drgnx-agents-five--editor) (setq drgnx-agents-five--editor (selected-window)))
@@ -148,7 +148,7 @@ Returns the mirrors."
     (switch-to-buffer b)
     (goto-char (point-min))
     (forward-line (/ drgnx-agents-five-lines 2))
-    (when (require 'diff-hl nil t) (diff-hl-mode 1))
+    (when (fboundp 'drgnx-hunks-mode) (drgnx-hunks-mode 1))
     b))
 
 (defun drgnx-agents-five-follow ()

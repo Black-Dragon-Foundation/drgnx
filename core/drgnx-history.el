@@ -136,8 +136,9 @@ inserts more is split (`drgnx-history--pieces')."
   (let* ((b (or buffer (current-buffer))) (st (gethash (or (buffer-base-buffer b) b) drgnx-history--buffers)))
     (and st (drgnx-history--st-registered st) t)))
 
-(defun drgnx-history-ask (buffer method callback)
-  "Ask the hub METHOD about BUFFER's file (`:path' and `:worktree_root' are the params), BUFFER's text first handed to
+(defun drgnx-history-ask (buffer method callback &optional params)
+  "Ask the hub METHOD about BUFFER's file (`:path' and `:worktree_root' are the params, PARAMS a plist more), BUFFER's
+text first handed to
 the hub when it is small enough to drain at once, so the hub reads what BUFFER holds.  CALLBACK gets (RESULT ERROR).
 Non-nil when the question went; nil when the history does not track BUFFER or no hub is connected.  Never prompts or
 waits."
@@ -145,7 +146,8 @@ waits."
     (when (and st (drgnx-history--st-registered st) (drgnx-history--st-root st) (drgnx-history--connected-p))
       (when (< (buffer-size buffer) drgnx-history-large-size)
         (drgnx-history-drain-now buffer))
-      (drgnx-history--send method (list :path (drgnx-history--st-path st) :worktree_root (drgnx-history--st-root st))
+      (drgnx-history--send method (append (list :path (drgnx-history--st-path st) :worktree_root (drgnx-history--st-root st))
+                                          params)
                            callback))))
 
 (defun drgnx-history-last-result (&optional buffer)

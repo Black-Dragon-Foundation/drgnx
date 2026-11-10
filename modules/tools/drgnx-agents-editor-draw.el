@@ -38,9 +38,8 @@
 (declare-function drgnx-decor--glitnir-p "drgnx-decor")
 (defvar drgnx-agents-editor-apply-functions)
 (defvar drgnx-agents-tags)
-(defvar diff-hl-highlight-function)
-(defvar diff-hl-mode)
-(declare-function diff-hl-update "diff-hl")
+(defvar drgnx-hunks-skip-line-function)
+(declare-function drgnx-hunks-redraw "drgnx-hunks")
 
 (defun drgnx-agents-editor-draw--tags-apply ()
   "A new tag setting applies to the frames drawn from now on."
@@ -287,20 +286,10 @@ Two agents of one colour, and the agent you follow, keep their tags on whatever 
                    do (puthash l (vector (if (= l (plist-get g :start)) first rest) ord kind) table))))
       table)))
 
-(defvar drgnx-agents-editor-draw--previous-hl nil "The `diff-hl-highlight-function' the wrapper calls for lines no agent owns.")
-
-(defun drgnx-agents-editor--diff-hl-highlight (ovl type shape)
-  "`diff-hl-highlight-function' while the module is on: skip the lines an agent's strip owns, give the others to the
-function that was set before."
-  (unless (and drgnx-agents-editor-draw--lines
-               (gethash (line-number-at-pos (overlay-start ovl)) drgnx-agents-editor-draw--lines))
-    (when drgnx-agents-editor-draw--previous-hl (funcall drgnx-agents-editor-draw--previous-hl ovl type shape))))
-
-(defun drgnx-agents-editor-draw--wrap-diff-hl ()
-  "Set diff-hl's highlight function to the wrapper (once diff-hl is loaded); `drgnx-module-set' undoes it."
-  (unless (eq (default-value 'diff-hl-highlight-function) #'drgnx-agents-editor--diff-hl-highlight)
-    (setq drgnx-agents-editor-draw--previous-hl (default-value 'diff-hl-highlight-function))
-    (drgnx-module-set 'diff-hl-highlight-function #'drgnx-agents-editor--diff-hl-highlight)))
+(defun drgnx-agents-editor-draw--owns-line-p (line)
+  "Whether an agent's strip draws the gutter on LINE of this buffer: the change marks leave that line out
+(`drgnx-hunks-skip-line-function')."
+  (and drgnx-agents-editor-draw--lines (gethash line drgnx-agents-editor-draw--lines) t))
 
 (defun drgnx-agents-editor-draw--margin (buffer on)
   "Hold a one-column left margin in BUFFER (and its windows) while ON, for the terminal's strip."
@@ -311,12 +300,11 @@ function that was set before."
       (dolist (w (get-buffer-window-list buffer nil t))
         (set-window-margins w (and on 1) (cdr (window-margins w)))))))
 
-(defun drgnx-agents-editor-draw--redraw-diff-hl (&optional buffer)
-  "Draw diff-hl again in BUFFER (default: every buffer it marks): the wrapper is gone, or the strip was."
-  (when (fboundp 'diff-hl-update)
+(defun drgnx-agents-editor-draw--redraw-marks (&optional buffer)
+  "Draw the change marks again in BUFFER (default: every buffer that has them): the strip came or went."
+  (when (fboundp 'drgnx-hunks-redraw)
     (dolist (b (if buffer (list buffer) (buffer-list)))
-      (when (and (buffer-live-p b) (buffer-local-value 'diff-hl-mode b))
-        (with-current-buffer b (ignore-errors (diff-hl-update)))))))
+      (when (buffer-live-p b) (ignore-errors (drgnx-hunks-redraw b))))))
 
 ;;;; Applying a frame
 
@@ -349,8 +337,8 @@ function that was set before."
           (setq drgnx-agents-editor-draw--lines (drgnx-agents-editor-draw--gutter-lines frame))
           (drgnx-agents-editor-draw--margin buffer (and drgnx-agents-editor-draw--lines (not (display-graphic-p))))
           (drgnx-agents-editor-draw--rebuild-buffer buffer)
-          ;; the strip went: diff-hl marks the lines it skipped again
-          (when (and had (not drgnx-agents-editor-draw--lines)) (drgnx-agents-editor-draw--redraw-diff-hl buffer)))))))
+          ;; the strip came or went: the change marks leave its lines out, or draw them again
+          (unless (eq (and had t) (and drgnx-agents-editor-draw--lines t)) (drgnx-agents-editor-draw--redraw-marks buffer)))))))
 
 (defun drgnx-agents-editor-draw--redraw-all ()
   "The identity cache cleared: resolve every colour again and put every bar again."
@@ -391,14 +379,14 @@ function that was set before."
   (drgnx-module-hook 'drgnx-agents-editor-unwatch-functions draw-unwatch (buffer)
     :module 'tools/agents-in-editor
     (drgnx-agents-editor-draw-clear buffer))
-  ;; once diff-hl is loaded (now, when it is): its highlight function skips the lines an agent owns
-  (eval-after-load 'diff-hl (drgnx-modules-with-owner (drgnx-agents-editor-draw--wrap-diff-hl)))
+  ;; the change marks skip the lines an agent's strip owns
+  (drgnx-module-set 'drgnx-hunks-skip-line-function #'drgnx-agents-editor-draw--owns-line-p)
   (drgnx-agents-editor-draw--tags-apply))
 
 (defun drgnx-agents-editor-draw-teardown ()
-  "Take everything drawn out of every live buffer and draw diff-hl's own marks again."
+  "Take everything drawn out of every live buffer and draw the change marks again."
   (dolist (b (buffer-list)) (drgnx-agents-editor-draw-clear b))
-  (drgnx-agents-editor-draw--redraw-diff-hl)
+  (drgnx-agents-editor-draw--redraw-marks)
   (clrhash drgnx-agents-editor-draw--tints))
 
 (provide 'drgnx-agents-editor-draw)

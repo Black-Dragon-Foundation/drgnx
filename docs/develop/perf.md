@@ -112,7 +112,7 @@ in every workload that types into the fixture.
 in the editor, the agent panel and pair mode cost the typing of the user. A hub of the workload's own
 (`$DRGNX_RATATOSKR_BIN`, a test-hooks build with `ratatoskr-mock` beside it) runs five mock agents, each in a worktree of
 a repository with one 3,000-line file; each makes an edit and then, a second at a time, a chunk and a read of another
-offset, as the thirty-agent fixture's agents do. The keys are typed into that file in the editor window (diff-hl on). A
+offset, as the thirty-agent fixture's agents do. The keys are typed into that file in the editor window (the change marks on). A
 workload's setup, `:each` and `:check` call the fixture's premise, which signals when the five agents are not streaming
 and says, in tenths of a second since the start, when each one's status changed, when the follow window began and when
 the file was visited.

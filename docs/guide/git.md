@@ -42,6 +42,16 @@ Remote files are never asked about, and neither is a file git refuses (untracked
 **Toggle Inline Blame** turns it off or on for the buffer. **Blame: Show Commit of Line** opens that commit in the
 diff view.
 
+## Changes in the gutter
+
+In a file the edit history tracks, the gutter shows what changed against the last commit (module `extra/hunks`): a solid
+3 px bar beside each added line (green) and each changed line (blue), and a short red mark where lines were deleted. The hub
+does the diffing: a moment after your changes reach it the marks are asked for again, so they follow your typing, and saving,
+reverting or a Magit refresh asks too. A line an agent is writing keeps the agent's bar. **Show Change** shows the hunk at
+point against the last commit, **Revert Change** puts the last commit's lines back (it asks first) and **Stage Change**
+stages the hunk in git's index (the file is not touched). Remote files, large files and files the history does not track have
+no marks; there is no package to install.
+
 ## Generate a commit message
 
 In a commit message buffer (magit's, or VC's), **Git: Generate Commit Message** writes the message for you (module

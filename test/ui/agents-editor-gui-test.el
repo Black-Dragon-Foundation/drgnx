@@ -1,8 +1,7 @@
-;;; agents-editor-gui-test.el --- GUI measurements: drawing agent ranges beside diff-hl (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;;; agents-editor-gui-test.el --- GUI measurements: drawing agent ranges (run by `drgnx test --ui') -*- lexical-binding: t -*-
 ;; test-class: det
 ;; Pattern D: every picture is taken after `drgnx-test-wait-presented'.  These rows are design measurements: they
-;; prototype the visible-rows rebuild of ring and gutter overlays, a per-line fringe `before-string' beside diff-hl
-;; (with `diff-hl-highlight-function' wrapped, through its sync, async and flydiff updates) and the one-column margin
+;; prototype the visible-rows rebuild of ring and gutter overlays, a per-line fringe `before-string' and the one-column margin
 ;; form, and print what they measured (`S1: ...' lines).  The numbers are in docs/develop/agents-editor.md.  The pixel
 ;; rows run in the dark, the light and the high-contrast theme, at whatever scale the session has (DRGNX_UI_SCALE: 1, 2).
 
@@ -23,12 +22,6 @@
 (load (expand-file-name "modules/ui/drgnx-decor" agents-editor-gui--repo) nil t)
 
 (declare-function drgnx-decor-box "drgnx-decor")
-(defvar diff-hl-highlight-function)
-(defvar diff-hl-update-async)
-(declare-function diff-hl-mode "diff-hl")
-(declare-function diff-hl-update "diff-hl")
-(declare-function diff-hl-flydiff-mode "diff-hl-flydiff")
-(declare-function diff-hl-flydiff-update "diff-hl-flydiff")
 
 ;;;; Prototype: the faces, bitmaps and the visible-rows rebuild
 
@@ -280,141 +273,6 @@ bar is 2 ms); then the cost of the redisplay the overlays add; then a picture in
 
 (defun agents-editor-gui--scroll (win start)
   (agents-editor-gui--rebuild win start))
-
-;;;; Row 2: one fringe owner per line beside diff-hl
-
-(defvar agents-editor-gui--agent-lines nil "The line table the wrapper reads (the module reads the frame's cache).")
-(defvar agents-editor-gui--previous nil)
-
-(defun agents-editor-gui--hl-wrapper (ovl type shape)
-  "diff-hl's highlight function, skipping the lines an agent owns."
-  (unless (gethash (line-number-at-pos (overlay-start ovl)) agents-editor-gui--agent-lines)
-    (funcall agents-editor-gui--previous ovl type shape)))
-
-(defun agents-editor-gui--git (dir &rest args)
-  (let ((process-environment (append (list (concat "HOME=" dir) "GIT_CONFIG_NOSYSTEM=1") process-environment))
-        (default-directory dir))
-    (should (zerop (apply #'call-process "git" nil nil nil "-c" "user.name=t" "-c" "user.email=t@t.invalid"
-                          "-c" "commit.gpgsign=false" args)))))
-
-(defun agents-editor-gui--repo-file ()
-  "A temp git repo with a 300-line file committed, its lines 10-15 and 60-65 then changed on disk."
-  (let* ((dir (file-name-as-directory (make-temp-file "s1-repo" t))) (file (expand-file-name "f.txt" dir)))
-    (with-temp-file file (dotimes (i 300) (insert (format "row %d\n" (1+ i)))))
-    (agents-editor-gui--git dir "init" "-q")
-    (agents-editor-gui--git dir "add" "f.txt")
-    (agents-editor-gui--git dir "commit" "-q" "-m" "base")
-    (with-temp-file file
-      (dotimes (i 300)
-        (let ((n (1+ i)))
-          (insert (if (or (<= 10 n 15) (<= 60 n 65)) (format "changed %d\n" n) (format "row %d\n" n))))))
-    file))
-
-(defun agents-editor-gui--hl-lines ()
-  (let (lines)
-    (dolist (o (overlays-in (point-min) (point-max)))
-      (when (overlay-get o 'diff-hl)
-        (push (cons (line-number-at-pos (overlay-start o)) (and (overlay-get o 'before-string) t)) lines)))
-    (sort lines (lambda (a b) (< (car a) (car b))))))
-
-(defun agents-editor-gui--fringe-line-owner (win line cands)
-  (let ((pos (with-current-buffer (window-buffer win)
-               (save-excursion (goto-char (point-min)) (forward-line (max 0 (- line 6))) (point)))))
-    (set-window-start win pos)
-    (set-window-point win (+ pos 2)))      ; point must stay in view or redisplay scrolls back
-  (drgnx-test-wait-presented)
-  (agents-editor-gui--owner (agents-editor-gui--owners (drgnx-uitest-snapshot) win line cands)))
-
-(ert-deftest agents-editor-gui/s1-fringe-owner-beside-diff-hl ()
-  "Pixels: an agent's gutter overlay on a line diff-hl also marks.  With diff-hl's highlight function wrapped the
-line shows the agent's bar and the user's own changed lines keep diff-hl's, through diff-hl's sync update, its async
-update and flydiff; unwrapped, the owner is whichever the display engine takes (printed).  Both themes."
-  (skip-unless (display-graphic-p))
-  ;; the GUI session's Emacs does not get DRGNX_USER_ELPA, but `bin/drgnx test --container' mounts it at /elpa
-  (let ((elpa (seq-find (lambda (d) (and d (file-expand-wildcards (expand-file-name "diff-hl-*" d))))
-                        (list (getenv "DRGNX_USER_ELPA") "/elpa" (expand-file-name "~/.config/emacs/elpa")))))
-    (unless elpa
-      (agents-editor-gui--note "S1 fringe skipped: no diff-hl (DRGNX_USER_ELPA=%S, /elpa=%S)" (getenv "DRGNX_USER_ELPA")
-                               (file-directory-p "/elpa"))
-      (ert-skip "no diff-hl"))
-    (dolist (d (directory-files elpa t "\\`[^.]")) (when (file-directory-p d) (add-to-list 'load-path d))))
-  (require 'diff-hl)
-  (require 'diff-hl-flydiff)
-  (handler-bind ((error (lambda (e)
-                          (agents-editor-gui--note "S1 fringe error %S: %s" e
-                                                   (mapconcat #'identity (seq-take (split-string (backtrace-to-string) "\n") 14) " | ")))))
-    (agents-editor-gui--fringe-body)))
-
-(defun agents-editor-gui--fringe-body ()
-  (drgnx-uitest-bare-frame)
-  (agents-editor-gui--define-bitmaps)
-  (diff-hl-define-bitmaps)
-  (let* ((file (agents-editor-gui--repo-file)) (win (selected-window))
-         (buf (find-file-noselect file)) (default-hl (default-value 'diff-hl-highlight-function))
-         (default-async diff-hl-update-async) (default-agent-lines agents-editor-gui--agent-lines)
-         (verdicts nil))
-    (unwind-protect
-        (progn
-          (set-window-buffer win buf)
-          (with-current-buffer buf
-            (setq-local cursor-type nil)
-            (setq-local agents-editor-gui--table (make-hash-table))
-            ;; one agent, changed lines 12-14 (the user's change at 10-15 covers them); the user's own at 60-65
-            (dotimes (i 3) (puthash (+ 12 i) (vector 0 'changed 0 (= i 0) (= i 2)) agents-editor-gui--table))
-            (setq agents-editor-gui--agent-lines agents-editor-gui--table)
-            (setq diff-hl-update-async nil)
-            (diff-hl-mode 1))
-          (pcase-dolist (`(,variant . ,theme) agents-editor-gui--themes)
-            (agents-editor-gui--theme theme)
-            (clrhash agents-editor-gui--box-cache)
-            (let ((cands `((agent . ,(agents-editor-gui--rgb 'font-lock-keyword-face))
-                           (diff-hl-insert . ,(agents-editor-gui--rgb 'diff-hl-insert))
-                           (diff-hl-change . ,(agents-editor-gui--rgb 'diff-hl-change)))))
-              ;; the agent colour must differ from both diff-hl colours or the pixels prove nothing
-              (dolist (n '(diff-hl-insert diff-hl-change))
-                (should (cl-some (lambda (a b) (> (abs (- a b)) 60)) (cdr (assq 'agent cands)) (cdr (assq n cands)))))
-              (dolist (mode '(unwrapped-late unwrapped-early priority-early sync async flydiff))
-                (setq-default diff-hl-highlight-function default-hl)
-                (when (memq mode '(sync async flydiff))
-                  (setq agents-editor-gui--previous default-hl)
-                  (setq-default diff-hl-highlight-function #'agents-editor-gui--hl-wrapper))
-                (setq agents-editor-gui--priority (and (eq mode 'priority-early) 100))
-                (with-current-buffer buf
-                  (agents-editor-gui--clear)
-                  (setq diff-hl-update-async (eq mode 'async))
-                  (set-buffer-modified-p nil)
-                  (diff-hl-remove-overlays)
-                  (when (eq mode 'flydiff)
-                    (diff-hl-flydiff-mode 1)
-                    (save-excursion (goto-char (point-min)) (forward-line 99) (insert "unsaved\n")))
-                  (unless (eq mode 'unwrapped-late)   ; ours first, diff-hl's overlays made after: the order of a redraw
-                    (agents-editor-gui--rebuild win (save-excursion (goto-char (point-min)) (forward-line 5) (point))))
-                  (if (eq mode 'flydiff) (diff-hl-flydiff-update) (diff-hl-update))
-                  (drgnx-test-wait (lambda () (cl-some (lambda (o) (overlay-get o 'diff-hl)) (overlays-in 1 (point-max))))
-                                   :what "diff-hl overlays")
-                  (when (eq mode 'unwrapped-late)
-                    (agents-editor-gui--rebuild win (save-excursion (goto-char (point-min)) (forward-line 5) (point)))))
-                (let ((agent-line (agents-editor-gui--fringe-line-owner win 13 cands))
-                      (user-line (agents-editor-gui--fringe-line-owner win 62 cands))
-                      (hl (with-current-buffer buf (agents-editor-gui--hl-lines))))
-                  (agents-editor-gui--note "S1 fringe %s %s: agent line 13 owner=%s, user line 62 owner=%s, diff-hl overlays with a spec on 12-14=%S"
-                                           variant mode agent-line user-line
-                                           (mapcar (lambda (l) (assq l hl)) '(12 13 14)))
-                  (push (list variant mode agent-line user-line) verdicts)
-                  (when (memq mode '(sync async flydiff))
-                    (should (eq agent-line 'agent))
-                    (should (memq user-line '(diff-hl-insert diff-hl-change)))
-                    (should-not (cl-some #'cdr (mapcar (lambda (l) (assq l hl)) '(12 13 14)))))
-                  (when (eq mode 'sync) (agents-editor-gui--png (format "s1-fringe-%s" variant)))
-                  (when (eq mode 'flydiff)
-                    (with-current-buffer buf (diff-hl-flydiff-mode -1) (set-buffer-modified-p nil)))))))
-          (agents-editor-gui--note "S1 fringe verdicts: %S" (nreverse verdicts)))
-      (setq-default diff-hl-highlight-function default-hl)
-      (setq diff-hl-update-async default-async agents-editor-gui--agent-lines default-agent-lines)
-      (mapc #'disable-theme custom-enabled-themes)
-      (with-current-buffer buf (set-buffer-modified-p nil) (diff-hl-mode -1))
-      (kill-buffer buf)
-      (delete-directory (file-name-directory file) t))))
 
 ;;;; Row 3: the one-column margin form
 
