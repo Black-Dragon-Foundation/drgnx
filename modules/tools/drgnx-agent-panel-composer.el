@@ -16,6 +16,9 @@
 (require 'subr-x)
 (require 'drgnx-view)
 (require 'drgnx-registry)
+(require 'drgnx-ui-kit)                 ; the bar's buttons
+(require 'drgnx-pixels)
+(require 'drgnx-icons)
 
 (defvar drgnx-agent-panel--session)
 (defvar drgnx-agent-panel--snap)
@@ -24,6 +27,8 @@
 (defvar drgnx-work-resume-text)
 (declare-function drgnx-agent-panel--ask "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--one-line "drgnx-agent-panel")
+(declare-function drgnx-history-fork-here "drgnx-history-revert")
+(defvar drgnx-agent-panel--steps)
 
 (defconst drgnx-agent-panel-composer-max-files 2000 "How many files `@' completion looks through at most.")
 
@@ -59,11 +64,63 @@
                                            (t "")))
                   'face 'drgnx-agent-panel-chip))))
 
+(defun drgnx-agent-panel-composer--click (text command face &optional help)
+  "TEXT in FACE (nil: its own faces) that runs COMMAND (a registry command) when clicked."
+  (let ((map (make-sparse-keymap)) (s (copy-sequence text)))
+    (define-key map [mouse-1] command)
+    (when face (add-face-text-property 0 (length s) face nil s))
+    (add-text-properties 0 (length s) (list 'mouse-face 'drgnx-hover 'keymap map 'help-echo help) s)
+    s))
+
+(defun drgnx-agent-panel-composer--field ()
+  "The composer's field: one card line to the panel's right edge (12 px in), in one face, since a box is drawn per run
+of one face; a click writes to the agent."
+  (let ((s (concat " Steer the agent…  (@ file, / command)"
+                   (propertize " " 'display `(space :align-to (- right (,(drgnx-px 12))))))))
+    (add-face-text-property 0 (length s) '(drgnx-agent-panel-subtle drgnx-card-single) nil s)
+    (concat (drgnx-agent-panel-composer--click s #'drgnx-agent-panel-send nil "s: write to the agent") "\n")))
+
+(defun drgnx-agent-panel-fork ()
+  "Start a second agent from the chat's last step: the composer's Fork (Fork from the Step at Point picks another)."
+  (interactive)
+  (let ((seq (and (hash-table-p drgnx-agent-panel--steps)
+                  (car (sort (hash-table-keys drgnx-agent-panel--steps) #'>)))))
+    (unless seq (user-error "The chat has no step to fork from yet"))
+    (require 'drgnx-history-revert)
+    (drgnx-history-fork-here drgnx-agent-panel--session seq)))
+
 (defun drgnx-agent-panel-composer--row ()
-  (let ((pair (drgnx-agent-panel-composer--pair-chip)))
-    (concat (propertize "  ▍ s write to the agent · x stop · p stop after this step · u resume" 'face 'drgnx-agent-panel-subtle)
-            (if pair (concat "  " pair) "")
-            "\n")))
+  "The composer (agent-panel.html `.composer'): the field's card, where a click writes to the agent, and under it the
+bar: the model and the mode as chips that switch them, Pair when it is a command, then Fork, the pause icon (stop after
+this step) and Send, an arrow, as buttons.
+The bar sits under the card, not in it: its chips and buttons have boxes of their own."
+  (let* ((snap drgnx-agent-panel--snap) (model (plist-get snap :model)) (mode (plist-get snap :mode))
+         (pair (drgnx-agent-panel-composer--pair-chip))
+         (buttons (concat (drgnx-agent-panel-composer--click (concat " " (drgnx-look-icon 'git-fork) " Fork ")
+                                                             #'drgnx-agent-panel-fork 'drgnx-ui-button
+                                                             "Start a second agent from the chat's last step")
+                          " "
+                          (drgnx-agent-panel-composer--click (concat " " (drgnx-look-icon 'pause) " ") #'drgnx-agent-panel-pause
+                                                             'drgnx-ui-button "p: stop the agent after its current step")
+                          " "
+                          (drgnx-agent-panel-composer--click (concat " " (drgnx-look-icon 'arrow-up) " ")
+                                                             #'drgnx-agent-panel-send 'drgnx-ui-button-primary
+                                                             "s: write to the agent; while it works it is queued")))
+         (bar (concat (if (stringp model)
+                          (concat (drgnx-agent-panel-composer--click (concat " " (drgnx-look-icon 'sparkle) " " model " ")
+                                                                     #'drgnx-agent-panel-switch-model
+                                                                     'drgnx-agent-panel-chip "Switch the model")
+                                  " ")
+                        "")
+                      (if mode
+                          (concat (drgnx-agent-panel-composer--click (format " %s ▾ " mode) #'drgnx-agent-panel-switch-mode
+                                                                     'drgnx-agent-panel-chip "Switch the mode")
+                                  " ")
+                        "")
+                      (or pair "")
+                      (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width buttons) (drgnx-px 20))))))
+                      buttons)))
+    (concat (drgnx-agent-panel-composer--field) " " bar "\n")))
 
 ;;;; Completion in the composer
 
@@ -263,6 +320,8 @@ When the lock allows none, say why (the hub's reason)."
                                          "Change the queued note at point until it is sent")
                (agents-panel-drop-queued "Drop the Queued Note" drgnx-agent-panel-drop-queued
                                          "Take the queued note at point out of the queue")
+               (agents-panel-fork "Fork the Chat" drgnx-agent-panel-fork
+                                  "Start a second agent from the chat's last step (the composer's Fork)")
                (agents-panel-pair "Pair With the Agent" drgnx-agent-panel-pair "Pair mode, when it is available")
                (agents-panel-start "Start Another Agent Here" drgnx-agent-panel-start
                                    "Start an agent of a profile you choose in this session's folder")

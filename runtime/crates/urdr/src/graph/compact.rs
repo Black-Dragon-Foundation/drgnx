@@ -172,7 +172,7 @@ pub async fn run(
             .await?;
     }
     loop {
-        let rows = pool.with(foldable).await.map_err(read)??;
+        let rows = pool.with(|c| foldable(c)).await.map_err(read)??;
         if rows.is_empty() {
             break;
         }

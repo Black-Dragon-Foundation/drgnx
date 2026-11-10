@@ -913,8 +913,8 @@ sent the client."
   ;; 12 KB: longer than `so-long-threshold' (10000), under the test's :ask-above (16 KiB)
   (drgnx-large-files-test--door
     (should global-so-long-mode)
-    (dolist (m '(indent-bars-mode drgnx-blame-mode drgnx-sticky-mode diff-hl-margin-mode
-                                  display-line-numbers-mode diff-hl-mode))
+    (dolist (m '(indent-bars-mode drgnx-blame-mode drgnx-sticky-mode drgnx-hunks-mode
+                                  display-line-numbers-mode))
       (should (memq m so-long-minor-modes)))
     (let ((f (drgnx-large-files-test--file "long.js" 12000 t))
           ;; so-long acts when a buffer is first displayed; a buffer nobody shows acts at once

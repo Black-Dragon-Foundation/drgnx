@@ -23,6 +23,7 @@
 (require 'drgnx-timer)
 (require 'drgnx-view)
 (require 'drgnx-large-file)
+(require 'drgnx-icons)
 
 (defface drgnx-outline-group '((t :inherit shadow)) "A group of definitions (imenu submenu)." :group 'drgnx)
 
@@ -134,7 +135,9 @@ ORDINAL counts the earlier rows with that name and depth.  Fills `drgnx-outline-
 (defun drgnx-outline--render-row (key)
   "The text of KEY's row: a notice, a group or a definition, from the column of the section's title (2)."
   (if (eq (car-safe key) :notice)
-      (propertize (concat "  " (cadr key) "\n") 'face 'shadow)
+      ;; an empty state, not a row: the icon and the text in the muted colour, never selected
+      (propertize (concat "  " (drgnx-look-icon 'info 'drgnx-text-muted) " " (cadr key) "\n")
+                  'face 'drgnx-text-muted 'drgnx-row-inert t)
     (let* ((r (gethash key drgnx-outline--table))
            (text (concat (make-string (+ 2 (* 2 (nth 1 key))) ?\s) (drgnx-wb-display-name (car key)) "\n")))
       (if (and r (null (aref r 2))) (propertize text 'face 'drgnx-outline-group) text))))
@@ -169,6 +172,7 @@ Outline's point and window are not touched, except by the first draw of a new fi
   (when-let* ((buf (get-buffer drgnx-outline-buffer-name)))
     (with-current-buffer buf
       (mapc (lambda (o) (when (overlay-get o 'drgnx-outline-current) (delete-overlay o))) (overlays-in (point-min) (point-max)))
+      (when (and (zerop (length drgnx-outline--rows)) (not (drgnx-view-pending-p drgnx-view))) (drgnx-outline--quiet))
       (let ((reveal (and drgnx-outline--reveal (not (drgnx-view-pending-p drgnx-view)))))
         (when reveal (setq drgnx-outline--reveal nil))
         (when-let* ((window (get-buffer-window buf t)) ((buffer-live-p drgnx-outline--source))
@@ -192,6 +196,15 @@ Outline's point and window are not touched, except by the first draw of a new fi
           ;; one end per row: the selection's, when it is on this row (`drgnx-wb--tail-paint')
           (when (overlayp drgnx-wb--selected-overlay) (drgnx-wb-selection-sync))
           (when reveal (drgnx-outline--reveal-row window start)))))))
+
+(defun drgnx-outline--quiet ()
+  "An Outline without rows (its notice): no row stays selected, and the windows showing it are at its start, not
+scrolled sideways.  The selection of the rows it replaced would otherwise outlive them: an empty overlay whose fill
+stretches to the right edge before the notice, which pushes it off the window."
+  (save-excursion (goto-char (point-min)) (drgnx-wb-selection-sync))
+  (dolist (w (get-buffer-window-list (current-buffer) nil t))
+    (set-window-point w (point-min))
+    (set-window-hscroll w 0)))
 
 (defun drgnx-outline--reveal-row (window start)
   "Put WINDOW's point (and the buffer's) on the row at START; a row below the first screen gets a third of the

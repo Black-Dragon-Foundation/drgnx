@@ -33,6 +33,8 @@
 ;; and the echo area's box (its setting is declared when it loads)
 (unless (featurep 'drgnx-look-echo)
   (load (expand-file-name "drgnx-look-echo" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-look-bridge)
+  (load (expand-file-name "drgnx-look-bridge" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-look-variant "drgnx-theme-gen" (&optional frame))
 (declare-function drgnx-look-density-value "drgnx-look-density" (key &optional density))
 (defvar drgnx-look-density-changed-hook)
@@ -55,6 +57,7 @@
 (declare-function drgnx-decor-scale-off "drgnx-decor" ())
 (declare-function drgnx-decor-activate "drgnx-decor" ())
 (declare-function drgnx-look-echo-apply "drgnx-look-echo" ())
+(declare-function drgnx-look-bridge-on "drgnx-look-bridge" ())
 (declare-function drgnx-look-echo-off "drgnx-look-echo" ())
 (declare-function drgnx-look-echo-apply-frames "drgnx-look-echo" ())
 (defvar drgnx-look-echo--on)
@@ -87,15 +90,14 @@ High contrast has no shadow and a 1 px ring (the `child-frame-border' face, `drg
 
 (defun drgnx-look-palette-for (variant)
   "The floating command palette's child frame parameters in VARIANT, in logical pixels.
-High contrast is opaque, with no shadow and no blur, and a 2 px ring.  The others are 98 % opaque with no backdrop
-blur: the design's 90 % with a 16 px blur needs the blur in the picture, and on Nidhogg's line it is not there yet,
-so at 90 % the text behind would read through (`palette-float-hides-what-lies-behind')."
+High contrast is opaque, with no shadow and no blur, and a 2 px ring.  The others are frosted as the design is: 90 %
+opaque over a 16 px blur of what lies behind (`palette-float-hides-what-lies-behind')."
   (drgnx-look--float-motion
    (pcase variant
      ('hc '((corner-radius . 12) (alpha-background . 1.0) (child-frame-border-width . 2) (transition . pop)))
      (_ `((corner-radius . 12)
           (shadow . (:blur 48 :offset (0 . 16) :spread 0 :opacity ,(if (eq variant 'light) 0.22 0.50)))
-          (alpha-background . 0.98) (transition . pop))))))
+          (alpha-background . 0.90) (backdrop-blur . 16) (transition . pop))))))
 
 (defcustom drgnx-look-chrome (drgnx-look-chrome-for 'dark)
   "The chrome of popups (child frames) under Glitnir, in logical pixels: `child-frame-chrome' while ui/look is on.
@@ -604,6 +606,7 @@ only the one remap is reapplied."
                        (drgnx-module-define-key 'global-map [left-fringe down-mouse-1] #'drgnx-look-edge-drag)
                        (drgnx-look-cards-apply)
                        (drgnx-look-derive-on)
+                       (drgnx-look-bridge-on)             ; package faces onto the look's (Magit, diff-hl)
                        (drgnx-look-fonts-on)
                        (drgnx-look-density-on)
                        (drgnx-look-scale-on)

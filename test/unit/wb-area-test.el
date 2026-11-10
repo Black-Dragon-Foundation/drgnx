@@ -287,3 +287,26 @@
    (let ((row (window-parameter (drgnx-wb-area-show 'panel 'help) 'header-line-format)))
      (should (stringp row))
      (should (eq (get-text-property (1- (length row)) 'drgnx-area row) 'panel)))))
+
+(ert-deftest drgnx-area/the-right-area-has-no-tab-row-for-one-tab ()
+  "agent-panel.html: the right area's tab row shows only while two of its tabs have content, so a lone pane's own
+header is the area's top row; showing a tab with nothing (its placeholder) keeps the row to switch back.  The bottom
+panel always has its row."
+  (drgnx-area-test--with
+   (drgnx-wb-define-tab 'right 'area-test-a :title "A")
+   (drgnx-wb-define-tab 'right 'area-test-b :title "B")
+   (unwind-protect
+       (let ((a (get-buffer-create "*notes*")) (b (get-buffer-create " area-test b")))
+         (unwind-protect
+             (progn
+               (let ((w (drgnx-wb-area-show 'right 'area-test-a a)))
+                 (should (eq 'none (window-parameter w 'header-line-format))))
+               (let ((row (window-parameter (drgnx-wb-area-show 'right 'area-test-b) 'header-line-format)))
+                 (should (stringp row))
+                 (should (string-search " A " row)))
+               (let ((row (window-parameter (drgnx-wb-area-show 'right 'area-test-b b) 'header-line-format)))
+                 (should (and (stringp row) (string-search " A " row) (string-search " B " row))))
+               (should (stringp (window-parameter (drgnx-wb-area-show 'panel 'output) 'header-line-format))))
+           (kill-buffer b)))
+     (drgnx-wb-undefine-tab 'right 'area-test-a)
+     (drgnx-wb-undefine-tab 'right 'area-test-b))))

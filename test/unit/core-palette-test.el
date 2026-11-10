@@ -110,13 +110,14 @@
   ;; a frame of Nidhogg's Wayland shell counts device pixels: 640 logical at scale 2 are 1280 of them
   ;; `dlet': `features' is not special, so a `let' of it would be lexical here and change nothing
   (dlet ((features (cons 'nidhogg-wayland features)))
-    (should (equal (drgnx-test--palette-placed 3000) '(1280 240)))
-    (should (equal (drgnx-test--palette-placed 1000) '(936 240)))
+    ;; the input row and 10 rows of 20 px, then 6 + 30 logical pixels of gap and footer
+    (should (equal (drgnx-test--palette-placed 3000) '(1280 292)))
+    (should (equal (drgnx-test--palette-placed 1000) '(936 292)))
     (cl-letf (((symbol-function 'frame-scale-factor) (lambda (_) 2.0)))
       (should (= 16 (alist-get 'internal-border-width (drgnx-palette-frame--params 'parent))))))
   ;; elsewhere a frame counts logical pixels already
   (dlet ((features (remq 'nidhogg-wayland features)))
-    (should (equal (drgnx-test--palette-placed 3000) '(640 240)))
+    (should (equal (drgnx-test--palette-placed 3000) '(640 256)))
     (should (= 8 (alist-get 'internal-border-width (drgnx-palette-frame--params 'parent))))))
 
 (ert-deftest core-palette-float-stays-for-a-minibuffer-on-top ()
@@ -213,3 +214,60 @@ asks an agent with that text."
 (ert-deftest drgnx-palette/no-agents-row-without-the-command ()
   (drgnx-test--palette-in-project
     (should-not (drgnx-palette-ask-label "run te"))))
+
+(ert-deftest drgnx-palette/groups-in-the-mockups-order ()
+  "palette.html's groups: Commands, then Files, then Agents.  The ask row is the fallback: last, never first while a
+command or a file matches; recent commands still lead their group."
+  (drgnx-test--palette-in-project
+    (drgnx-command-define 'agents-ask :title "Ask an Agent…" :category "Agents" :command #'ignore)
+    (drgnx-command-define 'run-file :title "Run Tests in This File" :category "Tests" :command #'ignore)
+    (drgnx-command-define 'rerun :title "Rerun Last Tests" :category "Tests" :command #'ignore)
+    (let* ((cands (drgnx-palette-candidates))
+           (files (drgnx-palette-files))
+           (drgnx-palette--file-rows (drgnx-palette--file-table files))
+           (drgnx-palette--history (list (list 'rerun (floor (float-time)))))
+           (ask (drgnx-palette-ask-label "run te"))
+           (labels (list ask "File: test/unit/gateway-test.el" "Tests: Run Tests in This File"
+                         "Tests: Rerun Last Tests"))
+           (sorted (drgnx-palette-sort labels cands)))
+      (should (equal (mapcar #'drgnx-palette-group sorted) '("Commands" "Commands" "Files" "Agents")))
+      (should (equal (car sorted) "Tests: Rerun Last Tests"))
+      (should (equal (car (last sorted)) ask)))))
+
+(require 'drgnx-palette-frame)
+
+;; The coordinator's ruling: once the user types, match quality first, recency for near-ties
+(ert-deftest drgnx-palette/typed-text-ranks-by-match-then-recency ()
+  "With text typed, how well a row matches ranks first (word starts, the words in order) and a recent run only
+breaks near-ties, as in VS Code: \"run te\" gives palette.html's order with Rerun run 2 minutes ago.  With nothing
+typed, recent first."
+  (drgnx-test--palette-in-project
+    (pcase-dolist (`(,id ,title ,cat) '((run-file "Run Tests in This File" "Tests") (run-point "Run Test at Point" "Tests")
+                                        (rerun "Rerun Last Tests" "Tests") (run-term "Run in Terminal…" "Terminal")
+                                        (rotate "Rotate Cloud CA" "Runners")))
+      (drgnx-command-define id :title title :category cat :command #'ignore))
+    (let* ((cands (drgnx-palette-candidates))
+           (drgnx-palette--history (list (list 'rerun (- (floor (float-time)) 125))))
+           (labels (list "Runners: Rotate Cloud CA" "Terminal: Run in Terminal…" "Tests: Rerun Last Tests"
+                         "Tests: Run Tests in This File" "Tests: Run Test at Point")))
+      (should (equal (drgnx-palette-sort labels cands nil "run te")
+                     '("Tests: Run Tests in This File" "Tests: Run Test at Point" "Tests: Rerun Last Tests"
+                       "Terminal: Run in Terminal…" "Runners: Rotate Cloud CA")))
+      (should (equal (car (drgnx-palette-sort labels cands nil "")) "Tests: Rerun Last Tests"))
+      ;; a recent row that matches clearly worse stays below the better matches
+      (let ((in (drgnx-palette-sort labels cands nil "run in")))
+        (should (equal (car in) "Terminal: Run in Terminal…"))
+        (should (< (seq-position in "Tests: Run Tests in This File") (seq-position in "Tests: Rerun Last Tests")))))))
+
+(ert-deftest drgnx-palette/the-hint-and-the-footer-name-every-key ()
+  "palette.html's input row ends \"Commands · # code · @ agents\" (the last when an agent can be asked); its footer
+names move, run, preview and close."
+  (drgnx-test--palette-in-project
+    (with-temp-buffer
+      (should-not (string-search "agents" (substring-no-properties (drgnx-palette-frame--hint))))
+      (drgnx-command-define 'agents-ask :title "Ask an Agent…" :category "Agents" :command #'ignore)
+      (let ((hint (substring-no-properties (drgnx-palette-frame--hint))))
+        (should (string-search "code" hint))
+        (should (string-search "agents" hint)))
+      (let ((foot (substring-no-properties (drgnx-palette-frame--footer))))
+        (dolist (w '("move" "run" "preview" "close")) (should (string-search w foot)))))))

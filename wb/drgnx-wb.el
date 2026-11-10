@@ -374,11 +374,31 @@ and its own back after."
   "Non-nil when the current buffer's window is the selected window."
   (let ((window (get-buffer-window (current-buffer)))) (and window (eq window (selected-window)))))
 
+(defvar-local drgnx-wb-selection-unfocused nil
+  "Non-nil in the dock buffer whose selected row shows while another window has focus: the Explorer's, which follows
+the current buffer.  The sidebar shows one selected row (window-dark.html); the others show theirs only with focus.")
+
 (defun drgnx-wb-selection-sync ()
   "Mark point's row as the selected one (`drgnx-wb-row-face'): the selection with the focus ring while this
-buffer's window is the selected window, the inactive selection otherwise.  The fill covers the row's text, its tail
-\(drawn again in the face) or, on a row with none, a stretch to the right edge.  Cheap: three overlays at most are
-touched."
+buffer's window is the selected window, the inactive selection otherwise, and that only in the buffer that keeps it
+\(`drgnx-wb-selection-unfocused').  The fill covers the row's text, its tail (drawn again in the face) or, on a row
+with none, a stretch to the right edge.  Cheap: three overlays at most are touched.  A line marked `drgnx-row-inert'
+\(an empty state) is text, not a row: nothing is selected on it."
+  (if (or (get-text-property (pos-bol) 'drgnx-row-inert)
+          (not (or drgnx-wb-selection-unfocused (drgnx-wb--focused-p))))
+      (drgnx-wb--selection-off)
+    (drgnx-wb--selection-on)))
+
+(defun drgnx-wb--selection-off ()
+  "No row is selected: point is on an empty state (`drgnx-row-inert'), which is text, not a row, or the buffer shows
+no selection without focus."
+  (dolist (o (list drgnx-wb--selected-overlay drgnx-wb--selected-newline))
+    (when (overlayp o) (delete-overlay o)))
+  (drgnx-wb--tail-paint drgnx-wb--selected-tail nil)
+  (setq drgnx-wb--selected-tail nil))
+
+(defun drgnx-wb--selection-on ()
+  "`drgnx-wb-selection-sync' on a row."
   (let* ((beg (pos-bol)) (end (pos-eol)) (entry (drgnx-wb--row-faces-entry (drgnx-wb--focused-p)))
          (face (cadr entry)) (tail nil))
     (unless (overlayp drgnx-wb--selected-overlay)
@@ -653,6 +673,12 @@ The width is noted `:by auto' (`drgnx-state-note-intent'): a width you chose is 
   (when-let* ((windows (drgnx-wb--dock-windows)))
     (drgnx-state-note-intent nil :sizes 'left (window-pixel-width (car windows)) :by 'auto)
     (when (memq (selected-window) windows) (drgnx-wb-focus-editor))
+    (drgnx-wb--delete-dock windows)))
+
+(defun drgnx-wb--delete-dock (windows)
+  "Delete the dock's WINDOWS.  Their width goes to the editor groups in proportion to their widths, as showing the
+dock takes it back, so a hide and a show leave each group as wide as it was."
+  (let ((window-combination-resize t))
     (dolist (w windows) (when (window-live-p w) (delete-window w)))))
 
 (defvar drgnx-wb-view-providers nil
@@ -672,7 +698,7 @@ sidebar is shown first.  A view with no sections is a `user-error' and changes n
       (when-let* ((windows (drgnx-wb--dock-windows)))
         (drgnx-state-note-intent nil :sizes 'left (window-pixel-width (car windows)) :by 'auto)
         (when in-dock (drgnx-wb-focus-editor))
-        (dolist (w windows) (when (window-live-p w) (delete-window w))))
+        (drgnx-wb--delete-dock windows))
       (drgnx-state-note-intent nil :view nil view)            ; who asked: the running write's, or the default
       (drgnx-wb-show-sidebar)
       (when-let* ((_ in-dock) (w (car (drgnx-wb--dock-windows))))

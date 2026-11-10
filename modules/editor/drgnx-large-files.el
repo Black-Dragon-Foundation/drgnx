@@ -525,7 +525,7 @@ Chunk buffers stay, without the header.  The status bar's segment and its place 
         ('chunks (with-current-buffer b (drgnx-large-files--header-clear)))))
     (when any (message "Large files off: lean buffers keep their mode until you revert them"))))
 
-(defconst drgnx-large-files--sweep-modes '(indent-bars-mode drgnx-blame-mode drgnx-sticky-mode diff-hl-margin-mode)
+(defconst drgnx-large-files--sweep-modes '(indent-bars-mode drgnx-blame-mode drgnx-sticky-mode drgnx-hunks-mode)
   "The expensive modes so-long's `so-long-minor-modes' lacks: the module adds them, so lean and so-long share one list.")
 
 ;;;; The module

@@ -24,7 +24,7 @@ setup.
   inherits standard faces looks right with no work of its own.
 - **Controls.** Buttons (`drgnx-control`: the quiet selection's fill in a 1 px ring of the border colour, radius 6;
   `drgnx-control-primary`: the accent's fill) and keycaps (`drgnx-keycap`: subtle text in a 1 px ring of the strong
-  border, radius 4). A ring's colour cannot be inherited, so the theme gives it; chips need none (a tint with room
+  border, radius 4, as tall as its text even on a taller list row where Nidhogg's compositor draws boxes `:fit text`). A ring's colour cannot be inherited, so the theme gives it; chips need none (a tint with room
   inside it), except in high contrast, which has no tints: there a chip is ringed in its own text colour, with the
   same room. Hairlines come in three strengths: `drgnx-border-subtle` (under the tab row), `drgnx-border` (cards,
   dividers) and `drgnx-border-strong` (inputs, popups). See [face.md](face.md#faces).
@@ -36,6 +36,27 @@ setup.
   inside the characters, so selecting or searching never moves text or changes a line's height. Rounding needs
   Nidhogg's compositor; elsewhere the runs are square.
 - **Native title strip.** `nidhogg-title-bar` and `nidhogg-title-bar-inactive` follow the theme.
+- **Shell scripts.** A here-document is in the string colour (sh-script's own is bold yellow), a command substitution
+  in the function colour.
+- **Problems at a line's end.** A diagnostic flymake shows after the line (`drgnx-face-inline-problems`) is a chip of
+  its kind: the error, warning or note colour on its tint, in the caption size, as tall as the text. High contrast
+  rings it instead. The chips of the look come in six kinds: `drgnx-chip-quiet`, `-accent`, `-attention`, `-ok`,
+  `-warn` and `-error`.
+
+### Packages
+
+Packages whose faces do not inherit standard ones are given the look by ui/look (the theme bridge): only their faces'
+default specs change, so a theme that styles the package itself still wins, and turning ui/look off gives the package
+its own back. A package that loads later gets them when it loads.
+
+- **Magit.** Section headings in the UI heading role (not gold), the current section in the hover colour, hunk
+  headers muted on the quiet selection, diff lines on the diff tints, hashes and dates subtle. Branches and tags are
+  chips as tall as the text: a local branch in the accent, a remote one in ok, a tag in warn.
+- **The change gutter** (`extra/hunks`, not a package): a solid 3 px bar beside each added line (ok) and changed line (info), and a short mark where lines were deleted (error), in the status colours.
+- **Org** (module `org/org`). Headings in the UI font, 17 px at level 1 and 14.5 px at level 2 (over the editor's
+  13.5), weight 600, on Org's own `org-level-*` faces, so the headings of `outline-minor-mode` in code keep the text's
+  height. TODO is an attention chip, DONE an ok chip; source blocks are flat panels with their begin and end lines
+  subtle; tables are muted; links are in the accent.
 
 ### The three variants
 
@@ -299,7 +320,7 @@ rounded and shadowed, with values per variant:
 | | Dark | Light | High Contrast |
 |---|---|---|---|
 | Popups | radius 8, shadow blur 16 down 6, opacity 0.35 | the same at 0.14 | no shadow, a 1 px `drgnx-border-strong` ring |
-| Palette | radius 12, shadow blur 48 down 16 at 0.50, 98 % opaque, no blur (90 % with a blur once Glitnir's blur shows) | shadow 0.22 | opaque, no shadow, no blur, a 2 px ring |
+| Palette | radius 12, shadow blur 48 down 16 at 0.50, 90 % opaque over a 16 px blur of what lies behind | shadow 0.22 | opaque, no shadow, no blur, a 2 px ring |
 
 The values follow the theme when it changes. `drgnx-look-chrome` and `drgnx-look-palette` hold them as frame
 parameter lists; a value you set (Customize or `settings.el`) stands in every variant. In the popup lane, descriptions
@@ -317,7 +338,9 @@ A graphical frame has no echo row at the bottom (`drgnx-look-echo-row`, a settin
 something asks, a box shows top-centre in the frame, as wide as the palette and in its look: a minibuffer
 (`find-file`, `yes-or-no-p`, a password), a question read a key at a time (`y-or-n-p`, `read-key`, `read-char`,
 `query-replace`'s), and the prompts Emacs's own commands show (`interactive` "c" and "k"; Nidhogg says which echo
-messages are prompts with `nidhogg-echo-prompt`). The box hides once the prompt is answered. Messages show in the
+messages are prompts with `nidhogg-echo-prompt`). The box hides once the prompt is answered. The floating command
+palette is a prompt of its own: while it is open the box stays hidden, and a question asked on top of it shows in the
+box. Messages show in the
 status bar for `drgnx-look-echo-status-seconds` (5) or until the next one, a command's error in the error face, and
 so do the keys of a prefix (`C-x-`); clicking the message opens `*Messages*`, which still logs them all.
 

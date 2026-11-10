@@ -68,6 +68,12 @@ subtle does not (3.8:1 on the dark selection, 4.3 on the light); in high contras
   "A chip of what waits for you, on the attention tint." :group 'drgnx-look)
 (defface drgnx-chip-accent '((t :inherit (drgnx-accent drgnx-selected-quiet)))
   "A chip in the accent, on its tint: the agents at work, a mode." :group 'drgnx-look)
+(defface drgnx-chip-ok '((t :inherit (success drgnx-selected-quiet)))
+  "A chip of something fine, on the ok tint: a remote branch, DONE." :group 'drgnx-look)
+(defface drgnx-chip-warn '((t :inherit (warning drgnx-selected-quiet)))
+  "A chip to look at, on the warn tint: a tag, a warning." :group 'drgnx-look)
+(defface drgnx-chip-error '((t :inherit (error drgnx-selected-quiet)))
+  "A chip of something wrong, on the error tint: an error." :group 'drgnx-look)
 
 ;;;; Controls (design §3.5): a button and a keycap.  Their rings take colours, so the themes give them (a box's
 ;;;; colour is not inherited); here they are the standard faces' fill and a ring in the text colour.
@@ -77,6 +83,13 @@ subtle does not (3.8:1 on the dark selection, 4.3 on the light); in high contras
   :group 'drgnx-look)
 (defface drgnx-control-primary '((t :inherit region :box (:line-width (1 . 1))))
   "The primary button of a group: on-accent text on the accent's fill." :group 'drgnx-look)
+
+(defface drgnx-pill '((t :inherit drgnx-ui-caption :box (:line-width (1 . 1))))
+  "A toggle pill (agent-panel.html `.disc .t'): subtle text in a ring of the border colour (the themes give it), radius
+9 (half its 18 px) where the compositor rounds." :group 'drgnx-look)
+(defface drgnx-pill-on '((t :inherit drgnx-ui-caption :box (:line-width (1 . 1))))
+  "A toggle pill that is on (`.disc .t.open'): the text colour on the quiet selection, in the same ring."
+  :group 'drgnx-look)
 
 ;;;; Agents
 

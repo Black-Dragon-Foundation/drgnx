@@ -11,6 +11,10 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'subr-x)
+(require 'drgnx-palette)                ; the palette scene's commands and history
+(declare-function drgnx-pane-show "drgnx-panes")
+(declare-function drgnx-panel-replay--wait "panel-replay-fixture")
+(declare-function drgnx-agent-panel-cards--permissions "drgnx-agent-panel-cards")
 
 (declare-function drgnx-uitest--json "drgnx-uitest")
 (declare-function drgnx-trust-folder "drgnx-trust")
@@ -198,6 +202,8 @@ changed to hide a gap: the gap is named here instead.")
   (when (and elpa (file-directory-p elpa))
     (drgnx-look-scene--try "packages"
       (require 'package)
+      ;; packages another Emacs build compiled (the desktop's pinned ELPA is from 30.2) must not meet this Emacs's JIT
+      (drgnx-pkg-jit-guard elpa)
       (setq package-directory-list (list elpa))
       (package-initialize)
       ;; `package-initialize' leaves vertico and orderless off the path from a read-only directory list
@@ -262,12 +268,19 @@ from 201."
       (setq drgnx-panel-replay-prefix 3)
       (defalias 'drgnx-panel-replay-program
         (lambda ()
+          ;; the mockup's figures: a slow run (past `drgnx-agent-panel-slow-seconds'), a quick one, then a read
+          ;; that asks and stays open, so the permission card shows.  The replay session is a chat: the matrix
+          ;; answers a chat's edit or run Never (no card), and asks for its reads
           (concat "tool:read src/main.el\\nsay Reading the gateway: replies to a closed client are lost.\\n"
-                  "tool:exec echo 1 of 14 failed\\nsay 1 of 14 failed: gateway/reply-after-close.\\n"
+                  "tool:run sleep 11; echo 1 of 14 failed\\nsay 1 of 14 failed: gateway/reply-after-close.\\n"
                   "tool:edit src/main.el\\nsay Queue the reply when the client went away.\\n"
-                  "tool:exec echo 9 of 14 passed\\n"
-                  "ask:permission execute\nsay done")))
-      (setq drgnx-look-scene--panel (drgnx-panel-replay-up bin))))
+                  "tool:run sleep 2; echo 9 of 14 passed\\n"
+                  "ask:tool {\"kind\": \"read\", \"title\": \"Read the gateway's log\"}\nsay done")))
+      (setq drgnx-look-scene--panel (drgnx-panel-replay-up bin))
+      ;; the turn runs on past the prefix to its ask: the scene shows every step's time and the open card
+      (unless (drgnx-panel-replay--wait 30 (lambda () (with-current-buffer drgnx-look-scene--panel
+                                                        (drgnx-agent-panel-cards--permissions))))
+        (push "agent: no permission card within 30 s" drgnx-look-scene--errors))))
   (drgnx-look-scene--answer :panel (if (buffer-live-p drgnx-look-scene--panel) (buffer-name drgnx-look-scene--panel) :null)))
 
 (defun drgnx-look-scene--editor ()
@@ -286,15 +299,34 @@ from 201."
     (unless (buffer-live-p drgnx-look-scene--panel) (error "No agent panel (the mock agent did not run)"))
     (if-let* ((w (get-buffer-window drgnx-look-scene--panel)))
         (select-window w)
-      ;; where the line puts it today: a tab of the editor (the limit says so)
-      (drgnx-wb-focus-editor)
-      (drgnx-look-scene--show drgnx-look-scene--panel)))
+      ;; an earlier scene put the editor back: the panel opens again where opening it puts it, the right island
+      (drgnx-pane-show 'agent-panel :buffer drgnx-look-scene--panel :select t)))
   (drgnx-look-scene--answer))
 
+(defun drgnx-look-scene--palette-commands ()
+  "palette.html's commands for \"run te\": the test runner's three and the terminal's, with the mockup's keys, first in
+the registry as the mockup lists them; Rerun Last Tests was run 2 minutes ago.  drgnx has no test runner commands of
+its own yet, so the scene registers stand-ins that do nothing."
+  (drgnx-look-scene--try "palette commands"
+    (pcase-dolist (`(,id ,title ,category ,key)
+                   '((look-scene-run-file "Run Tests in This File" "Tests" "C-; f")
+                     (look-scene-run-at-point "Run Test at Point" "Tests" "C-; t")
+                     (look-scene-rerun "Rerun Last Tests" "Tests" "C-; r")
+                     (look-scene-run-in-terminal "Run in Terminal…" "Terminal" nil)))
+      (drgnx-command-define id :title title :category category :command #'ignore)
+      (when key (setf (drgnx-cmd-bound (drgnx-commands-get id)) (list (cons key nil)))))
+    (let ((ids '(look-scene-run-file look-scene-run-at-point look-scene-rerun look-scene-run-in-terminal)))
+      (setq drgnx-commands--order (append ids (seq-difference drgnx-commands--order ids))))
+    (drgnx-palette--history)
+    (setq drgnx-palette--history (cons (list 'look-scene-rerun (- (floor (float-time)) 125))
+                                       (assq-delete-all 'look-scene-rerun drgnx-palette--history)))))
+
 (defun drgnx-look-scene-palette ()
-  "The editor focused; the session's own keys open the palette (`drgnx ui look-scenes' types them)."
+  "The editor focused, the mockup's commands registered; the session's own keys open the palette (`drgnx ui
+look-scenes' types them)."
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--editor)
+  (drgnx-look-scene--palette-commands)
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-window-light ()

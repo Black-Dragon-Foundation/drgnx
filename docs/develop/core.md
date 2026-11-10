@@ -2130,7 +2130,8 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   a held key's notices on the test clock, the clear notice, the hook on a move only, the broken view; `test/unit/work-trail-nav-test.el`: a 2,000-step trail
   paging at its edge with a held key).
 - **The Explorer on the rows path** (`drgnx-explorer-rows-attach VIEW CLASS`): the hub lists the roots and the open
-  folders (`explorer/subscribe`, hub.md) and its jit-lock painting is off. Next and previous follow `down` and `up`,
+  folders (`explorer/subscribe`, hub.md, asked on the subscribed connection `drgnx-hub--events`, where its env went) and its
+  jit-lock painting is off. Next and previous follow `down` and `up`,
   expand on an open folder follows `right` and collapse on anything but an open folder `left`; opening or closing a
   folder changes `drgnx-explorer--expanded` and asks the hub again without waiting; typing is Sjá's `prefix` over the
   visible siblings; a row's node (`drgnx-explorer-node-at`) is the path over it, so the file commands work as before.
@@ -3017,7 +3018,7 @@ Agents' `fs/read_text_file` serves an open buffer only when it is not a large fi
 
 The producers that check it today: sticky scroll (`drgnx-sticky--maybe`), indent guides (`drgnx-guides--maybe`),
 inline blame (`drgnx-blame--maybe`), lang's language server (`drgnx-lang--maybe-eglot`), the gutter's changes
-(`extra/hunks` advises `diff-hl--global-turn-on`, `:before-while`, so diff-hl's global mode skips the buffer), the
+(`extra/hunks`: `drgnx-hunks--maybe` does not turn its mode on for the buffer), the
 Outline dock (`drgnx-outline--index`: "This file is too large for an outline", also for a small chunk buffer) and
 the status bar (`position` shows `Col N` without the line number, `indent` shows nothing, and the memo's key reads
 `tab-width` instead of scanning the first lines). **A new producer that reads or scans the buffer checks the flag
@@ -3067,7 +3068,7 @@ revisit the file normally, a timer's open included.
 that stays large across a revert gets no parser either. The sweep, in `find-file-hook` at depth -90, turns the mode on
 for a large file, or for a buffer whose text is above `:ask-above` (a compressed file that expands), never for a
 chunk buffer. The mode turns
-off every mode of `so-long-minor-modes` that is on (the module adds indent-bars, blame, sticky and diff-hl's margin
+off every mode of `so-long-minor-modes` that is on (the module adds indent-bars, blame, sticky and the change marks'
 mode to that one list), deletes the buffer's tree-sitter parsers and ends eglot's management (a buffer that turns
 lean on a revert kept them: auto-revert keeps the modes), then undo and auto-save. A raw visit (`find-file-noselect` with RAWFILE) runs no
 `find-file-hook`, so the door runs the sweep itself. A major mode changed by hand (`M-x text-mode`) resets the

@@ -873,6 +873,10 @@ impl State {
                             Some(id),
                         )),
                     );
+                    // the entry names its step (the step table's seq), so the panel shows the step's time and cost
+                    if let Some(c) = &self.cur {
+                        self.entries[idx].rest.insert("step".into(), json!(c.key));
+                    }
                     // a call of a tool that records a conclusion: its step is that conclusion's
                     let name = self
                         .tool_meta
@@ -2745,6 +2749,20 @@ pub(crate) enum Again {
     },
 }
 
+/// The seq of session SID's last step in the step table, 0 when it has none (or the table cannot be read).
+async fn last_step(db: &norn::store::CoordDb, sid: &str) -> i64 {
+    let key = format!("session:{sid}");
+    db.read(move |c| {
+        Ok(c.query_row(
+            "select coalesce(max(seq), 0) from step where session = ?1",
+            [&key],
+            |r| r.get(0),
+        )?)
+    })
+    .await
+    .unwrap_or(0)
+}
+
 /// ROW's session running again as AGAIN says, under its own id, row, transcript and queue: the level a fork landed at
 /// (none for any other way back), or why it is not running.  The row's conversation is written only once the launch
 /// has landed, so a launch that fails leaves the row as it was, resumable.
@@ -2904,9 +2922,12 @@ pub(crate) async fn relaunch(
     let (queue, paused) = match &s.store {
         Some(store) => {
             let entries = store.load(&sid);
+            // its steps go on from its last in the step table: an entry's `step` is that table's seq
+            let last = last_step(&front.writer.db, &sid).await;
             let mut st = lock(&s.state);
             st.flushed = entries.len();
             st.entries = entries;
+            st.steps_begun = st.steps_begun.max(last);
             drop(st);
             store.load_queue(&sid)
         }
@@ -6789,6 +6810,24 @@ mod tests {
     }
 
     #[test]
+    fn a_tool_entry_names_its_step() {
+        // the panel reads a step's time and cost through the entry's `step` (the step table's seq: the session's
+        // next, as `steps_begun` counts)
+        let mut st = State::new();
+        st.step_begin(StepClass::Think, None);
+        st.apply(&upd(
+            json!({"sessionUpdate": "tool_call", "toolCallId": "t1",
+            "title": "Read x", "kind": "read", "status": "pending"}),
+        ));
+        st.apply(&upd(
+            json!({"sessionUpdate": "tool_call", "toolCallId": "t2",
+            "title": "Read y", "kind": "read", "status": "pending"}),
+        ));
+        assert_eq!(st.entries[0].rest["step"], json!(2));
+        assert_eq!(st.entries[1].rest["step"], json!(3));
+    }
+
+    #[test]
     fn a_turn_is_think_tool_think_and_a_wait_is_split_out() {
         let mut st = State::new();
         st.step_begin(StepClass::Think, None);
@@ -7507,6 +7546,14 @@ mod tests {
             .output()
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "a.txt");
+    }
+
+    #[tokio::test]
+    async fn a_resumed_session_s_steps_go_on_from_its_last() {
+        let dir = tempfile::tempdir().unwrap();
+        let (writer, steps, _) = written_turn(dir.path()).await;
+        assert_eq!(last_step(&writer.db, "a1").await, steps.len() as i64);
+        assert_eq!(last_step(&writer.db, "none").await, 0);
     }
 
     #[tokio::test]

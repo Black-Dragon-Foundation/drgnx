@@ -694,18 +694,16 @@ act through `drgnx-work-lens-nav` (buffer-local): a view that is not the map set
 `drgnx-work-map--move` and its siblings call it first. The selection always lives in the map buffer
 (`drgnx-work-lens--map` names it from the other views); `drgnx-work-lens-switch` carries it across.
 
-`modules/tools/drgnx-work-board.el` is the Board: a `work-board` view (rows `(:head)` and `(:cards I)`, three lines a
-card, the bar a 4 px `display` space). Its tasks come from `tasks/find` (every task, up to four pages) or `plans/get`
-(a plan's tasks with their steps, for the progress bar), asked again 0.3 s after the map's frame changes
-(`drgnx-timer-soon` keyed `(work-board . VIEW)`). `drgnx-work-board-column` is the Lisp copy of
-`norn::tracker::board_column` (a test pins every status). `drgnx-work-board-for-selection` and
-`drgnx-work-board-to-selection` are the design's table 8.2, pure functions of the cached frame and the cards; an agent
-works on a card when its `task` field names the card's id.
-
-On the rows path (the map is a hub-fed view `VIEW`) the Board is the hub-fed view `VIEW/board` in the map's class:
-`drgnx-work-board-refresh` asks `work/board/subscribe {view, map, plans}` instead of the tasks (docs/develop/hub.md,
-"The Board"), and the hub sends its model and rows. Its keys answer from its own model (`drgnx-work-board--rows-nav`:
-the `board` form's links, `team` for the agent keys, the card's `agent` field to open). Its selection is its own: it
+`modules/tools/drgnx-work-board.el` is the Board, drawn only from the hub's rows. Beside a map that is a hub-fed view
+`VIEW` it is the hub-fed view `VIEW/board` in the map's class: `drgnx-work-board-refresh` asks
+`work/board/subscribe {view, map, plans}` (docs/develop/hub.md, "The Board") on the subscribed connection, as the map does
+(`drgnx-work-client--call`: the hub sends a view's rows to the connection that asked and finds the map there), again 0.3 s after the map's frame
+changes (`drgnx-timer-soon` keyed `(work-board . VIEW)`), and the hub sends its model and rows (the columns, three rows
+a card, the bar a row `spaces` entry). `drgnx-work-board-plans-for` is the design's table 8.2 from the map to the
+Board: a plan, spec or ask scopes it to its plans. Beside a map that is not on the rows path (no Sjá, or
+`drgnx-view-old-path`) the Board says so and draws nothing; its old Lisp drawing went in plan sja-complete B2. Its keys
+answer from its own model (`drgnx-work-board--nav`: the `board` form's links, `team` for the agent keys, the card's
+`agent` field to open). Its selection is its own: it
 neither follows the map's nor moves it, and switching back to the map selects nothing there (a decision of 2026-11-08:
 the map's model holds no tracker tasks, so the Board is not an instance in the map's selection group).
 

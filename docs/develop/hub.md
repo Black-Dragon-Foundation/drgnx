@@ -1390,7 +1390,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, sid?: SessionId, task?: TaskRef}` | `{openrouter?: any, socket?: string, token: string, url?: string}` | no |
 | `gateway/set-budget` | user | `{budget: Usd, job: Id}` | `boolean` | no |
 | `gateway/unregister` | user | `{token: string}` | `boolean` | no |
+| `git/blame` | user | `{path: string, worktree_root: string}` | `{agents: [AgentLines], commits: [BlameCommit], head?: string, lines: [natnum]}` | no |
 | `git/letters` | user | `{root: AbsPath, shown?: [string], view: string}` | `boolean` | no |
+| `git/stage-hunk` | user | `{new_start: integer, path: string, worktree_root: string}` | `{staged: boolean}` | yes |
 | `graph/backup` | user | `{}` | `BackupAnswer` | no |
 | `graph/compact` | user | `{dry_run?: boolean}` | `{dry_run: boolean, link_stats: natnum, versions: natnum}` | yes |
 | `graph/entity` | user | `{as_of?: natnum, id: string, include?: ["links" \| "notes" \| "history"]}` | `EntityAnswer` | no |
@@ -1416,6 +1418,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
 | `history/fork/drop` | user | `{id: string}` | `{ok: boolean}` | yes |
 | `history/hunks` | user | `{branch: string, since: integer}` | `{files: [FileHunks]}` | no |
+| `history/hunks/head` | user | `{path: string, worktree_root: string}` | `{hunks: [HeadHunk], tracked: boolean}` | no |
 | `history/op/hunks` | user | `{op?: integer, session?: string, worktree: string}` | `{hunks: [OpHunk]}` | no |
 | `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
@@ -2147,7 +2150,10 @@ rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display 
   each card naming the agent of the connection's map view `map` that works on it (the agent whose task title is the
   card's). It is read again after each write like a trail; `work/trail/close` ends it. Rows: `head` (each column's
   heading and count at a sixth of the width, at least 120 px), then `cards:I:0` (the titles at height I) and
-  `cards:I:1` (state · agent · steps done), or `none`. Its model is its own, not the map's: a `card` node per task
+  `cards:I:1` (state · agent · steps done) and `cards:I:2` (the progress bar: on a GUI two `spaces` 4 px high from
+  4 px in, the steps done in `drgnx-work-bar` and the rest in `drgnx-work-bar-rest`, together the column less 16 px,
+  in device px at the env's `scale`, rounded half up as `drgnx-px` does; on a terminal the card's text width of `▰`
+  and `▱` in those faces), or `none`. Its model is its own, not the map's: a `card` node per task
   (fields `label status column plan agent agent-label`) whose links are the `board` form's (`navs.board`: up and down
   in its column, left and right to the nearest column with cards, at the same height or its last card), lists
   `cards` (column by column) and `team` (the cards an agent works on).
@@ -2190,9 +2196,10 @@ its builder, the fitter and the SVG writer are in the crate `drgnx-rows` (no I/O
 it builds for Android too).
 
 - **A row** `{key, text, runs: [[start, end, face]], props: [[start, end, name, value]], stops: [[pos, px]], images:
-  [[pos, image_id, alt]], height: {lines, unit}?}`. `face` is a registered drgnx face name (Lisp drops one it does
+  [[pos, image_id, alt]], spaces: [[pos, width, height]], height: {lines, unit}?}`. `face` is a registered drgnx face name (Lisp drops one it does
   not know and never interns it); a stop is one placeholder character at POS, displayed as the space up to PX
-  (`(space :align-to (PX))`); an image takes one placeholder character too. Empty lists are left out. Runs may
+  (`(space :align-to (PX))`); an image takes one placeholder character too, and so does a space, shown as WIDTH x
+  HEIGHT device px (`(space :width (W) :height (H))`, a card's progress bar) in its run's face. Empty lists are left out. Runs may
   overlap: the editor adds them in order, each below those before it (a card's box face under its text's faces).
 - **Positions** are Unicode scalar indices into `text`, which is what Lisp's string indices are after
   `json-parse-string`; never bytes or UTF-16 units. `RowBuilder` counts them and merges adjacent runs of one face.
@@ -2483,12 +2490,15 @@ the rows themselves are `agents/session/rows.rs`, pure).
   A change of the transcript (each `emit`, the same moment `agent-entries` is sent) builds again only the groups that
   hold a changed entry; per (connection, view, class) a cache keeps the others' rows, so the store's diff sends only
   the changed rows. A new env (its epoch or width), a new look or new step facts build every group again.
-- **Rows.** `e:I` is entry I's row (a step on one line: its state, title, the first line of its result, `↶ undone`,
+- **Rows.** `e:I` is entry I's row (a step on one line: its state, title (an `execute` call: `Shell` and the title, its backticks dropped, in
+  `drgnx-agent-panel-code`), the first line of its result, `↶ undone`,
   and its time and cost right-aligned, in `drgnx-agent-panel-warn` past 10 s or $0.50); `e:I/p:N` the lines under a
   step (each hook's verdict that refused, changed, failed or was busy, `hooked at the hub's server`, and `allowed by
   your Always`); `e:I/t`, `e:I/t:N` its thinking, folded to a line count or open (40 lines); `e:I/d:N` its output
-  when open (12 lines, or a large one's first and last 10 around a count of the hidden lines); `e:I/h:N` its diff
-  hunks when open (ACP `diff` items, or a paired chat's `edit_file` old and new text), at most 30 lines a row;
+  when open (12 lines, or a large one's first and last 10 around a count of the hidden lines), in
+  `drgnx-agent-panel-output`; `e:I/h:N` its diff hunks when open (ACP `diff` items, or a paired chat's `edit_file` old
+  and new text), at most 30 lines a row, unchanged lines in `drgnx-agent-panel-context` (the panel's own text is in the
+  UI font, so every code line names a code face);
   `b:I:N` block N of an agent message, its Markdown spans as runs; `more` above the first row when earlier entries
   are not shown. A subagent's step is indented and drawn in one of the six agent faces, by its `Task` call.
 - **Props.** Every row carries `drgnx-agent-panel-entry` (the entry's index); a step that can be reverted to
@@ -2508,7 +2518,9 @@ the rows themselves are `agents/session/rows.rs`, pure).
   reset at base 0). The panel's next/previous keys look through the drawn rows from point for the next step whose
   kind (or `diff`) in Sjá matches, wrapping, and select it there; a fold stays the panel's own state, told to the hub
   after with `agents/panel/look`.
-- **The facts** of a step (time, cost, checkpoint, undone, subagent, hooks) are keyed by the entry's `step`: they
+- **The facts** of a step (time, cost, checkpoint, undone, subagent, hooks) are keyed by the entry's `step`, the
+  `step` table's seq a tool entry is given when its step begins (a resumed session counts on from its last step in
+  the table): they
   come from the step bus as steps close, from the `step` table when a panel first shows the session, and again after
   every `history/applied`. Grants changing (an Always given or revoked) build the session's panels again.
 - `agents/panel/look {view, open?, rows?, older?}` answers whether VIEW is a panel: the step types open

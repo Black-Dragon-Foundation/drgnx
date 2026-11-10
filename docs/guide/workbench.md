@@ -23,7 +23,8 @@ where a file with unsaved changes shows `●` there instead, always. The `⋯` a
 are drawn in the row's own colour, so it is invisible, until the pointer is on the row, the row at point's too;
 every row on a terminal shows it. The row at point is the selection: in the selection colour while the panel
 has the focus, inside a 1-pixel ring of the focus colour where Glitnir draws (Nidhogg), and the inactive selection (`drgnx-selected-inactive`, a clearly visible grey) while another window
-has it, as VS Code does. The Outline's current definition is drawn the same way, in bold. A row's selection and
+has it, as VS Code does. Without the focus only the Explorer keeps its selected row, the current buffer's file: the
+sidebar shows one selection (window-dark.html), and the Buffers panel shows its row again when you focus it. The Outline's current definition is drawn the same way, in bold. A row's selection and
 its hover are one fill from the row's start to its right edge, the git mark and the control included, 6 pixels in
 from the island's sides (the sections' fringes, in the island's colour), with rounded corners where Glitnir draws
 them. Neither changes a row's width or moves its text. The current line's highlight (`hl-line`) is not used in
@@ -53,7 +54,8 @@ file tree, the Search view with the cursor in its Find field), like VS Code's `C
 Focus Explorer, Focus Outline and the like also switch the sidebar to their view first. The Search view is there from
 the start (its module sets up in the startup stage), so its key works in the first second too. Swapping the view another way
 (`drgnx-wb-show-view`, as a layout does; there are no clickable view tabs yet) swaps the sections in place, at the same width, and leaves focus where it was (a focus inside the
-sidebar moves to the new view's first section); with the sidebar hidden it shows it. Hiding and showing the sidebar brings back the view it had.
+sidebar moves to the new view's first section); with the sidebar hidden it shows it. Hiding and showing the sidebar brings back the view it had, and gives each editor
+group back the width it had: the sidebar's width goes to the groups and comes back from them in proportion.
 
 **Turning a module off** hides its panes (a panel tab, a right-dock tab) and removes its sections and tabs; nothing
 else in the workbench moves. The size you gave a pane and its place in front are remembered: turn the module on again
@@ -90,7 +92,8 @@ Below the Explorer, the **Outline** lists the definitions of the file in the edi
 same way). A click shows the definition in the editor and keeps you in the Outline; `RET` goes there. It follows the
 editor, and half a second after you stop typing, your edits — only while it is shown (hidden, it lets go of the file
 at the next pause or editor change), and a key you press while it works wins (it tries again at the next pause). Files without an index, remote files and buffers over 1 MB get a
-one-line notice instead. The definition your cursor is in is highlighted in the Outline (an overlay, set a moment
+one-line notice instead: an info icon and the reason in the muted text ("No outline for this file"), an empty
+state that is never selected. The definition your cursor is in is highlighted in the Outline (an overlay, set a moment
 after the cursor stops — the Outline's own cursor is yours and never moves while you work in a file). Another file
 starts the Outline at its top, its cursor on the definition your cursor is in (scrolled into view). An edit that only
 moves definitions redraws nothing, and the Outline keeps your place in it when definitions are added above. Its rows
@@ -492,7 +495,7 @@ frame's edge gets the same gap (`internal-border-width`), so the outer cards hav
 against a margin and not the frame's edge or the top line. So the ring and shadow have room and never cover text.
 Dragging the gap between two cards resizes them, and so does dragging either card's side edge beside it (the fringe
 there; `drgnx-look-edge-drag`), as VS Code's sash takes a few pixels on each side. The inner half of a fringe whose
-click a mode uses (diff-hl's hunk, a breakpoint) keeps that click. A drag released over a fringe ends there: Nidhogg's
+click a mode uses (a breakpoint) keeps that click. A drag released over a fringe ends there: Nidhogg's
 `mouse-drag-line` takes the fringes' releases (stock Emacs 31 does not, and such a drag stays on there).
 A window made while the module runs is born with the edge (`default-frame-alist`), so it never grows by it once it is
 shown: a shown window that asked the window manager for a bigger size could get the size it was made with back a
@@ -510,7 +513,9 @@ scrolls. Without Glitnir nothing changes.
 
 The **panel** (Toggle Panel: ``C-` `` · palette · `SPC j`) sits under the editors; the **right dock** (Toggle
 Right Dock: `C-M-b` · palette · `SPC R`) runs the frame's full height, like the left one. Each is one window with a
-**tab row** at the top (click a tab to show it). Showing a buffer there never takes focus (Focus Panel does), and
+**tab row** at the top (click a tab to show it). The right dock shows its tab row only while two of its tabs have
+something to show: with one (an agent panel, say) that pane's own header is the top row, and `q` or `C-w l` then
+`C-x 0` hides the dock. Showing a buffer there never takes focus (Focus Panel does), and
 switching tabs swaps the buffer *in place*: the window stays, nothing around it moves, and each tab comes back
 scrolled where you left it. Both keep their pixel size across hiding and showing. **The size you chose stays:**
 a size you set for the left dock, the panel or the right dock is the one it comes back at the next time it shows.

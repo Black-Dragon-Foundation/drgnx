@@ -307,20 +307,68 @@ description, or nil) as keycaps at the right edge."
             ((< d 86400) (format "used %d h ago" (/ d 3600)))
             (t (format "used %d d ago" (/ d 86400)))))))
 
-(defun drgnx-palette-sort (labels cands &optional ids)
-  "LABELS with the recently run commands first, newest first; the rest in their order.  CANDS is (LABEL . ID); IDS,
-when given, is a hash of CANDS (`drgnx-palette--ids', made once per palette, not per key).  The history is read once and
-no comparison runs: the labels with a rank are placed by it and the others follow as they came."
+(defun drgnx-palette--alnum-p (char)
+  "Non-nil when CHAR is a letter or a digit."
+  (memq (get-char-code-property char 'general-category) '(Lu Ll Lt Lm Lo Nd)))
+
+(defun drgnx-palette--word-start-p (title pos)
+  "Non-nil when POS in TITLE begins a word: the title's start, or after a character that is not a letter or digit."
+  (or (zerop pos) (not (drgnx-palette--alnum-p (aref title (1- pos))))))
+
+(defun drgnx-palette--word-after (title pos)
+  "The start of the word after the one at POS in TITLE, or nil."
+  (let ((n (length title)) (i pos))
+    (while (and (< i n) (drgnx-palette--alnum-p (aref title i))) (setq i (1+ i)))
+    (while (and (< i n) (not (drgnx-palette--alnum-p (aref title i)))) (setq i (1+ i)))
+    (and (< i n) i)))
+
+(defun drgnx-palette-match-score (title words)
+  "How well TITLE (downcased) matches the typed WORDS (downcased): each word 2 at a word's start, 1 inside one, 0
+when only the category holds it; 1 more when it starts the word right after the previous word's (the words in
+order).  VS Code's ranking in small: word starts and order count, not where the typed letters happen to fall."
+  (let ((score 0) (prev nil))
+    (dolist (w words score)
+      (let ((pos nil) (inside nil) (from 0))
+        (while (and (not pos) (setq from (string-search w title from)))
+          (if (drgnx-palette--word-start-p title from) (setq pos from)
+            (unless inside (setq inside from))
+            (setq from (1+ from))))
+        (cond (pos (setq score (+ score 2 (if (and prev (eql pos (drgnx-palette--word-after title prev))) 1 0))
+                         prev pos))
+              (inside (setq score (1+ score) prev inside))
+              (t (setq prev nil)))))))
+
+(defun drgnx-palette-sort (labels cands &optional ids input)
+  "LABELS in the groups' order, Commands, Files, then Agents (palette.html; the row that asks an agent is the
+fallback, never first while something else matches).  Within a group, with nothing typed (INPUT nil or blank) the
+recently run commands first, newest first, the rest in their order.  With text typed, how well a row's title
+matches it ranks first (`drgnx-palette-match-score') and a recent run only breaks near-ties: it is worth one point,
+less than a word matched at its start instead of inside one.  CANDS is (LABEL . ID); IDS, when given, is a hash of
+CANDS (`drgnx-palette--ids', made once per palette, not per key).  The history is read once and the groups are split
+in one pass."
   (let* ((ids (or ids (drgnx-palette--ids cands)))
          (rank (make-hash-table :test #'eq)) (i 0)
-         (ranked nil) (rest nil))
+         (words (and input (split-string (downcase input) "[ \t]+" t)))
+         (keyed nil) (n 0))
     (dolist (e (drgnx-palette--history))
       (unless (gethash (car e) rank) (puthash (car e) i rank))
       (setq i (1+ i)))
     (dolist (l labels)
-      (if-let* ((r (gethash (gethash l ids) rank))) (push (cons r l) ranked) (push l rest)))
-    (nconc (mapcar #'cdr (sort (nreverse ranked) (lambda (a b) (< (car a) (car b)))))   ; the ranked few, stable
-           (nreverse rest))))
+      (let* ((r (gethash (gethash l ids) rank))
+             (score (if words (+ (drgnx-palette-match-score (downcase (drgnx-palette--title l)) words) (if r 1 0)) 0)))
+        ;; (SCORE RECENCY ORDER . LABEL): higher score, then newer, then as they came
+        (push (cons (list (- score) (or r most-positive-fixnum) n) l) keyed)
+        (setq n (1+ n))))
+    (let ((commands nil) (files nil) (agents nil))
+      (dolist (l (mapcar #'cdr (sort keyed (lambda (a b) (drgnx-palette--key< (car a) (car b))))))
+        (pcase (drgnx-palette-group l)
+          ("Files" (push l files)) ("Agents" (push l agents)) (_ (push l commands))))
+      (nconc (nreverse commands) (nreverse files) (nreverse agents)))))
+
+(defun drgnx-palette--key< (a b)
+  "Non-nil when the sort key A (a list of numbers) comes before B."
+  (while (and a (= (car a) (car b))) (setq a (cdr a) b (cdr b)))
+  (and a (< (car a) (car b))))
 
 (defun drgnx-palette--ids (cands)
   "A hash label → id of CANDS (the first of a label that two commands share)."
@@ -392,7 +440,8 @@ runs it; several is an \"Ambiguous\" error naming up to three; none is \"No comm
          (table (lambda (string pred action)
                   (if (eq action 'metadata)
                       `(metadata (annotation-function . ,annotate) (category . drgnx-command)
-                                 (display-sort-function . ,(lambda (labels) (drgnx-palette-sort labels cands ids)))
+                                 (display-sort-function . ,(lambda (labels)
+                                                             (drgnx-palette-sort labels cands ids (and (minibufferp) (minibuffer-contents-no-properties)))))
                                  (group-function . ,(lambda (label transform)
                                                       (if transform (drgnx-palette--shown label)
                                                         (drgnx-palette--group-title (drgnx-palette-group label))))))

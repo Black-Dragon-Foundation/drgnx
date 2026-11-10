@@ -558,7 +558,7 @@ How it works:
   errors.
 
 What it reads from the environment:
-- `DRGNX_LOOK_ELPA`: a package directory to activate (Magit, Vertico, diff-hl, …). A session has no packages of its
+- `DRGNX_LOOK_ELPA`: a package directory to activate (Magit, Vertico, …). A session has no packages of its
   own, and the user's install does.
 - `DRGNX_RATATOSKR_BIN`: a `test-hooks` ratatoskr with `ratatoskr-mock` beside it, for the agent panel. Without it, the
   agent scenes record what is missing.

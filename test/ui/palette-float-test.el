@@ -182,9 +182,20 @@ of keys; those belong to the box's window alone, and C-g takes them all off the 
            (drgnx-palette-float-test--wait-shown f)
            (setq mb (current-buffer) win (frame-root-window f))
            (should (string-search "move" (format "%s" (window-parameter win 'mode-line-format))))
-           ;; the box fits its rows: the group's title and the two commands, the input row and the footer
-           (should (= (window-pixel-height win) (* (default-line-height) (+ 3 2))))
-           (should (< (+ 3 2) (+ (default-value 'vertico-count) 2)))
+           ;; the box fits its rows: the input row, the group's title and the two commands, then the gap and the
+           ;; footer, `drgnx-palette-frame-footer-px' high within the pads' rounding
+           (let ((parent (frame-parent f)))
+             (should (<= (abs (- (window-pixel-height win)
+                                 (+ (* (default-line-height) (+ 1 3))
+                                    (drgnx-palette-frame--px parent drgnx-palette-frame-footer-gap-px)
+                                    (drgnx-palette-frame--px parent drgnx-palette-frame-footer-px))))
+                         1))
+             ;; the footer as drawn (the glyph matrix's mode line row, not an estimate from the face)
+             (redisplay t)
+             (should (<= (abs (- (car (window-line-height 'mode-line win))
+                                 (drgnx-palette-frame--px parent drgnx-palette-frame-footer-px)))
+                         1)))
+           (should (< 3 (default-value 'vertico-count)))
            (let ((ovs (seq-filter (lambda (o) (eq (overlay-get o 'window) win))
                                   (overlays-in (point-min) (point-max)))))
              (should (seq-find (lambda (o) (overlay-get o 'invisible)) ovs))
@@ -260,8 +271,11 @@ of keys; those belong to the box's window alone, and C-g takes them all off the 
 
 ;; The editor under the box is a block of solid glyphs; a strip of the box's input row where the box draws nothing
 ;; (between the typed text and the hint) must be one surface, every channel within this many levels: what lies behind
-;; shows through neither crisp (alpha alone) nor as stripes.
-(defconst drgnx-palette-float-test--frost-delta 8)
+;; shows through neither crisp (alpha alone) nor as stripes.  The bound is the mockup's: palette.png's input strip is
+;; one flat colour (a spread of 0) over code, so the frosted box may differ from flat by rounding and the blur's
+;; quarter-resolution sampling only.  A 90 % box whose blur does not reach the picture spreads 10 % of the stripes'
+;; levels (over 60, so 6 and up): 4 fails it.
+(defconst drgnx-palette-float-test--frost-delta 4)
 
 (defun drgnx-palette-float-test--spread (snap xs y)
   "The widest range of one colour channel over SNAP's pixels XS on row Y."
@@ -307,6 +321,7 @@ in the box (its input row, between the typed text and the hint, where it draws n
                      (when (drgnx-uitest-region-equal-p snap none e)
                        (ert-skip "the snapshot of a root does not hold child frames yet (nsnap): no pixel check"))
                      (should (> behind 60))           ; the stripes are there to hide
+                     (should (frame-parameter f 'backdrop-blur)) ; the frosted box, as the design is
                      (unless (<= inside drgnx-palette-float-test--frost-delta)
                        (ert-fail (list :inside inside :behind behind :at y :from (car xs) :to (car (last xs))
                                        :alpha (frame-parameter f 'alpha-background)

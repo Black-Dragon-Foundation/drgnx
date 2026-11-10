@@ -1978,6 +1978,8 @@ place, and the measure reported (`view/measured').  Returns the new text, or nil
             (unless (member key (gethash (nth 3 p) ids)) (push key (gethash (nth 3 p) ids)))))))
     (dolist (stop stops)
       (put-text-property (car stop) (1+ (car stop)) 'display (drgnx-view-patch--stop state (cadr stop)) text))
+    (dolist (sp (plist-get row :spaces))              ; a space of a size in device px (a card's progress bar)
+      (put-text-property (car sp) (1+ (car sp)) 'display `(space :width (,(nth 1 sp)) :height (,(nth 2 sp))) text))
     (dolist (im (plist-get row :images))
       (let ((spec (gethash (nth 1 im) (drgnx-view-patch-images state))))
         (put-text-property (nth 0 im) (1+ (nth 0 im)) 'display (if (or (null spec) (eq spec :alt)) (nth 2 im) spec)

@@ -228,12 +228,12 @@ Every module must turn off cleanly: its setup changes global state only through 
 | `tools/jobs` | startup | Jobs as a source of what needs you: the open cards and messages of jobs in the one needs-you count and as desktop notifications, and the status bar's `jobs` segment; no commands (a job shows in the Work space) |
 | `tools/work-space` | startup | Open the Work Space: the map of every live piece of agent work in a project's repositories, in six layers, kept current by the hub and drawn only while a window shows it; an empty map outside a project; says "reconnecting" and subscribes again when the hub restarts. Turned off, it closes its views and kills its map buffers ([work-space.md](work-space.md)) |
 | `tools/ai` | startup | ghost-text completion in code buffers (the `complete` role), one Tab for suggestion / popup / snippet / heading / indent, Accept Suggestion (word, line), Toggle AI Completion, Edit with AI… (reviewed hunk by hunk), Ask the Codebase…, Choose AI Provider/Model… ([ai.md](ai.md)) |
-| `org/org` | startup | Capture `C-c c`, Agenda `C-c a` |
+| `org/org` | startup | Capture `C-c c`, Agenda `C-c a`; Org in the look ([look.md](look.md#packages)) |
 | `extra/jump` | idle | Jump to Text (needs avy) |
 | `extra/mc` | idle | Add Next Occurrence, Select All Occurrences — a cursor on each match (needs multiple-cursors) |
 | `extra/undo` | idle | Undo Tree (needs vundo) |
 | `extra/wgrep` | idle | Edit Results / Apply Edited Results in search results (needs wgrep) |
-| `extra/hunks` | idle | changed lines in the gutter; Show / Revert / Stage Change (needs diff-hl) |
+| `extra/hunks` | idle | changed lines in the gutter, from the hub: solid bars, green added, blue changed; Show / Revert / Stage Change |
 | `extra/blame` | idle | inline blame: the current line's author, age and commit subject at its end; Blame: Show Commit of Line ([git.md](git.md)) |
 | `extra/keycast` | idle | Show Keys As I Type (needs keycast): the key and command in the status bar's `misc` segment (in the stock mode line elsewhere) |
 | `extra/windows` | idle | Pick Window: a letter on every window, type it to go there (needs ace-window) |
