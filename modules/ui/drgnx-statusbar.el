@@ -444,10 +444,6 @@ the bar would be drawn smaller than it was measured."
       (drgnx-statusbar--base-on)
     (drgnx-statusbar--base-off)))
 
-(defun drgnx-statusbar--scale (&optional frame)
-  "FRAME's scale (1.0 without a native shell)."
-  (if (fboundp 'frame-scale-factor) (float (frame-scale-factor frame)) 1.0))
-
 (defun drgnx-statusbar--row (w)
   "(HEIGHT TEXT BOX LEFTOVER) for window W's bar, in device pixels: the row's HEIGHT (`status-bar' at the frame's
 scale), the TEXT height of the bar's font, the BOX width above and below the text that makes up the difference, and
@@ -532,9 +528,8 @@ With LAYOUT (the bar's `drgnx-statusbar--layout-key') the widths are kept (`drgn
           (t (lambda (s) (funcall f s face))))))
 
 (defun drgnx-statusbar--row-height (frame)
-  "The bar's row height on FRAME in its pixels: the density's `status-bar' at the frame's scale."
-  (round (* (if (fboundp 'drgnx-look-density-value) (drgnx-look-density-value 'status-bar) 24)
-            (drgnx-statusbar--scale frame))))
+  "The bar's row height on FRAME in its pixels: the density's `status-bar' through `drgnx-px'."
+  (drgnx-px (if (fboundp 'drgnx-look-density-value) (drgnx-look-density-value 'status-bar) 24) frame))
 
 (defun drgnx-statusbar--layout-key (window)
   "An integer that changes when the sizes the bar is measured at change: the frame's character size (a scale change
@@ -572,11 +567,11 @@ A string measured with a space of exact width at an end comes out short by the f
 
 (defun drgnx-statusbar--segment-pad ()
   "A pixel bar's room either side of a segment's text, in the frame's pixels: the design's 6 logical pixels."
-  (round (* 6 (drgnx-statusbar--scale (window-frame (drgnx-statusbar-source-window))))))
+  (drgnx-px 6 (window-frame (drgnx-statusbar-source-window))))
 
 (defun drgnx-statusbar--pixel-gap (frame)
   "What goes between a pixel bar's segments: a space of the design's 2 logical pixels on FRAME."
-  (let ((px (round (* 2 (drgnx-statusbar--scale frame)))))
+  (let ((px (drgnx-px 2 frame)))
     (propertize " " 'display `(space :width (,px)) 'drgnx-statusbar-pixels (list px))))
 (defconst drgnx-statusbar--branch-min 14 "Spaces' width the branch is cut to before other segments are dropped for it.")
 
@@ -700,7 +695,7 @@ COMPACT: only the segments of `drgnx-statusbar-compact' (on the right); `quiet':
              (drgnx-statusbar--measure (or measure #'string-width))
              (drgnx-statusbar--space (if measure (max 1 (funcall measure " ")) 1))
              ;; a pixel bar: 8 px at the ends, then each segment's own 6 (the design's `.status' and `.seg')
-             (drgnx-statusbar--pad (if measure (round (* 8 (drgnx-statusbar--scale frame))) 1))
+             (drgnx-statusbar--pad (if measure (drgnx-px 8 frame) 1))
              (drgnx-statusbar--left-sep (if measure (drgnx-statusbar--pixel-gap frame) (drgnx-statusbar--separator)))
              (drgnx-statusbar--right-sep (if measure (drgnx-statusbar--pixel-gap frame) drgnx-statusbar--right-sep))
              (drgnx-statusbar--steady-store (and (window-live-p w) (drgnx-statusbar--steady-store w)))

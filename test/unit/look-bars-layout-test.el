@@ -39,7 +39,7 @@ the padding as measured, less the window's right fringe (`right' in a mode line 
 is the design's 8 logical pixels; the right run is C with its room either side (22 here)."
   (drgnx-statusbar-test--with
     (let* ((drgnx-look-bars-measure-function #'drgnx-look-bars-test--ten)
-           (pad (round (* 8 (drgnx-statusbar--scale nil))))
+           (pad (drgnx-px 8))
            (gap (drgnx-statusbar-test--gap (drgnx-statusbar-render 400))))
       (should (equal (plist-get (cdr gap) :align-to) `(- right (,(max 0 (- (+ 22 pad) (drgnx-statusbar--right-fringe (selected-window)))))))))))
 
@@ -292,7 +292,7 @@ not the font's MAX-WIDTH, which put the spacer wholly above the baseline and gre
       (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
                 ((symbol-function 'face-font) (lambda (&rest _) "a font"))
                 ((symbol-function 'font-info) (lambda (&rest _) info))
-                ((symbol-function 'drgnx-statusbar--scale) (lambda (&optional _f) 1.0)))
+                ((symbol-function 'drgnx-pixels-scale) (lambda (&optional _f) 1.0)))
         (let ((spec (get-text-property 0 'display (drgnx-statusbar--lead (selected-window) 12))))
           (should (equal '(22) (plist-get (cdr spec) :height)))
           (should (equal (ceiling (* 100.0 (+ 13 2 1)) 22) (plist-get (cdr spec) :ascent))))))))
@@ -370,6 +370,26 @@ height (the memo would keep the old box otherwise)."
         (let ((drgnx-look-density 'roomy)) (should-not (eq k (drgnx-statusbar--layout-key w))))
         (let ((drgnx-look-density 'compact)) (should-not (eq k (drgnx-statusbar--layout-key w))))
         (should (eq k (drgnx-statusbar--layout-key w)))))))
+
+(ert-deftest drgnx-look-bars/sizes-go-through-the-pixel-rule ()
+  "Pattern D: at a display scale of 1.25 the bar's sizes are each part rounded half up (`drgnx-px'): the row 30, the
+padding 10, a segment's room 8, the gap between segments 3 (Emacs's `round' sends 2.5 to 2); and the UI scale counts
+too: at 1.1 on a scale-1 display the row is 26 and the gap 2."
+  (drgnx-statusbar-test--with
+    (let ((f (selected-frame)) (drgnx-look-density 'comfortable))
+      (cl-letf (((symbol-function 'drgnx-pixels-device-p) (lambda () t))
+                ((symbol-function 'frame-scale-factor) (lambda (&optional _f) 1.25)))
+        (should (= (drgnx-statusbar--row-height f) 30))
+        (should (equal (get-text-property 0 'drgnx-statusbar-pixels (drgnx-statusbar--pixel-gap f)) '(3)))
+        (should (= (drgnx-statusbar--segment-pad) 8)))
+      (cl-letf (((symbol-function 'drgnx-pixels-device-p) (lambda () t))
+                ((symbol-function 'frame-scale-factor) (lambda (&optional _f) 1.0)))
+        (unwind-protect
+            (progn
+              (set-frame-parameter f 'drgnx-ui-scale 1.1)
+              (should (= (drgnx-statusbar--row-height f) 26))
+              (should (equal (get-text-property 0 'drgnx-statusbar-pixels (drgnx-statusbar--pixel-gap f)) '(2))))
+          (set-frame-parameter f 'drgnx-ui-scale nil))))))
 
 (defmacro drgnx-look-bars-test--counting (calls &rest body)
   "BODY with the bars measuring one pixel a column through a measure that counts its calls in CALLS."
