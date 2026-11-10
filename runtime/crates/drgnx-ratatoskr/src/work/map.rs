@@ -1243,8 +1243,8 @@ impl Map {
 
     /// The sessions whose Timeline lanes the selection of connection CONN's shown rows map views lights: the agents
     /// and subagents on its chain, the selection's own included (a subagent stands for its session).
-    /// The agents on map view VIEW of connection CONN that work on a tracker task: (the task's title, the agent's item
-    /// id, its label), by start order. The Board puts each on its task's card (`work::trail::board`).
+    /// The agents on map view VIEW of connection CONN that work on a tracker task: (the task's id `task:ID`, the agent's
+    /// item id, its label), by start order. The Board puts each on its task's card (`work::trail::board`).
     pub fn agents_of(&self, conn: u64, view: &str) -> Vec<(String, String, String)> {
         let g = lock(&self.inner);
         let key = ViewKey {
@@ -1259,12 +1259,12 @@ impl Map {
             .model()
             .items()
             .into_values()
-            .filter(|it| it.kind == Kind::Agent && it.fields.task.is_some())
+            .filter(|it| it.kind == Kind::Agent && it.fields.task_id.is_some())
             .collect();
         agents.sort_by_key(|it| it.order);
         agents
             .into_iter()
-            .map(|it| (it.fields.task.unwrap_or_default(), it.id.0, it.label))
+            .map(|it| (it.fields.task_id.unwrap_or_default(), it.id.0, it.label))
             .collect()
     }
 

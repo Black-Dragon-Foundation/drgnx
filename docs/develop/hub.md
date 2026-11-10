@@ -2144,8 +2144,8 @@ rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display 
   query url` and, in a Timeline, `session`. The rows' node spans are their `drgnx-work-id` props.
 - **The Board** (`work::trail::board`). `work/board/subscribe {view, map, plans?}` opens a Board view the same way:
   the tasks of `plans` (`plans/get` each, their steps the progress), else every task (`tasks/find`, up to four pages),
-  each card naming the agent of the connection's map view `map` that works on it (the agent whose task title is the
-  card's). It is read again after each write like a trail; `work/trail/close` ends it. Rows: `head` (each column's
+  each card naming the agent of the connection's map view `map` that works on it (the agent whose task id is the
+  card's: two tasks of one title never show each other's agent). It is read again after each write like a trail; `work/trail/close` ends it. Rows: `head` (each column's
   heading and count at a sixth of the width, at least 120 px), then `cards:I:0` (the titles at height I) and
   `cards:I:1` (state · agent · steps done) and `cards:I:2` (the progress bar: on a GUI two `spaces` 4 px high from
   4 px in, the steps done in `drgnx-work-bar` and the rest in `drgnx-work-bar-rest`, together the column less 16 px,
