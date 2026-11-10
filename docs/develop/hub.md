@@ -2480,7 +2480,9 @@ never kept), `include?`, `exclude?`.
   replaces), `search/saved/delete {root, name}` → whether there was one, `search/saved/list {root}` → `{saved,
   problems?}`: the hub's, then the project's, each `{name, search, pinned, project, shared}`.
 - **Where:** the hub's state, `<state>/hub/search/<key>.json` (a digest of the root's path names the file; written
-  whole through a temporary file and a rename, mode 0600). At most 64 projects stay in memory.
+  whole through a temporary file and a rename, mode 0600). At most 64 projects stay in memory. A `search/run` never
+  writes: when it records a search that changes the recent list, a thread of its own writes the file, one at a time,
+  each writing the newest state (a write and its sync on the run's path held a key's reset past the next key).
 - **The project's searches** are `.drgnx/searches.eld`, one plist per search: `(:name "TODOs" :mode text :query
   "todo!(" :case t :scope changed :changed-lines t :include ("*.rs"))`; keys `:name`, `:mode` (`text`, `symbol`,
   `meaning`), `:query`, `:case`, `:word`, `:regexp` (`t` or `nil`), `:replace`, `:scope`, `:base`, `:changed-lines`,
