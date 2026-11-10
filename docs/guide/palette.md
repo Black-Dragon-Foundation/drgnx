@@ -62,12 +62,15 @@ has its name above its rows, with no count. The letters you
 typed are in the accent colour, semibold; the current row is the selection colour, one rounded fill 6 pixels in from the list's sides (as the sidebar's rows; every row keeps the same left inset, so nothing moves as the selection does). The keycaps
 (`Ctrl` `Shift` `P`; in a terminal the names alone, `Ctrl Shift P`) come from the key profile you use. On the current row the
 keycaps and hints turn from the faint secondary colour to the muted one, so they stay readable on the selection.
-The commands you ran from the palette come first, newest first, then the rest in their usual order; the list is grouped
-Commands, Files and Agents, and is kept in `palette-history.eld` in drgnx's state folder (200 commands at most).
+The groups always come in this order: Commands, then Files, then Agents, so "Ask an agent" is the last row and never the
+one chosen while a command or a file matches. Within Commands, the commands you ran from the palette come first, newest
+first, then the rest in their usual order; that history is kept in `palette-history.eld` in drgnx's state folder (200
+commands at most).
 
 In the floating palette the prompt is a search icon, a hint at the right of what you type says what it searches
-(`Commands · # code`), and a footer shows the keys: `↑` `↓` move, `↵` run, `Esc` close. The minibuffer in the echo area
-is not changed by any of this.
+(`Commands · # code · @ agents`, the last with `tools/agents` on), and a footer 30 logical pixels high, 6 below the
+last row, shows the keys in its middle: `↑` `↓` move, `↵` run, `Tab` preview, `Esc` close. The minibuffer in the echo
+area is not changed by any of this.
 
 ## The echo area
 

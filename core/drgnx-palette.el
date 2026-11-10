@@ -308,9 +308,11 @@ description, or nil) as keycaps at the right edge."
             (t (format "used %d d ago" (/ d 86400)))))))
 
 (defun drgnx-palette-sort (labels cands &optional ids)
-  "LABELS with the recently run commands first, newest first; the rest in their order.  CANDS is (LABEL . ID); IDS,
-when given, is a hash of CANDS (`drgnx-palette--ids', made once per palette, not per key).  The history is read once and
-no comparison runs: the labels with a rank are placed by it and the others follow as they came."
+  "LABELS in the groups' order, Commands, Files, then Agents (palette.html; the row that asks an agent is the
+fallback, never first while something else matches), within a group the recently run commands first, newest first,
+the rest in their order.  CANDS is (LABEL . ID); IDS, when given, is a hash of CANDS (`drgnx-palette--ids', made once
+per palette, not per key).  The history is read once and no comparison runs: the labels with a rank are placed by it,
+the others follow as they came, and the groups are split in one pass."
   (let* ((ids (or ids (drgnx-palette--ids cands)))
          (rank (make-hash-table :test #'eq)) (i 0)
          (ranked nil) (rest nil))
@@ -319,8 +321,12 @@ no comparison runs: the labels with a rank are placed by it and the others follo
       (setq i (1+ i)))
     (dolist (l labels)
       (if-let* ((r (gethash (gethash l ids) rank))) (push (cons r l) ranked) (push l rest)))
-    (nconc (mapcar #'cdr (sort (nreverse ranked) (lambda (a b) (< (car a) (car b)))))   ; the ranked few, stable
-           (nreverse rest))))
+    (let ((commands nil) (files nil) (agents nil))
+      (dolist (l (nconc (mapcar #'cdr (sort (nreverse ranked) (lambda (a b) (< (car a) (car b)))))   ; ranked, stable
+                        (nreverse rest)))
+        (pcase (drgnx-palette-group l)
+          ("Files" (push l files)) ("Agents" (push l agents)) (_ (push l commands))))
+      (nconc (nreverse commands) (nreverse files) (nreverse agents)))))
 
 (defun drgnx-palette--ids (cands)
   "A hash label → id of CANDS (the first of a label that two commands share)."

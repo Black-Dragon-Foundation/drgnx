@@ -182,9 +182,20 @@ of keys; those belong to the box's window alone, and C-g takes them all off the 
            (drgnx-palette-float-test--wait-shown f)
            (setq mb (current-buffer) win (frame-root-window f))
            (should (string-search "move" (format "%s" (window-parameter win 'mode-line-format))))
-           ;; the box fits its rows: the group's title and the two commands, the input row and the footer
-           (should (= (window-pixel-height win) (* (default-line-height) (+ 3 2))))
-           (should (< (+ 3 2) (+ (default-value 'vertico-count) 2)))
+           ;; the box fits its rows: the input row, the group's title and the two commands, then the gap and the
+           ;; footer, `drgnx-palette-frame-footer-px' high within the pads' rounding
+           (let ((parent (frame-parent f)))
+             (should (<= (abs (- (window-pixel-height win)
+                                 (+ (* (default-line-height) (+ 1 3))
+                                    (drgnx-palette-frame--px parent drgnx-palette-frame-footer-gap-px)
+                                    (drgnx-palette-frame--px parent drgnx-palette-frame-footer-px))))
+                         1))
+             ;; the footer as drawn (the glyph matrix's mode line row, not an estimate from the face)
+             (redisplay t)
+             (should (<= (abs (- (car (window-line-height 'mode-line win))
+                                 (drgnx-palette-frame--px parent drgnx-palette-frame-footer-px)))
+                         1)))
+           (should (< 3 (default-value 'vertico-count)))
            (let ((ovs (seq-filter (lambda (o) (eq (overlay-get o 'window) win))
                                   (overlays-in (point-min) (point-max)))))
              (should (seq-find (lambda (o) (overlay-get o 'invisible)) ovs))
