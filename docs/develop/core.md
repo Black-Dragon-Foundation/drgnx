@@ -1480,8 +1480,11 @@ function and one rounding rule:
   floor(scale)) pixels (1 at 1.25 and 4/3, 2 at 2, as the mockups' 1 CSS px at scale 2); a line under 2 is
   max(1, floor(WIDTH × scale)); a wider one is `drgnx-px`.
 - `(drgnx-pixels-scale &optional FRAME)` is the factor both use: the display scale on a native shell (1.0 elsewhere)
-  times the UI scale, `(drgnx-pixels-ui-scale FRAME)`: the root frame's `drgnx-ui-scale` parameter, which ui/look's
-  `drgnx-look-scale` sets on every graphical root frame (1.0 without one).
+  times the UI scale, `(drgnx-pixels-ui-scale FRAME)`: the root frame's, which ui/look's `drgnx-look-scale` sets on
+  every graphical root frame with `(drgnx-pixels-set-ui-scale FRAME SCALE)` (1.0 without one). It is kept in a
+  frame-weak table, not a frame parameter: `frame-parameter` copies the frame's whole parameter list to read a
+  parameter of drgnx's own, and the scale is read on every bar build and row. Reading it conses nothing, a budget
+  `drgnx-pixels/the-scale-conses-nothing` holds.
 - A size made of parts adds the rounded parts (`(+ (drgnx-px 26) (drgnx-px 6))`), never `drgnx-px` of the sum, so a
   row and its gap add up to what is drawn.
 

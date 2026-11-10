@@ -35,5 +35,20 @@ a native shell can't be made here; the Naglfar case can."
   "A row and its gap add up from their rounded parts at 1.25 (33 + 8), never from the unrounded sum (round 40)."
   (should (= (+ (drgnx-px 26 nil 1.25) (drgnx-px 6 nil 1.25)) 41)))
 
+(ert-deftest drgnx-pixels/the-scale-conses-nothing ()
+  "A budget: `drgnx-pixels-scale' runs on every bar build and row, so reading the scale conses nothing, with a UI
+scale or without one (`frame-parameter' of a parameter of drgnx's own copies the frame's whole parameter list)."
+  (let ((f (selected-frame))
+        ;; compiled, so the loop itself conses nothing; the difference to an empty loop is the calls' own
+        (conses (byte-compile (lambda (n) (let ((c (car (memory-use-counts))))
+                                            (dotimes (_ n) (drgnx-pixels-scale))
+                                            (- (car (memory-use-counts)) c))))))
+    (unwind-protect
+        (dolist (s '(nil 1.1))
+          (drgnx-pixels-set-ui-scale f s)
+          (should (= (drgnx-pixels-ui-scale f) (or s 1.0)))
+          (should (= (funcall conses 1000) (funcall conses 0))))
+      (drgnx-pixels-set-ui-scale f nil))))
+
 (provide 'look-pixels-test)
 ;;; look-pixels-test.el ends here

@@ -66,13 +66,23 @@ its own faces.  Call it when a row's memo changes, never on every redisplay."
 terminal, a port that lays out in logical pixels) a frame pixel is a logical pixel."
   (or (featurep 'nidhogg-wayland) (featurep 'naglfar)))
 
+(defvar drgnx-pixels--ui-scales (make-hash-table :test #'eq :weakness 'key)
+  "Root frame → its UI scale, a float other than 1.0 (`drgnx-pixels-set-ui-scale').  A table, not a frame parameter:
+`frame-parameter' copies the frame's whole parameter list to read a parameter of drgnx's own, and the scale is read
+on every bar build and row.  Weak on the frame: an entry goes with its frame.")
+
+(defun drgnx-pixels-set-ui-scale (frame scale)
+  "Give the root FRAME the UI scale SCALE (a number; nil or 1: none), which `drgnx-pixels-ui-scale' reads."
+  (if (and (numberp scale) (/= scale 1))
+      (puthash frame (float scale) drgnx-pixels--ui-scales)
+    (remhash frame drgnx-pixels--ui-scales)))
+
 (defun drgnx-pixels-ui-scale (&optional frame)
-  "The UI scale on FRAME (default the selected frame): its root frame's `drgnx-ui-scale' parameter, which the look's
-UI scale sets (modules/ui/drgnx-look-scale.el); 1.0 without one."
+  "The UI scale on FRAME (default the selected frame): its root frame's, which the look's UI scale sets
+\(modules/ui/drgnx-look-scale.el, through `drgnx-pixels-set-ui-scale'); 1.0 without one.  Conses nothing."
   (let ((f (or frame (selected-frame))))
     (while (frame-parent f) (setq f (frame-parent f)))
-    (let ((s (frame-parameter f 'drgnx-ui-scale)))
-      (if (numberp s) (float s) 1.0))))
+    (gethash f drgnx-pixels--ui-scales 1.0)))
 
 (defun drgnx-pixels-scale (&optional frame)
   "FRAME's frame pixels per logical pixel: its display scale on a native shell (1.0 elsewhere) times the UI scale."
