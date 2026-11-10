@@ -2476,7 +2476,8 @@ the rows themselves are `agents/session/rows.rs`, pure).
   A change of the transcript (each `emit`, the same moment `agent-entries` is sent) builds again only the groups that
   hold a changed entry; per (connection, view, class) a cache keeps the others' rows, so the store's diff sends only
   the changed rows. A new env (its epoch or width), a new look or new step facts build every group again.
-- **Rows.** `e:I` is entry I's row (a step on one line: its state, title, the first line of its result, `↶ undone`,
+- **Rows.** `e:I` is entry I's row (a step on one line: its state, title (an `execute` call: `Shell` and the title, its backticks dropped, in
+  `drgnx-agent-panel-code`), the first line of its result, `↶ undone`,
   and its time and cost right-aligned, in `drgnx-agent-panel-warn` past 10 s or $0.50); `e:I/p:N` the lines under a
   step (each hook's verdict that refused, changed, failed or was busy, `hooked at the hub's server`, and `allowed by
   your Always`); `e:I/t`, `e:I/t:N` its thinking, folded to a line count or open (40 lines); `e:I/d:N` its output

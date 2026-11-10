@@ -12,7 +12,8 @@ Turn it off with the module `tools/agent-panel` (see [modules](modules.md)); eve
   it) or "Pair · editing your checkout"; on the right the **watch · review · debug** lens, the preset in force raised.
 - **Chips:** model, context ring, cost, mode, sandbox, MCP servers, files edited, checkpoints. A chip appears only when
   the hub reports it; none is made up.
-- **Steps:** a tool call is one line: a dot for its state, its title, its result after `·`, and its time and cost on the
+- **Steps:** a tool call is one line: a dot for its state, its title (a shell step: "Shell" and its command in the
+  code font), its result after `·`, and its time and cost on the
   right in the code font. A slow step (over `drgnx-agent-panel-slow-seconds`) or an expensive one (over
   `drgnx-agent-panel-expensive-cost`) shows that figure in the warning colour. The agent's thinking is folded under the
   step it belongs to; `TAB` opens or folds it, with the step's detail.
