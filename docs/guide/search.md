@@ -217,6 +217,7 @@ linear in tokens, so throughput is in tokens.
 | Built-in model on 4 CPU cores | 680 tokens/s (about 1 chunk/s) |
 | One question embedded | 50 ms (95th percentile) |
 | A query, warm, 50,000 chunks | 100 ms (95th percentile) |
+| A query, warm, 100,000 chunks | 200 ms (95th percentile) |
 | The editor's main thread per answer | 16 ms (it only renders) |
 | The embed worker's memory | 1.5 GiB, unloaded after 5 idle minutes |
 

@@ -1359,7 +1359,11 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
 - **The query (`hrafn::query`).** Lists from the routes, fused by RRF (k = 60): an exact one-identifier query pins its
   definitions first (non-test before test, then by kind); prefix and trigram name matches from the identifier-like
   tokens of a question add a list that is never pinned; a token that names a file adds a path list; `bm25(chunk_fts, 5,
-  5, 2, 1)` ranks identifier phrases on `symbols` and words over `doc` and `body`; vectors are scanned by Hamming
+  5, 2, 1)` ranks identifier phrases on `symbols` and words over `doc` and `body` on the FTS index alone
+  (`KEYWORD_RANK_SQL`, the best 400), and the view's predicate (`VISIBLE_SQL`) is applied to that ranking in order
+  until 100 chunks are seen (the ranking is asked again for four times as many when the view hides most of it: still
+  filtered before the limit, but only candidates are probed; joining every match first was 80 of 143 ms at 50,000
+  chunks, where a common word matches 40,000); vectors are scanned by Hamming
   distance over the sign bits and the nearest 200 re-ranked by their int8 values. A test or generated file keeps half
   its score. Hits in files changed since indexing are looked for again by their first line, else their symbol (20 files,
   50 ms). The scope (`code`, which holds tests below it, `tests`, `docs`, `all`) filters by file class. Every answer has

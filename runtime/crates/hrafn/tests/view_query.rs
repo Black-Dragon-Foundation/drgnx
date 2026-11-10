@@ -406,7 +406,7 @@ async fn overlay_predicates_use_indexes() {
         hrafn::query::NAME_TRIGRAM_SQL,
         hrafn::query::PATH_ANY_SQL,
         hrafn::query::PATH_NAME_SQL,
-        hrafn::query::KEYWORD_SQL,
+        hrafn::query::VISIBLE_SQL,
         hrafn::query::FIRST_CHUNK_SQL,
         hrafn::query::META_SQL,
         hrafn::index::LAG_TOTAL_SQL,
@@ -434,4 +434,12 @@ async fn overlay_predicates_use_indexes() {
             "file by (tree, path):\n{plan}\n{sql}"
         );
     }
+    // the keyword ranking reads the FTS index only; the view is applied to its candidates by VISIBLE_SQL
+    let plan = plan_of(&s, hrafn::query::KEYWORD_RANK_SQL, 0).await;
+    assert!(
+        plan.lines()
+            .filter(|l| l.contains("SCAN ") || l.contains("SEARCH "))
+            .all(|l| l.contains("chunk_fts VIRTUAL TABLE")),
+        "{plan}"
+    );
 }
