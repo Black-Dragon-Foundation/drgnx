@@ -2268,12 +2268,15 @@ All of it is in memory only.
 ### The native view model (`view-model`)
 
 A view whose keys move a selection (the Work map first) also sends its **model**: what the editor's replica (Sjá, in
-Nidhogg: `nidhogg-view-apply`) needs to answer every key in-process, never from the hub. The hub keeps, per
-(connection, view), the model and version it last sent (`view::Store`'s models, `view::model`), and sends what changed
-as the event `view-model {view, hub, base, version, reset?, model}`:
+Nidhogg) needs to answer every key in-process, never from the hub. The hub keeps, per (connection, view), the model
+and version it last sent (`view::Store`'s models, `view::model`), and sends what changed as the event `view-model
+{view, hub, base, version, reset?, model}`:
 
-- **One string.** `model` is a JSON string, `{"ops": [...]}`, that the editor hands to its replica whole; the editor
-  never makes Lisp data of it. The ops are Sjá's wire: `reset {descriptor, nodes, edges, lists}`, then `edges
+- **One line, unparsed by the editor.** The line starts `{"event":"view-model"` (the event writer, `runstav::wire::Event`,
+  puts `event` first) and `model` is a JSON object, `{"ops": [...]}`. The editor routes the line by that prefix,
+  before any parse, and hands it whole to Sjá (`nidhogg-view-push`), which reads the envelope and the model; the editor
+  never makes Lisp data of it. Every publisher (the map, the trail, the board, the panel, Search, the Explorer, agents
+  here, extensions, a terminal's Find) writes it through `view::model` or as an object. The ops are Sjá's wire: `reset {descriptor, nodes, edges, lists}`, then `edges
   {remove}`, `remove [id]`, `nodes [node]`, `edges {add}`, `list {name, ids}` (a list that went is sent empty). A
   changed descriptor is a reset.
 - **The model goes first.** A builder writes the model before the rows built from it (`work::map`'s `publish`), and
@@ -2281,8 +2284,7 @@ as the event `view-model {view, hub, base, version, reset?, model}`:
   to N at the draw. A change only the model sees (a field the rows don't show) sends a model and no patch.
 - **Resets.** The first model after a `work/map/subscribe` (the editor starts a new replica: version 1), after a
   hidden view is shown again (`work/map/set {shown}`), and the answer to `view/resync {view, model: true}` (CLASS is
-  not read) are resets, and say so in the envelope (`reset: true`), so the editor routes a model without parsing
-  it; a subscribe's reset has `base` 0. A hub restart is a new `hub`, and the subscribe that follows starts at a reset; the ids are the
+  not read) are resets, and say so in the envelope (`reset: true`); a subscribe's reset has `base` 0. A hub restart is a new `hub`, and the subscribe that follows starts at a reset; the ids are the
   items' own, so the same records give the same model.
 - **Hidden views get none.** A view hidden by its editor gets no model until it is shown again.
 - **The selection is the editor's.** The hub's own selection only draws the chain's edges in the rows: `work/map/set

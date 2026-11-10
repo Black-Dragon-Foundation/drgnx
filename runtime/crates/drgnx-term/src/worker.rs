@@ -86,7 +86,7 @@ pub struct Worker {
     /// The version of the view's model (Find's matches) last sent, and that model as a reset (none: no search since
     /// the view was attached).
     model_version: u64,
-    model: Option<String>,
+    model: Option<serde_json::Value>,
 }
 
 impl Worker {
@@ -756,14 +756,14 @@ impl Worker {
     }
 
     /// The attached view's model is now MODEL (a reset): its `view-model` goes out, from the version last sent.
-    fn send_model(&mut self, model: String) {
+    fn send_model(&mut self, model: serde_json::Value) {
         let Some(a) = &self.attach else { return };
         let base = self.model_version;
         self.model_version += 1;
         self.out.push(Out::Model {
             model: serde_json::json!({
                 "view": a.view, "hub": a.hub, "base": base, "version": self.model_version, "reset": true,
-                "model": model,
+                "model": &model,
             }),
         });
         self.model = Some(model);
@@ -910,7 +910,7 @@ const MODEL_MATCHES_MAX: usize = 20_000;
 
 /// Find's model from a search's MATCHES: a `list` scheme whose list `matches` holds, in their order, those in rows the
 /// editor holds (id `KEY:COL`, fields `key`, `col`, `len`), as one reset op; and how many it holds.
-fn matches_model(matches: &[(Option<Key>, u32, u32)]) -> (String, usize) {
+fn matches_model(matches: &[(Option<Key>, u32, u32)]) -> (serde_json::Value, usize) {
     let (mut nodes, mut ids) = (Vec::new(), Vec::new());
     for (key, col, len) in matches {
         if ids.len() >= MODEL_MATCHES_MAX {
@@ -928,7 +928,7 @@ fn matches_model(matches: &[(Option<Key>, u32, u32)]) -> (String, usize) {
                        "classes": ["selected"], "flags": [], "forms": [], "start": "matches"},
         "nodes": nodes, "edges": [], "lists": [{"name": "matches", "ids": ids}],
     }}]});
-    (model.to_string(), n)
+    (model, n)
 }
 
 /// `#rrggbb` as bytes.

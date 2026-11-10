@@ -652,8 +652,8 @@ fn models(w: &mut Worker) -> (Vec<Sent>, Vec<serde_json::Value>) {
             Out::Model { model } => {
                 assert_eq!(model["view"], "term:1");
                 assert_eq!(model["hub"], 7);
-                let ops: serde_json::Value =
-                    serde_json::from_str(model["model"].as_str().expect("a string")).expect("JSON");
+                let ops = model["model"].clone();
+                assert!(ops.is_object(), "the model is an object");
                 models.push((
                     model["base"].as_u64().unwrap(),
                     model["version"].as_u64().unwrap(),

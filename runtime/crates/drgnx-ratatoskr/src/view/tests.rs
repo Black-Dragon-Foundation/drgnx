@@ -560,20 +560,18 @@ fn doc(gen_: u32) -> super::model::Doc {
     d
 }
 
-/// The model's ops, parsed back from its one string.
+/// The model's ops.
 fn ops_of(m: &runstav::methods::view::ViewModel) -> Vec<serde_json::Value> {
-    let v: serde_json::Value = serde_json::from_str(&m.model).expect("one JSON string");
-    v["ops"].as_array().expect("ops").clone()
+    m.model["ops"].as_array().expect("ops").clone()
 }
 
-/// [D] The model goes as one string field: the event's `model` is a JSON string holding `{"ops": [...]}`, never an
-/// object the editor's reader would make Lisp data of.
+/// [D] The model goes as an object, `{"ops": [...]}`: the editor hands the whole line to Sjá, which reads it.
 #[test]
-fn model_is_one_string_field() {
+fn model_is_an_object() {
     let mut s = Store::new(7);
     let m = s.publish_model(CONN, "v", doc(1)).expect("a first model");
     let ev = serde_json::to_value(&m).expect("the event");
-    assert!(ev["model"].is_string(), "{ev}");
+    assert!(ev["model"].is_object(), "{ev}");
     assert_eq!((m.hub, m.base, m.version), (7, 0, 1));
     assert!(ops_of(&m)[0].get("reset").is_some());
     assert_eq!(ev["reset"], true, "the envelope says reset: {ev}");

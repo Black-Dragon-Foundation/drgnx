@@ -11,11 +11,11 @@
 {"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
 {"do": "send", "conn": "e", "json": {"id": 3, "method": "agents/presence/subscribe", "params": {"workspace": {"id": "workspace:000000000001", "roots": ["$ROOT/work"]}, "view": "agents-here"}}}
 {"do": "expect", "conn": "e", "json": {"id": 3, "result": {"files": []}}}
-{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "agents-here", "hub": "$capture:hub", "base": 0, "version": 1, "reset": true, "model": "$string"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "agents-here", "hub": "$capture:hub", "base": 0, "version": 1, "reset": true, "model": {"ops": "$any"}}}, "within_ms": 10000}
 {"do": "expect_next", "conn": "e", "json": {"event": "view-patch", "data": {"view": "agents-here", "class": "data", "hub": "$hub", "base": 0, "version": 1, "model": 1, "ops": [{"reset": []}]}}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "moves 4 1\nsay done"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
-{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "agents-here", "hub": "$hub", "base": 1, "version": 2, "model": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "agents-here", "hub": "$hub", "base": 1, "version": 2, "model": {"ops": "$any"}}}, "within_ms": 30000}
 {"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "agents-here", "class": "data", "hub": "$hub", "base": 1, "version": 2, "model": 2, "ops": [{"insert": {"after": null, "rows": [{"key": "$string", "text": "$string", "props": [[0, "$number", "drgnx-work-id", "$string"]]}]}}]}}, "within_ms": 10000}

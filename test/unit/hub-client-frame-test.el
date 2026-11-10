@@ -27,24 +27,70 @@
         (setq i (+ i len))))
     (nreverse out)))
 
+(defun drgnx-hub-client-frame-test--raw (line)
+  "(:raw BYTES): LINE as Sjá reads it, its UTF-8 bytes (a unibyte line is already that)."
+  (list :raw (if (multibyte-string-p line) (encode-coding-string line 'utf-8 t) line)))
+
 (defun drgnx-hub-client-frame-test--framed (chunks eof)
-  "The events `drgnx-hub--client-batch' passes on for CHUNKS framed by Nidhogg's reader."
+  "The events `drgnx-hub--client-batch' passes on for CHUNKS framed by Nidhogg's reader, as `drgnx-hub--frame' frames
+them; a `view-model' line as (:raw LINE)."
   (let (got)
-    (cl-letf (((symbol-function 'drgnx-hub--client-line) (lambda (_conn json) (push json got))))
+    (cl-letf (((symbol-function 'drgnx-hub--client-line) (lambda (_conn json) (push json got)))
+              ((symbol-function 'drgnx-hub--model-line)
+               (lambda (line) (push (drgnx-hub-client-frame-test--raw line) got))))
       (drgnx-hub--client-batch
        nil (car (nidhogg-workers--test-frame chunks eof 'lines :parse 'string :object-type 'plist
-                                             :array-type 'list :null-object nil :false-object nil))))
+                                             :array-type 'list :null-object nil :false-object nil
+                                             :raw-prefix drgnx-hub--model-prefix))))
     (nreverse got)))
 
 (defun drgnx-hub-client-frame-test--unframed (chunks)
-  "The same through the filter's splitter."
+  "The same through the filter's splitter, as the client's filter calls it."
   (let (got (conn (make-symbol "conn")))
     (cl-letf (((symbol-function 'process-live-p) (lambda (_) nil))
               (process-get-table (make-hash-table)))
       (cl-letf (((symbol-function 'process-get) (lambda (_c k) (gethash k process-get-table)))
                 ((symbol-function 'process-put) (lambda (_c k v) (puthash k v process-get-table))))
-        (dolist (c chunks) (drgnx-hub--lines conn c (lambda (j) (push j got))))))
+        (dolist (c chunks)
+          (drgnx-hub--lines conn c (lambda (j) (push j got)) nil nil
+                            (lambda (line) (push (drgnx-hub-client-frame-test--raw line) got))))))
     (nreverse got)))
+
+(defconst drgnx-hub-client-frame-test--model-line
+  "{\"event\":\"view-model\",\"data\":{\"base\":0,\"hub\":1,\"model\":{\"ops\":[{\"remove\":[\"é\U0001F409\"]}]},\"reset\":true,\"version\":1,\"view\":\"v\"}}"
+  "A hub's `view-model' line, non-ASCII inside.")
+
+(defvar drgnx-hub-client-frame-test--parsed 0 "Calls of `json-parse-string' on a `view-model' line.")
+
+(defun drgnx-hub-client-frame-test--count-parse (fn string &rest args)
+  (when (string-prefix-p drgnx-hub--model-prefix string) (cl-incf drgnx-hub-client-frame-test--parsed))
+  (apply fn string args))
+
+(ert-deftest drgnx-hub-client-frame/a-view-model-line-goes-whole-and-unparsed-both-ways ()
+  "A `view-model' line between other events, cut anywhere (split over many chunks on the unframed path): both paths
+hand it whole to the model, in its place among the events, and neither parses it."
+  (skip-unless (fboundp 'nidhogg-workers--test-frame))
+  (let ((stream (concat "{\"event\":\"notice\",\"data\":{\"a\":1}}\n" drgnx-hub-client-frame-test--model-line "\n"
+                        "{\"id\":3,\"result\":true}\n"))
+        (drgnx-hub-client-frame-test--parsed 0))
+    (advice-add 'json-parse-string :around #'drgnx-hub-client-frame-test--count-parse)
+    (unwind-protect
+        (dolist (seed '(1 7 42 1000 31337))
+          (let* ((chunks (drgnx-hub-client-frame-test--chunks stream seed))
+                 (want (list '(:event "notice" :data (:a 1))
+                             (drgnx-hub-client-frame-test--raw drgnx-hub-client-frame-test--model-line)
+                             '(:id 3 :result t))))
+            (should (> (length chunks) 3))
+            (should (equal want (drgnx-hub-client-frame-test--unframed chunks)))
+            (should (equal want (drgnx-hub-client-frame-test--framed chunks t)))))
+      (advice-remove 'json-parse-string #'drgnx-hub-client-frame-test--count-parse))
+    (should (= 0 drgnx-hub-client-frame-test--parsed))))
+
+(ert-deftest drgnx-hub-client-frame/frames-with-the-model-prefix ()
+  (let (args (nidhogg-workers-framing t))
+    (cl-letf (((symbol-function 'nidhogg-set-process-framing) (lambda (&rest a) (setq args a))))
+      (drgnx-hub--frame 'conn))
+    (should (equal drgnx-hub--model-prefix (plist-get (cddr args) :raw-prefix)))))
 
 (ert-deftest drgnx-hub-client-frame/same-events-both-ways ()
   (dolist (seed '(1 7 42 1000 31337))

@@ -1615,9 +1615,9 @@ Returns what was done: `drop', `hold', `resync', `apply', `paused' (kept until t
             what))))))
 
 (defun drgnx-view-patch-event (event data)
-  "A `drgnx-hub-event-functions' handler: a `view-patch' goes to its buffer, a `view-model' to its view's queue."
-  (cond ((equal event "view-patch") (drgnx-view-apply-patch data))
-        ((equal event "view-model") (drgnx-view-model-event data))))
+  "A `drgnx-hub-event-functions' handler: a `view-patch' goes to its buffer.  (A `view-model' line never comes here:
+the hub client hands it whole to `drgnx-view-model-line'.)"
+  (when (equal event "view-patch") (drgnx-view-apply-patch data)))
 
 (defun drgnx-view-patch-env-sent (view class epoch)
   "This editor sent (VIEW, CLASS) the env EPOCH (`drgnx-view-env'): patches of an older one are held from now on."
@@ -1658,36 +1658,32 @@ every row is drawn again, with no message to the hub."
            drgnx-view-patch--buffers)
   (drgnx-view-model--hub-lost))
 
-;;;; The native view model (Sjá): each view's model strings, queued, applied at the draw
+;;;; The native view model (Sjá): each view's model, queued in Sjá, applied at the draw
 ;;
-;; A view whose keys move a selection also gets its model (`view-model', docs/develop/hub.md "The native view model"):
-;; one JSON string per version, which drgnx never parses.  The strings queue per view (not per class) and go to Sjá
-;; (`nidhogg-view-apply') at the draw that inserts the rows built from them: a draw's first slice (the type's SYNC)
-;; applies every queued model up to the highest `model' its buffer's row patches named, so a key answers from the model
-;; that is drawn.  A model no row patch names (a change the rows don't show) applies on the view's own timer one
-;; throttle later.  The envelope's rules are the rows' (`drgnx-view-patch--decide'), read from four scalars and
-;; `reset'.  Without Sjá (an Emacs that is not Nidhogg) models are ignored.
+;; A view whose keys move a selection also gets its model (`view-model', docs/develop/hub.md "The native view model").
+;; drgnx never parses it: the hub client hands the whole line to Sjá (`drgnx-view-model-line' → `nidhogg-view-push'),
+;; which reads the envelope, decides (the rows' rules: a new stream, a queued diff, an old one dropped, a gap) and
+;; queues the model per view.  The models go into Sjá's model at the draw that inserts the rows built from them: a
+;; draw's first slice (the type's SYNC) drains every queued model up to the highest `model' its buffer's row patches
+;; named (`nidhogg-view-drain'), so a key answers from the model that is drawn.  A model no row patch names (a change
+;; the rows don't show) applies on the view's own timer one throttle later (`nidhogg-view-due').  Lisp keeps only what
+;; talks to the hub: an outstanding `view/resync'.  Without Sjá (an Emacs that is not Nidhogg) the lines are dropped.
 
 (require 'nidhogg-views nil t)          ; Nidhogg's, not preloaded; `nidhogg-view--call' is the C door
-(declare-function nidhogg-view-apply "nidhogg-views" (view hub version model))
+(declare-function nidhogg-view-push "nidhogg-views" (line))
+(declare-function nidhogg-view-drain "nidhogg-views" (view &optional upto))
+(declare-function nidhogg-view-named "nidhogg-views" (view n))
+(declare-function nidhogg-view-due "nidhogg-views" (view))
 (declare-function nidhogg-view-open "nidhogg-views" (view &optional group))
 (declare-function nidhogg-view-close "nidhogg-views" (h))
 (declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
 (declare-function nidhogg-view-hub-lost "nidhogg-views" ())
 
-(defconst drgnx-view-model-queue-max 64
-  "The most model strings a view holds unapplied; past that the queue is dropped and a reset asked for.")
-
-(defvar drgnx-view-model--gen 0
-  "Counts the model streams this Emacs began.  Sjá is told the hub as \"HUB/GEN\": a new subscription's reset (version
-1 again, from the same hub) is a new stream to it, never a version it already holds.")
-
 (cl-defstruct (drgnx-view-model (:constructor drgnx-view-model--make) (:copier nil))
-  "One hub-fed VIEW's model stream.  HUB, GEN and VERSION: the stream's (HUB nil: no reset since the view was attached,
-the hub went or the queue was dropped).  QUEUE: (VERSION . STRING) not applied yet, oldest first.  NAMED: the highest
-model version a row patch of the stream named.  RESYNC: non-nil while a `view/resync' with `model' is outstanding.
-LAST: Sjá's answer to the last apply."
-  view hub gen version queue (named 0) resync last (applied 0) (resyncs 0))
+  "One hub-fed VIEW's model stream, as the editor's side of it: RESYNC, non-nil while a `view/resync' with `model' is
+outstanding (RESYNCS counts them).  LAST: Sjá's status of the last model drained; APPLIED counts those applied.  The
+stream itself (its hub, generation, version, queue and the version the rows named) is Sjá's."
+  view resync last (applied 0) (resyncs 0))
 
 (defvar drgnx-view-model-functions nil
   "Called with (VIEW VERSION) after a `view-model' of VIEW (a view's name) was queued: a command that asked the hub
@@ -1700,20 +1696,31 @@ for a model and got the answer first takes it here (Find in Terminal).")
   "Non-nil when this Emacs has Sjá."
   (fboundp 'nidhogg-view--call))
 
-(defun drgnx-view-model--decide (state data)
-  "What to do with DATA, a `view-model' event's, given STATE: `restart' (a reset of a new stream: a subscription's,
-base 0, or another hub's), `queue', `drop' (another hub's diff, one before the first reset, or an old one) or
-`resync' (a gap)."
-  (let ((version (drgnx-view-model-version state))
-        (same (and (drgnx-view-model-hub state) (eql (drgnx-view-model-hub state) (plist-get data :hub)))))
-    (cond ((plist-get data :reset)
-           (cond ((or (not same) (eql (plist-get data :base) 0)) 'restart)
-                 ((<= (plist-get data :version) version) 'drop)
-                 (t 'queue)))
-          ((not same) 'drop)
-          ((< (plist-get data :base) version) 'drop)
-          ((> (plist-get data :base) version) 'resync)
-          (t 'queue))))
+(defun drgnx-view-model-line (line)
+  "A hub's whole `view-model' LINE, unparsed, to Sjá (`nidhogg-view-push'), which decides by its envelope and queues
+its model for the draw.  A gap or a full queue asks the hub for a reset; a queued model arms the view's timer and runs
+`drgnx-view-model-functions'.  Returns Sjá's decision (`queue', `reset', `drop', `resync', `none'), or nil without
+Sjá."
+  (when-let* (((drgnx-view-model--sja-p)) (r (nidhogg-view-push line)))
+    (let ((view (nth 0 r)) (what (nth 2 r)))
+      (when-let* ((state (gethash view drgnx-view-model--views)))
+        (pcase what
+          ('resync (drgnx-view-model--resync state))
+          ((or 'queue 'reset)
+           (when (eq what 'reset) (setf (drgnx-view-model-resync state) nil))
+           (drgnx-view-model--arm state)
+           (run-hook-with-args 'drgnx-view-model-functions view (nth 1 r)))))
+      what)))
+
+(defun drgnx-view-model-event (data)
+  "DATA, a `view-model' event's as a plist whose `:model' is the model's JSON text, as the hub writes the line, to
+`drgnx-view-model-line' (tests and the harness: the hub's lines never come here).  Returns its decision."
+  (let ((text (lambda (s) (if (multibyte-string-p s) s (decode-coding-string s 'utf-8 t))))) ; json-serialize's bytes
+    (drgnx-view-model-line
+     (format "{\"event\":\"view-model\",\"data\":{\"view\":%s,\"hub\":%d,\"base\":%d,\"version\":%d,%s\"model\":%s}}"
+             (funcall text (json-serialize (plist-get data :view))) (plist-get data :hub) (plist-get data :base)
+             (plist-get data :version) (if (plist-get data :reset) "\"reset\":true," "")
+             (funcall text (plist-get data :model))))))
 
 (defun drgnx-view-model--resync (state)
   "Ask the hub for a reset of STATE's view, unless one is outstanding."
@@ -1722,63 +1729,33 @@ base 0, or another hub's), `queue', `drop' (another hub's diff, one before the f
     (cl-incf (drgnx-view-model-resyncs state))
     (funcall drgnx-view-patch-send-function "view/resync" (list :view (drgnx-view-model-view state) :model t))))
 
-(defun drgnx-view-model--lose (state)
-  "STATE drops its queue and its stream: nothing is queued again before a reset."
-  (setf (drgnx-view-model-queue state) nil (drgnx-view-model-hub state) nil (drgnx-view-model-version state) nil
-        (drgnx-view-model-named state) 0))
-
 (defun drgnx-view-model--arm (state)
   "One throttle from now, STATE's queued models no row patch named apply (`drgnx-view-model--due')."
   (let ((view (drgnx-view-model-view state)))
     (drgnx-timer-soon (cons 'drgnx-view-model view) drgnx-view-delay #'drgnx-view-model--due
                       :args (list view) :owner :core)))
 
-(defun drgnx-view-model-event (data)
-  "A `view-model' event's DATA: decided by its envelope (`drgnx-view-model--decide') and queued; Sjá gets it at the
-draw.  Returns the decision, or nil when no buffer shows the view or this Emacs has no Sjá."
-  (when-let* (((drgnx-view-model--sja-p))
-              (state (gethash (plist-get data :view) drgnx-view-model--views)))
-    (let ((what (drgnx-view-model--decide state data)))
-      (pcase what
-        ('resync (drgnx-view-model--resync state))
-        ((or 'restart 'queue)
-         (when (eq what 'restart)
-           (drgnx-view-model--lose state)
-           (setf (drgnx-view-model-gen state) (cl-incf drgnx-view-model--gen)))
-         (when (plist-get data :reset)
-           (setf (drgnx-view-model-queue state) nil (drgnx-view-model-resync state) nil
-                 (drgnx-view-model-hub state) (plist-get data :hub)))
-         (setf (drgnx-view-model-version state) (plist-get data :version))
-         (if (>= (length (drgnx-view-model-queue state)) drgnx-view-model-queue-max)
-             (progn (drgnx-view-model--lose state) (drgnx-view-model--resync state))
-           (setf (drgnx-view-model-queue state)
-                 (nconc (drgnx-view-model-queue state)
-                        (list (cons (plist-get data :version) (plist-get data :model)))))
-           (drgnx-view-model--arm state)
-           (run-hook-with-args 'drgnx-view-model-functions (plist-get data :view) (plist-get data :version)))))
-      what)))
+(defun drgnx-view-model--drained (state r)
+  "R, Sjá's answer to a drain of STATE's view, (APPLIED LAST VERSION): the faces by class go after a model applied,
+and Sjá's `resync' (a model that did not apply: the queue and the stream are gone) asks the hub for a reset."
+  (when r
+    (setf (drgnx-view-model-last state) (nth 1 r))
+    (when (> (nth 0 r) 0)
+      (cl-incf (drgnx-view-model-applied state) (nth 0 r))
+      (drgnx-view-model--forget-faces (drgnx-view-model-view state)))
+    (when (eq (nth 1 r) 'resync) (drgnx-view-model--resync state)))
+  r)
 
 (defun drgnx-view-model--apply (state upto)
-  "Hand STATE's queued models of a version up to UPTO (t: all) to Sjá, oldest first.  Sjá's `resync' drops the queue
-and asks for a reset; `too-large' drops it (the view keeps what it holds)."
-  (let ((hub (format "%s/%s" (drgnx-view-model-hub state) (drgnx-view-model-gen state))) (q nil))
-    (while (and (setq q (drgnx-view-model-queue state)) (or (eq upto t) (<= (car (car q)) upto)))
-      (setf (drgnx-view-model-queue state) (cdr q))
-      (let ((status (nidhogg-view-apply (drgnx-view-model-view state) hub (car (car q)) (cdr (car q)))))
-        (setf (drgnx-view-model-last state) status)
-        (pcase status
-          ('applied (cl-incf (drgnx-view-model-applied state))
-                    (drgnx-view-model--forget-faces (drgnx-view-model-view state)))
-          ('resync (drgnx-view-model--lose state) (drgnx-view-model--resync state))
-          ('too-large (drgnx-view-model--lose state)))))))
+  "STATE's queued models of a version up to UPTO (nil: all) go into Sjá's model, oldest first (`nidhogg-view-drain')."
+  (drgnx-view-model--drained state (nidhogg-view-drain (drgnx-view-model-view state) upto)))
 
 (defun drgnx-view-model-apply-queued (view)
   "The queued models of VIEW (a view's name) go to Sjá now: for a view whose row patches name no model (a
 terminal's), the command that asked the hub for one uses it at once instead of one throttle later.  Returns the
 version of the last model VIEW's stream queued (now applied), or nil."
   (when-let* ((state (gethash view drgnx-view-model--views)))
-    (drgnx-view-model--apply state t)
-    (drgnx-view-model-version state)))
+    (nth 2 (drgnx-view-model--apply state nil))))
 
 (defun drgnx-view-model--forget-faces (view)
   "VIEW's buffers make their faces by class again: a reset may name other classes."
@@ -1791,10 +1768,9 @@ version of the last model VIEW's stream queued (now applied), or nil."
 (defun drgnx-view-model--due (view)
   "The timer of VIEW's queue: models no row patch named apply now.  One a patch named waits for that patch's draw,
 which arms this again for what is left."
-  (when-let* ((state (gethash view drgnx-view-model--views)) (q (drgnx-view-model-queue state)))
-    (when (> (car (car q)) (drgnx-view-model-named state))
-      (drgnx-view-model--apply state t)
-      (drgnx-view-model--reclass view))))
+  (when-let* ((state (gethash view drgnx-view-model--views))
+              ((drgnx-view-model--drained state (nidhogg-view-due view))))
+    (drgnx-view-model--reclass view)))
 
 (defun drgnx-view-model--reclass (view)
   "VIEW's buffers take the classes a model no row patch named changed (a list another view's selection lit): no
@@ -1808,8 +1784,8 @@ draw follows it to run the class step."
 (defun drgnx-view-model--named (patch-state n reset)
   "A row patch applied in PATCH-STATE's buffer named model N (RESET: a reset of the rows): its draw applies up to N."
   (setf (drgnx-view-patch-model patch-state) (if reset n (max n (or (drgnx-view-patch-model patch-state) 0))))
-  (when-let* ((m (gethash (drgnx-view-patch-view patch-state) drgnx-view-model--views)))
-    (setf (drgnx-view-model-named m) (max n (drgnx-view-model-named m)))))
+  (when (gethash (drgnx-view-patch-view patch-state) drgnx-view-model--views)
+    (nidhogg-view-named (drgnx-view-patch-view patch-state) n)))
 
 (defun drgnx-view-patch--sync (_view)
   "SYNC of `drgnx-view-rows', at a draw's first slice in the view's buffer: the view's queued models up to the
@@ -1819,20 +1795,20 @@ highest one this buffer's row patches named go to Sjá, before the rows built fr
                 (m (gethash (drgnx-view-patch-view state) drgnx-view-model--views)))
       (setf (drgnx-view-patch-model state) nil)
       (drgnx-view-model--apply m n)
-      (when (drgnx-view-model-queue m) (drgnx-view-model--arm m)))))
+      (drgnx-view-model--arm m))))
 
 (defun drgnx-view-model--hub-lost ()
-  "The hub went: every view's queue and stream go, and Sjá marks every view stale; keys keep working on what is
+  "The hub went: Sjá drops every view's queue and stream and marks every view stale; keys keep working on what is
 drawn."
-  (maphash (lambda (_ m) (drgnx-view-model--lose m) (setf (drgnx-view-model-resync m) nil)) drgnx-view-model--views)
+  (maphash (lambda (_ m) (setf (drgnx-view-model-resync m) nil)) drgnx-view-model--views)
   (when (drgnx-view-model--sja-p) (nidhogg-view-hub-lost)))
 
 (defun drgnx-view-model--open (state)
-  "Open PATCH-STATE's instance in Sjá, and its view's queue when it is the view's first buffer."
+  "Open PATCH-STATE's instance in Sjá, and its view's stream state when it is the view's first buffer."
   (when (drgnx-view-model--sja-p)
     (let ((view (drgnx-view-patch-view state)))
       (unless (gethash view drgnx-view-model--views)
-        (puthash view (drgnx-view-model--make :view view :gen (cl-incf drgnx-view-model--gen)) drgnx-view-model--views))
+        (puthash view (drgnx-view-model--make :view view) drgnx-view-model--views))
       (setf (drgnx-view-patch-handle state) (nidhogg-view-open view)))))
 
 (defun drgnx-view-model--close (state &optional all)

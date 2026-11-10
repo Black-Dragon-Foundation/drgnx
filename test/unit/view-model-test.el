@@ -62,12 +62,12 @@ captured.  `h' is the buffer's instance in Sjá."
 
 (defun drgnx-view-model-test--start (view)
   "VIEW's first model (a, b, c; a's right is b) and its rows, applied and drawn."
-  (should (eq 'restart (drgnx-view-model-event
-                        (drgnx-view-model-test--model
-                         view (list (drgnx-view-model-test--reset
-                                     (list (drgnx-view-model-test--node "a" "b") (drgnx-view-model-test--node "b" nil)
-                                           (drgnx-view-model-test--node "c" nil))))
-                         :reset t))))
+  (should (eq 'reset (drgnx-view-model-event
+                      (drgnx-view-model-test--model
+                       view (list (drgnx-view-model-test--reset
+                                   (list (drgnx-view-model-test--node "a" "b") (drgnx-view-model-test--node "b" nil)
+                                         (drgnx-view-model-test--node "c" nil))))
+                       :reset t))))
   (should (eq 'apply (drgnx-view-apply-patch (drgnx-view-model-test--rows view 1 '("a" "b" "c") :reset t))))
   (drgnx-view-draw-now drgnx-view))
 
@@ -86,22 +86,47 @@ captured.  `h' is the buffer's instance in Sjá."
           (push (append (take i rest) (list (car free)) (nthcdr i rest)) out)))
       (nreverse out))))
 
-;;;; The rules on the envelope (D)
+(defun drgnx-view-model-test--queued-none (view)
+  "Non-nil when VIEW has no model queued in Sjá (a drain applies none)."
+  (eql 0 (car (nidhogg-view-drain view))))
+
+;;;; The rules on the envelope (D): Sjá decides
 
 (ert-deftest drgnx-view-model/envelope-rules ()
-  "Pattern D: the decision is a pure function of the stream and the envelope."
-  (let ((s (drgnx-view-model--make :view "v")))
-    (should (eq 'drop (drgnx-view-model--decide s '(:hub 7 :base 0 :version 1))))      ; no reset yet
-    (should (eq 'restart (drgnx-view-model--decide s '(:hub 7 :base 0 :version 1 :reset t))))
-    (setf (drgnx-view-model-hub s) 7 (drgnx-view-model-version s) 4)
-    (should (eq 'queue (drgnx-view-model--decide s '(:hub 7 :base 4 :version 5))))
-    (should (eq 'drop (drgnx-view-model--decide s '(:hub 7 :base 3 :version 4))))       ; old
-    (should (eq 'resync (drgnx-view-model--decide s '(:hub 7 :base 5 :version 6))))     ; a gap
-    (should (eq 'drop (drgnx-view-model--decide s '(:hub 8 :base 4 :version 5))))       ; another hub's diff
-    (should (eq 'restart (drgnx-view-model--decide s '(:hub 8 :base 9 :version 10 :reset t))))
-    (should (eq 'restart (drgnx-view-model--decide s '(:hub 7 :base 0 :version 1 :reset t)))) ; subscribed again
-    (should (eq 'queue (drgnx-view-model--decide s '(:hub 7 :base 4 :version 5 :reset t))))   ; a resync's answer
-    (should (eq 'drop (drgnx-view-model--decide s '(:hub 7 :base 3 :version 4 :reset t))))))
+  "Pattern D: Sjá decides by the stream and the envelope; Lisp sends a resync for a gap and nothing else."
+  (drgnx-view-model-test--with
+    (let ((m (lambda (hub base version &optional reset)
+               (drgnx-view-model-event (drgnx-view-model-test--model view (list (list :remove ["x"])) :hub hub
+                                                                     :base base :version version :reset reset)))))
+      (should (eq 'drop (funcall m 7 0 1)))           ; no reset yet
+      (should (eq 'reset (funcall m 7 0 1 t)))
+      (should (eq 'queue (funcall m 7 1 2)))
+      (should (eq 'drop (funcall m 7 0 1)))           ; old
+      (should (eq 'drop (funcall m 8 2 3)))           ; another hub's diff
+      (should-not drgnx-view-model-test--sent)
+      (should (eq 'resync (funcall m 7 5 6)))         ; a gap
+      (should (equal (list (cons "view/resync" (list :view view :model t))) drgnx-view-model-test--sent))
+      (should (eq 'reset (funcall m 7 3 4 t)))        ; the resync's answer
+      (should (eq 'drop (funcall m 7 2 3 t)))         ; an older reset
+      (should (eq 'reset (funcall m 8 9 10 t)))       ; another hub's reset: a new stream
+      (should (eq 'reset (funcall m 8 0 1 t)))        ; subscribed again
+      (should (equal (list (nidhogg-view-push "{\"event\":\"view-model\",\"data\":{}}")) '(nil))))))
+
+(ert-deftest drgnx-view-model/a-full-queue-asks-one-resync ()
+  "Pattern D: past 64 models unapplied Sjá drops the queue and the stream: one `view/resync' with `model', and diffs
+are dropped until the reset comes."
+  (drgnx-view-model-test--with
+    (drgnx-view-model-test--start view)
+    (dotimes (i 64)
+      (should (eq 'queue (drgnx-view-model-event
+                          (drgnx-view-model-test--model view (list (list :remove ["x"])) :base (+ 1 i) :version (+ 2 i))))))
+    (should (eq 'resync (drgnx-view-model-event
+                         (drgnx-view-model-test--model view (list (list :remove ["x"])) :base 65 :version 66))))
+    (should (eq 'drop (drgnx-view-model-event
+                       (drgnx-view-model-test--model view (list (list :remove ["x"])) :base 66 :version 67))))
+    (should (equal (list (cons "view/resync" (list :view view :model t))) drgnx-view-model-test--sent))
+    (should (drgnx-view-model-test--queued-none view))
+    (should (equal "b" (drgnx-view-model-test--right-of-a h)))))
 
 ;;;; Keys answer from the drawn model (A)
 
@@ -159,7 +184,7 @@ order with the draw: once all have run, b is selected, in Sjá and on screen."
       (dolist (step order)
         (pcase step
           ('key (should (equal "b" (nidhogg-view-follow h "right"))))
-          ('model (should (eq 'queue (drgnx-view-model-event
+          ('model (should (eq 'reset (drgnx-view-model-event
                                       (drgnx-view-model-test--model
                                        view (list (drgnx-view-model-test--reset
                                                    (list (drgnx-view-model-test--node "a" "b")
@@ -171,7 +196,7 @@ order with the draw: once all have run, b is selected, in Sjá and on screen."
           ('draw (drgnx-view-draw-now drgnx-view))))
       (drgnx-view-draw-now drgnx-view)
       (should (equal "b" (nidhogg-view-get h 'selection)))
-      (should (null (drgnx-view-model-queue (gethash view drgnx-view-model--views)))))))
+      (should (drgnx-view-model-test--queued-none view)))))
 
 (ert-deftest drgnx-view-model/hub-lost-drops-the-queue-keys-still-move ()
   "Pattern A: the hub goes with a model queued: the queue goes, keys answer from what is drawn, and the next
@@ -182,14 +207,14 @@ subscription's reset (version 1 again, the same hub) applies."
                              view (list (list :nodes (vector (drgnx-view-model-test--node "a" "c"))))
                              :base 1 :version 2))
     (drgnx-view-patch--disconnected)
-    (should (null (drgnx-view-model-queue (gethash view drgnx-view-model--views))))
+    (should (drgnx-view-model-test--queued-none view))
     (should (eql 3 (nidhogg-view-get h 'health)))                          ; stale
     (should (equal "b" (drgnx-view-model-test--right-of-a h)))
-    (should (eq 'restart (drgnx-view-model-event
-                          (drgnx-view-model-test--model
-                           view (list (drgnx-view-model-test--reset (list (drgnx-view-model-test--node "a" "c")
-                                                                          (drgnx-view-model-test--node "c" nil))))
-                           :reset t))))
+    (should (eq 'reset (drgnx-view-model-event
+                        (drgnx-view-model-test--model
+                         view (list (drgnx-view-model-test--reset (list (drgnx-view-model-test--node "a" "c")
+                                                                        (drgnx-view-model-test--node "c" nil))))
+                         :reset t))))
     (drgnx-view-apply-patch (drgnx-view-model-test--rows view 1 '("a" "c") :reset t))
     (drgnx-view-draw-now drgnx-view)
     (should (eq 'applied (drgnx-view-model-last (gethash view drgnx-view-model--views))))

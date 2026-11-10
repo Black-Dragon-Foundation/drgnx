@@ -355,7 +355,7 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
         event!(
             "view-model",
             crate::methods::view::ViewModel,
-            "what changed in one hub-fed view's model, to its connection only: one JSON string the editor's replica takes whole (a reset first, after a hidden view is shown again and on view/resync with model), written before the rows built from it, which name its version"
+            "what changed in one hub-fed view's model, to its connection only: the model as an object, {\"ops\": [...]}, in a line that starts {\"event\":\"view-model\" so the editor hands it whole and unparsed to its replica (a reset first, after a hidden view is shown again and on view/resync with model), written before the rows built from it, which name its version"
         ),
         event!(
             "view-patch",

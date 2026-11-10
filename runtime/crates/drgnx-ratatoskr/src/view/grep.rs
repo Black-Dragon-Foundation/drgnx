@@ -481,7 +481,7 @@ impl Views {
                 let (model, patches) =
                     batch_patches(&mut lock(&self.store), conn, view, run, file, ms);
                 if let Some(m) = model {
-                    f.send_to(conn, "view-model", json!(m));
+                    f.send_to(conn, "view-model", super::Store::model_data(m));
                 }
                 for p in patches {
                     f.send_to(conn, "view-patch", json!(p));
