@@ -157,6 +157,11 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "what the editor's tracked buffer of a file changed against the last commit (HEAD), as hunks numbered as git diff --unified=0 numbers them; for the change marks in the margin",
         ),
         method!(
+            "git/stage-hunk", GitStageHunk(StageHunkParams) -> Staged,
+            classes: [User], writes: true,
+            doc: "stage one hunk of the editor's tracked buffer against HEAD in git's index (git apply --cached); the work tree is untouched",
+        ),
+        method!(
             "history/take", HistoryTake(TakeParams) -> Taken,
             classes: [User], writes: true,
             doc: "whole hunks of a branch taken into a worktree's branch as the user's new text, with where it came from; the files are written",
@@ -476,13 +481,44 @@ pub struct HeadHunksParams {
     pub worktree_root: String,
 }
 
+/// A hunk against HEAD: git's numbers and the lines HEAD has there (the text a revert puts back and a stage applies).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HeadHunk {
+    pub old_start: i64,
+    pub old_count: i64,
+    pub new_start: i64,
+    pub new_count: i64,
+    /// HEAD's lines OLD_START..OLD_START+OLD_COUNT, each with its line end.
+    pub old_lines: Vec<String>,
+}
+
 /// `history/hunks/head`'s answer.  `tracked` is false when no buffer of the file is tracked (no hunks were computed);
 /// a file HEAD does not hold is one hunk of all its lines.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HeadHunks {
     pub tracked: bool,
-    pub hunks: Vec<LineHunk>,
+    pub hunks: Vec<HeadHunk>,
+}
+
+/// `git/stage-hunk`: stage one hunk of the tracked buffer's change against HEAD (as `history/hunks/head` numbered it)
+/// in the index, as `git apply --cached` does; the work tree is not touched.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StageHunkParams {
+    /// Relative to the worktree.
+    pub path: String,
+    pub worktree_root: String,
+    /// Which of the hunks: the line the hunk starts at in the buffer (`new_start`; for a pure deletion, the line it
+    /// sits before).
+    pub new_start: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Staged {
+    pub staged: bool,
 }
 
 /// A hunk to take: the file and its exact range in the source branch's text (a `ComparedHunk`'s `theirs_*`).

@@ -82,6 +82,7 @@
   "gateway/unregister": ["user"],
   "git/blame": ["user"],
   "git/letters": ["user"],
+  "git/stage-hunk": ["user"],
   "graph/backup": ["user"],
   "graph/compact": ["user"],
   "graph/entity": ["user"],

@@ -15683,6 +15683,54 @@
       "classes": [
         "user"
       ],
+      "doc": "stage one hunk of the editor's tracked buffer against HEAD in git's index (git apply --cached); the work tree is untouched",
+      "name": "git/stage-hunk",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/stage-hunk`: stage one hunk of the tracked buffer's change against HEAD (as `history/hunks/head` numbered it)\nin the index, as `git apply --cached` does; the work tree is not touched.",
+        "properties": {
+          "new_start": {
+            "description": "Which of the hunks: the line the hunk starts at in the buffer (`new_start`; for a pure deletion, the line it\nsits before).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "path": {
+            "description": "Relative to the worktree.",
+            "type": "string"
+          },
+          "worktree_root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "worktree_root",
+          "new_start"
+        ],
+        "title": "StageHunkParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "staged": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "staged"
+        ],
+        "title": "Staged",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a checked copy of work.db in <data>/backup/ (VACUUM INTO), then the old copies rotated",
       "name": "graph/backup",
       "params": {
@@ -18584,9 +18632,9 @@
       },
       "result": {
         "$defs": {
-          "LineHunk": {
+          "HeadHunk": {
             "additionalProperties": false,
-            "description": "One hunk with git's numbers (`@@ -old_start,old_count +new_start,new_count @@` of `git diff --unified=0`).",
+            "description": "A hunk against HEAD: git's numbers and the lines HEAD has there (the text a revert puts back and a stage applies).",
             "properties": {
               "new_count": {
                 "format": "int64",
@@ -18600,6 +18648,13 @@
                 "format": "int64",
                 "type": "integer"
               },
+              "old_lines": {
+                "description": "HEAD's lines OLD_START..OLD_START+OLD_COUNT, each with its line end.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "old_start": {
                 "format": "int64",
                 "type": "integer"
@@ -18609,7 +18664,8 @@
               "old_start",
               "old_count",
               "new_start",
-              "new_count"
+              "new_count",
+              "old_lines"
             ],
             "type": "object"
           }
@@ -18620,7 +18676,7 @@
         "properties": {
           "hunks": {
             "items": {
-              "$ref": "#/$defs/LineHunk"
+              "$ref": "#/$defs/HeadHunk"
             },
             "type": "array"
           },

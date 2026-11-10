@@ -297,26 +297,85 @@ impl Hub {
     }
 
     /// The hunks of the editor's tracked buffer of REL of TREE against HEAD's text of it (a file HEAD does not hold is
-    /// all added); none when no buffer of it is tracked.
-    pub fn hunks_head(&self, tree: &Tree, rel: &str) -> verdandi::Result<Option<Vec<w::LineHunk>>> {
+    /// all added), each with HEAD's lines it replaces; none when no buffer of it is tracked.
+    pub fn hunks_head(&self, tree: &Tree, rel: &str) -> verdandi::Result<Option<Vec<w::HeadHunk>>> {
         let Some(now) = self.mirror_text(tree, rel)? else {
             return Ok(None);
         };
         let old = super::blob::text_at(&tree.git_dir, &tree.root, "HEAD", rel)
             .map(|b| String::from_utf8_lossy(&b).into_owned())
             .unwrap_or_default();
-        Ok(Some(
-            verdandi::threeway::diff_hunks(&old, &now)?
-                .into_iter()
-                .map(|(os, oc, ns, nc)| w::LineHunk {
-                    old_start: n(os),
-                    old_count: n(oc),
-                    new_start: n(ns),
-                    new_count: n(nc),
-                })
-                .collect(),
-        ))
+        Ok(Some(head_hunks(&old, &now)?))
     }
+
+    /// Stage the hunk of the tracked buffer of REL that starts at line NEW_START: the index gets its text with that
+    /// hunk applied to what the index holds (other staged hunks stay), the work tree is not touched.  False when the
+    /// buffer is not tracked or has no such hunk against the index.
+    pub fn stage_hunk(&self, tree: &Tree, rel: &str, new_start: i64) -> verdandi::Result<bool> {
+        let Some(now) = self.mirror_text(tree, rel)? else {
+            return Ok(false);
+        };
+        let (mode, index) = match super::blob::index_entry(&tree.git_dir, &tree.root, rel) {
+            Some((m, b)) => (m, String::from_utf8_lossy(&b).into_owned()),
+            None => ("100644".to_owned(), String::new()),
+        };
+        let hunks = head_hunks(&index, &now)?;
+        let Some(h) = hunks.iter().find(|h| h.new_start == new_start) else {
+            return Ok(false);
+        };
+        let lines: Vec<&str> = index.split_inclusive('\n').collect();
+        let new: Vec<&str> = now.split_inclusive('\n').collect();
+        let from = |n: i64| usize::try_from(n).unwrap_or(0);
+        // git numbers an empty side by the line before it
+        let first_old = if h.old_count == 0 {
+            from(h.old_start)
+        } else {
+            from(h.old_start) - 1
+        };
+        let first_new = if h.new_count == 0 {
+            from(h.new_start)
+        } else {
+            from(h.new_start) - 1
+        };
+        let mut out = String::new();
+        out.extend(lines[..first_old.min(lines.len())].iter().copied());
+        out.extend(
+            new[first_new.min(new.len())..(first_new + from(h.new_count)).min(new.len())]
+                .iter()
+                .copied(),
+        );
+        out.extend(
+            lines[(first_old + from(h.old_count)).min(lines.len())..]
+                .iter()
+                .copied(),
+        );
+        super::blob::stage_bytes(&tree.git_dir, &tree.root, rel, &mode, out.as_bytes())
+            .map_err(|e| verdandi::Error::Refused(format!("git: {e}")))?;
+        Ok(true)
+    }
+}
+
+/// OLD against NEW as hunks with OLD's replaced lines.
+fn head_hunks(old: &str, new: &str) -> verdandi::Result<Vec<w::HeadHunk>> {
+    let lines: Vec<&str> = old.split_inclusive('\n').collect();
+    Ok(verdandi::threeway::diff_hunks(old, new)?
+        .into_iter()
+        .map(|(os, oc, ns, nc)| {
+            let first = if oc == 0 { os } else { os.saturating_sub(1) };
+            w::HeadHunk {
+                old_start: n(os),
+                old_count: n(oc),
+                new_start: n(ns),
+                new_count: n(nc),
+                old_lines: lines
+                    .iter()
+                    .skip(first)
+                    .take(oc)
+                    .map(|l| (*l).to_owned())
+                    .collect(),
+            }
+        })
+        .collect())
 }
 
 /// One file an agent's worktree changed against its branch's base, with the lines added and removed.
@@ -496,6 +555,20 @@ pub async fn git_blame(f: &Front, c: &Caller, p: w::GitBlameParams) -> Result<w:
         .await
         .map_err(|e| internal(e.to_string()))?
         .map_err(store)
+}
+
+/// `git/stage-hunk`.
+pub async fn stage_hunk(f: &Front, c: &Caller, p: w::StageHunkParams) -> Result<w::Staged, Error> {
+    super::revert::user_only(c)?;
+    let (hub, tree) = f
+        .core
+        .history
+        .of_tree(&hub_dir(f)?, Path::new(&p.worktree_root))?;
+    let staged = crate::clock::blocking(move || hub.stage_hunk(&tree, &p.path, p.new_start))
+        .await
+        .map_err(|e| internal(e.to_string()))?
+        .map_err(store)?;
+    Ok(w::Staged { staged })
 }
 
 /// `history/hunks/head`.
@@ -795,8 +868,69 @@ mod tests {
             .collect();
         assert_eq!(got, git_hunks("a\nb\nc\nd\n", now));
         assert_eq!(got, [(2, 1, 2, 1), (4, 0, 5, 1)]);
+        // HEAD's lines a hunk replaces ride along: what a revert puts back
+        let olds: Vec<_> = f
+            .hub
+            .hunks_head(&f.tree, "a.txt")
+            .unwrap()
+            .unwrap()
+            .into_iter()
+            .map(|h| h.old_lines)
+            .collect();
+        assert_eq!(olds, vec![vec!["b\n".to_owned()], Vec::<String>::new()]);
         // no buffer of a file: nothing computed
         assert!(f.hub.hunks_head(&f.tree, "other.txt").unwrap().is_none());
+    }
+
+    // pattern: D
+    #[test]
+    fn staging_one_hunk_puts_only_it_in_the_index() {
+        let f = fx("a\nb\nc\nd\n");
+        tracked(&f, "a.txt", "a\nB\nc\nd\ne\n", "user");
+        // the append (the second hunk), not the change of b
+        assert!(f.hub.stage_hunk(&f.tree, "a.txt", 5).unwrap());
+        assert_eq!(git(&f.tree.root, &["show", ":a.txt"]), "a\nb\nc\nd\ne");
+        // the first hunk goes on top of what is staged already
+        assert!(f.hub.stage_hunk(&f.tree, "a.txt", 2).unwrap());
+        assert_eq!(git(&f.tree.root, &["show", ":a.txt"]), "a\nB\nc\nd\ne");
+        // the work tree was not touched, and a hunk that is not there is no change
+        assert_eq!(
+            std::fs::read_to_string(f.tree.root.join("a.txt")).unwrap(),
+            "a\nb\nc\nd\n"
+        );
+        assert!(!f.hub.stage_hunk(&f.tree, "a.txt", 3).unwrap());
+    }
+
+    // pattern: D
+    #[test]
+    fn staging_a_deletion_and_a_new_file() {
+        let f = fx("a\nb\nc\n");
+        tracked(&f, "a.txt", "a\nc\n", "user");
+        let h = f.hub.hunks_head(&f.tree, "a.txt").unwrap().unwrap();
+        assert_eq!((h[0].old_start, h[0].old_count, h[0].new_count), (2, 1, 0));
+        assert!(f.hub.stage_hunk(&f.tree, "a.txt", h[0].new_start).unwrap());
+        assert_eq!(git(&f.tree.root, &["show", ":a.txt"]), "a\nc");
+        std::fs::write(f.tree.root.join("new.txt"), "").unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let deny = norn::deny::DenyList::load(home.path(), home.path());
+        f.hub.register(&f.tree, "new.txt", "b2", &deny).unwrap();
+        let ch = crate::history::methods::BatchChange {
+            start: 0,
+            old_len: 0,
+            inserted: "x\ny\n".into(),
+            origin: "user".into(),
+        };
+        f.hub
+            .batch(
+                "b2",
+                &[ch],
+                &crate::history::methods::hash("x\ny\n"),
+                1,
+                5.0,
+            )
+            .unwrap();
+        assert!(f.hub.stage_hunk(&f.tree, "new.txt", 1).unwrap());
+        assert_eq!(git(&f.tree.root, &["show", ":new.txt"]), "x\ny");
     }
 
     // pattern: D

@@ -1392,6 +1392,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `gateway/unregister` | user | `{token: string}` | `boolean` | no |
 | `git/blame` | user | `{path: string, worktree_root: string}` | `{agents: [AgentLines], commits: [BlameCommit], head?: string, lines: [natnum]}` | no |
 | `git/letters` | user | `{root: AbsPath, shown?: [string], view: string}` | `boolean` | no |
+| `git/stage-hunk` | user | `{new_start: integer, path: string, worktree_root: string}` | `{staged: boolean}` | yes |
 | `graph/backup` | user | `{}` | `BackupAnswer` | no |
 | `graph/compact` | user | `{dry_run?: boolean}` | `{dry_run: boolean, link_stats: natnum, versions: natnum}` | yes |
 | `graph/entity` | user | `{as_of?: natnum, id: string, include?: ["links" \| "notes" \| "history"]}` | `EntityAnswer` | no |
@@ -1417,7 +1418,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
 | `history/fork/drop` | user | `{id: string}` | `{ok: boolean}` | yes |
 | `history/hunks` | user | `{branch: string, since: integer}` | `{files: [FileHunks]}` | no |
-| `history/hunks/head` | user | `{path: string, worktree_root: string}` | `{hunks: [LineHunk], tracked: boolean}` | no |
+| `history/hunks/head` | user | `{path: string, worktree_root: string}` | `{hunks: [HeadHunk], tracked: boolean}` | no |
 | `history/op/hunks` | user | `{op?: integer, session?: string, worktree: string}` | `{hunks: [OpHunk]}` | no |
 | `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |

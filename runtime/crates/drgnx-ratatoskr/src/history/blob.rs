@@ -87,6 +87,41 @@ pub fn blame_porcelain(
     run(c, contents)
 }
 
+/// REL's content in the index (stage 0), or none when the index does not hold it, with the file's mode.
+pub fn index_entry(git_dir: &Path, work_tree: &Path, rel: &str) -> Option<(String, Vec<u8>)> {
+    let mut c = base(git_dir, work_tree);
+    c.args(["ls-files", "-s", "--", rel]);
+    let line = String::from_utf8_lossy(&run(c, None).ok()?).into_owned();
+    let (mode, rest) = line.split_once(' ')?;
+    let sha = rest.split(' ').next()?;
+    let mut c = base(git_dir, work_tree);
+    c.args(["cat-file", "blob", sha]);
+    Some((mode.to_owned(), run(c, None).ok()?))
+}
+
+/// Put BYTES in the index as REL with MODE (the blob is written to the object store first).
+pub fn stage_bytes(
+    git_dir: &Path,
+    work_tree: &Path,
+    rel: &str,
+    mode: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let mut c = base(git_dir, work_tree);
+    c.args(["hash-object", "-w", "--stdin", "--path", rel]);
+    let sha = String::from_utf8_lossy(&run(c, Some(bytes))?)
+        .trim()
+        .to_owned();
+    let mut c = base(git_dir, work_tree);
+    c.args([
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("{mode},{sha},{rel}"),
+    ]);
+    run(c, None).map(|_| ())
+}
+
 /// The paths that differ between the commits OLD and NEW.
 pub fn changed_paths(
     git_dir: &Path,
