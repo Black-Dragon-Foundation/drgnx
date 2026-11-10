@@ -14,6 +14,8 @@
 (require 'drgnx-setting)
 (require 'drgnx-view)
 (require 'drgnx-registry)
+(require 'drgnx-icons)
+(require 'drgnx-pixels)
 
 (defvar drgnx-agent-panel--session)
 (defvar drgnx-agent-panel--shown-keys)
@@ -63,13 +65,42 @@ SNAP is the snapshot, SINCE when it began running (float seconds) and NOW the ti
         what
       (format "%s · %s" who what))))
 
+(defface drgnx-agent-panel-lens '((t :inherit (drgnx-ui-caption drgnx-text-muted drgnx-surface-gap)
+                                     :box (:line-width (2 . 8) :style flat-button)))
+  "A preset of the header's lens that is not in force, on the lens's well (`.lens': the gap's colour)." :group 'drgnx-agent-panel)
+(defface drgnx-agent-panel-lens-on '((t :inherit (drgnx-ui-caption drgnx-control)))
+  "The preset of the header's lens in force: raised (agent-panel.html `.lens span.on')." :group 'drgnx-agent-panel)
+
+(defun drgnx-agent-panel--preset-in-force ()
+  "The number (1 to 3) of the preset the chat's open step types are, or nil."
+  (let ((open (sort (mapcar #'symbol-name drgnx-agent-panel--disclosure) #'string<)) (n 0))
+    (seq-some (lambda (p) (cl-incf n)
+                (and (equal open (sort (mapcar #'symbol-name (cdr p)) #'string<)) n))
+              drgnx-agent-panel-presets)))
+
+(defun drgnx-agent-panel--lens ()
+  "The header's lens: watch, review and debug, the one in force raised; a click picks one."
+  (let ((on (drgnx-agent-panel--preset-in-force)) (n 0))
+    (mapconcat (lambda (p)
+                 (cl-incf n)
+                 (let ((map (make-sparse-keymap)))
+                   (define-key map [mouse-1] (intern (format "drgnx-agent-panel-preset-%d" n)))
+                   (propertize (symbol-name (car p)) 'face (if (eql n on) 'drgnx-agent-panel-lens-on 'drgnx-agent-panel-lens)
+                               'mouse-face 'drgnx-hover 'keymap map 'help-echo (format "%d: %s" n (car p)))))
+               drgnx-agent-panel-presets
+               ;; 2 px of the well between segments: two segments of one face would be one box, padded at its ends only
+               (propertize " " 'face 'drgnx-surface-gap 'display `(space :width (,(drgnx-px 2)))))))
+
 (defun drgnx-agent-panel--header-row ()
+  "The header (agent-panel.html `.agent .ph'): the agent's icon, the chat's name, what the agent is doing, the lens."
   (let* ((snap drgnx-agent-panel--snap)
-         (name (or (plist-get snap :name) drgnx-agent-panel--session "agent")))
-    (concat (propertize (format " %s" name) 'face 'drgnx-agent-panel-title)
-            (propertize (format "  %s" (drgnx-agent-panel--status-line snap drgnx-agent-panel--busy-since
-                                                                       (float-time)))
+         (name (or (plist-get snap :name) drgnx-agent-panel--session "agent"))
+         (lens (drgnx-agent-panel--lens)))
+    (concat " " (drgnx-look-icon 'bot 'drgnx-accent) " "
+            (propertize name 'face 'drgnx-agent-panel-title)
+            (propertize (format " · %s" (drgnx-agent-panel--status-line snap drgnx-agent-panel--busy-since (float-time)))
                         'face 'drgnx-agent-panel-subtle)
+            (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width lens) (drgnx-px 12)))))) lens
             "\n")))
 
 (defun drgnx-agent-panel--chips (snap)
@@ -222,14 +253,28 @@ else when the chat's toggle for its type is on."
            (if drgnx-agent-panel-disclosure (mapconcat #'symbol-name drgnx-agent-panel-disclosure ", ") "titles only")
            (if drgnx-agent-panel--defaults-unsaved " (not saved: your settings file refused it)" "")))
 
+(defface drgnx-agent-panel-tag '((t :inherit (drgnx-ui-caption drgnx-text-subtle)))
+  "A step type of the strip whose detail is closed." :group 'drgnx-agent-panel)
+(defface drgnx-agent-panel-tag-on '((t :inherit drgnx-chip))
+  "A step type of the strip whose detail is open (agent-panel.html `.disc .t.open')." :group 'drgnx-agent-panel)
+
 (defun drgnx-agent-panel--strip-row ()
-  "The disclosure strip: a toggle for each step type, and the presets."
-  (concat " "
+  "The disclosure strip (agent-panel.html `.disc'): \"Open:\" and a pill for each step type, the open ones raised; a
+click flips one.  The presets are the header's lens."
+  (concat (propertize " Open: " 'face 'drgnx-agent-panel-subtle)
           (mapconcat (lambda (ty)
-                       (propertize (format " %s %s " (if (memq ty drgnx-agent-panel--disclosure) "▾" "▸") ty)
-                                   'face 'drgnx-agent-panel-chip))
+                       (let ((map (make-sparse-keymap)))
+                         (define-key map [mouse-1] (lambda () (interactive) (drgnx-agent-panel-toggle-type ty)))
+                         (propertize (symbol-name ty)
+                                     'face (if (memq ty drgnx-agent-panel--disclosure) 'drgnx-agent-panel-tag-on
+                                             'drgnx-agent-panel-tag)
+                                     'mouse-face 'drgnx-hover 'keymap map)))
                      drgnx-agent-panel-step-types " ")
-          (propertize "  1 watch · 2 review · 3 debug · T toggle · M make default" 'face 'drgnx-agent-panel-subtle)
+          (let ((map (make-sparse-keymap)) (label "make default"))
+            (define-key map [mouse-1] #'drgnx-agent-panel-make-default)
+            (concat (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width label) (drgnx-px 12))))))
+                    (propertize label 'face 'drgnx-accent 'mouse-face 'drgnx-hover 'keymap map
+                                'help-echo "M: what is open now is what new panels open")))
           "\n"))
 
 (defun drgnx-agent-panel-steps-setup ()
