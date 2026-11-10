@@ -696,7 +696,8 @@ act through `drgnx-work-lens-nav` (buffer-local): a view that is not the map set
 
 `modules/tools/drgnx-work-board.el` is the Board, drawn only from the hub's rows. Beside a map that is a hub-fed view
 `VIEW` it is the hub-fed view `VIEW/board` in the map's class: `drgnx-work-board-refresh` asks
-`work/board/subscribe {view, map, plans}` (docs/develop/hub.md, "The Board"), again 0.3 s after the map's frame
+`work/board/subscribe {view, map, plans}` (docs/develop/hub.md, "The Board") on the subscribed connection, as the map does
+(`drgnx-work-client--call`: the hub sends a view's rows to the connection that asked and finds the map there), again 0.3 s after the map's frame
 changes (`drgnx-timer-soon` keyed `(work-board . VIEW)`), and the hub sends its model and rows (the columns, three rows
 a card, the bar a row `spaces` entry). `drgnx-work-board-plans-for` is the design's table 8.2 from the map to the
 Board: a plan, spec or ask scopes it to its plans. Beside a map that is not on the rows path (no Sjá, or

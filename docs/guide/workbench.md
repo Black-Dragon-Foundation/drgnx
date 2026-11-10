@@ -512,7 +512,9 @@ scrolls. Without Glitnir nothing changes.
 
 The **panel** (Toggle Panel: ``C-` `` · palette · `SPC j`) sits under the editors; the **right dock** (Toggle
 Right Dock: `C-M-b` · palette · `SPC R`) runs the frame's full height, like the left one. Each is one window with a
-**tab row** at the top (click a tab to show it). Showing a buffer there never takes focus (Focus Panel does), and
+**tab row** at the top (click a tab to show it). The right dock shows its tab row only while two of its tabs have
+something to show: with one (an agent panel, say) that pane's own header is the top row, and `q` or `C-w l` then
+`C-x 0` hides the dock. Showing a buffer there never takes focus (Focus Panel does), and
 switching tabs swaps the buffer *in place*: the window stays, nothing around it moves, and each tab comes back
 scrolled where you left it. Both keep their pixel size across hiding and showing. **The size you chose stays:**
 a size you set for the left dock, the panel or the right dock is the one it comes back at the next time it shows.

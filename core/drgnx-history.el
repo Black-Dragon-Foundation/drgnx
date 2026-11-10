@@ -10,7 +10,8 @@
 ;; the agents' and the outside world's.  A batch carries the hash of the buffer's whole text; when the hub's document
 ;; differs it answers `resync' and the whole text goes (`history/resync').
 ;; - Typing costs this file nothing: the hook is Nidhogg's (a branch for an untracked buffer), and the drain runs
-;;   off the command loop on a timer.  The hash is the drain's cost, one `secure-hash' of the buffer per drain.
+;;   off the command loop on a timer.  The hash is the drain's cost: Nidhogg hashes the buffer's text (`nidhogg-buffer-sha256'),
+;;   and a large buffer's copy is hashed on a worker thread (`nidhogg-buffer-sha256-async'): its batches go when it lands.
 ;; - `drgnx-history-with-origin' marks the changes its body makes as someone else's (a revert, a merge, git); Emacs's own
 ;;   undo of them runs outside it and is the user's change.
 ;; - Without the Nidhogg primitives the mode stays off.  Nothing here prompts or waits; a lost hub drops the
@@ -26,6 +27,8 @@
 (declare-function nidhogg-history-track "nidhogg-history" (buffer on))
 (declare-function nidhogg-history-drain "nidhogg-history" (buffer))
 (declare-function nidhogg-history-pending-p "nidhogg-history" ())
+(declare-function nidhogg-buffer-sha256 "nidhogg-blk" (buffer))
+(declare-function nidhogg-buffer-sha256-async "nidhogg-blk" (buffer callback))
 (defvar nidhogg-history-origin)
 (defvar drgnx-hub--client)
 (defvar drgnx-hub-connected-functions)
@@ -53,8 +56,8 @@ no listener the drain does nothing more.")
 (cl-defstruct (drgnx-history--st (:constructor drgnx-history--st-make))
   "A tracked buffer: ID (the hub's name for it), REGISTERED (the hub answered tracked), LAST (the hub's last answer
 to a batch: `ok', `resync', or `resynced' once the text went), RESYNCING (a `history/resync' is out), DRAINS (the
-drains that sent changes)."
-  id registered last resyncing (drains 0))
+drains that sent changes), HASHING (a large buffer's text is being hashed on a worker: its ring waits)."
+  id registered last resyncing (drains 0) hashing)
 
 (defvar drgnx-history--buffers (make-hash-table :test 'eq :weakness 'key)
   "Buffer → `drgnx-history--st'.  Weak on the buffer; entries go with `kill-buffer-hook' and the mode's teardown.")
@@ -63,7 +66,8 @@ drains that sent changes)."
 
 (defun drgnx-history--primitives-p ()
   "Whether this Emacs has Nidhogg's change hook."
-  (and (fboundp 'nidhogg-history-track) (fboundp 'nidhogg-history-drain) (fboundp 'nidhogg-history-pending-p)))
+  (and (fboundp 'nidhogg-history-track) (fboundp 'nidhogg-history-drain) (fboundp 'nidhogg-history-pending-p)
+       (fboundp 'nidhogg-buffer-sha256) (fboundp 'nidhogg-buffer-sha256-async)))
 
 (defun drgnx-history--connected-p ()
   "Whether this Emacs has a live connection to the hub (a hook never opens one)."
@@ -217,13 +221,6 @@ file inside a git project; else nil.  ROOT is the project's folder, PATH relativ
 
 ;;;; The drain
 
-(defun drgnx-history--hash (buffer)
-  "SHA-256 in hex of BUFFER's whole text as the hub holds it: UTF-8 with LF."
-  (with-current-buffer buffer
-    (save-restriction
-      (widen)
-      (let ((coding-system-for-write 'utf-8-unix)) (secure-hash 'sha256 (current-buffer))))))
-
 (defun drgnx-history--gap (buffer st)
   "BUFFER's changes since its last drain went unsent: a drain of its own, told to the listeners as `resync'."
   (cl-incf (drgnx-history--st-drains st))
@@ -236,7 +233,8 @@ file inside a git project; else nil.  ROOT is the project's folder, PATH relativ
       (save-restriction
         (widen)
         (nidhogg-history-drain buffer)
-        (setf (drgnx-history--st-resyncing st) t)
+        (setf (drgnx-history--st-resyncing st) t
+              (drgnx-history--st-hashing st) nil)         ; a hash on its way is of text this one replaces
         (drgnx-history--gap buffer st)
         (unless (drgnx-history--send "history/resync"
                                      (list :buffer_id (drgnx-history--st-id st)
@@ -263,31 +261,54 @@ file inside a git project; else nil.  ROOT is the project's folder, PATH relativ
 (defun drgnx-history--due-p (buffer)
   "Whether BUFFER's ring may go now: a small buffer always; a large one only after Emacs has been idle for
 `drgnx-history-idle-delay', because the hub checks every batch against the hash of the buffer's whole text, which
-costs time in proportion to the buffer and must not sit between two keystrokes.  The changes wait in the ring."
+costs the buffer's size in copying (the hash itself runs on a worker) and must not sit between two keystrokes.  The
+changes wait in the ring."
   (or (< (buffer-size buffer) drgnx-history-large-size)
       (let ((idle (drgnx-history--idle-time)))
         (and idle (>= (float-time idle) drgnx-history-idle-delay)))))
 
-(defun drgnx-history--drain-buffer (buffer st)
-  "Hand BUFFER's ring to the hub."
-  (let ((drained (nidhogg-history-drain buffer)))
-    (cond ((null drained))
-          ((eq drained 'resync) (drgnx-history--resync buffer st))
-          ((drgnx-history--st-resyncing st) (drgnx-history--gap buffer st))  ; the text on its way includes these
-          (t (let* ((changes (drgnx-history--changes drained))
-                    (batches (drgnx-history--batches changes drgnx-history-batch-max))
-                    (hash (drgnx-history--hash buffer)) (id (drgnx-history--st-id st)) (sent t)
-                    (version (1+ (drgnx-history--st-drains st))))
-               (while batches
-                 (let* ((batch (pop batches)) (lastp (null batches)))
-                   (unless (drgnx-history--send "history/batch"
-                                                (list :buffer_id id :changes batch :region_hash hash :version version)
-                                                (if lastp (lambda (r e) (drgnx-history--batch-replied buffer st r e)) #'ignore))
-                     (setq batches nil sent nil)
-                     (drgnx-history--forget buffer))))
-               (when sent
-                 (cl-incf (drgnx-history--st-drains st))
-                 (when drgnx-history-drained-functions (drgnx-history--tell buffer st changes))))))))
+(defun drgnx-history--send-batches (buffer st changes hash)
+  "Send CHANGES, drained from BUFFER's ring, with HASH of the text they lead to; tell the listeners once they went."
+  (let* ((batches (drgnx-history--batches changes drgnx-history-batch-max))
+         (id (drgnx-history--st-id st)) (sent t)
+         (version (1+ (drgnx-history--st-drains st))))
+    (while batches
+      (let* ((batch (pop batches)) (lastp (null batches)))
+        (unless (drgnx-history--send "history/batch"
+                                     (list :buffer_id id :changes batch :region_hash hash :version version)
+                                     (if lastp (lambda (r e) (drgnx-history--batch-replied buffer st r e)) #'ignore))
+          (setq batches nil sent nil)
+          (drgnx-history--forget buffer))))
+    (when sent
+      (cl-incf (drgnx-history--st-drains st))
+      (when drgnx-history-drained-functions (drgnx-history--tell buffer st changes)))))
+
+(defun drgnx-history--hashed (buffer st token changes hash)
+  "A worker's HASH of BUFFER's text at a drain has landed: send that drain's CHANGES, unless the buffer went or the
+whole text went instead meanwhile (`drgnx-history--resync' drops TOKEN)."
+  (when (eq (drgnx-history--st-hashing st) token)
+    (setf (drgnx-history--st-hashing st) nil)
+    (when (and (buffer-live-p buffer) (eq (gethash buffer drgnx-history--buffers) st))
+      (condition-case nil
+          (drgnx-history--send-batches buffer st changes hash)
+        (error (drgnx-history--forget buffer))))))
+
+(defun drgnx-history--drain-buffer (buffer st &optional now)
+  "Hand BUFFER's ring to the hub.  The hash of a large buffer's text is made on a worker and the batches go when it
+lands, its ring waiting meanwhile; NOW (a caller that needs the batches gone when this returns) and a small buffer
+hash at once."
+  (unless (drgnx-history--st-hashing st)
+    (let ((drained (nidhogg-history-drain buffer)))
+      (cond ((null drained))
+            ((eq drained 'resync) (drgnx-history--resync buffer st))
+            ((drgnx-history--st-resyncing st) (drgnx-history--gap buffer st))  ; the text on its way includes these
+            (t (let ((changes (drgnx-history--changes drained)))
+                 (if (or now (< (buffer-size buffer) drgnx-history-large-size))
+                     (drgnx-history--send-batches buffer st changes (nidhogg-buffer-sha256 buffer))
+                   (let ((token (list 'hashing)))
+                     (setf (drgnx-history--st-hashing st) token)
+                     (nidhogg-buffer-sha256-async
+                      buffer (lambda (hash) (drgnx-history--hashed buffer st token changes hash)))))))))))
 
 (defun drgnx-history--tell (buffer st changes)
   "Tell `drgnx-history-drained-functions' that BUFFER's CHANGES went; a listener that signals is skipped."
@@ -299,7 +320,7 @@ costs time in proportion to the buffer and must not sit between two keystrokes. 
 the version of its text from then on.  Nil when the history does not track it.  Never prompts, waits or signals."
   (let* ((b (or buffer (current-buffer))) (st (gethash b drgnx-history--buffers)))
     (when (and st (drgnx-history--st-registered st))
-      (condition-case nil (drgnx-history--drain-buffer b st) (error (drgnx-history--forget b)))
+      (condition-case nil (drgnx-history--drain-buffer b st t) (error (drgnx-history--forget b)))
       (and (eq (gethash b drgnx-history--buffers) st) (drgnx-history--st-drains st)))))
 
 (defun drgnx-history-resyncing-p ()

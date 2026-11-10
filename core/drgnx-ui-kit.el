@@ -32,7 +32,7 @@
     (message-square "▭" . "m") (scroll-text "≣" . "=") (list-checks "☑" . "x")
     (monitor "▭" . "M") (laptop "▭" . "L") (server "☰" . "S") (globe "◍" . "@") (brain "◉" . "B")
     (lightbulb "◌" . "i") (pencil "✎" . "e") (clock "◷" . "t") (bot "◈" . "b") (pin "⌖" . "p")
-    (circle-dot "◉" . "o") (play "▶" . ">") (pause "⏸" . "||") (square "■" . "#") (refresh-cw "↻" . "r")
+    (circle-dot "◉" . "o") (play "▶" . ">") (pause "⏸" . "||") (git-fork "⑂" . "Y") (arrow-up "↑" . "^") (sparkle "✦" . "*") (square "■" . "#") (refresh-cw "↻" . "r")
     (trash-2 "⌫" . "d") (copy "⎘" . "c") (settings "⚙" . "*") (terminal "›_" . ">_") (bell "◔" . "!")
     (eye "◉" . "o") (lock "▮" . "#") (tag "⌗" . "#") (shield "⛨" . "!") (panel-right "◫" . "|")
     (triangle "▲" . "^") (hexagon "⬢" . "H") (star "★" . "*"))

@@ -13,6 +13,7 @@
 (require 'drgnx-view-nav)
 (require 'drgnx-explorer)
 
+(defvar drgnx-hub--events)
 (defvar drgnx-explorer-rows-nav-test--n 0 "Each run's view gets a name of its own in Sjá.")
 
 (defun drgnx-explorer-rows-nav-test--model ()
@@ -45,7 +46,8 @@
 
 (defmacro drgnx-explorer-rows-nav-test--with (&rest body)
   "BODY in the Explorer's buffer attached as hub-fed VIEW (roots /r, lib open), the model and rows applied; CALLS holds
-what was asked of the hub (newest first).  Nothing is sent, nothing on disk is read."
+what was asked of the hub (newest first): (METHOD . PARAMS) on the subscribed connection (`drgnx-hub--events', where the
+hub sends the view), tagged :call-connection or :other-connection elsewhere.  Nothing is sent, nothing on disk is read."
   (declare (indent 0))
   `(progn
      (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
@@ -55,6 +57,7 @@ what was asked of the hub (newest first).  Nothing is sent, nothing on disk is r
             (drgnx-view-patch--hooked nil)
             (drgnx-view-old-path nil)
             (drgnx-view-patch-send-function #'ignore)
+            (drgnx-hub--events (make-pipe-process :name "drgnx-test-events" :noquery t))   ; the subscribed connection
             (drgnx-explorer--hub-view nil)
             (drgnx-explorer--roots '("/r/"))
             (drgnx-explorer--expanded (make-hash-table :test #'equal))
@@ -64,8 +67,11 @@ what was asked of the hub (newest first).  Nothing is sent, nothing on disk is r
             (calls nil))
        (puthash "/r/lib" t drgnx-explorer--expanded)
        (unwind-protect
-           (cl-letf (((symbol-function 'drgnx-hub-call)
-                      (lambda (method params _cb &rest _) (push (cons method params) calls)))
+           (cl-letf (((symbol-function 'drgnx-hub-call)   ; the call connection: the hub would send the view nowhere
+                      (lambda (method params _cb &rest _) (push (list :call-connection method params) calls)))
+                     ((symbol-function 'drgnx-hub--call-on)
+                      (lambda (conn method params _cb &rest _)
+                        (push (if (eq conn drgnx-hub--events) (cons method params) (list :other-connection method params)) calls)))
                      ((symbol-function 'drgnx-view-env-register) #'ignore))
              (with-current-buffer (get-buffer-create drgnx-explorer-buffer-name)
                (drgnx-explorer-mode)
@@ -76,6 +82,7 @@ what was asked of the hub (newest first).  Nothing is sent, nothing on disk is r
                                              :ops (list (list :reset (drgnx-explorer-rows-nav-test--rows)))))
                (drgnx-view-draw-now drgnx-view)
                ,@body))
+         (delete-process drgnx-hub--events)
          (drgnx-view-patch-teardown)
          (when-let* ((b (get-buffer drgnx-explorer-buffer-name)))
            (drgnx-timer-cancel (cons 'drgnx-view b))

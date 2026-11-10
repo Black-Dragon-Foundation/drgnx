@@ -367,7 +367,13 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
     };
     l.push(dot, Some(face)).push(" ", None);
     let child = parent.map(child_face);
-    l.push(&title, child.as_deref());
+    if str_of(e, "kind") == Some("execute") {
+        // agent-panel.html `.step .what`: "Shell" and the command in the code font
+        l.push("Shell ", child.as_deref())
+            .push(title.trim_matches('`'), Some("drgnx-agent-panel-code"));
+    } else {
+        l.push(&title, child.as_deref());
+    }
     if !result.is_empty() {
         l.push(&format!("  · {result}"), Some("drgnx-agent-panel-subtle"));
     }
@@ -487,6 +493,9 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
     rows
 }
 
+/// The face of a tool's output lines: the code font (the panel's own text is in the UI font).
+const OUTPUT: &str = "drgnx-agent-panel-output";
+
 /// A tool's output: a short one whole (its first [`DETAIL_LINES`]), a large one its first and last [`OUTPUT_EDGE`]
 /// lines around a line that says how many are hidden (an estimate, `~`, when the hub kept only its ends: TOTAL bytes).
 fn detail_rows(idx: usize, key: &str, text: &str, total: Option<u64>) -> Vec<Row> {
@@ -496,7 +505,7 @@ fn detail_rows(idx: usize, key: &str, text: &str, total: Option<u64>) -> Vec<Row
     let large = lines.len() > 2 * OUTPUT_EDGE || total.is_some_and(|t| t > bytes);
     let dkey = format!("{key}/d");
     if !large {
-        return chunked(&dkey, idx, &indented(text, DETAIL_LINES), None);
+        return chunked(&dkey, idx, &indented(text, DETAIL_LINES), Some(OUTPUT));
     }
     let have = lines.len();
     let whole = match total {
@@ -521,9 +530,9 @@ fn detail_rows(idx: usize, key: &str, text: &str, total: Option<u64>) -> Vec<Row
         Some("drgnx-agent-panel-subtle"),
     );
     let mut h = Line::new(format!("{dkey}:0"), idx);
-    h.push(&head.join("\n"), None);
+    h.push(&head.join("\n"), Some(OUTPUT));
     let mut t = Line::new(format!("{dkey}:2"), idx);
-    t.push(&tail.join("\n"), None);
+    t.push(&tail.join("\n"), Some(OUTPUT));
     vec![h.finish(), mid.finish(), t.finish()]
 }
 
@@ -569,7 +578,7 @@ fn hunk_rows(idx: usize, key: &str, diffs: &[(String, String, String)]) -> Vec<R
                 let (sign, face) = match change.tag() {
                     similar::ChangeTag::Insert => ("+", Some("drgnx-agent-panel-added")),
                     similar::ChangeTag::Delete => ("-", Some("drgnx-agent-panel-removed")),
-                    similar::ChangeTag::Equal => (" ", None),
+                    similar::ChangeTag::Equal => (" ", Some("drgnx-agent-panel-context")),
                 };
                 let text = change.value().trim_end_matches('\n');
                 lines.push((format!("    {sign}{text}"), face));

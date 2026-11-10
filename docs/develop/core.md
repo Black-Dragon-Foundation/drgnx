@@ -2123,7 +2123,8 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   a held key's notices on the test clock, the clear notice, the hook on a move only, the broken view; `test/unit/work-trail-nav-test.el`: a 2,000-step trail
   paging at its edge with a held key).
 - **The Explorer on the rows path** (`drgnx-explorer-rows-attach VIEW CLASS`): the hub lists the roots and the open
-  folders (`explorer/subscribe`, hub.md) and its jit-lock painting is off. Next and previous follow `down` and `up`,
+  folders (`explorer/subscribe`, hub.md, asked on the subscribed connection `drgnx-hub--events`, where its env went) and its
+  jit-lock painting is off. Next and previous follow `down` and `up`,
   expand on an open folder follows `right` and collapse on anything but an open folder `left`; opening or closing a
   folder changes `drgnx-explorer--expanded` and asks the hub again without waiting; typing is Sjá's `prefix` over the
   visible siblings; a row's node (`drgnx-explorer-node-at`) is the path over it, so the file commands work as before.
