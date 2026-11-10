@@ -26,7 +26,9 @@ pub const CHUNKER_VERSION: u32 = 2;
 
 /// Bump it when what a parse derives besides the chunks changes (a symbol's lines or signature, a new language, the
 /// references): tier 1 parses every stored file again, and the chunks keep their content keys, so no vector changes.
-pub const PARSE_VERSION: u32 = 7;
+/// Only ever up, never back to a number used before: a store stamped with it by another parse would not parse again
+/// (7 was a reverted parse's before the references').
+pub const PARSE_VERSION: u32 = 8;
 
 /// The text of a chunk's FTS columns. `symbols` is raw: the store encodes it (`encode_symbol`) on write.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

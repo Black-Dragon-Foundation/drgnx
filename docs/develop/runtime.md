@@ -1215,8 +1215,8 @@ of 8 characters or more, × 0.1 for a `_`-private name and × 0.1 for a name def
 references to its own names are dropped. PageRank runs with damping 0.85 until the L1 change is under 1e-6 (at most
 100 iterations); the teleport and the dangling files' mass go by the personalisation vector, uniform or the focus
 files. Scope `code` masks tests and docs out of the walk. The graph and its unpersonalised ranks are kept in the memo
-until the store changes, for the base and the last 4 tree views; it is built in one pass over `file`, `symbol` and
-`ref`.
+until the store changes, within 64 MB (by an estimate of each graph's size; the least recently used view's graph goes
+first, and the one just built stays even alone over it); it is built in one pass over `file`, `symbol` and `ref`.
 
 `map::repo_map(store, view, MapAsk)` ranks definitions `(file, name)` by splitting each file's rank over its edges
 (a name the request gives × 10), leaves the focus files out, groups the rest by file in rank order and renders each
@@ -1430,7 +1430,12 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   difference of MRR@10 (or, `--by file`, of file MRR@10, which is fair to a chunker that gives a language no symbols)
   must be at least -0.01 overall and -0.03 per stratum of 30 rows or more (a smaller stratum is reported, not gated),
   the index has no coverage error and exact-symbol recall@1 is 1.0. A report from before file MRR was measured is
-  refused by `--by file`. It needs no hub.
+  refused by `--by file`. `eval run … --map TOKENS` also measures the repo map's yield at that budget, per question:
+  def-yield (the share of its target definitions shown) and file-yield (the share of its target files), with
+  intervals per stratum, for three contexts of the same token estimate: `map` (the global map, tests and docs
+  included), `map-around-search` (the top 5 hits' chunks, then the map focused on their files in what is left; the
+  focus files themselves are not in a focused map, so the hits stand for them) and `search` (hits packed in rank order,
+  each with its `path:lines` line). It needs no hub.
 - **The MCP tools (`search/mcp.rs`).** A session whose `mcp/session` came while `drgnx-agents-mcp` holds `search` gets
   `search.sock` beside `mcp.sock` (recorded in the session's row, so it is bound again at a restart and closed with the
   session): the tools `search` (`query`, `scope`, `k`), `symbols` (`name`, `match`, `kind`, `path`, `scope`, `k`) and
