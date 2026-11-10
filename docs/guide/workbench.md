@@ -219,7 +219,8 @@ its own (`split-height-threshold` and `split-width-threshold` nil, `even-window-
 
 The table is one entry at the **end** of `display-buffer-alist`, so your own entries and
 `display-buffer-overriding-action` still win, and so does a caller that asks for a frame or for no window (`C-x 5 b`,
-`display-buffer-no-window`). `C-x 4 b` shows the buffer in another editor when there is one; a window you locked with
+`display-buffer-no-window`), or that marks its own action with `(drgnx-explicit . t)` in the action's alist (the floating
+palette does). `C-x 4 b` shows the buffer in another editor when there is one; a window you locked with
 `C-x w d` is left alone. If your configuration replaces the variable after drgnx started (`(setq display-buffer-alist …)`
 instead of `add-to-list`), drgnx's entry is gone and buffers go wherever Emacs puts them: once init is done,
 every start checks the entry and posts a warning notice (source `wb`) when it is missing, and `drgnx doctor`

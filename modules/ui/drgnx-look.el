@@ -80,13 +80,15 @@ High contrast has no shadow and a 1 px ring (the `child-frame-border' face, `drg
 
 (defun drgnx-look-palette-for (variant)
   "The floating command palette's child frame parameters in VARIANT, in logical pixels.
-High contrast is opaque, with no shadow and no blur, and a 2 px ring."
+High contrast is opaque, with no shadow and no blur, and a 2 px ring.  The others are 98 % opaque with no backdrop
+blur: the design's 90 % with a 16 px blur needs the blur in the picture, and on Nidhogg's line it is not there yet,
+so at 90 % the text behind would read through (`palette-float-hides-what-lies-behind')."
   (drgnx-look--float-motion
    (pcase variant
      ('hc '((corner-radius . 12) (alpha-background . 1.0) (child-frame-border-width . 2) (transition . pop)))
      (_ `((corner-radius . 12)
           (shadow . (:blur 48 :offset (0 . 16) :spread 0 :opacity ,(if (eq variant 'light) 0.22 0.50)))
-          (alpha-background . 0.90) (backdrop-blur . 12) (transition . pop))))))
+          (alpha-background . 0.98) (transition . pop))))))
 
 (defcustom drgnx-look-chrome (drgnx-look-chrome-for 'dark)
   "The chrome of popups (child frames) under Glitnir, in logical pixels: `child-frame-chrome' while ui/look is on.

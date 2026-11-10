@@ -552,7 +552,8 @@ How it works:
   The last three, `explorer-focused-dark`, `explorer-focused-light` and `explorer-focused-hc`, are the window scene
   with the Explorer focused, so its selected row shows the focus ring and the other sections the inactive selection.
 - It writes `NAME-sN-facts.eld` beside each shot: the themes, the fonts the chrome faces got, the windows, the
-  modules, and `:limits`, what the line cannot show of that mockup yet (`drgnx-look-scene-limits`). A limit is
+  modules, the visible child frames, `:palette` while a minibuffer is open (whether the palette floats and why: its
+  category's multiform entry, the display action, the frame), and `:limits`, what the line cannot show of that mockup yet (`drgnx-look-scene-limits`). A limit is
   written down, never hidden by changing the scene. It also writes `scenes-sN.eld`, with the shots and each scene's
   errors.
 

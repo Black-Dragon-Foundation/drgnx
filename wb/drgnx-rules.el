@@ -106,11 +106,14 @@ Non-nil when PLACE was defined."
   "Actions a caller only names on purpose (C-x 5 b, no window wanted): they win over the rules.")
 
 (defun drgnx-rules--explicit-p (action)
-  (seq-some (lambda (f) (memq f drgnx-rules--explicit-actions)) (ensure-list (car-safe action))))
+  "ACTION wins over the rules: it names one of `drgnx-rules--explicit-actions', or its alist holds
+\=`(drgnx-explicit . t)' (a caller's own function that places the buffer itself, such as the floating palette's)."
+  (or (seq-some (lambda (f) (memq f drgnx-rules--explicit-actions)) (ensure-list (car-safe action)))
+      (and (consp action) (listp (cdr action)) (alist-get 'drgnx-explicit (cdr action)) t)))
 
 (defun drgnx-rules--condition (name action)
   "Our `display-buffer-alist' condition: a rule matches, or the buffer is not internal — unless
-the caller asked for a frame or for no window."
+the caller asked for a frame or for no window, or marked its action explicit."
   (and (not (drgnx-rules--explicit-p action))
        (or (not (drgnx-rules--internal-p name)) (drgnx-wb-rule-for name action))))
 

@@ -4,7 +4,9 @@
 
 ;;; Commentary:
 ;; Every available registry command by "Category: Title", with its key shown beside it;
-;; choosing one runs it as if typed and shows the key tip.  Works with any completion UI.
+;; choosing one runs it as if typed and shows the key tip.  Works with any completion UI.  A row shows (palette.html)
+;; an icon and the title, then the category and when it was last run in the subtle colour, then the keycaps at the
+;; right edge; the groups are Commands, Files and Agents.
 ;; Input starting with `#' is a Semantic Search question.  The completion UI does not require a match (an
 ;; orderless or other style may never offer `#words' as a candidate); the answer is resolved here.
 
@@ -18,6 +20,8 @@
 (require 'drgnx-file)
 (require 'drgnx-type-faces)             ; `drgnx-code-small', `drgnx-ui-caption'
 (require 'drgnx-faces)                  ; `drgnx-text-subtle'
+(require 'drgnx-icons)                  ; `drgnx-look-icon'
+(require 'drgnx-pixels)                 ; `drgnx-px'
 
 (declare-function drgnx-surfaces-run "drgnx-surfaces")
 
@@ -54,13 +58,72 @@ the ring's colour), radius 4 where the compositor rounds."
 (defconst drgnx-palette--keycap-pad (propertize " " 'display '(space :width (4)))
   "The room inside a keycap at either end (design §3.5 `kbd': 5 px with the 1 px ring).")
 
-(defun drgnx-palette-keycaps (key)
-  "The key description KEY as keycaps: each key in `drgnx-keycap' with 4 px of room inside at either end on a
-graphical frame, one space between.  A terminal draws no ring, so its caps are the names alone (a 4 px space is 4
-columns there)."
+(defun drgnx-palette-keycap (name)
+  "One keycap showing NAME (\"Ctrl\", \"↵\"): `drgnx-keycap' with 4 px of room inside at either end on a graphical
+frame; on a terminal, which draws no ring, the name alone (a 4 px space is 4 columns there)."
   (let ((pad (if (display-graphic-p) drgnx-palette--keycap-pad "")))
-    (mapconcat (lambda (name) (propertize (concat pad name pad) 'face 'drgnx-keycap))
-               (drgnx-palette-keycap-names key) " ")))
+    (propertize (concat pad name pad) 'face 'drgnx-keycap)))
+
+(defun drgnx-palette-keycaps (key)
+  "The key description KEY as keycaps (`drgnx-palette-keycap'), one space between."
+  (mapconcat #'drgnx-palette-keycap (drgnx-palette-keycap-names key) " "))
+
+;;;; Rows
+
+(defface drgnx-palette-group '((t :inherit (drgnx-ui-caption drgnx-text-subtle) :weight semibold :slant normal))
+  "A group's title in the palette: Commands, Files, Agents."
+  :group 'drgnx-look)
+
+(defconst drgnx-palette--category-icons
+  '(("Agents" . bot) ("Work" . bot) ("AI" . bot) ("Agent Settings" . bot) ("Terminal" . terminal)
+    ("Shell" . terminal) ("Source Control" . git-branch) ("File" . file) ("Go" . file) ("Explorer" . folder)
+    ("Buffers" . layers) ("Search" . search) ("Settings" . settings) ("Preferences" . settings) ("Help" . info)
+    ("Extensions" . layers) ("Plugins" . layers) ("Modules" . layers) ("Runners" . server) ("Remote" . server)
+    ("Tests" . play) ("Debug" . circle-dot) ("Notices" . bell) ("Window" . panel-right) ("View" . eye)
+    ("Edit" . pencil) ("Code" . file-code) ("Outline" . list-checks))
+  "The icon of a command's row by its category; any other category's is `chevron-right'.")
+
+(defconst drgnx-palette-row-padding 8
+  "Logical pixels between a row's fill and its text, at either end (palette.html `.it').")
+
+(defun drgnx-palette--title (label)
+  "LABEL (\"Category: Title\") without its category, its text properties (the matched letters) kept."
+  (let ((i (string-search ": " label)))
+    (if i (substring label (+ i 2)) label)))
+
+(defun drgnx-palette--category (label)
+  "The category of LABEL (\"Category: Title\"), or nil."
+  (let ((i (string-search ": " label)))
+    (and i (substring-no-properties label 0 i))))
+
+(defun drgnx-palette--shown (label)
+  "The row the list shows for LABEL: the category's icon and the title."
+  (concat (drgnx-look-icon (alist-get (drgnx-palette--category label) drgnx-palette--category-icons
+                                      'chevron-right nil #'equal)
+                           'drgnx-text-muted)
+          " " (drgnx-palette--title label)))
+
+(defun drgnx-palette--group-title (group)
+  "The title line of GROUP: its name in `drgnx-palette-group', in from the left as a row's text is."
+  (concat (if (display-graphic-p)
+              (propertize " " 'display `(space :width (,(drgnx-px (+ 6 drgnx-palette-row-padding)))))
+            " ")
+          (propertize group 'face 'drgnx-palette-group)))
+
+(defun drgnx-palette--right (s)
+  "A space that puts S, which follows it, against the right edge less a row's inset and padding."
+  (if (display-graphic-p)
+      (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width s (current-buffer))
+                                                               (drgnx-px (+ 6 drgnx-palette-row-padding)))))))
+    (propertize " " 'display `(space :align-to (- right ,(+ (string-width s) 2))))))
+
+(defun drgnx-palette--annotation (category age key)
+  "A row's annotation: CATEGORY and AGE (\"used 2 min ago\", or nil) in the subtle colour, then KEY (a key
+description, or nil) as keycaps at the right edge."
+  (let ((hint (string-join (delq nil (list category age)) " · "))
+        (caps (and key (drgnx-palette-keycaps key))))
+    (concat "  " (propertize hint 'face 'drgnx-text-subtle)
+            (and caps (concat (drgnx-palette--right caps) caps)))))
 
 ;;;; Recent commands
 
@@ -175,16 +238,17 @@ runs it; several is an \"Ambiguous\" error naming up to three; none is \"No comm
                      (when-let* ((c (drgnx-commands-get (cdr (assoc label cands)))))
                        (let ((key (with-current-buffer (if (buffer-live-p origin) origin (current-buffer))
                                     (drgnx-surfaces-key c))))
-                         (concat (if (string-empty-p key) "" (concat "  " (drgnx-palette-keycaps (car (split-string key " (" t)))))
-                                 (if-let* ((age (drgnx-palette-recent-age (cdr (assoc label cands)))))
-                                     (concat "  " (propertize age 'face 'shadow))
-                                   "")
-                                 (if (drgnx-cmd-doc c) (concat "  — " (drgnx-cmd-doc c)) ""))))))
+                         (drgnx-palette--annotation (drgnx-cmd-category c)
+                                                    (drgnx-palette-recent-age (cdr (assoc label cands)))
+                                                    (and (not (string-empty-p key))
+                                                         (car (split-string key " (" t))))))))
          (table (lambda (string pred action)
                   (if (eq action 'metadata)
                       `(metadata (annotation-function . ,annotate) (category . drgnx-command)
                                  (display-sort-function . ,(lambda (labels) (drgnx-palette-sort labels cands ids)))
-                                 (group-function . ,(lambda (label transform) (if transform label (drgnx-palette-group label)))))
+                                 (group-function . ,(lambda (label transform)
+                                                      (if transform (drgnx-palette--shown label)
+                                                        (drgnx-palette--group-title (drgnx-palette-group label))))))
                     (complete-with-action action cands string pred))))
          (choice (string-trim (completing-read "Command (# for a code question): " table nil nil initial))))
     (cond ((string-empty-p choice))

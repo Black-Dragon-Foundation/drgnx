@@ -18,6 +18,7 @@
 (declare-function vertico-multiform-mode "vertico-multiform")
 (declare-function drgnx-palette-frame-delete "drgnx-palette-frame")
 (declare-function drgnx-palette-frame-hide "drgnx-palette-frame")
+(declare-function drgnx-palette-frame-after-candidates "drgnx-palette-frame")
 (declare-function drgnx-palette-frame-minibuffer-rows "drgnx-palette-frame")
 (declare-function vertico-mode "vertico")
 (declare-function marginalia-mode "marginalia")
@@ -91,6 +92,9 @@ current row: subtle is under 4.5:1 on the selection.  Runs on the current row on
                                                       drgnx-palette-frame-multiform)
                               (drgnx-module-hook 'minibuffer-exit-hook palette-frame-hide ()
                                 (drgnx-palette-frame-hide))
+                              ;; the floating palette: its hint ends the input row, and the box fits its rows
+                              (drgnx-module-advice 'vertico--display-candidates :after palette-hint (lines)
+                                (drgnx-palette-frame-after-candidates lines))
                               ;; the rows: UI font, 24 px in the echo area (the palette's own are 32 px)
                               (drgnx-module-hook 'minibuffer-setup-hook minibuffer-rows ()
                                 (drgnx-palette-frame-minibuffer-rows))

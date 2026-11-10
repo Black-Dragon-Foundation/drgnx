@@ -156,5 +156,36 @@ the selection (7 in high contrast)."
               (should (>= ratio bar)))))
       (mapc #'disable-theme custom-enabled-themes))))
 
+(ert-deftest drgnx-look-palette/a-row-is-icon-title-category-and-keys ()
+  "Pattern D: palette.html's row.  The shown row is the title without its category (the matched letters keep their
+faces) after an icon; the annotation is the category in the subtle colour and no doc; keycaps sit at the right edge;
+a group's title is the group's name in its own face (no count, no rule line)."
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil) (meta nil))
+    (drgnx-command-define 'look-palette-test-run :title "Run Tests in This File" :category "Tests"
+                          :doc "Run every test of the file." :command #'ignore)
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt table &rest _) (setq meta (completion-metadata "" table nil)) "")))
+      (drgnx-palette))
+    (let* ((label "Tests: Run Tests in This File")
+           (lit (concat (propertize "Tests: Run" 'face 'completions-common-part) " Tests in This File"))
+           (group (completion-metadata-get meta 'group-function))
+           (shown (funcall group lit t))
+           (note (funcall (completion-metadata-get meta 'annotation-function) label)))
+      (should (string-suffix-p "Run Tests in This File" shown))
+      (should-not (string-search "Tests: " shown))
+      (should (eq 'completions-common-part (get-text-property (string-search "Run" shown) 'face shown)))
+      (should (string-search "Tests" note))
+      (should-not (string-search "every test" note))
+      (should (memq 'drgnx-text-subtle (ensure-list (get-text-property (string-search "Tests" note) 'face note))))
+      (should (equal "Commands" (string-trim (substring-no-properties (funcall group label nil)))))
+      (let ((title (funcall group label nil)))
+        (should (eq 'drgnx-palette-group (get-text-property (string-search "Commands" title) 'face title))))))
+  ;; keys: right-aligned caps on a graphical frame
+  (let ((note (cl-letf (((symbol-function 'display-graphic-p) #'always))
+                (drgnx-palette--annotation "Tests" nil "C-; f"))))
+    (should (string-search "Ctrl" note))
+    (should (seq-some (lambda (i) (eq :align-to (car-safe (cdr-safe (get-text-property i 'display note)))))
+                      (number-sequence 0 (1- (length note)))))))
+
 (provide 'look-palette-test)
 ;;; look-palette-test.el ends here
