@@ -7,7 +7,8 @@
 
 use crate::door::DoorKind;
 use crate::store::{
-    ChunkIn, CodeStore, FileRow, StoreError, SymbolIn, remove_file_row, row_blob, write_version,
+    ChunkIn, CodeStore, FileRow, RefIn, StoreError, SymbolIn, remove_file_row, row_blob,
+    write_version,
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
@@ -283,13 +284,30 @@ impl CodeStore {
         chunks: Vec<ChunkIn>,
         symbols: Vec<SymbolIn>,
     ) -> Result<Vec<i64>, StoreError> {
+        self.write_file_with_refs(view, row, chunks, symbols, Vec::new())
+            .await
+    }
+
+    /// [`CodeStore::write_file`] with the content's references.
+    pub async fn write_file_with_refs(
+        &self,
+        view: View,
+        row: FileRow,
+        chunks: Vec<ChunkIn>,
+        symbols: Vec<SymbolIn>,
+        refs: Vec<RefIn>,
+    ) -> Result<Vec<i64>, StoreError> {
         Ok(self
             .handle()
             .write(move |c| {
-                Ok(
-                    write_version(c, view.tree(), &row, Some((&chunks, &symbols)), false)?
-                        .unwrap_or_default(),
-                )
+                Ok(write_version(
+                    c,
+                    view.tree(),
+                    &row,
+                    Some((&chunks, &symbols, &refs)),
+                    false,
+                )?
+                .unwrap_or_default())
             })
             .await?)
     }

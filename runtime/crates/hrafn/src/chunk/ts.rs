@@ -3,6 +3,7 @@
 
 use super::definers::Def;
 use super::merge::{self, Form};
+use super::refs::{self, Ref};
 use super::{Chunk, Nws, Symbol};
 use tree_sitter::Node;
 
@@ -20,7 +21,19 @@ pub(super) enum Kind {
 }
 
 impl Kind {
-    fn language(self) -> tree_sitter::Language {
+    pub(super) const ALL: [Kind; 9] = [
+        Kind::Rust,
+        Kind::C,
+        Kind::Shell,
+        Kind::Python,
+        Kind::JavaScript,
+        Kind::TypeScript,
+        Kind::Tsx,
+        Kind::Go,
+        Kind::Java,
+    ];
+
+    pub(super) fn language(self) -> tree_sitter::Language {
         match self {
             Kind::Rust => tree_sitter_rust::LANGUAGE.into(),
             Kind::C => tree_sitter_c::LANGUAGE.into(),
@@ -552,7 +565,7 @@ pub(super) fn chunk(
     generated: bool,
     text: &str,
     budget: usize,
-) -> Option<(Vec<Chunk>, Vec<Symbol>)> {
+) -> Option<(Vec<Chunk>, Vec<Symbol>, Vec<Ref>)> {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&kind.language()).ok()?;
     let tree = parser.parse(text, None)?;
@@ -569,7 +582,7 @@ pub(super) fn chunk(
             .ok()
             .map(|i| nodes[i])
     };
-    Some(merge::assemble(merge::Input {
+    let (chunks, symbols) = merge::assemble(merge::Input {
         path,
         generated,
         text,
@@ -589,5 +602,6 @@ pub(super) fn chunk(
                 .map(|n| cuts(kind, n, text, &nws, budget))
                 .unwrap_or_default()
         },
-    }))
+    });
+    Some((chunks, symbols, refs::of_tree(kind, &tree, text)))
 }

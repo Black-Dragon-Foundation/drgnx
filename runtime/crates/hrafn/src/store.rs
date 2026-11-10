@@ -91,6 +91,14 @@ pub struct SymbolIn {
     pub sig: String,
 }
 
+/// A name the content uses (`chunk::Ref`): how often, and its first lines (at most 8 are kept).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefIn {
+    pub name: String,
+    pub n: u32,
+    pub lines: Vec<u32>,
+}
+
 /// One row of `vec`: a quantized vector of one model for one content key.
 #[derive(Clone, Debug)]
 pub struct VecRow {
@@ -128,8 +136,8 @@ pub(crate) fn row_blob(
     })
 }
 
-/// The reference sweep of one pair: `(path, blob)`'s chunks (their FTS rows and symbols go by trigger) are deleted
-/// when no `file` row names the pair any more. Whether they went.
+/// The reference sweep of one pair: `(path, blob)`'s chunks (their FTS rows and symbols go by trigger) and references
+/// are deleted when no `file` row names the pair any more. Whether they went.
 pub(crate) fn sweep(c: &Connection, path: &str, blob: &str) -> urdr::Result<bool> {
     let named: bool = c
         .prepare("select exists(select 1 from file where path = ?1 and blob = ?2)")?
@@ -139,6 +147,8 @@ pub(crate) fn sweep(c: &Connection, path: &str, blob: &str) -> urdr::Result<bool
     }
     c.prepare("delete from chunk where path = ?1 and blob = ?2")?
         .execute(params![path, blob])?;
+    c.prepare("delete from ref where path = ?1 and blob = ?2")?
+        .execute(params![path, blob])?;
     Ok(true)
 }
 
@@ -147,6 +157,11 @@ pub(crate) fn sweep_all(c: &Connection) -> urdr::Result<()> {
     c.execute(
         "delete from chunk where not exists
            (select 1 from file f where f.path = chunk.path and f.blob = chunk.blob)",
+        [],
+    )?;
+    c.execute(
+        "delete from ref where not exists
+           (select 1 from file f where f.path = ref.path and f.blob = ref.blob)",
         [],
     )?;
     Ok(())
@@ -195,17 +210,25 @@ pub(crate) fn remove_file_row(c: &Connection, tree: i64, path: &str) -> urdr::Re
     Ok(())
 }
 
-/// `(path, blob)`'s chunks, FTS rows and symbols in place of what the pair had, inside the caller's transaction. The
-/// new chunk ids, in order.
+/// `(path, blob)`'s chunks, FTS rows, symbols and references in place of what the pair had, inside the caller's
+/// transaction. The new chunk ids, in order.
 pub(crate) fn write_chunks(
     c: &Connection,
     path: &str,
     blob: &str,
     chunks: &[ChunkIn],
     symbols: &[SymbolIn],
+    refs: &[RefIn],
 ) -> urdr::Result<Vec<i64>> {
     c.prepare("delete from chunk where path = ?1 and blob = ?2")?
         .execute(params![path, blob])?;
+    c.prepare("delete from ref where path = ?1 and blob = ?2")?
+        .execute(params![path, blob])?;
+    for r in refs {
+        let lines: Vec<String> = r.lines.iter().map(u32::to_string).collect();
+        c.prepare("insert into ref(path, blob, name, n, lines) values (?1, ?2, ?3, ?4, ?5)")?
+            .execute(params![path, blob, r.name, r.n, lines.join(" ")])?;
+    }
     let mut ids = Vec::with_capacity(chunks.len());
     for ch in chunks {
         c.prepare(
@@ -284,7 +307,7 @@ pub(crate) fn write_version(
     c: &Connection,
     tree: i64,
     f: &FileRow,
-    built: Option<(&[ChunkIn], &[SymbolIn])>,
+    built: Option<(&[ChunkIn], &[SymbolIn], &[RefIn])>,
     force: bool,
 ) -> urdr::Result<Option<Vec<i64>>> {
     let Some(blob) = f.blob.as_deref() else {
@@ -296,11 +319,11 @@ pub(crate) fn write_version(
         write_file_row(c, tree, f)?;
         return Ok(Some(have));
     }
-    let Some((chunks, symbols)) = built else {
+    let Some((chunks, symbols, refs)) = built else {
         return Ok(None);
     };
     write_file_row(c, tree, f)?;
-    write_chunks(c, &f.path, blob, chunks, symbols).map(Some)
+    write_chunks(c, &f.path, blob, chunks, symbols, refs).map(Some)
 }
 
 pub struct CodeStore {
@@ -355,7 +378,7 @@ impl CodeStore {
         let (path, blob) = (path.to_string(), blob.to_string());
         Ok(self
             .handle
-            .write(move |c| write_chunks(c, &path, &blob, &chunks, &symbols))
+            .write(move |c| write_chunks(c, &path, &blob, &chunks, &symbols, &[]))
             .await?)
     }
 

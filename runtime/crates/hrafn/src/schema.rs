@@ -85,7 +85,22 @@ create index vec_used on vec(model, last_used);
 ";
 
 /// The migrations for `urdr::StoreSpec`.
-pub const MIGRATIONS: &[(u32, &str)] = &[(1, V1), (2, V2), (3, V3), (4, V4)];
+pub const MIGRATIONS: &[(u32, &str)] = &[(1, V1), (2, V2), (3, V3), (4, V4), (5, V5)];
+
+/// Schema v5: the names a file's content uses (`chunk::refs`), counted, with their first lines (up to 8, space
+/// separated). Keyed by `(path, blob)` like chunks and symbols, so a view sees them through its `file` rows and the
+/// reference sweep (`store::sweep`) takes them with the pair. Filled by tier 1 when `chunk::PARSE_VERSION` moves.
+const V5: &str = "
+create table ref(
+  path text not null,
+  blob text not null,
+  name text not null,
+  n integer not null,
+  lines text not null,
+  primary key(path, blob, name)
+) without rowid;
+create index ref_name on ref(name, path, blob);
+";
 
 /// Schema v4: a symbol's lines and signature, for the `symbols` and `outline` answers. Rows written before it have
 /// zeros and an empty signature until tier 1 parses them again (`chunk::PARSE_VERSION`).

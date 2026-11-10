@@ -392,7 +392,8 @@ async fn plan_of(s: &CodeStore, sql: &'static str, binds: usize) -> String {
         .unwrap()
 }
 
-/// Pattern D (plan). Every route, in both views, and the view's lag read `chunk`, `symbol` and `file` by an index:
+/// Pattern D (plan). Every route, in both views, the view's lag and the references read `chunk`, `symbol`, `ref` and
+/// `file` by an index:
 /// no line scans one of them (a virtual table's scan is the FTS index; a covering index scan reads no row), and
 /// `file` is reached by its primary key `(tree, path)`.
 #[tokio::test]
@@ -409,6 +410,7 @@ async fn overlay_predicates_use_indexes() {
         hrafn::query::VISIBLE_SQL,
         hrafn::query::FIRST_CHUNK_SQL,
         hrafn::query::META_SQL,
+        hrafn::refs::REFS_SQL,
         hrafn::index::LAG_TOTAL_SQL,
         hrafn::index::LAG_BEHIND_SQL,
         hrafn::index::LAG_FILES_SQL,
@@ -424,7 +426,7 @@ async fn overlay_predicates_use_indexes() {
                 .and_then(|r| r.split_whitespace().next());
             let scans = matches!(
                 table,
-                Some("chunk" | "symbol" | "file" | "c" | "s" | "f" | "o" | "t" | "b")
+                Some("chunk" | "symbol" | "file" | "ref" | "c" | "s" | "f" | "o" | "t" | "b" | "r")
             ) && !line.contains("COVERING INDEX");
             assert!(!scans, "{line}\n{plan}\n{sql}");
         }
@@ -434,6 +436,11 @@ async fn overlay_predicates_use_indexes() {
             "file by (tree, path):\n{plan}\n{sql}"
         );
     }
+    let plan = plan_of(&s, hrafn::refs::REFS_SQL, 0).await;
+    assert!(
+        plan.contains("ref_name (name=?)"),
+        "references by name:\n{plan}"
+    );
     // the keyword ranking reads the FTS index only; the view is applied to its candidates by VISIBLE_SQL
     let plan = plan_of(&s, hrafn::query::KEYWORD_RANK_SQL, 0).await;
     assert!(
