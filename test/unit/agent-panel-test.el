@@ -16,6 +16,7 @@
 (defvar drgnx-agent-panel--stats-render)
 (defvar drgnx-agent-panel--diffs)
 (declare-function drgnx-agent-panel-cards--diff-row "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-composer--row "drgnx-agent-panel-composer")
 (defvar drgnx-agent-panel--subscribed)
 (defvar drgnx-hub--events)
 (declare-function drgnx-agent-panel-buffer "drgnx-agent-panel")
@@ -879,3 +880,50 @@ and code in the code font."
       (and (facep face)
            (seq-some (lambda (p) (drgnx-agent-panel-test--inherits-p p target))
                      (ensure-list (face-attribute face :inherit nil))))))
+
+(defun drgnx-agent-panel-test--face-at (s text)
+  "The face list of the first character of TEXT in string S."
+  (ensure-list (get-text-property (string-search text s) 'face s)))
+
+(ert-deftest drgnx-agent-panel/header-lens-and-open-strip ()
+  "agent-panel.html: the header ends with the watch / review / debug lens, the preset in force raised; the strip
+under the chips reads \"Open:\" and its step types are pills, the open ones raised, no arrows."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel-preset 2)
+      (let ((head (drgnx-agent-panel--header-row)) (strip (drgnx-agent-panel--strip-row)))
+        (should (memq 'drgnx-agent-panel-lens-on (drgnx-agent-panel-test--face-at head "review")))
+        (dolist (off '("watch" "debug"))
+          (should (memq 'drgnx-agent-panel-lens (drgnx-agent-panel-test--face-at head off))))
+        ;; segments of one face are never adjacent (they would be one box)
+        (drgnx-agent-panel-preset 1)
+        (let ((head (drgnx-agent-panel--header-row)))
+          (should-not (equal (get-text-property (1- (string-search "debug" head)) 'face head)
+                             (get-text-property (string-search "debug" head) 'face head))))
+        (should (string-match-p "\\`[[:space:]]*Open:" strip))
+        (should-not (string-match-p "[▸▾]" strip))
+        (should (memq 'drgnx-agent-panel-tag-on (drgnx-agent-panel-test--face-at strip "edit")))
+        (should (memq 'drgnx-agent-panel-tag (drgnx-agent-panel-test--face-at strip "read")))))))
+
+(ert-deftest drgnx-agent-panel/composer-is-a-field-card ()
+  "agent-panel.html `.composer': the field's card (\"Steer the agent…\", a click writes to the agent) and the bar:
+the model and the mode as chips that switch them, Stop after this step and Send as buttons."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (setq drgnx-agent-panel--snap (list :model "opus" :mode "accept edits"))
+      (let ((row (drgnx-agent-panel-composer--row)))
+        (should (string-search "Steer the agent" row))
+        (should (eq 'drgnx-agent-panel-send
+                    (lookup-key (get-text-property (string-search "Steer" row) 'keymap row) [mouse-1])))
+        (should (memq 'drgnx-card-single (drgnx-agent-panel-test--face-at row "Steer")))
+        ;; the field's card is one run of one face to its end (a box is drawn per run)
+        (let ((eol (string-search "\n" row)))
+          (should (equal (get-text-property 1 'face row) (get-text-property (1- eol) 'face row))))
+        (should (memq 'drgnx-agent-panel-chip (drgnx-agent-panel-test--face-at row "opus")))
+        (should (eq 'drgnx-agent-panel-switch-model
+                    (lookup-key (get-text-property (string-search "opus" row) 'keymap row) [mouse-1])))
+        (should (eq 'drgnx-agent-panel-switch-mode
+                    (lookup-key (get-text-property (string-search "accept edits" row) 'keymap row) [mouse-1])))
+        (should (memq 'drgnx-ui-button-primary (drgnx-agent-panel-test--face-at row "Send")))
+        (should (eq 'drgnx-agent-panel-pause
+                    (lookup-key (get-text-property (string-search "Stop after" row) 'keymap row) [mouse-1])))))))
