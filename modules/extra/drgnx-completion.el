@@ -29,29 +29,42 @@
 (defconst drgnx-completion-row-inset 6
   "Logical pixels between a candidate row's fill and the list's sides (palette.html `.row', the sidebar's rows).")
 
-(defvar drgnx-completion--lead nil "(PX . STRING): the left inset of a candidate row at PX pixels, made once per size.")
+(defvar drgnx-palette-row-padding)
+
+(defvar drgnx-completion--lead nil
+  "(PX . (OUTSIDE PAD PLAIN)): a candidate row's left inset at PX pixels (`drgnx-px' of the inset), made once per size:
+the inset outside the fill, the padding inside it, and both together for a row with no fill.")
+
+(defun drgnx-completion--space (px)
+  "A space PX pixels wide on a graphical frame, invisible on a terminal, with an empty `line-prefix' (see
+`drgnx-completion--row')."
+  (propertize " " 'display `(when (display-graphic-p) space :width (,px)) 'invisible t 'line-prefix ""))
 
 (defun drgnx-completion--row (cand current)
   "CAND, a candidate line as vertico formats it (ending in a newline; CURRENT: it is the current one, in
 `vertico-current'), drawn as a row: on a graphical frame an inset of `drgnx-completion-row-inset' before it, outside
-the fill; when CURRENT, the text and a stretch to the inset on the right in the current face with the row's rounded
-inside box (`drgnx-wb-row-box': one box run, which the stretch ends), and a plain newline, so nothing fills past the
-row.  A terminal shows the text as it was."
+the fill, then `drgnx-palette-row-padding' before the text; when CURRENT, the padding, the text and a stretch to the
+inset on the right in the current face with the row's rounded inside box (`drgnx-wb-row-box': one box run, which the
+stretch ends), and a plain newline, so nothing fills past the row.  The row starts with an empty `line-prefix': the
+minibuffer the palette dresses has the input row's inset as its prefix, which would put the row in twice.  A terminal
+shows the text as it was."
   (let* ((px (drgnx-px drgnx-completion-row-inset))
          (lead (cdr (if (eql px (car drgnx-completion--lead)) drgnx-completion--lead
-                      (setq drgnx-completion--lead
-                            (cons px (propertize " " 'display `(when (display-graphic-p) space :width (,px))
-                                                 'invisible t)))))))
+                      (let ((pad (drgnx-px drgnx-palette-row-padding)))
+                        (setq drgnx-completion--lead
+                              (list px (drgnx-completion--space px) (drgnx-completion--space pad)
+                                    (drgnx-completion--space (+ px pad)))))))))
     (if (not current)
-        (concat lead cand)
-      (let* ((body (substring cand 0 -1))
+        (concat (nth 2 lead) cand)
+      (let* ((body (concat (copy-sequence (nth 1 lead)) (substring cand 0 -1)))
              (box (list :box (drgnx-wb-row-box)))
              (end (propertize " " 'display `(when (display-graphic-p) space :align-to (- right (,px))) 'invisible t)))
+        (add-face-text-property 0 1 'vertico-current t body)
         (add-face-text-property 0 (length end) 'vertico-current t end)
         (drgnx-completion--secondary body)
         (add-face-text-property 0 (length body) box t body)
         (add-face-text-property 0 (length end) box t end)
-        (concat lead body end "\n")))))
+        (concat (car lead) body end "\n")))))
 
 (defun drgnx-completion--foreground (face)
   "The foreground FACE gives (a face, a face plist or a list of them, as a `face' property holds), or nil."
