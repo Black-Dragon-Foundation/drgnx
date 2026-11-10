@@ -236,6 +236,29 @@ command or a file matches; recent commands still lead their group."
 
 (require 'drgnx-palette-frame)
 
+;; The coordinator's ruling: once the user types, match quality first, recency for near-ties
+(ert-deftest drgnx-palette/typed-text-ranks-by-match-then-recency ()
+  "With text typed, how well a row matches ranks first (word starts, the words in order) and a recent run only
+breaks near-ties, as in VS Code: \"run te\" gives palette.html's order with Rerun run 2 minutes ago.  With nothing
+typed, recent first."
+  (drgnx-test--palette-in-project
+    (pcase-dolist (`(,id ,title ,cat) '((run-file "Run Tests in This File" "Tests") (run-point "Run Test at Point" "Tests")
+                                        (rerun "Rerun Last Tests" "Tests") (run-term "Run in Terminal…" "Terminal")
+                                        (rotate "Rotate Cloud CA" "Runners")))
+      (drgnx-command-define id :title title :category cat :command #'ignore))
+    (let* ((cands (drgnx-palette-candidates))
+           (drgnx-palette--history (list (list 'rerun (- (floor (float-time)) 125))))
+           (labels (list "Runners: Rotate Cloud CA" "Terminal: Run in Terminal…" "Tests: Rerun Last Tests"
+                         "Tests: Run Tests in This File" "Tests: Run Test at Point")))
+      (should (equal (drgnx-palette-sort labels cands nil "run te")
+                     '("Tests: Run Tests in This File" "Tests: Run Test at Point" "Tests: Rerun Last Tests"
+                       "Terminal: Run in Terminal…" "Runners: Rotate Cloud CA")))
+      (should (equal (car (drgnx-palette-sort labels cands nil "")) "Tests: Rerun Last Tests"))
+      ;; a recent row that matches clearly worse stays below the better matches
+      (let ((in (drgnx-palette-sort labels cands nil "run in")))
+        (should (equal (car in) "Terminal: Run in Terminal…"))
+        (should (< (seq-position in "Tests: Run Tests in This File") (seq-position in "Tests: Rerun Last Tests")))))))
+
 (ert-deftest drgnx-palette/the-hint-and-the-footer-name-every-key ()
   "palette.html's input row ends \"Commands · # code · @ agents\" (the last when an agent can be asked); its footer
 names move, run, preview and close."
