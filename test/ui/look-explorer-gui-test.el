@@ -88,6 +88,25 @@ drawn at its foot; the section below takes the pixels left over, and a second fi
         (set-window-parameter top 'drgnx-role nil)
         (set-window-parameter top 'no-other-window nil)))))
 
+(ert-deftest drgnx-ui-look-explorer/a-section-header-is-one-colour-to-the-edge ()
+  "Pattern D, window-dark.html `.sec': a section's header row is the bar's colour over the right fringe too (the
+rows' inset), not a strip of the header line's own colour at its right end."
+  (skip-unless (display-graphic-p))
+  (drgnx-ui-look-explorer--with root
+    (set-window-parameter nil 'header-line-format (drgnx-wb-section-header "Files"))
+    (unwind-protect
+        (progn
+          (drgnx-test-wait-presented)
+          (let* ((snap (drgnx-uitest-snapshot)) (s (drgnx-uitest-device-scale (selected-frame)))
+                 (e (window-edges nil nil nil t))
+                 (y (round (* s (+ (nth 1 e) (/ (window-header-line-height) 2)))))
+                 (bar (mapcar (lambda (c) (round (/ c 257.0))) (color-values (face-background 'drgnx-wb-bar nil t))))
+                 (near (lambda (x) (cl-every (lambda (p c) (<= (abs (- p c)) 6)) (cdr (drgnx-uitest-pixel snap x y)) bar))))
+            (should (> (cadr (window-fringes)) 0))
+            (should (funcall near (round (* s (- (nth 2 e) 2)))))                     ; over the right fringe
+            (should (funcall near (round (* s (- (nth 2 e) (cadr (window-fringes)) 2)))))))
+      (set-window-parameter nil 'header-line-format nil))))
+
 (ert-deftest drgnx-ui-look-explorer/row-height ()
   "Pattern D: a row of the Explorer is round (26 x scale) device pixels high at the comfortable density."
   (skip-unless (display-graphic-p))

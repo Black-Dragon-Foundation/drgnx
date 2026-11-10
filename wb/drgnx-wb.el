@@ -59,10 +59,11 @@ follower is not a jank-guard violation (invariant I9).")
 
 (defun drgnx-wb-bar (string &optional filled)
   "STRING as a header row: `drgnx-wb-bar' behind it (under any face it has), and a filler to the window's right edge,
-so the whole row is the bar's colour and not the header line's.  FILLED: STRING already reaches the edge."
+over the right fringe too (the dock's sections have one: the rows' inset), so the whole row is the bar's colour and
+not the header line's.  FILLED: STRING already reaches the edge."
   (let ((s (copy-sequence string)))
     (add-face-text-property 0 (length s) 'drgnx-wb-bar t s)
-    (if filled s (concat s (propertize " " 'display '(space :align-to right) 'face 'drgnx-wb-bar)))))
+    (if filled s (concat s (propertize " " 'display '(space :align-to (+ right right-fringe)) 'face 'drgnx-wb-bar)))))
 
 (defun drgnx-wb-header-with-close (title command help &rest props)
   "TITLE, then the close button for COMMAND (see `drgnx-wb-close-button') at the right edge of the window."
@@ -236,7 +237,7 @@ no gap or padding."
 (defconst drgnx-wb--row-inset 6
   "Logical pixels between a row's fill and the card's edge, either side (`.tree' 6px): the dock windows' fringes.")
 
-(defun drgnx-wb--row-box ()
+(defun drgnx-wb-row-box ()
   "A row's `:box': inside the row (negative widths, so nothing moves when it appears), in the fill's own colour (a
 flat button: only its rounded corners show); rounded where Glitnir draws.  No focus ring: the row's text and its tail
 \(an overlay string) are two box runs to Emacs, so a ring would show a seam between them and no right side."
@@ -254,7 +255,7 @@ reaches it."
   (let ((key (list (drgnx-px-line 1) (drgnx-px drgnx-wb--row-radius) (and (fboundp 'glitnir-active-p) (glitnir-active-p)))))
     (or (gethash key drgnx-wb--hover-faces)
         (progn (when (> (hash-table-count drgnx-wb--hover-faces) 16) (clrhash drgnx-wb--hover-faces))
-               (puthash key `(:inherit drgnx-hover-row :box ,(drgnx-wb--row-box)) drgnx-wb--hover-faces)))))
+               (puthash key `(:inherit drgnx-hover-row :box ,(drgnx-wb-row-box)) drgnx-wb--hover-faces)))))
 
 (defvar drgnx-wb--row-faces nil
   "((FOCUSED FACE . END)...): the selected row's face and its end (`drgnx-wb--row-end'), made once, so the selection's
@@ -268,12 +269,12 @@ post-command sync only reads them.  Forgotten at a theme switch, a focus change 
 (defun drgnx-wb--row-faces-entry (focused)
   "The (FOCUSED FACE . END) entry of `drgnx-wb--row-faces', made on first use."
   (or (assq focused drgnx-wb--row-faces)
-      (let ((face `(:inherit ,(if focused 'drgnx-selected 'drgnx-selected-inactive) :box ,(drgnx-wb--row-box))))
+      (let ((face `(:inherit ,(if focused 'drgnx-selected 'drgnx-selected-inactive) :box ,(drgnx-wb-row-box))))
         (car (push (cons focused (cons face (drgnx-wb--row-end face))) drgnx-wb--row-faces)))))
 
 (defun drgnx-wb-row-face (focused)
   "The face of the selected row: FOCUSED (its window is the selected one), the selection (`.row.sel.focus', its ring
-not drawn: `drgnx-wb--row-box'); else the inactive selection (`.row.sel', VS Code's inactive selection), rounded alike.
+not drawn: `drgnx-wb-row-box'); else the inactive selection (`.row.sel', VS Code's inactive selection), rounded alike.
 The same object until `drgnx-wb--row-faces-clear'."
   (cadr (drgnx-wb--row-faces-entry focused)))
 
