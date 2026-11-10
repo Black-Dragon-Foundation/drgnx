@@ -615,6 +615,103 @@ compared, and a round's own list starts wherever the flood is)."
   (drgnx-perf-w--clean)
   t)
 
+;;;; explorer-watch: files made in an open folder, the hub's watch relists it (plan sja-complete E1)
+
+(defvar drgnx-perf-w--watch-round 0 "The iteration whose files the fire writes.")
+(defvar drgnx-perf-w--watch-last nil "When the fire's last write ended (`float-time').")
+
+(defun drgnx-perf-w--watch-root () (expand-file-name "watched" (drgnx-perf-w--tmpdir)))
+(defun drgnx-perf-w--watch-name (round i) (format "w%03d-%02d.txt" round i))
+
+(defun drgnx-perf-w-explorer-watch-setup ()
+  "A project of 20 files, the Explorer on it as the hub-fed view (attached here until the switch, plan sja-complete
+E4), its listing drawn.  An error when it is not on the rows path."
+  (let ((root (drgnx-perf-w--watch-root)))
+    (make-directory root t)
+    (dotimes (i 20) (write-region "" nil (expand-file-name (format "f%02d.txt" i) root) nil 'silent))
+    (setq drgnx-perf-w--stats nil drgnx-perf-w--watch-round 0)
+    (drgnx-perf-w--explorer-open root)
+    (drgnx-explorer-rows-attach "perf-explorer-watch" "unshown")
+    (with-timeout (10 (with-current-buffer drgnx-explorer-buffer-name
+                        (error "Premise: the hub's listing was not drawn in 10 s (rows path %s, env classes %S, windows %d, \
+patch %S, hub %s): %S"
+                               (drgnx-explorer--rows-p) (drgnx-view-env-classes "perf-explorer-watch")
+                               (length (get-buffer-window-list nil nil t))
+                               (and drgnx-view-patch (list (drgnx-view-patch-class drgnx-view-patch) (drgnx-view-patch-version drgnx-view-patch)
+                                                           (drgnx-view-patch-epoch drgnx-view-patch) (length (drgnx-view-patch-held drgnx-view-patch))
+                                                           (drgnx-view-patch-handle drgnx-view-patch)))
+                               (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
+                               (buffer-substring-no-properties (point-min) (min (point-max) 300)))))
+      ;; the hub's row (it carries a row id), not the old path's drawing from before the attach
+      (while (not (with-current-buffer drgnx-explorer-buffer-name
+                    (save-excursion (goto-char (point-min))
+                                    (and (search-forward "f19.txt" nil t)
+                                         (get-text-property (pos-bol) drgnx-view-patch-id-prop)))))
+        (accept-process-output nil 0.05)
+        (redisplay t)))
+    (unless (drgnx-explorer--rows-p) (error "Premise: the Explorer is not on the hub's rows"))
+    t))
+
+(defun drgnx-perf-w--watch-fire ()
+  (drgnx-perf-w--stat :fire_started t)
+  (condition-case err
+      (progn
+        (dotimes (i 50)
+          (write-region "" nil (expand-file-name (drgnx-perf-w--watch-name drgnx-perf-w--watch-round i)
+                                                 (drgnx-perf-w--watch-root))
+                        nil 'silent))
+        (setq drgnx-perf-w--watch-last (float-time)))
+    (error (drgnx-perf-w--stat :fire_error (error-message-string err)))))
+
+(defun drgnx-perf-w-explorer-watch-each ()
+  "Remove the files the last iteration made, then make 50 new ones after the first key."
+  (dotimes (i 50)
+    (ignore-errors (delete-file (expand-file-name (drgnx-perf-w--watch-name drgnx-perf-w--watch-round i)
+                                                  (drgnx-perf-w--watch-root)))))
+  (setq drgnx-perf-w--watch-round (1+ drgnx-perf-w--watch-round) drgnx-perf-w--watch-last nil)
+  (drgnx-perf-w--arm #'drgnx-perf-w--watch-fire)
+  t)
+
+(defun drgnx-perf-w-explorer-watch-done ()
+  "Whether the Explorer shows all 50 files of this iteration; the first time, :settle_ms from the last write."
+  (or (plist-get drgnx-perf-w--stats :settle_ms)
+      (and drgnx-perf-w--watch-last
+           (with-current-buffer drgnx-explorer-buffer-name
+             (save-excursion
+               (cl-loop for i below 50
+                        always (progn (goto-char (point-min))
+                                      (search-forward (drgnx-perf-w--watch-name drgnx-perf-w--watch-round i) nil t)))))
+           (progn (drgnx-perf-w--stat :settle_ms (drgnx-perf-w--ms drgnx-perf-w--watch-last)) t))))
+
+(defun drgnx-perf-w-explorer-watch-digest ()
+  (with-current-buffer drgnx-explorer-buffer-name (format "%d" (count-lines (point-min) (point-max)))))
+
+(defun drgnx-perf-w-explorer-watch-measure () (list :settle_ms (plist-get drgnx-perf-w--stats :settle_ms)))
+
+(defun drgnx-perf-w-explorer-watch-check ()
+  "Done, on the rows path, with no Lisp `file-notify' watch: the hub watched the folder."
+  (or (and (drgnx-perf-w-explorer-watch-done) (drgnx-explorer--rows-p) (= 0 (hash-table-count drgnx-explorer--watches)))
+      (with-current-buffer drgnx-explorer-buffer-name
+        (error "Premise: round %d: %d of its 50 files on disk, %d shown (%d lines), rows path %s, %d Lisp watches, \
+key seen %s, written %s, stats %S"
+               drgnx-perf-w--watch-round
+               (cl-loop for i below 50
+                        count (file-exists-p (expand-file-name (drgnx-perf-w--watch-name drgnx-perf-w--watch-round i)
+                                                               (drgnx-perf-w--watch-root))))
+               (cl-loop for i below 50
+                        count (save-excursion (goto-char (point-min))
+                                              (search-forward (drgnx-perf-w--watch-name drgnx-perf-w--watch-round i) nil t)))
+               (count-lines (point-min) (point-max)) (drgnx-explorer--rows-p)
+               (hash-table-count drgnx-explorer--watches) drgnx-perf-w--fired (and drgnx-perf-w--watch-last t) drgnx-perf-w--stats))))
+
+(defun drgnx-perf-w-explorer-watch-teardown ()
+  (drgnx-perf-w--disarm)
+  (drgnx-perf-w--explorer-close)
+  (setq drgnx-explorer--hub-view nil)                   ; the Explorer draws its own rows again (a new buffer)
+  (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
+  (drgnx-perf-w--clean)
+  t)
+
 (defvar drgnx-perf-w--qo-files nil "The candidates Quick Open listed.")
 
 (defun drgnx-perf-w-quick-open-setup ()

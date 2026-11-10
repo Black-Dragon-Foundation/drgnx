@@ -1381,6 +1381,7 @@ dependencies = [
  "libc",
  "mimir",
  "norn",
+ "notify",
  "openssh",
  "proptest",
  "pulldown-cmark",
