@@ -245,3 +245,38 @@ async fn tier1_writes_references_and_the_reset_clears_them() {
         .unwrap();
     assert_eq!(rows, 0);
 }
+
+/// A store stamped with parse 7 holds no references: 7 was also a parse before them (one reverted), so a store from
+/// then is parsed again and gains them.
+#[tokio::test]
+async fn a_store_from_the_parse_before_references_gains_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = CodeStore::open(&dir.path().join("code.db")).unwrap();
+    let text = "fn a() {\n    bee();\n}\n\nfn bee() {}\n";
+    let l = vec![Listed {
+        path: "src/a.rs".into(),
+        blob: "b1".into(),
+        class: Class::Code,
+        lang: Lang::Rust,
+        generated: false,
+        size: text.len() as u64,
+    }];
+    let read = move |_: &str| Ok::<_, io::Error>(text.as_bytes().to_vec());
+    refresh(&s, &l, &read, &[]).await.unwrap();
+    s.handle()
+        .write(|c| {
+            c.execute("delete from ref", [])?;
+            c.execute(
+                "update meta set value = '7' where key = 'parse_version'",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    refresh(&s, &l, &read, &[]).await.unwrap();
+    assert_eq!(
+        seen(&s, View::Base, "bee").await,
+        [("src/a.rs".into(), 1, vec![2])]
+    );
+}
