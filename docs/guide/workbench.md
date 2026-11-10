@@ -23,7 +23,8 @@ where a file with unsaved changes shows `●` there instead, always. The `⋯` a
 are drawn in the row's own colour, so it is invisible, until the pointer is on the row, the row at point's too;
 every row on a terminal shows it. The row at point is the selection: in the selection colour while the panel
 has the focus, inside a 1-pixel ring of the focus colour where Glitnir draws (Nidhogg), and the inactive selection (`drgnx-selected-inactive`, a clearly visible grey) while another window
-has it, as VS Code does. The Outline's current definition is drawn the same way, in bold. A row's selection and
+has it, as VS Code does. Without the focus only the Explorer keeps its selected row, the current buffer's file: the
+sidebar shows one selection (window-dark.html), and the Buffers panel shows its row again when you focus it. The Outline's current definition is drawn the same way, in bold. A row's selection and
 its hover are one fill from the row's start to its right edge, the git mark and the control included, 6 pixels in
 from the island's sides (the sections' fringes, in the island's colour), with rounded corners where Glitnir draws
 them. Neither changes a row's width or moves its text. The current line's highlight (`hl-line`) is not used in

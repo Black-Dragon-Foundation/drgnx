@@ -256,6 +256,7 @@ conses (a refresh of 500 rows made 20,000 conses interpreted, 4,000 compiled)."
 (ert-deftest drgnx-buffers/the-selection-highlight-survives-a-re-render ()
   (drgnx-buffers-test--with dir
     (let ((a (drgnx-buffers-test--open dir "a.txt")) (b (drgnx-buffers-test--open dir "b.txt")))
+      (select-window (get-buffer-window drgnx-buffers-buffer-name))   ; its selection shows while it has focus
       (with-current-buffer drgnx-buffers-buffer-name
         (goto-char (drgnx-buffers--row-pos b))
         (drgnx-wb-selection-sync))
@@ -352,3 +353,19 @@ conses (a refresh of 500 rows made 20,000 conses interpreted, 4,000 compiled)."
         (setq drgnx-buffers--signature nil)
         (drgnx-buffers--render)
         (should (= calls 1))))))
+
+(ert-deftest drgnx-buffers/no-selection-while-another-window-has-focus ()
+  "window-dark.html: the sidebar shows one selected row, the Files row of the current buffer.  The Buffers panel
+shows its selected row only while its window has focus."
+  (drgnx-buffers-test--with dir
+    (let ((b (drgnx-buffers-test--open dir "b.txt")) (panel (get-buffer-window drgnx-buffers-buffer-name)))
+      (should (window-live-p panel))
+      (should-not (eq panel (selected-window)))
+      (with-current-buffer drgnx-buffers-buffer-name
+        (goto-char (drgnx-buffers--row-pos b))
+        (drgnx-wb-selection-sync)
+        (should-not (and (overlayp drgnx-wb--selected-overlay) (overlay-buffer drgnx-wb--selected-overlay))))
+      (with-selected-window panel
+        (goto-char (drgnx-buffers--row-pos b))
+        (drgnx-wb-selection-sync)
+        (should (= (overlay-start drgnx-wb--selected-overlay) (drgnx-buffers--row-pos b)))))))
