@@ -125,7 +125,8 @@ high contrast, where tints are black, they are ringed in their own colour."
     (drgnx-themes-test--with theme
       (should (equal (drgnx-look-token 'gap variant) (drgnx-face-color 'tab-bar :background 'gui)))
       (pcase-dolist (`(,face ,fg ,bg) '((drgnx-chip-quiet muted sel-quiet) (drgnx-chip-attention attention attention-tint)
-                                        (drgnx-chip-accent accent accent-tint)))
+                                        (drgnx-chip-accent accent accent-tint) (drgnx-chip-ok ok ok-tint)
+                                        (drgnx-chip-warn warn warn-tint) (drgnx-chip-error error error-tint)))
         (should (equal (list face (drgnx-look-token fg variant) (drgnx-look-token bg variant))
                        (list face (drgnx-face-color face :foreground 'gui) (drgnx-face-color face :background 'gui))))
         (should (eq (eq variant 'hc) (and (plist-get (drgnx-faces--clause-plist face 'gui) :box) t)))))))
@@ -250,4 +251,42 @@ dropped on purpose (`drgnx-themes-test--dropped-on-purpose')."
     (should (equal nil (nreverse lost)))))
 
 (provide 'themes-test)
+;; Look step 7: the problems at a line's end are chips (window-dark.html `.diag')
+(ert-deftest drgnx-themes/end-of-line-diagnostics-are-chips ()
+  "A diagnostic shown at the line's end is a chip in its kind's colour on its tint, in the caption role."
+  (require 'flymake)
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (pcase-dolist (`(,face ,fg ,bg) '((flymake-error-echo-at-eol error error-tint)
+                                        (flymake-warning-echo-at-eol warn warn-tint)
+                                        (flymake-note-echo-at-eol info info-tint)))
+        (unless (eq variant 'hc)
+          (should (equal (list face (drgnx-look-token fg variant) (drgnx-look-token bg variant))
+                         (list face (drgnx-face-color face :foreground 'gui)
+                               (drgnx-face-color face :background 'gui)))))))))
+
+;; Look step 7: sh-script's here-documents were bold yellow (the audit's "yellow-heavy" G7)
+(ert-deftest drgnx-themes/shell-scripts-in-the-code-colours ()
+  "A here-document is in the string colour, not bold; a command substitution in the function colour."
+  (require 'sh-script)
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (should (equal (drgnx-look-token 'str variant) (drgnx-face-color 'sh-heredoc :foreground 'gui)))
+      (should (eq 'normal (plist-get (drgnx-faces--clause-plist 'sh-heredoc 'gui) :weight)))
+      (should (equal (drgnx-look-token 'fn variant) (drgnx-face-color 'sh-quoted-exec :foreground 'gui))))))
+
+;; The coordinator's ruling (look step 7): keycaps are text-height, not row-height boxes
+(ert-deftest drgnx-themes/keycaps-fit-their-text-where-boxes-can ()
+  "Where this Emacs's boxes take `:fit text', a keycap's ring asks for it, so a palette row's line spacing does not
+make it tall; where they cannot, the key is left out (a face with it would be refused).  The specs are read, not
+enabled: this Emacs may refuse the key."
+  (cl-letf (((symbol-function 'featurep) (let ((real (symbol-function 'featurep)))
+                                           (lambda (f &optional sub) (or (eq f 'glitnir) (funcall real f sub))))))
+    (dolist (fit '(t nil))
+      (let ((drgnx-theme--box-fit fit))
+        (dolist (variant '(dark light hc))
+          (let* ((spec (cadr (assq 'drgnx-keycap (drgnx-theme--specs variant))))
+                 (box (plist-get (cdar spec) :box)))
+            (should (eq fit (eq 'text (plist-get box :fit))))))))))
+
 ;;; themes-test.el ends here

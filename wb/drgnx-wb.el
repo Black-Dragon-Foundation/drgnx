@@ -378,7 +378,20 @@ and its own back after."
   "Mark point's row as the selected one (`drgnx-wb-row-face'): the selection with the focus ring while this
 buffer's window is the selected window, the inactive selection otherwise.  The fill covers the row's text, its tail
 \(drawn again in the face) or, on a row with none, a stretch to the right edge.  Cheap: three overlays at most are
-touched."
+touched.  A line marked `drgnx-row-inert' (an empty state) is text, not a row: nothing is selected on it."
+  (if (get-text-property (pos-bol) 'drgnx-row-inert)
+      (drgnx-wb--selection-off)
+    (drgnx-wb--selection-on)))
+
+(defun drgnx-wb--selection-off ()
+  "No row is selected: point is on an empty state (`drgnx-row-inert'), which is text, not a row."
+  (dolist (o (list drgnx-wb--selected-overlay drgnx-wb--selected-newline))
+    (when (overlayp o) (delete-overlay o)))
+  (drgnx-wb--tail-paint drgnx-wb--selected-tail nil)
+  (setq drgnx-wb--selected-tail nil))
+
+(defun drgnx-wb--selection-on ()
+  "`drgnx-wb-selection-sync' on a row."
   (let* ((beg (pos-bol)) (end (pos-eol)) (entry (drgnx-wb--row-faces-entry (drgnx-wb--focused-p)))
          (face (cadr entry)) (tail nil))
     (unless (overlayp drgnx-wb--selected-overlay)
@@ -653,6 +666,12 @@ The width is noted `:by auto' (`drgnx-state-note-intent'): a width you chose is 
   (when-let* ((windows (drgnx-wb--dock-windows)))
     (drgnx-state-note-intent nil :sizes 'left (window-pixel-width (car windows)) :by 'auto)
     (when (memq (selected-window) windows) (drgnx-wb-focus-editor))
+    (drgnx-wb--delete-dock windows)))
+
+(defun drgnx-wb--delete-dock (windows)
+  "Delete the dock's WINDOWS.  Their width goes to the editor groups in proportion to their widths, as showing the
+dock takes it back, so a hide and a show leave each group as wide as it was."
+  (let ((window-combination-resize t))
     (dolist (w windows) (when (window-live-p w) (delete-window w)))))
 
 (defvar drgnx-wb-view-providers nil
@@ -672,7 +691,7 @@ sidebar is shown first.  A view with no sections is a `user-error' and changes n
       (when-let* ((windows (drgnx-wb--dock-windows)))
         (drgnx-state-note-intent nil :sizes 'left (window-pixel-width (car windows)) :by 'auto)
         (when in-dock (drgnx-wb-focus-editor))
-        (dolist (w windows) (when (window-live-p w) (delete-window w))))
+        (drgnx-wb--delete-dock windows))
       (drgnx-state-note-intent nil :view nil view)            ; who asked: the running write's, or the default
       (drgnx-wb-show-sidebar)
       (when-let* ((_ in-dock) (w (car (drgnx-wb--dock-windows))))

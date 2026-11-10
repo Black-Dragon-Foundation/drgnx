@@ -43,12 +43,12 @@ open: when you have answered, the palette is there as you left it.
 |---|---|---|
 | `corner-radius` | 12 | logical pixels |
 | `shadow` | `(:blur 48 :offset (0 . 16) :spread 0 :opacity 0.5)` | 0.22 in the light theme, none in High Contrast; colour comes from the `child-frame-shadow` face |
-| `alpha-background` | 0.98 | 1.0 in High Contrast; near opaque, see below |
-| `backdrop-blur` | none | logical pixels of blur radius behind the box, when you set it |
+| `alpha-background` | 0.90 | 1.0 in High Contrast |
+| `backdrop-blur` | 16 | logical pixels of blur radius behind the box; none in High Contrast |
 | `transition` | `pop` | fade and pop in and out |
 
-The design's box is 90 % opaque with a blur of what lies behind it. Until that blur shows on Nidhogg, a box at 90 %
-would let the text behind read through, so the box is near opaque instead.
+The box is frosted, as the design is: 90 % opaque over a blur of what lies behind it, so the editor shows through as
+a soft wash of its colours and never as text.
 
 `drgnx-palette-frame-width` (640 logical pixels, at any display scale) and `drgnx-palette-frame-top` (0.12, the fraction
 of the frame's height above the box) place it. No colours are set here: the theme's faces colour everything.
@@ -62,12 +62,18 @@ has its name above its rows, with no count. The letters you
 typed are in the accent colour, semibold; the current row is the selection colour, one rounded fill 6 pixels in from the list's sides (as the sidebar's rows; every row keeps the same left inset, so nothing moves as the selection does). The keycaps
 (`Ctrl` `Shift` `P`; in a terminal the names alone, `Ctrl Shift P`) come from the key profile you use. On the current row the
 keycaps and hints turn from the faint secondary colour to the muted one, so they stay readable on the selection.
-The commands you ran from the palette come first, newest first, then the rest in their usual order; the list is grouped
-Commands, Files and Agents, and is kept in `palette-history.eld` in drgnx's state folder (200 commands at most).
+The groups always come in this order: Commands, then Files, then Agents, so "Ask an agent" is the last row and never the
+one chosen while a command or a file matches. With nothing typed, the commands you ran from the palette come first,
+newest first, then the rest in their usual order. Once you type, how well a row matches comes first, as in VS Code:
+each word you type counts more at the start of a word of the title than inside one, and more again when it starts the
+word after the previous one's ("run te" puts Run Tests in This File above Run in Terminal…). A command you ran
+recently only wins between rows that match about as well. The history is kept in `palette-history.eld` in drgnx's
+state folder (200 commands at most).
 
 In the floating palette the prompt is a search icon, a hint at the right of what you type says what it searches
-(`Commands · # code`), and a footer shows the keys: `↑` `↓` move, `↵` run, `Esc` close. The minibuffer in the echo area
-is not changed by any of this.
+(`Commands · # code · @ agents`, the last with `tools/agents` on), and a footer 30 logical pixels high, 6 below the
+last row, shows the keys in its middle: `↑` `↓` move, `↵` run, `Tab` preview, `Esc` close. The minibuffer in the echo
+area is not changed by any of this.
 
 ## The echo area
 
