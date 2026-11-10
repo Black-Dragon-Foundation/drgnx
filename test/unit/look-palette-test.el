@@ -128,5 +128,33 @@ plain newline (no fill past the row).  Every row gets the same left inset, so th
       (should (equal "Run Test at Point\n" (substring other 1)))
       (should-not (drgnx-look-palette-test--boxed-p (get-text-property 1 'face other))))))
 
+(ert-deftest drgnx-look-palette/secondary-text-on-the-current-row-is-muted ()
+  "Pattern D, the look's contrast rule: on the current candidate, text in the subtle colour (a keycap, an
+annotation) is `drgnx-selected-secondary' (muted: subtle is 3.8:1 on the dark selection, 4.3 on the light); the
+candidate's own text keeps its face; other rows keep subtle.  Under each drgnx theme the face is at least 4.5:1 on
+the selection (7 in high contrast)."
+  (load (expand-file-name "modules/extra/drgnx-completion" drgnx-dir) nil t)
+  (load (expand-file-name "themes/drgnx-theme-gen" drgnx-dir) nil t)
+  (pcase-dolist (`(,theme . ,bar) '((drgnx-dark . 4.5) (drgnx-light . 4.5) (drgnx-high-contrast . 7.0)))
+    (unwind-protect
+        (progn
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme theme t)
+          (let* ((cand (concat "Run Tests" (propertize "  C-; F" 'face 'drgnx-keycap)
+                               (propertize "  Tests" 'face 'completions-annotations) "\n"))
+                 (row (drgnx-completion--row (let ((s (copy-sequence cand)))
+                                               (add-face-text-property 0 (length s) 'vertico-current t s) s)
+                                             t))
+                 (other (drgnx-completion--row (copy-sequence cand) nil))
+                 (at (lambda (s text) (drgnx-look-palette-test--faces (get-text-property (string-search text s) 'face s)))))
+            (should (memq 'drgnx-selected-secondary (funcall at row "C-; F")))
+            (should (memq 'drgnx-selected-secondary (funcall at row "  Tests")))
+            (should-not (memq 'drgnx-selected-secondary (funcall at row "Run")))
+            (should-not (memq 'drgnx-selected-secondary (funcall at other "C-; F")))
+            (let ((ratio (drgnx-color-contrast (face-foreground 'drgnx-selected-secondary nil t)
+                                               (face-background 'drgnx-selected nil t))))
+              (should (>= ratio bar)))))
+      (mapc #'disable-theme custom-enabled-themes))))
+
 (provide 'look-palette-test)
 ;;; look-palette-test.el ends here

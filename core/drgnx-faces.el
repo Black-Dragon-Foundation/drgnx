@@ -49,6 +49,10 @@
   "The selected row of a list whose window has not the focus (Explorer, Open, Outline), as VS Code's inactive
 selection: at least 1.25:1 against the panel, above the hover."
   :group 'drgnx-look)
+(defface drgnx-selected-secondary '((t :inherit drgnx-text-muted))
+  "Secondary text (a keycap, an annotation) on the selected row: muted, which keeps 4.5:1 on the selection, where
+subtle does not (3.8:1 on the dark selection, 4.3 on the light); in high contrast the selection's own text colour."
+  :group 'drgnx-look)
 (defface drgnx-focus '((t :box (:line-width (-2 . -2)))) "The keyboard focus ring.  Themes and derive set its colour."
   :group 'drgnx-look)
 
