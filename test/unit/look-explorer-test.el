@@ -215,8 +215,8 @@ the right edge; an ignored file is the one whose name changes (dimmed, `.row.dim
                                                         'face)))))))))
 
 (ert-deftest drgnx-look-explorer/the-icon-stands-off-its-name ()
-  "Pattern D, window-dark.html `.row' (gap 6px): where icons are images, a row's icon is followed by 6 logical
-pixels of room before the name."
+  "Pattern D, window-dark.html `.row' (gap 6px): where icons are images, a row's icon has 6 logical pixels of room
+either side (the image's own margin: an image inside a display string is not drawn)."
   (drgnx-explorer-edge--with root
     (cl-letf (((symbol-function 'drgnx-look-icon)
                (lambda (name &rest _) (propertize "i" 'display `(image :type svg :data "<svg/>" :name ,name)))))
@@ -225,9 +225,20 @@ pixels of room before the name."
           (with-current-buffer (drgnx-explorer--buffer)
             (let* ((name (drgnx-look-explorer-test--at row "README"))
                    (icon (get-text-property (1- name) 'display)))
-              (should (stringp icon))
-              (should (eq 'image (car-safe (get-text-property 0 'display icon))))
-              (should (equal `(space :width (,(drgnx-px 6))) (get-text-property 1 'display icon))))))))))
+              (should (eq 'image (car-safe icon)))
+              (should (equal (cons (drgnx-px 6) 0) (plist-get (cdr icon) :margin))))))))))
+
+(ert-deftest drgnx-look-explorer/the-hidden-root-row-draws-no-icon ()
+  "Pattern D: the one root's row is invisible, and Emacs draws a `display' image even on invisible text, so the row
+gets no chevron or icon (they showed before the first folder's own)."
+  (drgnx-explorer-edge--with root
+    (cl-letf (((symbol-function 'drgnx-look-icon)
+               (lambda (name &rest _) (propertize "i" 'display `(image :type svg :data "<svg/>" :name ,name)))))
+      (drgnx-look-explorer-test--as 'gui nil
+        (with-current-buffer (drgnx-explorer--buffer)
+          (drgnx-explorer--fontify (point-min) (point-max))
+          (should (invisible-p (point-min)))
+          (should-not (text-property-not-all (point-min) (pos-eol 1) 'display nil)))))))
 
 (ert-deftest drgnx-look-explorer/one-root-has-no-root-row ()
   "Pattern D, window-dark.html: with one root the tree starts at its entries (the island's header names the

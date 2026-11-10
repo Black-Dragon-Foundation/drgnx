@@ -179,18 +179,17 @@ window parameter `drgnx-wb-island' the chrome reads.  Call it when the sidebar s
 ;;;; Rows: the UI font, git marks at the right edge, the selected row, the hover-revealed ⋯
 
 (defvar drgnx-wb--icon-gaps (make-hash-table :test #'equal)
-  "(IMAGE . PX) → the icon IMAGE followed by PX pixels of room, shared by the rows.  Bounded: cleared past 64
-entries (a scale or icon change adds a set).")
+  "(IMAGE . PX) → the icon IMAGE with PX pixels of margin, shared by the rows.  Bounded: cleared past 64 entries (a
+scale or icon change adds a set).")
 
 (defun drgnx-wb-icon-gap (image)
-  "IMAGE (an icon's display spec) followed by the room before a row's name, window-dark.html `.row' gap 6px: a
-display string, made once per icon and scale (the Explorer's and the Buffers panel's rows)."
+  "IMAGE (an icon's display spec) with window-dark.html `.row' gap 6px either side, as the image's own margin (an
+image inside a display string is not drawn): made once per icon and scale (the Explorer's and the Buffers panel's
+rows)."
   (let ((key (cons image (drgnx-px 6))))
     (or (gethash key drgnx-wb--icon-gaps)
         (progn (when (> (hash-table-count drgnx-wb--icon-gaps) 64) (clrhash drgnx-wb--icon-gaps))
-               (puthash key (concat (propertize " " 'display image)
-                                    (propertize " " 'display `(space :width (,(cdr key)))))
-                        drgnx-wb--icon-gaps)))))
+               (puthash key (append image (list :margin (cons (cdr key) 0))) drgnx-wb--icon-gaps)))))
 
 (defconst drgnx-wb--control "⋯" "A row's menu control; `drgnx-look-hover-control' hides it until the row is hovered.")
 

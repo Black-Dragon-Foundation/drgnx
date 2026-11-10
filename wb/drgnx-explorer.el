@@ -363,7 +363,8 @@ name's face, the hover highlight, the icons, the git status and the ⋯ control.
                                                    (t 'drgnx-explorer-file))))
             (unless (or (drgnx-explorer--placeholder-p v) (equal (aref v 0) drgnx-explorer--reading-row))
               (put-text-property (point) (pos-eol) 'mouse-face 'drgnx-hover-row)
-              (drgnx-explorer--icons (point) depth name-start (aref v 2) (aref v 0))
+              ;; not on the hidden root row: Emacs draws a `display' image even on invisible text
+              (unless (invisible-p (point)) (drgnx-explorer--icons (point) depth name-start (aref v 2) (aref v 0)))
               (drgnx-explorer--git-decorate (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start)
               (dolist (d drgnx-explorer-decorators)
                 (condition-case nil (funcall d (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start)
