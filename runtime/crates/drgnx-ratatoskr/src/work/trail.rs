@@ -44,7 +44,8 @@ enum Sub {
 
 /// What a view's rows are built from, read once per refresh for every class.
 enum Data {
-    Trail(Vec<trail::Step>, Vec<trail::Conclusion>),
+    /// A window of the session's steps (all when they fit), its conclusions, how many steps it has.
+    Trail(Vec<trail::Step>, Vec<trail::Conclusion>, usize),
     Timeline(Vec<trail::Lane>),
     Board(Vec<board::Card>),
 }
@@ -94,6 +95,17 @@ impl Trails {
         });
     }
 
+    /// `view/window` of CONN's VIEW: a trail draws again with its window where the editor asked; false when VIEW is
+    /// not a trail.
+    pub async fn window(&self, f: &Front, conn: u64, view: &str) -> bool {
+        let key = (conn, view.to_owned());
+        if !matches!(lock(&self.views).get(&key), Some(Sub::Trail(_))) {
+            return false;
+        }
+        self.refresh(f, &key).await;
+        true
+    }
+
     /// An env of (connection, view, class) K3 arrived: a trail or Timeline view of that name draws again.
     pub fn view_env(&self, k3: &crate::view::Key) {
         let key = (k3.0, k3.1.clone());
@@ -115,7 +127,11 @@ impl Trails {
             return;
         };
         let data = match sub {
-            Sub::Trail(sid) => Data::Trail(steps(f, &sid).await, conclusions(f, &sid).await),
+            Sub::Trail(sid) => {
+                let from = f.core.views.window_from(key.0, &key.1, "steps");
+                let (steps, total) = trail_steps(f, &sid, from).await;
+                Data::Trail(steps, conclusions(f, &sid).await, total)
+            }
             Sub::Timeline(lanes) => {
                 let mut out = Vec::with_capacity(lanes.len());
                 for l in lanes {
@@ -150,7 +166,7 @@ impl Trails {
 /// DATA's model, the lanes of the sessions NEAR lit.
 fn doc_of(data: &Data, near: &[String]) -> crate::view::model::Doc {
     match data {
-        Data::Trail(steps, concs) => model::trail_doc(steps, concs),
+        Data::Trail(steps, concs, total) => model::trail_doc(steps, concs, *total),
         Data::Timeline(lanes) => model::timeline_doc(lanes, near),
         Data::Board(cards) => board::board_doc(cards),
     }
@@ -162,7 +178,7 @@ fn rows(data: &Data, env: &ViewEnv, fonts: &dyn drgnx_rows::fit::Measure) -> Vec
     let renv = crate::work::map::render_env(env, &palette);
     let zone = Zone::parse(&env.tz);
     match data {
-        Data::Trail(steps, concs) => trail::trail_rows(steps, concs, &renv, zone),
+        Data::Trail(steps, concs, _) => trail::trail_rows(steps, concs, &renv, zone),
         Data::Timeline(lanes) => trail::timeline_rows(lanes, &renv, fonts, zone),
         Data::Board(cards) => board::board_rows(cards, env),
     }
@@ -255,8 +271,13 @@ fn hub_caller() -> Caller {
 
 /// Session SID's last steps, oldest first (none when it has none or the read failed).
 async fn steps(f: &Front, sid: &str) -> Vec<trail::Step> {
+    steps_before(f, sid, None).await
+}
+
+/// Session SID's [`STEPS`] steps before seq BEFORE (none: its last), oldest first.
+async fn steps_before(f: &Front, sid: &str, before: Option<u64>) -> Vec<trail::Step> {
     let Ok(p) = serde_json::from_value::<TimelineParams>(
-        json!({"scope": "session", "id": sid, "limit": STEPS}),
+        json!({"scope": "session", "id": sid, "limit": STEPS, "before": before}),
     ) else {
         return Vec::new();
     };
@@ -264,6 +285,24 @@ async fn steps(f: &Front, sid: &str) -> Vec<trail::Step> {
         Ok(t) => t.steps.iter().map(step_of).collect(),
         Err(_) => Vec::new(),
     }
+}
+
+/// A trail's steps of session SID: its last [`STEPS`], or, when the editor asked for a window FROM (`view/window`,
+/// a position in the whole trail; clamped), the [`STEPS`] from there; and how many the session has (seq counts them
+/// from 1).
+async fn trail_steps(f: &Front, sid: &str, from: Option<usize>) -> (Vec<trail::Step>, usize) {
+    let last = steps(f, sid).await;
+    let total = last
+        .last()
+        .map_or(0, |s| usize::try_from(s.seq).unwrap_or(usize::MAX));
+    let Some(from) = from.map(|n| n.min(total.saturating_sub(STEPS as usize))) else {
+        return (last, total);
+    };
+    if from + STEPS as usize >= total {
+        return (last, total);
+    }
+    let page = steps_before(f, sid, Some((from + STEPS as usize + 1) as u64)).await;
+    (page, total)
 }
 
 /// Session SID's conclusions.

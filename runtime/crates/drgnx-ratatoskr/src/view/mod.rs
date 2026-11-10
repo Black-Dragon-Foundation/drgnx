@@ -34,7 +34,7 @@ use drgnx_rows::image::ImageSet;
 use drgnx_rows::{ImageId, Op, Patch, Row, RowBuilder};
 use runstav::methods::view::{
     Display, ViewAck, ViewClose, ViewEnv, ViewGlyphs, ViewGlyphsAsk, ViewMeasured, ViewModel,
-    ViewResync,
+    ViewResync, ViewWindow,
 };
 use runstav::wire::Error;
 use serde_json::json;
@@ -84,6 +84,9 @@ pub struct Store {
     opts: BTreeMap<(u64, String), ViewOpts>,
     /// (connection, view) → the model its editor was last sent (views with a model only).
     models: BTreeMap<(u64, String), model::Sent>,
+    /// (connection, view, list) → where the editor asked the list's window to start (`view/window`); a builder reads
+    /// it ([`Store::window_from`]) when it holds more of the list than a window.
+    froms: BTreeMap<(u64, String, String), usize>,
 }
 
 impl Store {
@@ -93,7 +96,26 @@ impl Store {
             pairs: BTreeMap::new(),
             opts: BTreeMap::new(),
             models: BTreeMap::new(),
+            froms: BTreeMap::new(),
         }
+    }
+
+    /// Where CONN's editor asked list LIST of VIEW's model to start, if it asked.
+    pub fn window_from(&self, conn: u64, view: &str, list: &str) -> Option<usize> {
+        self.froms
+            .get(&(conn, view.to_owned(), list.to_owned()))
+            .copied()
+    }
+
+    /// CONN's VIEW starts its lists' windows again from where its builder puts them (a new search).
+    pub fn forget_windows(&mut self, conn: u64, view: &str) {
+        self.froms.retain(|(c, v, _), _| !(*c == conn && v == view));
+    }
+
+    /// CONN's editor asks list LIST of VIEW's model to start at FROM (`view/window`).
+    pub fn set_window(&mut self, conn: u64, view: &str, list: &str, from: usize) {
+        self.froms
+            .insert((conn, view.to_owned(), list.to_owned()), from);
     }
 
     /// The model version of KEY's view, for its patches; none for a view with no model.
@@ -158,6 +180,7 @@ impl Store {
     /// CONN subscribed VIEW (again): its editor starts a new replica, so its model starts again at version 1.
     pub fn model_restart(&mut self, conn: u64, view: &str) {
         self.models.remove(&(conn, view.to_owned()));
+        self.forget_windows(conn, view);
     }
 
     /// CONN's VIEW was hidden: it gets no model until it is shown again, and then a reset.
@@ -363,6 +386,7 @@ impl Store {
         self.pairs.retain(|(c, v, _), _| !(*c == conn && v == view));
         self.opts.remove(&(conn, view.to_owned()));
         self.models.retain(|(c, v), _| !(*c == conn && v == view));
+        self.froms.retain(|(c, v, _), _| !(*c == conn && v == view));
         self.pairs.len() + self.models.len() != before
     }
 
@@ -371,6 +395,7 @@ impl Store {
         self.pairs.retain(|(c, _, _), _| *c != conn);
         self.opts.retain(|(c, _), _| *c != conn);
         self.models.retain(|(c, _), _| *c != conn);
+        self.froms.retain(|(c, _, _), _| *c != conn);
     }
 }
 
@@ -592,6 +617,11 @@ impl Views {
         lock(&self.store).model_restart(conn, view);
     }
 
+    /// Where CONN's editor asked list LIST of VIEW's model to start ([`Store::window_from`]).
+    pub fn window_from(&self, conn: u64, view: &str, list: &str) -> Option<usize> {
+        lock(&self.store).window_from(conn, view, list)
+    }
+
     /// KEY's font set, for a builder to measure with (none before its `view/env`).
     pub fn with_fonts<R>(&self, key: &Key, then: impl FnOnce(&FontSet) -> R) -> Option<R> {
         lock(&self.fonts).sets.get(key).map(then)
@@ -732,6 +762,18 @@ pub fn resync(f: &Front, c: &Caller, p: ViewResync) -> Result<bool, Error> {
         Some(p) => f.send_to(key.0, "view-patch", json!(p)),
         None => false,
     })
+}
+
+/// `view/window`: CALLER's editor needs another window of a list of VIEW's model. The from is kept, and the view's
+/// builder (a trail's `steps`, a search's or an Explorer's `order`) sends its model again with it; false when none
+/// holds the view.
+pub async fn window(f: &Front, c: &Caller, p: ViewWindow) -> Result<bool, Error> {
+    let views = &f.core.views;
+    let from = usize::try_from(p.from).unwrap_or(usize::MAX);
+    lock(&views.store).set_window(c.conn_id, &p.view, &p.list, from);
+    Ok(views.grep_window(f, c.conn_id, &p.view)
+        || views.explorer_window(f, c.conn_id, &p.view)
+        || f.core.trails.window(f, c.conn_id, &p.view).await)
 }
 
 /// `view/ack`: the editor applied a patch; an acknowledged view's waiting rows go (false for a pair with no env).

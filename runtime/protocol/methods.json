@@ -32115,6 +32115,43 @@
       "classes": [
         "user"
       ],
+      "doc": "the editor's replica needs another window of a list of a view's model, from a position in the whole list: the view's builder sends the model with that window",
+      "name": "view/window",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`view/window`: the editor's replica of VIEW's model needs another window of list LIST, starting at FROM (a\nposition in the whole list; the hub clamps it). The view's builder sends the model with that window, whole\n(docs/develop/core.md, \"Views\": windows); the answer is false when no builder holds such a list.",
+        "properties": {
+          "from": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "list": {
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "list",
+          "from"
+        ],
+        "title": "ViewWindow",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "open (or open again) one Board view of this connection: the tracker's tasks (of plans, else every task) by column, its model and its rows per display class, the first a reset, before the answer; read again after each write",
       "name": "work/board/subscribe",
       "params": {

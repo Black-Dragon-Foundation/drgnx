@@ -706,6 +706,9 @@ impl Front {
             Params::ViewGlyphs(p) => crate::view::glyphs(self, &caller, p).map(|b| json!(b)),
             Params::ViewMeasured(p) => crate::view::measured(self, &caller, p).map(|b| json!(b)),
             Params::ViewClose(p) => crate::view::close(self, &caller, p).map(|b| json!(b)),
+            Params::ViewWindow(p) => crate::view::window(self, &caller, p)
+                .await
+                .map(|b| json!(b)),
             Params::AgentsPanelLook(p) => {
                 crate::view::panel::look(self, &caller, p).map(|b| json!(b))
             }

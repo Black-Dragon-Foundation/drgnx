@@ -2086,6 +2086,16 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
 - **The trailing notice:** the view's `drgnx-view-nav-notice-method` gets `(:view V :selected ID)`, or
   `(:view V :clear t)` for none, once the selection has been still for `drgnx-view-delay`, and at most once per
   `drgnx-view-delay` while a key is held (`drgnx-timer-soon`, owned by the buffer).
+- **Windows:** a list longer than the hub sends whole is a window of it (`{name, ids, total, from}`): a trail past
+  500 steps (`steps`, its last ones), a search or an Explorer past 20,000 entries (`order`, its first ones). A key
+  that stops at the window's edge gets `(ID . more)` from Sjá (`walk`, `walk-to`, and a `follow` whose link names a
+  direction). The view then asks the hub for the window centred on that edge, `view/window` `(:view V :list L :from
+  F)` (L: the walked list, or for `follow` the buffer's `drgnx-view-nav-list`, `"order"` by default, `"steps"` in a
+  trail; F from Sjá's `(nidhogg-view-get H 'window L)`), once while one is asked, and keeps the key in
+  `drgnx-view-nav--pending` (one per buffer, the newest wins). When a model whose window moved is drained
+  (`drgnx-view-model--drained` calls `drgnx-view-nav-drained`), the key runs again; point goes to the selection
+  after the rows drawn from that model. Nothing waits for the hub: keys pressed meanwhile answer from the window
+  held. The hub keeps the from per (view, list) and its builder sends the model with that window, whole (hub.md).
 - **A broken view** (Sjá's breaker tripped after two panics): a key answers nil and the buffer posts a `render` `fail`
   condition keyed `(view-broken . VIEW)`, which the doctor's `views` row fails on; the view's last instance closing
   clears it. The doctor's `view-model` row fails on an Emacs without `nidhogg-view-push` (no Sjá, or a Nidhogg older
@@ -2094,7 +2104,8 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   the first fails one `render` condition, `view-model-missing`, naming `nidhogg-view-push` and `drgnx update`, so the
   views' keys never go dead silently and the filter never errors per line.
 - Tests: `test/unit/view-nav-test.el` (the class on the card, a replaced row in every order of patch, draw and key,
-  a held key's notices on the test clock, the clear notice, the hook on a move only, the broken view).
+  a held key's notices on the test clock, the clear notice, the hook on a move only, the broken view; `test/unit/work-trail-nav-test.el`: a 2,000-step trail
+  paging at its edge with a held key).
 - **The Explorer on the rows path** (`drgnx-explorer-rows-attach VIEW CLASS`): the hub lists the roots and the open
   folders (`explorer/subscribe`, hub.md) and its jit-lock painting is off. Next and previous follow `down` and `up`,
   expand on an open folder follows `right` and collapse on anything but an open folder `left`; opening or closing a

@@ -175,4 +175,67 @@ the steps it rests on in the chain class; open on it opens the conclusion with i
     (drgnx-work-trail--nav 'up)
     (should (equal "step:2" (drgnx-view-nav-selection)))))
 
+;; A trail of 2,000 steps, as the hub sends it: a window of 500 of them in `steps'.
+
+(defun drgnx-work-trail-nav-test--long (from)
+  "The hub's model of a 2,000-step trail holding steps FROM+1 to FROM+500: each row linked to the next."
+  (let* ((ids (mapcar (lambda (i) (format "step:%d" i)) (number-sequence (1+ from) (+ from 500))))
+         (nodes (let ((prev nil) (out nil) (rest ids))
+                  (while rest
+                    (let ((nav (append (when prev (list :up prev :left prev))
+                                       (when (cdr rest) (list :down (cadr rest) :right (cadr rest))))))
+                      (push (drgnx-work-trail-nav-test--node (car rest) "step" nav
+                                                             (list (vector "label" (car rest)) ["class" "tool"]))
+                            out))
+                    (setq prev (car rest) rest (cdr rest)))
+                  (vconcat (nreverse out)))))
+    (json-serialize
+     (list :ops (vector (list :reset
+                              (list :descriptor (drgnx-work-trail-nav-test--descriptor '("steps") '("rests-on") "steps")
+                                    :nodes nodes :edges []
+                                    :lists (vector (list :name "steps" :ids (vconcat ids) :total 2000 :from from)))))))))
+
+(defun drgnx-work-trail-nav-test--long-rows (from)
+  (mapcar (lambda (i) (let ((id (format "step:%d" i)))
+                        (list :key id :text id :props (list (list 0 (length id) "drgnx-work-id" id)))))
+          (number-sequence (1+ from) (+ from 500))))
+
+(ert-deftest drgnx-work-trail-nav/a-long-trail-pages-at-its-edge ()
+  "Pattern C: on a trail of 2,000 steps whose model holds the last 500, `up' from the window's first step stays (Sjá
+answers `more'), asks the hub once for the window centred there (`view/window' steps from 1250) and keeps the key;
+keys held meanwhile answer at once from the window held and ask nothing more; when the model with the moved window is
+drained, the kept key runs and selects the step above.  Needs Sjá's `window' read and a `follow' that answers
+`more' (Nidhogg after .6's tarball): skipped without them, failed on the line (strict)."
+  (drgnx-work-trail-nav-test--with #'drgnx-work-trail-mode (drgnx-work-trail-nav-test--long 1500)
+                                   (drgnx-work-trail-nav-test--long-rows 1500)
+    (drgnx-test-require-nidhogg
+     (ignore-errors (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'window "steps"))
+     "Sjá window read (nidhogg-view-get 'window)")
+    (let ((sent nil))
+      (setq-local drgnx-view-patch-send-function (lambda (method params) (push (cons method params) sent)))
+      (drgnx-view-nav 'select "step:1501")
+      (drgnx-work-trail--nav 'up)
+      (should (equal "step:1501" (drgnx-view-nav-selection)))
+      (should (equal '(("steps" . 1250))
+                     (mapcar (lambda (s) (cons (plist-get (cdr s) :list) (plist-get (cdr s) :from)))
+                             (seq-filter (lambda (s) (equal (car s) "view/window")) sent))))
+      ;; held: each key answers from the window held, no second ask
+      (dotimes (_ 5) (drgnx-work-trail--nav 'up))
+      (should (= 1 (seq-count (lambda (s) (equal (car s) "view/window")) sent)))
+      (should (equal "step:1501" (drgnx-view-nav-selection)))
+      ;; a model that does not move the window leaves the key waiting
+      (let ((view (drgnx-view-patch-view drgnx-view-patch)))
+        (let ((same (vconcat (mapcar (lambda (i) (format "step:%d" i)) (number-sequence 1501 2000)))))
+          (drgnx-view-model-event
+           (list :view view :hub 7 :base 1 :version 2
+                 :model (json-serialize
+                         (list :ops (vector (list :list (list :name "steps" :ids same :total 2000 :from 1500))))))))
+        (drgnx-view-model--due view)
+        (should (equal "step:1501" (drgnx-view-nav-selection)))
+        (drgnx-view-model-event (list :view view :hub 7 :base 2 :version 3 :reset t
+                                      :model (drgnx-work-trail-nav-test--long 1250)))
+        (drgnx-view-model--due view))
+      (should (equal "step:1500" (drgnx-view-nav-selection)))
+      (should (= 1 (seq-count (lambda (s) (equal (car s) "view/window")) sent))))))
+
 ;;; work-trail-nav-test.el ends here

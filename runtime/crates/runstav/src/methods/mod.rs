@@ -275,6 +275,7 @@ params! {
     ViewGlyphs(view::ViewGlyphs),
     ViewMeasured(view::ViewMeasured),
     ViewClose(view::ViewClose),
+    ViewWindow(view::ViewWindow),
     TermOpen(term::TermOpen),
     TermConfig(term::TermConfig),
     TermKey(term::TermKey),

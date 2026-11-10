@@ -220,6 +220,7 @@
   "view/glyphs": ["user"],
   "view/measured": ["user"],
   "view/resync": ["user"],
+  "view/window": ["user"],
   "work/board/subscribe": ["user"],
   "work/conclusions": ["user"],
   "work/file-at": ["user"],
