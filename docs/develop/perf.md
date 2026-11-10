@@ -878,7 +878,7 @@ desktop's pinned island (`perf-exclusive.sh` as the outer wrapper, `DRGNX_PERF_C
 
 | Row | Where | Budget |
 |---|---|---|
-| tier 1 of a drgnx checkout; one saved file searchable | `drgnx-ratatoskr/tests/timing.rs` (`tier1_of_a_checkout_and_one_saved_file`) | 60 s; 1 s |
+| tier 1 of a drgnx checkout; one saved file searchable | `drgnx-ratatoskr/tests/timing.rs` (`tier1_of_a_checkout_and_one_saved_file`) | 60 s; 1 s (the references cost about 12 % of a full tier 1, paired on the island; the row prints the store's growth from them) |
 | `search/query` p95, 50,000 and 100,000 synthetic chunks, vectors on | the same file (`query_p95_at_50k_chunks`, `…_100k_…`) | 100 ms; 200 ms |
 | the agent tools at 50,000 synthetic chunks with references (each function calls 4 others, drawn Zipf-like): repo map cold (graph built) and warm p95, usages p95, symbols p95, outline p95, graph cache | the same file (`agent_tools_at_50k_chunks`) | 1,000 ms, 150 ms; 50 ms; 20 ms; 10 ms; 64 MB |
 | built-in embedding tokens/s (GPU), VRAM at 4,096 tokens | `hrafn-embed/tests/timing.rs` (`bench_tokens_per_s`) | 20,000; 800 MB |
