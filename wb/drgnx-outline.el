@@ -23,6 +23,7 @@
 (require 'drgnx-timer)
 (require 'drgnx-view)
 (require 'drgnx-large-file)
+(require 'drgnx-icons)
 
 (defface drgnx-outline-group '((t :inherit shadow)) "A group of definitions (imenu submenu)." :group 'drgnx)
 
@@ -134,7 +135,9 @@ ORDINAL counts the earlier rows with that name and depth.  Fills `drgnx-outline-
 (defun drgnx-outline--render-row (key)
   "The text of KEY's row: a notice, a group or a definition, from the column of the section's title (2)."
   (if (eq (car-safe key) :notice)
-      (propertize (concat "  " (cadr key) "\n") 'face 'shadow)
+      ;; an empty state, not a row: the icon and the text in the muted colour, never selected
+      (propertize (concat "  " (drgnx-look-icon 'info 'drgnx-text-muted) " " (cadr key) "\n")
+                  'face 'drgnx-text-muted 'drgnx-row-inert t)
     (let* ((r (gethash key drgnx-outline--table))
            (text (concat (make-string (+ 2 (* 2 (nth 1 key))) ?\s) (drgnx-wb-display-name (car key)) "\n")))
       (if (and r (null (aref r 2))) (propertize text 'face 'drgnx-outline-group) text))))
