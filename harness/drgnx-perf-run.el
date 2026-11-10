@@ -794,6 +794,86 @@ went from and to.  An error when a key went back (a wrap), a round paged no wind
       t))
   "The `search-window' workload's session side (with the replace workloads' and the hub's).")
 
+(defconst drgnx-perf-run--search-retype-form
+  (prin1-to-string
+   '(progn
+      (defvar drgnx-perf--rt nil
+        "While armed: one record per key that changed the query, newest first: [KEY-T TEXT START RESET FIRST SETTLE]
+\(`float-time's; START when its search went to the hub, RESET when the hub's reset of the rows came, FIRST when rows
+of the new search were drawn, SETTLE when the search ended with all 10k matches: its end can come before its first
+rows are drawn, so a key settles at the later of the two).")
+      (defvar drgnx-perf--rt-key-t nil "When the running command's key came.")
+      (defvar drgnx-perf--rt-text nil "The query before the running command.")
+      (defun drgnx-perf--rt-pre ()
+        (setq drgnx-perf--rt-key-t (float-time)
+              drgnx-perf--rt-text (with-current-buffer (drgnx-perf--replace-view) (drgnx-replace--text 'find))))
+      (defun drgnx-perf--rt-post ()
+        (let ((text (with-current-buffer (drgnx-perf--replace-view) (drgnx-replace--text 'find))))
+          (unless (equal text drgnx-perf--rt-text)
+            (push (vector drgnx-perf--rt-key-t text nil nil nil nil) drgnx-perf--rt))))
+      (defun drgnx-perf--rt-start (&rest _)
+        (when-let* ((r (car drgnx-perf--rt)) ((null (aref r 2)))) (aset r 2 (float-time))))
+      (defun drgnx-perf--rt-patch (patch)
+        (when-let* ((r (car drgnx-perf--rt)) ((aref r 2)) ((null (aref r 3)))
+                    ((equal (plist-get patch :view) drgnx-replace-view)) ((drgnx-view-patch--reset-p patch)))
+          (aset r 3 (float-time))))
+      (defun drgnx-perf--rt-drawn (&rest _)
+        "After a hub patch was drawn (`drgnx-view-patch-patched-functions', in the view's buffer)."
+        (when-let* ((r (car drgnx-perf--rt)) ((aref r 3)) ((null (aref r 4)))
+                    ((> (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)) 0)))
+          (aset r 4 (float-time))))
+      (defun drgnx-perf--rt-done (event data)
+        (when-let* (((equal event "search-grep-done")) ((equal (plist-get data :view) drgnx-replace-view))
+                    ((eql 10000 (plist-get data :matches)))
+                    (r (car drgnx-perf--rt)) ((aref r 3)) ((null (aref r 5))))
+          (aset r 5 (float-time))))
+      (defun drgnx-perf--rt-arm ()
+        "The Search view listing the 10k matches of \"needle\" (the hub's rows path), point at the end of its query."
+        (drgnx-replace--open :text "needle"
+                             :origin (with-current-buffer (find-file-noselect (expand-file-name "f000.txt" drgnx-perf--needles))
+                                       (point-min-marker)))
+        (let ((v (drgnx-perf--replace-view)))
+          (unless (drgnx-perf--wait 60 (lambda () (with-current-buffer v
+                                                    (and drgnx-view-patch (eql 10000 (cdr drgnx-replace--hub-counts))
+                                                         (not (drgnx-replace--busy-p))))))
+            (error "Premise: \"needle\" did not list 10,000 matches on the rows path (counts %S)"
+                   (buffer-local-value 'drgnx-replace--hub-counts v)))
+          (unless (eq (window-buffer (selected-window)) v) (error "Premise: the Search view is not the selected window"))
+          (goto-char (widget-field-text-end (drgnx-replace--widget 'find))))
+        (setq drgnx-perf--rt nil)
+        (add-hook 'pre-command-hook #'drgnx-perf--rt-pre)
+        (add-hook 'post-command-hook #'drgnx-perf--rt-post)
+        (advice-add 'drgnx-replace--hub-search :before #'drgnx-perf--rt-start)
+        (advice-add 'drgnx-view-apply-patch :before #'drgnx-perf--rt-patch)
+        (advice-add 'drgnx-replace--rows-boxes :after #'drgnx-perf--rt-drawn)
+        (advice-add 'drgnx-replace--hub-event :after #'drgnx-perf--rt-done)
+        t)
+      (defun drgnx-perf--rt-disarm ()
+        (remove-hook 'pre-command-hook #'drgnx-perf--rt-pre)
+        (remove-hook 'post-command-hook #'drgnx-perf--rt-post)
+        (advice-remove 'drgnx-replace--hub-search #'drgnx-perf--rt-start)
+        (advice-remove 'drgnx-view-apply-patch #'drgnx-perf--rt-patch)
+        (advice-remove 'drgnx-replace--rows-boxes #'drgnx-perf--rt-drawn)
+        (advice-remove 'drgnx-replace--hub-event #'drgnx-perf--rt-done))
+      (defun drgnx-perf--rt-measure ()
+        "(:first_ms STATS :settle_ms STATS :search_first_ms STATS :keys N :settled N): per key that changed the query,
+from the key to the first rows of its search drawn (the typing pause, `drgnx-replace-delay', included) and to its
+search's end with all 10k matches listed (only keys whose search ended before the next key); from the search's start
+to its first rows.  An error when a key's search drew no rows before the next key, or the last search did not end."
+        (drgnx-perf--wait 30 (lambda () (when-let* ((r (car drgnx-perf--rt))) (aref r 5))))
+        (drgnx-perf--rt-disarm)
+        (let ((rs (reverse drgnx-perf--rt)) (ms (lambda (a b) (* 1000 (- b a)))))
+          (when-let* ((bad (seq-find (lambda (r) (null (aref r 4))) rs)))
+            (error "Premise: the search of %S drew no rows before the next key (%S)" (aref bad 1) bad))
+          (unless (aref (car (last rs)) 5) (error "Premise: the last search (%S) did not end" (aref (car (last rs)) 1)))
+          (list :first_ms (mapcar #'drgnx-perf--round (drgnx-perf-stats (mapcar (lambda (r) (funcall ms (aref r 0) (aref r 4))) rs)))
+                :settle_ms (mapcar #'drgnx-perf--round
+                                   (drgnx-perf-stats (delq nil (mapcar (lambda (r) (and (aref r 5) (funcall ms (aref r 0) (max (aref r 4) (aref r 5))))) rs))))
+                :search_first_ms (mapcar #'drgnx-perf--round (drgnx-perf-stats (mapcar (lambda (r) (funcall ms (aref r 2) (aref r 4))) rs)))
+                :keys (length rs) :settled (seq-count (lambda (r) (aref r 5)) rs))))
+      t))
+  "The `search-retype' workload's session side (with the replace workloads' and the hub's).")
+
 (defun drgnx-perf-run--hub-form ()
   "The agent workloads' setup, as a form string: the session functions that start Ratatoskr (a test-hooks build,
 $DRGNX_RATATOSKR_BIN, with `ratatoskr-mock' beside it) for the workload, give it the profile \"mock\"
@@ -998,6 +1078,20 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                        " " drgnx-perf-run--search-window-form " (drgnx-perf--sw-up))")
        :measure "(drgnx-perf--sw-measure)"
        :teardown ,(concat "(progn (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
+      ;; retyping the Search view's query over 10k matches on the hub's rows path, a character at a time: "needle" to
+      ;; "needl", "need", "needl", "needle" 25 times (100 keys, each a search of 10k matches); a pause of 0.6 s
+      ;; after each key (the 0.25 s typing pause runs out, the next key may land while the rows stream) and 1.5 s after
+      ;; every fourth (its search ends)
+      (search-retype
+       :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) " (drgnx-perf-run--replace-setup-form)
+                       " " drgnx-perf-run--search-retype-form ")")
+       :each "(drgnx-perf--rt-arm)"
+       :actions ,(apply #'append (make-list 25 '((:keys "DEL") (:pause 0.6) (:keys "DEL") (:pause 0.6)
+                                                 (:type "l") (:pause 0.6) (:type "e") (:pause 1.5))))
+       :measure "(drgnx-perf--rt-measure)"
+       :check "(and (equal (with-current-buffer (drgnx-perf--replace-view) (drgnx-replace--text 'find)) \"needle\")
+                    (eql 10000 (cdr (buffer-local-value 'drgnx-replace--hub-counts (drgnx-perf--replace-view)))))"
+       :teardown ,(concat "(progn (drgnx-perf--rt-disarm) (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
       ;; typing while the Live view shows frames from a mock browser (30 a second, each once the last was acked)
       (live-view
        :setup ,(drgnx-perf-run--live-setup-form)
@@ -1540,6 +1634,7 @@ version and the commit, as JSON in FILE."
               '(work-typing-shown work-typing-hidden))
     (view-patch . "report-only until the render offload's combined pass (its numbers on the island)")
     (work-nav-rows . "report-only until the combined pass (gates after core, editor and agents); needs Sjá's Nidhogg")
+    (search-retype . "its input rows are judged now; allocation, CPU and rows follow its first runs on the desktop island (the combined pass)")
     (typing-evil . "needs DRGNX_MODAL_ELPA (evil); not run in the container")
     (motions-evil . "needs DRGNX_MODAL_ELPA")
     (explorer-evil . "needs DRGNX_MODAL_ELPA")

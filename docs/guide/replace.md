@@ -93,8 +93,9 @@ palette, category Search.
 `test/unit/mod-replace-view-test.el` (the view, the find bar; on the virtual clock, the view's own rows Symbol mode
 uses: 10k rows streaming and a replacement patching them in slices of at most 576, a new search, a hidden view, no
 marker per file); `test/ui/editor-m11c1-test.el` walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each. The perf workload
-`replace-typing-rows` types in a file while the hub lists 10k matches, and `search-window` walks Next Match across the
-model's window of a 30k-match search ([perf.md](../develop/perf.md)).
+`replace-typing-rows` types in a file while the hub lists 10k matches, `search-retype` changes the view's query a
+character at a time over 10k matches (each key a search, timed to its first rows and to its end), and `search-window`
+walks Next Match across the model's window of a 30k-match search ([perf.md](../develop/perf.md)).
 
 When the hub builds the results (`search/grep`, [hub.md](../develop/hub.md)), they also arrive as a model of files and
 their matches, and the keys answer from it in Emacs (`drgnx-replace-rows-attached`): Next Match and Previous Match walk

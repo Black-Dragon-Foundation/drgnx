@@ -364,6 +364,15 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
 (ert-deftest drgnx-ui/act-rejects-unknown-actions ()
   (should-error (drgnx-ui-act '(:socket "/nonexistent") '(:fly 1)) :type 'drgnx-ui-error))
 
+(ert-deftest drgnx-ui/a-pause-action-queues-a-wait ()
+  ;; (:pause S): S seconds of no input before the next action, queued in the session like a click's hold
+  (let (sent)
+    (cl-letf (((symbol-function 'drgnx-ui-call) (lambda (_sess form &rest _) (push form sent) nil)))
+      (drgnx-ui-act '(:socket "/nonexistent") '(:pause 0.5)))
+    (should (equal sent '("(drgnx-uitest-api-pause 0.5)"))))
+  (dolist (bad '(-1 "1" nil))
+    (should-error (drgnx-ui-act '(:socket "/nonexistent") (list :pause bad)) :type 'drgnx-ui-error)))
+
 (ert-deftest drgnx-ui/drag-actions-take-pixels-in-any-shape ()
   ;; (:drag (:from (X . Y) :to (X . Y) :steps N)), and the same from JSON: arrays and objects
   (should (equal (drgnx-ui--drag-spec '(:from (10 . 20) :to (110 . 20))) '(10 20 110 20 1 nil)))
