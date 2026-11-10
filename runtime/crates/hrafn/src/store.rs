@@ -231,12 +231,15 @@ pub(crate) fn write_chunks(
         insert.execute(params![path, blob, r.name, r.n, lines.join(" ")])?;
     }
     let mut ids = Vec::with_capacity(chunks.len());
+    let mut chunk_insert = c.prepare(
+        "insert into chunk(path, blob, start, end, line_start, line_end, symbol, key, embed, embed_text)
+         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+    )?;
+    let mut fts_insert = c.prepare(
+        "insert into chunk_fts(rowid, path, symbols, doc, body) values (?1, ?2, ?3, ?4, ?5)",
+    )?;
     for ch in chunks {
-        c.prepare(
-            "insert into chunk(path, blob, start, end, line_start, line_end, symbol, key, embed, embed_text)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        )?
-        .execute(params![
+        chunk_insert.execute(params![
             path,
             blob,
             ch.start,
@@ -249,10 +252,7 @@ pub(crate) fn write_chunks(
             ch.embed_text
         ])?;
         let id = c.last_insert_rowid();
-        c.prepare(
-            "insert into chunk_fts(rowid, path, symbols, doc, body) values (?1, ?2, ?3, ?4, ?5)",
-        )?
-        .execute(params![
+        fts_insert.execute(params![
             id,
             path,
             encode_symbol(&ch.symbols),
@@ -261,13 +261,13 @@ pub(crate) fn write_chunks(
         ])?;
         ids.push(id);
     }
+    let mut symbol_insert = c.prepare(
+        "insert into symbol(name, kind, path, blob, start, end, chunk, definer, doc1, line_start, line_end, sig)
+         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+    )?;
     for s in symbols {
         let chunk = ids.get(s.chunk).copied().ok_or(urdr::Error::Aborted)?;
-        c.prepare(
-            "insert into symbol(name, kind, path, blob, start, end, chunk, definer, doc1, line_start, line_end, sig)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        )?
-        .execute(params![
+        symbol_insert.execute(params![
             s.name,
             s.kind,
             path,

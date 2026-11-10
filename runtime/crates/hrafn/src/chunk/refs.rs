@@ -117,7 +117,11 @@ impl Tally {
         if name.chars().count() < 2 {
             return;
         }
-        let (n, lines) = self.0.entry(name.to_string()).or_default();
+        // a name seen before is found without allocating its key again
+        if !self.0.contains_key(name) {
+            self.0.insert(name.to_string(), (0, Vec::new()));
+        }
+        let (n, lines) = self.0.get_mut(name).expect("inserted above");
         *n += 1;
         if lines.len() < LINES && !lines.contains(&line) {
             lines.push(line);
