@@ -607,9 +607,11 @@ mod tests {
             ms.iter().map(|m| (m.line, m.col)).collect::<Vec<_>>(),
             [(1, 4), (2, 9)]
         );
-        assert!(search_text(&q(Path::new("/r"), ""), "/r/a.txt", text)
-            .unwrap()
-            .is_empty());
+        assert!(
+            search_text(&q(Path::new("/r"), ""), "/r/a.txt", text)
+                .unwrap()
+                .is_empty()
+        );
         let mut bad = q(Path::new("/r"), "(");
         bad.regexp = true;
         assert!(search_text(&bad, "/r/a.txt", text).is_err());
