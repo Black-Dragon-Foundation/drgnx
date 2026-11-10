@@ -25,26 +25,34 @@
 
 (drgnx-look-gui-deftest drgnx-ui-look-outline/the-empty-state-is-whole-and-quiet ()
   "Pattern D: a file without an outline shows an icon and \"No outline for this file\" in the muted text, whole (not
-scrolled sideways, not cut at the right), and never as the selected row: no fill or ring before or around it."
+scrolled sideways, not cut at the right), and never as the selected row: no fill or ring before or around it, also
+when a row of the file before was selected (its selection must not outlive its row)."
   (skip-unless (display-graphic-p))
   (drgnx-uitest-bare-frame)
   (delete-other-windows)
   (mapc #'disable-theme custom-enabled-themes)
   (load-theme 'drgnx-dark t)
-  (let* ((src (generate-new-buffer "outline-src"))
+  (let* ((code (generate-new-buffer "outline-code"))
+         (src (generate-new-buffer "outline-src"))
          (side (selected-window))
          (editor (split-window side (drgnx-px 248 (selected-frame)) 'right t)))
     (unwind-protect
         (cl-letf (((symbol-function 'drgnx-wb-editor-window) (lambda (&rest _) editor)))
           (drgnx-look-density-on)
+          (with-current-buffer code
+            (insert "(defun alpha () 1)\n(defun beta () 2)\n(defun gamma () 3)\n") (emacs-lisp-mode))
           (with-current-buffer src (insert "nothing to index here\n") (fundamental-mode))
-          (set-window-buffer editor src)
           (set-window-parameter side 'drgnx-role 'dock)
           (set-window-buffer side (drgnx-outline--buffer))
+          ;; as in the scene: the Outline lists a file's definitions, one of them selected (a click on its row)
+          (set-window-buffer editor code)
           (drgnx-outline-refresh)
           (drgnx-test-wait-presented)
-          ;; a command run in the Outline (a click on it): its post-command selection
-          (with-selected-window side (drgnx-wb-selection-sync))
+          (with-selected-window side (goto-char (point-min)) (forward-line 2) (drgnx-wb-selection-sync))
+          (drgnx-test-wait-presented)
+          ;; then the editor shows a file without an outline
+          (set-window-buffer editor src)
+          (drgnx-outline-refresh)
           (drgnx-test-wait-presented)
           (with-current-buffer drgnx-outline-buffer-name
             (goto-char (point-min))
@@ -74,6 +82,7 @@ scrolled sideways, not cut at the right), and never as the selected row: no fill
       (set-window-parameter side 'drgnx-role nil)
       (mapc #'disable-theme custom-enabled-themes)
       (when (get-buffer drgnx-outline-buffer-name) (kill-buffer drgnx-outline-buffer-name))
-      (kill-buffer src))))
+      (kill-buffer src)
+      (kill-buffer code))))
 
 ;;; look-outline-gui-test.el ends here
