@@ -212,33 +212,12 @@ pub(crate) fn assemble(input: Input) -> (Vec<Chunk>, Vec<Symbol>) {
                 .trim()
                 .to_string();
             for (i, span) in parts.into_iter().enumerate() {
-                // a part names the form's first definition and the members that start in it; the whole doc goes in
-                // the first part, the others keep its first line for their header
-                let defs = form
-                    .defs
-                    .iter()
-                    .enumerate()
-                    .filter(|(j, d)| {
-                        let s = d.span.map_or(form.start, |(s, _)| s);
-                        *j == 0 || (span.0 <= s && s < span.1)
-                    })
-                    .map(|(_, d)| (d.name.clone(), d.kind.to_string()))
-                    .collect();
-                let docs = if i == 0 {
-                    header.docs.clone()
-                } else {
-                    header
-                        .docs
-                        .iter()
-                        .map(|d| d.lines().next().unwrap_or("").to_string())
-                        .collect()
-                };
                 let h = Header {
                     path,
                     title: header.title,
                     section: header.section,
-                    defs,
-                    docs,
+                    defs: header.defs.clone(),
+                    docs: header.docs.clone(),
                     part: Some((i + 1, n, sig.clone())),
                 };
                 chunks.push(build_chunk(text, &lines, span, &h, None, embed));
