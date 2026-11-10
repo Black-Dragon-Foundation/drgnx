@@ -97,11 +97,12 @@ font-lock (`lisp--el-funcall-position-p', through `forward-sexp') scanned the re
       (defvar drgnx-perf--cad-last nil "`model' after a model line, `other' after any other hub line, nil after a pass.")
       (defvar drgnx-perf--cad-queued nil "When the oldest model line not yet drained came (`float-time'), or nil.")
       (defvar drgnx-perf--cad-lags nil "Each drain's lag in ms: from the oldest model line it applied to the drain.")
-      (defun drgnx-perf--cad-model (line)
+      (defun drgnx-perf--cad-model (line &rest _)
+        "A model LINE came: a Lisp string, or Sjá's answer to one the reader pushed (no string: its bytes not counted)."
         (setq drgnx-perf--cad-last 'model)
         (when drgnx-perf--cad
           (cl-incf (nth 3 drgnx-perf--cad))
-          (cl-incf (nth 4 drgnx-perf--cad) (length line))
+          (when (stringp line) (cl-incf (nth 4 drgnx-perf--cad) (length line)))
           (unless drgnx-perf--cad-queued (setq drgnx-perf--cad-queued (float-time)))))
       (defun drgnx-perf--cad-other (&rest _) (setq drgnx-perf--cad-last 'other))
       (defun drgnx-perf--cad-drained (_state r)
@@ -118,12 +119,14 @@ font-lock (`lisp--el-funcall-position-p', through `forward-sexp') scanned the re
       (defun drgnx-perf--passes-arm ()
         (setq drgnx-perf--cad (list 0 0 0 0 0) drgnx-perf--cad-last nil drgnx-perf--cad-queued nil drgnx-perf--cad-lags nil)
         (advice-add 'drgnx-hub--model-line :before #'drgnx-perf--cad-model)
+        (advice-add 'drgnx-hub--model-pushed :before #'drgnx-perf--cad-model)
         (advice-add 'drgnx-hub--client-line :before #'drgnx-perf--cad-other)
         (advice-add 'drgnx-view-model--drained :before #'drgnx-perf--cad-drained)
         (advice-add 'redisplay--pre-redisplay-functions :before #'drgnx-perf--cad-pass))
       (defun drgnx-perf--passes-done ()
         "The cadence counts since the arm, as measure keys (none when not armed)."
         (advice-remove 'drgnx-hub--model-line #'drgnx-perf--cad-model)
+        (advice-remove 'drgnx-hub--model-pushed #'drgnx-perf--cad-model)
         (advice-remove 'drgnx-hub--client-line #'drgnx-perf--cad-other)
         (advice-remove 'drgnx-view-model--drained #'drgnx-perf--cad-drained)
         (advice-remove 'redisplay--pre-redisplay-functions #'drgnx-perf--cad-pass)
@@ -741,6 +744,7 @@ match 50 entries before its end, Next Match until a key stopped at the window's 
 went from and to.  An error when a key went back (a wrap), a round paged no window, or Sjá held more than the window."
         (with-current-buffer (drgnx-perf--sw-view)
           (advice-add 'drgnx-hub--model-line :around #'drgnx-perf--sw-line)
+          (advice-add 'drgnx-hub--model-pushed :around #'drgnx-perf--sw-line)
           (advice-add 'drgnx-hub--client-batch :before #'drgnx-perf--sw-batch)
           ;; a new env between runs may search again (`drgnx-replace--hub-resubscribe'): its end first
           (unless (drgnx-perf--wait 120 (lambda () (and (eql 30000 (cdr drgnx-replace--hub-counts)) (not (drgnx-replace--busy-p))
@@ -800,6 +804,7 @@ went from and to.  An error when a key went back (a wrap), a round paged no wind
                               (setq most (max most (length (nidhogg-view-get h 'list "order"))))))
                 (unless paged (error "Premise: round %d's 200 Next Match keys from %d paged no window (at %d)" round from at))))
             (advice-remove 'drgnx-hub--model-line #'drgnx-perf--sw-line)
+            (advice-remove 'drgnx-hub--model-pushed #'drgnx-perf--sw-line)
             (advice-remove 'drgnx-hub--client-batch #'drgnx-perf--sw-batch)
             (when (> most 20000) (error "Premise: Sjá held %d entries, more than the window's 20,000" most))
             (list :key_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats keys))

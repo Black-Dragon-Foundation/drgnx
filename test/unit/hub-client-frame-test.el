@@ -32,23 +32,22 @@
   (list :raw (if (multibyte-string-p line) (encode-coding-string line 'utf-8 t) line)))
 
 (defun drgnx-hub-client-frame-test--require-raw-prefix ()
-  "Skip without Nidhogg's reader; on one older than `:raw-prefix' (it came with Sjá's queue, `nidhogg-view-push': an
-older nh-io refuses the keyword, and the client then stays unframed), skip by name, or fail on the line (strict)."
+  "Skip without Nidhogg's reader; on one older than `:raw-to-sja' (the reader's push to Sjá, `nidhogg-view--pushed':
+an older nh-io refuses the keyword, and the client then stays unframed), skip by name, or fail on the line (strict)."
   (unless (fboundp 'nidhogg-workers--test-frame) (ert-skip "no Nidhogg reader (nidhogg-workers--test-frame)"))
   (require 'nidhogg-views nil t)
-  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) ":raw-prefix framing (with nidhogg-view-push)"))
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view--pushed) ":raw-to-sja framing (nidhogg-view--pushed)"))
 
 (defun drgnx-hub-client-frame-test--framed (chunks eof)
   "The events `drgnx-hub--client-batch' passes on for CHUNKS framed by Nidhogg's reader, as `drgnx-hub--frame' frames
-them; a `view-model' line as (:raw LINE)."
+them; a `view-model' line, which the reader pushes to Sjá, as (:pushed . SJÁ'S-ANSWER)."
   (let (got)
     (cl-letf (((symbol-function 'drgnx-hub--client-line) (lambda (_conn json) (push json got)))
-              ((symbol-function 'drgnx-hub--model-line)
-               (lambda (line) (push (drgnx-hub-client-frame-test--raw line) got))))
+              ((symbol-function 'drgnx-view-model--pushed) (lambda (r) (push (cons :pushed r) got))))
       (drgnx-hub--client-batch
        nil (car (nidhogg-workers--test-frame chunks eof 'lines :parse 'string :object-type 'plist
                                              :array-type 'list :null-object nil :false-object nil
-                                             :raw-prefix drgnx-hub--model-prefix))))
+                                             :raw-prefix drgnx-hub--model-prefix :raw-to-sja t))))
     (nreverse got)))
 
 (defun drgnx-hub-client-frame-test--unframed (chunks)
@@ -74,8 +73,9 @@ them; a `view-model' line as (:raw LINE)."
   (apply fn string args))
 
 (ert-deftest drgnx-hub-client-frame/a-view-model-line-goes-whole-and-unparsed-both-ways ()
-  "A `view-model' line between other events, cut anywhere (split over many chunks on the unframed path): both paths
-hand it whole to the model, in its place among the events, and neither parses it."
+  "A `view-model' line between other events, cut anywhere (split over many chunks): the filter hands it whole to the
+model, the reader pushes it to Sjá itself (its answer comes, never the line as a string), each in its place among the
+events, and neither parses it in Lisp."
   (drgnx-hub-client-frame-test--require-raw-prefix)
   (let ((stream (concat "{\"event\":\"notice\",\"data\":{\"a\":1}}\n" drgnx-hub-client-frame-test--model-line "\n"
                         "{\"id\":3,\"result\":true}\n"))
@@ -83,63 +83,23 @@ hand it whole to the model, in its place among the events, and neither parses it
     (advice-add 'json-parse-string :around #'drgnx-hub-client-frame-test--count-parse)
     (unwind-protect
         (dolist (seed '(1 7 42 1000 31337))
-          (let* ((chunks (drgnx-hub-client-frame-test--chunks stream seed))
-                 (want (list '(:event "notice" :data (:a 1))
-                             (drgnx-hub-client-frame-test--raw drgnx-hub-client-frame-test--model-line)
-                             '(:id 3 :result t))))
+          (let ((chunks (drgnx-hub-client-frame-test--chunks stream seed))
+                (want (lambda (model) (list '(:event "notice" :data (:a 1)) model '(:id 3 :result t)))))
             (should (> (length chunks) 3))
-            (should (equal want (drgnx-hub-client-frame-test--unframed chunks)))
-            (should (equal want (drgnx-hub-client-frame-test--framed chunks t)))))
+            (should (equal (funcall want (drgnx-hub-client-frame-test--raw drgnx-hub-client-frame-test--model-line))
+                           (drgnx-hub-client-frame-test--unframed chunks)))
+            ;; no instance of view "v" is open: Sjá answers `none' for it
+            (should (equal (funcall want '(:pushed "v" 1 none)) (drgnx-hub-client-frame-test--framed chunks t)))))
       (advice-remove 'json-parse-string #'drgnx-hub-client-frame-test--count-parse))
     (should (= 0 drgnx-hub-client-frame-test--parsed))))
 
-(ert-deftest drgnx-hub-client-frame/frames-with-the-model-prefix ()
+(ert-deftest drgnx-hub-client-frame/frames-with-the-model-prefix-pushed-to-sja ()
+  "The reader is asked to push a `view-model' line to Sjá itself: there is no framing that hands it to Lisp."
   (let (args (nidhogg-workers-framing t))
     (cl-letf (((symbol-function 'nidhogg-set-process-framing) (lambda (&rest a) (setq args a))))
       (drgnx-hub--frame 'conn))
-    (should (equal drgnx-hub--model-prefix (plist-get (cddr args) :raw-prefix)))))
-
-(defun drgnx-hub-client-frame-test--frame-calls (setting pushed refuse)
-  "The framings `drgnx-hub--frame' asks for, oldest first, each as (RAW-TO-SJA . ACCEPTED): with
-`drgnx-hub-model-lines-to-sja' SETTING, `nidhogg-view--pushed' when PUSHED, and a Nidhogg that refuses `:raw-to-sja'
-when REFUSE (an older nh-io takes it for a JSON option, which fails)."
-  (let (calls (nidhogg-workers-framing t) (drgnx-hub-model-lines-to-sja setting))
-    (cl-letf (((symbol-function 'nidhogg-set-process-framing)
-               (lambda (&rest a)
-                 (let ((sja (plist-member (cddr a) :raw-to-sja)))
-                   (push (cons (and sja (cadr sja)) (not (and sja refuse))) calls)
-                   (when (and sja refuse) (error "Unknown keyword :raw-to-sja")))))
-              ((symbol-function 'nidhogg-view--pushed) (and pushed #'identity)))
-      (drgnx-hub--frame 'conn))
-    (nreverse calls)))
-
-(ert-deftest drgnx-hub-client-frame/model-lines-go-to-sja-in-the-reader-when-set-and-it-can ()
-  "With `drgnx-hub-model-lines-to-sja' on, a Nidhogg whose reader pushes a model line to Sjá itself is asked to
-\(`:raw-to-sja'): the line never becomes a Lisp string.  Off, or a Nidhogg without `nidhogg-view--pushed', it is not
-asked; one that refuses the keyword is framed again without it (the line comes raw, Lisp pushes it)."
-  (should (equal '((t . t)) (drgnx-hub-client-frame-test--frame-calls t t nil)))
-  (should (equal '((nil . t)) (drgnx-hub-client-frame-test--frame-calls nil t nil)))
-  (should (equal '((nil . t)) (drgnx-hub-client-frame-test--frame-calls t nil nil)))
-  (should (equal '((t . nil) (nil . t)) (drgnx-hub-client-frame-test--frame-calls t t t))))
-
-(ert-deftest drgnx-hub-client-frame/the-line-reader-pushes-a-model-line-to-sja ()
-  "On the line (Nidhogg's real framer with `:raw-to-sja', as `drgnx-hub--frame' asks for it): a `view-model' line
-between events reaches `drgnx-view-model--pushed' as Sjá's answer, in its place, never as a string, and the events
-around it are parsed as before."
-  (drgnx-hub-client-frame-test--require-raw-prefix)
-  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view--pushed) ":raw-to-sja framing (nidhogg-view--pushed)")
-  (let ((stream (concat "{\"event\":\"notice\",\"data\":{\"a\":1}}\n" drgnx-hub-client-frame-test--model-line "\n"
-                        "{\"id\":3,\"result\":true}\n"))
-        got)
-    (cl-letf (((symbol-function 'drgnx-hub--client-line) (lambda (_conn json) (push json got)))
-              ((symbol-function 'drgnx-hub--model-line) (lambda (line) (push (list :string line) got)))
-              ((symbol-function 'drgnx-view-model--pushed) (lambda (r) (push (cons :pushed r) got))))
-      (drgnx-hub--client-batch
-       nil (car (nidhogg-workers--test-frame (list stream) t 'lines :parse 'string :object-type 'plist
-                                             :array-type 'list :null-object nil :false-object nil
-                                             :raw-prefix drgnx-hub--model-prefix :raw-to-sja t))))
-    ;; no instance of view "v" is open: Sjá answers `none' for it
-    (should (equal (nreverse got) '((:event "notice" :data (:a 1)) (:pushed "v" 1 none) (:id 3 :result t))))))
+    (should (equal drgnx-hub--model-prefix (plist-get (cddr args) :raw-prefix)))
+    (should (eq t (plist-get (cddr args) :raw-to-sja)))))
 
 (ert-deftest drgnx-hub-client-frame/a-pushed-model-line-reaches-its-view-in-order ()
   "An entry the reader pushed to Sjá, (ANSWER sja nil), goes to `drgnx-view-model--pushed' with the decision as a
