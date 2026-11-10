@@ -149,17 +149,17 @@ machine starts: nothing starts here."
 (defun drgnx-runners-cloud-define-commands ()
   "Register the cloud commands in the registry (called by tools/runners' setup)."
   (pcase-dolist (`(,id ,title ,fn ,doc)
-                 '((runners-cloud-setup "Runners: Set Up Cloud…" drgnx-runners-cloud-setup
+                 '((runners-cloud-setup "Set Up Cloud…" drgnx-runners-cloud-setup
                                         "Set the cap, regions, sizes and credentials for cloud runners")
-                   (runners-cloud-confirm "Runners: Start the First Cloud Machine" drgnx-runners-cloud-confirm
+                   (runners-cloud-confirm "Start the First Cloud Machine" drgnx-runners-cloud-confirm
                                           "Confirm the first cloud machine the card describes")
-                   (runners-cloud-off "Runners: Turn Cloud Off" drgnx-runners-cloud-off
+                   (runners-cloud-off "Turn Cloud Off" drgnx-runners-cloud-off
                                       "End every cloud machine of ours and delete what drgnx made")
-                   (runners-cloud-retry "Runners: Retry Cloud" drgnx-runners-cloud-retry
+                   (runners-cloud-retry "Retry Cloud" drgnx-runners-cloud-retry
                                         "Check the cloud credentials again after a login")
-                   (runners-cloud-cost "Runners: Cloud Cost" drgnx-runners-cloud-cost
+                   (runners-cloud-cost "Cloud Cost" drgnx-runners-cloud-cost
                                        "What cloud has cost this month against the cap")
-                   (runners-cloud-rotate-ca "Runners: Rotate Cloud CA" drgnx-runners-cloud-rotate-ca
+                   (runners-cloud-rotate-ca "Rotate Cloud CA" drgnx-runners-cloud-rotate-ca
                                             "Rotate the SSH certificate authority cloud machines trust")))
     (drgnx-command-define id :category "Runners" :title title :command fn :doc doc)))
 

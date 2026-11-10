@@ -310,7 +310,7 @@ of the row removes it.  Add and remove with `drgnx-explorer-add-decorator' and `
   (setq drgnx-explorer-decorators (delq fn (copy-sequence drgnx-explorer-decorators)))
   (drgnx-explorer--repaint))
 
-(defun drgnx-explorer--git-decorate (bol eol path dirp name-start)
+(defun drgnx-explorer--git-decorate (_bol eol path dirp name-start)
   "Dim an ignored file's name, and put at the right edge the status letter (● for a folder with changes) and the ⋯ control
 \(`drgnx-wb-row-tail-overlay'): the control is hidden until the row is hovered; the selected row's is drawn in the
 selection's face.

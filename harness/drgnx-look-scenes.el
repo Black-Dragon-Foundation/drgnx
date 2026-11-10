@@ -41,9 +41,9 @@
     (explorer-focused-light)
     (explorer-focused-hc))
   "The scenes in the order they are drawn: (NAME . PLIST).  NAME is the mockup's (docs/specs, the-look/NAME.png; the
-start page, the highlights and the focused Explorer have none: they are judged against the components' spec and the tokens) and the session's `drgnx-look-scene-NAME' sets it
-up.  :agent t starts the mock agent first; :keys and :type are typed after the setup and before the shot, :then after
-it.")
+start page, the highlights and the focused Explorer have none: they are judged against the components' spec and
+the tokens) and the session's `drgnx-look-scene-NAME' sets it up.  :agent t starts the mock agent first; :keys and
+:type are typed after the setup and before the shot, :then after it.")
 
 (defun drgnx-look-scenes--size (scale)
   "The session's size in device pixels: the mockups' window, 1440x900 logical pixels, at SCALE."

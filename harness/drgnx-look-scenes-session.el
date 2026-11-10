@@ -28,6 +28,12 @@
 (declare-function drgnx-chrome--note "drgnx-chrome")
 (declare-function drgnx-chrome-note-preview "drgnx-chrome")
 (declare-function drgnx-start-show "drgnx-start")
+(declare-function drgnx-wb--selected-changed "drgnx-wb")
+(declare-function drgnx-wb--tail-paint "drgnx-wb")
+(declare-function drgnx-wb-row-hover-face "drgnx-wb")
+(declare-function diff-refine-hunk "diff-mode")
+(declare-function diff-hunk-next "diff-mode")
+(defvar drgnx-explorer-buffer-name)
 
 ;; drgnx-gateway.el's lines 201-232 as the mockups show them (window-dark.html), the working copy; the committed copy
 ;; has the two lines the agent changed (215-217) as they were before
