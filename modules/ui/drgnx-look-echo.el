@@ -18,9 +18,11 @@
 (require 'seq)
 (require 'drgnx-setting)
 (require 'drgnx-timer)
+(require 'drgnx-hooks)
 (require 'drgnx-palette-frame)
 
 (declare-function drgnx-module-running-p "drgnx-modules" (module))
+(declare-function face-remap-remove-relative "face-remap" (cookie))
 (defvar nidhogg-echo-prompt)
 
 (defconst drgnx-look-echo--systems '(x w32 ns pgtk haiku android)
@@ -34,7 +36,8 @@
   :type 'number :group 'drgnx-look)
 
 (defvar drgnx-look-echo--on nil "Non-nil while the box is in use (`drgnx-look-echo-on').")
-(defvar drgnx-look-echo--saved nil "What `drgnx-look-echo-on' replaced: (RESIZE-MINI-FRAMES . MINIBUFFER-FRAME-ALIST).")
+(defvar drgnx-look-echo--saved nil "The `resize-mini-frames' `drgnx-look-echo-on' replaced.")
+(defvar drgnx-look-echo-swaps 0 "How many frames `drgnx-look-echo-swap' replaced this session (a start swaps none).")
 (defvar drgnx-look-echo--waiting nil "Non-nil while a Lisp caller waits for a key (`drgnx-look-echo--wait').")
 (defvar drgnx-look-echo--prompting nil
   "Non-nil while the echo area shows a prompt of C's: until it is cleared, a Lisp wait returns or the command ends.")
@@ -223,16 +226,21 @@ again, as `query-replace''s does.  Once answered, the prompt goes and the box hi
 
 ;;;; On, off and the swap
 
+(defun drgnx-look-echo--without-box (alist params)
+  "ALIST without the entries whose keys PARAMS (the box's parameters) has."
+  (seq-remove (lambda (p) (assq (car p) params)) alist))
+
 (defun drgnx-look-echo-on ()
   "Graphical frames made from now on get the box; prompts go to it, messages to the status bar.  Frames that exist
 keep what they have (`drgnx-look-echo-apply' swaps them)."
   (unless drgnx-look-echo--on
     (setq drgnx-look-echo--on t
-          drgnx-look-echo--saved (cons resize-mini-frames minibuffer-frame-alist))
+          drgnx-look-echo--saved resize-mini-frames)
     (dolist (sys drgnx-look-echo--systems)
       (setf (alist-get 'minibuffer (alist-get sys window-system-default-frame-alist)) 'child-frame))
-    (setq minibuffer-frame-alist (append (drgnx-look-echo--params) minibuffer-frame-alist)
-          resize-mini-frames #'drgnx-look-echo--fit)
+    (let ((params (drgnx-look-echo--params)))    ; early-init.el may have put some of them there already
+      (setq minibuffer-frame-alist (append params (drgnx-look-echo--without-box minibuffer-frame-alist params))
+            resize-mini-frames #'drgnx-look-echo--fit))
     (add-hook 'set-message-functions #'drgnx-look-echo--route -90)
     (add-function :after (default-value 'clear-message-function) #'drgnx-look-echo--cleared)
     (add-function :around (default-value 'command-error-function) #'drgnx-look-echo--command-error)
@@ -250,8 +258,8 @@ keep what they have (`drgnx-look-echo-apply' swaps them)."
       (when-let* ((cell (assq sys window-system-default-frame-alist)))
         (setcdr cell (assq-delete-all 'minibuffer (cdr cell)))
         (unless (cdr cell) (setq window-system-default-frame-alist (delq cell window-system-default-frame-alist)))))
-    (setq resize-mini-frames (car drgnx-look-echo--saved)
-          minibuffer-frame-alist (cdr drgnx-look-echo--saved)
+    (setq resize-mini-frames drgnx-look-echo--saved
+          minibuffer-frame-alist (drgnx-look-echo--without-box minibuffer-frame-alist (drgnx-look-echo--params))
           drgnx-look-echo--saved nil)
     (remove-hook 'set-message-functions #'drgnx-look-echo--route)
     (remove-function (default-value 'clear-message-function) #'drgnx-look-echo--cleared)
@@ -271,10 +279,46 @@ keep what they have (`drgnx-look-echo-apply' swaps them)."
                explicit-name)
   "The frame parameters a swap does not copy: the new frame's own, or what the swap decides.")
 
+(defvar drgnx-look-echo--widths (make-hash-table :test 'eq :weakness 'key)
+  "Frame → (TEXT-WIDTH . ((WINDOW . PIXEL-WIDTH) …)): the widths a swapped frame's windows had, waiting for the
+frame to reach its width (a window system may size a new frame after it is made).")
+
+(defun drgnx-look-echo--widths (old new)
+  "Give each window of NEW the pixel width of its counterpart in OLD, now or once NEW has OLD's width.  The frames
+differ in height by the echo row, and a new frame may get its size later, so `window-state-put' shares the width out
+by proportion and a split can land a column off."
+  (let ((pairs nil))
+    (dolist (w (window-list new 'nomini (frame-first-window new)))
+      (when-let* ((id (window-parameter w 'drgnx-replaced-id))
+                  (was (seq-find (lambda (o) (eql (window-parameter o 'drgnx-replaced-id) id)) (window-list old 'nomini))))
+        (push (cons w (window-pixel-width was)) pairs)))
+    (puthash new (cons (frame-text-width old) (nreverse pairs)) drgnx-look-echo--widths)
+    (if (= (frame-text-width new) (frame-text-width old))
+        (drgnx-look-echo--widths-apply new)
+      (add-hook 'window-size-change-functions #'drgnx-look-echo--widths-apply))))
+
+(defun drgnx-look-echo--widths-apply (frame)
+  "FRAME's windows get the widths they were swapped with, once FRAME has the width it was swapped from (on
+`window-size-change-functions', which it leaves when no frame waits)."
+  (when-let* ((want (gethash frame drgnx-look-echo--widths))
+              ((or (not (frame-live-p frame)) (= (frame-text-width frame) (car want)))))
+    (remhash frame drgnx-look-echo--widths)
+    (when (zerop (hash-table-count drgnx-look-echo--widths))
+      (remove-hook 'window-size-change-functions #'drgnx-look-echo--widths-apply))
+    (when (frame-live-p frame)
+      (let ((window-resize-pixelwise t))
+        (pcase-dolist (`(,w . ,px) (cdr want))
+          (when (window-live-p w)
+            (let ((delta (- px (window-pixel-width w))))
+              (when (and (/= delta 0) (window-resizable-p w delta t nil t))
+                (window-resize w delta t nil t)))))))))
+
 (defun drgnx-look-echo-swap (frame)
   "Replace FRAME with a new frame like it, whose minibuffer follows the setting now (the box when on): the same
 windows and their parameters, buffers and points, the selected window, the frame's parameters, size and place.
 Return the new frame.  Nothing is asked and no buffer is killed: FRAME's buffers stay, shown by the new frame."
+  (let ((n 0))
+    (dolist (w (window-list frame 'nomini)) (set-window-parameter w 'drgnx-replaced-id (setq n (1+ n)))))
   (let* ((window-persistent-parameters
           (append (mapcar (lambda (p) (cons p t))
                           (delete-dups (mapcan (lambda (w) (mapcar #'car (window-parameters w)))
@@ -287,8 +331,14 @@ Return the new frame.  Nothing is asked and no buffer is killed: FRAME's buffers
          (new (make-frame `((minibuffer . ,(if drgnx-look-echo--on 'child-frame t)) ,@params))))
     (set-frame-size new (car size) (cadr size) t)
     (window-state-put state (frame-root-window new) 'safe)
+    (drgnx-look-echo--widths frame new)
     (when selected (select-frame-set-input-focus new))
+    ;; The role first: the main window stays main, and deleting FRAME hands it to no other window.
+    (when (eq (frame-parameter frame 'drgnx-frame-role) 'main) (set-frame-parameter frame 'drgnx-frame-role nil))
+    (run-hook-with-args 'drgnx-frame-replaced-functions frame new)
+    (dolist (w (window-list new 'nomini)) (set-window-parameter w 'drgnx-replaced-id nil))
     (delete-frame frame t)
+    (setq drgnx-look-echo-swaps (1+ drgnx-look-echo-swaps))
     new))
 
 (defun drgnx-look-echo--wrong-p (frame)
@@ -308,7 +358,11 @@ minibuffer is in use the swap waits until it ends."
   (if (active-minibuffer-window)
       (add-hook 'minibuffer-exit-hook #'drgnx-look-echo--apply-later)
     (dolist (f (frame-list))
-      (when (and (frame-live-p f) (drgnx-look-echo--wrong-p f)) (drgnx-look-echo-swap f)))))
+      (when (and (frame-live-p f) (drgnx-look-echo--wrong-p f))
+        (if (memq f (bound-and-true-p drgnx-platform-moving))
+            ;; the window manager may still be looking for it: try again once the move is over
+            (drgnx-timer-start 'look-echo-apply 0.25 #'drgnx-look-echo-apply-frames :owner 'ui/look)
+          (drgnx-look-echo-swap f))))))
 
 (defun drgnx-look-echo--apply-later ()
   "On `minibuffer-exit-hook', once: the swap a minibuffer in use held back."

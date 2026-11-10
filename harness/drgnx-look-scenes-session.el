@@ -507,6 +507,12 @@ chrome faces, frame metrics, windows, modules."
                                                                       (ignore-errors (glitnir--chrome pf)))
                                                          :stats (and (fboundp 'glitnir-stats)
                                                                      (ignore-errors (glitnir-stats pf)))))))))
+                  ;; the echo area's box: the first frame is born with it, so a start swaps no frame
+                  :echo (list :row (bound-and-true-p drgnx-look-echo-row)
+                              :box (and (fboundp 'drgnx-look-echo-box) (drgnx-look-echo-box f) t)
+                              :swaps (bound-and-true-p drgnx-look-echo-swaps)
+                              :root-bottom (nth 3 (window-pixel-edges (frame-root-window f)))
+                              :inner-height (frame-inner-height f))
                   :modules (ignore-errors (mapcar (lambda (r) (list (car r) (plist-get (cdr r) :status)))
                                                   (drgnx-modules-report))))
             (current-buffer)))))

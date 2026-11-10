@@ -47,5 +47,51 @@ frame reads) does not.  Off: both as they were."
   (cl-letf (((symbol-function 'drgnx-look-echo-box) #'ignore))
     (should-not (drgnx-look-echo--route "hello"))))
 
+;; early-init.el: the first frame is born with the box unless settings.el says otherwise
+(load (expand-file-name "core/drgnx-echo-early" drgnx-dir) nil t)
+
+(defun drgnx-look-echo-test--wanted (text)
+  "`drgnx-echo-early-wanted-p' of a settings file holding TEXT (nil: no file)."
+  (let ((f (make-temp-file "drgnx-echo-settings" nil ".el")))
+    (unwind-protect
+        (progn (if text (with-temp-file f (insert text)) (delete-file f))
+               (drgnx-echo-early-wanted-p f))
+      (when (file-exists-p f) (delete-file f)))))
+
+(ert-deftest drgnx-look-echo/early-reads-the-settings ()
+  "No settings file, or one that says nothing of it: the box.  `classic', or ui/look turned off: the row."
+  (should (drgnx-look-echo-test--wanted nil))
+  (should (drgnx-look-echo-test--wanted "(drgnx-settings :version 1 (fill-column 100))"))
+  (should (drgnx-look-echo-test--wanted "(drgnx-settings :version 1 (drgnx-look-echo-row float))"))
+  (should-not (drgnx-look-echo-test--wanted "(drgnx-settings :version 1 (drgnx-look-echo-row classic))"))
+  (should-not (drgnx-look-echo-test--wanted "(drgnx-settings :version 1 (drgnx-modules-disabled (ui/look)))")))
+
+(ert-deftest drgnx-look-echo/early-setup-then-on-adds-nothing-twice ()
+  "What early-init puts in the frame alists, the module's on keeps once; off takes all of it away."
+  (let ((window-system-default-frame-alist nil) (minibuffer-frame-alist nil) (resize-mini-frames nil)
+        (drgnx-look-echo--on nil) (process-environment (cons "XDG_CONFIG_HOME=/nonexistent" process-environment)))
+    (cl-letf (((symbol-function 'drgnx-echo-early-wanted-p) (lambda (_f) t))
+              ((symbol-function 'drgnx-echo-early-born-p) (lambda () t)))
+      (drgnx-echo-early-setup))
+    (should (eq (alist-get 'minibuffer (alist-get 'pgtk window-system-default-frame-alist)) 'child-frame))
+    (drgnx-look-echo-on)
+    (should (= 1 (length (seq-filter (lambda (p) (eq (car p) 'visibility)) minibuffer-frame-alist))))
+    (should (= 1 (length (alist-get 'pgtk window-system-default-frame-alist))))
+    (drgnx-look-echo-off)
+    (should-not minibuffer-frame-alist)
+    (should-not window-system-default-frame-alist)))
+
+(ert-deftest drgnx-look-echo/early-setup-waits-for-an-emacs-that-makes-the-first-frame-so ()
+  "Stock Emacs makes the first frame with a minibuffer of its own and, asked for another, makes it again after init,
+waiting for it to show: early-init asks only where the first frame is born with the box (Nidhogg's
+lisp/nidhogg-frame.el), or in a daemon, which has no first graphical frame."
+  (let ((window-system-default-frame-alist nil) (minibuffer-frame-alist nil))
+    (cl-letf (((symbol-function 'drgnx-echo-early-wanted-p) (lambda (_f) t))
+              ((symbol-function 'featurep) (lambda (f &rest _) (not (eq f 'nidhogg-frame))))
+              ((symbol-function 'daemonp) #'ignore))
+      (drgnx-echo-early-setup))
+    (should-not window-system-default-frame-alist)
+    (should-not minibuffer-frame-alist)))
+
 (provide 'look-echo-test)
 ;;; look-echo-test.el ends here

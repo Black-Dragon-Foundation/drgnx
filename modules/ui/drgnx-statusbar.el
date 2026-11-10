@@ -38,6 +38,7 @@
 (require 'drgnx-icons)                  ; `drgnx-look-icon'
 (require 'drgnx-notices)                ; the two counts the bar shows, and `drgnx-notice-tick'
 (declare-function drgnx-face-glyph "drgnx-face")
+(declare-function drgnx-look-echo-status "drgnx-look-echo" ())
 (declare-function drgnx-notice-toast-more-count "drgnx-notice-toast")
 (declare-function drgnx-notice-toast-more-text "drgnx-notice-toast")
 (declare-function drgnx-file-write "drgnx-file")

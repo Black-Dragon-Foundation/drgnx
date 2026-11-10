@@ -32,6 +32,8 @@
 (declare-function drgnx-wb-panel-next-tab "drgnx-actions")
 (declare-function drgnx-help-mode-menu "drgnx-actions")
 (declare-function drgnx-frames-mode "drgnx-frames")
+(declare-function drgnx-pane--frame-replaced "drgnx-panes")
+(declare-function drgnx-popup--frame-replaced "drgnx-popup")
 (declare-function drgnx-frames-move-editor "drgnx-frames")
 (declare-function drgnx-frames-open-editor "drgnx-frames")
 (declare-function drgnx-frames-move-group "drgnx-frames")
@@ -94,6 +96,10 @@
                        ;; The bottom panel and the right dock; popups borrow the panel.
                        (require 'drgnx-area)
                        (require 'drgnx-popup)
+                       ;; A frame replaced by one like it (the echo box's swap): the panes and the popup lanes move.
+                       (drgnx-module-hook 'drgnx-frame-replaced-functions frame-replaced (old new)
+                         (when (featurep 'drgnx-panes) (drgnx-pane--frame-replaced old new))
+                         (drgnx-popup--frame-replaced old new))
                        (drgnx-command-define 'toggle-panel :category "View" :title "Toggle Panel" :scope 'window
                                              :command #'drgnx-wb-toggle-panel :menu '("View") :doc "Show or hide the bottom panel (Terminal, Problems, Output, Results, Help)")
                        (drgnx-command-define 'focus-panel :category "View" :title "Focus Panel" :scope 'window

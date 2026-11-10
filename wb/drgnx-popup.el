@@ -17,6 +17,7 @@
 (require 'drgnx-area)
 
 (require 'drgnx-setting)
+(require 'drgnx-hooks)
 
 (drgnx-defsetting drgnx-popup-style 'auto
   "How the popup lane shows: `window' (the panel's window, or one under the editors), `float' (one child frame
@@ -218,6 +219,18 @@ one; mark it as the lane.  Under `drgnx-popup-style' `float', one child frame in
         (unless (zerop delta)
           (let ((window-resize-pixelwise t)) (ignore-errors (window-resize lane delta nil nil t)))))))
     nil))
+
+(defun drgnx-popup--frame-replaced (old new)
+  "`drgnx-frame-replaced-functions': a lane NEW took over goes back to NEW's window when it quits (its `quit-restore'
+named OLD's); a floating popup ends, as OLD's popup child frame goes with OLD."
+  (dolist (w (window-list new 'nomini))
+    (when-let* (((window-parameter w 'drgnx-popup)) (qr (copy-sequence (window-parameter w 'quit-restore))))
+      (setf (nth 2 qr) (or (drgnx-frame-replaced-window (nth 2 qr) new) (frame-selected-window new)))
+      (set-window-parameter w 'quit-restore qr)))
+  (set-frame-parameter new 'drgnx-popup-frame nil)
+  (when-let* ((child (drgnx-popup--float-frame old)) (lane (frame-root-window child))
+              ((window-parameter lane 'drgnx-popup)))
+    (drgnx-popup--end lane)))
 
 (defun drgnx-popup--check-window (window)
   "WINDOW's buffer changed: if it is a lane no longer showing its popup, the popup is over (a

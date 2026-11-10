@@ -24,6 +24,7 @@
 (require 'drgnx-hub-client)
 (require 'drgnx-large-file)
 (require 'drgnx-no-prompt)
+(require 'drgnx-hooks)
 
 (declare-function drgnx-agents-editor-here--name "drgnx-agents-editor-here")
 (declare-function drgnx-agents-editor-fact "drgnx-agents-editor")
@@ -443,8 +444,16 @@ the editor's `agents/wheel/saved', which comes in on that one and would queue be
 
 ;;;; Setup
 
+(defun drgnx-agents-follow--frame-replaced (old new)
+  "`drgnx-frame-replaced-functions': following goes on in the follow window's counterpart in NEW."
+  (when (and (window-live-p drgnx-agents-follow--window) (eq (window-frame drgnx-agents-follow--window) old))
+    (setq drgnx-agents-follow--window (drgnx-frame-replaced-window drgnx-agents-follow--window new))))
+
 (defun drgnx-agents-follow-setup ()
   "The follow window's and the wheel's commands and events.  Called by the module's setup."
+  (drgnx-module-hook 'drgnx-frame-replaced-functions follow-frame-replaced (old new)
+    :module 'tools/agents-in-editor
+    (drgnx-agents-follow--frame-replaced old new))
   (drgnx-module-hook 'drgnx-hub-event-functions follow-event (event data)
     :module 'tools/agents-in-editor
     (drgnx-agents-follow--event event data))

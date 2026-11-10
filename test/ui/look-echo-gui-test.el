@@ -1,5 +1,5 @@
 ;;; look-echo-gui-test.el --- GUI tests: no echo row; prompts float in a box at the top (run by `drgnx test --ui') -*- lexical-binding: t -*-
-;; test-class: det
+;; test-class: cond
 ;; test-pattern: handshake
 
 ;; `drgnx-look-echo-row' `float': a graphical frame made while it is on has no echo row; its minibuffer is a child
@@ -62,21 +62,44 @@ undone after."
       (and (current-message) (substring-no-properties (current-message)))
       (ignore box)))
 
+(defvar drgnx-look-echo-ui-test--note nil
+  "While a row waits at a prompt: called by the special event `drgnx-look-echo-ui-test-note' (`special-event-map'),
+which the prompt's own read runs without returning it.")
+
+(defun drgnx-look-echo-ui-test--note ()
+  "The special event's command: call the waiting row's note."
+  (interactive)
+  (when drgnx-look-echo-ui-test--note (funcall drgnx-look-echo-ui-test--note)))
+
+(define-key special-event-map [drgnx-look-echo-ui-test-note] #'drgnx-look-echo-ui-test--note)
+
+(defun drgnx-look-echo-ui-test--at-prompt (box fn keys)
+  "Run FN once the read now starting waits with BOX shown (else after 40 notes: a prompt that never shows it), then
+answer with KEYS.  The harness's queue delivers each note to the read itself, so a note runs only while it waits."
+  (let ((tries 40))
+    (setq drgnx-look-echo-ui-test--note
+          (lambda ()
+            (if (and (not (frame-visible-p box)) (> (setq tries (1- tries)) 0))
+                (drgnx-uitest-enqueue (list 'drgnx-look-echo-ui-test-note))
+              (setq drgnx-look-echo-ui-test--note nil)
+              (funcall fn)
+              (drgnx-uitest-enqueue (append (listify-key-sequence keys) nil)))))
+    (drgnx-uitest-enqueue (list 'drgnx-look-echo-ui-test-note))))
+
 (defun drgnx-look-echo-ui-test--ask (form keys &optional command)
-  "Run FORM; 0.4 s in, note (VISIBLE TEXT PLACE) of the box, then answer with KEYS.  Return (SEEN . AFTER-VISIBLE).
-COMMAND non-nil: FORM is a command's own read from C, which only the command's end follows (`post-command-hook', as
-the command loop runs it).
+  "Run FORM; while it waits, note (VISIBLE TEXT PLACE) of the box, then answer with KEYS.  Return
+(SEEN . AFTER-VISIBLE).  COMMAND non-nil: FORM is a command's own read from C, which only the command's end follows
+(`post-command-hook', as the command loop runs it).
 PLACE is (LEFT TOP WIDTH PARENT-WIDTH PARENT-HEIGHT): the box in its parent's pixels."
-  (let* ((box (drgnx-look-echo-box)) seen
-         (drgnx-uitest--queue (list 'echo))   ; the harness's idle-prompt guard: an answer is coming
-         (timer (run-at-time 0.4 nil
-                             (lambda ()
-                               (setq seen (list (frame-visible-p box) (drgnx-look-echo-ui-test--box-text box)
-                                                (list (car (frame-position box)) (cdr (frame-position box))
-                                                      (frame-pixel-width box) (frame-pixel-width (frame-parent box))
-                                                      (frame-pixel-height (frame-parent box)))))
-                               (setq unread-command-events (append (listify-key-sequence keys) nil))))))
-    (unwind-protect (eval form t) (cancel-timer timer))
+  (let* ((box (drgnx-look-echo-box)) seen)
+    (drgnx-look-echo-ui-test--at-prompt
+     box (lambda ()
+           (setq seen (list (frame-visible-p box) (drgnx-look-echo-ui-test--box-text box)
+                            (list (car (frame-position box)) (cdr (frame-position box))
+                                  (frame-pixel-width box) (frame-pixel-width (frame-parent box))
+                                  (frame-pixel-height (frame-parent box))))))
+     keys)
+    (unwind-protect (eval form t) (setq drgnx-look-echo-ui-test--note nil))
     (when command (run-hooks 'post-command-hook))
     (drgnx-test-wait-presented)
     (cons seen (frame-visible-p box))))
@@ -201,15 +224,10 @@ palette's: the echo area draws `default' as the gap surface, as the palette's mi
           (mapc #'disable-theme custom-enabled-themes)
           (load-theme theme t)
           (drgnx-look-echo-ui-test--with-frame f
-            (let* ((box (drgnx-look-echo-box f))
-                   (drgnx-uitest--queue (list 'echo))
-                   (timer (run-at-time 0.4 nil
-                                       (lambda ()
-                                         (drgnx-uitest-capture
-                                          (drgnx-look-echo-ui-test--out (format "echo-box-%s" theme)))
-                                         (setq unread-command-events (list ?c))))))
-              (unwind-protect (read-char "Pick a register: ") (cancel-timer timer))
-              (ignore box)
+            (let ((box (drgnx-look-echo-box f)))
+              (drgnx-look-echo-ui-test--at-prompt
+               box (lambda () (drgnx-uitest-capture (drgnx-look-echo-ui-test--out (format "echo-box-%s" theme)))) "c")
+              (unwind-protect (read-char "Pick a register: ") (setq drgnx-look-echo-ui-test--note nil))
               (with-current-buffer (get-buffer-create " *Echo Area 0*")
                 (should (memq 'drgnx-surface-gap (cdr (assq 'default face-remapping-alist))))))))
       (drgnx-look-echo-area-off)
@@ -247,7 +265,7 @@ client's frame asks for shows in it."
                              (funcall ask "(let* ((f (seq-find (lambda (x) (and (display-graphic-p x) (not (frame-parent x)))) (frame-list))) (box (drgnx-look-echo-box f)) seen) (with-selected-frame f (run-at-time 0.3 nil (lambda () (setq seen (frame-visible-p box)) (setq unread-command-events (list ?c)))) (read-char \"Client? \")) seen)")))))
             (should (eq shown t))))
       (ignore-errors (call-process client nil nil nil "-s" sock "-e" "(kill-emacs)"))
-      (when (process-live-p daemon) (delete-process daemon))
+      (delete-process daemon)
       (delete-directory dir t))))
 
 (provide 'look-echo-gui-test)

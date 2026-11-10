@@ -321,7 +321,9 @@ messages are prompts with `nidhogg-echo-prompt`). The box hides once the prompt 
 status bar for `drgnx-look-echo-status-seconds` (5) or until the next one, a command's error in the error face, and
 so do the keys of a prefix (`C-x-`); clicking the message opens `*Messages*`, which still logs them all.
 
-`classic` gives the row back. The change applies at once: each graphical frame is swapped for a new one with the same
+A frame cannot gain or lose its echo row once it is made, so drgnx's `early-init.el` reads `settings.el` (as data)
+before Emacs makes the first frame: unless it says `classic` or turns ui/look off, that frame is born with the box,
+and a start swaps nothing. `classic` gives the row back. The change applies at once: each graphical frame is swapped for a new one with the same
 windows, buffers, selected window, size and place (a frame whose minibuffer is in use waits until it ends). A terminal
 frame keeps its row either way, and turning ui/look off gives every frame its row back.
 
