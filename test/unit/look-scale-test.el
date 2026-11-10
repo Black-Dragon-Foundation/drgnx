@@ -11,13 +11,13 @@
 (defmacro drgnx-look-scale-test--isolated (&rest body)
   "BODY with the save and Nidhogg's text zoom stubbed (ZOOMS collects (FRAME . ZOOM)), then the frame as it was."
   (declare (indent 0))
-  `(let ((drgnx-look-scale 100) (zooms nil) (was (frame-parameter nil 'drgnx-ui-scale)))
+  `(let ((drgnx-look-scale 100) (zooms nil) (was (drgnx-pixels-ui-scale)))
      (ignore zooms)
      (cl-letf (((symbol-function 'drgnx-settings-defaults-save) (lambda (var value) (set var value)))
                ((symbol-function 'nidhogg-set-frame-text-zoom) (lambda (f z) (push (cons f z) zooms)))
                ((symbol-function 'drgnx-look-scale--roots) (lambda () (list (selected-frame)))))
        (unwind-protect (progn ,@body)
-         (set-frame-parameter nil 'drgnx-ui-scale was)))))
+         (drgnx-pixels-set-ui-scale (selected-frame) was)))))
 
 (ert-deftest drgnx-look-scale/steps-are-five-percent ()
   "Pattern D: the schema takes 100 to 200 in steps of 5 (103 is refused, 105 taken)."

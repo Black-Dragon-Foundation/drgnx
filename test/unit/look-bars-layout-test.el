@@ -386,10 +386,10 @@ too: at 1.1 on a scale-1 display the row is 26 and the gap 2."
                 ((symbol-function 'frame-scale-factor) (lambda (&optional _f) 1.0)))
         (unwind-protect
             (progn
-              (set-frame-parameter f 'drgnx-ui-scale 1.1)
+              (drgnx-pixels-set-ui-scale f 1.1)
               (should (= (drgnx-statusbar--row-height f) 26))
               (should (equal (get-text-property 0 'drgnx-statusbar-pixels (drgnx-statusbar--pixel-gap f)) '(2))))
-          (set-frame-parameter f 'drgnx-ui-scale nil))))))
+          (drgnx-pixels-set-ui-scale f nil))))))
 
 (defmacro drgnx-look-bars-test--counting (calls &rest body)
   "BODY with the bars measuring one pixel a column through a measure that counts its calls in CALLS."
