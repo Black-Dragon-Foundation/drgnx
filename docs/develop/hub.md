@@ -1493,6 +1493,12 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
 | `search/outline` | user | `{base?: boolean, docs?: boolean, path: string, root: AbsPath}` | `{entries: [OutlineEntry], fresh: Fresh, lang: string, path: string}` | no |
 | `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
+| `search/recent` | user | `{root: AbsPath}` | `{recent: [SearchSpec]}` | no |
+| `search/saved/delete` | user | `{name: string, root: AbsPath}` | `boolean` | yes |
+| `search/saved/list` | user | `{root: AbsPath}` | `{problems?: [string], saved: [SavedSearch]}` | no |
+| `search/saved/put` | user | `{name: string, pinned?: boolean, root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}}` | `boolean` | yes |
+| `search/saved/share` | user | `{name: string, root: AbsPath}` | `{path: AbsPath}` | yes |
+| `search/scope-bases` | user | `{root: AbsPath}` | `{current?: string, default?: string, detached: boolean, recent: [string], upstream?: string}` | no |
 | `search/server-plan` | user | `{kind: "tei" \| "ollama"}` | `ServerPlan` | no |
 | `search/server-start` | user | `{confirm: boolean, kind: "tei" \| "ollama"}` | `{provider: ProviderEntry, started: boolean, unit: string}` | no |
 | `search/server-stop` | user | `{kind: "tei" \| "ollama"}` | `{stopped: boolean}` | no |
@@ -2414,6 +2420,50 @@ the search itself is `hrafn::grep`).
 - `ignore` is `index` (no dot paths, no secret-looking names, the filters of the index) or `real` (only what
   `.gitignore` files and the globs name). Without it the setting `drgnx-search-ignore-rules` decides (`index` by
   default); it is a runtime setting, so the hub reads the user's value.
+
+### Recent and saved searches (`search/recent`, `search/saved/*`)
+
+The Search view's history, per project root (`runtime/crates/drgnx-ratatoskr/src/search/saved.rs`). A search is a
+`SearchSpec`: `query` (`{mode: "text", text, case?, word?, regexp?}`, `{mode: "symbol", name, case?}` or `{mode:
+"meaning", question}`), `replace?`, `scope?` (`{kind, base?, changed_lines?}`; the open files of File and Open are
+never kept), `include?`, `exclude?`.
+
+- **Recent:** a view's search is recorded once it has stood for the typing pause (250 ms): the next search of the
+  view, or a `search/recent` after the pause, records it; one replaced sooner is not, and an empty one never is. Newest
+  first, each once (a search run again moves to the front), the last 50. `search/recent {root}` → `{recent}`.
+- **Saved:** `search/saved/put {root, name, search, pinned?}` (a name of 1 to 200 characters, one line; the same name
+  replaces), `search/saved/delete {root, name}` → whether there was one, `search/saved/list {root}` → `{saved,
+  problems?}`: the hub's, then the project's, each `{name, search, pinned, project, shared}`.
+- **Where:** the hub's state, `<state>/hub/search/<key>.json` (a digest of the root's path names the file; written
+  whole through a temporary file and a rename, mode 0600). At most 64 projects stay in memory.
+- **The project's searches** are `.drgnx/searches.eld`, one plist per search: `(:name "TODOs" :mode text :query
+  "todo!(" :case t :scope changed :changed-lines t :include ("*.rs"))`; keys `:name`, `:mode` (`text`, `symbol`,
+  `meaning`), `:query`, `:case`, `:word`, `:regexp` (`t` or `nil`), `:replace`, `:scope`, `:base`, `:changed-lines`,
+  `:include`, `:exclude` (a string or a list of strings). The file is read as data only (huginn's reader: no reader
+  macro, nothing evaluated); a form that is not such a plist, or has an unknown or doubled key, is left out and named
+  in `problems`. They are listed after the hub's, `project: true`, read-only in the view; one with the name of a
+  hub's saved search is not listed again (the hub's is, `shared: true`).
+- `search/saved/share {root, name}` → `{path}` writes the hub's saved search into that file on the user's click: the
+  form of that name is replaced where it stands, else appended, every other byte kept (comments too); the new file is a
+  temporary file beside it, synced, then renamed over it, with the old file's mode. A file the reader refuses is not
+  touched (`invalid-params`).
+
+### Git scopes (`search/scope-bases`)
+
+Which files the Search view's git scopes search (`search/scope.rs`), read with the trusted git (`draugr::git`, a
+read-only call): Changed is the working tree's modified, added and untracked files (`status --porcelain=v2 -z
+--untracked-files=all`, ignored left out); Staged the files whose index entry differs from HEAD (their working-tree
+text is what is searched); Branch the files changed between the merge base of HEAD and a base (`merge-base`, `diff
+--raw -z -M BASE`) and the untracked ones. A rename is searched at its new path; deleted files and submodules are
+counted, not searched; a linked worktree is its own top level; an empty list says why ("nothing staged"). Branch's
+base when none is chosen is the upstream, else `main`, else `master`; a detached HEAD or an unborn branch has none, so
+the view asks. Changed lines only (`±`) keeps a match whose lines meet an added-side hunk (`diff -U0`, against HEAD,
+the index, or the merge base); a deleted-only hunk keeps nothing; a new file counts whole; Staged takes the
+working-tree hunks of a file that also has unstaged changes. A git child, not gix: the workspace's gix has no
+`status` feature, and Branch needs a merge base and a diff anyway.
+
+- `search/scope-bases {root}` → `{current?, upstream?, default?, recent, detached}`: the Branch menu (the 20 branches
+  most recently committed to, local and remote, without the current one).
 
 ### Git letters as rows (`git/letters`)
 

@@ -735,6 +735,163 @@ pub struct ExplorerStarted {
     pub listing: u64,
 }
 
+/// What the Search view's Find means: the mode and what was typed, with the mode's toggles.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "mode", rename_all = "lowercase", deny_unknown_fields)]
+pub enum FindQuery {
+    /// Text or a regular expression (`hrafn::grep`).
+    Text {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        case: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        word: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        regexp: Option<bool>,
+    },
+    /// Definitions and uses of a name, from the index (by name only).
+    Symbol {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        case: Option<bool>,
+    },
+    /// A question about what the code does (Hrafn's hybrid query).
+    Meaning { question: String },
+}
+
+impl FindQuery {
+    /// What was typed: the text, the name or the question.
+    pub fn typed(&self) -> &str {
+        match self {
+            FindQuery::Text { text, .. } => text,
+            FindQuery::Symbol { name, .. } => name,
+            FindQuery::Meaning { question } => question,
+        }
+    }
+}
+
+/// Which files a search looks in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ScopeKind {
+    /// The root, the ignore rules as set.
+    Project,
+    /// One file: the view's origin buffer.
+    File,
+    /// The files normal buffers visit under the root.
+    Open,
+    /// The working tree's modified, added and untracked files.
+    Changed,
+    /// The files whose index entry differs from HEAD (their working-tree text is searched).
+    Staged,
+    /// The files changed since the merge base of HEAD and BASE, and the working tree's changes.
+    Branch,
+}
+
+/// A search's scope: its kind, Branch's base (none: the upstream, else `main`, else `master`), whether only matches
+/// in changed lines count (Changed, Staged, Branch), and the files of File and Open (the editor's state, never saved).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchScope {
+    pub kind: ScopeKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_lines: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<AbsPath>>,
+}
+
+/// A search as the user made it: what recent and saved searches keep, and what a click runs again.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchSpec {
+    pub query: FindQuery,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<SearchScope>,
+    /// Globs; each string may hold several, comma-separated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
+}
+
+/// One saved search: its NAME, the search, whether it is PINNED to the view's header (a live count), whether it comes
+/// from the project's `.drgnx/searches.eld` (PROJECT: read-only here) and whether the user shared it there (SHARED).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SavedSearch {
+    pub name: String,
+    pub search: SearchSpec,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub project: bool,
+    #[serde(default)]
+    pub shared: bool,
+}
+
+/// `search/recent`'s answer: ROOT's recent searches, newest first (at most 50).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RecentAnswer {
+    pub recent: Vec<SearchSpec>,
+}
+
+/// `search/saved/list`'s answer: the hub's saved searches of ROOT, then the project's; PROBLEMS names each form of
+/// `.drgnx/searches.eld` that was refused, and why.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SavedList {
+    pub saved: Vec<SavedSearch>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub problems: Vec<String>,
+}
+
+/// `search/saved/put`: save SEARCH under NAME in ROOT (a search of that name is replaced).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SavedPutParams {
+    pub root: AbsPath,
+    pub name: String,
+    pub search: SearchSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<bool>,
+}
+
+/// `search/saved/delete` and `search/saved/share`: ROOT's saved search NAME.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SavedNameParams {
+    pub root: AbsPath,
+    pub name: String,
+}
+
+/// `search/saved/share`'s answer: the file it was written to.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SavedShared {
+    pub path: AbsPath,
+}
+
+/// `search/scope-bases`'s answer: the Branch scope's menu. CURRENT is the branch (none: detached or unborn),
+/// UPSTREAM its upstream, DEFAULT the base Branch uses when none is chosen (none: it must ask), RECENT the branches
+/// most recently committed to.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScopeBases {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+    pub recent: Vec<String>,
+    pub detached: bool,
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -811,6 +968,36 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/grep-look", SearchGrepLook(GrepLookParams) -> bool,
             classes: [User], writes: false,
             doc: "a view's grep rows go on: one more window of rows (more), or the rows up to a match beyond them and a margin (upto); false when the view has no search; a search sends only its first 200 rows until asked",
+        ),
+        method!(
+            "search/recent", SearchRecent(RootParams) -> RecentAnswer,
+            classes: [User], writes: false,
+            doc: "a project's recent searches, newest first (the last 50): each search that stood past the typing pause and was not empty, with its mode, toggles, replacement, scope and globs",
+        ),
+        method!(
+            "search/saved/list", SearchSavedList(RootParams) -> SavedList,
+            classes: [User], writes: false,
+            doc: "a project's saved searches: the hub's, then the project's .drgnx/searches.eld (read as data only, nothing evaluated; a refused form is named in problems)",
+        ),
+        method!(
+            "search/saved/put", SearchSavedPut(SavedPutParams) -> bool,
+            classes: [User], writes: true,
+            doc: "save a search under a name for a project (the hub's state, not the project's files); a search of that name is replaced",
+        ),
+        method!(
+            "search/saved/delete", SearchSavedDelete(SavedNameParams) -> bool,
+            classes: [User], writes: true,
+            doc: "delete a project's saved search from the hub's state; false when there is none of that name",
+        ),
+        method!(
+            "search/saved/share", SearchSavedShare(SavedNameParams) -> SavedShared,
+            classes: [User], writes: true,
+            doc: "write a saved search into the project's .drgnx/searches.eld (atomically: a temporary file, then a rename; the rest of the file kept as it was), on the user's click",
+        ),
+        method!(
+            "search/scope-bases", SearchScopeBases(RootParams) -> ScopeBases,
+            classes: [User], writes: false,
+            doc: "the Branch scope's menu for a folder's repository: the current branch, its upstream, the default base, the recent branches, and whether HEAD is detached",
         ),
         method!(
             "explorer/subscribe", ExplorerSubscribe(ExplorerParams) -> ExplorerStarted,

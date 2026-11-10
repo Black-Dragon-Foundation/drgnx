@@ -6,6 +6,8 @@ pub mod mcp;
 pub mod methods;
 pub mod power;
 pub mod project;
+pub mod saved;
+pub mod scope;
 pub mod servers;
 pub mod worker;
 
