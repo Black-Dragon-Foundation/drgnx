@@ -49,7 +49,7 @@ In a file the edit history tracks, the gutter shows what changed against the las
 does the diffing: a moment after your changes reach it the marks are asked for again, so they follow your typing, and saving,
 reverting or a Magit refresh asks too. A line an agent is writing keeps the agent's bar. **Show Change** shows the hunk at
 point against the last commit, **Revert Change** puts the last commit's lines back (it asks first) and **Stage Change**
-stages the hunk in git's index (the file is not touched). Remote files, large files and files the history does not track have
+stages the hunk in git's index (the file is not touched). The bar is drawn in the window's left fringe, against the text (an 8 px bitmap holding the 3 px bar): where it starts from the window's left edge is the fringe's width, which the look sets (`set-window-fringes`). Remote files, large files and files the history does not track have
 no marks; there is no package to install.
 
 ## Generate a commit message
