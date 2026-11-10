@@ -1215,8 +1215,8 @@ of 8 characters or more, × 0.1 for a `_`-private name and × 0.1 for a name def
 references to its own names are dropped. PageRank runs with damping 0.85 until the L1 change is under 1e-6 (at most
 100 iterations); the teleport and the dangling files' mass go by the personalisation vector, uniform or the focus
 files. Scope `code` masks tests and docs out of the walk. The graph and its unpersonalised ranks are kept in the memo
-until the store changes, for the base and the last 4 tree views; it is built in one pass over `file`, `symbol` and
-`ref`.
+until the store changes, within 64 MB (by an estimate of each graph's size; the least recently used view's graph goes
+first, and the one just built stays even alone over it); it is built in one pass over `file`, `symbol` and `ref`.
 
 `map::repo_map(store, view, MapAsk)` ranks definitions `(file, name)` by splitting each file's rank over its edges
 (a name the request gives × 10), leaves the focus files out, groups the rest by file in rank order and renders each

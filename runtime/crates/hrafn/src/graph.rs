@@ -8,7 +8,7 @@
 //!   file's rank is split over its out-edges to rank `(file, name)` definitions.
 //! - **Scope** `code` leaves tests and docs out of the walk (a mask on the one graph, not a second graph).
 //! - **Cache:** the graph and its unpersonalised ranks per view live in the memo (`memo.rs`) until the store changes:
-//!   the base and the last [`TREE_VIEWS`] tree views.
+//!   at most [`CACHE_BYTES`] of them (by [`Graph::bytes`]' estimate), the least recently used going first.
 
 use crate::memo;
 use crate::store::{CodeStore, StoreError};
@@ -20,8 +20,8 @@ use std::sync::{Arc, OnceLock};
 pub const DAMPING: f64 = 0.85;
 pub const TOLERANCE: f64 = 1e-6;
 pub const ITERATIONS: usize = 100;
-/// How many tree views keep their graph beside the base.
-pub const TREE_VIEWS: usize = 4;
+/// The graph cache's budget, by [`Graph::bytes`]' estimate: past it the least recently used views' graphs go.
+pub const CACHE_BYTES: usize = 64 << 20;
 /// A name defined in more files than this is weighed down.
 const WIDE: usize = 5;
 
@@ -330,7 +330,7 @@ impl Graph {
     }
 }
 
-/// The graph cache of the memo: the base's graph and the last [`TREE_VIEWS`] tree views', most recent last.
+/// The graph cache of the memo: views' graphs within [`CACHE_BYTES`], least recently used first.
 #[derive(Default)]
 pub(crate) struct Graphs {
     views: Vec<(View, Arc<Graph>)>,
@@ -354,16 +354,16 @@ impl Graphs {
     }
 
     fn put(&mut self, view: View, g: Arc<Graph>) {
+        self.put_within(view, g, CACHE_BYTES);
+    }
+
+    /// VIEW's graph G, the most recent; then the least recently used go until the cache is within LIMIT bytes (G
+    /// stays, even alone over it).
+    fn put_within(&mut self, view: View, g: Arc<Graph>, limit: usize) {
         self.views.retain(|(v, _)| *v != view);
         self.views.push((view, g));
-        let trees = self.views.iter().filter(|(v, _)| *v != View::Base).count();
-        if trees > TREE_VIEWS {
-            let i = self
-                .views
-                .iter()
-                .position(|(v, _)| *v != View::Base)
-                .expect("a tree view");
-            self.views.remove(i);
+        while self.views.len() > 1 && self.bytes() > limit {
+            self.views.remove(0);
         }
     }
 }
@@ -429,4 +429,58 @@ pub async fn file_ranks(
             Ok((out, built))
         })
         .await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tree::TreeId;
+
+    /// A graph of N files and no edges, for the cache's arithmetic.
+    fn sized(n: usize) -> Arc<Graph> {
+        let paths: Vec<String> = (0..n).map(|i| format!("f{i:06}")).collect();
+        Arc::new(Graph {
+            by_path: HashMap::new(),
+            blobs: paths.clone(),
+            code: vec![true; n],
+            names: Vec::new(),
+            start: vec![0; n + 1],
+            edges: Vec::new(),
+            paths,
+            rank_all: OnceLock::new(),
+            rank_code: OnceLock::new(),
+        })
+    }
+
+    fn views(g: &Graphs) -> Vec<View> {
+        g.views.iter().map(|(v, _)| *v).collect()
+    }
+
+    /// The cache keeps graphs within its byte budget, letting go of the least recently used first; the graph just
+    /// built stays even when it alone is over.
+    #[test]
+    fn the_cache_keeps_to_its_byte_budget() {
+        let one = sized(1000).bytes();
+        let limit = 3 * one + one / 2;
+        let t = |i| View::Tree(TreeId(i));
+        let mut g = Graphs::default();
+        g.put_within(View::Base, sized(1000), limit);
+        g.put_within(t(1), sized(1000), limit);
+        g.put_within(t(2), sized(1000), limit);
+        assert_eq!(views(&g), [View::Base, t(1), t(2)]);
+        assert!(g.get(t(1)).is_some(), "used: now the most recent");
+        g.put_within(t(3), sized(1000), limit);
+        assert_eq!(
+            views(&g),
+            [t(2), t(1), t(3)],
+            "the base was the least recently used"
+        );
+        assert!(g.bytes() <= limit);
+        g.put_within(t(4), sized(10_000), limit);
+        assert_eq!(
+            views(&g),
+            [t(4)],
+            "a graph over the budget alone is kept, the others go"
+        );
+    }
 }
