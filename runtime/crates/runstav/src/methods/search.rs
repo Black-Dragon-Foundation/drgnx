@@ -396,10 +396,29 @@ pub struct GrepReplaceParams {
     pub replace: String,
 }
 
+/// `search/grep-skipped`: VIEW's search lists only the matches Replace All skipped, each with why (after the
+/// match's text); the rest go and the search stops.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GrepSkippedParams {
+    pub view: String,
+    pub skipped: Vec<GrepSkip>,
+}
+
+/// One skipped match: its node id (`m:FILE:LINE:COL`) and why.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GrepSkip {
+    pub id: String,
+    pub why: String,
+}
+
 /// `search/grep-look`: VIEW's rows of its search go on. A search sends a view its first 200 rows (a file's header and
 /// its matches, in order), and the totals in `search-grep-done`; the hub keeps every match, and Sjá's model holds them.
 /// The editor asks for more when its window nears the end of the rows (`more`), or when it goes to a match beyond them
-/// (`upto`: the row's key, and 100 rows after it come too).
+/// (`upto`: the row's key, and 100 rows after it come too). A match more than 400 rows past the rows sent comes with
+/// the 100 rows before it too, after a gap row (key `gap`); `fill` (the gap row in sight) sends the 200 rows before
+/// it, and the gap row goes when they meet the rows after it.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GrepLookParams {
@@ -410,6 +429,9 @@ pub struct GrepLookParams {
     /// The key of a row to reach (`f:FILE`, `m:FILE:LINE:COL`); over `more`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upto: Option<String>,
+    /// The rows before the gap row, one window more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<bool>,
 }
 
 /// `search-grep-done`: search QUERY of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not
@@ -675,6 +697,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/grep-replace", SearchGrepReplace(GrepReplaceParams) -> bool,
             classes: [User], writes: false,
             doc: "the replacement a view's grep rows preview changed: the rows are patched, nothing is searched again; false when the view has no search",
+        ),
+        method!(
+            "search/grep-skipped", SearchGrepSkipped(GrepSkippedParams) -> bool,
+            classes: [User], writes: false,
+            doc: "a view's grep rows after Replace All: only the matches it skipped, each with why; the search stops; false when the view has no search",
         ),
         method!(
             "search/grep-look", SearchGrepLook(GrepLookParams) -> bool,

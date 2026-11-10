@@ -422,6 +422,8 @@
         (replace-undo "C-c C-u" :map (drgnx-replace . drgnx-replace-keys-map))
         (replace-next "C-c C-n" :map (drgnx-replace . drgnx-replace-keys-map))
         (replace-prev "C-c C-p" "S-<return>" :map (drgnx-replace . drgnx-replace-keys-map))
+        (replace-next-file "C-c M-n" :map (drgnx-replace . drgnx-replace-keys-map))
+        (replace-prev-file "C-c M-p" :map (drgnx-replace . drgnx-replace-keys-map))
         (replace-bar-close "<escape>" :map (drgnx-replace . drgnx-replace-bar-keys-map))
         (layout-next :none "the palette")
         (layout-agent :none "the palette")

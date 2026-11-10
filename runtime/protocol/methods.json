@@ -27369,8 +27369,15 @@
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`search/grep-look`: VIEW's rows of its search go on. A search sends a view its first 200 rows (a file's header and\nits matches, in order), and the totals in `search-grep-done`; the hub keeps every match, and Sjá's model holds them.\nThe editor asks for more when its window nears the end of the rows (`more`), or when it goes to a match beyond them\n(`upto`: the row's key, and 100 rows after it come too).",
+        "description": "`search/grep-look`: VIEW's rows of its search go on. A search sends a view its first 200 rows (a file's header and\nits matches, in order), and the totals in `search-grep-done`; the hub keeps every match, and Sjá's model holds them.\nThe editor asks for more when its window nears the end of the rows (`more`), or when it goes to a match beyond them\n(`upto`: the row's key, and 100 rows after it come too). A match more than 400 rows past the rows sent comes with\nthe 100 rows before it too, after a gap row (key `gap`); `fill` (the gap row in sight) sends the 200 rows before\nit, and the gap row goes when they meet the rows after it.",
         "properties": {
+          "fill": {
+            "description": "The rows before the gap row, one window more.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "more": {
             "description": "One more window (200 rows).",
             "type": [
@@ -27425,6 +27432,60 @@
           "replace"
         ],
         "title": "GrepReplaceParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a view's grep rows after Replace All: only the matches it skipped, each with why; the search stops; false when the view has no search",
+      "name": "search/grep-skipped",
+      "params": {
+        "$defs": {
+          "GrepSkip": {
+            "additionalProperties": false,
+            "description": "One skipped match: its node id (`m:FILE:LINE:COL`) and why.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "why"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/grep-skipped`: VIEW's search lists only the matches Replace All skipped, each with why (after the\nmatch's text); the rest go and the search stops.",
+        "properties": {
+          "skipped": {
+            "items": {
+              "$ref": "#/$defs/GrepSkip"
+            },
+            "type": "array"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "skipped"
+        ],
+        "title": "GrepSkippedParams",
         "type": "object"
       },
       "result": {

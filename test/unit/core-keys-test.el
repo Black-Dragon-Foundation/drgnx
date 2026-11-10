@@ -962,6 +962,7 @@ The commands of modules that need no installed package are in it, the later stag
   (let* ((new '(view-explorer view-search replace-in-files rename-symbol   ; M12a's views took four of the keys
                               ;; the later stages' modules from M11c-1: replace, layouts, browser, shortcuts
                               replace-in-file replace-all replace-this replace-next replace-prev replace-bar-close
+                              replace-next-file replace-prev-file ; the Search view's file moves (sja-complete S1)
                               layout-next browser-go keyboard-shortcuts shortcuts-change shortcuts-add shortcuts-filter
                               shortcuts-record-filter shortcuts-conflicts shortcuts-no-key shortcuts-changed
                               shortcuts-undo shortcuts-reset shortcuts-reset-all shortcuts-profile

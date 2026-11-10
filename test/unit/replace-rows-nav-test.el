@@ -64,6 +64,11 @@
            (buf (get-buffer-create drgnx-replace-buffer-name)))
        (with-current-buffer buf
          (drgnx-replace-mode)
+         ;; the view's tables, as `drgnx-replace--render-view' makes them
+         (setq drgnx-replace--off (make-hash-table :test #'eq))
+         (dolist (v '(drgnx-replace--seen drgnx-replace--listed drgnx-replace--off-files drgnx-replace--headers
+                                          drgnx-replace--last-row))
+           (set v (make-hash-table :test #'equal)))
          (drgnx-view-patch-attach view "c" :epoch 1)
          (drgnx-replace-rows-attached)
          (unwind-protect
@@ -130,20 +135,101 @@ matches, and again ticks them all; a hub patch that redraws a row keeps its box 
     (drgnx-replace--rows-tick "f:/r/a.txt")
     (should (equal '("[x]" "[x]" "[x]" "[x]" "[x]") (drgnx-replace-rows-nav-test--boxes)))))
 
+(defun drgnx-replace-rows-nav-test--box-at (id)
+  "Where row ID's tick box starts."
+  (let ((p (point-min)) found)
+    (while (and (not found) (setq p (text-property-not-all p (point-max) 'drgnx-replace-box nil)))
+      (if (equal (get-text-property p 'drgnx-work-id) id)
+          (setq found p)
+        (setq p (or (next-single-property-change p 'drgnx-replace-box) (point-max)))))
+    found))
+
+(ert-deftest drgnx-replace-rows/ret-and-a-click-on-a-box-tick-it ()
+  "Pattern D: a hub row's tick box is a button (SJA-SEARCH-1 (1)): RET on a match's box unticks it in Sjá, a click on
+its file's box (a link: mouse-1 follows it) unticks the file's other match, and a box a hub patch redraws is one again."
+  (drgnx-replace-rows-nav-test--with
+    (goto-char (drgnx-replace-rows-nav-test--box-at "m:/r/a.txt:2:4"))
+    (call-interactively (key-binding (kbd "RET")))
+    (should (equal '("[-]" "[x]" "[ ]" "[x]" "[x]") (drgnx-replace-rows-nav-test--boxes)))
+    (let ((file (drgnx-replace-rows-nav-test--box-at "f:/r/a.txt")))
+      (should (mouse-on-link-p file))
+      (push-button file))
+    (should (equal '("[ ]" "[ ]" "[ ]" "[x]" "[x]") (drgnx-replace-rows-nav-test--boxes)))
+    (drgnx-view-apply-patch (list :view (drgnx-view-patch-view drgnx-view-patch) :class "c" :hub 7 :base 1 :version 2
+                                  :env_epoch 1 :model 1
+                                  :ops (list (list :replace (list (drgnx-replace-rows-nav-test--row
+                                                                   "m:/r/b.txt:5:4" "  [x] let needlepin;" 2))))))
+    (drgnx-view-draw-now drgnx-view)
+    (goto-char (drgnx-replace-rows-nav-test--box-at "m:/r/b.txt:5:4"))
+    (call-interactively (key-binding (kbd "RET")))
+    (should (equal '("[ ]" "[ ]" "[ ]" "[ ]" "[ ]") (drgnx-replace-rows-nav-test--boxes)))))
+
+(ert-deftest drgnx-replace-rows/a-new-search-ticks-every-match-again ()
+  "Pattern D: a new search empties Sjá's ticked set, as the old path empties its unticked matches (SJA-SEARCH-1 (2)):
+else a match of the new search with the same file, line and column as an unticked one would start unticked."
+  (drgnx-replace-rows-nav-test--with
+    (drgnx-replace--rows-tick "m:/r/a.txt:2:4")
+    (drgnx-replace--rows-tick "m:/r/b.txt:5:4")
+    (let ((searched 0))
+      (cl-letf (((symbol-function 'drgnx-replace--hub-ready-p) #'always)
+                ((symbol-function 'drgnx-replace--hub-search) (lambda (&rest _) (cl-incf searched)))
+                ((symbol-function 'drgnx-replace--ensure-origin) #'ignore)
+                ((symbol-function 'drgnx-replace--update-status) #'ignore))   ; the fields' status line
+        (drgnx-replace--search-now))
+      (should (= 1 searched)))
+    (should-not (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'ticked))
+    (should (equal '("[x]" "[x]" "[x]" "[x]" "[x]") (drgnx-replace-rows-nav-test--boxes)))))
+
+(ert-deftest drgnx-replace-rows/next-and-previous-file-walk-the-files ()
+  "Pattern D: Next File selects the next file's row from a match (`down:file' in Sjá), Previous File the one before;
+both have keys in every profile (SJA-SEARCH-1 (4))."
+  (drgnx-replace-rows-nav-test--with
+    (drgnx-view-nav 'select "m:/r/a.txt:2:4")
+    (drgnx-replace-next-file)
+    (should (equal "f:/r/b.txt" (drgnx-view-nav-selection)))
+    (drgnx-replace-prev-file)
+    (should (equal "f:/r/a.txt" (drgnx-view-nav-selection)))
+    (dolist (id '(replace-next-file replace-prev-file))
+      (dolist (profile '("vscode" "emacs" "vim"))
+        (with-temp-buffer
+          (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
+          (should (search-forward (format "(%s " id) nil t)))))))
+
 (ert-deftest drgnx-replace-rows/replace-all-writes-the-ticked ()
-  "Pattern D: Replace All writes the matches not unticked, read from the model's fields, then searches again."
+  "Pattern D: Replace All writes the matches not unticked, read from the model's fields; the list is then what it
+left (none here: `search/grep-skipped' with no match), not a new search."
   (drgnx-replace-rows-nav-test--with
     (drgnx-replace--rows-tick "m:/r/a.txt:1:4")
-    (let ((applied nil) (searched 0))
+    (let ((applied nil) (searched 0) (calls nil))
       (cl-letf (((symbol-function 'drgnx-replace-apply) (lambda (ms new) (push (cons new ms) applied)
                                                           (list :written (length ms) :files 2 :skipped nil :undo nil)))
                 ((symbol-function 'drgnx-replace--search-now) (lambda () (cl-incf searched)))
+                ((symbol-function 'drgnx-replace--hub-call) (lambda (method params) (push (cons method params) calls)))
                 ((symbol-function 'drgnx-replace--message) #'ignore))
         (drgnx-replace--rows-replace-all "pin"))
-      (should (= 1 searched))
+      (should (= 0 searched))
+      (should (equal `(("search/grep-skipped" :view ,drgnx-replace-view :skipped [])) calls))
       (should (equal "pin" (caar applied)))
       (should (equal '(("/r/a.txt" 2) ("/r/b.txt" 5))
                      (mapcar (lambda (m) (list (plist-get m :file) (plist-get m :line))) (cdar applied)))))))
+
+(ert-deftest drgnx-replace-rows/replace-all-leaves-the-skipped-with-their-reasons ()
+  "Pattern D: a match Replace All skipped stays listed with its reason (SJA-SEARCH-1 (3)): the hub is told which
+\(`search/grep-skipped', by node id) and lists only those; the ticks start over."
+  (drgnx-replace-rows-nav-test--with
+    (drgnx-replace--rows-tick "m:/r/a.txt:1:4")
+    (let ((calls nil))
+      (cl-letf (((symbol-function 'drgnx-replace-apply)
+                 (lambda (ms _new)
+                   (list :written (1- (length ms)) :files 1
+                         :skipped (list (drgnx-replace--skip (car (last ms)) "changed since the search")) :undo nil)))
+                ((symbol-function 'drgnx-replace--hub-call) (lambda (method params) (push (cons method params) calls)))
+                ((symbol-function 'drgnx-replace--message) #'ignore))
+        (drgnx-replace--rows-replace-all "pin"))
+      (should (equal `(("search/grep-skipped" :view ,drgnx-replace-view
+                        :skipped [(:id "m:/r/b.txt:5:4" :why "changed since the search")]))
+                     calls))
+      (should-not (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'ticked)))))
 
 (defun drgnx-replace-rows-nav-test--drop-b ()
   "The hub sent a window of the rows that stops after a.txt: b.txt's rows are not in the view (its nodes are in the model)."
@@ -208,6 +294,30 @@ again only when the rows have grown since, so a hub with no more is not asked ov
             (drgnx-view-draw-now drgnx-view)
             (drgnx-replace--look-more win)
             (should (equal '((:more t) (:more t)) asked)))
+        (set-window-buffer win old)))))
+
+(ert-deftest drgnx-replace-rows/a-gap-in-sight-asks-for-the-rows-before-it ()
+  "Pattern D: after a far jump the hub sends a block of rows after a gap row (SJA-ROWS-FAR-1); when the window shows
+the gap row the view asks for the rows before it (`fill'), again only once the rows have changed."
+  (drgnx-replace-rows-nav-test--with
+    (let ((asked nil) (win (selected-window)) (old (window-buffer (selected-window))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-replace--look) (lambda (params) (push params asked))))
+            (drgnx-view-apply-patch (list :view (drgnx-view-patch-view drgnx-view-patch) :class "c" :hub 7 :base 1 :version 2
+                                          :env_epoch 1 :model 1
+                                          :ops (list (list :insert (list :after "m:/r/a.txt:2:4"
+                                                                         :rows (list (list :key "gap" :text "  ⋯ 1200 more")))))))
+            (drgnx-view-draw-now drgnx-view)
+            (set-window-buffer win (current-buffer))
+            (drgnx-replace--look-more win)
+            (drgnx-replace--look-more win)
+            (should (equal 1 (cl-count '(:fill t) asked :test #'equal)))
+            (drgnx-view-apply-patch (list :view (drgnx-view-patch-view drgnx-view-patch) :class "c" :hub 7 :base 2 :version 3
+                                          :env_epoch 1 :model 1
+                                          :ops (list (list :replace (list (list :key "gap" :text "  ⋯ 1000 more"))))))
+            (drgnx-view-draw-now drgnx-view)
+            (drgnx-replace--look-more win)
+            (should (equal 2 (cl-count '(:fill t) asked :test #'equal))))
         (set-window-buffer win old)))))
 
 ;;; replace-rows-nav-test.el ends here
