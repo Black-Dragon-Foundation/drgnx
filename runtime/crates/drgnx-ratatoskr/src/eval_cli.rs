@@ -6,7 +6,8 @@
 //!   (default `runtime/crates/hrafn/eval/<name of ROOT>`); an existing set is never overwritten.
 //! - `eval run ROOT [--model ID] [--set dev|test] [--rows FILE] [--device cpu|gpu:ADAPTER] [--models DIR] [--state DIR]
 //!   [--out FILE]`: embeds ROOT with the model, asks the set, prints the numbers and writes the run as JSON.
-//! - `eval compare A.json B.json`: B against A, paired; exit 0 when B passes the gate, 1 when it does not.
+//! - `eval compare [--by chunk|file] A.json B.json`: B against A, paired, on chunk-level MRR@10 (the default) or on
+//!   file MRR@10 (fair to a chunker that gives a language no symbols); exit 0 when B passes the gate, 1 when it does not.
 
 use crate::clock;
 use hrafn::eval::{self, EvalRow, Report};
@@ -37,6 +38,7 @@ pub enum EvalCommand {
     Compare {
         a: PathBuf,
         b: PathBuf,
+        by: eval::Gate,
     },
 }
 
@@ -57,10 +59,18 @@ pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
     let (mut model, mut set, mut rows, mut device) =
         (None, "dev".to_string(), None, "cpu".to_string());
     let (mut models, mut state, mut out) = (None, None, None);
+    let mut by = eval::Gate::Chunk;
     let mut words: Vec<PathBuf> = Vec::new();
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
             Long("out") => out = Some(PathBuf::from(p.value().map_err(e)?)),
+            Long("by") if name == "compare" => {
+                by = match p.value().map_err(e)?.string().map_err(e)?.as_str() {
+                    "chunk" => eval::Gate::Chunk,
+                    "file" => eval::Gate::File,
+                    other => return Err(format!("--by is chunk or file, not {other:?}")),
+                }
+            }
             Long("model") if name == "run" => {
                 model = Some(p.value().map_err(e)?.string().map_err(e)?)
             }
@@ -107,6 +117,7 @@ pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
         _ => EvalCommand::Compare {
             a: next("two reports")?,
             b: next("two reports")?,
+            by,
         },
     })
 }
@@ -473,12 +484,22 @@ fn run_set(
 fn summary(model: &str, set: &str, r: &Report, chunks: u64, secs: f64) -> String {
     let mut s = format!(
         "{model} on the {set} set: {chunks} chunks embedded in {secs:.0}s\n\
-         | stratum | n | MRR@10 (95 % CI) | nDCG@10 | recall@5 | recall@10 |\n|---|---|---|---|---|---|\n"
+         | stratum | n | MRR@10 (95 % CI) | nDCG@10 | recall@5 | recall@10 | file MRR@10 (95 % CI) |\n\
+         |---|---|---|---|---|---|---|\n"
     );
     let line = |name: &str, x: &eval::Summary| {
         format!(
-            "| {name} | {} | {:.3} ({:.3} to {:.3}) | {:.3} | {:.3} | {:.3} |\n",
-            x.n, x.mrr, x.mrr_ci.0, x.mrr_ci.1, x.ndcg, x.recall5, x.recall10
+            "| {name} | {} | {:.3} ({:.3} to {:.3}) | {:.3} | {:.3} | {:.3} | {:.3} ({:.3} to {:.3}) |\n",
+            x.n,
+            x.mrr,
+            x.mrr_ci.0,
+            x.mrr_ci.1,
+            x.ndcg,
+            x.recall5,
+            x.recall10,
+            x.file_mrr,
+            x.file_mrr_ci.0,
+            x.file_mrr_ci.1
         )
     };
     s.push_str(&line("all", &r.overall));
@@ -493,15 +514,19 @@ fn summary(model: &str, set: &str, r: &Report, chunks: u64, secs: f64) -> String
     s
 }
 
-fn compare_files(a: &Path, b: &Path) -> Result<(String, bool), String> {
+fn compare_files(a: &Path, b: &Path, by: eval::Gate) -> Result<(String, bool), String> {
     let load = |p: &Path| -> Result<RunFile, String> {
         let text = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
         serde_json::from_str(&text).map_err(|e| format!("{}: {e}", p.display()))
     };
     let (fa, fb) = (load(a)?, load(b)?);
-    let v = eval::compare(&fa.report, &fb.report)?;
+    let v = eval::compare_on(&fa.report, &fb.report, by)?;
+    let label = match by {
+        eval::Gate::Chunk => "MRR@10",
+        eval::Gate::File => "file MRR@10",
+    };
     let mut s = format!(
-        "{} (B) against {} (A): overall MRR@10 difference {:+.4} (95 % CI {:+.4} to {:+.4}, {} queries)\n",
+        "{} (B) against {} (A): overall {label} difference {:+.4} (95 % CI {:+.4} to {:+.4}, {} queries)\n",
         fb.model, fa.model, v.overall.mean, v.overall.lo, v.overall.hi, v.overall.n
     );
     for (name, d) in &v.strata {
@@ -548,7 +573,7 @@ pub fn run(env: &runstav::paths::Env, cmd: EvalCommand) -> i32 {
                 &root, model, &set, rows, &device, models, state, out,
             ))
         }
-        EvalCommand::Compare { a, b } => match compare_files(&a, &b) {
+        EvalCommand::Compare { a, b, by } => match compare_files(&a, &b, by) {
             Ok((text, pass)) => {
                 print!("{text}");
                 i32::from(!pass)
@@ -654,9 +679,20 @@ mod tests {
             p(&["compare", "a.json", "b.json"]).unwrap(),
             EvalCommand::Compare {
                 a: "a.json".into(),
-                b: "b.json".into()
+                b: "b.json".into(),
+                by: eval::Gate::Chunk
             }
         );
+        assert_eq!(
+            p(&["compare", "--by", "file", "a.json", "b.json"]).unwrap(),
+            EvalCommand::Compare {
+                a: "a.json".into(),
+                b: "b.json".into(),
+                by: eval::Gate::File
+            }
+        );
+        assert!(p(&["compare", "--by", "symbol", "a.json", "b.json"]).is_err());
+        assert!(p(&["run", "/r", "--by", "file"]).is_err());
         assert!(p(&[]).is_err());
         assert!(p(&["run", "/r", "--device", "tpu"]).is_err());
         assert!(p(&["compare", "a.json"]).is_err());

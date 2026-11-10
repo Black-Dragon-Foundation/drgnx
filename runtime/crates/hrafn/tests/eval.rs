@@ -3,7 +3,7 @@
 //! test-pattern: pure (D): git runs to its exit in a temporary repository, the store thread answers in order, and the
 //! metrics and the bootstrap are functions of their inputs (the bootstrap's generator is seeded); no clock, no wait.
 
-use hrafn::eval::{EvalRow, Report, compare, generate, judge, run};
+use hrafn::eval::{EvalRow, Gate, Report, compare, compare_on, generate, judge, run};
 use hrafn::{Answer, CodeStore, Config, GitCli, Hit, Lag, Query, refresh};
 use std::path::Path;
 use std::process::Command;
@@ -259,6 +259,61 @@ fn metrics_known_values() {
     let s = &r.strata["symbol"];
     assert_eq!((s.mrr, s.mrr_ci), (1.0, (1.0, 1.0)));
     assert_eq!(r.overall.n, 50);
+}
+
+/// Pattern D. File MRR@10: the reciprocal rank of the first hit in any target file, whatever its symbol (a chunker that
+/// gives no symbol still scores), and its summary.
+#[test]
+fn file_mrr_counts_the_first_hit_in_a_target_file() {
+    let t = |p: &str, s: &str| (p.to_string(), s.to_string());
+    let plain = |p: &str| Hit {
+        symbol: None,
+        ..hit(p, "")
+    };
+    let hits = vec![plain("x.el"), plain("y.el"), plain("a.el")];
+    let j = judge(&[t("a.el", "f")], &hits);
+    assert_eq!(j.rr, 0.0, "no symbol: no chunk-level hit");
+    assert!((j.file_rr.unwrap() - 1.0 / 3.0).abs() < 1e-12);
+    let hits: Vec<Hit> = (0..12).map(|i| hit("z.el", &format!("z{i}"))).collect();
+    assert_eq!(judge(&[t("a.el", "f")], &hits).file_rr, Some(0.0));
+    let mut hits: Vec<Hit> = (0..10).map(|i| hit("z.el", &format!("z{i}"))).collect();
+    hits.push(hit("a.el", "f"));
+    assert_eq!(
+        judge(&[t("a.el", "f")], &hits).file_rr,
+        Some(0.0),
+        "rank 11"
+    );
+
+    let rows = rows_of(&[("symbol", 20)]);
+    let r = run(&rows, &|_q: &Query| {
+        answer(vec![plain("z.el"), plain("a.el")])
+    });
+    assert_eq!((r.overall.mrr, r.overall.file_mrr), (0.0, 0.5));
+}
+
+/// Pattern D. The gate on file MRR: the same floors over the paired file-level difference; a report made before file
+/// MRR existed (no `file_rr`) is refused rather than read as zeros.
+#[test]
+fn compare_on_file_mrr() {
+    let rows = rows_of(&[("symbol", 400)]);
+    let base = report(&rows, &[]);
+    // B finds the file at rank 1 with no symbols: chunk MRR falls to 0, file MRR holds
+    let cand = run(&rows, &|_q: &Query| {
+        answer(vec![Hit {
+            symbol: None,
+            ..hit("a.el", "")
+        }])
+    });
+    assert!(!compare_on(&base, &cand, Gate::Chunk).unwrap().pass);
+    let v = compare_on(&base, &cand, Gate::File).unwrap();
+    assert!(v.pass, "{v:?}");
+    assert_eq!(v.overall.mean, 0.0);
+    let mut old = base.clone();
+    for r in old.rows.values_mut() {
+        r.judged.file_rr = None;
+    }
+    assert!(compare_on(&old, &cand, Gate::File).is_err());
+    assert!(compare_on(&old, &cand, Gate::Chunk).is_ok());
 }
 
 fn rows_of(strata: &[(&str, usize)]) -> Vec<EvalRow> {
