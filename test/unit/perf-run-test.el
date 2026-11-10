@@ -379,3 +379,28 @@ run of sources measures the interpreter); a compiled tree is not."
       (delete-directory root t))))
 
 ;;; perf-run-test.el ends here
+
+(defvar drgnx-perf--wait-on)            ; the hub form's (special: the wait binds it)
+(declare-function drgnx-perf--wait-check nil)
+
+(ert-deftest drgnx-perf-run/a-wait-times-the-change-and-leaves-no-advice ()
+  "The agent workloads' wait (`drgnx-perf--wait', from the hub form): after a timer or a hub batch the check notes when
+the condition first held, in the wait's buffer, and the wait returns that time; an error inside the wait still takes
+its advice off `timer-event-handler' and the hub batch."
+  (eval (car (read-from-string (drgnx-perf-run--hub-form))) t)
+  (let ((buf (generate-new-buffer " wait")) (flag nil))
+    (unwind-protect
+        (let ((drgnx-perf--wait-on (list buf (lambda () (and flag (eq (current-buffer) buf))) nil)))
+          (drgnx-perf--wait-check)
+          (should-not (nth 2 drgnx-perf--wait-on))
+          (setq flag t)
+          (drgnx-perf--wait-check)
+          (let ((met (nth 2 drgnx-perf--wait-on)))
+            (should (numberp met))
+            (drgnx-perf--wait-check)
+            (should (eql met (nth 2 drgnx-perf--wait-on)))))
+      (kill-buffer buf)))
+  (let ((n 0))
+    (should-error (funcall 'drgnx-perf--wait 2 (lambda () (when (> (cl-incf n) 1) (error "Inside the wait")))))
+    (should-not (advice-member-p 'drgnx-perf--wait-check 'timer-event-handler))
+    (should-not (advice-member-p 'drgnx-perf--wait-check 'drgnx-hub--client-batch))))

@@ -4,7 +4,8 @@
 //!
 //! - A trail: each step, then the conclusions stamped on it, then those on no step shown; up and left go to the row
 //!   before, down and right to the row after. A conclusion `rests-on` its steps (the chain kind: selecting one lights
-//!   them). The list `steps` holds the last [`WINDOW`] steps, a window of the session's when there are more.
+//!   them). The list `steps` holds [`WINDOW`] steps, a window of the session's when there are more: the last ones, or
+//!   where the editor asked (`view/window`).
 //! - A Timeline: a lane node per session (`lane:SID`), then its steps (`step:SID:SEQ`); left and right run along the
 //!   lane (left of the first step: its lane), up and down to the step of the lane above or below nearest in time
 //!   (wrapping). Lists: `lanes`, `lasts` (each lane's last step, else the lane: where the keys start) and `near` (the
@@ -91,8 +92,9 @@ fn node(id: &str, kind: &str, fields: Vec<Value>, links: [(&str, Option<&String>
     json!({"id": id, "kind": kind, "flags": 0, "nav": nav, "fields": fields})
 }
 
-/// A trail's model: STEPS (the last [`WINDOW`] of them by seq) and CONCS.
-pub(crate) fn trail_doc(steps: &[Step], concs: &[Conclusion]) -> Doc {
+/// A trail's model: STEPS (the last [`WINDOW`] of them by seq) of the session's TOTAL, and CONCS. Steps that are not
+/// all of the session's are a window of them in `steps`, from the first one's seq.
+pub(crate) fn trail_doc(steps: &[Step], concs: &[Conclusion], total: usize) -> Doc {
     let mut steps: Vec<&Step> = steps.iter().collect();
     steps.sort_by_key(|s| (s.seq, s.id));
     let steps = &steps[steps.len().saturating_sub(WINDOW)..];
@@ -157,8 +159,9 @@ pub(crate) fn trail_doc(steps: &[Step], concs: &[Conclusion]) -> Doc {
     let from = steps
         .first()
         .map_or(0, |s| s.seq.saturating_sub(1) as usize);
-    if from > 0 {
-        d.windows.insert("steps".into(), (from + steps.len(), from));
+    let total = total.max(from + steps.len());
+    if from > 0 || from + steps.len() < total {
+        d.windows.insert("steps".into(), (total, from));
     }
     d
 }
@@ -303,7 +306,7 @@ mod tests {
     fn trail_model_windows_past_500() {
         let steps: Vec<Step> = (1..=600).map(|i| step(i, i as f64)).collect();
         let concs = vec![conc(1, 550, vec![50, 549, 550]), conc(2, 50, vec![50])];
-        let d = trail_doc(&steps, &concs);
+        let d = trail_doc(&steps, &concs, 600);
         let list = &d.lists["steps"];
         assert_eq!(list.len(), WINDOW);
         assert_eq!(list[0], "step:101");
@@ -333,9 +336,20 @@ mod tests {
             fields.contains(&json!(["path", "src/f550.rs"])),
             "{fields:?}"
         );
-        let short = trail_doc(&steps[..400], &[]);
+        let short = trail_doc(&steps[..400], &[], 400);
         assert!(short.windows.is_empty());
         assert_eq!(short.lists["steps"].len(), 400);
+    }
+
+    /// [D] A trail paged to its start (`view/window` from 0): the first 500 of 2,000 steps, a window from 0 of 2000;
+    /// the first row has no row above.
+    #[test]
+    fn trail_model_paged_to_the_start() {
+        let steps: Vec<Step> = (1..=500).map(|i| step(i, i as f64)).collect();
+        let d = trail_doc(&steps, &[], 2000);
+        assert_eq!(d.windows["steps"], (2000, 0));
+        assert_eq!(d.lists["steps"][0], "step:1");
+        assert!(d.nodes["step:1"]["nav"].get("up").is_none());
     }
 
     /// [D] A Timeline's links: along a lane by seq (left of the first step: the lane), across to the nearest step in

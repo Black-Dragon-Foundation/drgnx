@@ -1,0 +1,14 @@
+{"scenario": "view/window-moves-a-list", "requires": ["v1"], "doc": "A trail of 2,000 steps holds its last 500 in the model's list steps (from 1500, total 2000); view/window with from 0 moves it: the next view-model's list steps starts at 0 and holds step 1, and the answer is true; a view/window of a view the hub does not hold answers false. Pattern B: each event and answer is the gate."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql": ["insert into step (session, seq, class, start, end) with recursive n(i) as (select 1 union all select i + 1 from n where i < 2000) select 'session:s1', i, 'tool', i, i + 1 from n"]}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "work/trail/subscribe", "params": {"view": "t", "session": "s1"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "t", "hub": "$capture:hub", "base": 0, "version": 1, "model": {"ops": [{"reset": {"lists": [{"name": "steps", "total": 2000, "from": 1500}]}}]}}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"hub": "$hub"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "view/window", "params": {"view": "t", "list": "steps", "from": 0}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "t", "hub": "$hub", "base": 1, "version": 2, "model": {"ops": {"$contains": [{"list": {"name": "steps", "total": 2000, "from": 0, "ids": {"$contains": ["step:1"]}}}]}}}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "view/window", "params": {"view": "nothing-here", "list": "steps", "from": 0}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": false}}

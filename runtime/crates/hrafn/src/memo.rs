@@ -1,4 +1,5 @@
-//! What every query reads that only a change of the store moves: the lag counts and the vectors' sign bits. Kept for
+//! What every query reads that only a change of the store moves: the lag counts, the vectors' sign bits and the
+//! reference graphs (`graph.rs`). Kept for
 //! one store generation (the store thread's own changes and other connections' commits), so a query between two index
 //! writes reads neither again. At 100,000 chunks the lag probes were 38 ms and the scan of the vectors 28 ms of each
 //! query.
@@ -38,6 +39,7 @@ pub(crate) struct Memo {
     generation: Option<(u64, i64)>,
     pub lag: HashMap<(Option<String>, View), Counts>,
     pub signs: Option<Signs>,
+    pub graphs: crate::graph::Graphs,
 }
 
 impl Memo {
@@ -47,6 +49,7 @@ impl Memo {
         if self.generation != now {
             self.lag.clear();
             self.signs = None;
+            self.graphs.clear();
             self.generation = now;
         }
         Ok(self)

@@ -241,7 +241,7 @@ async fn mcp_search_answers_with_lag_line() {
     let tools = client.list_all_tools().await.unwrap();
     assert_eq!(
         tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>(),
-        ["outline", "search", "symbols"]
+        ["find_usages", "outline", "repo_map", "search", "symbols"]
     );
     let r = client
         .call_tool(

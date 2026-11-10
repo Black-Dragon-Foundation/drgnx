@@ -6,12 +6,12 @@
 //! on write and whenever tier 1 writes a chunk that refers to the key; unreferenced keys are kept up to twice the live
 //! set, the least recently referenced going first.
 
-use crate::chunk::{BUDGET, CHUNKER_VERSION, PARSE_VERSION, chunk_file};
+use crate::chunk::{BUDGET, CHUNKER_VERSION, PARSE_VERSION, chunk_file_refs};
 use crate::files::Listed;
 use crate::memo;
 use crate::store::{
-    ChunkIn, CodeStore, FileRow, StoreError, SymbolIn, content_ids, remove_file_row, sweep_all,
-    vec_key, write_version,
+    ChunkIn, CodeStore, FileRow, RefIn, StoreError, SymbolIn, content_ids, remove_file_row,
+    sweep_all, vec_key, write_version,
 };
 use crate::tree::{View, transition};
 use rusqlite::{Connection, params};
@@ -89,6 +89,7 @@ pub(crate) struct Built {
     pub(crate) row: FileRow,
     pub(crate) chunks: Vec<ChunkIn>,
     pub(crate) symbols: Vec<SymbolIn>,
+    pub(crate) refs: Vec<RefIn>,
 }
 
 /// A listed file's `file` row.
@@ -112,9 +113,17 @@ enum Pending {
 
 pub(crate) fn build(l: &Listed, bytes: &[u8]) -> Built {
     let text = String::from_utf8_lossy(bytes);
-    let (chunks, symbols) = chunk_file(&l.path, l.lang, l.generated, &text, BUDGET);
+    let (chunks, symbols, refs) = chunk_file_refs(&l.path, l.lang, l.generated, &text, BUDGET);
     Built {
         row: row_of(l),
+        refs: refs
+            .into_iter()
+            .map(|r| RefIn {
+                name: r.name,
+                n: r.n,
+                lines: r.lines,
+            })
+            .collect(),
         chunks: chunks
             .into_iter()
             .map(|c| ChunkIn {
@@ -155,6 +164,12 @@ pub fn built(l: &Listed, bytes: &[u8]) -> (Vec<ChunkIn>, Vec<SymbolIn>) {
     (b.chunks, b.symbols)
 }
 
+/// [`built`] with the file's references.
+pub fn built_refs(l: &Listed, bytes: &[u8]) -> (Vec<ChunkIn>, Vec<SymbolIn>, Vec<RefIn>) {
+    let b = build(l, bytes);
+    (b.chunks, b.symbols, b.refs)
+}
+
 /// Tier 1: rows rebuilt only for the files of `listed` whose blob changed (all of them after a chunker change), and
 /// dropped for the files no longer listed; one transaction per batch of files. `read` gives a listed file's bytes
 /// (the hub's reads go through `eitri`); a file that cannot be read any more is dropped like a gone one. `models` are
@@ -163,7 +178,41 @@ pub fn built(l: &Listed, bytes: &[u8]) -> (Vec<ChunkIn>, Vec<SymbolIn>) {
 /// Every write is by content: a file's base row is replaced, its `(path, blob)` is chunked only when no row (a
 /// worktree's) has its content already, and the pair the row named before is swept only when no worktree still names
 /// it. A chunker change clears every worktree's rows first (they re-seed), so all content is written by the new one.
+///
+/// The writes run with a page cache of [`TIER1_CACHE_KIB`]: a file's references go into the name index all over it, and
+/// the default cache (2 MB) made that index most of tier 1's cost of references. The cache size is put back after,
+/// and the pages let go, so an idle store holds no more than before.
 pub async fn refresh(
+    store: &CodeStore,
+    listed: &[Listed],
+    read: &(dyn Fn(&str) -> io::Result<Vec<u8>> + Sync),
+    models: &[(&str, usize)],
+) -> Result<Refresh, StoreError> {
+    let before: i64 = store
+        .handle()
+        .read(|c| {
+            let v = c.query_row("pragma cache_size", [], |r| r.get(0))?;
+            c.execute_batch(&format!("pragma cache_size = -{TIER1_CACHE_KIB}"))?;
+            Ok(v)
+        })
+        .await?;
+    let out = refresh_files(store, listed, read, models).await;
+    store
+        .handle()
+        .read(move |c| {
+            c.execute_batch(&format!(
+                "pragma cache_size = {before}; pragma shrink_memory"
+            ))?;
+            Ok(())
+        })
+        .await?;
+    out
+}
+
+/// The page cache tier 1 writes with, in KiB.
+pub const TIER1_CACHE_KIB: u32 = 64 * 1024;
+
+async fn refresh_files(
     store: &CodeStore,
     listed: &[Listed],
     read: &(dyn Fn(&str) -> io::Result<Vec<u8>> + Sync),
@@ -396,7 +445,13 @@ fn write_base(c: &Connection, pending: &[Pending], rebuild: bool) -> urdr::Resul
             }
             Pending::Built(b) => {
                 transition(c, &b.row.path, b.row.blob.as_deref())?;
-                write_version(c, 0, &b.row, Some((&b.chunks, &b.symbols)), rebuild)?;
+                write_version(
+                    c,
+                    0,
+                    &b.row,
+                    Some((&b.chunks, &b.symbols, &b.refs)),
+                    rebuild,
+                )?;
                 for ch in &b.chunks {
                     c.execute(
                         "update vec set last_used = ?1 where key = ?2",
@@ -421,7 +476,7 @@ fn clear_trees(c: &Connection) -> urdr::Result<()> {
     Ok(())
 }
 
-/// Drops every file row and chunk (with their FTS rows and symbols), the worktrees' too, so the next [`refresh`]
+/// Drops every file row and chunk (with their FTS rows, symbols and references), the worktrees' too, so the next [`refresh`]
 /// builds everything again and the trees re-seed. The vectors stay: their keys are content, so the new chunks find
 /// them.
 pub async fn reset(store: &CodeStore) -> Result<(), StoreError> {
@@ -429,6 +484,7 @@ pub async fn reset(store: &CodeStore) -> Result<(), StoreError> {
         .handle()
         .write(|c| {
             c.execute("delete from chunk", [])?;
+            c.execute("delete from ref", [])?;
             c.execute("delete from file", [])?;
             c.execute(
                 "update tree set state = 'stale' where state != 'seeding'",

@@ -416,6 +416,22 @@
           (should (< drgnx-hub-client-test--searched (* 2 n (length chunk)))))
       (delete-process p))))
 
+(ert-deftest drgnx-hub-client/a-chunk-inside-a-long-line-is-held-not-copied ()
+  ;; SJA T3: a model line of megabytes arrives in many chunks with no newline; each is held as it came (the filter's
+  ;; string is the line's only copy until the join), and only an open line's first piece is cut from its chunk
+  (let ((p (make-pipe-process :name "drgnx-lines" :noquery t)) (got nil)
+        (head "{\"a\":1}\n{\"b\":") (middle (make-string 1000 ?x)))
+    (unwind-protect
+        (progn
+          (drgnx-hub--lines p head (lambda (j) (push j got)))
+          (drgnx-hub--lines p middle (lambda (j) (push j got)))
+          (should (eq middle (car (process-get p :pending))))
+          (should (equal "{\"b\":" (cadr (process-get p :pending))))
+          (drgnx-hub--lines p "\"y\"}\n" (lambda (j) (push j got)) (lambda (_) nil))
+          (should (equal (nreverse got) '((:a 1))))
+          (should-not (process-get p :pending)))
+      (delete-process p))))
+
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 
 (ert-deftest drgnx-hub-client/a-failing-callback-does-not-drop-the-rest-of-the-chunk ()

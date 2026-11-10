@@ -74,6 +74,39 @@ sending captured, the notice method \"t/set\".  `h' is the buffer's instance in 
     (should (equal '(drgnx-view-selected) (drgnx-view-nav-test--face-at (+ (point-min) 4))))
     (should (= (point) (+ (point-min) 4)))))
 
+(defun drgnx-view-nav-test--drawn ()
+  "What a redisplay of this buffer would show: its text ticks and its overlays with their properties."
+  (list (buffer-modified-tick) (buffer-chars-modified-tick)
+        (sort (mapcar (lambda (o) (list (overlay-start o) (overlay-end o) (overlay-properties o)))
+                      (overlays-in (point-min) (point-max)))
+              (lambda (x y) (< (car x) (car y))))))
+
+(defun drgnx-view-nav-test--label (view version label)
+  "VIEW's model VERSION: a's label is LABEL, a field the rows don't show (no row patch names it)."
+  (drgnx-view-model-event
+   (list :view view :hub 7 :base (1- version) :version version
+         :model (json-serialize
+                 (list :ops (vector (list :nodes (vector (list :id "a" :kind "card" :nav (list :right "b")
+                                                               :fields (vector (vector "label" label)))))))))))
+
+(ert-deftest drgnx-view-nav/a-model-that-moves-no-class-changes-nothing-drawn ()
+  "Pattern B (SJA-MODEL-CADENCE-1): a model no row patch names whose apply moves no class changes neither the text nor
+an overlay of the view's buffer when its timer applies it; one applied after a class moved puts that class on."
+  (drgnx-view-nav-test--with
+    (should (equal "a" (drgnx-view-nav 'select "a")))
+    (let ((before (drgnx-view-nav-test--drawn)))
+      (should (nth 2 before))
+      (cl-loop for label in '("A2" "A3" "A4") for version from 2
+               do (drgnx-view-nav-test--label view version label)
+               (drgnx-view-model--due view)
+               (should (equal label (nidhogg-view-get h 'field "label" "a")))
+               (should (equal before (drgnx-view-nav-test--drawn))))
+      (nidhogg-view-set h 'select "b")
+      (drgnx-view-nav-test--label view 5 "A5")
+      (drgnx-view-model--due view)
+      (should (equal '(drgnx-view-selected) (drgnx-view-nav-test--face-at (+ (point-min) 4))))
+      (should (equal (nth 1 before) (buffer-chars-modified-tick))))))
+
 (ert-deftest drgnx-view-nav/replaced-row-keeps-its-class ()
   "Pattern A: the row holding the selected card is replaced (rows naming the same model); in every order of the
 patch, the draw and the key, once all have run, a's span has the selected face and b's the dim one."
@@ -152,5 +185,49 @@ cost it no object (a panel draws a node per step: a closure each was 100 kB a dr
                     (- (nth 2 (memory-use-counts)) v0))))
         (let* ((few (cells 10)) (many (cells 1000)))
           (should (< (- many few) 100)))))))
+
+;; Windows
+
+(defun drgnx-view-nav-test--tree-window (from)
+  "A tree's model whose list `order' is entries FROM to FROM+3 of m0..m9, as a reset."
+  (let ((ids (mapcar (lambda (i) (format "m%d" i)) (number-sequence from (+ from 3)))))
+    (json-serialize
+     (list :ops (vector (list :reset
+                              (list :descriptor (list :scheme "tree" :lists ["order"] :classes ["selected"] :start "order")
+                                    :nodes (vconcat (mapcar (lambda (id) (list :id id :kind "match"
+                                                                               :fields (vector (vector "label" id))))
+                                                            ids))
+                                    :edges []
+                                    :lists (vector (list :name "order" :ids (vconcat ids) :total 10 :from from)))))))))
+
+(ert-deftest drgnx-view-nav/a-key-past-the-window-asks-once-and-runs-again ()
+  "Pattern C: a tree holding entries 0-3 of 10.  `down' from the last asks the hub once for the window a step past it
+\(half the window: `view/window' order from 2), keys meanwhile ask nothing more and the newest is kept (a walk-to entry 8); each model
+that comes applies at once; one that does not reach entry 8 asks again (from 6), and the one that does selects it."
+  (drgnx-view-nav-test--with
+    (drgnx-test-require-nidhogg
+     (progn (drgnx-view-model-event (list :view view :hub 7 :base 1 :version 2 :reset t
+                                          :model (drgnx-view-nav-test--tree-window 0)))
+            (drgnx-view-model--due view)
+            (ignore-errors (nidhogg-view-get h 'window "order")))
+     "Sjá window read (nidhogg-view-get 'window)")
+    (let ((asks (lambda () (mapcar (lambda (s) (plist-get (cdr s) :from))
+                                   (seq-filter (lambda (s) (equal (car s) "view/window")) drgnx-view-nav-test--sent)))))
+      (drgnx-view-nav 'select "m3")
+      (should (equal "m3" (drgnx-view-nav 'follow "down")))
+      (should (equal '(2) (funcall asks)))
+      (should (drgnx-view-nav-paging-p))
+      (drgnx-view-nav 'follow "down")
+      (should (equal "m3" (drgnx-view-nav 'walk-to "order" 8)))
+      (should (equal '(2) (funcall asks)))
+      (drgnx-view-model-event (list :view view :hub 7 :base 2 :version 3 :reset t
+                                    :model (drgnx-view-nav-test--tree-window 4)))
+      (should (equal '(6 2) (funcall asks)))   ; walk-to 8 ran on 4-7: past it again, centred
+      (should (drgnx-view-nav-paging-p))
+      (drgnx-view-model-event (list :view view :hub 7 :base 3 :version 4 :reset t
+                                    :model (drgnx-view-nav-test--tree-window 6)))
+      (should (equal "m8" (drgnx-view-nav-selection)))
+      (should-not (drgnx-view-nav-paging-p))
+      (should (equal '(6 2) (funcall asks))))))
 
 ;;; view-nav-test.el ends here

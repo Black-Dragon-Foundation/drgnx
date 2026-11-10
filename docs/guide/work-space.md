@@ -109,7 +109,9 @@ of the agents that touch it.
 `r` on an agent opens its **research trail**: its steps in order, newest at the bottom, following the end while it works.
 A row has the kind's icon, a title (`path:120–184` for a read, the query for a search, the host and title of a page,
 `thinking` for a thought), and its time and duration at the right. It opens with the last 60 steps and fetches 200 more
-when you scroll near its top. The agent's decisions and findings stand among the steps as cards that say how many steps
+when you scroll near its top. On the hub-drawn trail a long session shows 500 steps at a time: moving up from the first
+one shown (or down from the last) brings in the 500 around it, and the key you pressed lands once they are there, so
+every step of the session can be reached from the keyboard. The agent's decisions and findings stand among the steps as cards that say how many steps
 they are based on and which named sources no step of the session matches ("named, not read in this session"); a step a
 conclusion rests on carries that conclusion's number in a small pill. `l` on a conclusion lights its steps and goes
 through them; `L` on a step goes to a conclusion that rests on it (in the Vim profile, `g l` and `g L`).

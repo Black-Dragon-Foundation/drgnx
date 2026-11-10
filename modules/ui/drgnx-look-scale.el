@@ -4,7 +4,7 @@
 
 ;;; Commentary:
 ;; `drgnx-look-scale' (percent, 100 to 200 in steps of 5) multiplies the display's own scale.  On every graphical
-;; root frame it sets the frame parameter `drgnx-ui-scale', which `drgnx-pixels-ui-scale' reads, so every
+;; root frame it sets the UI scale `drgnx-pixels-ui-scale' reads (`drgnx-pixels-set-ui-scale'), so every
 ;; `drgnx-px' of the look follows, and Nidhogg's text zoom (`nidhogg-set-frame-text-zoom'), so the fonts are opened at
 ;; 96 dpi × the display scale × the UI scale; child frames share their root's.  Then what is sized from the scale is
 ;; given again: the density's code line, the cards' gap, the bars and the hub views' env.  Frames made later take it
@@ -65,7 +65,7 @@ instead of `drgnx-look-scale', and changes when it moves to another monitor.  A 
   "Give the root FRAME the UI scale PERCENT (default its own): its pixels and, on Nidhogg, its fonts."
   (when (frame-live-p frame)
     (let ((s (/ (or percent (drgnx-look-scale--frame-percent frame)) 100.0)))
-      (set-frame-parameter frame 'drgnx-ui-scale (unless (= s 1.0) s))
+      (drgnx-pixels-set-ui-scale frame s)
       (when (fboundp 'nidhogg-set-frame-text-zoom)
         (nidhogg-set-frame-text-zoom frame s)))))
 

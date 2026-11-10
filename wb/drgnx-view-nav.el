@@ -20,6 +20,11 @@
 ;; The trailing notice tells the hub the selection once it has been still for `drgnx-view-delay', and at most once per
 ;; `drgnx-view-delay' while a key is held: the view's `drgnx-view-nav-notice-method' with (:view V :selected ID), or
 ;; (:view V :clear t) for no selection.
+;;
+;; Windows: a list longer than the hub sends whole is a window of it (a trail past 500 steps, a search or an Explorer
+;; past 20,000 entries).  A key that stops at its edge gets `more' from Sjá; the view asks the hub for the window
+;; centred on that edge (`view/window'), keeps the key (one per buffer, the newest wins) and runs it again once a
+;; model whose window moved is drained.  Nothing waits for the hub: keys pressed meanwhile answer from the window held.
 
 ;;; Code:
 (require 'cl-lib)
@@ -61,6 +66,20 @@
 follows here (the timeline's lit lanes after the map's selection).")
 
 (defvar-local drgnx-view-nav--said-broken nil "Non-nil once this buffer said its view is broken.")
+
+(defvar-local drgnx-view-nav-list "order"
+  "The list a `follow' that answers `more' pages: the view's primary list (the descriptor's `start').")
+
+(defvar-local drgnx-view-nav-paged-functions nil
+  "Called with the selection (an id or nil) after a key that waited for another window ran again: a view whose rows
+are a window of their own shows the selection's row here (Search).")
+
+(defvar-local drgnx-view-nav--place-after-draw nil
+  "Non-nil when a key ran again as a model came, before the rows drawn from it: the draw's class step puts point.")
+
+(defvar-local drgnx-view-nav--pending nil
+  "The key waiting for another window: (LIST WINDOW VERB . ARGS), WINDOW being the list's (FROM LENGTH TOTAL) when
+the view asked the hub (`drgnx-view-nav--ask-window').  One per buffer; the newest key wins.")
 
 (defun drgnx-view-nav--face-of (class)
   "The face of CLASS, an index into the descriptor's classes, or nil.  The faces by index are made once per applied
@@ -131,7 +150,10 @@ draw replaced), every node drawn in them gets its current class again and the ov
                                                    (when (= (overlay-start o) (overlay-end o)) (delete-overlay o) t))
                                                  ovs)))
                          (if live (puthash id live table) (remhash id table))))
-                     table)))))))
+                     table))
+          (when drgnx-view-nav--place-after-draw
+            (setq drgnx-view-nav--place-after-draw nil)
+            (when-let* ((id (nidhogg-view-get h 'selection))) (drgnx-view-nav--place-point view id))))))))
 
 ;;;; Point, the notice, the broken view
 
@@ -167,12 +189,67 @@ draw replaced), every node drawn in them gets its current class again and the ov
                     :fix "close its buffer and open it again"))
     t))
 
+;;;; Windows
+
+(defconst drgnx-view-nav-window-step 2000
+  "The most entries a window moves by when a key passes its edge: a page costs the hub, the line and Sjá what it adds,
+so a long window moves a step, not half its length.")
+
+(defun drgnx-view-nav--ask-window (h verb args)
+  "The key VERB ARGS stopped at the edge of its list's window (`nidhogg-view-more' the direction): ask the hub for the
+window that holds a step past that edge (half the window, at most `drgnx-view-nav-window-step'), or for a `walk-to' the
+window centred on its entry, once while one is asked, and keep the key as the one to run when it comes."
+  (let* ((list (if (eq verb 'follow) drgnx-view-nav-list (car args)))
+         (window (nidhogg-view-get h 'window list)))
+    (when window
+      (let* ((from (nth 0 window)) (len (nth 1 window)) (total (nth 2 window))
+             (step (min (/ len 2) drgnx-view-nav-window-step))
+             (want (max 0 (min (- total len)
+                               (cond ((eq verb 'walk-to) (- (cadr args) (/ len 2)))
+                                     ((< nidhogg-view-more 0) (- from step))
+                                     (t (+ from step)))))))
+        (unless (and drgnx-view-nav--pending (equal (car drgnx-view-nav--pending) list))
+          (funcall drgnx-view-patch-send-function "view/window"
+                   (list :view (drgnx-view-patch-view drgnx-view-patch) :list list :from want)))
+        (setq drgnx-view-nav--pending
+              (cons list (cons (if (equal (car drgnx-view-nav--pending) list) (cadr drgnx-view-nav--pending) window)
+                               (cons verb args))))))))
+
+(defun drgnx-view-nav-drained (view)
+  "A model of VIEW was drained into Sjá: in each of VIEW's buffers, a key waiting for another window runs again when
+the window it was asked from has moved (a model that did not move it leaves the key waiting)."
+  (maphash (lambda (pair buffer)
+             (when (and (equal (car pair) view) (buffer-live-p buffer))
+               (with-current-buffer buffer
+                 (when-let* ((pending drgnx-view-nav--pending) (state drgnx-view-patch)
+                             (h (drgnx-view-patch-handle state))
+                             ((not (equal (nidhogg-view-get h 'window (car pending)) (cadr pending)))))
+                   (setq drgnx-view-nav--pending nil
+                         drgnx-view-nav--place-after-draw t)
+                   (run-hook-with-args 'drgnx-view-nav-paged-functions (apply #'drgnx-view-nav (cddr pending)))))))
+           drgnx-view-patch--buffers))
+
+(defun drgnx-view-nav-waiting-p (view)
+  "Non-nil when a buffer of VIEW (a view's name) has a key waiting for another window: its models apply as they come."
+  (catch 'waiting
+    (maphash (lambda (pair buffer)
+               (when (and (equal (car pair) view) (buffer-live-p buffer)
+                          (buffer-local-value 'drgnx-view-nav--pending buffer))
+                 (throw 'waiting t)))
+             drgnx-view-patch--buffers)
+    nil))
+
+(defun drgnx-view-nav-paging-p ()
+  "Non-nil while a key of the current hub-fed view waits for another window (a move that stayed is not an end)."
+  (and drgnx-view-nav--pending t))
+
 ;;;; The one entry point
 
 (defun drgnx-view-nav (verb &rest args)
   "Move the current hub-fed view's selection by VERB with ARGS, in-process: `follow' LINK, `walk' LIST STEP,
 `walk-to' LIST N, or `select' ID.  Puts point on the selection, runs the class step, arms the trailing notice and
-runs `drgnx-view-selected-functions'.  Returns the selection (an id or nil).  Nothing without a model."
+runs `drgnx-view-selected-functions'.  A move that stops at a window's edge asks the hub for the next window and runs
+again when it comes (\"Windows\" above).  Returns the selection (an id or nil).  Nothing without a model."
   (when-let* ((state drgnx-view-patch) (h (drgnx-view-patch-handle state)))
     (let* ((before (nidhogg-view-get h 'selection))
            (answer (pcase verb
@@ -182,6 +259,8 @@ runs `drgnx-view-selected-functions'.  Returns the selection (an id or nil).  No
                      ('select (nidhogg-view-set h 'select (car args)))
                      (_ (error "drgnx-view-nav: no verb %s" verb)))))
       (unless (and (null answer) (drgnx-view-nav--broken-p h))
+        (when (and (consp answer) (eq (cdr answer) 'more))
+          (drgnx-view-nav--ask-window h verb args))
         (let ((view drgnx-view) (id (nidhogg-view-get h 'selection)))
           (drgnx-view-nav-class-step view)
           (when id (drgnx-view-nav--place-point view id))

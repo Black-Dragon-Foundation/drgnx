@@ -175,6 +175,32 @@ fn check_rel(p: &str, field: &str) -> Result<(), Error> {
     Ok(())
 }
 
+fn wire_hit(h: hrafn::symbols::SymbolHit) -> w::SymbolHit {
+    w::SymbolHit {
+        path: h.path,
+        name: h.name,
+        kind: h.kind,
+        line_start: h.line_start,
+        line_end: h.line_end,
+        sig: h.sig,
+        doc1: h.doc1,
+        container: h.container,
+        class: h.class,
+    }
+}
+
+fn wire_entry(e: hrafn::symbols::OutlineEntry) -> w::OutlineEntry {
+    w::OutlineEntry {
+        name: e.name,
+        kind: e.kind,
+        line_start: e.line_start,
+        line_end: e.line_end,
+        sig: e.sig,
+        doc1: e.doc1,
+        depth: e.depth,
+    }
+}
+
 fn symbols_error(e: hrafn::symbols::SymbolsError) -> Error {
     match e {
         hrafn::symbols::SymbolsError::BadRegex(_) => {
@@ -736,21 +762,7 @@ impl Hub {
                 hrafn::symbols::Match::Regex => w::NameMatch::Regex,
                 hrafn::symbols::Match::Auto => w::NameMatch::Auto,
             },
-            symbols: found
-                .hits
-                .into_iter()
-                .map(|h| w::SymbolHit {
-                    path: h.path,
-                    name: h.name,
-                    kind: h.kind,
-                    line_start: h.line_start,
-                    line_end: h.line_end,
-                    sig: h.sig,
-                    doc1: h.doc1,
-                    container: h.container,
-                    class: h.class,
-                })
-                .collect(),
+            symbols: found.hits.into_iter().map(wire_hit).collect(),
             fresh: self.fresh(&p, &of).await?,
         })
     }
@@ -776,13 +788,116 @@ impl Hub {
                 .entries
                 .into_iter()
                 .map(|e| w::OutlineEntry {
-                    name: e.name,
-                    kind: e.kind,
-                    line_start: e.line_start,
-                    line_end: e.line_end,
-                    sig: e.sig,
-                    doc1: e.doc1.filter(|_| docs),
-                    depth: e.depth,
+                    doc1: e.doc1.clone().filter(|_| docs),
+                    ..wire_entry(e)
+                })
+                .collect(),
+            fresh: self.fresh(&p, &of).await?,
+        })
+    }
+
+    /// `search/map`.
+    pub async fn map(&self, front: &Front, a: w::MapParams) -> Result<w::MapAnswer, Error> {
+        let budget = a.budget.unwrap_or(2_000);
+        if !(256..=32_000).contains(&budget) {
+            return Err(error(
+                ErrorCode::InvalidParams,
+                "256 to 32,000 tokens",
+                Some("budget"),
+            ));
+        }
+        let focus = a.focus.unwrap_or_default();
+        if focus.len() > 50 {
+            return Err(error(
+                ErrorCode::InvalidParams,
+                "at most 50 files",
+                Some("focus"),
+            ));
+        }
+        for f in &focus {
+            check_rel(f, "focus")?;
+        }
+        let names = a.names.unwrap_or_default();
+        if names.len() > 50
+            || names
+                .iter()
+                .any(|n| n.is_empty() || n.chars().count() > 200)
+        {
+            return Err(error(
+                ErrorCode::InvalidParams,
+                "at most 50 names of 1 to 200 characters",
+                Some("names"),
+            ));
+        }
+        let (p, of) = self
+            .view_of(front, Path::new(a.root.as_str()), a.base == Some(true))
+            .await?;
+        let ask = hrafn::map::MapAsk {
+            budget: budget as usize,
+            focus,
+            names,
+            all: a.scope == Some(w::MapScope::All),
+        };
+        let m = hrafn::map::repo_map(p.store(), of.view, &ask)
+            .await
+            .map_err(internal)?;
+        Ok(w::MapAnswer {
+            text: m.text,
+            files: m
+                .files
+                .into_iter()
+                .map(|f| w::MapFile {
+                    path: f.path,
+                    rank: f.rank,
+                    defs: f.defs.into_iter().map(wire_entry).collect(),
+                })
+                .collect(),
+            tokens: m.tokens as u32,
+            files_total: m.files_total as u32,
+            fresh: self.fresh(&p, &of).await?,
+        })
+    }
+
+    /// `search/usages`.
+    pub async fn usages(
+        &self,
+        front: &Front,
+        a: w::UsagesParams,
+    ) -> Result<w::UsagesAnswer, Error> {
+        if a.name.trim().is_empty() || a.name.chars().count() > 200 {
+            return Err(error(
+                ErrorCode::InvalidParams,
+                "a name of 1 to 200 characters",
+                Some("name"),
+            ));
+        }
+        if a.k.is_some_and(|k| !(1..=100).contains(&k)) {
+            return Err(error(ErrorCode::InvalidParams, "1 to 100", Some("k")));
+        }
+        let (p, of) = self
+            .view_of(front, Path::new(a.root.as_str()), a.base == Some(true))
+            .await?;
+        let u = hrafn::map::usages(
+            p.store(),
+            of.view,
+            &a.name,
+            a.scope.map_or(Scope::All, |s| scope_of(Some(s))),
+            a.k.unwrap_or(20) as usize,
+        )
+        .await
+        .map_err(symbols_error)?;
+        Ok(w::UsagesAnswer {
+            defined: u.defined.into_iter().map(wire_hit).collect(),
+            usages: u
+                .usages
+                .into_iter()
+                .map(|x| w::Usage {
+                    path: x.path,
+                    line: x.line,
+                    lines: x.lines,
+                    n: x.n,
+                    enclosing: x.enclosing,
+                    rank: x.rank,
                 })
                 .collect(),
             fresh: self.fresh(&p, &of).await?,
@@ -1186,6 +1301,8 @@ pub async fn serve(
         Params::SearchSymbolAt(a) => symbol_at(a).await.map(|s| json!(s)),
         Params::SearchSymbols(a) => hub.symbols(front, a).await.map(|s| json!(s)),
         Params::SearchOutline(a) => hub.outline(front, a).await.map(|o| json!(o)),
+        Params::SearchMap(a) => hub.map(front, a).await.map(|m| json!(m)),
+        Params::SearchUsages(a) => hub.usages(front, a).await.map(|u| json!(u)),
         Params::SearchTyping(_) => {
             hub.typing().await;
             Ok(json!({}))

@@ -8,6 +8,7 @@ mod definers;
 mod elisp;
 mod merge;
 mod outline;
+mod refs;
 mod text;
 mod ts;
 
@@ -15,6 +16,7 @@ use crate::files::Lang;
 
 pub use definers::{Definer, definer};
 pub use elisp::top_level_forms;
+pub use refs::Ref;
 
 /// The chunk budget, in non-whitespace characters (the eval tunes it).
 pub const BUDGET: usize = 1800;
@@ -24,7 +26,9 @@ pub const CHUNKER_VERSION: u32 = 2;
 
 /// Bump it when what a parse derives besides the chunks changes (a symbol's lines or signature, a new language, the
 /// references): tier 1 parses every stored file again, and the chunks keep their content keys, so no vector changes.
-pub const PARSE_VERSION: u32 = 6;
+/// Only ever up, never back to a number used before: a store stamped with it by another parse would not parse again
+/// (7 was a reverted parse's before the references').
+pub const PARSE_VERSION: u32 = 8;
 
 /// The text of a chunk's FTS columns. `symbols` is raw: the store encodes it (`encode_symbol`) on write.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -110,7 +114,20 @@ pub fn chunk_file(
     text: &str,
     budget: usize,
 ) -> (Vec<Chunk>, Vec<Symbol>) {
+    let (chunks, symbols, _) = chunk_file_refs(path, lang, generated, text, budget);
+    (chunks, symbols)
+}
+
+/// Chunks, symbols and references of one file, from one parse.
+pub fn chunk_file_refs(
+    path: &str,
+    lang: Lang,
+    generated: bool,
+    text: &str,
+    budget: usize,
+) -> (Vec<Chunk>, Vec<Symbol>, Vec<Ref>) {
     let tree_sitter = |kind| ts::chunk(kind, path, generated, text, budget);
+    let none = |(c, s): (Vec<Chunk>, Vec<Symbol>)| (c, s, Vec::new());
     match lang {
         Lang::Elisp => Some(elisp::chunk(path, generated, text, budget)),
         Lang::Rust => tree_sitter(ts::Kind::Rust),
@@ -122,23 +139,23 @@ pub fn chunk_file(
         Lang::Tsx => tree_sitter(ts::Kind::Tsx),
         Lang::Go => tree_sitter(ts::Kind::Go),
         Lang::Java => tree_sitter(ts::Kind::Java),
-        Lang::Org => Some(outline::chunk(
+        Lang::Org => Some(none(outline::chunk(
             outline::Flavor::Org,
             path,
             generated,
             text,
             budget,
-        )),
-        Lang::Markdown => Some(outline::chunk(
+        ))),
+        Lang::Markdown => Some(none(outline::chunk(
             outline::Flavor::Markdown,
             path,
             generated,
             text,
             budget,
-        )),
+        ))),
         Lang::Text => None,
     }
-    .unwrap_or_else(|| text::chunk(path, generated, text, budget))
+    .unwrap_or_else(|| none(text::chunk(path, generated, text, budget)))
 }
 
 /// The name of the innermost symbol PATH's TEXT defines that holds LINE (from 1), or none: the language from the

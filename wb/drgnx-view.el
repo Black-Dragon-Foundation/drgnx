@@ -1715,11 +1715,14 @@ Fails one `render' condition a session (the doctor's `views' row shows it), neve
                   :id 'view-model-missing :life 'condition
                   :fix "update Nidhogg to the version drgnx pins: drgnx update")))
 
+(declare-function drgnx-view-nav-drained "drgnx-view-nav" (view))
+(declare-function drgnx-view-nav-waiting-p "drgnx-view-nav" (view))
+
 (defun drgnx-view-model-line (line)
   "A hub's whole `view-model' LINE, unparsed, to Sjá (`nidhogg-view-push'), which decides by its envelope and queues
 its model for the draw.  A gap or a full queue asks the hub for a reset; a queued model arms the view's timer and runs
-`drgnx-view-model-functions'.  Returns Sjá's decision (`queue', `reset', `drop', `resync', `none'), or nil without
-Sjá's queue (`drgnx-view-model--missing' says so once)."
+`drgnx-view-model-functions'; one a key waits for (another window) applies at once.  Returns Sjá's decision
+\(`queue', `reset', `drop', `resync', `none'), or nil without Sjá's queue (`drgnx-view-model--missing' says so once)."
   (when-let* (((or (drgnx-view-model--sja-p) (ignore (drgnx-view-model--missing)))) (r (nidhogg-view-push line)))
     (let ((view (nth 0 r)) (what (nth 2 r)))
       (when-let* ((state (gethash view drgnx-view-model--views)))
@@ -1728,7 +1731,10 @@ Sjá's queue (`drgnx-view-model--missing' says so once)."
           ((or 'queue 'reset)
            (when (eq what 'reset) (setf (drgnx-view-model-resync state) nil))
            (drgnx-view-model--arm state)
-           (run-hook-with-args 'drgnx-view-model-functions view (nth 1 r)))))
+           (run-hook-with-args 'drgnx-view-model-functions view (nth 1 r))
+           ;; a key waits for this model's window: no throttle (`drgnx-view-nav-drained' runs it)
+           (when (and (fboundp 'drgnx-view-nav-waiting-p) (drgnx-view-nav-waiting-p view))
+             (drgnx-view-model--apply state nil)))))
       what)))
 
 (defun drgnx-view-model-event (data)
@@ -1755,13 +1761,16 @@ Sjá's queue (`drgnx-view-model--missing' says so once)."
                       :args (list view) :owner :core)))
 
 (defun drgnx-view-model--drained (state r)
-  "R, Sjá's answer to a drain of STATE's view, (APPLIED LAST VERSION): the faces by class go after a model applied,
-and Sjá's `resync' (a model that did not apply: the queue and the stream are gone) asks the hub for a reset."
+  "R, Sjá's answer to a drain of STATE's view, (APPLIED LAST VERSION): the faces by class go after a model applied and
+a key that waited for another window runs again (`drgnx-view-nav-drained'), and Sjá's `resync' (a model that did not
+apply: the queue and the stream are gone) asks the hub for a reset."
   (when r
     (setf (drgnx-view-model-last state) (nth 1 r))
     (when (> (nth 0 r) 0)
       (cl-incf (drgnx-view-model-applied state) (nth 0 r))
-      (drgnx-view-model--forget-faces (drgnx-view-model-view state)))
+      (drgnx-view-model--forget-faces (drgnx-view-model-view state))
+      (when (fboundp 'drgnx-view-nav-drained)
+        (drgnx-view-nav-drained (drgnx-view-model-view state))))
     (when (eq (nth 1 r) 'resync) (drgnx-view-model--resync state)))
   r)
 

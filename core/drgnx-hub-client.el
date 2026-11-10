@@ -264,7 +264,8 @@ views are not loaded."
 With LIMIT, a line longer than LIMIT closes CONN: nothing after it is read, nor after FN or BAD closed CONN.
 With RAW, a line that starts with `drgnx-hub--model-prefix' goes to RAW whole, never parsed.
 Only CHUNK is searched for a newline: the start of a line still open waits in CONN's list of pieces (`:pending'),
-joined once when its newline comes, so a long line in many chunks costs its length (HUB-LINES-1)."
+joined once when its newline comes, so a long line in many chunks costs its length (HUB-LINES-1); a chunk with no
+newline is held as it came, not copied."
   (let ((start 0) (n (length chunk)) (live (process-live-p conn)) nl)
     (while (and (setq nl (string-search "\n" chunk start)) (or (not live) (process-live-p conn)))
       (let* ((pending (process-get conn :pending))
@@ -287,7 +288,9 @@ joined once when its newline comes, so a long line in many chunks costs its leng
       (let ((length (+ (or (process-get conn :pending-length) 0) (- n start))))
         (if (and limit (> length limit))
             (drgnx-hub--line-too-long conn limit)
-          (process-put conn :pending (cons (substring chunk start) (process-get conn :pending)))
+          ;; a chunk with no newline is held as it came (the filter's string is fresh per call): a line of megabytes
+          ;; (a view model) costs its chunks and the join, not a copy of each chunk as well
+          (process-put conn :pending (cons (if (= start 0) chunk (substring chunk start)) (process-get conn :pending)))
           (process-put conn :pending-length length))))))
 
 ;;;; The client side

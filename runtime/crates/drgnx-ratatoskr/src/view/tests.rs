@@ -712,3 +712,23 @@ fn an_attach_over_a_held_pair_starts_with_a_reset() {
     assert!(is_reset(&p) && p.base == 0 && p.version == 1);
     assert!(matches!(p.ops.as_slice(), [Op::Reset(r)] if r.len() == 3));
 }
+
+/// [D] `view/window`'s from is kept per (connection, view, list), and goes when the view's model starts again, the
+/// view closes or its connection goes.
+#[test]
+fn a_window_start_is_kept_per_list_until_the_view_starts_again() {
+    let mut s = Store::new(1);
+    assert_eq!(s.window_from(CONN, "v", "order"), None);
+    s.set_window(CONN, "v", "order", 30_000);
+    s.set_window(CONN, "w", "order", 5);
+    assert_eq!(s.window_from(CONN, "v", "order"), Some(30_000));
+    assert_eq!(s.window_from(CONN, "v", "steps"), None);
+    s.model_restart(CONN, "v");
+    assert_eq!(s.window_from(CONN, "v", "order"), None);
+    assert_eq!(s.window_from(CONN, "w", "order"), Some(5));
+    s.close(CONN, "w");
+    assert_eq!(s.window_from(CONN, "w", "order"), None);
+    s.set_window(CONN, "v", "order", 1);
+    s.gone(CONN);
+    assert_eq!(s.window_from(CONN, "v", "order"), None);
+}

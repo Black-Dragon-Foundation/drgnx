@@ -706,6 +706,9 @@ impl Front {
             Params::ViewGlyphs(p) => crate::view::glyphs(self, &caller, p).map(|b| json!(b)),
             Params::ViewMeasured(p) => crate::view::measured(self, &caller, p).map(|b| json!(b)),
             Params::ViewClose(p) => crate::view::close(self, &caller, p).map(|b| json!(b)),
+            Params::ViewWindow(p) => crate::view::window(self, &caller, p)
+                .await
+                .map(|b| json!(b)),
             Params::AgentsPanelLook(p) => {
                 crate::view::panel::look(self, &caller, p).map(|b| json!(b))
             }
@@ -718,6 +721,9 @@ impl Front {
             }
             Params::SearchGrepLook(p) => {
                 crate::view::grep::look(self, &caller, p).map(|b| json!(b))
+            }
+            Params::SearchGrepSkipped(p) => {
+                crate::view::grep::skipped(self, &caller, p).map(|b| json!(b))
             }
             // the Explorer's listing as a tree model and rows (`explorer/subscribe`)
             Params::ExplorerSubscribe(p) => {
@@ -858,6 +864,8 @@ impl Front {
             | Params::SearchSymbolAt(_)
             | Params::SearchSymbols(_)
             | Params::SearchOutline(_)
+            | Params::SearchMap(_)
+            | Params::SearchUsages(_)
             | Params::SearchTyping(_)) => crate::search::methods::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),

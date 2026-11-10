@@ -43,7 +43,8 @@ match is checked against the file as it is now: a match whose text changed since
 with the reason, never written blind. So is every match in a large file open in chunks or raw ("open in chunks:
 Large File: Open Whole first"; [large-files.md](large-files.md)). A file's replacements are one change; files are saved, except a file whose
 buffer held unsaved edits: it gets the replacement and stays unsaved, as in VS Code. **Undo Replace** (the view's
-Undo button) puts every file of the last replacement back in one step; a file edited since is left alone.
+Undo button) puts every file of the last replacement back in one step; a file edited since is left alone. After
+Replace All the list holds what it skipped, each match with why after its text; a new search ticks every match again.
 
 ## The list stays current
 
@@ -76,10 +77,13 @@ view, scope This file.
 | Undo Replace | the Undo button | `C-c C-u` | `C-c C-u` |
 | Next Match | `<f4>` (anywhere) | `C-c C-n` | `C-c C-n` |
 | Previous Match | `S-<f4>`, `S-<return>` | `C-c C-p`, `S-<return>` | `C-c C-p`, `S-<return>` |
+| Next File | `C-M-<down>` (the Search view) | `C-c M-n` | `C-c M-n` |
+| Previous File | `C-M-<up>` (the Search view) | `C-c M-p` | `C-c M-p` |
 | Close Find Bar | `<escape>` | `<escape>` | `<escape>` |
 
 Except where marked, the keys work in the Search view and the find bar, their fields too; `RET` in a find bar field
-is its next match (in Replace: replace it). Next and Previous Match show the match in the editor. In the VS Code
+is its next match (in Replace: replace it). Next and Previous Match show the match in the editor; Next and Previous
+File select the next or previous file's row. `RET` or a click on a tick box ticks or unticks it. In the VS Code
 profile `C-h` is Replace in File in buffers (the conflict with Emacs' help prefix is listed in Keyboard Shortcuts);
 the minibuffer keeps `C-h` as help. Every command is in the
 palette, category Search.
@@ -96,14 +100,19 @@ over them ([perf.md](../develop/perf.md)).
 
 When the hub builds the results (`search/grep`, [hub.md](../develop/hub.md)), they also arrive as a model of files and
 their matches, and the keys answer from it in Emacs (`drgnx-replace-rows-attached`): Next Match and Previous Match walk
-the matches over the file rows, wrapping; a tick box unticks a match (its file's box: all of them) and stays as it is
-when the hub redraws the row; Replace All writes the ticked matches from the model's fields, then searches again.
+the matches over the file rows, wrapping, and Next and Previous File the files (`down:file`, `up:file`); a tick box (a
+button: `RET` or a click) unticks a match (its file's box: all of them) and stays as it is when the hub redraws the
+row; a new search empties Sjá's ticked set. Replace All writes the ticked matches from the model's fields, then tells
+the hub what it skipped (`search/grep-skipped`): the hub lists those alone, each with why, and stops the search.
 `test/unit/replace-rows-nav-test.el` covers these with no hub.
 
 The hub keeps every match but sends the view a window of the rows, the first 200 (the agent panel's shape), and the
 totals with `search-grep-done`; the view asks for the next window when its window nears the end of the rows
 (`search/grep-look` with `more`), and for the rows up to a match when Next Match or Previous Match goes beyond them
-(`upto`; point goes to the row when it arrives).  Replace All and the tick boxes read the model, so they act on every
+(`upto`; point goes to the row when it arrives).  A match more than 400 rows past the rows sent comes in a block
+of rows around it after a gap row ("⋯ N more"), not with every row before it (one patch of 19,000 rows was over the
+hub's 16 MiB per client, and it dropped the editor); when the gap row is in sight the view asks for the rows before it
+(`fill`), and the gap row goes when they meet the block.  Replace All and the tick boxes read the model, so they act on every
 match, not only the rows sent; the file watches follow the model's files too.
 
 With the hub up, the search itself goes to the hub too: a text search is `search/grep` (the view `search`, the fields' text and

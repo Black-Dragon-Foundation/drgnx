@@ -16,7 +16,7 @@
 (defvar drgnx-look-palette)
 (declare-function vertico-buffer-mode "vertico-buffer")
 (declare-function glitnir-active-p "glitnir")
-(declare-function face-remap-remove-relative "face-remap" (cookie))
+(declare-function face-remap-remove-relative "face-remap")
 
 (defcustom drgnx-palette-frame-width 640
   "The floating palette's width, in logical pixels (less when the editor frame is narrower)."
@@ -136,24 +136,19 @@ the palette's frame shows it, whichever of the two ran first)."
   (propertize " " 'display `(space :width (,(drgnx-px (+ 6 drgnx-palette-row-padding))))))
 
 (defun drgnx-palette-frame--hint ()
-  "The input row's hint at the right edge: what the palette searches, `#' for a code question and, when an agent can
-be asked, `@' for one."
+  "The input row's hint at the right edge: what the palette searches, and `#' for a code question."
   (let ((s (concat (propertize "Commands · " 'face 'drgnx-text-subtle) (drgnx-palette-keycap "#")
-                   (propertize " code" 'face 'drgnx-text-subtle)
-                   (when (and (fboundp 'drgnx-palette--ask-command) (drgnx-palette--ask-command))
-                     (concat (propertize " · " 'face 'drgnx-text-subtle) (drgnx-palette-keycap "@")
-                             (propertize " agents" 'face 'drgnx-text-subtle))))))
+                   (propertize " code" 'face 'drgnx-text-subtle))))
     (concat (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width s (current-buffer))
                                                                      (drgnx-px (+ 6 drgnx-palette-row-padding)))))))
             s)))
 
 (defun drgnx-palette-frame--footer ()
-  "The footer's keys (palette.html `.foot'): move, run, preview, close."
+  "The footer's keys (palette.html `.foot'): move, run, close."
   (let ((gap (propertize "   " 'face 'drgnx-text-subtle)))
     (concat (drgnx-palette-frame--lead)
             (drgnx-palette-keycap "↑") " " (drgnx-palette-keycap "↓") (propertize " move" 'face 'drgnx-text-subtle) gap
             (drgnx-palette-keycap "↵") (propertize " run" 'face 'drgnx-text-subtle) gap
-            (drgnx-palette-keycap "Tab") (propertize " preview" 'face 'drgnx-text-subtle) gap
             (drgnx-palette-keycap "Esc") (propertize " close" 'face 'drgnx-text-subtle))))
 
 (defun drgnx-palette-frame--dress (win)

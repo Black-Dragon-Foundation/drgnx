@@ -1485,9 +1485,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
 | `search/files` | user | `{ignore?: "index" \| "real", n?: natnum, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
 | `search/grep` | user | `{case?: boolean, exclude?: [string], file?: AbsPath, ignore?: "index" \| "real", include?: [string], regexp?: boolean, replace?: string, root: AbsPath, text: string, view: string, word?: boolean}` | `{query: natnum}` | no |
-| `search/grep-look` | user | `{more?: boolean, upto?: string, view: string}` | `boolean` | no |
+| `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
 | `search/grep-replace` | user | `{replace: string, view: string}` | `boolean` | no |
+| `search/grep-skipped` | user | `{skipped: [{id: string, why: string}], view: string}` | `boolean` | no |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
+| `search/map` | user | `{base?: boolean, budget?: natnum, focus?: [string], names?: [string], root: AbsPath, scope?: "code" \| "all"}` | `{files: [MapFile], files_total: natnum, fresh: Fresh, text: string, tokens: natnum}` | no |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
 | `search/outline` | user | `{base?: boolean, docs?: boolean, path: string, root: AbsPath}` | `{entries: [OutlineEntry], fresh: Fresh, lang: string, path: string}` | no |
 | `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
@@ -1498,6 +1500,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/symbol-at` | user | `{file: string, line: natnum, root: AbsPath}` | `{name?: string}` | no |
 | `search/symbols` | user | `{base?: boolean, k?: natnum, kind?: [string], match?: "auto" \| "exact" \| "prefix" \| "contains" \| "regex", name: string, path?: string, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code"}` | `{fresh: Fresh, matched: "auto" \| "exact" \| "prefix" \| "contains" \| "regex", symbols: [SymbolHit]}` | no |
 | `search/typing` | user | `{}` | `{}` | no |
+| `search/usages` | user | `{base?: boolean, k?: natnum, name: string, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code"}` | `{defined: [SymbolHit], fresh: Fresh, usages: [Usage]}` | no |
 | `settings/confirm` | user | `{error?: string, ok: boolean, tx: natnum}` | `{state: "accepted" \| "reverted" \| "blocked"}` | yes |
 | `settings/explained` | user | `{req: natnum, settings: [JsonObject]}` | `boolean` | no |
 | `settings/record` | user | `{changes: [{file: string, id: string, line?: natnum, value?: Text}], req: string, reverts?: natnum, tool: string}` | `{tx: integer}` | yes |
@@ -1530,6 +1533,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `view/glyphs` | user | `{class: string, glyphs: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/resync` | user | `{class?: string, model?: boolean, version?: natnum, view: string}` | `boolean` | no |
+| `view/window` | user | `{from: natnum, list: string, view: string}` | `boolean` | no |
 | `work/board/subscribe` | user | `{map: string, plans?: [string], view: string}` | `{hub: natnum}` | no |
 | `work/conclusions` | user | `{session: string}` | `{conclusions?: [Conclusion]}` | no |
 | `work/file-at` | user | `{path: string, seq: natnum, session: Id}` | `{bytes: string, seq: natnum}` | no |
@@ -2129,7 +2133,8 @@ rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display 
   the view's `view-model`. A trail: nodes `step:ID` (kind `step`) and `conc:N` (kind `conclusion`) in the rows' order,
   `up`/`left` to the row before and `down`/`right` to the row after; edges `conc:N → step:ID` of kind `rests-on` (the
   chain kind: a selected conclusion lights its steps); the list `steps`, a window `{total, from}` of the session's
-  when its first step is not its first (`from` = that step's seq − 1). A Timeline: `lane:SESSION` (kind `lane`) and
+  when it holds fewer steps than the session has (`from` = its first step's seq − 1): the last 500, or the 500 from
+  where `view/window` asked (clamped; the rows are those steps too). A Timeline: `lane:SESSION` (kind `lane`) and
   `step:SESSION:SEQ` (kind `step`); left and right along the lane (left of the first step is the lane), up and down to
   the step of the lane above or below nearest in time, wrapping (the lane when it has none); lists `lanes`, `lasts`
   (each lane's last step, else the lane: the descriptor's `start`) and `near`, the lanes of the sessions the selection
@@ -2275,10 +2280,20 @@ and version it last sent (`view::Store`'s models, `view::model`), and sends what
 - **One line, unparsed by the editor.** The line starts `{"event":"view-model"` (the event writer, `runstav::wire::Event`,
   puts `event` first) and `model` is a JSON object, `{"ops": [...]}`. The editor routes the line by that prefix,
   before any parse, and hands it whole to Sjá (`nidhogg-view-push`), which reads the envelope and the model; the editor
-  never makes Lisp data of it. Every publisher (the map, the trail, the board, the panel, Search, the Explorer, agents
+  never makes Lisp data of it. Unframed, the line's chunks are held as they came until its newline and joined once
+  (a model of megabytes is not copied chunk by chunk). Every publisher (the map, the trail, the board, the panel, Search, the Explorer, agents
   here, extensions, a terminal's Find) writes it through `view::model` or as an object. The ops are Sjá's wire: `reset {descriptor, nodes, edges, lists}`, then `edges
   {remove}`, `remove [id]`, `nodes [node]`, `edges {add}`, `list {name, ids}` (a list that went is sent empty). A
   changed descriptor is a reset.
+- **Windows.** A list longer than its builder sends whole is a window `{total, from}` of it. `view/window {view, list,
+  from}` (user) asks for the window from FROM (a position in the whole list): the hub keeps it per (connection, view,
+  list) and the view's builder (a trail's `steps`, a search's or an Explorer's `order`) sends its model again with
+  it, a diff that says the list whole (and, for a trail, its rows). A search that has not grown since its last model
+  sends the move alone (`Sent::move_window`): the ids the new window drops, the nodes it adds (only those are built;
+  no node is compared) and the list, so a move costs what it changes. Its answer is false for a view no such builder
+  holds. A view's from goes when its model starts again (a subscribe), when it closes and with its connection; the
+  editor moves the window a step past the key that stopped at its edge (half the window, at most 2,000), or centres
+  it on a `walk-to`'s entry (core.md, "Keys through the model").
 - **The model goes first.** A builder writes the model before the rows built from it (`work::map`'s `publish`), and
   each `view-patch` carries `model: N`, the version its rows were built from; the editor applies its queued models up
   to N at the draw. A change only the model sees (a field the rows don't show) sends a model and no patch.
@@ -2350,25 +2365,44 @@ the search itself is `hrafn::grep`).
   by its match nodes `m:<file>:<line>:<col>` (kind `match`, `parent` the file; fields `label`, the text around it,
   and `file`, `line`, `col`, `end`, `text`). A search starts with a model of no nodes; each file's batch is a diff;
   a class's first env sends the model before its rows. Replace reads the matches it writes from these fields. Past
-  20,000 entries (files and matches) the model holds the first 20,000 and `order` is a window `{total, from: 0}`.
+  20,000 entries (files and matches) the model holds 20,000 and `order` is a window `{total, from}`: the first ones,
+  or from where `view/window` asked (a window that starts inside a file holds the file's node outside `order`). A new
+  search starts at the first again.
 - **The window** (the agent panel's shape, `agents/panel/look`): the hub keeps every match and Sjá's model holds them
   (so Next Match, Previous Match and Replace All, which read the model, act on all of them), but the rows sent are
   the first 200 (a file's header and its matches, in the order the files were complete) and no more until the editor
-  asks; the totals (files, matches) come with `search-grep-done`. `search/grep-look {view, more?, upto?}` goes on:
-  `more` is one window more (the editor's window neared the end of the rows), `upto` a row's key (Next or Previous
-  Match went to a match beyond them): the rows up to it and 100 after it. A search still streaming fills the room a
-  look made. The answer is `false` when the view has no search. A replacement's preview (`search/grep-replace`) patches
+  asks; the totals (files, matches) come with `search-grep-done`. `search/grep-look {view, more?, fill?, upto?}` goes
+  on: `more` is one window more (the editor's window neared the end of the rows), `upto` a row's key (Next or Previous
+  Match went to a match beyond them): the rows up to it and 100 after it. A row more than 400 rows (`FAR`) past the
+  rows sent comes in a block, the 100 rows before it, it and the 100 after, after a gap row (key `gap`, "⋯ N more"),
+  never every row before it (SJA-ROWS-FAR-1: a jump past ~19,000 rows was one patch over the 16 MiB a client may have
+  queued, and the hub dropped the editor); `more` then grows the block, an `upto` next to it grows it either way, and
+  `fill` (the editor shows the gap row) is one window more before the gap; when those rows reach the block the gap row
+  goes. Each look is the rows the editor should hold, sent as a diff (inserts where they go, the gap row's count
+  replaced). A search still streaming fills the room a look made. The answer is `false` when the view has no search. A replacement's preview (`search/grep-replace`) patches
   the rows sent only.
-- **The model's cadence:** once the rows' window is full the model is sent when the search has doubled it, and whole
-  before `search-grep-done`; while rows go out it is sent with each file. A send carries only what changed: the `order`
-  list grew at its end, so the diff against what the editor holds is one `splice` there (`Doc::diff` sends any changed
-  list as the splice of what lies between its common prefix and suffix, or whole when that is shorter, when its window's
-  `from` moved, or when its total moved by other than the ids added less those removed, which is how Sjá moves a
-  window's total). Past 20,000 entries the list is a window whose total grows with no id to carry it, so each send is
-  the window whole. A send per file batch was measured (101 sends for 10k matches) and cost five times the editor CPU
-  of nine, so the cadence stays.
+- **The model's cadence:** a file's batch adds its nodes and ids to what waits, and the model goes out with each file
+  while rows go out (the rows name the model they were built from), else at most once per 100 ms (`MODEL_EVERY`, the
+  editor's throttle `drgnx-view-delay`: it applies a model no row names one throttle after it comes, and every line it
+  reads costs it a redisplay pass), and before `search-grep-done` when anything waits. A send is what waited appended to
+  what the editor holds (`Sent::append`: the nodes by id and one `splice` at the end of `order`, the ops `Doc::diff`
+  would send, made from the batches alone, so the hub never rebuilds and diffs the whole model per send). The whole is
+  sent, and diffed, for a run's first batch and when the editor's model is not this run's up to what waits (a reset
+  due, a class's env that arrived); `Doc::diff` sends any changed list as the splice of what lies between its common
+  prefix and suffix, or whole when that is shorter or when its total moved by other than the ids added less those
+  removed, which is how Sjá moves a window's total. A window whose `from` moved over the same total goes as at most
+  two splices that name the new `from` (the ids after the part both windows hold, then those before it; Sjá sets
+  `from` and keeps the total), or whole when the windows share no ids or that is shorter. Past 20,000 entries the list is a
+  window whose total grows with no id to carry it, so each send is the window whole, sent when the search has doubled
+  it, while rows go out and at the end. What waits goes with the next batch or at the end: a search whose files come
+  more than 100 ms apart sends each with the next. Measured at 10k matches in 100 files (pinned lab): six model lines;
+  rebuilt and diffed per batch the hub took seconds and the models came over 4.7 s instead of 0.9 s; appended per batch
+  with no throttle each line woke the editor for a pass that redrew nothing, 1.3 times the editor CPU with framing on;
+  coalesced, 0.84 times the doubling cadence's CPU with framing on and 0.82 times off.
 - `search/grep-replace {view, replace}` changes the replacement the rows preview: the hub patches the rows that
   change (`replace` ops) and searches nothing again.
+- `search/grep-skipped {view, skipped: [{id, why}]}` is what Replace All left: the search stops, its files and matches
+  become the ones named (each row shows why after the match), and the model and the rows go out as diffs.
 - `ignore` is `index` (no dot paths, no secret-looking names, the filters of the index) or `real` (only what
   `.gitignore` files and the globs name). Without it the setting `drgnx-search-ignore-rules` decides (`index` by
   default); it is a runtime setting, so the hub reads the user's value.
@@ -2423,7 +2457,8 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
 - **The model** is a `tree`: one node per row, its id the path (a root's without the trailing slash), kind `root`, `dir`
   or `file`, its parent the row above it in the tree, the flag `expanded` on a root and on each open folder, and the
   fields `label` (as shown; a root's name in capitals), `path` and `dir` (1 or 0). The list `order` holds the rows in
-  pre-order; past 20,000 it is a window of the first ones (the rows hold every entry).
+  pre-order; past 20,000 it is a window of the first ones, or from where `view/window` asked (with the folders above
+  its first entry as nodes outside `order`); the rows hold every entry.
 - **Row:** the key is the path; the indent guides (`│ ` per level below the first) and the chevron (`▾ `, `▸ `, or two
   spaces for a file) in `drgnx-explorer-guide`, then the name in `drgnx-explorer-root`, `-directory` or `-file`, a
   control character as `^X`; the path is the `drgnx-work-id` over the whole row.

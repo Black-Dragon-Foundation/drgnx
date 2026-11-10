@@ -423,6 +423,8 @@
         (replace-undo :none "the view's Undo button; the palette")
         (replace-next "<f4>")
         (replace-prev "S-<f4>" "S-<return>" :map (drgnx-replace . drgnx-replace-keys-map))
+        (replace-next-file "C-M-<down>" :map (drgnx-replace . drgnx-replace-keys-map))
+        (replace-prev-file "C-M-<up>" :map (drgnx-replace . drgnx-replace-keys-map))
         (replace-bar-close "<escape>" :map (drgnx-replace . drgnx-replace-bar-keys-map))
         (layout-next "C-k C-l")
         (layout-agent :none "Next Layout (C-k C-l) cycles; the palette")

@@ -293,7 +293,13 @@ async fn diff(cx: &Cx<'_>, only: Option<&[String]>) -> Result<Seed, StoreError> 
                         match w {
                             Write::Drop(p) => remove_file_row(c, t, &p)?,
                             Write::Built(b) => {
-                                write_version(c, t, &b.row, Some((&b.chunks, &b.symbols)), false)?;
+                                write_version(
+                                    c,
+                                    t,
+                                    &b.row,
+                                    Some((&b.chunks, &b.symbols, &b.refs)),
+                                    false,
+                                )?;
                             }
                             Write::Row(row, bytes) => {
                                 if write_version(c, t, &row, None, false)?.is_none() {
