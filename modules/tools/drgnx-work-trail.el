@@ -180,7 +180,8 @@ time and duration.  LIT: the ids of the steps lit (their pills fill and the row 
 
 (define-derived-mode drgnx-work-trail-mode special-mode "Work trail"
   "The Work space's research trail: one agent's steps in order, with its conclusions among them."
-  (setq-local truncate-lines t cursor-type nil tab-line-format '("" drgnx-work-map--lens))
+  (setq-local truncate-lines t cursor-type nil tab-line-format '("" drgnx-work-map--lens)
+              drgnx-view-nav-list "steps")   ; on the rows path a key past the window pages the model's steps
   (add-hook 'post-command-hook #'drgnx-work-trail--maybe-page nil t))
 
 (defun drgnx-work-trail-buffers ()

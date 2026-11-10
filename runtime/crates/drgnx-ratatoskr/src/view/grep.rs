@@ -221,13 +221,15 @@ fn batch_nodes(file: &str, ms: &[Match]) -> (Vec<(String, Value)>, Vec<String>) 
     (nodes, ids)
 }
 
-/// The search's model: a `tree` of FILES in the rows' order, each open, with its matches as children.
-fn grep_doc(files: &[(String, Vec<Match>)]) -> Doc {
-    grep_doc_in(files, MODEL_WINDOW)
+/// The search's model: a `tree` of FILES in the rows' order, each open, with its matches as children; past
+/// [`MODEL_WINDOW`] entries `order` is a window of them, from FROM (`view/window`; none: the first).
+fn grep_doc(files: &[(String, Vec<Match>)], from: Option<usize>) -> Doc {
+    grep_doc_in(files, MODEL_WINDOW, from)
 }
 
-/// [`grep_doc`] holding at most WINDOW entries.
-fn grep_doc_in(files: &[(String, Vec<Match>)], window: usize) -> Doc {
+/// [`grep_doc`] holding at most WINDOW entries, from entry FROM (clamped so the window is full). A window that starts
+/// inside a file holds the file's node too, outside `order`: Sjá shows a match under its file.
+fn grep_doc_in(files: &[(String, Vec<Match>)], window: usize, from: Option<usize>) -> Doc {
     let mut d = Doc {
         descriptor: json!({
             "scheme": "tree",
@@ -241,23 +243,37 @@ fn grep_doc_in(files: &[(String, Vec<Match>)], window: usize) -> Doc {
         }),
         ..Doc::default()
     };
-    let total: usize = files.iter().map(|(_, ms)| 1 + ms.len()).sum();
+    let total = entries_of(files);
+    let from = from.unwrap_or(0).min(total.saturating_sub(window));
+    let end = from + window;
     let mut order = Vec::new();
+    let mut at = 0;
     for (file, ms) in files {
-        if order.len() >= window {
+        if at >= end {
             break;
+        }
+        let n = 1 + ms.len();
+        if at + n <= from {
+            at += n;
+            continue;
         }
         let (fid, node) = file_node(file);
         d.nodes.insert(fid.clone(), node);
-        order.push(fid.clone());
-        for m in ms.iter().take(window - order.len()) {
+        if at >= from {
+            order.push(fid.clone());
+        }
+        at += 1;
+        let skip = from.saturating_sub(at);
+        at += skip;
+        for m in ms.iter().skip(skip).take(end.saturating_sub(at)) {
             let (id, node) = match_node(&fid, m);
             d.nodes.insert(id.clone(), node);
             order.push(id);
+            at += 1;
         }
     }
     if total > order.len() {
-        d.windows.insert("order".into(), (total, 0));
+        d.windows.insert("order".into(), (total, from));
     }
     d.lists.insert("order".into(), order);
     d
@@ -418,7 +434,10 @@ fn flush_model(store: &mut Store, conn: u64, view: &str, run: &mut Run) -> Optio
     appends
         .then(|| store.append_model(conn, view, nodes, "order", ids))
         .flatten()
-        .or_else(|| store.publish_model(conn, view, grep_doc(&run.files)))
+        .or_else(|| {
+            let from = store.window_from(conn, view, "order");
+            store.publish_model(conn, view, grep_doc(&run.files, from))
+        })
 }
 
 /// A file's matches: the model with them when it is due ([`flush_model`]; none when nothing changed or a throttle
@@ -453,7 +472,8 @@ fn batch_patches(
         // past the model's window `order` is a window of the first entries: only its total grows, whole each time
         run.waiting = (Vec::new(), Vec::new());
         run.model_sent = entries;
-        store.publish_model(conn, view, grep_doc(&run.files))
+        let from = store.window_from(conn, view, "order");
+        store.publish_model(conn, view, grep_doc(&run.files, from))
     } else {
         None
     };
@@ -522,11 +542,23 @@ impl Views {
     pub(super) fn grep_build(&self, f: &Front, key: &Key) -> bool {
         self.greps
             .current(key.0, &key.1, |run| {
-                self.publish_model(f, key.0, &key.1, grep_doc(&run.files));
+                let from = self.window_from(key.0, &key.1, "order");
+                self.publish_model(f, key.0, &key.1, grep_doc(&run.files, from));
                 let rows = window_rows(run);
                 if let Some(p) = lock(&self.store).publish(key, rows, &[]) {
                     f.send_to(key.0, "view-patch", json!(p));
                 }
+            })
+            .is_some()
+    }
+
+    /// `view/window` of CONN's VIEW: its search's model again, with `order`'s window where the editor asked; false when
+    /// VIEW has no search.
+    pub(super) fn grep_window(&self, f: &Front, conn: u64, view: &str) -> bool {
+        self.greps
+            .current(conn, view, |run| {
+                let from = self.window_from(conn, view, "order");
+                self.publish_model(f, conn, view, grep_doc(&run.files, from));
             })
             .is_some()
     }
@@ -606,8 +638,9 @@ pub fn start(f: &Front, c: &Caller, p: GrepParams) -> Result<GrepStarted, Error>
     let (id, cancel) = views
         .greps
         .start(conn, &view, query.clone(), p.replace.unwrap_or_default());
-    // a new search's model: no files yet
-    views.publish_model(f, conn, &view, grep_doc(&[]));
+    // a new search's model: no files yet, and its window from the start
+    lock(&views.store).forget_windows(conn, &view);
+    views.publish_model(f, conn, &view, grep_doc(&[], None));
     for patch in start_patches(&mut lock(&views.store), conn, &view) {
         f.send_to(conn, "view-patch", json!(patch));
     }

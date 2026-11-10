@@ -123,7 +123,7 @@ fn explorer_tree_joins_open_chains() {
 fn explorer_model_and_rows() {
     let mut reads = Vec::new();
     let got = list(&["/r/lib"], true, &mut reads).unwrap();
-    let doc = explorer_doc(&got);
+    let doc = explorer_doc(&got, None);
     assert_eq!(doc.descriptor["scheme"], "tree");
     assert_eq!(
         doc.lists["order"],
@@ -149,8 +149,14 @@ fn explorer_model_and_rows() {
     assert_eq!(m.runs[0], (0, 4, "drgnx-explorer-guide".to_owned()));
     assert_eq!(m.runs[1], (4, 8, "drgnx-explorer-file".to_owned()));
 
-    let cut = explorer_doc_in(&got, 2);
+    let cut = explorer_doc_in(&got, 2, None);
     assert_eq!(cut.lists["order"].len(), 2);
     assert_eq!(cut.windows["order"], (5, 0));
+    // a window from the fourth entry: m.el and z.txt, with m.el's folders as nodes (not in `order`)
+    let late = explorer_doc_in(&got, 2, Some(3));
+    assert_eq!(late.lists["order"], ["/r/lib/m.el", "/r/z.txt"]);
+    assert_eq!(late.windows["order"], (5, 3));
+    assert!(late.nodes.contains_key("/r/lib"));
+    assert!(late.nodes.contains_key(&got[0].path), "the root");
     assert_eq!(display("a\nb\u{7f}"), "a^Jb^?");
 }

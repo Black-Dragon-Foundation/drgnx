@@ -134,6 +134,16 @@ pub struct ViewClose {
     pub view: String,
 }
 
+/// `view/window`: the editor's replica of VIEW's model needs another window of list LIST, starting at FROM (a
+/// position in the whole list; the hub clamps it). The view's builder sends the model with that window, whole
+/// (docs/develop/core.md, "Views": windows); the answer is false when no builder holds such a list.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ViewWindow {
+    pub view: String,
+    pub list: String,
+    pub from: u64,
+}
+
 /// `view-glyphs`: the hub asks the editor for advances it cannot read from the font, `[role, char]` each.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -198,6 +208,18 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "the fit guard's measurements of strings that overflowed, [role, string, px] each: the hub fits by them",
             check: |p: &ViewMeasured| check_ids(&p.view, Some(&p.class)),
+        ),
+        method!(
+            "view/window", ViewWindow(ViewWindow) -> bool,
+            classes: [User], writes: false,
+            doc: "the editor's replica needs another window of a list of a view's model, from a position in the whole list: the view's builder sends the model with that window",
+            check: |p: &ViewWindow| {
+                check_ids(&p.view, None)?;
+                if p.list.is_empty() || p.list.len() > VIEW_MAX {
+                    return Err(invalid("list", "a list name of 1 to 64 bytes"));
+                }
+                Ok(())
+            },
         ),
         method!(
             "view/close", ViewClose(ViewClose) -> bool,
@@ -266,7 +288,7 @@ mod tests {
             .collect();
         assert_eq!(
             methods.len(),
-            6,
+            7,
             "the view/ methods: {:?}",
             methods.iter().map(|m| m.name).collect::<Vec<_>>()
         );

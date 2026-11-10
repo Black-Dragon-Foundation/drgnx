@@ -1446,7 +1446,12 @@ match left loses its header too.  BLOCK: the file read off the main thread (see 
   (add-hook 'drgnx-view-patch-patched-functions #'drgnx-replace--rows-boxes nil t)
   (add-hook 'drgnx-view-patch-patched-functions #'drgnx-replace--local-patched nil t)
   (add-hook 'drgnx-view-patch-patched-functions #'drgnx-replace--reached nil t)
+  (add-hook 'drgnx-view-nav-paged-functions #'drgnx-replace--paged nil t)
   (add-hook 'window-scroll-functions #'drgnx-replace--scrolled nil t))
+
+(defun drgnx-replace--paged (id)
+  "`drgnx-view-nav-paged-functions': Next Match waited for the model's next window and moved to ID: its row is shown."
+  (when (stringp id) (drgnx-replace--reach id)))
 
 (defun drgnx-replace--rows-match (id &optional extra)
   "Match node ID of the model as `drgnx-replace-apply' takes a match, EXTRA appended."
@@ -1585,7 +1590,8 @@ does not hold; Next Match walks both."
   "`drgnx-replace--rows-step' over the model's matches alone."
   (let* ((h (drgnx-view-patch-handle drgnx-view-patch)) (before (drgnx-view-nav-selection))
          (id (drgnx-view-nav 'follow (if (> dir 0) "down:match" "up:match"))))
-    (if (and id (not (equal id before)) (drgnx-replace--rows-kind-p id "match"))
+    (if (or (and id (not (equal id before)) (drgnx-replace--rows-kind-p id "match"))
+            (drgnx-view-nav-paging-p))   ; past the model's window: the key runs again once the next one is in
         id
       (let ((ms (cl-remove-if-not (lambda (i) (drgnx-replace--rows-kind-p i "match"))
                                   (append (nidhogg-view-get h 'list "visible") nil))))
@@ -1646,6 +1652,7 @@ search again, as the files changed."
     (drgnx-view-patch-detach)
     (remove-hook 'drgnx-view-patch-patched-functions #'drgnx-replace--rows-boxes t)
     (remove-hook 'drgnx-view-patch-patched-functions #'drgnx-replace--reached t)
+    (remove-hook 'drgnx-view-nav-paged-functions #'drgnx-replace--paged t)
     (remove-hook 'window-scroll-functions #'drgnx-replace--scrolled t)
     (when drgnx-replace--box-overlays (maphash (lambda (_ ov) (delete-overlay ov)) drgnx-replace--box-overlays)
           (clrhash drgnx-replace--box-overlays))

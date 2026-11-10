@@ -706,6 +706,111 @@ collection, against before it opened, plus its buffer's text)."
       (drgnx-perf--term-open)
       t)))
 
+(defconst drgnx-perf-run--search-window-form
+  (prin1-to-string
+   '(progn
+      (defun drgnx-perf--sw-view () (drgnx-perf--replace-view))
+      (defvar drgnx-perf--sw-lines 0 "The model lines the hub sent while the workload ran.")
+      (defvar drgnx-perf--sw-arrived nil "When the first model line since it was cleared came (`float-time').")
+      (defvar drgnx-perf--sw-handled 0.0 "The seconds the model lines' handler ran since it was cleared.")
+      (defun drgnx-perf--sw-line (f &rest args)
+        (let ((t0 (float-time)))
+          (setq drgnx-perf--sw-lines (1+ drgnx-perf--sw-lines))
+          (unless drgnx-perf--sw-arrived (setq drgnx-perf--sw-arrived t0))
+          (prog1 (apply f args) (setq drgnx-perf--sw-handled (+ drgnx-perf--sw-handled (- (float-time) t0))))))
+      (defun drgnx-perf--sw-h () (drgnx-view-patch-handle (buffer-local-value 'drgnx-view-patch (drgnx-perf--sw-view))))
+      (defun drgnx-perf--sw-up ()
+        "The needles grown to 300 files (30,000 matches, 30,300 entries), searched on the hub's rows path to the end:
+the model's `order' is a window of the first 20,000."
+        (let ((text (apply #'concat (make-list 100 "a needle in the haystack, line after line\n"))))
+          (cl-loop for i from 100 below 300
+                   do (with-temp-file (expand-file-name (format "f%03d.txt" i) drgnx-perf--needles) (insert text))))
+        (let ((editor (selected-window)))
+          (drgnx-replace--open :text "needle"
+                               :origin (with-current-buffer (find-file-noselect (expand-file-name "f000.txt" drgnx-perf--needles))
+                                         (point-min-marker)))
+          (select-window editor))
+        (with-current-buffer (drgnx-perf--sw-view) (drgnx-replace--search-now))
+        (unless (drgnx-perf--wait 120 (lambda () (with-current-buffer (drgnx-perf--sw-view)
+                                                   (and drgnx-view-patch (eql 30000 (cdr drgnx-replace--hub-counts))
+                                                        (not (drgnx-replace--busy-p))
+                                                        (equal (ignore-errors (nidhogg-view-get (drgnx-perf--sw-h) 'window "order"))
+                                                               '(0 20000 30300))))))
+          (error "Premise: the search did not list 30,000 matches in a 20,000 window (counts %S, window %S)"
+                 (with-current-buffer (drgnx-perf--sw-view) drgnx-replace--hub-counts)
+                 (ignore-errors (nidhogg-view-get (drgnx-perf--sw-h) 'window "order"))))
+        t)
+      (defun drgnx-perf--sw-index (h id)
+        "ID's position in the whole list `order' (its window's from plus its place in the window)."
+        (let ((w (nidhogg-view-get h 'window "order")) (p (cl-position id (nidhogg-view-get h 'list "order") :test #'equal)))
+          (unless p (error "Premise: the selection %S is not in the window %S (counts %S, searching %S)"
+                           id w drgnx-replace--hub-counts drgnx-replace--searching))
+          (+ (if w (car w) 0) p)))
+      (defun drgnx-perf--sw-measure ()
+        "(:key_ms STATS :page_ms STATS :pages N :list_max N :from N :to N): from the match 50 entries before the window's
+end, Next Match 200 times: each key's time, and for a key that stopped at the window's edge the time until it ran
+again in the next window; the entries the selection went from and to.  An error when a key went back (a wrap), or Sjá
+held more than the window."
+        (with-current-buffer (drgnx-perf--sw-view)
+          (advice-add 'drgnx-hub--model-line :around #'drgnx-perf--sw-line)
+          ;; a new env between runs may search again (`drgnx-replace--hub-resubscribe'): its end first
+          (unless (drgnx-perf--wait 120 (lambda () (and (eql 30000 (cdr drgnx-replace--hub-counts)) (not (drgnx-replace--busy-p))
+                                                        (nidhogg-view-get (drgnx-perf--sw-h) 'window "order"))))
+            (error "Premise: the search is not listed whole (counts %S)" drgnx-replace--hub-counts))
+          ;; each run starts from the first window (the run before paged past it)
+          (funcall drgnx-view-patch-send-function "view/window" (list :view (drgnx-view-patch-view drgnx-view-patch)
+                                                                      :list "order" :from 0))
+          (unless (drgnx-perf--wait 20 (lambda () (equal (nidhogg-view-get (drgnx-perf--sw-h) 'window "order") '(0 20000 30300))))
+            (error "Premise: the window did not go back to the first 20,000 (%S)"
+                   (nidhogg-view-get (drgnx-perf--sw-h) 'window "order")))
+          ;; the rows grow from the first as the view scrolls (`search/grep-look'), 1,000 at a time, to the window's
+          ;; end: one far `upto' would send ~20,000 rows in one patch, over the hub's 16 MiB per client, which drops it
+          (let ((ids (nidhogg-view-get (drgnx-perf--sw-h) 'list "order")))
+            (cl-loop for k from 999 below 20000 by 1000
+                     do (drgnx-replace--look (list :upto (nth k ids)))
+                     unless (drgnx-perf--wait 30 (lambda () (> (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)) k)))
+                     do (error "Premise: the rows did not grow past %d (%d rows)" k
+                               (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)))))
+          (let* ((h (drgnx-perf--sw-h)) keys pages lines handled (most 0) trace
+                 (start (cl-find-if (lambda (id) (string-prefix-p "m:" id)) (nthcdr 19950 (nidhogg-view-get h 'list "order"))))
+                 (from (progn
+                         (unless (and start (equal start (drgnx-view-nav 'select start)))
+                           (error "Premise: no match at entry 19,950 to start from (start %S, list %d, window %S, selection %S, h %S, view %S)"
+                                  start (length (nidhogg-view-get h 'list "order")) (nidhogg-view-get h 'window "order")
+                                  (drgnx-view-nav-selection) h (drgnx-view-patch-view drgnx-view-patch)))
+                         (drgnx-perf--sw-index h start)))
+                 (at from))
+            (dotimes (_ 200)
+              (let ((t0 (float-time)))
+                (setq drgnx-perf--sw-arrived nil drgnx-perf--sw-handled 0.0)
+                (drgnx-replace--rows-step 1)
+                (push (* 1000 (- (float-time) t0)) keys)
+                (when (drgnx-view-nav-paging-p)
+                  (let ((lines drgnx-perf--sw-lines))
+                    (unless (drgnx-perf--wait 20 (lambda () (not (drgnx-view-nav-paging-p))))
+                      (error "Premise: the window asked at %s did not come (pending %S, window %S, model lines since %d)"
+                             (drgnx-view-nav-selection) (car drgnx-view-nav--pending)
+                             (nidhogg-view-get h 'window "order") (- drgnx-perf--sw-lines lines))))
+                  (push (* 1000 (- (float-time) t0)) pages)
+                  (push (* 1000 (- drgnx-perf--sw-arrived t0)) lines)
+                  (push (* 1000 drgnx-perf--sw-handled) handled))
+                (let ((i (drgnx-perf--sw-index h (drgnx-view-nav-selection))))
+                  (push i trace)
+                  (unless (> i at) (error "Premise: Next Match went from entry %d to %d (from %d; entries, newest first: %S)"
+                                          at i from (seq-take trace 30)))
+                  (setq at i))
+                (setq most (max most (length (nidhogg-view-get h 'list "order"))))))
+            (advice-remove 'drgnx-hub--model-line #'drgnx-perf--sw-line)
+            (when (> most 20000) (error "Premise: Sjá held %d entries, more than the window's 20,000" most))
+            (unless (> at 20000) (error "Premise: 200 Next Match keys from %d stopped at %d, inside the first window" from at))
+            (list :key_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats keys))
+                  :page_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats pages))
+                  :line_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats lines))
+                  :handled_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats handled))
+                  :pages (length pages) :list_max most :from from :to at))))
+      t))
+  "The `search-window' workload's session side (with the replace workloads' and the hub's).")
+
 (defun drgnx-perf-run--hub-form ()
   "The agent workloads' setup, as a form string: the session functions that start Ratatoskr (a test-hooks build,
 $DRGNX_RATATOSKR_BIN, with `ratatoskr-mock' beside it) for the workload, give it the profile \"mock\"
@@ -893,6 +998,12 @@ error if it does not hold).  With :actions, :measure runs after the input and it
        :measure "(drgnx-perf--retype-measure)"
        :complete-when "(drgnx-perf--replace-done)"
        :check "(and (drgnx-perf--replace-check) (buffer-local-value 'drgnx-view-patch (drgnx-perf--replace-view)) t)"
+       :teardown ,(concat "(progn (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
+      ;; Next Match across the model's 20,000-entry window of a 30k-match search, on the rows path (plan sja-complete W1)
+      (search-window
+       :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) " (drgnx-perf-run--replace-setup-form)
+                       " " drgnx-perf-run--search-window-form " (drgnx-perf--sw-up))")
+       :measure "(drgnx-perf--sw-measure)"
        :teardown ,(concat "(progn (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
       ;; retyping the replacement over 10k listed matches: the rows are patched in place, in slices
       (replace-retype

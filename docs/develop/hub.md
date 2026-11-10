@@ -1532,6 +1532,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `view/glyphs` | user | `{class: string, glyphs: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/resync` | user | `{class?: string, model?: boolean, version?: natnum, view: string}` | `boolean` | no |
+| `view/window` | user | `{from: natnum, list: string, view: string}` | `boolean` | no |
 | `work/board/subscribe` | user | `{map: string, plans?: [string], view: string}` | `{hub: natnum}` | no |
 | `work/conclusions` | user | `{session: string}` | `{conclusions?: [Conclusion]}` | no |
 | `work/file-at` | user | `{path: string, seq: natnum, session: Id}` | `{bytes: string, seq: natnum}` | no |
@@ -2131,7 +2132,8 @@ rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display 
   the view's `view-model`. A trail: nodes `step:ID` (kind `step`) and `conc:N` (kind `conclusion`) in the rows' order,
   `up`/`left` to the row before and `down`/`right` to the row after; edges `conc:N → step:ID` of kind `rests-on` (the
   chain kind: a selected conclusion lights its steps); the list `steps`, a window `{total, from}` of the session's
-  when its first step is not its first (`from` = that step's seq − 1). A Timeline: `lane:SESSION` (kind `lane`) and
+  when it holds fewer steps than the session has (`from` = its first step's seq − 1): the last 500, or the 500 from
+  where `view/window` asked (clamped; the rows are those steps too). A Timeline: `lane:SESSION` (kind `lane`) and
   `step:SESSION:SEQ` (kind `step`); left and right along the lane (left of the first step is the lane), up and down to
   the step of the lane above or below nearest in time, wrapping (the lane when it has none); lists `lanes`, `lasts`
   (each lane's last step, else the lane: the descriptor's `start`) and `near`, the lanes of the sessions the selection
@@ -2282,6 +2284,12 @@ and version it last sent (`view::Store`'s models, `view::model`), and sends what
   here, extensions, a terminal's Find) writes it through `view::model` or as an object. The ops are Sjá's wire: `reset {descriptor, nodes, edges, lists}`, then `edges
   {remove}`, `remove [id]`, `nodes [node]`, `edges {add}`, `list {name, ids}` (a list that went is sent empty). A
   changed descriptor is a reset.
+- **Windows.** A list longer than its builder sends whole is a window `{total, from}` of it. `view/window {view, list,
+  from}` (user) asks for the window from FROM (a position in the whole list): the hub keeps it per (connection, view,
+  list) and the view's builder (a trail's `steps`, a search's or an Explorer's `order`) sends its model again with
+  it, a diff that says the list whole (and, for a trail, its rows). Its answer is false for a view no such builder
+  holds. A view's from goes when its model starts again (a subscribe), when it closes and with its connection; the
+  editor centres the window on the key that stopped at its edge (core.md, "Keys through the model").
 - **The model goes first.** A builder writes the model before the rows built from it (`work::map`'s `publish`), and
   each `view-patch` carries `model: N`, the version its rows were built from; the editor applies its queued models up
   to N at the draw. A change only the model sees (a field the rows don't show) sends a model and no patch.
@@ -2353,7 +2361,9 @@ the search itself is `hrafn::grep`).
   by its match nodes `m:<file>:<line>:<col>` (kind `match`, `parent` the file; fields `label`, the text around it,
   and `file`, `line`, `col`, `end`, `text`). A search starts with a model of no nodes; each file's batch is a diff;
   a class's first env sends the model before its rows. Replace reads the matches it writes from these fields. Past
-  20,000 entries (files and matches) the model holds the first 20,000 and `order` is a window `{total, from: 0}`.
+  20,000 entries (files and matches) the model holds 20,000 and `order` is a window `{total, from}`: the first ones,
+  or from where `view/window` asked (a window that starts inside a file holds the file's node outside `order`). A new
+  search starts at the first again.
 - **The window** (the agent panel's shape, `agents/panel/look`): the hub keeps every match and Sjá's model holds them
   (so Next Match, Previous Match and Replace All, which read the model, act on all of them), but the rows sent are
   the first 200 (a file's header and its matches, in the order the files were complete) and no more until the editor
@@ -2434,7 +2444,8 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
 - **The model** is a `tree`: one node per row, its id the path (a root's without the trailing slash), kind `root`, `dir`
   or `file`, its parent the row above it in the tree, the flag `expanded` on a root and on each open folder, and the
   fields `label` (as shown; a root's name in capitals), `path` and `dir` (1 or 0). The list `order` holds the rows in
-  pre-order; past 20,000 it is a window of the first ones (the rows hold every entry).
+  pre-order; past 20,000 it is a window of the first ones, or from where `view/window` asked (with the folders above
+  its first entry as nodes outside `order`); the rows hold every entry.
 - **Row:** the key is the path; the indent guides (`│ ` per level below the first) and the chevron (`▾ `, `▸ `, or two
   spaces for a file) in `drgnx-explorer-guide`, then the name in `drgnx-explorer-root`, `-directory` or `-file`, a
   control character as `^X`; the path is the `drgnx-work-id` over the whole row.

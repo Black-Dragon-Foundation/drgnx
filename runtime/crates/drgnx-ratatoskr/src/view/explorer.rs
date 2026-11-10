@@ -13,7 +13,7 @@ use crate::front::Front;
 use drgnx_rows::{Row, RowBuilder};
 use runstav::methods::search::{ExplorerParams, ExplorerStarted};
 use runstav::wire::{Error, ErrorCode};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::cmp::Ordering as Cmp;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -228,13 +228,29 @@ fn display(name: &str) -> String {
     s
 }
 
-/// The model of ENTRIES: a `tree` of path nodes in pre-order, a folder open (flag 1) when its entries are listed.
-pub fn explorer_doc(entries: &[Entry]) -> Doc {
-    explorer_doc_in(entries, MODEL_WINDOW)
+/// The model of ENTRIES: a `tree` of path nodes in pre-order, a folder open (flag 1) when its entries are listed; past
+/// [`MODEL_WINDOW`] entries `order` is a window of them, from FROM (`view/window`; none: the first).
+pub fn explorer_doc(entries: &[Entry], from: Option<usize>) -> Doc {
+    explorer_doc_in(entries, MODEL_WINDOW, from)
 }
 
-/// [`explorer_doc`] holding at most WINDOW entries.
-fn explorer_doc_in(entries: &[Entry], window: usize) -> Doc {
+fn entry_node(e: &Entry) -> Value {
+    let kind = match (e.depth, e.dir) {
+        (0, _) => "root",
+        (_, true) => "dir",
+        _ => "file",
+    };
+    let mut node = json!({"id": e.path, "kind": kind, "flags": u8::from(e.open),
+                          "fields": [["label", e.label], ["path", e.path], ["dir", i64::from(e.dir)]]});
+    if let Some(p) = &e.parent {
+        node["parent"] = json!(p);
+    }
+    node
+}
+
+/// [`explorer_doc`] holding at most WINDOW entries, from entry FROM (clamped so the window is full). The folders above
+/// a window's first entry are nodes too, outside `order`: Sjá shows an entry only under its open folders.
+fn explorer_doc_in(entries: &[Entry], window: usize, from: Option<usize>) -> Doc {
     let mut d = Doc {
         descriptor: json!({
             "scheme": "tree",
@@ -248,23 +264,27 @@ fn explorer_doc_in(entries: &[Entry], window: usize) -> Doc {
         }),
         ..Doc::default()
     };
+    let from = from.unwrap_or(0).min(entries.len().saturating_sub(window));
     let mut order = Vec::new();
-    for e in entries.iter().take(window) {
-        let kind = match (e.depth, e.dir) {
-            (0, _) => "root",
-            (_, true) => "dir",
-            _ => "file",
-        };
-        let mut node = json!({"id": e.path, "kind": kind, "flags": u8::from(e.open),
-                              "fields": [["label", e.label], ["path", e.path], ["dir", i64::from(e.dir)]]});
-        if let Some(p) = &e.parent {
-            node["parent"] = json!(p);
-        }
-        d.nodes.insert(e.path.clone(), node);
+    for e in entries.iter().skip(from).take(window) {
+        d.nodes.insert(e.path.clone(), entry_node(e));
         order.push(e.path.clone());
     }
-    if entries.len() > order.len() {
-        d.windows.insert("order".into(), (entries.len(), 0));
+    if let Some(first) = entries.get(from).filter(|_| from > 0) {
+        // pre-order: each folder above the first entry comes before it
+        let mut parent = first.parent.as_deref();
+        for e in entries[..from].iter().rev() {
+            if parent.is_none() {
+                break;
+            }
+            if Some(e.path.as_str()) == parent {
+                d.nodes.insert(e.path.clone(), entry_node(e));
+                parent = e.parent.as_deref();
+            }
+        }
+    }
+    if from > 0 || entries.len() > from + order.len() {
+        d.windows.insert("order".into(), (entries.len(), from));
     }
     d.lists.insert("order".into(), order);
     d
@@ -383,10 +403,22 @@ impl Views {
         let Some(entries) = self.explorers.entries(key.0, &key.1) else {
             return false;
         };
-        self.publish_model(f, key.0, &key.1, explorer_doc(&entries));
+        let from = self.window_from(key.0, &key.1, "order");
+        self.publish_model(f, key.0, &key.1, explorer_doc(&entries, from));
         if let Some(p) = lock(&self.store).publish(key, explorer_rows(&entries), &[]) {
             f.send_to(key.0, "view-patch", json!(p));
         }
+        true
+    }
+
+    /// `view/window` of CONN's VIEW: its listing's model again, with `order`'s window where the editor asked; false
+    /// when VIEW has no listing.
+    pub(super) fn explorer_window(&self, f: &Front, conn: u64, view: &str) -> bool {
+        let Some(entries) = self.explorers.entries(conn, view) else {
+            return false;
+        };
+        let from = self.window_from(conn, view, "order");
+        self.publish_model(f, conn, view, explorer_doc(&entries, from));
         true
     }
 
@@ -394,7 +426,8 @@ impl Views {
     /// model, then the rows to every class.
     fn explorer_listed(&self, f: &Front, conn: u64, view: &str, id: u64, entries: Vec<Entry>) {
         self.explorers.finish(conn, view, id, entries, |entries| {
-            self.publish_model(f, conn, view, explorer_doc(entries));
+            let from = self.window_from(conn, view, "order");
+            self.publish_model(f, conn, view, explorer_doc(entries, from));
             let rows = explorer_rows(entries);
             let mut store = lock(&self.store);
             for class in store.classes(conn, view) {

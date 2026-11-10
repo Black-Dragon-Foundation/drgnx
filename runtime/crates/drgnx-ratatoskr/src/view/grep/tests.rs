@@ -185,16 +185,33 @@ fn grep_model_windows_a_long_search() {
             vec![m("/r/b.txt", 1, "", "needle", "")],
         ),
     ];
-    let d = grep_doc_in(&files, 3);
+    let d = grep_doc_in(&files, 3, None);
     assert_eq!(
         d.lists["order"],
         ["f:/r/a.txt", "m:/r/a.txt:1:0", "m:/r/a.txt:2:0"]
     );
     assert_eq!(d.nodes.len(), 3);
     assert_eq!(d.windows.get("order"), Some(&(6, 0)));
-    let all = grep_doc_in(&files, 6);
+    let all = grep_doc_in(&files, 6, None);
     assert_eq!(all.lists["order"].len(), 6);
     assert!(all.windows.is_empty(), "no window when everything fits");
+    // a window from the third entry: a's last two matches and b; a's node is there (their parent), not in `order`
+    let mid = grep_doc_in(&files, 3, Some(2));
+    assert_eq!(
+        mid.lists["order"],
+        ["m:/r/a.txt:2:0", "m:/r/a.txt:3:0", "f:/r/b.txt"]
+    );
+    assert!(mid.nodes.contains_key("f:/r/a.txt"));
+    assert_eq!(mid.windows.get("order"), Some(&(6, 2)));
+    // past the end: the last window
+    let end = grep_doc_in(&files, 3, Some(99));
+    assert_eq!(end.windows.get("order"), Some(&(6, 3)));
+    assert_eq!(end.lists["order"][2], "m:/r/b.txt:1:0");
+    assert_eq!(
+        grep_doc_in(&files, 6, Some(4)).windows.len(),
+        0,
+        "all fits: no window, whatever the from"
+    );
 }
 
 #[test]
@@ -356,7 +373,7 @@ fn ten_thousand_matches_send_only_the_window_until_asked() {
                 10_000
             );
             // the model holds the matches beyond the window
-            let d = grep_doc(&run.files);
+            let d = grep_doc(&run.files, None);
             assert_eq!(d.lists["order"].len(), 10_100);
         })
         .unwrap();
@@ -476,7 +493,7 @@ fn every_file_sends_a_model_and_all_of_them_cost_about_one_whole_model() {
     assert_eq!(sends, 100, "{sends} models for 100 files");
     let whole = greps
         .current(CONN, "s", |run| {
-            grep_doc(&run.files).reset().to_string().len()
+            grep_doc(&run.files, None).reset().to_string().len()
         })
         .unwrap();
     assert!(
@@ -512,10 +529,12 @@ fn the_model_stream_is_the_fixture_sja_loads() {
     let mut steps = Vec::new();
     for (file, ms) in files {
         held.push((file.to_owned(), ms));
-        let out = sent.publish(grep_doc(&held)).expect("a model per batch");
+        let out = sent
+            .publish(grep_doc(&held, None))
+            .expect("a model per batch");
         steps.push(json!({"base": out.base, "version": out.version, "reset": out.reset, "model": out.model}));
     }
-    let ids = grep_doc(&held).lists["order"].clone();
+    let ids = grep_doc(&held, None).lists["order"].clone();
     let now = json!({"list": "order", "ids": ids, "steps": steps});
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -584,7 +603,7 @@ fn every_batch_sends_its_own_nodes_and_a_splice() {
         }
     }
     assert!(
-        s.publish_model(CONN, "s", grep_doc(&held)).is_none(),
+        s.publish_model(CONN, "s", grep_doc(&held, None)).is_none(),
         "the editor holds the model whole"
     );
 }
@@ -651,7 +670,7 @@ fn appends_within_a_throttle_window_go_in_one_send() {
         "nothing waits"
     );
     assert!(
-        s.publish_model(CONN, "s", grep_doc(&held)).is_none(),
+        s.publish_model(CONN, "s", grep_doc(&held, None)).is_none(),
         "the editor holds the model whole"
     );
 }

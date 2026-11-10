@@ -186,4 +186,48 @@ cost it no object (a panel draws a node per step: a closure each was 100 kB a dr
         (let* ((few (cells 10)) (many (cells 1000)))
           (should (< (- many few) 100)))))))
 
+;; Windows
+
+(defun drgnx-view-nav-test--tree-window (from)
+  "A tree's model whose list `order' is entries FROM to FROM+3 of m0..m9, as a reset."
+  (let ((ids (mapcar (lambda (i) (format "m%d" i)) (number-sequence from (+ from 3)))))
+    (json-serialize
+     (list :ops (vector (list :reset
+                              (list :descriptor (list :scheme "tree" :lists ["order"] :classes ["selected"] :start "order")
+                                    :nodes (vconcat (mapcar (lambda (id) (list :id id :kind "match"
+                                                                               :fields (vector (vector "label" id))))
+                                                            ids))
+                                    :edges []
+                                    :lists (vector (list :name "order" :ids (vconcat ids) :total 10 :from from)))))))))
+
+(ert-deftest drgnx-view-nav/a-key-past-the-window-asks-once-and-runs-again ()
+  "Pattern C: a tree holding entries 0-3 of 10.  `down' from the last asks the hub once for the window centred there
+\(`view/window' order from 1), keys meanwhile ask nothing more and the newest is kept (a walk-to entry 8); each model
+that comes applies at once; one that does not reach entry 8 asks again (from 6), and the one that does selects it."
+  (drgnx-view-nav-test--with
+    (drgnx-test-require-nidhogg
+     (progn (drgnx-view-model-event (list :view view :hub 7 :base 1 :version 2 :reset t
+                                          :model (drgnx-view-nav-test--tree-window 0)))
+            (drgnx-view-model--due view)
+            (ignore-errors (nidhogg-view-get h 'window "order")))
+     "Sjá window read (nidhogg-view-get 'window)")
+    (let ((asks (lambda () (mapcar (lambda (s) (plist-get (cdr s) :from))
+                                   (seq-filter (lambda (s) (equal (car s) "view/window")) drgnx-view-nav-test--sent)))))
+      (drgnx-view-nav 'select "m3")
+      (should (equal "m3" (drgnx-view-nav 'follow "down")))
+      (should (equal '(1) (funcall asks)))
+      (should (drgnx-view-nav-paging-p))
+      (drgnx-view-nav 'follow "down")
+      (should (equal "m3" (drgnx-view-nav 'walk-to "order" 8)))
+      (should (equal '(1) (funcall asks)))
+      (drgnx-view-model-event (list :view view :hub 7 :base 2 :version 3 :reset t
+                                    :model (drgnx-view-nav-test--tree-window 4)))
+      (should (equal '(6 1) (funcall asks)))   ; walk-to 8 ran on 4-7: past it again
+      (should (drgnx-view-nav-paging-p))
+      (drgnx-view-model-event (list :view view :hub 7 :base 3 :version 4 :reset t
+                                    :model (drgnx-view-nav-test--tree-window 6)))
+      (should (equal "m8" (drgnx-view-nav-selection)))
+      (should-not (drgnx-view-nav-paging-p))
+      (should (equal '(6 1) (funcall asks))))))
+
 ;;; view-nav-test.el ends here
