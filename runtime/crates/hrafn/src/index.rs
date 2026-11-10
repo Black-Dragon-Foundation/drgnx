@@ -178,7 +178,41 @@ pub fn built_refs(l: &Listed, bytes: &[u8]) -> (Vec<ChunkIn>, Vec<SymbolIn>, Vec
 /// Every write is by content: a file's base row is replaced, its `(path, blob)` is chunked only when no row (a
 /// worktree's) has its content already, and the pair the row named before is swept only when no worktree still names
 /// it. A chunker change clears every worktree's rows first (they re-seed), so all content is written by the new one.
+///
+/// The writes run with a page cache of [`TIER1_CACHE_KIB`]: a file's references go into the name index all over it, and
+/// the default cache (2 MB) made that index most of tier 1's cost of references. The cache size is put back after,
+/// and the pages let go, so an idle store holds no more than before.
 pub async fn refresh(
+    store: &CodeStore,
+    listed: &[Listed],
+    read: &(dyn Fn(&str) -> io::Result<Vec<u8>> + Sync),
+    models: &[(&str, usize)],
+) -> Result<Refresh, StoreError> {
+    let before: i64 = store
+        .handle()
+        .read(|c| {
+            let v = c.query_row("pragma cache_size", [], |r| r.get(0))?;
+            c.execute_batch(&format!("pragma cache_size = -{TIER1_CACHE_KIB}"))?;
+            Ok(v)
+        })
+        .await?;
+    let out = refresh_files(store, listed, read, models).await;
+    store
+        .handle()
+        .read(move |c| {
+            c.execute_batch(&format!(
+                "pragma cache_size = {before}; pragma shrink_memory"
+            ))?;
+            Ok(())
+        })
+        .await?;
+    out
+}
+
+/// The page cache tier 1 writes with, in KiB.
+pub const TIER1_CACHE_KIB: u32 = 64 * 1024;
+
+async fn refresh_files(
     store: &CodeStore,
     listed: &[Listed],
     read: &(dyn Fn(&str) -> io::Result<Vec<u8>> + Sync),
