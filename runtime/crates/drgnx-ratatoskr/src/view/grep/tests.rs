@@ -674,3 +674,53 @@ fn appends_within_a_throttle_window_go_in_one_send() {
         "the editor holds the model whole"
     );
 }
+
+/// [D] A window move over the same search is the ops the whole model's diff would send, for every start (windows that
+/// begin on a file, inside one, at the end), and builds only the nodes the editor does not hold.
+#[test]
+fn a_window_move_is_the_diff_of_the_whole() {
+    let files: Vec<(String, Vec<Match>)> = (0..4)
+        .map(|f| {
+            let name = format!("/r/f{f}.txt");
+            let ms = (1..=4).map(|l| m(&name, l, "", "needle", "")).collect();
+            (name, ms)
+        })
+        .collect();
+    for a in 0..14 {
+        for b in 0..14 {
+            let old = grep_doc_in(&files, 6, Some(a));
+            let mut sent = crate::view::model::Sent::default();
+            sent.publish(old.clone()).unwrap();
+            let new = grep_doc_in(&files, 6, Some(b));
+            let w = window_of(&files, 6, Some(b));
+            let mut built = 0;
+            let m = crate::view::model::WindowMove {
+                name: "order",
+                window: (w.total, w.from),
+                held: &w.held,
+                order: w.order.clone(),
+            };
+            let out = sent.move_window(m, |i| {
+                built += 1;
+                w.node(i)
+            });
+            let diff = new.diff(&old);
+            match out {
+                Some(o) => assert_eq!(o.model, json!({ "ops": diff }), "from {a} to {b}"),
+                None => assert!(
+                    diff.is_empty(),
+                    "from {a} to {b}: no move but a diff {diff:?}"
+                ),
+            }
+            let fresh = new
+                .nodes
+                .keys()
+                .filter(|k| !old.nodes.contains_key(*k))
+                .count();
+            assert_eq!(
+                built, fresh,
+                "from {a} to {b}: only the new nodes are built"
+            );
+        }
+    }
+}

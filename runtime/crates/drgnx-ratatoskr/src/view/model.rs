@@ -39,24 +39,32 @@ fn ids_len(ids: &[String]) -> usize {
     ids.iter().map(|i| i.len() + 3).sum()
 }
 
-/// The `splice` that turns the editor's list OLD into NEW: what is left after their common prefix and suffix, when that
-/// is shorter than NEW whole. None when the whole list is the shorter way, or when a splice cannot say it: a window
-/// whose `from` moved, or whose total moved by other than the ids added less the ids removed (Sjá moves a window's total
-/// by exactly that).
+/// The `splice` ops that turn the editor's list OLD into NEW, when they are shorter than NEW whole; None when the whole
+/// list is the shorter way or a splice cannot say it.
+/// - Same window start (or no window): one splice, what is left after their common prefix and suffix. Its total must
+///   move by the ids added less the ids removed (Sjá moves a window's total by exactly that).
+/// - A window moved over the same total: the ids both windows hold must agree; the old ids after them become the new
+///   ids after them, then the old ids before them the new ids before them, each splice naming the new `from` (Sjá
+///   sets it and keeps the total).
 fn splice_json(
     name: &str,
     old: &[String],
     old_window: Option<&(usize, usize)>,
     new: &[String],
     new_window: Option<&(usize, usize)>,
-) -> Option<Value> {
+) -> Option<Vec<Value>> {
     match (old_window, new_window) {
         (None, None) => {}
-        (Some(&(ot, of)), Some(&(nt, nf))) => {
+        (Some(&(ot, of)), Some(&(nt, nf))) if of != nf => {
+            return (ot == nt)
+                .then(|| move_json(name, old, of, new, nf))
+                .flatten();
+        }
+        (Some(&(ot, _)), Some(&(nt, _))) => {
             let by = |a: usize, b: usize| {
                 i128::try_from(a).unwrap_or(0) - i128::try_from(b).unwrap_or(0)
             };
-            if of != nf || by(nt, ot) != by(new.len(), old.len()) {
+            if by(nt, ot) != by(new.len(), old.len()) {
                 return None;
             }
         }
@@ -73,9 +81,40 @@ fn splice_json(
     if ids_len(ids) >= ids_len(new) {
         return None;
     }
-    Some(
+    Some(vec![
         json!({"splice": {"name": name, "at": prefix, "remove": old.len() - prefix - suffix, "ids": ids}}),
-    )
+    ])
+}
+
+/// [`splice_json`] for a window moved from OF to NF over the same total.
+fn move_json(
+    name: &str,
+    old: &[String],
+    of: usize,
+    new: &[String],
+    nf: usize,
+) -> Option<Vec<Value>> {
+    let start = of.max(nf);
+    let end = (of + old.len()).min(nf + new.len());
+    if end <= start {
+        return None;
+    }
+    let (so, sn, k) = (start - of, start - nf, end - start);
+    if old[so..so + k] != new[sn..sn + k] {
+        return None;
+    }
+    let (head, tail) = (&new[..sn], &new[sn + k..]);
+    if ids_len(head) + ids_len(tail) >= ids_len(new) {
+        return None;
+    }
+    let mut ops = Vec::new();
+    if so + k < old.len() || !tail.is_empty() {
+        ops.push(json!({"splice": {"name": name, "at": so + k, "remove": old.len() - so - k, "ids": tail, "from": nf}}));
+    }
+    if so > 0 || !head.is_empty() {
+        ops.push(json!({"splice": {"name": name, "at": 0, "remove": so, "ids": head, "from": nf}}));
+    }
+    Some(ops)
 }
 
 impl Doc {
@@ -123,12 +162,12 @@ impl Doc {
         for (name, ids) in &self.lists {
             let window = self.windows.get(name);
             if old.lists.get(name) != Some(ids) || old.windows.get(name) != window {
-                let op = old
-                    .lists
-                    .get(name)
-                    .and_then(|o| splice_json(name, o, old.windows.get(name), ids, window))
-                    .unwrap_or_else(|| json!({ "list": list_json(name, ids, window) }));
-                ops.push(op);
+                ops.extend(
+                    old.lists
+                        .get(name)
+                        .and_then(|o| splice_json(name, o, old.windows.get(name), ids, window))
+                        .unwrap_or_else(|| vec![json!({ "list": list_json(name, ids, window) })]),
+                );
             }
         }
         for name in old.lists.keys().filter(|n| !self.lists.contains_key(*n)) {
@@ -136,6 +175,15 @@ impl Doc {
         }
         ops
     }
+}
+
+/// A windowed list's move ([`Sent::move_window`]): list NAME's new WINDOW (total, from); HELD, every node id of the new
+/// model, the list's ids `HELD[ORDER]` and the others their parents.
+pub struct WindowMove<'a> {
+    pub name: &'a str,
+    pub window: (usize, usize),
+    pub held: &'a [String],
+    pub order: std::ops::Range<usize>,
 }
 
 /// What one view's editor was last sent: the version and the model, and whether the next send is a reset.
@@ -192,6 +240,75 @@ impl Sent {
             return None;
         }
         Some(self.send(vec![json!({ "nodes": changed })]))
+    }
+
+    /// The editor's model, one list NAME that is a window and its nodes, moves to WINDOW over HELD ([`WindowMove`]);
+    /// NODE(i) builds `HELD[i]`'s wire object. The ops the diff would send for that move (the nodes gone, the new ones, the list), made from the
+    /// move alone: NODE runs only for the ids the editor does not hold, and no node is compared, so a move costs what
+    /// it changes, not the model. The caller vouches that the nodes held stay as they are. None (the builder publishes
+    /// the whole) when nothing was sent, a reset is due, the model is not one windowed list without edges, or the
+    /// list's total changed (a list that grew is published whole).
+    pub fn move_window(
+        &mut self,
+        WindowMove {
+            name,
+            window,
+            held,
+            order,
+        }: WindowMove,
+        mut node: impl FnMut(usize) -> Value,
+    ) -> Option<Out> {
+        if self.reset_due {
+            return None;
+        }
+        let doc = self.doc.as_mut()?;
+        if doc.lists.len() != 1
+            || doc.windows.get(name).map(|w| w.0) != Some(window.0)
+            || !doc.edges.is_empty()
+        {
+            return None;
+        }
+        let keep: std::collections::HashSet<&str> = held.iter().map(String::as_str).collect();
+        let gone: Vec<String> = doc
+            .nodes
+            .keys()
+            .filter(|id| !keep.contains(id.as_str()))
+            .cloned()
+            .collect();
+        let mut added: Vec<(String, Value)> = held
+            .iter()
+            .enumerate()
+            .filter(|(_, id)| !doc.nodes.contains_key(*id))
+            .map(|(i, id)| (id.clone(), node(i)))
+            .collect();
+        added.sort_by(|a, b| a.0.cmp(&b.0));
+        let ids = held[order].to_vec();
+        let mut ops = Vec::new();
+        if !gone.is_empty() {
+            ops.push(json!({ "remove": gone }));
+        }
+        if !added.is_empty() {
+            ops.push(json!({ "nodes": added.iter().map(|(_, n)| n).collect::<Vec<_>>() }));
+        }
+        let old = doc.lists.get(name).map(Vec::as_slice).unwrap_or_default();
+        let old_window = doc.windows.get(name);
+        if old != ids.as_slice() || old_window != Some(&window) {
+            ops.extend(
+                splice_json(name, old, old_window, &ids, Some(&window)).unwrap_or_else(|| {
+                    vec![json!({ "list": list_json(name, &ids, Some(&window)) })]
+                }),
+            );
+        }
+        if ops.is_empty() {
+            return None;
+        }
+        for id in &gone {
+            doc.nodes.remove(id);
+        }
+        doc.nodes.extend(added);
+        doc.lists.insert(name.to_owned(), ids);
+        doc.windows.insert(name.to_owned(), window);
+        Some(self.send(ops))
     }
 
     /// The editor's model gains NODES (id, wire object), new, and their IDS at the end of list NAME: the ops the diff
@@ -311,8 +428,13 @@ mod tests {
                 assert!(at + remove <= e.0.len(), "a splice outside its list");
                 let added = new.len();
                 e.0.splice(at..at + remove, new);
-                if let Some((t, _)) = e.1.as_mut() {
-                    *t = (*t + added).saturating_sub(remove);
+                match (s.get("from"), e.1.as_mut()) {
+                    (Some(f), Some((_, from))) => {
+                        *from = usize::try_from(f.as_u64().unwrap()).unwrap();
+                    }
+                    (Some(_), None) => panic!("a splice names a from for a whole list"),
+                    (None, Some((t, _))) => *t = (*t + added).saturating_sub(remove),
+                    (None, None) => {}
                 }
             }
         }
@@ -361,16 +483,39 @@ mod tests {
     }
 
     #[test]
-    fn a_window_that_grows_with_its_list_splices_and_a_window_that_moves_is_sent_whole() {
+    fn a_window_that_grows_with_its_list_splices_and_a_window_that_moves_splices_its_ends() {
         let old = doc(ids(0..100), Some((500, 0)));
         let ops = doc(ids(0..110), Some((510, 0))).diff(&old);
         assert!(only_op(&ops).get("splice").is_some(), "{ops:?}");
         // the total moved with no ids to carry it: a splice cannot say that
         let ops = doc(ids(0..100), Some((510, 0))).diff(&old);
         assert!(only_op(&ops).get("list").is_some(), "{ops:?}");
-        // a new `from`
-        let ops = doc(ids(10..110), Some((500, 10))).diff(&old);
-        assert_eq!(only_op(&ops)["list"]["from"], json!(10), "{ops:?}");
+        // a new `from` over the same total: the ids that leave and come, each splice naming it
+        let new = doc(ids(10..110), Some((500, 10)));
+        let ops = new.diff(&old);
+        assert_eq!(ops.len(), 2, "{ops:?}");
+        assert_eq!(
+            ops[0]["splice"]["at"],
+            json!(100),
+            "the tail first: {ops:?}"
+        );
+        assert_eq!(
+            ops[1]["splice"]["remove"],
+            json!(10),
+            "then the head: {ops:?}"
+        );
+        assert!(
+            ops.iter().all(|op| op["splice"]["from"] == json!(10)),
+            "{ops:?}"
+        );
+        let mut state = state_of(&old);
+        apply(&ops, &mut state);
+        assert_eq!(state, state_of(&new));
+        // backward, and a move with no ids in common: the list whole
+        let ops = doc(ids(0..100), Some((500, 0))).diff(&new);
+        assert_eq!(ops.len(), 2, "{ops:?}");
+        let ops = doc(ids(200..300), Some((500, 200))).diff(&old);
+        assert_eq!(only_op(&ops)["list"]["from"], json!(200), "{ops:?}");
     }
 
     #[test]
@@ -395,8 +540,78 @@ mod tests {
         )
     }
 
+    fn mv(
+        window: (usize, usize),
+        held: &[String],
+        order: std::ops::Range<usize>,
+    ) -> WindowMove<'_> {
+        WindowMove {
+            name: "order",
+            window,
+            held,
+            order,
+        }
+    }
+
     fn node(id: &str) -> (String, Value) {
         (id.to_owned(), json!({"id": id, "kind": "match"}))
+    }
+
+    /// A window move is the ops the diff would send for the same move, made from the move alone: the node builder runs
+    /// only for the ids the editor does not hold, and the sent model is the new one. Refused with no model sent, a
+    /// reset due, or a list that is not a window (the builder publishes the whole).
+    #[test]
+    fn a_window_move_sends_what_the_diff_would() {
+        let parent = |d: &mut Doc, id: &str| {
+            d.nodes.insert(id.into(), node(id).1);
+        };
+        let mut old = doc(ids(10..20), Some((40, 10)));
+        old.nodes = ids(10..20).iter().map(|i| node(i)).collect();
+        parent(&mut old, "p:a");
+        let mut sent = Sent::default();
+        assert!(
+            sent.move_window(mv((40, 15), &[], 0..0), |_| unreachable!())
+                .is_none()
+        );
+        sent.publish(old.clone()).unwrap();
+        // the new window, 15..25, under a parent of its own
+        let mut new = doc(ids(15..25), Some((40, 15)));
+        new.nodes = ids(15..25).iter().map(|i| node(i)).collect();
+        parent(&mut new, "p:b");
+        let mut held = vec!["p:b".to_owned()];
+        held.extend(ids(15..25));
+        let mut built = Vec::new();
+        let out = sent
+            .move_window(mv((40, 15), &held, 1..11), |i| {
+                built.push(held[i].clone());
+                node(&held[i]).1
+            })
+            .unwrap();
+        assert_eq!(out.model, json!({ "ops": new.diff(&old) }));
+        let mut want = vec!["p:b".to_owned()];
+        want.extend(ids(20..25));
+        assert_eq!(
+            built, want,
+            "only the nodes the editor did not hold are built"
+        );
+        assert!(sent.publish(new).is_none(), "the sent model is the new one");
+        assert!(
+            sent.move_window(mv((41, 0), &held, 1..11), |_| unreachable!())
+                .is_none(),
+            "a list that grew is published whole"
+        );
+        sent.reset_due();
+        assert!(
+            sent.move_window(mv((40, 0), &held, 1..11), |_| unreachable!())
+                .is_none()
+        );
+        let mut whole = Sent::default();
+        whole.publish(doc(ids(0..3), None)).unwrap();
+        assert!(
+            whole
+                .move_window(mv((3, 0), &[], 0..0), |_| unreachable!())
+                .is_none()
+        );
     }
 
     /// An append is the ops the diff would send for the same change, made from the change alone; refused with no model
@@ -448,6 +663,25 @@ mod tests {
             let (la, lb) = (to(&a), to(&b));
             let (wa, wb) = if windowed { (Some((la.len() + 7, 0)), Some((lb.len() + 7, 0))) } else { (None, None) };
             let (old, new) = (doc(la, wa), doc(lb, wb));
+            let mut state = state_of(&old);
+            apply(&new.diff(&old), &mut state);
+            prop_assert_eq!(state, state_of(&new));
+        }
+
+        /// A window of one whole list moved anywhere: the diff applied to the old window is the new one.
+        #[test]
+        fn a_moved_window_applied_is_the_new_window(
+            whole in proptest::collection::vec(0u8..30, 1..60),
+            (a, la, b, lb) in (0usize..60, 0usize..60, 0usize..60, 0usize..60),
+        ) {
+            let all: Vec<String> = whole.iter().enumerate().map(|(i, x)| format!("n:{i}:{x}")).collect();
+            let total = all.len();
+            let win = |from: usize, len: usize| {
+                let from = from % total;
+                let len = len.min(total - from);
+                doc(all[from..from + len].to_vec(), Some((total, from)))
+            };
+            let (old, new) = (win(a, la), win(b, lb));
             let mut state = state_of(&old);
             apply(&new.diff(&old), &mut state);
             prop_assert_eq!(state, state_of(&new));

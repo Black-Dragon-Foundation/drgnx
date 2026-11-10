@@ -191,17 +191,23 @@ draw replaced), every node drawn in them gets its current class again and the ov
 
 ;;;; Windows
 
+(defconst drgnx-view-nav-window-step 2000
+  "The most entries a window moves by when a key passes its edge: a page costs the hub, the line and Sjá what it adds,
+so a long window moves a step, not half its length.")
+
 (defun drgnx-view-nav--ask-window (h verb args)
   "The key VERB ARGS stopped at the edge of its list's window (`nidhogg-view-more' the direction): ask the hub for the
-window centred on that edge, once while one is asked, and keep the key as the one to run when it comes."
+window that holds a step past that edge (half the window, at most `drgnx-view-nav-window-step'), or for a `walk-to' the
+window centred on its entry, once while one is asked, and keep the key as the one to run when it comes."
   (let* ((list (if (eq verb 'follow) drgnx-view-nav-list (car args)))
          (window (nidhogg-view-get h 'window list)))
     (when window
       (let* ((from (nth 0 window)) (len (nth 1 window)) (total (nth 2 window))
-             (edge (cond ((eq verb 'walk-to) (cadr args))
-                         ((< nidhogg-view-more 0) from)
-                         (t (+ from len -1))))
-             (want (max 0 (min (- total len) (- edge (/ len 2))))))
+             (step (min (/ len 2) drgnx-view-nav-window-step))
+             (want (max 0 (min (- total len)
+                               (cond ((eq verb 'walk-to) (- (cadr args) (/ len 2)))
+                                     ((< nidhogg-view-more 0) (- from step))
+                                     (t (+ from step)))))))
         (unless (and drgnx-view-nav--pending (equal (car drgnx-view-nav--pending) list))
           (funcall drgnx-view-patch-send-function "view/window"
                    (list :view (drgnx-view-patch-view drgnx-view-patch) :list list :from want)))

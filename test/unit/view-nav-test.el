@@ -201,8 +201,8 @@ cost it no object (a panel draws a node per step: a closure each was 100 kB a dr
                                     :lists (vector (list :name "order" :ids (vconcat ids) :total 10 :from from)))))))))
 
 (ert-deftest drgnx-view-nav/a-key-past-the-window-asks-once-and-runs-again ()
-  "Pattern C: a tree holding entries 0-3 of 10.  `down' from the last asks the hub once for the window centred there
-\(`view/window' order from 1), keys meanwhile ask nothing more and the newest is kept (a walk-to entry 8); each model
+  "Pattern C: a tree holding entries 0-3 of 10.  `down' from the last asks the hub once for the window a step past it
+\(half the window: `view/window' order from 2), keys meanwhile ask nothing more and the newest is kept (a walk-to entry 8); each model
 that comes applies at once; one that does not reach entry 8 asks again (from 6), and the one that does selects it."
   (drgnx-view-nav-test--with
     (drgnx-test-require-nidhogg
@@ -215,19 +215,19 @@ that comes applies at once; one that does not reach entry 8 asks again (from 6),
                                    (seq-filter (lambda (s) (equal (car s) "view/window")) drgnx-view-nav-test--sent)))))
       (drgnx-view-nav 'select "m3")
       (should (equal "m3" (drgnx-view-nav 'follow "down")))
-      (should (equal '(1) (funcall asks)))
+      (should (equal '(2) (funcall asks)))
       (should (drgnx-view-nav-paging-p))
       (drgnx-view-nav 'follow "down")
       (should (equal "m3" (drgnx-view-nav 'walk-to "order" 8)))
-      (should (equal '(1) (funcall asks)))
+      (should (equal '(2) (funcall asks)))
       (drgnx-view-model-event (list :view view :hub 7 :base 2 :version 3 :reset t
                                     :model (drgnx-view-nav-test--tree-window 4)))
-      (should (equal '(6 1) (funcall asks)))   ; walk-to 8 ran on 4-7: past it again
+      (should (equal '(6 2) (funcall asks)))   ; walk-to 8 ran on 4-7: past it again, centred
       (should (drgnx-view-nav-paging-p))
       (drgnx-view-model-event (list :view view :hub 7 :base 3 :version 4 :reset t
                                     :model (drgnx-view-nav-test--tree-window 6)))
       (should (equal "m8" (drgnx-view-nav-selection)))
       (should-not (drgnx-view-nav-paging-p))
-      (should (equal '(6 1) (funcall asks))))))
+      (should (equal '(6 2) (funcall asks))))))
 
 ;;; view-nav-test.el ends here
