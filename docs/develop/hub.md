@@ -2458,6 +2458,14 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
   trailing slash) that is shown, and sends the view its model (`view-model`), then its rows to every class: the first
   listing a reset, a later one the difference. The editor opens or closes a folder by asking again with the new set,
   without waiting; a listing a newer one stopped sends nothing. A folder that cannot be read has no entries.
+- **Watching.** After its listing the thread watches every folder it read (the roots, the open folders and the
+  middle folders of a joined row; `notify`, one folder each, not recursive, so a closed folder's changes send nothing)
+  until a newer listing, `view/close` or the connection's end, which stop it through its channel (the watcher goes
+  with the thread; nothing polls). A burst of changes (a name made, removed or renamed; a file's data or metadata does
+  not count) is read again once it is quiet for 30 ms, or 100 ms after its first change: only the changed folders are
+  read, the others come from the listing's own copy, and the model and rows go out as for a listing when the entries
+  differ. A watch that lost events reads every folder again; a folder that cannot be watched (the inotify limit) is
+  tried again at the next relisting. The editor adds no watch of its own on this path (`drgnx-explorer--sync-watches`).
 - **The entries.** Folders first, then names in natural, case-insensitive order (`file2` before `file10`); a link to a
   folder is a folder. `.git`, `.hg`, `.svn`, `.DS_Store`, `__pycache__` and `.#…` lock files never show. With
   `compact` (default on), an open folder whose only entry is a folder shares its row with it (`src/app`, the node being

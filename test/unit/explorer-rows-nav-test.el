@@ -99,6 +99,14 @@ a row's node is its path; a refresh asks again and draws nothing itself."
     (should (= 2 (length calls)))
     (should (equal "▾ R\n▸ a\n▾ lib\n│   m.el\n  z.txt\n" (buffer-substring-no-properties (point-min) (point-max))))))
 
+(ert-deftest drgnx-explorer-rows/no-lisp-watches-on-the-rows-path ()
+  "Pattern D: on the rows path the hub watches the listed folders (plan sja-complete E1): the Explorer adds no Lisp
+`file-notify' watch, at attach or on a refresh."
+  (drgnx-explorer-rows-nav-test--with
+    (should (= 0 (hash-table-count drgnx-explorer--watches)))
+    (drgnx-explorer-refresh)
+    (should (= 0 (hash-table-count drgnx-explorer--watches)))))
+
 (ert-deftest drgnx-explorer-rows/keys-walk-the-tree ()
   "Pattern D: next and previous walk the visible rows; expand on a closed folder asks the hub with it open (the
 selection stays), on an open folder goes to its first child; collapse on a file goes to its folder, on an open folder
