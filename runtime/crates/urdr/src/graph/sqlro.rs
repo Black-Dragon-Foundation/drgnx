@@ -183,7 +183,7 @@ fn query(
     let fail = |e: rusqlite::Error| refusal(e, denied, &late);
     // rusqlite refuses a tail holding another statement (`MultipleStatement`); comments and blanks may follow.
     let mut stmt = conn.prepare(sql).map_err(fail)?;
-    let columns: Vec<String> = stmt.column_names().into_iter().map(String::from).collect();
+    let columns: Vec<String> = stmt.column_names().map(String::from).collect();
     let width = columns.len();
     let mut rows = stmt
         .query(params_from_iter(params.iter().map(bind)))
