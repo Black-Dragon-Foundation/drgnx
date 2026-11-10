@@ -297,7 +297,7 @@ hub or its worker."
 
 (ert-deftest drgnx-term/find-next-and-previous-walk-the-replica ()
   ;; pattern C (handshake: each step settles on the condition the hub's lines bring)
-  (skip-unless (fboundp 'nidhogg-view--call))
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
   (drgnx-term-test--with
     (let ((b (drgnx-term-test--start)) (asked 0))
       (drgnx-term-test--run b "printf 'f%s\\n' x-1 x-2 x-3")

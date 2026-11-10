@@ -48,7 +48,7 @@
 what was asked of the hub (newest first).  Nothing is sent, nothing on disk is read."
   (declare (indent 0))
   `(progn
-     (skip-unless (fboundp 'nidhogg-view--call))
+     (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
      (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
      (let* ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
             (drgnx-view-model--views (make-hash-table :test #'equal))

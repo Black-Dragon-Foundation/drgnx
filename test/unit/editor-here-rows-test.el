@@ -92,7 +92,7 @@ PARAMS), the subscribed connection a live pipe and `rebuilds' counting `drgnx-ag
   "The hub's model gives who is here, the badges and the status segment path by path, as its rows name them: a reset,
 then a change of one file's node, then its removal; nothing is rebuilt from the cached presence, and `agent-presence'
 is the cursors' only."
-  (skip-unless (fboundp 'nidhogg-view--call))
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
   (drgnx-editor-here-rows-test--with
     (drgnx-agents-editor-here--subscribe)
     (should (equal (mapcar #'car (reverse calls)) '("view/env" "agents/presence/subscribe")))
@@ -131,7 +131,7 @@ is the cursors' only."
 (ert-deftest drgnx-agents-editor-here/reconnect-redraws-from-reset ()
   "A new hub: the connection's hook subscribes again (the data class's env first), and the new hub's reset replaces
 everything held, badges of paths it no longer names included."
-  (skip-unless (fboundp 'nidhogg-view--call))
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
   (drgnx-editor-here-rows-test--with
     (let* ((old (concat root "old.el")) (new (concat root "new.el"))
            (a1 (drgnx-editor-here-rows-test--agent "s1" 1 "edit" old 1))

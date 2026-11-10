@@ -17,7 +17,7 @@
   "BODY with a gated hub, this Emacs connected to it, and ROOT a repository with src/a.txt changed."
   (declare (indent 1))
   `(progn
-     (skip-unless (fboundp 'nidhogg-view--call))
+     (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
      (drgnx-test-with-clock (:allow-pending t)
        (drgnx-agents-mirror-test--with '()
          (drgnx-hub-connect)

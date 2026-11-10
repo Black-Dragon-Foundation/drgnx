@@ -35,7 +35,7 @@
   "BODY with ROOT a folder with a .git directory, the hub up (its calls recorded), nothing sent."
   (declare (indent 1))
   `(progn
-     (skip-unless (fboundp 'nidhogg-view--call))
+     (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
      (let* ((,root (file-name-as-directory (make-temp-file "drgnx-git-letters" t)))
             (drgnx-view-patch--buffers (make-hash-table :test #'equal))
             (drgnx-view-model--views (make-hash-table :test #'equal))

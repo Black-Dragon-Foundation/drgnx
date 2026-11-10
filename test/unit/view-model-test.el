@@ -18,7 +18,7 @@
 captured.  `h' is the buffer's instance in Sjá."
   (declare (indent 0))
   `(progn
-     (skip-unless (fboundp 'nidhogg-view--call))
+     (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
      (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
            (drgnx-view-model--views (make-hash-table :test #'equal))
            (drgnx-view-patch--hooked nil)
@@ -252,5 +252,23 @@ In every order of a model queued and keys, a drawn view's keys move from what is
       (should (eq 'resync (drgnx-view-model-event
                            (drgnx-view-model-test--model view (list (list :remove ["c"])) :base v :version (1+ v))))))
     (should (equal (list (cons "view/resync" (list :view view :model t))) drgnx-view-model-test--sent))))
+
+(ert-deftest drgnx-view-model/an-emacs-without-the-queue-says-so-once ()
+  "Pattern D: on an Emacs without Sjá's queue (an older Nidhogg, or none) a model line fails one `render' notice
+naming `nidhogg-view-push' and the fix, not an error per line and not a silent empty view.  Runs on any Emacs: it
+takes the door away."
+  (let ((said nil) (drgnx-view-model--said-missing nil)
+        (line "{\"event\":\"view-model\",\"data\":{\"view\":\"v\",\"hub\":1,\"base\":0,\"version\":1,\"reset\":true,\"model\":{\"ops\":[]}}}"))
+    (cl-letf (((symbol-function 'nidhogg-view-push) nil)
+              ((symbol-function 'drgnx-notify) (lambda (&rest args) (push args said))))
+      (should-not (drgnx-view-model-line line))
+      (should-not (drgnx-view-model-line line))
+      (should (= 1 (length said)))
+      (pcase-let ((`(,source ,severity ,text . ,keys) (car said)))
+        (should (eq source 'render))
+        (should (eq severity 'fail))
+        (should (string-search "nidhogg-view-push" text))
+        (should (eq (plist-get keys :life) 'condition))
+        (should (plist-get keys :fix))))))
 
 ;;; view-model-test.el ends here

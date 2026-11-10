@@ -52,7 +52,7 @@
   "BODY in a fresh panel on the rows path holding the model and rows above, nothing selected, sends recorded."
   (declare (indent 0))
   `(progn
-     (skip-unless (fboundp 'nidhogg-view--call))
+     (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
      (let* ((drgnx-agent-panel-nav-test--sent nil)
             (drgnx-view-patch--buffers (make-hash-table :test #'equal))
             (drgnx-view-model--views (make-hash-table :test #'equal))

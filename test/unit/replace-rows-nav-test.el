@@ -53,7 +53,7 @@
   "BODY in the Search view's buffer on the rows path holding the model and rows above, nothing selected, nothing sent."
   (declare (indent 0))
   `(progn
-     (skip-unless (fboundp 'nidhogg-view--call))
+     (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
      (should-not (get-buffer drgnx-replace-buffer-name))
      (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
            (drgnx-view-model--views (make-hash-table :test #'equal))
