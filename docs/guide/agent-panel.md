@@ -76,7 +76,8 @@ already on screen is never drawn again, and rows are drawn in slices of 4 ms or 
 ## What opens
 
 The strip under the chips reads **Open:** and has a pill for each step type (thinking, read, search, edit, execute,
-fetch, other), raised when it is on; **make default** is at its right end. A type that is on shows the detail of its
+fetch, other), raised when it is on; **make default** is at its right end. In a narrow panel the pills go on as
+many lines as they need, and they follow the panel's width when you resize it. A type that is on shows the detail of its
 steps; a click on its pill or `T` flips one, `TAB` opens or folds the step at point whatever the toggles say.
 A step that failed opens by itself. `1`, `2` and `3` (or a click on the header's lens) are presets: **watch** (titles only), **review** (edits and
 commands open) and **debug** (everything, thinking included). What is open belongs to the chat. `M` makes the current
@@ -106,7 +107,9 @@ the agent…"; a click writes to the agent, as `s` does) and under it a bar with
 
 What the agent changed and what it asks sit under the transcript as cards.
 
-- **Diff cards:** one for each hunk of each file the agent edited (flat, with a border). `a` accepts the hunk: it writes
+- **Diff cards:** one for each hunk of each file the agent edited (flat, with a border). Its header names the file,
+  the lines and which hunk it is ("215–217 · hunk 1 of 1"), with **Reject** and **Accept** at the right; each line
+  shows its number (the new file's; a removed line, the old file's). `a` accepts the hunk: it writes
   the review mark the merge gate compares, and nothing is merged. `D` rejects it: the file goes back to pending and the
   agent is told, in a queued message, to take it back. The panel never writes to an agent's worktree and keeps no queue
   of its own; both keys are the review view's own functions (module `tools/work-space`).

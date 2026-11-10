@@ -16,6 +16,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-icons)
 (require 'drgnx-pixels)
+(require 'drgnx-state)                  ; the panel's width, from the store's events
 
 (defvar drgnx-agent-panel--session)
 (defvar drgnx-agent-panel--shown-keys)
@@ -26,6 +27,8 @@
 (defvar drgnx-agent-panel--open)
 (defvar drgnx-agent-panel-slow-seconds)
 (defvar drgnx-agent-panel-expensive-cost)
+(defvar drgnx-agent-panel--disclosure)      ; below: the header's lens reads them first
+(defvar drgnx-agent-panel-presets)
 (declare-function drgnx-agent-panel--key-at "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--rows-p "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--send-look "drgnx-agent-panel")
@@ -206,11 +209,11 @@ else when the chat's toggle for its type is on."
     (if (drgnx-agent-panel--rows-p) (drgnx-agent-panel--send-look) (drgnx-view-dirty drgnx-view (list key)))))
 
 (defun drgnx-agent-panel--redraw-steps ()
-  "Every step row and the strip are drawn again."
+  "Every step row, the strip and the header (its lens) are drawn again."
   (when (drgnx-view-p drgnx-view)
     (drgnx-view-dirty drgnx-view
-                      (cons (list :strip)
-                            (seq-filter (lambda (k) (eq (car-safe k) :e)) (hash-table-keys drgnx-agent-panel--shown-keys))))))
+                      (cons (list :strip) (cons (list :header)
+                                                (seq-filter (lambda (k) (eq (car-safe k) :e)) (hash-table-keys drgnx-agent-panel--shown-keys)))))))
 
 (defun drgnx-agent-panel--set-disclosure (types)
   "TYPES are the open step types of this chat; rows you opened or folded by hand are back under the toggles."
@@ -258,24 +261,59 @@ else when the chat's toggle for its type is on."
 (defface drgnx-agent-panel-tag-on '((t :inherit drgnx-chip))
   "A step type of the strip whose detail is open (agent-panel.html `.disc .t.open')." :group 'drgnx-agent-panel)
 
+(defvar-local drgnx-agent-panel--strip-width nil
+  "The width in pixels of the window that last showed this panel (the state store's events), or nil.")
+
+(defun drgnx-agent-panel--width ()
+  "The width in pixels the strip is laid out for: the panel's window's, as the state store last told, or nil."
+  drgnx-agent-panel--strip-width)
+
+(defun drgnx-agent-panel--resized (data)
+  "A window of DATA's frame shows a panel or changed size (`windows-changed', `pane-resized'): a panel whose width
+changed lays its strip out again."
+  (let ((frame (plist-get data :frame)))
+    (dolist (w (append (or (plist-get data :windows) (list (plist-get data :window)))
+                       (and (frame-live-p frame) (drgnx-state-windows frame))))
+      (when (window-live-p w)
+        (with-current-buffer (window-buffer w)
+          (when (derived-mode-p 'drgnx-agent-panel-mode)
+            (let ((width (window-body-width w t)))
+              (unless (eql width drgnx-agent-panel--strip-width)
+                (setq drgnx-agent-panel--strip-width width)
+                (when (drgnx-view-p drgnx-view) (drgnx-view-dirty drgnx-view (list (list :strip))))))))))))
+
 (defun drgnx-agent-panel--strip-row ()
-  "The disclosure strip (agent-panel.html `.disc'): \"Open:\" and a pill for each step type, the open ones raised; a
-click flips one.  The presets are the header's lens."
-  (concat (propertize " Open: " 'face 'drgnx-agent-panel-subtle)
-          (mapconcat (lambda (ty)
-                       (let ((map (make-sparse-keymap)))
-                         (define-key map [mouse-1] (lambda () (interactive) (drgnx-agent-panel-toggle-type ty)))
-                         (propertize (symbol-name ty)
-                                     'face (if (memq ty drgnx-agent-panel--disclosure) 'drgnx-agent-panel-tag-on
-                                             'drgnx-agent-panel-tag)
-                                     'mouse-face 'drgnx-hover 'keymap map)))
-                     drgnx-agent-panel-step-types " ")
-          (let ((map (make-sparse-keymap)) (label "make default"))
-            (define-key map [mouse-1] #'drgnx-agent-panel-make-default)
-            (concat (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width label) (drgnx-px 12))))))
-                    (propertize label 'face 'drgnx-accent 'mouse-face 'drgnx-hover 'keymap map
+  "The disclosure strip (agent-panel.html `.disc'): \"Open:\" and a pill for each step type, the open ones raised, a
+click flips one; \"make default\" at the end.  The pills go on as many lines as the panel's width needs.  The presets
+are the header's lens."
+  (let* ((open (propertize " Open: " 'face 'drgnx-agent-panel-subtle))
+         (pills (mapcar (lambda (ty)
+                          (let ((map (make-sparse-keymap)))
+                            (define-key map [mouse-1] (lambda () (interactive) (drgnx-agent-panel-toggle-type ty)))
+                            (propertize (symbol-name ty)
+                                        'face (if (memq ty drgnx-agent-panel--disclosure) 'drgnx-agent-panel-tag-on
+                                                'drgnx-agent-panel-tag)
+                                        'mouse-face 'drgnx-hover 'keymap map)))
+                        drgnx-agent-panel-step-types))
+         (default (let ((map (make-sparse-keymap)))
+                    (define-key map [mouse-1] #'drgnx-agent-panel-make-default)
+                    (propertize "make default" 'face 'drgnx-accent 'mouse-face 'drgnx-hover 'keymap map
                                 'help-echo "M: what is open now is what new panels open")))
-          "\n"))
+         (room (let ((w (drgnx-agent-panel--width))) (and w (- w (drgnx-px 12)))))
+         (indent (propertize " " 'display `(space :width (,(string-pixel-width open)))))
+         (line open) (lines nil))
+    (dolist (part (append pills (list default)))
+      (let ((next (concat line " " part)))
+        (cond ((and room (> (string-pixel-width next) room))
+               (push line lines)
+               (setq line (concat indent part)))
+              ;; "make default" sits at the right end of the line it fits on (`margin-left: auto')
+              ((eq part default)
+               (setq line (concat line (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width default) (drgnx-px 12))))))
+                                  part)))
+              (t (setq line next)))))
+    (push line lines)
+    (mapconcat (lambda (l) (concat l "\n")) (nreverse lines) "")))
 
 (defun drgnx-agent-panel-steps-setup ()
   (drgnx-command-define 'agents-panel-toggle-type :category "Agents" :title "Open or Close a Step Type"

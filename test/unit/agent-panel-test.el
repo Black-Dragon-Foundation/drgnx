@@ -927,3 +927,54 @@ the model and the mode as chips that switch them, Stop after this step and Send 
         (should (memq 'drgnx-ui-button-primary (drgnx-agent-panel-test--face-at row "Send")))
         (should (eq 'drgnx-agent-panel-pause
                     (lookup-key (get-text-property (string-search "Stop after" row) 'keymap row) [mouse-1])))))))
+
+(ert-deftest drgnx-agent-panel/diff-card-as-the-mockup ()
+  "agent-panel.html `.acard': a header with the file's name, its lines and \"hunk 1 of 1\", and Reject and Accept that
+answer it; the body's lines numbered (the new file's numbers, a removed line the old's), in the code font."
+  (drgnx-agent-panel-test--with
+    (load (expand-file-name "modules/tools/drgnx-work-review" drgnx-dir) nil t)
+    (with-current-buffer buf
+      (setq drgnx-agent-panel--diffs (list (cons "a.el" "@@ -215,2 +215,3 @@\n-  (when p\n+  (if p\n     (send p)\n+    (queue p)\n")))
+      (let ((card (drgnx-agent-panel-cards--diff-row "a.el" 0)))
+        (should (string-match-p "a\\.el +215–217 · hunk 1 of 1" card))
+        (should (eq 'drgnx-agent-panel-accept
+                    (lookup-key (get-text-property (string-search "Accept" card) 'keymap card) [mouse-1])))
+        (should (eq 'drgnx-agent-panel-reject
+                    (lookup-key (get-text-property (string-search "Reject" card) 'keymap card) [mouse-1])))
+        (should (string-match-p " 215 -  (when p" card))
+        (should (string-match-p " 215 \\+  (if p" card))
+        (should (string-match-p " 216      (send p)" card))
+        (should (string-match-p " 217 \\+    (queue p)" card))
+        (should (seq-some (lambda (f) (drgnx-agent-panel-test--inherits-p f 'drgnx-code-small))
+                          (drgnx-agent-panel-test--face-at card "216")))))))
+
+(ert-deftest drgnx-agent-panel/strip-wraps-to-the-panel-width ()
+  "The strip fits the panel's width: in a narrow panel its pills go on as many lines as they need, \"make default\"
+on the last, nothing past the edge; in a wide one it is one line.  A change of the panel's width draws it again."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (let* ((wide (cl-letf (((symbol-function 'drgnx-agent-panel--width) (lambda () 4000)))
+                     (drgnx-agent-panel--strip-row)))
+             (narrow-px (/ (string-pixel-width wide) 2))
+             (narrow (cl-letf (((symbol-function 'drgnx-agent-panel--width) (lambda () narrow-px)))
+                       (drgnx-agent-panel--strip-row))))
+        (should (= 1 (cl-count ?\n wide)))
+        (should (< 1 (cl-count ?\n narrow)))
+        (dolist (line (split-string narrow "\n" t))
+          (should (<= (string-pixel-width line) narrow-px)))
+        (should (string-search "make default" (car (last (split-string narrow "\n" t))))))
+      ;; the store's event about the panel's window lays the strip out for its width
+      (set-window-buffer (selected-window) buf)
+      (drgnx-view-draw-now drgnx-view)
+      (setq drgnx-agent-panel--strip-width nil)
+      (drgnx-agent-panel--resized (list :window (selected-window)))
+      (should (eql drgnx-agent-panel--strip-width (window-body-width (selected-window) t)))
+      (should (gethash (list :strip) (drgnx-view--dirty drgnx-view))))))
+
+(ert-deftest drgnx-agent-panel/a-preset-redraws-the-header-lens ()
+  "Picking a preset draws the header again, so its lens shows the preset in force."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-view-draw-now drgnx-view)
+      (drgnx-agent-panel-preset 3)
+      (should (gethash (list :header) (drgnx-view--dirty drgnx-view))))))
