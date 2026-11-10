@@ -754,7 +754,7 @@ the model's `order' is a window of the first 20,000."
           (error "Premise: the window did not go back to the first 20,000 (%S)"
                  (nidhogg-view-get (drgnx-perf--sw-h) 'window "order"))))
       (defun drgnx-perf--sw-measure ()
-        "(:key_ms STATS :page_ms STATS :pages N :page_each \"MS ...\" :line_each \"MS ...\" :gc_each \"GCS:MS ...\" :list_max N :from N :to N): 12 rounds, each from the first window and the
+        "(:key_ms STATS :page_ms STATS :page_nogc_ms STATS :gc_pages N :pages N :page_each \"MS ...\" :line_each \"MS ...\" :gc_each \"GCS:MS ...\" :list_max N :from N :to N): 12 rounds, each from the first window and the
 match 50 entries before its end, Next Match until a key stopped at the window's edge and ran again in the next window
 (at most 200 keys): each key's time and each page's, the time from that key until it ran; the entries the last round
 went from and to.  An error when a key went back (a wrap), a round paged no window, or Sjá held more than the window."
@@ -773,7 +773,7 @@ went from and to.  An error when a key went back (a wrap), a round paged no wind
                      unless (drgnx-perf--wait 30 (lambda () (> (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)) k)))
                      do (error "Premise: the rows did not grow past %d (%d rows)" k
                                (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)))))
-          (let ((h (drgnx-perf--sw-h)) keys pages lines handled gcs (most 0) from at)
+          (let ((h (drgnx-perf--sw-h)) keys pages lines handled gcs clean (most 0) from at)
             (dotimes (round 12)
               (unless (zerop round) (drgnx-perf--sw-first-window))
               (let ((start (cl-find-if (lambda (id) (string-prefix-p "m:" id)) (nthcdr 19950 (nidhogg-view-get h 'list "order"))))
@@ -798,6 +798,7 @@ went from and to.  An error when a key went back (a wrap), a round paged no wind
                                         pages))
                                 (push (* 1000 (- drgnx-perf--sw-arrived t0)) lines)
                                 (push (format "%d:%.0f" (- gcs-done gc0) (* 1000 (- gc-elapsed gce0))) gcs)
+                                (when (= gcs-done gc0) (push (car pages) clean))
                                 (push (* 1000 drgnx-perf--sw-handled) handled)
                                 (setq paged t))
                               (let ((i (drgnx-perf--sw-index h (drgnx-view-nav-selection))))
@@ -811,6 +812,9 @@ went from and to.  An error when a key went back (a wrap), a round paged no wind
             (when (> most 20000) (error "Premise: Sjá held %d entries, more than the window's 20,000" most))
             (list :key_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats keys))
                   :page_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats pages))
+                  ;; the bar is judged on the pages no collection landed in; those it did are counted, never dropped
+                  :page_nogc_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats clean))
+                  :gc_pages (- (length pages) (length clean))
                   :line_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats lines))
                   :handled_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats handled))
                   :pages (length pages)
