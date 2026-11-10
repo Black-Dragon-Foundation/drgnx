@@ -260,8 +260,11 @@ of keys; those belong to the box's window alone, and C-g takes them all off the 
 
 ;; The editor under the box is a block of solid glyphs; a strip of the box's input row where the box draws nothing
 ;; (between the typed text and the hint) must be one surface, every channel within this many levels: what lies behind
-;; shows through neither crisp (alpha alone) nor as stripes.
-(defconst drgnx-palette-float-test--frost-delta 8)
+;; shows through neither crisp (alpha alone) nor as stripes.  The bound is the mockup's: palette.png's input strip is
+;; one flat colour (a spread of 0) over code, so the frosted box may differ from flat by rounding and the blur's
+;; quarter-resolution sampling only.  A 90 % box whose blur does not reach the picture spreads 10 % of the stripes'
+;; levels (over 60, so 6 and up): 4 fails it.
+(defconst drgnx-palette-float-test--frost-delta 4)
 
 (defun drgnx-palette-float-test--spread (snap xs y)
   "The widest range of one colour channel over SNAP's pixels XS on row Y."
@@ -307,6 +310,7 @@ in the box (its input row, between the typed text and the hint, where it draws n
                      (when (drgnx-uitest-region-equal-p snap none e)
                        (ert-skip "the snapshot of a root does not hold child frames yet (nsnap): no pixel check"))
                      (should (> behind 60))           ; the stripes are there to hide
+                     (should (frame-parameter f 'backdrop-blur)) ; the frosted box, as the design is
                      (unless (<= inside drgnx-palette-float-test--frost-delta)
                        (ert-fail (list :inside inside :behind behind :at y :from (car xs) :to (car (last xs))
                                        :alpha (frame-parameter f 'alpha-background)

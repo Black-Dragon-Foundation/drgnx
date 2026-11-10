@@ -299,7 +299,7 @@ rounded and shadowed, with values per variant:
 | | Dark | Light | High Contrast |
 |---|---|---|---|
 | Popups | radius 8, shadow blur 16 down 6, opacity 0.35 | the same at 0.14 | no shadow, a 1 px `drgnx-border-strong` ring |
-| Palette | radius 12, shadow blur 48 down 16 at 0.50, 98 % opaque, no blur (90 % with a blur once Glitnir's blur shows) | shadow 0.22 | opaque, no shadow, no blur, a 2 px ring |
+| Palette | radius 12, shadow blur 48 down 16 at 0.50, 90 % opaque over a 16 px blur of what lies behind | shadow 0.22 | opaque, no shadow, no blur, a 2 px ring |
 
 The values follow the theme when it changes. `drgnx-look-chrome` and `drgnx-look-palette` hold them as frame
 parameter lists; a value you set (Customize or `settings.el`) stands in every variant. In the popup lane, descriptions

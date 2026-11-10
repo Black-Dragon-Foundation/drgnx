@@ -43,12 +43,12 @@ open: when you have answered, the palette is there as you left it.
 |---|---|---|
 | `corner-radius` | 12 | logical pixels |
 | `shadow` | `(:blur 48 :offset (0 . 16) :spread 0 :opacity 0.5)` | 0.22 in the light theme, none in High Contrast; colour comes from the `child-frame-shadow` face |
-| `alpha-background` | 0.98 | 1.0 in High Contrast; near opaque, see below |
-| `backdrop-blur` | none | logical pixels of blur radius behind the box, when you set it |
+| `alpha-background` | 0.90 | 1.0 in High Contrast |
+| `backdrop-blur` | 16 | logical pixels of blur radius behind the box; none in High Contrast |
 | `transition` | `pop` | fade and pop in and out |
 
-The design's box is 90 % opaque with a blur of what lies behind it. Until that blur shows on Nidhogg, a box at 90 %
-would let the text behind read through, so the box is near opaque instead.
+The box is frosted, as the design is: 90 % opaque over a blur of what lies behind it, so the editor shows through as
+a soft wash of its colours and never as text.
 
 `drgnx-palette-frame-width` (640 logical pixels, at any display scale) and `drgnx-palette-frame-top` (0.12, the fraction
 of the frame's height above the box) place it. No colours are set here: the theme's faces colour everything.
