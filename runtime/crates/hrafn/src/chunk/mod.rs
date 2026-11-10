@@ -22,6 +22,10 @@ pub const BUDGET: usize = 1800;
 /// Bump it when chunking changes: the content key of every vector changes with it.
 pub const CHUNKER_VERSION: u32 = 2;
 
+/// Bump it when what a parse derives besides the chunks changes (a symbol's lines or signature, a new language, the
+/// references): tier 1 parses every stored file again, and the chunks keep their content keys, so no vector changes.
+pub const PARSE_VERSION: u32 = 1;
+
 /// The text of a chunk's FTS columns. `symbols` is raw: the store encodes it (`encode_symbol`) on write.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FtsCols {
@@ -56,6 +60,35 @@ pub struct Symbol {
     pub chunk: u32,
     pub definer: String,
     pub doc1: Option<String>,
+    /// The lines (from 1) of `start` and of the last byte before `end`.
+    pub line_start: u32,
+    pub line_end: u32,
+    /// The definition's head: its lines up to the one that names it (at most three), cut before a `{` body.
+    pub sig: String,
+}
+
+/// The longest signature, in characters.
+const SIG_MAX: usize = 200;
+
+/// The head of the definition NAME at `text[start..end]`: its lines joined up to the first that holds the name (the
+/// first line alone when none of the first three does), cut before an opening brace, at most [`SIG_MAX`] characters.
+pub(crate) fn signature(text: &str, start: usize, end: usize, name: &str) -> String {
+    let lines: Vec<&str> = text[start..end].lines().take(3).collect();
+    let upto = lines.iter().position(|l| l.contains(name)).unwrap_or(0);
+    let mut sig = lines[..lines.len().min(upto + 1)]
+        .iter()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if let Some(i) = sig.find('{') {
+        sig.truncate(i);
+    }
+    let sig = sig.trim_end();
+    match sig.char_indices().nth(SIG_MAX) {
+        Some((i, _)) => sig[..i].to_string(),
+        None => sig.to_string(),
+    }
 }
 
 /// Chunks and symbols of one file.

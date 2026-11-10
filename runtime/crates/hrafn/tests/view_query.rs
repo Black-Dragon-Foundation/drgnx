@@ -94,6 +94,9 @@ async fn put(s: &CodeStore, tree: TreeId, path: &str, text: &str) {
             chunk: y.chunk as usize,
             definer: y.definer,
             doc1: y.doc1,
+            line_start: y.line_start,
+            line_end: y.line_end,
+            sig: y.sig,
         })
         .collect();
     let row = FileRow {
