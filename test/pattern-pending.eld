@@ -56,7 +56,6 @@
  "test/ui/state-ui-test.el"
  "test/ui/statusbar-state-ui-test.el"
  "test/ui/statusbar-test.el"
- "test/ui/view-ui-test.el"
  "test/ui/workbench-pass-a-test.el"
  "test/unit/agent-check-test.el"
  "test/unit/agent-config-claude-test.el"
