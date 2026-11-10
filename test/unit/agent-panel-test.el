@@ -927,3 +927,23 @@ the model and the mode as chips that switch them, Stop after this step and Send 
         (should (memq 'drgnx-ui-button-primary (drgnx-agent-panel-test--face-at row "Send")))
         (should (eq 'drgnx-agent-panel-pause
                     (lookup-key (get-text-property (string-search "Stop after" row) 'keymap row) [mouse-1])))))))
+
+(ert-deftest drgnx-agent-panel/diff-card-as-the-mockup ()
+  "agent-panel.html `.acard': a header with the file's name, its lines and \"hunk 1 of 1\", and Reject and Accept that
+answer it; the body's lines numbered (the new file's numbers, a removed line the old's), in the code font."
+  (drgnx-agent-panel-test--with
+    (load (expand-file-name "modules/tools/drgnx-work-review" drgnx-dir) nil t)
+    (with-current-buffer buf
+      (setq drgnx-agent-panel--diffs (list (cons "a.el" "@@ -215,2 +215,3 @@\n-  (when p\n+  (if p\n     (send p)\n+    (queue p)\n")))
+      (let ((card (drgnx-agent-panel-cards--diff-row "a.el" 0)))
+        (should (string-match-p "a\\.el +215–217 · hunk 1 of 1" card))
+        (should (eq 'drgnx-agent-panel-accept
+                    (lookup-key (get-text-property (string-search "Accept" card) 'keymap card) [mouse-1])))
+        (should (eq 'drgnx-agent-panel-reject
+                    (lookup-key (get-text-property (string-search "Reject" card) 'keymap card) [mouse-1])))
+        (should (string-match-p " 215 -  (when p" card))
+        (should (string-match-p " 215 \\+  (if p" card))
+        (should (string-match-p " 216      (send p)" card))
+        (should (string-match-p " 217 \\+    (queue p)" card))
+        (should (seq-some (lambda (f) (drgnx-agent-panel-test--inherits-p f 'drgnx-code-small))
+                          (drgnx-agent-panel-test--face-at card "216")))))))
