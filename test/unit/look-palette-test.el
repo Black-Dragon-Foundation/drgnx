@@ -55,7 +55,8 @@ Vim; a chord is one cap a key, a function key its number."
   (should (equal '("Alt" "X") (drgnx-palette-keycap-names "M-x")))
   (should (equal '("Space" "F" "F") (drgnx-palette-keycap-names "SPC f f")))
   (let ((caps (drgnx-palette-keycaps "C-S-p")))
-    (should (equal "Ctrl Shift P" (substring-no-properties caps)))
+    (should (equal "Ctrl Shift P" (string-join (split-string (substring-no-properties caps)) " ")))
+    (should (equal '(space :width (4)) (get-text-property 0 'display caps)))   ; room inside the cap
     (should (eq 'drgnx-keycap (get-text-property 0 'face caps)))))
 
 (ert-deftest drgnx-look-palette/echo-area-remap-on-and-off ()

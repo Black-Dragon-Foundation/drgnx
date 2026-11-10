@@ -13,6 +13,7 @@
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/memo-alloc-fixture" drgnx-dir) nil t)
 (defvar drgnx-chrome--root)
+(defvar drgnx-look-bars-measure-function)
 
 (defun drgnx-topline-test--activate ()
   "The setup of the tests' own `ui/face': what `drgnx-topline-setup' activates."
@@ -90,12 +91,13 @@ owned) and torn down after (the watchers go, the memo empties)."
   (assq key (drgnx-topline--line)))
 
 (ert-deftest drgnx-topline/faces-follow-the-theme-chrome-and-keep-the-text-colour ()
-  ;; The strong text fell back to the tab bar's dim foreground: it takes the text colour, on the tab line's band.
+  ;; The strong text fell back to the tab bar's dim foreground: it takes the text colour, on the title row's gap
+  ;; (the tab bar's background, design §4), not on a card's tab line.
   (dolist (f '(drgnx-topline drgnx-topline-strong))
     (let ((inh (face-attribute f :inherit nil nil)))
-      (should (memq 'tab-line inh))
+      (should (memq 'tab-bar inh))
       (should-not (memq 'header-line inh))
-      (should-not (memq 'tab-bar inh))))
+      (should-not (memq 'tab-line inh))))
   (should (memq 'bold (face-attribute 'drgnx-topline-strong :inherit nil nil))))
 
 (ert-deftest drgnx-topline/shows-project-branch-and-the-three-keys ()
@@ -176,9 +178,22 @@ owned) and torn down after (the watchers go, the memo empties)."
         (should (eq (nth 3 (drgnx-topline-test--item 'drgnx-topline-minimize)) 'iconify-frame))
         (should (eq (nth 3 (drgnx-topline-test--item 'drgnx-topline-maximize)) 'toggle-frame-maximized))
         (should (eq (nth 3 (drgnx-topline-test--item 'drgnx-topline-close)) 'delete-frame))
-        ;; the empty area drags the frame
-        (should (eq (nth 3 (drgnx-topline-test--item 'drgnx-topline-gap-2)) 'mouse-drag-frame-move))
-        (should (eq (nth 3 (drgnx-topline-test--item 'drgnx-topline-gap-1)) 'mouse-drag-frame-move))))
+        ;; the empty area drags the frame: a command (the tab bar calls an item's binding interactively), which hands
+        ;; the press to `mouse-drag-frame-move'
+        (dolist (gap '(drgnx-topline-gap-1 drgnx-topline-gap-2))
+          (let ((cmd (nth 3 (drgnx-topline-test--item gap))) dragged)
+            (should (eq cmd 'drgnx-topline-drag-window))
+            (should (commandp cmd))
+            (cl-letf (((symbol-function 'mouse-drag-frame-move) (lambda (e) (setq dragged e))))
+              (let ((press (list 'down-mouse-1 (list (selected-window) 'tab-bar '(10 . 5) 0))))
+                (call-interactively cmd nil (vector press))
+                (should (eq dragged press))
+                ;; the row's own press handler drags too; its release runs nothing
+                (setq dragged nil)
+                (cl-letf (((symbol-function 'drgnx-topline--event-item) (lambda (_e) (drgnx-topline-test--item gap))))
+                  (drgnx-topline-mouse-down press)
+                  (should (eq dragged press))
+                  (drgnx-topline-mouse-up press))))))))
     ;; and gone again when the title is not drawn
     (should-not (assq 'drgnx-topline-close (drgnx-topline--line)))
     (should (eq (nth 3 (drgnx-topline-test--item 'drgnx-topline-gap-1)) 'ignore))))
@@ -231,6 +246,81 @@ owned) and torn down after (the watchers go, the memo empties)."
                    (hint-w (- (string-width (string-trim-right text)) start)))
               (should (<= (abs (- start (- width hint-w start))) 1)))))))))
 
+(ert-deftest drgnx-topline/a-click-runs-the-item-it-carries ()
+  "A tab-bar click carries its item (the caption's `menu-item', as Emacs's tab bar and Nidhogg's native shell attach
+it): the release runs that item's command, a press runs nothing but a drag of the empty part, and a click that carries
+no item runs nothing (the x is never used to guess one)."
+  (drgnx-topline-test--with 'vscode
+    (drgnx-topline--on)
+    (should (eq 'drgnx-topline-mouse-up (lookup-key tab-bar-map [mouse-1])))
+    (let* ((items (drgnx-topline--line))
+           (before (drgnx-topline--width (seq-take items (cl-position 'drgnx-topline-palette (mapcar #'car items)))))
+           (at (lambda (kind key)
+                 (let ((caption (and key (propertize "x" 'menu-item
+                                                     (list key (nth 3 (drgnx-topline-test--item key)) nil)))))
+                   (list kind (append (list (selected-window) 'tab-bar (cons (1+ before) 0) 0)
+                                      (and caption (list (cons caption 0)))))))))
+      (drgnx-topline-mouse-down (funcall at 'down-mouse-1 'drgnx-topline-palette))
+      (should-not drgnx-topline-test--ran)
+      (drgnx-topline-mouse-up (funcall at 'mouse-1 'drgnx-topline-palette))
+      (should (equal drgnx-topline-test--ran '(palette)))
+      (drgnx-topline-mouse-up (funcall at 'mouse-1 nil))          ; no item carried: nothing, though x is the palette's
+      (should (equal drgnx-topline-test--ran '(palette)))
+      (should (eq (car (drgnx-topline--event-item (funcall at 'mouse-1 'drgnx-topline-keys-sheet)))
+                  'drgnx-topline-keys-sheet))
+      (drgnx-topline-mouse-up (funcall at 'mouse-1 'drgnx-topline-keys-sheet))
+      (should (equal drgnx-topline-test--ran '(keys palette))))
+    (drgnx-topline--off)
+    (should-not (eq 'drgnx-topline-mouse-up (lookup-key tab-bar-map [mouse-1])))))
+
+(ert-deftest drgnx-topline/images-follow-the-frame-scale ()
+  "At scale 2 the frame counts device pixels: an image is drawn twice its logical size and says so, and a chip keeps
+the space before its dimmer part (SVG drops a leading space unless told to keep it)."
+  (cl-letf (((symbol-function 'drgnx-pixels-scale) (lambda (&optional _) 2.0))
+            ((symbol-function 'drgnx-topline--svg-p) (lambda () t)))
+    (let* ((s (drgnx-topline--image "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"26\" height=\"26\"></svg>" "x"))
+           (image (get-text-property 0 'display s)))
+      (should (equal (image-property image :scale) 2.0))
+      (should (equal (get-text-property 0 'drgnx-topline-px s) 52)))
+    (let ((svg (plist-get (cdr (get-text-property 0 'display (drgnx-topline--chip '("main" (" ↑2" . shadow))
+                                                                                  'drgnx-chip-quiet 20 4)))
+                          :data)))
+      (should (string-match-p "xml:space=\"preserve\"" svg)))
+    ;; the icons too: without a :scale of its own an image takes `image-scaling-factor', a guess from the font
+    (should (equal (image-property (drgnx-icons--make 'x 16 2.0) :scale) 2.0))))
+
+(ert-deftest drgnx-topline/the-row-s-ends-count-the-frame-s-edge ()
+  "The tab bar sits inside the frame's edge (the cards' gap, `internal-border-width'), so the mark's 14 px and the end's
+8 px from the window's sides are less that edge."
+  (cl-letf (((symbol-function 'frame-internal-border-width) (lambda (&optional _) 7))
+            ((symbol-function 'drgnx-pixels-scale) (lambda (&optional _) 1.0)))
+    (let* ((mark (nth 2 (drgnx-topline--mark-pixels (current-buffer))))
+           (pos (text-property-not-all 0 (length mark) 'drgnx-topline-px nil mark)))
+      (should (equal (get-text-property pos 'drgnx-topline-px mark) 7)))
+    (should (equal (plist-get (nthcdr 4 (car (last (drgnx-topline--build-pixels (current-buffer) 1426 nil)))) :drgnx-px)
+                   1)))
+  ;; the maximise square is the design's size, smaller than the minus and the cross
+  (should (string-match-p "width=\"12\" height=\"12\"" (drgnx-topline--control-svg 'square)))
+  (should (string-match-p "width=\"16\" height=\"16\"" (drgnx-topline--control-svg 'x))))
+
+(ert-deftest drgnx-topline/a-control-s-hover-is-a-circle ()
+  "The design's hover on – □ × is a 26 px circle.  A `mouse-face' paints a glyph's whole box, the row's full height, so
+the control's image is the row's height in the gap colour with a round hole of radius 13: only the hole shows the
+hover colour.  The hover face has no box (a box would ring the square)."
+  (cl-letf (((symbol-function 'drgnx-pixels-scale) (lambda (&optional _) 1.0)))
+    (let ((svg (drgnx-topline--control-svg 'x)))
+      (should (string-match-p "height=\"38\"" svg))
+      (should (string-match-p "fill-rule=\"evenodd\"" svg))
+      (should (string-match-p "a13 13 " svg))))
+  (should (memq (face-attribute 'drgnx-topline-hover :box nil t) '(nil unspecified)))
+  (cl-letf (((symbol-function 'drgnx-topline--svg-p) (lambda () t)))
+    (dolist (item (drgnx-topline--control-buttons))
+      (let ((s (nth 2 item)))
+        (should (eq 'drgnx-topline-hover (get-text-property (1- (length s)) 'mouse-face s)))
+        ;; the tab bar counts the hover's extent in characters but the row in glyphs: an image over three characters
+        ;; is one glyph, and the hover would run two glyphs past it (onto the row's end)
+        (should (= 2 (length s)))))))
+
 (ert-deftest drgnx-topline/the-hint-runs-the-command ()
   (drgnx-topline-test--with 'vscode
     (dolist (spec '((drgnx-topline-go-quick-open . files) (drgnx-topline-palette . palette) (drgnx-topline-keys-sheet . keys)))
@@ -251,7 +341,10 @@ owned) and torn down after (the watchers go, the memo empties)."
     (drgnx-memo-forget 'topline)
     (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
               ((symbol-function 'drgnx-tty-sendable-key) (lambda (_frame _key) (error "not on a window"))))
-      (should (string-match-p "C-S-p commands" (drgnx-topline-test--text))))))
+      ;; a window's row is the design's: Quick Open's key as it is bound, on the search box's keycap
+      (let ((drgnx-look-bars-measure-function (lambda (s &optional _face) (* 10 (string-width s)))))
+        (should (string-match-p "Ctrl P" (mapconcat (lambda (i) (substring-no-properties (nth 2 i)))
+                                                    (drgnx-topline--build (current-buffer) 160 nil 1440) "")))))))
 
 (ert-deftest drgnx-topline/glyphs-have-an-ascii-form ()
   (drgnx-topline-test--with 'vscode
@@ -399,7 +492,8 @@ owned) and torn down after (the watchers go, the memo empties)."
     (let ((tab-bar-mode nil) (spec (get 'tab-bar 'face-defface-spec)))
       (drgnx-topline--apply)
       (should-not (equal (get 'tab-bar 'face-defface-spec) spec))
-      (should (equal (get 'tab-bar 'face-defface-spec) '((t :inherit tab-line :height 1.0 :box nil))))
+      (should (equal (get 'tab-bar 'face-defface-spec)
+                     '((t :inherit (drgnx-ui-text drgnx-text-muted drgnx-surface-gap) :box nil))))
       (drgnx-topline--off)
       (should (equal (get 'tab-bar 'face-defface-spec) spec)))))
 

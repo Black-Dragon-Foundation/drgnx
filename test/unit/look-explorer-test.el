@@ -150,5 +150,63 @@ once a graphical frame shows it, it gets the tree row in that frame's scale (×2
       (with-current-buffer buf
         (should (memq 'drgnx-ui-text (ensure-list (cadr (assq 'default face-remapping-alist)))))))))
 
+(defun drgnx-look-explorer-test--at (row text)
+  "Where TEXT starts in the row at ROW of the current buffer."
+  (+ row (string-search text (buffer-substring row (save-excursion (goto-char row) (pos-eol))))))
+
+(ert-deftest drgnx-look-explorer/a-changed-name-keeps-the-text-colour ()
+  "Pattern D, window-dark.html `.row': a modified file's name is in the row's text colour, its state only the mark at
+the right edge; an ignored file is the one whose name changes (dimmed, `.row.dim')."
+  (drgnx-explorer-edge--with root
+    (drgnx-look-explorer-test--as 'gui 'modified
+      (let ((row (drgnx-look-explorer-test--row "README.md")))
+        (with-current-buffer (drgnx-explorer--buffer)
+          (should-not (memq 'drgnx-git-modified
+                            (ensure-list (get-text-property (drgnx-look-explorer-test--at row "R")
+                                                            'face)))))
+        (should (string-search "M" (drgnx-look-explorer-test--tail row)))))
+    (drgnx-look-explorer-test--as 'gui 'ignored
+      (let ((row (drgnx-look-explorer-test--row "README.md")))
+        (with-current-buffer (drgnx-explorer--buffer)
+          (should (memq 'drgnx-git-ignored
+                        (ensure-list (get-text-property (drgnx-look-explorer-test--at row "R")
+                                                        'face)))))))))
+
+(ert-deftest drgnx-look-explorer/the-icon-stands-off-its-name ()
+  "Pattern D, window-dark.html `.row' (gap 6px): where icons are images, a row's icon is followed by 6 logical
+pixels of room before the name."
+  (drgnx-explorer-edge--with root
+    (cl-letf (((symbol-function 'drgnx-look-icon)
+               (lambda (name &rest _) (propertize "i" 'display `(image :type svg :data "<svg/>" :name ,name)))))
+      (drgnx-look-explorer-test--as 'gui nil
+        (let ((row (drgnx-look-explorer-test--row "README.md")))
+          (with-current-buffer (drgnx-explorer--buffer)
+            (let* ((name (drgnx-look-explorer-test--at row "README"))
+                   (icon (get-text-property (1- name) 'display)))
+              (should (stringp icon))
+              (should (eq 'image (car-safe (get-text-property 0 'display icon))))
+              (should (equal `(space :width (,(drgnx-px 6))) (get-text-property 1 'display icon))))))))))
+
+(ert-deftest drgnx-look-explorer/one-root-has-no-root-row ()
+  "Pattern D, window-dark.html: with one root the tree starts at its entries (the island's header names the
+project); the root's row is there but not shown.  With several roots each has a row, its name as it is."
+  (drgnx-explorer-edge--with root
+    (with-current-buffer (drgnx-explorer--buffer)
+      (goto-char (point-min))
+      (should (invisible-p (point)))
+      (should-not (string-search (upcase (file-name-nondirectory (directory-file-name root)))
+                                 (buffer-substring-no-properties (point-min) (point-max)))))
+    (let ((other (file-name-as-directory (make-temp-file "drgnx-explorer-b" t))))
+      (unwind-protect
+          (progn
+            (drgnx-explorer-set-roots (list root other))
+            (with-current-buffer (drgnx-explorer--buffer)
+              (goto-char (point-min))
+              (should-not (invisible-p (point)))
+              (should (string-search (file-name-nondirectory (directory-file-name root))
+                                     (buffer-substring-no-properties (point) (pos-eol))))))
+        (drgnx-explorer-set-roots (list root))
+        (delete-directory other t)))))
+
 (provide 'look-explorer-test)
 ;;; look-explorer-test.el ends here

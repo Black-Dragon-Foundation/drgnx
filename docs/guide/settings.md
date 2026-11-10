@@ -291,7 +291,7 @@ yours and always applies (only drgnx's security settings and global-only setting
   Such a folder also counts as trusted content: Flymake checkers and symbol shorthands work there.
 - **Never trusted:** your home folder, `/`, the temp folders and anything above them, and remote folders, also as
   `drgnx-trust-parents` entries.
-- **Trust This Folder** (File menu, palette, or a click on "Restricted Mode") shows the code in the folder's
+- **Trust This Folder** (File menu, palette, or the offer a click on the Restricted Mode shield makes) shows the code in the folder's
   `.dir-locals.el`, `.dir-locals-2.el` and `.drgnx/settings.el` and asks once; trusting allows exactly that code. Code
   added or changed afterwards waits.
 - **Untrust This Folder** takes everything back at once: the values trust gave leave the folder's open buffers, and the

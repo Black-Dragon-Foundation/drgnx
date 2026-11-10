@@ -214,11 +214,20 @@ variant's opacities, or nil when it has none (no shadow in high contrast)."
   (let ((sel (frame-selected-window (window-frame window))))
     (eq window (if (window-minibuffer-p sel) (minibuffer-selected-window) sel))))
 
+(defun drgnx-look--card-tiled-p (window)
+  "Non-nil when WINDOW is an editor group and its frame has another (tiling.html: the focused card is ringed; with
+one editor group, window-dark.html, no card is)."
+  (and (eq (drgnx-state-window-role window) 'editor)
+       (let ((n 0))
+         (dolist (w (window-list (window-frame window) 'nomini) (> n 1))
+           (when (eq (drgnx-state-window-role w) 'editor) (setq n (1+ n)))))))
+
 (defun drgnx-look--card-set (window)
   "Give WINDOW the card parameters, only those that differ (a setting of one reruns the hooks).  The selected
-window's ring is the accent."
+window's ring is the accent when it is one of several editor groups (`drgnx-look--card-tiled-p')."
   (dolist (p drgnx-look--card-parameters)
-    (let ((v (if (and (eq p 'ring) (drgnx-look--card-value 'ring) (drgnx-look--card-focused-p window))
+    (let ((v (if (and (eq p 'ring) (drgnx-look--card-value 'ring) (drgnx-look--card-focused-p window)
+                      (drgnx-look--card-tiled-p window))
                  '(drgnx-accent . 1.0)
                (drgnx-look--card-value p))))
       (unless (equal (window-parameter window p) v) (set-window-parameter window p v))))
@@ -303,45 +312,7 @@ a mode binds (diff-hl's hunk, a breakpoint): its click still comes."
                           (and (window-at-x-y (nth 2 edges) fy (window-frame w)) w)
                         (window-at-x-y (- (car edges) 1) fy (window-frame w))))))
     (when (and (window-live-p target) (not (window-minibuffer-p target)))
-      (mouse-drag-line (list (car event) (cons target (cdr posn))) 'vertical)
-      (drgnx-look--drag-line-fringes))))
-
-(defun drgnx-look-gap-drag (event)
-  "A press on the gap between two cards (the right divider): `mouse-drag-vertical-line', whose drag also ends over a
-fringe (`drgnx-look--drag-line-fringes')."
-  (interactive "e")
-  (mouse-drag-vertical-line event)
-  (drgnx-look--drag-line-fringes))
-
-(defun drgnx-look--drag-map ()
-  "The transient map of the `mouse-drag-line' drag under way (it has the dividers as prefixes of itself), or nil."
-  (and (consp overriding-terminal-local-map)
-       (seq-find (lambda (m) (and (keymapp m) (eq (lookup-key m [right-divider]) m))) (cdr overriding-terminal-local-map))))
-
-(defun drgnx-look--drag-end ()
-  "A release over a fringe during a `mouse-drag-line' drag: end the drag as its own release does."
-  (interactive)
-  (when-let* ((m (drgnx-look--drag-map)) (end (lookup-key m [drag-mouse-1])) ((commandp end)))
-    (call-interactively end)))
-
-(defvar drgnx-look--drag-fringe-map
-  (let ((m (make-sparse-keymap)))
-    (define-key m [right-fringe drag-mouse-1] #'drgnx-look--drag-end)
-    (define-key m [left-fringe drag-mouse-1] #'drgnx-look--drag-end)
-    (define-key m [right-fringe mouse-1] #'drgnx-look--drag-end)
-    (define-key m [left-fringe mouse-1] #'drgnx-look--drag-end)
-    m)
-  "The fringe releases a `mouse-drag-line' drag does not take: they end it (`drgnx-look--drag-line-fringes').")
-
-(defun drgnx-look--drag-line-fringes ()
-  "Right after `mouse-drag-line' began a drag: a release over a fringe ends it too.  Its transient map lists the
-dividers, margins and lines as prefixes, not the fringes, so a release over a fringe beside the gap was
-`<right-fringe> <drag-mouse-1> is undefined' and the drag never ended: its map stayed, and every later mouse movement
-went on resizing windows (and failing once the drag's state was gone).  The fringe releases go to a map of their own
-while the drag's map is there."
-  (when-let* ((m (drgnx-look--drag-map)))
-    (set-transient-map drgnx-look--drag-fringe-map
-                       (lambda () (and (consp overriding-terminal-local-map) (memq m overriding-terminal-local-map) t)))))
+      (mouse-drag-line (list (car event) (cons target (cdr posn))) 'vertical))))
 
 (defun drgnx-look--islands-off ()
   "Undo `drgnx-look--islands-on'."
@@ -612,7 +583,6 @@ only the one remap is reapplied."
                        ;; a card's side edge is a fringe beside the gap: pressing it drags the gap too
                        (drgnx-module-define-key 'global-map [right-fringe down-mouse-1] #'drgnx-look-edge-drag)
                        (drgnx-module-define-key 'global-map [left-fringe down-mouse-1] #'drgnx-look-edge-drag)
-                       (drgnx-module-define-key 'global-map [right-divider down-mouse-1] #'drgnx-look-gap-drag)
                        (drgnx-look-cards-apply)
                        (drgnx-look-derive-on)
                        (drgnx-look-fonts-on)

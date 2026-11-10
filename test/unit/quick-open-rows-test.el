@@ -44,6 +44,22 @@ waited for rows."
     ;; the view is closed when Quick Open ends
     (should (equal (car (car sent)) "view/close"))))
 
+(ert-deftest drgnx-quick-open/a-greater-than-sign-turns-it-into-the-palette ()
+  "As in VS Code: `>' typed first in Quick Open leaves the files for the command palette, with what follows it typed
+already.  No file is opened."
+  (let ((sent nil) palette opened (dir (file-name-as-directory (make-temp-file "drgnx-qo" t))))
+    (unwind-protect
+        (quick-open-rows-test--hub sent
+          (cl-letf (((symbol-function 'drgnx-quick-open--root) (lambda () dir))
+                    ((symbol-function 'drgnx-palette) (lambda (&optional initial) (setq palette (list initial))))
+                    ((symbol-function 'find-file) (lambda (f &rest _) (setq opened f))))
+            (ert-simulate-keys (vconcat (kbd ">")) (drgnx-quick-open))))
+      (delete-directory dir t))
+    (should (equal palette '("")))
+    (should-not opened)
+    ;; the view is closed all the same
+    (should (equal (car (car sent)) "view/close"))))
+
 (ert-deftest drgnx-quick-open/old-rows-stay-until-new-arrive ()
   "A new query leaves the rows shown as they are; the patch that answers it changes them."
   (let* ((sent nil) (r (drgnx-quick-open--rows-make "q" "/r/")))

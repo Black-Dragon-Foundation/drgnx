@@ -127,7 +127,8 @@
     (make-directory (expand-file-name ".git" dir))
     (drgnx-chrome-test--open dir "src/app/main.py")
     (let ((crumb (substring-no-properties (drgnx-chrome-breadcrumb (selected-window)))))
-      (should (string-match-p "src › app › main\\.py" crumb))
+      ;; from the project's root, which the Explorer and the title row name already (window-dark.html `.crumbs')
+      (should (equal "src › app › main.py" (string-trim crumb)))
       (insert "y")
       (should (string-match-p "●" (drgnx-chrome-breadcrumb (selected-window)))))))
 
@@ -237,8 +238,24 @@
     ;; no height of their own: a relative 1.0 kept the tab line's height and cost a font spec copy per tab run
     (dolist (f '(drgnx-chrome-tab drgnx-chrome-tab-current drgnx-chrome-tab-active))
       (should (eq (face-attribute f :height nil nil) 'unspecified))))
-  (should (eq (face-attribute 'drgnx-chrome-tab-active :overline nil nil) t))
-  (should (memq (face-attribute 'drgnx-chrome-tab-current :overline nil nil) '(nil unspecified))))
+  ;; the look (design §4 tabs, §3.8 Current): the shown tab joins the editor in the body text's colour, no link colour,
+  ;; line or bold; the shown tab of another group is muted
+  (dolist (f '(drgnx-chrome-tab-active drgnx-chrome-tab-current))
+    (should (memq (face-attribute f :overline nil nil) '(nil unspecified)))
+    (should (memq (face-attribute f :weight nil nil) '(normal unspecified)))
+    (should-not (memq 'link (ensure-list (face-attribute f :inherit nil nil)))))
+  (should (memq 'drgnx-text-muted (ensure-list (face-attribute 'drgnx-chrome-tab-current :inherit nil nil)))))
+
+(ert-deftest drgnx-chrome/the-breadcrumb-sits-on-the-editor ()
+  "The look (design §4 editor): the breadcrumb row is part of the editor's surface, under the shown tab: the header is
+not painted with the tab row's band (`drgnx-wb-bar'); the theme's `header-line' gives the editor's colour."
+  (drgnx-chrome-test--with dir
+    (drgnx-chrome-test--open dir "src/a.el")
+    (drgnx-chrome-apply nil t)
+    (let ((h (window-parameter (selected-window) 'header-line-format)))
+      (should (stringp h))
+      (should-not (seq-some (lambda (i) (memq 'drgnx-wb-bar (ensure-list (get-text-property i 'face h))))
+                            (number-sequence 0 (1- (length h))))))))
 
 (ert-deftest drgnx-chrome/header-rows-are-one-band-to-the-edge ()
   (let ((s (drgnx-wb-bar "x")))
@@ -440,6 +457,20 @@ stubbed)."
           (should (equal (window-parameter editor 'ring) '(drgnx-accent . 1.0)))
           (should (equal (window-parameter other 'shadow) (drgnx-look--card-value 'shadow))))))))
 
+(ert-deftest drgnx-wb-chrome/the-accent-ring-only-among-editor-groups ()
+  "window-dark.html: one editor group and the docked panes show no focus ring (the selected pane is told by its
+rows); tiling.html: with two editor groups the selected one's card is ringed in the accent.  Race-proof pattern
+D."
+  (drgnx-chrome-test--with _dir
+    (let ((editor (selected-window)))
+      (drgnx-look--card-set editor)
+      (should (equal (window-parameter editor 'ring) (drgnx-look--card-value 'ring)))
+      (let ((other (split-window editor nil 'right)))
+        (drgnx-look--card-set editor)
+        (should (equal (window-parameter editor 'ring) '(drgnx-accent . 1.0)))
+        (drgnx-look--card-set other)
+        (should (equal (window-parameter other 'ring) (drgnx-look--card-value 'ring)))))))
+
 (ert-deftest drgnx-wb-chrome/gap-follows-density ()
   "The dividers and the frame's edge are the density's gap in device pixels, and a density change gives them again
 at once (the density's changed hook).  Race-proof pattern D (the scale is stubbed)."
@@ -546,6 +577,135 @@ Race-proof pattern D."
         (drgnx-chrome-remove-tail-provider #'drgnx-chrome-test--tail-a)
         (drgnx-chrome-apply nil t)
         (should (stringp (window-parameter (selected-window) 'header-line-format)))))))
+
+(ert-deftest drgnx-chrome/the-breadcrumb-is-spaced-as-the-mockup ()
+  "window-dark.html `.crumbs': on a graphical frame the row starts 12 px in and its parts are 6 px either side of
+each `›' (the text stays `a › b')."
+  (drgnx-chrome-test--with dir
+    (make-directory (expand-file-name ".git" dir))
+    (drgnx-chrome-test--open dir "src/main.py")
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+              ((symbol-function 'drgnx-pixels-font-extent) (lambda (&rest _) '(12 . 4))))
+      (let* ((crumb (drgnx-chrome-breadcrumb (selected-window)))
+             (sep (string-search "›" crumb)))
+        (should (equal "src › main.py" (string-trim (substring-no-properties crumb))))
+        (should (equal '(space :width (6)) (get-text-property (1- sep) 'display crumb)))
+        (should (equal '(space :width (6)) (get-text-property (1+ sep) 'display crumb)))
+        (should (equal '(space :width (12)) (get-text-property (1- (string-search "src" crumb)) 'display crumb)))))))
+
+(ert-deftest drgnx-chrome/the-breadcrumb-names-the-definition-at-point ()
+  "window-dark.html `.crumbs': the breadcrumb ends with the definition point is in (`.cur', muted; the file then in
+the crumbs' colour).  The name is looked up on idle (a command only arms the debounce), kept in the window, and the
+breadcrumb only reads it: making it calls no lookup.  A window showing another buffer shows no stale name.  Pattern D
+(the idle timer's function is called)."
+  (drgnx-chrome-test--with dir
+    (make-directory (expand-file-name ".git" dir))
+    (let* ((w (selected-window)) (b (drgnx-chrome-test--open dir "src/a.el")))
+      (with-current-buffer b
+        (erase-buffer)
+        (insert "(defun drgnx-test-one ()\n  1)\n\n(defun drgnx-test-two ()\n  2)\n")
+        (emacs-lisp-mode)
+        (goto-char (point-min)) (search-forward "2)") (set-buffer-modified-p nil))
+      (set-window-point w (with-current-buffer b (point)))
+      (drgnx-chrome--symbol-schedule)
+      (should (drgnx-timer-active-p 'chrome-symbol))
+      (drgnx-chrome--symbol-update)
+      (let ((crumb (cl-letf (((symbol-function 'add-log-current-defun) (lambda () (error "Looked up while drawing"))))
+                     (drgnx-chrome-breadcrumb w))))
+        (should (equal "src › a.el › drgnx-test-two" (string-trim (substring-no-properties crumb))))
+        (should (memq 'drgnx-text-muted (ensure-list (get-text-property (string-search "drgnx-test-two" crumb) 'face crumb))))
+        (should (memq 'drgnx-chrome-crumb (ensure-list (get-text-property (string-search "a.el" crumb) 'face crumb)))))
+      (should (string-search "drgnx-test-two" (format "%s" (window-parameter w 'header-line-format))))
+      (drgnx-chrome-test--open dir "b.txt")
+      (should-not (string-search "drgnx-test" (drgnx-chrome-breadcrumb w)))
+      (drgnx-timer-cancel 'chrome-symbol))))
+
+(defun drgnx-chrome-test--face-key (s pos key)
+  "The value of KEY in the anonymous face at POS of S (a plist in its `face' list), or nil."
+  (let ((found nil))
+    (dolist (f (let ((v (get-text-property pos 'face s))) (if (keywordp (car-safe v)) (list v) (ensure-list v))))
+      (when (and (consp f) (keywordp (car f)) (plist-member f key) (not found)) (setq found (plist-get f key))))
+    found))
+
+(defun drgnx-chrome-test--at (s prop value)
+  "The first position of S whose PROP is VALUE."
+  (let ((i 0) (n (length s)) (found nil))
+    (while (and (< i n) (not found))
+      (when (equal (get-text-property i prop s) value) (setq found i))
+      (setq i (1+ i)))
+    found))
+
+(ert-deftest drgnx-chrome/the-tab-row-is-drawn-as-the-mockup ()
+  "window-dark.html `.tabs': on a graphical frame the row starts 6 px in; the shown tab is lifted 4 px off the row's
+top by a box in the row's colour (its rounded top is Glitnir's); every other part of the row (the other tabs, the
+gaps, the buttons) is underlined by the subtle border, the hairline under the row the shown tab joins the editor
+through; a tab's × is the 14 px icon in an 18 px slot; a modified tab shows its dot in that slot; the buttons are
+split, then more.  Pattern D (the frame's kind and fonts are stubbed)."
+  (drgnx-chrome-test--with dir
+    (unwind-protect
+        (progn
+          (load-theme 'drgnx-dark t)
+          (let* ((w (selected-window)) (a (drgnx-chrome-test--open dir "a.el")) (_b (drgnx-chrome-test--open dir "b.el"))
+                 (drgnx-look-icons 'glyphs))   ; the × as its glyph, so the text shows it
+            (with-current-buffer a (insert "y"))
+            (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                      ((symbol-function 'drgnx-pixels-font-extent) (lambda (&rest _) '(12 . 4))))
+              (let* ((line (drgnx-chrome--tab-line-make w))
+                     (rule (face-foreground 'drgnx-border-subtle nil t))
+                     (pa (string-search "a.el" line)) (pb (string-search "b.el" line)))
+                (should (stringp rule))
+                (should (equal '(space :width (6)) (get-text-property 1 'display line)))
+                ;; the shown tab: lifted by the row's colour, no hairline
+                (should (equal '(0 . 4) (plist-get (drgnx-chrome-test--face-key line pb :box) :line-width)))
+                (should (equal (face-background 'drgnx-chrome-tab nil t)
+                               (plist-get (drgnx-chrome-test--face-key line pb :box) :color)))
+                (should-not (drgnx-chrome-test--face-key line pb :underline))
+                ;; another tab, the gap after it and the buttons: the hairline
+                (dolist (p (list pa (+ pa 5) (1- (length line))))
+                  (should (equal rule (plist-get (drgnx-chrome-test--face-key line p :underline) :color))))
+                (should (string-search "●" (substring-no-properties line pa pb)))
+                (should-not (string-search "×" (substring-no-properties line pa pb)))
+                (let ((x (string-search "×" line pb)))
+                  (should x)
+                  (should (equal '(space :width (2)) (get-text-property (1- x) 'display line))))
+                (let ((split (drgnx-chrome-test--at line 'help-echo "Split the editor right"))
+                      (more (drgnx-chrome-test--at line 'help-echo "Tabs of this group")))
+                  (should (< split more)))))))
+      (disable-theme 'drgnx-dark))))
+
+(ert-deftest drgnx-chrome/a-preview-tab-is-italic-until-kept ()
+  "As VS Code's preview: a file opened as a preview (the Explorer's single click) is an italic tab that the next
+preview replaces; an edit, or opening it to work in (a double click, Open), keeps it as a normal tab.  A file that
+was already a tab never becomes a preview."
+  (drgnx-chrome-test--with dir
+    (let* ((w (selected-window))
+           (kept (drgnx-chrome-test--open dir "kept.el"))
+           (visit (lambda (name preview)
+                    (let ((b (find-file-noselect (expand-file-name name dir))))
+                      (let ((new (not (drgnx-chrome-tab-p b))))
+                        (switch-to-buffer b) (drgnx-chrome-apply nil t)
+                        (drgnx-chrome-note-preview b (and preview new)))
+                      b)))
+           (italic (lambda (b) (memq 'drgnx-chrome-tab-preview
+                                     (ensure-list (get-text-property 2 'face (drgnx-chrome--tab w b t t nil)))))))
+      (write-region "x\n" nil (expand-file-name "a.el" dir) nil 'silent)
+      (write-region "x\n" nil (expand-file-name "b.el" dir) nil 'silent)
+      (let ((a (funcall visit "a.el" t)))
+        (should (funcall italic a))
+        (should-not (funcall italic kept))
+        (let ((b (funcall visit "b.el" t)))              ; the next preview takes a's place
+          (should (funcall italic b))
+          (should-not (memq a (drgnx-chrome-tabs w)))
+          (with-current-buffer b (insert "y"))          ; an edit keeps it
+          (should-not (funcall italic b))
+          (let ((a2 (funcall visit "a.el" t)))
+            (should (memq b (drgnx-chrome-tabs w)))
+            (should (funcall italic a2))
+            (funcall visit "a.el" nil)                  ; opened to work in: kept
+            (should-not (funcall italic a2))
+            (funcall visit "kept.el" t)                 ; already a tab: not a preview
+            (should-not (funcall italic kept))
+            (with-current-buffer b (set-buffer-modified-p nil))))))))
 
 (ert-deftest drgnx-chrome/the-breadcrumb-shortens-on-request ()
   (drgnx-chrome-test--with dir

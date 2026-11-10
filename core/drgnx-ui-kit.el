@@ -17,6 +17,8 @@
 (require 'drgnx-registry)
 (require 'drgnx-surfaces)
 (require 'drgnx-faces)
+(require 'drgnx-type-faces)
+(require 'drgnx-pixels)
 
 (defconst drgnx-ui--icon-glyphs
   ;; one per icon of etc/icons (`drgnx-look-icon'): the glyph a terminal frame or the setting `glyphs' shows
@@ -32,7 +34,7 @@
     (lightbulb "◌" . "i") (pencil "✎" . "e") (clock "◷" . "t") (bot "◈" . "b") (pin "⌖" . "p")
     (circle-dot "◉" . "o") (play "▶" . ">") (pause "⏸" . "||") (square "■" . "#") (refresh-cw "↻" . "r")
     (trash-2 "⌫" . "d") (copy "⎘" . "c") (settings "⚙" . "*") (terminal "›_" . ">_") (bell "◔" . "!")
-    (eye "◉" . "o") (lock "▮" . "#") (tag "⌗" . "#")
+    (eye "◉" . "o") (lock "▮" . "#") (tag "⌗" . "#") (shield "⛨" . "!") (panel-right "◫" . "|")
     (triangle "▲" . "^") (hexagon "⬢" . "H") (star "★" . "*"))
   "The glyphs of the icons (NAME → (UNICODE . ASCII)), named after the icon files.  Several look alike on a terminal
 that is not UTF-8: an icon's glyph says less than its picture.  The icon names that exist as glyphs already
@@ -95,7 +97,10 @@ An unknown SEVERITY is `info'."
 
 ;;;; Buttons
 
-(defface drgnx-ui-button '((t :inherit button)) "A button drawn by the UI kit (`drgnx-ui-button')." :group 'drgnx)
+(defface drgnx-ui-button '((t :inherit (drgnx-ui-text drgnx-control)))
+  "A button drawn by the UI kit (`drgnx-ui-button'): the look's control, in the UI text role." :group 'drgnx)
+(defface drgnx-ui-button-primary '((t :inherit (drgnx-ui-text drgnx-control-primary)))
+  "The primary button of a group (`drgnx-ui-button' with this face): filled with the accent." :group 'drgnx)
 
 (defface drgnx-ui-close '((t :inherit shadow))
   "The close button (×) of a title, tab row or popup header (`drgnx-ui-close-button')." :group 'drgnx)
@@ -122,13 +127,35 @@ called interactively, else a function of no arguments.  A symbol that is none of
           (puthash action (cons (cons where m) maps) drgnx-ui--button-maps)
           m))))
 
+(defconst drgnx-ui-button-height 26
+  "A button's height with its 1 px ring, in logical pixels (design §3.5 `.btn').  The room's stretch is this tall:
+the ring does not add to a stretch's height.")
+
+(defun drgnx-ui-button-pad (face &optional frame)
+  "The `display' of the room at either end of a button in FACE on FRAME: 11 logical pixels (12 with the ring), and on
+a graphical frame as tall as `drgnx-ui-button-height', the text centred in it."
+  (let* ((scale (drgnx-pixels-scale frame)) (width (list (round (* scale 11))))
+         (height (round (* scale drgnx-ui-button-height)))
+         (extent (drgnx-pixels-font-extent face frame)))
+    (if (and extent (> height (+ (car extent) (cdr extent))))
+        (let* ((below (+ (cdr extent) (/ (- height (car extent) (cdr extent)) 2))))
+          `(space :width ,width :height (,height) :ascent ,(min 100 (ceiling (* 100.0 (- height below)) height))))
+      `(space :width ,width))))
+
 (cl-defun drgnx-ui-button (label action &key help face (where 'text) props)
   "LABEL as a button that runs ACTION: a registry id (run as from the palette, so its use is counted), a command, or
 a function of no arguments.  WHERE is `text' (`mouse-1' and RET), `header-line', `mode-line' or `tab-line' (`mouse-1'
-there).  FACE defaults to `drgnx-ui-button'; HELP is the `help-echo'; PROPS are more text properties."
-  (apply #'propertize label 'face (or face 'drgnx-ui-button) 'mouse-face 'highlight 'help-echo help
-         (if (eq where 'text) 'keymap 'local-map) (drgnx-ui--button-map action where)
-         (append (and (eq where 'text) '(follow-link t)) props)))
+there).  FACE defaults to `drgnx-ui-button' (`drgnx-ui-button-primary' for a group's main action); HELP is the
+`help-echo'; PROPS are more text properties.  In text the label has room inside the button at either end
+\(`drgnx-ui-button-pad'); on a line (header, mode, tab) it is the label alone."
+  (let* ((face (or face 'drgnx-ui-button))
+         (label (if (eq where 'text)
+                    (let ((pad (propertize " " 'display (drgnx-ui-button-pad face))))
+                      (concat pad label pad))
+                  label)))
+    (apply #'propertize label 'face face 'mouse-face 'highlight 'help-echo help
+           (if (eq where 'text) 'keymap 'local-map) (drgnx-ui--button-map action where)
+           (append (and (eq where 'text) '(follow-link t)) props))))
 
 (defun drgnx-ui-insert-button (label action &rest keys)
   "Insert at point the button `drgnx-ui-button' makes of LABEL, ACTION and KEYS."

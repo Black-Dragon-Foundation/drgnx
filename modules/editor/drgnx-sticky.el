@@ -4,8 +4,8 @@
 
 ;;; Commentary:
 ;; Like VS Code's sticky scroll: when the start of the function (class, block) you are in has scrolled off the top,
-;; its first line shows in the header, after the breadcrumb — up to three enclosing scopes, outermost first, one
-;; line (`a › b › c').  The header line is always there (the breadcrumb), so nothing shifts as you scroll.  Scopes
+;; its name shows in the header, after the breadcrumb — up to three enclosing scopes, outermost first, one
+;; line (`a › b › c'), in the breadcrumb's caption face (the look shows symbol names, never the code line).  The header line is always there (the breadcrumb), so nothing shifts as you scroll.  Scopes
 ;; come from tree-sitter when the buffer has a parser (functions, classes, …), else from indentation.  Each window
 ;; start is worked out once (a memo, rebuilt when the start moves or the text above it changes).  drgnx's own; no package.  See docs/guide/editing.md.
 
@@ -17,6 +17,7 @@
 (require 'drgnx-memo)
 (require 'drgnx-large-file)
 (require 'drgnx-timer)
+(require 'drgnx-type-faces)             ; `drgnx-ui-caption'
 
 (declare-function drgnx-chrome-add-tail-provider "drgnx-chrome")
 (declare-function drgnx-chrome-remove-tail-provider "drgnx-chrome")
@@ -42,7 +43,8 @@
 
 (defvar drgnx-sticky-scan-chars 300000 "How far back (characters) the indentation fallback looks for a scope.")
 
-(defface drgnx-sticky '((t :inherit drgnx-wb-bar)) "Sticky scroll's scopes in the header line." :group 'drgnx)
+(defface drgnx-sticky '((t :inherit (drgnx-ui-caption drgnx-text-muted)))
+  "Sticky scroll's scope names in the header line: the breadcrumb's caption." :group 'drgnx)
 
 (defun drgnx-sticky--line-indent ()
   "The current line's indentation, or nil when it is blank."
@@ -133,13 +135,43 @@ and a poll redraws the header once the tree is there."
          (drgnx-sticky--indent-scopes pos))
         (t (drgnx-sticky--treesit-scopes pos))))
 
+(defconst drgnx-sticky--lisp-name
+  "(\\(?:[[:alnum:]-]+[:/]\\)?def[[:alnum:]-]*\\*?[ \t]+'?(?\\([^][ \t\n()\"]+\\)"
+  "A Lisp definition's name: `(defun NAME', `(cl-defmethod NAME', `(defvar NAME'.")
+
+(defconst drgnx-sticky--keyword-name
+  (concat "\\_<\\(?:def\\|fn\\|func\\|function\\|class\\|struct\\|enum\\|union\\|trait\\|impl\\|interface\\|module"
+          "\\|mod\\|namespace\\|object\\|record\\|type\\|macro_rules!\\)\\_>[ \t]+\\([[:alpha:]_$][[:alnum:]_$]*\\)")
+  "A definition's name after its keyword: `def area', `class Shape', `fn main', `impl Foo'.")
+
+(defconst drgnx-sticky--call-name "\\([[:alpha:]_][[:alnum:]_:.~]*\\)[ \t]*("
+  "A C-like definition's name: the identifier before its parameter list (`int main(void) {').")
+
+(defconst drgnx-sticky--key-name "\\`\\([[:alpha:]_][[:alnum:]_.-]*\\)[ \t]*:"
+  "A key that opens a block (`build:' in YAML).")
+
+(defconst drgnx-sticky--not-names '("if" "for" "while" "switch" "catch" "return" "sizeof" "else" "do")
+  "Words before a `(' that are statements, not definitions.")
+
+(defun drgnx-sticky--name (line lisp)
+  "The symbol name LINE (a scope's first line, trimmed) defines, or nil when it names nothing (`(let ((x', `if (a)').
+LISP: the buffer is a Lisp, where only a definition form names a scope."
+  (save-match-data
+    (cond ((string-match drgnx-sticky--lisp-name line) (match-string 1 line))
+          (lisp nil)
+          ((string-match drgnx-sticky--keyword-name line) (match-string 1 line))
+          ((and (string-match drgnx-sticky--call-name line)
+                (not (member (match-string 1 line) drgnx-sticky--not-names)))
+           (match-string 1 line))
+          ((string-match drgnx-sticky--key-name line) (match-string 1 line)))))
+
 (defun drgnx-sticky--text (start)
-  "The line at START, as the buffer shows it, trimmed."
+  "The symbol name the scope at START defines (the look: a breadcrumb shows names, never code), or nil."
   (save-excursion
     (goto-char start)
-    (let ((end (line-end-position)))
-      (when (fboundp 'font-lock-ensure) (ignore-errors (font-lock-ensure start end)))
-      (string-trim (buffer-substring (progn (back-to-indentation) (point)) end)))))
+    (drgnx-sticky--name (string-trim (buffer-substring-no-properties (progn (back-to-indentation) (point))
+                                                                     (line-end-position)))
+                        (derived-mode-p 'lisp-data-mode))))
 
 (drgnx-epoch-define 'sticky :per 'buffer
                     :doc "Raised by an edit at or above a window's start in the buffer (its scopes may have changed).")
@@ -166,11 +198,13 @@ segment, with the text unchanged, takes that segment: the scope lines are read a
                        (last drgnx-sticky--last) (tick (buffer-chars-modified-tick)))
                   (cond ((null scopes) "")
                         ((and last (eql (aref last 0) tick) (equal (aref last 1) scopes)) (aref last 2))
-                        (t (let ((text (string-replace "%" "%%" (mapconcat #'drgnx-sticky--text scopes " › "))))  ; the mode line's %
-                             (add-face-text-property 0 (length text) 'drgnx-sticky t text)          ; the buffer's colours stay
-                             (let ((s (concat " › " text)))
-                               (setq drgnx-sticky--last (vector tick scopes s))
-                               s))))))))
+                        (t (let* ((names (delq nil (mapcar #'drgnx-sticky--text scopes)))
+                                  (s (if names
+                                         (concat " › " (string-replace "%" "%%" (string-join names " › "))) ; the mode line's %
+                                       "")))
+                             (add-face-text-property 0 (length s) 'drgnx-sticky t s)
+                             (setq drgnx-sticky--last (vector tick scopes s))
+                             s)))))))
 
 (defun drgnx-sticky--tail (w)
   "The chrome's tail provider (depth 20, after the large-file header): window W's sticky part,

@@ -16,14 +16,16 @@
 (require 'seq)
 (require 'drgnx-paths)
 (require 'drgnx-file)
-(require 'drgnx-type-faces)             ; `drgnx-code-small'
+(require 'drgnx-type-faces)             ; `drgnx-code-small', `drgnx-ui-caption'
+(require 'drgnx-faces)                  ; `drgnx-text-subtle'
 
 (declare-function drgnx-surfaces-run "drgnx-surfaces")
 
 ;;;; Keycaps
 
-(defface drgnx-keycap '((t :inherit (drgnx-code-small drgnx-surface-raised) :box (:line-width (1 . -1))))
-  "One key of a shortcut, drawn as a cap beside a palette row."
+(defface drgnx-keycap '((t :inherit (drgnx-ui-caption drgnx-text-subtle) :box (:line-width (1 . 1))))
+  "One key of a shortcut, drawn as a cap: subtle text in the caption role, ringed in the strong border (the themes give
+the ring's colour), radius 4 where the compositor rounds."
   :group 'drgnx-look)
 
 (defconst drgnx-palette--key-names
@@ -49,9 +51,15 @@
                                  (t chord))))))
           (split-string key " " t)))
 
+(defconst drgnx-palette--keycap-pad (propertize " " 'display '(space :width (4)))
+  "The room inside a keycap at either end (design §3.5 `kbd': 5 px with the 1 px ring).")
+
 (defun drgnx-palette-keycaps (key)
-  "The key description KEY as keycaps: each key in `drgnx-keycap', one space between."
-  (mapconcat (lambda (name) (propertize name 'face 'drgnx-keycap)) (drgnx-palette-keycap-names key) " "))
+  "The key description KEY as keycaps: each key in `drgnx-keycap' with 4 px of room inside at either end, one space
+between."
+  (mapconcat (lambda (name)
+               (propertize (concat drgnx-palette--keycap-pad name drgnx-palette--keycap-pad) 'face 'drgnx-keycap))
+             (drgnx-palette-keycap-names key) " "))
 
 ;;;; Recent commands
 
