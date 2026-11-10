@@ -1482,6 +1482,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `say/end` | user | `{id: Id}` | `boolean` | yes |
 | `say/revise` | user | `{id: Id, text: Text}` | `boolean` | yes |
 | `say/start` | user | `{profile?: string, project?: Id, repo: AbsPath, text: Text}` | `{id: string}` | yes |
+| `search/buffer` | user | `{large?: boolean, path: AbsPath, text?: string, tick?: natnum, view: string}` | `boolean` | no |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
 | `search/files` | user | `{ignore?: "index" \| "real", n?: natnum, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
 | `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
@@ -2380,7 +2381,18 @@ snapshots; the search itself is `hrafn::grep`).
   none), and the editor unticks them. A run stopped before its end hands what it carried to the next run; the
   skipped list of Replace All (`search/grep-skipped`) ends the carry.
 - **Snapshots:** the run records each file's size, modified time, inode and, up to 16 MiB, an xxh3 of its bytes, read
-  in the search's thread outside every lock.
+  in the search's thread outside every lock; for a buffer's text (below), its size, xxh3 and the buffer's tick.
+- **Open buffers:** `search/buffer {view, path, tick?, text?, large?}` → `true`. With `text`, the view's searches
+  search it in place of the file at `path` (absolute) from now on: a run drops the file's matches on disk and, at its
+  end, searches each such text (`hrafn::grep::search_text`, line by line with the fallbacks' regex) where the run
+  would search its file (the File scope's one file, else under the root and searched by the ignore rules; the globs
+  do not apply), outside every lock. The current run takes a text sent while it runs or after it ended at once: the
+  file's matches are replaced in place with new numbers after the run's others (so no id sent names another match),
+  a file the run did not list comes last, and one left with no match goes; the model and the rows go out whole as
+  diffs, and a run that had ended sends `search-run-done` again with the new totals (no `off`). `large` (a buffer
+  over the editor's threshold, or open as a large file) keeps the file's matches on disk and adds "open in chunks:
+  searched on disk" to its header. Neither forgets the buffer (saved or killed): the next run reads the file. A
+  view's buffers go when the view closes or its connection ends.
 - **Row text:** a header is `[x] name` and, below the root, the folder in `drgnx-replace-dim`; a match is `  [x] ` and
   the text around it, with the match in `drgnx-replace-match`, or, when `replace` is not empty, struck out
   (`drgnx-replace-old`) with the replacement after it (`drgnx-replace-new`); after a regexp search `\1`, `\&` and

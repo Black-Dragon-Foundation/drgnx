@@ -3,7 +3,7 @@
 ;; test-pattern: pure
 ;; Needs Sjá (a Nidhogg with `nidhogg-view--call') for the hub-fed view; those tests are skipped elsewhere.  No hub:
 ;; the hub's calls are recorded and its patches and events are handed in by hand (the real stream is the row
-;; `search/run-streams-rows').  Each test names its pattern (D: pure; A: every order, unsaved-buffer rescan).
+;; `search/run-streams-rows').  Each test names its pattern (D: pure).
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)
@@ -131,95 +131,68 @@ the old version), is dropped by the editor and never drawn."
     (drgnx-view-draw-now drgnx-view)
     (should (equal "[x] new.txt\n" (buffer-substring-no-properties drgnx-replace--results (point-max))))))
 
-(ert-deftest drgnx-replace-rows/unsaved-buffer-rescan-still-marks ()
-  "Pattern A: the Lisp rescan reads a visited file from its buffer, unsaved edits too, through `--grep-line' and
-`--match': the matches the hub's disk search cannot see."
-  (let* ((dir (make-temp-file "replace-rows" t)) (file (expand-file-name "a.txt" dir)) buf)
-    (unwind-protect
-        (progn
-          (write-region "nothing here\n" nil file nil 'silent)
-          (setq buf (find-file-noselect file))
-          (with-current-buffer buf (goto-char (point-max)) (insert "a needle appears\n"))
-          (with-temp-buffer
-            (drgnx-replace-mode)
-            (setq drgnx-replace--root (file-name-as-directory dir)
-                  drgnx-replace--widgets nil drgnx-replace--opts (list :case nil :word nil :regexp nil))
-            (cl-letf (((symbol-function 'drgnx-replace--text) (lambda (name) (if (eq name 'find) "needle" ""))))
-              (let ((ms (drgnx-replace--scan file)))
-                (should (= 1 (length ms)))
-                (should (equal '(:line 2 :col 2 :end 8 :text "needle")
-                               (list :line (plist-get (car ms) :line) :col (plist-get (car ms) :col)
-                                     :end (plist-get (car ms) :end) :text (plist-get (car ms) :text))))))))
-      (when buf (with-current-buffer buf (set-buffer-modified-p nil)) (kill-buffer buf))
-      (delete-directory dir t))))
-
-(ert-deftest drgnx-replace-rows/unsaved-buffer-rescan-still-marks-on-the-hub-path ()
-  "Pattern A: on the hub path a modified buffer's matches are the Lisp rescan's, not the disk's.  a.txt: the buffer
-has a match the file lacks, and the hub found none; b.txt: the hub found a match on disk that the buffer no longer
-has.  After `search-run-done' the view shows a.txt's match and no row of b.txt, the status counts what is shown, and
-Replace All writes the buffer's match."
+(ert-deftest drgnx-replace-rows/modified-buffers-go-to-the-hub-with-the-search ()
+  "Pattern D: before a search the view sends the hub each modified buffer under the root (`search/buffer': its text
+and tick; one over the size the view sends, or open as a large file, as `large' with no text), then `search/run'.  A
+buffer outside the root is not sent.  The next search sends only what changed since: nothing for a buffer not edited
+again, and a buffer saved since is forgotten (its path alone): the hub searches its file again."
   (drgnx-replace-rows-test--with
     (let* ((dir (file-name-as-directory (make-temp-file "replace-rows-hub" t)))
-           (a (expand-file-name "a.txt" dir)) (b (expand-file-name "b.txt" dir)) (c (expand-file-name "c.txt" dir))
-           bufs)
+           (out (file-name-as-directory (make-temp-file "replace-rows-out" t)))
+           (a (expand-file-name "a.txt" dir)) (big (expand-file-name "big.log" dir)) (o (expand-file-name "o.txt" out))
+           (drgnx-replace-refresh-max-bytes 64) bufs)
       (unwind-protect
           (progn
-            (write-region "nothing here\n" nil a nil 'silent)
-            (write-region "old needle\n" nil b nil 'silent)
-            (write-region "disk needle\n" nil c nil 'silent)
-            (let ((ba (find-file-noselect a)) (bb (find-file-noselect b)))
-              (setq bufs (list ba bb))
-              (with-current-buffer ba (goto-char (point-max)) (insert "a needle appears\n"))
-              (with-current-buffer bb (erase-buffer) (insert "no match now\n")))
-            (setq drgnx-replace--root dir)
+            (dolist (f (list a big o)) (write-region "nothing\n" nil f nil 'silent))
+            (setq bufs (mapcar #'find-file-noselect (list a big o)) drgnx-replace--root dir)
+            (with-current-buffer (nth 0 bufs) (insert "a needle\n"))
+            (with-current-buffer (nth 1 bufs) (insert (make-string 100 ?x)))
+            (with-current-buffer (nth 2 bufs) (insert "needle\n"))
             (drgnx-replace--fill 'find "needle")
             (drgnx-replace--search-now)
-            (drgnx-view-apply-patch (drgnx-replace-rows-test--patch view 0 1 (list (list :reset nil))))
-            (drgnx-view-apply-patch
-             (drgnx-replace-rows-test--patch
-              view 1 2 (list (list :insert (list :after nil
-                                                 :rows (list (drgnx-replace-rows-test--row "f:b.txt" "[x] b.txt" b)
-                                                             (drgnx-replace-rows-test--row "m:1:0" "  [x] old needle" b)
-                                                             (drgnx-replace-rows-test--row "f:c.txt" "[x] c.txt" c)
-                                                             (drgnx-replace-rows-test--row
-                                                              "m:1:1" "  [x] disk needle" c)))))))
-            (drgnx-replace--hub-event "search-run-done" (list :view view :run 1 :files 2 :matches 2))
-            (drgnx-view-draw-now drgnx-view)
-            (let ((text (buffer-substring-no-properties drgnx-replace--results (point-max))))
-              (should (string-match-p "a\\.txt" text))
-              (should (string-match-p "a needle appears" text))
-              (should-not (string-match-p "b\\.txt" text))
-              (should (string-match-p "c\\.txt" text)))
-            (should (string-match-p "2 results in 2 files" (buffer-substring-no-properties
-                                                            drgnx-replace--status-beg drgnx-replace--status-end)))
-            (let ((ms (drgnx-replace--rows-ticked nil)))
-              ;; no model here: the hub's c.txt is not in it
-              (should (equal (list a) (mapcar (lambda (m) (plist-get m :file)) ms)))))
+            (should (equal (list (list a :tick (buffer-chars-modified-tick (nth 0 bufs)) :text "a needle\nnothing\n")
+                                 (list big :tick (buffer-chars-modified-tick (nth 1 bufs)) :large t))
+                           (sort (drgnx-replace-rows-test--buffer-calls) (lambda (x y) (string< (car x) (car y))))))
+            (should (equal "search/run" (car (car drgnx-replace-rows-test--calls))))
+            ;; again: a was saved meanwhile, big not edited
+            (setq drgnx-replace-rows-test--calls nil)
+            (with-current-buffer (nth 0 bufs) (set-buffer-modified-p nil))
+            (drgnx-replace--fill 'find "needl")
+            (drgnx-replace--search-now)
+            (should (equal (list (list a)) (drgnx-replace-rows-test--buffer-calls))))
         (dolist (x bufs) (with-current-buffer x (set-buffer-modified-p nil)) (kill-buffer x))
-        (delete-directory dir t)))))
+        (delete-directory dir t)
+        (delete-directory out t)))))
 
-(ert-deftest drgnx-replace-rows/next-match-walks-the-unsaved-buffer-rows ()
-  "Pattern A: Next Match and Previous Match go through the rows Emacs scanned in a modified buffer (they are not in the
-hub's model), wrapping, and show each match from the buffer's scan."
+(defun drgnx-replace-rows-test--buffer-calls ()
+  "The `search/buffer' calls made, oldest first: (PATH . the rest of its params but the view)."
+  (mapcar (lambda (c) (let ((p (cdr c))) (cons (plist-get p :path) (cl-loop for (k v) on p by #'cddr
+                                                                            unless (memq k '(:view :path))
+                                                                            append (list k v)))))
+          (seq-filter (lambda (c) (equal (car c) "search/buffer")) (reverse drgnx-replace-rows-test--calls))))
+
+(ert-deftest drgnx-replace-rows/an-edit-sends-the-buffer-again-after-the-pause ()
+  "Pattern D: an edit in a modified buffer under the root sends its text again once the pause after it is over (the
+hub patches the search's rows of its file); before the pause nothing goes."
   (drgnx-replace-rows-test--with
-    (let* ((dir (file-name-as-directory (make-temp-file "replace-rows-next" t)))
-           (a (expand-file-name "a.txt" dir)) buf (shown nil))
+    (let* ((dir (file-name-as-directory (make-temp-file "replace-rows-edit" t)))
+           (a (expand-file-name "a.txt" dir)) buf)
       (unwind-protect
           (progn
-            (write-region "nothing here\n" nil a nil 'silent)
-            (setq buf (find-file-noselect a))
-            (with-current-buffer buf (goto-char (point-max)) (insert "one needle\ntwo needle\n"))
-            (setq drgnx-replace--root dir)
+            (write-region "nothing\n" nil a nil 'silent)
+            (setq buf (find-file-noselect a) drgnx-replace--root dir)
+            (with-current-buffer buf (insert "one needle\n"))
             (drgnx-replace--fill 'find "needle")
             (drgnx-replace--search-now)
-            (drgnx-view-apply-patch (drgnx-replace-rows-test--patch view 0 1 (list (list :reset nil))))
-            (drgnx-replace--hub-event "search-run-done" (list :view view :run 1 :files 0 :matches 0))
-            (cl-letf (((symbol-function 'drgnx-replace--show-match) (lambda (m _select) (push (plist-get m :line) shown))))
-              (drgnx-replace-next)
-              (drgnx-replace-next)
-              (drgnx-replace-next)
-              (drgnx-replace-prev))
-            (should (equal '(3 2 3 2) shown)))
+            (setq drgnx-replace-rows-test--calls nil)
+            (with-current-buffer buf (goto-char (point-max)) (insert "two needle\n") (drgnx-replace--buffer-changed))
+            (should-not (drgnx-replace-rows-test--buffer-calls))
+            (should (drgnx-timer-active-p (cons 'replace-buffers (current-buffer))))
+            (drgnx-replace--buffers-timer (current-buffer))
+            (should (equal (list (list a :tick (buffer-chars-modified-tick buf)
+                                       :text "one needle\nnothing\ntwo needle\n"))
+                           (drgnx-replace-rows-test--buffer-calls)))
+            (should-not (member "search/run" (mapcar #'car drgnx-replace-rows-test--calls))))
         (when buf (with-current-buffer buf (set-buffer-modified-p nil)) (kill-buffer buf))
         (delete-directory dir t)))))
 

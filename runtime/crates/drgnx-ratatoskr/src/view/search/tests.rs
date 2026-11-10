@@ -1,5 +1,5 @@
 use super::rows::grep_doc_in;
-use super::run::{DIGEST_MAX, match_id, snapshot};
+use super::run::{DIGEST_MAX, buffer_snap, match_id, snapshot};
 use super::*;
 use runstav::methods::view::{Display, ViewEnv};
 
@@ -21,6 +21,7 @@ fn founds(files: Vec<(String, Vec<Match>)>) -> Vec<Found> {
                 ms,
                 ns,
                 snap: None,
+                large: false,
             }
         })
         .collect()
@@ -1153,4 +1154,170 @@ fn the_run_records_each_files_snapshot() {
             .unwrap(),
         Some(snap)
     );
+}
+
+/// RUN's FILE as PUT gives it, its patches dropped.
+fn put(greps: &Greps, s: &mut Store, run: u64, file: &str, p: Put) {
+    greps
+        .with(CONN, "s", run, |r| {
+            if put_file(r, file, p) {
+                whole_patches(s, CONN, "s", r);
+            }
+        })
+        .unwrap();
+}
+
+/// [D] A buffer's matches take the place of its file's: in the file's place, with new numbers after the run's
+/// others (the ids already sent name no other match), its snapshot the buffer's; a buffer's file the search did
+/// not list comes after the others; a buffer with no match takes its file away. The rows and the model follow, and
+/// Next Match finds the new ids.
+#[test]
+fn a_buffers_matches_take_the_place_of_its_files() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    feed(
+        &greps,
+        &mut s,
+        id,
+        "/r/a.txt",
+        vec![m("/r/a.txt", 1, "", "needle", "")],
+    );
+    feed(
+        &greps,
+        &mut s,
+        id,
+        "/r/b.txt",
+        vec![m("/r/b.txt", 1, "", "needle", "")],
+    );
+    let text = "needle\ntwo needle\n";
+    let snap = buffer_snap(7, text);
+    assert_eq!(
+        (snap.size, snap.xxh3, snap.tick),
+        (
+            18,
+            Some(xxhash_rust::xxh3::xxh3_64(text.as_bytes())),
+            Some(7)
+        )
+    );
+    let two = vec![
+        m("/r/a.txt", 1, "", "needle", ""),
+        m("/r/a.txt", 2, "two ", "needle", ""),
+    ];
+    put(&greps, &mut s, id, "/r/a.txt", Put::Text(two, snap.clone()));
+    assert_eq!(held(&s), ["f:a.txt", "m:1:2", "m:1:3", "f:b.txt", "m:1:1"]);
+    greps.current(CONN, "s", |run| {
+        assert_eq!(run.files[0].snap, Some(snap.clone()));
+        assert_eq!(row_index(run, "m:1:3"), Some(2));
+        assert_eq!(row_index(run, "m:1:1"), Some(4));
+        assert_eq!(row_index(run, "m:1:0"), None);
+        let doc = grep_doc(&run.query.root, run.id, &run.files, None);
+        assert_eq!(
+            doc.lists["order"],
+            ["f:a.txt", "m:1:2", "m:1:3", "f:b.txt", "m:1:1"].map(String::from)
+        );
+    });
+    let c = vec![m("/r/c.txt", 3, "", "needle", "")];
+    put(
+        &greps,
+        &mut s,
+        id,
+        "/r/c.txt",
+        Put::Text(c, buffer_snap(1, "\n\nneedle\n")),
+    );
+    assert_eq!(held(&s)[5..], ["f:c.txt", "m:1:4"]);
+    put(
+        &greps,
+        &mut s,
+        id,
+        "/r/a.txt",
+        Put::Text(vec![], buffer_snap(8, "")),
+    );
+    assert_eq!(held(&s), ["f:b.txt", "m:1:1", "f:c.txt", "m:1:4"]);
+    greps.current(CONN, "s", |run| {
+        assert_eq!(row_index(run, "m:1:4"), Some(3));
+    });
+}
+
+/// [D] A buffer too large to send keeps its file's matches on disk, and its header says the buffer is open in chunks.
+#[test]
+fn a_large_buffer_keeps_the_disk_matches_and_says_so() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    feed(
+        &greps,
+        &mut s,
+        id,
+        "/r/big.log",
+        vec![m("/r/big.log", 9, "", "needle", "")],
+    );
+    put(&greps, &mut s, id, "/r/big.log", Put::Large);
+    let rows = &s.pairs[&(CONN, "s".to_string(), "gui-1".to_string())].rows;
+    assert_eq!(
+        rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(),
+        [
+            "[x] big.log  open in chunks: searched on disk",
+            "  [x] needle"
+        ]
+    );
+}
+
+/// [D] A view's buffers: a text stands for its file (the search drops the file's matches on disk), a large one does
+/// not; none forgets it; another view's or connection's are its own, and the end of the connection forgets them.
+#[test]
+fn a_views_buffers_stand_for_their_files() {
+    let greps = Greps::default();
+    let text = |t: &str| {
+        Some(Buffer {
+            tick: 1,
+            text: Some(t.into()),
+        })
+    };
+    greps.put_buffer(CONN, "s", "/r/a.txt".into(), text("needle"));
+    greps.put_buffer(
+        CONN,
+        "s",
+        "/r/big.log".into(),
+        Some(Buffer {
+            tick: 2,
+            text: None,
+        }),
+    );
+    greps.put_buffer(CONN, "other", "/r/b.txt".into(), text("x"));
+    assert!(!greps.disk_ok(CONN, "s", "/r/a.txt"));
+    assert!(greps.disk_ok(CONN, "s", "/r/big.log"));
+    assert!(greps.disk_ok(CONN, "s", "/r/b.txt"));
+    assert!(greps.disk_ok(CONN + 1, "s", "/r/a.txt"));
+    assert_eq!(
+        greps
+            .buffers_of(CONN, "s")
+            .into_iter()
+            .map(|(f, _)| f)
+            .collect::<Vec<_>>(),
+        ["/r/a.txt", "/r/big.log"]
+    );
+    greps.put_buffer(CONN, "s", "/r/a.txt".into(), None);
+    assert!(greps.disk_ok(CONN, "s", "/r/a.txt"));
+    greps.gone(CONN);
+    assert!(greps.buffers_of(CONN, "other").is_empty());
+}
+
+/// [D] A buffer is searched when the search would search its file: the File scope's one file, else a file under the
+/// root its ignore rules search.
+#[test]
+fn a_buffer_is_searched_where_its_file_would_be() {
+    let mut q = query();
+    assert!(in_scope(&q, "/r/a.txt"));
+    assert!(in_scope(&q, "/r/sub/b.rs"));
+    assert!(!in_scope(&q, "/elsewhere/a.txt"));
+    assert!(!in_scope(&q, "/rr/a.txt"));
+    assert!(!in_scope(&q, "/r/.env"));
+    q.ignore = hrafn::grep::Ignore::Real;
+    assert!(in_scope(&q, "/r/.env"));
+    q.file = Some("/r/a.txt".into());
+    assert!(in_scope(&q, "/r/a.txt"));
+    assert!(!in_scope(&q, "/r/sub/b.rs"));
 }

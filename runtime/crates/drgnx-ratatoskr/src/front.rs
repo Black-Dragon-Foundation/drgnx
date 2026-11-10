@@ -715,6 +715,9 @@ impl Front {
             Params::GitLetters(p) => crate::view::git::letters(self, &caller, p).map(|b| json!(b)),
             // the Search view's search streaming rows to it (`search/run`, `search/grep-*`)
             Params::SearchRun(p) => crate::view::search::run(self, &caller, p).map(|r| json!(r)),
+            Params::SearchBuffer(p) => {
+                crate::view::search::buffer(self, &caller, p).map(|b| json!(b))
+            }
             Params::SearchFiles(p) => crate::view::files::start(self, &caller, p).map(|r| json!(r)),
             Params::SearchGrepReplace(p) => {
                 crate::view::search::replace(self, &caller, p).map(|b| json!(b))

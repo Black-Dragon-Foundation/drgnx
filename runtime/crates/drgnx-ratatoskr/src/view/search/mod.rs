@@ -20,10 +20,10 @@ use crate::front::Front;
 use drgnx_rows::{Op, Patch, Row};
 use hrafn::grep::{self, Match, Query};
 use rows::{MODEL_WINDOW, entries_of, gap_row, grep_doc, row_index, rows_in, rows_upto, window_of};
-use run::{Found, Snap};
+use run::{Buffer, Found, Snap};
 use runstav::methods::search::{
-    FindQuery, GrepLookParams, GrepReplaceParams, GrepSkippedParams, RunDone, RunParams,
-    RunStarted, ScopeKind,
+    BufferParams, FindQuery, GrepLookParams, GrepReplaceParams, GrepSkippedParams, RunDone,
+    RunParams, RunStarted, ScopeKind,
 };
 use runstav::methods::view::ViewModel;
 use runstav::wire::{Error, ErrorCode};
@@ -65,6 +65,8 @@ pub(super) struct Run {
     /// The remap keys of the matches the user unticked in the runs before (`run.rs`): resolved at the run's end, or
     /// handed to the next run when a newer one stops this one first.
     carry: HashSet<u64>,
+    /// The search has ended (`search-run-done` went out): a buffer's matches after it send the new totals again.
+    done: bool,
     /// The entries (files and matches) the model last sent held. Up to [`MODEL_WINDOW`] the batches' nodes and ids
     /// are appended, at most one send per `model_every`; past it the model grows when the search has doubled it, when
     /// rows go out, and at the end.
@@ -82,11 +84,13 @@ pub(super) struct Run {
 /// (`drgnx-view-delay`, 0.1 s) after it comes, and every line it reads costs it a redisplay pass.
 const MODEL_EVERY: Duration = Duration::from_millis(100);
 
-/// The searches, one per (connection, view).
+/// The searches, one per (connection, view), and the editor's buffers each view searches in place of their files.
 #[derive(Default)]
 pub(super) struct Greps {
     runs: Mutex<BTreeMap<(u64, String), Run>>,
     next: AtomicU64,
+    /// (connection, view) → file → its buffer (`search/buffer`), until the editor says the buffer is saved or gone.
+    buffers: Mutex<BTreeMap<(u64, String), BTreeMap<String, Buffer>>>,
 }
 
 impl Greps {
@@ -122,6 +126,7 @@ impl Greps {
             block: None,
             reasons: BTreeMap::new(),
             carry,
+            done: false,
             model_sent: 0,
             model_every: MODEL_EVERY,
             model_at: None,
@@ -134,14 +139,15 @@ impl Greps {
         (id, cancel)
     }
 
-    /// Stop VIEW's search.
+    /// Stop VIEW's search (the view closed): its buffers go too.
     pub(super) fn stop(&self, conn: u64, view: &str) {
         if let Some(r) = lock(&self.runs).remove(&(conn, view.to_owned())) {
             r.cancel.store(true, Ordering::Relaxed);
         }
+        lock(&self.buffers).remove(&(conn, view.to_owned()));
     }
 
-    /// Stop every search of CONN.
+    /// Stop every search of CONN, and forget its buffers.
     pub(super) fn gone(&self, conn: u64) {
         lock(&self.runs).retain(|(c, _), r| {
             if *c == conn {
@@ -149,6 +155,7 @@ impl Greps {
             }
             *c != conn
         });
+        lock(&self.buffers).retain(|(c, _), _| *c != conn);
     }
 
     /// Run THEN on VIEW's search when it is still search ID (a newer search, a close: none).
@@ -168,6 +175,134 @@ impl Greps {
     fn current<R>(&self, conn: u64, view: &str, then: impl FnOnce(&mut Run) -> R) -> Option<R> {
         Some(then(lock(&self.runs).get_mut(&(conn, view.to_owned()))?))
     }
+
+    /// VIEW's buffer of FILE is BUF from now on; none: the file is searched on disk again.
+    fn put_buffer(&self, conn: u64, view: &str, file: String, buf: Option<Buffer>) {
+        let mut all = lock(&self.buffers);
+        let key = (conn, view.to_owned());
+        match buf {
+            Some(b) => {
+                all.entry(key).or_default().insert(file, b);
+            }
+            None => {
+                if let Some(bufs) = all.get_mut(&key) {
+                    bufs.remove(&file);
+                    if bufs.is_empty() {
+                        all.remove(&key);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether VIEW's search takes FILE's matches on disk: not when a buffer's text stands for it.
+    fn disk_ok(&self, conn: u64, view: &str, file: &str) -> bool {
+        lock(&self.buffers)
+            .get(&(conn, view.to_owned()))
+            .and_then(|bufs| bufs.get(file))
+            .is_none_or(|b| b.text.is_none())
+    }
+
+    /// VIEW's buffers, by file.
+    fn buffers_of(&self, conn: u64, view: &str) -> Vec<(String, Buffer)> {
+        lock(&self.buffers)
+            .get(&(conn, view.to_owned()))
+            .map(|bufs| bufs.iter().map(|(f, b)| (f.clone(), b.clone())).collect())
+            .unwrap_or_default()
+    }
+}
+
+/// Whether Q searches FILE (absolute): its one file, else a file under its root that its ignore rules search. A
+/// buffer's file outside it is not searched (the include and exclude globs are the searcher's: a buffer is searched
+/// whatever they say).
+fn in_scope(q: &Query, file: &str) -> bool {
+    if let Some(one) = &q.file {
+        return Path::new(file) == one.as_path();
+    }
+    Path::new(file)
+        .strip_prefix(&q.root)
+        .ok()
+        .and_then(|rel| rel.to_str())
+        .is_some_and(|rel| !rel.is_empty() && grep::searched(q.ignore, rel))
+}
+
+/// FILE's buffer BUF as a run takes it: its text's matches for Q and its snapshot, or `Large`; none when its file is
+/// not one Q searches. Searched here, outside every lock.
+fn put_of(q: &Query, file: &str, buf: &Buffer) -> Option<Put> {
+    if !in_scope(q, file) {
+        return None;
+    }
+    Some(match &buf.text {
+        Some(text) => Put::Text(
+            grep::search_text(q, file, text).unwrap_or_default(),
+            run::buffer_snap(buf.tick, text),
+        ),
+        None => Put::Large,
+    })
+}
+
+/// What a buffer gives a run for its file.
+enum Put {
+    /// Its text's matches, and the text's snapshot: they take the place of the file's.
+    Text(Vec<Match>, Snap),
+    /// Too large to send: the file's matches on disk stay, and its header says the buffer is open in chunks.
+    Large,
+}
+
+/// FILE's matches in RUN as PUT gives them: its matches (if any) replaced in place, with new numbers, or the file
+/// added after the others; a file with none goes. False when nothing changed ([`whole_patches`] sends the rest).
+fn put_file(run: &mut Run, file: &str, put: Put) -> bool {
+    let at = run.files.iter().position(|f| f.file == file);
+    match put {
+        Put::Large => match at {
+            Some(i) if !run.files[i].large => run.files[i].large = true,
+            _ => return false,
+        },
+        Put::Text(ms, snap) => {
+            let ns: Vec<u32> = (run.next..).take(ms.len()).collect();
+            run.next += ms.len() as u32;
+            let found = Found {
+                file: file.to_owned(),
+                ms,
+                ns,
+                snap: Some(snap),
+                large: false,
+            };
+            match (at, found.ms.is_empty()) {
+                (Some(i), true) => {
+                    run.files.remove(i);
+                }
+                (Some(i), false) => run.files[i] = found,
+                (None, true) => return false,
+                (None, false) => run.files.push(found),
+            }
+        }
+    }
+    true
+}
+
+/// RUN's whole model, and its rows, as diffs for each class (files changed somewhere in them).
+fn whole_patches(
+    store: &mut Store,
+    conn: u64,
+    view: &str,
+    run: &mut Run,
+) -> (Option<ViewModel>, Vec<Patch>) {
+    run.waiting = (Vec::new(), Vec::new());
+    run.model_sent = entries_of(&run.files);
+    run.model_at = Some(Instant::now());
+    let from = store.window_from(conn, view, "order");
+    let model = store.publish_model(
+        conn,
+        view,
+        grep_doc(&run.query.root, run.id, &run.files, from),
+    );
+    let rows = view_rows(run);
+    let patches = keys(store, conn, view)
+        .iter()
+        .filter_map(|k| store.publish(k, rows.clone(), &[]))
+        .collect();
+    (model, patches)
 }
 
 impl Run {
@@ -286,7 +421,13 @@ fn batch_patches(
 ) -> (Option<ViewModel>, Vec<Patch>) {
     let ns: Vec<u32> = (run.next..).take(ms.len()).collect();
     run.next += ms.len() as u32;
-    let found = Found { file, ms, ns, snap };
+    let found = Found {
+        file,
+        ms,
+        ns,
+        snap,
+        large: false,
+    };
     let (nodes, ids) = rows::batch_nodes(&run.query.root, run.id, &found);
     run.files.push(found);
     // the file's rows (its header, then its matches), only what the window still has room for
@@ -535,22 +676,70 @@ impl Views {
             .is_some()
     }
 
+    /// The buffers' matches (PUTS, by file) in VIEW's search ID, one model and one patch for all of them; false when
+    /// VIEW's search is not search ID any more.
+    fn grep_puts(
+        &self,
+        f: &Front,
+        conn: u64,
+        view: &str,
+        id: u64,
+        puts: Vec<(String, Put)>,
+    ) -> bool {
+        self.greps
+            .with(conn, view, id, |run| {
+                let mut changed = false;
+                for (file, put) in puts {
+                    changed |= put_file(run, &file, put);
+                }
+                if !changed {
+                    return;
+                }
+                let (model, patches) = whole_patches(&mut lock(&self.store), conn, view, run);
+                if let Some(m) = model {
+                    f.send_to(conn, "view-model", super::Store::model_data(m));
+                }
+                for p in patches {
+                    f.send_to(conn, "view-patch", json!(p));
+                }
+                if run.done {
+                    // the totals changed after the end: they go again (the unticks went with the end)
+                    f.send_to(
+                        conn,
+                        "search-run-done",
+                        json!(done_of(view, run, None, Vec::new())),
+                    );
+                }
+            })
+            .is_some()
+    }
+
     fn grep_done(&self, f: &Front, conn: u64, view: &str, id: u64, error: Option<String>) {
         self.greps.with(conn, view, id, |run| {
             // the model is whole before the search is done: what waits goes now
             if let Some(m) = flush_model(&mut lock(&self.store), conn, view, run) {
                 f.send_to(conn, "view-model", super::Store::model_data(m));
             }
-            let done = RunDone {
-                view: view.to_owned(),
-                run: id,
-                files: run.files.len() as u64,
-                matches: run.files.iter().map(|f| f.ms.len() as u64).sum(),
-                error,
-                off: run.off(),
-            };
-            f.send_to(conn, "search-run-done", json!(done));
+            let off = run.off();
+            run.done = true;
+            f.send_to(
+                conn,
+                "search-run-done",
+                json!(done_of(view, run, error, off)),
+            );
         });
+    }
+}
+
+/// `search-run-done` of VIEW's RUN: its totals, ERROR, the matches that come back unticked (OFF).
+fn done_of(view: &str, run: &Run, error: Option<String>, off: Vec<String>) -> RunDone {
+    RunDone {
+        view: view.to_owned(),
+        run: run.id,
+        files: run.files.len() as u64,
+        matches: run.files.iter().map(|f| f.ms.len() as u64).sum(),
+        error,
+        off,
     }
 }
 
@@ -642,23 +831,75 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
         .spawn(move || {
             let on_file = |ms: Vec<Match>| {
                 let file = ms[0].file.clone();
-                // the file as the search read it, read here, outside every lock
-                let snap = run::snapshot(Path::new(&file));
                 let Some(f) = front.upgrade() else {
                     cancel.store(true, Ordering::Relaxed);
                     return;
                 };
+                // a buffer's text stands for the file: its matches come at the end
+                if !f.core.views.greps.disk_ok(conn, &view, &file) {
+                    return;
+                }
+                // the file as the search read it, read here, outside every lock
+                let snap = run::snapshot(Path::new(&file));
                 if !f.core.views.grep_batch(&f, conn, &view, id, file, ms, snap) {
                     cancel.store(true, Ordering::Relaxed);
                 }
             };
             let result = grep::run(&query, &cancel, on_file);
             if let Some(f) = front.upgrade() {
+                // the editor's buffers with unsaved edits, searched here, outside every lock
+                let puts = f
+                    .core
+                    .views
+                    .greps
+                    .buffers_of(conn, &view)
+                    .into_iter()
+                    .filter_map(|(file, b)| Some((file.clone(), put_of(&query, &file, &b)?)))
+                    .collect::<Vec<_>>();
+                if !cancel.load(Ordering::Relaxed) && !puts.is_empty() {
+                    f.core.views.grep_puts(&f, conn, &view, id, puts);
+                }
                 f.core.views.grep_done(&f, conn, &view, id, result.err());
             }
         })
         .map_err(|e| invalid("view", &e.to_string()))?;
     Ok(RunStarted { run: id })
+}
+
+/// `search/buffer`: VIEW's searches search the buffer's text in place of its file from now on (or the file on disk,
+/// saying the buffer is too large; neither: the file again); the current search takes it at once. True.
+pub fn buffer(f: &Front, c: &Caller, p: BufferParams) -> Result<bool, Error> {
+    let views = &f.core.views;
+    if p.view.is_empty() || p.view.len() > runstav::methods::view::VIEW_MAX {
+        return Err(invalid("view", "a view id of 1 to 64 bytes"));
+    }
+    let (conn, file) = (c.conn_id, p.path.as_str().to_owned());
+    let buf = match (p.text, p.large) {
+        (Some(text), _) => Some(Buffer {
+            tick: p.tick,
+            text: Some(text.into()),
+        }),
+        (None, Some(true)) => Some(Buffer {
+            tick: p.tick,
+            text: None,
+        }),
+        _ => None,
+    };
+    views
+        .greps
+        .put_buffer(conn, &p.view, file.clone(), buf.clone());
+    // the current search's query, then its matches in the text, searched outside every lock
+    let Some(buf) = buf else { return Ok(true) };
+    let Some((id, query)) = views
+        .greps
+        .current(conn, &p.view, |run| (run.id, run.query.clone()))
+    else {
+        return Ok(true);
+    };
+    if let Some(put) = put_of(&query, &file, &buf) {
+        views.grep_puts(f, conn, &p.view, id, vec![(file, put)]);
+    }
+    Ok(true)
 }
 
 /// `search/grep-look`: VIEW's rows go on, as P asks (the editor scrolled to the end of them, or went to a match

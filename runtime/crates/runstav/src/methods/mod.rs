@@ -299,6 +299,7 @@ params! {
     SearchTyping(Empty),
     GitLetters(git::LettersParams),
     SearchRun(search::RunParams),
+    SearchBuffer(search::BufferParams),
     SearchFiles(search::FilesParams),
     SearchSymbolAt(search::SymbolAtParams),
     SearchSymbols(search::SymbolsParams),

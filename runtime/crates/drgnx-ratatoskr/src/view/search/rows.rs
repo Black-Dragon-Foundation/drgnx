@@ -28,8 +28,9 @@ fn match_json(m: &Match) -> Value {
            "before": m.before, "after": m.after})
 }
 
-/// FILE's header: its tick box, its name, the folder (relative to the root) after it.
-pub(super) fn header(root: &Path, file: &str) -> Row {
+/// FILE's header: its tick box, its name, the folder (relative to the root) after it, and when its buffer is too large
+/// to send (LARGE) that its matches are the file's on disk.
+pub(super) fn header(root: &Path, file: &str, large: bool) -> Row {
     let path = Path::new(file);
     let name = path
         .file_name()
@@ -46,6 +47,12 @@ pub(super) fn header(root: &Path, file: &str) -> Row {
     b.push(" ", None).push(&name, None);
     if !dir.is_empty() {
         b.push(&format!("  {dir}/"), Some("drgnx-replace-dim"));
+    }
+    if large {
+        b.push(
+            "  open in chunks: searched on disk",
+            Some("drgnx-replace-dim"),
+        );
     }
     let end = b.pos();
     b.prop(0, end, "drgnx-replace-file", json!(file));
@@ -290,7 +297,7 @@ pub(super) fn rows_in(run: &Run, at: std::ops::Range<usize>) -> Vec<Row> {
             continue;
         }
         if at.contains(&i) {
-            rows.push(header(&run.query.root, &f.file));
+            rows.push(header(&run.query.root, &f.file, f.large));
         }
         let skip = at.start.saturating_sub(i + 1);
         for (m, k) in
@@ -324,14 +331,18 @@ pub(super) fn row_index(run: &Run, key: &str) -> Option<usize> {
         if r != run.id {
             return None;
         }
-        // the numbers grow file by file: the file holding N, then N among its matches
-        let fi = run
-            .files
-            .partition_point(|f| f.ns.first().is_some_and(|first| *first <= n))
-            .checked_sub(1)?;
-        let j = run.files[fi].ns.binary_search(&n).ok()?;
-        let before: usize = run.files[..fi].iter().map(|f| 1 + f.ms.len()).sum();
-        return Some(before + 1 + j);
+        // a file's numbers are one block (a file searched again from its buffer gets a later block in its old place):
+        // the file whose block holds N, then N among its matches
+        let mut before = 0;
+        for f in &run.files {
+            if let (Some(first), Some(last)) = (f.ns.first(), f.ns.last())
+                && (*first..=*last).contains(&n)
+            {
+                return Some(before + 1 + f.ns.binary_search(&n).ok()?);
+            }
+            before += 1 + f.ms.len();
+        }
+        return None;
     }
     let mut at = 0;
     for f in &run.files {

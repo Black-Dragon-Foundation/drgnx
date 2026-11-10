@@ -375,6 +375,24 @@ pub struct RunStarted {
     pub run: u64,
 }
 
+/// `search/buffer`: the editor's buffer of PATH holds unsaved edits: VIEW's searches search TEXT in place of the file
+/// from now on, and the current one takes its matches at once. A buffer over the editor's large-file threshold sends
+/// `large` and no text: the file is searched on disk, its header saying the buffer is open in chunks. Neither: the
+/// buffer was saved or killed, and the next search reads the file again.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BufferParams {
+    pub view: String,
+    pub path: AbsPath,
+    /// The buffer's `buffer-chars-modified-tick`.
+    #[serde(default)]
+    pub tick: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub large: Option<bool>,
+}
+
 /// `search/grep-replace`: VIEW's rows preview REPLACE now (no new search).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -912,6 +930,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/run", SearchRun(RunParams) -> RunStarted,
             classes: [User], writes: false,
             doc: "run the Search view's search over a folder and stream the matches to a hub-fed view as rows (view-patch: a reset, then each file's header and matches; ids m:RUN:N), ending with search-run-done; a newer search of the view stops the old one, and the matches the user unticked in it stay unticked when found again",
+        ),
+        method!(
+            "search/buffer", SearchBuffer(BufferParams) -> bool,
+            classes: [User], writes: false,
+            doc: "an editor buffer with unsaved edits: the Search view's searches search its text in place of its file (the current search at once), or say the buffer is too large and is searched on disk; without text or large the file is searched again",
         ),
         method!(
             "search/files", SearchFiles(FilesParams) -> FilesStarted,

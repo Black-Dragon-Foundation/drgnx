@@ -175,6 +175,7 @@
   "search/embedders": ["user"],
   "search/files": ["user"],
   "search/run": ["user"],
+  "search/buffer": ["user"],
   "search/grep-look": ["user"],
   "search/grep-skipped": ["user"],
   "search/grep-replace": ["user"],

@@ -20,6 +20,29 @@ pub(super) struct Snap {
     pub inode: u64,
     /// The 64-bit xxh3 of its bytes; none past [`DIGEST_MAX`].
     pub xxh3: Option<u64>,
+    /// The editor buffer's `buffer-chars-modified-tick` when the run searched the buffer's text (`search/buffer`),
+    /// not the file.
+    pub tick: Option<u64>,
+}
+
+/// An editor's buffer of a file with unsaved edits, as `search/buffer` sent it: its text is searched in place of the
+/// file's. A buffer over the editor's large-file threshold sends no text (`None`): the file is searched on disk, and
+/// its header says the buffer is open in chunks.
+#[derive(Clone, Debug)]
+pub(super) struct Buffer {
+    pub tick: u64,
+    pub text: Option<std::sync::Arc<str>>,
+}
+
+/// The snapshot of a buffer's TEXT at TICK.
+pub(super) fn buffer_snap(tick: u64, text: &str) -> Snap {
+    Snap {
+        size: text.len() as u64,
+        mtime: None,
+        inode: 0,
+        xxh3: Some(xxh3_64(text.as_bytes())),
+        tick: Some(tick),
+    }
 }
 
 /// FILE's snapshot now; none when it cannot be read.
@@ -39,11 +62,13 @@ pub(super) fn snapshot(file: &Path) -> Option<Snap> {
         mtime: meta.modified().ok(),
         inode,
         xxh3,
+        tick: None,
     })
 }
 
 /// One file's matches in a run: in the order the searcher gave them, each with its number in the run (its id
-/// `m:RUN:N`), and the file's snapshot.
+/// `m:RUN:N`; a file searched again from its buffer gets new numbers, after the run's others), and the file's
+/// snapshot.
 #[derive(Clone, Debug)]
 pub(super) struct Found {
     pub file: String,
@@ -53,10 +78,12 @@ pub(super) struct Found {
         not(test),
         expect(
             dead_code,
-            reason = "recorded now; the open-buffer search reads it to tell a changed file"
+            reason = "recorded now; the edit set reads it to tell a file changed since the search"
         )
     )]
     pub snap: Option<Snap>,
+    /// The file's buffer is open in chunks (too large to send): these are the matches on disk.
+    pub large: bool,
 }
 
 /// The id of match N of run RUN (its node, its row's key).

@@ -50,7 +50,8 @@ Replace All the list holds what it skipped, each match with why after its text; 
 ## The list stays current
 
 When a listed file changes on disk (an agent, a checkout, a save) the search runs again half a second later; a
-buffer with unsaved edits is searched from the buffer, so its edits count. Replace always reads the files at once, and
+buffer with unsaved edits is searched from the buffer (its text goes to the hub half a second after an edit), so its
+edits count, and its matches can be ticked and unticked like any other. Replace always reads the files at once, and
 checks them, before it writes. Changes on disk are noticed for the first 200 listed files
 (`drgnx-replace-watch-limit`). A symbol
 list is never re-asked of the server by itself: when the code changes, the status line says so; run Rename Symbol
@@ -126,7 +127,10 @@ base.  `search-run-done` ends the search and gives the count the status line sho
 "Searching…" until then.  Typing in the Replace field is `search/grep-replace`: the hub patches the previews and
 nothing is searched again.  Symbol mode (the language server's edits) keeps rows of Emacs's own (the `replace-results`
 view type), and the view changes between the two with each search; `drgnx-view-old-path` has no Search path of its
-own any more (plan sja-complete S2 removed the Lisp text engine).  The file watches stay Lisp: a listed file that changes on disk is searched again through the hub after half a second.  The hub reads the disk, so a file whose buffer has unsaved edits is rescanned by Emacs from the buffer
-(`drgnx-replace--scan`, after each search and half a second after an edit), also when the hub found nothing in the file:
-those matches take the place of the hub's rows of the file, are counted and are what Replace All and Replace This
-write.  Next Match and Previous Match walk them after the hub's matches; they have no tick boxes (they are not in the hub's model); a new search forgets them.  `test/unit/replace-rows-test.el` covers the stream with no hub.
+own any more (plan sja-complete S2 removed the Lisp text engine).  The file watches stay Lisp: a listed file that changes on disk is searched again through the hub after half a second.  The hub reads the disk, so before each search, and half a second after an edit, the view sends it the text of each
+buffer under the folder that has unsaved edits (`search/buffer`, only what changed since): the hub searches that text
+in place of the file, also when the file on disk has no match, and the search shown takes it at once.  Those matches
+are rows like any other, with tick boxes, in the model Next Match walks and Replace All writes.  A buffer over 4 MiB,
+or open as a large file, is not sent: its file is searched on disk and its header says "open in chunks: searched on
+disk".  A buffer saved or killed since is forgotten, and the hub reads its file again.
+`test/unit/replace-rows-test.el` covers the stream with no hub.

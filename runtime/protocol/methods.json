@@ -27015,6 +27015,65 @@
       "classes": [
         "user"
       ],
+      "doc": "an editor buffer with unsaved edits: the Search view's searches search its text in place of its file (the current search at once), or say the buffer is too large and is searched on disk; without text or large the file is searched again",
+      "name": "search/buffer",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/buffer`: the editor's buffer of PATH holds unsaved edits: VIEW's searches search TEXT in place of the file\nfrom now on, and the current one takes its matches at once. A buffer over the editor's large-file threshold sends\n`large` and no text: the file is searched on disk, its header saying the buffer is open in chunks. Neither: the\nbuffer was saved or killed, and the next search reads the file again.",
+        "properties": {
+          "large": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "path": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tick": {
+            "default": 0,
+            "description": "The buffer's `buffer-chars-modified-tick`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "path"
+        ],
+        "title": "BufferParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the built-in model's state and device, the servers that can embed and which answer, and the model a query prefers",
       "name": "search/embedders",
       "params": {
