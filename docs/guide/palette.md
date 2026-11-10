@@ -38,7 +38,7 @@ of the frame's height above the box) place it. No colours are set here: the them
 ## Rows
 
 Rows are in the UI font, 32 logical pixels high in the floating palette and 24 in the minibuffer. The letters you
-typed are in the accent colour, semibold; the current row is the selection colour. Each row shows its key as keycaps
+typed are in the accent colour, semibold; the current row is the selection colour, one rounded fill 6 pixels in from the list's sides (as the sidebar's rows; every row keeps the same left inset, so nothing moves as the selection does). Each row shows its key as keycaps
 (`Ctrl` `Shift` `P`; in a terminal the names alone, `Ctrl Shift P`), from the key profile you use, and, for a command you ran lately, when ("used 2 min ago").
 The commands you ran from the palette come first, newest first, then the rest in their usual order; the list is grouped
 Commands, Files and Agents, and is kept in `palette-history.eld` in drgnx's state folder (200 commands at most).

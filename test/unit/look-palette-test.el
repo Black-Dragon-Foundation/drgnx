@@ -97,5 +97,36 @@ rest."
             (should (equal (seq-take sorted 3) '("Z: C" "X: A" "Cmd: 1")))
             (should (equal (cddr sorted) (seq-take labels 300)))))))))
 
+(defun drgnx-look-palette-test--faces (face)
+  "FACE (a text property value) as a flat list of face names and plists."
+  (if (and (consp face) (not (keywordp (car face)))) face (list face)))
+
+(defun drgnx-look-palette-test--boxed-p (face)
+  "Non-nil when FACE carries the row's inside box."
+  (cl-some (lambda (f) (and (consp f) (plist-get f :box))) (drgnx-look-palette-test--faces face)))
+
+(ert-deftest drgnx-look-palette/the-current-row-is-one-rounded-inset-run ()
+  "Pattern D, palette.html `.row.sel': the current candidate is one rounded fill, 6 logical pixels in from the
+popup's sides: an inset before it (outside the fill), the text and a stretch to 6 pixels short of the right edge in the
+current face with the row's inside box (one box run: the stretch ends it, so its right corners are drawn), then a
+plain newline (no fill past the row).  Every row gets the same left inset, so the text does not move."
+  (load (expand-file-name "modules/extra/drgnx-completion" drgnx-dir) nil t)
+  (let* ((cand (let ((s (concat "Run Tests" "\n"))) (add-face-text-property 0 (length s) 'vertico-current t s) s))
+         (row (drgnx-completion--row cand t))
+         (n (length row)))
+    (should (equal "\n" (substring row -1)))
+    (should-not (memq 'vertico-current (drgnx-look-palette-test--faces (get-text-property (1- n) 'face row))))
+    (should (get-text-property 0 'display row))                                         ; the left inset
+    (should-not (memq 'vertico-current (drgnx-look-palette-test--faces (get-text-property 0 'face row))))
+    (should (string-search "Run Tests" row))
+    (cl-loop for i from 1 below (1- n)
+             do (should (memq 'vertico-current (drgnx-look-palette-test--faces (get-text-property i 'face row))))
+             do (should (drgnx-look-palette-test--boxed-p (get-text-property i 'face row))))
+    (should (string-match-p "align-to" (format "%S" (get-text-property (- n 2) 'display row))))
+    (let ((other (drgnx-completion--row (copy-sequence "Run Test at Point\n") nil)))
+      (should (get-text-property 0 'display other))
+      (should (equal "Run Test at Point\n" (substring other 1)))
+      (should-not (drgnx-look-palette-test--boxed-p (get-text-property 1 'face other))))))
+
 (provide 'look-palette-test)
 ;;; look-palette-test.el ends here

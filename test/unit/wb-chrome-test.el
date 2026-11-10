@@ -260,7 +260,8 @@ not painted with the tab row's band (`drgnx-wb-bar'); the theme's `header-line' 
 (ert-deftest drgnx-chrome/header-rows-are-one-band-to-the-edge ()
   (let ((s (drgnx-wb-bar "x")))
     (should (eq (get-text-property 0 'face s) 'drgnx-wb-bar))
-    (should (equal (get-text-property 1 'display s) '(space :align-to right)))
+    ;; over the right fringe too: the dock's sections have one (the rows' inset)
+    (should (equal (get-text-property 1 'display s) '(space :align-to (+ right right-fringe))))
     (should (eq (get-text-property 1 'face s) 'drgnx-wb-bar))))
 
 (ert-deftest drgnx-chrome/tab-faces-are-defined ()
