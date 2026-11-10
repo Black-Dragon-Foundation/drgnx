@@ -156,6 +156,27 @@ ringed in the strong border, with no fill of its own."
                          (list face (drgnx-face-color face :foreground 'gui) (drgnx-face-color face :background 'gui)
                                (plist-get box :color) (plist-get box :line-width)))))))))
 
+;; window-dark.html `.ln .sel' (the selection, radius 3) and design "Matches" (a 25 % accent tint; the current match
+;; gets the accent ring)
+(ert-deftest drgnx-themes/overlays-are-tints-in-inside-boxes ()
+  "The region is `sel' in a box of its own colour; `lazy-highlight' is the accent at 25 % over the editor in the same
+kind of box; `isearch' is that tint ringed 1 px in the accent, and keeps the text's own colour.  Every box is drawn
+inside the glyphs (negative widths), so it never moves text or grows a row; under Glitnir it is rounded 3 (logical; the
+decoration faces scale it per frame).  The region stops at the line's end: no square block past it."
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (let ((tint (drgnx-color-over (drgnx-look-token 'accent variant) (drgnx-look-token 'editor variant) 0.25)))
+        (pcase-dolist (`(,face ,bg ,style ,ring) `((region ,(drgnx-look-token 'sel variant) flat-button nil)
+                                                   (lazy-highlight ,tint flat-button nil)
+                                                   (isearch ,tint nil ,(drgnx-look-token 'accent variant))))
+          (let* ((p (drgnx-faces--clause-plist face 'gui)) (box (plist-get p :box)))
+            (should (equal (list face bg '(-1 . -1) style ring (and (featurep 'glitnir) 3))
+                           (list face (drgnx-face-color face :background 'gui) (plist-get box :line-width)
+                                 (plist-get box :style) (plist-get box :color) (plist-get box :corner-radius))))
+            ;; said, not left out: a theme spec inherits `:extend' from the defface (region's is t)
+            (should (equal (list face t nil) (list face (and (plist-member p :extend) t) (plist-get p :extend))))
+            (unless (eq face 'region) (should (equal (list face nil) (list face (plist-get p :foreground)))))))))))
+
 (ert-deftest drgnx-themes/variant-follows-the-theme ()
   (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
     (drgnx-themes-test--with theme (should (eq variant (drgnx-look-variant)))))
@@ -190,7 +211,9 @@ not loaded, so a module's faces count without its setup."
   '(;; the defface inherits `region' for a theme that is not drgnx's colour; a button ends with its label
     (drgnx-control-primary region :extend)
     ;; how far the selection reaches is the look's highlight step's (drgnx-selected is a row's colour, not the region)
-    (drgnx-selected region :extend))
+    (drgnx-selected region :extend)
+    ;; the region's rounded run is the editor's; a row's selection draws its own inset box (wb/drgnx-wb.el)
+    (drgnx-selected region :box))
   "(FACE PARENT ATTRIBUTE): what drgnx's themes drop from a defface's parent on purpose.")
 
 (ert-deftest drgnx-themes/a-theme-spec-keeps-the-defface-inherit ()

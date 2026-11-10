@@ -205,5 +205,51 @@ colour, 6 logical pixels wide; under Glitnir its corners are rounded (the corner
       (when (and (fboundp 'glitnir-active-p) (glitnir-active-p))
         (should-not (funcall near left (round (* s (+ (nth 1 e) top))) 'sel))))))
 
+(ert-deftest drgnx-ui-look-explorer/the-focused-row-is-ringed ()
+  "Pattern D, window-dark.html `.row.sel.focus' (`box-shadow: inset 0 0 0 1px var(--focus)'): with the Explorer
+focused, the selected row is ringed in the focus colour on its left, top and right (the right side at the text
+area's edge, after the tail), and the ring has no seam where the row's text meets its tail (the fill there, above the
+text, is the selection's)."
+  (skip-unless (and (display-graphic-p) (fboundp 'glitnir-active-p) (glitnir-active-p)))
+  (drgnx-ui-look-explorer--with root
+    (with-current-buffer drgnx-explorer-buffer-name
+      (goto-char (point-min)) (forward-line 2) (drgnx-wb-selection-sync))
+    (drgnx-test-wait-presented)
+    (let* ((snap (drgnx-uitest-snapshot)) (s (drgnx-uitest-device-scale (selected-frame)))
+           (e (window-body-pixel-edges))
+           (row (with-current-buffer drgnx-explorer-buffer-name
+                  (save-excursion (goto-char (point-min)) (forward-line 2)
+                                  ;; the seam: where the name's last character ends (the newline is after the tail)
+                                  (let ((last (posn-at-point (1- (pos-eol)))))
+                                    (list (cadr (pos-visible-in-window-p (point) nil t))
+                                          (+ (car (posn-x-y last)) (car (posn-object-width-height last))))))))
+           (y (round (* s (+ (nth 1 e) (drgnx-ui-look-explorer--row-y 3)))))
+           (above (round (* s (+ (nth 1 e) (nth 0 row) 4))))
+           (rgb (lambda (token) (mapcar (lambda (c) (round (* 255 c))) (drgnx-color-rgb (drgnx-look-token token 'dark)))))
+           (near (lambda (x yy token) (cl-every (lambda (p c) (<= (abs (- p c)) 6))
+                                                (cdr (drgnx-uitest-pixel snap x yy)) (funcall rgb token))))
+           (left (round (* s (nth 0 e)))) (right (round (* s (nth 2 e))))
+           (seam (round (* s (+ (nth 0 e) (nth 1 row)))))
+           (top (round (* s (+ (nth 1 e) (nth 0 row)))))
+           ;; the ring within 3 logical pixels of an edge (where the snapping puts a 1 px line), inward by DX, DY;
+           ;; else the pixels seen, for the failure
+           (ringed (lambda (x0 y0 dx dy)
+                     (or (cl-loop for i from 0 to (round (* 3 s))
+                                  thereis (funcall near (+ x0 (* i dx)) (+ y0 (* i dy)) 'focus))
+                         (list x0 y0 (car snap) (cl-loop for i from -4 to (round (* 8 s))
+                                                         for x = (+ x0 (* i dx)) for yy = (+ y0 (* i dy))
+                                                         when (and (< -1 x (car snap)) (< -1 yy (cadr snap)))
+                                                         collect (cdr (drgnx-uitest-pixel snap x yy))))))))
+      (should (eq t (funcall ringed left y 1 0)))
+      (should (eq t (funcall ringed (1- right) y -1 0)))
+      ;; the box's top: the first pixel below the row's top (its spacing is the panel) that is not the panel
+      (should (eq t (let ((x (+ seam (round (* 4 s)))))
+                      (cl-loop for yy from top to y
+                               unless (funcall near x yy 'panel)
+                               return (or (funcall near x yy 'focus) (list x yy (cdr (drgnx-uitest-pixel snap x yy))))
+                               finally return (list x 'no-box)))))
+      (dolist (x (list (1- seam) seam (1+ seam)))
+        (should (equal (list 'seam x 'sel) (list 'seam x (and (funcall near x above 'sel) 'sel))))))))
+
 (provide 'look-explorer-gui-test)
 ;;; look-explorer-gui-test.el ends here

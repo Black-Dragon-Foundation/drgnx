@@ -6,6 +6,7 @@
 (require 'cl-lib)
 (require 'drgnx)
 (load (expand-file-name "test/unit/wb-explorer-edge-test" drgnx-dir) nil t)   ; its fixtures: a root with files
+(load (expand-file-name "themes/drgnx-theme-gen" drgnx-dir) nil t)
 
 (defmacro drgnx-look-explorer-test--as (kind status &rest body)
   "BODY with the selected frame's kind stubbed to KIND (`gui' or `tty') and every file's git status STATUS."
@@ -126,24 +127,40 @@ made once and not again for another redraw of the same rows."
 (ert-deftest drgnx-look-explorer/selected-and-quiet ()
   "Pattern D, window-dark.html `.row.sel.focus' and `.row.sel': the row at point is the selection while the
 Explorer's window is the selected one, and the inactive selection when another window is (as VS Code's inactive
-selection).  Both are an inside box: no width changes when a row is selected.  No ring: the row's text and its tail
-are two box runs to Emacs (LOOK-FIX-RING-END-1), so the box is the fill's own colour."
+selection).  Both are an inside box: no width changes when a row is selected.  The focused one is ringed in the
+focus colour (`drgnx-focus''s ring); the inactive one's box is its fill's own colour.  The row's newline carries the
+selection's face too, so its text and its tail are one box run (one ring, no seam between them).  Under the dark
+theme (the ring's colour is a theme's), with Glitnir drawing (the ring needs it)."
   (drgnx-explorer-edge--with root
     (drgnx-look-explorer-test--as 'gui nil
-      (let ((buf (drgnx-explorer--buffer)) (row (drgnx-look-explorer-test--row "README.md")))
+      (cl-letf* (((symbol-function 'glitnir-active-p) #'always)
+                 (buf (drgnx-explorer--buffer)) (row (drgnx-look-explorer-test--row "README.md"))
+                 (was custom-enabled-themes))
+        (mapc #'disable-theme custom-enabled-themes)
+        (load-theme 'drgnx-dark t)
+        (drgnx-wb--row-faces-clear)
         (set-window-buffer (selected-window) buf)
         (with-current-buffer buf (goto-char row) (drgnx-wb-selection-sync))
         (let* ((o (drgnx-look-explorer-test--selected buf)) (face (overlay-get o 'face))
                (box (plist-get face :box)))
           (should (eq 'drgnx-selected (plist-get face :inherit)))
-          (should (eq 'flat-button (plist-get box :style)))
+          (should (equal (list nil (plist-get (face-attribute 'drgnx-focus :box nil t) :color))
+                         (list (plist-get box :style) (plist-get box :color))))
+          (should (stringp (plist-get box :color)))
           (should (< (car (plist-get box :line-width)) 0))
           (should (= row (overlay-start o)))
+          (with-current-buffer buf
+            (let ((eol (save-excursion (goto-char row) (pos-eol))))
+              (should (eq face (get-char-property eol 'face)))))
           (let ((other (split-window)))
             (select-window other)
             (set-window-buffer other (get-buffer-create "*look-explorer-other*"))
             (with-current-buffer buf (drgnx-wb-selection-sync))
-            (should (eq 'drgnx-selected-inactive (plist-get (overlay-get o 'face) :inherit)))))))))
+            (should (eq 'drgnx-selected-inactive (plist-get (overlay-get o 'face) :inherit)))
+            (should (eq 'flat-button (plist-get (plist-get (overlay-get o 'face) :box) :style)))))
+        (mapc #'disable-theme custom-enabled-themes)
+        (mapc (lambda (th) (enable-theme th)) (reverse was))
+        (drgnx-wb--row-faces-clear)))))
 
 (ert-deftest drgnx-look-explorer/ellipsis-hidden-shown-on-point-and-selected ()
   "Pattern D, window-dark.html: on a graphical frame a row's ⋯ is hidden, drawn in its row's colour: the hidden face
