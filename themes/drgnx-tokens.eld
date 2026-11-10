@@ -8,6 +8,8 @@
 ;; `match' is the search matches' fill, `match-edge' the outline of a match that is not the current one.  Dark's
 ;; matches are 18 % and outlined in the accent at 72 % (3:1 on the selection, so a match inside one shows; the user's
 ;; ruling of 2026-11-10); light and high contrast keep the design's 25 %, unoutlined (the edge is the fill).
+;; `refine-add', `refine-del' and `refine-chg' are a diff's refined words: as strong as each variant's tint can be
+;; with every syntax colour still at its bar on it (25 % at most).
 ((dark
   (gap . "#0a0b0d") (editor . "#15161a") (panel . "#18191e") (raised . "#1e1f25") (overlay . "#1e1f25")
   (hover . "#202128") (sel . "#243150") (sel-quiet . "#23252c") (sel-inactive . "#2b2d35") (current-line . "#1a1b20")
@@ -21,6 +23,7 @@
   (kw . "#c6a0ff") (fn . "#80b6ff") (str . "#a3dba3") (ty . "#7fd6d1") (const . "#f2ac7e")
   (comment . "#9599a4") (punct . "#a2a5b2")
   (match tint accent . 0.18) (match-edge tint accent . 0.72)
+  (refine-add tint ok . 0.16) (refine-del tint error . 0.21) (refine-chg tint warn . 0.25)
   (a1 . "#80b6ff") (a2 . "#f2ac7e") (a3 . "#a3dba3") (a4 . "#c6a0ff") (a5 . "#f592bb") (a6 . "#7fd6d1"))
  (light
   (gap . "#dfe0e6") (editor . "#ffffff") (panel . "#f6f6f8") (raised . "#ffffff") (overlay . "#ffffff")
@@ -35,6 +38,7 @@
   (kw . "#763ac9") (fn . "#2255c2") (str . "#286a34") (ty . "#0a6865") (const . "#944817")
   (comment . "#595d69") (punct . "#545866")
   (match tint accent . 0.25) (match-edge tint accent . 0.25)
+  (refine-add tint ok . 0.25) (refine-del tint error . 0.23) (refine-chg tint warn . 0.25)
   (a1 . "#2255c2") (a2 . "#a5501a") (a3 . "#2b7339") (a4 . "#7a3ccf") (a5 . "#b0306c") (a6 . "#0b7470"))
  (hc
   (gap . "#000000") (editor . "#000000") (panel . "#000000") (raised . "#0b0b0b") (overlay . "#0b0b0b")
@@ -50,4 +54,5 @@
   (kw . "#dcc0ff") (fn . "#a8c6ff") (str . "#b9f0b9") (ty . "#96ece6") (const . "#ffc49c")
   (comment . "#bfc2ca") (punct . "#d6d8de")
   (match tint accent . 0.25) (match-edge tint accent . 0.25)
+  (refine-add tint ok . 0.23) (refine-del tint error . 0.25) (refine-chg tint warn . 0.25)
   (a1 . "#a8c6ff") (a2 . "#ffc49c") (a3 . "#b9f0b9") (a4 . "#dcc0ff") (a5 . "#ffb0d3") (a6 . "#96ece6")))

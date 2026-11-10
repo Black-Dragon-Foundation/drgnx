@@ -203,9 +203,15 @@ A tint is composited over the variant's `editor'."
        `((diff-added :foreground ,(c 'add-fg) :background ,(c 'add-bg))
          (diff-removed :foreground ,(c 'del-fg) :background ,(c 'del-bg))
          (diff-changed :background ,(c 'warn-tint))
-         (diff-refine-added :background ,(drgnx-color-over (c 'ok) (c 'editor) 0.25))
-         (diff-refine-removed :background ,(drgnx-color-over (c 'error) (c 'editor) 0.25))
-         (diff-refine-changed :background ,(drgnx-color-over (c 'warn) (c 'editor) 0.25))
+         ;; refined words: rounded in-text runs, as the region (boxes inside the glyphs)
+         (diff-refine-added :background ,(c 'refine-add) :extend nil
+                            :box (:line-width (-1 . -1) :style flat-button ,@(and (featurep 'glitnir) '(:corner-radius 3))))
+         (diff-refine-removed :background ,(c 'refine-del) :extend nil
+                              :box (:line-width (-1 . -1) :style flat-button
+                                                ,@(and (featurep 'glitnir) '(:corner-radius 3))))
+         (diff-refine-changed :background ,(c 'refine-chg) :extend nil
+                              :box (:line-width (-1 . -1) :style flat-button
+                                                ,@(and (featurep 'glitnir) '(:corner-radius 3))))
          (diff-header :foreground ,(c 'muted) :background ,(c 'raised))
          (diff-file-header :foreground ,(c 'fg) :weight bold)
          (diff-hunk-header :foreground ,(c 'info))

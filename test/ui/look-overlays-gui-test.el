@@ -61,12 +61,12 @@ boxes scaled.  Everything undone after."
   (cl-every (lambda (x y) (<= (abs (- x y)) 6)) a b))
 
 (drgnx-look-gui-deftest drgnx-ui-look-overlays/a-box-never-moves-text ()
-  "Pattern D: the region, `lazy-highlight' and `isearch' over a span inside a line and over a span across a line's
-end leave every character where it was, in x and y: their boxes are drawn inside the glyphs."
+  "Pattern D: the region, `lazy-highlight', `isearch' and a diff's refined words over a span inside a line and over
+a span across a line's end leave every character where it was, in x and y: their boxes are drawn inside the glyphs."
   (skip-unless (display-graphic-p))
   (drgnx-ui-look-overlays--with
     (let ((plain (drgnx-ui-look-overlays--xys)))
-      (dolist (face '(region lazy-highlight isearch))
+      (dolist (face '(region lazy-highlight isearch diff-refine-added))
         (dolist (span '((8 . 13) (22 . 40)))
           (let ((o (drgnx-ui-look-overlays--put face (car span) (cdr span))))
             (unwind-protect (should (equal (list face span plain) (list face span (drgnx-ui-look-overlays--xys))))

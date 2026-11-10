@@ -44,6 +44,10 @@ setup.
 | Selection | blue-grey | pale blue | deep blue, text on it is white |
 | Selection without the focus (a list's selected row) | grey, 1.28:1 on the panel | grey, 1.28:1 | grey, 1.35:1 |
 | Tints (status chips, diff lines) | 11 to 15 % of the status colour | 8 to 14 % | none |
+| A diff's refined words (`diff-refine-*`) | 16 % added, 21 % removed, 25 % changed | 25 %, 23 %, 25 % | 23 %, 25 %, 25 % |
+
+The refined words' tints are as strong as they can be with every syntax colour still readable on them (4.5:1, 7:1 in
+High Contrast), since a hunk keeps its code's colours.
 
 High Contrast has no tints and no shadow faces; every text pair is at least 7:1.
 

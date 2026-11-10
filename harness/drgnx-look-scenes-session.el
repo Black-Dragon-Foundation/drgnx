@@ -339,7 +339,7 @@ from 201."
   "diff --git a/core/drgnx-gateway.el b/core/drgnx-gateway.el
 --- a/core/drgnx-gateway.el
 +++ b/core/drgnx-gateway.el
-@@ -213,5 +213,5 @@ (defun drgnx-gateway--reply (p reply)
+@@ -213,4 +213,4 @@ (defun drgnx-gateway--reply (p reply)
    \"Send REPLY to the client process P.\"
 -  (when (process-live-p p)
 +  (if (process-live-p p)
@@ -347,7 +347,8 @@ from 201."
 -    nil))
 +    (drgnx-gateway--queue p reply)))
 "
-  "A hunk with a changed line pair, for the diff highlights.")
+  "A hunk with two changed line pairs, for the diff highlights.  Its header counts its lines (four a side): with a
+wrong count `diff-refine-hunk' finds no pairs and refines nothing.")
 
 (defun drgnx-look-scene--hl-put (beg end face)
   "An overlay of the scene's from BEG to END in FACE."

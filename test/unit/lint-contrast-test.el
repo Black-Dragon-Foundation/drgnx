@@ -88,6 +88,13 @@
             (unless (and ratio (>= ratio 3.0))
               (push (format "drgnx-focus ring (%s) on %s: %s, needs 3" c surface (and ratio (format "%.2f" ratio)))
                     fails)))))
+      ;; a diff's text on its line's tint and on the refined words' stronger tint; code in a hunk keeps its
+      ;; syntax colours there (`diff-font-lock-syntax')
+      (add (drgnx-lint-contrast--pairs text '(diff-added) '(diff-added diff-refine-added)))
+      (add (drgnx-lint-contrast--pairs text '(diff-removed) '(diff-removed diff-refine-removed)))
+      (add (drgnx-lint-contrast--pairs text '(default) '(diff-changed diff-refine-changed)))
+      (add (drgnx-lint-contrast--pairs text drgnx-lint-contrast--syntax
+                                       '(diff-added diff-removed diff-refine-added diff-refine-removed)))
       ;; a non-current match's outline, where it has one of its own colour, shows inside a selection: 3:1 on it
       (let ((c (face-attribute 'lazy-highlight :box nil t)))
         (when-let* ((c (and (consp c) (plist-get c :color))) ((stringp c))
