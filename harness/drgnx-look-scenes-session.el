@@ -224,7 +224,10 @@ window starting at line START."
   (drgnx-look-scene--open file)
   (goto-char (point-min)) (forward-line (1- start))
   (set-window-start (selected-window) (point))
-  (forward-line (- line start)) (move-to-column column))
+  (forward-line (- line start)) (move-to-column column)
+  ;; as after a command: what follows point (the current line's overlay, the breadcrumb) moves to it, else the first
+  ;; scene shows them where the file opened
+  (run-hooks 'post-command-hook))
 
 (defun drgnx-look-scene-setup (elpa)
   "The mockups' state: the project at ~/code/drgnx, trusted; ELPA's packages active; tabs drgnx-gateway.el,
@@ -489,6 +492,9 @@ chrome faces, frame metrics, windows, modules."
       (with-temp-file file
         (pp (list :limits (cdr (assq scene drgnx-look-scene-limits))
                   :themes custom-enabled-themes
+                  ;; the Emacs the scene ran on, and a box the compositor's keys shape (`:fit', `:corner-radius')
+                  :emacs (list emacs-version (bound-and-true-p nidhogg-version) :glitnir (featurep 'glitnir))
+                  :keycap-box (face-attribute 'drgnx-keycap :box f)
                   :fonts (mapcar (lambda (fc) (list fc (ignore-errors (face-font fc f))))
                                  '(default drgnx-ui-text drgnx-ui-heading drgnx-ui-caption tab-bar tab-line
                                            mode-line header-line))
