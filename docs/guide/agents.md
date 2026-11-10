@@ -337,7 +337,7 @@ A durable session's messages and Stop work like this:
 
 Every agent drgnx starts gets MCP servers in its ACP `session/new`: the **coordination tools** (see below) by default,
 and, when you ask for it, the **search tools** (`drgnx search mcp`, [search.md](search.md#for-agents): `search`,
-`symbols` and `outline`) for the project the agent works in. `settings.el` holds the choice, next to `drgnx-agents-profiles`:
+`symbols`, `outline`, `repo_map` and `find_usages`) for the project the agent works in. `settings.el` holds the choice, next to `drgnx-agents-profiles`:
 
 ```elisp
 (drgnx-agents-default "claude")                   ; what New Agent Session… offers on Return

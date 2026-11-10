@@ -187,6 +187,8 @@
   "search/symbol-at": ["user"],
   "search/symbols": ["user"],
   "search/outline": ["user"],
+  "search/map": ["user"],
+  "search/usages": ["user"],
   "search/typing": ["user"],
   "settings/confirm": ["user"],
   "settings/explained": ["user"],

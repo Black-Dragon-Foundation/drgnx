@@ -7,6 +7,10 @@
 //! - `search symbols ROOT NAME [--match auto|exact|prefix|contains|regex] [--kind K]… [--path GLOB] [--scope S] [-k N]
 //!   [--json]`: `search/symbols`, printed as the MCP `symbols` tool prints it.
 //! - `search outline ROOT PATH [--no-docs] [--json]`: `search/outline`, printed as the MCP `outline` tool prints it.
+//! - `search map ROOT [--budget N] [--focus PATH]… [--name ID]… [--scope code|all] [--json]`: `search/map`, printed as
+//!   the MCP `repo_map` tool prints it.
+//! - `search usages ROOT NAME [--scope S] [-k N] [--json]`: `search/usages`, printed as the MCP `find_usages` tool
+//!   prints it.
 //! - `search mcp [ROOT]`: the MCP search tools on stdio, pinned to ROOT (the working folder by default); their questions
 //!   go to the hub. Outside agents run it (`docs/guide/agents.md`).
 //!
@@ -24,7 +28,9 @@ use serde_json::json;
 
 use crate::cli::ENSURE_TIMEOUT;
 use crate::client::Client;
-use crate::search::mcp::{Backend, SearchCtx, render, render_outline, render_symbols};
+use crate::search::mcp::{
+    Backend, SearchCtx, render, render_map, render_outline, render_symbols, render_usages,
+};
 
 /// How long one call to the hub may take: a first query builds the index.
 const CALL: Duration = Duration::from_secs(120);
@@ -62,6 +68,21 @@ pub enum SearchCommand {
         docs: bool,
         json: bool,
     },
+    Map {
+        root: PathBuf,
+        budget: Option<u32>,
+        focus: Vec<String>,
+        names: Vec<String>,
+        scope: Option<String>,
+        json: bool,
+    },
+    Usages {
+        root: PathBuf,
+        name: String,
+        scope: Option<String>,
+        k: Option<u32>,
+        json: bool,
+    },
     /// `eval gen|run|compare` (`crate::eval_cli`): needs no hub.
     Eval(crate::eval_cli::EvalCommand),
 }
@@ -80,18 +101,41 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
     if name == "eval" {
         return crate::eval_cli::parse(p.raw_args().map_err(e)?.collect()).map(SearchCommand::Eval);
     }
-    if !["index", "query", "mcp", "symbols", "outline"].contains(&name.as_str()) {
+    if ![
+        "index", "query", "mcp", "symbols", "outline", "map", "usages",
+    ]
+    .contains(&name.as_str())
+    {
         return Err(format!("unknown search subcommand {name:?}"));
     }
     let (mut rebuild, mut now, mut json, mut scope, mut k) = (false, false, false, None, None);
     let (mut mode, mut kinds, mut glob, mut docs) = (None, Vec::new(), None, true);
-    let asks = matches!(name.as_str(), "query" | "symbols");
+    let (mut budget, mut focus, mut names) = (None, Vec::new(), Vec::new());
+    let asks = matches!(name.as_str(), "query" | "symbols" | "usages");
     let mut words: Vec<String> = Vec::new();
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
             Long("rebuild") if name == "index" => rebuild = true,
             Long("now") if name == "index" => now = true,
-            Long("json") if asks || name == "outline" => json = true,
+            Long("json") if asks || name == "outline" || name == "map" => json = true,
+            Long("budget") if name == "map" => {
+                let b: u32 = p.value().map_err(e)?.parse().map_err(e)?;
+                if !(256..=32_000).contains(&b) {
+                    return Err("--budget is 256 to 32000 tokens".into());
+                }
+                budget = Some(b);
+            }
+            Long("focus") if name == "map" => {
+                focus.push(p.value().map_err(e)?.string().map_err(e)?)
+            }
+            Long("name") if name == "map" => names.push(p.value().map_err(e)?.string().map_err(e)?),
+            Long("scope") if name == "map" => {
+                let s = p.value().map_err(e)?.string().map_err(e)?;
+                if !["code", "all"].contains(&s.as_str()) {
+                    return Err(format!("--scope is code or all, not {s:?}"));
+                }
+                scope = Some(s);
+            }
             Long("match") if name == "symbols" => {
                 let m = p.value().map_err(e)?.string().map_err(e)?;
                 if !["auto", "exact", "prefix", "contains", "regex"].contains(&m.as_str()) {
@@ -180,6 +224,34 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
                 root: root.into(),
                 path,
                 docs,
+                json,
+            }
+        }
+        "map" => {
+            let root = words.next().ok_or("search map needs a project root")?;
+            if let Some(extra) = words.next() {
+                return Err(format!("search map: unexpected argument {extra:?}"));
+            }
+            SearchCommand::Map {
+                root: root.into(),
+                budget,
+                focus,
+                names,
+                scope,
+                json,
+            }
+        }
+        "usages" => {
+            let root = words.next().ok_or("search usages needs a project root")?;
+            let name = words.next().ok_or("search usages needs a name")?;
+            if let Some(extra) = words.next() {
+                return Err(format!("search usages: unexpected argument {extra:?}"));
+            }
+            SearchCommand::Usages {
+                root: root.into(),
+                name,
+                scope,
+                k,
                 json,
             }
         }
@@ -276,12 +348,21 @@ fn serve_mcp(env: &Env, root: PathBuf) -> i32 {
     0
 }
 
-/// METHOD's answer A as the MCP tool prints it (`search/index`'s as data).
-fn text(method: &str, a: serde_json::Value) -> Result<String, serde_json::Error> {
+/// METHOD's answer A as the MCP tool prints it (`search/index`'s as data); PARAMS are the call's.
+fn text(
+    method: &str,
+    params: &serde_json::Value,
+    a: serde_json::Value,
+) -> Result<String, serde_json::Error> {
     Ok(match method {
         "search/query" => render(&serde_json::from_value(a)?),
         "search/symbols" => render_symbols(&serde_json::from_value(a)?),
         "search/outline" => render_outline(&serde_json::from_value(a)?),
+        "search/map" => render_map(&serde_json::from_value(a)?),
+        "search/usages" => render_usages(
+            params["name"].as_str().unwrap_or_default(),
+            &serde_json::from_value(a)?,
+        ),
         _ => format!("{a}\n"),
     })
 }
@@ -371,15 +452,54 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
             json!({"root": absolute(&cwd, root), "path": path, "docs": docs}),
             *json,
         ),
+        SearchCommand::Map {
+            root,
+            budget,
+            focus,
+            names,
+            scope,
+            json,
+        } => {
+            let mut p = json!({"root": absolute(&cwd, root)});
+            if let Some(b) = budget {
+                p["budget"] = json!(b);
+            }
+            if !focus.is_empty() {
+                p["focus"] = json!(focus);
+            }
+            if !names.is_empty() {
+                p["names"] = json!(names);
+            }
+            if let Some(s) = scope {
+                p["scope"] = json!(s);
+            }
+            ("search/map", p, *json)
+        }
+        SearchCommand::Usages {
+            root,
+            name,
+            scope,
+            k,
+            json,
+        } => {
+            let mut p = json!({"root": absolute(&cwd, root), "name": name});
+            if let Some(s) = scope {
+                p["scope"] = json!(s);
+            }
+            if let Some(k) = k {
+                p["k"] = json!(k);
+            }
+            ("search/usages", p, *json)
+        }
     };
-    let answer =
-        Client::user(env, Duration::from_secs(5)).and_then(|mut c| c.call(method, params, CALL));
+    let answer = Client::user(env, Duration::from_secs(5))
+        .and_then(|mut c| c.call(method, params.clone(), CALL));
     match answer {
         Ok(a) if json => {
             println!("{a}");
             0
         }
-        Ok(a) => match text(method, a) {
+        Ok(a) => match text(method, &params, a) {
             Ok(t) => {
                 print!("{t}");
                 0
@@ -463,5 +583,54 @@ mod tests {
         assert!(p(&["symbols", "/r", "x", "--match", "fuzzy"]).is_err());
         assert!(p(&["outline", "/r"]).is_err());
         assert!(p(&["outline", "/r", "a.rs", "--match", "exact"]).is_err());
+    }
+
+    #[test]
+    fn map_and_usages_parse() {
+        assert_eq!(
+            p(&[
+                "map",
+                "/r",
+                "--budget",
+                "4000",
+                "--focus",
+                "src/a.rs",
+                "--focus",
+                "src/b.rs",
+                "--name",
+                "make_widget",
+                "--scope",
+                "all",
+                "--json"
+            ])
+            .unwrap(),
+            SearchCommand::Map {
+                root: "/r".into(),
+                budget: Some(4000),
+                focus: vec!["src/a.rs".into(), "src/b.rs".into()],
+                names: vec!["make_widget".into()],
+                scope: Some("all".into()),
+                json: true
+            }
+        );
+        assert_eq!(
+            p(&["usages", "/r", "make_widget", "--scope", "code", "-k", "5"]).unwrap(),
+            SearchCommand::Usages {
+                root: "/r".into(),
+                name: "make_widget".into(),
+                scope: Some("code".into()),
+                k: Some(5),
+                json: false
+            }
+        );
+        assert!(p(&["map"]).is_err());
+        assert!(p(&["map", "/r", "--budget", "100"]).is_err(), "under 256");
+        assert!(
+            p(&["map", "/r", "--scope", "tests"]).is_err(),
+            "code or all"
+        );
+        assert!(p(&["map", "/r", "extra"]).is_err());
+        assert!(p(&["usages", "/r"]).is_err());
+        assert!(p(&["usages", "/r", "x", "--focus", "a.rs"]).is_err());
     }
 }

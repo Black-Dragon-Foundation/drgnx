@@ -1,8 +1,9 @@
 //! The MCP search tools (runtime design §5.8): a session's `search.sock` serves them, outside the sandbox and pinned to
 //! the job's root, and `ratatoskr search mcp [ROOT]` serves them on stdio for an agent outside drgnx. Each tool is a
 //! front method with the root fixed: the agent names no root, so it cannot ask about another project, and the paths it
-//! names are relative and stay inside it. `search` is `search/query`; `symbols` and `outline` are `search/symbols` and
-//! `search/outline`, which answer from the index alone.
+//! names are relative and stay inside it. `search` is `search/query`; `symbols`, `outline`, `repo_map` and
+//! `find_usages` are `search/symbols`, `search/outline`, `search/map` and `search/usages`, which answer from the index
+//! alone.
 //!
 //! - **Arguments:** `query` (a question or a name), `scope` (`code` by default, `tests`, `docs`, `all`), `k` (1 to 50,
 //!   10 by default).
@@ -27,7 +28,8 @@ pub trait Backend: Send + Sync {
         k: Option<u32>,
     ) -> BoxFuture<'a, Result<w::QueryAnswer, String>>;
 
-    /// A structural question: the hub method METHOD (`search/symbols`, `search/outline`) with PARAMS, which name the
+    /// A structural question: the hub method METHOD (`search/symbols`, `search/outline`, `search/map`,
+    /// `search/usages`) with PARAMS, which name the
     /// pinned root; its answer as data.
     fn call<'a>(
         &'a self,
@@ -51,6 +53,14 @@ impl HubBackend {
             "search/outline" => {
                 let p = serde_json::from_value(params).map_err(|e| e.to_string())?;
                 s.outline(&front, p).await.map(|a| json!(a))
+            }
+            "search/map" => {
+                let p = serde_json::from_value(params).map_err(|e| e.to_string())?;
+                s.map(&front, p).await.map(|a| json!(a))
+            }
+            "search/usages" => {
+                let p = serde_json::from_value(params).map_err(|e| e.to_string())?;
+                s.usages(&front, p).await.map(|a| json!(a))
             }
             other => return Err(format!("no tool method {other}")),
         };
@@ -491,9 +501,227 @@ impl Tool<SearchCtx> for OutlineTool {
     }
 }
 
-/// The tools of a search socket: `search`, `symbols` and `outline`.
+/// `search/map`'s text answer: the map (its last line has the counts and the estimate), then the freshness line.
+pub fn render_map(a: &w::MapAnswer) -> String {
+    format!("{}\n\n{}\n", a.text, fresh_line(&a.fresh))
+}
+
+/// `search/usages`' text answer: a head line with where NAME is defined and that the match is by name, then one line
+/// per using file: `path:line  in <definition>  ×n  [lines …]`.
+pub fn render_usages(name: &str, a: &w::UsagesAnswer) -> String {
+    let defined = if a.defined.is_empty() {
+        "no definition in the index".to_string()
+    } else {
+        let places: Vec<String> = a
+            .defined
+            .iter()
+            .map(|d| format!("{}:{}-{}", d.path, d.line_start, d.line_end))
+            .collect();
+        format!("defined at {}", places.join(", "))
+    };
+    let mut out = format!("{name}: {defined}; usages by name only\n");
+    if a.usages.is_empty() {
+        out.push_str("no usages\n");
+    }
+    for u in &a.usages {
+        let lines: Vec<String> = u.lines.iter().map(u32::to_string).collect();
+        out.push_str(&format!(
+            "{}:{}  in {}  ×{}  [lines {}]\n",
+            u.path,
+            u.line,
+            u.enclosing.as_deref().unwrap_or("(top level)"),
+            u.n,
+            lines.join(", ")
+        ));
+    }
+    out.push('\n');
+    out.push_str(&fresh_line(&a.fresh));
+    out.push('\n');
+    out
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MapArgs {
+    #[serde(default)]
+    budget: Option<u32>,
+    #[serde(default)]
+    focus: Option<Vec<String>>,
+    #[serde(default)]
+    names: Option<Vec<String>>,
+    #[serde(default)]
+    scope: Option<w::MapScope>,
+}
+
+fn decode_map(args: &Value) -> Result<MapArgs, ArgsError> {
+    let a: MapArgs = decode_as(args)?;
+    if a.budget.is_some_and(|b| !(256..=32_000).contains(&b)) {
+        return Err(arg_err("budget", "256 to 32,000 tokens"));
+    }
+    if a
+        .focus
+        .as_ref()
+        .is_some_and(|f| f.len() > 50 || !f.iter().all(|p| rel_ok(p)))
+    {
+        return Err(arg_err(
+            "focus",
+            "at most 50 files of this project, relative to its root (no leading /, no ..)",
+        ));
+    }
+    if a.names
+        .as_ref()
+        .is_some_and(|n| n.len() > 50 || n.iter().any(|x| x.is_empty() || x.chars().count() > 200))
+    {
+        return Err(arg_err("names", "at most 50 names of 1 to 200 characters"));
+    }
+    Ok(a)
+}
+
+struct RepoMap;
+
+impl Tool<SearchCtx> for RepoMap {
+    fn name(&self) -> &'static str {
+        "repo_map"
+    }
+
+    fn description(&self) -> &'static str {
+        "A map of this project for a first look: the most-referenced files and their key definitions (signatures \
+         only), ranked by how the code refers to itself, cut to a token budget. Give focus files to centre it on what \
+         you are working on."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "budget": {"type": "integer", "minimum": 256, "maximum": 32000, "description": "tokens the map may take; 2000 by default"},
+                "focus": {"type": "array", "items": {"type": "string", "maxLength": 500}, "maxItems": 50, "description": "files you are working on (relative paths); the map ranks what they use and what uses them first, and leaves them out of the listing"},
+                "names": {"type": "array", "items": {"type": "string", "maxLength": 200}, "maxItems": 50, "description": "identifiers you care about; their definitions rank higher"},
+                "scope": {"type": "string", "enum": ["code", "all"], "description": "code by default (tests and docs left out)"}
+            },
+            "additionalProperties": false
+        })
+    }
+
+    fn check(&self, args: &Value) -> Result<(), ArgsError> {
+        decode_map(args).map(drop)
+    }
+
+    fn call<'a>(&'a self, ctx: &'a SearchCtx, args: Value) -> BoxFuture<'a, ToolResult> {
+        Box::pin(async move {
+            let a = match decode_map(&args) {
+                Ok(a) => a,
+                Err(e) => return ToolResult::Err(e.to_string()),
+            };
+            let mut params = json!({"root": ctx.root});
+            for (key, v) in [
+                ("budget", json!(a.budget)),
+                ("focus", json!(a.focus)),
+                ("names", json!(a.names)),
+                ("scope", json!(a.scope)),
+            ] {
+                if !v.is_null() {
+                    params[key] = v;
+                }
+            }
+            match ctx.backend.call("search/map", params).await {
+                Ok(v) => match serde_json::from_value::<w::MapAnswer>(v.clone()) {
+                    Ok(answer) => ToolResult::Ok {
+                        text: render_map(&answer),
+                        structured: Some(v),
+                    },
+                    Err(e) => ToolResult::Err(e.to_string()),
+                },
+                Err(e) => ToolResult::Err(e),
+            }
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UsagesArgs {
+    name: String,
+    #[serde(default)]
+    scope: Option<w::Scope>,
+    #[serde(default)]
+    k: Option<u32>,
+}
+
+fn decode_usages(args: &Value) -> Result<UsagesArgs, ArgsError> {
+    let a: UsagesArgs = decode_as(args)?;
+    if a.name.trim().is_empty() || a.name.chars().count() > 200 {
+        return Err(arg_err("name", "a name of 1 to 200 characters"));
+    }
+    if a.k.is_some_and(|k| !(1..=100).contains(&k)) {
+        return Err(arg_err("k", "1 to 100"));
+    }
+    Ok(a)
+}
+
+struct FindUsages;
+
+impl Tool<SearchCtx> for FindUsages {
+    fn name(&self) -> &'static str {
+        "find_usages"
+    }
+
+    fn description(&self) -> &'static str {
+        "Where a name is used, by name only (no type resolution: same-named things in other scopes show up too). \
+         Grouped by the definition that uses it, ranked by how central the using file is."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "minLength": 1, "maxLength": 200},
+                "scope": {"type": "string", "enum": ["code", "tests", "docs", "all"], "description": "all by default; tests ranked after code"},
+                "k": {"type": "integer", "minimum": 1, "maximum": 100, "description": "how many places; 20 by default"}
+            },
+            "required": ["name"],
+            "additionalProperties": false
+        })
+    }
+
+    fn check(&self, args: &Value) -> Result<(), ArgsError> {
+        decode_usages(args).map(drop)
+    }
+
+    fn call<'a>(&'a self, ctx: &'a SearchCtx, args: Value) -> BoxFuture<'a, ToolResult> {
+        Box::pin(async move {
+            let a = match decode_usages(&args) {
+                Ok(a) => a,
+                Err(e) => return ToolResult::Err(e.to_string()),
+            };
+            let mut params = json!({"root": ctx.root, "name": a.name});
+            for (key, v) in [("scope", json!(a.scope)), ("k", json!(a.k))] {
+                if !v.is_null() {
+                    params[key] = v;
+                }
+            }
+            match ctx.backend.call("search/usages", params).await {
+                Ok(v) => match serde_json::from_value::<w::UsagesAnswer>(v.clone()) {
+                    Ok(answer) => ToolResult::Ok {
+                        text: render_usages(&a.name, &answer),
+                        structured: Some(v),
+                    },
+                    Err(e) => ToolResult::Err(e.to_string()),
+                },
+                Err(e) => ToolResult::Err(e),
+            }
+        })
+    }
+}
+
+/// The tools of a search socket: `search`, `symbols`, `outline`, `repo_map` and `find_usages`.
 pub fn tools() -> Arc<[Box<dyn Tool<SearchCtx>>]> {
-    let list: Vec<Box<dyn Tool<SearchCtx>>> =
-        vec![Box::new(Search), Box::new(Symbols), Box::new(OutlineTool)];
+    let list: Vec<Box<dyn Tool<SearchCtx>>> = vec![
+        Box::new(Search),
+        Box::new(Symbols),
+        Box::new(OutlineTool),
+        Box::new(RepoMap),
+        Box::new(FindUsages),
+    ];
     list.into()
 }
