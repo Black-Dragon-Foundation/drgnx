@@ -143,7 +143,7 @@ async fn seen(s: &CodeStore, view: View, name: &str) -> Vec<(String, u32, Vec<u3
         .await
         .unwrap()
         .into_iter()
-        .map(|RefRow { path, n, lines }| (path, n, lines))
+        .map(|RefRow { path, n, lines, .. }| (path, n, lines))
         .collect()
 }
 

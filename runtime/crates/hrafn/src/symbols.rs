@@ -369,6 +369,54 @@ pub async fn find(store: &CodeStore, view: View, f: &Find) -> Result<Found, Symb
 /// `(name, kind, start, end, line_start, line_end, sig, doc1)` of one symbol of an outline.
 type OutlineRow = (String, String, i64, i64, u32, u32, String, Option<String>);
 
+/// The definitions of the pair `(path, blob)`, in file order, each with the number of definitions around it.
+pub(crate) fn entries(
+    c: &Connection,
+    path: &str,
+    blob: &str,
+) -> rusqlite::Result<Vec<OutlineEntry>> {
+    let mut q = c.prepare(
+        "select name, kind, start, end, line_start, line_end, sig, doc1 from symbol
+         where path = ?1 and blob = ?2 order by start, end desc, id",
+    )?;
+    let all: Vec<OutlineRow> = q
+        .query_map(params![path, blob], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+                r.get(7)?,
+            ))
+        })?
+        .collect::<Result<_, _>>()?;
+    // the ends of the definitions around the current one
+    let mut open: Vec<(i64, i64)> = Vec::new();
+    let mut entries = Vec::with_capacity(all.len());
+    for (name, kind, start, end, line_start, line_end, sig, doc1) in all {
+        while open
+            .last()
+            .is_some_and(|&(s, e)| !(s <= start && end <= e && e - s > end - start))
+        {
+            open.pop();
+        }
+        entries.push(OutlineEntry {
+            name,
+            kind,
+            line_start,
+            line_end,
+            sig,
+            doc1,
+            depth: open.len() as u32,
+        });
+        open.push((start, end));
+    }
+    Ok(entries)
+}
+
 /// PATH's definitions in VIEW, in file order, each with the number of definitions around it.
 pub async fn outline(store: &CodeStore, view: View, path: &str) -> Result<Outline, SymbolsError> {
     let path = path.to_string();
@@ -390,49 +438,10 @@ pub async fn outline(store: &CodeStore, view: View, path: &str) -> Result<Outlin
             let Some((lang, blob)) = file else {
                 return Ok(None);
             };
-            let mut q = c.prepare(
-                "select name, kind, start, end, line_start, line_end, sig, doc1 from symbol
-                 where path = ?1 and blob = ?2 order by start, end desc, id",
-            )?;
-            let all: Vec<OutlineRow> = q
-                .query_map(params![path, blob], |r| {
-                    Ok((
-                        r.get(0)?,
-                        r.get(1)?,
-                        r.get(2)?,
-                        r.get(3)?,
-                        r.get(4)?,
-                        r.get(5)?,
-                        r.get(6)?,
-                        r.get(7)?,
-                    ))
-                })?
-                .collect::<Result<_, _>>()?;
-            // the ends of the definitions around the current one
-            let mut open: Vec<(i64, i64)> = Vec::new();
-            let mut entries = Vec::with_capacity(all.len());
-            for (name, kind, start, end, line_start, line_end, sig, doc1) in all {
-                while open
-                    .last()
-                    .is_some_and(|&(s, e)| !(s <= start && end <= e && e - s > end - start))
-                {
-                    open.pop();
-                }
-                entries.push(OutlineEntry {
-                    name,
-                    kind,
-                    line_start,
-                    line_end,
-                    sig,
-                    doc1,
-                    depth: open.len() as u32,
-                });
-                open.push((start, end));
-            }
             Ok(Some(Outline {
+                entries: entries(c, &path, &blob)?,
                 path: path.clone(),
                 lang,
-                entries,
             }))
         })
         .await?;

@@ -164,6 +164,12 @@ pub fn built(l: &Listed, bytes: &[u8]) -> (Vec<ChunkIn>, Vec<SymbolIn>) {
     (b.chunks, b.symbols)
 }
 
+/// [`built`] with the file's references.
+pub fn built_refs(l: &Listed, bytes: &[u8]) -> (Vec<ChunkIn>, Vec<SymbolIn>, Vec<RefIn>) {
+    let b = build(l, bytes);
+    (b.chunks, b.symbols, b.refs)
+}
+
 /// Tier 1: rows rebuilt only for the files of `listed` whose blob changed (all of them after a chunker change), and
 /// dropped for the files no longer listed; one transaction per batch of files. `read` gives a listed file's bytes
 /// (the hub's reads go through `eitri`); a file that cannot be read any more is dropped like a gone one. `models` are

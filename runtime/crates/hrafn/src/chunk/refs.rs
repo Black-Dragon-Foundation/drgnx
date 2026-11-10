@@ -12,7 +12,7 @@ use super::definers;
 use super::ts::Kind;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
-use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
+use tree_sitter::{CaptureQuantifier, Node, Query, QueryCursor, StreamingIterator, Tree};
 
 /// How many first lines a reference keeps.
 pub const LINES: usize = 8;
@@ -86,7 +86,22 @@ fn query(kind: Kind) -> Option<&'static Query> {
                     Kind::Go => tree_sitter_go::TAGS_QUERY.to_string(),
                     Kind::Java => tree_sitter_java::TAGS_QUERY.to_string(),
                 };
-                Query::new(&k.language(), &src).ok()
+                let mut q = Query::new(&k.language(), &src).ok()?;
+                // the crates' tags queries also match definitions (some with doc predicates): only references run
+                let refs: Vec<usize> = q
+                    .capture_names()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.starts_with("reference"))
+                    .map(|(i, _)| i)
+                    .collect();
+                for p in 0..q.pattern_count() {
+                    let used = q.capture_quantifiers(p);
+                    if !refs.iter().any(|&i| used[i] != CaptureQuantifier::Zero) {
+                        q.disable_pattern(p);
+                    }
+                }
+                Some(q)
             })
             .collect()
     });

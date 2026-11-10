@@ -224,10 +224,11 @@ pub(crate) fn write_chunks(
         .execute(params![path, blob])?;
     c.prepare("delete from ref where path = ?1 and blob = ?2")?
         .execute(params![path, blob])?;
+    let mut insert =
+        c.prepare("insert into ref(path, blob, name, n, lines) values (?1, ?2, ?3, ?4, ?5)")?;
     for r in refs {
         let lines: Vec<String> = r.lines.iter().map(u32::to_string).collect();
-        c.prepare("insert into ref(path, blob, name, n, lines) values (?1, ?2, ?3, ?4, ?5)")?
-            .execute(params![path, blob, r.name, r.n, lines.join(" ")])?;
+        insert.execute(params![path, blob, r.name, r.n, lines.join(" ")])?;
     }
     let mut ids = Vec::with_capacity(chunks.len());
     for ch in chunks {

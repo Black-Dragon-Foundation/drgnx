@@ -1208,6 +1208,25 @@ kind, path glob and scope, code before docs before tests. `symbols::outline(stor
 definitions in order with their nesting depth. Both read the index only, through the view's visibility, so an excluded
 file is never in an answer; a file the view does not hold is `NotIndexed`.
 
+**The reference graph** (`graph.rs`) is Aider's repo map, by name. Its nodes are a view's files; an edge runs from a file
+to each file that defines a name it references (`ref` joined with `symbol` on the name, both through the view), one
+per name, weighted `sqrt(n)` × 10 for a name the request gives, × 10 for a compound name (snake, kebab or camel case)
+of 8 characters or more, × 0.1 for a `_`-private name and × 0.1 for a name defined in more than 5 files; a file's
+references to its own names are dropped. PageRank runs with damping 0.85 until the L1 change is under 1e-6 (at most
+100 iterations); the teleport and the dangling files' mass go by the personalisation vector, uniform or the focus
+files. Scope `code` masks tests and docs out of the walk. The graph and its unpersonalised ranks are kept in the memo
+until the store changes, for the base and the last 4 tree views; it is built in one pass over `file`, `symbol` and
+`ref`.
+
+`map::repo_map(store, view, MapAsk)` ranks definitions `(file, name)` by splitting each file's rank over its edges
+(a name the request gives × 10), leaves the focus files out, groups the rest by file in rank order and renders each
+definition's signature with its line (`  12│ fn …`), nested members indented and `⋮` between rows that are not
+neighbours in the file. It keeps the most definitions whose text fits the budget, by binary search on the estimate
+`ceil(chars / 4)`; the last line gives the counts and the estimate. `map::usages(store, view, name, scope, k)` gives the
+name's exact definitions, then the view's `ref` rows for it without the lines inside the name's own definitions in that
+file, each under the innermost definition holding its first line, ranked by the file's rank × `ln(1 + n)`, tests after
+code. It is by name only: same-named things in other scopes show up too.
+
 For Emacs Lisp (`tree-sitter` 0.25, ABI 15, with `tree-sitter-elisp` 1.7; 0.26 and later needed Rust 1.90, above the
 workspace's MSRV of the time, 1.88) the units are the top-level forms, each with the comments right above it, and the stretches between
 them. Adjacent units merge greedily up to the budget and never across a section heading (a `;;;` line with text, at
