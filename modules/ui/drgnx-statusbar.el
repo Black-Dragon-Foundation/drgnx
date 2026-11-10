@@ -134,7 +134,7 @@ packages' entries of the mode line are formatted once per value, for each buffer
   (drgnx-statusbar--bump)
   (force-mode-line-update t))
 
-(defcustom drgnx-statusbar-left '(branch trust problems tests jobs needs-you drgnx toasts modal misc)
+(defcustom drgnx-statusbar-left '(branch trust problems tests jobs needs-you drgnx toasts modal misc echo)
   "The segments on the left of the status bar, in order (see `drgnx-statusbar-define-segment')."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
@@ -1514,6 +1514,12 @@ Reads the cache only (a remote buffer has no entry)."
   (when-let* (((fboundp 'drgnx-notice-toast-more-text)) (s (drgnx-notice-toast-more-text)))
     (propertize s 'face 'drgnx-status-info)))
 
+(defun drgnx-statusbar--seg-echo ()
+  "The message the echo area would show, while a graphical frame has no echo row (ui/look's box): for a few seconds,
+a command's error in its face."
+  (when-let* (((fboundp 'drgnx-look-echo-status)) (m (drgnx-look-echo-status)))
+    (if (cdr m) (propertize (car m) 'face (cdr m)) (car m))))
+
 (defun drgnx-statusbar--seg-mode ()
   "The buffer's `mode-name' (Magit, Help, … : the buffers that are not files)."
   (let ((name (if (stringp mode-name) mode-name (format-mode-line mode-name))))
@@ -1952,6 +1958,8 @@ Click the language in the status bar for it.  A command: it asks; the bar itself
   (drgnx-statusbar-define-segment 'toasts :fn #'drgnx-statusbar--seg-toasts :click #'drgnx-notices-show
                                   :help "Notices waiting for a toast's place: click for the Notices list")
   (drgnx-statusbar-define-segment 'modal :fn #'drgnx-statusbar--seg-modal :help "Modal editing state")
+  (drgnx-statusbar-define-segment 'echo :fn #'drgnx-statusbar--seg-echo :click 'view-echo-area-messages
+                                  :help "The last message (all of them: *Messages*)")
   (drgnx-statusbar-define-segment 'mode :fn #'drgnx-statusbar--seg-mode :help "The buffer's major mode")
   (drgnx-statusbar-define-segment 'misc :fn #'drgnx-statusbar--seg-misc
                                   :help "Process, recording, narrowing, remote and other indicators")

@@ -30,6 +30,9 @@
   (load (expand-file-name "drgnx-look-derive" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-look-follow)
   (load (expand-file-name "drgnx-look-follow" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+;; and the echo area's box (its setting is declared when it loads)
+(unless (featurep 'drgnx-look-echo)
+  (load (expand-file-name "drgnx-look-echo" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-look-variant "drgnx-theme-gen" (&optional frame))
 (declare-function drgnx-look-density-value "drgnx-look-density" (key &optional density))
 (defvar drgnx-look-density-changed-hook)
@@ -51,6 +54,10 @@
 (declare-function drgnx-decor-scale-on "drgnx-decor" ())
 (declare-function drgnx-decor-scale-off "drgnx-decor" ())
 (declare-function drgnx-decor-activate "drgnx-decor" ())
+(declare-function drgnx-look-echo-apply "drgnx-look-echo" ())
+(declare-function drgnx-look-echo-off "drgnx-look-echo" ())
+(declare-function drgnx-look-echo-apply-frames "drgnx-look-echo" ())
+(defvar drgnx-look-echo--on)
 
 ;;;; Chrome (Glitnir, the compositor)
 
@@ -449,6 +456,9 @@ loaded since.  Its teardown gives the previous ones back.")
 else enabled since stays)."
   (when (frame-parameter nil 'drgnx-look-zen) (drgnx-look-zen))
   (drgnx-look-follow-off)
+  (when (bound-and-true-p drgnx-look-echo--on)
+    (drgnx-look-echo-off)
+    (drgnx-look-echo-apply-frames))
   (drgnx-look-echo-area-off)
   (drgnx-look-scale-off)
   (drgnx-look-density-off)
@@ -598,6 +608,8 @@ only the one remap is reapplied."
                        (drgnx-look-density-on)
                        (drgnx-look-scale-on)
                        (drgnx-look-echo-area-on)
+                       ;; no echo row on graphical frames: the box, and the frames that exist swapped for it
+                       (drgnx-look-echo-apply)
                        (drgnx-command-define 'preferences-theme :category "Preferences" :title "Color Theme"
                                              :command #'drgnx-look-choose-theme :menu '("Options") :doc "Pick the colour theme (remembered)")
                        (drgnx-command-define 'view-zen :category "View" :title "Zen Mode" :scope 'window
