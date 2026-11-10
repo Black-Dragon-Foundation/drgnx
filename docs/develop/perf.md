@@ -892,7 +892,7 @@ desktop's pinned island (`perf-exclusive.sh` as the outer wrapper, `DRGNX_PERF_C
 | Row | Where | Budget |
 |---|---|---|
 | tier 1 of a drgnx checkout; one saved file searchable | `drgnx-ratatoskr/tests/timing.rs` (`tier1_of_a_checkout_and_one_saved_file`) | 60 s; 1 s |
-| `search/query` p95, 50,000 and 100,000 synthetic chunks, vectors on | the same file (`query_p95_at_50k_chunks`, `…_100k_…`) | 100 ms |
+| `search/query` p95, 50,000 and 100,000 synthetic chunks, vectors on | the same file (`query_p95_at_50k_chunks`, `…_100k_…`) | 100 ms; 200 ms |
 | built-in embedding tokens/s (GPU), VRAM at 4,096 tokens | `hrafn-embed/tests/timing.rs` (`bench_tokens_per_s`) | 20,000; 800 MB |
 | CPU fallback tokens/s on 4 cores | `bench_cpu` | 680 |
 | one query embedding p95 | `query_p95` and `bench_cpu` | 50 ms |

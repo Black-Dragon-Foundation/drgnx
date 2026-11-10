@@ -1043,7 +1043,7 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 ### The code store
 
 `CodeStore::open(<state>/code/<project-id>.db)` opens one SQLite file through `urdr` (one owning thread, WAL, mode
-0600, migrations as data). Schema v4:
+0600, migrations as data). Schema v5:
 
 | Table | Holds |
 |---|---|
@@ -1052,13 +1052,14 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 | `chunk` | path and `blob` (the content it was cut from), byte and line span, symbol, content `key`, `embed` flag, and `embed_text` (the only copy of a chunk's text, because `chunk_fts` is contentless) |
 | `chunk_fts` | FTS5 over `path, symbols, doc, body`, contentless with `contentless_delete=1`; rowid = `chunk.id`; a trigger removes the row, and the chunk's symbols, with the chunk |
 | `symbol`, `symbol_fts` | defined names with kind, span and lines, signature (`sig`: the definition's lines up to the one that names it, cut before a `{`), `(path, blob)`, chunk and definer (`id` an explicit rowid, so it survives `VACUUM`); a trigram FTS over the names |
+| `ref` | the names a pair's content uses: `(path, blob, name)`, how often (`n`) and the first 8 lines it is used on; `ref_name` finds a name's users |
 | `vec` | one quantized vector per `(model, key)` |
 | `meta` | `urdr`'s table: the schema version, `chunker_version`, `parse_version`, `built_from` and the like |
 
-**Shared content.** Chunks and symbols belong to a `(path, blob)` pair, not to a tree: every `file` row that names
-the pair shares one copy, so sibling worktrees on one line cost one copy of each changed file. A write is by content:
-a row is set, the pair is chunked only when nothing stores it yet, and the pair the row named before is swept (its
-chunks, FTS rows and symbols deleted) when no `file` row names it any more. There is no reference counter; the
+**Shared content.** Chunks, symbols and references belong to a `(path, blob)` pair, not to a tree: every `file` row
+that names the pair shares one copy, so sibling worktrees on one line cost one copy of each changed file. A write is by
+content: a row is set, the pair is chunked only when nothing stores it yet, and the pair the row named before is swept
+(its chunks, FTS rows, symbols and references deleted) when no `file` row names it any more. There is no reference counter; the
 `file_path_blob` index answers "is it still named". A query sees a row when the view's `file` row of its path names
 its blob (`blob_V(p) = r.blob`); every route applies that before its `limit`, the base view too, and joins `file` on
 `(tree, path)`. Schema 3 migrates a schema-2 store in place: `chunk` gains `blob` (ids kept), `symbol` is rebuilt
@@ -1184,8 +1185,16 @@ before), which is where a hit opens and what `reanchor` compares against. Versio
 version 1 is chunked again at the next refresh, whether or not a file changed (and, the version being in every
 vector's key, embedded again).
 
+`chunk::chunk_file_refs` also returns the file's references (`chunk::Ref`: a name, how often, its first 8 lines),
+from the same parse, which tier 1 and the overlay write to `ref`. Tree-sitter languages run a tags query and keep the
+`@reference.*` matches' `@name`: the grammar crate's own query for Rust, Python, JavaScript, Go and Java (calls, macros,
+`impl` targets, `new`, types where the query has them), TypeScript's with calls added, and our own for C (calls) and
+shell (commands). Emacs Lisp takes each top-level form's symbol atoms, without the name it defines, keywords, `&`
+markers, `t`, `nil`, definers and the special forms. Org, Markdown and text have none; one-character names are dropped.
+`hrafn::refs::references(store, view, name)` reads a name's users in a view.
+
 `PARSE_VERSION` covers what a parse derives besides the chunks (a symbol's lines and signature, the languages parsed;
-1: lines and signatures, 2: Python, JavaScript, TypeScript and TSX, 3: Go and Java, 4: JavaScript callbacks' cuts, 5: test files by directory only, 6: nested cuts). A parse version that moves chunk
+1: lines and signatures, 2: Python, JavaScript, TypeScript and TSX, 3: Go and Java, 4: JavaScript callbacks' cuts, 5: test files by directory only, 6: nested cuts, 7: references). A parse version that moves chunk
 boundaries needs no `CHUNKER_VERSION` bump: the files are chunked again, and only a chunk whose text changed has a new
 key and is embedded again.
 When the store's `parse_version` is older, the next refresh parses every file again as for a new chunker, but the
@@ -1359,7 +1368,11 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
 - **The query (`hrafn::query`).** Lists from the routes, fused by RRF (k = 60): an exact one-identifier query pins its
   definitions first (non-test before test, then by kind); prefix and trigram name matches from the identifier-like
   tokens of a question add a list that is never pinned; a token that names a file adds a path list; `bm25(chunk_fts, 5,
-  5, 2, 1)` ranks identifier phrases on `symbols` and words over `doc` and `body`; vectors are scanned by Hamming
+  5, 2, 1)` ranks identifier phrases on `symbols` and words over `doc` and `body` on the FTS index alone
+  (`KEYWORD_RANK_SQL`, the best 400), and the view's predicate (`VISIBLE_SQL`) is applied to that ranking in order
+  until 100 chunks are seen (the ranking is asked again for four times as many when the view hides most of it: still
+  filtered before the limit, but only candidates are probed; joining every match first was 80 of 143 ms at 50,000
+  chunks, where a common word matches 40,000); vectors are scanned by Hamming
   distance over the sign bits and the nearest 200 re-ranked by their int8 values. A test or generated file keeps half
   its score. Hits in files changed since indexing are looked for again by their first line, else their symbol (20 files,
   50 ms). The scope (`code`, which holds tests below it, `tests`, `docs`, `all`) filters by file class. Every answer has
