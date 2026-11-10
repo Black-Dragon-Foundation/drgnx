@@ -907,7 +907,7 @@ under the chips reads \"Open:\" and its step types are pills, the open ones rais
 
 (ert-deftest drgnx-agent-panel/composer-is-a-field-card ()
   "agent-panel.html `.composer': the field's card (\"Steer the agent…\", a click writes to the agent) and the bar:
-the model and the mode as chips that switch them, Stop after this step and Send as buttons."
+the model and the mode as chips that switch them, Fork, the pause icon and Send (an arrow) as buttons."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
       (setq drgnx-agent-panel--snap (list :model "opus" :mode "accept edits"))
@@ -924,9 +924,14 @@ the model and the mode as chips that switch them, Stop after this step and Send 
                     (lookup-key (get-text-property (string-search "opus" row) 'keymap row) [mouse-1])))
         (should (eq 'drgnx-agent-panel-switch-mode
                     (lookup-key (get-text-property (string-search "accept edits" row) 'keymap row) [mouse-1])))
-        (should (memq 'drgnx-ui-button-primary (drgnx-agent-panel-test--face-at row "Send")))
-        (should (eq 'drgnx-agent-panel-pause
-                    (lookup-key (get-text-property (string-search "Stop after" row) 'keymap row) [mouse-1])))))))
+        ;; the bar's buttons: Fork, the pause icon (stop after this step), Send as the primary arrow
+        (let ((send (string-search (drgnx-face-glyph 'arrow-up) row))
+              (pause (string-search (drgnx-face-glyph 'pause) row)))
+          (should (memq 'drgnx-ui-button-primary (ensure-list (get-text-property send 'face row))))
+          (should (eq 'drgnx-agent-panel-send (lookup-key (get-text-property send 'keymap row) [mouse-1])))
+          (should (eq 'drgnx-agent-panel-pause (lookup-key (get-text-property pause 'keymap row) [mouse-1]))))
+        (should (eq 'drgnx-agent-panel-fork
+                    (lookup-key (get-text-property (string-search "Fork" row) 'keymap row) [mouse-1])))))))
 
 (ert-deftest drgnx-agent-panel/diff-card-as-the-mockup ()
   "agent-panel.html `.acard': a header with the file's name, its lines and \"hunk 1 of 1\", and Reject and Accept that

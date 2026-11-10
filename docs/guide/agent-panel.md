@@ -92,8 +92,9 @@ answer at once, without asking the hub. With nothing at point, `TAB` opens or fo
 ## Steering
 
 Under the transcript are the notes waiting for the agent's turn to end, one row each, and the composer: a field ("Steer
-the agent…"; a click writes to the agent, as `s` does) and under it a bar with the model and mode chips and the
-**Stop after this step** and **Send** buttons.
+the agent…"; a click writes to the agent, as `s` does) and under it a bar with the model and mode chips and three
+buttons: **Fork** (**Fork the Chat**: a second agent from the chat's last step), the pause icon (stop after this step,
+as `p`) and Send, an arrow (as `s`).
 
 - `s` writes to the agent. While it works, the message is queued and goes in when the turn ends; **sending never cancels
   the turn**. In the message, `@` completes a file of the agent's folder and `/` at the start completes one of its
