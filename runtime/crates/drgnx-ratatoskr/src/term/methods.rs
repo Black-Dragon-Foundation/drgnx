@@ -78,6 +78,7 @@ pub async fn serve(t: &Terms, conn: u64, p: Params) -> Result<Value, Error> {
                 },
                 config: p.config.into_iter().map(|(k, v)| (k, v.into())).collect(),
                 place: p.place,
+                remote: p.remote,
             };
             let rec = t
                 .spawn(conn, t.session_of(conn), spawn)
@@ -186,6 +187,7 @@ pub async fn serve(t: &Terms, conn: u64, p: Params) -> Result<Value, Error> {
                     detached_at: s.detached_at,
                     command: s.command,
                     place: s.place,
+                    remote: s.remote,
                 })
                 .collect();
             Ok(json!(list))
