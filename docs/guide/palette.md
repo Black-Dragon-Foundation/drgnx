@@ -73,8 +73,8 @@ state folder (200 commands at most).
 
 In the floating palette the prompt is a search icon, a hint at the right of what you type says what it searches
 (`Commands · # code · @ agents`, the last with `tools/agents` on), and a footer 30 logical pixels high, 6 below the
-last row, shows the keys in its middle: `↑` `↓` move, `↵` run, `Tab` preview, `Esc` close. The minibuffer in the echo
-area is not changed by any of this.
+last row, shows the keys in its middle: `↑` `↓` move, `↵` run, `Tab` preview, `Esc` close. A 1 pixel hairline in the border
+colour runs along the footer's top. The minibuffer in the echo area is not changed by any of this.
 
 ## The echo area
 

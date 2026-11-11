@@ -149,6 +149,15 @@ in every theme."
       (should (equal (list theme (face-attribute 'line-number-current-line :background nil t))
                      (list theme (drgnx-look-token 'current-line variant)))))))
 
+(ert-deftest drgnx-themes/the-palette-footer-has-a-hairline-above ()
+  "palette.html `.foot': the footer of keys has a 1 px hairline in the border colour along its top, in every theme."
+  (require 'drgnx-palette-frame)
+  (pcase-dolist (`(,theme . ,variant) '((drgnx-dark . dark) (drgnx-light . light) (drgnx-high-contrast . hc)))
+    (drgnx-themes-test--with theme
+      (should (equal (list theme (face-attribute 'drgnx-palette-footer :overline nil t))
+                     (list theme (drgnx-look-token 'border variant))))
+      (should (memq 'drgnx-ui-caption (ensure-list (face-attribute 'drgnx-palette-footer :inherit)))))))
+
 ;; Design §3.5: a button is a quiet fill in a 1 px hairline (radius 6), the primary one the accent's fill; a keycap is
 ;; subtle text in a strong hairline (radius 4)
 (ert-deftest drgnx-themes/buttons-and-keycaps ()

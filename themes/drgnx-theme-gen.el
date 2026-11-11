@@ -84,6 +84,8 @@ taller (Nidhogg's compositor).  Asked once: a face that sets it is refused where
          (drgnx-text-subtle :foreground ,(c 'subtle))
          (drgnx-text-disabled :foreground ,(c 'disabled))
          (drgnx-border :foreground ,(c 'border) :background ,(c 'border))
+         ;; the palette's footer of keys: a hairline along its top (palette.html `.foot')
+         (drgnx-palette-footer :inherit (drgnx-ui-caption default) :box nil :underline nil :overline ,(c 'border))
          (drgnx-border-strong :foreground ,(c 'border-strong) :background ,(c 'border-strong))
          (drgnx-border-subtle :foreground ,(c 'border-subtle) :background ,(c 'border-subtle))
          (drgnx-accent :foreground ,(c 'accent) :underline nil)
