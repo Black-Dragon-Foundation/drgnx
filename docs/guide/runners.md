@@ -226,7 +226,9 @@ started is stopped and ends as "disk", not as a failure.
 built and signed on a Mac: `drgnx build runner-bundle --target aarch64-apple-darwin`. A Mac job that needs a
 Homebrew package the Mac lacks waits, and its row shows the line to run in your own account (for example "on the Mac,
 brew install cmake"); the runner account never installs into Homebrew. A Mac job that needs a toolchain the Mac
-doesn't have yet waits too, and its row says that `drgnx runner check` on the Mac installs it.
+doesn't have yet waits too, and its row says that `drgnx runner check` on the Mac installs it. A job that needs a GPU
+or KVM goes only to a Linux runner whose check found one the runner account can use (a GPU render node, NVIDIA's
+devices, `/dev/kvm`); for now that only picks the machine: the job's container doesn't get the device yet.
 
 ## Which jobs go where
 

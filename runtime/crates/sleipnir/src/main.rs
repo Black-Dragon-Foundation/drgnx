@@ -37,7 +37,16 @@ fn main() -> ExitCode {
         return ExitCode::from(sleipnir::darwin::brew::run(&args).clamp(0, 255) as u8);
     }
     match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
-        ["job-exec", dir] => job_exec(std::path::Path::new(dir)),
+        ["job-exec", dir] => {
+            let dir = std::path::Path::new(dir);
+            // the slot the job reads stays at its inputs until job-exec ends (sync::slot::Locks)
+            #[cfg(feature = "sync")]
+            let _slot = match sleipnir::sync::slot::hold_for_job(dir) {
+                Ok(held) => held,
+                Err(why) => return job_setup_failed(dir, &why),
+            };
+            job_exec(dir)
+        }
         ["job-helper", ref rest @ ..] => job_helper(rest),
         ["serve", ref rest @ ..] => serve(rest),
         ["watchdog", ref rest @ ..] => watchdog(rest),
@@ -177,6 +186,43 @@ fn tools(root: &str, pins: &[&str]) -> ExitCode {
 fn tools(_root: &str, _pins: &[&str]) -> ExitCode {
     eprintln!("sleipnir tools: a Mac runner's step");
     ExitCode::from(2)
+}
+
+/// An attempt that must not run (WHY: its slot can't be held at its inputs): `infra: setup`, WHY in its log.
+#[cfg(feature = "sync")]
+fn job_setup_failed(dir: &std::path::Path, why: &str) -> ExitCode {
+    use forseti::Verdict;
+    use forseti::classify::infra;
+    use sleipnir::linux::{jobexec::JobExec, result::ResultJson};
+    use std::io::Write;
+    eprintln!("sleipnir job-exec: {}: {why}", dir.display());
+    let Ok(spec) = JobExec::read(dir) else {
+        return ExitCode::from(2);
+    };
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&spec.log)
+        .and_then(|mut f| writeln!(f, "sleipnir job-exec: the attempt can't start: {why}"));
+    let r = ResultJson {
+        verdict: Verdict::Infra(infra::SETUP.into()),
+        infra: Some(format!("infra: {}", infra::SETUP)),
+        counts: Default::default(),
+        rows: vec![],
+        failing: vec![],
+        machine: spec.machine,
+        grant: spec.grant,
+        wall_s: 0.0,
+        cpu_s: 0.0,
+        mem_peak_mib: 0,
+        mem_overshoot_mib: None,
+        disturbed: false,
+        log: spec.log.display().to_string(),
+    };
+    match r.write(dir) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_) => ExitCode::from(2),
+    }
 }
 
 #[cfg(target_os = "linux")]

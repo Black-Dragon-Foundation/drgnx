@@ -65,7 +65,7 @@ fn barrier_marks_every_connection_after_what_was_sent() {
     assert_eq!(on_a[2]["data"], json!({"marker": 1}));
     assert_eq!(
         on_a[3]["result"],
-        json!({"marker": 1, "unnamed": 0, "busy": [], "waiting": []})
+        json!({"marker": 1, "unnamed": 0, "busy": [], "waiting": [], "sites": []})
     );
     let on_b = until(&mut b, |v| v["event"] == "__test_marker");
     let kinds: Vec<String> = on_b.iter().map(kind).collect();

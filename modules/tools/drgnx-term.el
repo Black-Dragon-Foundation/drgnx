@@ -94,6 +94,7 @@ text scale or a font change never re-pairs the buffer.")
 (defvar-local drgnx-term--top-done nil "The first row's key when the worker last said nothing is missing above it.")
 (defvar-local drgnx-term--started nil "When this terminal's `term/open' was sent (`float-time').")
 (defvar-local drgnx-term--command-start nil "When the running command's output started (OSC 133 C), or nil.")
+(defvar drgnx-chrome-tab-icon)
 (defvar-local drgnx-term--remote nil
   "A terminal in a remote folder: TRAMP's prefix of that folder (\"/ssh:host:\"); its folders and links are there.")
 (defvar-local drgnx-term--remote-host nil
@@ -1367,7 +1368,7 @@ that host (`drgnx-term-remote-command'); a COMMAND runs in a local folder only."
             drgnx-term--program program
             drgnx-term--remote remote
             drgnx-term--shell (not command))
-      (when remote (drgnx-term--title "")))
+      (when remote (setq-local drgnx-chrome-tab-icon 'server) (drgnx-term--title "")))
     (pop-to-buffer buffer)
     (drgnx-term--open buffer)
     (when (and drgnx-term-input (not command))
@@ -1549,6 +1550,7 @@ else the panel), drawn from a reset at this window's size; SELECT shows it selec
             drgnx-term--remote (and (stringp remote) remote)
             drgnx-term--shell (or (stringp remote) (null (cdr command)))
             drgnx-term--state 'opening)
+      (when drgnx-term--remote (setq-local drgnx-chrome-tab-icon 'server))
       ;; the folder its shell named last (OSC 7); a remote one on its host, not checked (no connection waits)
       (when (stringp cwd) (drgnx-term--cwd cwd))
       (unless (and (not drgnx-term--remote) (string-empty-p (or (plist-get row :title) "")))

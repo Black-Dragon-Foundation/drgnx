@@ -289,6 +289,56 @@ impl Probe {
         has(&self.runtime_dir, "wayland-") || has(Path::new("/tmp/.X11-unix"), "X")
     }
 
+    /// The devices this user can open read-write, as placement features: `kvm` for `/dev/kvm`, `gpu` for a DRM
+    /// render node (`/dev/dri/renderD*`) of a real driver (not `vgem` or `vkms`, which only share buffers or draw
+    /// in memory) or NVIDIA's `nvidiactl` with a `nvidiaN`. Names and permissions only: nothing is opened, so the probe
+    /// stays cheap and offline. Jobs don't get the devices yet: sleipnir passes none into their containers.
+    pub fn devices(&self, dev: &Path) -> Vec<String> {
+        let usable = |p: &Path| {
+            rustix::fs::access(
+                p,
+                rustix::fs::Access::READ_OK | rustix::fs::Access::WRITE_OK,
+            )
+            .is_ok()
+        };
+        let named = |dir: &Path, prefix: &str| -> Vec<String> {
+            let mut v: Vec<String> = fs::read_dir(dir)
+                .map(|d| {
+                    d.flatten()
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .filter(|n| n.starts_with(prefix))
+                        .collect()
+                })
+                .unwrap_or_default();
+            v.sort();
+            v
+        };
+        let shares_only = |node: &str| {
+            fs::read_link(
+                self.sys_root
+                    .join("class/drm")
+                    .join(node)
+                    .join("device/driver"),
+            )
+            .is_ok_and(|d| d.file_name().is_some_and(|n| n == "vgem" || n == "vkms"))
+        };
+        let render = named(&dev.join("dri"), "renderD")
+            .into_iter()
+            .any(|n| !shares_only(&n) && usable(&dev.join("dri").join(&n)));
+        let nvidia = usable(&dev.join("nvidiactl"))
+            && named(dev, "nvidia")
+                .into_iter()
+                .any(|n| n[6..].parse::<u32>().is_ok() && usable(&dev.join(&n)));
+        let mut features = vec![];
+        if render || nvidia {
+            features.push("gpu".to_string());
+        }
+        if usable(&dev.join("kvm")) {
+            features.push("kvm".to_string());
+        }
+        features
+    }
+
     /// Whether a unit of ours can be given `memory.swap.max` (swap accounting on the user manager's tree).
     pub fn swap_max_settable(&self) -> bool {
         self.manager.join("memory.swap.max").exists()
@@ -1202,5 +1252,56 @@ mod tests {
             .unwrap();
         assert_eq!(m.psi.app_mem_some10, Some(7.0));
         assert!(m.others.is_empty() && m.running.is_empty());
+    }
+
+    // [D] pure (a fixture /dev and /sys): `kvm` for /dev/kvm, `gpu` for a render node of a real driver or NVIDIA's
+    // control device with a card; a vgem or vkms node, NVIDIA's control device alone, or nothing gives none
+    #[test]
+    fn devices_are_the_gpu_and_kvm_this_user_can_open() {
+        let d = tempfile::tempdir().unwrap();
+        let (dev, sys) = (d.path().join("dev"), d.path().join("sys"));
+        fs::create_dir_all(dev.join("dri")).unwrap();
+        let p = Probe {
+            name: "m".into(),
+            proc_root: d.path().join("proc"),
+            sys_root: sys.clone(),
+            manager: d.path().join("mgr"),
+            runtime_dir: d.path().join("run"),
+            folder: d.path().to_path_buf(),
+            slice_root: "t".into(),
+            scheduler: "me".into(),
+            profile: Profile::Dedicated,
+        };
+        let node = |path: &Path| fs::write(path, b"").unwrap();
+        let driver = |n: &str, name: &str| {
+            let at = sys.join("class/drm").join(n).join("device");
+            fs::create_dir_all(&at).unwrap();
+            std::os::unix::fs::symlink(format!("../../../bus/drivers/{name}"), at.join("driver"))
+                .unwrap();
+        };
+        assert!(p.devices(&dev).is_empty());
+        assert!(p.devices(&d.path().join("missing")).is_empty());
+        node(&dev.join("dri/card0"));
+        node(&dev.join("dri/renderD128"));
+        driver("renderD128", "vgem");
+        node(&dev.join("nvidiactl"));
+        assert!(
+            p.devices(&dev).is_empty(),
+            "vgem, a card node, nvidiactl alone"
+        );
+        node(&dev.join("nvidia-uvm"));
+        assert!(p.devices(&dev).is_empty(), "nvidia-uvm is no card");
+        node(&dev.join("nvidia0"));
+        assert_eq!(p.devices(&dev), ["gpu"]);
+        fs::remove_file(dev.join("nvidia0")).unwrap();
+        node(&dev.join("dri/renderD129"));
+        driver("renderD129", "amdgpu");
+        assert_eq!(p.devices(&dev), ["gpu"]);
+        node(&dev.join("kvm"));
+        assert_eq!(p.devices(&dev), ["gpu", "kvm"]);
+        for n in ["dri/renderD129", "nvidiactl"] {
+            fs::remove_file(dev.join(n)).unwrap();
+        }
+        assert_eq!(p.devices(&dev), ["kvm"]);
     }
 }

@@ -171,7 +171,11 @@ branch gateway-queue, staged file and history come with the Magit adapter (look 
     (palette "the mockup's palette rows come from its own commands; the line lists the registry's")
     (explorer-focused-dark "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
     (explorer-focused-light "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
-    (explorer-focused-hc "no agent badges (C, R) in the Explorer: agent system part 3 (G9)"))
+    (explorer-focused-hc "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
+    (debugging "no session runs: no stopped line (arrow and band on 24), toolbar, inline values, Run and Debug view or
+Debug Console (graphical debugging's later tasks); compare the breakpoint column"
+               "no hover dot on 32: the margin's mouse-face needs Nidhogg's margin patch"
+               "no change bars: the scene's inventory.py is new, not a changed file"))
   "What the line cannot show of each scene's mockup yet, written to the scene's facts (:limits).  A scene is never
 changed to hide a gap: the gap is named here instead.")
 
@@ -394,17 +398,61 @@ look-scenes' types them)."
     (goto-char (point-max)))
   (drgnx-look-scene--answer))
 
+(declare-function drgnx-work-map-rows-p "drgnx-work-map")
+
+(defun drgnx-look-scene--work-map ()
+  "The Work map on the scenes' hub (its seeded plan run), drawn from the hub's rows; nil, with an error, when it is not:
+a map off the rows path or without a hub draws a placeholder, and a shot of that judges nothing."
+  (drgnx-look-scene--hub)
+  (let ((map (drgnx-work-space-open)))
+    (unless (drgnx-work-map-rows-p)
+      (error "The Work map is off the rows path (this Emacs has no Sjá: run the scenes on Nidhogg's line, --line)"))
+    ;; the hub sends the map's rows after it opens and the view draws them on a timer once its window shows: the
+    ;; shot waits for the first of them (redisplay and timers run in `sit-for'), not an empty window
+    (and (drgnx-look-scene--until 15 "work map rows"
+                                  (lambda () (with-current-buffer map (drgnx-look-scene--row-ids ""))))
+         map)))
+
 (defun drgnx-look-scene-work-space-dark ()
   (drgnx-look-scene--theme 'drgnx-dark)
-  (drgnx-look-scene--try "work space"
-    (let ((map (drgnx-work-space-open)))
-      ;; the hub sends the map's rows after it opens and the view draws them on a timer once its window shows: the
-      ;; shot waits for the first of them (redisplay and timers run in `sit-for'), not an empty window
-      (let ((end (+ (float-time) 15)))
-        (while (and (zerop (buffer-size map)) (< (float-time) end))
-          (sit-for 0.05)))
-      (when (zerop (buffer-size map))
-        (push "work space: no map rows within 15 s" drgnx-look-scene--errors))))
+  (drgnx-look-scene--try "work space" (drgnx-look-scene--work-map))
+  (drgnx-look-scene--answer))
+
+(declare-function drgnx-work-flow-open "drgnx-work-flow")
+(declare-function drgnx-work-flow-detail-show "drgnx-work-flow")
+(declare-function drgnx-work-flow-detail-buffer "drgnx-work-flow")
+(declare-function drgnx-work-flow-rules-buffer "drgnx-work-flow")
+(declare-function drgnx-work-flow-rules "drgnx-work-flow")
+(declare-function drgnx-view-nav "drgnx-view")
+
+(defun drgnx-look-scene-work-flow ()
+  "The Flow lens beside the scene's map (the mockup hub-orchestration), on the hub's seeded plan run: its tasks in each
+gate state, the held one, the batch.  A Flow without the run's task rows (its waiting or off-path text) is an error."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--try "work flow"
+    (when-let* ((map (drgnx-look-scene--work-map))
+                (flow (drgnx-work-flow-open map)))
+      (pop-to-buffer-same-window flow)
+      ;; the held task's row (its `drgnx-work-id' is the task's id) and the batch's heading
+      (drgnx-look-scene--until 15 "the seeded run's Flow rows (scene-run#5, the batch)"
+                               (lambda ()
+                                 (with-current-buffer flow
+                                   (and (member "scene-run#5" (drgnx-look-scene--row-ids "scene-run#"))
+                                        (save-excursion (goto-char (point-min))
+                                                        (search-forward "Merge batch" nil t))))))
+      ;; the held task selected (Tab walks the held ones): its detail tile where the map's side panel was, and the
+      ;; Rules tile in the bottom panel, each waited for with its rows, not its placeholder
+      (with-selected-window (get-buffer-window flow) (drgnx-view-nav 'walk "held" 1))
+      (drgnx-work-flow-detail-show flow)
+      (with-current-buffer flow (drgnx-work-flow-rules))
+      (drgnx-look-scene--until 15 "the detail tile of the held task and the Rules tile"
+                               (lambda ()
+                                 (and (with-current-buffer (drgnx-work-flow-detail-buffer flow)
+                                        (save-excursion (goto-char (point-min))
+                                                        (search-forward "Why it is held" nil t)))
+                                      (with-current-buffer (drgnx-work-flow-rules-buffer flow)
+                                        (save-excursion (goto-char (point-min))
+                                                        (search-forward "Rules · scene-pack" nil t))))))))
   (drgnx-look-scene--answer))
 
 ;; The highlights (look step 5b's audit): no mockup of their own; each is judged against the mockups' tokens
@@ -547,24 +595,29 @@ sections' with the inactive selection."
       (redisplay))
     (or (funcall pred) (progn (push (format "%s: not within %d s" what secs) drgnx-look-scene--errors) nil))))
 
+(defun drgnx-look-scene--hub ()
+  "The scenes' hub, started once and connected.  A session starts no hub (DRGNX_NO_HUB_START): the scenes run the
+worktree's own ($DRGNX_RATATOSKR_BIN, a test-hooks build) in the foreground, as the perf workloads do, ended with the
+session, with one plan run seeded into its fresh store (RATATOSKR_SEED_SCENE, the hub's `orch::scene') for the Work
+space's scenes."
+  (unless (drgnx-hub-running-p)
+    (let ((bin (getenv "DRGNX_RATATOSKR_BIN"))
+          (process-environment (append '("RATATOSKR_SUPERVISOR=none" "RATATOSKR_SEED_SCENE=1") process-environment)))
+      (unless (and bin (file-executable-p bin)) (error "No ratatoskr binary (DRGNX_RATATOSKR_BIN)"))
+      (make-process :name "ratatoskr" :noquery t :connection-type 'pipe
+                    :buffer (generate-new-buffer " *ratatoskr*")
+                    :command (list bin "serve" "--foreground" "--parent-pid" (number-to-string (emacs-pid))))
+      (drgnx-look-scene--until 30 "hub start" #'drgnx-hub-running-p)))
+  (drgnx-hub-connect))
+
 (defun drgnx-look-scene--search ()
   "The mockup's search in the Search view: regexp `(gateway)--pending' replaced by `\\1--queued' in the project, the
 match on line 209 (the `puthash' line) unticked; the view's buffer, or nil."
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--editor)
   (drgnx-look-scene--try "hub"                 ; the Search view's rows come from the hub
-    ;; a session starts no hub (DRGNX_NO_HUB_START): the scene runs the worktree's own ($DRGNX_RATATOSKR_BIN) in the
-    ;; foreground, as the perf workloads do, ended with the session
     (unless (drgnx-replace--hub-ready-p)
-      (unless (drgnx-hub-running-p)
-        (let ((bin (getenv "DRGNX_RATATOSKR_BIN"))
-              (process-environment (cons "RATATOSKR_SUPERVISOR=none" process-environment)))
-          (unless (and bin (file-executable-p bin)) (error "No ratatoskr binary (DRGNX_RATATOSKR_BIN)"))
-          (make-process :name "ratatoskr" :noquery t :connection-type 'pipe
-                        :buffer (generate-new-buffer " *ratatoskr*")
-                        :command (list bin "serve" "--foreground" "--parent-pid" (number-to-string (emacs-pid))))
-          (drgnx-look-scene--until 30 "hub start" #'drgnx-hub-running-p)))
-      (drgnx-hub-connect)
+      (drgnx-look-scene--hub)
       (drgnx-look-scene--until 20 "hub" #'drgnx-replace--hub-ready-p)))
   (drgnx-look-scene--try "search"
     (drgnx-replace-in-files)
@@ -620,6 +673,48 @@ match on line 209 (the `puthash' line) unticked; the view's buffer, or nil."
       (drgnx-look-scene--until 10 "sheet" (lambda () (when-let* ((b (get-buffer drgnx-replace-sheet-buffer-name)))
                                                        (plist-get (buffer-local-value 'drgnx-replace--sheet b) :hunk)))))
     (drgnx-look-scene--answer)))
+
+;; The debugging mockup's file (the-look/debugging.html): its lines 13-33, after twelve lines of header.
+(defconst drgnx-look-scene--inventory
+  (concat "\"\"\"Stock levels and the weekly order.\"\"\"\n\nimport logging\nfrom dataclasses import dataclass\n\n"
+          "log = logging.getLogger(__name__)\nPACK_SIZE = 6\n\n\n@dataclass\nclass Item:\n    sku: str; qty: int; min: int\n\n"
+          "def reorder_quantities(items: list[Item], threshold: int) -> dict[str, int]:\n"
+          "    \"\"\"Packs to order so that no item falls under its minimum.\"\"\"\n"
+          "    order: dict[str, int] = {}\n    for i, item in enumerate(items):\n        if item.qty >= item.min:\n"
+          "            continue\n        shortfall = item.min - item.qty\n        # large gaps are worth a warning in the log\n"
+          "        if shortfall > threshold:\n            log.warning(\"large shortfall: %s\", item.sku)\n"
+          "        packs = -(-shortfall // PACK_SIZE)\n        order[item.sku] = packs * PACK_SIZE\n    return order\n\n\n"
+          "def plan_week(stock: Stock) -> Plan:\n    items = [i for i in stock.items if i.active]\n"
+          "    order = reorder_quantities(items, threshold=10)\n"
+          "    cost = sum(prices[s] * n for s, n in order.items())\n    return Plan(order=order, cost=cost)\n"))
+
+(declare-function drgnx-debug-gutter-mode "drgnx-debug-gutter")
+(declare-function drgnx-debug-gutter--apply "drgnx-debug-gutter")
+
+(defun drgnx-look-scene-debugging ()
+  "The debugging mockup's editor: inventory.py from line 13, with its breakpoints in the column (18 verified, 22 a
+condition, 24 verified, 25 a logpoint, 30 disabled).  No session runs yet, so there is no stopped line, toolbar or
+views: the scene is the column's (the mockup's stop arrow on 24 is a plain breakpoint here, its hover dot on 32 is not
+drawn)."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--try "debugging"
+    (drgnx-wb-focus-editor)
+    (let ((f (expand-file-name "inventory.py" drgnx-look-scene--project)))
+      (unless (file-exists-p f) (with-temp-file f (insert drgnx-look-scene--inventory)))
+      (dolist (m '("drgnx-debug-launch" "drgnx-debug-gutter"))
+        (load (expand-file-name (concat "modules/extra/" m) (bound-and-true-p drgnx-dir)) nil t))
+      (drgnx-look-scene--goto "inventory.py" 24 8 13)
+      ;; the store's answer, as the hub would give it (the scene has no hub)
+      (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore))
+        (drgnx-debug-gutter-mode 1))
+      (drgnx-debug-gutter--apply
+       (list :version 1 :breakpoints
+             (list (list :id 1 :line 18 :enabled t :verified t)
+                   (list :id 2 :line 22 :enabled t :verified t :condition "shortfall > 20")
+                   (list :id 3 :line 24 :enabled t :verified t)
+                   (list :id 4 :line 25 :enabled t :verified t :log "order {item.sku}")
+                   (list :id 5 :line 30 :enabled nil :verified t))))))
+  (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-start-page ()
   "The start page in the editor, dark (no mockup: its buttons, keycaps and shield are the components of design §3.5)."

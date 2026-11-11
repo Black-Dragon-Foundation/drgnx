@@ -102,6 +102,13 @@ drgnx-ratatoskr/test-hooks` in `runtime/`), set the two variables, and run `bin/
 mounts them). A run narrowed by `DRGNX_TEST_SELECTOR` does not hold the list. The selector is read as a Lisp string:
 `DRGNX_TEST_SELECTOR='"a\\|b"'`, quotes included.
 
+The GUI suite (`test --ui`'s session) holds every hub row to run, narrowed or not. A session inherits no
+`DRGNX_RATATOSKR_BIN`, so `drgnx-ui-run-ui-session-tests` passes it explicitly: the caller's value, or else the checkout's
+`runtime/target/debug/ratatoskr`. It also sets `DRGNX_TEST_HUB_REQUIRED=1`, and under that a hub fixture that finds no
+Ratatoskr fails the row (`drgnx-test-no-hub`) instead of skipping it. Neither `test --ui` nor `--container --ui` builds
+the hub. Build it first (`cargo build -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks` in
+`runtime/`); CI's GUI tier fetches the test-hooks bins its `bins-linux` job built (`fetch-test-bins`).
+
 The helpers of the hub-client tests (`test/fixtures/hub-client-fixture.el`) are a fixture so that loading them registers
 no test: a test file that loaded `hub-client-test.el` whole ran its 54 tests again in its own session.
 
@@ -555,7 +562,16 @@ How it works:
   `search-preview` and `search-sheet` (mockup `search-view`), search the project for `(gateway)--pending` replaced by
   `\1--queued` (regexp) with the third match unticked, in the dark theme, then show the first file's preview tile and
   the Replace All sheet. They need the hub: the scene starts `DRGNX_RATATOSKR_BIN` in the foreground (a session starts
-  none).
+  none). `debugging` opens the debugging mockup's `inventory.py` at line 24 with its breakpoints (18, a condition on
+  22, 24, a logpoint on 25, 30 disabled) in the breakpoint column; the hub's answer is given to the column directly,
+  since no session runs. The scenes share that hub, started with `RATATOSKR_SEED_SCENE=1`: the hub writes one plan
+  run into its fresh store (`orch::scene`, test-hooks only). It is a paused job, `scene-run`, with a rule pack, tasks
+  in each gate state and their evidence, a held `gate` card, a batch of three with its affected groups' runs on two
+  machines, and the push tiers' runs at the line's head. `work-space-dark` and `work-flow` (mockup
+  `hub-orchestration`) open the Work map on that hub, then the Flow lens beside it, in the dark theme; `work-flow`
+  then selects the held task (its detail tile in the side panel) and opens the Rules tile below. Both need
+  Nidhogg's view model (Sjá; the line, not the tarball). A map or Flow drawn without the hub's rows shows only its
+  placeholder text, so it is an error of the scene, not a shot.
 - It writes `NAME-sN-facts.eld` beside each shot: the themes, the fonts the chrome faces got, the windows, the
   modules, the visible child frames, `:palette` while a minibuffer is open (whether the palette floats and why: its
   category's multiform entry, the display action, the frame), and `:limits`, what the line cannot show of that mockup yet (`drgnx-look-scene-limits`). A limit is
@@ -565,8 +581,8 @@ How it works:
 What it reads from the environment:
 - `DRGNX_LOOK_ELPA`: a package directory to activate (Magit, Vertico, …). A session has no packages of its
   own, and the user's install does.
-- `DRGNX_RATATOSKR_BIN`: a `test-hooks` ratatoskr with `ratatoskr-mock` beside it, for the agent panel and the Search
-  scenes. Without it, those scenes record what is missing.
+- `DRGNX_RATATOSKR_BIN`: a `test-hooks` ratatoskr with `ratatoskr-mock` beside it, for the agent panel, the Search
+  and the Work space scenes. Without it, those scenes record what is missing.
 - `DRGNX_LOOK_ONLY`: a regexp; only the scenes whose names match it run (`^search-`).
 
 Nothing in the command asserts a pixel. **A look change is done only when its scene sits beside its mockup at scales 1

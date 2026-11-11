@@ -17,6 +17,16 @@ use vordr::batch::{Ready, form};
 struct Line {
     ready: Vec<Ready>,
     batch: Vec<Ready>,
+    seen: Seen,
+}
+
+/// What the Flow shows of a job's queue besides its tasks: what the queue last said to each member, the combined
+/// tree the groups gate judged last (with the groups it listed there) and the head and tree the push gate judged last.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Seen {
+    pub said: std::collections::BTreeMap<String, String>,
+    pub groups: Option<(String, Vec<vordr::pack::Check>)>,
+    pub push: Option<(String, String)>,
 }
 
 /// The queues, by job.
@@ -40,7 +50,7 @@ impl Queue {
     /// TASK of JOB is ready at TIP (now AT; a task ready at another tip before is ready anew), with LIVE the job's
     /// tasks that may merge (the rest leave the queue).  The batch it is in, formed now when none is open (CLASH
     /// says two tips conflict).
-    fn place(
+    pub(crate) fn place(
         &self,
         job: &str,
         r: Ready,
@@ -73,7 +83,57 @@ impl Queue {
         if let Some(line) = self.jobs.lock().unwrap().get_mut(job) {
             line.ready.retain(|x| x.task != task);
             line.batch.retain(|x| x.task != task);
+            line.seen.said.remove(task);
         }
+    }
+
+    /// The queue said WORDS to TASK of JOB (its turn: merge, wait or back).
+    pub fn say(&self, job: &str, task: &str, words: &str) {
+        let mut jobs = self.jobs.lock().unwrap();
+        let line = jobs.entry(job.to_owned()).or_default();
+        line.seen.said.insert(task.to_owned(), words.to_owned());
+    }
+
+    /// JOB's groups gate judged the combined tree TREE, which needs GROUPS.
+    pub fn at_groups(&self, job: &str, tree: &str, groups: Vec<vordr::pack::Check>) {
+        let mut jobs = self.jobs.lock().unwrap();
+        jobs.entry(job.to_owned()).or_default().seen.groups = Some((tree.to_owned(), groups));
+    }
+
+    /// JOB's push gate judged the commit HEAD, of tree TREE.
+    pub fn at_push(&self, job: &str, head: &str, tree: &str) {
+        let mut jobs = self.jobs.lock().unwrap();
+        jobs.entry(job.to_owned()).or_default().seen.push =
+            Some((head.to_owned(), tree.to_owned()));
+    }
+
+    /// What the Flow shows of JOB's queue.
+    pub fn seen(&self, job: &str) -> Seen {
+        self.jobs
+            .lock()
+            .unwrap()
+            .get(job)
+            .map(|l| l.seen.clone())
+            .unwrap_or_default()
+    }
+
+    /// JOB's queue as a test hub seeds it: READY all ready and in one batch.
+    #[cfg(feature = "test-hooks")]
+    pub(crate) fn seed(&self, job: &str, ready: Vec<Ready>) {
+        let mut jobs = self.jobs.lock().unwrap();
+        let line = jobs.entry(job.to_owned()).or_default();
+        line.batch = ready.clone();
+        line.ready = ready;
+    }
+
+    /// JOB's ready tasks, in readiness order.
+    pub fn ready(&self, job: &str) -> Vec<Ready> {
+        self.jobs
+            .lock()
+            .unwrap()
+            .get(job)
+            .map(|l| l.ready.clone())
+            .unwrap_or_default()
     }
 
     /// JOB's current batch.
@@ -115,6 +175,18 @@ pub struct Entry<'a> {
 /// E's turn in its job's queue, in DIR (the job's tree, HEAD its line).  With shared paths, a clean merge onto the
 /// line joining shared files both sides changed sends the task back for notes.  Blocking (git).
 pub fn turn(queue: &Queue, dir: &Path, e: Entry<'_>) -> Result<Turn, String> {
+    let (job, task) = (e.job, e.task);
+    let t = turn_of(queue, dir, e)?;
+    match &t {
+        Turn::Merge => queue.say(job, task, "trial merge clean"),
+        Turn::Wait(why) => queue.say(job, task, why),
+        // it left the queue: the words go with it
+        Turn::Back(_) => {}
+    }
+    Ok(t)
+}
+
+fn turn_of(queue: &Queue, dir: &Path, e: Entry<'_>) -> Result<Turn, String> {
     let Entry {
         job,
         task,
@@ -205,5 +277,30 @@ mod tests {
         );
         assert_eq!(names(q.batch("j")), vec!["d", "c"]);
         assert!(q.batch("other").is_empty());
+    }
+
+    /// [D] The queue keeps, for the Flow, what it last said to each member and the trees its groups and push gates
+    /// judged last; a member that leaves takes its words along.
+    #[test]
+    fn the_queue_keeps_what_it_said_and_the_trees_it_judged() {
+        let q = Queue::default();
+        let unit = vordr::pack::Check {
+            name: "unit".into(),
+            dir: String::new(),
+            run: vec!["t".into()],
+        };
+        q.say("j", "a", "trial merge clean");
+        q.at_groups("j", "T1", vec![unit.clone()]);
+        q.at_push("j", "h1", "T2");
+        let s = q.seen("j");
+        assert_eq!(
+            s.said.get("a").map(String::as_str),
+            Some("trial merge clean")
+        );
+        assert_eq!(s.groups, Some(("T1".into(), vec![unit])));
+        assert_eq!(s.push, Some(("h1".into(), "T2".into())));
+        q.forget("j", "a");
+        assert!(q.seen("j").said.is_empty());
+        assert_eq!(q.seen("other"), Seen::default());
     }
 }

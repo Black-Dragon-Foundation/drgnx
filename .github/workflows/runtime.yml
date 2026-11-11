@@ -1109,7 +1109,22 @@ jobs:
         run: /bin/bash test/container/zig.sh macos
       - name: libghostty-vt's pinned tarballs (build.rs never downloads)
         run: /bin/bash runtime/crates/ghostty-vt-sys/fetch.sh
+      # drgnx-term's vttest rows drive the real vttest (the Linux test images carry it; a missing one fails the rows)
+      - name: vttest (the terminal's conformance rows)
+        run: brew install vttest
       - run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
+      # The terminal worker's peer check on a Mac (getpeereid): the workspace run above checks that this user's
+      # connection is served; another uid's needs root, so the same test runs again under sudo (the runner's user has
+      # passwordless sudo), and a run that did not check (no root) fails. The worker's log goes to the job's log.
+      - name: a terminal worker drops another uid's connection (getpeereid, as root)
+        if: ${{ !cancelled() }}
+        run: |
+          bin=$(cargo test --locked --no-fail-fast --no-run --manifest-path runtime/Cargo.toml -p drgnx-term --test running --message-format=json |
+            jq -r 'select(.profile.test == true and .target.name == "running") | .executable' | tail -n 1)
+          [ -x "$bin" ] || { echo "::error::no test binary for drgnx-term's running tests"; exit 1; }
+          out=$(sudo env RUST_LOG=debug "$bin" --exact the_socket_is_private_and_another_uid_is_dropped --nocapture 2>&1) || { echo "$out"; exit 1; }
+          echo "$out"
+          if grep -q "not checked" <<< "$out"; then echo "::error::another uid's connection was not checked"; exit 1; fi
       # The hub on a Mac: the runner rows of tests/macos.rs ran above with the workspace; this is the one that needs a
       # real sshd. Remote Login on with a throwaway key (.github/ci/macos-sshd.sh), then the generated ssh config and
       # the transport against it. The key's folder is removed with the step, whatever it said.

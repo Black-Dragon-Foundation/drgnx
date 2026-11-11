@@ -37282,6 +37282,65 @@
       "classes": [
         "user"
       ],
+      "doc": "open (or open again) one Flow lens view of this connection: a plan run's tasks by gate (a chip per gate from the hub's evidence), its merge batch and rule pack, its model and its rows per display class, the first a reset, before the answer; read again after each write; with detail, one task's detail tile (why it is held, what clears it, its evidence, its actions), with rules the Rules tile (the rule pack), as rows alone",
+      "name": "work/flow/subscribe",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/flow/subscribe`: view `view` shows the Flow lens of job `job` (else the newest running job), with the agents\nof map view `map` on its tasks.  With `detail` (a task id of that job), the view is the task's detail tile: why\nthe gates hold it, what clears it, its evidence and its actions; with `rules`, the Rules tile (the run's rule pack:\neach rule, its kind, how the hub holds it). A tile is rows with no model.",
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "job": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "map": {
+            "type": "string"
+          },
+          "rules": {
+            "type": "boolean"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "map"
+        ],
+        "title": "FlowSubscribe",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/trail/subscribe`'s answer: the view's patches name this hub and start from a reset.",
+        "properties": {
+          "hub": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hub"
+        ],
+        "title": "TrailSubscribed",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "one edited file's unified diff against its worktree's base",
       "name": "work/hunks",
       "params": {
