@@ -88,10 +88,12 @@ heights), so scrolling to them never scrolls sideways."
          (extra-w (- (window-pixel-width window) (window-body-width window t)))
          (extra-h (- (window-pixel-height window) (window-body-height window t)))
          (text (window-text-pixel-size window nil nil (- max-w extra-w) (* 3 (- max-h extra-h))))
-         ;; with no right fringe the window's last column holds the truncation glyph: a line as wide as the text area
-         ;; would be cut, so one column more
+         ;; with no right fringe the window's last column holds the truncation glyph (`$', in the buffer's font): a line
+         ;; as wide as the text area would be cut, so room for the glyph too
          (w (min max-w (+ (car text) extra-w
-                          (if (zerop (or (cadr (window-fringes window)) 0)) (frame-char-width child) 0))))
+                          (if (zerop (or (cadr (window-fringes window)) 0))
+                              (max (frame-char-width child) (string-pixel-width "$" (window-buffer window)))
+                            0))))
          (h (min max-h (+ (cdr text) extra-h)))
          (border-w (- (frame-outer-width child) (frame-text-width child)))
          (border-h (- (frame-outer-height child) (frame-text-height child))))
