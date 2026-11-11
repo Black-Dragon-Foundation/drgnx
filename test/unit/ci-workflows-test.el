@@ -276,7 +276,7 @@ Returns (EXIT . OUTPUT)."
 
 (ert-deftest drgnx-ci/the-rust-test-jobs-have-the-models-and-linux-has-llvmpipe ()
   ;; the tests that run the built-in model fail without DRGNX_TEST_MODELS, the GPU tests without DRGNX_TEST_ADAPTER
-  ;; (never a skip): both workspace test jobs fetch the pinned files before `cargo test', and the Fedora 45 one runs
+  ;; (never a skip): both workspace test jobs fetch the pinned files before their tests run, and the Fedora 45 one runs
   ;; the shaders on llvmpipe; macOS has no adapter and ignores its GPU rows
   (let* ((rt (drgnx-ci-test--yml "runtime.yml")) (list (drgnx-ci-test--file ".github/ci/models.txt"))
          (packages (drgnx-ci-test--file "test/container/rust-packages.sh")))
@@ -290,7 +290,7 @@ Returns (EXIT . OUTPUT)."
                             "echo \"DRGNX_TEST_MODELS=$(cd ../test-models && pwd)\" >> \"$GITHUB_ENV\"\n")
         (should (and fetch test (< fetch test)))
         (should (string-search "env.CACHE_SAVE == 'true' && steps.models.outputs.cache-hit != 'true'" text))))
-    (should (string-match-p "DRGNX_TEST_ADAPTER: llvmpipe\n *run: cargo test --locked --no-fail-fast --workspace"
+    (should (string-match-p "DRGNX_TEST_ADAPTER: llvmpipe\n *run: cargo nextest run --locked --no-fail-fast --retries 0 --workspace"
                             (drgnx-ci-test--job rt "linux")))
     (should-not (string-search "DRGNX_TEST_ADAPTER:" (drgnx-ci-test--job rt "macos")))
     (drgnx-ci-test--has packages "vulkan-loader mesa-vulkan-drivers")
@@ -504,6 +504,10 @@ Returns (EXIT . OUTPUT)."
     ;; every cargo test runs every crate's tests, every matrix every row, and no job's failure is let off
     (dolist (line (drgnx-ci-test--matches "^\\(.*cargo[^\n]* test .*\\)$" yml))
       (should (string-search "--no-fail-fast" line)))
+    ;; and every nextest run, with no retries (a retried test that passed hides a race)
+    (dolist (line (drgnx-ci-test--matches "^\\(.*cargo nextest run.*\\)$" yml))
+      (should (string-search "--no-fail-fast" line))
+      (should (string-search "--retries 0" line)))
     (should (= (length (drgnx-ci-test--matches "\\(strategy:\\)" yml))
                (length (drgnx-ci-test--matches "\\(fail-fast: false\\)" yml))))
     (should-not (string-search "continue-on-error" yml))

@@ -197,12 +197,18 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: ${{ github.workspace }}
         run: bash .github/ci/wasm-target.sh
+      # cargo-nextest runs the workspace's tests, one process per test (the same tests by name as cargo test, the
+      # ignored ones still ignored), with no retries
+      - name: cargo-nextest 0.9.151 (checksum verified)
+        if: ${{ !cancelled() }}
+        working-directory: ${{ github.workspace }}
+        run: bash .github/ci/nextest.sh
       # --no-fail-fast: every crate's failures in one run. The GPU tests run the real shaders on llvmpipe, Mesa's
       # software Vulkan driver (rust-packages.sh installs it), so they need no GPU
       - if: ${{ !cancelled() }}
         env:
           DRGNX_TEST_ADAPTER: llvmpipe
-        run: cargo test --locked --no-fail-fast --workspace --features drgnx-ratatoskr/test-hooks,drgnx-px/test-hooks
+        run: cargo nextest run --locked --no-fail-fast --retries 0 --workspace --features drgnx-ratatoskr/test-hooks,drgnx-px/test-hooks
       # the test-hooks binary and the harness for the steps below
       # (+ gleipnir-probe and gleipnir-escape, the escape suite's two binaries: glibc builds, so the same ones run on a VM)
       - id: build
