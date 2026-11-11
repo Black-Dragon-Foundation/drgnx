@@ -1985,6 +1985,52 @@ fn a_grouped_window_holds_its_first_entrys_parents() {
         .unwrap();
 }
 
+/// The length of the list `order` a model's ops set, wherever it is in V.
+fn order_len(v: &Value) -> Option<usize> {
+    match v {
+        Value::Object(o) if o.get("name") == Some(&json!("order")) => {
+            o.get("ids").and_then(Value::as_array).map(Vec::len)
+        }
+        Value::Object(o) => o.values().find_map(order_len),
+        Value::Array(a) => a.iter().find_map(order_len),
+        _ => None,
+    }
+}
+
+/// A regroup sends the first window of the model (its rows come at once); the editor's `view/window` after they are
+/// drawn brings the whole window.
+#[test]
+fn a_regroup_sends_the_first_window_and_the_editor_asks_the_rest() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    for f in 0..30 {
+        let file = format!("/r/d{}/f{f}.rs", f % 3);
+        let ms = (0..100)
+            .map(|i| m(&file, i + 1, "", "needle", ""))
+            .collect();
+        feed(&greps, &mut s, id, &file, ms);
+    }
+    let entries = greps.with(CONN, "s", id, |run| run_entries(run)).unwrap();
+    assert!(entries > FIRST_MODEL_WINDOW, "{entries}");
+    let (model, patches) = greps
+        .with(CONN, "s", id, |run| {
+            regroup_patches(&mut s, CONN, "s", run, GrepGroup::Tree, None)
+        })
+        .unwrap();
+    let model = model.expect("a regroup's model");
+    assert!(!patches.is_empty(), "the first window's rows");
+    assert_eq!(order_len(&model.model), Some(FIRST_MODEL_WINDOW));
+    let rest = greps
+        .with(CONN, "s", id, |run| window_model(&mut s, CONN, "s", run))
+        .unwrap()
+        .expect("the whole window");
+    // the files and matches, and the three folders above them
+    assert_eq!(order_len(&rest.model), Some(entries + 3));
+    assert!(rest.version > model.version);
+}
+
 /// Regrouping 10,000 matches in 100 files: the time to the first window's rows and model (printed; the budget is
 /// 50 ms p95, measured in a release build: `--ignored --nocapture`).
 #[test]

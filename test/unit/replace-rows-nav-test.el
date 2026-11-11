@@ -641,6 +641,34 @@ finds a match's file on its definition's `path'."
       (drgnx-replace-prev-file)
       (should (equal "s:a.txt:0:9:f" (drgnx-view-nav-selection))))))
 
+(ert-deftest drgnx-replace-rows/a-regroup-asks-the-whole-window-after-its-first-draw ()
+  "Pattern D: a regroup's model comes as a first window (its rows at once); after the first draw that holds it, the
+view asks the hub for the whole window (`view/window'), once; a draw of the model before the regroup's asks nothing."
+  (let ((drgnx-replace-rows-nav-test--grouped t))
+    (drgnx-replace-rows-nav-test--with
+      (drgnx-replace-rows-nav-test--hub
+        (let* ((get (symbol-function 'nidhogg-view-get)) (win '(0 20000 30000))
+               (windows (lambda () (seq-filter (lambda (c) (equal (car c) "view/window")) calls))))
+          (cl-letf (((symbol-function 'nidhogg-view-get)
+                     (lambda (h what &rest args) (if (eq what 'window) win (apply get h what args)))))
+            (drgnx-replace-search-group 'tree)
+            (should drgnx-replace--grow)
+            ;; the model before the regroup's is drawn: its window is whole, nothing is asked
+            (drgnx-replace--rows-boxes drgnx-view nil)
+            (should-not (funcall windows))
+            ;; the regroup's first window is drawn: the whole one is asked for, from where it starts
+            (setq win '(0 2000 3033))
+            (drgnx-replace--rows-boxes drgnx-view nil)
+            (should (equal (list (list "view/window" :view drgnx-replace-view :list "order" :from 0)) (funcall windows)))
+            (drgnx-replace--rows-boxes drgnx-view nil)
+            (should (= 1 (length (funcall windows))))
+            ;; a new search asks nothing after its draws
+            (drgnx-replace-search-group 'symbol)
+            (cl-letf (((symbol-function 'drgnx-replace--send-buffers) #'ignore)
+                      ((symbol-function 'drgnx-replace--hub-attach) #'ignore))
+              (drgnx-replace--hub-search "needle" nil))
+            (should-not drgnx-replace--grow)))))))
+
 (ert-deftest drgnx-replace-rows/grouping-regroups-without-searching ()
   "Pattern D: the grouping control (and Next Grouping) asks the hub to regroup (`search/group', the sort with it),
 never a search again; a new search keeps the grouping (`search/run''s `group' and `sort'); the keys are in every

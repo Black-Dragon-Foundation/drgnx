@@ -29,8 +29,8 @@ use drgnx_rows::{Op, Patch, Row};
 use hrafn::grep::{self, Match, Query};
 use modes::Mode;
 use rows::{
-    MODEL_WINDOW, gap_row, grep_doc, row_index, rows_in, rows_total, rows_upto, run_doc,
-    run_entries, run_window,
+    FIRST_MODEL_WINDOW, MODEL_WINDOW, gap_row, grep_doc, row_index, rows_in, rows_total, rows_upto,
+    run_doc, run_entries, run_window,
 };
 use run::{Buffer, Found, Read};
 use runstav::methods::search::{
@@ -358,6 +358,23 @@ fn put_file(run: &mut Run, file: &str, put: Put) -> bool {
     true
 }
 
+/// RUN's model in the window CONN's editor asked for (`view/window`; after a regroup, the whole window): the same
+/// entries in another window are the move alone (the nodes held stay as they are), else the model's diff.
+fn window_model(store: &mut Store, conn: u64, view: &str, run: &Run) -> Option<ViewModel> {
+    let from = store.window_from(conn, view, "order");
+    let w = run_window(run, MODEL_WINDOW, from);
+    let m = super::model::WindowMove {
+        name: "order",
+        window: (w.total, w.from),
+        held: &w.held,
+        order: w.order.clone(),
+    };
+    match store.move_model(conn, view, m, |i| w.node(i)) {
+        Some(m) => Some(m),
+        None => store.publish_model(conn, view, run_doc(run, from)),
+    }
+}
+
 /// RUN's whole model, and its rows, as diffs for each class (files changed somewhere in them).
 fn whole_patches(
     store: &mut Store,
@@ -365,11 +382,23 @@ fn whole_patches(
     view: &str,
     run: &mut Run,
 ) -> (Option<ViewModel>, Vec<Patch>) {
+    whole_patches_of(store, conn, view, run, MODEL_WINDOW)
+}
+
+/// [`whole_patches`] with a model window of at most WINDOW entries.
+fn whole_patches_of(
+    store: &mut Store,
+    conn: u64,
+    view: &str,
+    run: &mut Run,
+    window: usize,
+) -> (Option<ViewModel>, Vec<Patch>) {
     run.waiting = (Vec::new(), Vec::new());
-    run.model_sent = run_entries(run);
+    // a first window holds fewer: a batch then publishes the whole, never extends what the editor does not hold
+    run.model_sent = run_entries(run).min(window);
     run.model_at = Some(crate::clock::now());
     let from = store.window_from(conn, view, "order");
-    let model = store.publish_model(conn, view, run_doc(run, from));
+    let model = store.publish_model(conn, view, rows::run_doc_of(run, window, from));
     let rows = view_rows(run);
     let patches = keys(store, conn, view)
         .iter()
@@ -751,23 +780,8 @@ impl Views {
     pub(super) fn grep_window(&self, f: &Front, conn: u64, view: &str) -> bool {
         self.greps
             .current(conn, view, |run| {
-                let from = self.window_from(conn, view, "order");
-                // the same entries in another window: the move alone (the nodes held stay as they are)
-                let w = run_window(run, MODEL_WINDOW, from);
-                let m = super::model::WindowMove {
-                    name: "order",
-                    window: (w.total, w.from),
-                    held: &w.held,
-                    order: w.order.clone(),
-                };
-                let moved = lock(&self.store).move_model(conn, view, m, |i| w.node(i));
-                match moved {
-                    Some(m) => {
-                        f.send_to(conn, "view-model", super::Store::model_data(m));
-                    }
-                    None => {
-                        self.publish_model(f, conn, view, run_doc(run, from));
-                    }
+                if let Some(m) = window_model(&mut lock(&self.store), conn, view, run) {
+                    f.send_to(conn, "view-model", super::Store::model_data(m));
                 }
             })
             .is_some()
@@ -1258,7 +1272,8 @@ fn regroup_patches(
     run.limit = WINDOW;
     run.block = None;
     store.forget_windows(conn, view);
-    whole_patches(store, conn, view, run)
+    // the first window's model; the editor asks for the whole window once its rows are drawn
+    whole_patches_of(store, conn, view, run, FIRST_MODEL_WINDOW)
 }
 
 /// `search/group`: VIEW's search grouped as asked, without searching again: its model (from its start) and rows whole,

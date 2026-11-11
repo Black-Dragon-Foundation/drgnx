@@ -21,6 +21,10 @@ pub(super) const GAP: &str = "gap";
 /// (Sjá takes no longer list unwindowed).
 pub(super) const MODEL_WINDOW: usize = 20_000;
 
+/// The window of the model a regroup sends first: the first rows draw after Sjá takes this much, and the editor asks
+/// for the whole window (`view/window`) once they are drawn (a regroup re-parents every node: spec §8's 50 ms).
+pub(super) const FIRST_MODEL_WINDOW: usize = 2_000;
+
 fn flat(s: &str) -> String {
     s.replace('\n', "⏎")
 }
@@ -260,7 +264,12 @@ pub(super) fn run_window(run: &Run, window: usize, from: Option<usize>) -> Windo
 
 /// RUN's model ([`grep_doc`], grouped or not), its window from FROM.
 pub(super) fn run_doc(run: &Run, from: Option<usize>) -> Doc {
-    doc_of(&run_window(run, MODEL_WINDOW, from))
+    run_doc_of(run, MODEL_WINDOW, from)
+}
+
+/// RUN's model with a window of at most WINDOW entries from FROM.
+pub(super) fn run_doc_of(run: &Run, window: usize, from: Option<usize>) -> Doc {
+    doc_of(&run_window(run, window, from))
 }
 
 /// FILES' (run RUN) window of at most WINDOW entries from entry FROM (clamped so the window is full): its ids only, no

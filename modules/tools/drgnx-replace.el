@@ -473,6 +473,11 @@ matches of the new run in `search-run-done', which are unticked again.")
 
 (defvar-local drgnx-replace--group 'file
   "How the Search view's results are grouped: `file', `tree' (Folders) or `symbol' (Symbols).")
+(defvar-local drgnx-replace--grow nil
+  "After a regroup on the rows path: the hub sent the first window of the model (`FIRST_MODEL_WINDOW'), and the view
+asks for the whole window once its rows are drawn (`drgnx-replace--grow-window').")
+(defconst drgnx-replace--model-window 20000
+  "The longest window of the Search view's model the hub sends (its `MODEL_WINDOW').")
 (defvar-local drgnx-replace--sort nil
   "The order of the Search view's groups: nil (as found; Folders and Symbols by path), `path', `count' or `rank'
 \(the files' rank in the project's map, most central first).")
@@ -1034,6 +1039,7 @@ the groups; interactively, a prefix argument asks for it."
     (setq drgnx-replace--group group)
     (when sort (setq drgnx-replace--sort sort))
     (when (drgnx-replace--rows-p)
+      (setq drgnx-replace--grow t)
       (drgnx-replace--hub-call "search/group"
                                (append (list :view drgnx-replace-view :group (symbol-name group))
                                        (and drgnx-replace--sort (list :sort (symbol-name drgnx-replace--sort))))))
@@ -1720,7 +1726,17 @@ runs it after a draw."
         (if (equal text "[x]")
             (when ov (delete-overlay ov) (remhash key table))
           (if ov (move-overlay ov pos (+ pos 3)) (setq ov (make-overlay pos (+ pos 3))) (puthash key ov table))
-          (overlay-put ov 'display text))))))
+          (overlay-put ov 'display text))))
+    (when drgnx-replace--grow (drgnx-replace--grow-window))))
+
+(defun drgnx-replace--grow-window ()
+  "After a regroup, once the first window's rows are drawn: ask the hub for the whole window of the model (a regroup
+sends a short one first, so its rows come at once; the rest drains after them)."
+  (when-let* ((h (drgnx-view-patch-handle drgnx-view-patch))
+              (window (nidhogg-view-get h 'window "order")))
+    (when (< (nth 1 window) (min (nth 2 window) drgnx-replace--model-window))
+      (setq drgnx-replace--grow nil)
+      (drgnx-replace--hub-call "view/window" (list :view drgnx-replace-view :list "order" :from (nth 0 window))))))
 
 (defun drgnx-replace--rows-untick-all ()
   "On the rows path, every match ticked again: Sjá's ticked set emptied (a new search, Replace All's leftovers), the
@@ -1918,7 +1934,7 @@ text is sent too: the hub empties the rows and stops the search before.  The mat
   (when (and (eq (drgnx-replace--opt :scope) 'file) (not file))
     (setq text "" drgnx-replace--status "This file: the view was not opened from a file"))
   (let ((off (prog1 drgnx-replace--carry (setq drgnx-replace--carry nil))))
-    (setq drgnx-replace--searching t)
+    (setq drgnx-replace--searching t drgnx-replace--grow nil)
     (drgnx-replace--send-buffers)
     (drgnx-replace--hub-call
      "search/run"
@@ -1929,6 +1945,7 @@ text is sent too: the hub empties the rows and stops the search before.  The mat
              (and (memq drgnx-replace--sort '(path count)) (list :sort (symbol-name drgnx-replace--sort)))))
     ;; the sort by rank waits for the project's index: the hub takes it as a regroup of the new search
     (when (eq drgnx-replace--sort 'rank)
+      (setq drgnx-replace--grow t)
       (drgnx-replace--hub-call "search/group" (list :view drgnx-replace-view :group (symbol-name drgnx-replace--group)
                                                     :sort "rank")))))
 
