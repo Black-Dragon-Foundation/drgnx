@@ -88,31 +88,38 @@ STATE).")
 
 (defun drgnx-search-edit--insert (lines root)
   "Insert LINES (the hub's `search/edit-doc' lines, by file and line) under their files' headers (ROOT their folder);
-the buffer's lines vector."
+the buffer's lines vector.  The text goes in at once and the lines' markers are made after it: a marker made before
+an insertion would be moved by every insertion after it."
   (let* ((width (length (number-to-string (apply #'max 1 (mapcar (lambda (l) (plist-get l :line)) lines)))))
-         (counts (make-hash-table :test #'equal)) (path nil) (out nil))
+         (number (format "%%%dd  " width))
+         (counts (make-hash-table :test #'equal)) (path nil) (pieces nil) (at 0) (spans nil))
     (dolist (l lines) (cl-incf (gethash (plist-get l :path) counts 0)))
     (dolist (l lines)
       (unless (equal (plist-get l :path) path)
         (setq path (plist-get l :path))
-        (insert (drgnx-search-edit--header path root (gethash path counts))))
+        (let ((h (drgnx-search-edit--header path root (gethash path counts))))
+          (push h pieces) (cl-incf at (length h))))
       ;; the number: read-only, nothing typed before it; text typed after it is the line's
-      (insert (propertize (format (format "%%%dd  " width) (plist-get l :line)) 'face 'drgnx-search-edit-number
-                          'read-only t 'front-sticky '(read-only) 'rear-nonsticky t))
-      (let ((start (point-marker)) (context (equal (plist-get l :kind) "context")))
-        (insert (plist-get l :text))
-        (when context (add-face-text-property start (point) 'drgnx-search-edit-context t))
-        (insert (propertize "\n" 'read-only t))
-        (let ((rec (drgnx-search-edit--line-make
-                    :id (plist-get l :line_id) :path path :line (plist-get l :line) :old (plist-get l :text)
-                    :eol (plist-get l :eol) :kind (if context 'context 'match)
-                    ;; text typed at either end is the line's: the start stays before it, the end moves after it
-                    :start start :end (copy-marker (1- (point)) t))))
-          (when (plist-get l :held)
-            (add-text-properties start (1- (point)) '(read-only "An agent holds this line" front-sticky (read-only)))
-            (add-face-text-property start (1- (point)) 'drgnx-search-edit-held))
-          (push rec out))))
-    (vconcat (nreverse out))))
+      (let ((n (propertize (format number (plist-get l :line)) 'face 'drgnx-search-edit-number
+                           'read-only t 'front-sticky '(read-only) 'rear-nonsticky t))
+            (text (copy-sequence (plist-get l :text))))
+        (when (equal (plist-get l :kind) "context") (add-face-text-property 0 (length text) 'drgnx-search-edit-context t text))
+        (when (plist-get l :held)
+          (add-text-properties 0 (length text) '(read-only "An agent holds this line" front-sticky (read-only)) text)
+          (add-face-text-property 0 (length text) 'drgnx-search-edit-held nil text))
+        (push n pieces) (cl-incf at (length n))
+        (push (list l path at (+ at (length text))) spans)
+        (push text pieces) (push (propertize "\n" 'read-only t) pieces) (cl-incf at (1+ (length text)))))
+    (let ((base (point)))
+      (insert (apply #'concat (nreverse pieces)))
+      (vconcat
+       (mapcar (pcase-lambda (`(,l ,path ,from ,to))
+                 (drgnx-search-edit--line-make
+                  :id (plist-get l :line_id) :path path :line (plist-get l :line) :old (plist-get l :text)
+                  :eol (plist-get l :eol) :kind (if (equal (plist-get l :kind) "context") 'context 'match)
+                  ;; text typed at either end is the line's: the start stays before it, the end moves after it
+                  :start (copy-marker (+ base from)) :end (copy-marker (+ base to) t)))
+               (nreverse spans))))))
 
 (defun drgnx-search-edit--buffer-name (query)
   "The tab of an Edit Results buffer of QUERY."
@@ -124,6 +131,12 @@ one of this search has unsaved edits."
   (let ((buf (get-buffer-create (drgnx-search-edit--buffer-name query))))
     (with-current-buffer buf
       (unless (and (derived-mode-p 'drgnx-search-edit-mode) (drgnx-search-edit--unsaved-p))
+        ;; the lines made before let go of their markers and overlays: each would slow every change after
+        (when (derived-mode-p 'drgnx-search-edit-mode)
+          (cl-loop for l across drgnx-search-edit--lines
+                   do (set-marker (drgnx-search-edit--line-start l) nil)
+                   (set-marker (drgnx-search-edit--line-end l) nil))
+          (delete-all-overlays))
         (drgnx-search-edit-mode)
         (setq drgnx-search-edit--view view drgnx-search-edit--title query)
         (let ((inhibit-read-only t) (inhibit-modification-hooks t))

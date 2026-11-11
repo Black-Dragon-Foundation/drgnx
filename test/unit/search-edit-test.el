@@ -256,3 +256,15 @@ the lines."
     (should-not buffer-file-name)))
 
 ;;; search-edit-test.el ends here
+
+(ert-deftest drgnx-search-edit/a-buffer-opened-again-marks-its-edits ()
+  "Pattern D: Edit Results opened again over itself (the same search, nothing unsaved) is made again, and a line
+changed in it (a `replace-match' inside the line) is marked for the save."
+  (drgnx-search-edit-test--with '()
+    (drgnx-search-edit--open "s" "one" "/r/" drgnx-search-edit-test--doc)
+    (let ((l (drgnx-search-edit-test--line "l:3")))
+      (goto-char (drgnx-search-edit--line-start l))
+      (should (search-forward "more" (drgnx-search-edit--line-end l) t))
+      (replace-match "less" t t)
+      (should (equal (drgnx-search-edit--text l) "one less"))
+      (should (= (hash-table-count drgnx-search-edit--marked) 1)))))
