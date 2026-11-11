@@ -36,6 +36,14 @@
 (unless (featurep 'drgnx-search-edit)
   (load (expand-file-name "drgnx-search-edit" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-search-edit-change "drgnx-search-edit")
+(unless (featurep 'drgnx-search-handoff)
+  (load (expand-file-name "drgnx-search-handoff" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-search-handoff-event "drgnx-search-handoff")
+(declare-function drgnx-search-handoff-chip "drgnx-search-handoff")
+(declare-function svg-create "svg")      ; the sheet's key chip (`drgnx-replace--chip-image'), loaded when drawn
+(declare-function svg-rectangle "svg")
+(declare-function svg-text "svg")
+(declare-function svg-image "svg")
 
 (declare-function eglot-current-server "eglot")
 (declare-function eglot-server-capable "eglot")
@@ -446,6 +454,17 @@ matches of the new run in `search-run-done', which are unticked again.")
 (defvar-local drgnx-replace--off nil "Hash MATCH → t: the unticked matches.")
 (defvar-local drgnx-replace--results nil "Marker: where the result tree starts (the view's rows).")
 (defvar-local drgnx-replace--status-beg nil "Marker: the status line's start.")
+
+;; Symbol's kind chips (docs/guide/replace.md, "Modes"): a line over the status line, one chip per kind with the
+;; name's definitions of it (the hub's `search-run-done' `kinds'); a chip on shows only that kind's definitions and the
+;; uses in their files; none on is every kind.
+(defconst drgnx-replace--kinds
+  '((fn square-function "Functions") (macro wand "Macros") (var variable "Variables and constants") (type type "Types"))
+  "The kind chips, in order: (KIND ICON HELP); KIND as the hub names it.")
+
+(defvar-local drgnx-replace--kinds-on nil "The kind chips on (KIND symbols): the Symbol search's `kinds'.")
+(defvar-local drgnx-replace--kind-counts nil
+  "The last Symbol search's definitions per kind, a plist (:fn 2 :macro 1…), before the chips' filter.")
 (defvar-local drgnx-replace--status-end nil "Marker: the status line's end.")
 (defvar-local drgnx-replace--lists-beg nil "Marker: the lists' start (pinned counts; saved and recent searches).")
 (defvar-local drgnx-replace--lists-end nil "Marker: the lists' end.")
@@ -616,9 +635,46 @@ no globs; Symbol keeps Aa); Rename (the language server's edits) keeps the repla
 (defun drgnx-replace--set-mode (mode)
   "Search in MODE (`text', `symbol' or `meaning'), out of Rename, and search again."
   (when (drgnx-replace--opt :symbol) (setq drgnx-replace--opts (plist-put drgnx-replace--opts :symbol nil)))
-  (setq drgnx-replace--opts (plist-put drgnx-replace--opts :mode mode))
+  (setq drgnx-replace--opts (plist-put drgnx-replace--opts :mode mode)
+        drgnx-replace--kinds-on nil drgnx-replace--kind-counts nil)   ; the chips are Symbol's, of one search
   (drgnx-replace--apply-mode)
   (drgnx-replace--search-now))
+
+(defun drgnx-replace--kinds-line ()
+  "Symbol's kind chips and a newline, or \"\" (another mode, no counts yet)."
+  (if (not (and (eq (drgnx-replace--opt :mode) 'symbol) drgnx-replace--kind-counts)) ""
+    ;; the view's own values: the chips are made in a temporary buffer
+    (let ((counts drgnx-replace--kind-counts) (kinds-on drgnx-replace--kinds-on))
+      (with-temp-buffer
+        (insert (propertize "Kinds " 'face 'drgnx-text-subtle))
+        (pcase-dolist (`(,kind ,icon ,help) drgnx-replace--kinds)
+          (let* ((n (or (plist-get counts (intern (format ":%s" kind))) 0))
+                 (on (memq kind kinds-on))
+                 (face (cond (on 'drgnx-replace-on) ((zerop n) 'drgnx-text-subtle) (t 'drgnx-replace-dim))))
+            (insert-text-button (concat (drgnx-look-icon icon nil 14) " " (symbol-name kind)
+                                        (if (> n 0) (format " %d" n) ""))
+                                'face face 'follow-link t 'help-echo (format "%s (%s)" help (if on "on" "off"))
+                                'action (lambda (_) (drgnx-replace-kind-toggle kind)))
+            (insert " ")))
+        (insert "\n")
+        (buffer-string)))))
+
+(defun drgnx-replace-kind-toggle (kind)
+  "In Symbol mode: show only definitions of KIND (`fn', `macro', `var', `type'), with the others on; again: not."
+  (with-current-buffer (drgnx-replace--live-view)
+    (setq drgnx-replace--kinds-on (if (memq kind drgnx-replace--kinds-on) (delq kind drgnx-replace--kinds-on)
+                                    (append drgnx-replace--kinds-on (list kind))))
+    (drgnx-replace--search-now)))
+
+(defun drgnx-replace-search-kinds (kinds)
+  "In Symbol mode: show only the definitions of KINDS (asked; none is every kind) and the uses in their files."
+  (interactive (list (mapcar #'intern (completing-read-multiple
+                                       "Kinds (none: all): " (mapcar (lambda (k) (symbol-name (car k))) drgnx-replace--kinds)
+                                       nil t))))
+  (with-current-buffer (drgnx-replace--live-view)
+    (unless (eq (drgnx-replace--opt :mode) 'symbol) (user-error "Kind chips are Symbol mode's"))
+    (setq drgnx-replace--kinds-on kinds)
+    (drgnx-replace--search-now)))
 
 (defun drgnx-replace--check-writable ()
   "A user error in a mode that finds without replacing (Symbol, Meaning)."
@@ -895,7 +951,10 @@ Branch's base and `±'."
     (drgnx-replace--drawing
      (delete-region drgnx-replace--status-beg drgnx-replace--status-end)
      (goto-char drgnx-replace--status-beg)
+     (insert (drgnx-replace--kinds-line))
      (insert (propertize line 'face 'drgnx-replace-dim))
+     ;; the newest hand-off to an agent: its state chip
+     (insert (drgnx-search-handoff-chip))
      ;; Branch with no base to take (a detached HEAD, no upstream, main or master): its menu
      (when (plist-get drgnx-replace--scope-done :needs_base)
        (insert (propertize " · " 'face 'drgnx-replace-dim))
@@ -1188,20 +1247,25 @@ Nil when it sent edits; else the reason as a string (`nothing' when it sent none
       (buffer-substring-no-properties (region-beginning) (region-end))
     (thing-at-point 'symbol t)))
 
-(cl-defun drgnx-replace--open (&key symbol text replace opts (scope 'project) origin)
+(cl-defun drgnx-replace--open (&key symbol text replace opts (scope 'project) origin mode root)
   "Show the Search view searching TEXT (default: the word at point) in SCOPE, REPLACE in the replace field.
 SYMBOL: t (on), `auto' (on at a name the language server can rename) or nil.  OPTS: (:case :word :regexp) to set.
-ORIGIN: the marker the view works for (default: point in the editor)."
+ORIGIN: the marker the view works for (default: point in the editor).  MODE: `text', `symbol' or `meaning' (default:
+the view's own).  ROOT: the folder to search (default: ORIGIN's project)."
   (let* ((origin (or origin
                      (if (drgnx-signal-editor-window-p (selected-window)) (point-marker)
                        (let ((w (drgnx-wb-editor-window))) (with-current-buffer (window-buffer w) (copy-marker (window-point w)))))))
          (text (or text (with-current-buffer (marker-buffer origin) (save-excursion (goto-char origin) (drgnx-replace--word-here)))))
          (view (drgnx-replace--view-buffer)))
     (with-current-buffer view
-      (setq drgnx-replace--origin origin drgnx-replace--root (drgnx-replace--root-of origin))
+      (setq drgnx-replace--origin origin drgnx-replace--root (or root (drgnx-replace--root-of origin)))
       (when text (drgnx-replace--fill 'find text))
       (when replace (drgnx-replace--fill 'replace replace))
       (when (drgnx-replace--opt :symbol) (drgnx-replace--set-symbol nil))
+      (when (and mode (not (eq mode (drgnx-replace--opt :mode))))
+        (setq drgnx-replace--opts (plist-put drgnx-replace--opts :mode mode)
+              drgnx-replace--kinds-on nil drgnx-replace--kind-counts nil)
+        (drgnx-replace--apply-mode))
       (dolist (k '(:case :word :regexp))
         (when (plist-member opts k)
           (setq drgnx-replace--opts (plist-put drgnx-replace--opts k (plist-get opts k)))
@@ -1734,7 +1798,9 @@ mode's query, and in Text mode the replacement and the globs; the scope."
          (mode (drgnx-replace--opt :mode))
          (text-p (not (memq mode '(symbol meaning)))))   ; Symbol and Meaning: no replacement, no globs
     (append (list :query (pcase mode
-                           ('symbol (list :mode "symbol" :name text :case (funcall on :case)))
+                           ('symbol (append (list :mode "symbol" :name text :case (funcall on :case))
+                                            (and drgnx-replace--kinds-on
+                                                 (list :kinds (vconcat (mapcar #'symbol-name drgnx-replace--kinds-on))))))
                            ('meaning (list :mode "meaning" :question text))
                            (_ (list :mode "text" :text text :case (funcall on :case)
                                     :word (funcall on :word) :regexp (funcall on :regexp)))))
@@ -1777,7 +1843,8 @@ it would draw stays as it was)."
   (let* ((q (plist-get spec :query)) (scope (plist-get spec :scope))
          (globs (lambda (k) (string-join (append (plist-get spec k) nil) ", "))))
     (when (drgnx-replace--opt :symbol) (drgnx-replace--set-symbol nil))
-    (setq drgnx-replace--opts (plist-put drgnx-replace--opts :mode (intern (or (plist-get q :mode) "text"))))
+    (setq drgnx-replace--opts (plist-put drgnx-replace--opts :mode (intern (or (plist-get q :mode) "text")))
+          drgnx-replace--kinds-on (mapcar #'intern (append (plist-get q :kinds) nil)))
     (dolist (k '(:case :word :regexp))
       (setq drgnx-replace--opts (plist-put drgnx-replace--opts k (drgnx-replace--true (plist-get q k))))
       (drgnx-replace--restyle k))
@@ -1978,7 +2045,9 @@ view shows.  A timer: never signals."
       (drgnx-replace--rows-boxes drgnx-view (delete-dups shown)))))
 
 (defun drgnx-replace--write-event (event data)
-  "`drgnx-hub-event-functions': `search-apply' (a file of the view's write) and `search-change' (the write ended)."
+  "`drgnx-hub-event-functions': `search-apply' (a file of the view's write) and `search-change' (the write ended);
+`search-handoff-state' is Ask an Agent's."
+  (drgnx-search-handoff-event event data)
   (pcase event
     ("search-apply" (drgnx-replace--apply-later data))
     ("search-change"
@@ -2008,7 +2077,8 @@ the matches the user had unticked before it (`:off'); `search-apply' and `search
           (setq drgnx-replace--searching nil
                 drgnx-replace--hub-counts (cons (or (plist-get data :files) 0) (or (plist-get data :matches) 0)))
           (when-let* ((err (plist-get data :error))) (setq drgnx-replace--status (format "%s" err)))
-          (setq drgnx-replace--scope-done (plist-get data :scope))
+          (setq drgnx-replace--scope-done (plist-get data :scope)
+                drgnx-replace--kind-counts (plist-get data :kinds))
           (drgnx-replace--apply-scope)
           (drgnx-replace--hub-listed)
           (drgnx-replace--watch)
@@ -2524,7 +2594,21 @@ The find bar's button; not a command of its own (it needs the bar)."
                    (search-edit-refresh-line "Take the File's Line" drgnx-search-edit-refresh-line
                                              "In Edit Results: show the file's current text for the line at point")
                    (search-edit-undo-saves "Undo All Saves of Edited Results" drgnx-search-edit-undo-saves
-                                           "In Edit Results: put back every save of it, newest first")))
+                                           "In Edit Results: put back every save of it, newest first")
+                   (search-kinds "Filter Symbol Results by Kind…" drgnx-replace-search-kinds
+                                 "In Symbol mode: only the definitions of some kinds (fn, macro, var, type) and their files' uses")
+                   (search-to-agent "Ask an Agent" drgnx-search-to-agent
+                                    "Hand the Search view's ticked matches (or this row's) to an agent with what to do")
+                   (search-handoff-send "Send to the Agent" drgnx-search-handoff-send
+                                        "On the Ask an Agent card: send the brief to the agent")
+                   (search-handoff-cancel "Cancel Asking an Agent" drgnx-search-handoff-cancel
+                                          "On the Ask an Agent card: close it, nothing sent")
+                   (search-handoff-next-who "Next Agent" drgnx-search-handoff-next-who
+                                            "On the Ask an Agent card: who it goes to next (a new worker, a live session)")
+                   (search-handoff-hidden "Hidden Files In or Out" drgnx-search-handoff-hidden
+                                          "On the Ask an Agent card: put the matches in dot paths and secret-looking files in the brief, or not")
+                   (search-handoff-rerun "Re-run in Worktree" drgnx-search-handoff-rerun
+                                         "Run the search again in the worktree of the worker it was handed to: what is left")))
     (drgnx-command-define id :category "Search" :title title :command fn :doc doc :scope scope))
   (drgnx-command-define 'replace-this :category "Search" :title "Replace This Match" :command #'drgnx-replace-this
                         :doc "Replace the match on this row of the Search view"
@@ -2547,11 +2631,19 @@ The find bar's button; not a command of its own (it needs the bar)."
 (defface drgnx-replace-preview-number '((t :inherit line-number))
   "A preview's line numbers." :group 'drgnx)
 
-(defface drgnx-replace-preview-word-old '((t :inherit diff-refine-removed :box nil))
+(defface drgnx-replace-preview-del '((t :inherit diff-removed :extend nil :box (:line-width (-1 . -1) :style flat-button)))
+  "A removed line of a preview or the sheet: its tint, a box in its own colour inside the glyphs (rounded under
+Glitnir by the theme, the mockup's `.dl'), so the text never moves." :group 'drgnx)
+
+(defface drgnx-replace-preview-add '((t :inherit diff-added :extend nil :box (:line-width (-1 . -1) :style flat-button)))
+  "An added line of a preview or the sheet: its tint, as `drgnx-replace-preview-del'." :group 'drgnx)
+
+;; the word tints keep a box like the line's: a run with no box would end the line's rounded run in its middle
+(defface drgnx-replace-preview-word-old '((t :inherit diff-refine-removed :box (:line-width (-1 . -1) :style flat-button)))
   "The part of a removed line that its replacement changes: a filled tint, no outline (the mockup's `.w-del')."
   :group 'drgnx)
 
-(defface drgnx-replace-preview-word-new '((t :inherit diff-refine-added :box nil))
+(defface drgnx-replace-preview-word-new '((t :inherit diff-refine-added :box (:line-width (-1 . -1) :style flat-button)))
   "The part of an added line that is new: a filled tint, no outline (the mockup's `.w-add')." :group 'drgnx)
 
 (defface drgnx-replace-preview-kept '((t :inherit (drgnx-ui-caption drgnx-text-subtle)))
@@ -2576,6 +2668,15 @@ row's own background fills the line around the image, which carries the fill its
 (defface drgnx-replace-sheet-code '((t :inherit drgnx-code-small))
   "The code lines of the Replace All sheet (the lane's text is the UI font)." :group 'drgnx)
 
+(defface drgnx-replace-plus '((t :inherit success))
+  "Lines added, a count (`+4'): coloured text, no tint (the mockup's `.pl')." :group 'drgnx)
+
+(defface drgnx-replace-minus '((t :inherit error))
+  "Lines removed, a count (`−4'): coloured text, no tint (the mockup's `.mi')." :group 'drgnx)
+
+(defface drgnx-replace-sheet-rule '((t :inherit shadow :overline t))
+  "The hairline above the Replace All sheet's foot: an overline in the border's colour." :group 'drgnx)
+
 (defface drgnx-replace-sheet-selected '((t :inherit (drgnx-selected-quiet drgnx-focus)))
   "The Replace All sheet's selected file: the selection in the focus ring, rounded where the theme rounds it."
   :group 'drgnx)
@@ -2592,14 +2693,19 @@ row's own background fills the line around the image, which carries the fill its
              (setcar hunks (plist-put (car hunks) :lines (cons line (plist-get (car hunks) :lines)))))))
     (mapcar (lambda (h) (plist-put h :lines (nreverse (plist-get h :lines)))) (nreverse hunks))))
 
-(defun drgnx-replace--diff-line (indent line &optional number face note)
+(defun drgnx-replace--diff-line (indent line &optional number face note stop)
   "LINE of a diff (its first character `+', `-' or a space) after INDENT and its line NUMBER, in its face (and FACE
-under it: the sheet's code font), with its newline: `208 - text'.  NOTE goes after the text."
+under it: the sheet's code font), with its newline: `208 - text'.  NOTE goes after the text.  STOP: where the line's
+tint ends, a `:align-to' position (the card's inset edge); without it the tint runs to the window's edge."
   (let* ((mark (aref line 0))
-         (text (concat (if (memq mark '(?+ ?-)) (string mark) " ") " " (substring line 1) (or note "") "\n")))
+         (text (concat (if (memq mark '(?+ ?-)) (string mark) " ") " " (substring line 1) (or note "")
+                       (if stop (propertize " " 'display `(space :align-to ,stop)) "\n")))
+         (nl (if stop (propertize "\n" 'face face) ""))
+         ;; the number is inside the line's tint (the mockup's `.dl .n'), in its own colour
+         (text (concat (propertize (if number (format "%4d " number) "") 'face 'drgnx-replace-preview-number) text)))
     (when face (add-face-text-property 0 (length text) face t text))
-    (add-face-text-property 0 (length text) (pcase mark (?+ 'diff-added) (?- 'diff-removed) (_ 'default)) t text)
-    (concat indent (propertize (if number (format "%4d " number) "") 'face 'drgnx-replace-preview-number) text)))
+    (add-face-text-property 0 (length text) (pcase mark (?+ 'drgnx-replace-preview-add) (?- 'drgnx-replace-preview-del) (_ 'default)) t text)
+    (concat indent text nl)))
 
 (defun drgnx-replace--refine (old new)
   "OLD and NEW (a removed line and the line that replaced it, their marks first) with the part that differs in the
@@ -2634,10 +2740,11 @@ word faces: what is between their common start and common end."
           (setq i (max k j)))))
     (append v nil)))
 
-(defun drgnx-replace--hunk-lines (indent hunk &optional face kept changed)
+(defun drgnx-replace--hunk-lines (indent hunk &optional face kept changed stop)
   "HUNK's lines (`drgnx-replace--hunks-of') after INDENT, each with its number: the old file's for a removed line,
 the new file's for the others; changed words marked; FACE under each line (the sheet's code font).  KEPT: the old
-file's lines of unticked matches, noted `← unticked, kept'.  CHANGED: the removed and added lines only (the sheet's)."
+file's lines of unticked matches, noted `← unticked, kept'.  CHANGED: the removed and added lines only (the sheet's).
+STOP: where each line's tint ends (`drgnx-replace--diff-line')."
   (let* ((head (plist-get hunk :header))
          (old (if (string-match "-\\([0-9]+\\)" head) (string-to-number (match-string 1 head)) 1))
          (new (if (string-match "\\+\\([0-9]+\\)" head) (string-to-number (match-string 1 head)) 1))
@@ -2652,9 +2759,10 @@ file's lines of unticked matches, noted `← unticked, kept'.  CHANGED: the remo
     (setq lines (nreverse lines))
     (mapconcat (lambda (l)
                  (pcase (aref l 0)
-                   (?- (prog1 (drgnx-replace--diff-line indent l old face) (cl-incf old)))
-                   (?+ (prog1 (drgnx-replace--diff-line indent l new face) (cl-incf new)))
-                   (_ (prog1 (if changed "" (drgnx-replace--diff-line indent l new face (and (memql old kept) note)))
+                   (?- (prog1 (drgnx-replace--diff-line indent l old face nil stop) (cl-incf old)))
+                   (?+ (prog1 (drgnx-replace--diff-line indent l new face nil stop) (cl-incf new)))
+                   (_ (prog1 (if changed ""
+                               (drgnx-replace--diff-line indent l new face (and (memql old kept) note) stop))
                         (cl-incf old) (cl-incf new)))))
                (drgnx-replace--refined lines) "")))
 
@@ -2686,6 +2794,8 @@ before it, its width measured in pixels (buttons and keycaps are wider than thei
   "One file's changes of the Search view's search, read-only: `a' keeps a hunk's matches, `D' drops them."
   ;; its own header line from the start: the editor's chrome shows it only when the buffer has one as it shows
   (setq-local truncate-lines t header-line-format (list " " (propertize "Preview" 'face 'drgnx-ui-heading)))
+  ;; the hunk band's tick shows where you are: no hollow cursor box on it when another window is selected
+  (setq-local cursor-in-non-selected-windows nil)
   (buffer-disable-undo))
 
 (defun drgnx-replace--preview-buffer (path)
@@ -2783,7 +2893,9 @@ groups line; the hunk's match ids on the whole row)."
                                        (propertize " " 'display `(space :align-to (- right (,inset)))))))
                     (add-face-text-property 0 (length band) 'drgnx-replace-preview-head t band)
                     (concat (propertize " " 'display `(space :width (,inset))) band "\n"))
-                  (drgnx-replace--hunk-lines "" p nil (append (plist-get h :kept) nil))
+                  ;; the lines' tints start and stop at the card's inset, as the band (the mockup's `.dl' margin)
+                  (drgnx-replace--hunk-lines (propertize " " 'display `(space :width (,(drgnx-px 8)))) p nil (append (plist-get h :kept) nil) nil
+                                             `(- right (,(drgnx-px 8))))
                   (drgnx-replace--groups-line "       " (plist-get h :captures)))
           'drgnx-replace-hunk ids)))
       (_ "\n"))))
@@ -2801,8 +2913,8 @@ groups line; the hunk's match ids on the whole row)."
           (propertize (format " · %d of %d matches ticked · " (cl-count-if-not (lambda (id) (member id off)) all)
                               (+ (length all) kept))
                       'face 'drgnx-text-subtle)
-          (propertize (format "+%d" (or (plist-get answer :plus) 0)) 'face 'diff-added) " "
-          (propertize (format "−%d" (or (plist-get answer :minus) 0)) 'face 'diff-removed)
+          (propertize (format "+%d" (or (plist-get answer :plus) 0)) 'face 'drgnx-replace-plus) " "
+          (propertize (format "−%d" (or (plist-get answer :minus) 0)) 'face 'drgnx-replace-minus)
           (drgnx-replace--right
            (concat (drgnx-replace--header-button "Open File" 'search-preview-open 'drgnx-ui-button) " "
                    (drgnx-replace--header-button "Replace in This File" 'search-preview-replace-file
@@ -2947,7 +3059,8 @@ index, :hunk its first hunk's diff text when it came, :captures that hunk's grou
   (let ((k (drgnx-replace--lines-changed (plist-get f :edits)))
         (skips (cl-count-if (lambda (x) (equal (plist-get x :path) (plist-get f :path))) skipped))
         (b (find-buffer-visiting (plist-get f :path))))
-    (concat (propertize (format "+%d" k) 'face 'diff-added) " " (propertize (format "−%d" k) 'face 'diff-removed)
+    (concat (propertize (format "+%d" k) 'face '(drgnx-replace-plus drgnx-replace-sheet-code)) " "
+            (propertize (format "−%d" k) 'face '(drgnx-replace-minus drgnx-replace-sheet-code))
             (if (> skips 0) (propertize (format "  %d skipped" skips) 'face 'warning) "")
             (if (and b (buffer-modified-p b)) (propertize "  open, unsaved: stays unsaved" 'face 'warning) ""))))
 
@@ -2963,13 +3076,16 @@ between each (the mockup's `.fl')."
           (drgnx-replace--gap 8) (drgnx-replace--sheet-name f)))
 
 (defun drgnx-replace--sheet-edge (files skipped)
-  "The sheet's right edge in pixels, in this buffer: the widest head, a gap, the widest tail; the tails end there."
-  (let ((px (lambda (str) (string-pixel-width str (current-buffer)))))
-    (+ (drgnx-px 6)                                     ; the row's inset (outside its ring)
-       (apply #'max 0 (mapcar (lambda (f) (funcall px (drgnx-replace--sheet-head f t))) files))
-       (drgnx-px 32)
-       (apply #'max (funcall px (drgnx-replace--sheet-buttons))
-              (mapcar (lambda (f) (funcall px (drgnx-replace--sheet-tail f skipped))) files)))))
+  "The sheet's right edge in pixels, in this buffer: the widest head, a gap, the widest tail; the tails end there.
+Further when the selected file's hunk (shown under it) has a wider line: the code stays inside the rows' ring."
+  (let ((px (lambda (str) (string-pixel-width str (current-buffer))))
+        (h (plist-get drgnx-replace--sheet :hunk)))
+    (max (+ (drgnx-px 6)                                     ; the row's inset (outside its ring)
+            (apply #'max 0 (mapcar (lambda (f) (funcall px (drgnx-replace--sheet-head f t))) files))
+            (drgnx-px 32)
+            (apply #'max (funcall px (drgnx-replace--sheet-buttons))
+                   (mapcar (lambda (f) (funcall px (drgnx-replace--sheet-tail f skipped))) files)))
+         (if h (funcall px (drgnx-replace--hunk-lines (drgnx-replace--gap 40) h 'drgnx-replace-sheet-code nil t)) 0))))
 
 (defun drgnx-replace--sheet-at-edge (edge text)
   "TEXT ending at EDGE pixels (`drgnx-replace--sheet-edge'): a stretch space before it."
@@ -2995,7 +3111,12 @@ why, what Undo does, Cancel and Replace)."
                                      (if (= (length files) 1) "" "s"))
                              'face 'drgnx-ui-heading)
                  (if skipped (propertize (format " · %d skipped" (length skipped)) 'face 'drgnx-text-subtle) "")
-                 (propertize "\n" 'line-height 2.4))))
+                 (propertize "\n" 'line-height 2.4)
+                 ;; its rule (the mockup's `.sheet .t' bottom line): an overline on a 6 px row (the room above the
+                 ;; files), as wide as the foot's
+                 (propertize " " 'display `(space :align-to (,(+ (drgnx-replace--sheet-edge files skipped) (drgnx-px 14))))
+                             'face 'drgnx-replace-sheet-rule)
+                 (propertize " " 'display `(space :width (0) :height (,(drgnx-px 6)))) "\n")))
       (`(:file ,i)
        (let* ((f (nth i files)) (sel (= i (plist-get s :sel))) (h (and sel (plist-get s :hunk)))
               (edge (drgnx-replace--sheet-edge files skipped))
@@ -3005,9 +3126,15 @@ why, what Undo does, Cancel and Replace)."
                            (propertize " " 'display `(space :align-to (,(+ edge (drgnx-px 8))))))))
          (when sel (add-face-text-property 0 (length row) 'drgnx-replace-sheet-selected t row))
          (propertize
-          (concat (drgnx-replace--gap 6) row (propertize "\n" 'line-height 1.65)   ; 30 px rows
+          ;; 30 px rows, the text in their middle: a strut 30 px high, 63 % above the baseline (a `line-height' puts
+          ;; all its room above the text)
+          (concat (drgnx-replace--gap 6)
+                  (propertize " " 'display `(space :width (0) :height (,(drgnx-px 30)) :ascent 63))
+                  row "\n"
                   ;; the hunk under the file's name (the mockup's `.sheet .hunk', 40 px in)
-                  (if h (concat (drgnx-replace--hunk-lines (drgnx-replace--gap 40) h 'drgnx-replace-sheet-code nil t)
+                  (if h (concat (drgnx-replace--hunk-lines (drgnx-replace--gap 40) h 'drgnx-replace-sheet-code nil t
+                                                           ;; the tints end with the rows' ring
+                                                           (list (+ edge (drgnx-px 8))))
                                 (drgnx-replace--groups-line (concat (drgnx-replace--gap 40) "      ")
                                                             (plist-get s :captures)))
                     ""))
@@ -3021,6 +3148,10 @@ why, what Undo does, Cancel and Replace)."
                                                   "; "))
                                'face 'warning)
                  "")
+               ;; the foot's rule (the mockup's `.sheet .ft' top line): an overline over a line of room, to the rows'
+               ;; ring and its inset (not `right': the popup fits its widest line)
+               (propertize " " 'display `(space :align-to (,(+ (drgnx-replace--sheet-edge files skipped) (drgnx-px 14))))
+                           'face 'drgnx-replace-sheet-rule)
                "\n" (drgnx-replace--gap 14)
                (propertize (format "Undo puts all %d file%s back" (length files) (if (= (length files) 1) "" "s"))
                            'face 'drgnx-text-subtle)
@@ -3047,12 +3178,35 @@ why, what Undo does, Cancel and Replace)."
   (let* ((key (and (fboundp 'drgnx-surfaces-key-label) (drgnx-surfaces-key-label id :short t)))
          (cap (and key (fboundp 'drgnx-palette-keycap)
                    (drgnx-palette-keycap (string-join (drgnx-palette-keycap-names key) " "))))
-         (button (drgnx-ui-button (if cap (concat label "  " cap) label) id :face face)))
-    ;; the button's face replaces the chip's: ring the chip again, over the button (after its 1-character pad)
-    (when cap
+         (img (and cap (drgnx-replace--chip-image (substring-no-properties cap))))
+         (button (drgnx-ui-button (if cap (concat label "  " (or img cap)) label) id :face face)))
+    ;; without an image the button's face replaces the chip's: ring the chip again, over the button (after its pad);
+    ;; that ring breaks the button's (one box per run), the image keeps it whole
+    (when (and cap (not img))
       (let ((start (+ 1 (length label) 2)))
         (add-face-text-property start (+ start (length cap)) 'drgnx-replace-sheet-key nil button)))
     button))
+
+(defun drgnx-replace--chip-image (text)
+  "TEXT (a key: `Ctrl ↵') as one SVG chip in a string: rounded, ringed and written in `drgnx-replace-sheet-key''s
+colour and font, on no fill (the button's shows through), so the button's own ring runs on over it: a face's box in
+the button would end the button's run.  Nil without SVG on a graphical frame or the face's font."
+  (when-let* (((display-graphic-p)) ((image-type-available-p 'svg))
+              (font (face-font 'drgnx-replace-sheet-key)) (info (font-info font))
+              (family (face-attribute 'drgnx-replace-sheet-key :family nil t)) ((stringp family))
+              (fg (face-foreground 'drgnx-replace-sheet-key nil t)))
+    (require 'svg)
+    ;; `font-info': [NAME FULL SIZE HEIGHT … ASCENT (8) DESCENT (9) …]
+    (let* ((asc (aref info 8)) (desc (aref info 9)) (lw (drgnx-px-line 1)) (pad (drgnx-px 5))
+           (w (+ (* 2 pad) (string-pixel-width (propertize text 'face 'drgnx-replace-sheet-key))))
+           (h (+ asc desc (* 2 lw) (drgnx-px 2)))
+           (svg (svg-create w h)))
+      (svg-rectangle svg (/ lw 2.0) (/ lw 2.0) (- w lw) (- h lw)
+                     :rx (drgnx-px 4) :fill "none" :stroke fg :stroke-width lw)
+      ;; centred: the SVG's font may set the text a little narrower than the frame's
+      (svg-text svg text :x (/ w 2.0) :text-anchor "middle" :y (+ (/ (- h asc desc) 2) asc) :fill fg
+                :font-family family :font-size (aref info 2))
+      (propertize " " 'display (svg-image svg :ascent 'center :scale 1)))))
 
 (defun drgnx-replace--sheet-hunk ()
   "Ask the hub for the selected file's first hunk (its preview), drawn under it when it comes."
@@ -3128,6 +3282,7 @@ cancels those."
                               (add-hook 'drgnx-hub-connected-functions #'drgnx-replace--hub-up)
                               (drgnx-state-define-role 'bar) ; the find bar's window: no editor, no chrome
                               (drgnx-wb-place 'drgnx-replace-sheet-mode 'popup :height 0.8 :modal t) ; the sheet: the popup lane, tall
+                              (drgnx-wb-place 'drgnx-search-handoff-mode 'popup :height 0.3 :modal t) ; Ask an Agent's card
                               (eval-after-load 'evil (drgnx-modules-with-owner (drgnx-replace--evil-states)))
                               ;; wb/drgnx-persist.el saves the main area with `window-state-get': the bar's window would be in it.
                               (advice-add 'drgnx-persist-save :before #'drgnx-replace--close-bars)))

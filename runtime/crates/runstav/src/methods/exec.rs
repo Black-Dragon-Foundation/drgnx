@@ -22,6 +22,15 @@ pub enum ExecKind {
     Container,
 }
 
+/// The OS a job needs: `linux` (the default; this machine and Linux runners) or `macos` (a Mac runner's host job: it
+/// waits for one and never runs on this machine).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum JobOs {
+    Linux,
+    Macos,
+}
+
 /// Where a job is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -150,6 +159,9 @@ pub struct StartParams {
     /// The paths (globs) the job may write back into the tree (at most 64).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub writes: Option<Bounded<Vec<Bounded<String, 512>>, 64>>,
+    /// The OS it needs (default `linux`); a `macos` job needs a Mac runner with its project's Homebrew packages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<JobOs>,
     /// The job's priority, 1 (highest) to 5: the user's connections only (a session's request is refused).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<u8>,
@@ -257,6 +269,9 @@ pub struct JobStartParams {
     /// The paths (globs) the job may write back into your tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub writes: Option<Bounded<Vec<Bounded<String, 512>>, 64>>,
+    /// `macos`: the job needs a Mac runner (a Naglfar build, macOS tests); default `linux`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<JobOs>,
 }
 
 /// `exec/start`'s answer (and `job_start`'s): the job's id and what the agent does now.

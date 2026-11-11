@@ -23,6 +23,40 @@ fn spec(starter: Starter, cwd: &Path, script: &str, timebox: Duration) -> ExecSp
     }
 }
 
+/// [D] A test job whose parser counts rows (`ert`, `cargo-test`) must run at least one: its spec expects a row, so a
+/// selector that matched nothing reads `suspect`, not `pass`. A job that only exits, or lists plist rows, expects none.
+#[test]
+fn a_test_job_that_ran_no_rows_does_not_pass() {
+    let mut job = spec(
+        Starter::User,
+        Path::new("/p/proj"),
+        "true",
+        Duration::from_secs(5),
+    );
+    assert_eq!(job.forseti_spec("x1", "1G").expect.min_ran, None);
+    for (parser, min) in [("ert", Some(1)), ("cargo-test", Some(1)), ("plist", None)] {
+        job.place.suite = Some(queue::Suite {
+            parser: parser.into(),
+            listed: vec!["a".into()],
+        });
+        let s = job.forseti_spec("x1", "1G");
+        assert_eq!(s.expect.min_ran, min, "{parser}");
+    }
+    job.place.suite = Some(queue::Suite {
+        parser: "ert".into(),
+        listed: vec![],
+    });
+    let s = job.forseti_spec("x1", "1G");
+    let none = forseti::cachekey::Counts {
+        counts_rows: true,
+        ..Default::default()
+    };
+    assert!(matches!(
+        forseti::cachekey::verdict_of(&none, &s.expect),
+        forseti::Verdict::Suspect(_)
+    ));
+}
+
 /// What a runner is told is the job's folder inside its tree ("." for the tree itself): a runner mounts its own
 /// checkout, so the hub's absolute path would name a folder that does not exist there.
 #[test]
@@ -1626,6 +1660,87 @@ async fn a_projects_own_runner_settings_reach_its_jobs_only() {
     };
     assert!(overlay("alpha").await);
     assert!(!overlay("beta").await);
+}
+
+/// [D] A Mac job (`os: macos`) needs the Command Line Tools, its project's Homebrew packages
+/// (`drgnx-runners-mac-tools`) and its toolchains (`drgnx-runners-mac-toolchains`) as features, and counts as heavy (it can't run here); a Linux job needs none of them.
+/// The spec the queue places carries both.
+#[tokio::test]
+async fn a_mac_job_needs_its_projects_homebrew_packages() {
+    let d = tempfile::tempdir().unwrap();
+    let f = crate::front::Front::new(
+        runstav::proof::Cap::generate().unwrap(),
+        d.path().join("hub-x.sock"),
+        crate::store::WorkDb::spawn(d.path().join("work.db")).unwrap(),
+        norn::store::CoordDb::spawn(d.path().join("work.db")),
+    );
+    let at = d.path().join("alpha");
+    std::fs::create_dir(&at).unwrap();
+    let ok = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&at)
+        .status()
+        .unwrap();
+    assert!(ok.success());
+    f.settings
+        .set_overrides(
+            Some("alpha"),
+            vec![
+                crate::settings::overrides::Override {
+                    name: "drgnx-runners-mac-tools".into(),
+                    value: json!(["cmake", "ninja"]),
+                    source: "workspace".into(),
+                },
+                crate::settings::overrides::Override {
+                    name: "drgnx-runners-mac-toolchains".into(),
+                    value: json!(["rust@1.95"]),
+                    source: "workspace".into(),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+    let c = Caller {
+        class: runstav::registry::Class::User,
+        sid: None,
+        job: None,
+        conn_id: 0,
+    };
+    let cwd = at.join("");
+    let mac = placement(
+        &f,
+        &c,
+        &params(json!({"cwd": cwd.to_str().unwrap(), "os": "macos"})),
+        Machine::Auto,
+        true,
+    )
+    .await;
+    assert_eq!(mac.os, forseti::Os::Macos);
+    assert_eq!(
+        mac.features,
+        ["xcode-clt", "brew:cmake", "brew:ninja", "tool:rust@1.95"]
+    );
+    assert!(mac.heavy);
+    let mut job = spec(Starter::User, &at, "true", Duration::from_secs(5));
+    job.place = mac;
+    let s = job.forseti_spec("x1", "1G");
+    assert_eq!(s.os, forseti::Os::Macos);
+    assert_eq!(
+        s.features,
+        ["xcode-clt", "brew:cmake", "brew:ninja", "tool:rust@1.95"]
+    );
+
+    let linux = placement(
+        &f,
+        &c,
+        &params(json!({"cwd": cwd.to_str().unwrap()})),
+        Machine::Auto,
+        true,
+    )
+    .await;
+    assert_eq!(linux.os, forseti::Os::Linux);
+    assert!(linux.features.is_empty());
+    assert!(!linux.heavy);
 }
 
 /// The rows a job's `result.json` keeps, as JSON (`[{name, verdict, class?, symbols?}]`).

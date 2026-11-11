@@ -6,6 +6,7 @@
 //! sleipnir job-exec <attempt folder>          runs the folder's job.json, writes its result.json
 //! sleipnir job-helper --dir D [--hub-allow F] the attempt's keys, proxy and disk watch, until stdin ends
 //! sleipnir bench --root DIR --image DIGEST    this runner's speed, as JSON on stdout
+//! sleipnir tools --root DIR PIN...            a Mac: the project's toolchains (`rust@1.95`) into DIR by `mise`
 //! sleipnir git-receive --root ROOT REPO       the hub's `git push --receive-pack`: receive-pack on a mirror, hardened
 //! sleipnir credential-helper SOCKET OP        git's credential helper for an origin fetch: the token from SOCKET
 //! sleipnir watchdog --provider aws|gcp --idle S --lifetime S --unattended S --root DIR --dir DIR
@@ -20,17 +21,27 @@ const USAGE: &str = "usage: sleipnir serve --root DIR --prefix P --hub-id H --pr
                      sleipnir watchdog --provider aws|gcp --idle S --lifetime S --unattended S --root DIR --dir DIR\n       \
                      sleipnir job-helper --dir D [--hub-allow FILE]\n       \
                      sleipnir bench --root DIR --image DIGEST\n       \
+                     sleipnir tools --root DIR PIN...\n       \
                      sleipnir git-receive --root ROOT REPO\n       \
                      sleipnir credential-helper SOCKET OP";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // started as `brew`: a Mac job's brew shim (darwin::brew)
+    #[cfg(all(feature = "runner", target_os = "macos"))]
+    if std::env::args_os()
+        .next()
+        .is_some_and(|a| std::path::Path::new(&a).file_name() == Some(std::ffi::OsStr::new("brew")))
+    {
+        return ExitCode::from(sleipnir::darwin::brew::run(&args).clamp(0, 255) as u8);
+    }
     match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         ["job-exec", dir] => job_exec(std::path::Path::new(dir)),
         ["job-helper", ref rest @ ..] => job_helper(rest),
         ["serve", ref rest @ ..] => serve(rest),
         ["watchdog", ref rest @ ..] => watchdog(rest),
         ["bench", "--root", root, "--image", image] => bench(root, image),
+        ["tools", "--root", root, ref pins @ ..] => tools(root, pins),
         #[cfg(feature = "sync")]
         ["git-receive", "--root", root, repo] => sync::git_receive(root, repo),
         #[cfg(feature = "sync")]
@@ -134,6 +145,36 @@ fn bench(root: &str, image: &str) -> ExitCode {
 #[cfg(not(all(feature = "runner", target_os = "linux")))]
 fn bench(_root: &str, _image: &str) -> ExitCode {
     eprintln!("sleipnir bench: runners run only on Linux with a systemd user manager");
+    ExitCode::from(2)
+}
+
+/// A Mac's toolchains: each pin installed into ROOT by the user's `mise` and recorded; the outcomes and the features the
+/// root now offers, as JSON on stdout. Run by the hub at `runner add` and `runner check`, outside any job sandbox.
+#[cfg(all(feature = "runner", target_os = "macos"))]
+fn tools(root: &str, pins: &[&str]) -> ExitCode {
+    use sleipnir::darwin::tools;
+    let root = std::path::Path::new(root);
+    if !root.is_absolute() {
+        eprintln!("sleipnir tools: --root must be absolute");
+        return ExitCode::from(2);
+    }
+    let Some(mise) = tools::find_mise() else {
+        eprintln!("sleipnir tools: no mise: run `brew install mise` in your own account");
+        return ExitCode::from(2);
+    };
+    let pins: Vec<String> = pins.iter().map(|p| p.to_string()).collect();
+    let outcomes = tools::install(&mise, root, sleipnir::darwin::sandbox::PATH, &pins);
+    let features = tools::features(&tools::installed(root));
+    println!(
+        "{}",
+        serde_json::json!({ "outcomes": outcomes, "features": features })
+    );
+    ExitCode::SUCCESS
+}
+
+#[cfg(not(all(feature = "runner", target_os = "macos")))]
+fn tools(_root: &str, _pins: &[&str]) -> ExitCode {
+    eprintln!("sleipnir tools: a Mac runner's step");
     ExitCode::from(2)
 }
 

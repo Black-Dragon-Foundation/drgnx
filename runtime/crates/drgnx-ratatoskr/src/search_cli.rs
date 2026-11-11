@@ -335,6 +335,7 @@ fn serve_mcp(env: &Env, root: PathBuf) -> i32 {
     let ctx = Arc::new(SearchCtx {
         root,
         backend: Arc::new(ClientBackend { env: env.clone() }),
+        session: None,
     });
     let end = rt.block_on(mimir::serve(
         ctx,

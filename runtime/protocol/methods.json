@@ -3472,6 +3472,68 @@
     {
       "data": {
         "$defs": {
+          "HandoffPhase": {
+            "description": "Where a hand-off is: sent (no edit yet), editing (the agent edits), done (the agent stopped after editing).",
+            "enum": [
+              "sent",
+              "editing",
+              "done"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search-handoff-state` (and `search/handoff-state`'s answer): hand-off HANDOFF of VIEW, to SESSION, at PHASE: the\nhanded-off matches its agent's edits took out (DONE), those still there (LEFT: skipped once it is done), and those\nwhose line moved where it cannot be found again (UNKNOWN, never counted done).",
+        "properties": {
+          "done": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "handoff": {
+            "type": "string"
+          },
+          "left": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "phase": {
+            "$ref": "#/$defs/HandoffPhase"
+          },
+          "session": {
+            "type": "string"
+          },
+          "unknown": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handoff",
+          "view",
+          "session",
+          "phase",
+          "done",
+          "left"
+        ],
+        "title": "HandoffState",
+        "type": "object"
+      },
+      "doc": "where a Search view's hand-off (search/handoff) is, after its agent's edits and when its agent stops: which handed-off matches are done, still there or not found again; to the handing-off connection only",
+      "name": "search-handoff-state"
+    },
+    {
+      "data": {
+        "$defs": {
           "ScopeDone": {
             "additionalProperties": false,
             "description": "What a git scope (Changed, Staged, Branch) searched: FILES files of the repository (before the globs), the\nSUBMODULES and DELETED files it skipped, Branch's BASE, why it is empty (WHY_EMPTY), or why Branch has no base to\ntake (NEEDS_BASE: the view asks, `search/scope-bases`).",
@@ -3520,7 +3582,7 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`search-run-done`: search RUN of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not\nrun; OFF the matches that come back unticked (`search/run`'s `off`); SCOPE what a git scope searched. A search a\nnewer one stopped says nothing.",
+        "description": "`search-run-done`: search RUN of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not\nrun; OFF the matches that come back unticked (`search/run`'s `off`); SCOPE what a git scope searched. A search a\nnewer one stopped says nothing. KINDS (a Symbol search): how many of the name's definitions are of each kind (`fn`,\n`type`, `macro`, `var`, `other`), before the query's `kinds` filter: the view's kind chips and their counts.",
         "properties": {
           "error": {
             "type": [
@@ -3532,6 +3594,17 @@
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
+          },
+          "kinds": {
+            "additionalProperties": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "matches": {
             "format": "uint64",
@@ -13217,6 +13290,14 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
             "type": "string"
           },
+          "JobOs": {
+            "description": "The OS a job needs: `linux` (the default; this machine and Linux runners) or `macos` (a Mac runner's host job: it\nwaits for one and never runs on this machine).",
+            "enum": [
+              "linux",
+              "macos"
+            ],
+            "type": "string"
+          },
           "RowsParam": {
             "additionalProperties": false,
             "description": "`exec/start`'s `rows`: the parser that reads the rows from the job's log, and the rows in listing order.",
@@ -13378,6 +13459,17 @@
               "boolean",
               "null"
             ]
+          },
+          "os": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JobOs"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The OS it needs (default `linux`); a `macos` job needs a Mac runner with its project's Homebrew packages."
           },
           "priority": {
             "description": "The job's priority, 1 (highest) to 5: the user's connections only (a session's request is refused).",
@@ -29569,6 +29661,276 @@
       "classes": [
         "user"
       ],
+      "doc": "hand a view's ticked matches to an agent: a brief (the instruction, the query, the matches grouped by file, at most 300 lines, the rest through the drgnx-search tool search_results) to a new worker in its own worktree or to a live session; hidden paths left out unless asked; its progress is search-handoff-state",
+      "name": "search/handoff",
+      "params": {
+        "$defs": {
+          "HandoffMark": {
+            "additionalProperties": false,
+            "description": "The mark the handed-off rows show: the agent's colour (a face name) and its glyph (one column), as the editor gives\nthem (the agents' identity scheme).",
+            "properties": {
+              "face": {
+                "type": "string"
+              },
+              "glyph": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "face",
+              "glyph"
+            ],
+            "type": "object"
+          },
+          "HandoffTo": {
+            "description": "Who a Search view's hand-off goes to: a new worker of PROFILE in a worktree of its own, or the live session ID\n(a chat, a worker, a paired chat in this checkout).",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "new": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "profile": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "profile"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "new"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "session": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "$ref": "#/$defs/Id"
+                      }
+                    },
+                    "required": [
+                      "id"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "session"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Prompt": {
+            "description": "a prompt or a message: at most 1 MiB (1048576 characters)",
+            "maxLength": 1048576,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/handoff`: hand VIEW's matches to an agent with INSTRUCTION: the matches IDS names (else all but OFF), to TO.\nPaths the index never reads (dot paths, secret-looking names) are left out unless HIDDEN. The handed-off rows show\nMARK.",
+        "properties": {
+          "hidden": {
+            "type": "boolean"
+          },
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "instruction": {
+            "$ref": "#/$defs/Prompt"
+          },
+          "mark": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/HandoffMark"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "off": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "to": {
+            "$ref": "#/$defs/HandoffTo"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "instruction",
+          "to"
+        ],
+        "title": "HandoffParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/handoff`'s answer: the hand-off's id, the session it went to (and the worktree of a new worker), the match\nids handed off, how many lines the brief holds and how many more `search_results` serves, and the hidden paths\nleft out.",
+        "properties": {
+          "handoff": {
+            "type": "string"
+          },
+          "hidden": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "more": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sent": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session": {
+            "type": "string"
+          },
+          "worktree": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "handoff",
+          "session",
+          "ids",
+          "sent",
+          "more"
+        ],
+        "title": "HandoffAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "where a hand-off is: sent, editing or done, and which of its matches the agent's edits took out, which are still there and which cannot be found again",
+      "name": "search/handoff-state",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/handoff-state`: where hand-off HANDOFF is.",
+        "properties": {
+          "handoff": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handoff"
+        ],
+        "title": "HandoffStateParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "HandoffPhase": {
+            "description": "Where a hand-off is: sent (no edit yet), editing (the agent edits), done (the agent stopped after editing).",
+            "enum": [
+              "sent",
+              "editing",
+              "done"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search-handoff-state` (and `search/handoff-state`'s answer): hand-off HANDOFF of VIEW, to SESSION, at PHASE: the\nhanded-off matches its agent's edits took out (DONE), those still there (LEFT: skipped once it is done), and those\nwhose line moved where it cannot be found again (UNKNOWN, never counted done).",
+        "properties": {
+          "done": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "handoff": {
+            "type": "string"
+          },
+          "left": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "phase": {
+            "$ref": "#/$defs/HandoffPhase"
+          },
+          "session": {
+            "type": "string"
+          },
+          "unknown": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handoff",
+          "view",
+          "session",
+          "phase",
+          "done",
+          "left"
+        ],
+        "title": "HandoffState",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "start or rebuild a project's index; now overrides the battery gate",
       "name": "search/index",
       "params": {
@@ -30643,6 +31005,16 @@
                       "null"
                     ]
                   },
+                  "kinds": {
+                    "description": "Only the definitions of these kinds (`fn`, `type`, `macro`, `var`) and the uses in their files; none or\nempty is every kind (the view's kind chips).",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
                   "mode": {
                     "const": "symbol",
                     "type": "string"
@@ -30874,6 +31246,16 @@
                   "case": {
                     "type": [
                       "boolean",
+                      "null"
+                    ]
+                  },
+                  "kinds": {
+                    "description": "Only the definitions of these kinds (`fn`, `type`, `macro`, `var`) and the uses in their files; none or\nempty is every kind (the view's kind chips).",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
                       "null"
                     ]
                   },
@@ -31245,6 +31627,16 @@
                       "null"
                     ]
                   },
+                  "kinds": {
+                    "description": "Only the definitions of these kinds (`fn`, `type`, `macro`, `var`) and the uses in their files; none or\nempty is every kind (the view's kind chips).",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
                   "mode": {
                     "const": "symbol",
                     "type": "string"
@@ -31511,6 +31903,16 @@
                   "case": {
                     "type": [
                       "boolean",
+                      "null"
+                    ]
+                  },
+                  "kinds": {
+                    "description": "Only the definitions of these kinds (`fn`, `type`, `macro`, `var`) and the uses in their files; none or\nempty is every kind (the view's kind chips).",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
                       "null"
                     ]
                   },

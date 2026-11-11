@@ -485,7 +485,11 @@ fn parse_form(n: &Node) -> Result<(String, SearchSpec), String> {
             word,
             regexp,
         },
-        "symbol" if word.is_none() && regexp.is_none() => FindQuery::Symbol { name: query, case },
+        "symbol" if word.is_none() && regexp.is_none() => FindQuery::Symbol {
+            name: query,
+            case,
+            kinds: None,
+        },
         "meaning" if case.is_none() && word.is_none() && regexp.is_none() => {
             FindQuery::Meaning { question: query }
         }
@@ -537,7 +541,8 @@ pub fn print_form(name: &str, spec: &SearchSpec) -> String {
             flag(&mut out, ":word", *word);
             flag(&mut out, ":regexp", *regexp);
         }
-        FindQuery::Symbol { name, case } => {
+        // the kind chips are the view's filter of the moment: a saved search keeps the name and its case
+        FindQuery::Symbol { name, case, .. } => {
             out.push_str(&format!(" :mode symbol :query {}", quoted(name)));
             flag(&mut out, ":case", *case);
         }
