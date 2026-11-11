@@ -690,7 +690,7 @@ cgroups and PSI); `DarwinPlatform` is a Mac's ("A Mac runner", above). What a pl
 
 | Area | Methods | Linux |
 |---|---|---|
-| probe and contract | `machine`, `limits`, `boot_id`, `contract`, `survives_link`, `job_runner` | `linux::probe`, linger, podman's caps check (`podman` feature) |
+| probe and contract | `machine`, `limits`, `boot_id`, `contract`, `survives_link`, `job_runner` | `linux::probe`, linger, podman's caps check (`podman` feature), `Probe::devices` (`gpu`: a DRM render node of a real driver, not `vgem`/`vkms`, or NVIDIA's `nvidiactl` with a `nvidiaN`; `kvm`: `/dev/kvm`; each only when this user may open it read-write, by permissions alone: nothing is opened). Jobs don't get these devices yet: no `--device` goes into a job's container |
 | reservations between schedulers | `reservations`, `start_time` | `linux::reserve` (`$XDG_RUNTIME_DIR`, `/proc` start times) |
 | attempts | `launch`, `active`, `kill` | `job.json`, `sleipnir job-exec` in a transient unit; `podman kill` |
 | caps | `current_mib`, `pause`, `unpause`, `grow_candidate`, `resize`, `weight_unit`, `set_weight` | the job slice's cgroup, `linux::resize` |

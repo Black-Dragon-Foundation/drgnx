@@ -242,7 +242,8 @@ job, in queue order, the hub builds a `Candidate` per machine (the local one wit
   or `on` naming another machine), the OS (`JobSpec.os`, default `linux`, must equal the candidate's `os`: a
   container job never places on a Mac runner, a `macos` job waits "needs a Mac runner"; the hub's own machine is
   `linux`, since a hub on a Mac runs its container jobs in podman's Linux machine; and a keyed job is refused on a
-  Mac, `Trust` with the reason), features (a Mac candidate offers its probe's `brew:`/`tool:` features; a refusal for
+  Mac, `Trust` with the reason), features (a runner candidate offers its last probe's features, none before one: a
+  Linux runner's `podman`, `gpu` and `kvm`, a Mac's `brew:`/`tool:` ones; the hub's own machine offers the job's; a refusal for
   the OS ranks before one for a missing feature, so a Mac job that a Mac lacks a package for waits on the package, and
   the hub's text adds "on the Mac, brew install NAME", and for a `tool:` feature that `drgnx runner check` installs
   it), the runner's state (benched, needs login, needs keys, awaiting the
