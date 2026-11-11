@@ -74,6 +74,21 @@ Built when the popup shows, set as a window parameter."
   (drgnx-wb-header-with-close (concat " " (string-trim (buffer-name buffer) "[ *]+" "[ *]+"))
                               #'drgnx-popup--close-click "Close (Esc, q)"))
 
+(defun drgnx-popup--truncated-width (window)
+  "The widest of the first 200 lines of WINDOW's buffer in pixels when it truncates its lines, else nil.  Measured
+line by line: a shown frame takes a new size only when the compositor answers, so the window a refit measures in may
+still be the old, narrower one, and a truncated line counts only up to its edge there."
+  (with-current-buffer (window-buffer window)
+    (when truncate-lines
+      (save-excursion
+        (goto-char (point-min))
+        (let ((w 0) (n 0))
+          (while (and (not (eobp)) (< n 200))
+            (setq w (max w (string-pixel-width (buffer-substring (pos-bol) (pos-eol)) (current-buffer))))
+            (forward-line 1)
+            (setq n (1+ n)))
+          w)))))
+
 (defun drgnx-popup--float-fit (window &optional fraction)
   "Fit the floating lane's frame to its buffer (at most 0.9 of the root's width and FRACTION, default 0.33, of its
 height) and put it bottom-centre, above the echo area.  The width counts the lines below the height too (up to three
@@ -88,7 +103,8 @@ heights), so scrolling to them never scrolls sideways."
          (extra-w (- (window-pixel-width window) (window-body-width window t)))
          (extra-h (- (window-pixel-height window) (window-body-height window t)))
          (text (window-text-pixel-size window nil nil (- max-w extra-w) (* 3 (- max-h extra-h))))
-         (w (min max-w (+ (car text) extra-w))) (h (min max-h (+ (cdr text) extra-h)))
+         (w (min max-w (+ (max (car text) (or (drgnx-popup--truncated-width window) 0)) extra-w)))
+         (h (min max-h (+ (cdr text) extra-h)))
          (border-w (- (frame-outer-width child) (frame-text-width child)))
          (border-h (- (frame-outer-height child) (frame-text-height child))))
     (set-frame-size child w h t)

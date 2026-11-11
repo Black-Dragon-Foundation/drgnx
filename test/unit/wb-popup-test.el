@@ -40,6 +40,22 @@
 (defun drgnx-popup-test--edges ()
   (mapcar #'window-pixel-edges (window-list nil 'nomini)))
 
+(ert-deftest drgnx-popup/a-truncating-lane-is-as-wide-as-its-widest-line ()
+  "Pattern A: the float lane's width counts each line of a buffer that truncates its lines, measured line by line (a
+shown frame's window may still be its old size when a refit measures); a wrapping buffer is left to the window's
+measure."
+  (with-temp-buffer
+    (insert "ab\nabcdefgh\nabc")
+    (setq truncate-lines t)
+    (let ((old (window-buffer)))
+      (unwind-protect
+          (progn
+            (set-window-buffer (selected-window) (current-buffer))
+            (should (= (string-pixel-width "abcdefgh") (drgnx-popup--truncated-width (selected-window))))
+            (setq truncate-lines nil)
+            (should-not (drgnx-popup--truncated-width (selected-window))))
+        (set-window-buffer (selected-window) old)))))
+
 (ert-deftest drgnx-popup/borrows-and-restores-the-panel ()
   (drgnx-popup-test--with
    (let* ((saved (drgnx-popup-test--panel-on-results)) (n (length (window-list nil 'nomini)))
