@@ -344,12 +344,15 @@ lowest pending line:
      `budget`) event is on the channel, so a client that read its whole answer sees the event before the marker.
 3. The tasks spawned since then are run once (an advance of 0 ms), and the held writes are released.
 4. `{"event": "__test_marker", "data": {"marker": M}}` is written on every live connection. M counts from 1 per hub.
-5. The answer: `{"marker": M, "unnamed": n, "busy": [origins], "waiting": [origins]}`. `n` counts the writes from
+5. The answer: `{"marker": M, "unnamed": n, "busy": [origins], "waiting": [origins], "sites": [sites]}`. `n` counts the writes from
    tasks without an origin since the last barrier. The gate fails a test when n > 0, since such writes are released
    here and not by the test's own advance. `busy` names tasks still running after 5 s. `waiting` names the tasks
    still inside a real wait (and `gateway:requests` while requests are in flight): the allowed ones, and those still
    inside after the 5 s. The gate fails a test on any its `drgnx-test-gate-waiting-ok` does not list, since what they
-   write later is not ordered by the test.
+   write later is not ordered by the test. `sites` says where each of those waits began and for how long, as
+   `"ORIGIN at FILE:LINE for N ms"`: the line of the `clock::blocking`, `clock::real` or `clock::real_long` call (they
+   are `#[track_caller]`), or for a store thread's answer the urdr line that waits. The gate's failure prints them, so
+   a rare red names its line.
 
 An advance waits for a woken task's `clock::real` waits too (it is not parked inside one, whatever clock timer it also
 holds), but not for a `clock::real_long` one: the advance may be what ends it (a job's time box). A job's kill after
@@ -1365,6 +1368,13 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `coord/notify` | user, agent, service | `{}` | `boolean` | no |
 | `coord/prune` | user | `{}` | `{pruned: boolean}` | yes |
 | `coord/task-status` | user | `{agent?: AgentName, status: Status, task: TaskRef}` | `boolean` | yes |
+| `debug/breakpoints` | user | `{op?: {condition?: string, enabled?: boolean, hit?: string, id?: natnum, line?: natnum, log?: string, name?: string, op: string, path?: string}, path?: string, root: string}` | `DebugBreakpointsView` | no |
+| `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
+| `debug/control` | user | `{op: string, session: string, thread?: integer}` | `boolean` | no |
+| `debug/run-to-cursor` | user | `{line: natnum, path: string, session: string}` | `boolean` | no |
+| `debug/select` | user | `{frame: integer, session: string, thread?: integer}` | `boolean` | no |
+| `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, root: string, selection?: string, user?: [JsonObject]}` | `{needs?: any, session?: string}` | no |
+| `debug/trust` | user | `{root: string, trusted: boolean}` | `boolean` | no |
 | `decisions/effects` | user | `{decision: string}` | `{commits?: [string], decision: string, label: string, later_hunks?: [Hunk]}` | no |
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no |
 | `events/add` | user | `{agent?: AgentName, best_effort?: boolean, data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text, task?: TaskRef}` | `{id?: natnum}` | yes |
@@ -1546,6 +1556,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `term/session-end` | user | `{keep?: [string]}` | `natnum` | no |
 | `term/text` | user | `{id: string, text: string}` | `boolean` | no |
 | `term/text-range` | user | `{from_key?: string, id: string, to_key?: string}` | `{text: string}` | no |
+| `term/visible` | user | `{id: string, visible: boolean}` | `boolean` | no |
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
 | `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `view/close` | user | `{view: string}` | `boolean` | no |

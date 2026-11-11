@@ -70,6 +70,10 @@ pub enum In {
     /// No editor draws this terminal now (its session went away or kept it at quit): nothing is sent until the next
     /// attach; `detached-keep` counts from here.
     Detach,
+    /// Whether a window shows the terminal: image animations advance only while one does.
+    Visible {
+        visible: bool,
+    },
     /// The editor applied the patch of this version.
     Ack {
         version: u64,

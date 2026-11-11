@@ -22,6 +22,7 @@
 (require 'drgnx-pixels)                 ; `drgnx-px'
 (require 'drgnx-history)                ; `drgnx-history-ask'
 (require 'drgnx-ui-kit)                 ; the status faces
+(require 'drgnx-margins)
 
 (defface drgnx-hunk-added '((t :inherit drgnx-status-ok))
   "The gutter bar beside an added line." :group 'drgnx)
@@ -71,7 +72,8 @@ inner side, just left of the line numbers (window-dark.html `.ln .g'), not out a
         (propertize " " 'display `(left-fringe ,(if (eq kind 'deleted) 'drgnx-hunk-delete 'drgnx-hunk-bar) ,face)
                     'help-echo text)
       (propertize " " 'display (list '(margin left-margin)
-                                     (propertize (pcase kind ('added "▎") ('changed "▎") (_ "▁")) 'face face))
+                                     (concat (drgnx-margins-pad 'hunks)
+                                             (propertize (pcase kind ('added "▎") ('changed "▎") (_ "▁")) 'face face)))
                   'help-echo text))))
 
 (defun drgnx-hunks--clear ()
@@ -81,12 +83,10 @@ inner side, just left of the line numbers (window-dark.html `.ln .g'), not out a
   (drgnx-hunks--margin nil))
 
 (defun drgnx-hunks--margin (on)
-  "A one-column left margin in the buffer's windows while ON, for the terminal's marks."
+  "Claim one column of the left margin while ON, for the terminal's marks (`drgnx-margins': nearest the text)."
   (unless (eq on drgnx-hunks--margin)
     (setq drgnx-hunks--margin on)
-    (if on (setq-local left-margin-width 1) (kill-local-variable 'left-margin-width))
-    (dolist (w (get-buffer-window-list (current-buffer) nil t))
-      (set-window-margins w (and on 1) (cdr (window-margins w))))))
+    (drgnx-margins-claim 'hunks (and on 1) :order 2)))
 
 (defun drgnx-hunks--lines (hunks)
   "HUNKS as marked lines: a sorted list of (LINE . KIND), KIND `added', `changed' or `deleted' (the line after a

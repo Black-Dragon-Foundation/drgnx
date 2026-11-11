@@ -216,7 +216,7 @@ seen inside.
 | `run` | bind or absent | the session's dir: one session's socket dir, always `ro` |
 | `env` | `[[name, value], …]` | the program's whole environment; it travels in the inner spec over a sealed memfd, never in argv |
 | `chdir` | path | the working directory, as a path inside |
-| `net` | `"shared"` or `{"isolated": {"relay": [{port, socket}], "mac_tcp_ports": [port]}}` | Linux isolation is a new network namespace plus the relay (loopback port inside → Unix socket); macOS allows only `localhost` on `mac_tcp_ports` |
+| `net` | `"shared"` or `{"isolated": {"relay": [{port, socket}], "mac_tcp_ports": [port], "loopback": false, "mac_loopback_ports": [port]}}` | Linux isolation is a new network namespace plus the relay (loopback port inside → Unix socket); macOS allows only `localhost` on `mac_tcp_ports`. `loopback` (a debug session's, set by nothing else): the program's own loopback traffic. Linux full tier: no Landlock TCP port rule, the namespace alone isolates; macOS: `localhost` bound, accepted and connected to on `mac_loopback_ports` only (the hub picks them free), Unix sockets bound, accepted and connected to under `tmp` (nothing outside it), and an Xcode developer dir's `../SharedFrameworks` read (LLDB.framework). Refused: `loopback` in the reduced tier, `mac_loopback_ports` on Linux or without `loopback` |
 | `tmp` | path or absent | the temporary directory; required by the reduced tier, which has no private `/tmp` |
 | `layers` | `{landlock_min_abi}` | the lowest Landlock ABI the run accepts; seccomp is not a field (always on) |
 | `extra_tcp_ports` | ports | TCP ports besides the relay's (Landlock's port rule, never counted as isolation); the full tier only, the reduced tier grants none |
@@ -836,7 +836,9 @@ policy:
 (deny file-write-unlink (literal D) (regex …) …)                     ; 11. no rename of a root or a pin's parents
 (deny file-clone (literal C) (regex …) …)                            ;     no clone of a hidden path's parents
 (allow network-outbound (remote ip "*:*"))      ; 12. shared, with AF_SYSTEM and the network mach services
-  — or, isolated: (deny network*) (allow network-outbound (remote ip "localhost:PORT")) per mac_tcp_ports
+  — or, isolated: (deny network*) (allow network-outbound (remote ip "localhost:PORT")) per mac_tcp_ports;
+    with loopback, (allow network-bind/-inbound (local ip "localhost:PORT")) and network-outbound per
+    mac_loopback_ports, and network-bind/-inbound (local unix-socket (subpath TMP))
 (deny network-outbound (remote unix-socket))    ; 13. every Unix socket…
 (allow network-outbound (remote unix-socket (path-literal S)))   ; …but each of sockets (and, shared, the resolver's)
 ```
@@ -882,7 +884,11 @@ policy:
   services (`sbpl::NET_SERVICES`: TLS trust, the network's configuration, user dirs), the resolver's socket
   (`/private/var/run/mDNSResponder`: every lookup on macOS goes through it) and `/private/var/run/resolv.conf` (Go's
   resolver). Isolated denies all network, then allows outbound to `localhost` on `mac_tcp_ports` only: macOS has no
-  network namespace, so the ports are what isolates, and there is no relay. The mach services and the resolver come
+  network namespace, so the ports are what isolates, and there is no relay. A debug session's spec (`loopback`) adds
+  its own ports (`mac_loopback_ports`: bound, accepted, connected to; never `localhost:*`, which would be every
+  service on the Mac's loopback), Unix sockets bound and accepted under its `tmp` (node's inspector), and, when the
+  developer dir is an Xcode's `Contents/Developer`, its `Contents/SharedFrameworks` read (LLDB.framework). The
+  task port stays closed, so native debuggers run unsandboxed only. The mach services and the resolver come
   with shared only, as in Codex: `trustd` and `ocspd` fetch a certificate's AIA, OCSP and CRL URLs outside the sandbox,
   a way past `(deny network*)`. So tools that verify TLS through Apple's frameworks (`curl` and `git` from the Command
   Line Tools) may fail when isolated, even through the proxy (SB-T4-3, a Mac row).
@@ -1238,7 +1244,8 @@ size.
 | Group | Probes |
 |---|---|
 | files | `read PATH` (size), `write PATH` (opens for writing, writes nothing), `create PATH`, `list DIR` (names, sorted), `stat PATH`, `rename A B`, `link A B` (hard link), `clone A B` (macOS `clonefile`, a directory too; elsewhere blocked `EOPNOTSUPP`), `mkdir PATH`, `unlink PATH`, `swap A B` (exchange two paths in one step: macOS `renamex_np(RENAME_SWAP)`, Linux `renameat2(RENAME_EXCHANGE)`) |
-| sockets | `connect-unix PATH`, `connect-abstract NAME` (Linux), `connect-tcp HOST:PORT`, `tfo HOST:PORT` (`sendto(MSG_FASTOPEN)`, Linux), `udp HOST:PORT` (sends, waits 500 ms for the echo; no echo is blocked with no errno), `unix-self PATH` (listens there, then connects; the detail says which step failed), `bind-tcp HOST:PORT` (bind only), `socket DOMAIN TYPE [PROTO]` (Linux: `socket(2)` alone; DOMAIN `unix inet inet6 netlink packet vsock`, TYPE `stream dgram raw seqpacket`, PROTO a number or `tcp udp icmp icmpv6 sctp mptcp`) |
+| sockets | `connect-unix PATH`, `connect-abstract NAME` (Linux), `connect-tcp HOST:PORT`, `tfo HOST:PORT` (`sendto(MSG_FASTOPEN)`, Linux), `udp HOST:PORT` (sends, waits 500 ms for the echo; no echo is blocked with no errno), `unix-self PATH` (listens there, then connects; the detail says which step failed), `tcp-self HOST:PORT` (binds,
+connects, accepts: a program's own loopback traffic; the detail says which step failed), `bind-tcp HOST:PORT` (bind only), `socket DOMAIN TYPE [PROTO]` (Linux: `socket(2)` alone; DOMAIN `unix inet inet6 netlink packet vsock`, TYPE `stream dgram raw seqpacket`, PROTO a number or `tcp udp icmp icmpv6 sctp mptcp`) |
 | environment | `env-has NAME…`: reached when any is set, the detail names which (never a value) |
 | syscalls | `syscall NAME` for `unshare-user io-uring keyctl add-key vsock clone3 clone-newuser mount-missing tiocsti-own-pty tiocsti-high-own-pty ptrace-own-child x32-getpid i386-int80 pidfd-getfd process-vm-readv` (the last two on the probe's own process: its stdin through a pidfd of itself, four bytes of its own memory). Each runs in a forked child, so a kill by the filter is a result: blocked, no errno, detail `killed by SIGSYS`. `x32-getpid` and `i386-int80` are x86_64 only (elsewhere ENOSYS) |
 | process | `status-field NAME` (from `/proc/self/status`), `fds` (the open descriptors below 1024, `0,1,2`), `proc-read PID FILE` (size), `spawn-sleep N` (a child that sleeps N seconds without exec and without the probe's pipes; the detail is its pid), `kill PID SIG` |
@@ -1262,7 +1269,8 @@ One JSON object per line; unknown keys are a parse error.
 | `needs` | `bwrap reduced landlock seccomp netns root macos linux x86_64 x32 browser` (`browser`: Landlock ABI 9, the browser layer's floor) |
 | `tier` | `full` (default) or `reduced` |
 | `layer` | `browser`: the probes run as the browser host, under the browser layer (see "The browser layer's rows") |
-| `spec` | the spec, with placeholders. The harness fills what is left out: `chdir` (`${W}`); `net` (Linux: isolated, with a relay from a free port to `${RUN}/proxy.sock`, and then `run`, `sockets` and an `HTTPS_PROXY` in the default `env` to match; macOS: isolated with `mac_tcp_ports` the proxy's TCP port, and the same `HTTPS_PROXY`); `env` (a `PATH`); `layers` (the tier's floor; on macOS 0, since a macOS spec may not ask for Landlock); `tmp` (reduced: `${TMP}`). The probe's directory is added to `read` |
+| `spec` | the spec, with placeholders. The harness fills what is left out: `chdir` (`${W}`); `net` (Linux: isolated, with a relay from a free port to `${RUN}/proxy.sock`, and then `run`, `sockets` and an `HTTPS_PROXY` in the default `env` to match; macOS: isolated with `mac_tcp_ports` the proxy's TCP port, and the same `HTTPS_PROXY`; `"net": "loopback"` is that
+default with `loopback` on and, on macOS, `mac_loopback_ports` `[${FREE_PORT}]`); `env` (a `PATH`); `layers` (the tier's floor; on macOS 0, since a macOS spec may not ask for Landlock); `tmp` (reduced: `${TMP}`). The probe's directory is added to `read` |
 | `setup` | steps: `fake-bwrap {version}`, `path-bwrap {name?}`, `swap-to-link {path, target}` (done while `ratatoskr` waits at `--pause-before-spawn`), `plant-link {path, target}`, `canary-fd {n}`, `start-sleep`, `make-dir {path}`, `make-file {path, text?}` (the last two, like `plant-link`, run in the control run's fixture too) |
 | `probes`, `expect` | one argument list per probe; one `{result, errno?: [names], detail?}` per probe. `errno` is a list so the layer that blocked is visible |
 | `control`, `control_expect` | see below |
@@ -1284,7 +1292,9 @@ ${TASK2} ${W} ${DATA} ${CANARY_DIR} ${FIXTURE} ${TMP} ${MARKER}`, and on macOS `
 `${ABSTRACT}` (`@glp-…`), `${TCP_LO} ${TCP_NL} ${UDP_LO} ${UDP_NL}` (`host:port`; the `_NL` ones are the first
 non-loopback address), `${UPSTREAM}` (`upstream.test:PORT`, pinned in the proxy), `${PROXY_TCP}`; for the web proxy
 `${HOST_LAN}` (an address alone, `192.168.77.7`, which its policy counts as the host's own), `${GATEWAY_PORT}` (a hub
-TCP port on the loopback, in its `NeverSet`) and `${TCP_LO_PORT}` (`${TCP_LO}`'s port alone). Others:
+TCP port on the loopback, in its `NeverSet`) and `${TCP_LO_PORT}` (`${TCP_LO}`'s port alone); `${FREE_PORT}` (a
+loopback port found free at the start: a `"net": "loopback"` row's own port) and `${DEVELOPER_DIR}` (macOS: `${GIT}`'s
+developer dir). Others:
 `${HARNESS_PID}`, `${SLEEP_PID}` (the `start-sleep` step), `${FAKE_BWRAP}` (the `fake-bwrap` step), `${GIT}` (the
 git draugr runs: `draugr::git::git_program()`, so on macOS the developer dir's, not the `/usr/bin/git` shim), and in
 `layer` rows only `${PARENT}` (the stand-in agent's pid, which only the processes inside know: the fixture writes

@@ -1360,6 +1360,8 @@ mod tests {
                     socket: "/run/drgnx/web.sock".into(),
                 }],
                 mac_tcp_ports: vec![],
+                loopback: false,
+                mac_loopback_ports: vec![],
             },
             tmp: None,
             layers: Layers::for_target(Target::LinuxBwrap),

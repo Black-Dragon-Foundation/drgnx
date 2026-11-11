@@ -353,6 +353,31 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "a pair write whose answer did not come in its time to live: the editor answers pair/answer from what it applied"
         ),
         event!(
+            "debug-breakpoints",
+            crate::methods::debug::DebugBreakpointsView,
+            "a file's breakpoints changed, or what an adapter made of them (verified, message, its line): to every editor"
+        ),
+        event!(
+            "debug-state",
+            crate::methods::debug::DebugState,
+            "every debug session (id, name, parent, root, state, reason, the adapter's capabilities), to every editor, whenever one starts, runs, stops or ends"
+        ),
+        event!(
+            "debug-frame",
+            crate::methods::debug::DebugFrame,
+            "a debug session stopped: its selected frame's file (or source reference), line and column; open is true only for the editor that started the session, which opens the file"
+        ),
+        event!(
+            "debug-terminal",
+            crate::methods::debug::DebugTerminal,
+            "a debug session's program runs in a drgnx terminal (runInTerminal), to the editor that started it"
+        ),
+        event!(
+            "debug-ended",
+            crate::methods::debug::DebugEnded,
+            "a debug session ended, with why and its program's exit code"
+        ),
+        event!(
             "view-model",
             crate::methods::view::ViewModel,
             "what changed in one hub-fed view's model, to its connection only: the model as an object, {\"ops\": [...]}, in a line that starts {\"event\":\"view-model\" so the editor hands it whole and unparsed to its replica (a reset first, after a hidden view is shown again and on view/resync with model), written before the rows built from it, which name its version"
@@ -545,6 +570,12 @@ mod tests {
                     "term/progress",
                     "term/clipboard-write",
                     "term/prompt",
+                    // debugging
+                    "debug-breakpoints",
+                    "debug-state",
+                    "debug-frame",
+                    "debug-terminal",
+                    "debug-ended",
                 ]
                 .contains(&n.as_str())
             })
@@ -559,7 +590,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 55);
+        assert_eq!(events().len(), 60);
         // names only: a value-shaped name is no key name, and nothing but `names` is taken
         let need = event("runners/need-keys").unwrap();
         assert_eq!(

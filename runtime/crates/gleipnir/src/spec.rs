@@ -221,7 +221,7 @@ pub enum Mode {
     Rw,
 }
 
-/// The network: `"shared"`, or `{"isolated": {"relay": [...], "mac_tcp_ports": [...]}}`.
+/// The network: `"shared"`, or `{"isolated": {"relay": [...], "mac_tcp_ports": [...], "loopback": false}}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Net {
@@ -234,6 +234,17 @@ pub enum Net {
         relay: Vec<RelayPort>,
         #[serde(default)]
         mac_tcp_ports: Vec<u16>,
+        /// The program's own loopback traffic, for a debug session (an adapter and its debuggee); nothing else sets
+        /// it. Linux full tier: no Landlock TCP port rule, the network namespace alone isolates (its loopback is not
+        /// the host's). macOS, which has no namespace: `localhost` bound, accepted and connected to on
+        /// `mac_loopback_ports` only (the hub picks them free per session), Unix sockets bound and accepted under
+        /// `tmp`, and an Xcode developer dir's `../SharedFrameworks` (LLDB.framework) read. Refused in the reduced
+        /// tier, which has no namespace.
+        #[serde(default)]
+        loopback: bool,
+        /// macOS, with `loopback`: the loopback ports the program may bind, accept on and connect to.
+        #[serde(default)]
+        mac_loopback_ports: Vec<u16>,
     },
 }
 
@@ -344,7 +355,7 @@ mod tests {
             "env": [["PATH", "/usr/bin"], ["LANG", "C.UTF-8"]],
             "chdir": "/work/task",
             "net": {"isolated": {"relay": [{"port": 3128, "socket": "/run/drgnx/proxy.sock"}],
-                                 "mac_tcp_ports": []}},
+                                 "mac_tcp_ports": [], "loopback": false, "mac_loopback_ports": []}},
             "tmp": "/state/tmp-1",
             "layers": {"landlock_min_abi": 1},
             "extra_tcp_ports": [8080]
@@ -385,7 +396,9 @@ mod tests {
                     port: 3128,
                     socket: "/run/drgnx/proxy.sock".into()
                 }],
-                mac_tcp_ports: vec![]
+                mac_tcp_ports: vec![],
+                loopback: false,
+                mac_loopback_ports: vec![],
             }
         );
         assert_eq!(spec.env[1], ("LANG".to_owned(), "C.UTF-8".to_owned()));
@@ -471,7 +484,9 @@ mod tests {
             minimal.net,
             Net::Isolated {
                 relay: vec![],
-                mac_tcp_ports: vec![]
+                mac_tcp_ports: vec![],
+                loopback: false,
+                mac_loopback_ports: vec![],
             }
         );
         let err = decode(json!({"chdir": "/w", "net": "shared", "layers": {}})).unwrap_err();

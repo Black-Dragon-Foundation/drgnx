@@ -61,8 +61,9 @@ languages whose build reds count when they name a symbol the task adds), `:batch
 groups a range affects; `%r` is the range), `:no-cache`, `:shared-paths` (clean merges there still need intent
 notes) and `:context-share`.
 
-drgnx ships `etc/orch/drgnx-default.eld`: red first, the author check, affected groups and the push gate, with no
-project's commands (any project's: its author check is the task's own tests at the tip). A plan names another with a `**Pack:** FILE` line (relative to the plan);
+drgnx ships `etc/orch/drgnx-default.eld`: red first, the author check and affected groups, with no project's
+commands (any project's: its author check is the task's own tests at the tip). The push gate needs a project's own
+tiers, so a project's pack turns it on; a pack whose push gate names no `:push-tiers` doesn't read. A plan names another with a `**Pack:** FILE` line (relative to the plan);
 a pack that doesn't read, or names a rule or kind the hub doesn't know, refuses the proposal. The proposal carries
 the pack, so the user approves it with the plan, and the approval records it as the job's `rule_pack` entity
 (`norn::write::evidence::rule_pack`); the gates read that record, never the file again.
@@ -103,6 +104,80 @@ which the lease reaper leaves alone, so nothing needs renewing.)
 `:context-share` tokens (the supervisor's `context` rule; 120 000 in `drgnx-default`, 0 turns it off): the same
 path as a manager's rotation (when its turn ends, a fresh session in the same worktree), told its task's brief and to
 read the tree's log and status first.
+
+## Merge notes
+
+With `merge-notes` on (the org's pack), every two-parent merge in a task's base..tip is resolved by both sides'
+intent and says so. For a merge of the line (theirs) into the task's branch (ours), `orch::notes` diffs both sides
+from their merge base and needs a note for:
+
+- each **hunk both sides changed**, as `PATH:FIRST-LAST` in the base's lines (ranges that overlap or touch, joined:
+  git conflicts on neighbouring lines too; `vordr::notes::conflicts`);
+- each **shared file** (the pack's `:shared-paths`) both sides changed apart, as `PATH`: a clean merge there is
+  still audited.
+
+A note is a line of the merge commit's message:
+
+```text
+Merge-note: core/x.el:12-18 ours=1a2b3c4 theirs=5d6e7f8 resolution=both | the new key and the renamed one both stay
+```
+
+`resolution` is `ours`, `theirs`, `both` or `new`; the reason after `|` is required. Each cited commit (7 characters
+or more) must have touched its hunk on its side: `git log -L FIRST,LAST:PATH base..side` over the hunk's lines on that
+side, or `git log base..side -- PATH` for a shared file. A merge with a hunk uncovered, a citation that didn't touch it
+or a note without a reason holds the task's merge (a `gate` card naming each); like the trailers, no waiver passes it.
+
+## The merge queue
+
+A task whose gates passed is **ready** (`orch::queue`, in memory: after a restart tasks are ready again as their
+gates pass again). The next **batch** is the earliest ready tasks, up to the pack's `:batch-size`, leaving out a task
+whose tip conflicts with an earlier member's (`git merge-tree`): it waits for the next batch, after the earlier one
+merged. A batch stays until its members merged or left the job's review (dropped, sent back, a card); members merge
+one at a time in readiness order, each `--no-ff`. A member whose merge onto the line would cleanly join shared files
+both sides changed since they parted goes back to its agent, told to merge the line in with a note per file. A job
+with no rule pack merges as before, each task as it passes.
+
+## Affected groups
+
+With `affected-groups` on and a `:groups` command in the pack (`drgnx-org`: `bin/drgnx test --affected %r --json`;
+`drgnx-default` names none, so it runs no groups), the batch's first member merges only when the batch's groups are
+green (`orch::groups`, `vordr::groups`):
+
+- **The combined commit:** the line's HEAD with each member's tip merged in order (`git merge-tree`, `git
+  commit-tree`: no worktree, no ref moves). Its tree key is the batch's: the same members in any order give the same
+  tree, and so do the later members once the first merged, so their turn reuses the runs.
+- **The groups** come from the base's own tool: the command runs in a detached worktree of the line's HEAD with `%r`
+  = `HEAD..COMBINED` (its `test/affected.eld`, never the batch's); listed once per tree.
+- **Each group** runs at the combined commit through the queue as the user's job (a detached worktree that goes when
+  the job ends); its end is evidence of `batch:JOB@TREE`.
+- **Green:** every group's newest run at the tree passed, or failed only rows the base's `test/frozen.eld` lists.
+  Any other red goes to the reruns (next section).
+
+## Reruns, interaction reds, flakes
+
+When a batch's groups are red, the red groups run again in parallel, once (never a bisection), at the line's HEAD
+and at each member's tip merged alone onto it (`orch::groups`, judged by `vordr::reruns::verdict`). Each run is
+evidence of `batch:JOB@TREE` for its own tree. The gate waits until every rerun is in; then:
+
+- **The line itself is red:** no tip is blamed. The batch is held on a `gate` card and a `followup` entity (one open
+  per title) records the line's failing rows.
+- **Some tips are red alone:** exactly those go back to their agents, with the rows; the others form the next batch.
+- **Every tip is green alone:** an interaction red. The later tip in readiness order goes back, told which tips it
+  fails together with; it merges the line once they are in.
+
+A **flake** is a row that failed in one run and passed in a later run of the same selector on the same tree, env stamp
+and platform (`vordr::gates::flaky`). Under a pack with `flake-hold` on, it holds the batch on a `gate` card and opens a `followup`; flakes are fixed at
+the cause, never listed. A held batch's card offers `Waive once…`, which the gate honours for that tree.
+
+## The push gate
+
+Under a pack with `push-gate` on, a job's agent asking to push (the matrix's `push.ci` or `push.main`) is refused
+until each of the pack's `:push-tiers` has a green run on the exact commit's tree (the agent's `HEAD`) with the env
+stamp the hub has now, on Linux (`vordr::push::judge`, `orch::push`). Runs on another tree, env stamp or platform
+never count. The refusal names the missing tiers, which start through the queue as evidence of `push:JOB@TREE`, or the
+red tiers with their rows; the agent asks again once they are green. A push the gate lets through still meets the
+matrix, so the push itself stays the user's. A pack whose push gate names no tiers doesn't read, and the gate refuses
+every push of a job recorded with one.
 
 ## Red first
 

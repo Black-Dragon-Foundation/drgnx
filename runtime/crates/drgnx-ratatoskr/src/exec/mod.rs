@@ -460,7 +460,7 @@ const FACTS: &str = "facts.json";
 
 /// The Emacs build and the Rust toolchain on this machine (`emacs`, `rustc`, `cargo` `--version`'s first lines, `none`
 /// for one that is missing), read once: as `core/drgnx-affected.el`'s stamp.
-fn env_stamp() -> &'static str {
+pub(crate) fn env_stamp() -> &'static str {
     static STAMP: OnceLock<String> = OnceLock::new();
     STAMP.get_or_init(|| {
         let tool = |p: &str| {

@@ -82,6 +82,10 @@ The rules behind it:
   why. Emacs 31.2 does the same; drgnx adds the check on Emacs versions that lack it.
 - **Symbol shorthands** (`read-symbol-shorthands` in a file's or folder's local variables). They are dropped when
   the file opens, and given back when you trust the folder.
+- **Debugging.** A launch configuration runs programs and a debug adapter with your rights, so the hub starts none
+  in a folder it was not told is trusted: Start Debugging there asks first, and Trust This Folder tells the hub.
+  Untrust This Folder stops that folder's debug sessions at once. Your own configurations and adapters
+  (`drgnx-debug-configurations`, `drgnx-debug-adapters`) are never taken from a project's settings.
 
 ## What is guarded everywhere
 

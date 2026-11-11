@@ -47,6 +47,10 @@ pub const PLACEHOLDERS: &[&str] = &[
     "HOST_LAN",
     "GATEWAY_PORT",
     "TCP_LO_PORT",
+    // A debug session's own loopback port (`"net": "loopback"` rows).
+    "FREE_PORT",
+    // macOS: the active developer dir (`xcode-select -p`, by its true name).
+    "DEVELOPER_DIR",
 ];
 
 /// The listeners a row may name in `listeners_silent`.

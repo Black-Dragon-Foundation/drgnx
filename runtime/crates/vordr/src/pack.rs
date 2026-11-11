@@ -128,6 +128,9 @@ impl Pack {
                 out.push(format!("check {} runs nothing", c.name));
             }
         }
+        if self.on("push-gate") && self.push_tiers.is_empty() {
+            out.push("the push gate is on but the pack names no :push-tiers".to_string());
+        }
         out
     }
 }

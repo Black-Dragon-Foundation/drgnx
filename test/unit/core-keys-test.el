@@ -910,6 +910,7 @@ keys); every binding is undone after."
     (work-diff-accept-hunk "a" drgnx-work-diff-mode-map) (work-diff-reject-hunk "D" drgnx-work-diff-mode-map)
     (work-job-log "l" drgnx-work-detail-mode-map) (work-who-is-here "C-k h" nil) (work-left "<left>" drgnx-work-lens-map) (work-right "<right>" drgnx-work-lens-map)
     (work-why "<up>" drgnx-work-lens-map) (work-touches "<down>" drgnx-work-lens-map)
+    (work-back "M-<left>" drgnx-work-lens-map) (work-forward "M-<right>" drgnx-work-lens-map)
     (work-next-agent "TAB" drgnx-work-lens-map) (work-previous-agent "<backtab>" drgnx-work-lens-map)
     (work-open "RET" drgnx-work-lens-map) (work-open-beside "S-<return>" drgnx-work-lens-map)
     (work-view-map "m" drgnx-work-lens-map) (work-view-board "b" drgnx-work-lens-map)

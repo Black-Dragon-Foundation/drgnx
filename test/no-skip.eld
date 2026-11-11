@@ -78,6 +78,7 @@
   "drgnx-agents-editor-hub/give-refused-lists-unsaved-buffers"
   "drgnx-agents-editor-hub/the-interim-save-hook-is-gone"
   "drgnx-search/semantic-goes-through-hub"
+  "drgnx-search/xref-references-and-definitions-come-from-the-hub"
   "drgnx-shell-env/a-real-zsh-login"
   "drgnx-shell-rc/a-path-with-dollar-and-quotes-sources-for-real"
   "drgnx-shell-rc/the-line-sources-cleanly"

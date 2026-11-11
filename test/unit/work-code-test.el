@@ -290,6 +290,18 @@ diff buffers killed."
           (should (equal before (mapcar #'window-buffer (window-list nil 'never))))
           (should-not (seq-some #'drgnx-work-code-test--diff-buffer-p (buffer-list))))))))
 
+(ert-deftest drgnx-work-code/q-restores-the-windows-after-a-frame-swap ()
+  "Pattern D (LOOK-FIX-SWAP-DIFFS-LAYOUT-1): the saved layout is frame-free, so a frame swap (the echo box turned on or
+off) moves it to the new frame and q still puts it back there.  Batch has one frame: it stands for both."
+  (drgnx-work-code-test--ws
+    (drgnx-work-code-test--windows
+      (let ((before (mapcar #'window-buffer (window-list nil 'never))))
+        (drgnx-work-code-test--answering (drgnx-work-code-test--diff-answers '("a.el" "b.el"))
+          (drgnx-work-code-diffs state '(agent . "agent:a1"))
+          (drgnx-work-code--frame-replaced (selected-frame) (selected-frame))
+          (with-selected-window (car (drgnx-work-code-test--diff-windows)) (drgnx-work-diff-quit))
+          (should (equal before (mapcar #'window-buffer (window-list nil 'never)))))))))
+
 (ert-deftest drgnx-work-code/diffs-are-against-the-base ()
   (drgnx-work-code-test--ws
     (drgnx-work-code-test--windows
