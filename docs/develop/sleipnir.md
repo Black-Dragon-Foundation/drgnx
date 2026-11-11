@@ -125,7 +125,9 @@ SIGKILLs every one: the verdict is `oom` (the kill counts as the job's own OOM, 
 `result.json`'s `mem_overshoot_mib` records the peak past the grant for every Mac job (none on Linux, where the kernel
 caps it). A Mac has no job helper (no keys, no network yet), so job-exec also runs the disk watch (`linux::disk`,
 every 10 s, `disk-start` written before the command): below the floor, the running job that grew most is stopped
-`infra: disk`.
+`infra: disk`. **The sweep**: setsid loses launchd's group cleanup, so a Mac's `cleanup` (at start and after each job)
+first SIGKILLs the runner user's processes whose marker names this hub and an attempt that no longer runs
+(`memwatch::strays`); another hub's are left alone.
 
 **Machine-wide pressure** (`darwin::pressure`): a Mac has no PSI, so `DarwinPlatform::pressure` answers the
 kernel's own event instead (a `DISPATCH_SOURCE_TYPE_MEMORYPRESSURE` source, the level read once at start; no polling),

@@ -93,6 +93,42 @@ pub fn start_of(pid: i32) -> u64 {
     reserve::start_time(pid as u32).unwrap_or(0)
 }
 
+/// The leftovers of HUB's attempts among MARKED (a pid and its marker's value, `<hub>/<job>/<attempt>`): those whose
+/// attempt RUNS doesn't say runs. Another hub's, and a value that isn't an attempt's, are left alone.
+pub fn strays(marked: &[(i32, String)], hub: &str, runs: impl Fn(&str, u32) -> bool) -> Vec<i32> {
+    marked
+        .iter()
+        .filter(|(_, v)| {
+            let mut it = v.rsplitn(3, '/');
+            let (Some(n), Some(job), Some(h)) = (it.next(), it.next(), it.next()) else {
+                return false;
+            };
+            h == hub && n.parse().is_ok_and(|n| !runs(job, n))
+        })
+        .map(|(p, _)| *p)
+        .collect()
+}
+
+/// This user's processes (not ME) that carry the marker, with its value.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn marked(me: i32) -> Vec<(i32, String)> {
+    // SAFETY: getuid has no failure
+    let uid = unsafe { libc::getuid() };
+    let want = format!("{MARKER}=");
+    os::pids()
+        .into_iter()
+        .filter(|p| *p != me && *p > 1)
+        .filter_map(os::proc_of)
+        .filter(|p| p.uid == uid)
+        .filter_map(|p| {
+            let v = os::environ(p.pid)
+                .into_iter()
+                .find_map(|e| e.strip_prefix(&want).map(String::from))?;
+            Some((p.pid, v))
+        })
+        .collect()
+}
+
 #[cfg(target_os = "macos")]
 mod os {
     use super::Proc;
@@ -274,6 +310,23 @@ mod tests {
             .map(|p| p.pid)
             .collect();
         assert_eq!(got, vec![101, 102, 200]);
+    }
+
+    /// [D] pure: the sweep takes this hub's markers whose attempt no longer runs; a running attempt's, another hub's
+    /// and a malformed value stay.
+    #[test]
+    fn the_sweep_takes_only_this_hubs_ended_attempts() {
+        let marked = [
+            (10, "hubA/j1/1".to_string()),
+            (11, "hubA/j2/3".to_string()),
+            (12, "hubB/j1/1".to_string()),
+            (13, "nonsense".to_string()),
+            (14, "hubA/j3/x".to_string()),
+            (15, "hub/with/slash/j4/2".to_string()),
+        ];
+        let runs = |job: &str, n: u32| job == "j2" && n == 3;
+        assert_eq!(strays(&marked, "hubA", runs), vec![10]);
+        assert_eq!(strays(&marked, "hub/with/slash", runs), vec![15]);
     }
 
     /// [D] pure: the cap is the grant less the measured headroom, never under half the grant.
