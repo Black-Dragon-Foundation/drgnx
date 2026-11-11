@@ -140,7 +140,6 @@ fn start() -> Start {
         breakpoints: vec![],
         functions: vec![],
         exception_filters: None,
-        hold_configuration_done: false,
     }
 }
 

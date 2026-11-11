@@ -79,7 +79,6 @@ fn start_of(request: Request, arguments: Value) -> Start {
         breakpoints: vec![],
         functions: vec![],
         exception_filters: None,
-        hold_configuration_done: false,
     }
 }
 
@@ -240,47 +239,6 @@ async fn the_launch_sequence_sends_breakpoints_and_configuration_done_before_the
     let cmds = log.commands();
     let pos = |c: &str| cmds.iter().position(|x| *x == c).unwrap();
     assert!(pos("setExceptionBreakpoints") < pos("configurationDone"));
-}
-
-/// js-debug attached to `node --inspect-brk`: it writes its bootloader into the program's environment only after the
-/// attach, so `configurationDone` (which lets the program run) waits for the attach's answer, or a child forked at
-/// once runs without a debugger (ledger, spike run 10).
-#[tokio::test(start_paused = true)]
-async fn a_js_debug_attach_holds_configuration_done_until_the_attach_is_answered() {
-    let mut start = start_of(Request::Attach, json!({"port": 47611}));
-    start.adapter_id = "pwa-node".into();
-    start.hold_configuration_done = true;
-    let steps = vec![
-        json!({"expect": INIT, "ok": {"supportsConfigurationDoneRequest": true}}),
-        json!({"expect": "attach", "args": {"port": 47611}, "defer": true}),
-        json!({"event": "initialized"}),
-        // a barrier: nothing may come from the session until it answers this (configurationDone would)
-        json!({"reverse": "runInTerminal", "arguments": {"args": ["x"]}, "answer": {"processId": 7}, "wait": true}),
-        json!({"answer": "attach"}),
-        json!({"expect": "configurationDone"}),
-        json!({"expect": "disconnect", "args": {"terminateDebuggee": false}, "ok": {}}),
-        json!({"die": true}),
-    ];
-    let mut r = run(start, steps, Exit::Itself);
-    loop {
-        match r.next().await {
-            Update::RunInTerminal { reply, .. } => {
-                let _ = reply.send(Ok(7));
-                break;
-            }
-            Update::Caps(_) => {}
-            u => panic!("before the barrier: {u:?}"),
-        }
-    }
-    r.running().await;
-    r.h.op(Op::Stop {
-        kill_debuggee: None,
-    })
-    .await
-    .unwrap();
-    let (_, log, _) = r.finish().await;
-    let cmds = log.commands();
-    assert_eq!(cmds[cmds.len() - 2], "configurationDone");
 }
 
 #[tokio::test(start_paused = true)]

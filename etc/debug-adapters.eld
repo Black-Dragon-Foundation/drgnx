@@ -10,8 +10,6 @@
 ;;   :find      how to find it: (:path "PROGRAM"), (:python-module "MODULE") or (:tools "RELATIVE/FILE")
 ;;   :start     (:stdio (ARGV...)) or (:tcp (ARGV...)); ARGV may hold {program} (what :find found), {python},
 ;;              {tools} and {port} (a free port on 127.0.0.1 the hub picks)
-;;   :configure-after-attach t: an attach sends configurationDone only once the attach is answered (js-debug: its
-;;              bootloader reaches the program after the attach; a fork before it would run without a debugger)
 ;;   :defaults  configurations offered when launch.json has none for the file's language
 ;;   :install   how to get it, shown in the picker's "not installed" row
 ;;   :not-built-in t: drgnx names it but cannot start it; the user adds it in the setting `debug.adapters`
@@ -30,7 +28,6 @@
   :languages ("javascript" "typescript" "js" "ts") :tested t
   :find (:tools "js-debug/src/dapDebugServer.js")
   :start (:tcp ("node" "{program}" "{port}" "127.0.0.1"))
-  :configure-after-attach t
   :defaults ((:name "Node: Launch File" :type "pwa-node" :request "launch" :program "${file}"
               :cwd "${workspaceFolder}"))
   :install (:url "https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.1/js-debug-dap-v1.140.1.tar.gz"

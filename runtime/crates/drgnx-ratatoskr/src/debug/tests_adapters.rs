@@ -160,18 +160,3 @@ fn a_free_port_is_on_this_machine() {
     std::net::TcpListener::bind(("127.0.0.1", p)).expect("free again once the hub let go of it");
     let _ = json!(null);
 }
-
-#[test]
-fn only_a_js_debug_attach_holds_configuration_done() {
-    // js-debug writes its bootloader into an attached program after the attach; debugpy answers its launch only
-    // after configurationDone, so holding it there would never end
-    let t = Table::builtin();
-    let js = t.by_id("js-debug").unwrap();
-    assert!(js.holds_configuration_done(true));
-    assert!(!js.holds_configuration_done(false));
-    for id in ["debugpy", "delve", "lldb-dap"] {
-        let a = t.by_id(id).unwrap();
-        assert!(!a.holds_configuration_done(true), "{id}");
-        assert!(!a.holds_configuration_done(false), "{id}");
-    }
-}
