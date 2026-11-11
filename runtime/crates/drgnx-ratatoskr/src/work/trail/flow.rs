@@ -274,7 +274,13 @@ pub(crate) fn cells(t: &TaskFacts, pack: Option<&Pack>) -> [Cell; 6] {
             Queue::None => cell(Chip::Wait, "—"),
         }
     };
-    let review = if on("review") {
+    // the review happens at the plan's end whether the pack gates on it or routes it; advice is no review
+    let reviewed = pack.is_some_and(|p| {
+        p.rules
+            .iter()
+            .any(|r| r.id == "review" && r.kind != "advice")
+    });
+    let review = if reviewed {
         cell(Chip::Wait, "at plan end")
     } else {
         cell(Chip::Na, "—")
@@ -1362,6 +1368,15 @@ mod tests {
                 (Chip::Wait, "at plan end")
             ]
         );
+        // a review the pack routes (not gating) still happens at the plan's end; advice shows none
+        for (kind, want) in [("routing", "at plan end"), ("advice", "—")] {
+            let mut r = pack();
+            r.rules
+                .iter_mut()
+                .filter(|x| x.id == "review")
+                .for_each(|x| x.kind = kind.into());
+            assert_eq!(cells(&q, Some(&r))[5].text, want, "{kind}");
+        }
         let build = selector_of(&p.author_check[0]);
         let mut t = task(1, "in-review");
         t.evidence = vec![

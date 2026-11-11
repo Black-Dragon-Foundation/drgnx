@@ -216,7 +216,8 @@ open `gate` cards, and builds the model and the rows (`work::trail::flow`, pure)
   ring where a gate has nothing yet, and the label face where the pack has no such gate or a gate waits on another
   ("waits red"). Red first is the oldest red run's failing rows ("N failed · base"; "no red · held" at review
   without one), Build the newest run, the author check its checks green at their newest runs (a check when all are),
-  the merge column the queue's place or the open `gate` card's words. Text is in `drgnx-work-flow-text`, ids and
+  the merge column the queue's place or the open `gate` card's words, Review "at plan end" when the pack has a
+  `review` rule that gates or routes (an `advice` one shows none). Text is in `drgnx-work-flow-text`, ids and
   agents in `-label`, headings in `-heading`;
 - the columns fit the window, titles before chips: each gate column wants its widest cell or heading in the UI font
   (the hub measures with the env's fonts), the agent's is its widest agent, and the task column wants its widest
