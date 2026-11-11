@@ -465,6 +465,10 @@ matches of the new run in `search-run-done', which are unticked again.")
 (defvar-local drgnx-replace--kinds-on nil "The kind chips on (KIND symbols): the Symbol search's `kinds'.")
 (defvar-local drgnx-replace--kind-counts nil
   "The last Symbol search's definitions per kind, a plist (:fn 2 :macro 1…), before the chips' filter.")
+(defun drgnx-replace--kind-plist (kinds)
+  "KINDS, `search-run-done''s list of (:kind K :count N), as a plist (:fn 2 :macro 1…); nil for none."
+  (mapcan (lambda (k) (list (intern (concat ":" (plist-get k :kind))) (plist-get k :count))) (append kinds nil)))
+
 (defvar-local drgnx-replace--status-end nil "Marker: the status line's end.")
 (defvar-local drgnx-replace--lists-beg nil "Marker: the lists' start (pinned counts; saved and recent searches).")
 (defvar-local drgnx-replace--lists-end nil "Marker: the lists' end.")
@@ -2078,7 +2082,7 @@ the matches the user had unticked before it (`:off'); `search-apply' and `search
                 drgnx-replace--hub-counts (cons (or (plist-get data :files) 0) (or (plist-get data :matches) 0)))
           (when-let* ((err (plist-get data :error))) (setq drgnx-replace--status (format "%s" err)))
           (setq drgnx-replace--scope-done (plist-get data :scope)
-                drgnx-replace--kind-counts (plist-get data :kinds))
+                drgnx-replace--kind-counts (drgnx-replace--kind-plist (plist-get data :kinds)))
           (drgnx-replace--apply-scope)
           (drgnx-replace--hub-listed)
           (drgnx-replace--watch)

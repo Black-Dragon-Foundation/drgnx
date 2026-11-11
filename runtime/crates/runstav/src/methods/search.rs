@@ -843,8 +843,8 @@ pub struct GrepLookParams {
 
 /// `search-run-done`: search RUN of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not
 /// run; OFF the matches that come back unticked (`search/run`'s `off`); SCOPE what a git scope searched. A search a
-/// newer one stopped says nothing. KINDS (a Symbol search): how many of the name's definitions are of each kind (`fn`,
-/// `type`, `macro`, `var`, `other`), before the query's `kinds` filter: the view's kind chips and their counts.
+/// newer one stopped says nothing. KINDS (a Symbol search): how many of the name's definitions are of each kind, a list in
+/// the chips' order (`fn`, `macro`, `var`, `type`, `other`; a kind with none left out), before the query's `kinds` filter: the view's kind chips and their counts.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RunDone {
@@ -859,7 +859,15 @@ pub struct RunDone {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<ScopeDone>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kinds: Option<std::collections::BTreeMap<String, u64>>,
+    pub kinds: Option<Vec<KindCount>>,
+}
+
+/// How many of a Symbol search's definitions are of KIND (`fn`, `macro`, `var`, `type`, `other`).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct KindCount {
+    pub kind: String,
+    pub count: u64,
 }
 
 /// What a git scope (Changed, Staged, Branch) searched: FILES files of the repository (before the globs), the
