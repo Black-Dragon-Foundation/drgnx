@@ -106,5 +106,128 @@ its blank, drawn past the row's text by the padding."
         (let ((s (overlay-get drgnx-term--pad-overlay 'after-string)))
           (should (get-text-property 1 'cursor s)))))))
 
+;;;; Images and reattach
+
+(require 'drgnx-uitest)
+(defvar drgnx-session-quit-keep)
+
+(defun drgnx-term-gui--sixel (cw ch)
+  "A printf command drawing a sixel 2 cells wide (2 × CW px) and 2 cells tall (2 × CH px, in 6-px bands): red down
+to the last whole band of its first cell row, blue below."
+  (let* ((red (/ ch 6)) (bands (/ (+ (* 2 ch) 5) 6)) (w (* 2 cw)) (band (format "!%d~" w)))
+    (concat "printf '\\033[H\\033[2J\\033P0;1;0q\"1;1;" (number-to-string w) ";" (number-to-string (* 6 bands))
+            "#1;2;100;0;0#2;2;0;0;100"
+            (mapconcat (lambda (i) (concat (if (< i red) "#1" "#2") band)) (number-sequence 0 (1- bands)) "-")
+            "\\033\\\\after\\n'")))
+
+(defun drgnx-term-gui--image-pos (buffer)
+  "The first position of BUFFER whose cells display an image slice, or nil."
+  (with-current-buffer buffer
+    (when drgnx-view (drgnx-view-draw-now drgnx-view))
+    (let ((pos (text-property-not-all (point-min) (point-max) 'drgnx-term-image nil)))
+      (and pos (eq (car-safe (car-safe (get-text-property pos 'display))) 'slice) pos))))
+
+(defun drgnx-term-gui--px (snap win pos dx dy)
+  "SNAP's pixel (R G B) at DX, DY frame pixels from the top-left corner of POS's glyph in WIN."
+  (redisplay t)
+  (let* ((xy (posn-x-y (posn-at-point pos win))) (o (drgnx-uitest--text-origin win))
+         (s (drgnx-uitest-device-scale (window-frame win))))
+    (cdr (drgnx-uitest-pixel snap (round (* s (+ (car o) (car xy) dx))) (round (* s (+ (cdr o) (cdr xy) dy)))))))
+
+(defun drgnx-term-gui--near (px rgb)
+  (cl-every (lambda (a b) (<= (abs (- a b)) 40)) px rgb))
+
+(ert-deftest drgnx-term-gui/a-sixel-is-drawn-at-its-cells ()
+  "A sixel 2 cells by 2 is drawn where the program put it: red in its first cell row, blue in its second, the cell
+after it the window's background; the text after it starts on the row below the image."
+  (skip-unless (display-graphic-p))
+  (skip-unless (image-type-available-p 'png))
+  (drgnx-term-gui--with
+    (let* ((b (drgnx-term-gui--start)) (win (get-buffer-window b)) (cw (frame-char-width)) (ch (frame-char-height)))
+      (drgnx-term-gui--run b (drgnx-term-gui--sixel cw ch))
+      (drgnx-test-wait (lambda () (and (drgnx-term-gui--image-pos b) (member "after" (drgnx-term-gui--lines b))))
+                       :secs 30 :what "the image and the text after it")
+      (let* ((pos (drgnx-term-gui--image-pos b)) (snap (drgnx-uitest-snapshot))
+             (top (drgnx-term-gui--px snap win pos (/ cw 2) (/ ch 4)))
+             (below (with-current-buffer b (save-excursion (goto-char pos) (forward-line 1) (point))))
+             (bg (drgnx-term-gui--px snap win (with-current-buffer b (save-excursion (goto-char below) (forward-line 1)
+                                                                                     (point)))
+                                     (* 20 cw) (/ ch 2)))
+             (bottom (drgnx-term-gui--px snap win below (/ cw 2) (/ ch 2)))
+             (right (drgnx-term-gui--px snap win pos (+ (* 2 cw) (/ cw 2)) (/ ch 2))))
+        (message "drgnx-term-gui: image top %S, bottom %S, right of it %S, background %S" top bottom right bg)
+        (should (drgnx-term-gui--near top '(255 0 0)))
+        (should (drgnx-term-gui--near bottom '(0 0 255)))
+        (should-not (drgnx-term-gui--near right '(255 0 0)))
+        (should-not (drgnx-term-gui--near right '(0 0 255)))
+        (should (equal (nth 2 (drgnx-term-gui--lines b)) "after"))))))
+
+(defun drgnx-term-gui--ask (method params)
+  "The hub's answer to METHOD with PARAMS."
+  (let (done answer)
+    (drgnx-hub-call method params (lambda (r e) (setq answer (or r e) done t)))
+    (drgnx-test-wait (lambda () done) :secs 30 :what (format "the hub's answer to %s" method))
+    answer))
+
+(defun drgnx-term-gui--row (id)
+  "Terminal ID's `term/list' row, or nil."
+  (seq-find (lambda (r) (equal (plist-get r :id) id)) (drgnx-term-gui--ask "term/list" nil)))
+
+(ert-deftest drgnx-term-gui/a-reattached-screen-is-the-screen-before-the-quit ()
+  "Kept at quit, the terminal's screen (coloured text, an image) is drawn by the next Emacs pixel for pixel as it
+was, the cursor's row aside."
+  (skip-unless (display-graphic-p))
+  (skip-unless (image-type-available-p 'png))
+  (drgnx-term-gui--with
+    (let* ((b (drgnx-term-gui--start)) (win (get-buffer-window b)) (cw (frame-char-width)) (ch (frame-char-height))
+           (id (buffer-local-value 'drgnx-term--id b)))
+      (unwind-protect
+          (let (before rect)
+            (drgnx-term-gui--run b (drgnx-term-gui--sixel cw ch))
+            (drgnx-test-wait (lambda () (and (drgnx-term-gui--image-pos b) (member "after" (drgnx-term-gui--lines b))))
+                             :secs 30 :what "the image")
+            (drgnx-term-gui--run b "printf '\\033[1;31mred\\033[0m \\033[44mon blue\\033[0m\\n'")
+            (drgnx-test-wait (lambda () (member "red on blue" (drgnx-term-gui--lines b))) :secs 30 :what "the colours")
+            (drgnx-test-wait (lambda ()
+                               (drgnx-term-gui--lines b)
+                               (with-current-buffer b
+                                 (and (string-prefix-p "$" (buffer-substring-no-properties (line-beginning-position)
+                                                                                           (line-end-position)))
+                                      (save-excursion (forward-line -1) (looking-at "red on blue")))))
+                             :secs 30 :what "the prompt after them")
+            (redisplay t)
+            (let* ((o (drgnx-uitest--text-origin win)) (s (drgnx-uitest-device-scale (window-frame win)))
+                   (cur (with-current-buffer b (posn-x-y (posn-at-point (line-beginning-position) win)))))
+              (setq rect (list (round (* s (car o))) (round (* s (cdr o)))
+                               (round (* s (+ (car o) (window-body-width win t)))) (round (* s (+ (cdr o) (cdr cur))))))
+              (setq before (drgnx-uitest-snapshot)))
+            (let ((drgnx-term-on-quit 'ask) (drgnx-session-quit-keep 'keep) (drgnx-term--quit-keep (list id)))
+              (drgnx-term--session-end))
+            (drgnx-test-wait (lambda () (plist-get (drgnx-term-gui--row id) :detached_at)) :secs 30 :what "detached")
+            (with-current-buffer b
+              (remhash drgnx-term--id drgnx-term--buffers)
+              (setq drgnx-term--id nil drgnx-term--state nil))
+            (let ((kill-buffer-query-functions nil)) (kill-buffer b))
+            (drgnx-hub-disconnect)
+            (let ((drgnx-hub-session (format "next-%x" (random (ash 1 30)))))
+              (drgnx-hub-connect)
+              ;; what the module's `drgnx-hub-connected-functions' entry does in a new Emacs (the module is not on here)
+              (drgnx-test-wait #'drgnx-term--up-p :secs 30 :what "the next subscription")
+              (drgnx-term--look)
+              (drgnx-test-wait (lambda () (seq-find (lambda (r) (equal (plist-get r :id) id)) drgnx-term--offered))
+                               :secs 30 :what "the offer")
+              (let ((nb (drgnx-term-reattach-one (seq-find (lambda (r) (equal (plist-get r :id) id)) drgnx-term--offered)
+                                                 t)))
+                (set-window-buffer win nb)
+                (drgnx-test-wait (lambda () (and (eq (buffer-local-value 'drgnx-term--state nb) 'open)
+                                                 (drgnx-term-gui--image-pos nb)
+                                                 (member "red on blue" (drgnx-term-gui--lines nb))))
+                                 :secs 30 :what "the reattached screen")
+                (redisplay t)
+                (let ((after (drgnx-uitest-snapshot)))
+                  (message "drgnx-term-gui: reattach compares %S" rect)
+                  (should (drgnx-uitest-region-equal-p before after rect))))))
+        (ignore-errors (drgnx-term-gui--ask "term/close" (list :id id)))))))
+
 (provide 'term-gui-test)
 ;;; term-gui-test.el ends here

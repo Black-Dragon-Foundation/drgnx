@@ -12,7 +12,8 @@
 
 use super::run::{DIGEST_MAX, Snap};
 use runstav::methods::search::{
-    EditSkip, EditSource, MatchGroups, PreviewAnswer, PreviewHunk, SearchEdit,
+    EditLine, EditLineKind, EditSkip, EditSource, EditedLine, MatchGroups, PreviewAnswer,
+    PreviewHunk, SearchEdit,
 };
 use std::sync::Arc;
 use xxhash_rust::xxh3::xxh3_64;
@@ -34,6 +35,7 @@ pub(super) const GONE: &str = "the file is gone";
 pub(super) const TEXT_CHANGED: &str = "its text changed";
 pub(super) const NO_LONGER: &str = "the regexp no longer matches its text";
 pub(super) const OVERLAPS: &str = "overlaps another match";
+pub(super) const CHANGED_IN_BUFFER: &str = "changed in its buffer since the search";
 
 /// One edit wanted, before it is checked against the text: NEW none when the replacement cannot be made (a regexp
 /// that no longer matches the match's text).
@@ -157,8 +159,13 @@ fn place(path: &str, text: &str, wants: Vec<Want>) -> (Vec<SearchEdit>, Vec<Edit
     let mut edits: Vec<SearchEdit> = Vec::with_capacity(found.len());
     for e in found {
         match edits.last() {
-            // a match inside or across the one before (a nested regexp match): the first is kept
-            Some(last) if e.byte_start < last.byte_end || (e.byte_start == last.byte_start) => {
+            // a match inside or across the one before (a nested regexp match): the first is kept.  An insertion (an
+            // empty range: an undone line deletion) before an edit at the same place is not an overlap; two at one
+            // place are
+            Some(last)
+                if e.byte_start < last.byte_end
+                    || (e.byte_start == last.byte_start && e.byte_end == last.byte_end) =>
+            {
                 skipped.push(EditSkip {
                     id: Some(e.id),
                     path: path.to_owned(),
@@ -172,17 +179,17 @@ fn place(path: &str, text: &str, wants: Vec<Want>) -> (Vec<SearchEdit>, Vec<Edit
 }
 
 /// The text PLAN's edits are made against and where it came from (the buffer's text the run searched in the file's
-/// place, else the file, read blocking); else every want skipped with why.
-fn text_of(plan: &FilePlan) -> Result<(Arc<str>, EditSource), Vec<EditSkip>> {
+/// place, else the file, read blocking); else why the whole file is left out.
+fn text_of(plan: &FilePlan) -> Result<(Arc<str>, EditSource), &'static str> {
     let FilePlan {
         path,
         snap,
         large,
         buffer,
-        wants,
+        ..
     } = plan;
     if *large {
-        return Err(skip_all(path, wants, IN_CHUNKS));
+        return Err(IN_CHUNKS);
     }
     if let Some(t) = buffer {
         // the buffer's text the hub holds now: another than the search's when the editor sent it again since
@@ -190,30 +197,26 @@ fn text_of(plan: &FilePlan) -> Result<(Arc<str>, EditSource), Vec<EditSkip>> {
             && s.tick.is_some()
             && s.xxh3 != Some(xxh3_64(t.as_bytes()))
         {
-            return Err(skip_all(
-                path,
-                wants,
-                "changed in its buffer since the search",
-            ));
+            return Err(CHANGED_IN_BUFFER);
         }
         return Ok((t.clone(), EditSource::Buffer));
     }
     match std::fs::metadata(path).map(|m| m.len() <= WRITE_MAX) {
-        Err(_) => return Err(skip_all(path, wants, GONE)),
-        Ok(false) => return Err(skip_all(path, wants, TOO_LARGE)),
+        Err(_) => return Err(GONE),
+        Ok(false) => return Err(TOO_LARGE),
         Ok(true) => {}
     }
     let Ok(bytes) = std::fs::read(path) else {
-        return Err(skip_all(path, wants, GONE));
+        return Err(GONE);
     };
     if let Some(why) = unwritable(&bytes) {
-        return Err(skip_all(path, wants, why));
+        return Err(why);
     }
     if let Some(s) = snap
         && s.tick.is_none()
         && s.xxh3.is_some_and(|d| d != xxh3_64(&bytes))
     {
-        return Err(skip_all(path, wants, CHANGED_SINCE_SEARCH));
+        return Err(CHANGED_SINCE_SEARCH);
     }
     // checked UTF-8 above
     Ok((
@@ -227,7 +230,7 @@ fn text_of(plan: &FilePlan) -> Result<(Arc<str>, EditSource), Vec<EditSkip>> {
 pub(super) fn file_edits(plan: FilePlan) -> (Option<Planned>, Vec<EditSkip>) {
     let (text, source) = match text_of(&plan) {
         Ok(t) => t,
-        Err(skipped) => return (None, skipped),
+        Err(why) => return (None, skip_all(&plan.path, &plan.wants, why)),
     };
     let xxh3 = xxh3_64(text.as_bytes());
     let (edits, skipped) = place(&plan.path, &text, plan.wants);
@@ -240,19 +243,127 @@ pub(super) fn file_edits(plan: FilePlan) -> (Option<Planned>, Vec<EditSkip>) {
     (planned, skipped)
 }
 
-/// Lines of context around a preview's hunks (a unified diff's usual 3).
-const CONTEXT: usize = 3;
+/// The edit an Edit Results line L wants: its old text (one line, or several once a save split it) replaced by its new
+/// lines, or deleted with the newline after it (the file's last line, with none after it, is emptied). Checked
+/// against the text as any edit is: a line whose text is not at its place any more is skipped ("its text changed").
+pub(super) fn line_want(l: &EditedLine) -> Want {
+    let end_line = l.line + l.old.matches('\n').count() as u32;
+    let end_col = l.old.rsplit('\n').next().unwrap_or("").chars().count() as u32;
+    let mut w = Want {
+        id: l.line_id.clone(),
+        line: l.line,
+        col: 0,
+        end_line,
+        end_col,
+        old: l.old.clone(),
+        new: Some(l.new.as_ref().map(|v| v.join("\n")).unwrap_or_default()),
+    };
+    if l.new.is_none() && l.eol {
+        w.end_line += 1;
+        w.end_col = 0;
+        w.old.push('\n');
+    }
+    w
+}
+
+/// One file's part of an Edit Results document: its match lines (from 1, in order, once each), its snapshot, whether
+/// its buffer is open in chunks and the buffer's text the hub holds in its place.
+#[derive(Clone, Debug)]
+pub(super) struct DocPlan {
+    pub path: String,
+    pub snap: Option<Snap>,
+    pub large: bool,
+    pub buffer: Option<Arc<str>>,
+    pub lines: Vec<u32>,
+}
+
+/// PLAN's Edit Results lines, CONTEXT lines around each match line, each source line once (a match line's kind wins),
+/// numbered `l:K` from NEXT on; or why the whole file is left out (as a write would leave it). Reads the file
+/// (blocking) unless its buffer's text is held.
+pub(super) fn doc_lines(
+    plan: DocPlan,
+    context: u32,
+    next: &mut u64,
+) -> Result<Vec<EditLine>, EditSkip> {
+    let fp = FilePlan {
+        path: plan.path.clone(),
+        snap: plan.snap.clone(),
+        large: plan.large,
+        buffer: plan.buffer.clone(),
+        wants: Vec::new(),
+    };
+    let (text, _) = text_of(&fp).map_err(|why| EditSkip {
+        id: None,
+        path: plan.path.clone(),
+        why: why.to_owned(),
+    })?;
+    let starts = line_starts(&text);
+    // a text ending in a newline has no line after it
+    let count = if text.is_empty() {
+        0
+    } else if text.ends_with('\n') {
+        starts.len() - 1
+    } else {
+        starts.len()
+    } as u32;
+    let mut kinds = std::collections::BTreeMap::new();
+    for &l in plan.lines.iter().filter(|l| (1..=count).contains(*l)) {
+        for n in l.saturating_sub(context).max(1)..=(l + context).min(count) {
+            kinds.entry(n).or_insert(EditLineKind::Context);
+        }
+        kinds.insert(l, EditLineKind::Match);
+    }
+    Ok(kinds
+        .into_iter()
+        .map(|(n, kind)| {
+            let s = starts[n as usize - 1];
+            let after = starts.get(n as usize).copied();
+            let e = after.map_or(text.len(), |a| a - 1);
+            let id = format!("l:{next}");
+            *next += 1;
+            EditLine {
+                line_id: id,
+                path: plan.path.clone(),
+                line: n,
+                text: text[s..e].to_owned(),
+                kind,
+                eol: after.is_some(),
+            }
+        })
+        .collect())
+}
+
+/// Lines of context around a preview's hunks: 1, so nearby changes in different definitions are hunks of their own
+/// (the mockup's).
+const CONTEXT: usize = 1;
+
+/// What a preview knows of a file from its run: each match's definition by id (its first line, from 1, and its name),
+/// and the lines of its unticked matches.
+#[derive(Debug, Default)]
+pub(super) struct Around {
+    pub defs: std::collections::HashMap<String, (u32, String)>,
+    pub kept: Vec<u32>,
+}
+
+/// A definition's head: its first LINE up to its NAME, the paren before the form left out (`defvar
+/// drgnx-gateway--pending`, `pub fn queue`); none when the line does not hold the name.
+fn def_head(line: &str, name: &str) -> Option<String> {
+    let end = line.find(name)? + name.len();
+    let head = line[..end].trim_start().trim_start_matches('(');
+    Some(head.to_owned())
+}
 
 /// One file's preview (`search/preview`): the unified diff of its text before and after its edits, each hunk with the
 /// ids of the edits in it and their captures (GROUPS of an edit's old text: a regexp's groups, `None` for one that
-/// matched nothing); the skipped, each with why.
+/// matched nothing), the head of its first match's definition and its kept lines; the skipped, each with why.
 pub(super) fn preview(
     plan: FilePlan,
     groups: impl Fn(&str) -> Vec<Option<String>>,
+    around: &Around,
 ) -> (Option<PreviewAnswer>, Vec<EditSkip>) {
     let (text, _) = match text_of(&plan) {
         Ok(t) => t,
-        Err(skipped) => return (None, skipped),
+        Err(why) => return (None, skip_all(&plan.path, &plan.wants, why)),
     };
     let path = plan.path.clone();
     let (edits, skipped) = place(&plan.path, &text, plan.wants);
@@ -302,6 +413,16 @@ pub(super) fn preview(
                         groups: groups(&e.old),
                     })
                     .filter(|g| !g.groups.is_empty())
+                    .collect(),
+                label: mine.first().and_then(|e| {
+                    let (line, name) = around.defs.get(&e.id)?;
+                    def_head(text.lines().nth(line.checked_sub(1)? as usize)?, name)
+                }),
+                kept: around
+                    .kept
+                    .iter()
+                    .copied()
+                    .filter(|l| old.contains(&(*l as usize - 1)))
                     .collect(),
             })
         })
@@ -465,6 +586,7 @@ mod tests {
                 ],
             ),
             |old| vec![Some(old[..1].to_owned()), None],
+            &Around::default(),
         );
         let a = answer.unwrap();
         assert_eq!(whys(&skipped), [("m:1:3".into(), TEXT_CHANGED.into())]);
@@ -479,12 +601,74 @@ mod tests {
         let h = &a.hunks[0];
         assert_eq!(
             (h.old_start, h.old_lines, h.new_start, h.new_lines),
-            (1, 6, 1, 6)
+            (1, 4, 1, 4),
+            "1 line of context, as the mockup's hunks"
         );
         assert_eq!(h.ids, ["m:1:0", "m:1:1"]);
         assert_eq!(h.captures[0].groups, [Some("f".to_owned()), None]);
         assert_eq!(a.hunks[1].ids, ["m:1:2"]);
-        assert!(a.diff.contains("@@ -15,6 +15,6 @@"), "{}", a.diff);
+        assert!(a.diff.contains("@@ -17,3 +17,3 @@"), "{}", a.diff);
+    }
+
+    /// [D] A definition's head is its first line up to its name, without the paren before it: the form and the name
+    /// (`defvar drgnx-gateway--pending`, `pub fn queue`); none when the line does not hold the name.
+    #[test]
+    fn a_definitions_head_is_its_form_and_name() {
+        assert_eq!(
+            def_head(
+                "(defvar drgnx-gateway--pending (make-hash-table :test #'eq)",
+                "drgnx-gateway--pending"
+            ),
+            Some("defvar drgnx-gateway--pending".to_owned())
+        );
+        assert_eq!(
+            def_head(
+                "  (defun drgnx-gateway--queue (p reply)",
+                "drgnx-gateway--queue"
+            ),
+            Some("defun drgnx-gateway--queue".to_owned())
+        );
+        assert_eq!(
+            def_head("    pub fn queue(p: P) {", "queue"),
+            Some("pub fn queue".to_owned())
+        );
+        assert_eq!(def_head("#[derive(Debug)]", "Gateway"), None);
+    }
+
+    /// [D] Each hunk is named by its first match's definition (the run's context label), and the lines of the file's
+    /// unticked matches inside it are listed: they stay as they are, between the changed lines.
+    #[test]
+    fn a_preview_hunk_names_its_definition_and_its_kept_lines() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("a.txt");
+        let text: String = (1..=20).map(|i| format!("line {i} food\n")).collect();
+        std::fs::write(&f, &text).unwrap();
+        let p = f.to_string_lossy().into_owned();
+        let around = Around {
+            defs: [("m:1:0".to_owned(), (2, "line".to_owned()))].into(),
+            kept: vec![3, 19],
+        };
+        let (answer, _) = preview(
+            plan(
+                &p,
+                vec![
+                    want("m:1:0", 2, 7, "food", "d-f"),
+                    want("m:1:1", 4, 7, "food", "d-f"),
+                    want("m:1:2", 18, 8, "food", "d-f"),
+                ],
+            ),
+            |_| Vec::new(),
+            &around,
+        );
+        let a = answer.unwrap();
+        assert_eq!(a.hunks[0].label.as_deref(), Some("line"));
+        assert_eq!(
+            a.hunks[0].kept,
+            [3],
+            "line 3's match is unticked, inside hunk 1"
+        );
+        assert_eq!(a.hunks[1].label, None, "no definition around line 18");
+        assert_eq!(a.hunks[1].kept, [19]);
     }
 
     /// [D] Overlapping and nested matches: sorted by start, the first kept, the others skipped with today's reason.
@@ -598,5 +782,84 @@ mod tests {
         let (back, _) = splice(&out, &inverse).unwrap();
         assert_eq!(back, text);
         assert_eq!(splice("other\n", &edits).unwrap_err(), TEXT_CHANGED);
+    }
+
+    fn doc(path: &str, lines: Vec<u32>) -> DocPlan {
+        DocPlan {
+            path: path.into(),
+            snap: None,
+            large: false,
+            buffer: None,
+            lines,
+        }
+    }
+
+    /// [D] An Edit Results document holds each source line once, however many matches or context windows name it: a
+    /// match line is `match` even inside another's context, the windows stop at the file's ends, the ids run on
+    /// across files, and the file's last line without a newline says so.
+    #[test]
+    fn an_edit_doc_holds_each_source_line_once() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("a.txt");
+        let text: String = (1..=10).map(|i| format!("l{i}\n")).collect();
+        std::fs::write(&f, text.trim_end()).unwrap();
+        let p = f.to_string_lossy().into_owned();
+        let mut next = 5;
+        let lines = doc_lines(doc(&p, vec![1, 3, 4, 10]), 1, &mut next).unwrap();
+        let got: Vec<(String, u32, &str, EditLineKind, bool)> = lines
+            .iter()
+            .map(|l| (l.line_id.clone(), l.line, l.text.as_str(), l.kind, l.eol))
+            .collect();
+        use EditLineKind::{Context as C, Match as M};
+        assert_eq!(
+            got,
+            [
+                ("l:5".into(), 1, "l1", M, true),
+                ("l:6".into(), 2, "l2", C, true),
+                ("l:7".into(), 3, "l3", M, true),
+                ("l:8".into(), 4, "l4", M, true),
+                ("l:9".into(), 5, "l5", C, true),
+                ("l:10".into(), 9, "l9", C, true),
+                ("l:11".into(), 10, "l10", M, false),
+            ]
+        );
+        assert_eq!(next, 12);
+        let none = doc_lines(doc(&p, vec![2]), 0, &mut next).unwrap();
+        assert_eq!(none.len(), 1, "no context: the match lines alone");
+        let mut chunks = doc(&p, vec![1]);
+        chunks.large = true;
+        let skip = doc_lines(chunks, 0, &mut next).unwrap_err();
+        assert_eq!((skip.id, skip.why.as_str()), (None, IN_CHUNKS));
+    }
+
+    fn line(id: &str, n: u32, old: &str, new: Option<&[&str]>, eol: bool) -> EditedLine {
+        EditedLine {
+            line_id: id.into(),
+            path: runstav::types::AbsPath::new("/x".to_owned()).unwrap(),
+            line: n,
+            old: old.into(),
+            new: new.map(|v| v.iter().map(|s| (*s).to_owned()).collect()),
+            eol,
+        }
+    }
+
+    /// [D] Edit Results lines write as edits: a line typed into several lines replaces the one, a deleted line goes
+    /// with its newline (the last line, with none after it, is emptied), a line split by an earlier save is found by
+    /// its several old lines, and a line whose text changed underneath is skipped.
+    #[test]
+    fn edited_lines_split_delete_and_skip_a_changed_line() {
+        let text = "a\nb\nc1\nc2\nd\ne";
+        let wants = vec![
+            line_want(&line("l:0", 1, "a", Some(&["A1", "A2"]), true)),
+            line_want(&line("l:1", 2, "b", None, true)),
+            line_want(&line("l:2", 3, "c1\nc2", Some(&["C"]), true)),
+            line_want(&line("l:3", 5, "x", Some(&["X"]), true)),
+            line_want(&line("l:4", 6, "e", None, false)),
+        ];
+        let (edits, skipped) = place("", text, wants);
+        assert_eq!(whys(&skipped), [("l:3".into(), TEXT_CHANGED.into())]);
+        let (out, inverse) = splice(text, &edits).unwrap();
+        assert_eq!(out, "A1\nA2\nC\nd\n");
+        assert_eq!(splice(&out, &inverse).unwrap().0, text);
     }
 }

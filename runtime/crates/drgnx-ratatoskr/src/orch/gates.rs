@@ -102,7 +102,7 @@ pub fn rerun_of(
         .or_else(|| evidence.iter().rev().find_map(of))
 }
 
-fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let out = std::process::Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -138,7 +138,24 @@ fn trailers_in(dir: &Path, base: &str, tip: &str) -> Result<Vec<String>, String>
 
 /// Start RERUN for TASK at COMMIT (whose tree key is KEY) of the task's tree TOP, through the queue as the user's
 /// job, once: in a detached worktree beside TOP, removed when the job ends.
-async fn start(
+/// A pack's CHECK (an author check, a rule test, a group) as a run.
+pub(crate) fn run_of(c: &vordr::pack::Check) -> Rerun {
+    let kind = if c.run.first().map(String::as_str) == Some("cargo") {
+        "cargo"
+    } else {
+        "other"
+    };
+    Rerun {
+        job: String::new(),
+        rel: c.dir.clone(),
+        argv: c.run.clone(),
+        kind: kind.into(),
+        image: None,
+        selector: selector_of(c),
+    }
+}
+
+pub(crate) async fn start(
     front: &Front,
     task: &str,
     top: &Path,
@@ -260,15 +277,20 @@ pub async fn before_merge(
     let (top, base, tip) = (tree.path.clone(), tree.base.clone(), tree.branch.clone());
     let body = crate::orch::red_first::body_of(data, n);
     let p = pack.clone();
-    let (tip_commit, found, inputs) = crate::clock::blocking(move || {
+    let (tip_commit, found, unnoted, inputs) = crate::clock::blocking(move || {
         let tip_commit = git(&top, &["rev-parse", &tip])?.trim().to_owned();
         let found = if p.on("trailers") {
             trailers_in(&top, &base, &tip)?
         } else {
             Vec::new()
         };
+        let unnoted = if p.on("merge-notes") {
+            crate::orch::notes::check(&top, &base, &tip, &p.shared_paths)?
+        } else {
+            Vec::new()
+        };
         let inputs = crate::orch::red_first::inputs(&top, &base, &tip, &p, &body)?;
-        Ok::<_, String>((tip_commit, found, inputs))
+        Ok::<_, String>((tip_commit, found, unnoted, inputs))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -276,6 +298,14 @@ pub async fn before_merge(
         return Ok(Decision::Hold(format!(
             "attribution trailers: {}",
             found.join("; ")
+        )));
+    }
+    // like the trailers, a commit's own words: no waiver passes them
+    if !unnoted.is_empty() {
+        return Ok(Decision::Hold(format!(
+            "merge notes: {}. Each needs a line in its merge commit's message: Merge-note: HUNK ours=COMMIT \
+             theirs=COMMIT resolution=ours|theirs|both|new | why",
+            unnoted.join("; ")
         )));
     }
     // the user's waiver at this tip passes red first and the author check (never the trailers: those are reworded)
@@ -322,19 +352,7 @@ pub async fn before_merge(
                 )));
             }
             State::Missing => {
-                let kind = if c.run.first().map(String::as_str) == Some("cargo") {
-                    "cargo"
-                } else {
-                    "other"
-                };
-                let r = Rerun {
-                    job: String::new(),
-                    rel: c.dir.clone(),
-                    argv: c.run.clone(),
-                    kind: kind.into(),
-                    image: None,
-                    selector: sel,
-                };
+                let r = run_of(&c);
                 start(front, tid, top, &tip_commit, &inputs.tip_key, &r).await?;
                 return Ok(Decision::Wait(format!(
                     "the author check {} runs at the tip",

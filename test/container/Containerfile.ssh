@@ -1,6 +1,9 @@
 # The remote-terminal rows (test/ssh/): the batch test image (BASE, the line's drgnx-test) with an sshd and a client
 # for loopback, csh, sudo and tic.  Built by ssh-row.sh, tagged by a hash of this file and BASE's image id (so a new
-# line image rebuilds it); never published.  Keys and users are made by the tests, inside each run.
+# line image rebuilds it); never published.  Keys and users are made by the tests, inside each run.  Nidhogg is BASE's
+# (Containerfile ran nidhogg.sh); the ENV below names the same pinned build, so a pin bump changes this file too.
+# on: drgnx-test
 ARG BASE
 FROM ${BASE}
 RUN dnf -y --setopt=keepcache=1 install openssh-server openssh-clients tcsh sudo ncurses
+ENV DRGNX_EMACS=/opt/nidhogg/31.1-nidhogg.5/bin/nidhogg

@@ -509,3 +509,43 @@ hub or its worker."
 
 (provide 'term-test)
 ;;; term-test.el ends here
+
+(defun drgnx-term-test--image-pos (buffer)
+  "The first position in BUFFER whose text carries an image slice, or nil."
+  (with-current-buffer buffer (text-property-not-all (point-min) (point-max) 'drgnx-term-image nil)))
+
+(ert-deftest drgnx-term/a-sixel-shows-its-alt-where-images-cannot-be-drawn-and-a-slice-where-they-can ()
+  ;; 4 × 6 px of blue (one sixel band; batch Emacs's cell is 1 px, so 6 rows), then text: the image's rows name a
+  ;; canvas file
+  (drgnx-term-test--with
+    (let ((b (drgnx-term-test--start)))
+      (drgnx-term-test--run b "printf '\\033P0;1;0q#1;2;0;0;100#1~~~~\\033\\\\after\\n'")
+      (drgnx-term-test--settle (lambda () (drgnx-term-test--image-pos b)) "a row with an image slice")
+      (with-current-buffer b
+        (let* ((pos (drgnx-term-test--image-pos b)) (v (get-text-property pos 'drgnx-term-image)))
+          (should (file-exists-p (elt v 0)))
+          (should (equal (elt v 5) (format "[image %d×%d]" 4 6)))
+          ;; batch Emacs draws no images: the first row shows the alt
+          (should (eql (elt v 2) 0))
+          (should (equal (get-text-property pos 'display) (elt v 5)))
+          (should (eq (get-text-property 0 'face (get-text-property pos 'display)) 'drgnx-term-image-alt))
+          ;; where PNGs can be drawn: the cells display their row's slice of the canvas, one line tall
+          (cl-letf (((symbol-function 'display-images-p) (lambda (&rest _) t))
+                    ((symbol-function 'image-type-available-p) (lambda (&rest _) t)))
+            (drgnx-term--draw-images drgnx-view (append (drgnx-view--keys drgnx-view) nil)))
+          (let ((d (get-text-property pos 'display)))
+            (should (equal (car d) (list 'slice (elt v 1) (elt v 2) (elt v 3) (elt v 4))))
+            (should (eq (car (cadr d)) 'image))
+            (should (equal (plist-get (cdr (cadr d)) :file) (elt v 0)))
+            (should (eql (plist-get (cdr (cadr d)) :scale) 1))))))))
+
+(ert-deftest drgnx-term/a-terminal-no-window-shows-tells-its-worker ()
+  (drgnx-term-test--with
+    (let ((b (drgnx-term-test--start)) (sent nil))
+      (cl-letf (((symbol-function 'drgnx-term--send)
+                 (lambda (method params) (when (equal method "term/visible") (push params sent))))
+                ((symbol-function 'get-buffer-window) (lambda (&rest _) nil)))
+        (drgnx-term--windows-changed)
+        (drgnx-term--windows-changed))
+      (should (equal sent '((:visible :false))))
+      (should-not (buffer-local-value 'drgnx-term--visible b)))))

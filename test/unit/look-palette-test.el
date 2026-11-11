@@ -53,7 +53,15 @@ Vim; a chord is one cap a key, a function key its number."
     (should (equal '("Space" "Space") (drgnx-palette-keycap-names (funcall first-key 'vim)))))
   (should (equal '("F1") (drgnx-palette-keycap-names "<f1>")))
   (should (equal '("Alt" "X") (drgnx-palette-keycap-names "M-x")))
-  (should (equal '("Space" "F" "F") (drgnx-palette-keycap-names "SPC f f")))
+  ;; the function keys read as their ASCII twins (ESC, RET); Enter is ↵, as every mockup draws it
+  (should (equal '("Esc") (drgnx-palette-keycap-names "<escape>")))
+  (should (equal '("Ctrl" "↵") (drgnx-palette-keycap-names "C-<return>")))
+  (should (equal '("↵") (drgnx-palette-keycap-names "RET")))
+  ;; a key alone reads as typed, and Shift alone with a letter is its capital (the mockups' `a keep', `D drop')
+  (should (equal '("a") (drgnx-palette-keycap-names "a")))
+  (should (equal '("D") (drgnx-palette-keycap-names "D")))
+  (should (equal '("D") (drgnx-palette-keycap-names "S-d")))
+  (should (equal '("Space" "f" "f") (drgnx-palette-keycap-names "SPC f f")))
   (let ((caps (cl-letf (((symbol-function 'display-graphic-p) #'always)) (drgnx-palette-keycaps "C-S-p"))))
     (should (equal "Ctrl Shift P" (string-join (split-string (substring-no-properties caps)) " ")))
     (should (equal '(space :width (4)) (get-text-property 0 'display caps)))   ; room inside the cap
@@ -62,12 +70,13 @@ Vim; a chord is one cap a key, a function key its number."
   (should (equal "Ctrl Shift P" (substring-no-properties (drgnx-palette-keycaps "C-S-p")))))
 
 (ert-deftest drgnx-look-palette/a-shifted-letter-shows-its-shift ()
-  "M-F and M-f are different keys: the capital letter shows Shift, once, whether written M-F or M-S-f."
+  "M-F and M-f are different keys: with another modifier the capital letter shows Shift, once, whether written M-F
+or M-S-f.  Alone, a capital is its letter (`G', as the mockups draw `D drop')."
   (should (equal '("Alt" "Shift" "F") (drgnx-palette-keycap-names "M-F")))
   (should (equal '("Alt" "F") (drgnx-palette-keycap-names "M-f")))
   (should (equal '("Alt" "Shift" "F") (drgnx-palette-keycap-names "M-S-f")))
   (should (equal '("Ctrl" "Shift" "F") (drgnx-palette-keycap-names "C-S-F")))
-  (should (equal '("Shift" "G") (drgnx-palette-keycap-names "G")))
+  (should (equal '("G") (drgnx-palette-keycap-names "G")))
   (should (equal '("?") (drgnx-palette-keycap-names "?"))))
 
 (ert-deftest drgnx-look-palette/echo-area-remap-on-and-off ()

@@ -133,7 +133,8 @@ pub fn build(key: &str, cells: &[Cell], cell_px: u32, styles: &mut StyleTable) -
                 b.push(" ", face);
             }
             _ => {
-                let t = if c.text.is_empty() {
+                // a kitty placeholder cell (U+10EEEE and its diacritics) is blank: its image's slice covers it
+                let t = if c.text.is_empty() || c.text.starts_with('\u{10EEEE}') {
                     " "
                 } else {
                     c.text.as_str()

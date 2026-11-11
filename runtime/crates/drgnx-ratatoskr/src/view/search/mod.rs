@@ -32,9 +32,10 @@ use rows::{
 };
 use run::{Buffer, Found, Read};
 use runstav::methods::search::{
-    AppliedParams, ApplyParams, BufferParams, ChangeOrigin, EditsAnswer, EditsParams, FileEdits,
-    FindQuery, GrepLookParams, GrepReplaceParams, GrepSkippedParams, PreviewAnswer, PreviewParams,
-    RunDone, RunParams, RunStarted, ScopeDone, ScopeKind, UndoParams,
+    AppliedParams, ApplyParams, BufferParams, ChangeOrigin, EditDocAnswer, EditDocParams,
+    EditsAnswer, EditsParams, FileEdits, FindQuery, GrepLookParams, GrepReplaceParams,
+    GrepSkippedParams, PreviewAnswer, PreviewParams, RunDone, RunParams, RunStarted, ScopeDone,
+    ScopeKind, UndoParams,
 };
 use runstav::methods::view::ViewModel;
 use runstav::wire::{Error, ErrorCode};
@@ -1255,25 +1256,66 @@ fn given_plans(given: &[runstav::methods::search::GivenEdit]) -> Vec<edits::File
     by
 }
 
-/// `search/edits`: the edit set of VIEW's search (or of the edits P names), kept as a change set for `search/apply`.
-/// The files are read on a blocking thread, outside every lock.
+/// An Edit Results line set's plans: LINES' edits by file in the order first named (`line_want`), each file's text the
+/// buffer's the hub holds (BUFS) or the file's.
+fn line_plans(
+    lines: &[runstav::methods::search::EditedLine],
+    bufs: &BTreeMap<String, std::sync::Arc<str>>,
+) -> Vec<edits::FilePlan> {
+    let mut by: Vec<edits::FilePlan> = Vec::new();
+    for l in lines {
+        let want = edits::line_want(l);
+        match by.iter_mut().find(|f| f.path == l.path.as_str()) {
+            Some(f) => f.wants.push(want),
+            None => by.push(edits::FilePlan {
+                path: l.path.as_str().to_owned(),
+                snap: None,
+                large: false,
+                buffer: bufs.get(l.path.as_str()).cloned(),
+                wants: vec![want],
+            }),
+        }
+    }
+    by
+}
+
+/// The buffers' texts the run of VIEW (CONN's) searched in their files' place, by file.
+fn texts_of(views: &Views, conn: u64, view: &str) -> BTreeMap<String, std::sync::Arc<str>> {
+    views
+        .greps
+        .buffers_of(conn, view)
+        .into_iter()
+        .filter_map(|(f, b)| Some((f, b.text?)))
+        .collect()
+}
+
+/// `search/edits`: the edit set of VIEW's search (or of the edits P names, or of an Edit Results buffer's changed
+/// lines), kept as a change set for `search/apply`. The files are read on a blocking thread, outside every lock.
 pub async fn edits(f: &Front, c: &Caller, p: EditsParams) -> Result<EditsAnswer, Error> {
     let views = &f.core.views;
     let conn = c.conn_id;
-    let (root, plans) = match &p.edits {
-        Some(given) => {
+    let origin = if p.lines.is_some() {
+        ChangeOrigin::EditResults
+    } else {
+        ChangeOrigin::ReplaceAll
+    };
+    let (root, plans) = match (&p.edits, &p.lines) {
+        (_, Some(lines)) => {
+            let bufs = texts_of(views, conn, &p.view);
+            let root = views
+                .greps
+                .current(conn, &p.view, |run| run.query.root.clone())
+                .ok_or_else(|| invalid("view", "the view has no search"))?;
+            (root, line_plans(lines, &bufs))
+        }
+        (Some(given), None) => {
             let Some(root) = &p.root else {
                 return Err(invalid("root", "the project the edits are in"));
             };
             (std::path::PathBuf::from(root.as_str()), given_plans(given))
         }
-        None => {
-            let bufs: BTreeMap<String, std::sync::Arc<str>> = views
-                .greps
-                .buffers_of(conn, &p.view)
-                .into_iter()
-                .filter_map(|(f, b)| Some((f, b.text?)))
-                .collect();
+        (None, None) => {
+            let bufs = texts_of(views, conn, &p.view);
             views
                 .greps
                 .current(conn, &p.view, |run| {
@@ -1300,14 +1342,84 @@ pub async fn edits(f: &Front, c: &Caller, p: EditsParams) -> Result<EditsAnswer,
             edits: p.edits.clone(),
         })
         .collect();
-    let change =
-        views
-            .greps
-            .changes
-            .add(conn, &p.view, root, ChangeOrigin::ReplaceAll, None, files);
+    let change = views
+        .greps
+        .changes
+        .add(conn, &p.view, root, origin, None, files);
     Ok(EditsAnswer {
         change,
         files: answer_files,
+        skipped,
+    })
+}
+
+/// How many lines an Edit Results buffer holds at most, unless the editor says (`search/edit-doc` `max`).
+const EDIT_DOC_MAX: u32 = 20_000;
+
+/// The Edit Results document's plans of RUN: each file's match lines, once each, in order.
+fn doc_plans(run: &Run, bufs: &BTreeMap<String, std::sync::Arc<str>>) -> Vec<edits::DocPlan> {
+    let mut by: BTreeMap<&str, edits::DocPlan> = BTreeMap::new();
+    for f in &run.files {
+        let d = by.entry(f.file.as_str()).or_insert_with(|| edits::DocPlan {
+            path: f.file.clone(),
+            snap: f.snap.clone(),
+            large: f.large,
+            buffer: bufs.get(&f.file).cloned(),
+            lines: Vec::new(),
+        });
+        d.lines.extend(f.ms.iter().map(|m| m.line));
+    }
+    by.into_values()
+        .map(|mut d| {
+            d.lines.sort_unstable();
+            d.lines.dedup();
+            d
+        })
+        .collect()
+}
+
+/// `search/edit-doc`: VIEW's search as an Edit Results document, P.context lines around each match line; none past
+/// P.max lines (counted from the match lines first, so a huge search reads no file). Read on a blocking thread.
+pub async fn edit_doc(f: &Front, c: &Caller, p: EditDocParams) -> Result<EditDocAnswer, Error> {
+    let views = &f.core.views;
+    let conn = c.conn_id;
+    let context = p.context.unwrap_or(0).min(3);
+    let max = u64::from(p.max.unwrap_or(EDIT_DOC_MAX));
+    let bufs = texts_of(views, conn, &p.view);
+    let plans = views
+        .greps
+        .current(conn, &p.view, |run| doc_plans(run, &bufs))
+        .ok_or_else(|| invalid("view", "the view has no search"))?;
+    let over = |total: u64, skipped| EditDocAnswer {
+        lines: Vec::new(),
+        total,
+        over: true,
+        skipped,
+    };
+    let first: u64 = plans.iter().map(|d| d.lines.len() as u64).sum();
+    if first > max {
+        return Ok(over(first, Vec::new()));
+    }
+    let (lines, skipped) = crate::clock::blocking(move || {
+        let (mut next, mut lines, mut skipped) = (0, Vec::new(), Vec::new());
+        for d in plans {
+            match edits::doc_lines(d, context, &mut next) {
+                Ok(ls) => lines.extend(ls),
+                Err(s) => skipped.push(s),
+            }
+        }
+        (lines, skipped)
+    })
+    .await
+    .map_err(|e| invalid("view", &e.to_string()))?;
+    let total = lines.len() as u64;
+    if total > max {
+        return Ok(over(total, skipped));
+    }
+    Ok(EditDocAnswer {
+        lines,
+        total,
+        over: false,
         skipped,
     })
 }
@@ -1331,14 +1443,19 @@ pub async fn preview(f: &Front, c: &Caller, p: PreviewParams) -> Result<PreviewA
         off: p.off.clone(),
         edits: None,
         replace: p.replace.clone(),
+        lines: None,
     };
-    let (query, plan) = views
+    let (query, plan, around) = views
         .greps
         .current(conn, &p.view, |run| {
             let plan = plans_of(run, &edits_params, &bufs)
                 .into_iter()
                 .find(|f| f.path == path);
-            (run.query.clone(), plan)
+            (
+                run.query.clone(),
+                plan,
+                around_of(run, &path, &edits_params),
+            )
         })
         .ok_or_else(|| invalid("view", "the view has no search"))?;
     let Some(plan) = plan else {
@@ -1351,10 +1468,11 @@ pub async fn preview(f: &Front, c: &Caller, p: PreviewParams) -> Result<PreviewA
             skipped: Vec::new(),
         });
     };
-    let (answer, skipped) =
-        crate::clock::blocking(move || edits::preview(plan, |old| grep::captures(&query, old)))
-            .await
-            .map_err(|e| invalid("view", &e.to_string()))?;
+    let (answer, skipped) = crate::clock::blocking(move || {
+        edits::preview(plan, |old| grep::captures(&query, old), &around)
+    })
+    .await
+    .map_err(|e| invalid("view", &e.to_string()))?;
     let mut answer = answer.unwrap_or(PreviewAnswer {
         path: p.path.as_str().to_owned(),
         diff: String::new(),
@@ -1365,6 +1483,27 @@ pub async fn preview(f: &Front, c: &Caller, p: PreviewParams) -> Result<PreviewA
     });
     answer.skipped = skipped;
     Ok(answer)
+}
+
+/// The preview's knowledge of PATH from RUN: each match's definition (its first line and name) and the lines of the
+/// matches P leaves unticked.
+fn around_of(run: &Run, path: &str, p: &EditsParams) -> edits::Around {
+    let off: HashSet<&str> = p.off.iter().flatten().map(String::as_str).collect();
+    let mut around = edits::Around::default();
+    for f in run.files.iter().filter(|f| f.file == path) {
+        for (i, (m, n)) in f.ms.iter().zip(&f.ns).enumerate() {
+            let id = run::match_id(run.id, *n);
+            if let Some(Some(def)) = f.ctx.get(i) {
+                around
+                    .defs
+                    .insert(id.clone(), (def.line_start, def.name.clone()));
+            }
+            if off.contains(id.as_str()) {
+                around.kept.push(m.line);
+            }
+        }
+    }
+    around
 }
 
 /// `search/apply`: change set P.change written (`apply.rs`); false when there is none of the caller's to write.

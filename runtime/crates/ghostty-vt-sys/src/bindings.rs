@@ -297,6 +297,7 @@ pub const GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT: i32 = 43;
 /// Terminal data (`ghostty_terminal_get`).
 pub const GHOSTTY_TERMINAL_DATA_COLS: i32 = 1;
 pub const GHOSTTY_TERMINAL_DATA_ROWS: i32 = 2;
+pub const GHOSTTY_TERMINAL_DATA_CURSOR_X: i32 = 3; // u16
 pub const GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN: i32 = 6; // GhosttyTerminalScreen (int)
 pub const GHOSTTY_TERMINAL_DATA_KITTY_KEYBOARD_FLAGS: i32 = 8; // u8
 pub const GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING: i32 = 11; // bool
@@ -669,5 +670,101 @@ unsafe extern "C" {
         buf: *mut u8,
         buf_len: usize,
         out_written: *mut usize,
+    ) -> GhosttyResult;
+}
+
+// ---- Images (drgnx-term): the kitty image storage, the render state's placements, the PNG decoder the host gives. ----
+
+/// `GhosttyKittyGraphics`: the active screen's image storage, borrowed until the terminal is next changed.
+pub type GhosttyKittyGraphics = *mut c_void;
+/// `GhosttyKittyGraphicsImage`: one stored image, borrowed as the storage.
+pub type GhosttyKittyGraphicsImage = *const c_void;
+pub type GhosttyRenderStateImageIterator = *mut c_void;
+
+pub const GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT: i32 = 16; // u64*
+pub const GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_FILE: i32 = 17; // bool*
+pub const GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_TEMP_FILE: i32 = 18; // GhosttyString* (the directory; NULL: off)
+pub const GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_SHARED_MEM: i32 = 19; // bool*
+pub const GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS: i32 = 30; // GhosttyKittyGraphics
+
+pub const GHOSTTY_RENDER_STATE_DATA_IMAGE_ITERATOR: i32 = 22;
+pub const GHOSTTY_RENDER_STATE_DATA_IMAGE_PLACEMENTS_GENERATION: i32 = 23; // u64
+
+pub const GHOSTTY_IMAGE_PROTOCOL_KITTY: i32 = 0;
+pub const GHOSTTY_RENDER_STATE_IMAGE_DATA_PROTOCOL: i32 = 1; // GhosttyImageProtocol (int)
+pub const GHOSTTY_RENDER_STATE_IMAGE_DATA_IMAGE_ID: i32 = 2; // u32
+pub const GHOSTTY_RENDER_STATE_IMAGE_DATA_IMAGE_GENERATION: i32 = 3; // u64
+pub const GHOSTTY_RENDER_STATE_IMAGE_DATA_Z: i32 = 5; // i32
+pub const GHOSTTY_RENDER_STATE_IMAGE_DATA_VIEWPORT_COL: i32 = 6; // i32
+pub const GHOSTTY_RENDER_STATE_IMAGE_DATA_VIEWPORT_ROW: i32 = 7; // i32
+pub const GHOSTTY_RENDER_STATE_IMAGE_DATA_GRID_COLS: i32 = 8; // u32
+pub const GHOSTTY_RENDER_STATE_IMAGE_DATA_GRID_ROWS: i32 = 9; // u32
+pub const GHOSTTY_RENDER_STATE_IMAGE_DATA_CELL_OFFSET_X: i32 = 10; // u32
+pub const GHOSTTY_RENDER_STATE_IMAGE_DATA_CELL_OFFSET_Y: i32 = 11; // u32
+pub const GHOSTTY_RENDER_STATE_IMAGE_DATA_PIXEL_WIDTH: i32 = 12; // u32
+pub const GHOSTTY_RENDER_STATE_IMAGE_DATA_PIXEL_HEIGHT: i32 = 13; // u32
+pub const GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_X: i32 = 14; // u32
+pub const GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_Y: i32 = 15; // u32
+pub const GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_WIDTH: i32 = 16; // u32
+pub const GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_HEIGHT: i32 = 17; // u32
+
+pub const GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_WIDTH: i32 = 3; // u32
+pub const GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_HEIGHT: i32 = 4; // u32
+pub const GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_FORMAT: i32 = 5; // GhosttyKittyImageFormat (int)
+pub const GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_PIXELS: i32 = 7; // GhosttyString
+pub const GHOSTTY_KITTY_IMAGE_FORMAT_RGB: i32 = 0;
+pub const GHOSTTY_KITTY_IMAGE_FORMAT_RGBA: i32 = 1;
+pub const GHOSTTY_KITTY_IMAGE_FORMAT_GRAY_ALPHA: i32 = 3;
+pub const GHOSTTY_KITTY_IMAGE_FORMAT_GRAY: i32 = 4;
+
+/// `GhosttySysImage`: a decoded PNG; DATA allocated with the allocator the callback got (the library frees it).
+#[repr(C)]
+#[derive(Debug)]
+pub struct GhosttySysImage {
+    pub width: u32,
+    pub height: u32,
+    pub data: *mut u8,
+    pub data_len: usize,
+}
+pub type GhosttySysDecodePngFn = unsafe extern "C" fn(
+    userdata: *mut c_void,
+    allocator: *const GhosttyAllocator,
+    data: *const u8,
+    data_len: usize,
+    out: *mut GhosttySysImage,
+) -> bool;
+pub const GHOSTTY_SYS_OPT_DECODE_PNG: i32 = 2;
+
+unsafe extern "C" {
+    pub fn ghostty_sys_set(option: i32, value: *const c_void) -> GhosttyResult;
+    pub fn ghostty_alloc(allocator: *const GhosttyAllocator, len: usize) -> *mut u8;
+
+    pub fn ghostty_kitty_graphics_image(
+        graphics: GhosttyKittyGraphics,
+        image_id: u32,
+    ) -> GhosttyKittyGraphicsImage;
+    pub fn ghostty_kitty_graphics_image_get(
+        image: GhosttyKittyGraphicsImage,
+        data: i32,
+        out: *mut c_void,
+    ) -> GhosttyResult;
+    pub fn ghostty_kitty_graphics_animation_tick(
+        graphics: GhosttyKittyGraphics,
+        now_ms: u64,
+        next_ms: *mut u64,
+    ) -> GhosttyResult;
+
+    pub fn ghostty_render_state_image_iterator_new(
+        allocator: *const GhosttyAllocator,
+        out: *mut GhosttyRenderStateImageIterator,
+    ) -> GhosttyResult;
+    pub fn ghostty_render_state_image_iterator_free(iterator: GhosttyRenderStateImageIterator);
+    pub fn ghostty_render_state_image_iterator_next(
+        iterator: GhosttyRenderStateImageIterator,
+    ) -> bool;
+    pub fn ghostty_render_state_image_get(
+        iterator: GhosttyRenderStateImageIterator,
+        data: i32,
+        out: *mut c_void,
     ) -> GhosttyResult;
 }

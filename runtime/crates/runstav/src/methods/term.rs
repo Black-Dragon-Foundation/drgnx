@@ -137,6 +137,13 @@ pub struct TermFocus {
     pub focus_in: bool,
 }
 
+/// `term/visible`: whether a window shows the terminal; image animations advance only while one does.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct TermVisible {
+    pub id: String,
+    pub visible: bool,
+}
+
 /// `term/mouse`: KIND `press`, `release` or `motion`, BUTTON 1–11 (0: none), the cell (0-based); sent to the
 /// program only while it tracks the mouse.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -377,6 +384,7 @@ has_id!(
     TermKey,
     TermText,
     TermFocus,
+    TermVisible,
     TermMouse,
     TermResize,
     TermAttach,
@@ -492,6 +500,12 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_id,
         ),
         method!(
+            "term/visible", TermVisible(TermVisible) -> bool,
+            classes: [User], writes: false,
+            doc: "whether a window shows the terminal: its image animations advance only while one does",
+            check: check_id,
+        ),
+        method!(
             "term/mouse", TermMouse(TermMouse) -> bool,
             classes: [User], writes: false,
             doc: "a mouse press, release or motion at a cell: sent to the program only while it tracks the mouse",
@@ -588,7 +602,7 @@ mod tests {
             .collect();
         assert_eq!(
             methods.len(),
-            16,
+            17,
             "the term/ methods: {:?}",
             methods.iter().map(|m| m.name).collect::<Vec<_>>()
         );

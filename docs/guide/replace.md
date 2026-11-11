@@ -134,17 +134,45 @@ saved. Symbol mode's rename sends the language server's edits the same way, as e
 
 **Preview** (the view's Preview button, or Preview This File's Changes on a row) opens the row's file as a read-only
 diff in the editor area, "NAME · preview": the file before and after its ticked replacements, the same edit set
-Replace All writes (the hub's `search/preview`), each line with its number. **Open File** opens the file; **Replace in
-This File** writes the file's ticked matches only. Each hunk has a tick box: `a` keeps the hunk (its matches are ticked
-in the view), `D` drops it (unticked); the view's boxes and the tile follow each other. With **.\*** on, a groups line
-under each hunk shows what each group took, `\1 = pending · \2 = p`, and `\2 = ∅` in the warning colour for a group
-that matched nothing, so a wrong group number shows before anything is written.
+Replace All writes (the hub's `search/preview`), each line with its number and the words that change marked. Its header
+line says how many of the file's matches are ticked and the lines added and removed; **Open File** opens the file and
+**Replace in This File** writes the file's ticked matches only. Each hunk is a card: one line of context around its
+changes (blank lines at its ends left out), under a band with its tick box (a minus when only some of its matches are
+ticked), `hunk N` and the
+definition it is in (`defun drgnx-gateway--queue`); `a` keeps the hunk (its matches are ticked in the view), `D` drops it
+(unticked); the view's boxes and the tile follow each other. A line whose match you unticked stays in the hunk as it
+is, marked `← unticked, kept`. With **.\*** on, a groups line under each hunk shows what each group took, `\1 = pending`
+`\2 = p`, and `\2 = ∅` in the warning colour for a group that matched nothing, so a wrong group number shows before
+anything is written.
 
-**Replace All** first shows the **Replace All sheet** (in the popup lane): every file with its lines added and removed
-and how many of its matches are skipped, the selected file's first hunk (`n`/`p` or the arrows move), what is skipped
+**Replace All** first shows the **Replace All sheet**, a box in the middle of the window (the popup lane, modal): every
+file with its lines added and removed
+and how many of its matches are skipped, the selected file's first hunk, its changed lines (`n`/`p` or the arrows move), what is skipped
 and why, and how many files with unsaved edits stay unsaved. **Replace** writes exactly the changes the sheet shows (the
 hub's change set); **Cancel** writes nothing. The setting `drgnx-search-preview-threshold` (default 1) is how many
 matches it takes to show the sheet; 0 never shows it, and `C-u` Replace All skips it once.
+
+### Edit Results
+
+**Edit Results** (`M-e` / `C-c C-e` in the Search view) opens the results as an editable buffer in the editor area, a
+tab named `Search: <query>`: each line with a match, once however many matches it has, its number before it, under
+its file's header. The headers and numbers are read-only; the lines are ordinary text: every editing command works,
+multiple cursors, `query-replace`, macros, evil. Each line shows in its file's major mode's colours. The setting
+`drgnx-search-edit-context` (0 to 3, default 0) adds that many lines of context around each match line, dim and
+editable too. A search of more than `drgnx-search-edit-max-lines` lines (default 20,000) opens nothing and says how
+many: narrow it first.
+
+**Save** (the profile's save, or Save Edited Results) writes the lines you changed, and only those, through the same
+write path as Replace All: each line is checked against its file where it was, an open file is written in its buffer
+(saved unless it had unsaved edits before), a closed one on disk in one atomic step. A line you typed into several
+lines replaces the one; **Delete This Line** marks a line (struck and dim; again to unmark) and the save deletes it
+with its newline (the file's last line, with no newline after it, is emptied). A line whose file changed underneath is
+skipped: it stays marked, says "changed since: your text kept", and your text stays; **Take the File's Line** shows
+the file's current text beside yours, and the next save writes yours over it. After a save the buffer stays, the
+header line says what was saved, and the lines after a split or deleted one keep their right numbers. **Undo All
+Saves** puts the files back, newest save first (a file edited since is left alone and named); the buffer's own `undo`
+undoes typing, not files. **Discard Edited Results** drops the unsaved edits and closes it; closing it with unsaved
+edits asks first, and only when you closed it.
 
 ## The list stays current
 
@@ -191,6 +219,12 @@ view, scope This file.
 | Keep / Drop This Hunk (a preview tile) | `a` / `D` | `a` / `D` | `a` / `D` |
 | Replace / Cancel (the Replace All sheet) | `C-<return>` / `<escape>` | `C-c C-c` / `C-c C-k` | `C-c C-c` / `C-c C-k` |
 | Next / Previous File (the sheet) | `<down>` / `<up>` | `n` / `p`, `<down>` / `<up>` | `n` / `p`, `<down>` / `<up>` |
+| Edit Results (the Search view) | `M-e` | `C-c C-e` | `C-c C-e` |
+| Save Edited Results (Edit Results; the profile's save too) | `C-s` | `C-c C-c`, `C-x C-s` | `C-c C-c` |
+| Discard Edited Results (Edit Results) | palette (closing the tab asks) | `C-c C-k` | `C-c C-k` |
+| Delete This Line (on save) (Edit Results) | `C-S-k` | `C-c C-d` | `C-c C-d` |
+| Take the File's Line (Edit Results) | palette | `C-c C-r` | `C-c C-r` |
+| Undo All Saves of Edited Results | palette | palette | palette |
 
 Except where marked, the keys work in the Search view and the find bar, their fields too; `RET` in a find bar field
 is its next match (in Replace: replace it). Next and Previous Match show the match in the editor; Next and Previous
@@ -203,7 +237,8 @@ palette, category Search.
 
 `test/unit/mod-replace-engine-test.el` (the editor's half of a write: edits into an open buffer, stale ones skipped,
 symbol edits, undo), `test/conformance/search/write.jsonl` (the hub's: the edit set, writes on disk, a file changed
-since, undo) and
+since, undo), `test/unit/search-edit-test.el` and `test/conformance/search/edit-results.jsonl` (Edit Results: the
+document, read-only headers, saves of changed, split and deleted lines, conflicts, undo) and
 `test/unit/mod-replace-view-test.el` (the view, the find bar; on the virtual clock, the view's own rows Symbol mode
 uses: 10k rows streaming and a replacement patching them in slices of at most 576, a new search, a hidden view, no
 marker per file); `test/ui/editor-m11c1-test.el` walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each; `test/ui/search-view-gui-test.el` walks the hub-fed view (Sjá) through Text with a context label, Symbol, Meaning, a git scope and the empty view's saved and recent searches, the hub's rows handed in as it sends them, a screenshot of each in the evidence folder. The perf workload
