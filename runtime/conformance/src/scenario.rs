@@ -57,6 +57,9 @@ pub struct Scenario {
     /// `"pending": REASON`: a known red until REASON's task lands (a failure counts as expected, a pass fails the run
     /// so the mark goes).
     pub pending: Option<String>,
+    /// `"bound_s": N`: the whole row's time, `DEFAULT_BOUND_S` without it.  Past it the row fails at its next step
+    /// (or `measure` repeat) with what it had done, so one slow row does not hold up the run.
+    pub bound_s: u64,
     pub steps: Vec<Step>,
 }
 
@@ -89,6 +92,9 @@ fn err(line: usize, msg: impl Into<String>) -> ParseError {
         msg: msg.into(),
     }
 }
+
+/// A row's time when its header gives no `bound_s`.
+pub const DEFAULT_BOUND_S: u64 = 600;
 
 /// One scenario file: line 1 is the header, every other non-blank line a step.
 pub fn parse(text: &str) -> Result<Scenario, ParseError> {
@@ -141,6 +147,13 @@ pub fn parse(text: &str) -> Result<Scenario, ParseError> {
             ));
         }
     };
+    let bound_s = match h.get("bound_s") {
+        None => DEFAULT_BOUND_S,
+        Some(v) => v
+            .as_u64()
+            .filter(|&n| n > 0)
+            .ok_or_else(|| err(hl, "\"bound_s\" is a whole number of seconds above 0"))?,
+    };
     let mut steps = Vec::new();
     for (line, text) in lines {
         let v: Value =
@@ -163,6 +176,7 @@ pub fn parse(text: &str) -> Result<Scenario, ParseError> {
         requires,
         doc,
         pending,
+        bound_s,
         steps,
     })
 }
@@ -512,6 +526,19 @@ mod tests {
             assert!(
                 parse(&format!("{{\"scenario\": \"t/p\", \"pending\": {bad}}}\n")).is_err(),
                 "pending {bad} is an error"
+            );
+        }
+    }
+
+    #[test]
+    fn bound_s_is_a_positive_whole_number_with_a_default() {
+        assert_eq!(row("").bound_s, DEFAULT_BOUND_S);
+        let s = parse("{\"scenario\": \"t/b\", \"bound_s\": 30}\n").unwrap();
+        assert_eq!(s.bound_s, 30);
+        for bad in ["0", "-1", "1.5", "\"30\""] {
+            assert!(
+                parse(&format!("{{\"scenario\": \"t/b\", \"bound_s\": {bad}}}\n")).is_err(),
+                "bound_s {bad} is an error"
             );
         }
     }

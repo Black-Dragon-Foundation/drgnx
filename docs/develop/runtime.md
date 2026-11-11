@@ -614,7 +614,8 @@ hub clock's module (`drgnx-ratatoskr/src/clock*`).
 
 `domr` runs **scenarios** (data) against a hub binary: a process that answers the hub protocol on its socket.
 Every scenario gets fresh temporary roots under `/tmp/rtsk-XXXXXX/` (`/tmp`, not `$TMPDIR`, so macOS socket paths stay
-short) holding `home run state data config cache tmp`, and the hub's `HOME`, `XDG_*`, `DRGNX_DATA_DIR`,
+short; taken by its true name, so `$ROOT` is `/private/tmp/rtsk-XXXXXX` on macOS, where `/tmp` is a link the hub
+refuses in a path and resolves in what it reports) holding `home run state data config cache tmp`, and the hub's `HOME`, `XDG_*`, `DRGNX_DATA_DIR`,
 `DRGNX_CONFIG_DIR` and `TMPDIR` point there. A hub is started with `--parent-pid` of the harness, so it ends with the
 test, and `RATATOSKR_SUPERVISOR=none` keeps a supervisor out of it. Only `PATH`, `DRGNX_EMACS` (for the rows that
 run the editor's own CLIs, such as the personal-notes canary) and `DBUS_SESSION_BUS_ADDRESS` are inherited.
@@ -652,6 +653,11 @@ A scenario is one file, `test/conformance/<group>/<name>.jsonl`. Line 1 is the h
 ```
 
 Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in failure messages.
+
+**The row's bound** (`"bound_s": N` in the header, 600 without it): once N seconds have passed since the row started,
+its next step, or the next repeat of a `measure`, fails the row with "the scenario's bound of N s ran out" (for a
+`measure`, how many repeats it did and their mean), and the run goes on with the next row. A step in flight is not cut
+short: it stops at its own `within_ms`.
 
 **Tags** (`requires`): `v1` (hello v1: every row), `sudo` (euid 0, or `sudo -n true` succeeds), `test-hooks` (the
 binary's `version --json` says `"test_hooks": true`), `linux`, `macos`, `perf`, `agent-locks`, `podman` (`podman` is on
@@ -705,7 +711,7 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
 | `pid` | `capture`, `alive` (true), `within_ms` (5000), `stays_for_ms` | a captured pid is (or is no longer) running; a reused pid does not count. With `stays_for_ms` a pid that is running must stay so that long (a signal sent a moment ago has landed by then) |
 | `class_matrix` | `table`, `args`, `env`, `agent`, `last`, `within_ms` | every method of `table` (`{method: [classes]}`, `class-matrix.json`) gets `{}` from `user` (a valid hello), `service` (no hello) and, with `agent: SID`, `agent` (that session's socket, which `args` such as `["--agent-socket", "s1:j1"]` makes the hub serve). A listed class must not get `not-allowed`; any other must. The step starts its own hubs with `args` and `env`: one for the table, and for each method of `last` (default `restart`, `shutdown`, which a user call runs) one per class |
 | `bad_params` | `conn`, `registry`, `within_ms` | every method of the registry file (`methods.json`; a relative path is from the current directory) with required params gets `{}` and a wrong type for its first required key (`true` where a list belongs, else `[]`) on `conn`; each must be `invalid-params` with a `path` (one of the required keys, then that key). `hello`, and a method whose classes leave out `user` (`mcp/attach`), go on a fresh connection (service class) each time |
-| `measure` | `name`, `repeat`, `steps` | times the steps, `repeat` times, and records the milliseconds for `--perf` |
+| `measure` | `name`, `repeat`, `steps` | times the steps, `repeat` times, and records the milliseconds for `--perf` (nothing when the row's bound runs out first) |
 
 **`ratatoskr-mock`** (`conformance/src/bin/`, std only; `$MOCK` is its path, beside `domr`) stands in for the network:
 
