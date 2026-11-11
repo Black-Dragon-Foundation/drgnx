@@ -1564,8 +1564,9 @@ applied patch sets the version.  Returns the decision.  No buffer is touched."
   (mapcar (lambda (r) (plist-get r :key)) rows))
 
 (defun drgnx-view-patch--image (svg)
-  "SVG as an image spec on a graphic display, else `:alt' (the row's alt shows)."
-  (or (and (display-graphic-p) (image-type-available-p 'svg) (create-image svg 'svg t :ascent 'center)) :alt))
+  "SVG as an image spec on a graphic display, else `:alt' (the row's alt shows).  The hub sized it in device pixels
+for the class's scale, so Emacs scales it no further (`:scale' 1, not `image-scaling-factor''s guess from the font)."
+  (or (and (display-graphic-p) (image-type-available-p 'svg) (create-image svg 'svg t :ascent 'center :scale 1)) :alt))
 
 (defun drgnx-view-patch--evict-images (state)
   "Past `drgnx-view-patch-image-max', drop the images no live row names."

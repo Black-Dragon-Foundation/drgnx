@@ -1494,6 +1494,8 @@ function and one rounding rule:
   `drgnx-pixels/the-scale-conses-nothing` holds.
 - A size made of parts adds the rounded parts (`(+ (drgnx-px 26) (drgnx-px 6))`), never `drgnx-px` of the sum, so a
   row and its gap add up to what is drawn.
+- An image already sized in device pixels (the hub's row images, `drgnx-view-patch--image`) is made with `:scale 1`;
+  without it Emacs applies `image-scaling-factor`, a guess from the font (1.6 at scale 2), on top.
 
 Never multiply by `frame-scale-factor` yourself, and never test `(featurep 'nidhogg-wayland)` for it: a Naglfar
 frame counts device pixels too. Tests pass SCALE to check the four scales (1, 1.25, 4/3, 2) without a display
