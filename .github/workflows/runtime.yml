@@ -685,10 +685,12 @@ jobs:
     runs-on: xcode-27
     timeout-minutes: 150
     env:
-      MR_OUT: ${{ runner.temp }}/mac-runner/out
-      MR_KEYS: ${{ runner.temp }}/mac-runner/keys
       NIDHOGG_REF: scratch/ng-fin-t24-dcda282f57
     steps:
+      - name: the results and key folders (the key never leaves the host)
+        run: |
+          echo "MR_OUT=$RUNNER_TEMP/mac-runner/out" >> "$GITHUB_ENV"
+          echo "MR_KEYS=$RUNNER_TEMP/mac-runner/keys" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
