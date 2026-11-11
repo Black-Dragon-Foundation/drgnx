@@ -191,8 +191,8 @@ pub struct RunnerFact {
     pub icon: String,
     #[serde(default)]
     pub cost: Option<String>,
-    /// A Mac runner: its chip says `macOS` after its name.
-    #[serde(default)]
+    /// A Mac runner: its chip says `macOS` after its name. Absent means false, so other runners' frames are as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mac: bool,
 }
 
