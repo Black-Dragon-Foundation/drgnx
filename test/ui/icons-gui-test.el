@@ -46,5 +46,53 @@
       (should (cl-every (lambda (a b) (<= (abs (- a b)) 24)) best want)))
     (kill-buffer "*icons-ui*")))
 
+(require 'drgnx-monitors-fixture (expand-file-name "../fixtures/monitors-fixture" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-pixels)
+
+(defun drgnx-icons-ui-test--drawn-width (icon)
+  "The width ICON takes in the selected window once presented: its row's text pixel width less the spaces'."
+  (with-current-buffer (get-buffer-create "*icons-ui*")
+    (erase-buffer)
+    (setq-local cursor-type nil)
+    (insert "x" icon "x")
+    (set-window-buffer (selected-window) (current-buffer))
+    (drgnx-test-wait-presented)
+    (- (car (window-text-pixel-size nil 1 4)) (car (window-text-pixel-size nil 1 2))
+       (car (window-text-pixel-size nil 3 4)))))
+
+(defun drgnx-icons-ui-test--sizes-at (frame s)
+  "On FRAME (selected), a 16 px and a 14 px icon are `drgnx-px' of them at total scale S, as images and as drawn."
+  (dolist (size '(16 14))
+    (let* ((icon (drgnx-look-icon 'folder nil size)) (want (drgnx-px size frame s)))
+      (should (equal (image-size (get-text-property 0 'display icon) t frame) (cons want want)))
+      (when (eq frame (drgnx-uitest-root-frame))
+        (should (= (drgnx-icons-ui-test--drawn-width icon) want))))))
+
+(ert-deftest drgnx-ui-icons/size-at-the-frame-scale ()
+  "Pattern D: an icon is `drgnx-px' of its size at the frame's scale, a whole number of the frame's pixels (16 px:
+16, 20, 21, 24, 32 at 1, 1.25, 4/3, 1.5, 2), as an image and as drawn; at a UI scale of 110 % it is the display scale
+× 1.1 (22 at 1.25); on a second monitor at another scale, an icon made there has that monitor's size."
+  (skip-unless (display-graphic-p))
+  (skip-unless (image-type-available-p 'svg))
+  (drgnx-uitest-bare-frame)
+  (let* ((f (selected-frame)) (s (float (frame-scale-factor f))))
+    (unwind-protect
+        (progn
+          (drgnx-icons-ui-test--sizes-at f s)
+          (drgnx-pixels-set-ui-scale f 1.1)
+          (drgnx-icons-ui-test--sizes-at f (* s 1.1))
+          (drgnx-pixels-set-ui-scale f nil)
+          (drgnx-icons-ui-test--sizes-at f s)
+          (when (drgnx-test-second-monitor-p)
+            (let ((g (drgnx-test-frame-on-second-monitor "drgnx-icons-second")))
+              (unwind-protect
+                  (let ((s2 (float (frame-scale-factor g))))
+                    (with-selected-frame g (drgnx-icons-ui-test--sizes-at g s2))
+                    (should-not (= (drgnx-px 16 g s2) (drgnx-px 16 f s)))
+                    (drgnx-icons-ui-test--sizes-at f s))
+                (delete-frame g)))))
+      (drgnx-pixels-set-ui-scale f nil)
+      (when (get-buffer "*icons-ui*") (kill-buffer "*icons-ui*")))))
+
 (provide 'icons-gui-test)
 ;;; icons-gui-test.el ends here
