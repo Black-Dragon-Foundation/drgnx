@@ -474,4 +474,111 @@ recent branches); the base picked goes with the search and on the chip."
     (should (equal '(:kind "branch" :base "dev") (drgnx-replace-rows-test--scope)))
     (should (equal "Branch dev ▾" (string-trim (widget-value (drgnx-replace--widget 'branch)))))))
 
+(defconst drgnx-replace-rows-test--older
+  '(:query (:mode "text" :text "older" :case t :regexp :false) :replace "x"
+           :scope (:kind "changed" :changed_lines t) :include ["*.rs, *.el"])
+  "A recent search as the hub gives it back.")
+
+(ert-deftest drgnx-replace-rows/history-walks-recent-searches-and-restores-each ()
+  "Pattern D: Previous Search (`M-p'; Up in Find in the VS Code profile) walks the project's recent searches
+\(`search/recent'), newest first, each restored whole (mode, words, toggles, replacement, scope, globs) and run; Next
+Search walks back, and past the newest gives the search that was there before the walk."
+  (drgnx-replace-rows-test--with
+    (drgnx-replace--fill 'find "now")
+    (let ((asked 0))
+      (cl-letf (((symbol-function 'drgnx-hub-call-sync)
+                 (lambda (method params &rest _)
+                   (cl-incf asked)
+                   (should (equal (list "search/recent" :root "/r/") (cons method params)))
+                   (list :recent (vector drgnx-replace-rows-test--older '(:query (:mode "meaning" :question "retry")))))))
+        (drgnx-replace-search-history-prev)
+        (should (equal "older" (drgnx-replace--text 'find)))
+        (should (equal "x" (drgnx-replace--text 'replace)))
+        (should (equal "*.rs, *.el" (drgnx-replace--text 'include)))
+        (should (equal '(t nil nil changed t) (mapcar #'drgnx-replace--opt '(:case :word :regexp :scope :lines))))
+        (should (equal '(:mode "text" :text "older" :case t :word :false :regexp :false)
+                       (drgnx-replace-rows-test--search (cdar drgnx-replace-rows-test--calls) :query)))
+        (drgnx-replace-search-history-prev)
+        (should (eq 'meaning (drgnx-replace--opt :mode)))
+        (should (equal "retry" (drgnx-replace--text 'find)))
+        (should (eq 'project (drgnx-replace--opt :scope)))
+        (drgnx-replace-search-history-prev)          ; the oldest stays
+        (should (equal "retry" (drgnx-replace--text 'find)))
+        (drgnx-replace-search-history-next)
+        (should (equal "older" (drgnx-replace--text 'find)))
+        (drgnx-replace-search-history-next)
+        (should (equal "now" (drgnx-replace--text 'find)))
+        (should (eq 'text (drgnx-replace--opt :mode)))
+        (should (eq 'project (drgnx-replace--opt :scope)))
+        (should (= 1 asked))))))
+
+(defmacro drgnx-replace-rows-test--answering (answers &rest body)
+  "BODY with the hub's calls answered from ANSWERS, an alist METHOD → result (others recorded, unanswered)."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'drgnx-hub--call-on)
+              (lambda (_conn method params &optional cb &rest _)
+                (push (cons method params) drgnx-replace-rows-test--calls)
+                (when-let* ((a (assoc method ,answers))) (when cb (funcall cb (cdr a) nil)))
+                nil)))
+     ,@body))
+
+(defun drgnx-replace-rows-test--lists ()
+  "The text of the view's lists (Saved, Recent) and pinned counts."
+  (buffer-substring-no-properties drgnx-replace--lists-beg drgnx-replace--lists-end))
+
+(ert-deftest drgnx-replace-rows/the-empty-view-lists-saved-then-recent ()
+  "Pattern D: with Find empty the view lists the project's saved searches, then its last 8 recent ones; a click on
+one restores and runs it; with words in Find the lists go."
+  (drgnx-replace-rows-test--with
+    (drgnx-replace-rows-test--answering
+        `(("search/saved/list" . (:saved [(:name "TODOs" :search (:query (:mode "text" :text "TODO")) :pinned :false
+                                                 :project :false :shared :false)]))
+          ("search/recent" . (:recent ,(vconcat (cons drgnx-replace-rows-test--older
+                                                      (mapcar (lambda (i) `(:query (:mode "text" :text ,(format "r%d" i))))
+                                                              (number-sequence 1 9)))))))
+      (drgnx-replace--search-now)
+      (let ((lists (drgnx-replace-rows-test--lists)))
+        (should (string-match-p "Saved\n.*☆ TODOs.*\nRecent\n.*older" lists))
+        (should (string-match-p "r7" lists))
+        (should-not (string-match-p "r8" lists)))
+      (goto-char drgnx-replace--lists-beg)
+      (search-forward "older")
+      (push-button (match-beginning 0))
+      (should (equal "older" (drgnx-replace--text 'find)))
+      (should (eq 'changed (drgnx-replace--opt :scope)))
+      (should (equal "" (drgnx-replace-rows-test--lists))))))
+
+(ert-deftest drgnx-replace-rows/a-saved-search-and-its-pinned-count ()
+  "Pattern D: Save This Search (☆) names the view's search (the words by default) and keeps it
+\(`search/saved/put'); a pinned one shows its live count above the status line: a count-only `search/run' on a view of
+its own, re-run at most every 5 s and only while the Search view shows."
+  (drgnx-replace-rows-test--with
+    (drgnx-replace-rows-test--answering
+        '(("search/saved/list" . (:saved [(:name "TODOs" :search (:query (:mode "text" :text "TODO")) :pinned t)]))
+          ("search/recent" . (:recent [])))
+      (drgnx-replace--fill 'find "needle")
+      (drgnx-replace--set-scope 'changed)
+      (cl-letf (((symbol-function 'read-string) (lambda (_prompt &optional _init _hist default &rest _) default)))
+        (drgnx-replace-search-save))
+      (let ((put (car drgnx-replace-rows-test--calls)))
+        (should (equal "search/saved/put" (car put)))
+        (should (equal '("/r/" "needle" :false) (mapcar (lambda (k) (plist-get (cdr put) k)) '(:root :name :pinned))))
+        (should (equal '(:kind "changed") (plist-get (plist-get (cdr put) :search) :scope))))
+      (should (string-match-p "TODOs · …" (drgnx-replace-rows-test--lists)))
+      (cl-letf (((symbol-function 'drgnx-replace--shown-p) (lambda () nil)))
+        (setq drgnx-replace-rows-test--calls nil)
+        (drgnx-replace--pins-run (current-buffer))
+        (should-not drgnx-replace-rows-test--calls))
+      (cl-letf (((symbol-function 'drgnx-replace--shown-p) (lambda () t)))
+        (drgnx-replace--pins-run (current-buffer)))
+      (let ((run (car drgnx-replace-rows-test--calls)))
+        (should (equal "search/run" (car run)))
+        (should (equal (list (concat view "~pin0") t)
+                       (list (plist-get (cdr run) :view) (plist-get (cdr run) :count))))
+        (should (equal '(:mode "text" :text "TODO") (drgnx-replace-rows-test--search (cdr run) :query))))
+      (drgnx-replace--hub-event "search-run-done" (list :view (concat view "~pin0") :run 9 :files 2 :matches 3))
+      (should (string-match-p "TODOs · 3" (drgnx-replace-rows-test--lists)))
+      (drgnx-replace--search-now)
+      (should (drgnx-timer-active-p (cons 'replace-pins (current-buffer)))))))
+
 ;;; replace-rows-test.el ends here

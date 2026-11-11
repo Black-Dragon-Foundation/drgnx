@@ -58,6 +58,21 @@ The status line says what a git scope searched ("Changed: 7 files · 2 submodule
 chip shows the count. Submodules and deleted files are not searched; a renamed file is searched at its new name. An
 empty scope says why ("nothing staged"); a folder outside git says so. Symbol and Meaning search the whole project.
 
+## Recent and saved searches
+
+Every search that stood for the typing pause is kept, per project, the last 50: its mode, words, toggles,
+replacement, scope and globs. **Previous Search** and **Next Search** (`Up` and `Down` in Find in the VS Code profile;
+`M-p` and `M-n` in the view in the Emacs and Vim profiles) walk them, each restored whole and run; Next Search past the
+newest gives back what you had.
+
+With Find empty, the view lists the project's **Saved** searches, then its last 8 **Recent** ones; a click runs one.
+**Save This Search** (the ☆ button; `C-k C-b`; `C-c C-w`) keeps the view's search under a name, the words by default.
+A saved search's row has **pin**, **share** and **×** (delete). A pinned search shows its live count above the
+results ("TODOs · 3"), counted again at most every 5 seconds, when the view searches, and only while the view shows.
+**share** writes it into the project's `.drgnx/searches.eld`, so the team gets it; searches found there are listed too,
+read as data only (nothing in that file runs). **Search: Run Saved Search…** (`C-c s S`; `SPC s S`; the palette)
+picks one by name. drgnx keeps them in its own state, not in the project.
+
 ## Modes: Text, Symbol, Meaning
 
 The mode chip says what Find means; clicking it, or **Search: Next Mode** (`M-m` in the view; `C-c C-m` in the Emacs
@@ -133,6 +148,9 @@ view, scope This file.
 | Next Scope (the Search view) | `M-s` | `C-c C-o` | `C-c C-o` |
 | In Changed Files | `C-k C-g` (anywhere) | `C-c s g` | `SPC s g` |
 | In Files Changed on This Branch | palette | `C-c s b` | `SPC s b` |
+| Previous / Next Search | `<up>` / `<down>` in Find | `M-p` / `M-n` | `M-p` / `M-n` |
+| Save This Search | `C-k C-b` | `C-c C-w` | `C-c C-w` |
+| Run Saved Search… | palette | `C-c s S` | `SPC s S` |
 
 Except where marked, the keys work in the Search view and the find bar, their fields too; `RET` in a find bar field
 is its next match (in Replace: replace it). Next and Previous Match show the match in the editor; Next and Previous
