@@ -20,6 +20,7 @@ pub mod hub;
 pub mod jobs;
 pub mod matrix;
 pub mod mcp;
+pub mod orch;
 pub mod pair;
 pub mod plans;
 pub mod plugins;
@@ -229,6 +230,7 @@ params! {
     ExecStop(exec::ById),
     ExecLog(exec::LogParams),
     ExecBump(exec::ById),
+    OrchEvidence(orch::ByTask),
     MatrixGet(matrix::GetParams),
     MatrixCheck(matrix::CheckParams),
     PresenceSet(matrix::PresenceParams),
@@ -385,6 +387,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(agents::methods());
     v.extend(jobs::methods());
     v.extend(exec::methods());
+    v.extend(orch::methods());
     v.extend(matrix::methods());
     v.extend(plans::methods());
     v.extend(timeline::methods());

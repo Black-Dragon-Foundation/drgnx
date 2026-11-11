@@ -1451,6 +1451,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `messages/mark` | user | `{id: natnum, state: "delivered" \| "read" \| "acted"}` | `{changed: boolean}` | yes |
 | `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes |
+| `orch/evidence` | user | `{task: TaskRef}` | `{evidence: [any]}` | no |
 | `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
 | `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |
 | `pair/closed` | user | `{file: AbsPath}` | `boolean` | no |
@@ -3207,6 +3208,16 @@ the `launch-sandboxed/*` rows (`tests/launch_sandboxed.rs`, a session's launch s
 container has no user namespaces for bwrap, so CI runs them in `escape-host`'s sandbox lane; the rows of the reduced
 tier run on it where the kernel has Landlock ABI 9 and on the full tier elsewhere (no runner has ABI 9 yet).
 
+**Rows and failure classes.** `result.json` keeps every row of the whole log (`End.rows`, read a line at a time by
+`vordr::rows::Reader`, whatever the job's kind: cargo test, ERT and domr lines don't overlap): its name, verdict
+(`pass`, `skip`, `fail`) and a failure's class — `assert` (a panic or a `should` in the test), `build` (a compile error,
+an ERT void function or a file that didn't load; it carries the symbols the errors say are missing: rustc's
+`vordr::rows::MISSING` codes, `(void-function S)`), `error`, `timeout` and `infra`. A compile error is the row
+`build:CRATE (TARGET)` from cargo's `could not compile` line. `vordr::rows::close` adds the row `(job)` for a job that
+timed out (`timeout`), was lost or ended `infra` (`infra`), was stopped, or failed with no failing row (`error`). The
+summary's `failing` names the failed rows (at most 50, `(job)` left out); `Runner::rows` reads them. The gates read
+rows only (`docs/develop/orchestration.md`).
+
 The editor's own jobs are the user's `exec/start` with four more fields (`StartParams`: `name`, `env`, `memory_max`,
 `nice`; `StartParams::user_only_field` names the first one a request sets). `exec::start` refuses them from a session
 (`user_job`: `invalid-params`), `env` and `memory_max` from a container job, and `memory_max` on macOS; the decode check
@@ -3820,7 +3831,13 @@ graph's own door is shut to every other class (`write::runners::an_agent_write_o
 seam: `UrdrStore` in the hub, `MemStore` in tests.
 
 `Registry::add(host, trust, …)`, in order, each step a `sh -c` on the runner over the user's own ssh (the generated
-config, no terminal): `uname -m`, `uname -s` and `$HOME` (not Linux: refused); the bundle for that architecture from
+config, no terminal): `uname -m`, `uname -s`, `$HOME` and, on a Mac, `sysctl.proc_translated` (neither Linux nor
+Darwin, an architecture without a bundle, or an Intel Mac: refused; a Rosetta shell, x86_64 and translated, is Apple
+silicon). A Mac (`host_kind`) takes the `aarch64-apple-darwin` bundle (`sleipnir` alone, built and ad-hoc signed on a
+Mac by `drgnx build runner-bundle --target aarch64-apple-darwin`), checked with `shasum -a 256`, into the root
+`~/.drgnx-runner.noindex` (Spotlight skips `.noindex`), made 0700 and excluded from Time Machine (`tmutil
+addexclusion`). The hub's own boot id is `/proc/sys/kernel/random/boot_id`, or `kern.bootsessionuuid` on a Mac
+(`hub_boot_id`). A Linux host takes the bundle for its architecture from
 `DRGNX_RUNNER_BUNDLES` (default `runtime/target/bundle` beside the hub's build folder, where `drgnx build runner-bundle`
 puts `<arch>/sleipnir`, `drgnx-key`, `drgnx-px-<arch>-linux-musl`) copied to `<root>/bin/<hash>/` (written as `.part`, hash checked, moved
 into place; refused with the build command when there is none); `sleipnir serve` asked for `hello-ok` and `probe` over

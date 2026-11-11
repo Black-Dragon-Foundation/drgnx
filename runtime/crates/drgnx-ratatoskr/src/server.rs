@@ -256,6 +256,11 @@ pub async fn run(args: ServeArgs) -> Exit {
         "wake:run",
         crate::agents::wake::run(front.clone(), front.core.exec.subscribe()),
     );
+    // a task's session's job is that task's evidence once it ends
+    crate::clock::spawn(
+        "orch:evidence",
+        crate::orch::evidence::run(front.clone(), front.core.exec.subscribe()),
+    );
     // a queued message reaches its session once that is free
     crate::clock::spawn("deliver:run", crate::agents::deliver::run(front.clone()));
     // reported machines expire; the local slots follow the job pool

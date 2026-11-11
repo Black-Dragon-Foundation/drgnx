@@ -109,6 +109,15 @@
                          (list (list :replace (list (drgnx-view-patch-test--row "a" " x" :images '((0 "00ab-1" "*"))))))
                          :base 1 :version 2 :images '(("00ab-1" "<svg xmlns=\"http://www.w3.org/2000/svg\"/>"))))))))
 
+(ert-deftest drgnx-view-patch/an-image-is-drawn-at-its-own-size ()
+  "The hub sizes a row's image in device pixels for the class's scale: Emacs scales it no further (without `:scale'
+it takes `image-scaling-factor', a guess from the font: 1.6 at scale 2, and the Explorer's icons and rows grew)."
+  (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+            ((symbol-function 'image-type-available-p) (lambda (_) t)))
+    (let ((spec (drgnx-view-patch--image "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\"/>")))
+      (should (eq 'image (car-safe spec)))
+      (should (eql 1 (plist-get (cdr spec) :scale))))))
+
 (ert-deftest drgnx-view-patch/newer-base-resyncs-once ()
   (drgnx-view-patch-test--with
     (drgnx-view-apply-patch (drgnx-view-patch-test--reset '("a")))

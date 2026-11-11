@@ -82,7 +82,23 @@ start time, job, reserve, current, expiry), written by rename, mode 0600 in a 07
   write the own reservation, let go. Two admissions in one second can't both fit.
 - **Counting** is `forseti::count_others`: another scheduler's job counts as `max(reserve, current)`, once.
 - **Liveness**: a file counts only while its process is the one that wrote it (`alive(pid, start_time)`, by
-  `/proc/<pid>/stat` field 22, so a reused pid doesn't count) and on the boot it was written in.
+  `/proc/<pid>/stat` field 22, so a reused pid doesn't count) and on the boot it was written in. On a Mac the start
+  time is `proc_pidinfo`'s (microseconds since the epoch), and the directory is under the runner root.
+
+## A Mac runner (`darwin`)
+
+A Mac with Apple silicon, in a standard account of its own (`drgnx-runner`), runs host jobs under Seatbelt; no
+containers, no keys. Its probe (`darwin::probe`) reads the machine once into a `Raw` (`read`, macOS only: `sw_vers`,
+`sysctl`, `pmset -g batt`, `dseditgroup`, `xcode-select -p`, `/usr/bin/clang --version`, one `brew list --versions`,
+`statvfs` of the runner root, and Gleipnir's check of `/usr/bin/sandbox-exec`); the rest is pure and tested on
+fixtures on Linux.
+
+**The Mac contract** (`contract`), refused with the whole list: macOS 15 or newer; Apple silicon
+(`hw.optional.arm64`, so a Rosetta shell passes); a root-owned `sandbox-exec`; a standard (non-admin) account; the
+Command Line Tools answering, with a full Xcode's licence accepted (`clang`'s refusal names it, its own item); 40 GB
+free on the runner root's volume. **Facts**: `os` `macos 15.6`, `arch` `aarch64`, cores (`hw.ncpu`), memory, disk,
+battery; the Linux-only fields false. **Features**: `arch:aarch64`, `host-jobs`, `xcode-clt`, and `brew:<name>@<major>.<minor>`
+for each Homebrew package at its newest installed version. The boot id is `kern.bootsessionuuid`.
 
 ## The podman argv
 
@@ -601,6 +617,24 @@ watchdog"). It lives on stdin and stdout and exits at their end, at `bye`, or
 after 45 s without a frame (the hub pings every 10 s, and so does `serve`). Nothing is installed or enabled: between
 connections the runner has its folder and, with linger, the attempts still running in their own units. It is blocking
 and threaded (one thread reads frames, the main loop handles them and ticks every 100 ms); no async runtime.
+
+### Platforms (`serve::platform`)
+
+`serve`'s protocol loop never calls the machine itself: everything it asks of it goes through a `Platform`, so one
+loop serves every runner kind. `LinuxPlatform` is the one above (transient units in job slices, rootless podman,
+cgroups and PSI); a Mac's is the next. What a platform answers:
+
+| Area | Methods | Linux |
+|---|---|---|
+| probe and contract | `machine`, `limits`, `boot_id`, `contract`, `survives_link`, `job_runner` | `linux::probe`, linger, podman's caps check (`podman` feature) |
+| reservations between schedulers | `reservations`, `start_time` | `linux::reserve` (`$XDG_RUNTIME_DIR`, `/proc` start times) |
+| attempts | `launch`, `active`, `kill` | `job.json`, `sleipnir job-exec` in a transient unit; `podman kill` |
+| caps | `current_mib`, `pause`, `unpause`, `grow_candidate`, `resize`, `weight_unit`, `set_weight` | the job slice's cgroup, `linux::resize` |
+| cleanup | `cleanup` | containers, units, attempt folders, bundles (`serve::cleanup`) |
+
+A platform that has no pause, grow or CPU weights says so (`grow_candidate` and `weight_unit` answer none), and the
+loop skips them. The rows in `serve/platform_tests.rs` run the loop on a fake platform: hello and probe answer from
+it, and an attempt goes from offer to `finished` through its `launch`, `active` and `kill`.
 
 **The runner folder** (`--root`): `bin/<name>/` holds bundles (the `sleipnir` that serves names its own folder in
 `hello-ok`, and runs every job-exec it starts); `jobs/<id>.<attempt>/` is an attempt's folder, its whole record:

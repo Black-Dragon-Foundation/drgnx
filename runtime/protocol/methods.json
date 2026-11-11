@@ -23315,6 +23315,53 @@
       "classes": [
         "user"
       ],
+      "doc": "a task's evidence (its jobs' rows on their facts, the gates' findings), oldest first",
+      "name": "orch/evidence",
+      "params": {
+        "$defs": {
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A task.",
+        "properties": {
+          "task": {
+            "$ref": "#/$defs/TaskRef"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "title": "ByTask",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A task's evidence, oldest first: each record as `vordr::evidence::Evidence` (`kind`, `task`, `job`, `facts`,\n`rows`, `truncated`, `at`, `note`).",
+        "properties": {
+          "evidence": {
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "evidence"
+        ],
+        "title": "EvidenceList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the subscriptions' meters: share used, rate per hour and when it runs out at that rate (estimates)",
       "name": "pace/get",
       "params": {

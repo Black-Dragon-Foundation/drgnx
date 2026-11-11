@@ -30,6 +30,46 @@ mod on {
     use std::path::PathBuf;
     use std::sync::{Arc, OnceLock};
 
+    /// This machine's boot id, as a runner's `serve` reports its own: `runner add` of the hub's machine is refused.
+    /// Linux's `/proc/sys/kernel/random/boot_id`; a Mac's `kern.bootsessionuuid`. Empty when unreadable (no refusal).
+    pub(crate) fn hub_boot_id() -> String {
+        #[cfg(target_os = "macos")]
+        {
+            let mut buf = [0u8; 64];
+            let mut len = buf.len();
+            // SAFETY: a NUL-terminated name, a buffer of LEN bytes and its length; no new value
+            let rc = unsafe {
+                libc::sysctlbyname(
+                    c"kern.bootsessionuuid".as_ptr(),
+                    buf.as_mut_ptr().cast(),
+                    &mut len,
+                    std::ptr::null_mut(),
+                    0,
+                )
+            };
+            if rc != 0 {
+                return String::new();
+            }
+            String::from_utf8_lossy(&buf[..len])
+                .trim_end_matches('\0')
+                .trim()
+                .to_string()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default()
+        }
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn the_hub_boot_id_is_read() {
+        let id = hub_boot_id();
+        assert!(id.len() >= 32 && id.contains('-'), "{id:?}");
+    }
+
     /// The hub's registry, made on first use.
     #[derive(Default)]
     pub struct Hub {
@@ -43,9 +83,7 @@ mod on {
             }
             let queue = crate::exec::queue(f)?;
             let runtime_dir = link_dir(std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))?;
-            let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
-                .map(|s| s.trim().to_string())
-                .unwrap_or_default();
+            let boot_id = hub_boot_id();
             let settings = f.settings.clone();
             let cfg = Cfg {
                 transport: Arc::new(OpensshTransport::new(runtime_dir.clone())),

@@ -82,14 +82,14 @@ settled within 250 ms."
 
 (ert-deftest drgnx-inv/i2-every-area-keeps-its-size ()
   (drgnx-inv--with sess
-    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`") (list :keys "C-M-b")))
+    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "M-j") (list :keys "C-M-b")))
     (drgnx-ui-call sess "(progn (require 'transient)
                                 (transient-define-prefix drgnx-inv-tr () [(\"a\" \"Do A\" ignore)])
                                 (keymap-global-set \"<f19>\" #'drgnx-inv-tr) (drgnx-uitest--json (list :ok t)))")
     (let ((first (drgnx-inv--probe sess)))
       (should (> (plist-get first :panel) 0))
       (dotimes (_ 10)
-        (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-b") (list :keys "C-`") (list :keys "C-`")
+        (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-b") (list :keys "M-j") (list :keys "M-j")
                                      (list :keys "C-M-b") (list :keys "C-M-b"))))
       (drgnx-ui-measure sess (list (list :keys "M-x") (list :type "describe-function") (list :keys "RET") (list :type "car") (list :keys "RET")))   ; a tab switch
       (drgnx-ui-measure sess (list (list :keys "<f19>")))                                       ; a popup
@@ -103,7 +103,7 @@ settled within 250 ms."
 
 (ert-deftest drgnx-inv/i4-buffer-switches-and-messages-keep-the-rows ()
   (drgnx-inv--with sess
-    (drgnx-ui-measure sess (list (list :keys "C-`")))
+    (drgnx-ui-measure sess (list (list :keys "M-j")))
     (drgnx-ui-call sess "(progn (find-file-noselect (expand-file-name \"docs/guide.md\" (car drgnx-explorer--roots)))
                                 (drgnx-uitest--json (list :ok t)))")
     (let ((first (drgnx-inv--probe sess)))
@@ -120,7 +120,7 @@ settled within 250 ms."
   (drgnx-inv--with sess
     (drgnx-ui-call sess "(progn (setq which-key-idle-delay 0.1) (which-key-mode 1) (drgnx-uitest--json (list :ok t)))")
     (dolist (panel '(nil t))
-      (when panel (drgnx-ui-measure sess (list (list :keys "C-`"))))
+      (when panel (drgnx-ui-measure sess (list (list :keys "M-j"))))
       (let ((before (drgnx-inv--probe sess)))
         (drgnx-ui-measure sess (list (list :keys "C-x")) 400)
         ;; on any visible frame: under Glitnir the lane is a child frame of the window
@@ -136,7 +136,7 @@ settled within 250 ms."
   (let ((forms (with-temp-buffer (insert-file-contents drgnx-inv--fuzz-file) (read (current-buffer)))))
     (should (= 50 (length forms)))
     (drgnx-inv--with sess
-      (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`") (list :keys "C-M-b")))
+      (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "M-j") (list :keys "C-M-b")))
       (drgnx-ui-call sess (format "(progn (setq drgnx-inv--forms '%S)
                                           (setq drgnx-inv--errors nil)
                                           (keymap-global-set \"<f11>\" (lambda () (interactive)
@@ -171,7 +171,7 @@ settled within 250 ms."
 (ert-deftest drgnx-inv/i3-chrome-height-depends-on-the-role-only ()
   ;; The editor shows a file, then ibuffer (its own header line), then *scratch*: same chrome heights.
   (drgnx-inv--with sess
-    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`")))
+    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "M-j")))
     (let* ((q "(drgnx-uitest--json (let ((e (drgnx-wb-editor-window)) (p (drgnx-wb-area-window 'panel)))
                  (list :editor (vector (window-tab-line-height e) (window-header-line-height e) (window-mode-line-height e))
                        :panel (vector (window-tab-line-height p) (window-header-line-height p) (window-mode-line-height p)))))")
@@ -196,7 +196,7 @@ settled within 250 ms."
     (unwind-protect
         (let* ((s (drgnx-ui-start "drgnx" "1400x800" 30)) (sess (drgnx-ui-own-session (plist-get s :name))))
           (drgnx-ui-wait-start-page sess)
-          (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`") (list :keys "C-M-b")))
+          (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "M-j") (list :keys "C-M-b")))
           (drgnx-ui-call sess (format "(let ((window-resize-pixelwise t))
                                          (setq drgnx-persist-file %S)
                                          (window-resize (car (drgnx-wb--dock-windows)) 37 t nil t)

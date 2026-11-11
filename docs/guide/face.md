@@ -177,7 +177,7 @@ while the caption's height is absolute, as ui/look writes it: a relative one (ui
 |---|---|---|
 | `branch` | `⑂ main ↑2 ↓1`: the branch, and how many commits it is ahead of and behind its upstream (a count of 0 is left out) | the repository status |
 | `trust` | a small shield in the warning colour (`Restricted Mode` in a text bar) while the file's folder is not trusted: its Flymake checkers and symbol shorthands are off (hover for what that means) | **About Restricted Mode**: it explains and offers Trust This Folder |
-| `problems` | `✓` when flymake finds nothing, `◐` while a checker has not reported yet, `● 3` (dimmed) when it finds only notes, else `⚠ 1 2`: the errors, then the warnings, each in its own colour | the problems list |
+| `problems` | `✓` when flymake finds nothing, `◐` while a checker has not reported yet, `● 3` (dimmed) when it finds only notes, `not checked` (dimmed) when flymake turned a checker off (in a folder you have not trusted, Emacs runs no checker that could execute the file's code), else `⚠ 1 2`: the errors, then the warnings, each in its own colour | the problems list |
 | `tests` | `✓ tests 41/41` or `× tests 2 failed`: the last test run (a graphical bar: `✓ 41 tests` or `✕ 2 failed`, with the Lucide check and cross) | its output |
 | `jobs` | `◎ 2 jobs` while jobs run (a graphical bar: the layers icon; the Jobs module's: gone when it is off) | What Needs You, every job's |
 | `needs-you` | `◐ 2 waiting on you` (in the needs-you colour): the one count of everything that waits for you | the newest item's own command when every item comes from one source, else the Notices list |

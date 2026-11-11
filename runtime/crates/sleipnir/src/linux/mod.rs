@@ -20,7 +20,8 @@ pub mod shim;
 pub mod jobexec;
 #[cfg(target_os = "linux")]
 pub mod probe;
-#[cfg(target_os = "linux")]
+/// also a Mac runner's (its start times from `proc_pidinfo`)
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod reserve;
 #[cfg(target_os = "linux")]
 pub mod resize;

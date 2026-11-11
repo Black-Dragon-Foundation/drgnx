@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// The most roots a listing takes.
 pub const ROOTS_MAX: usize = 16;
@@ -513,7 +513,9 @@ fn entry_row(
 ) -> Row {
     let guide = "drgnx-explorer-guide";
     let mut b = RowBuilder::new(e.path.clone());
-    match look.gui {
+    // a hidden root's row is its name alone: an image is drawn even on invisible text
+    let hidden = e.depth == 0 && look.one_root;
+    match look.gui.filter(|_| !hidden) {
         Some((indent, icon, gap)) => {
             for _ in 1..e.depth.max(1) {
                 b.space(indent, icon, guide);
@@ -545,6 +547,7 @@ fn entry_row(
             let end = b.pos();
             b.face(at, end, guide);
         }
+        None if hidden => {}
         None => {
             let chevron = match (e.dir, e.open) {
                 (false, _) => "  ",
@@ -571,7 +574,7 @@ fn entry_row(
         b.prop(name, end, "drgnx-agents-here", json!(ords));
     }
     b.prop(0, end, "drgnx-work-id", json!(e.path));
-    if e.depth == 0 && look.one_root {
+    if hidden {
         b.prop(0, end, "invisible", json!(true));
     }
     b.finish()
@@ -724,9 +727,10 @@ pub(crate) fn list_and_watch(
             return;
         }
         // a burst settles; a relisting does not wait (the editor waits for it), but takes what is already heard
-        let end = Instant::now() + SETTLE_MAX;
+        // the watcher's thread waits for the file system, outside the hub: real time, whatever clock the hub runs on
+        let end = crate::clock::real_now() + SETTLE_MAX;
         loop {
-            let left = end.saturating_duration_since(Instant::now());
+            let left = end.saturating_duration_since(crate::clock::real_now());
             let h = if next.is_some() {
                 match rx.try_recv() {
                     Ok(h) => h,

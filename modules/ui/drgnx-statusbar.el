@@ -53,6 +53,7 @@
 (declare-function flymake--mode-line-counter "flymake")
 (declare-function flymake-running-backends "flymake")
 (declare-function flymake-reporting-backends "flymake")
+(declare-function flymake-disabled-backends "flymake")
 (declare-function jsonrpc-running-p "jsonrpc")
 (declare-function drgnx-git-branch "drgnx-git")
 (declare-function drgnx-git-cached-root "drgnx-git")
@@ -1566,6 +1567,9 @@ nothing.  In a pixel bar the mark is the `git-branch' icon."
        ((> (drgnx-statusbar--flymake-count :note) 0)
         (propertize (format "%s %d" (drgnx-statusbar--glyph 'dot) (drgnx-statusbar--flymake-count :note))
                     'face 'shadow))
+       ;; a backend flymake turned off (in an untrusted buffer Emacs 31 runs no unsafe backend) checked nothing: a ✓
+       ;; would claim a check that did not run
+       ((flymake-disabled-backends) (propertize "not checked" 'face 'shadow))
        ((flymake-reporting-backends) (propertize (drgnx-statusbar--glyph 'ok) 'face 'success))))))
 
 (defvar drgnx-statusbar--state-texts (make-hash-table :test #'eq)
