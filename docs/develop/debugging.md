@@ -248,6 +248,13 @@ only).
   runs in the project (`debug/run-to-cursor`).
 - The prompt (`drgnx-debug-gutter-edit`) starts from the field's text; an empty answer clears it (an `edit` op with
   `""`), and on a line without a breakpoint a non-empty answer adds one with that field.
+- The hover dot: with the pointer over the column, a line without a mark shows a faint dot ("Click to add a
+  breakpoint"), with no Lisp on mouse motion. Each shown line carries a margin string, `●` in the column's middle
+  character, in the margin's own background (`default` as the buffer remaps it) with a `mouse-face` of
+  `drgnx-debug-hover` at 38 % over it, both through `drgnx-color`. The strings sit on a pool of overlays per window (the
+  overlay's `window`), laid out from `pre-redisplay-functions` and `window-scroll-functions` when the window's start or
+  height, the text or the marks changed; folded lines and lines with a mark are skipped. Only on a graphical frame of a
+  Nidhogg that lights a margin's `mouse-face` (feature `glitnir-margin-mouse-face`); elsewhere there is no pool.
 
 The module's global `drgnx-debug-mode` (turned on by `extra/debug`'s setup, off by its teardown) turns the column on
 in every file's buffer (`find-file-hook`) and holds `drgnx-debug-mode-map`, where the Emacs profile's `C-x C-a` keys
@@ -255,7 +262,9 @@ go: a loaded gud binds `C-x C-a` in `global-map`, and a minor mode's map comes f
 (`debug-breakpoint`, `-conditional`, `debug-logpoint`, `debug-breakpoint-enable`, `debug-run-to-cursor`) act on
 point's line through the column.
 
-Its tests (`test/unit/debug-gutter-test.el`) script the hub with a small store of their own.
+Its tests (`test/unit/debug-gutter-test.el`) script the hub with a small store of their own;
+`test/ui/debug-gutter-gui-test.el` reads the margin's pixels: no dot at rest on a plain, current (hl-line), region or
+banded line, and the pointer noted on a dot lights it.
 
 ## Live adapters: the image
 
