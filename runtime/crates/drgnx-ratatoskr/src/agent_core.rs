@@ -227,6 +227,7 @@ pub async fn serve(
         Params::WorkTrailSubscribe(p) => answer(work::trail::subscribe(f, c, p).await),
         Params::WorkTrailClose(p) => answer(work::trail::close(f, c, p)),
         Params::WorkBoardSubscribe(p) => answer(work::trail::board_subscribe(f, c, p).await),
+        Params::WorkFlowSubscribe(p) => answer(work::trail::flow_subscribe(f, c, p).await),
         Params::WorkFiles(p) => answer(work::edits::files(f, c, p).await),
         Params::WorkHunks(p) => answer(work::edits::hunks(f, c, p).await),
         Params::WorkFileAt(p) => answer(work::edits::file_at(f, c, p).await),

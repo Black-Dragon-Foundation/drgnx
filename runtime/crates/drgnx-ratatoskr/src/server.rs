@@ -261,6 +261,16 @@ pub async fn run(args: ServeArgs) -> Exit {
         "orch:evidence",
         crate::orch::evidence::run(front.clone(), front.core.exec.subscribe()),
     );
+    // `RATATOSKR_SEED_SCENE=1` (test-hooks): one plan run for the look scenes, once, into a fresh store
+    #[cfg(feature = "test-hooks")]
+    if std::env::var_os("RATATOSKR_SEED_SCENE").is_some_and(|v| v == "1") {
+        let f = front.clone();
+        crate::clock::spawn("orch:scene", async move {
+            if let Err(e) = crate::orch::scene::seed(&f).await {
+                tracing::warn!("the scene's plan run was not seeded: {e}");
+            }
+        });
+    }
     // a queued message reaches its session once that is free
     crate::clock::spawn("deliver:run", crate::agents::deliver::run(front.clone()));
     // reported machines expire; the local slots follow the job pool

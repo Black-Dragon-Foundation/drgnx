@@ -156,7 +156,7 @@ runs out prints the screen it saw.
 | `vt52-exit` | 7, to the screen after VT52 mode is left | the identify reply and the cursor report in ANSI mode |
 
 vttest must be installed: the test images carry it (`test/container/base/Containerfile`, `test/container/rust-packages.sh`),
-and without it the test fails, it never skips. `UPDATE_VTTEST_GOLDENS=1` writes the goldens instead of comparing.
+runtime.yml's macOS job installs Homebrew's, and without it the test fails, it never skips. `UPDATE_VTTEST_GOLDENS=1` writes the goldens instead of comparing.
 They were recorded from the worker and checked by eye against what vttest says each screen should show. Where they
 differ, the golden keeps what the worker does and the row below records the difference: it is fixed in the engine or the
 worker, never in the golden.
@@ -312,7 +312,8 @@ worker and the engine stay local, the terminal's program is one command, and not
 - **Lost connection**: ssh's exit 255 keeps the buffer with "Connection lost (exit 255)" and **Reconnect**
   (`terminal-reconnect`: the same command in a new terminal in that buffer).
 - **Title**: a remote terminal's buffer, and so its tab, is named after its host (`*terminal: HOST*`, then `HOST:
-  TITLE`).
+  TITLE`); its tab shows the server icon (the buffer-local `drgnx-chrome-tab-icon`, which any buffer may set to name
+  its tab's icon instead of its file kind's).
 
 **Tests:** `test/unit/term-remote-test.el` (the command per method, hops, sudo/doas/su, containers, refused methods;
 the folder through sh, bash, zsh and fish; the environment; `install`'s script; folders, links, the clipboard,
@@ -330,7 +331,8 @@ there; the terminals' ssh reads a config from the run's folder (a wrapper first 
 csh users reach a folder with a quote and a space; a sudo hop reaches root; OSC 7 follows the host, not a foreign
 one; an OSC 52 write asks; a dropped connection shows Reconnect and reconnects; `install` sends the terminfo after two
 password prompts in the terminal; a remote terminal kept at quit is reattached by the next Emacs, the same shell. With
-no image to be had the script exits 75, "image refused", never skipping.
+no image to be had the script exits 75, "image refused", never skipping. CI runs it as the tiers workflow's `ssh` job,
+on every push (`docs/develop/ci.md`).
 
 ## Images
 
@@ -389,8 +391,10 @@ refused and the file medium is off; a canvas goes after the ack that dropped its
 worker; over `image-disk-max` a row above the screen shows its alt; an animation's next frame is due only while
 visible; a row that scrolled past unseen comes back by the backfill with its image. The editor's rows (`test/unit/term-test.el`) show
 a sixel's alt in batch Emacs and its slice where PNGs can be drawn, and send `term/visible`. The GUI rows
-(`test/ui/term-gui-test.el`) read the frame's pixels: a sixel two cells by two is red in its first cell row, blue in its
-second, nothing past its cells, the text after it on the next row; and a terminal kept at quit (coloured text and that
+(`test/ui/term-gui-test.el`) read the frame's pixels: a sixel, a kitty PNG placed on two cells by two and an iTerm2
+image sized two cells by two are each red in their first cell row, blue in their second, nothing past their cells,
+the text after them on the next row; a kitty animation shows both its frames in turn; an image under the text
+(`z=-1`) covers the text's cells; and a terminal kept at quit (coloured text and that
 image) is drawn by the next Emacs pixel for pixel as before, the cursor's row aside. `image.rs`'s own tests cut sequences split at every byte, bound sixels before decoding and size iTerm2 images.
 
 ## The editor's side

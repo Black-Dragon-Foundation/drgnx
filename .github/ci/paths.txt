@@ -2,11 +2,11 @@
 # filter"). A row: a glob (`*` matches across `/`) and the jobs a change there can affect; the first row that matches
 # wins, and a path no row matches runs everything. ALL: every job below. -: no job (the changes, scripts and gate jobs
 # always run). rt-*: runtime.yml's jobs; the rest are drgnx-tiers.yml's tiers.
-jobs: rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos unit no-lisp-writes hub-chaos ui scenario perf macos tty timing
+jobs: rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos unit no-lisp-writes hub-chaos ui scenario perf macos tty ssh timing
 
 # the outputs the workflows pass on: runtime.yml's `only`, drgnx-tiers.yml's `tiers`
 list runtime: rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos
-list tiers: unit no-lisp-writes hub-chaos ui scenario perf macos tty timing
+list tiers: unit no-lisp-writes hub-chaos ui scenario perf macos tty ssh timing
 
 # the workflows and CI's scripts, the command and installer, the test harness and its settings, the hooks, the lock
 # and the Nidhogg pin (test/container/nidhogg.sh): everything
@@ -27,11 +27,11 @@ runtime/*                     ALL
 core/*                        ALL
 docs/develop/hub.md           ALL
 # Lisp outside core/: the tiers; runtime's cargo test reads modules/ too (norn's migration test reads its Lisp)
-modules/*                     rt-linux rt-macos unit no-lisp-writes hub-chaos ui scenario perf macos tty timing
-wb/*                          unit no-lisp-writes hub-chaos ui scenario perf macos tty timing
-keys/*                        unit no-lisp-writes hub-chaos ui scenario perf macos tty timing
-init/*                        unit no-lisp-writes hub-chaos ui scenario perf macos tty timing
-etc/*                         unit no-lisp-writes hub-chaos ui scenario perf macos tty timing
+modules/*                     rt-linux rt-macos unit no-lisp-writes hub-chaos ui scenario perf macos tty ssh timing
+wb/*                          unit no-lisp-writes hub-chaos ui scenario perf macos tty ssh timing
+keys/*                        unit no-lisp-writes hub-chaos ui scenario perf macos tty ssh timing
+init/*                        unit no-lisp-writes hub-chaos ui scenario perf macos tty ssh timing
+etc/*                         unit no-lisp-writes hub-chaos ui scenario perf macos tty ssh timing
 # tests read the docs and the README (generated references, the guide's examples, the scenario configs)
 docs/*                        unit no-lisp-writes ui scenario perf macos tty timing
 README.md                     unit no-lisp-writes ui scenario perf macos tty timing
@@ -46,6 +46,7 @@ test/live/*                   unit no-lisp-writes macos ui timing
 test/scenario/*               unit no-lisp-writes macos scenario
 test/perf/*                   unit no-lisp-writes macos perf
 test/tty/*                    unit no-lisp-writes macos tty timing
+test/ssh/*                    unit no-lisp-writes macos ssh
 # files nothing builds, installs, tests or reads (the leak scan, which reads every file, always runs)
 SECURITY.md                   -
 LICENSE                       -
@@ -53,8 +54,8 @@ LICENSES/*                    -
 # any other test/ file (the suite's lists, timing rows, bench, install and bootstrap) matches no row: everything
 
 # bite cases (changes.sh --self-test): PATHS | REQUEST | SELECTOR | RUN | PARTIAL
-test wb/drgnx-wb.el                         | -        | -                | unit no-lisp-writes hub-chaos ui scenario perf macos tty timing | false
-test modules/tools/drgnx-browser.el         | -        | -                | rt-linux rt-macos unit no-lisp-writes hub-chaos ui scenario perf macos tty timing | false
+test wb/drgnx-wb.el                         | -        | -                | unit no-lisp-writes hub-chaos ui scenario perf macos tty ssh timing | false
+test modules/tools/drgnx-browser.el         | -        | -                | rt-linux rt-macos unit no-lisp-writes hub-chaos ui scenario perf macos tty ssh timing | false
 test runtime/crates/huginn/src/lib.rs       | -        | -                | ALL   | false
 test runtime/Cargo.lock                     | -        | -                | ALL   | false
 test core/drgnx-registry.el                 | -        | -                | ALL   | false
@@ -68,7 +69,7 @@ test docs/guide/modules.md                  | -        | -                | unit
 test docs/develop/hub.md                    | -        | -                | ALL   | false
 test runtime/fuzz/fuzz_targets/line.rs      | -        | -                | rt-fuzz | false
 test test/scenario/buffers-test.el          | -        | -                | unit no-lisp-writes scenario macos | false
-test test/unit/ci-workflows-test.el,wb/x.el | -        | -                | unit no-lisp-writes hub-chaos ui scenario perf macos tty timing | false
+test test/unit/ci-workflows-test.el,wb/x.el | -        | -                | unit no-lisp-writes hub-chaos ui scenario perf macos tty ssh timing | false
 test test/unit/hub-client-test.el           | -        | -                | unit no-lisp-writes hub-chaos macos timing | false
 test test/unit/ai-gateway-test.el           | -        | -                | unit no-lisp-writes hub-chaos macos timing | false
 # narrowed dispatches: what the change needs and the run leaves out, or a selector, makes the run partial

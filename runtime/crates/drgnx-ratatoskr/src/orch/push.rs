@@ -39,6 +39,7 @@ pub async fn refusal(front: &Front, job: &str, dir: &Path) -> Option<String> {
         Ok(Err(e)) => return Some(format!("the push gate cannot read the commit: {e}")),
         Err(e) => return Some(format!("the push gate cannot read the commit: {e}")),
     };
+    front.queue.at_push(job, &head, &tree);
     let key = format!("push:{job}@{tree}");
     let k = key.clone();
     let evidence = match front

@@ -144,7 +144,7 @@ pub fn paths(root: &Path, key: &SlotKey) -> SlotPaths {
 const ATTRIBUTES: &str = "* -text -ident -filter -working-tree-encoding\n";
 
 /// Moves the slot to `commit` (which the bare `mirror` holds) plus `overlay`. Every path and the commit id are
-/// checked before anything changes. The caller holds `Locks::update`.
+/// checked before anything changes. The caller holds the update lock ([`hold`] does).
 pub fn update(p: &SlotPaths, mirror: &Path, commit: &str, overlay: &Overlay) -> Result<()> {
     let oid_ok = matches!(commit.len(), 40 | 64)
         && commit
@@ -393,8 +393,10 @@ fn clone_new(_: &fs::File, _: &Path) -> bool {
     false
 }
 
-/// The slot's locks: `flock`s on files in its git dir, so they hold across processes (the job helper holds a read
-/// lock for its job's life) and go with a process that dies.
+/// The slot's locks: `flock`s on files in its git dir, so they hold across processes and go with a process that dies.
+/// A job that reads the slot is held by read locks for its life ([`hold`]: `serve` from the checkout, the job's
+/// job-exec from its start, [`hold_for_job`]), so no `serve` of any hub moves the slot under it, and `gc` and the disk
+/// guard keep it.
 pub struct Locks {
     git_dir: PathBuf,
 }
@@ -420,14 +422,7 @@ impl Locks {
         Ok(held)
     }
 
-    /// Exclusive: waits for every reader.
-    pub fn update(&self) -> Result<Held> {
-        Ok(self
-            .lock("slot.lock", FlockOperation::LockExclusive)?
-            .expect("a blocking lock"))
-    }
-
-    /// `update`, or `None` at once while a reader or another update holds the slot.
+    /// Exclusive, or `None` at once while a reader or another update holds the slot.
     pub fn try_update(&self) -> Result<Option<Held>> {
         self.lock("slot.lock", FlockOperation::NonBlockingLockExclusive)
     }
@@ -458,6 +453,88 @@ impl Locks {
             Err(e) => Err(io::Error::from(e).into()),
         }
     }
+}
+
+/// The record of the inputs a slot holds (the hub's input key), in its git dir: written under the update lock once a
+/// move is done, removed before one starts.
+const INPUTS: &str = "inputs";
+
+/// Whether the slot whose git dir is GIT_DIR holds INPUTS (an empty key is never held).
+fn holds(git_dir: &Path, inputs: &str) -> bool {
+    !inputs.is_empty() && fs::read_to_string(git_dir.join(INPUTS)).is_ok_and(|s| s == inputs)
+}
+
+/// A read lock on slot P once it holds INPUTS, for a job that reads it: the slot is moved there first by MOVE (under
+/// the update lock) when no job reads it at other inputs; `None` while one does. The check and the read lock are one
+/// step, so between this answer and the job's end no process moves the slot: a move needs the update lock, which
+/// waits for no reader.
+pub fn hold(
+    p: &SlotPaths,
+    inputs: &str,
+    mut move_to: impl FnMut() -> Result<()>,
+) -> Result<Option<Held>> {
+    let locks = Locks::of(p);
+    let mut readers = false;
+    // a lock can't be turned from exclusive to shared in one step, so after a move the slot is read again; three
+    // rounds only end without an answer when other processes keep moving it in between
+    for _ in 0..3 {
+        let held = locks.read()?;
+        if holds(&p.git_dir, inputs) {
+            return Ok(Some(held));
+        }
+        drop(held);
+        if readers {
+            return Ok(None);
+        }
+        match locks.try_update()? {
+            // a job reads it: at other inputs, unless it was moved to ours meanwhile (the next round sees)
+            None => readers = true,
+            Some(_update) => {
+                if !holds(&p.git_dir, inputs) {
+                    remove_if_there(&p.git_dir.join(INPUTS))?;
+                    move_to()?;
+                    fs::write(p.git_dir.join(INPUTS), inputs)?;
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The file in an attempt's folder that names the slot its job reads: its input key, a newline, the slot's git dir.
+pub const JOB_HOLD: &str = "slot-hold";
+
+/// Writes DIR's [`JOB_HOLD`]: its job reads slot P at INPUTS.
+pub fn write_job_hold(dir: &Path, p: &SlotPaths, inputs: &str) -> io::Result<()> {
+    let mut body = format!("{inputs}\n").into_bytes();
+    body.extend_from_slice(p.git_dir.as_os_str().as_bytes());
+    fs::write(dir.join(JOB_HOLD), body)
+}
+
+/// The read lock job-exec holds for its job's life, on the slot DIR's [`JOB_HOLD`] names (none named: `Ok(None)`). An
+/// error when the slot no longer holds the job's inputs (moved between `serve`'s checkout and this start: that `serve`
+/// is gone) or can't be locked: the job must not run.
+pub fn hold_for_job(dir: &Path) -> std::result::Result<Option<Held>, String> {
+    let body = match fs::read(dir.join(JOB_HOLD)) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{JOB_HOLD}: {e}")),
+        Ok(b) => b,
+    };
+    let at = body
+        .iter()
+        .position(|&b| b == b'\n')
+        .ok_or_else(|| format!("{JOB_HOLD}: no slot named"))?;
+    let inputs = std::str::from_utf8(&body[..at]).map_err(|_| format!("{JOB_HOLD}: not a key"))?;
+    let git_dir = Path::new(std::ffi::OsStr::from_bytes(&body[at + 1..]));
+    let held = Locks {
+        git_dir: git_dir.to_path_buf(),
+    }
+    .read()
+    .map_err(|e| format!("the checkout slot's read lock: {e}"))?;
+    if !holds(git_dir, inputs) {
+        return Err("its checkout slot moved to other inputs before the job started".into());
+    }
+    Ok(Some(held))
 }
 
 /// Removes the slots under `root` unused for `UNUSED_FOR` at `now`, target dir first, except those in `in_use` (slot

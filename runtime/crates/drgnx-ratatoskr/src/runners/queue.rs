@@ -414,7 +414,7 @@ struct Remote {
     ready: Option<ReadyNow>,
     /// The input keys its attempts synced, newest last (at most [`SYNCED_KEPT`]): their bytes are there.
     synced: Vec<String>,
-    /// The features its last probe offered (`probe-result`): what a Mac candidate has.
+    /// The features its last probe offered (`probe-result`): what it has as a candidate (none before its first probe).
     features: Vec<String>,
 }
 
@@ -1994,13 +1994,9 @@ impl Queue {
                 trust: r.r.trust,
                 keys_allowed: vec![],
                 os: r.r.os,
-                // a Mac's packages and tools are its probe's (a missing one waits with its install line); Linux
-                // runners don't report theirs to placement yet
-                features: if r.r.os == Os::Macos {
-                    r.features.clone()
-                } else {
-                    job.spec.features.clone()
-                },
+                // the runner's features are its probe's: a Mac's packages and tools (a missing one waits with its
+                // install line), a Linux runner's podman, gpu and kvm
+                features: r.features.clone(),
                 state: r.state.clone(),
                 accept: r.r.accept,
                 link_bps: None,
@@ -3973,6 +3969,35 @@ mod tests {
             why.contains("`drgnx runner check` on the Mac installs the toolchains"),
             "{why}"
         );
+    }
+
+    // [D] pure: a Linux runner has the features its probe offered, not the job's: a `gpu` job (then a `kvm` one) is
+    // not placed on a runner whose probe lacks it, and is once its probe offers it
+    #[tokio::test]
+    async fn a_linux_runner_has_only_its_probes_features() {
+        for feature in ["gpu", "kvm"] {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            add(&q, "r1", 600);
+            hello(&q, "r1", true, 100);
+            let probe = |features: &[&str]| Frame::ProbeResult {
+                facts: None,
+                missing: vec![],
+                limits: None,
+                features: features.iter().map(|f| f.to_string()).collect(),
+            };
+            frame(&q, "r1", probe(&["podman"]), 100);
+            let mut s = job("x1", Priority::P3, 64);
+            s.spec.features = vec![feature.into()];
+            q.submit(s, 100);
+            q.tick(100);
+            let row = q.row("x1").unwrap();
+            assert_eq!(row.machine, None, "{feature}: {row:?}");
+            frame(&q, "r1", probe(&["podman", feature]), 101);
+            q.tick(101);
+            let row = q.row("x1").unwrap();
+            assert_eq!(row.machine.as_deref(), Some("r1"), "{feature}: {row:?}");
+        }
     }
 
     // [D] pure: a Mac whose last `ready` said it ran on battery is `sleeping` when it goes quiet (a lid closed), not
