@@ -406,3 +406,18 @@ async fn connect_gives_up_when_the_port_never_opens() {
     );
     assert!(err.to_string().contains(&addr.to_string()), "{err}");
 }
+
+#[tokio::test]
+async fn dropping_every_handle_closes_the_adapters_input() {
+    let (client, inc, mut ad) = pair();
+    let other = client.clone();
+    drop(client);
+    drop(other);
+    drop(inc);
+    let mut b = [0u8; 1];
+    assert_eq!(
+        ad.r.read(&mut b).await.unwrap(),
+        0,
+        "the adapter reads the end"
+    );
+}

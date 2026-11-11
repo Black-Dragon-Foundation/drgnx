@@ -192,7 +192,8 @@ impl Client {
             pending: Mutex::new(Ok(HashMap::new())),
         });
         let client = Client { inner };
-        // the writer: ends when every sender is gone or a write fails (the reader then sees the end too)
+        // the writer: ends when every handle is gone (closing the adapter's input) or a write fails (the reader then
+        // sees the end too)
         let weak = Arc::downgrade(&client.inner);
         tokio::spawn(async move {
             let mut write = write;
@@ -211,6 +212,8 @@ impl Client {
                     return;
                 }
             }
+            // every handle is gone: the adapter reads the end of its input
+            let _ = write.shutdown().await;
         });
         // the reader: frames in the order they came, then one end
         let weak = Arc::downgrade(&client.inner);

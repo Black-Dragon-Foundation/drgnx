@@ -32,8 +32,31 @@ and Emacs draws the gutter, the toolbar and the views. This page is for contribu
   `cargo run -p vor --example gen_types -- crates/vor/schema/debugAdapterProtocol.json > crates/vor/src/types.rs`
   and `cargo fmt -p vor` (in a container, like every build).
 
+Dropping every handle (the `Client`s and unanswered reverse requests) closes the adapter's input, so a stdio adapter
+reads its end.
+
+### The mock adapter
+
+`vor::mock` (feature `mock`) plays a script against a client: expected requests (in order, or a set in any order)
+with canned answers, events, reverse requests whose answers it checks, and the adapter's death. It fails on any request
+it did not expect, a request after the script's end, or a client that leaves early, and `Mock::finish` names what it
+expected and what came, with a log of every request and its arguments. The steps are JSON (the module's doc lists
+them); the `vor-mock SCRIPT.json` binary (built with the feature) plays one on stdio for ERT.
+
+```json
+[{"expect": "initialize", "ok": {"supportsTerminateRequest": true}},
+ {"expect": "launch", "defer": true},
+ {"event": "initialized"},
+ {"expect": "configurationDone"},
+ {"answer": "launch"},
+ {"any": [{"expect": "variables", "args": {"variablesReference": 1}},
+          {"expect": "variables", "args": {"variablesReference": 2}}]},
+ {"expect": "terminate", "silent": true},
+ {"die": true}]
+```
+
 Its tests (`crates/vor/tests/client.rs`) drive the client against a hand-written adapter on an in-memory pipe and one
-TCP socket; the waits use tokio's paused clock.
+TCP socket, and the mock's own (`tests/mock.rs`); the waits use tokio's paused clock.
 
 ## Live adapters: the image
 

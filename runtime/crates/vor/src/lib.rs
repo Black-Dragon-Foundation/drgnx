@@ -2,12 +2,15 @@
 //!
 //! - [`codec`]: the base protocol's `Content-Length` framing.
 //! - [`Client`]: one connection: requests matched to answers, events and reverse requests in order, one end for all.
+//! - `mock` (feature `mock`): a scripted adapter for tests, also the `vor-mock` binary.
 //! - [`types`]: the protocol's types, generated from its JSON schema (`examples/gen_types.rs`); unknown fields are kept.
 //!
 //! It knows nothing of drgnx: sessions, adapters and timeouts are the caller's (docs/develop/debugging.md).
 pub mod client;
 pub mod codec;
 pub mod message;
+#[cfg(feature = "mock")]
+pub mod mock;
 pub mod types;
 
 pub use client::{Client, Error, Incoming, Pending, ReverseRequest, event_body};

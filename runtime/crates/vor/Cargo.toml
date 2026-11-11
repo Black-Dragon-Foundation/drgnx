@@ -7,6 +7,15 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+# The mock adapter (`vor::mock` and the `vor-mock` binary): a script of expected requests, for the hub's tests and ERT.
+mock = ["tokio/io-std"]
+
+[[bin]]
+name = "vor-mock"
+path = "src/bin/vor-mock.rs"
+required-features = ["mock"]
+
 [dependencies]
 tokio.workspace = true
 tokio-util.workspace = true
