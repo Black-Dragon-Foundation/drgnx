@@ -1266,6 +1266,141 @@ to its first rows.  An error when a key's search drew no rows before the next ke
       t))
   "The `search-retype' workload's session side (with the replace workloads' and the hub's).")
 
+(defconst drgnx-perf-run--search-modes-form
+  (prin1-to-string
+   '(progn
+      (defvar drgnx-perf--sm nil "The running search: [START RESET FIRST DONE], `float-time's (as search-context's).")
+      (defvar drgnx-perf--sm-root nil "The indexed project of 25,000 synthetic Rust files, without a trailing slash.")
+      (defun drgnx-perf--sm-chunks ()
+        "How many chunks the hub holds of the project."
+        (or (plist-get (drgnx-hub-call-sync "search/status" (list :root drgnx-perf--sm-root) 10) :chunks) 0))
+      (defun drgnx-perf--sm-file (f files)
+        "Synthetic file F of FILES, as Hrafn's timing rows' (`tests/timing.rs'): 10 functions of a doc line, a signature
+and a body (about 2 chunks), each calling 4 of the files' functions drawn Zipf-like (rank g goes as 1/(g + 1))."
+        (let ((verbs ["parse" "render" "retry" "flush" "resolve" "encode" "split" "merge" "probe" "gather" "release"
+                      "verify"])
+              (nouns ["request" "buffer" "socket" "session" "token" "header" "frame" "window" "project" "symbol"
+                      "manifest" "timer" "channel" "record" "snapshot" "queue"])
+              (all (* files 10)))
+          (cl-flet ((name (f i) (format "%s_%s_%d_%d" (aref verbs (% (+ (* f 7) i) 12)) (aref nouns (% (+ (* f 3) (* i 5)) 16)) f i)))
+            (mapconcat
+             (lambda (i)
+               (let* ((v (aref verbs (% (+ (* f 7) i) 12)))
+                      (m (aref nouns (% (+ f (* i 11)) 16)))
+                      (n (aref nouns (% (+ (* f 3) (* i 5)) 16)))
+                      (calls (mapconcat (lambda (_)
+                                          (let ((g (min (1- all) (max 0 (1- (floor (expt all (/ (random 1000000) 1e6))))))))
+                                            (format "    let _ = %s(input, limit);\n" (name (/ g 10) (% g 10)))))
+                                        (number-sequence 1 4) "")))
+                 (format "/// %s the %s of the %s and report what was %sed.\nfn %s(input: &str, limit: usize) -> Result<Vec<String>, Error> {\n%s    let mut out = Vec::new();\n    for part in input.split(',') {\n        if part.len() > limit { return Err(Error::Long(part.to_string())); }\n        out.push(format!(\"{}-{}\", part, %d));\n    }\n    Ok(out)\n}\n\n"
+                         v n m v (name f i) calls i)))
+             (number-sequence 0 9) ""))))
+      (defun drgnx-perf--sm-up ()
+        "The project indexed (50,000 chunks or more; tier 1 only: the session has no model), and the Search view open."
+        (require 'drgnx-search)
+        (setq drgnx-perf--sm-root (directory-file-name (make-temp-file "drgnx-perf-modes" t)))
+        (random "drgnx-perf-search-modes")                ; the same callees every run
+        (let ((src (expand-file-name "src" drgnx-perf--sm-root)))
+          (make-directory src)
+          (dotimes (f 25000)
+            (let ((coding-system-for-write 'utf-8-unix))
+              (write-region (drgnx-perf--sm-file f 25000) nil (expand-file-name (format "m%d.rs" f) src) nil 'silent))))
+        (let ((default-directory (file-name-as-directory drgnx-perf--sm-root)))
+          (dolist (args '(("init" "-q") ("add" "-A")
+                          ("-c" "user.name=perf" "-c" "user.email=perf@localhost" "commit" "-q" "-m" "perf")))
+            (unless (zerop (apply #'call-process "git" nil nil nil args)) (error "git %S failed" args))))
+        ;; `:now' answers when tier 1 has run: 25,000 files take minutes
+        (drgnx-hub-call-sync "search/index" (list :root drgnx-perf--sm-root :now t) 900)
+        (let ((deadline (+ (float-time) 900)))
+          (while (and (< (drgnx-perf--sm-chunks) 50000) (< (float-time) deadline)) (accept-process-output nil 1)))
+        (when (< (drgnx-perf--sm-chunks) 50000)
+          (error "Premise: the hub holds only %s chunks of the project, not 50,000" (drgnx-perf--sm-chunks)))
+        (let ((editor (selected-window)))
+          (drgnx-replace--open :text "parse_request_0_0"
+                               :origin (with-current-buffer (find-file-noselect (expand-file-name "src/m0.rs" drgnx-perf--sm-root))
+                                         (point-min-marker)))
+          (select-window editor))
+        (advice-add 'drgnx-view-apply-patch :before #'drgnx-perf--sm-patch)
+        (advice-add 'drgnx-replace--rows-boxes :after #'drgnx-perf--sm-drawn)
+        (advice-add 'drgnx-replace--hub-event :after #'drgnx-perf--sm-done)
+        t)
+      (defun drgnx-perf--sm-patch (patch)
+        (when-let* ((r drgnx-perf--sm) ((null (aref r 1))) ((equal (plist-get patch :view) drgnx-replace-view))
+                    ((drgnx-view-patch--reset-p patch)))
+          (aset r 1 (float-time))))
+      (defun drgnx-perf--sm-drawn (&rest _)
+        (when-let* ((r drgnx-perf--sm) ((aref r 1)) ((null (aref r 2)))
+                    ((> (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)) 0)))
+          (aset r 2 (float-time))))
+      (defun drgnx-perf--sm-done (event data)
+        (when-let* (((equal event "search-run-done")) ((equal (plist-get data :view) drgnx-replace-view))
+                    ((> (or (plist-get data :matches) 0) 0)) (r drgnx-perf--sm) ((aref r 1)) ((null (aref r 3))))
+          (aset r 3 (float-time))))
+      (defun drgnx-perf--sm-once (mode text)
+        "One search of TEXT in MODE (`symbol' or `meaning'): its first rows' ms from the search's start."
+        (let ((v (drgnx-perf--replace-view)))
+          (setq drgnx-perf--sm (vector (float-time) nil nil nil))
+          (with-current-buffer v
+            (drgnx-replace--fill 'find text)
+            (if (eq (drgnx-replace--opt :mode) mode) (drgnx-replace--search-now) (drgnx-replace--set-mode mode)))
+          (unless (drgnx-perf--wait 60 (lambda () (and (aref drgnx-perf--sm 2) (aref drgnx-perf--sm 3)
+                                                       (with-current-buffer v (not (drgnx-replace--busy-p))))))
+            (error "Premise: the %s search %S drew no rows (%S)" mode text drgnx-perf--sm))
+          ;; 200 ms for the view's last draws, which would otherwise run inside the next call's wait (a timed
+          ;; `search/query' among them); zero-delay slices back to back, as `drgnx-perf--replace-idle' runs them
+          (let ((d (+ (float-time) 0.2)))
+            (while (< (float-time) d)
+              (accept-process-output nil (if (and timer-list (not (time-less-p nil (timer--time (car timer-list))))) 0 0.02))))
+          (* 1000 (- (aref drgnx-perf--sm 2) (aref drgnx-perf--sm 0)))))
+      (defun drgnx-perf--sm-usages (name)
+        "The ms of `search/usages' of NAME as the Symbol view asks it (100), round trip."
+        (let ((start (float-time)))
+          (drgnx-hub-call-sync "search/usages" (list :root drgnx-perf--sm-root :name name :k 100) 30)
+          (* 1000 (- (float-time) start))))
+      (defun drgnx-perf--sm-query (text)
+        "The ms of `search/query' of TEXT as the Meaning view asks it (code, 100 hits), round trip."
+        (let ((start (float-time)))
+          (unless (plist-get (drgnx-hub-call-sync "search/query" (list :root drgnx-perf--sm-root :text text :k 100 :scope "code") 30)
+                             :hits)
+            (error "Premise: search/query %S found nothing" text))
+          (* 1000 (- (float-time) start))))
+      (defun drgnx-perf--sm-measure ()
+        "(:symbol_first_ms STATS) of 100 Symbol searches of `parse_request_0_0' (the most called function), and of 100
+Meaning searches each paired with a `search/query' of its question: :meaning_first_ms, :query_ms, and :meaning_over_ms
+(the pair's difference, whose p95 is the budget); after one of each.  Reported to place a miss: :usages_ms (100
+`search/usages' of the name, the hub's part of a Symbol search)."
+        (let ((questions ["where do we retry a failed request" "how is the session token verified"
+                          "parse the header of a frame" "flush the buffer before the socket closes"
+                          "release the queue of a project" "encode the record for the channel"])
+              sym meaning query over usages)
+          (drgnx-perf--sm-once 'symbol "parse_request_0_0")
+          (dotimes (_ 100) (push (drgnx-perf--sm-once 'symbol "parse_request_0_0") sym))
+          (dotimes (_ 100) (push (drgnx-perf--sm-usages "parse_request_0_0") usages))
+          (drgnx-perf--sm-once 'meaning (aref questions 0))
+          (drgnx-perf--sm-query (aref questions 0))
+          (dotimes (i 100)
+            (let* ((q (aref questions (% i (length questions))))
+                   ;; alternating which goes first: neither is always the one a warm cache helps
+                   (pair (if (cl-evenp i)
+                             (let ((a (drgnx-perf--sm-query q))) (list a (drgnx-perf--sm-once 'meaning q)))
+                           (let ((b (drgnx-perf--sm-once 'meaning q))) (list (drgnx-perf--sm-query q) b)))))
+              (push (car pair) query)
+              (push (cadr pair) meaning)
+              (push (- (cadr pair) (car pair)) over)))
+          (let ((st (lambda (xs) (mapcar #'drgnx-perf--round (drgnx-perf-stats xs)))))
+            (list :symbol_first_ms (funcall st sym) :meaning_first_ms (funcall st meaning)
+                  :query_ms (funcall st query) :meaning_over_ms (funcall st over) :usages_ms (funcall st usages)))))
+      (defun drgnx-perf--sm-down ()
+        (advice-remove 'drgnx-view-apply-patch #'drgnx-perf--sm-patch)
+        (advice-remove 'drgnx-replace--rows-boxes #'drgnx-perf--sm-drawn)
+        (advice-remove 'drgnx-replace--hub-event #'drgnx-perf--sm-done)
+        (dolist (b (buffer-list))
+          (when (and drgnx-perf--sm-root (buffer-file-name b) (string-prefix-p drgnx-perf--sm-root (buffer-file-name b)))
+            (kill-buffer b)))
+        (when drgnx-perf--sm-root (ignore-errors (delete-directory drgnx-perf--sm-root t))))
+      t))
+  "The `search-modes' workload's session side (with the replace workloads' and the hub's).")
+
 (defun drgnx-perf-run--explorer-rows-form (dir)
   "An Explorer workload's setup, as a form string: the hub up (`drgnx-perf-run--hub-form'), the Explorer on DIR in the
 sidebar, its rows the hub's and drawn (the rows path, plan sja-complete E4)."
@@ -1389,9 +1524,11 @@ at the wait's return held that."
 (defvar drgnx-perf-ab-min-rounds)   ; below, with the A/B
 
 (defun drgnx-perf-run--workloads ()
-  "The workloads:(NAME :setup FORM :each FORM :actions ACTIONS :check FORM :measure FORM :teardown FORM :repeat N).
+  "The workloads:(NAME :setup FORM :each FORM :actions ACTIONS :check FORM :measure FORM :teardown FORM :repeat N
+:timeout SECS).
 Every workload runs three times (medians are kept); :each runs before each repeat, :check after it (an
-error if it does not hold).  With :actions, :measure runs after the input and its plist joins the run's."
+error if it does not hold).  With :actions, :measure runs after the input and its plist joins the run's.  :setup and
+a :measure without :actions each have :timeout seconds to answer (120)."
   (let ((type (lambda (s) (list :type s))) (keys (lambda (k n) (make-list n (list :keys k))))
         (kill-fixture (format "(progn (when-let* ((b (find-buffer-visiting %S))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)) t)"
                               (or drgnx-perf-run--fixture ""))))
@@ -1558,6 +1695,14 @@ error if it does not hold).  With :actions, :measure runs after the input and it
        :check "(and (equal (with-current-buffer (drgnx-perf--replace-view) (drgnx-replace--text 'find)) \"needle\")
                     (eql 10000 (cdr (buffer-local-value 'drgnx-replace--hub-counts (drgnx-perf--replace-view)))))"
        :teardown ,(concat "(progn (drgnx-perf--rt-disarm) (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
+      ;; the Search view's Symbol and Meaning modes over an index of 50,000 chunks (25,000 synthetic Rust files, tier 1;
+      ;; the session has no model, so Meaning is keyword and symbol hits), 100 times each (search view plan, spec §8)
+      (search-modes
+       :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) " (drgnx-perf-run--replace-setup-form)
+                       " " drgnx-perf-run--search-modes-form " (drgnx-perf--sm-up))")
+       :measure "(drgnx-perf--sm-measure)"
+       :repeat 1 :timeout 1200                    ; 100 samples a metric already; the setup writes and indexes 25,000 files
+       :teardown ,(concat "(progn (drgnx-perf--sm-down) (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
       ;; typing while the Live view shows frames from a mock browser (30 a second, each once the last was acked)
       (live-view
        :setup ,(drgnx-perf-run--live-setup-form)
@@ -1995,12 +2140,14 @@ actions is profiled from its first key to the end of the completion wait instead
     (if (plist-get spec :daemon) (drgnx-perf-run-daemon-startup)
       (unwind-protect
           (progn
-            (when (plist-get spec :setup) (drgnx-perf-run--call sess (plist-get spec :setup) 120) (drgnx-ui-measure sess nil))
+            (when (plist-get spec :setup)
+              (drgnx-perf-run--call sess (plist-get spec :setup) (or (plist-get spec :timeout) 120))
+              (drgnx-ui-measure sess nil))
             (let (runs audit-rows audit-hooks)
               (dotimes (_ (or (plist-get spec :repeat) 3))
                 (when (plist-get spec :each) (drgnx-perf-run--call sess (plist-get spec :each) 120) (drgnx-ui-measure sess nil))
                 (if (not actions)
-                    (push (drgnx-perf-run--call sess measure 120) runs)
+                    (push (drgnx-perf-run--call sess measure (or (plist-get spec :timeout) 120)) runs)
                   (when keys-profile (drgnx-perf-run--call sess "(drgnx-perf-profile-begin)"))
                   (drgnx-perf-run--call sess (drgnx-perf-run--begin-form spec audit))
                   (drgnx-ui-measure sess actions)

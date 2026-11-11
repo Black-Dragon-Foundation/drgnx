@@ -128,6 +128,9 @@
  ;; search's end with its rows drawn (the 250 ms typing pause included): 337-356 ms p95 then, x 1.25
  (search-retype (:input :p95) 16) (search-retype (:input :max) 50)
  (search-retype (:search_first_ms :p95) 50) (search-retype (:settle_ms :p95) 450)
+ ;; search-modes: the Search view's index modes over 50,000 chunks (spec §8): Symbol's first rows within 50 ms of the
+ ;; search's start, and Meaning's at most 20 ms past `search/query' of its question (the pair's difference, 100 pairs)
+ (search-modes (:symbol_first_ms :p95) 50) (search-modes (:meaning_over_ms :p95) 20)
  ;; search-context: the Search view's context label rows cost at most 10 % on the first rows and 15 % to the end, the
  ;; p50s of 10 searches with labels over 10 without (100 Rust files, 10k matches, 1,000 labels; spec §8)
  (search-context (:first_ratio) 1.10) (search-context (:done_ratio) 1.15)
