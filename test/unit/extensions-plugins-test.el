@@ -98,6 +98,24 @@
         (should (equal (car calls) (cons "plugins/approve"
                                          (list :name "rewrite-msg" :hash drgnx-extensions-plugins-test--hash-a))))))))
 
+(ert-deftest drgnx-extensions-plugins/approve-holds-once-when-the-page-changed-under-the-user ()
+  "M13: the page was redrawn with another hash while it was open: the first Approve says so and sends nothing; the
+second, after reading, sends the hash the page now shows."
+  (let ((drgnx-plugins--rows (list (drgnx-extensions-plugins-test--row :state "unapproved"))) calls)
+    (cl-letf (((symbol-function 'drgnx-hub-call)
+               (lambda (method params _cb &rest _) (push (cons method params) calls) 1)))
+      (with-temp-buffer
+        (drgnx-extensions-details-mode)
+        (setq drgnx-extensions-details--id "plugin:rewrite-msg")
+        (drgnx-extensions-plugins-page-text "rewrite-msg")
+        (setq drgnx-plugins--rows (list (drgnx-extensions-plugins-test--row :hash drgnx-extensions-plugins-test--hash-b)))
+        (drgnx-extensions-plugins-page-text "rewrite-msg")   ; a plugin event redraws the page
+        (should-error (drgnx-extensions-plugins-approve) :type 'user-error)
+        (should-not calls)
+        (drgnx-extensions-plugins-approve)
+        (should (equal (car calls) (cons "plugins/approve"
+                                         (list :name "rewrite-msg" :hash drgnx-extensions-plugins-test--hash-b))))))))
+
 (ert-deftest drgnx-extensions-plugins/settings-plugins-opens-the-view ()
   (let (applied)
     (cl-letf (((symbol-function 'drgnx-module-running-p) (lambda (m) (eq m 'tools/extensions)))

@@ -44,6 +44,9 @@
 (defvar-local drgnx-extensions-plugins--shown nil
   "((NAME . HASH)…) in a details page: the hash its page displayed, which Approve sends.")
 
+(defvar-local drgnx-extensions-plugins--changed nil
+  "The names whose hash the page displayed changed while it was open (M13): Approve holds once, so the user reads it.")
+
 (defvar-local drgnx-extensions-plugins--root nil "The project root a plugin page's \"In this project\" is about, or nil.")
 
 ;;;; Which plugin
@@ -139,6 +142,11 @@ hash it displays is kept for Approve."
              (drgnx-plugins-page-insert name drgnx-extensions-plugins--root)
              (setq shown drgnx-plugins--shown)
              (buffer-string))
+      ;; a page drawn again with another hash than the one the user may have read: the next Approve holds once
+      (dolist (cell shown)
+        (let ((was (assoc (car cell) drgnx-extensions-plugins--shown)))
+          (when (and was (not (equal (cdr was) (cdr cell))))
+            (cl-pushnew (car cell) drgnx-extensions-plugins--changed :test #'equal))))
       (setq drgnx-extensions-plugins--shown shown))))
 
 (defun drgnx-extensions-plugin-open (name)
@@ -158,6 +166,9 @@ now."
   (interactive)
   (let* ((name (drgnx-extensions-plugins--name)) (hash (cdr (assoc name drgnx-extensions-plugins--shown))))
     (unless hash (user-error "Open the page of %s first: Approve sends the hash the page shows" name))
+    (when (member name drgnx-extensions-plugins--changed)
+      (setq drgnx-extensions-plugins--changed (delete name drgnx-extensions-plugins--changed))
+      (user-error "%s changed while this page was open: read the page again, then Approve" name))
     (drgnx-plugins-approve name hash)))
 
 ;;;; The replace diff

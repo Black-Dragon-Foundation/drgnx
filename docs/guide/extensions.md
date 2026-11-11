@@ -235,6 +235,8 @@ not known: read the whole reach below* instead, in the attention colour. Under t
 
 - **Approve** (the page's button, or the command *Approve Plugin*): sends the hash the page showed you. If the files
   changed since, the hub refuses and the page shows the new state.
+  If the page was drawn again with another hash while you had it open (the plugin changed), the first Approve only
+  says so: read the page again, then Approve.
 - **Turn on / Turn off:** adds the plugin to the end of your plugins setting or takes it out, so the order of the hooks
   stays yours. **Move up / Move down** change that order (the plugin has to be on).
 - **In this project:** as on the plugins page: the project's own plugin list, written to your private workspace file.
