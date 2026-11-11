@@ -1729,6 +1729,24 @@ Non-nil turns a project's semantic search off.
 | `:agents` | `never` |
 | `:schema` | `boolean` |
 
+## drgnx-search-preview-threshold
+
+Replace All with at least this many ticked matches first shows the Replace All sheet (every file's changes, then
+Replace or Cancel); 0 never shows it.  `C-u' Replace All skips it once.
+
+| Key | Value |
+| --- | --- |
+| Default | `1` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
 ## drgnx-session-keep-running
 
 Non-nil: drgnx keeps running in the background when its last window closes (reopening is instant).
@@ -1980,6 +1998,25 @@ Whether a program's notification (OSC 9, OSC 777) becomes a drgnx notice.
 | `:agents` | `never` |
 | `:schema` | `boolean` |
 
+## drgnx-term-detached-keep
+
+Hours a terminal no drgnx shows keeps running before its program is ended (SIGHUP); 0: until it ends by itself or
+the machine restarts.  The terminal's own worker counts the time, so no drgnx needs to run.  A change applies to
+every terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `24` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-config` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
 ## drgnx-term-enquiry-response
 
 What a terminal answers a program that sends ENQ (0x05); empty: nothing.  Applies to every terminal at once.
@@ -2176,6 +2213,27 @@ How many seconds a command must run before its end is told.
 | `:agents` | `never` |
 | `:schema` | `number` |
 
+## drgnx-term-on-quit
+
+What quitting drgnx does with its terminals: `ask' (when a program runs in one, the quit question offers Keep
+Running, Close Them and Cancel; Keep Running keeps those terminals and closes idle shells), `keep' (every terminal
+keeps running, for the next drgnx to reattach) or `close' (they close, after the usual question about running
+programs).  A quit that cannot ask (a daemon's shutdown, `kill-emacs' from a script) keeps the terminals whose program
+runs; a crash keeps them all.
+
+| Key | Value |
+| --- | --- |
+| Default | `ask` |
+| Type | `(choice (const ask) (const keep) (const close))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum ask keep close)` |
+
 ## drgnx-term-progress-style
 
 Whether a program's progress (OSC 9;4) shows on its terminal's tab.
@@ -2192,6 +2250,25 @@ Whether a program's progress (OSC 9;4) shows on its terminal's tab.
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | `boolean` |
+
+## drgnx-term-reattach
+
+What drgnx does with the terminals an earlier drgnx left running (kept at its quit, or after its crash): `ask' (a
+notice offers them: Reattach All, Choose… or Close Them), `always' (they open here at once) or `never' (only
+Reattach Terminal shows them).  A terminal another running drgnx shows is never offered.
+
+| Key | Value |
+| --- | --- |
+| Default | `ask` |
+| Type | `(choice (const ask) (const always) (const never))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum ask always never)` |
 
 ## drgnx-term-scroll-to-bottom
 

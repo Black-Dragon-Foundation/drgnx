@@ -697,7 +697,8 @@ impl Front {
             | Params::TermTextRange(_)
             | Params::TermClose(_)
             | Params::TermList(_)
-            | Params::TermSessionEnd(_)) => {
+            | Params::TermSessionEnd(_)
+            | Params::TermAttach(_)) => {
                 crate::term::methods::serve(&self.core.terms, s.conn, p).await
             }
             Params::OrchEvidence(p) => crate::orch::evidence::list(self, &caller, p)

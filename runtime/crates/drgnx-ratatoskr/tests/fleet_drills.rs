@@ -361,6 +361,7 @@ impl Drill {
     /// The runner as the registry gives it to the queue.
     fn remote(&self) -> RemoteRunner {
         RemoteRunner {
+            os: Default::default(),
             name: self.runner.clone(),
             trust: RunnerTrust::Mine,
             accept: forseti::Accept::All,
@@ -1389,6 +1390,7 @@ mod drill {
             let s = Session::start(r, channels, d.q.route(), d.q.link_events());
             d.q.add_runner(
                 RemoteRunner {
+                    os: Default::default(),
                     name: r.to_string(),
                     trust: RunnerTrust::Mine,
                     accept: forseti::Accept::All,

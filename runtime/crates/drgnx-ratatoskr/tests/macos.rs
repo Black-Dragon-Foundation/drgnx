@@ -33,6 +33,7 @@ use std::time::Duration;
 
 fn spec(trust: JobTrust, keys: &[&str]) -> JobSpec {
     JobSpec {
+        os: Default::default(),
         name: "j".into(),
         kind: Kind::Test,
         weight: Weight::Light,
@@ -89,6 +90,7 @@ fn cand(name: &str, local: bool, trust: RunnerTrust) -> Candidate {
         local,
         trust,
         keys_allowed: vec![],
+        os: Default::default(),
         features: vec!["podman".into()],
         state: RunnerState::Ready,
         accept: Accept::All,

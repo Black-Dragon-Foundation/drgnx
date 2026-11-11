@@ -24,7 +24,6 @@ fn main() {
 #[cfg(feature = "ghostty")]
 fn serve() -> Result<drgnx_term::run::Exit, String> {
     use drgnx_term::{pty, worker};
-    use std::os::unix::net::UnixListener;
 
     let level = match std::env::var("DRGNX_TERM_LOG").as_deref() {
         Ok("error") => tracing::Level::ERROR,
@@ -71,8 +70,8 @@ fn serve() -> Result<drgnx_term::run::Exit, String> {
     }
     let socket = socket.ok_or("--socket is required")?;
     let (program, rest) = command.split_first().ok_or("no program after --")?;
-    let _ = std::fs::remove_file(&socket);
-    let listener = UnixListener::bind(&socket).map_err(|e| format!("{socket}: {e}"))?;
+    let listener = drgnx_term::run::listen(std::path::Path::new(&socket))
+        .map_err(|e| format!("{socket}: {e}"))?;
     let env: Vec<(String, String)> = std::env::vars().collect();
     let size = pty::winsize(opts.cols, opts.rows, opts.cell_px);
     let pty =

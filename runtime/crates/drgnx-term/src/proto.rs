@@ -6,7 +6,7 @@ use drgnx_rows::Patch;
 use serde::{Deserialize, Serialize};
 
 /// The `term` protocol version: a newer hub adopts a worker of the same major version.
-pub const PROTO: (u32, u32) = (1, 2);
+pub const PROTO: (u32, u32) = (1, 3);
 
 /// From the hub.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -58,11 +58,18 @@ pub enum In {
         #[serde(default)]
         mods: Vec<String>,
     },
+    /// A new size; REDRAW (a reattach): the program gets SIGWINCH even when the size is the same, so a full-screen
+    /// program draws its screen again.
     Resize {
         cols: u16,
         rows: u16,
         cell_px: (u32, u32),
+        #[serde(default)]
+        redraw: bool,
     },
+    /// No editor draws this terminal now (its session went away or kept it at quit): nothing is sent until the next
+    /// attach; `detached-keep` counts from here.
+    Detach,
     /// The editor applied the patch of this version.
     Ack {
         version: u64,

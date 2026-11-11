@@ -64,6 +64,9 @@ pub struct TermOpen {
     pub memory_max: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tasks_max: Option<String>,
+    /// Where the editor shows it (`panel`, `editor`): kept for a reattach.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
 }
 
 /// `term/open`'s answer.
@@ -238,8 +241,28 @@ pub struct TermClose {
     pub signal: Option<i32>,
 }
 
+/// `term/session-end`: the terminals of the session to KEEP running, detached; the rest end.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct TermSessionEnd {
+    #[serde(default)]
+    pub keep: Vec<String>,
+}
+
+/// `term/attach`: take an orphaned or detached terminal into this connection's session, at COLS × ROWS cells of
+/// CELL_PX. Answered as `term/open` is; the first patch is a reset.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct TermAttach {
+    pub id: String,
+    pub cols: u16,
+    pub rows: u16,
+    #[serde(default)]
+    pub cell_px: (u32, u32),
+}
+
 /// One terminal in `term/list`: whether a program runs in it (a worker that does not answer within 200 ms counts as
-/// running), and OLD for one from before an update (only `term/close` reaches it).
+/// running), and OLD for one from before an update (only `term/close` reaches it). MINE: it draws for the asking
+/// connection's session; ORPHANED: no live connection carries its session; DETACHED_AT (ms since the epoch): its
+/// session went past the grace, or quit keeping it. Only an orphaned or detached terminal can be taken (`term/attach`).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct TermStatus {
     pub id: String,
@@ -248,6 +271,21 @@ pub struct TermStatus {
     pub cwd: String,
     pub title: String,
     pub old: bool,
+    pub mine: bool,
+    pub orphaned: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detached_at: Option<u64>,
+    #[serde(default)]
+    pub command: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
+}
+
+/// `term/detached`: terminals were left running by a session that is gone; a live editor may offer them.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TermDetached {
+    pub ids: Vec<String>,
 }
 
 /// `term/exit`: the terminal's program ended, with its exit code or the signal that ended it (both none: its worker
@@ -336,6 +374,7 @@ has_id!(
     TermFocus,
     TermMouse,
     TermResize,
+    TermAttach,
     TermScroll,
     TermFetch,
     TermSearch,
@@ -394,6 +433,14 @@ fn check_text(p: &TermText) -> Result<(), Error> {
 }
 
 fn check_resize(p: &TermResize) -> Result<(), Error> {
+    check_id(p)?;
+    if p.cols == 0 || p.rows == 0 {
+        return Err(invalid("cols", "at least one column and one row"));
+    }
+    Ok(())
+}
+
+fn check_attach(p: &TermAttach) -> Result<(), Error> {
     check_id(p)?;
     if p.cols == 0 || p.rows == 0 {
         return Err(invalid("cols", "at least one column and one row"));
@@ -484,12 +531,18 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "term/list", TermList(Empty) -> Vec<TermStatus>,
             classes: [User], writes: false,
-            doc: "every terminal: its worker's pid, whether a program runs in it (no answer within 200 ms counts as running), its cwd and title, and whether it is from before an update",
+            doc: "every terminal: its worker's pid, whether a program runs in it (no answer within 200 ms counts as running), its cwd, title and command, whether it is from before an update, whether it is this session's, orphaned (no live connection carries its session) or detached (since when), and where it was shown",
         ),
         method!(
-            "term/session-end", TermSessionEnd(Empty) -> u32,
+            "term/session-end", TermSessionEnd(TermSessionEnd) -> u32,
             classes: [User], writes: false,
-            doc: "the editor exits cleanly: every terminal of the session this connection's hello named ends now, without the 60 s grace; how many",
+            doc: "the editor exits cleanly: every terminal of the session this connection's hello named ends now, without the 60 s grace, but those in keep, which detach and run on; how many ended",
+        ),
+        method!(
+            "term/attach", TermAttach(TermAttach) -> TermOpened,
+            classes: [User], writes: false,
+            doc: "take an orphaned or detached terminal into this connection's session at a size: it draws here from a reset, its program redraws (SIGWINCH); refused for a terminal another live session has",
+            check: check_attach,
         ),
     ]
 }
@@ -530,7 +583,7 @@ mod tests {
             .collect();
         assert_eq!(
             methods.len(),
-            15,
+            16,
             "the term/ methods: {:?}",
             methods.iter().map(|m| m.name).collect::<Vec<_>>()
         );
@@ -553,7 +606,7 @@ mod tests {
             .collect();
         assert_eq!(
             events.len(),
-            8,
+            9,
             "the term/ events: {:?}",
             events.iter().map(|e| e.name).collect::<Vec<_>>()
         );
