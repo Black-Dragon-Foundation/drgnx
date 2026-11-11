@@ -1268,6 +1268,33 @@ impl Map {
             .collect()
     }
 
+    /// The machines of connection CONN's map VIEW and their load: (label, slots used, slots), in the map's order.
+    pub fn machines_of(&self, conn: u64, view: &str) -> Vec<(String, u32, u32)> {
+        let g = lock(&self.inner);
+        let key = ViewKey {
+            conn,
+            view: view.to_owned(),
+        };
+        let Some(sp) = g.views.get(&key).and_then(|v| g.spaces.get(&v.space)) else {
+            return Vec::new();
+        };
+        let mut machines: Vec<vegvisir::model::Item> = sp
+            .core
+            .model()
+            .items()
+            .into_values()
+            .filter(|it| it.kind == Kind::Machine)
+            .collect();
+        machines.sort_by_key(|it| it.order);
+        machines
+            .into_iter()
+            .map(|it| {
+                let (used, total) = it.fields.slots.unwrap_or((0, 0));
+                (it.label, used, total)
+            })
+            .collect()
+    }
+
     pub fn near(&self, conn: u64) -> Vec<String> {
         Self::near_in(&lock(&self.inner), conn)
     }

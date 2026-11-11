@@ -148,6 +148,136 @@ column's claim drawn into it), else the pad and a character in KIND's face."
                                           'face (drgnx-debug-gutter--face kind)))))
               'help-echo help))
 
+;;;; The hover dot
+
+;; A faint dot under the pointer on a line without a mark, with no Lisp on mouse motion: each shown line carries a
+;; margin string, a dot in the margin's own background with a `mouse-face' that shows it (Nidhogg lights a margin
+;; string's mouse face).  The strings sit on a pool of overlays per window (the overlay's `window', so a buffer in two
+;; windows is not doubled), laid over the window's lines when its start, height or the text changed.
+
+(defvar-local drgnx-debug-gutter--pool nil
+  "(WINDOW KEY . OVERLAYS): each window's hover dots and what they were laid out for (KEY: a vector of the window's
+start and height, the text's tick, the marks' version and count and the string, compared without consing).")
+(defvar-local drgnx-debug-gutter--hover-cache nil
+  "[THEMES REMAPS OFFSET STRING]: the last hover string, for these `custom-enabled-themes', `face-remapping-alist' and
+pad (the colours change only with a theme or a remap).")
+
+(defun drgnx-debug-gutter--hover-p (window)
+  "Whether WINDOW's frame lights a margin string's `mouse-face' (Nidhogg's feature, graphical frames)."
+  (and (featurep 'glitnir-margin-mouse-face) (display-graphic-p (window-frame window))))
+
+(defun drgnx-debug-gutter--margin-background ()
+  "The background the left margin draws in here: `default' as this buffer remaps it (`face-remapping-alist'), else the
+frame's."
+  (let ((specs (alist-get 'default face-remapping-alist)))
+    (when (keywordp (car-safe specs)) (setq specs (list specs)))
+    (or (seq-some (lambda (s)
+                    (let ((b (cond ((and (consp s) (keywordp (car s))) (plist-get s :background))
+                                   ((and (symbolp s) (not (eq s 'default)) (facep s))
+                                    (face-attribute s :background nil t)))))
+                      (and (stringp b) b)))
+                  specs)
+        (face-background 'default nil t))))
+
+(defun drgnx-debug-gutter--hover-colours ()
+  "(BACKGROUND . DOT) as #rrggbb: the margin's background and the hover face's colour, or nil where either is unknown."
+  (let ((bg (drgnx-color-rgb (drgnx-debug-gutter--margin-background)))
+        (fg (drgnx-color-rgb (face-foreground 'drgnx-debug-hover nil t))))
+    (and bg fg (cons (drgnx-color-hex bg) (drgnx-color-hex fg)))))
+
+(defun drgnx-debug-gutter--hover-string (bg fg)
+  "The hover dot's margin string: after the claim's pad, a dot in BG (the margin's background: unseen) whose
+`mouse-face' is FG at 38 % over BG.  The dot sits in the column's middle character (a margin string draws no pixel
+space: the glyphs' images are centred in the whole column, so an odd column count lines them up).  The dot is in the
+UI font (`drgnx-ui-text'): its ● is the mockup's 10 px at 13 px where the code font's is 8, and its line is no
+taller."
+  (propertize " " 'display
+              (list '(margin left-margin)
+                    (concat (drgnx-margins-pad 'debug)
+                            (make-string (/ (1- (drgnx-debug-gutter--columns)) 2) ?\s)
+                            (propertize "●" 'face (list :inherit 'drgnx-ui-text :foreground bg)
+                                        'mouse-face (list :inherit 'drgnx-ui-text
+                                                          :foreground (drgnx-color-over fg bg 0.38))
+                                        'help-echo "Click to add a breakpoint")))))
+
+(defun drgnx-debug-gutter--hover-string-now ()
+  "The hover string for this buffer's pad and the theme's colours, or nil without colours.  Cached on the themes, the
+remaps and the pad by `eq', so a redisplay that changes none of them reads no face and conses nothing."
+  (let ((c drgnx-debug-gutter--hover-cache) (offset (drgnx-margins-offset 'debug)))
+    (if (and c (eq (aref c 0) custom-enabled-themes) (eq (aref c 1) face-remapping-alist) (eql (aref c 2) offset))
+        (aref c 3)
+      (let ((colours (drgnx-debug-gutter--hover-colours)))
+        (aref (setq drgnx-debug-gutter--hover-cache
+                    (vector custom-enabled-themes face-remapping-alist offset
+                            (and colours (drgnx-debug-gutter--hover-string (car colours) (cdr colours)))))
+              3)))))
+
+(defun drgnx-debug-gutter--pool-clear (&optional window)
+  "Take WINDOW's hover dots out (all windows' when nil)."
+  (dolist (cell drgnx-debug-gutter--pool)
+    (when (or (null window) (eq (car cell) window))
+      (mapc #'delete-overlay (cddr cell))))
+  (setq drgnx-debug-gutter--pool
+        (and window (seq-remove (lambda (cell) (eq (car cell) window)) drgnx-debug-gutter--pool))))
+
+(defun drgnx-debug-gutter--pool-key-p (key window string)
+  "Whether KEY (a pool's vector) still describes WINDOW and STRING."
+  (and key
+       (eql (aref key 0) (window-start window)) (eql (aref key 1) (window-body-height window))
+       (eql (aref key 2) (buffer-chars-modified-tick)) (eql (aref key 3) drgnx-debug-gutter--version)
+       (eql (aref key 4) (length drgnx-debug-gutter--overlays)) (eq (aref key 5) string)))
+
+(defun drgnx-debug-gutter--pool-lay (window string old)
+  "Put STRING on each line WINDOW shows from its start, visible and without a mark, as many as its body is high:
+reuse the overlays OLD, make more as needed, delete those left.  The new overlays, in order."
+  (let ((n (window-body-height window)) new)
+    (save-excursion
+      (goto-char (window-start window))
+      (while (> n 0)
+        (let ((bol (line-beginning-position)))
+          (unless (or (invisible-p bol) (get-char-property bol 'drgnx-debug-bp))
+            (let ((o (or (pop old)
+                         (let ((o (make-overlay 1 1 nil t nil)))
+                           (overlay-put o 'drgnx-debug-hover window)
+                           (overlay-put o 'window window)
+                           o))))
+              (move-overlay o bol bol)
+              (unless (eq (overlay-get o 'before-string) string) (overlay-put o 'before-string string))
+              (push o new)))
+          (setq n (1- n))
+          ;; the next visible line: `forward-line' then past any folded text
+          (if (or (eobp) (/= (forward-line 1) 0))
+              (setq n 0)
+            (while (and (not (eobp)) (invisible-p (point)))
+              (goto-char (next-single-char-property-change (point) 'invisible)))))))
+    (mapc #'delete-overlay old)
+    (nreverse new)))
+
+(defun drgnx-debug-gutter--pool-update (window)
+  "`pre-redisplay-functions' and `window-scroll-functions': lay WINDOW's hover dots over its shown lines when its start,
+height, the text or the marks changed; take the dots of windows that no longer show the buffer out."
+  (dolist (cell drgnx-debug-gutter--pool)
+    (unless (and (window-live-p (car cell)) (eq (window-buffer (car cell)) (current-buffer)))
+      (drgnx-debug-gutter--pool-clear (car cell))))
+  (when (and (window-live-p window) (eq (window-buffer window) (current-buffer)))
+    (let ((string (and drgnx-debug-gutter-mode (drgnx-debug-gutter--hover-p window)
+                       (drgnx-margins-offset 'debug)
+                       (drgnx-debug-gutter--hover-string-now))))
+      (if (not string)
+          (when (assq window drgnx-debug-gutter--pool) (drgnx-debug-gutter--pool-clear window))
+        (let ((cell (assq window drgnx-debug-gutter--pool)))
+          (unless (and cell (drgnx-debug-gutter--pool-key-p (cadr cell) window string))
+            (let ((overlays (drgnx-debug-gutter--pool-lay window string (cddr cell)))
+                  (key (vector (window-start window) (window-body-height window) (buffer-chars-modified-tick)
+                               drgnx-debug-gutter--version (length drgnx-debug-gutter--overlays) string)))
+              (if cell
+                  (setcdr cell (cons key overlays))
+                (push (cons window (cons key overlays)) drgnx-debug-gutter--pool)))))))))
+
+(defun drgnx-debug-gutter--pool-scrolled (window _start)
+  "`window-scroll-functions': WINDOW scrolled; its dots follow."
+  (drgnx-debug-gutter--pool-update window))
+
 ;;;; The column's claim
 
 (defun drgnx-debug-gutter--wanted-p ()
@@ -421,10 +551,16 @@ it), a mark whose line was deleted sends `remove'."
         (add-hook 'after-revert-hook #'drgnx-debug-gutter--reverted nil t)
         (add-hook 'drgnx-margins-changed-functions #'drgnx-debug-gutter--restring)
         (add-hook 'drgnx-hub-event-functions #'drgnx-debug-gutter--event)
+        (add-hook 'pre-redisplay-functions #'drgnx-debug-gutter--pool-update nil t)
+        (add-hook 'window-scroll-functions #'drgnx-debug-gutter--pool-scrolled nil t)
         (when buffer-file-name (drgnx-debug-gutter--ask nil))
         (drgnx-debug-gutter--claim))
     (remove-hook 'after-save-hook #'drgnx-debug-gutter--saved t)
     (remove-hook 'after-revert-hook #'drgnx-debug-gutter--reverted t)
+    (remove-hook 'pre-redisplay-functions #'drgnx-debug-gutter--pool-update t)
+    (remove-hook 'window-scroll-functions #'drgnx-debug-gutter--pool-scrolled t)
+    (drgnx-debug-gutter--pool-clear)
+    (setq drgnx-debug-gutter--hover-cache nil)
     (drgnx-debug-gutter--clear)
     (setq drgnx-debug-gutter--bps nil drgnx-debug-gutter--version 0)
     (drgnx-margins-claim 'debug nil)

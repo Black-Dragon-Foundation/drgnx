@@ -13,11 +13,32 @@
 (drgnx-test-modules-preload '(tools/work-space))
 
 (ert-deftest drgnx-work-flow/the-lens-names-the-flow ()
-  "The lens is Map · Board · Timeline · Flow; the current one is bold."
-  (let ((s (drgnx-work-lens-string 'flow)))
-    (should (string-match-p "Map .*Board .*Timeline .*Flow" s))
-    (should (eq (get-text-property (string-match "Flow" s) 'face s) 'bold))
-    (should (eq (get-text-property (string-match "Map" s) 'face s) 'drgnx-work-label))))
+  "The lens bar is the Work space's tab (Work · its name), then Map · Board · Timeline · Flow with the current one
+marked, then the lens's own keys as chips with their key badges."
+  (let ((s (drgnx-work-lens-string 'flow "drgnx" '(("evidence" . "e") ("rules" . "R")))))
+    (should (string-match-p "Work · drgnx.*Map.*Board.*Timeline.*Flow.*evidence.*e.*rules.*R" s))
+    (should (eq (get-text-property (string-match "Work · drgnx" s) 'face s) 'drgnx-work-lens-title))
+    (should (eq (get-text-property (string-match "Flow" s) 'face s) 'drgnx-work-lens-current))
+    (should (eq (get-text-property (string-match "Map" s) 'face s) 'drgnx-work-label))
+    (should (eq (get-text-property (string-match "evidence" s) 'face s) 'drgnx-work-chip))
+    (should (eq (get-text-property (string-search "R" s (string-search "rules" s)) 'face s) 'drgnx-work-lens-key)))
+  ;; no name: the tab says Work alone; no keys: no chips
+  (let ((s (drgnx-work-lens-string 'map)))
+    (should (string-match-p "Work .*Map" s))
+    (should-not (string-match-p "evidence" s))))
+
+(ert-deftest drgnx-work-flow/its-window-shows-the-lens-bar ()
+  "The Flow's window shows the lens bar as its tab line (the chrome keeps a buffer's own) and no header: its strip
+(what needs you, the machines' load) is the hub's, in its rows."
+  (with-temp-buffer
+    (drgnx-work-flow-mode)
+    (should (local-variable-p 'drgnx-chrome-own-tab-line))
+    (should drgnx-chrome-own-tab-line)
+    (should (equal tab-line-format '("" drgnx-work-map--lens)))
+    (should-not header-line-format)
+    ;; a mode line drops the faces of a variable's string unless the variable is risky
+    (should (get 'drgnx-work-map--lens 'risky-local-variable))
+    (should (get 'drgnx-work-map--strip 'risky-local-variable))))
 
 (ert-deftest drgnx-work-flow/it-asks-the-hub-for-the-job-s-flow ()
   "The Flow asks `work/flow/subscribe' with its view, its map's view and the job (none: the hub picks the newest
@@ -84,11 +105,29 @@ says its reason."
 literal colour."
   (dolist (f '(drgnx-work-flow-text drgnx-work-flow-label drgnx-work-flow-heading drgnx-work-flow-chip-ok
                                     drgnx-work-flow-chip-run drgnx-work-flow-chip-held drgnx-work-flow-chip-err
-                                    drgnx-work-flow-chip-wait))
+                                    drgnx-work-flow-chip-wait drgnx-work-flow-key))
     (should (facep f))
     (let ((spec (face-default-spec f)))
       (should-not (string-match-p "#[0-9a-fA-F]\\{3\\}" (format "%S" spec)))
       (should (string-match-p "drgnx-ui-" (format "%S" spec))))))
+
+(ert-deftest drgnx-work-flow/g-n-selects-the-nth-held-task ()
+  "In the Flow, `g N' (the strip's badges) selects the Nth task a gate holds; on the map it stays the map's Nth thing
+that needs you; elsewhere it says where it works."
+  (let (moved)
+    (cl-letf (((symbol-function 'drgnx-work-flow--rows-p) (lambda () t))
+              ((symbol-function 'drgnx-view-nav) (lambda (&rest args) (push args moved)))
+              ((symbol-function 'drgnx-work-map-needs-you) (lambda (n) (push (list 'map n) moved))))
+      (with-temp-buffer
+        (drgnx-work-flow-mode)
+        (drgnx-work-needs-you 2))
+      (with-temp-buffer
+        (drgnx-work-map-mode)
+        (drgnx-work-needs-you 3))
+      (with-temp-buffer
+        (fundamental-mode)
+        (should-error (drgnx-work-needs-you 1) :type 'user-error)))
+    (should (equal (nreverse moved) '((walk-to "held" 1) (map 3))))))
 
 (ert-deftest drgnx-work-flow/the-actions-answer-the-gate-card ()
   "Run the red, Tell the agent and Waive once answer the held task's `gate' card (`job/card': merge, retry, waive with
@@ -120,5 +159,43 @@ only; every profile names them."
                                (read (current-buffer)))
                              :bind)))
         (should (assq id rows))))))
+
+(ert-deftest drgnx-work-flow/its-cards-and-rules-are-glitnir-blocks ()
+  "Pattern D: the hub's block marks on the rows become `glitnir-blocks' on the window showing the Flow: a card's ring
+from its first row to the end of its last, a rule per marked row, colours as faces (Glitnir resolves them again on a
+theme change).  The parameter is set when the blocks change, not per patch; a killed Flow leaves no blocks behind."
+  (let ((buffer (generate-new-buffer "*flow-blocks*")) (sets 0)
+        (setp (symbol-function 'set-window-parameter)))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer buffer)
+          (add-hook 'kill-buffer-hook #'drgnx-work-flow--unblock nil t)
+          (let ((inhibit-read-only t))
+            (insert (propertize "T1 row" 'drgnx-work-flow-block ["rule" "task:1" 0 600]) "\n"
+                    (propertize "Merge batch" 'drgnx-work-flow-block ["ring" "batch" 0 290])
+                    (propertize " Line gate" 'drgnx-work-flow-block ["ring" "line" 300 598]) "\n"
+                    (propertize "T2 tip" 'drgnx-work-flow-block ["ring" "batch" 0 290]) "\n"))
+          (cl-letf (((symbol-function 'set-window-parameter)
+                     (lambda (w p v) (when (eq p 'glitnir-blocks) (cl-incf sets)) (funcall setp w p v))))
+            (drgnx-work-flow--patched nil nil)
+            (let* ((blocks (window-parameter (selected-window) 'glitnir-blocks))
+                   (kinds (mapcar #'car blocks)))
+              (should (equal kinds '(rule ring ring)))
+              (let ((batch (nth 1 blocks)))
+                ;; the batch's ring spans its two rows: from "Merge batch" to the end of "T2 tip"
+                (should (= (marker-position (nth 1 batch)) 8))
+                (should (= (marker-position (nth 2 batch)) (1- (point-max))))
+                (should (equal (plist-get (nthcdr 3 batch) :x1) 290))
+                (should (eq (plist-get (nthcdr 3 batch) :ring) 'drgnx-border))
+                (should (eq (plist-get (nthcdr 3 batch) :beneath) 'default)))
+              (should (eq (plist-get (nthcdr 3 (car blocks)) :ring) 'drgnx-border-subtle))
+              (should (equal (plist-get (nthcdr 3 (nth 2 blocks)) :x0) 300))
+              ;; the same rows again: the same object, not set again
+              (drgnx-work-flow--patched nil nil)
+              (should (eq (window-parameter (selected-window) 'glitnir-blocks) blocks))
+              (should (= sets 1))))
+          (kill-buffer buffer)
+          (should-not (window-parameter (selected-window) 'glitnir-blocks)))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
 
 ;;; work-flow-test.el ends here

@@ -2447,7 +2447,10 @@ snapshots; the search itself is `hrafn::grep`).
   a folder sorts by its files' ranks together; `search/run` refuses it, since it waits for the index, so the editor
   sends it as a regroup right after the run). `search/fold {view, node, open}` folds a `d:` folder in Folders: its
   row stays (`▸`, a `drgnx-replace-fold` property on the chevron), the rows under it go, the model keeps every
-  node; `upto` to a row under it opens the folders above it, and a regroup opens all. Files in the order found need nothing; any other
+  node; `upto` to a row under it opens the folders above it, and a regroup opens all. A regroup re-parents every
+  node, so its model goes as a first window of 2,000 entries (`FIRST_MODEL_WINDOW`) with the first window's rows;
+  once those are drawn the editor asks for the whole window (`view/window`), which drains after them (spec §8's
+  50 ms is the first window's). Files in the order found need nothing; any other
   grouping or a sort builds a layout of the run's files (every row in order with its parent node), again only when the
   files change. Folders: a tree by path, folders before files, one-child chains joined, `d:<path>` nodes (kind
   `folder`, a `count` field) parenting their folders and files. Symbols: each file's matches under `s:<path>:<start

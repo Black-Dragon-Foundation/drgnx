@@ -60,7 +60,10 @@ font-lock (`lisp--el-funcall-position-p', through `forward-sexp') scanned the re
 
 (defun drgnx-perf-run--debug-setup-form ()
   "The debug workloads' setup: the breakpoint column's files, `drgnx-hub-call' answered by a store in the session (its
-`debug/breakpoints' adds and removes by line, as the hub's), F9 toggling; `drgnx-perf--debug-stop' undoes it."
+`debug/breakpoints' adds and removes by line, as the hub's), F9 toggling, and the hover pool laid out as on a Nidhogg
+that lights a margin's mouse face (the feature provided where the Emacs lacks it: an advice on the gutter's own call
+would be bypassed by native code; the cost timed is the Lisp's, the C lights nothing until the pointer comes);
+`drgnx-perf--debug-stop' undoes it."
   (format "(progn (dolist (m '(\"drgnx-debug-launch\" \"drgnx-debug-gutter\")) (load (expand-file-name (concat \"modules/extra/\" m) %S) nil t))
      (defvar drgnx-perf--debug-store nil) (defvar drgnx-perf--debug-version 0)
      (defun drgnx-perf--debug-hub (method params cb &rest _)
@@ -72,8 +75,12 @@ font-lock (`lisp--el-funcall-position-p', through `forward-sexp') scanned the re
          (funcall cb (list :version (cl-incf drgnx-perf--debug-version) :breakpoints (reverse drgnx-perf--debug-store)) nil))
        1)
      (defun drgnx-perf--debug-stop ()
-       (advice-remove 'drgnx-hub-call #'drgnx-perf--debug-hub) (global-unset-key (kbd \"<f9>\")) t)
+       (advice-remove 'drgnx-hub-call #'drgnx-perf--debug-hub)
+       (when drgnx-perf--debug-feature (setq features (delq 'glitnir-margin-mouse-face features)))
+       (global-unset-key (kbd \"<f9>\")) t)
      (advice-add 'drgnx-hub-call :override #'drgnx-perf--debug-hub)
+     (defvar drgnx-perf--debug-feature (not (featurep 'glitnir-margin-mouse-face)))
+     (provide 'glitnir-margin-mouse-face)
      (global-set-key (kbd \"<f9>\") #'drgnx-debug-gutter-toggle) t)"
           drgnx-ui-repo-dir))
 
@@ -1101,26 +1108,42 @@ up, from a search's start to its end (an upper bound of the scope's list: the en
 (defconst drgnx-perf-run--search-regroup-form
   (prin1-to-string
    '(progn
-      (defvar drgnx-perf--rg-drawn nil "When the hub's last patch of the Search view was drawn.")
-      (defvar drgnx-perf--rg-trace nil "Diagnostics: the view's patches and hub events since the last regroup, newest first.")
-      (defun drgnx-perf--rg-patch (apply patch)
-        (let ((what (funcall apply patch)))
-          (push (list 'patch (plist-get patch :view) (plist-get patch :class) (plist-get patch :base)
-                      (plist-get patch :version) (mapcar (lambda (op) (if (consp op) (car op) op)) (plist-get patch :ops))
-                      what)
-                drgnx-perf--rg-trace)
-          what))
-      (defun drgnx-perf--rg-event (event data)
-        (push (list 'event event (plist-get data :view)) drgnx-perf--rg-trace))
-      (defun drgnx-perf--rg-mark (&rest _)
-        "After a hub patch was drawn (`drgnx-replace--rows-boxes')."
-        (setq drgnx-perf--rg-drawn (float-time)))
       (defvar drgnx-perf--rg-dir nil "The project of the 10k matches the workload regroups.")
+      (defvar drgnx-perf--rg nil
+        "While armed: one record per regroup (`M-g'), newest first: [T0 FIRST ASKED FOLLOW-START FOLLOW-END KEY GROUP]
+\(`float-time's): the key, the first draw after it (the regroup's first window), the view asking for the whole
+window, the drain of the model that brought it, the next command (`<down>', typed 50 ms after `M-g'), the grouping.")
+      (defun drgnx-perf--rg-pre ()
+        (if (eq this-command 'drgnx-replace-search-group-next)
+            (push (vector (float-time) nil nil nil nil nil nil) drgnx-perf--rg)
+          (when-let* ((r (car drgnx-perf--rg)) ((null (aref r 5)))) (aset r 5 (float-time)))))
+      (defun drgnx-perf--rg-post ()
+        (when-let* (((eq this-command 'drgnx-replace-search-group-next)) (r (car drgnx-perf--rg)))
+          (aset r 6 (buffer-local-value 'drgnx-replace--group (drgnx-perf--replace-view)))))
+      (defun drgnx-perf--rg-drawn (&rest _)
+        "After a hub patch was drawn (`drgnx-replace--rows-boxes')."
+        (when-let* ((r (car drgnx-perf--rg)) ((null (aref r 1)))) (aset r 1 (float-time))))
+      (defun drgnx-perf--rg-asked (&rest _)
+        "The view asks for the whole window (`drgnx-replace--hub-call' of `view/window'): from inside the first draw's
+`drgnx-replace--rows-boxes', so that draw is marked here too."
+        (when-let* ((r (car drgnx-perf--rg)) ((null (aref r 2))))
+          (let ((now (float-time)))
+            (unless (aref r 1) (aset r 1 now))
+            (aset r 2 now))))
+      (defun drgnx-perf--rg-call (method _params)
+        (when (equal method "view/window") (drgnx-perf--rg-asked)))
+      (defun drgnx-perf--rg-apply (apply &rest args)
+        "A model drained into Sjá (`drgnx-view-model--apply' at a draw, `drgnx-view-model--due' for one no row patch
+named): the first after the view asked is the follow-up."
+        (let ((t0 (float-time)) (r (car drgnx-perf--rg)))
+          (prog1 (apply apply args)
+            (when (and r (aref r 2) (null (aref r 3)) (> t0 (aref r 2)))
+              (aset r 3 t0) (aset r 4 (float-time))))))
       (defun drgnx-perf--rg-arm ()
         "The Search view listing 10k matches of \"needle\" on the hub's rows path, grouped by Files: 100 Rust files in
 10 folders (`dNN/mod/', a one-child chain the Folders tree joins), each 10 functions of 10 lines that call it."
         (when drgnx-perf--rg-dir (delete-directory drgnx-perf--rg-dir t))
-        (setq drgnx-perf--rg-dir (make-temp-file "drgnx-perf-regroup" t))
+        (setq drgnx-perf--rg-dir (make-temp-file "drgnx-perf-regroup" t) drgnx-perf--rg nil)
         (let ((text (apply #'concat
                            (mapcar (lambda (i) (concat (format "fn f%d() {\n" i)
                                                        (apply #'concat (make-list 10 "    let x = needle(1);\n")) "}\n\n"))
@@ -1143,46 +1166,54 @@ up, from a search's start to its end (an upper bound of the scope's list: the en
                                                     (and drgnx-view-patch (eql 10000 (cdr drgnx-replace--hub-counts))
                                                          (not (drgnx-replace--busy-p))))))
             (error "Premise: \"needle\" did not list 10,000 matches on the rows path (counts %S)"
-                   (buffer-local-value 'drgnx-replace--hub-counts v))))
-        (advice-add 'drgnx-replace--rows-boxes :after #'drgnx-perf--rg-mark)
-        (advice-add 'drgnx-view-apply-patch :around #'drgnx-perf--rg-patch)
-        (advice-add 'drgnx-replace--hub-event :before #'drgnx-perf--rg-event)
+                   (buffer-local-value 'drgnx-replace--hub-counts v)))
+          (unless (eq (window-buffer (selected-window)) v) (error "Premise: the Search view is not the selected window"))
+          (unless (eq (key-binding (kbd "M-g")) 'drgnx-replace-search-group-next)
+            (error "Premise: M-g is %S in the Search view" (key-binding (kbd "M-g")))))
+        (add-hook 'pre-command-hook #'drgnx-perf--rg-pre)
+        (add-hook 'post-command-hook #'drgnx-perf--rg-post)
+        (advice-add 'drgnx-replace--rows-boxes :after #'drgnx-perf--rg-drawn)
+        (advice-add 'drgnx-replace--hub-call :before #'drgnx-perf--rg-call)
+        (advice-add 'drgnx-view-model--apply :around #'drgnx-perf--rg-apply)
+        (advice-add 'drgnx-view-model--due :around #'drgnx-perf--rg-apply)
         t)
       (defun drgnx-perf--rg-disarm ()
-        (advice-remove 'drgnx-view-apply-patch #'drgnx-perf--rg-patch)
-        (advice-remove 'drgnx-replace--hub-event #'drgnx-perf--rg-event)
-        (advice-remove 'drgnx-replace--rows-boxes #'drgnx-perf--rg-mark)
+        (remove-hook 'pre-command-hook #'drgnx-perf--rg-pre)
+        (remove-hook 'post-command-hook #'drgnx-perf--rg-post)
+        (advice-remove 'drgnx-replace--rows-boxes #'drgnx-perf--rg-drawn)
+        (advice-remove 'drgnx-replace--hub-call #'drgnx-perf--rg-call)
+        (advice-remove 'drgnx-view-model--apply #'drgnx-perf--rg-apply)
+        (advice-remove 'drgnx-view-model--due #'drgnx-perf--rg-apply)
         (when drgnx-perf--rg-dir (delete-directory drgnx-perf--rg-dir t) (setq drgnx-perf--rg-dir nil)))
-      (defun drgnx-perf--rg-once (group)
-        "One regroup to GROUP: ms from the command to the hub's new rows drawn."
-        (with-current-buffer (drgnx-perf--replace-view)
-          (setq drgnx-perf--rg-drawn nil drgnx-perf--rg-trace nil)
-          (let ((t0 (float-time)))
-            (drgnx-replace-search-group group)
-            (unless (drgnx-perf--wait 10 (lambda () drgnx-perf--rg-drawn))
-              (error "Premise: regrouping to %s drew no rows in 10 s (group %S, rows %S, view %S, trace %S; messages: %s)"
-                     group drgnx-replace--group (drgnx-replace--rows-p) drgnx-replace-view (reverse drgnx-perf--rg-trace)
-                     (with-current-buffer (messages-buffer)
-                       (buffer-substring-no-properties (max (point-min) (- (point-max) 600)) (point-max)))))
-            ;; the model and the rows come as two lines: what follows within a quiet 50 ms belongs to this regroup
-            (let ((last drgnx-perf--rg-drawn))
-              (while (progn (drgnx-perf--wait 0.05 (lambda () (not (eql last drgnx-perf--rg-drawn))))
-                            (not (eql last drgnx-perf--rg-drawn)))
-                (setq last drgnx-perf--rg-drawn)))
-            (* 1000 (- drgnx-perf--rg-drawn t0)))))
       (defun drgnx-perf--rg-measure ()
-        "(:regroup_ms STATS :tree_ms STATS :symbol_ms STATS :file_ms STATS): 40 rounds of Folders, Symbols, Files after
-one to warm up, each from the command to its rows drawn (spec §8: the first window ≤ 50 ms p95, no search again)."
-        (dolist (g '(tree symbol file)) (drgnx-perf--rg-once g))
-        (let (tree symbol file)
-          (dotimes (_ 40)
-            (push (drgnx-perf--rg-once 'tree) tree)
-            (push (drgnx-perf--rg-once 'symbol) symbol)
-            (push (drgnx-perf--rg-once 'file) file))
-          (drgnx-perf--rg-disarm)
-          (let ((st (lambda (l) (mapcar #'drgnx-perf--round (drgnx-perf-stats l)))))
-            (list :regroup_ms (funcall st (append tree symbol file)) :tree_ms (funcall st tree)
-                  :symbol_ms (funcall st symbol) :file_ms (funcall st file)))))
+        "(:first_ms STATS :tree_ms :symbol_ms :file_ms STATS :follow_ms STATS :settle_ms STATS :key_wait_ms STATS
+:key_in_follow N :rounds N): per regroup, ms from `M-g' to its first window drawn (spec §8: ≤ 50 ms p95), per grouping;
+the follow-up's drain (the whole window's model); from `M-g' to that drain's end; and for `<down>', typed 50 ms
+after `M-g', how long after the follow-up's start it ran when it came while the drain held the editor (0 when it came
+before or after).  An error when a regroup drew nothing or never asked for the whole window."
+        (drgnx-perf--wait 5 (lambda () (when-let* ((r (car drgnx-perf--rg))) (aref r 4))))
+        (drgnx-perf--rg-disarm)
+        (let* ((rs (reverse drgnx-perf--rg)) (ms (lambda (a b) (* 1000 (- b a))))
+               (st (lambda (l) (mapcar #'drgnx-perf--round (drgnx-perf-stats l))))
+               (of (lambda (g) (delq nil (mapcar (lambda (r) (and (eq (aref r 6) g) (funcall ms (aref r 0) (aref r 1))))
+                                                 rs)))))
+          (when-let* ((bad (seq-find (lambda (r) (null (aref r 1))) rs)))
+            (error "Premise: a regroup drew nothing (%S)" bad))
+          (when-let* ((bad (seq-find (lambda (r) (null (aref r 4))) rs)))
+            (error "Premise: a regroup never drained the whole window (%S)" bad))
+          (let ((waits (mapcar (lambda (r) (let ((k (aref r 5)))
+                                             (if (and k (> k (aref r 3)) (<= k (+ (aref r 4) 0.002)))
+                                                 (funcall ms (aref r 3) k)
+                                               0.0)))
+                               rs)))
+            (list :first_ms (funcall st (mapcar (lambda (r) (funcall ms (aref r 0) (aref r 1))) rs))
+                  :tree_ms (funcall st (funcall of 'tree)) :symbol_ms (funcall st (funcall of 'symbol))
+                  :file_ms (funcall st (funcall of 'file))
+                  :follow_ms (funcall st (mapcar (lambda (r) (funcall ms (aref r 3) (aref r 4))) rs))
+                  :settle_ms (funcall st (mapcar (lambda (r) (funcall ms (aref r 0) (aref r 4))) rs))
+                  :key_wait_ms (funcall st waits)
+                  :key_in_follow (seq-count (lambda (w) (> w 0)) waits)
+                  :rounds (length rs)))))
       t))
   "The `search-regroup' workload's session side (with the replace workloads' and the hub's).")
 
@@ -1571,13 +1602,17 @@ a :measure without :actions each have :timeout seconds to answer (120)."
       ;; (`drgnx-perf--debug-hub'), so what is timed is the editor's half: placing and dressing the marks
       (debug-gutter-scroll
        :setup ,(drgnx-perf-run--debug-setup-form)
-       ;; the 12k-line fixture with a breakpoint every 40 lines (300), of every kind; then as code-scrolling
-       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min)) (drgnx-debug-gutter-mode 1)"
-                      " (drgnx-debug-gutter--apply (list :version 1 :breakpoints"
+       ;; the 12k-line fixture with a breakpoint every 40 lines (300), of every kind, in the session's store, which the
+       ;; mode asks for as it turns on (a view handed to `--apply' would be older than the store's version and dropped);
+       ;; then as code-scrolling
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
+                      " (setq drgnx-perf--debug-store (reverse"
                       "   (mapcar (lambda (i) (list :id i :line (* 40 i) :enabled (/= 0 (% i 5)) :verified (/= 0 (% i 7))"
                       "                             :condition (and (= 0 (% i 3)) \"x > 1\") :log (and (= 0 (% i 11)) \"{x}\")))"
-                      "           (number-sequence 1 300)))) t)")
+                      "           (number-sequence 1 300))))"
+                      " (drgnx-debug-gutter-mode 1) t)")
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
+       :check "(with-current-buffer (window-buffer) (and (= 300 (length drgnx-debug-gutter--overlays)) (seq-some (lambda (o) (overlay-get o 'drgnx-debug-hover)) (overlays-in (window-start) (window-end))) t))"   ; the marks and the hover pool were drawn
        :teardown ,(concat "(progn (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
       ;; F9 on 20 lines in a row: each key a `debug/breakpoints' add, its answer and the column redrawn
       (debug-breakpoint-click
@@ -1673,12 +1708,15 @@ a :measure without :actions each have :timeout seconds to answer (120)."
                        " " drgnx-perf-run--search-scopes-form " (drgnx-perf--replace-arm) (drgnx-perf--gs-up))")
        :measure "(drgnx-perf--gs-measure)"
        :teardown ,(concat "(progn (drgnx-perf--gs-down) (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
-      ;; regrouping the Search view's 10k matches (100 files) without searching again: Folders, Symbols, Files, 20 rounds
-      ;; (spec §8: the first window ≤ 50 ms p95)
+      ;; regrouping the Search view's 10k matches (100 files in 10 folders) without searching again, by key: Folders,
+      ;; Symbols, Files, 40 rounds (spec §8: the first window ≤ 50 ms p95; the follow-up drain and a key during it reported)
       (search-regroup
        :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) " (drgnx-perf-run--replace-setup-form)
                        " " drgnx-perf-run--search-regroup-form ")")
        :each "(drgnx-perf--rg-arm)"
+       ;; 40 rounds of three regroups (Folders, Symbols, Files): each M-g, then <down> 50 ms later (while the first
+       ;; window is drawn and the whole window is asked for and drains), then 0.6 s
+       :actions ,(apply #'append (make-list 120 '((:keys "M-g") (:pause 0.05) (:keys "<down>") (:pause 0.6))))
        :measure "(drgnx-perf--rg-measure)"
        :teardown ,(concat "(progn (drgnx-perf--rg-disarm) (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
       ;; retyping the Search view's query over 10k matches on the hub's rows path, a character at a time: "needle" to
@@ -2252,7 +2290,7 @@ version and the commit, as JSON in FILE."
     (search-context . "its bar is a ratio of its own runs (labels against none: first rows ≤ 1.10×, end ≤ 1.15×), read from :first_ratio and :done_ratio")
     (search-lists . "its bar is the lists' draw time (:draw_ms :p95 ≤ 5 ms, spec §8); no keys are typed")
     (search-scopes . "its rows are git's and the disk's time (spec §8: reported, never failed); no keys are typed")
-    (search-regroup . "its bar is the regroup's time to its rows (:regroup_ms :p95 ≤ 50 ms, spec §8); no keys are typed")
+    (search-regroup . "its bar is the regroup's first window (:first_ms :p95 ≤ 50 ms, spec §8); the follow-up drain and the key during it are reported")
     (search-retype . "its input rows are judged now; allocation, CPU and rows follow its first runs on the desktop island (the combined pass)")
     (typing-evil . "needs DRGNX_MODAL_ELPA (evil); not run in the container")
     (motions-evil . "needs DRGNX_MODAL_ELPA")

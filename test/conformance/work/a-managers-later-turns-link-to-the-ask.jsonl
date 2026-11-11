@@ -1,9 +1,9 @@
-{"scenario": "work/a-managers-later-turns-link-to-the-ask", "requires": ["v1"], "doc": "A manager's graph writes link to the user's message behind them in any turn, not only the turn that answers it: a task written after the turn ended (as in a turn the hub woke on a job) links to the ask, a second message becomes the current ask for the writes after it, and each ask is made once, with the user's words and the manager's channel. Pattern B: the user's turn's last step is the gate for its delivery, and the tool call's answer for its links (the hub links a session's writes before the call answers)."}
+{"scenario": "work/a-managers-later-turns-link-to-the-ask", "requires": ["v1", "test-hooks"], "doc": "A manager's graph writes link to the user's message behind them in any turn, not only the turn that answers it: a task written after the turn ended (as in a turn the hub woke on a job) links to the ask, a second message becomes the current ask for the writes after it, and each ask is made once, with the user's words and the manager's channel. Pattern B: the agent's answer in the user's turn is the gate for its delivery (the hub starts with a delay between the turn's first step and its ask, so a wait for a step fails), and the tool call's answer for its links (the hub links a session's writes before the call answers)."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m init"], "expect_code": 0}
 {"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
-{"do": "start", "hub": "h"}
+{"do": "start", "hub": "h", "env": {"RATATOSKR_TEST_ASK_DELAY_MS": "1500"}}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "connect", "conn": "e", "hub": "h"}
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
@@ -12,9 +12,11 @@
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/role", "params": {"id": "$sid", "role": "manager"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": true}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 901, "method": "agents/entries/subscribe", "params": {"session": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"id": 901, "result": {"seq": "$number"}}}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "plan the cache"}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
-{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"turn_id": "t1"}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [["$any", {"type": "agent", "text": "You said: plan the cache"}]]}}}, "within_ms": 30000}
 {"do": "connect", "conn": "m", "hub": "h", "socket": "path:$SOCKET_DIR/s/$sid/mcp.sock", "as": "raw"}
 {"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
 {"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
@@ -23,7 +25,7 @@
 {"do": "sql_expect", "sql": "select a.title, json_extract(a.data, '$.channel'), json_extract(a.data, '$.by'), t.title from link l join entity a on a.n = l.src join entity t on t.n = l.dst where l.kind = 'asked' order by t.title", "rows": [["plan the cache", "manager", "user", "alpha"]]}
 {"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "and the tests"}}}
 {"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
-{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"turn_id": "t2"}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [["$any", {"type": "agent", "text": "You said: and the tests"}]]}}}, "within_ms": 30000}
 {"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "create", "title": "beta"}}}}
 {"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": "$any"}}
 {"do": "sql_expect", "sql": "select a.title, t.title from link l join entity a on a.n = l.src join entity t on t.n = l.dst where l.kind = 'asked' order by t.title", "rows": [["plan the cache", "alpha"], ["and the tests", "beta"]]}

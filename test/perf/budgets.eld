@@ -139,8 +139,8 @@
  (search-pattern (:first_ms :p95) 300) (search-pattern (:done_ms :p95) 2000)
  ;; search-lists: the empty Search view's saved (100, 10 pinned) and recent (50) searches drawn within 5 ms (spec §8)
  (search-lists (:draw_ms :p95) 5)
- ;; search-regroup: the Search view's 10k matches regrouped (Folders, Symbols, Files) to their rows drawn within 50 ms (spec §8)
- (search-regroup (:regroup_ms :p95) 50)
+ ;; search-regroup: the Search view's 10k matches regrouped (Folders, Symbols, Files) to their first window drawn within 50 ms (spec §8)
+ (search-regroup (:first_ms :p95) 50)
  ;; work-board: 40 moves over a Board of 200 cards on the hub's rows path (plan sja-complete B1).  Its allocation is held
  ;; to its old-path pair's, work-board-old (4750-4752 objects a key; the rows path 1932-1944 before and after the bar,
  ;; 2026-11-10, pinned, two runs each); cpu p90 6.8-11.5 ms (the most, 11.48, before the bar), x 1.25
