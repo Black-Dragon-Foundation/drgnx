@@ -1153,6 +1153,16 @@ impl PlanHooks {
                         .map(|_| ());
                     }
                 }
+                // the merge queue: batches of the pack's size, members one at a time in readiness order
+                use crate::orch::queue::Turn;
+                match self
+                    .queue_turn(front, job, tid, &l, &data, &tree, &job_tree)
+                    .await?
+                {
+                    Turn::Merge => {}
+                    Turn::Wait(_) => return Ok(()),
+                    Turn::Back(note) => return retry(front, job, tid, Some(note)).await,
+                }
                 let Some(message) = self
                     .commit_hooks(front, job, t, &tree, &job_tree, &data)
                     .await?
@@ -1210,6 +1220,72 @@ impl PlanHooks {
         }
     }
 
+    /// Task TID's turn in its job's merge queue, once its gates passed (`orch::queue`).  A job with no rule pack
+    /// merges as before: one task at a time, as each passes.
+    #[allow(clippy::too_many_arguments)]
+    async fn queue_turn(
+        &self,
+        front: &Arc<Front>,
+        job: &str,
+        tid: &str,
+        l: &Loaded,
+        data: &Map<String, Value>,
+        tree: &TaskTree,
+        job_tree: &Path,
+    ) -> Result<crate::orch::queue::Turn, Error> {
+        use crate::orch::queue::{Entry, Turn, turn};
+        let j = job.to_owned();
+        let pack = front
+            .writer
+            .db
+            .read(move |c| norn::read::evidence::pack_of_job(c, &j))
+            .await
+            .map_err(fail)?;
+        let Some(pack) = pack else {
+            return Ok(Turn::Merge);
+        };
+        let live: Vec<String> = l
+            .tasks
+            .iter()
+            .filter(|x| {
+                x.row.status.as_deref() == Some("in-review")
+                    && data_for(data, "passed", &x.row.id).is_some()
+            })
+            .map(|x| x.row.id.clone())
+            .collect();
+        let tip = tick::git(&tree.path, &["rev-parse", &tree.branch])
+            .await
+            .map_err(git_error)?
+            .trim()
+            .to_owned();
+        let (f, dir, job, tid) = (
+            front.clone(),
+            job_tree.to_path_buf(),
+            job.to_owned(),
+            tid.to_owned(),
+        );
+        let shared = pack.on("merge-notes").then(|| pack.shared_paths.clone());
+        let size = pack.batch();
+        crate::clock::blocking(move || {
+            turn(
+                &f.queue,
+                &dir,
+                Entry {
+                    job: &job,
+                    task: &tid,
+                    tip: &tip,
+                    at: now(),
+                    live: &live,
+                    size,
+                    shared: shared.as_deref(),
+                },
+            )
+        })
+        .await
+        .map_err(|e| internal(e.to_string()))?
+        .map_err(internal)
+    }
+
     /// The reviewer's pass accepts every file of T at the diff it has now (the gate checks the marks against it).
     async fn accept_all(
         &self,
@@ -1246,6 +1322,7 @@ impl PlanHooks {
     /// T's branch is in the job's: done, and its dependents may start.
     async fn merged(&self, front: &Arc<Front>, job: &str, t: &Task) -> Result<(), Error> {
         let tid = t.row.id.as_str();
+        front.queue.forget(job, tid);
         set_status(front, tid, "done", t.row.agent.clone()).await?;
         let t2 = tid.to_owned();
         update_data(front, &service(), job, move |d| {

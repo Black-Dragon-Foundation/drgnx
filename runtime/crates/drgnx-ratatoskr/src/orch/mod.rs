@@ -4,8 +4,13 @@
 //! - [`evidence`]: a task's jobs as `red` / `green` evidence; `orch/evidence`.
 //! - [`policy`]: the rule pack a job was approved with, and the policy files read at the line's base.
 //! - [`red_first`]: the red-first gate before a task's merge.
+//! - [`gates`]: the gates before a task's merge, the runs they start, waivers.
+//! - [`notes`]: the merge notes a task's merges need.
+//! - [`queue`]: the merge queue's batches.
 
 pub mod evidence;
 pub mod gates;
+pub mod notes;
 pub mod policy;
+pub mod queue;
 pub mod red_first;

@@ -90,6 +90,8 @@ pub struct Front {
     pub extensions: crate::extensions::Hub,
     /// The runs the orchestration gates started, in flight ([`crate::orch::gates`]).
     pub orch: crate::orch::gates::Runs,
+    /// The merge queue's ready tasks and batches, by job ([`crate::orch::queue`]).
+    pub queue: crate::orch::queue::Queue,
     /// Test hooks (`--test-ignore-shutdown`): `shutdown` is answered and ignored, so `stop` reaches its signal.
     pub ignore_shutdown: AtomicBool,
     /// The store's other folders (home, config, `<state>/hub`), once the server opened it.
@@ -184,6 +186,7 @@ impl Front {
             search: crate::search::Hub::default(),
             extensions: crate::extensions::Hub::default(),
             orch: crate::orch::gates::Runs::default(),
+            queue: crate::orch::queue::Queue::default(),
             ignore_shutdown: AtomicBool::new(false),
             dirs: OnceLock::new(),
             shell_env: crate::shell_env::ShellEnv::default(),

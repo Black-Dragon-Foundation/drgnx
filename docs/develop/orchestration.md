@@ -104,6 +104,38 @@ which the lease reaper leaves alone, so nothing needs renewing.)
 path as a manager's rotation (when its turn ends, a fresh session in the same worktree), told its task's brief and to
 read the tree's log and status first.
 
+## Merge notes
+
+With `merge-notes` on (the org's pack), every two-parent merge in a task's base..tip is resolved by both sides'
+intent and says so. For a merge of the line (theirs) into the task's branch (ours), `orch::notes` diffs both sides
+from their merge base and needs a note for:
+
+- each **hunk both sides changed**, as `PATH:FIRST-LAST` in the base's lines (ranges that overlap or touch, joined:
+  git conflicts on neighbouring lines too; `vordr::notes::conflicts`);
+- each **shared file** (the pack's `:shared-paths`) both sides changed apart, as `PATH`: a clean merge there is
+  still audited.
+
+A note is a line of the merge commit's message:
+
+```text
+Merge-note: core/x.el:12-18 ours=1a2b3c4 theirs=5d6e7f8 resolution=both | the new key and the renamed one both stay
+```
+
+`resolution` is `ours`, `theirs`, `both` or `new`; the reason after `|` is required. Each cited commit (7 characters
+or more) must have touched its hunk on its side: `git log -L FIRST,LAST:PATH base..side` over the hunk's lines on that
+side, or `git log base..side -- PATH` for a shared file. A merge with a hunk uncovered, a citation that didn't touch it
+or a note without a reason holds the task's merge (a `gate` card naming each); like the trailers, no waiver passes it.
+
+## The merge queue
+
+A task whose gates passed is **ready** (`orch::queue`, in memory: after a restart tasks are ready again as their
+gates pass again). The next **batch** is the earliest ready tasks, up to the pack's `:batch-size`, leaving out a task
+whose tip conflicts with an earlier member's (`git merge-tree`): it waits for the next batch, after the earlier one
+merged. A batch stays until its members merged or left the job's review (dropped, sent back, a card); members merge
+one at a time in readiness order, each `--no-ff`. A member whose merge onto the line would cleanly join shared files
+both sides changed since they parted goes back to its agent, told to merge the line in with a note per file. A job
+with no rule pack merges as before, each task as it passes.
+
 ## Red first
 
 `vordr::redfirst::decide` over the task's commits base..tip (`orch::red_first::inputs`):

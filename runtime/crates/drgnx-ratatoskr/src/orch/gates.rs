@@ -102,7 +102,7 @@ pub fn rerun_of(
         .or_else(|| evidence.iter().rev().find_map(of))
 }
 
-fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let out = std::process::Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -260,15 +260,20 @@ pub async fn before_merge(
     let (top, base, tip) = (tree.path.clone(), tree.base.clone(), tree.branch.clone());
     let body = crate::orch::red_first::body_of(data, n);
     let p = pack.clone();
-    let (tip_commit, found, inputs) = crate::clock::blocking(move || {
+    let (tip_commit, found, unnoted, inputs) = crate::clock::blocking(move || {
         let tip_commit = git(&top, &["rev-parse", &tip])?.trim().to_owned();
         let found = if p.on("trailers") {
             trailers_in(&top, &base, &tip)?
         } else {
             Vec::new()
         };
+        let unnoted = if p.on("merge-notes") {
+            crate::orch::notes::check(&top, &base, &tip, &p.shared_paths)?
+        } else {
+            Vec::new()
+        };
         let inputs = crate::orch::red_first::inputs(&top, &base, &tip, &p, &body)?;
-        Ok::<_, String>((tip_commit, found, inputs))
+        Ok::<_, String>((tip_commit, found, unnoted, inputs))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -276,6 +281,14 @@ pub async fn before_merge(
         return Ok(Decision::Hold(format!(
             "attribution trailers: {}",
             found.join("; ")
+        )));
+    }
+    // like the trailers, a commit's own words: no waiver passes them
+    if !unnoted.is_empty() {
+        return Ok(Decision::Hold(format!(
+            "merge notes: {}. Each needs a line in its merge commit's message: Merge-note: HUNK ours=COMMIT \
+             theirs=COMMIT resolution=ours|theirs|both|new | why",
+            unnoted.join("; ")
         )));
     }
     // the user's waiver at this tip passes red first and the author check (never the trailers: those are reworded)
