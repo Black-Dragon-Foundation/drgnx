@@ -94,7 +94,8 @@ impl Drop for Report {
                 "{}",
                 sh_lossy(&format!(
                     "cd '{root}' || exit 0; echo '-- the root'; ls -la . run jobs 2>&1; \
-                     for d in jobs/*/; do echo \"== $d\"; ls -la \"$d\"; \
+                     for d in $(find jobs -mindepth 1 -maxdepth 1 -type d 2>/dev/null); do d=\"$d/\"; \
+                       echo \"== $d\"; ls -la \"$d\"; \
                        for f in job-exec.log log result.json meta.json job.json job.sb; do \
                          if [ -f \"$d$f\" ]; then echo \"-- $f\"; tail -c 4000 \"$d$f\"; echo; fi; done; done; \
                      echo '-- other logs'; find . -maxdepth 3 -name '*.log' ! -path './jobs/*' \
@@ -182,11 +183,13 @@ impl Hub {
         self.q.submit(s, now());
     }
 
-    /// The runner added as NAME with its root at ROOT (under the account's home), in rotation.
+    /// The runner added as NAME with its root at ROOT (under the account's home), in rotation. The CI host is
+    /// `dedicated`: no one works on it, and its 7 GB less a workstation's 4 GB user reserve and floor leaves no
+    /// memory for jobs (round 17: `-256 MiB is free for jobs`, so nothing was offered).
     async fn add(&mut self, name: &str, root: &str) -> serde_json::Value {
         self.root = Some(root.to_string());
         let p: AddParams = serde_json::from_value(json!({
-            "host": host(), "trust": "mine", "name": name, "profile": "workstation", "root": root,
+            "host": host(), "trust": "mine", "name": name, "profile": "dedicated", "root": root,
         }))
         .unwrap();
         let view = self.reg.add(p).await.expect("the Mac is added");
@@ -452,19 +455,18 @@ mod mac_runner {
         let script = "touch \"$TMPDIR/started\"; while [ ! -e \"$TMPDIR/go\" ]; do /bin/sleep 0.2; done; echo survived";
         hub.submit(job("xlink", script, freeze(&work, &blobs), 512));
         hub.running("xlink", "mac").await;
+        // `find`, not a glob: the account's shell is zsh, where a glob that matches nothing is an error
         let started = |root: &str| {
             sh(&format!(
-                "ls -d '{root}'/jobs/*/tmp/started 2>/dev/null | head -n 1"
+                "find '{root}/jobs' -path '*/tmp/started' 2>/dev/null | head -n 1"
             ))
         };
-        {
-            let _report = hub.report();
-            skuld::wait_until_async("the job started", WAIT, || {
-                let s = started(&root);
-                std::future::ready((!s.is_empty()).then_some(()))
-            })
-            .await;
-        }
+        // the queue is driven meanwhile: the job's offer, admission and start go through it
+        hub.drive("the job started", |_, _| {
+            let s = started(&root);
+            (!s.is_empty()).then_some(())
+        })
+        .await;
 
         // the ssh master stopped: the link is lost, the job runs on
         OpensshTransport::new(dir.path().join("run"))
