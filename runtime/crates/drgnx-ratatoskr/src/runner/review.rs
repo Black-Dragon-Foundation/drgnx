@@ -1122,6 +1122,27 @@ impl PlanHooks {
             .await
             .map(|_| ()),
             Gate::Allow => {
+                // the gates on the hub's own records (docs/develop/orchestration.md): red first
+                use vordr::redfirst::Decision;
+                match crate::orch::red_first::check(front, job, tid, t.row.n, &repo, &tree, &data)
+                    .await
+                    .map_err(internal)?
+                {
+                    Decision::Pass(_) => {}
+                    Decision::Wait(why) | Decision::Hold(why) => {
+                        return raise_card(
+                            front,
+                            &service(),
+                            job,
+                            Some(tid),
+                            "gate",
+                            &format!("red first: {why}"),
+                            json!({"key": "red-first"}),
+                        )
+                        .await
+                        .map(|_| ());
+                    }
+                }
                 let Some(message) = self
                     .commit_hooks(front, job, t, &tree, &job_tree, &data)
                     .await?

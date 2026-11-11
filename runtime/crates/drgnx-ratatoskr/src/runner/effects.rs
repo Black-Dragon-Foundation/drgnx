@@ -368,6 +368,7 @@ pub async fn plan_for_job(front: &Front, id: &str) -> Result<(PathBuf, Plan), Er
                 .map(|r| if r.ends_with('/') { r } else { format!("{r}/") }),
             tasks,
             wont_build: Vec::new(),
+            pack: None,
             hash,
         },
     ))

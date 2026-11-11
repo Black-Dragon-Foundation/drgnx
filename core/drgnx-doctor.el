@@ -76,7 +76,7 @@ PLATFORM (`linux' or `macos'): only run on that platform, as `drgnx-platform' sa
 (declare-function drgnx-pkg-status "drgnx-pkg")
 (declare-function drgnx-pkg-gpg-facts "drgnx-pkg")
 (declare-function drgnx-pkg-service-unit-file "drgnx-pkg")
-(declare-function drgnx-pkg--unit-exec-start "drgnx-pkg")
+(declare-function drgnx-pkg--daemon-start "drgnx-pkg")
 (declare-function drgnx-file-read-bounded "drgnx-file")
 
 (defun drgnx-doctor--service-unit ()
@@ -87,7 +87,7 @@ PLATFORM (`linux' or `macos'): only run on that platform, as `drgnx-platform' sa
         (let* ((file (drgnx-pkg-service-unit-file))
                (text (drgnx-file-read-bounded file)))
           (when text
-            (pcase (drgnx-pkg--unit-exec-start text)
+            (pcase (drgnx-pkg--daemon-start text)
               (`(,_ ,emacs ,drgnx) (list :file file :emacs emacs :drgnx (and drgnx t)))
               (_ (list :file file :emacs nil :drgnx nil))))))
     (error (list :error (error-message-string err)))))
@@ -860,18 +860,23 @@ the issues it backports a fix for are left out."
                                                      (directory-file-name (plist-get c :dir)))))
                                       (t (list 'ok "init/ has no local changes" nil))))))
 
-(drgnx-doctor-define 'service-unit :group "drgnx" :platform 'linux
-                     :doc "The systemd unit starts the Emacs drgnx uses"
+(drgnx-doctor-define 'service-unit :group "drgnx"
+                     :doc "The daemon's service (systemd unit, macOS launch agent) starts the Emacs drgnx uses"
                      :check (lambda (f)
-                              (let ((u (plist-get f :service-unit)) (running (plist-get f :running-emacs)))
+                              (let ((u (plist-get f :service-unit)) (running (plist-get f :running-emacs))
+                                    (macos (eq (drgnx-platform) 'macos)))
                                 (cond ((null u) nil)
                                       ((plist-get u :error) (list 'info (format "could not check: %s" (plist-get u :error)) nil))
                                       ((not (plist-get u :drgnx))
-                                       (list 'info (format "%s is not drgnx's daemon unit: left alone" (abbreviate-file-name (plist-get u :file))) nil))
+                                       (list 'info (format "%s is not drgnx's daemon %s: left alone" (abbreviate-file-name (plist-get u :file))
+                                                           (if macos "agent" "unit"))
+                                             nil))
                                       ((equal (file-truename (plist-get u :emacs)) (file-truename running))
-                                       (list 'ok (format "drgnx.service runs %s" (plist-get u :emacs)) nil))
-                                      (t (list 'warn (format "drgnx.service starts %s, but drgnx uses %s" (plist-get u :emacs) running)
-                                               "drgnx service-unit --refresh, then: systemctl --user restart drgnx"))))))
+                                       (list 'ok (format "%s runs %s" (if macos "drgnx's launch agent" "drgnx.service") (plist-get u :emacs)) nil))
+                                      (t (list 'warn (format "%s starts %s, but drgnx uses %s" (if macos "drgnx's launch agent" "drgnx.service")
+                                                             (plist-get u :emacs) running)
+                                               (if macos "drgnx update --restart (it refreshes the agent first)"
+                                                 "drgnx service-unit --refresh, then: systemctl --user restart drgnx")))))))
 
 (drgnx-doctor-define 'job-sandbox :group "Agents"
                      :doc "Jobs' agents run in a sandbox: bubblewrap (bwrap) on Linux, sandbox-exec on macOS"

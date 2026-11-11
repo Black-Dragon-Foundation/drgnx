@@ -1,4 +1,4 @@
-{"scenario": "hooks/allow-verdict-on-an-ask-cell-still-asks", "requires": ["v1", "test-hooks"], "doc": "[C] Hooks only narrow: the deny-rm-hook fixture says allow to `ls`, on a step the matrix asks about. The hooks run before the card, the matrix still asks (one matrix card, the row's outcome `ask`), and only the user's yes lets the agent go on."}
+{"scenario": "hooks/allow-verdict-on-an-ask-cell-still-asks", "requires": ["v1", "test-hooks"], "doc": "[C] Hooks only narrow: the deny-rm-hook fixture says allow to `touch notes.txt`, a change (a plain `ls` is a code.read now), on a step the matrix asks about. The hooks run before the card, the matrix still asks (one matrix card, the row's outcome `ask`), and only the user's yes lets the agent go on."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
@@ -17,7 +17,7 @@
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": {"applied": 1}}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
 {"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
-{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/send", "params": {"id": "$sid", "text": "ask:tool {\"kind\": \"execute\", \"title\": \"ls\", \"rawInput\": {\"command\": \"ls\"}, \"_meta\": {\"claudeCode\": {\"toolName\": \"Bash\"}}}"}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/send", "params": {"id": "$sid", "text": "ask:tool {\"kind\": \"execute\", \"title\": \"touch notes.txt\", \"rawInput\": {\"command\": \"touch notes.txt\"}, \"_meta\": {\"claudeCode\": {\"toolName\": \"Bash\"}}}"}}}
 {"do": "expect", "conn": "c", "json": {"id": 5, "result": true}}
 {"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$capture:card", "kind": "matrix"}}, "within_ms": 15000}
 {"do": "sql_expect", "path": "$DATA/work.db", "sql": "select json_extract(e.data, '$.outcome'), json_extract(e.data, '$.records[0].verdict') from event e join tx t on t.id = e.tx where t.actor = 'hub:hooks'", "rows": [["ask", "allow"]]}

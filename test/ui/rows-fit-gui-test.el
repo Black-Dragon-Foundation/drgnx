@@ -16,6 +16,7 @@
 (dolist (d '("core" "wb" "harness"))
   (add-to-list 'load-path (expand-file-name d drgnx-rows-fit-ui-test--repo)))
 (load (expand-file-name "test/fixtures/rows-demo-fixture" drgnx-rows-fit-ui-test--repo) nil t)
+(require 'drgnx-pixels)                  ; `drgnx-px': a label's width in the frame's pixels
 
 (defconst drgnx-rows-fit-ui-test--fonts
   '(("Inter" . "Inter-Regular.ttf") ("JetBrains Mono" . "JetBrainsMono-Regular.otf"))
@@ -85,7 +86,8 @@ at 11-16 px, the hub's sum against `string-pixel-width'.  Both modes' largest er
     ("rtl" . "\N{ARABIC LETTER MEEM}\N{ARABIC LETTER REH}\N{ARABIC LETTER HAH}\N{ARABIC LETTER BEH}\N{ARABIC LETTER ALEF} hello"))
   "The fit check's labels: Latin, ligatures, a ZWJ sequence, combining marks and right-to-left text.")
 
-(defconst drgnx-rows-fit-ui-test--widths '(80 160 240) "The pixel widths each label is fitted to.")
+(defconst drgnx-rows-fit-ui-test--widths '(80 160 240)
+  "The widths each label is fitted to, in logical pixels (the hub fits to them at the class's scale).")
 
 (defun drgnx-rows-fit-ui-test--report (line)
   "LINE in the messages and in the report file (DRGNX_ROWS_FIT_REPORT, else the run's evidence folder)."
@@ -95,7 +97,8 @@ at 11-16 px, the hub's sum against `string-pixel-width'.  Both modes' largest er
     (write-region (concat line "\n") nil out t 'silent)))
 
 (defun drgnx-rows-fit-ui-test--check-rows (buffer)
-  "Each label row of BUFFER: (KEY PX WIDTH CUT MAX-CHAR), WIDTH the drawn segment's before its stop."
+  "Each label row of BUFFER: (KEY PX WIDTH CUT MAX-CHAR), PX the label's width in the frame's pixels (`drgnx-px'),
+WIDTH the drawn segment's before its stop."
   (with-current-buffer buffer
     (let ((state drgnx-view-patch) out)
       (dolist (l drgnx-rows-fit-ui-test--labels)
@@ -103,7 +106,7 @@ at 11-16 px, the hub's sum against `string-pixel-width'.  Both modes' largest er
           (let* ((key (format "%s/%d" (car l) px)) (row (gethash key (drgnx-view-patch-rows state)))
                  (beg (drgnx-view-row-start drgnx-view key)) (stop (car (car (plist-get row :stops))))
                  (seg (buffer-substring beg (+ beg stop))))
-            (push (list key px (string-pixel-width seg) (and (string-search "…" seg) t)
+            (push (list key (drgnx-px px) (string-pixel-width seg) (and (string-search "…" seg) t)
                         (apply #'max (mapcar (lambda (c) (string-pixel-width (string c))) (cdr l))))
                   out))))
       out)))

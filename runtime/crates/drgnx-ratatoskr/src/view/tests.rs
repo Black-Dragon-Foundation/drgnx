@@ -434,6 +434,30 @@ fn fixture_labels_are_fitted_per_class() {
     assert_eq!(t[0].text, "abcde… |");
 }
 
+/// A label's PX is logical, as every view's sizes are: a GUI class at scale 2 fits it, and puts its stop, at twice
+/// that in device px (its fonts' px), rounded half up as `drgnx-px` does.
+#[test]
+fn fixture_labels_are_logical_px() {
+    use drgnx_rows::fit::FontSet;
+    let labels = vec![("a".to_owned(), "abcdefghij".to_owned(), 30)];
+    let mut set = FontSet::new();
+    set.set_role("ui", None, 10.0);
+    let answers: Vec<(String, char, f32)> = "abcdefghij…"
+        .chars()
+        .map(|c| ("ui".to_owned(), c, 10.0))
+        .collect();
+    set.glyphs(&answers);
+    let mut two = env("g2", 1, 600);
+    two.scale = 2.0;
+    let gui = super::label_rows(&labels, &two, &set);
+    assert_eq!(gui[0].text, "abcd… |");
+    assert_eq!(gui[0].stops, vec![(5, 60)]);
+    let mut odd = env("g125", 1, 600);
+    odd.scale = 1.25;
+    // 30 × 1.25 = 37.5 → 38
+    assert_eq!(super::label_rows(&labels, &odd, &set)[0].stops[0].1, 38);
+}
+
 /// An acknowledged view (a terminal's): one patch in flight per (view, class); rows built meanwhile wait, the newest
 /// winning, and go as one patch on the ack of the version sent. An ack of another version releases nothing.
 #[test]

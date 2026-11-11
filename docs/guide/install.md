@@ -425,9 +425,10 @@ It works in the install's own checkout (the folder the `drgnx` command runs from
    got. A failed Rust build rolls the whole update back, so the Lisp and the binary never differ: the last run reads
    "failed: runtime build failed (…)", and the doctor says to fix the toolchain, then `drgnx update`. The same happens if the update is interrupted (Ctrl-C, a timeout,
    logout) before it finished. Output of the steps is kept in `~/.local/state/drgnx/update/last.log`.
-5. Points an installed `drgnx.service` at the Emacs drgnx uses now (`drgnx service-unit --refresh`; only the
-   `ExecStart=` line changes; see [packages.md](packages.md#running-drgnx-as-a-daemon)), and an installed desktop entry
-   at drgnx's icon and Nidhogg's windows. It never restarts the service.
+5. Points an installed `drgnx.service` (macOS: drgnx's launch agent) at the Emacs drgnx uses now (`drgnx service-unit
+   --refresh`; only the `ExecStart=` line, or the agent's `ProgramArguments`, changes; see
+   [packages.md](packages.md#running-drgnx-as-a-daemon)), and an installed desktop entry at drgnx's icon and Nidhogg's
+   windows. It never restarts the service.
 6. Prints what changed (`old..new`, one line per commit, at most 15) and ends with "Restart drgnx to use it": it
    never restarts or talks to a running drgnx unless you pass `--restart` (below). Restart it soon: a running drgnx still has the old code in memory, and
    files it loads later come from the new version.
@@ -444,10 +445,12 @@ It works in the install's own checkout (the folder the `drgnx` command runs from
 because `drgnx rollback` already exists for *packages*. A second `--back` goes forward again.
 
 `drgnx update --restart` (also with `--back`) restarts drgnx for you after a successful update: on Linux it runs
-`systemctl --user restart drgnx` when the drgnx systemd user unit is enabled. The restart ends the daemon, so its
+`systemctl --user restart drgnx` when the drgnx systemd user unit is enabled; on macOS, when drgnx's launch agent is
+installed (`drgnx service-unit --install`), it unloads the agent and loads it again (`launchctl bootout`, then
+`bootstrap`), so launchd starts the Emacs the update pointed the agent at. The restart ends the daemon, so its
 windows close and `emacsclient` sessions lose their server; run `drgnx` to open a window again. A failed update or
-rollback never restarts, and with no drgnx service installed (and on macOS, which has none) it says so and changes
-nothing. The daily timer never restarts.
+rollback never restarts, and with no drgnx service installed it says so and changes nothing. The daily timer never
+restarts.
 
 ### Updating by itself
 

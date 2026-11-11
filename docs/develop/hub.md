@@ -2361,7 +2361,9 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   (`view/measured`); from then on that width is used for that string instead of the sum (least recently used out).
 - **The fit check row** (`test/ui/rows-fit-gui-test.el`, on the fixture view `rows-demo`, whose labels the hub
   fits per class: `__test_view_rows`' `labels`): Latin, ligatures, a ZWJ
-  sequence, combining marks and Arabic in Inter and JetBrains Mono at 11 to 16 px, fitted to 80, 160 and 240 px. No
+  sequence, combining marks and Arabic in Inter and JetBrains Mono at 11 to 16 px, fitted to 80, 160 and 240 px. A
+  label's width is logical, as every view's sizes are: a GUI class fits it, and puts its stop, at the env's scale in
+  device px, rounded half up as `drgnx-px` does (160 is 320 at 2, 200 at 1.25). No
   segment runs past its stop after the guard, and none is cut more than the slack and one glyph short, except joined
   Arabic in a font without it: its letters come per char from the editor's fallback font, whose shaped (joined) forms
   are narrower, so the sum runs wide and the label may be cut up to about 26 px short at 80 px. That is reported, not

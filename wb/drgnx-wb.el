@@ -339,19 +339,21 @@ text's colour, which shows the hidden control."
   "The overlay putting the selected row's face on its newline: the face at the line's end then has the row's box,
 so Emacs runs the box on into the tail at the end instead of closing it after the text.")
 
-(defun drgnx-wb-row-tail-overlay (eol mark face &optional control reuse)
+(defun drgnx-wb-row-tail-overlay (eol mark face &optional control reuse sensor)
   "Put the tail (see `drgnx-wb-row-tail') of the row ending at EOL in an overlay over the row that remembers MARK,
 FACE and CONTROL and carries the row's mouse face (Emacs lights an overlay's string with its text: one run).  On the
 selected row (the selection overlay's, `drgnx-wb-selection-sync') it is drawn in the selection's face, and becomes
 the tail the next sync draws plain again when the selection moves.  REUSE, an overlay of an earlier call, is moved
-there instead of making a new one (drawn again only when its tail changed)."
+there instead of making a new one (drawn again only when its tail changed).  SENSOR, a list of functions, is the
+row's `mouse-sensor-functions' (Nidhogg): on the overlay and on every tail drawn, so the row and its tail are one run."
   (let* ((bol (save-excursion (goto-char eol) (pos-bol)))
-         (tail (list mark face control))
+         (tail (list mark face control sensor))
          (o (if (and (overlayp reuse) (overlay-buffer reuse)) (move-overlay reuse bol eol) (make-overlay bol eol)))
          (sel drgnx-wb--selected-overlay)
          (row (and (overlayp sel) (eq (overlay-buffer sel) (current-buffer)) (= bol (overlay-start sel))
                    (overlay-get sel 'face))))
     (overlay-put o 'drgnx-git t)
+    (overlay-put o 'mouse-sensor-functions sensor)
     (unless (equal tail (overlay-get o 'drgnx-row-tail)) (overlay-put o 'after-string nil))
     (overlay-put o 'drgnx-row-tail tail)
     (drgnx-wb--tail-paint o row)
@@ -367,10 +369,12 @@ and its own back after."
    ((overlay-get o 'drgnx-row-end)
     (overlay-put o 'after-string (if row (drgnx-wb--row-end row) (overlay-get o 'drgnx-row-end))))
    ((or (not (overlay-get o 'after-string)) (not (eq row (overlay-get o 'drgnx-row-face))))
-    (pcase-let ((`(,mark ,face ,control) (overlay-get o 'drgnx-row-tail)))
+    (pcase-let ((`(,mark ,face ,control ,sensor) (overlay-get o 'drgnx-row-tail)))
       (overlay-put o 'drgnx-row-face row)
       (overlay-put o 'mouse-face (if row (drgnx-wb--row-mouse-face row) (drgnx-wb-row-hover-face)))
-      (overlay-put o 'after-string (drgnx-wb-row-tail mark face row control))))))
+      (let ((s (drgnx-wb-row-tail mark face row control)))
+        (when sensor (put-text-property 0 (length s) 'mouse-sensor-functions sensor s))
+        (overlay-put o 'after-string s))))))
 
 
 (defun drgnx-wb--focused-p ()
