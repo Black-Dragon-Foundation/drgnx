@@ -2382,12 +2382,18 @@ snapshots; the search itself is `hrafn::grep`).
 - **Symbol and Meaning** (`view/search/modes.rs`) ask the index on a task of their own and send all their files when
   it answers, then `search-run-done` (its `error` is the index's refusal, e.g. no index yet). Symbol (`{mode:
   "symbol", name, case?}`, case on by default) is `search/usages`' answer: the files that define the name first, each
-  definition's line and then the file's uses, then the files that use it in the index's rank (at most 100), each
-  line's whole-word occurrences of the name a match (the line read from disk; a definition whose line lacks the name
-  is a match of nothing at its start). Meaning (`{mode: "meaning", question}`) is `search/query`'s hits (code scope, at
-  most 100): one match per hit under its file, the hit's symbol as the match (else its first line), its first line
-  and score after it. Both are read-only: a non-empty `replace` is refused at `search.replace`; scopes, globs and the
-  open buffers do not apply.
+  definition's line and then the file's uses in line order, then the files that use it in the index's rank (at most
+  100), each line's whole-word occurrences of the name a match (the line read from disk; a definition whose line lacks
+  the name is a match of nothing at its start). A definition's row is its kind's icon (`ƒ` function or method, `◇`
+  type, `#` macro, `≡` variable or constant, `•` else; face `drgnx-replace-kind`, the kind on hover) and its
+  signature, the name lit as a match; with `context`, the uses inside a definition follow one label row of it (as
+  Text's), the definition's own row standing for its label. Meaning (`{mode: "meaning", question}`) is
+  `search/query`'s hits (code scope, at most 100, re-located in the files as they are now): one match per hit under
+  its file, a row of a four-cell score bar (the hit's share of the best one, in eighths; face `drgnx-replace-score`,
+  the score on hover), the hit's symbol (face `drgnx-replace-kind`; else its first line) and its first line, and
+  `(moved)` when its lines moved since indexing. Both kinds of row keep a match row's tick box, `drgnx-replace-match`
+  and id. Both modes are read-only: a non-empty `replace` is refused at `search.replace`; scopes, globs and the open
+  buffers do not apply.
 - **Context labels** (`context?`, default true; the editor sends false when `drgnx-search-context` is off): the thread
   that reads each file for its snapshot also parses it once (`search/context.rs`, Hrafn's definitions; code languages
   only, none past 2 MB; an open buffer's text the same way; with labels on, up to 4 reader threads take the files as

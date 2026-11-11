@@ -272,6 +272,7 @@ fn put_of(q: &Query, file: &str, buf: &Buffer, context: bool, keep: Option<&Keep
             let read = Read {
                 snap: run::buffer_snap(buf.tick, text),
                 ctx,
+                marks: Vec::new(),
             };
             Put::Text(ms, read)
         }
@@ -605,7 +606,12 @@ fn skip_patches(
             } else {
                 pick(f.ctx, &keep)
             };
-            let read = f.snap.map(|snap| Read { snap, ctx });
+            // a replacement runs in Text mode only: no marks
+            let read = f.snap.map(|snap| Read {
+                snap,
+                ctx,
+                marks: Vec::new(),
+            });
             Some(Found {
                 large: f.large,
                 ..Found::new(f.file, ms, ns, read)
@@ -928,11 +934,11 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
         let root = p.root.clone();
         tokio::spawn(async move {
             let Some(f) = front.upgrade() else { return };
-            let found = modes::batches(&f, &root, &mode).await;
+            let found = modes::found(&f, &root, &mode, context).await;
             let error = match found {
                 Ok(files) => {
-                    for (file, ms) in files {
-                        if !f.core.views.grep_batch(&f, conn, &view, id, file, ms, None) {
+                    for (file, ms, read) in files {
+                        if !f.core.views.grep_batch(&f, conn, &view, id, file, ms, read) {
                             return;
                         }
                     }
