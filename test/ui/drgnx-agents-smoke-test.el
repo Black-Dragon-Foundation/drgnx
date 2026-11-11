@@ -15,6 +15,8 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'json)
+;; the session's load path has no core/ of its own: a narrowed run loads this file first
+(add-to-list 'load-path (expand-file-name "core" (expand-file-name "../../" (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory)))))
 (require 'drgnx-agents)
 (require 'drgnx-agents-mirror)
 (require 'drgnx-hub-client)
