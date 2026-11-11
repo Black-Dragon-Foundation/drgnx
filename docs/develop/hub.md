@@ -1498,6 +1498,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/map` | user | `{base?: boolean, budget?: natnum, focus?: [string], names?: [string], root: AbsPath, scope?: "code" \| "all"}` | `{files: [MapFile], files_total: natnum, fresh: Fresh, text: string, tokens: natnum}` | no |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
 | `search/outline` | user | `{base?: boolean, docs?: boolean, path: string, root: AbsPath}` | `{entries: [OutlineEntry], fresh: Fresh, lang: string, path: string}` | no |
+| `search/preview` | user | `{off?: [string], path: AbsPath, replace?: string, view: string}` | `PreviewAnswer` | no |
 | `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
 | `search/recent` | user | `{root: AbsPath}` | `{recent: [SearchSpec]}` | no |
 | `search/run` | user | `{context?: boolean, count?: boolean, ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, view: string}` | `{run: natnum}` | no |
@@ -2502,6 +2503,11 @@ Replace This, Undo Replace and Symbol mode's rename go through it, so a write ne
   first stays), a file changed since the search (size, mtime, inode, xxh3 of its snapshot), a buffer edited since,
   binary (NUL in the first 8 KiB), not UTF-8, over 16 MiB, open in chunks, gone. The answer `{change, files: [{path,
   source: disk|buffer, edits}], skipped}` names a change set the hub keeps (the last 20 per hub).
+- `search/preview {view, path, off?, replace?}` is one file's part of the same edit set as a diff (the preview tile):
+  the unified diff (3 lines of context; `similar`), its lines added and removed, the hunks (`old_start`, `old_lines`,
+  `new_start`, `new_lines`, the ids of the matches in each) and, for a regexp search, each match's groups (at most 8,
+  200 characters each, `null` for a group that matched nothing: the groups line), and what is skipped, with why. It
+  reads the file and keeps nothing.
 - `search/apply {view, change, open}` writes it (false when the change set is unknown or written already) and answers at
   once; the writes run in the background, a file at a time, each in its turn of the pair door's queue for that file
   (`pair/door.rs`, a user turn: an agent's write to the same file waits, and the search waits for one in flight). A

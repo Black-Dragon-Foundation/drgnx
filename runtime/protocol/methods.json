@@ -29061,6 +29061,194 @@
       "classes": [
         "user"
       ],
+      "doc": "one file's changes of a view's search as a unified diff: lines added and removed, the hunks with their matches' ids and a regexp's groups, the matches skipped with why",
+      "name": "search/preview",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/preview`: one file's changes of VIEW's search as a diff (the Search view's preview tile). The matches as\n`search/edits` takes them (all but `off`; `replace` when the fields have one the run was not told yet), of PATH only.",
+        "properties": {
+          "off": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "path": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "replace": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "path"
+        ],
+        "title": "PreviewParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "EditSkip": {
+            "additionalProperties": false,
+            "description": "An edit (or a whole file: no id) left out, and why.",
+            "properties": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "why"
+            ],
+            "type": "object"
+          },
+          "MatchGroups": {
+            "additionalProperties": false,
+            "description": "A regexp match's groups (`\\1` …, at most 8, each at most 200 characters): `None` for one that matched nothing.",
+            "properties": {
+              "groups": {
+                "items": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": "array"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "groups"
+            ],
+            "type": "object"
+          },
+          "PreviewHunk": {
+            "additionalProperties": false,
+            "description": "One hunk of a preview: its ranges (lines from 1, as the diff's `@@` line), the ids of the matches in it and, for a\nregexp search, their groups.",
+            "properties": {
+              "captures": {
+                "items": {
+                  "$ref": "#/$defs/MatchGroups"
+                },
+                "type": "array"
+              },
+              "ids": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "new_lines": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "new_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "old_lines": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "old_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "old_start",
+              "old_lines",
+              "new_start",
+              "new_lines",
+              "ids"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/preview`'s answer: the file's unified diff (3 lines of context), its lines added and removed, the hunks in\nthe diff's order and the matches skipped, each with why (an empty diff: none of its matches would be written).",
+        "properties": {
+          "diff": {
+            "type": "string"
+          },
+          "hunks": {
+            "items": {
+              "$ref": "#/$defs/PreviewHunk"
+            },
+            "type": "array"
+          },
+          "minus": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "plus": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/$defs/EditSkip"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "path",
+          "diff",
+          "plus",
+          "minus",
+          "hunks"
+        ],
+        "title": "PreviewAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "hybrid keyword, symbol, path and vector results for a question about a project's code; every answer says which model took part and what lags",
       "name": "search/query",
       "params": {

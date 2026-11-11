@@ -182,6 +182,7 @@
   "search/apply": ["user"],
   "search/buffer": ["user"],
   "search/edits": ["user"],
+  "search/preview": ["user"],
   "search/undo": ["user"],
   "search/grep-look": ["user"],
   "search/grep-skipped": ["user"],

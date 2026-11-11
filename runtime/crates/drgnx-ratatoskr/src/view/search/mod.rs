@@ -33,8 +33,8 @@ use rows::{
 use run::{Buffer, Found, Read};
 use runstav::methods::search::{
     AppliedParams, ApplyParams, BufferParams, ChangeOrigin, EditsAnswer, EditsParams, FileEdits,
-    FindQuery, GrepLookParams, GrepReplaceParams, GrepSkippedParams, RunDone, RunParams,
-    RunStarted, ScopeDone, ScopeKind, UndoParams,
+    FindQuery, GrepLookParams, GrepReplaceParams, GrepSkippedParams, PreviewAnswer, PreviewParams,
+    RunDone, RunParams, RunStarted, ScopeDone, ScopeKind, UndoParams,
 };
 use runstav::methods::view::ViewModel;
 use runstav::wire::{Error, ErrorCode};
@@ -1306,6 +1306,61 @@ pub async fn edits(f: &Front, c: &Caller, p: EditsParams) -> Result<EditsAnswer,
         files: answer_files,
         skipped,
     })
+}
+
+/// `search/preview`: P.path's changes of VIEW's search as a diff (the preview tile). Read on a blocking thread.
+pub async fn preview(f: &Front, c: &Caller, p: PreviewParams) -> Result<PreviewAnswer, Error> {
+    let views = &f.core.views;
+    let conn = c.conn_id;
+    let path = p.path.as_str().to_owned();
+    let bufs: BTreeMap<String, std::sync::Arc<str>> = views
+        .greps
+        .buffers_of(conn, &p.view)
+        .into_iter()
+        .filter(|(f, _)| *f == path)
+        .filter_map(|(f, b)| Some((f, b.text?)))
+        .collect();
+    let edits_params = EditsParams {
+        view: p.view.clone(),
+        root: None,
+        ids: None,
+        off: p.off.clone(),
+        edits: None,
+        replace: p.replace.clone(),
+    };
+    let (query, plan) = views
+        .greps
+        .current(conn, &p.view, |run| {
+            let plan = plans_of(run, &edits_params, &bufs)
+                .into_iter()
+                .find(|f| f.path == path);
+            (run.query.clone(), plan)
+        })
+        .ok_or_else(|| invalid("view", "the view has no search"))?;
+    let Some(plan) = plan else {
+        return Ok(PreviewAnswer {
+            path,
+            diff: String::new(),
+            plus: 0,
+            minus: 0,
+            hunks: Vec::new(),
+            skipped: Vec::new(),
+        });
+    };
+    let (answer, skipped) =
+        crate::clock::blocking(move || edits::preview(plan, |old| grep::captures(&query, old)))
+            .await
+            .map_err(|e| invalid("view", &e.to_string()))?;
+    let mut answer = answer.unwrap_or(PreviewAnswer {
+        path: p.path.as_str().to_owned(),
+        diff: String::new(),
+        plus: 0,
+        minus: 0,
+        hunks: Vec::new(),
+        skipped: Vec::new(),
+    });
+    answer.skipped = skipped;
+    Ok(answer)
 }
 
 /// `search/apply`: change set P.change written (`apply.rs`); false when there is none of the caller's to write.

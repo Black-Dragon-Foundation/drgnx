@@ -310,6 +310,7 @@ params! {
     SearchGrepLook(search::GrepLookParams),
     SearchGrepSkipped(search::GrepSkippedParams),
     SearchEdits(search::EditsParams),
+    SearchPreview(search::PreviewParams),
     SearchApply(search::ApplyParams),
     SearchApplied(search::AppliedParams),
     SearchUndo(search::UndoParams),

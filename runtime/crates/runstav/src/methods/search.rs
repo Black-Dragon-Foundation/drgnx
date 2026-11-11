@@ -608,6 +608,55 @@ pub struct ChangeDone {
     pub left: Vec<String>,
 }
 
+/// `search/preview`: one file's changes of VIEW's search as a diff (the Search view's preview tile). The matches as
+/// `search/edits` takes them (all but `off`; `replace` when the fields have one the run was not told yet), of PATH only.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PreviewParams {
+    pub view: String,
+    pub path: AbsPath,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub off: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace: Option<String>,
+}
+
+/// A regexp match's groups (`\1` …, at most 8, each at most 200 characters): `None` for one that matched nothing.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MatchGroups {
+    pub id: String,
+    pub groups: Vec<Option<String>>,
+}
+
+/// One hunk of a preview: its ranges (lines from 1, as the diff's `@@` line), the ids of the matches in it and, for a
+/// regexp search, their groups.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PreviewHunk {
+    pub old_start: u32,
+    pub old_lines: u32,
+    pub new_start: u32,
+    pub new_lines: u32,
+    pub ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub captures: Vec<MatchGroups>,
+}
+
+/// `search/preview`'s answer: the file's unified diff (3 lines of context), its lines added and removed, the hunks in
+/// the diff's order and the matches skipped, each with why (an empty diff: none of its matches would be written).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PreviewAnswer {
+    pub path: String,
+    pub diff: String,
+    pub plus: u32,
+    pub minus: u32,
+    pub hunks: Vec<PreviewHunk>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<EditSkip>,
+}
+
 /// `search/grep-look`: VIEW's rows of its search go on. A search sends a view its first 200 rows (a file's header and
 /// its matches, in order), and the totals in `search-run-done`; the hub keeps every match, and Sjá's model holds them.
 /// The editor asks for more when its window nears the end of the rows (`more`), or when it goes to a match beyond them
@@ -1211,6 +1260,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/edits", SearchEdits(EditsParams) -> EditsAnswer,
             classes: [User], writes: false,
             doc: "the edit set of a view's search (its ticked matches, the ids named, or edits the caller names): per file the edits with lines, character columns, byte ranges, old and new text; overlapping matches, files changed since the search, large and binary files skipped with why; kept as a change set for search/apply",
+        ),
+        method!(
+            "search/preview", SearchPreview(PreviewParams) -> PreviewAnswer,
+            classes: [User], writes: false,
+            doc: "one file's changes of a view's search as a unified diff: lines added and removed, the hunks with their matches' ids and a regexp's groups, the matches skipped with why",
         ),
         method!(
             "search/apply", SearchApply(ApplyParams) -> bool,

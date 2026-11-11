@@ -1,4 +1,4 @@
-{"scenario": "search/write", "requires": ["v1"], "doc": "the Search view's writes: search/edits makes the edit set of a search's matches (a change set), search/apply writes it file by file (closed files on disk, only over the bytes the edit set read: a file changed since is skipped with why) and ends with search-change; a change set is written once; search/undo puts back every file it wrote, leaving alone one edited since."}
+{"scenario": "search/write", "requires": ["v1"], "doc": "the Search view's writes: search/preview gives one file's diff; search/edits makes the edit set of a search's matches (a change set), search/apply writes it file by file (closed files on disk, only over the bytes the edit set read: a file changed since is skipped with why) and ends with search-change; a change set is written once; search/undo puts back every file it wrote, leaving alone one edited since."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "e", "hub": "h"}
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
@@ -10,6 +10,8 @@
 {"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": "$any", "files": 3, "matches": 4}}, "within_ms": 10000}
 {"do": "send", "conn": "e", "json": {"id": 3, "method": "search/edits", "params": {"view": "s"}}}
 {"do": "expect", "conn": "e", "json": {"id": 3, "result": {"change": "$capture:ch", "files": "$any", "skipped": []}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "search/preview", "params": {"view": "s", "path": "$ROOT/proj/a.txt", "off": ["m:0:0"]}}}
+{"do": "expect", "conn": "e", "json": {"id": 7, "result": {"path": "$ROOT/proj/a.txt", "diff": "$any", "plus": 2, "minus": 2, "hunks": [{"old_start": 1, "old_lines": 2, "new_start": 1, "new_lines": 2, "ids": "$any"}]}}, "within_ms": 10000}
 {"do": "write_file", "path": "$ROOT/proj/c.txt", "text": "x needle, edited after the preview\n"}
 {"do": "send", "conn": "e", "json": {"id": 4, "method": "search/apply", "params": {"view": "s", "change": "$ch"}}}
 {"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}

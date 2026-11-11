@@ -11,7 +11,9 @@
 //!   inverse edits, in the new text's coordinates: what Undo writes back.
 
 use super::run::{DIGEST_MAX, Snap};
-use runstav::methods::search::{EditSkip, EditSource, SearchEdit};
+use runstav::methods::search::{
+    EditSkip, EditSource, MatchGroups, PreviewAnswer, PreviewHunk, SearchEdit,
+};
 use std::sync::Arc;
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -169,9 +171,9 @@ fn place(path: &str, text: &str, wants: Vec<Want>) -> (Vec<SearchEdit>, Vec<Edit
     (edits, skipped)
 }
 
-/// One file's edit set: its edits (none when it has none to write) and what it skipped. Reads the file (blocking)
-/// unless the run searched a buffer's text in its place.
-pub(super) fn file_edits(plan: FilePlan) -> (Option<Planned>, Vec<EditSkip>) {
+/// The text PLAN's edits are made against and where it came from (the buffer's text the run searched in the file's
+/// place, else the file, read blocking); else every want skipped with why.
+fn text_of(plan: &FilePlan) -> Result<(Arc<str>, EditSource), Vec<EditSkip>> {
     let FilePlan {
         path,
         snap,
@@ -179,56 +181,147 @@ pub(super) fn file_edits(plan: FilePlan) -> (Option<Planned>, Vec<EditSkip>) {
         buffer,
         wants,
     } = plan;
-    if large {
-        return (None, skip_all(&path, &wants, IN_CHUNKS));
+    if *large {
+        return Err(skip_all(path, wants, IN_CHUNKS));
     }
-    let (text, source): (Arc<str>, EditSource) = match buffer {
-        Some(t) => {
-            // the buffer's text the hub holds now: another than the search's when the editor sent it again since
-            if let Some(s) = &snap
-                && s.tick.is_some()
-                && s.xxh3 != Some(xxh3_64(t.as_bytes()))
-            {
-                return (
-                    None,
-                    skip_all(&path, &wants, "changed in its buffer since the search"),
-                );
-            }
-            (t, EditSource::Buffer)
+    if let Some(t) = buffer {
+        // the buffer's text the hub holds now: another than the search's when the editor sent it again since
+        if let Some(s) = snap
+            && s.tick.is_some()
+            && s.xxh3 != Some(xxh3_64(t.as_bytes()))
+        {
+            return Err(skip_all(
+                path,
+                wants,
+                "changed in its buffer since the search",
+            ));
         }
-        None => {
-            let small = std::fs::metadata(&path).map(|m| m.len() <= WRITE_MAX);
-            match small {
-                Err(_) => return (None, skip_all(&path, &wants, GONE)),
-                Ok(false) => return (None, skip_all(&path, &wants, TOO_LARGE)),
-                Ok(true) => {}
-            }
-            let Ok(bytes) = std::fs::read(&path) else {
-                return (None, skip_all(&path, &wants, GONE));
-            };
-            if let Some(why) = unwritable(&bytes) {
-                return (None, skip_all(&path, &wants, why));
-            }
-            if let Some(s) = &snap
-                && s.tick.is_none()
-                && s.xxh3.is_some_and(|d| d != xxh3_64(&bytes))
-            {
-                return (None, skip_all(&path, &wants, CHANGED_SINCE_SEARCH));
-            }
-            // checked UTF-8 above
-            let text: Arc<str> = String::from_utf8(bytes).unwrap_or_default().into();
-            (text, EditSource::Disk)
-        }
+        return Ok((t.clone(), EditSource::Buffer));
+    }
+    match std::fs::metadata(path).map(|m| m.len() <= WRITE_MAX) {
+        Err(_) => return Err(skip_all(path, wants, GONE)),
+        Ok(false) => return Err(skip_all(path, wants, TOO_LARGE)),
+        Ok(true) => {}
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return Err(skip_all(path, wants, GONE));
+    };
+    if let Some(why) = unwritable(&bytes) {
+        return Err(skip_all(path, wants, why));
+    }
+    if let Some(s) = snap
+        && s.tick.is_none()
+        && s.xxh3.is_some_and(|d| d != xxh3_64(&bytes))
+    {
+        return Err(skip_all(path, wants, CHANGED_SINCE_SEARCH));
+    }
+    // checked UTF-8 above
+    Ok((
+        String::from_utf8(bytes).unwrap_or_default().into(),
+        EditSource::Disk,
+    ))
+}
+
+/// One file's edit set: its edits (none when it has none to write) and what it skipped. Reads the file (blocking)
+/// unless the run searched a buffer's text in its place.
+pub(super) fn file_edits(plan: FilePlan) -> (Option<Planned>, Vec<EditSkip>) {
+    let (text, source) = match text_of(&plan) {
+        Ok(t) => t,
+        Err(skipped) => return (None, skipped),
     };
     let xxh3 = xxh3_64(text.as_bytes());
-    let (edits, skipped) = place(&path, &text, wants);
+    let (edits, skipped) = place(&plan.path, &text, plan.wants);
     let planned = (!edits.is_empty()).then_some(Planned {
-        path,
+        path: plan.path,
         source,
         edits,
         xxh3,
     });
     (planned, skipped)
+}
+
+/// Lines of context around a preview's hunks (a unified diff's usual 3).
+const CONTEXT: usize = 3;
+
+/// One file's preview (`search/preview`): the unified diff of its text before and after its edits, each hunk with the
+/// ids of the edits in it and their captures (GROUPS of an edit's old text: a regexp's groups, `None` for one that
+/// matched nothing); the skipped, each with why.
+pub(super) fn preview(
+    plan: FilePlan,
+    groups: impl Fn(&str) -> Vec<Option<String>>,
+) -> (Option<PreviewAnswer>, Vec<EditSkip>) {
+    let (text, _) = match text_of(&plan) {
+        Ok(t) => t,
+        Err(skipped) => return (None, skipped),
+    };
+    let path = plan.path.clone();
+    let (edits, skipped) = place(&plan.path, &text, plan.wants);
+    if edits.is_empty() {
+        return (None, skipped);
+    }
+    let mut new = String::with_capacity(text.len());
+    let mut at = 0;
+    for e in &edits {
+        new.push_str(&text[at..e.byte_start as usize]);
+        new.push_str(&e.new);
+        at = e.byte_end as usize;
+    }
+    new.push_str(&text[at..]);
+    let diff = similar::TextDiff::from_lines(&*text, new.as_str());
+    let (mut plus, mut minus) = (0u32, 0u32);
+    for c in diff.iter_all_changes() {
+        match c.tag() {
+            similar::ChangeTag::Insert => plus += 1,
+            similar::ChangeTag::Delete => minus += 1,
+            similar::ChangeTag::Equal => {}
+        }
+    }
+    let hunks = diff
+        .grouped_ops(CONTEXT)
+        .iter()
+        .filter_map(|ops| {
+            let (first, last) = (ops.first()?, ops.last()?);
+            let (old, new) = (
+                first.old_range().start..last.old_range().end,
+                first.new_range().start..last.new_range().end,
+            );
+            let mine: Vec<&SearchEdit> = edits
+                .iter()
+                .filter(|e| old.contains(&(e.line as usize - 1)))
+                .collect();
+            Some(PreviewHunk {
+                old_start: old.start as u32 + 1,
+                old_lines: old.len() as u32,
+                new_start: new.start as u32 + 1,
+                new_lines: new.len() as u32,
+                ids: mine.iter().map(|e| e.id.clone()).collect(),
+                captures: mine
+                    .iter()
+                    .map(|e| MatchGroups {
+                        id: e.id.clone(),
+                        groups: groups(&e.old),
+                    })
+                    .filter(|g| !g.groups.is_empty())
+                    .collect(),
+            })
+        })
+        .collect();
+    let unified = diff
+        .unified_diff()
+        .context_radius(CONTEXT)
+        .header(&path, &path)
+        .to_string();
+    (
+        Some(PreviewAnswer {
+            path,
+            diff: unified,
+            plus,
+            minus,
+            hunks,
+            skipped: Vec::new(),
+        }),
+        skipped,
+    )
 }
 
 /// TEXT with EDITS written (each found again by its line, columns and `old`; one not there refuses the whole), and
@@ -350,6 +443,48 @@ mod tests {
         assert_eq!(whys(&skipped), [("m:1:2".into(), TEXT_CHANGED.into())]);
         let (_, skipped) = file_edits(plan(&p, vec![no_re]));
         assert_eq!(whys(&skipped), [("m:1:3".into(), NO_LONGER.into())]);
+    }
+
+    /// [D] A preview is the file's unified diff after its edits: lines added and removed, a hunk per group of nearby
+    /// changes (3 lines of context) with the ids of its matches and their groups; a skipped match is not in it.
+    #[test]
+    fn a_preview_is_the_diff_with_its_hunks_matches_and_groups() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("a.txt");
+        let text: String = (1..=20).map(|i| format!("line {i} food\n")).collect();
+        std::fs::write(&f, &text).unwrap();
+        let p = f.to_string_lossy().into_owned();
+        let (answer, skipped) = preview(
+            plan(
+                &p,
+                vec![
+                    want("m:1:0", 2, 7, "food", "d-f"),
+                    want("m:1:1", 3, 7, "food", "d-f"),
+                    want("m:1:2", 18, 8, "food", "d-f"),
+                    want("m:1:3", 19, 8, "fool", "x"),
+                ],
+            ),
+            |old| vec![Some(old[..1].to_owned()), None],
+        );
+        let a = answer.unwrap();
+        assert_eq!(whys(&skipped), [("m:1:3".into(), TEXT_CHANGED.into())]);
+        assert_eq!((a.plus, a.minus), (3, 3));
+        assert!(
+            a.diff
+                .contains("-line 2 food\n-line 3 food\n+line 2 d-f\n+line 3 d-f\n"),
+            "{}",
+            a.diff
+        );
+        assert_eq!(a.hunks.len(), 2);
+        let h = &a.hunks[0];
+        assert_eq!(
+            (h.old_start, h.old_lines, h.new_start, h.new_lines),
+            (1, 6, 1, 6)
+        );
+        assert_eq!(h.ids, ["m:1:0", "m:1:1"]);
+        assert_eq!(h.captures[0].groups, [Some("f".to_owned()), None]);
+        assert_eq!(a.hunks[1].ids, ["m:1:2"]);
+        assert!(a.diff.contains("@@ -15,6 +15,6 @@"), "{}", a.diff);
     }
 
     /// [D] Overlapping and nested matches: sorted by start, the first kept, the others skipped with today's reason.

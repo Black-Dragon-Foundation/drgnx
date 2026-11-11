@@ -732,6 +732,9 @@ impl Front {
             Params::SearchEdits(p) => crate::view::search::edits(self, &caller, p)
                 .await
                 .map(|r| json!(r)),
+            Params::SearchPreview(p) => crate::view::search::preview(self, &caller, p)
+                .await
+                .map(|r| json!(r)),
             Params::SearchApply(p) => {
                 crate::view::search::apply_change(self, &caller, p).map(|b| json!(b))
             }
