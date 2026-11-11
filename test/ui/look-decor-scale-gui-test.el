@@ -1,7 +1,7 @@
 ;;; look-decor-scale-gui-test.el --- GUI tests: the decoration boxes at the frame's scale (run by `drgnx test --ui') -*- lexical-binding: t -*-
 ;; test-class: det
 ;; Pattern D: the boxes are read from the frame's faces after each change.  The run's scale is DRGNX_UI_SCALE (1,
-;; 1.25, 4/3, 2); the UI scale (`drgnx-pixels-set-ui-scale' on the root frame) takes the frame to 2 within the row.
+;; 1.25, 4/3, 1.5, 2); the UI scale (`drgnx-pixels-set-ui-scale' on the root frame) takes the frame to 2 within the row.
 
 (require 'ert)
 (require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
@@ -16,7 +16,7 @@
 (load (expand-file-name "modules/ui/drgnx-decor" drgnx-look-decor-scale-ui-test--repo) nil t)
 
 (defconst drgnx-look-decor-scale-ui-test--want
-  '((1.0 1 2 8) (1.25 1 3 10) (1.3333333333333333 1 3 11) (2.0 2 4 16))
+  '((1.0 1 2 8) (1.25 1 3 10) (1.3333333333333333 1 3 11) (1.5 1 3 12) (2.0 2 4 16))
   "Per scale: a card's edge, the focus ring's width, a card's radius, in device pixels.")
 
 (defun drgnx-look-decor-scale-ui-test--check (frame)

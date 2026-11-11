@@ -1,0 +1,6 @@
+# The remote-terminal rows (test/ssh/): the batch test image (BASE, the line's drgnx-test) with an sshd and a client
+# for loopback, csh, sudo and tic.  Built by ssh-row.sh, tagged by a hash of this file and BASE's image id (so a new
+# line image rebuilds it); never published.  Keys and users are made by the tests, inside each run.
+ARG BASE
+FROM ${BASE}
+RUN dnf -y --setopt=keepcache=1 install openssh-server openssh-clients tcsh sudo ncurses

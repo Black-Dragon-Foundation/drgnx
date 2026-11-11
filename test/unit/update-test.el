@@ -408,12 +408,28 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
         (should (eq 0 (car r)))
         (should (string-match-p "no drgnx service is installed" (cdr r)))
         (should-not (string-match-p "--user restart" (drgnx-update-test--slurp log))))
-      ;; macOS: no daemon service of drgnx's own exists, so launchctl is never called
+      ;; macOS without drgnx's launch agent: launchctl is never called
       (drgnx-update-test--push dir "README" "three\n" "third")
       (let ((r (drgnx-update-test--run dir '("DRGNX_UPDATE_PLATFORM=Darwin") bin "update" "--restart")))
         (should (eq 0 (car r)))
         (should (string-match-p "nothing was restarted" (cdr r)))
         (should-not (file-exists-p (expand-file-name "launchctl.log" dir)))))))
+
+(ert-deftest drgnx-update/restart-on-macos-reloads-the-launch-agent ()
+  (drgnx-update-test--with-install
+    (let ((plist (expand-file-name "Library/LaunchAgents/org.blackdragonfoundation.drgnx.plist" dir))
+          (ctl (expand-file-name "launchctl.log" dir)))
+      (make-directory (file-name-directory plist) t)
+      (write-region "<plist/>\n" nil plist nil 'silent)
+      (drgnx-update-test--push dir "README" "two\n" "second")
+      (let ((r (drgnx-update-test--run dir '("DRGNX_UPDATE_PLATFORM=Darwin") bin "update" "--restart")))
+        (should (eq 0 (car r)))
+        ;; out and in again: launchd reads the plist (refreshed by the update) and starts it (RunAtLoad)
+        (should (string-match-p (format "^bootout gui/[0-9]+/org\\.blackdragonfoundation\\.drgnx\nbootstrap gui/[0-9]+ %s$"
+                                        (regexp-quote plist))
+                                (drgnx-update-test--slurp ctl)))
+        (should (string-match-p "restarted the drgnx service" (cdr r)))
+        (should (string-match-p "windows closed" (cdr r)))))))
 
 ;;; update-test.el ends here
 
@@ -442,11 +458,12 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
       (should (eq (car r) 0))
       (should (string-search "could not check drgnx.service" (cdr r))))))
 
-(ert-deftest drgnx-update/no-unit-refresh-on-macos ()
+(ert-deftest drgnx-update/the-unit-refresh-runs-on-macos-too ()
+  ;; there it points drgnx's launch agent at the Emacs drgnx uses
   (drgnx-update-test--with-install
     (let ((r (drgnx-update-test--run dir (list "DRGNX_UPDATE_PLATFORM=Darwin") bin "update")))
       (should (eq (car r) 0))
-      (should-not (drgnx-update-test--unit-log dir)))))
+      (should (equal (drgnx-update-test--unit-log dir) '("unit --refresh"))))))
 
 ;;; Ratatoskr: the third step of an update, and `drgnx runtime' (Task 19)
 

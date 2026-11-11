@@ -1,4 +1,4 @@
-//! The job helper's disk watch: every [`EVERY`] it reads the runner folder's free space; below the floor (the larger
+//! A job's disk watch (the job helper's on Linux, job-exec's on a Mac): every [`EVERY`] it reads the runner folder's free space; below the floor (the larger
 //! of 20 GB and 10 % of the folder's filesystem, `forseti`'s disk guard) the job that grew most since its start is
 //! stopped with `kill_reason("infra: disk")`.
 //!
@@ -105,6 +105,7 @@ pub fn check(probe: &Probe, root: &Path, dir: &Path, container: Option<&str>) ->
     true
 }
 
+#[cfg(target_os = "linux")]
 /// Starts the watch of the job in DIR under the runner folder ROOT: its start size recorded now, a reading every
 /// [`EVERY`].
 pub fn watch(root: PathBuf, dir: PathBuf, container: Option<String>) {
@@ -117,7 +118,7 @@ pub fn watch(root: PathBuf, dir: PathBuf, container: Option<String>) {
         loop {
             std::thread::sleep(EVERY);
             if check(&probe, &root, &dir, container.as_deref()) {
-                super::say(
+                crate::helper::say(
                     &dir,
                     "below the disk floor, this job grew most: stopped (infra: disk)",
                 );

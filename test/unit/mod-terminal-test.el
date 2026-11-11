@@ -7,15 +7,19 @@
 (load (expand-file-name "modules/tools/drgnx-terminal" drgnx-dir) nil t)
 
 (ert-deftest drgnx-terminal/a-remote-folder-and-windows-get-eshell ()
-  (let ((opened nil) (started nil))
-    (cl-letf (((symbol-function 'drgnx-terminal-new-eshell) (lambda (&optional dir) (push dir opened) nil))
+  ;; a remote folder no terminal reaches gets eshell, and a notice naming its method
+  (let ((opened nil) (started nil) (told nil))
+    (cl-letf (((symbol-function 'drgnx-notify) (lambda (_s _sev text &rest _) (push text told)))
+              ((symbol-function 'drgnx-terminal-new-eshell) (lambda (&optional dir) (push dir opened) nil))
               ((symbol-function 'drgnx-term-start) (lambda (dir) (push dir started) nil))
               ((symbol-function 'drgnx-term-usable-p) (lambda (dir) (not (file-remote-p dir))))
-              ((symbol-function 'file-remote-p) (lambda (f &rest _) (and (string-prefix-p "/ssh:" f) "/ssh:h:"))))
+              ((symbol-function 'file-remote-p) (lambda (f &optional id &rest _)
+                                                  (and (string-prefix-p "/ssh:" f) (if (eq id 'method) "ssh" "/ssh:h:")))))
       (drgnx-terminal-new "/ssh:h:/tmp/")
       (drgnx-terminal-new "/tmp/")
       (should (equal opened '("/ssh:h:/tmp/")))
-      (should (equal started '("/tmp/"))))))
+      (should (equal started '("/tmp/")))
+      (should (equal told '("No terminal reaches ssh folders: eshell instead"))))))
 
 (ert-deftest drgnx-terminal/the-environment-names-this-server ()
   (let* ((dir (make-temp-file "drgnx-srv" t)) (server-socket-dir dir) (server-name "drgnx-term-test")

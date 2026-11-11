@@ -35,6 +35,9 @@ pub struct Record {
     /// Where the editor showed it (`panel`, `editor`), so a reattach opens it there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub place: Option<String>,
+    /// A terminal in a remote folder: TRAMP's prefix of it (`/ssh:host:`), so a reattach knows its host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
 }
 
 impl Record {

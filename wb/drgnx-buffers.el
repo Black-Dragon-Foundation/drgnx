@@ -5,7 +5,8 @@
 ;;; Commentary:
 ;; The files you have open, in the order you opened them — switching never re-sorts, so a row
 ;; never moves under the pointer.  Each row: the file's icon and its name; at the right edge the git letter and the
-;; close button (hidden until the row is hovered), or ● in its place while the buffer has unsaved changes.
+;; close button (hidden until the row is hovered), or ● in its place while the buffer has unsaved changes; on Nidhogg the
+;; ● becomes × while the row is hovered (its mouse sensors).
 ;; The panel listens to the change bus and re-renders only when its signature (the rows and
 ;; their modified flags) changed; the view and the selection are restored by buffer identity,
 ;; and the title lives in the window, where no mode can erase it.  The active editor's row is
@@ -99,6 +100,30 @@ the right edge come from jit-lock, for visible rows."
   (when-let* ((i (seq-position drgnx-buffers--rows b #'eq)))
     (save-excursion (goto-char (point-min)) (forward-line i) (point))))
 
+(defvar-local drgnx-buffers--hovered nil
+  "The buffer whose row the pointer is on (Nidhogg's mouse sensors), or nil: its ● shows as × (VS Code's way).")
+
+(defvar drgnx-buffers--sensors (make-hash-table :test #'eq :weakness 'key)
+  "BUFFER → its row's `mouse-sensor-functions', one list per buffer: the value tells rows apart (by `eq') and stays
+the same object through every repaint, so a repaint under a still pointer is no change.  Weak on the buffer.")
+
+(defun drgnx-buffers--sensor (b)
+  "The `mouse-sensor-functions' of buffer B's row."
+  (or (gethash b drgnx-buffers--sensors)
+      (puthash b (list #'drgnx-buffers--sense) drgnx-buffers--sensors)))
+
+(defun drgnx-buffers--sense (window pos dir)
+  "A row's mouse sensor: the pointer came onto (DIR `entered') or went off (`left') the row at POS in WINDOW.  A row
+with unsaved changes shows its close button instead of ● while the pointer is on it; only that row is repainted."
+  (when (window-live-p window)
+    (with-current-buffer (window-buffer window)
+      (when (derived-mode-p 'drgnx-buffers-mode)
+        (let ((b (drgnx-buffers-buffer-at pos)) (was drgnx-buffers--hovered))
+          (setq drgnx-buffers--hovered (cond ((eq dir 'entered) b) ((eq b was) nil) (t was)))
+          (dolist (r (delete-dups (list was drgnx-buffers--hovered)))
+            (when-let* (((buffer-live-p r)) ((buffer-modified-p r)) (row (drgnx-buffers--row-pos r)))
+              (drgnx-buffers--fontify row (save-excursion (goto-char row) (pos-eol))))))))))
+
 (defun drgnx-buffers--fontify (beg end)
   "Paint the rows between BEG and END (jit-lock): the icon, the hover highlight, and at the right edge the git
 letter and the close button (`drgnx-wb-row-tail-overlay': hidden until the row is hovered), or
@@ -120,10 +145,11 @@ an always shown ● while the buffer has unsaved changes.  The name keeps the te
                      (letter (and status (car (drgnx-git-look status)))))
                 (when (eq status 'ignored) (add-face-text-property (+ bol 2) eol (cadr (drgnx-git-look status))))
                 (drgnx-wb-row-tail-overlay eol letter (and letter (drgnx-wb-git-mark-face status))
-                                           (if (buffer-modified-p b)
+                                           (if (and (buffer-modified-p b) (not (eq b drgnx-buffers--hovered)))
                                                (propertize (drgnx-face-glyph 'dot) 'face 'drgnx-buffers-modified
                                                            'help-echo "Unsaved changes")
-                                             (propertize (drgnx-face-glyph 'close) 'help-echo "Close"))))))
+                                             (propertize (drgnx-face-glyph 'close) 'help-echo "Close"))
+                                           nil (drgnx-buffers--sensor b)))))
           (forward-line 1)))))
   `(jit-lock-bounds ,beg . ,end))
 
@@ -309,6 +335,8 @@ in the editor."
   (drgnx-wb-rows-follow)
   (drgnx-signal-subscribe 'buffer-set-changed #'drgnx-buffers--refresh)
   (drgnx-signal-subscribe 'modified-changed #'drgnx-buffers--refresh)
+  (when (boundp 'mouse-sensor-enabled)                  ; Nidhogg: the ● of a hovered row becomes ×
+    (drgnx-module-set 'mouse-sensor-enabled t))
   (drgnx-signal-subscribe 'editor-changed #'drgnx-buffers--mark-active)
   (drgnx-signal-subscribe 'editor-changed #'drgnx-buffers--refresh)
   (drgnx-signal-subscribe 'frame-changed #'drgnx-buffers--refresh)           ; another window: its buffers

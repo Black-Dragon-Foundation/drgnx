@@ -6,7 +6,7 @@ use super::super::Config;
 use super::super::attempts::{self, LOG};
 use super::super::cleanup;
 use super::{LaunchReq, Platform};
-use crate::darwin::{attempt, jobexec, probe, sandbox};
+use crate::darwin::{attempt, jobexec, memwatch, pressure, probe, sandbox};
 use crate::linux::jobexec::JobExec;
 use crate::linux::parse::Parser;
 use crate::linux::reserve::{self, Reservations};
@@ -32,6 +32,7 @@ pub struct DarwinPlatform {
 
 impl DarwinPlatform {
     pub fn new(cfg: &Config, exe: &Path) -> Result<DarwinPlatform, String> {
+        pressure::start();
         Ok(DarwinPlatform {
             root: cfg.root.clone(),
             hub_id: cfg.hub_id.clone(),
@@ -302,8 +303,14 @@ impl Platform for DarwinPlatform {
         ))
     }
 
-    /// Attempt folders that ended, and bundles no longer used (no units or containers on a Mac).
+    /// Processes left by this hub's attempts that no longer run (the start-up sweep: under setsid, nothing like
+    /// launchd's group cleanup), then attempt folders that ended and bundles no longer used (no units or containers on
+    /// a Mac).
     fn cleanup(&self, root: &Path, owner: &cleanup::Owner) {
+        // SAFETY: getpid has no failure
+        let me = unsafe { libc::getpid() };
+        let runs = |job: &str, n: u32| attempt::active(&attempts::dir(root, job, n));
+        memwatch::kill_all(&memwatch::strays(&memwatch::marked(me), &self.hub_id, runs));
         let seen = cleanup::Seen {
             containers: serde_json::Value::Array(vec![]),
             units: vec![],
@@ -311,6 +318,11 @@ impl Platform for DarwinPlatform {
             bundles: cleanup::bundles(root),
         };
         cleanup::apply(root, &cleanup::plan(owner, &seen));
+    }
+
+    /// The kernel's memory-pressure event (no PSI on a Mac).
+    fn pressure(&self) -> Option<forseti::safety::Level> {
+        Some(pressure::level())
     }
 }
 

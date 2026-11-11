@@ -5,6 +5,7 @@
 use crate::store::{CoordError, WTx};
 use urdr::graph::entity::{self, EntityNew, Origin};
 use vordr::evidence::{Evidence, KINDS};
+use vordr::pack::Pack;
 
 /// Record E (in PROJECT); answers its id.  An unknown kind, or no task, is refused.
 pub fn record(tx: &mut WTx<'_>, e: &Evidence, project: Option<i64>) -> Result<String, CoordError> {
@@ -32,6 +33,34 @@ pub fn record(tx: &mut WTx<'_>, e: &Evidence, project: Option<i64>) -> Result<St
             priority: None,
             assignee: None,
             data,
+            origin: Origin::Recorded,
+            source: None,
+        },
+    )?;
+    Ok(id)
+}
+
+/// Record PACK as job JOB's rule pack (`rule_pack`, frozen at the job's approval: the gates read this record, never
+/// the plan's file again); answers its id.
+pub fn rule_pack(
+    tx: &mut WTx<'_>,
+    job: &str,
+    pack: &Pack,
+    project: Option<i64>,
+) -> Result<String, CoordError> {
+    let id = crate::tracker::new_id(tx, "rule_pack", project)?;
+    entity::create(
+        tx,
+        EntityNew {
+            id: id.clone(),
+            kind: "rule_pack".into(),
+            project,
+            title: Some(format!("{} v{}", pack.name, pack.version)),
+            status: None,
+            body: None,
+            priority: None,
+            assignee: None,
+            data: serde_json::json!({"job": job, "pack": pack}),
             origin: Origin::Recorded,
             source: None,
         },
@@ -75,5 +104,30 @@ mod tests {
         assert_eq!(back, vec![ev("red", "task:J#1"), ev("green", "task:J#1")]);
         assert!(record(&mut tx, &ev("maybe", "task:J#1"), None).is_err());
         assert!(record(&mut tx, &ev("red", ""), None).is_err());
+    }
+
+    #[test]
+    fn a_jobs_rule_pack_is_recorded_and_read_back() {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        let p = Pack {
+            name: "p".into(),
+            version: 2,
+            batch_size: 3,
+            ..Pack::default()
+        };
+        assert!(
+            rule_pack(&mut tx, "J", &p, None)
+                .unwrap()
+                .starts_with("rule_pack:")
+        );
+        assert_eq!(
+            crate::read::evidence::pack_of_job(tx.sql(), "J").unwrap(),
+            Some(p)
+        );
+        assert_eq!(
+            crate::read::evidence::pack_of_job(tx.sql(), "K").unwrap(),
+            None
+        );
     }
 }

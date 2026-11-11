@@ -5,8 +5,7 @@
 use gleipnir::spec::{Bind, Layers, Mode, Net, Spec, Target};
 use std::path::{Path, PathBuf};
 
-/// The environment variable every process of an attempt carries (the watchdog finds escaped processes by it).
-pub const MARKER: &str = "DRGNX_RUNNER_ATTEMPT";
+pub use super::memwatch::MARKER;
 /// The `PATH` a Mac job gets: Homebrew's, then the system's.
 pub const PATH: &str = "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
