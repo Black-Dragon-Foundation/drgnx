@@ -90,6 +90,12 @@ subtle does not (3.8:1 on the dark selection, 4.3 on the light); in high contras
 (defface drgnx-pill-on '((t :inherit drgnx-ui-caption :box (:line-width (1 . 1))))
   "A toggle pill that is on (`.disc .t.open'): the text colour on the quiet selection, in the same ring."
   :group 'drgnx-look)
+(defface drgnx-focus-line '((t))
+  "The focus colour as a foreground, for a ring drawn round a box (Glitnir's block rings take its colour): the
+mockups' `inset 0 0 0 1px var(--focus)'." :group 'drgnx-look)
+(defface drgnx-pill-accent '((t :inherit drgnx-ui-caption :box (:line-width (1 . 1))))
+  "A choice pill that is chosen (search-view.html `.sc.on'): the accent on its tint, in a ring of the accent."
+  :group 'drgnx-look)
 
 ;;;; Agents
 

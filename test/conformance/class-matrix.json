@@ -192,6 +192,7 @@
   "search/edits": ["user"],
   "search/edit-doc": ["user"],
   "search/handoff": ["user"],
+  "search/handoff-context": ["user"],
   "search/handoff-mark": ["user"],
   "search/handoff-state": ["user"],
   "search/preview": ["user"],

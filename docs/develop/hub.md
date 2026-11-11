@@ -1515,6 +1515,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/grep-skipped` | user | `{skipped: [{id: string, why: string}], view: string}` | `boolean` | no |
 | `search/group` | user | `{group: "file" \| "tree" \| "symbol", sort?: "path" \| "count" \| "rank", view: string}` | `boolean` | no |
 | `search/handoff` | user | `{hidden?: boolean, ids?: [string], instruction: Prompt, mark?: {face: string, glyph: string}, off?: [string], to: {new: {profile: string}} \| {pair: {profile: string}} \| {session: {id: Id}}, view: string}` | `HandoffAnswer` | yes |
+| `search/handoff-context` | user | `{hidden?: boolean, ids?: [string], off?: [string], view: string}` | `{hidden?: [string], rows: [HandoffContextRow], tokens: natnum, total: natnum}` | no |
 | `search/handoff-mark` | user | `{handoff: string, mark: {face: string, glyph: string}}` | `boolean` | no |
 | `search/handoff-state` | user | `{handoff: string}` | `HandoffState` | no |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |

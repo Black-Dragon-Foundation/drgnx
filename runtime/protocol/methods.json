@@ -29990,6 +29990,117 @@
       "classes": [
         "user"
       ],
+      "doc": "what Ask an Agent's card shows before Send: the first places of the matches it would hand off, how many in all, the brief's size in tokens and the hidden paths left out",
+      "name": "search/handoff-context",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/handoff-context`: what Ask an Agent's card shows of the brief before it is sent: the matches IDS (else\nall but OFF; hidden paths only when HIDDEN) of VIEW's search.",
+        "properties": {
+          "hidden": {
+            "type": "boolean"
+          },
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "off": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "HandoffContextParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "HandoffContextRow": {
+            "additionalProperties": false,
+            "description": "One place of the card's context box: its file (relative to the search's folder), line (from 1), the definition\nit is in and its line's text, trimmed.",
+            "properties": {
+              "ctx": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "line",
+              "text"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/handoff-context`'s answer: the first places, how many there are in all, the brief's size in tokens\n(about four characters a token, without the instruction) and the hidden paths left out.",
+        "properties": {
+          "hidden": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/$defs/HandoffContextRow"
+            },
+            "type": "array"
+          },
+          "tokens": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rows",
+          "total",
+          "tokens"
+        ],
+        "title": "HandoffContext",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a hand-off's rows show the agent's mark from now on: a new worker's, known once its first snapshot comes (after search/handoff answered); the asking window's own hand-offs only",
       "name": "search/handoff-mark",
       "params": {

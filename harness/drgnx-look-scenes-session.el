@@ -674,6 +674,21 @@ match on line 209 (the `puthash' line) unticked; the view's buffer, or nil."
                                                        (plist-get (buffer-local-value 'drgnx-replace--sheet b) :hunk)))))
     (drgnx-look-scene--answer)))
 
+(declare-function drgnx-search-to-agent "drgnx-search-handoff")
+(defvar drgnx-search-handoff-buffer-name)
+(defvar drgnx-search-handoff--ask)
+
+(defun drgnx-look-scene-search-ask ()
+  "Ask an Agent's card over the editor (search-view.html's \"Ask an Agent (light, modal)\"), its context read."
+  (when-let* ((view (drgnx-look-scene--search)))
+    (drgnx-look-scene--theme 'drgnx-light)
+    (drgnx-look-scene--try "ask"
+      (with-current-buffer view (drgnx-search-to-agent))
+      (drgnx-look-scene--until 10 "context"
+                               (lambda () (when-let* ((b (get-buffer drgnx-search-handoff-buffer-name)))
+                                            (plist-get (buffer-local-value 'drgnx-search-handoff--ask b) :context)))))
+    (drgnx-look-scene--answer)))
+
 ;; The debugging mockup's file (the-look/debugging.html): its lines 13-33, after twelve lines of header.
 (defconst drgnx-look-scene--inventory
   (concat "\"\"\"Stock levels and the weekly order.\"\"\"\n\nimport logging\nfrom dataclasses import dataclass\n\n"

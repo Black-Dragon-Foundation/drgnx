@@ -513,7 +513,7 @@ them in the UI text role, with 12 px of room at either end and 26 px tall on a g
 contrast rings it in its text colour, with the same room. A keycap (`drgnx-keycap`) is
 subtle caption text in a 1 px ring of the strong border, radius 4: the palette, the title row's search box and the
 start page show keys this way. A key alone reads as typed (`a`, `D`: Shift with a letter is its capital), with another
-modifier a letter is a capital (`Ctrl Shift P`, `Alt X`), and Enter is `↵`. A toggle pill (`drgnx-pill`, and `drgnx-pill-on` when it is on, on the quiet
+modifier a letter is a capital (`Ctrl Shift P`, `Alt X`), and Enter is `↵`. A choice pill that is chosen is `drgnx-pill-accent` (the accent on its tint, ringed in the accent). A toggle pill (`drgnx-pill`, and `drgnx-pill-on` when it is on, on the quiet
 selection) is caption text in a 1 px ring of the border colour, radius 6: the agent panel's step types. The rings' colours come from the theme (a box's colour cannot be inherited), so a
 theme that is not drgnx's draws them in the text colour. A theme's spec for a face replaces the face's own, its
 `:inherit` too, so drgnx's themes repeat a face's parents in theirs (the keycaps' and high contrast's chips' caption
@@ -537,6 +537,8 @@ look it describes.
 | `drgnx-selected-secondary` | `drgnx-text-muted` | secondary text on the selected row of a list (the palette's and Quick Open's keycaps and annotations): muted, which keeps 4.5:1 on the selection where subtle does not; high contrast uses the selection's own text colour |
 | `drgnx-selected-inactive` | `drgnx-selected-quiet` | the selected row of a list without the focus (the sidebar's sections), at least 1.25:1 against the panel and above the hover; a theme derive colours gets it by moving the raised colour toward the text until it meets that |
 | `drgnx-focus` | none (a box) | the keyboard focus ring; the theme sets its colour |
+| `drgnx-focus-line` | none | the focus colour as a foreground: a ring Glitnir draws round a box (Ask an Agent's instruction) |
+| `drgnx-pill-accent` | the caption role | a chosen choice pill: the accent on its tint, ringed in the accent |
 | `drgnx-status-attention` | `error` | something waits for you (`drgnx-status-needs-you` inherits it) |
 | `drgnx-agent-1` to `drgnx-agent-6` | `default` | the agents' colours |
 | `drgnx-control-hidden`, `drgnx-hover-row` | `shadow`, `drgnx-hover` | a row's × or ⋯ while it is not hovered (its foreground is the row's background; on a terminal, where the control is never hidden, a theme derive colours keeps it `shadow`), and the `mouse-face` of the row that reveals it |

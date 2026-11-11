@@ -37,9 +37,10 @@ use run::{Buffer, Found, Read};
 use runstav::methods::search::{
     AppliedParams, ApplyParams, BufferParams, ChangeOrigin, EditDocAnswer, EditDocParams,
     EditsAnswer, EditsParams, FileEdits, FindQuery, FoldParams, GrepGroup, GrepLookParams,
-    GrepReplaceParams, GrepSkippedParams, GrepSort, GroupParams, HandoffAnswer, HandoffMark,
-    HandoffMarkParams, HandoffParams, HandoffState, HandoffStateParams, HandoffTo, PreviewAnswer,
-    PreviewParams, RunDone, RunParams, RunStarted, ScopeDone, ScopeKind, UndoParams,
+    GrepReplaceParams, GrepSkippedParams, GrepSort, GroupParams, HandoffAnswer, HandoffContext,
+    HandoffContextParams, HandoffContextRow, HandoffMark, HandoffMarkParams, HandoffParams,
+    HandoffState, HandoffStateParams, HandoffTo, PreviewAnswer, PreviewParams, RunDone, RunParams,
+    RunStarted, ScopeDone, ScopeKind, UndoParams,
 };
 use runstav::methods::view::ViewModel;
 use runstav::wire::{Error, ErrorCode};
@@ -1805,20 +1806,23 @@ pub fn undo_change(f: &Front, c: &Caller, p: UndoParams) -> Result<bool, Error> 
     Ok(apply::undo(&front, c.conn_id, p.change, p.open))
 }
 
-/// RUN's matches P hands off (P.ids, else all but P.off), by file in the run's order: (handed, hidden paths left out).
-fn handed_of(run: &Run, p: &HandoffParams) -> (Vec<handoff::Handed>, Vec<String>) {
-    let ids: Option<HashSet<&str>> = p
-        .ids
-        .as_ref()
-        .map(|v| v.iter().map(String::as_str).collect());
-    let off: HashSet<&str> = p.off.iter().flatten().map(String::as_str).collect();
+/// RUN's matches a hand-off takes (IDS, else all but OFF; hidden paths only when HIDDEN), by file in the run's order:
+/// (handed, hidden paths left out).
+fn handed_of(
+    run: &Run,
+    ids: Option<&Vec<String>>,
+    off: Option<&Vec<String>>,
+    hidden_too: bool,
+) -> (Vec<handoff::Handed>, Vec<String>) {
+    let ids: Option<HashSet<&str>> = ids.map(|v| v.iter().map(String::as_str).collect());
+    let off: HashSet<&str> = off.into_iter().flatten().map(String::as_str).collect();
     let (mut handed, mut hidden) = (Vec::new(), Vec::new());
     for f in &run.files {
         let rel = Path::new(&f.file)
             .strip_prefix(&run.query.root)
             .map(|r| r.to_string_lossy().into_owned())
             .unwrap_or_else(|_| f.file.clone());
-        let shown = p.hidden || grep::searched(grep::Ignore::Index, &rel);
+        let shown = hidden_too || grep::searched(grep::Ignore::Index, &rel);
         for (i, (m, n)) in f.ms.iter().zip(&f.ns).enumerate() {
             let id = run::match_id(run.id, *n);
             let take = match &ids {
@@ -1990,7 +1994,7 @@ pub async fn handoff(f: &Front, c: &Caller, p: HandoffParams) -> Result<HandoffA
                 run.query.root.clone(),
                 query_line(&run.query),
                 run.replace.clone(),
-                handed_of(run, &p),
+                handed_of(run, p.ids.as_ref(), p.off.as_ref(), p.hidden),
             )
         })
         .ok_or_else(|| invalid("view", "the view has no search"))?;
@@ -2067,6 +2071,48 @@ pub async fn handoff(f: &Front, c: &Caller, p: HandoffParams) -> Result<HandoffA
         ids,
         sent,
         more,
+        hidden,
+    })
+}
+
+/// How many places the card's context box shows.
+const CONTEXT_ROWS: usize = 2;
+
+/// `search/handoff-context`: the card's context box for the matches P would hand off: the first places, the total,
+/// the brief's tokens (its text without the instruction, four characters a token) and the hidden paths left out.
+pub fn handoff_context(
+    f: &Front,
+    c: &Caller,
+    p: HandoffContextParams,
+) -> Result<HandoffContext, Error> {
+    let (query, replace, (handed, hidden)) = f
+        .core
+        .views
+        .greps
+        .current(c.conn_id, &p.view, |run| {
+            (
+                query_line(&run.query),
+                run.replace.clone(),
+                handed_of(run, p.ids.as_ref(), p.off.as_ref(), p.hidden),
+            )
+        })
+        .ok_or_else(|| invalid("view", "the view has no search"))?;
+    let rows: Vec<String> = handed.iter().map(handoff::row).collect();
+    let replace = (!replace.is_empty()).then_some(replace.as_str());
+    let (text, _, _) = handoff::brief("h:0", "", &query, replace, &rows, &[]);
+    Ok(HandoffContext {
+        rows: handed
+            .iter()
+            .take(CONTEXT_ROWS)
+            .map(|m| HandoffContextRow {
+                path: m.rel.clone(),
+                line: m.line,
+                ctx: m.ctx.clone(),
+                text: m.text.trim().to_owned(),
+            })
+            .collect(),
+        total: u32::try_from(handed.len()).unwrap_or(u32::MAX),
+        tokens: u32::try_from(text.chars().count().div_ceil(4)).unwrap_or(u32::MAX),
         hidden,
     })
 }

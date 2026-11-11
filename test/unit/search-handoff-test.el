@@ -27,7 +27,10 @@ each session (ID NAME CWD); the hub answers `search/handoff' with ANSWER from SP
      (cl-letf (((symbol-function 'drgnx-hub--call-on)
                 (lambda (_conn method params cb &rest _)
                   (push (list method params) drgnx-search-handoff-test--calls)
-                  (funcall cb (plist-get spec :answer) nil)))
+                  (funcall cb (if (equal method "search/handoff-context") (plist-get spec :context)
+                                (plist-get spec :answer))
+                           nil)))
+               ((symbol-function 'drgnx-replace--sheet-button) (lambda (label &rest _) label))
                ((symbol-function 'drgnx-replace--live-view) (lambda () view))
                ((symbol-function 'drgnx-replace--rows-p) (lambda () t))
                ((symbol-function 'drgnx-replace--rows-off)
@@ -60,6 +63,17 @@ each session (ID NAME CWD); the hub answers `search/handoff' with ANSWER from SP
          (kill-buffer view)
          (when-let* ((b (get-buffer drgnx-search-handoff-buffer-name))) (kill-buffer b))))))
 
+(defun drgnx-search-handoff-test--chosen ()
+  "The card's chosen who chip's label (the one in the accent pill)."
+  (save-excursion
+    (goto-char (point-min))
+    (when-let* ((m (text-property-search-forward 'face 'drgnx-pill-accent t)))
+      (get-text-property (prop-match-beginning m) 'drgnx-search-handoff-who))))
+
+(defun drgnx-search-handoff-test--text ()
+  "The card's text, without its properties."
+  (buffer-substring-no-properties (point-min) (point-max)))
+
 (defun drgnx-search-handoff-test--sent ()
   "The params of the last `search/handoff'."
   (cadr (assoc "search/handoff" drgnx-search-handoff-test--calls)))
@@ -69,24 +83,41 @@ each session (ID NAME CWD); the hub answers `search/handoff' with ANSWER from SP
 new pair in the checkout, then each live session with its state, the one in the search's checkout as a pair; Next
 Agent goes round them."
   (drgnx-search-handoff-test--with (list :total 3 :replace "queued"
-                                         :sessions '(("a1" "codex-1" "/r/") ("a2" "claude-2" "/elsewhere/")))
+                                         :sessions '(("a1" "codex-1" "/r/") ("a2" "claude-2" "/elsewhere/"))
+                                         :context '(:rows [(:path "a.el" :line 4 :ctx "f" :text "(pending)")]
+                                                          :total 3 :tokens 20))
     (drgnx-search-to-agent)
     (with-current-buffer drgnx-search-handoff-buffer-name
       (should (derived-mode-p 'drgnx-search-handoff-mode))
-      (should (equal (buffer-string) "Replace `pending' with `queued' in these places, keeping behaviour."))
+      (should (equal (drgnx-search-handoff--instruction)
+                     "Replace `pending' with `queued' in these places, keeping behaviour."))
+      ;; the title and the rest are not the instruction's: typing there is refused, at its end it is the text
+      (should (string-match-p "Ask an agent about 3 results" (drgnx-search-handoff-test--text)))
+      (should-error (save-excursion (goto-char (point-min)) (insert "x")) :type 'text-read-only)
+      (should-error (save-excursion (goto-char (point-max)) (insert "x")) :type 'text-read-only)
+      (insert " Now.")
+      (should (string-suffix-p "behaviour. Now." (drgnx-search-handoff--instruction)))
+      ;; the context box: the first places, how many more, the brief's size
+      (should (string-match-p "a.el\n.*4  in f  (pending)\n.*⋯ 2 more · ~3[0-9] tokens"
+                              (drgnx-search-handoff-test--text)))
+      (should (string-match-p "Hunks come back to Review" (drgnx-search-handoff-test--text)))
       (should (equal (mapcar #'car (plist-get drgnx-search-handoff--ask :choices))
                      '("New worker, own worktree" "New pair here" "Pair · codex-1 (idle)" "claude-2 (idle)")))
       (should (equal (cdr (nth 1 (plist-get drgnx-search-handoff--ask :choices))) '(:pair (:profile "claude"))))
-      (should (string-match-p "Ask an Agent · 3 matches  Who: New worker" drgnx-search-handoff--header-text))
+      (should (equal (drgnx-search-handoff-test--chosen) "New worker, own worktree"))
       (drgnx-search-handoff-next-who)
-      (should (string-match-p "Who: New pair here" drgnx-search-handoff--header-text))
+      (should (equal (drgnx-search-handoff-test--chosen) "New pair here"))
+      (should (string-match-p "Edits go to your buffers" (drgnx-search-handoff-test--text)))
       (drgnx-search-handoff-next-who)
-      (should (string-match-p "Who: Pair · codex-1 (idle)" drgnx-search-handoff--header-text))
+      (should (equal (drgnx-search-handoff-test--chosen) "Pair · codex-1 (idle)"))
       (drgnx-search-handoff-next-who)
       (drgnx-search-handoff-next-who)
-      (should (string-match-p "Who: New worker" drgnx-search-handoff--header-text))
+      (should (equal (drgnx-search-handoff-test--chosen) "New worker, own worktree"))
+      (should (string-suffix-p "Now." (drgnx-search-handoff--instruction)))
       (drgnx-search-handoff-hidden)
-      (should (string-match-p "hidden files in" drgnx-search-handoff--header-text)))))
+      (should (string-match-p "hidden files in" (drgnx-search-handoff-test--text)))
+      (should (equal (cadr (car drgnx-search-handoff-test--calls))
+                     '(:view "s" :off [] :hidden t))))))
 
 (ert-deftest drgnx-search-handoff/send-hands-off-the-ticked-or-the-row ()
   "Pattern D: with matches ticked, Send hands off all but the unticked (`off'); to a session, with the agent's mark for
@@ -176,13 +207,13 @@ remote or local; a chain the project's routes leave empty is said in red and Sen
     (drgnx-search-to-agent)
     (should (= asked 1))
     (with-current-buffer drgnx-search-handoff-buffer-name
-      (should (string-match-p "via its vendor's own service" drgnx-search-handoff--header-text))
+      (should (string-match-p "via its vendor's own service" (drgnx-search-handoff-test--text)))
       (drgnx-search-handoff-next-who)
       (drgnx-search-handoff-next-who)
-      (should (string-match-p "Who: or-1 (idle)  via openrouter (remote) → ollama (local)"
-                              drgnx-search-handoff--header-text))
+      (should (equal (drgnx-search-handoff-test--chosen) "or-1 (idle)"))
+      (should (string-match-p "via openrouter (remote) → ollama (local)" (drgnx-search-handoff-test--text)))
       (drgnx-search-handoff-next-who)
-      (should (string-match-p "via no provider the project's routes allow" drgnx-search-handoff--header-text))
+      (should (string-match-p "via no provider the project's routes allow" (drgnx-search-handoff-test--text)))
       (insert "Do it.")
       (should-error (drgnx-search-handoff-send) :type 'user-error)
       (should-not (assoc "search/handoff" drgnx-search-handoff-test--calls)))))

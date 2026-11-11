@@ -327,6 +327,7 @@ params! {
     SearchEdits(search::EditsParams),
     SearchEditDoc(search::EditDocParams),
     SearchHandoff(search::HandoffParams),
+    SearchHandoffContext(search::HandoffContextParams),
     SearchHandoffMark(search::HandoffMarkParams),
     SearchHandoffState(search::HandoffStateParams),
     SearchPreview(search::PreviewParams),

@@ -3614,7 +3614,7 @@ cancels those."
                               (add-hook 'drgnx-hub-connected-functions #'drgnx-replace--hub-up)
                               (drgnx-state-define-role 'bar) ; the find bar's window: no editor, no chrome
                               (drgnx-wb-place 'drgnx-replace-sheet-mode 'popup :height 0.8 :modal t) ; the sheet: the popup lane, tall
-                              (drgnx-wb-place 'drgnx-search-handoff-mode 'popup :height 0.3 :modal t) ; Ask an Agent's card
+                              (drgnx-wb-place 'drgnx-search-handoff-mode 'popup :height 0.6 :modal t) ; Ask an Agent's card
                               (eval-after-load 'evil (drgnx-modules-with-owner (drgnx-replace--evil-states)
                                                                                (drgnx-replace--evil-maps)))
                               ;; wb/drgnx-persist.el saves the main area with `window-state-get': the bar's window would be in it.

@@ -661,6 +661,44 @@ pub struct HandoffAnswer {
     pub hidden: Vec<String>,
 }
 
+/// `search/handoff-context`: what Ask an Agent's card shows of the brief before it is sent: the matches IDS (else
+/// all but OFF; hidden paths only when HIDDEN) of VIEW's search.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffContextParams {
+    pub view: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ids: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub off: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+}
+
+/// One place of the card's context box: its file (relative to the search's folder), line (from 1), the definition
+/// it is in and its line's text, trimmed.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffContextRow {
+    pub path: String,
+    pub line: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ctx: Option<String>,
+    pub text: String,
+}
+
+/// `search/handoff-context`'s answer: the first places, how many there are in all, the brief's size in tokens
+/// (about four characters a token, without the instruction) and the hidden paths left out.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffContext {
+    pub rows: Vec<HandoffContextRow>,
+    pub total: u32,
+    pub tokens: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden: Vec<String>,
+}
+
 /// `search/handoff-mark`: hand-off HANDOFF's rows show MARK (a new worker's mark, known from its first snapshot,
 /// after `search/handoff` answered).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -1538,6 +1576,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/handoff", SearchHandoff(HandoffParams) -> HandoffAnswer,
             classes: [User], writes: true,
             doc: "hand a view's ticked matches to an agent: a brief (the instruction, the query, the matches grouped by file, at most 300 lines, the rest through the drgnx-search tool search_results) to a new worker in its own worktree or to a live session; hidden paths left out unless asked; its progress is search-handoff-state",
+        ),
+        method!(
+            "search/handoff-context", SearchHandoffContext(HandoffContextParams) -> HandoffContext,
+            classes: [User], writes: false,
+            doc: "what Ask an Agent's card shows before Send: the first places of the matches it would hand off, how many in all, the brief's size in tokens and the hidden paths left out",
         ),
         method!(
             "search/handoff-mark", SearchHandoffMark(HandoffMarkParams) -> bool,

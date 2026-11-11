@@ -213,16 +213,19 @@ the buffer does: it never asks for a file). The other keys under `d` and `Z` sta
 
 **Ask an Agent** (`M-a` in the Search view; `C-c C-a` in the Emacs and Vim profiles; the palette) hands the ticked
 matches to an agent, or the selected row's (a match, or a file's matches) when none is ticked. A small card opens in
-the middle of the window: its text is what the agent is to do, prefilled with a replacement ("Replace `pending` with
-`queued` in these places, keeping behaviour"); its header line says who it goes to. **Next Agent** (`C-c C-w`) goes
-round a **new worker** of your default agent profile, in a worktree of its own (the default), a **new pair** (a chat
+the middle of the window: under its title (how many results, the search) a box in the focus colour holds what the
+agent is to do, prefilled with a replacement ("Replace `pending` with `queued` in these places, keeping behaviour"),
+the only text you edit. Under it, who it goes to, as chips (the chosen one in the accent; click one, or **Next Agent**,
+`C-c C-w`, goes round a **new worker** of your default agent profile, in a worktree of its own (the default), a **new pair** (a chat
 of that profile in this checkout, in pair mode: it edits your buffers directly, as your rules for a chat's project edits
-allow), and each live session with its state; a session working in this checkout is marked as a pair. The header also says
-where the chosen agent sends its requests: a vendor's agent to its own service, a gateway profile to its providers
+allow), and each live session with its state; a session working in this checkout is marked as a pair). The line under
+them says where the chosen agent sends its requests: a vendor's agent to its own service, a gateway profile to its providers
 (remote or local), keeping only the remote steps of the project's routes (`.drgnx/ai.eld`) you allowed; opening the
 card asks about those routes once, as every AI command does. An agent the routes leave no provider is said in red, and
-Send refuses it. **Send** (`C-<return>`; `C-c C-c`)
-hands it off, **Cancel** (`<escape>`; `C-c C-k`) does not.
+Send refuses it. A box shows the context the agent gets: the first places, by file, then how many more and the
+brief's size in tokens (about four characters a token), and the hidden files left out. The foot says where the edits
+come back (a worker's hunks to Review, a pair's to your buffers); **Send** (`C-<return>`; `C-c C-c`) hands it off,
+**Cancel** (`<escape>`; `C-c C-k`) does not.
 
 The agent gets a brief: what to do, the search and its replacement, and the places, grouped by file, as
 `path:line:col  in <definition>  <line>`; at most 300 places, or about 8,000 tokens' worth, go in the brief, and the
