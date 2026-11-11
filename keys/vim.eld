@@ -336,6 +336,8 @@
         (terminal-find-previous :none "the palette")
         (terminal-copy-mode :none "the palette")
         (terminal-reattach :none "the palette, or the notice an earlier drgnx's terminals post")
+        (terminal-reconnect :none "the Reconnect button of a remote terminal whose connection was lost")
+        (terminal-clipboard-answer :none "the notice a remote program's clipboard request posts")
         (shell-reload-environment :none "in the palette")
         (go-quick-open "SPC f p")
         (search-project "SPC s p")

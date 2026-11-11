@@ -33874,6 +33874,12 @@
                   "null"
                 ]
               },
+              "remote": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "running": {
                 "type": "boolean"
               },
@@ -34076,6 +34082,13 @@
           },
           "place": {
             "description": "Where the editor shows it (`panel`, `editor`): kept for a reattach.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remote": {
+            "description": "A terminal in a remote folder: TRAMP's prefix of it (`/ssh:host:`), kept for a reattach.",
             "type": [
               "string",
               "null"
