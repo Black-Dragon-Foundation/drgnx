@@ -293,6 +293,9 @@ Returns (EXIT . OUTPUT)."
     (should (string-match-p "DRGNX_TEST_ADAPTER: llvmpipe\n *run: cargo test --locked --no-fail-fast --workspace"
                             (drgnx-ci-test--job rt "linux")))
     (should-not (string-search "DRGNX_TEST_ADAPTER:" (drgnx-ci-test--job rt "macos")))
+    ;; drgnx-term's vttest rows need vttest on the Mac too, before the workspace's tests
+    (let* ((mac (drgnx-ci-test--job rt "macos")) (vt (string-search "run: brew install vttest\n" mac)))
+      (should (and vt (< vt (string-search "--no-fail-fast --manifest-path runtime/Cargo.toml --workspace" mac)))))
     (drgnx-ci-test--has packages "vulkan-loader mesa-vulkan-drivers")
     (should (string-search "https://huggingface.co/$repo/resolve/$rev/$name" (drgnx-ci-test--file ".github/ci/models.sh")))))
 

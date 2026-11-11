@@ -1060,6 +1060,9 @@ jobs:
         run: /bin/bash test/container/zig.sh macos
       - name: libghostty-vt's pinned tarballs (build.rs never downloads)
         run: /bin/bash runtime/crates/ghostty-vt-sys/fetch.sh
+      # drgnx-term's vttest rows drive the real vttest (the Linux test images carry it; a missing one fails the rows)
+      - name: vttest (the terminal's conformance rows)
+        run: brew install vttest
       - run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
       # The terminal worker's peer check on a Mac (getpeereid): the workspace run above checks that this user's
       # connection is served; another uid's needs root, so the same test runs again under sudo (the runner's user has

@@ -156,7 +156,7 @@ runs out prints the screen it saw.
 | `vt52-exit` | 7, to the screen after VT52 mode is left | the identify reply and the cursor report in ANSI mode |
 
 vttest must be installed: the test images carry it (`test/container/base/Containerfile`, `test/container/rust-packages.sh`),
-and without it the test fails, it never skips. `UPDATE_VTTEST_GOLDENS=1` writes the goldens instead of comparing.
+runtime.yml's macOS job installs Homebrew's, and without it the test fails, it never skips. `UPDATE_VTTEST_GOLDENS=1` writes the goldens instead of comparing.
 They were recorded from the worker and checked by eye against what vttest says each screen should show. Where they
 differ, the golden keeps what the worker does and the row below records the difference: it is fixed in the engine or the
 worker, never in the golden.
