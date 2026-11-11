@@ -83,18 +83,24 @@ through the text around it, on a graphical frame with SVG and `drgnx-look-icons'
 
 ;;;; File kinds
 
-(defconst drgnx-icons--file-kinds
-  (let ((r (drgnx-file-read (expand-file-name "files.eld" drgnx-icons-dir))))
-    (unless (eq (plist-get r :status) 'ok)
-      (error "etc/icons/files.eld: %s" (or (plist-get r :problem) (plist-get r :status))))
-    (cl-flet ((table (lines)
-                (let ((h (make-hash-table :test #'equal)))
-                  (dolist (line lines h)
-                    (dolist (w (cdr line)) (unless (gethash w h) (puthash w (car line) h)))))))
-      (cons (table (plist-get (plist-get r :data) :names)) (table (plist-get (plist-get r :data) :extensions)))))
-  "(NAMES . EXTENSIONS) from etc/icons/files.eld, read once: a lowercase exact file name or extension → its file-kind
-icon name (the first line naming it).  The hub reads the same table for the Explorer's rows
-\(runtime/crates/drgnx-ratatoskr/src/view/icons.rs).")
+(defvar drgnx-icons--file-kinds nil
+  "(NAMES . EXTENSIONS) once `drgnx-icons--file-kinds' has read etc/icons/files.eld, else nil.")
+
+(defun drgnx-icons--file-kinds ()
+  "(NAMES . EXTENSIONS) from etc/icons/files.eld, read at the first lookup (not at load: a build compiles drgnx
+without etc/), then kept: a lowercase exact file name or extension → its file-kind icon name (the first line naming
+it).  The hub reads the same table for the Explorer's rows (runtime/crates/drgnx-ratatoskr/src/view/icons.rs)."
+  (or drgnx-icons--file-kinds
+      (setq drgnx-icons--file-kinds
+            (let ((r (drgnx-file-read (expand-file-name "files.eld" drgnx-icons-dir))))
+              (unless (eq (plist-get r :status) 'ok)
+                (error "etc/icons/files.eld: %s" (or (plist-get r :problem) (plist-get r :status))))
+              (cl-flet ((table (lines)
+                          (let ((h (make-hash-table :test #'equal)))
+                            (dolist (line lines h)
+                              (dolist (w (cdr line)) (unless (gethash w h) (puthash w (car line) h)))))))
+                (cons (table (plist-get (plist-get r :data) :names))
+                      (table (plist-get (plist-get r :data) :extensions))))))))
 
 (defun drgnx-look-file-icon-name (file &optional open)
   "The icon name for FILE: a folder (OPEN: an open one), or the file kind from its name."
@@ -108,9 +114,9 @@ icon name (the first line naming it).  The hub reads the same table for the Expl
 after its last dot (a dotfile's name counts), else `file'.  The major mode is not asked: the hub names the same icon
 without one."
   (let* ((base (downcase (file-name-nondirectory name))) (dot (cl-position ?. base :from-end t))
-         (ext (and dot (substring base (1+ dot)))))
-    (or (gethash base (car drgnx-icons--file-kinds))
-        (and ext (gethash ext (cdr drgnx-icons--file-kinds)))
+         (ext (and dot (substring base (1+ dot)))) (kinds (drgnx-icons--file-kinds)))
+    (or (gethash base (car kinds))
+        (and ext (gethash ext (cdr kinds)))
         'file)))
 
 (defun drgnx-look-file-icon (file &optional face size open)
