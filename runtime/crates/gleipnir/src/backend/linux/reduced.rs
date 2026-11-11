@@ -129,6 +129,8 @@ mod tests {
                 socket: "/rt/s/S1/proxy.sock".into(),
             }],
             mac_tcp_ports: vec![],
+            loopback: false,
+            mac_loopback_ports: vec![],
         }
     }
 

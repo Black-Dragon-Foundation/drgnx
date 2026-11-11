@@ -104,7 +104,8 @@ impl Default for MacContext {
 /// 2. AF_UNIX sockets may be made (pipes to children); connecting to one is decided at step 13;
 /// 3. `(deny file-read* (subpath "/Users") …)`, before every allow;
 /// 4. `/` itself, and the metadata of [`LINKS`] and of every directory above an allowed path (stat, never list);
-/// 5. reads: [`SYSTEM_READ`], the developer dir, (shared) [`DNS_FILES`], `read`, `write`, `home`, `run`, `tmp`;
+/// 5. reads: [`SYSTEM_READ`], the developer dir (with `loopback`, an Xcode one's `../SharedFrameworks` too),
+///    (shared) [`DNS_FILES`], `read`, `write`, `home`, `run`, `tmp`;
 /// 6. [`DEVICES`], each by name;
 /// 7. [`SYSTEM_HIDDEN`] denied;
 /// 8. writes: `write`, `home` when `rw`, `tmp`;
@@ -114,7 +115,8 @@ impl Default for MacContext {
 ///     clone of a directory above a hidden path (`hide`, [`SYSTEM_HIDDEN`]): `clonefile` copies a whole tree, hidden
 ///     files too, and Seatbelt checks only the directory named;
 /// 12. the network: shared allows outbound IP anywhere, AF_SYSTEM and [`NET_SERVICES`]; isolated is
-///     `(deny network*)` and outbound to `localhost` on `mac_tcp_ports` only;
+///     `(deny network*)` and outbound to `localhost` on `mac_tcp_ports` only; with `loopback`, `localhost` on
+///     `mac_loopback_ports` bound, accepted and connected to, and Unix sockets under `tmp` bound and accepted;
 /// 13. every Unix socket denied, then each of `sockets` (and, shared, [`DNS_SOCKET`]) allowed by `path-literal`.
 ///
 /// Every deny also holds for every case of its path (a `regex` of character classes: APFS ignores case, and whether
@@ -163,8 +165,15 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
         .map(|b| Ok((b.mode, text(&b.source)?)))
         .collect::<Result<Vec<_>, Refusal>>()?;
 
+    let loopback = matches!(s.net, Net::Isolated { loopback: true, .. });
+    // A debug session's LLDB.framework: Xcode keeps it beside its developer dir, not in it.
+    let frameworks = dev
+        .filter(|_| loopback)
+        .and_then(|d| d.strip_suffix("/Contents/Developer"))
+        .map(|app| format!("{app}/Contents/SharedFrameworks"));
     let mut reads: Vec<&str> = SYSTEM_READ.to_vec();
     reads.extend(dev);
+    reads.extend(frameworks.as_deref());
     if shared {
         reads.extend(DNS_FILES);
     }
@@ -228,12 +237,34 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
             ));
             push(rule("allow", "mach-lookup", "global-name", NET_SERVICES)?);
         }
-        Net::Isolated { mac_tcp_ports, .. } => {
+        Net::Isolated {
+            mac_tcp_ports,
+            loopback,
+            mac_loopback_ports,
+            ..
+        } => {
             push(Some("(deny network*)".into()));
             for port in mac_tcp_ports {
                 push(Some(format!(
                     "(allow network-outbound (remote ip \"localhost:{port}\"))"
                 )));
+            }
+            if *loopback {
+                for port in mac_loopback_ports {
+                    let ip = format!("\"localhost:{port}\"");
+                    push(Some(format!("(allow network-bind (local ip {ip}))")));
+                    push(Some(format!("(allow network-inbound (local ip {ip}))")));
+                    push(Some(format!("(allow network-outbound (remote ip {ip}))")));
+                }
+                if let Some(t) = tmp {
+                    let t = quote(t)?;
+                    push(Some(format!(
+                        "(allow network-bind (local unix-socket (subpath {t})))"
+                    )));
+                    push(Some(format!(
+                        "(allow network-inbound (local unix-socket (subpath {t})))"
+                    )));
+                }
             }
         }
     }
@@ -587,6 +618,8 @@ mod tests {
         Net::Isolated {
             relay: vec![],
             mac_tcp_ports: vec![3128, 3129],
+            loopback: false,
+            mac_loopback_ports: vec![],
         }
     }
 
@@ -993,10 +1026,88 @@ mod tests {
         let mut none = spec(Net::Isolated {
             relay: vec![],
             mac_tcp_ports: vec![],
+            loopback: false,
+            mac_loopback_ports: vec![],
         });
         none.sockets = vec![];
         let p = prof(none);
         assert!(!p.contains("remote ip"));
+    }
+
+    /// A debug session (`loopback`): its own localhost ports bound, accepted and connected to, nothing wider (no
+    /// `localhost:*`: the Mac's loopback is the host's); Unix sockets bound and accepted under its tmp only; Xcode's
+    /// SharedFrameworks read, never written. Without the flag none of it.
+    #[test]
+    fn loopback_only_its_own_ports_tmp_sockets_and_frameworks() {
+        let net = |loopback, ports: Vec<u16>| Net::Isolated {
+            relay: vec![],
+            mac_tcp_ports: vec![3128],
+            loopback,
+            mac_loopback_ports: ports,
+        };
+        let p = prof(spec(net(true, vec![47001, 47002])));
+        let forms = own(&p);
+        let rs = rules(&forms);
+        let deny = one(&rs, "(deny network*)", |r| is(r, "deny", &["network*"]));
+        let mut seen = Vec::new();
+        for (i, r) in rs.iter().enumerate() {
+            if r.action == "allow" && r.ops.iter().any(|o| o.starts_with("network")) {
+                assert!(i > deny);
+                let f = items(r.filters[0]);
+                let kind = atom(&f[1]).unwrap();
+                let what = match kind {
+                    "ip" => string(&f[2]).unwrap().to_string(),
+                    "unix-socket" => {
+                        let sub = items(&f[2]);
+                        format!("{} {}", atom(&sub[0]).unwrap(), string(&sub[1]).unwrap())
+                    }
+                    other => panic!("{other}"),
+                };
+                seen.push(format!("{} {} {what}", r.ops[0], atom(&f[0]).unwrap()));
+            }
+        }
+        let tmp = |op: &str, dir: &str| format!("{op} {dir} subpath {TMP}");
+        let mut want = vec!["network-outbound remote localhost:3128".to_string()];
+        for port in [47001, 47002] {
+            want.push(format!("network-bind local localhost:{port}"));
+            want.push(format!("network-inbound local localhost:{port}"));
+            want.push(format!("network-outbound remote localhost:{port}"));
+        }
+        want.push(tmp("network-bind", "local"));
+        want.push(tmp("network-inbound", "local"));
+        // the session dir's one socket (step 13), as without the flag
+        want.push("network-outbound remote path-literal /w/run/s/S1/gw.sock".into());
+        assert_eq!(seen, want);
+        assert!(!p.contains("localhost:*") && !p.contains("\"*:*\""));
+        let fw = "/Applications/Xcode.app/Contents/SharedFrameworks";
+        let names = |r: &R<'_>| -> Vec<String> {
+            r.filters
+                .iter()
+                .flat_map(|f| items(f).iter().filter_map(string).map(str::to_string))
+                .collect()
+        };
+        assert!(
+            rs.iter()
+                .any(|r| is(r, "allow", &["file-read*"]) && names(r).iter().any(|n| n == fw))
+        );
+        for r in rs
+            .iter()
+            .filter(|r| r.action == "allow" && r.ops.iter().any(|o| o.starts_with("file-write")))
+        {
+            assert!(!names(r).iter().any(|n| n.starts_with("/Applications")));
+        }
+        // Without the flag: no loopback port, no socket bind, no frameworks.
+        let off = prof(spec(net(false, vec![])));
+        for word in ["network-bind", "network-inbound", "SharedFrameworks"] {
+            assert!(!off.contains(word), "{word}");
+        }
+        // The Command Line Tools' developer dir has no SharedFrameworks beside it: nothing added.
+        let clt = MacContext {
+            developer_dir: Some("/Library/Developer/CommandLineTools".into()),
+            users_dir: USERS_DIR.into(),
+        };
+        let p = try_prof(spec(net(true, vec![47001])), &clt).unwrap();
+        assert!(!p.contains("SharedFrameworks"));
     }
 
     #[test]
