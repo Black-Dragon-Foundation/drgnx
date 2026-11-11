@@ -71,7 +71,8 @@ clutter is hidden (`drgnx-explorer-exclude-names`: exact names or globs with `*`
 `.svn`, `.DS_Store`, `__pycache__` and `.#*` lock files). Dragging does nothing — the Explorer never moves files by drag.
 The hub (Ratatoskr, which starts with drgnx) lists and watches the folders: a file made, removed or changed by git
 outside Emacs shows within a moment. While the hub is starting, the Explorer says it waits for it and fills when it
-is up.
+is up. An Explorer on a second monitor at another scale draws the same folders at that monitor's size and fills in as
+you scroll it. The selected row stays on its file when the theme changes.
 
 **Compact folders:** an open folder whose only entry is a folder shares its row (`src/app`), as in VS Code; the row
 is the last folder (opening, renaming, deleting act on it) and the chain ends at the first closed folder. Only
