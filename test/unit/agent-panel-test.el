@@ -902,6 +902,23 @@ and code in the code font."
   "The face list of the first character of TEXT in string S."
   (ensure-list (get-text-property (string-search text s) 'face s)))
 
+(ert-deftest drgnx-agent-panel/header-pin-and-more ()
+  "agent-panel.html `.agent .ph': after the lens, a pin button and ⋯; a press on either leaves point where it is (the
+pin takes the card at point), ⋯ opens the panel's actions.  A lens segment's name has room either side in its face."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (let* ((head (drgnx-agent-panel--header-row))
+             (maps (cl-loop for i below (length head) for m = (get-text-property i 'keymap head)
+                            when (and m (lookup-key m [down-mouse-1])) collect m)))
+        (should (member "Pin the card at point" (cl-loop for i below (length head) collect (get-text-property i 'help-echo head))))
+        (should (member "More actions" (cl-loop for i below (length head) collect (get-text-property i 'help-echo head))))
+        (should (cl-every (lambda (m) (eq (lookup-key m [down-mouse-1]) #'ignore)) maps))
+        (should (cl-some (lambda (m) (eq (lookup-key m [mouse-1]) #'drgnx-agent-panel-header-menu)) maps))
+        (dolist (c (mapcar #'cdr drgnx-agent-panel-header-menu)) (should (drgnx-commands-get c)))
+        ;; the room before \"watch\" is in the segment's face
+        (let ((i (string-search "watch" head)))
+          (should (equal (get-text-property (1- i) 'face head) (get-text-property i 'face head))))))))
+
 (ert-deftest drgnx-agent-panel/header-lens-and-open-strip ()
   "agent-panel.html: the header ends with the watch / review / debug lens, the preset in force raised; the strip
 under the chips reads \"Open:\" and its step types are pills, the open ones raised, no arrows."
@@ -912,10 +929,10 @@ under the chips reads \"Open:\" and its step types are pills, the open ones rais
         (should (memq 'drgnx-agent-panel-lens-on (drgnx-agent-panel-test--face-at head "review")))
         (dolist (off '("watch" "debug"))
           (should (memq 'drgnx-agent-panel-lens (drgnx-agent-panel-test--face-at head off))))
-        ;; segments of one face are never adjacent (they would be one box)
+        ;; segments of one face are never adjacent (they would be one box): before debug's room, review's is apart
         (drgnx-agent-panel-preset 1)
         (let ((head (drgnx-agent-panel--header-row)))
-          (should-not (equal (get-text-property (1- (string-search "debug" head)) 'face head)
+          (should-not (equal (get-text-property (- (string-search "debug" head) 2) 'face head)
                              (get-text-property (string-search "debug" head) 'face head))))
         (should (string-match-p "\\`[[:space:]]*Open:" strip))
         (should-not (string-match-p "[▸▾]" strip))

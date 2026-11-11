@@ -2,7 +2,7 @@
 //! (`m:RUN:N`), the model's window, and the rows the window of rows holds.
 
 use super::Run;
-use super::run::{Found, match_id};
+use super::run::{Found, Mark, match_id};
 use crate::search::context::Def;
 use crate::view::model::Doc;
 use drgnx_rows::{Row, RowBuilder};
@@ -297,11 +297,102 @@ pub(super) fn match_row(q: &Query, replace: &str, id: String, m: &Match, why: Op
     b.finish()
 }
 
-/// Match N's row (M) in RUN, with why Replace All skipped it, if it did.
-fn row_of(run: &Run, m: &Match, n: u32) -> Row {
+/// Match N's row (M) in RUN: with an index mode's MARK, a definition's or a hit's row; else its match row, with why
+/// Replace All skipped it, if it did.
+fn row_of(run: &Run, m: &Match, n: u32, mark: Option<&Mark>) -> Row {
     let id = match_id(run.id, n);
-    let why = run.reasons.get(&id).map(String::as_str);
-    match_row(&run.query, &run.replace, id, m, why)
+    match mark {
+        Some(mark) => marked_row(id, m, mark),
+        None => {
+            let why = run.reasons.get(&id).map(String::as_str);
+            match_row(&run.query, &run.replace, id, m, why)
+        }
+    }
+}
+
+/// The glyph for a definition of KIND (Hrafn's kinds): a function's `ƒ`, a type's `◇`, a macro's `#`, a variable's
+/// or a constant's `≡`, else `•`.
+fn kind_icon(kind: &str) -> &'static str {
+    match kind {
+        "function" | "method" | "constructor" => "ƒ",
+        "struct" | "enum" | "union" | "class" | "interface" | "trait" | "type" | "record"
+        | "impl" | "module" => "◇",
+        "macro" => "#",
+        "variable" | "constant" | "static" | "custom" | "face" => "≡",
+        _ => "•",
+    }
+}
+
+/// The cells of a score bar.
+const BAR_CELLS: usize = 4;
+
+/// A score bar SHARE (0 to 1) full, in eighths of a cell: the full cells, then the part of the last one, padded with
+/// spaces to [`BAR_CELLS`]; a share above 0 shows at least an eighth.
+fn bar(share: f64) -> (String, usize) {
+    const PARTS: [char; 7] = ['▏', '▎', '▍', '▌', '▋', '▊', '▉'];
+    let eighths = (share.clamp(0.0, 1.0) * (BAR_CELLS * 8) as f64).round() as usize;
+    let eighths = if share > 0.0 { eighths.max(1) } else { 0 };
+    let mut s = "█".repeat(eighths / 8);
+    if eighths % 8 > 0 {
+        s.push(PARTS[eighths % 8 - 1]);
+    }
+    let filled = s.chars().count();
+    s.push_str(&" ".repeat(BAR_CELLS - filled));
+    (s, filled)
+}
+
+/// M's row (key ID) in an index mode, by its MARK: a definition's kind icon and signature (the name lit as a match), or
+/// a hit's score bar (the score on hover) before its symbol, then the rest of its line, and `(moved)` when its lines
+/// moved since they were indexed. The tick box, the match and the id as a match row's.
+fn marked_row(id: String, m: &Match, mark: &Mark) -> Row {
+    let mut b = RowBuilder::new(id.clone());
+    b.push("  ", None);
+    let at = b.pos();
+    b.push("[x]", None)
+        .prop(at, at + 3, "drgnx-replace-box", match_json(m));
+    b.push(" ", None);
+    match mark {
+        Mark::Def { kind, sig } => {
+            let at = b.pos();
+            b.push(kind_icon(kind), Some("drgnx-replace-kind"));
+            b.prop(at, b.pos(), "help-echo", json!(kind));
+            b.push(" ", None);
+            let sig = flat(sig);
+            match sig.find(m.text.as_str()).filter(|_| !m.text.is_empty()) {
+                Some(i) => {
+                    b.push(&sig[..i], None)
+                        .push(&m.text, Some("drgnx-replace-match"))
+                        .push(&sig[i + m.text.len()..], None);
+                }
+                None => {
+                    b.push(&sig, None);
+                }
+            }
+        }
+        Mark::Score {
+            score,
+            share,
+            moved,
+        } => {
+            let (cells, filled) = bar(*share);
+            let at = b.pos();
+            b.push(&cells, None);
+            if filled > 0 {
+                b.face(at, at + filled as u32, "drgnx-replace-score");
+            }
+            b.prop(at, b.pos(), "help-echo", json!(format!("score {score:.2}")));
+            b.push(" ", None)
+                .push(&flat(&m.text), Some("drgnx-replace-kind"))
+                .push(&flat(&m.after), None);
+            if *moved {
+                b.push("  (moved)", Some("drgnx-replace-dim"));
+            }
+        }
+    }
+    let end = b.pos();
+    b.prop(0, end, "drgnx-replace-match", match_json(m));
+    b.prop(0, end, "drgnx-work-id", json!(id));
+    b.finish()
 }
 
 /// The label row above match N of RUN, the first in definition D: `ƒ` and its name, dim; the names around it on hover.
@@ -351,7 +442,7 @@ pub(super) fn rows_in(run: &Run, at: std::ops::Range<usize>) -> Vec<Row> {
                 }
             }
             if at.contains(&i) {
-                rows.push(row_of(run, m, *k));
+                rows.push(row_of(run, m, *k, f.marks.get(j).and_then(Option::as_ref)));
             }
             i += 1;
         }

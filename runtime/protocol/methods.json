@@ -3060,9 +3060,56 @@
     },
     {
       "data": {
+        "$defs": {
+          "ScopeDone": {
+            "additionalProperties": false,
+            "description": "What a git scope (Changed, Staged, Branch) searched: FILES files of the repository (before the globs), the\nSUBMODULES and DELETED files it skipped, Branch's BASE, why it is empty (WHY_EMPTY), or why Branch has no base to\ntake (NEEDS_BASE: the view asks, `search/scope-bases`).",
+            "properties": {
+              "base": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "deleted": {
+                "default": 0,
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "files": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "needs_base": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "submodules": {
+                "default": 0,
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "why_empty": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "files"
+            ],
+            "type": "object"
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`search-run-done`: search RUN of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not\nrun; OFF the matches that come back unticked (`search/run`'s `off`). A search a newer one stopped says nothing.",
+        "description": "`search-run-done`: search RUN of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not\nrun; OFF the matches that come back unticked (`search/run`'s `off`); SCOPE what a git scope searched. A search a\nnewer one stopped says nothing.",
         "properties": {
           "error": {
             "type": [
@@ -3090,6 +3137,16 @@
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ScopeDone"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "view": {
             "type": "string"
@@ -12659,12 +12716,41 @@
               "null"
             ]
           },
+          "exclude": {
+            "description": "Names never listed, at most 256: exact names or globs (`*` any run, `?` one character); default `.git`,\n`.hg`, `.svn`, `.DS_Store`, `__pycache__` and `.#*`.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "expanded": {
             "description": "The open folders under the roots (no trailing slash), at most 10000.",
             "items": {
               "$ref": "#/$defs/AbsPath"
             },
             "type": "array"
+          },
+          "indent": {
+            "description": "A level's indent on a graphical display, in logical px (the density's `tree-indent`); default 12.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "only": {
+            "description": "Find: list only these files (at most 5000) under the roots, each with the folders above it open; nothing is\nread from disk and nothing watched.",
+            "items": {
+              "$ref": "#/$defs/AbsPath"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "roots": {
             "description": "The roots, 1 to 16 existing folders.",
@@ -28994,6 +29080,13 @@
         "properties": {
           "context": {
             "description": "A dim label row above the first match of each definition (the innermost one around it), from one parse of the\nfile; none at the top level or for a language without definitions. Default true (the setting\n`drgnx-search-context`).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "count": {
+            "description": "Only the totals (`search-run-done`): no rows, no model, and the search is not recorded as recent. For a search\nthe user did not type: a pinned saved search's live count. Default false.",
             "type": [
               "boolean",
               "null"

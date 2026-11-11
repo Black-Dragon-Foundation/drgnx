@@ -117,3 +117,84 @@ fn a_root_that_is_no_repository_is_an_error_not_no_changes() {
     assert_eq!(ev["error"], err);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let ok = Command::new("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "init.defaultBranch=main",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok, "git {args:?}");
+}
+
+/// Pattern D (plan sja-complete E3, the coordinator's ruling): a repository's watch reads its status again when git
+/// changes it from anywhere (an add, a commit, a checkout in a terminal), once per burst, and when poked (a name made
+/// outside git); its own reads (`git status`) are no change; a linked worktree's gitdir is found; it ends on Stop.
+#[test]
+fn a_repository_s_watch_reads_again_after_git_changes_it() {
+    let dir = std::env::temp_dir().join(format!("letters-watch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    git(&dir, &["init", "-q"]);
+    std::fs::write(dir.join("a"), "1").unwrap();
+    git(&dir, &["add", "a"]);
+    git(&dir, &["commit", "-qm", "one"]);
+    let (tx, rx) = channel();
+    let (reads_tx, reads) = channel();
+    let (root, poke) = (dir.clone(), tx.clone());
+    let watch = std::thread::spawn(move || {
+        watch_repo(&root, tx, rx, &mut || {
+            // what the hub's read does: a status read, which must not count as a change
+            let _ = read_status(&root);
+            reads_tx.send(()).is_ok()
+        });
+    });
+    std::thread::sleep(Duration::from_millis(200)); // the watch is set
+    let next = |what: &str| {
+        reads
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or_else(|_| panic!("no read after {what}"));
+        // the burst is read once, and the read itself wakes nothing
+        assert!(
+            reads.recv_timeout(Duration::from_millis(600)).is_err(),
+            "one read per burst ({what})"
+        );
+    };
+    std::fs::write(dir.join("b"), "2").unwrap();
+    git(&dir, &["add", "b"]);
+    next("git add");
+    git(&dir, &["commit", "-qm", "two"]);
+    next("git commit");
+    git(&dir, &["checkout", "-qb", "side"]);
+    next("git checkout");
+    poke.send(Heard::Changed).unwrap();
+    next("a poke");
+    // a linked worktree: its gitdir and the common dir
+    let wt = dir.join("wt");
+    git(
+        &dir,
+        &["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "wtb"],
+    );
+    let (gitdir, common) = git_dirs(&wt).expect("a linked worktree's dirs");
+    assert!(gitdir.join("HEAD").is_file(), "{gitdir:?}");
+    assert_eq!(
+        common.canonicalize().unwrap(),
+        dir.join(".git").canonicalize().unwrap()
+    );
+    let _ = reads.recv_timeout(Duration::from_secs(2)); // the worktree add moved refs: one read
+    poke.send(Heard::Stop).unwrap();
+    watch.join().unwrap();
+    assert!(git_dirs(&dir.join("a")).is_none());
+    std::fs::remove_dir_all(&dir).unwrap();
+}

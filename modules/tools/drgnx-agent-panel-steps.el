@@ -15,6 +15,7 @@
 (require 'drgnx-view)
 (require 'drgnx-registry)
 (require 'drgnx-icons)
+(require 'drgnx-ui-kit)                 ; the header's buttons
 (require 'drgnx-pixels)
 (require 'drgnx-state)                  ; the panel's width, from the store's events
 
@@ -83,30 +84,71 @@ SNAP is the snapshot, SINCE when it began running (float seconds) and NOW the ti
 
 (defun drgnx-agent-panel--lens ()
   "The header's lens: watch, review and debug, the one in force raised; a click picks one."
-  (let ((on (drgnx-agent-panel--preset-in-force)) (n 0))
+  (let ((on (drgnx-agent-panel--preset-in-force)) (n 0)
+        (pad (propertize " " 'display `(when (display-graphic-p) space :width (,(drgnx-px 8))) 'invisible t)))
     (mapconcat (lambda (p)
                  (cl-incf n)
                  (let ((map (make-sparse-keymap)))
                    (define-key map [mouse-1] (intern (format "drgnx-agent-panel-preset-%d" n)))
-                   (propertize (symbol-name (car p)) 'face (if (eql n on) 'drgnx-agent-panel-lens-on 'drgnx-agent-panel-lens)
+                   ;; `.lens span' pads the name 10 px either side: 8 here, in the segment's face, and its box's sides
+                   (propertize (concat pad (symbol-name (car p)) pad)
+                               'face (if (eql n on) 'drgnx-agent-panel-lens-on 'drgnx-agent-panel-lens)
                                'mouse-face 'drgnx-hover 'keymap map 'help-echo (format "%d: %s" n (car p)))))
                drgnx-agent-panel-presets
                ;; 2 px of the well between segments: two segments of one face would be one box, padded at its ends only
                (propertize " " 'face 'drgnx-surface-gap 'display `(space :width (,(drgnx-px 2)))))))
 
+(defvar drgnx-agent-panel-header-menu
+  '(("Fork the Chat" . agents-panel-fork) ("Compact the Context" . agents-panel-compact)
+    ("Switch the Model" . agents-panel-model) ("Switch the Mode" . agents-panel-mode)
+    ("List the Edits" . agents-panel-ledger) ("Stop the Agent" . agents-panel-stop))
+  "The header's ⋯ menu: (LABEL . COMMAND), COMMAND a registry id.")
+
+(defun drgnx-agent-panel-header-menu (event)
+  "The header's ⋯ menu (`drgnx-agent-panel-header-menu') at EVENT; run the chosen command."
+  (interactive "e")
+  (when-let* ((choice (x-popup-menu event (list "Agent" (cons "" drgnx-agent-panel-header-menu)))))
+    (drgnx-ui--run choice)))
+
+(defvar drgnx-agent-panel--header-maps nil "The header buttons' keymaps: (PIN . MORE), built on first use.")
+
+(defun drgnx-agent-panel--header-maps ()
+  "The keymaps of the header's pin and ⋯ buttons.  A press leaves point where it is, so the pin takes the card at
+point, not the header."
+  (or drgnx-agent-panel--header-maps
+      (let ((pin (make-sparse-keymap)) (more (make-sparse-keymap)))
+        (set-keymap-parent pin (drgnx-ui--button-map 'agents-panel-pin 'text))
+        (define-key pin [down-mouse-1] #'ignore)
+        (define-key more [down-mouse-1] #'ignore)
+        (define-key more [mouse-1] #'drgnx-agent-panel-header-menu)
+        (setq drgnx-agent-panel--header-maps (cons pin more)))))
+
+(defun drgnx-agent-panel--header-buttons ()
+  "The header's buttons after the lens (`.ph .ib'): pin and ⋯, 24 px around 16 px icons, 6 px apart."
+  (let* ((graphic (display-graphic-p))
+         (pad (if graphic (propertize " " 'display `(space :width (,(drgnx-px 4)))) ""))
+         (gap (if graphic (propertize " " 'display `(space :width (,(drgnx-px 6)))) " "))
+         (maps (drgnx-agent-panel--header-maps)))
+    (cl-flet ((button (icon help map)
+                (propertize (concat pad (drgnx-look-icon icon 'drgnx-agent-panel-subtle) pad)
+                            'help-echo help 'mouse-face 'drgnx-hover 'keymap map 'pointer 'hand)))
+      (concat gap (button 'pin "Pin the card at point" (car maps))
+              gap (button 'ellipsis "More actions" (cdr maps))))))
+
 (defun drgnx-agent-panel--header-row ()
-  "The header (agent-panel.html `.agent .ph'): the agent's icon, the chat's name, what the agent is doing, the lens."
+  "The header (agent-panel.html `.agent .ph'): the agent's icon, the chat's name, what the agent is doing, the lens,
+then pin and ⋯, 8 px from the edge."
   (let* ((snap drgnx-agent-panel--snap)
          (name (or (plist-get snap :name) drgnx-agent-panel--session "agent"))
-         (lens (drgnx-agent-panel--lens)))
+         (lens (concat (drgnx-agent-panel--lens) (drgnx-agent-panel--header-buttons))))
     (let* ((head (concat " " (drgnx-look-icon 'bot 'drgnx-accent) " " (propertize name 'face 'drgnx-agent-panel-title)))
            (status (propertize (format " · %s" (drgnx-agent-panel--status-line snap drgnx-agent-panel--busy-since (float-time)))
                                'face 'drgnx-agent-panel-subtle))
            (width (drgnx-agent-panel--width))
-           ;; what is left between the name and the lens, with 12 px either side of the lens
-           (room (and width (- width (string-pixel-width head) (string-pixel-width lens) (drgnx-px 24)))))
+           ;; what is left between the name and the lens: 12 px before it, its buttons 8 px from the edge
+           (room (and width (- width (string-pixel-width head) (string-pixel-width lens) (drgnx-px 20)))))
       (concat head (if room (drgnx-agent-panel--fit status room) status)
-              (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width lens) (drgnx-px 12)))))) lens
+              (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width lens) (drgnx-px 8)))))) lens
               "\n"))))
 
 (defun drgnx-agent-panel--fit (s px)

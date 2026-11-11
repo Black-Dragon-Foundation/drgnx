@@ -260,5 +260,24 @@ case \"$*\" in *tic*) printf 'stdin=%%s\\n' \"$(cat)\" >> '%s' ;; esac" log log)
         (drgnx-term--theme-changed)
         (should-not (eq colours (drgnx-term--colours)))))))
 
+(ert-deftest drgnx-term-shell/a-face-changed-without-a-theme-reaches-the-next-terminal ()
+  ;; a colour face changed by `set-face-attribute' (Customize, the user's config) is read again at once, not at the
+  ;; next theme change: the touch raises the epoch through a debounce, and the next open reads the new colour
+  (drgnx-test-with-modules '(tools/term)
+    (let ((calls nil) (old (face-attribute 'drgnx-term-default :foreground nil t)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-timer-debounce) (lambda (key _s fn &rest _) (push (cons key fn) calls) key)))
+            (let ((colours (drgnx-term--colours)))
+              (set-face-attribute 'drgnx-term-default nil :foreground "#123456")
+              (set-face-attribute 'drgnx-term-color-3 nil :foreground "#654321")
+              (set-face-attribute 'region nil :background (face-attribute 'region :background nil t))   ; not a term face
+              (should (= (length calls) 2))                    ; one per term face, the same key: a debounce merges them
+              (should (equal (delete-dups (mapcar #'car calls)) '(term-face-change)))
+              (should (eq colours (drgnx-term--colours)))     ; until the debounce fires
+              (funcall (cdr (car calls)))
+              (should-not (eq colours (drgnx-term--colours)))
+              (should (equal (aref (drgnx-term--colours) 0) "#123456"))))
+        (set-face-attribute 'drgnx-term-default nil :foreground old)))))
+
 (provide 'term-shell-test)
 ;;; term-shell-test.el ends here

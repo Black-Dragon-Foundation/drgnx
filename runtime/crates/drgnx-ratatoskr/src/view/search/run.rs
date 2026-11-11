@@ -54,11 +54,21 @@ pub(super) fn snapshot(file: &Path) -> Option<Snap> {
 /// Each match's innermost definition (none at the top level), shared by the matches in it.
 pub(super) type Ctx = Vec<Option<std::sync::Arc<crate::search::context::Def>>>;
 
-/// A file as a run read it for its matches: its snapshot and, with context on, each match's definition.
+/// What an index mode knows of a match past its text: a definition's kind and signature (Symbol), a hit's score, its
+/// share of the best hit's and whether its lines moved since they were indexed (Meaning).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Mark {
+    Def { kind: String, sig: String },
+    Score { score: f64, share: f64, moved: bool },
+}
+
+/// A file as a run read it for its matches: its snapshot, with context on each match's definition, and an index
+/// mode's marks (empty: none).
 #[derive(Clone, Debug)]
 pub(super) struct Read {
     pub snap: Snap,
     pub ctx: Ctx,
+    pub marks: Vec<Option<Mark>>,
 }
 
 /// FILE read once for its matches MS: its snapshot, and each match's definition when CONTEXT; none when it cannot be
@@ -79,6 +89,7 @@ pub(super) fn read(file: &Path, ms: &[Match], context: bool) -> Option<Read> {
     Some(Read {
         snap: snap_of(&meta, bytes.as_deref()),
         ctx,
+        marks: Vec::new(),
     })
 }
 
@@ -129,14 +140,16 @@ pub(super) struct Found {
     /// Each match's definition (empty: none), and how many label rows they give ([`Found::labelled`]).
     pub ctx: Ctx,
     pub labels: usize,
+    /// Each match's mark from an index mode (empty: none).
+    pub marks: Vec<Option<Mark>>,
 }
 
 impl Found {
     /// FILE's matches MS (numbered NS) as READ gives them.
     pub(super) fn new(file: String, ms: Vec<Match>, ns: Vec<u32>, read: Option<Read>) -> Found {
-        let (snap, ctx) = match read {
-            Some(r) => (Some(r.snap), r.ctx),
-            None => (None, Vec::new()),
+        let (snap, ctx, marks) = match read {
+            Some(r) => (Some(r.snap), r.ctx, r.marks),
+            None => (None, Vec::new(), Vec::new()),
         };
         let mut f = Found {
             file,
@@ -146,6 +159,7 @@ impl Found {
             large: false,
             ctx,
             labels: 0,
+            marks,
         };
         f.labels = (0..f.ms.len()).filter(|i| f.labelled(*i).is_some()).count();
         f

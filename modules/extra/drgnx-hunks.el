@@ -48,12 +48,17 @@
 
 ;;;; The marks
 
+(defun drgnx-hunks--bar-row (w)
+  "A row of the 8 pixel bar bitmap, the bar W device pixels wide: its right bits, so the bar sits at the fringe's
+inner side, just left of the line numbers (window-dark.html `.ln .g'), not out at the card's edge."
+  (1- (ash 1 w)))
+
 (defun drgnx-hunks--define-bitmaps ()
   "The bar and the deleted-mark bitmaps at the frame's scale: 3 logical pixels, whole device pixels."
   (when (fboundp 'define-fringe-bitmap)
     (let ((w (min 8 (max 1 (drgnx-px 3)))))
       (unless (eql w drgnx-hunks--bitmap-width)
-        (let ((row (ash (1- (ash 1 w)) (- 8 w))))
+        (let ((row (drgnx-hunks--bar-row w)))
           (define-fringe-bitmap 'drgnx-hunk-bar (vector row) 1 8 '(top t))
           (define-fringe-bitmap 'drgnx-hunk-delete (make-vector w row) w 8 'top))
         (setq drgnx-hunks--bitmap-width w)))))

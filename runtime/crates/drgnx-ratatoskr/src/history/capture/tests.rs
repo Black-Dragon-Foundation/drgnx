@@ -269,6 +269,38 @@ fn the_same_path_in_two_trees_is_two_versions() {
     assert_eq!(kind(&f, outside[0].op), Kind::External);
 }
 
+/// A hub restart forgets the origin core's last version of every file (it is in memory). A file an agent created (not in
+/// the base) that is then removed (a revert does it) must still empty its document, whose text the history holds.
+#[test]
+fn a_file_removed_after_a_hub_restart_empties_its_document() {
+    let Fixture {
+        repo,
+        hist,
+        hub,
+        tree,
+    } = fixture(&[("a.txt", "one\n")]);
+    std::fs::write(repo.path().join("new.txt"), "made by the agent\n").unwrap();
+    hub.on_agent_write(
+        &tree,
+        "new.txt",
+        b"made by the agent\n",
+        "s1",
+        cause("1"),
+        10.0,
+    )
+    .unwrap();
+    assert_eq!(
+        hub.text(&tree, "new.txt").unwrap().as_deref(),
+        Some("made by the agent\n")
+    );
+    drop(hub);
+    let hub = Hub::open(hist.path()).unwrap();
+    std::fs::remove_file(repo.path().join("new.txt")).unwrap();
+    let ops = hub.on_disk_change(&tree, "new.txt", 20.0).unwrap();
+    assert_eq!(ops.len(), 1, "the removal is a change of the document");
+    assert_eq!(hub.text(&tree, "new.txt").unwrap().as_deref(), Some(""));
+}
+
 #[test]
 fn crlf_file_blob_id_matches_git() {
     let f = fixture(&[("a.txt", "x\n")]);

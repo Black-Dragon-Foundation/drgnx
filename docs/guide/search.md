@@ -61,6 +61,11 @@ the keyword, symbol and path results are there at once; without a hub the echo a
 A hit in a file that changed since it was indexed is looked for again in the file as it is now (its first line, else its
 symbol), so the jump lands where the code is. A search never edits anything and never waits for a running indexer.
 
+The same index also answers in the **Search view** (**Replace in Files**; [Search and replace](replace.md#modes-text-symbol-meaning)):
+its mode chip's **Meaning** is this search, as rows with a score bar under their files, and **Symbol** lists a name's
+definitions (kind icon and signature) and then its uses, grouped under the definitions that hold them. Both stay in
+the view as you work through them, with recent and saved searches remembering the mode.
+
 While you type, the editor tells the hub (at most once every 2 seconds): the hub then holds the vectors back for 3
 seconds, so building them never competes with a keystroke.
 

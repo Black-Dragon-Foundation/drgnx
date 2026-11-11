@@ -12,7 +12,8 @@ brings it back) with the word at point, or the selected text, in **Find**. It ha
 - the **mode chip** at the left of **Find** (what Find means: **Text**, **Symbol** or **Meaning**; below), and
   **Replace**;
 - toggles: **Aa** (match case), **ab** (whole word), **.\*** (regular expression);
-- the scope: **Project** (the project of the file you were in) or **This file**;
+- the scope chips, one on at a time (below): **Project** (the project of the file you were in), **This file**,
+  **Open**, **Changed**, **Staged**, **Branch ▾**, and **±** (changed lines only);
 - **Include** and **Exclude**: globs, comma-separated (`src/**, *.el`); a glob without a slash matches at any depth;
 - **Replace All** and **Undo**, then a status line (how many results, what the last replacement did).
 
@@ -34,6 +35,44 @@ definition, so you see where a match is without opening it; the next matches in 
 one, and a match outside every definition has none. Hover a label for the names around it (`impl P › get`). Labels
 are not matches: no tick box, and Next Match skips them. Turn them off with the setting `drgnx-search-context`.
 
+## Scopes
+
+The scope chips say which files a Text search reads; **Include** and **Exclude** still narrow them. Clicking a chip,
+or **Search: Next Scope** (`M-s` in the view; `C-c C-o` in the Emacs and Vim profiles), searches again.
+
+- **Project**: every file of the project, as the ignore rules say. **This file**: the file the view was opened from.
+- **Open**: the files open in the editor under the project.
+- **Changed**: the working tree's modified, added and untracked files. **Search: In Changed Files** (`C-k C-g`;
+  `C-c s g`; `SPC s g`) opens the view there.
+- **Staged**: the files with staged changes. Their text in the working tree is what is searched (what an edit would
+  change).
+- **Branch ▾**: the files changed since this branch left its base, and the working tree's changes. The base is the
+  branch's upstream, else `main`, else `master`; pressing Branch again opens its menu (the upstream and the branches
+  committed to lately, or any name you type), and the chip shows the base you picked. On a detached HEAD or a branch
+  with no commit yet there is no base to take: the status line asks, with a **Choose…** link. **Search: In Files
+  Changed on This Branch** (`C-c s b`; `SPC s b`; the palette in VS Code) opens the view there.
+- **±** (Changed, Staged and Branch): only matches on lines the changes added; a new file counts whole. For a staged
+  file that also has unstaged changes, its working-tree changes count.
+
+The status line says what a git scope searched ("Changed: 7 files · 2 submodules not searched · 1 deleted"), and the
+chip shows the count. Submodules and deleted files are not searched; a renamed file is searched at its new name. An
+empty scope says why ("nothing staged"); a folder outside git says so. Symbol and Meaning search the whole project.
+
+## Recent and saved searches
+
+Every search that stood for the typing pause is kept, per project, the last 50: its mode, words, toggles,
+replacement, scope and globs. **Previous Search** and **Next Search** (`Up` and `Down` in Find in the VS Code profile;
+`M-p` and `M-n` in the view in the Emacs and Vim profiles) walk them, each restored whole and run; Next Search past the
+newest gives back what you had.
+
+With Find empty, the view lists the project's **Saved** searches, then its last 8 **Recent** ones; a click runs one.
+**Save This Search** (the ☆ button; `C-k C-b`; `C-c C-w`) keeps the view's search under a name, the words by default.
+A saved search's row has **pin**, **share** and **×** (delete). A pinned search shows its live count above the
+results ("TODOs · 3"), counted again at most every 5 seconds, when the view searches, and only while the view shows.
+**share** writes it into the project's `.drgnx/searches.eld`, so the team gets it; searches found there are listed too,
+read as data only (nothing in that file runs). **Search: Run Saved Search…** (`C-c s S`; `SPC s S`; the palette)
+picks one by name. drgnx keeps them in its own state, not in the project.
+
 ## Modes: Text, Symbol, Meaning
 
 The mode chip says what Find means; clicking it, or **Search: Next Mode** (`M-m` in the view; `C-c C-m` in the Emacs
@@ -42,10 +81,14 @@ and Vim profiles), goes Text → Symbol → Meaning → Text and searches again.
 
 - **Text** (the default): the files' text, with Aa, ab, .\*, the globs and Replace.
 - **Symbol**: a name's definitions first, then the lines that use it, from drgnx's code index (Hrafn): each line's
-  whole-word uses of the name are the matches. It is by name only, so same-named things in other scopes are listed
-  too. **Aa** says whether case counts; Replace, the globs, ab and .\* do not apply and are greyed out.
+  whole-word uses of the name are the matches. A definition's row shows its kind as an icon (`ƒ` a function, `◇` a
+  type, `#` a macro, `≡` a variable or constant; hover for the kind) and its signature; the uses inside one
+  definition follow a label row naming it (with `drgnx-search-context` on). It is by name only, so same-named things
+  in other scopes are listed too, and the status line says so. **Aa** says whether case counts; Replace, the globs,
+  ab and .\* do not apply and are greyed out.
 - **Meaning**: the code your words describe (the same search as Semantic Search): one row per piece of code found,
-  its symbol, its first line and its score. Nothing but the words applies.
+  with a score bar (how close it is, against the best one; hover for the score), its symbol and its first line; a
+  piece that moved since it was indexed is found where it is now and says `(moved)`. Nothing but the words applies.
 
 Symbol and Meaning only find: Replace All and Replace This say so. A Text search that finds nothing offers **Try
 Meaning** on the status line; the view never changes mode by itself. Symbol and Meaning need the index: before it is
@@ -106,6 +149,12 @@ view, scope This file.
 | Close Find Bar | `<escape>` | `<escape>` | `<escape>` |
 | Next Mode (the Search view) | `M-m` | `C-c C-m` | `C-c C-m` |
 | Text / Symbol / Meaning Mode | palette | palette | palette |
+| Next Scope (the Search view) | `M-s` | `C-c C-o` | `C-c C-o` |
+| In Changed Files | `C-k C-g` (anywhere) | `C-c s g` | `SPC s g` |
+| In Files Changed on This Branch | palette | `C-c s b` | `SPC s b` |
+| Previous / Next Search | `<up>` / `<down>` in Find | `M-p` / `M-n` | `M-p` / `M-n` |
+| Save This Search | `C-k C-b` | `C-c C-w` | `C-c C-w` |
+| Run Saved Search… | palette | `C-c s S` | `SPC s S` |
 
 Except where marked, the keys work in the Search view and the find bar, their fields too; `RET` in a find bar field
 is its next match (in Replace: replace it). Next and Previous Match show the match in the editor; Next and Previous
@@ -119,7 +168,7 @@ palette, category Search.
 `test/unit/mod-replace-engine-test.el` (writing: stale matches, symbol edits, undo) and
 `test/unit/mod-replace-view-test.el` (the view, the find bar; on the virtual clock, the view's own rows Symbol mode
 uses: 10k rows streaming and a replacement patching them in slices of at most 576, a new search, a hidden view, no
-marker per file); `test/ui/editor-m11c1-test.el` walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each. The perf workload
+marker per file); `test/ui/editor-m11c1-test.el` walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each; `test/ui/search-view-gui-test.el` walks the hub-fed view (Sjá) through Text with a context label, Symbol, Meaning, a git scope and the empty view's saved and recent searches, the hub's rows handed in as it sends them, a screenshot of each in the evidence folder. The perf workload
 `replace-typing-rows` types in a file while the hub lists 10k matches, `search-retype` changes the view's query a
 character at a time over 10k matches (each key a search, timed to its first rows and to its end), and `search-window`
 walks Next Match across the model's window of a 30k-match search ([perf.md](../develop/perf.md)).

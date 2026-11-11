@@ -1,5 +1,5 @@
 use super::rows::grep_doc_in;
-use super::run::{DIGEST_MAX, Snap, buffer_snap, match_id, snapshot};
+use super::run::{DIGEST_MAX, Mark, Snap, buffer_snap, match_id, snapshot};
 use super::*;
 use runstav::methods::view::{Display, ViewEnv};
 
@@ -23,7 +23,11 @@ fn founds(files: Vec<(String, Vec<Match>)>) -> Vec<Found> {
 
 /// A file read as SNAP, with no context.
 fn read_of(snap: Snap) -> Read {
-    Read { snap, ctx: vec![] }
+    Read {
+        snap,
+        ctx: vec![],
+        marks: vec![],
+    }
 }
 
 fn env(class: &str, epoch: u64) -> ViewEnv {
@@ -1444,4 +1448,246 @@ fn context_off_or_a_text_file_gives_no_labels() {
         .map(|c| c.as_deref().map(|d| d.name.as_str()))
         .collect();
     assert_eq!(names, [Some("outer"), Some("outer"), None, Some("other")]);
+}
+
+/// `git ARGS` in DIR, with no user or system configuration.
+fn git_in(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+}
+
+/// A repository on BRANCH with FILES committed.
+fn repo_of(branch: &str, files: &[(&str, &str)]) -> tempfile::TempDir {
+    let d = tempfile::tempdir().unwrap();
+    git_in(d.path(), &["init", "-q", "-b", branch]);
+    for (f, text) in files {
+        std::fs::write(d.path().join(f), text).unwrap();
+    }
+    git_in(d.path(), &["add", "-A"]);
+    git_in(d.path(), &["commit", "-q", "-m", "base"]);
+    d
+}
+
+fn git_scope(kind: ScopeKind, changed_lines: bool) -> scoped::GitScope {
+    scoped::GitScope {
+        kind,
+        base: None,
+        changed_lines,
+    }
+}
+
+/// The git scopes' file lists at a checkout's size (spec §8): 5,000 files in 50 folders, a branch `work` off `main`
+/// that changed 50 of them, 50 more staged and 50 more changed in the tree; 20 lists of each scope after one to warm
+/// up, the p95 printed against its budget (Changed 60 ms, Staged 40 ms, Branch 120 ms). Reported, never failed: the
+/// time is git's and the disk's. Ignored in normal runs; run optimized and alone on the perf island:
+/// `cargo test --release -p drgnx-ratatoskr --lib -- git_scope_lists_at_a_checkouts_size --ignored --nocapture`.
+#[test]
+#[ignore]
+fn git_scope_lists_at_a_checkouts_size() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path();
+    git_in(root, &["init", "-q", "-b", "main"]);
+    let body: String = (0..20).map(|i| format!("line {i} of the file\n")).collect();
+    let file = |i: usize| format!("d{:02}/f{i:04}.rs", i % 50);
+    for i in 0..5000 {
+        let f = root.join(file(i));
+        std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+        std::fs::write(f, &body).unwrap();
+    }
+    git_in(root, &["add", "-A"]);
+    git_in(root, &["commit", "-q", "-m", "base"]);
+    git_in(root, &["switch", "-q", "-c", "work"]);
+    let touch = |from: usize| {
+        for i in (from..from + 50).map(|k| k * 7 % 5000) {
+            std::fs::write(root.join(file(i)), format!("{body}changed\n")).unwrap();
+        }
+    };
+    touch(0);
+    git_in(root, &["commit", "-q", "-am", "work"]);
+    touch(50);
+    git_in(root, &["add", "-A"]);
+    touch(100);
+    for (kind, name, budget) in [
+        (ScopeKind::Changed, "Changed", 60.0),
+        (ScopeKind::Staged, "Staged", 40.0),
+        (ScopeKind::Branch, "Branch", 120.0),
+    ] {
+        let g = scoped::GitScope {
+            kind,
+            base: Some("main".into()),
+            changed_lines: false,
+        };
+        let files = scoped::find(root, &g).unwrap().files.len();
+        let mut ms: Vec<f64> = (0..20)
+            .map(|_| {
+                let t = std::time::Instant::now();
+                scoped::find(root, &g).unwrap();
+                t.elapsed().as_secs_f64() * 1000.0
+            })
+            .collect();
+        ms.sort_by(f64::total_cmp);
+        println!(
+            "git-scope {name}: {files} files, p50 {:.1} ms, p95 {:.1} ms (budget {budget} ms)",
+            ms[10], ms[18]
+        );
+    }
+}
+
+#[test]
+fn a_changed_scope_lists_its_files_under_the_root_and_counts_the_rest() {
+    let body = "one\ntwo\nthree\n";
+    let d = repo_of("main", &[("a.txt", body), ("b.txt", body), ("c.txt", body)]);
+    let root = d.path();
+    std::fs::write(root.join("a.txt"), "one\nneedle\nthree\n").unwrap();
+    std::fs::remove_file(root.join("c.txt")).unwrap();
+    std::fs::write(root.join("new.txt"), "needle\n").unwrap();
+    let s = scoped::find(root, &git_scope(ScopeKind::Changed, false)).unwrap();
+    assert_eq!(s.files, [root.join("a.txt"), root.join("new.txt")]);
+    assert_eq!(
+        s.done,
+        ScopeDone {
+            files: 2,
+            deleted: 1,
+            ..ScopeDone::default()
+        }
+    );
+    assert!(s.keep.is_none());
+}
+
+#[test]
+fn changed_lines_keep_only_a_match_on_an_added_line() {
+    let d = repo_of("main", &[("a.txt", "needle one\ntwo\nthree\n")]);
+    let root = d.path();
+    std::fs::write(root.join("a.txt"), "needle one\nneedle two\nthree\n").unwrap();
+    let s = scoped::find(root, &git_scope(ScopeKind::Changed, true)).unwrap();
+    let a = root.join("a.txt").to_string_lossy().into_owned();
+    let mut ms = vec![
+        m(&a, 1, "", "needle", " one"),
+        m(&a, 2, "", "needle", " two"),
+    ];
+    scoped::kept(s.keep.as_ref(), &a, &mut ms);
+    assert_eq!(ms.iter().map(|m| m.line).collect::<Vec<_>>(), [2]);
+    let mut other = vec![m("/elsewhere/b.txt", 1, "", "needle", "")];
+    scoped::kept(s.keep.as_ref(), "/elsewhere/b.txt", &mut other);
+    assert!(
+        other.is_empty(),
+        "a file the scope does not list keeps nothing"
+    );
+}
+
+#[test]
+fn a_branch_with_no_base_asks_and_a_folder_outside_git_says_so() {
+    let d = repo_of("work", &[("a.txt", "one\n")]);
+    let (done, why) = scoped::find(d.path(), &git_scope(ScopeKind::Branch, false)).unwrap_err();
+    assert!(done.needs_base.is_some(), "{done:?} {why}");
+    let plain = tempfile::tempdir().unwrap();
+    let (done, why) =
+        scoped::find(plain.path(), &git_scope(ScopeKind::Changed, false)).unwrap_err();
+    assert_eq!(
+        (done.needs_base, why.as_str()),
+        (None, "not in a git repository")
+    );
+}
+
+#[test]
+fn a_listed_query_takes_only_its_files_buffers() {
+    let q = Query {
+        files: Some(vec!["/r/a.txt".into()]),
+        ..query()
+    };
+    assert!(in_scope(&q, "/r/a.txt"));
+    assert!(!in_scope(&q, "/r/b.txt"));
+}
+
+/// [D] An index mode's rows: a definition's row is its kind's icon and its signature, the name lit as a match; a
+/// Meaning hit's row is a score bar (its share of the best hit's, four cells; the score on hover) before the symbol,
+/// and a hit whose lines moved since indexing says so. Both keep the match's tick box, its properties and its id.
+#[test]
+fn an_index_modes_rows_show_the_kind_the_signature_and_the_score() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = greps.start(CONN, "s", query(), String::new(), &[]).0;
+    start_patches(&mut s, CONN, "s");
+    let read = Read {
+        snap: buffer_snap(1, ""),
+        ctx: vec![],
+        marks: vec![
+            Some(Mark::Def {
+                kind: "function".into(),
+                sig: "fn parse(s: &str)".into(),
+            }),
+            Some(Mark::Score {
+                score: 0.5,
+                share: 0.5,
+                moved: true,
+            }),
+            None,
+        ],
+    };
+    let ms = vec![
+        m("/r/p.rs", 3, "fn ", "parse", "(s: &str) {"),
+        m("/r/p.rs", 9, "", "retry", "  fn retry(op: Op) {"),
+        m("/r/p.rs", 12, "    ", "parse", "(t)"),
+    ];
+    greps
+        .with(CONN, "s", id, |r| {
+            batch_patches(&mut s, CONN, "s", r, "/r/p.rs".into(), ms, Some(read))
+        })
+        .unwrap();
+    let rows = s.pairs[&(CONN, "s".to_string(), "gui-1".to_string())]
+        .rows
+        .clone();
+    let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+    assert_eq!(keys, ["f:p.rs", "m:1:0", "m:1:1", "m:1:2"]);
+    let run = |r: &Row, face: &str| -> Vec<(usize, usize)> {
+        r.runs
+            .iter()
+            .filter(|(_, _, f)| f == face)
+            .map(|(a, b, _)| (*a as usize, *b as usize))
+            .collect()
+    };
+    assert_eq!(rows[1].text, "  [x] ƒ fn parse(s: &str)");
+    assert_eq!(run(&rows[1], "drgnx-replace-kind"), [(6, 7)]);
+    assert_eq!(run(&rows[1], "drgnx-replace-match"), [(11, 16)]);
+    assert_eq!(
+        rows[2].text,
+        "  [x] ██   retry  fn retry(op: Op) {  (moved)"
+    );
+    assert_eq!(run(&rows[2], "drgnx-replace-score"), [(6, 8)]);
+    assert_eq!(run(&rows[2], "drgnx-replace-kind"), [(11, 16)]);
+    assert!(
+        rows[2]
+            .props
+            .iter()
+            .any(|(_, _, name, v)| name == "help-echo" && v == "score 0.50")
+    );
+    // a use's row is a plain match row
+    assert_eq!(rows[3].text, "  [x] parse(t)");
+    for r in &rows[1..] {
+        assert!(r.props.iter().any(|(_, _, n, _)| n == "drgnx-replace-box"));
+        assert!(
+            r.props
+                .iter()
+                .any(|(_, _, n, v)| n == "drgnx-work-id" && v == &json!(r.key))
+        );
+        assert!(
+            r.props
+                .iter()
+                .any(|(_, _, n, _)| n == "drgnx-replace-match")
+        );
+    }
 }
