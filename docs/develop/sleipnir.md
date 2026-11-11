@@ -496,10 +496,19 @@ links are copied as links, and `dest` must not exist.
 dies:
 
 - `read` is shared and marks the slot used;
-- `update` waits for every reader;
-- `target` is exclusive, for a job that builds into the target dir.
+- `try_update` (a move, `gc`, the disk guard's prune) is exclusive, `None` at once while anyone reads;
+- `target` is exclusive, for a job that builds into the target dir (`try_target`: `None` instead of waiting).
 
-`try_update` and `try_target` return `None` instead of waiting. A lock belongs to its open file description, which a
+`hold(paths, inputs, move_to)` is a job's read lock on its slot at its input key: the slot's git dir records the key
+it holds (`inputs`, written under the update lock after `move_to`, removed before it); a slot at other inputs is
+moved only when `try_update` gets it, so a slot any job reads (a job of another hub on the same root too) is never
+moved under it, and the answer is `None`. A lock can't turn from exclusive to shared in one step on Linux, so after a
+move the slot is read and checked again. `serve` holds its job's lock from the checkout until the result is there;
+the job's job-exec takes its own at its start (`hold_for_job`, on the slot the attempt's `slot-hold` names:
+`write_job_hold`), and refuses to run, `infra: setup`, when the slot moved meanwhile (its `serve` gone before
+job-exec started). A job that writes the tree reads its own copy, so its hold ends after the copies.
+
+Locks can't be handed to job-exec: a systemd-run unit inherits no file descriptor. A lock belongs to its open file description, which a
 child forked by another thread shares until it execs: a `try_*` can see a lock held a moment after its holder let it
 go. So the locks' test (`tests/slot_locks.rs`) runs alone in its own binary, where no other thread spawns git.
 
@@ -690,7 +699,7 @@ cgroups and PSI); `DarwinPlatform` is a Mac's ("A Mac runner", above). What a pl
 
 | Area | Methods | Linux |
 |---|---|---|
-| probe and contract | `machine`, `limits`, `boot_id`, `contract`, `survives_link`, `job_runner` | `linux::probe`, linger, podman's caps check (`podman` feature) |
+| probe and contract | `machine`, `limits`, `boot_id`, `contract`, `survives_link`, `job_runner` | `linux::probe`, linger, podman's caps check (`podman` feature), `Probe::devices` (`gpu`: a DRM render node of a real driver, not `vgem`/`vkms`, or NVIDIA's `nvidiactl` with a `nvidiaN`; `kvm`: `/dev/kvm`; each only when this user may open it read-write, by permissions alone: nothing is opened). Jobs don't get these devices yet: no `--device` goes into a job's container |
 | reservations between schedulers | `reservations`, `start_time` | `linux::reserve` (`$XDG_RUNTIME_DIR`, `/proc` start times) |
 | attempts | `launch`, `active`, `kill` | `job.json`, `sleipnir job-exec` in a transient unit; `podman kill` |
 | caps | `current_mib`, `pause`, `unpause`, `grow_candidate`, `resize`, `weight_unit`, `set_weight` | the job slice's cgroup, `linux::resize` |
@@ -730,7 +739,8 @@ it when it is the same placement (hub and nonce), and refused otherwise. While t
 offer is admitted. `forseti`'s 10 s gap between starts counts from this hub's latest start in the folder, so it
 holds across `serve` processes. An offer whose slot (`SlotKey` of its project, the hub's worktree and its trust) a
 running job reads at another input key is refused: a slot moves only between jobs (a job that writes the tree reads
-its own copy).
+its own copy). This check sees this hub's jobs only; the slot's read locks (`slot::hold`, at `start`) are what keep a
+slot still under every job.
 
 **Sync.** Between `admit` and `start` the hub sends `sync-have`: the repository's mirror id, the commit and the overlay
 the runner's trust may get. `serve` answers `sync-need` with the overlay's blobs the store lacks, whether the mirror
@@ -744,8 +754,9 @@ for that fetch only (`Live::origin_cred`), never handed to the job, and goes to 
 for an `http(s)://` origin or `OriginCred::SshKey` otherwise; a fetch naming a key that didn't come fails the sync. A sync that fails (a bad repository id, a bundle that doesn't check, a
 fetch that fails) ends the attempt `infra: setup`, with why in its log.
 
-**`start`** of a synced attempt first moves its slot to the inputs (`slot::update` under the slot's update lock: the
-mirror's commit, then the overlay from the blob store) and runs the job on the slot, or on `slot::private_copy` in
+**`start`** of a synced attempt first holds its slot at the inputs (`slot::hold`, moving it with `slot::update` under
+the slot's update lock: the mirror's commit, then the overlay from the blob store; a slot another job reads at other
+inputs ends the attempt `infra: setup`) and runs the job on the slot, or on `slot::private_copy` in
 `tree/` when it writes the tree; it records the slot's id in `attempt.json`. Then it writes `job.json` (the shared
 podman argv, `RunnerArgs::runner(prefix, hub id, slice)`, in the job's
 slice `drgnx-runner-work-<id>.slice`) and starts the unit `<prefix>-<id>-<attempt>` running `sleipnir job-exec` with
