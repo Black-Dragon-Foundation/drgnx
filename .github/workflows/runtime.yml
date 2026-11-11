@@ -726,12 +726,12 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 20
         run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p sleipnir --lib darwin 2>&1 | tee "$MR_OUT/darwin-rows.log"
-      - name: a pinned Rust through mise, found by a sandboxed job (CI account); `sleipnir tools` as the runner account
+      - name: a pinned Rust through mise and the brew shim, in a sandboxed job (CI account); `sleipnir tools` as the runner account
         if: ${{ !cancelled() }}
         timeout-minutes: 20
         run: |
           set -o pipefail
-          cargo test --locked --manifest-path runtime/Cargo.toml -p sleipnir --no-fail-fast --lib darwin::tools -- --ignored 2>&1 | tee "$MR_OUT/tools-row.log"
+          SLEIPNIR_BIN="$MR_OUT/bundle/sleipnir" cargo test --locked --manifest-path runtime/Cargo.toml -p sleipnir --no-fail-fast --lib darwin::tools -- --ignored 2>&1 | tee "$MR_OUT/tools-row.log"
           bash test/runners/mac/spike.sh tools "$MR_OUT/bundle/sleipnir" rust@1.95
       - name: S2 drgnx ERT selectors under the build profile
         if: ${{ !cancelled() }}

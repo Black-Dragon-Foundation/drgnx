@@ -7,6 +7,8 @@
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod attempt;
+#[cfg(feature = "runner")]
+pub mod brew;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod jobexec;
 pub mod memwatch;

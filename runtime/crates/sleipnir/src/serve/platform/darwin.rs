@@ -191,6 +191,9 @@ impl Platform for DarwinPlatform {
         let marker = format!("{}/{id}/{}", self.hub_id, meta.r.attempt);
         let records = tools::records_for(&self.root, &meta.spec.features)?;
         let tools_dir = self.root.join("tools");
+        let bin = self.root.join("bin");
+        let shim = crate::darwin::brew::ensure_shim(&self.root, &self.exe)
+            .map_err(|e| format!("the brew shim: {e}"))?;
         let spec = sandbox::spec(&sandbox::Job {
             dir,
             src: req.src,
@@ -199,6 +202,7 @@ impl Platform for DarwinPlatform {
             marker: &marker,
             tools_dir: &tools_dir,
             tools: &records,
+            bin: &bin,
         });
         let env = spec.env.clone();
         let ctx = gleipnir::Context {
@@ -212,6 +216,7 @@ impl Platform for DarwinPlatform {
             program_dirs: sandbox::PATH
                 .split(':')
                 .map(PathBuf::from)
+                .chain([shim])
                 .chain(
                     records
                         .iter()

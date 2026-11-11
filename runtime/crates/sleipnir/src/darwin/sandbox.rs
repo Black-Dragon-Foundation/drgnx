@@ -2,7 +2,8 @@
 //! attempt folder (and the source, for a job that writes its tree), has its home and temporary folder in the attempt
 //! folder, and no network. It runs Homebrew read-only (no update or cleanup; its cache, logs and temporary files in the
 //! attempt's tmp). A job placed with `tool:` features reads the runner's toolchains and has them in its
-//! environment ([`super::tools`]). Pure: the rows run on Linux.
+//! environment ([`super::tools`]). It reads the runner's programs, and its `brew` is the runner's shim ([`super::brew`]).
+//! Pure: the rows run on Linux.
 
 use gleipnir::spec::{Bind, Layers, Mode, Net, Spec, Target};
 use std::path::{Path, PathBuf};
@@ -27,6 +28,8 @@ pub struct Job<'a> {
     /// are some.
     pub tools_dir: &'a Path,
     pub tools: &'a [super::tools::Record],
+    /// The runner's programs (`<root>/bin`): read, and its brew shim ([`super::brew`]) first in the job's PATH.
+    pub bin: &'a Path,
 }
 
 /// The Seatbelt context of a Mac runner's job: the developer dir by true name, and the build addition with the
@@ -69,14 +72,18 @@ pub fn spec(job: &Job) -> Spec {
     } else {
         job.src.join(job.cwd)
     };
-    let mut read = vec![job.src.to_path_buf()];
+    let mut read = vec![job.src.to_path_buf(), job.bin.to_path_buf()];
     if !job.tools.is_empty() {
         read.push(job.tools_dir.to_path_buf());
     }
     let env = vec![
         ("HOME".into(), home.display().to_string()),
         ("TMPDIR".into(), format!("{}/", tmp.display())),
-        ("PATH".into(), PATH.into()),
+        // the brew shim first: Homebrew can't answer a package's prefix offline (super::brew)
+        (
+            "PATH".into(),
+            format!("{}/brew-shim:{PATH}", job.bin.display()),
+        ),
         ("LANG".into(), "en_US.UTF-8".into()),
         (MARKER.into(), job.marker.into()),
         // Homebrew read-only: a configure asks `brew` where a package is, and the profile lets no job write Homebrew
@@ -143,9 +150,16 @@ mod tests {
             marker: "hubA/j1/1",
             tools_dir: Path::new("/runner/.drgnx-runner.noindex/tools"),
             tools: &[],
+            bin: Path::new("/runner/.drgnx-runner.noindex/bin"),
         };
         let s = spec(&job);
-        assert_eq!(s.read, vec![src.to_path_buf()]);
+        assert_eq!(
+            s.read,
+            vec![
+                src.to_path_buf(),
+                PathBuf::from("/runner/.drgnx-runner.noindex/bin")
+            ]
+        );
         assert_eq!(s.write, vec![dir.to_path_buf()]);
         assert_eq!(s.chdir, src.join("sub"));
         assert_eq!(s.tmp, Some(dir.join("tmp")));
@@ -185,21 +199,56 @@ mod tests {
             marker: "h/j1/1",
             tools_dir,
             tools: std::slice::from_ref(&rec),
+            bin: Path::new("/r/bin"),
         };
         let s = spec(&job);
-        assert_eq!(s.read, vec![src.to_path_buf(), tools_dir.to_path_buf()]);
-        assert!(!s.write.iter().any(|w| w.starts_with(tools_dir)));
-        assert!(
-            s.env
-                .contains(&("PATH".into(), format!("/r/tools/cargo/bin:{PATH}")))
+        assert_eq!(
+            s.read,
+            vec![
+                src.to_path_buf(),
+                PathBuf::from("/r/bin"),
+                tools_dir.to_path_buf()
+            ]
         );
+        assert!(!s.write.iter().any(|w| w.starts_with(tools_dir)));
+        assert!(s.env.contains(&(
+            "PATH".into(),
+            format!("/r/tools/cargo/bin:/r/bin/brew-shim:{PATH}")
+        )));
         assert!(
             s.env
                 .contains(&("RUSTUP_HOME".into(), "/r/tools/rustup".into()))
         );
         assert_eq!(
             spec(&Job { tools: &[], ..job }).read,
-            vec![src.to_path_buf()]
+            vec![src.to_path_buf(), PathBuf::from("/r/bin")]
+        );
+    }
+
+    /// [D] A job runs the brew shim: the runner's programs read (never written), its shim folder first on PATH, before
+    /// Homebrew's own brew.
+    #[test]
+    fn a_job_runs_the_brew_shim_first() {
+        let dir = Path::new("/r/jobs/j1.1");
+        let s = spec(&Job {
+            dir,
+            src: Path::new("/r/slots/s1"),
+            cwd: Path::new("."),
+            writes_tree: true,
+            marker: "h/j1/1",
+            tools_dir: Path::new("/r/tools"),
+            tools: &[],
+            bin: Path::new("/r/bin"),
+        });
+        assert!(s.read.contains(&PathBuf::from("/r/bin")));
+        assert!(!s.write.iter().any(|w| w.starts_with("/r/bin")));
+        assert!(
+            s.env
+                .contains(&("PATH".into(), format!("/r/bin/brew-shim:{PATH}")))
+        );
+        assert_eq!(
+            super::super::brew::shim_dir(Path::new("/r")),
+            Path::new("/r/bin/brew-shim")
         );
     }
 
@@ -231,6 +280,7 @@ mod tests {
             marker: "h/j1/1",
             tools_dir: Path::new("/r/tools"),
             tools: &[],
+            bin: Path::new("/r/bin"),
         });
         let tmp = dir.join("tmp").display().to_string();
         for (k, v) in [

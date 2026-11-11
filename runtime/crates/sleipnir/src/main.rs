@@ -27,6 +27,14 @@ const USAGE: &str = "usage: sleipnir serve --root DIR --prefix P --hub-id H --pr
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // started as `brew`: a Mac job's brew shim (darwin::brew)
+    #[cfg(all(feature = "runner", target_os = "macos"))]
+    if std::env::args_os()
+        .next()
+        .is_some_and(|a| std::path::Path::new(&a).file_name() == Some(std::ffi::OsStr::new("brew")))
+    {
+        return ExitCode::from(sleipnir::darwin::brew::run(&args).clamp(0, 255) as u8);
+    }
     match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         ["job-exec", dir] => job_exec(std::path::Path::new(dir)),
         ["job-helper", ref rest @ ..] => job_helper(rest),

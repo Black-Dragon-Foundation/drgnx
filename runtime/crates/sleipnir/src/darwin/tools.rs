@@ -356,8 +356,9 @@ mod tests {
 
     /// [C] macOS CI (`--ignored`, after `brew install mise`): a pinned Rust (`SLEIPNIR_TOOLS_PIN`, default
     /// `rust@1.95`) installed by the user's mise into a root, then a job's Seatbelt profile with that pin finds
-    /// `cargo --version` from the root, at the pinned version; and `brew --prefix` answers in the same job (Homebrew
-    /// read-only, as a configure asks it).
+    /// `cargo --version` from the root, at the pinned version; and in the same job `brew --prefix --installed` answers
+    /// (the runner's brew shim, `SLEIPNIR_BIN`: a built sleipnir), as a configure asks it, and `brew install` fails
+    /// naming the shim.
     #[cfg(all(target_os = "macos", feature = "runner"))]
     #[test]
     #[ignore = "macos-tools"]
@@ -378,6 +379,13 @@ mod tests {
             std::fs::create_dir_all(d).unwrap();
         }
         let tools_dir = root.join("tools");
+        // the brew shim links to the runner's sleipnir, inside the root's bin (the bundle, as staging puts it)
+        let exe =
+            PathBuf::from(std::env::var("SLEIPNIR_BIN").expect("SLEIPNIR_BIN: a built sleipnir"));
+        let staged = root.join("bin/b1/sleipnir");
+        std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
+        std::fs::copy(&exe, &staged).unwrap();
+        let shim = crate::darwin::brew::ensure_shim(&root, &staged).unwrap();
         let spec = sandbox::spec(&sandbox::Job {
             dir: &dir,
             src: &src,
@@ -386,6 +394,7 @@ mod tests {
             marker: "hub/j1/1",
             tools_dir: &tools_dir,
             tools: &records,
+            bin: &root.join("bin"),
         });
         let ctx = gleipnir::Context {
             home: std::env::var_os("HOME")
@@ -398,6 +407,7 @@ mod tests {
             program_dirs: sandbox::PATH
                 .split(':')
                 .map(PathBuf::from)
+                .chain([shim])
                 .chain(
                     records
                         .iter()
@@ -455,6 +465,22 @@ mod tests {
         );
         assert!(brew.status.success(), "{said}");
         assert!(said.trim().ends_with("/opt/mise"), "{said}");
+
+        // what needs the network or writes Homebrew fails loudly, naming the shim
+        let install = std::process::Command::new("/usr/bin/sandbox-exec")
+            .arg("-f")
+            .arg(&sb)
+            .args(["brew", "install", "gmp"])
+            .env_clear()
+            .envs(valid.spec().env.iter().map(|(k, v)| (k, v)))
+            .current_dir(&valid.spec().chdir)
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&install.stderr);
+        assert!(
+            !install.status.success() && said.contains("brew shim"),
+            "{said}"
+        );
     }
 
     /// [D] The install: mise runs in the root with its folders and Rust's homes there, and each pin is recorded; a
