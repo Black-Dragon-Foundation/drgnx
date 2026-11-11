@@ -148,12 +148,14 @@ fn every_order_ops_and_rebuild_agree() {
             ranges: AgentRanges::new(base),
         },
         |s, _| {
+            // the blame knows characters, not deletions: the marks of a deletion are the ranges' own
+            let kept = s.ranges.without_marks();
             let again = AgentRanges::rebuild(&s.model.text(), &s.model.blame());
             for a in ["user", "agent:a"] {
-                if s.ranges.ranges(a) != again.ranges(a) {
+                if kept.ranges(a) != again.ranges(a) {
                     return Err(format!(
                         "{a}: kept {:?}, from the blame {:?} (text {:?})",
-                        s.ranges.ranges(a),
+                        kept.ranges(a),
                         again.ranges(a),
                         s.model.text()
                     ));
@@ -224,4 +226,52 @@ fn the_users_edits_under_the_wheel_have_no_agent_colour() {
         inserted: "x",
     }));
     assert_eq!(g, before);
+}
+
+#[test]
+fn a_pure_deletion_marks_the_line_it_joins() {
+    // the agent deletes line 2 whole: the line now at 2 is where the text went
+    let mut g = AgentRanges::new("a\nb\nc\n");
+    assert!(g.apply_op(Op {
+        author: "agent:s1",
+        start: 2,
+        old_len: 2,
+        inserted: "",
+    }));
+    assert_eq!(g.ranges("agent:s1"), vec![r(2, 2)]);
+    assert_eq!(g.authors(), vec!["agent:s1".to_string()]);
+    // inside a line: that line
+    let mut g = AgentRanges::new("abc\ndef\n");
+    assert!(g.apply_op(Op {
+        author: "agent:s1",
+        start: 5,
+        old_len: 1,
+        inserted: "",
+    }));
+    assert_eq!(g.ranges("agent:s1"), vec![r(2, 2)]);
+    // the mark moves with its line
+    assert!(g.apply_op(Op {
+        author: "user",
+        start: 0,
+        old_len: 0,
+        inserted: "top\n",
+    }));
+    assert_eq!(g.ranges("agent:s1"), vec![r(3, 3)]);
+    assert!(g.apply_op(Op {
+        author: "user",
+        start: 0,
+        old_len: 4,
+        inserted: "",
+    }));
+    assert_eq!(g.ranges("agent:s1"), vec![r(2, 2)]);
+    // the user's deletion marks the user's line, never an agent's
+    let mut g = AgentRanges::new("a\nb\nc\n");
+    assert!(g.apply_op(Op {
+        author: "user",
+        start: 2,
+        old_len: 2,
+        inserted: "",
+    }));
+    assert_eq!(g.ranges("user"), vec![r(2, 2)]);
+    assert_eq!(g.ranges("agent:s1"), Vec::<LineRange>::new());
 }
