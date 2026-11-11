@@ -30,6 +30,7 @@
 (declare-function xref-show-xrefs "xref")
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function drgnx-hub-ensure "drgnx-hub-client")
+(declare-function drgnx-hub-call-sync "drgnx-hub-client")
 (declare-function drgnx-search-setup "drgnx-search-setup")
 (declare-function drgnx-search-setup--current-root "drgnx-search-setup")
 
@@ -242,6 +243,131 @@ not there or anything goes wrong.  Never asks anything and never starts the hub.
                                       (error nil)))))
         (error (finish nil))))))
 
+;;;; Repo Map and Find Usages (Hrafn's `search/map' and `search/usages')
+
+(defun drgnx-search--fresh-line (fresh)
+  "What FRESH (a structural answer's `fresh') says lags, or nil when nothing does."
+  (let ((n (or (plist-get fresh :files_pending) 0)))
+    (when (> n 0) (format "%d file%s still to index" n (if (= n 1) "" "s")))))
+
+(defun drgnx-search--list (buffer window items line empty)
+  "Show ITEMS (xref items) in the panel's Results tab under LINE, as the command in BUFFER and WINDOW would (see
+`drgnx-search--show-safely'); EMPTY is said when there are none.  Called from a callback: never signals."
+  (require 'xref)
+  (condition-case err
+      (if (null items)
+          (message "%s" empty)
+        (let ((show (lambda ()
+                      (xref-show-xrefs (lambda () items) nil)
+                      (when-let* ((buf (get-buffer "*xref*")))
+                        (with-current-buffer buf (setq header-line-format (concat " " line)))))))
+          (if (buffer-live-p buffer)
+              (with-current-buffer buffer
+                (if (window-live-p window) (with-selected-window window (funcall show)) (funcall show)))
+            (funcall show))
+          (message "%s" line)))
+    (error (message "Search could not show its results: %s" (error-message-string err)))))
+
+(defun drgnx-search--map-items (root answer)
+  "The xref items of a `search/map' ANSWER in the project at ROOT: each file's definitions, files in the map's order."
+  (cl-loop for file in (append (plist-get answer :files) nil)
+           append (mapcar (lambda (d)
+                            (xref-make (string-trim (format "%s %s  %s" (plist-get d :kind) (plist-get d :name)
+                                                            (or (plist-get d :sig) "")))
+                                       (xref-make-file-location (expand-file-name (plist-get file :path) root)
+                                                                (max 1 (plist-get d :line_start)) 0)))
+                          (plist-get file :defs))))
+
+(defun drgnx-search-repo-map ()
+  "The project's most-referenced definitions, file by file, centred on the current file (Hrafn's repo map: what an
+agent reads to find its way); each opens at its line from the panel's Results tab."
+  (interactive)
+  (require 'xref)
+  (let* ((root (drgnx-search--root-or-error)) (buffer (current-buffer)) (window (selected-window))
+         (file (and buffer-file-name (file-in-directory-p buffer-file-name root)
+                    (file-relative-name buffer-file-name root))))
+    (message "Mapping %s…" (abbreviate-file-name root))
+    (drgnx-search--ask "search/map" (append (list :root (directory-file-name root))
+                                            (and file (list :focus (vector file))))
+                       (lambda (answer why)
+                         (if (null answer)
+                             (message "Repo Map: %s" (or why "no answer"))
+                           (drgnx-search--list
+                            buffer window (drgnx-search--map-items root answer)
+                            (string-join (delq nil (list (car (last (split-string (or (plist-get answer :text) "")
+                                                                                  "\n" t)))
+                                                         (drgnx-search--fresh-line (plist-get answer :fresh))))
+                                         "; ")
+                            "Repo Map: no definitions indexed yet"))))))
+
+(defun drgnx-search--usage-items (root answer)
+  "The xref items of a `search/usages' ANSWER in the project at ROOT: the definitions, then each line a file uses the
+name on, summarised by the definition that holds it."
+  (let ((at (lambda (path line summary)
+              (xref-make summary (xref-make-file-location (expand-file-name path root) (max 1 line) 0)))))
+    (append
+     (mapcar (lambda (d) (funcall at (plist-get d :path) (plist-get d :line_start)
+                                  (concat "definition: " (plist-get d :sig))))
+             (plist-get answer :defined))
+     (cl-loop for u in (append (plist-get answer :usages) nil)
+              append (mapcar (lambda (line)
+                               (funcall at (plist-get u :path) line
+                                        (if-let* ((e (plist-get u :enclosing))) (concat "in " e) "top level")))
+                             (or (append (plist-get u :lines) nil) (list (plist-get u :line))))))))
+
+(defun drgnx-search-usages (name)
+  "Where NAME (default: the symbol at point) is defined and used in the project, by name (Hrafn's index: every
+language it parses, without a language server); the uses land in the panel's Results tab."
+  (interactive (progn (drgnx-search--root-or-error)
+                      (let ((symbol (thing-at-point 'symbol t)))
+                        (list (read-string (format-prompt "Find usages of" symbol) nil nil symbol)))))
+  (require 'xref)
+  (let ((root (drgnx-search--root-or-error)) (name (string-trim name))
+        (buffer (current-buffer)) (window (selected-window)))
+    (when (string-empty-p name) (user-error "Find Usages needs a name"))
+    (drgnx-search--ask "search/usages" (list :root (directory-file-name root) :name name :k 100)
+                       (lambda (answer why)
+                         (if (null answer)
+                             (message "Find Usages: %s" (or why "no answer"))
+                           (drgnx-search--list
+                            buffer window (drgnx-search--usage-items root answer)
+                            (string-join (delq nil (list (format "Usages of %s" name)
+                                                         (drgnx-search--fresh-line (plist-get answer :fresh))))
+                                         "; ")
+                            (format "Find Usages: %s is not used in the project" name)))))))
+
+;;;; The xref backend: references and definitions by name, from the hub
+
+(defvar drgnx-search-xref-timeout 5 "Seconds an xref request waits for the hub before it gives up.")
+
+(defun drgnx-search-xref-backend ()
+  "On `xref-backend-functions' (after a mode's or a language server's own): `drgnx-hrafn' in a project, so
+Find References and Go to Definition answer from Hrafn's index where nothing better does."
+  (and (drgnx-search--root) 'drgnx-hrafn))
+
+(cl-defmethod xref-backend-identifier-at-point ((_ (eql drgnx-hrafn)))
+  (thing-at-point 'symbol t))
+
+(cl-defmethod xref-backend-identifier-completion-table ((_ (eql drgnx-hrafn)))
+  nil)
+
+(defun drgnx-search--usages-sync (name)
+  "The hub's `search/usages' answer for NAME in the current project; a `user-error' when the hub cannot answer."
+  (let ((root (drgnx-search--root-or-error)))
+    (condition-case err
+        (progn (drgnx-hub-ensure)
+               (cons root (drgnx-hub-call-sync "search/usages" (list :root (directory-file-name root) :name name :k 100)
+                                               drgnx-search-xref-timeout)))
+      (error (user-error "Find references: %s" (drgnx-search--why err))))))
+
+(cl-defmethod xref-backend-references ((_ (eql drgnx-hrafn)) identifier)
+  (pcase-let ((`(,root . ,answer) (drgnx-search--usages-sync identifier)))
+    (drgnx-search--usage-items root (plist-put (copy-sequence answer) :defined nil))))
+
+(cl-defmethod xref-backend-definitions ((_ (eql drgnx-hrafn)) identifier)
+  (pcase-let ((`(,root . ,answer) (drgnx-search--usages-sync identifier)))
+    (drgnx-search--usage-items root (plist-put (copy-sequence answer) :usages nil))))
+
 (defun drgnx-search--register-retriever ()
   "Add the semantic retriever to `drgnx-ai-retrievers' (once; the grep retriever stays)."
   ;; Not `add-to-list': the bare `defvar' above makes the compiler turn it into a `setq' the recorder cannot see.
@@ -270,8 +396,12 @@ not there or anything goes wrong.  Never asks anything and never starts the hub.
                                       '((search-semantic "Semantic Search" drgnx-search-semantic "Find code by meaning (in the panel)")
                                         (search-index-project "Index Project" drgnx-search-index-project "Build or refresh the semantic search index of this project")
                                         (search-index-status "Index Status" drgnx-search-index-status "Chunks, files, models, device and lag of this project's index")
-                                        (search-set-up "Set Up Semantic Search" drgnx-search-set-up "Offer the built-in model and a server, then index this project in the background")))
+                                        (search-set-up "Set Up Semantic Search" drgnx-search-set-up "Offer the built-in model and a server, then index this project in the background")
+                                        (search-repo-map "Repo Map" drgnx-search-repo-map "The project's most-referenced definitions, file by file, centred on this file (in the panel)")
+                                        (search-usages "Find Usages" drgnx-search-usages "Where a name is defined and used in the project, by name, in every indexed language (in the panel)")))
                          (drgnx-command-define id :category "Search" :title title :command fn :doc doc))
+                       ;; after the modes' and language servers' backends (depth 90): the answer where none is better
+                       (add-hook 'xref-backend-functions #'drgnx-search-xref-backend 90)
                        (drgnx-search--register-retriever)
                        ;; the hook only sets a flag; the timer tells the hub at most once per interval
                        (drgnx-module-hook 'post-command-hook typing ()

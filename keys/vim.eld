@@ -347,6 +347,8 @@
         (search-index-project :none "in the palette")
         (search-index-status :none "in the palette")
         (search-set-up :none "in the palette")
+        (search-repo-map :none "in the palette")
+        (search-usages "SPC s u")
         (go-symbol "SPC s s")
         (org-capture "SPC n c")
         (org-agenda "SPC n a")
