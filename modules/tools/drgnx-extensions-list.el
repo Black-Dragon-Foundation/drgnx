@@ -745,8 +745,9 @@ the env's resubscribe."
     (drgnx-extensions-list--changed)))
 
 (defun drgnx-extensions-list--typing ()
-  "`after-change-functions' of the search's minibuffer: apply the text a moment after the last key."
-  (drgnx-timer-debounce 'extensions-list-search 0.15 #'drgnx-extensions-list--apply-query
+  "`after-change-functions' of the search's minibuffer: apply the text once this turn's keys are in (the view's own
+delay is 0, design §13: results follow the key, M5)."
+  (drgnx-timer-debounce 'extensions-list-search 0 #'drgnx-extensions-list--apply-query
                         :args (list (minibuffer-contents-no-properties)) :owner (current-buffer)))
 
 (defun drgnx-extensions-list--minibuffer-setup ()
