@@ -312,11 +312,6 @@ fn row_of(run: &Run, m: &Match, n: u32, mark: Option<&Mark>) -> Row {
 
 /// The glyph for a definition of KIND (Hrafn's kinds): a function's `ƒ`, a type's `◇`, a macro's `#`, a variable's
 /// or a constant's `≡`, else `•`.
-/// A definition as its context label names it: its kind's icon and its name (`ƒ drgnx-gateway--queue`).
-pub(super) fn def_label(def: &crate::search::context::Def) -> String {
-    format!("{} {}", kind_icon(&def.kind), def.name)
-}
-
 fn kind_icon(kind: &str) -> &'static str {
     match kind {
         "function" | "method" | "constructor" => "ƒ",

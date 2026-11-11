@@ -1372,7 +1372,7 @@ pub async fn preview(f: &Front, c: &Caller, p: PreviewParams) -> Result<PreviewA
     Ok(answer)
 }
 
-/// The preview's knowledge of PATH from RUN: each match's definition (its context label, `ƒ name`) and the lines of the
+/// The preview's knowledge of PATH from RUN: each match's definition (its first line and name) and the lines of the
 /// matches P leaves unticked.
 fn around_of(run: &Run, path: &str, p: &EditsParams) -> edits::Around {
     let off: HashSet<&str> = p.off.iter().flatten().map(String::as_str).collect();
@@ -1381,7 +1381,9 @@ fn around_of(run: &Run, path: &str, p: &EditsParams) -> edits::Around {
         for (i, (m, n)) in f.ms.iter().zip(&f.ns).enumerate() {
             let id = run::match_id(run.id, *n);
             if let Some(Some(def)) = f.ctx.get(i) {
-                around.labels.insert(id.clone(), rows::def_label(def));
+                around
+                    .defs
+                    .insert(id.clone(), (def.line_start, def.name.clone()));
             }
             if off.contains(id.as_str()) {
                 around.kept.push(m.line);

@@ -2506,10 +2506,11 @@ Replace This, Undo Replace and Symbol mode's rename go through it, so a write ne
   binary (NUL in the first 8 KiB), not UTF-8, over 16 MiB, open in chunks, gone. The answer `{change, files: [{path,
   source: disk|buffer, edits}], skipped}` names a change set the hub keeps (the last 20 per hub).
 - `search/preview {view, path, off?, replace?}` is one file's part of the same edit set as a diff (the preview tile):
-  the unified diff (3 lines of context; `similar`), its lines added and removed, the hunks (`old_start`, `old_lines`,
+  the unified diff (1 line of context, so nearby changes in different definitions are hunks of their own; `similar`),
+  its lines added and removed, the hunks (`old_start`, `old_lines`,
   `new_start`, `new_lines`, the ids of the matches in each) and, for a regexp search, each match's groups (at most 8,
-  200 characters each, `null` for a group that matched nothing: the groups line), each hunk's `label` (the definition
-  its first match is in, as the context label names it: `ƒ drgnx-gateway--queue`) and `kept` (the old file's lines of
+  200 characters each, `null` for a group that matched nothing: the groups line), each hunk's `label` (the head of the
+  definition its first match is in: its first line up to its name, `defvar drgnx-gateway--pending`, `pub fn queue`) and `kept` (the old file's lines of
   the unticked matches inside it), and what is skipped, with why. It reads the file and keeps nothing.
 - `search/apply {view, change, open}` writes it (false when the change set is unknown or written already) and answers at
   once; the writes run in the background, a file at a time, each in its turn of the pair door's queue for that file

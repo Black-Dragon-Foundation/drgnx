@@ -240,20 +240,29 @@ pub(super) fn file_edits(plan: FilePlan) -> (Option<Planned>, Vec<EditSkip>) {
     (planned, skipped)
 }
 
-/// Lines of context around a preview's hunks (a unified diff's usual 3).
-const CONTEXT: usize = 3;
+/// Lines of context around a preview's hunks: 1, so nearby changes in different definitions are hunks of their own
+/// (the mockup's).
+const CONTEXT: usize = 1;
 
-/// One file's preview (`search/preview`): the unified diff of its text before and after its edits, each hunk with the
-/// ids of the edits in it and their captures (GROUPS of an edit's old text: a regexp's groups, `None` for one that
-/// matched nothing); the skipped, each with why.
-/// What a preview knows of a file from its run: each match's definition label by id, and the lines of its unticked
-/// matches.
+/// What a preview knows of a file from its run: each match's definition by id (its first line, from 1, and its name),
+/// and the lines of its unticked matches.
 #[derive(Debug, Default)]
 pub(super) struct Around {
-    pub labels: std::collections::HashMap<String, String>,
+    pub defs: std::collections::HashMap<String, (u32, String)>,
     pub kept: Vec<u32>,
 }
 
+/// A definition's head: its first LINE up to its NAME, the paren before the form left out (`defvar
+/// drgnx-gateway--pending`, `pub fn queue`); none when the line does not hold the name.
+fn def_head(line: &str, name: &str) -> Option<String> {
+    let end = line.find(name)? + name.len();
+    let head = line[..end].trim_start().trim_start_matches('(');
+    Some(head.to_owned())
+}
+
+/// One file's preview (`search/preview`): the unified diff of its text before and after its edits, each hunk with the
+/// ids of the edits in it and their captures (GROUPS of an edit's old text: a regexp's groups, `None` for one that
+/// matched nothing), the head of its first match's definition and its kept lines; the skipped, each with why.
 pub(super) fn preview(
     plan: FilePlan,
     groups: impl Fn(&str) -> Vec<Option<String>>,
@@ -312,7 +321,10 @@ pub(super) fn preview(
                     })
                     .filter(|g| !g.groups.is_empty())
                     .collect(),
-                label: mine.first().and_then(|e| around.labels.get(&e.id).cloned()),
+                label: mine.first().and_then(|e| {
+                    let (line, name) = around.defs.get(&e.id)?;
+                    def_head(text.lines().nth(line.checked_sub(1)? as usize)?, name)
+                }),
                 kept: around
                     .kept
                     .iter()
@@ -496,12 +508,38 @@ mod tests {
         let h = &a.hunks[0];
         assert_eq!(
             (h.old_start, h.old_lines, h.new_start, h.new_lines),
-            (1, 6, 1, 6)
+            (1, 4, 1, 4),
+            "1 line of context, as the mockup's hunks"
         );
         assert_eq!(h.ids, ["m:1:0", "m:1:1"]);
         assert_eq!(h.captures[0].groups, [Some("f".to_owned()), None]);
         assert_eq!(a.hunks[1].ids, ["m:1:2"]);
-        assert!(a.diff.contains("@@ -15,6 +15,6 @@"), "{}", a.diff);
+        assert!(a.diff.contains("@@ -17,3 +17,3 @@"), "{}", a.diff);
+    }
+
+    /// [D] A definition's head is its first line up to its name, without the paren before it: the form and the name
+    /// (`defvar drgnx-gateway--pending`, `pub fn queue`); none when the line does not hold the name.
+    #[test]
+    fn a_definitions_head_is_its_form_and_name() {
+        assert_eq!(
+            def_head(
+                "(defvar drgnx-gateway--pending (make-hash-table :test #'eq)",
+                "drgnx-gateway--pending"
+            ),
+            Some("defvar drgnx-gateway--pending".to_owned())
+        );
+        assert_eq!(
+            def_head(
+                "  (defun drgnx-gateway--queue (p reply)",
+                "drgnx-gateway--queue"
+            ),
+            Some("defun drgnx-gateway--queue".to_owned())
+        );
+        assert_eq!(
+            def_head("    pub fn queue(p: P) {", "queue"),
+            Some("pub fn queue".to_owned())
+        );
+        assert_eq!(def_head("#[derive(Debug)]", "Gateway"), None);
     }
 
     /// [D] Each hunk is named by its first match's definition (the run's context label), and the lines of the file's
@@ -514,7 +552,7 @@ mod tests {
         std::fs::write(&f, &text).unwrap();
         let p = f.to_string_lossy().into_owned();
         let around = Around {
-            labels: [("m:1:0".to_owned(), "ƒ eat".to_owned())].into(),
+            defs: [("m:1:0".to_owned(), (2, "line".to_owned()))].into(),
             kept: vec![3, 19],
         };
         let (answer, _) = preview(
@@ -530,7 +568,7 @@ mod tests {
             &around,
         );
         let a = answer.unwrap();
-        assert_eq!(a.hunks[0].label.as_deref(), Some("ƒ eat"));
+        assert_eq!(a.hunks[0].label.as_deref(), Some("line"));
         assert_eq!(
             a.hunks[0].kept,
             [3],
