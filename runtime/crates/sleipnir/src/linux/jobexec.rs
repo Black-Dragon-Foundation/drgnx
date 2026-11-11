@@ -435,6 +435,7 @@ fn judge_run(
         wall_s: wall.as_secs_f64(),
         cpu_s: after.cpu_usec.saturating_sub(before.cpu_usec) as f64 / 1e6,
         mem_peak_mib: after.peak / (1024 * 1024),
+        mem_overshoot_mib: None,
         disturbed,
         log: spec.log.display().to_string(),
     }

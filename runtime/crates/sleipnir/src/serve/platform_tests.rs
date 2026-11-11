@@ -91,6 +91,7 @@ impl Platform for Fake {
             wall_s: 0.0,
             cpu_s: 0.0,
             mem_peak_mib: 0,
+            mem_overshoot_mib: None,
             disturbed: false,
             log: String::new(),
         }

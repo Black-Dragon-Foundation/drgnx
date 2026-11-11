@@ -3,11 +3,17 @@
 //! attempt's log; keeps the Mac from idle sleep while it runs (`caffeinate -i -w`); stops it at its timeout, counted
 //! on `CLOCK_MONOTONIC` (which counts sleep: Rust's `Instant` on macOS doesn't), or when a kill reason appears; and
 //! writes `result.json` judged as on Linux (`forseti::classify`). On a stop the verdict is written first, then the
-//! whole process group goes, job-exec with it. The memory watchdog joins it with M6.
+//! whole process group goes, job-exec with it. Its memory cap is [`super::memwatch`]'s: past it every process of the
+//! job is killed, the verdict is `oom` and the overshoot is recorded.
+//!
+//! The job's processes are job-exec's session (it leads one: `attempt::launch`) less job-exec; a job-exec that leads
+//! none (a test, a hand run) starts the command in a session of its own instead, so the watchdog never takes a
+//! stranger's.
 //!
 //! It reads the same `job.json` ([`JobExec`]) as Linux's: the slice is unused, and a keyed job or one with a helper
 //! is refused (a Mac runner never gets keys). Plain Unix: the rows run on Linux.
 
+use super::memwatch::{self, MARKER};
 use crate::linux::jobexec::{JobExec, KILL_REASON, read_kill_reason};
 use crate::linux::parse::{self, RowVerdict};
 use crate::linux::result::{ResultJson, RowResult};
@@ -15,7 +21,7 @@ use forseti::Verdict;
 use forseti::classify::{ExitEvidence, infra};
 use std::fs;
 use std::io::Read;
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -62,13 +68,23 @@ struct Seen {
     signal: Option<i32>,
     exit_code: Option<i32>,
     setup: Option<String>,
+    /// The watchdog killed it past its cap.
+    oom: bool,
+    /// The job's largest footprint the watchdog saw, bytes.
+    peak: u64,
+}
+
+/// Whether this process leads its session (job-exec as `attempt::launch` starts it).
+fn leads_session() -> bool {
+    // SAFETY: getsid(0) and getpid have no failure
+    unsafe { libc::getsid(0) == libc::getpid() }
 }
 
 /// Runs SPEC from the attempt's folder DIR and writes `result.json` there; the result. A stop (timeout, kill
 /// reason) ends this process's group after the result is written.
 pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
     let (result, stop) = run_unchecked(dir, spec, refusal(spec));
-    if stop {
+    if stop && leads_session() {
         // SAFETY: SIGKILL to our own process group (job-exec and every process of the job that stayed in it)
         unsafe { libc::killpg(0, libc::SIGKILL) };
     }
@@ -104,8 +120,34 @@ fn run_unchecked(dir: &Path, spec: &JobExec, refused: Option<String>) -> (Result
                 if let Some(c) = &spec.cwd {
                     cmd.current_dir(c);
                 }
+                // the marker, from the spec (`sandbox::spec` sets it) or made here: the attempt's folder, unique
+                let marker = match spec.env.iter().find(|(k, _)| k == MARKER) {
+                    Some((_, v)) => v.clone(),
+                    None => {
+                        let v = dir.display().to_string();
+                        cmd.env(MARKER, &v);
+                        v
+                    }
+                };
+                if !leads_session() {
+                    // SAFETY: setsid is async-signal-safe and touches nothing of the parent's
+                    unsafe {
+                        cmd.pre_exec(|| {
+                            rustix::process::setsid()
+                                .map(|_| ())
+                                .map_err(std::io::Error::from)
+                        });
+                    }
+                }
                 if seen.setup.is_none() {
-                    watch(dir, spec, &mut cmd, t0, &mut seen);
+                    watch(
+                        dir,
+                        spec,
+                        &mut cmd,
+                        &format!("{MARKER}={marker}"),
+                        t0,
+                        &mut seen,
+                    );
                 }
             }
         }
@@ -116,7 +158,9 @@ fn run_unchecked(dir: &Path, spec: &JobExec, refused: Option<String>) -> (Result
     (result, stop)
 }
 
-fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, t0: f64, seen: &mut Seen) {
+fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, marker: &str, t0: f64, seen: &mut Seen) {
+    // SAFETY: getpid has no failure
+    let me = unsafe { libc::getpid() };
     let mut child = match cmd.spawn() {
         Err(e) => {
             seen.setup = Some(format!("{}: {e}", spec.argv[0]));
@@ -124,6 +168,13 @@ fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, t0: f64, seen: &mut Seen
         }
         Ok(c) => c,
     };
+    // the job's session: job-exec's, or the command's own
+    let leader = leads_session();
+    let sid = if leader { me } else { child.id() as i32 };
+    // a process that left the session counts when born after the command
+    let born = memwatch::start_of(child.id() as i32);
+    let cap = memwatch::cap_bytes(spec.grant.mem_cap_mib);
+    let every = (memwatch::TICK.as_millis() / TICK.as_millis()).max(1) as u32;
     // idle sleep held off while job-exec lives (a Mac on battery still sleeps at lid close)
     let awake = cfg!(target_os = "macos")
         .then(|| {
@@ -136,7 +187,19 @@ fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, t0: f64, seen: &mut Seen
                 .ok()
         })
         .flatten();
+    let mut tick = 0u32;
     loop {
+        if tick.is_multiple_of(every) {
+            let s = memwatch::scan(me, sid, born, marker);
+            seen.peak = seen.peak.max(s.bytes);
+            if s.bytes > cap {
+                memwatch::kill_all(&s.pids);
+                seen.oom = true;
+                seen.stopped = true;
+                break;
+            }
+        }
+        tick += 1;
         match child.try_wait() {
             Ok(Some(st)) => {
                 seen.exit_code = st.code();
@@ -160,11 +223,20 @@ fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, t0: f64, seen: &mut Seen
         std::thread::sleep(TICK);
     }
     if seen.timed_out || seen.stopped {
-        // the command now; what else stayed in the group goes once the result is written (`run`)
+        // the command now; what else stayed in job-exec's group goes once the result is written (`run`), or, in a
+        // session of its own, its group now
         let _ = child.kill();
+        if !leader {
+            // SAFETY: SIGKILL to the command's own process group (it leads its session)
+            unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
+        }
         if let Ok(st) = child.wait() {
             seen.exit_code = st.code();
             seen.signal = st.signal();
+        }
+        if seen.oom {
+            // what the job started between the scan and the kill
+            memwatch::kill_all(&memwatch::scan(me, sid, born, marker).pids);
         }
     }
     if let Some(mut c) = awake {
@@ -188,7 +260,8 @@ fn judge(dir: &Path, spec: &JobExec, seen: &Seen, wall_s: f64) -> ResultJson {
             (None, Some(r)) if !evicted => Some(r),
             _ => None,
         },
-        oom_kill_grew: false,
+        // the watchdog's kill is the job's own OOM (the kernel's counter on Linux), never `red`
+        oom_kill_grew: seen.oom,
         oomd_line: None,
         signal: seen.signal,
         exit_code: seen.exit_code,
@@ -218,7 +291,8 @@ fn judge(dir: &Path, spec: &JobExec, seen: &Seen, wall_s: f64) -> ResultJson {
         ru.ru_maxrss as u64
     } else {
         ru.ru_maxrss as u64 * 1024
-    };
+    }
+    .max(seen.peak);
     ResultJson {
         verdict,
         infra,
@@ -244,6 +318,7 @@ fn judge(dir: &Path, spec: &JobExec, seen: &Seen, wall_s: f64) -> ResultJson {
         wall_s,
         cpu_s: tv(ru.ru_utime) + tv(ru.ru_stime),
         mem_peak_mib: peak_bytes / (1024 * 1024),
+        mem_overshoot_mib: Some(seen.peak.saturating_sub(spec.grant.mem_cap_mib << 20) >> 20),
         disturbed,
         log: spec.log.display().to_string(),
     }
@@ -339,6 +414,26 @@ mod tests {
         );
         let red = spec(d.path(), &["/bin/sh", "-c", "exit 3"]);
         assert_eq!(run_unchecked(d.path(), &red, None).0.verdict, Verdict::Red);
+    }
+
+    /// [D] A job past its grant is killed by the watchdog: verdict `oom` (never `red`), its overshoot recorded, nothing
+    /// of it left. 400 MiB held (a `dd` buffer blocked on a pipe nobody reads) against a 256 MiB grant.
+    #[test]
+    fn a_job_past_its_grant_is_killed_oom() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = spec(
+            d.path(),
+            &[
+                "/bin/sh",
+                "-c",
+                "dd if=/dev/zero bs=419430400 count=1 2>/dev/null | sleep 30",
+            ],
+        );
+        s.grant.mem_cap_mib = 256;
+        let (r, stop) = run_unchecked(d.path(), &s, None);
+        assert_eq!(r.verdict, Verdict::Oom, "{r:?}");
+        assert!(stop);
+        assert!(r.mem_overshoot_mib.is_some(), "{r:?}");
     }
 
     /// [D] A kill reason written while the command runs stops it: the verdict names the reason, and the group is to

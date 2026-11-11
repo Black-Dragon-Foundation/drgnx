@@ -1066,6 +1066,7 @@ impl<W: Write> Serve<W> {
             wall_s: 0.0,
             cpu_s: 0.0,
             mem_peak_mib: 0,
+            mem_overshoot_mib: None,
             disturbed: false,
             log: dir.join(LOG).display().to_string(),
         };

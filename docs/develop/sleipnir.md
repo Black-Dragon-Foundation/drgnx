@@ -115,6 +115,16 @@ tree), `HOME` and `TMPDIR` inside the folder, `PATH` Homebrew's and the system's
 awake while the job runs, and the verdict comes from `forseti::classify` like Linux's. A Mac has no pause, live
 resize, CPU weights or keys: those methods answer none or refuse.
 
+**The memory cap** (`darwin::memwatch`): no kernel enforces a Mac job's grant, so job-exec's watchdog does. Every
+500 ms it lists the processes and takes the job's: job-exec's session less job-exec (a job-exec that leads no session,
+a test or a hand run, starts the command in a session of its own and takes that), plus processes of the runner's user
+outside it born after the command that carry `DRGNX_RUNNER_ATTEMPT=<hub>/<job>/<attempt>` (`KERN_PROCARGS2`). It sums
+their `ri_phys_footprint` (`proc_pid_rusage`; the resident set on Linux, where the rows run). Past the cap, the
+grant less 192 MiB (the overshoot the spike measured at this tick, rounded up; never under half the grant), it
+SIGKILLs every one: the verdict is `oom` (the kill counts as the job's own OOM, never `red` and never `infra`), and
+`result.json`'s `mem_overshoot_mib` records the peak past the grant for every Mac job (none on Linux, where the kernel
+caps it).
+
 ## The podman argv
 
 `linux::podman::argv(req, caps, runner_args)` is the one builder of a `podman run` line, used by the hub's own container
