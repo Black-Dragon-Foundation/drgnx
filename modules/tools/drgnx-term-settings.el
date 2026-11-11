@@ -143,6 +143,28 @@ closes, and a command's stays (what it printed can be read)."
   :type '(choice (const :tag "When a program runs" t) (const always) (const :tag "Never" nil))
   :group 'drgnx :scope 'global :agents 'never :schema '(or boolean (enum always)))
 
+(drgnx-defsetting drgnx-term-on-quit 'ask
+  "What quitting drgnx does with its terminals: `ask' (when a program runs in one, the quit question offers Keep
+Running, Close Them and Cancel; Keep Running keeps those terminals and closes idle shells), `keep' (every terminal
+keeps running, for the next drgnx to reattach) or `close' (they close, after the usual question about running
+programs).  A quit that cannot ask (a daemon's shutdown, `kill-emacs' from a script) keeps the terminals whose program
+runs; a crash keeps them all."
+  :type '(choice (const ask) (const keep) (const close))
+  :group 'drgnx :scope 'global :agents 'never :schema '(enum ask keep close))
+
+(drgnx-defsetting drgnx-term-reattach 'ask
+  "What drgnx does with the terminals an earlier drgnx left running (kept at its quit, or after its crash): `ask' (a
+notice offers them: Reattach All, Choose… or Close Them), `always' (they open here at once) or `never' (only
+Reattach Terminal shows them).  A terminal another running drgnx shows is never offered."
+  :type '(choice (const ask) (const always) (const never))
+  :group 'drgnx :scope 'global :agents 'never :schema '(enum ask always never))
+
+(drgnx-defsetting drgnx-term-detached-keep 24
+  "Hours a terminal no drgnx shows keeps running before its program is ended (SIGHUP); 0: until it ends by itself or
+the machine restarts.  The terminal's own worker counts the time, so no drgnx needs to run.  A change applies to
+every terminal at once."
+  :type 'natnum :group 'drgnx :scope 'global :agents 'never :schema 'natnum :apply #'drgnx-term--apply-config)
+
 (drgnx-defsetting drgnx-term-progress-style t
   "Whether a program's progress (OSC 9;4) shows on its terminal's tab."
   :type 'boolean :group 'drgnx :scope 'global :agents 'never :schema 'boolean)

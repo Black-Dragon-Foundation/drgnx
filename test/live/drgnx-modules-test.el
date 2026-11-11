@@ -34,7 +34,7 @@
 
 (ert-deftest drgnx-live/zen-by-keys-gives-the-layout-back ()
   (drgnx-live-mod--with sess
-    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`")))
+    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "M-j")))
     (let ((before (drgnx-live-mod--q sess "(sort (mapcar #'window-pixel-edges (window-list nil 'nomini)) (lambda (a b) (or (< (car a) (car b)) (and (= (car a) (car b)) (< (cadr a) (cadr b))))))")))
       (drgnx-ui-measure sess (list (list :keys "C-k z")))
       (should (= 1 (drgnx-live-mod--q sess "(length (window-list nil 'nomini))")))
@@ -81,7 +81,7 @@
     (drgnx-ui-call sess (format "(progn (dolist (d (directory-files %S t \"\\\\`[^.]\"))
                                    (when (file-directory-p d) (add-to-list 'load-path d t)))
                                  (drgnx-modules-run 'idle) (drgnx-uitest--json (list :ok t)))" (drgnx-live-mod--elpa)))
-    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`")))
+    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "M-j")))
     (should (equal (drgnx-live-mod--q sess "(list (plist-get (alist-get 'extra/jump (drgnx-modules-report)) :status) (key-binding (kbd \"C-;\")) (and (boundp 'vertico-mode) vertico-mode))")
                    '(ok avy-goto-char-timer t)))
     (let ((before (drgnx-live-mod--q sess "(sort (mapcar #'window-pixel-edges (window-list nil 'nomini)) (lambda (a b) (or (< (car a) (car b)) (and (= (car a) (car b)) (< (cadr a) (cadr b))))))")))

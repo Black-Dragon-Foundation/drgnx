@@ -310,6 +310,7 @@
         (buffers-diff :none "in the palette and the Buffers right-click menu")
         (scm-blame :none "in the palette")
         (terminal-new "C-S-`" :mac "C-S-`")
+        (terminal-toggle "C-`" :mac "C-`")   ; VS Code's Toggle Terminal; s-` is macOS' next window
         (explorer-terminal-here :none "the Explorer's right-click menu")
         (terminal-toggle-mouse :none "the palette")
         (terminal-check :none "the palette")
@@ -369,7 +370,7 @@
         (close-tab "C-w" "C-<f4>" :mac "s-w")
         (next-tab "C-<next>" :mac "M-s-<right>")
         (previous-tab "C-<prior>" :mac "M-s-<left>")
-        (toggle-panel "C-`" "M-j" :everywhere "C-j" :mac ("C-`" "M-j"))   ; s-` is macOS' next window
+        (toggle-panel "M-j" :everywhere "C-j" :mac "M-j")
         (focus-panel :none "in the palette")
         (switch-tab :none "in the palette")
         (title-row-maximize :none "a double click on the title row; in the palette")

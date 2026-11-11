@@ -185,7 +185,7 @@ pub fn grow(
     .map_err(|e| Refused::because(format!("the admission lock: {e}")))?
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     use crate::linux::probe::Probe;
@@ -204,6 +204,7 @@ mod tests {
 
     fn spec(mem_min: u64) -> JobSpec {
         JobSpec {
+            os: Default::default(),
             name: "t".into(),
             kind: Kind::Test,
             weight: Weight::Light,

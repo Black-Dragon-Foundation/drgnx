@@ -1527,19 +1527,20 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `tasks/find` | user | `{assignee?: string, cursor?: natnum, labels?: [string], project?: string, query?: Text, status?: Status}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/ready` | user | `{labels?: [string], limit?: natnum, project?: string}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/write` | user | `{acceptance?: Text, add?: [string], body?: Text, cwd?: AbsPath, dst?: string, id?: string, kind?: string, labels?: [string], lease?: integer, mode?: "children" \| "replace", note?: Text, op: "create" \| "update" \| "claim" \| "heartbeat" \| "release" \| "handoff" \| "reassign" \| "split" \| "complete" \| "link" \| "unlink" \| "label" \| "tools", parent?: string, parts?: [Text], priority?: integer, project?: string, remove?: [string], src?: string, status?: Status, title?: Text, to?: string, tracker?: boolean, ver?: integer}` | `any` | yes |
+| `term/attach` | user | `{cell_px?: [natnum, natnum], cols: natnum, id: string, rows: natnum}` | `{id: string, view: string}` | no |
 | `term/close` | user | `{id: string, signal?: integer}` | `boolean` | no |
 | `term/config` | user | `{config: [[string, SettingValue]], id: string}` | `boolean` | no |
 | `term/fetch` | user | `{before_key?: string, id: string, max_bytes?: natnum}` | `{version?: natnum}` | no |
 | `term/focus` | user | `{id: string, in: boolean}` | `boolean` | no |
-| `term/key` | user | `{id: string, key: string, mods?: [string], text?: string, unshifted?: natnum}` | `boolean` | no |
+| `term/key` | user | `{action?: "press" \| "repeat" \| "release", id: string, key: string, mods?: [string], text?: string, unshifted?: natnum}` | `boolean` | no |
 | `term/list` | user | `{}` | `[TermStatus]` | no |
 | `term/mouse` | user | `{button?: integer, col: natnum, id: string, kind: string, mods?: [string], row: natnum}` | `boolean` | no |
-| `term/open` | user | `{cell_px?: [natnum, natnum], class: string, cols: natnum, command?: [string], config?: [[string, SettingValue]], dir: string, env?: [[string, string]], memory_max?: string, rows: natnum, tasks_max?: string, window?: natnum}` | `{id: string, view: string}` | no |
+| `term/open` | user | `{cell_px?: [natnum, natnum], class: string, cols: natnum, command?: [string], config?: [[string, SettingValue]], dir: string, env?: [[string, string]], memory_max?: string, place?: string, rows: natnum, tasks_max?: string, window?: natnum}` | `{id: string, view: string}` | no |
 | `term/paste` | user | `{id: string, text: string}` | `boolean` | no |
 | `term/resize` | user | `{cell_px: [natnum, natnum], cols: natnum, id: string, rows: natnum}` | `boolean` | no |
 | `term/scroll` | user | `{delta?: integer, from?: string, id: string, prompt_delta?: integer, to?: string}` | `{key?: string}` | no |
 | `term/search` | user | `{dir?: string, id: string, query: string}` | `{found: natnum, held: natnum, model?: natnum}` | no |
-| `term/session-end` | user | `{}` | `natnum` | no |
+| `term/session-end` | user | `{keep?: [string]}` | `natnum` | no |
 | `term/text` | user | `{id: string, text: string}` | `boolean` | no |
 | `term/text-range` | user | `{from_key?: string, id: string, to_key?: string}` | `{text: string}` | no |
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
@@ -3581,7 +3582,10 @@ frames to `<id>/log` for the current attempt and `<id>/log.<n>` for a late one; 
 **Dialing** (`Queue::dial`, which the registry's `connect` calls): the transport opens the runner, its session starts
 and the queue takes it (adding a runner it doesn't know yet). A dial refused for a login the user must do, or for a
 changed host key, puts the runner in `needs login` with the command its card shows (`ssh HOST true`); a lost link
-leaves that state as it is, and nothing is placed there until the runner's next `hello`.
+leaves that state as it is, and nothing is placed there until the runner's next `hello`. A Mac runner whose last
+`ready` said `on_battery` and whose link is then lost is `sleeping` (its lid closed), not `unreachable`: no strike,
+its attempts detached for the grace, redialed like an unreachable one (`a_mac_on_battery_that_goes_quiet_is_sleeping`,
+`a_mac_on_mains_that_goes_quiet_is_unreachable`).
 
 **The local runner** (`runners/local.rs`, Calls 6 and 7): `Admission::Live` on Linux, `forseti::admit` over
 `sleipnir::linux::probe` under the `workstation` profile, with a reservation per admitted job in the reservation

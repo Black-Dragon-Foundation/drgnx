@@ -1442,6 +1442,7 @@ dependencies = [
  "serde",
  "serde_json",
  "skuld",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]

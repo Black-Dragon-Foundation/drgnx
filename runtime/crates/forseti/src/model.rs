@@ -148,9 +148,21 @@ pub enum Profile {
     Dedicated,
 }
 
+/// The OS a job runs on, and a runner offers: container jobs are `linux`; a Mac runner's host jobs `macos`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Os {
+    #[default]
+    Linux,
+    Macos,
+}
+
 /// What a job is and what it needs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct JobSpec {
+    /// The OS the job needs, matched before features (default `linux`).
+    #[serde(default)]
+    pub os: Os,
     pub name: String,
     pub kind: Kind,
     /// Heavy or light: what the send and accept modes and placement read ([`JobSpec::heavy`]).
@@ -377,6 +389,8 @@ pub enum WaitReason {
     Benched,
     /// The project's send mode or the runner's accept mode keeps it off.
     Mode,
+    /// No runner offers the OS the job needs (`macos`: "needs a Mac runner").
+    Os(Os),
     /// The runner lacks these features.
     Features(Vec<String>),
     /// The starter's `machines` matrix cell keeps it on this machine.

@@ -324,6 +324,7 @@
         (buffers-diff "SPC g d")
         (scm-blame "SPC g b")
         (terminal-new "SPC t n")
+        (terminal-toggle :none "in the palette")
         (explorer-terminal-here :none "the Explorer's right-click menu")
         (terminal-toggle-mouse :none "the palette")
         (terminal-check :none "the palette")

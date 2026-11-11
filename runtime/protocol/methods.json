@@ -3622,6 +3622,28 @@
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
+        "description": "`term/detached`: terminals were left running by a session that is gone; a live editor may offer them.",
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "TermDetached",
+        "type": "object"
+      },
+      "doc": "terminals whose editor session went past the grace or quit keeping them run on, detached: to every live editor session's connection, which may offer them (term/attach)",
+      "name": "term/detached"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "description": "`term/exit`: the terminal's program ended, with its exit code or the signal that ended it (both none: its worker\nwent away without saying).",
         "properties": {
           "code": {
@@ -4221,6 +4243,11 @@
                   }
                 ],
                 "type": "array"
+              },
+              "key_events": {
+                "default": false,
+                "description": "The program asked for key event types (the kitty keyboard protocol's flag 2): the editor sends repeats and\nreleases.",
+                "type": "boolean"
               },
               "mouse_tracking": {
                 "default": false,
@@ -33485,6 +33512,81 @@
       "classes": [
         "user"
       ],
+      "doc": "take an orphaned or detached terminal into this connection's session at a size: it draws here from a reset, its program redraws (SIGWINCH); refused for a terminal another live session has",
+      "name": "term/attach",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/attach`: take an orphaned or detached terminal into this connection's session, at COLS × ROWS cells of\nCELL_PX. Answered as `term/open` is; the first patch is a reset.",
+        "properties": {
+          "cell_px": {
+            "default": [
+              0,
+              0
+            ],
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            ],
+            "type": "array"
+          },
+          "cols": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "rows": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "cols",
+          "rows"
+        ],
+        "title": "TermAttach",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/open`'s answer.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "view"
+        ],
+        "title": "TermOpened",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "end a terminal's program (SIGHUP, or the signal given): term/exit follows; false for no such terminal",
       "name": "term/close",
       "params": {
@@ -33669,12 +33771,26 @@
       "classes": [
         "user"
       ],
-      "doc": "a key press, encoded by the worker from the terminal's modes (kitty keyboard, modifyOtherKeys, DECCKM); its echo is drawn at once",
+      "doc": "a key press, repeat or release, encoded by the worker from the terminal's modes (kitty keyboard, modifyOtherKeys, DECCKM); its echo is drawn at once",
       "name": "term/key",
       "params": {
+        "$defs": {
+          "TermKeyAction": {
+            "description": "`term/key`'s ACTION.",
+            "enum": [
+              "press",
+              "repeat",
+              "release"
+            ],
+            "type": "string"
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`term/key`: a key press, encoded by the worker from the terminal's modes. KEY is its name (`a`, `return`, `f5`),\nMODS its modifiers (`ctrl`, `shift`, `alt`, `super`), TEXT what it types, UNSHIFTED the codepoint without shift.",
+        "description": "`term/key`: a key event, encoded by the worker from the terminal's modes. KEY is its name (`a`, `return`, `f5`),\nMODS its modifiers (`ctrl`, `shift`, `alt`, `super`), TEXT what it types, UNSHIFTED the codepoint without shift,\nACTION `press` (the default), `repeat` or `release`: a repeat or a release reaches the program as itself only while\nit asked for key event types (the view's `term.key_events`).",
         "properties": {
+          "action": {
+            "$ref": "#/$defs/TermKeyAction"
+          },
           "id": {
             "type": "string"
           },
@@ -33721,7 +33837,7 @@
       "classes": [
         "user"
       ],
-      "doc": "every terminal: its worker's pid, whether a program runs in it (no answer within 200 ms counts as running), its cwd and title, and whether it is from before an update",
+      "doc": "every terminal: its worker's pid, whether a program runs in it (no answer within 200 ms counts as running), its cwd, title and command, whether it is from before an update, whether it is this session's, orphaned (no live connection carries its session) or detached (since when), and where it was shown",
       "name": "term/list",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -33732,20 +33848,47 @@
       "result": {
         "$defs": {
           "TermStatus": {
-            "description": "One terminal in `term/list`: whether a program runs in it (a worker that does not answer within 200 ms counts as\nrunning), and OLD for one from before an update (only `term/close` reaches it).",
+            "description": "One terminal in `term/list`: whether a program runs in it (a worker that does not answer within 200 ms counts as\nrunning), and OLD for one from before an update (only `term/close` reaches it). MINE: it draws for the asking\nconnection's session; ORPHANED: no live connection carries its session; DETACHED_AT (ms since the epoch): its\nsession went past the grace, or quit keeping it. Only an orphaned or detached terminal can be taken (`term/attach`).",
             "properties": {
+              "command": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "cwd": {
                 "type": "string"
+              },
+              "detached_at": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "id": {
                 "type": "string"
               },
+              "mine": {
+                "type": "boolean"
+              },
               "old": {
+                "type": "boolean"
+              },
+              "orphaned": {
                 "type": "boolean"
               },
               "pid": {
                 "format": "int32",
                 "type": "integer"
+              },
+              "place": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "running": {
                 "type": "boolean"
@@ -33760,7 +33903,9 @@
               "running",
               "cwd",
               "title",
-              "old"
+              "old",
+              "mine",
+              "orphaned"
             ],
             "type": "object"
           }
@@ -33940,6 +34085,13 @@
           },
           "memory_max": {
             "description": "The worker's scope's `MemoryMax` and `TasksMax` under a user systemd: a number, with K, M, G or T for memory\n(`drgnx-term-linux-cgroup-memory-limit`, `-processes-limit`); none: systemd's default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "place": {
+            "description": "Where the editor shows it (`panel`, `editor`): kept for a reattach.",
             "type": [
               "string",
               "null"
@@ -34214,12 +34366,21 @@
       "classes": [
         "user"
       ],
-      "doc": "the editor exits cleanly: every terminal of the session this connection's hello named ends now, without the 60 s grace; how many",
+      "doc": "the editor exits cleanly: every terminal of the session this connection's hello named ends now, without the 60 s grace, but those in keep, which detach and run on; how many ended",
       "name": "term/session-end",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
-        "title": "Empty",
+        "description": "`term/session-end`: the terminals of the session to KEEP running, detached; the rest end.",
+        "properties": {
+          "keep": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "title": "TermSessionEnd",
         "type": "object"
       },
       "result": {

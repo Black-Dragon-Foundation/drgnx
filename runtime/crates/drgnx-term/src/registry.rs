@@ -22,9 +22,19 @@ pub struct Record {
     pub view: String,
     pub class: String,
     pub cwd: String,
-    /// The editor session that opened it: its terminals end when it is gone.
+    /// The editor session it draws for (none: kept at that session's quit). A session gone past the hub's grace
+    /// leaves it detached, not ended.
     #[serde(default)]
     pub session: Option<String>,
+    /// When it was detached, in ms since the epoch (none: a session has it, or had it a moment ago).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detached_at: Option<u64>,
+    /// The program and its arguments, as started.
+    #[serde(default)]
+    pub command: Vec<String>,
+    /// Where the editor showed it (`panel`, `editor`), so a reattach opens it there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
 }
 
 impl Record {

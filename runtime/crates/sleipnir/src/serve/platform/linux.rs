@@ -1,13 +1,10 @@
-//! What `serve` asks of the machine it runs on (`docs/develop/sleipnir.md`, "Platforms"): the probe and the contract,
-//! the reservations between schedulers, starting, watching and stopping attempts, the caps (pause, grow, CPU
-//! weights) and the cleanup of what the attempts leave. `serve`'s protocol loop reaches the machine only through a
-//! [`Platform`]; [`LinuxPlatform`] is today's: transient systemd units in job slices, containers under rootless podman,
-//! cgroups and PSI.
+//! [`LinuxPlatform`]: transient systemd user units in job slices, containers under rootless podman, cgroups and PSI.
 
-use super::attempts::{self, LOG, Meta};
-use super::cleanup;
-use super::{Config, NET_ALLOW, Pins, SLICE_ROOT, UNIT_SLACK_S};
-use crate::linux::jobexec::{HelperSpec, JobExec};
+use super::super::attempts::{self, LOG};
+use super::super::cleanup;
+use super::super::{Config, NET_ALLOW, Pins, SLICE_ROOT, UNIT_SLACK_S};
+use super::{LaunchReq, Platform};
+use crate::linux::jobexec::{HELPER_SOCK, HelperSpec, JobExec};
 use crate::linux::parse::Parser;
 use crate::linux::podman::{self, Caps, ContainerImage, ContainerReq, RunnerArgs, RunnerMounts};
 use crate::linux::probe::{self, Probe};
@@ -23,63 +20,6 @@ use std::time::Duration;
 
 /// How long the relay sidecar's image check or import may take.
 const PX_IMAGE_LIMIT: Duration = Duration::from_secs(60);
-
-/// An attempt to start, as `serve` hands it to [`Platform::launch`]: its folder and record, the source it runs on,
-/// and what the hub's `start` said.
-pub struct LaunchReq<'a> {
-    pub dir: &'a Path,
-    pub meta: &'a Meta,
-    pub src: &'a Path,
-    pub image: Option<String>,
-    pub env: &'a [(String, String)],
-    pub net_hosts: &'a [String],
-    pub pins: Pins,
-    pub parser: &'a str,
-}
-
-/// The machine under `serve`. Every call is blocking and short; none prompts.
-pub trait Platform {
-    /// The machine as `forseti` reads it at NOW (the other schedulers' live reservations included).
-    fn machine(&self, now: u64, limits: &Limits) -> io::Result<MachineState>;
-    /// The admission limits of PROFILE on this machine.
-    fn limits(&self, profile: Profile) -> Limits;
-    /// This boot (empty when it can't be read).
-    fn boot_id(&self) -> String;
-    /// The runner contract: the facts, or every item missing with its fix.
-    fn contract(&self) -> Result<Facts, Vec<Missing>>;
-    /// Whether attempts outlive the link (Linux: linger).
-    fn survives_link(&self) -> bool;
-    /// What the job runner can't do here (none: it can), and the features it gives jobs.
-    fn job_runner(&self) -> (Option<String>, Vec<String>);
-    /// The reservations between schedulers on this machine.
-    fn reservations(&self) -> Reservations;
-    /// The start time of process PID, as the reservations compare it.
-    fn start_time(&self, pid: u32) -> io::Result<u64>;
-    /// Job ID's memory in use, MiB, where it can be read.
-    fn current_mib(&self, id: &str) -> Option<u64>;
-    /// Starts the attempt (its `job.json` written, job-exec running past this `serve`): the name the attempt runs
-    /// under (its unit) and job-exec's pid (0 when unknown).
-    fn launch(&self, req: &LaunchReq) -> Result<(String, u32), String>;
-    /// Whether the attempt running under UNIT is still up.
-    fn active(&self, unit: &str) -> bool;
-    /// Kills job ID's command; job-exec sees it end and writes the verdict the reason written before names.
-    fn kill(&self, id: &str) -> Result<(), String>;
-    /// Pauses job ID (the ladder's long builds).
-    fn pause(&self, id: &str) -> Result<(), String>;
-    /// Lets a paused job ID go on.
-    fn unpause(&self, id: &str) -> Result<(), String>;
-    /// Job ID as a grow judges it, when it runs near its cap CAP_MIB (MAX_MIB its most); none: not near, or no grow
-    /// on this platform.
-    fn grow_candidate(&self, id: &str, cap_mib: u64, max_mib: u64) -> Option<Sized>;
-    /// Carries a grow out.
-    fn resize(&self, r: &Resize) -> Result<(), String>;
-    /// What job ID's CPU weight is set on; none: no weights on this platform.
-    fn weight_unit(&self, id: &str) -> Option<String>;
-    /// Sets the CPU weight of UNIT.
-    fn set_weight(&self, unit: &str, w: u32) -> Result<(), String>;
-    /// Removes what this hub's attempts left under ROOT and on the machine (only OWNER's prefixed, labelled items).
-    fn cleanup(&self, root: &Path, owner: &cleanup::Owner);
-}
 
 /// Linux: transient systemd user units in job slices, rootless podman containers, cgroups and PSI.
 pub struct LinuxPlatform {
@@ -433,6 +373,10 @@ impl Platform for LinuxPlatform {
         resize::set_weight(unit, w)
     }
 
+    fn hand_key(&self, dir: &Path, name: &str, value: &[u8]) -> io::Result<()> {
+        crate::helper::keys::hand(&dir.join(HELPER_SOCK), name, value)
+    }
+
     fn cleanup(&self, root: &Path, owner: &cleanup::Owner) {
         let seen = cleanup::Seen {
             containers: cleanup::containers(&self.prefix, &self.hub_id),
@@ -446,7 +390,7 @@ impl Platform for LinuxPlatform {
 
 /// A networked job's relay as its `job.json` names it: the sidecar ([`podman::JobNet`]) and the sidecar's `podman`
 /// arguments for the helper, for job ID under RA from the relay image IMAGE.
-pub(super) fn net_helper(
+pub(in crate::serve) fn net_helper(
     ra: &RunnerArgs,
     id: &str,
     image: &str,
@@ -470,7 +414,7 @@ pub(super) fn net_helper(
 }
 
 /// The caps of a container job in IMAGE under GRANT, its proxy pinning PINS.
-pub(super) fn job_caps(grant: &forseti::Grant, image: String, pins: Pins) -> Caps {
+pub(in crate::serve) fn job_caps(grant: &forseti::Grant, image: String, pins: Pins) -> Caps {
     Caps {
         images: vec![ContainerImage {
             name: "job".into(),
