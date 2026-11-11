@@ -59,8 +59,9 @@ each session (ID NAME CWD); the hub answers `search/handoff' with ANSWER from SP
   (cadr (assoc "search/handoff" drgnx-search-handoff-test--calls)))
 
 (ert-deftest drgnx-search-handoff/the-card-is-prefilled-and-says-who ()
-  "Pattern D: the card's text is prefilled from the replacement; who is a new worker of the default profile first,
-then each live session, the one in the search's checkout as a pair; Next Agent goes round them."
+  "Pattern D: the card's text is prefilled from the replacement; who is a new worker of the default profile first, a
+new pair in the checkout, then each live session with its state, the one in the search's checkout as a pair; Next
+Agent goes round them."
   (drgnx-search-handoff-test--with (list :total 3 :replace "queued"
                                          :sessions '(("a1" "codex-1" "/r/") ("a2" "claude-2" "/elsewhere/")))
     (drgnx-search-to-agent)
@@ -68,10 +69,13 @@ then each live session, the one in the search's checkout as a pair; Next Agent g
       (should (derived-mode-p 'drgnx-search-handoff-mode))
       (should (equal (buffer-string) "Replace `pending' with `queued' in these places, keeping behaviour."))
       (should (equal (mapcar #'car (plist-get drgnx-search-handoff--ask :choices))
-                     '("New worker (claude), its own worktree" "Pair · codex-1" "claude-2")))
+                     '("New worker, own worktree" "New pair here" "Pair · codex-1 (idle)" "claude-2 (idle)")))
+      (should (equal (cdr (nth 1 (plist-get drgnx-search-handoff--ask :choices))) '(:pair (:profile "claude"))))
       (should (string-match-p "Ask an Agent · 3 matches  Who: New worker" drgnx-search-handoff--header-text))
       (drgnx-search-handoff-next-who)
-      (should (string-match-p "Who: Pair · codex-1" drgnx-search-handoff--header-text))
+      (should (string-match-p "Who: New pair here" drgnx-search-handoff--header-text))
+      (drgnx-search-handoff-next-who)
+      (should (string-match-p "Who: Pair · codex-1 (idle)" drgnx-search-handoff--header-text))
       (drgnx-search-handoff-next-who)
       (drgnx-search-handoff-next-who)
       (should (string-match-p "Who: New worker" drgnx-search-handoff--header-text))
@@ -88,6 +92,7 @@ the rows; with none ticked, the selected row's matches (a file's, by `ids').  An
     (with-current-buffer drgnx-search-handoff-buffer-name
       (should-error (drgnx-search-handoff-send) :type 'user-error)
       (insert "Rename it.")
+      (drgnx-search-handoff-next-who)
       (drgnx-search-handoff-next-who)
       (drgnx-search-handoff-send))
     (should (equal (drgnx-search-handoff-test--sent)
@@ -121,7 +126,7 @@ Worktree searches the worker's worktree."
     (should (drgnx-search-handoff-event "search-handoff-state"
                                         '(:handoff "h:3" :phase "editing" :done ["a"] :left ["b" "c"])))
     (with-current-buffer view
-      (should (string-match-p "New worker (claude), its own worktree: editing, 1 done" (drgnx-search-handoff-chip))))
+      (should (string-match-p " Worker: editing, 1 done" (drgnx-search-handoff-chip))))
     (drgnx-search-handoff-event "search-handoff-state" '(:handoff "h:3" :phase "done" :done ["a" "b"] :left ["c"]))
     (with-current-buffer view
       (should (string-match-p ": done 2 / 1 skipped $" (drgnx-search-handoff-chip)))

@@ -29823,6 +29823,28 @@
               },
               {
                 "additionalProperties": false,
+                "description": "A new chat of PROFILE in the view's checkout, paired: it edits the user's buffers.",
+                "properties": {
+                  "pair": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "profile": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "profile"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "pair"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
                 "properties": {
                   "session": {
                     "additionalProperties": false,

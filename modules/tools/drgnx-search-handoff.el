@@ -64,22 +64,27 @@ or, when none is ticked, the selected row's (a match, or a file's matches).  N i
         (list ids nil (length ids))))))
 
 (defun drgnx-search-handoff--choices (root)
-  "Who a hand-off can go to: a new worker of the default profile first, then each live session (hub-run), a session
-in the checkout ROOT marked as a pair.  Each (LABEL . TO), TO as `search/handoff' takes it."
-  (cons (cons (format "New worker (%s), its own worktree" (drgnx-agents-default-profile))
-              (list :new (list :profile (drgnx-agents-default-profile))))
-        (delq nil
-              (mapcar (lambda (s)
-                        (when-let* ((id (drgnx-agent-session-remote s))
-                                    ((not (memq (drgnx-agent-session-status s) '(exited stopped)))))
-                          (cons (format "%s%s" (if (and root (drgnx-agent-session-cwd s)
-                                                        (string= (file-name-as-directory
-                                                                  (expand-file-name (drgnx-agent-session-cwd s)))
-                                                                 (file-name-as-directory (expand-file-name root))))
-                                                   "Pair · " "")
-                                        (drgnx-agent-session-name s))
-                                (list :session (list :id id)))))
-                      (and (fboundp 'drgnx-agents-sessions) (drgnx-agents-sessions))))))
+  "Who a hand-off can go to: a new worker of the default profile in a worktree of its own, a new chat of it paired in
+the checkout ROOT (it edits your buffers), then each live session (hub-run) by name and state, one in ROOT marked as a
+pair.  Each (LABEL . TO), TO as `search/handoff' takes it."
+  (let ((profile (drgnx-agents-default-profile)))
+    (append
+     (list (cons "New worker, own worktree" (list :new (list :profile profile)))
+           (cons "New pair here" (list :pair (list :profile profile))))
+     (delq nil
+           (mapcar (lambda (s)
+                     (when-let* ((id (drgnx-agent-session-remote s))
+                                 (status (drgnx-agent-session-status s))
+                                 ((not (memq status '(exited stopped)))))
+                       (cons (format "%s%s (%s)"
+                                     (if (and root (drgnx-agent-session-cwd s)
+                                              (string= (file-name-as-directory
+                                                        (expand-file-name (drgnx-agent-session-cwd s)))
+                                                       (file-name-as-directory (expand-file-name root))))
+                                         "Pair · " "")
+                                     (drgnx-agent-session-name s) status)
+                             (list :session (list :id id)))))
+                   (and (fboundp 'drgnx-agents-sessions) (drgnx-agents-sessions)))))))
 
 ;;;; The card
 
@@ -203,7 +208,9 @@ scheme, or nil."
                (message "Ask an Agent: %s" (or (plist-get err :message) err))
              (when (buffer-live-p view)
                (with-current-buffer view
-                 (push (list :handoff (plist-get r :handoff) :session (plist-get r :session) :name (car choice)
+                 (push (list :handoff (plist-get r :handoff) :session (plist-get r :session)
+                             :name (cond ((plist-get to :new) "Worker") ((plist-get to :pair) "Pair")
+                                         (t (replace-regexp-in-string " ([^)]*)\\'" "" (car choice))))
                              :worktree (plist-get r :worktree) :ids (append (plist-get r :ids) nil)
                              :state (list :phase "sent") :unmarked (not mark))
                        drgnx-search-handoff--live)

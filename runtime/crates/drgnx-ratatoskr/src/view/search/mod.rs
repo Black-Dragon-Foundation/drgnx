@@ -1855,6 +1855,38 @@ fn query_line(q: &Query) -> String {
 
 /// A new worker of PROFILE for ROOT's hand-off, in a worktree of its own from ROOT's HEAD, registered as a worker so
 /// the Work space's review lists it: its session id and worktree.
+/// A new chat of PROFILE in ROOT (the view's checkout), paired: it edits the user's buffers through the editor.  The
+/// matrix decides as for any pair (`agents/pair`: `chat.project-edit` not never); a refusal ends the chat.
+async fn handoff_pair(f: &Front, c: &Caller, root: &Path, profile: &str) -> Result<String, Error> {
+    let started = f
+        .core
+        .agents
+        .start(
+            f,
+            runstav::methods::agents::StartParams {
+                profile: runstav::types::Bounded(profile.to_owned()),
+                cwd: runstav::types::AbsPath::new(root.to_string_lossy().into_owned()).ok(),
+                task: None,
+                job: None,
+                role: Some(runstav::methods::matrix::Role::Chat),
+                about: None,
+                document: None,
+                env: None,
+            },
+            c,
+        )
+        .await?;
+    let paired = match f.core.agents.find(started.id.as_str()) {
+        Ok(s) => s.pair_toggle(true).await,
+        Err(e) => Err(e),
+    };
+    if let Err(e) = paired {
+        let _ = f.core.agents.kill(started.id.as_str()).await;
+        return Err(e);
+    }
+    Ok(started.id)
+}
+
 async fn handoff_worker(
     f: &Front,
     c: &Caller,
@@ -1963,6 +1995,11 @@ pub async fn handoff(f: &Front, c: &Caller, p: HandoffParams) -> Result<HandoffA
             let (sid, tree) = handoff_worker(f, c, &root, profile).await?;
             (sid, tree, true)
         }
+        HandoffTo::Pair { profile } => (
+            handoff_pair(f, c, &root, profile).await?,
+            root.clone(),
+            false,
+        ),
     };
     let rows: Vec<String> = handed.iter().map(handoff::row).collect();
     let changed = {

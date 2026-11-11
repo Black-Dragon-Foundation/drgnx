@@ -601,8 +601,16 @@ pub struct EditDocAnswer {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase", deny_unknown_fields)]
 pub enum HandoffTo {
-    New { profile: String },
-    Session { id: Id },
+    New {
+        profile: String,
+    },
+    /// A new chat of PROFILE in the view's checkout, paired: it edits the user's buffers.
+    Pair {
+        profile: String,
+    },
+    Session {
+        id: Id,
+    },
 }
 
 /// `search/handoff`: hand VIEW's matches to an agent with INSTRUCTION: the matches IDS names (else all but OFF), to TO.

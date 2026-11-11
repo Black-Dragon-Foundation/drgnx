@@ -214,8 +214,9 @@ the buffer does: it never asks for a file). The other keys under `d` and `Z` sta
 matches to an agent, or the selected row's (a match, or a file's matches) when none is ticked. A small card opens in
 the middle of the window: its text is what the agent is to do, prefilled with a replacement ("Replace `pending` with
 `queued` in these places, keeping behaviour"); its header line says who it goes to. **Next Agent** (`C-c C-w`) goes
-round a **new worker** of your default agent profile, in a worktree of its own (the default), and each live session;
-a session working in this checkout is a **pair**, which edits your buffers directly. **Send** (`C-<return>`; `C-c C-c`)
+round a **new worker** of your default agent profile, in a worktree of its own (the default), a **new pair** (a chat
+of that profile in this checkout, in pair mode: it edits your buffers directly, as your rules for a chat's project edits
+allow), and each live session with its state; a session working in this checkout is marked as a pair. **Send** (`C-<return>`; `C-c C-c`)
 hands it off, **Cancel** (`<escape>`; `C-c C-k`) does not.
 
 The agent gets a brief: what to do, the search and its replacement, and the places, grouped by file, as
