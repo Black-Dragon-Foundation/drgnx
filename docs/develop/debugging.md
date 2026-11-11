@@ -123,6 +123,23 @@ names (symlinks resolved). An unknown variable, setting or folder is an error th
 (`presentation`, `preLaunchTask`, `postDebugTask`, `debugServer`, `internalConsoleOptions`, `serverReadyAction`) are
 not passed to the adapter; every other field is.
 
+## Adapters
+
+`etc/debug-adapters.eld` is the adapter table, read by the hub with huginn's reader as data only (strings, numbers,
+symbols and lists; nothing is evaluated; an unknown key is an error). Each entry names the launch.json `type`s it
+serves, the languages whose default configurations it gives, whether drgnx's live tests run it (`:tested`: debugpy,
+js-debug, delve, lldb-dap), how to find it and how to start it:
+
+- `:find`: `(:path "dlv")` (an executable on `PATH`), `(:tools "js-debug/src/dapDebugServer.js")` (a file in drgnx's
+  tools folder) or `(:python-module "debugpy")` (in the tools venv, `venv/lib/python*/site-packages`).
+- `:start`: `(:stdio ARGV)` or `(:tcp ARGV)`, where `{program}`, `{python}`, `{tools}` and `{port}` are filled in; a
+  TCP adapter gets a free port on 127.0.0.1 picked by the hub (`adapters::free_port`; another local process could take
+  it first, and DAP has no authentication: spec §9.5).
+
+The untested entries' command lines come from dape's recipes (credited in the file). Adapters drgnx cannot start are
+listed with `:not-built-in t`, so their type says to add them in the setting `debug.adapters`; an unknown type lists
+the known ones.
+
 ## Live adapters: the image
 
 The tests that run real adapters (debugpy, js-debug, delve, lldb-dap) use `drgnx-debug-adapters:f45`, built from

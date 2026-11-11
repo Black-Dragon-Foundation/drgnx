@@ -1,16 +1,20 @@
 //! Debugging (docs/develop/debugging.md): the hub owns each debug session, speaking the Debug Adapter Protocol to the
 //! adapter through `vor`.
 //!
+//! - [`adapters`]: the adapter table (`etc/debug-adapters.eld`, data only), finding an adapter, its command line.
 //! - [`launch`]: launch.json (JSONC), the picker's order, platform sections, `${…}` variables, inputs.
 //! - [`session`]: one session's life: the launch sequence, stops and their epochs, controls, the stop sequence.
 //! - [`Debug`] (here): the hub's sessions: starting them through a [`Launcher`], children from `startDebugging`,
 //!   restarts, `runInTerminal` in a drgnx terminal, the `debug-state` / `debug-frame` / `debug-terminal` events, and
 //!   stopping (children before their parent; every session at the hub's end).
 
+pub mod adapters;
 pub mod launch;
 pub mod session;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_adapters;
 #[cfg(test)]
 mod tests_launch;
 #[cfg(test)]
