@@ -372,6 +372,22 @@ line, which searches the same words by meaning; a search that found something of
     (drgnx-replace--hub-event "search-run-done" (list :view view :run 2 :files 0 :matches 0))
     (should-not (string-match-p "Try Meaning" (drgnx-replace-rows-test--status)))))
 
+(ert-deftest drgnx-replace-rows/symbol-results-say-they-are-by-name ()
+  "Pattern D: Symbol mode finds by name only, so a Symbol search that found something says so on the status line;
+Text and Meaning do not.  Its definition rows' kind icon and Meaning's hits' names take `drgnx-replace-kind' (the
+function name face's), Meaning's score bar `drgnx-replace-score' (the keyword face's)."
+  (should (eq 'font-lock-function-name-face (face-attribute 'drgnx-replace-kind :inherit)))
+  (should (eq 'font-lock-keyword-face (face-attribute 'drgnx-replace-score :inherit)))
+  (drgnx-replace-rows-test--with
+    (drgnx-replace--fill 'find "parse")
+    (drgnx-replace-search-mode-symbol)
+    (drgnx-replace--hub-event "search-run-done" (list :view view :run 1 :files 2 :matches 3))
+    (should (string-match-p "3 results in 2 files · by name: same-named things in other scopes are listed too"
+                            (drgnx-replace-rows-test--status)))
+    (drgnx-replace-search-mode-meaning)
+    (drgnx-replace--hub-event "search-run-done" (list :view view :run 2 :files 2 :matches 3))
+    (should-not (string-match-p "by name" (drgnx-replace-rows-test--status)))))
+
 (ert-deftest drgnx-replace-rows/context-labels-are-a-setting ()
   "Pattern D: the hub puts a dim label row (face `drgnx-replace-ctx', the dim face's) above the first match of each
 definition; `drgnx-search-context' off asks it not to (`context' false), on sends nothing (the hub's default).  A

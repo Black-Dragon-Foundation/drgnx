@@ -81,10 +81,14 @@ and Vim profiles), goes Text → Symbol → Meaning → Text and searches again.
 
 - **Text** (the default): the files' text, with Aa, ab, .\*, the globs and Replace.
 - **Symbol**: a name's definitions first, then the lines that use it, from drgnx's code index (Hrafn): each line's
-  whole-word uses of the name are the matches. It is by name only, so same-named things in other scopes are listed
-  too. **Aa** says whether case counts; Replace, the globs, ab and .\* do not apply and are greyed out.
+  whole-word uses of the name are the matches. A definition's row shows its kind as an icon (`ƒ` a function, `◇` a
+  type, `#` a macro, `≡` a variable or constant; hover for the kind) and its signature; the uses inside one
+  definition follow a label row naming it (with `drgnx-search-context` on). It is by name only, so same-named things
+  in other scopes are listed too, and the status line says so. **Aa** says whether case counts; Replace, the globs,
+  ab and .\* do not apply and are greyed out.
 - **Meaning**: the code your words describe (the same search as Semantic Search): one row per piece of code found,
-  its symbol, its first line and its score. Nothing but the words applies.
+  with a score bar (how close it is, against the best one; hover for the score), its symbol and its first line; a
+  piece that moved since it was indexed is found where it is now and says `(moved)`. Nothing but the words applies.
 
 Symbol and Meaning only find: Replace All and Replace This say so. A Text search that finds nothing offers **Try
 Meaning** on the status line; the view never changes mode by itself. Symbol and Meaning need the index: before it is

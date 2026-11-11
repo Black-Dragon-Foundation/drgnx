@@ -348,6 +348,10 @@ A file edited, killed or changed on disk since is left alone.  Returns (:undone 
 (defface drgnx-replace-on '((t :inherit lazy-highlight :weight bold)) "A toggle that is on." :group 'drgnx)
 (defface drgnx-replace-ctx '((t :inherit drgnx-replace-dim))
   "A context label row: the definition the matches below it are in." :group 'drgnx)
+(defface drgnx-replace-kind '((t :inherit font-lock-function-name-face))
+  "Symbol mode's kind icon on a definition row; Meaning's hit names." :group 'drgnx)
+(defface drgnx-replace-score '((t :inherit font-lock-keyword-face))
+  "Meaning's score bar: how close a hit is, as a share of the best one." :group 'drgnx)
 
 (drgnx-defsetting drgnx-search-context t
   "Non-nil: the Search view shows a dim label row (the definition's name) above the first match of each definition."
@@ -834,8 +838,13 @@ Branch's base and `±'."
                        ((zerop n) (if (string-empty-p (drgnx-replace--text 'find)) (drgnx-replace--hint) "No results"))
                        (t (format "%s%d result%s in %d file%s" (if drgnx-replace--searching "Searching… " "")
                                   n (if (= n 1) "" "s") files (if (= files 1) "" "s")))))
+         ;; Symbol finds by name only (no type resolution): its results say so
+         (by-name (if (and (> n 0) (eq (drgnx-replace--opt :mode) 'symbol))
+                      "by name: same-named things in other scopes are listed too"
+                    ""))
          (line (string-join (seq-remove #'string-empty-p
-                                        (list counts (or (drgnx-replace--scope-text) "") drgnx-replace--status))
+                                        (list counts by-name (or (drgnx-replace--scope-text) "")
+                                              drgnx-replace--status))
                             " · ")))
     (drgnx-replace--drawing
      (delete-region drgnx-replace--status-beg drgnx-replace--status-end)
