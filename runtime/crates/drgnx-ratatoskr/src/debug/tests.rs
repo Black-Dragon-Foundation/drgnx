@@ -77,7 +77,8 @@ fn start_of(request: Request, arguments: Value) -> Start {
         request,
         arguments,
         breakpoints: vec![],
-        exception_filters: vec![],
+        functions: vec![],
+        exception_filters: None,
     }
 }
 
@@ -200,9 +201,10 @@ async fn the_launch_sequence_sends_breakpoints_and_configuration_done_before_the
             breakpoints: vec![json!({"line": 3, "condition": "x > 1"})],
         },
     ];
-    start.exception_filters = vec!["uncaught".into()];
+    start.exception_filters = Some(vec!["uncaught".into()]);
     let steps = vec![
         json!({"expect": INIT, "ok": {"supportsConfigurationDoneRequest": true, "supportsTerminateRequest": true,
+               "supportsConditionalBreakpoints": true,
                "exceptionBreakpointFilters": [{"filter": "uncaught", "label": "Uncaught"}]}}),
         json!({"expect": "launch", "args": {"program": "/p/a.py"}, "defer": true}),
         json!({"event": "initialized"}),

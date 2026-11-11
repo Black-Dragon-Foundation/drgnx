@@ -39,12 +39,16 @@ pub struct Hub {
 impl Hub {
     fn debug(&self, front: &Front) -> &Debug {
         self.debug.get_or_init(|| {
-            Debug::new(
+            Debug::with_store(
                 front.editors.clone(),
                 Arc::new(TermDoor {
                     terms: front.core.terms.clone(),
                     base: front.shell_env.vars_os(),
                 }),
+                Some(
+                    runstav::paths::state_dir(&front.shell_env.paths_env())
+                        .join("debug-breakpoints"),
+                ),
             )
         })
     }
@@ -367,7 +371,8 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
         },
         arguments: launch::adapter_arguments(&config),
         breakpoints: vec![],
-        exception_filters: vec![],
+        functions: vec![],
+        exception_filters: None,
     };
     let id = front
         .debug
