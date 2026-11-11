@@ -73,6 +73,63 @@ frame; on a terminal, which draws no ring, the name alone (a 4 px space is 4 col
   "The key description KEY as keycaps (`drgnx-palette-keycap'), one space between."
   (mapconcat #'drgnx-palette-keycap (drgnx-palette-keycap-names key) " "))
 
+(defun drgnx-palette--xml (s)
+  "S with the characters XML text and attributes reserve escaped."
+  (replace-regexp-in-string "[&<>\"]" (lambda (c) (cdr (assoc c '(("&" . "&amp;") ("<" . "&lt;") (">" . "&gt;")
+                                                                  ("\"" . "&quot;")))))
+                            s t t))
+
+(defun drgnx-palette--keycap-svg (name m)
+  "The SVG of a keycap chip showing NAME, by the metrics M in device pixels: `:width', `:height', `:ascent' (the
+text's), `:pad' (room inside at either end), `:line' (the ring's width), `:radius', `:family', `:px' (the font's
+size), `:weight' (a face weight) and `:ring' (a colour).  The name is in `currentColor', the text's colour around it."
+  (let ((w (plist-get m :width)) (h (plist-get m :height)) (line (plist-get m :line)))
+    (format (concat "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\">"
+                    "<rect x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\" rx=\"%s\" fill=\"none\" stroke=\"%s\""
+                    " stroke-width=\"%s\"/>"
+                    "<text x=\"%s\" y=\"%d\" text-anchor=\"middle\" font-family=\"%s\" font-size=\"%dpx\""
+                    " font-weight=\"%s\" fill=\"currentColor\">%s</text></svg>")
+            w h (/ line 2.0) (/ line 2.0) (- w line) (- h line) (plist-get m :radius) (plist-get m :ring) line
+            (/ w 2.0) (+ line (plist-get m :ascent)) (drgnx-palette--xml (plist-get m :family)) (plist-get m :px)
+            (pcase (plist-get m :weight) ('bold "bold") ((or 'semibold 'demibold) "600") (_ "normal"))
+            (drgnx-palette--xml name))))
+
+(defvar drgnx-palette--keycap-images (make-hash-table :test 'equal)
+  "(NAME . METRICS) → a keycap chip's image.  A finite set: the key names a shortcut shows, per font and ring.")
+
+(defun drgnx-palette--keycap-image (name)
+  "The image of a keycap chip showing NAME in `drgnx-keycap''s font and ring on the selected frame, as tall as its
+text and as wide as the text keycap; nil when the face has no font there."
+  (when-let* ((font (face-font 'drgnx-keycap)) (info (font-info font)))
+    (let* ((box (face-attribute 'drgnx-keycap :box nil t))
+           (line (max 1 (let ((lw (and (consp box) (plist-get box :line-width))))
+                          (if (consp lw) (car lw) (or lw 1)))))
+           (pad (drgnx-px 4))
+           (ascent (aref info 8))                                ; `font-info': 8 ascent, 9 descent, 2 size
+           (m (list :width (+ (string-pixel-width (propertize name 'face 'drgnx-ui-caption)) pad pad line line)
+                    :height (+ ascent (aref info 9) line line) :ascent ascent :pad pad :line line
+                    :radius (or (and (consp box) (plist-get box :corner-radius)) 0)
+                    :family (face-attribute 'drgnx-keycap :family nil t) :px (aref info 2)
+                    :weight (face-attribute 'drgnx-keycap :weight nil t)
+                    :ring (or (and (consp box) (plist-get box :color)) (face-foreground 'drgnx-keycap nil t))))
+           (key (cons name m)))
+      (or (gethash key drgnx-palette--keycap-images)
+          (puthash key (create-image (drgnx-palette--keycap-svg name m) 'svg t :scale 1.0
+                                     :ascent (round (* 100.0 (+ line ascent)) (plist-get m :height)))
+                   drgnx-palette--keycap-images)))))
+
+(defun drgnx-palette-row-keycap (name)
+  "One keycap showing NAME on a row that can be selected: on a graphical frame with SVG a chip image
+(`drgnx-palette--keycap-image') in the subtle colour, with no face `:box', so the selected row's own box stays one
+run around it; elsewhere the text keycap (`drgnx-palette-keycap')."
+  (if-let* ((img (and (display-graphic-p) (image-type-available-p 'svg) (drgnx-palette--keycap-image name))))
+      (propertize name 'display img 'face 'drgnx-text-subtle 'rear-nonsticky t)
+    (drgnx-palette-keycap name)))
+
+(defun drgnx-palette-row-keycaps (key)
+  "The key description KEY as row keycaps (`drgnx-palette-row-keycap'), one space between."
+  (mapconcat #'drgnx-palette-row-keycap (drgnx-palette-keycap-names key) " "))
+
 ;;;; Rows
 
 (defvar drgnx-palette--file-rows nil
@@ -182,7 +239,7 @@ bot and the typed text in the accent colour for the row that asks an agent."
   "The agent row's annotation: the default profile's model and where it runs, then Ctrl ↵ at the right edge."
   (let* ((name (and (fboundp 'drgnx-agents-default-profile) (drgnx-agents-default-profile)))
          (model (or (and name (fboundp 'drgnx-agents-profile) (plist-get (drgnx-agents-profile name) :model)) name))
-         (caps (concat (drgnx-palette-keycap "Ctrl") " " (drgnx-palette-keycap "↵"))))
+         (caps (concat (drgnx-palette-row-keycap "Ctrl") " " (drgnx-palette-row-keycap "↵"))))
     (concat "  " (propertize (string-join (delq nil (list model "this project")) " · ") 'face 'drgnx-text-subtle)
             (drgnx-palette--right caps) caps)))
 
@@ -260,7 +317,7 @@ empty `line-prefix', as a row does (`drgnx-completion--row')."
   "A row's annotation: CATEGORY and AGE (\"used 2 min ago\", or nil) in the subtle colour, then KEY (a key
 description, or nil) as keycaps at the right edge."
   (let ((hint (string-join (delq nil (list category age)) " · "))
-        (caps (and key (drgnx-palette-keycaps key))))
+        (caps (and key (drgnx-palette-row-keycaps key))))
     (concat "  " (propertize hint 'face 'drgnx-text-subtle)
             (and caps (concat (drgnx-palette--right caps) caps)))))
 

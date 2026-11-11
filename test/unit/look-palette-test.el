@@ -128,6 +128,32 @@ plain newline (no fill past the row).  Every row gets the same left inset, so th
       (should (equal "Run Test at Point\n" (substring other 1)))
       (should-not (drgnx-look-palette-test--boxed-p (get-text-property 1 'face other))))))
 
+(ert-deftest drgnx-look-palette/a-row-keycap-is-a-chip-image ()
+  "A keycap on a row that can be selected is an SVG chip, not a face `:box': a face has one box, so a keycap's would
+cut the selected row's rounded fill into pieces around it.  The chip is a rounded ring in the keycap's ring colour
+with the name in `currentColor' (the subtle text, muted on the selected row), as tall as the text; its text stays the
+name; a terminal, or a frame with no SVG, gets the text keycap."
+  (let ((svg (drgnx-palette--keycap-svg "<" '(:width 20 :height 18 :ascent 13 :pad 4 :line 1 :radius 4
+                                                     :family "Sans" :px 13 :weight normal :ring "#123456"))))
+    (should (string-match-p "<rect [^>]*rx=\"4\"[^>]*stroke=\"#123456\"" svg))
+    (should (string-match-p "<text [^>]*fill=\"currentColor\"[^>]*>&lt;</text>" svg))
+    (should (string-match-p "font-size=\"13px\"" svg))
+    (should (string-match-p "width=\"20\" height=\"18\"" svg)))
+  (cl-letf (((symbol-function 'display-graphic-p) #'always)
+            ((symbol-function 'image-type-available-p) #'always)
+            ((symbol-function 'drgnx-palette--keycap-image) (lambda (name) (list 'image :type 'svg :name name))))
+    (let ((cap (drgnx-palette-row-keycap "Ctrl")))
+      (should (equal "Ctrl" (substring-no-properties cap)))
+      (should (eq 'image (car (get-text-property 0 'display cap))))
+      (should-not (memq 'drgnx-keycap (drgnx-look-palette-test--faces (get-text-property 0 'face cap)))))
+    (let ((ann (drgnx-palette--annotation "Tests" nil "C-; f")))
+      (should (cl-some (lambda (i) (equal "Ctrl" (plist-get (cdr-safe (get-text-property i 'display ann)) :name)))
+                       (number-sequence 0 (1- (length ann)))))
+      (dotimes (i (length ann))
+        (should-not (memq 'drgnx-keycap (drgnx-look-palette-test--faces (get-text-property i 'face ann)))))))
+  (should (equal "Ctrl" (substring-no-properties (drgnx-palette-row-keycap "Ctrl"))))
+  (should (eq 'drgnx-keycap (get-text-property 0 'face (drgnx-palette-row-keycap "Ctrl")))))
+
 (ert-deftest drgnx-look-palette/rows-own-their-inset ()
   "palette.html `.row' and `.it': a row's fill sits 6 logical pixels in and its text 8 more, inside the fill; a group
 title's text lines up with a row's.  The minibuffer the palette dresses has a `line-prefix' (the input row's inset),
