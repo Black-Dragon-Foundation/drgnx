@@ -673,6 +673,29 @@ fn short(tree: &str) -> &str {
     &tree[..tree.len().min(7)]
 }
 
+/// A batch member's note: what the queue SAID to it, with the job's task ids named by their labels (NAMES, id to
+/// label), and what the merge-notes check found on it (AUDITED).
+pub fn note(
+    said: Option<&str>,
+    audited: Option<&str>,
+    names: &[(String, String)],
+) -> Option<String> {
+    let said = said.map(|s| {
+        let mut ids: Vec<&(String, String)> = names.iter().collect();
+        // longest first, so an id never replaces the head of a longer one
+        ids.sort_by_key(|(id, _)| std::cmp::Reverse(id.len()));
+        let mut s = s.to_owned();
+        for (id, label) in ids {
+            s = s.replace(id.as_str(), label);
+        }
+        s
+    });
+    match (said, audited) {
+        (Some(s), Some(a)) => Some(format!("{s} · {a}")),
+        (s, a) => s.or_else(|| a.map(str::to_owned)),
+    }
+}
+
 /// The merge batch card's lines, its content CW px wide (FONTS measure): its heading with the affected groups' chip
 /// (green of listed at the combined tree), a line per member (its label and title, its tip, what the queue said to
 /// it), and its groups' runs per machine.
@@ -1315,6 +1338,30 @@ mod tests {
             );
             assert!(!rows[4].text.contains("no red · h…"), "{}", rows[4].text);
         }
+    }
+
+    /// [D] A member's note names the job's tasks by their labels, and adds what the merge-notes check found.
+    #[test]
+    fn a_members_note_names_tasks_by_label_and_adds_the_audit() {
+        let names = [("j#1", "T1"), ("j#10", "T10")].map(|(a, b)| (a.to_string(), b.to_string()));
+        assert_eq!(
+            note(Some("j#10 merges first"), None, &names).as_deref(),
+            Some("T10 merges first")
+        );
+        assert_eq!(
+            note(Some("waits for the batch ahead (j#1, j#10)"), None, &names).as_deref(),
+            Some("waits for the batch ahead (T1, T10)")
+        );
+        assert_eq!(
+            note(
+                Some("trial merge clean"),
+                Some("1 hunk by intent · notes"),
+                &names
+            )
+            .as_deref(),
+            Some("trial merge clean · 1 hunk by intent · notes")
+        );
+        assert_eq!(note(None, None, &names), None);
     }
 
     /// [D] The batch and the line gate: the batch's heading with its affected groups' chip (green of listed at the

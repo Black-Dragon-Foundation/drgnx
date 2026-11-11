@@ -335,6 +335,10 @@ pub async fn seed(front: &Front) -> Result<(), String> {
         };
         front.queue.say(JOB, &r.task, &said);
     }
+    // the first member passed the merge-notes check: one hunk both sides changed, resolved by intent
+    front
+        .queue
+        .audit(JOB, &ready[0].task, &crate::orch::queue::audit_words(1));
     front.queue.at_groups(JOB, BATCH_TREE, groups);
     front.queue.at_push(JOB, LINE_HEAD, LINE_TREE);
     front.writer.signals.wrote();

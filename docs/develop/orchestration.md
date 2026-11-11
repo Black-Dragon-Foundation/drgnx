@@ -223,7 +223,9 @@ open `gate` cards, and builds the model and the rows (`work::trail::flow`, pure)
   px), so cells are never cut and long titles give way;
 - under them the batch being checked: its heading with an "affected groups g/n" chip (the groups the groups gate
   listed at the combined tree, green of them, red in the error face), a row per member (its title, its tip, what the
-  queue said to it last: "trial merge clean", or why it waits) and a row per machine with each group's tick or cross;
+  queue said to it last: "trial merge clean", or why it waits, the job's tasks named by their labels; then what the
+  merge-notes check found on it, for a pack with shared paths: "shared paths audited" or "N hunks by intent · notes")
+  and a row per machine with each group's tick or cross;
 - the line gate, when the pack runs the push gate: its heading with the tiers' chip at the tree the push gate judged
   last ("green on …", "g/n at …", "N red at …"; "no push asked yet" before one), a row per machine, and the note that
   the push stays the user's. The queue keeps what it said and the trees its gates judged in memory (`orch::queue`,

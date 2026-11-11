@@ -336,6 +336,10 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
         }
     }
     let seen = f.queue.seen(&job);
+    let names: Vec<(String, String)> = tasks
+        .iter()
+        .map(|t| (t.id.clone(), format!("T{}", t.n)))
+        .collect();
     let batch = batch
         .iter()
         .map(|b| {
@@ -344,7 +348,11 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
                 label: t.map_or_else(|| b.task.clone(), |t| format!("T{}", t.n)),
                 title: t.map(|t| t.title.clone()).unwrap_or_default(),
                 tip: b.tip[..b.tip.len().min(7)].to_owned(),
-                said: seen.said.get(&b.task).cloned(),
+                said: flow::note(
+                    seen.said.get(&b.task).map(String::as_str),
+                    seen.audited.get(&b.task).map(String::as_str),
+                    &names,
+                ),
             }
         })
         .collect();
