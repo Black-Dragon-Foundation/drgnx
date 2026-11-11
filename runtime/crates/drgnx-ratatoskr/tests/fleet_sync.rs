@@ -381,6 +381,7 @@ fn queue_on(
     let session = Session::start("r1", channels, q.route(), q.link_events());
     q.add_runner(
         RemoteRunner {
+            os: Default::default(),
             name: "r1".into(),
             trust,
             accept: forseti::Accept::All,

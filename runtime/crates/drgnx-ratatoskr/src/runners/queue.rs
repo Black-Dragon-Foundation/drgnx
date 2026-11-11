@@ -19,7 +19,7 @@ use super::sync::{self, Frozen, SyncPlan};
 use crate::exec::Starter;
 use forseti::{
     Accept, Candidate, Drr, Expect, Expected, HistRow, Job, JobId, JobSpec, JobState, JobTrust,
-    Kind, Lane, Learned, Pick, PlaceCtx, Priority, Range, RunnerState, RunnerTrust, RunningJob,
+    Kind, Lane, Learned, Os, Pick, PlaceCtx, Priority, Range, RunnerState, RunnerTrust, RunningJob,
     WaitReason, Warmth, Weight,
 };
 use serde::{Deserialize, Serialize};
@@ -197,6 +197,7 @@ impl Placement {
 /// A forseti job spec with nothing declared but its name: the shape a hub job starts from.
 pub fn blank_spec(name: &str) -> JobSpec {
     JobSpec {
+        os: Os::Linux,
         name: name.into(),
         kind: Kind::Other,
         weight: Weight::Light,
@@ -257,6 +258,8 @@ pub struct RemoteRunner {
     pub name: String,
     pub trust: RunnerTrust,
     pub accept: Accept,
+    /// The OS its jobs run on (placement matches a job's `os` before its features).
+    pub os: Os,
     /// An attempt's grace there (`RunnerCfg::grace`).
     pub grace_s: u64,
     /// The image its health check's canary runs `true` in, by digest.
@@ -858,6 +861,8 @@ pub fn wait_text(r: &WaitReason) -> String {
         WaitReason::CloudCap(why) => why.clone(),
         WaitReason::Benched => "its runner is benched".into(),
         WaitReason::Mode => "the project's send mode keeps it on this machine".into(),
+        WaitReason::Os(Os::Macos) => "needs a Mac runner".into(),
+        WaitReason::Os(Os::Linux) => "needs a Linux machine".into(),
         WaitReason::Features(f) => format!("no machine has {}", f.join(", ")),
         WaitReason::Matrix => "the matrix keeps it on this machine".into(),
         WaitReason::AwaitingConfirm => "its runner waits for your confirm".into(),
@@ -1904,6 +1909,7 @@ impl Queue {
                 local: true,
                 trust: RunnerTrust::Mine,
                 keys_allowed: vec![],
+                os: Os::Linux,
                 features: job.spec.features.clone(),
                 state: RunnerState::Ready,
                 accept: Accept::All,
@@ -1944,6 +1950,7 @@ impl Queue {
                 local: false,
                 trust: r.r.trust,
                 keys_allowed: vec![],
+                os: r.r.os,
                 features: job.spec.features.clone(),
                 state: r.state.clone(),
                 accept: r.r.accept,
@@ -3492,6 +3499,7 @@ mod tests {
         );
         q.add_runner(
             RemoteRunner {
+                os: Default::default(),
                 name: "r1".into(),
                 trust: RunnerTrust::Mine,
                 accept: Accept::All,
@@ -3648,6 +3656,7 @@ mod tests {
 
     fn remote(name: &str, grace_s: u64) -> RemoteRunner {
         RemoteRunner {
+            os: Default::default(),
             name: name.into(),
             trust: RunnerTrust::Mine,
             accept: Accept::All,

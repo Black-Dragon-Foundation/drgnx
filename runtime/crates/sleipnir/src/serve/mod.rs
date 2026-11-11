@@ -1778,6 +1778,7 @@ pub type Pins = Vec<(String, std::net::IpAddr)>;
 pub(crate) fn tests_spec() -> forseti::JobSpec {
     use forseti::{Expect, JobTrust, Kind, Lane, Range, Weight};
     forseti::JobSpec {
+        os: Default::default(),
         name: "t".into(),
         kind: Kind::Test,
         weight: Weight::Light,

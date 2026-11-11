@@ -204,6 +204,7 @@ mod tests {
 
     fn spec(mem_min: u64) -> JobSpec {
         JobSpec {
+            os: Default::default(),
             name: "t".into(),
             kind: Kind::Test,
             weight: Weight::Light,

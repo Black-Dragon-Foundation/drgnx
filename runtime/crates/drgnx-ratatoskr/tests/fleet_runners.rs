@@ -303,6 +303,7 @@ fn queue_with_r1(
     let session = Session::start("r1", channels, q.route(), q.link_events());
     q.add_runner(
         RemoteRunner {
+            os: Default::default(),
             name: "r1".into(),
             trust: forseti::RunnerTrust::Mine,
             accept: forseti::Accept::All,
@@ -482,6 +483,7 @@ mod queue {
         let session = Session::start(r1, channels, q.route(), q.link_events());
         q.add_runner(
             RemoteRunner {
+                os: Default::default(),
                 name: r1.into(),
                 trust: forseti::RunnerTrust::Mine,
                 accept: forseti::Accept::All,
@@ -605,6 +607,7 @@ mod drill {
         });
         q.adopt("xbusy", Priority::P1, now());
         let runner = |name: &str, grace_s: u64| RemoteRunner {
+            os: Default::default(),
             name: name.into(),
             trust: forseti::RunnerTrust::Mine,
             accept: forseti::Accept::All,
@@ -901,6 +904,7 @@ mod watchdog {
         let session = Session::start(r1, channels, q.route(), q.link_events());
         q.add_runner(
             RemoteRunner {
+                os: Default::default(),
                 name: r1.into(),
                 trust: forseti::RunnerTrust::Mine,
                 accept: forseti::Accept::All,

@@ -898,6 +898,11 @@ impl Registry {
             name: rec.name.clone(),
             trust: forseti_trust(rec.trust),
             accept: forseti_accept(rec.accept),
+            os: if rec.os.starts_with("macos") {
+                forseti::Os::Macos
+            } else {
+                forseti::Os::Linux
+            },
             grace_s: cfg.grace().as_secs(),
             image: rec.image.clone(),
         }

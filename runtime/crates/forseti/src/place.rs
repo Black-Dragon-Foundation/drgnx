@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::history::HistRow;
 use crate::learn::{Learned, Warmth};
-use crate::model::{Job, JobTrust, Priority, RunnerTrust, WaitReason};
+use crate::model::{Job, JobTrust, Os, Priority, RunnerTrust, WaitReason};
 
 /// A runner's state as the hub knows it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +58,10 @@ pub struct Candidate {
     pub trust: RunnerTrust,
     /// The keys a `my-cloud` runner may get.
     pub keys_allowed: Vec<String>,
+    /// The OS its jobs run on: `macos` for a Mac runner; the hub's own machine and Linux runners `linux` (a hub on a
+    /// Mac runs its container jobs in podman's Linux machine).
+    #[serde(default)]
+    pub os: Os,
     pub features: Vec<String>,
     pub state: RunnerState,
     pub accept: Accept,
@@ -182,6 +186,18 @@ fn check(
         (spec.local_only && !c.local) || spec.on.as_ref().is_some_and(|on| *on != c.name);
     if pinned_away {
         return Err((STAGE_TRUST, WaitReason::Pinned));
+    }
+    if spec.os != c.os {
+        return Err((STAGE_FEATURES, WaitReason::Os(spec.os)));
+    }
+    if c.os == Os::Macos && !spec.keys.is_empty() {
+        return Err((
+            STAGE_TRUST,
+            WaitReason::Trust(format!(
+                "needs keys, and a Mac runner ({}) never gets keys",
+                c.name
+            )),
+        ));
     }
     let missing: Vec<String> = spec
         .features
@@ -437,6 +453,7 @@ mod tests {
             local: false,
             trust,
             keys_allowed: vec![],
+            os: Os::Linux,
             features: vec!["podman".into()],
             state: RunnerState::Ready,
             accept: Accept::All,
@@ -534,6 +551,44 @@ mod tests {
         // Pinned to a benched runner: it waits, saying why.
         cands2[1].state = RunnerState::Benched("setup failed".into());
         assert_eq!(pick(&j, &cands2, &ctx()), Pick::Wait(WaitReason::Benched));
+    }
+
+    /// [D] The OS comes before features: a featureless container job (`linux`, the default) never places on a Mac
+    /// runner, a `macos` job never on a Linux one (it waits for a Mac runner, never the hub's machine), and a keyed job
+    /// is refused on a Mac with the reason.
+    #[test]
+    fn the_os_is_matched_before_features() {
+        let mut j = job("j", Priority::P3, 0);
+        j.spec.features = vec![];
+        let mut mac = cand("mac", RunnerTrust::Mine);
+        mac.os = Os::Macos;
+        mac.features = vec!["host-jobs".into()];
+        assert_eq!(
+            filter(&j, &mac, Send::All, true),
+            Err(WaitReason::Os(Os::Linux))
+        );
+        assert_eq!(
+            pick(&j, &[mac.clone()], &ctx()),
+            Pick::Wait(WaitReason::Os(Os::Linux))
+        );
+        j.spec.os = Os::Macos;
+        j.spec.features = vec!["gpu".into()];
+        // the OS is reported before the missing feature
+        assert_eq!(
+            filter(&j, &cand("box", RunnerTrust::Mine), Send::All, true),
+            Err(WaitReason::Os(Os::Macos))
+        );
+        assert_eq!(
+            filter(&j, &local(), Send::All, true),
+            Err(WaitReason::Os(Os::Macos))
+        );
+        j.spec.features = vec![];
+        assert_eq!(filter(&j, &mac, Send::All, true), Ok(()));
+        j.spec.keys = vec!["GH_TOKEN".into()];
+        assert!(matches!(
+            filter(&j, &mac, Send::All, true),
+            Err(WaitReason::Trust(t)) if t.contains("Mac")
+        ));
     }
 
     #[test]

@@ -39,6 +39,7 @@ mod tests {
 
     fn spec() -> JobSpec {
         JobSpec {
+            os: Default::default(),
             name: "unit".into(),
             kind: Kind::Test,
             weight: Weight::Heavy,
