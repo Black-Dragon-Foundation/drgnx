@@ -38,7 +38,8 @@ reads its end.
 ### The mock adapter
 
 `vor::mock` (feature `mock`) plays a script against a client: expected requests (in order, or a set in any order)
-with canned answers, events, reverse requests whose answers it checks, and the adapter's death. It fails on any request
+with canned answers, events, reverse requests whose answers it checks (with `"wait": true` one is a barrier: the
+script holds until it is answered, and a request that comes first fails it), and the adapter's death. It fails on any request
 it did not expect, a request after the script's end, or a client that leaves early, and `Mock::finish` names what it
 expected and what came, with a log of every request and its arguments. The steps are JSON (the module's doc lists
 them); the `vor-mock SCRIPT.json` binary (built with the feature) plays one on stdio for ERT, and so does a test-hooks
@@ -68,6 +69,10 @@ process; the hub holds a `Handle` and reads `Update`s in order. Its waits read t
   progress, `invalidated`, ANSI styling), then `launch` / `attach` without waiting for the answer. On `initialized`:
   `setBreakpoints` for each source, `setExceptionBreakpoints` when the adapter has filters, `configurationDone` when it
   has the request. The launch answer may come before or after; a failed launch ends the session with its message.
+  An adapter marked `:configure-after-attach` (js-debug) holds `configurationDone` in an attach until the attach is
+  answered: js-debug writes its bootloader into the attached program's environment only after the attach, and a
+  program let run before that (`node --inspect-brk` waits for `configurationDone`) forks children with no debugger.
+  Never for debugpy, whose launch is answered only after `configurationDone`.
 - **Stops and epochs:** each `stopped` opens a new epoch and fetches `threads`, `stackTrace` (20 frames;
   `more_frames` fetches the next 20 while `totalFrames` says there are more), `scopes` of the top frame and the first
   page of `variables` of every scope that is not `expensive`, published as one `Stop`. `variables(epoch, reference)`

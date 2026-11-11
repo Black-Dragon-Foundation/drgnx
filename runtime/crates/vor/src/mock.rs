@@ -10,7 +10,9 @@
 //! - `{"any": [EXPECT…]}`: those requests in any order.
 //! - `{"answer": CMD, "ok"?: BODY}` / `"fail"`: the answer of the deferred request CMD.
 //! - `{"event": NAME, "body"?: BODY}`: an event.
-//! - `{"reverse": CMD, "arguments": A, "answer"?: B}`: a reverse request; its answer must succeed and contain B.
+//! - `{"reverse": CMD, "arguments": A, "answer"?: B, "wait"?: true}`: a reverse request; its answer must succeed and
+//!   contain B. With `wait` the script holds until it is answered, and a request that comes first fails it (a
+//!   barrier: "the client sends nothing before this answer").
 //! - `{"die": true}`: the adapter goes (the connection closes).
 //!
 //! The script fails when a request does not match, when one comes after the end, or when the client leaves before the
@@ -59,6 +61,7 @@ pub enum Step {
         command: String,
         arguments: Value,
         answer: Option<Value>,
+        wait: bool,
     },
     Die,
 }
@@ -132,6 +135,7 @@ fn step_of(v: &Value) -> Result<Step, String> {
             command,
             arguments: o.get("arguments").cloned().unwrap_or_else(|| json!({})),
             answer: o.get("answer").cloned(),
+            wait: o.get("wait") == Some(&Value::Bool(true)),
         })
     } else if o.get("die") == Some(&Value::Bool(true)) {
         Ok(Step::Die)
@@ -215,6 +219,8 @@ struct Player<W> {
     deferred: HashMap<String, (i64, String)>,
     /// Reverse requests sent and not yet answered: seq → (command, what the answer must contain).
     reverse: HashMap<i64, (String, Option<Value>)>,
+    /// A `wait` reverse request not yet answered: (seq, command).
+    waiting: Option<(i64, String)>,
 }
 
 impl<W: AsyncWrite + Unpin> Player<W> {
@@ -297,12 +303,16 @@ where
         error: None,
         deferred: HashMap::new(),
         reverse: HashMap::new(),
+        waiting: None,
     };
     let mut codec = DapCodec::default();
     let mut buf = BytesMut::new();
     'outer: loop {
         // the steps that need no request
         while let Some(step) = steps.front() {
+            if p.waiting.is_some() {
+                break;
+            }
             match step.clone() {
                 Step::Expect(_) | Step::Any(_) => break,
                 Step::Event { event, body } => {
@@ -319,9 +329,13 @@ where
                     command,
                     arguments,
                     answer,
+                    wait,
                 } => {
                     let seq = p.next_seq();
                     p.reverse.insert(seq, (command.clone(), answer));
+                    if wait {
+                        p.waiting = Some((seq, command.clone()));
+                    }
                     let _ = p
                         .send(Message::Request {
                             seq,
@@ -371,33 +385,38 @@ where
                 arguments,
             } => {
                 p.log.requests.push((command.clone(), arguments.clone()));
-                let found = match steps.front_mut() {
-                    Some(Step::Expect(e)) => {
-                        let r = match_one(e, &command, &arguments).map(|()| e.reply.clone());
-                        if r.is_ok() {
-                            steps.pop_front();
-                        }
-                        r
-                    }
-                    Some(Step::Any(es)) => {
-                        let hit = es
-                            .iter()
-                            .position(|e| match_one(e, &command, &arguments).is_ok());
-                        match hit {
-                            Some(i) => {
-                                let r = es.remove(i).reply;
-                                if es.is_empty() {
-                                    steps.pop_front();
-                                }
-                                Ok(r)
+                let found = match (&p.waiting, steps.front_mut()) {
+                    (Some((_, w)), _) => Err(format!(
+                        "got {command} {arguments} before the answer to the reverse request {w}"
+                    )),
+                    (None, s) => match s {
+                        Some(Step::Expect(e)) => {
+                            let r = match_one(e, &command, &arguments).map(|()| e.reply.clone());
+                            if r.is_ok() {
+                                steps.pop_front();
                             }
-                            None => Err(format!(
-                                "{}, got {command} {arguments}",
-                                describe_step(&Step::Any(es.clone()))
-                            )),
+                            r
                         }
-                    }
-                    _ => Err(format!("got {command} {arguments} after the script's end")),
+                        Some(Step::Any(es)) => {
+                            let hit = es
+                                .iter()
+                                .position(|e| match_one(e, &command, &arguments).is_ok());
+                            match hit {
+                                Some(i) => {
+                                    let r = es.remove(i).reply;
+                                    if es.is_empty() {
+                                        steps.pop_front();
+                                    }
+                                    Ok(r)
+                                }
+                                None => Err(format!(
+                                    "{}, got {command} {arguments}",
+                                    describe_step(&Step::Any(es.clone()))
+                                )),
+                            }
+                        }
+                        _ => Err(format!("got {command} {arguments} after the script's end")),
+                    },
                 };
                 match found {
                     Ok(reply) => {
@@ -417,19 +436,24 @@ where
                 body,
                 message,
                 ..
-            } => match p.reverse.remove(&request_seq) {
-                Some((command, _)) if !success => p.fail(format!(
-                    "the reverse request {command} was refused: {}",
-                    message.unwrap_or_default()
-                )),
-                Some((command, Some(want))) => {
-                    if let Err(e) = contains(&body, &want) {
-                        p.fail(format!("the answer to {command}: {e}"));
-                    }
+            } => {
+                if p.waiting.as_ref().is_some_and(|(s, _)| *s == request_seq) {
+                    p.waiting = None;
                 }
-                Some(_) => {}
-                None => p.fail(format!("an answer to no request ({request_seq})")),
-            },
+                match p.reverse.remove(&request_seq) {
+                    Some((command, _)) if !success => p.fail(format!(
+                        "the reverse request {command} was refused: {}",
+                        message.unwrap_or_default()
+                    )),
+                    Some((command, Some(want))) => {
+                        if let Err(e) = contains(&body, &want) {
+                            p.fail(format!("the answer to {command}: {e}"));
+                        }
+                    }
+                    Some(_) => {}
+                    None => p.fail(format!("an answer to no request ({request_seq})")),
+                }
+            }
             Message::Event { event, .. } => p.fail(format!("a client sent an event ({event})")),
         }
     }

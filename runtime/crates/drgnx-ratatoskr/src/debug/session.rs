@@ -5,7 +5,8 @@
 //! talks to it through a [`Handle`] and hears from it through [`Update`]s, in order. Its waits read the hub's clock.
 //!
 //! - **Launch:** `initialize`, then `launch` / `attach` without waiting for its answer; on `initialized` every source's
-//!   breakpoints, the exception filters and `configurationDone`. The launch answer may come before or after.
+//!   breakpoints, the exception filters and `configurationDone`. The launch answer may come before or after, except
+//!   with [`Start::hold_configuration_done`], where `configurationDone` waits for it.
 //! - **A stop** opens a new epoch: `threads`, `stackTrace` (20 frames, more on demand), `scopes` of the top frame and
 //!   `variables` of each scope that is not `expensive`, published as one [`Stop`]. A `variablesReference` of an older
 //!   epoch is refused here and never reaches the adapter. `invalidated` fetches its areas again in the same epoch.
@@ -113,6 +114,8 @@ pub struct Start {
     pub functions: Vec<Value>,
     /// The exception filters chosen; none: the adapter's defaults.
     pub exception_filters: Option<Vec<String>>,
+    /// `configurationDone` waits for the launch / attach answer (a js-debug attach: see [`super::adapters::Adapter`]).
+    pub hold_configuration_done: bool,
 }
 
 impl Start {
@@ -462,6 +465,8 @@ impl Session {
                 .request(self.start.request.command(), self.start.arguments.clone()),
         );
         let mut configured = false;
+        // configured, with configurationDone still to send once the launch is answered
+        let mut held = false;
         loop {
             tokio::select! {
                 biased;
@@ -472,7 +477,8 @@ impl Session {
                     Some(Incoming::Event { event, body }) => {
                         if event == "initialized" && !configured {
                             configured = true;
-                            if let Err(e) = self.configure().await {
+                            held = self.start.hold_configuration_done && launch.is_some();
+                            if let Err(e) = self.configure(!held).await {
                                 return self.fail(e);
                             }
                             if launch.is_none() {
@@ -487,6 +493,15 @@ impl Session {
                     launch = None;
                     match r {
                         Err(e) => return self.fail(msg(e)),
+                        Ok(_) if held => {
+                            held = false;
+                            if let Err(e) = self.configuration_done().await {
+                                return self.fail(e);
+                            }
+                            if self.stop.is_none() {
+                                self.send(Update::Running { thread: None, all: true });
+                            }
+                        }
                         Ok(_) => if configured && self.stop.is_none() {
                             self.send(Update::Running { thread: None, all: true });
                         },
@@ -536,7 +551,8 @@ impl Session {
         }
     }
 
-    async fn configure(&mut self) -> Result<(), String> {
+    /// Breakpoints and exception filters, then `configurationDone` when DONE.
+    async fn configure(&mut self, done: bool) -> Result<(), String> {
         for s in self.start.breakpoints.clone() {
             let r = self
                 .client
@@ -585,6 +601,13 @@ impl Session {
                 return Err(why);
             }
         }
+        if done {
+            self.configuration_done().await?;
+        }
+        Ok(())
+    }
+
+    async fn configuration_done(&mut self) -> Result<(), String> {
         if self.cap("supportsConfigurationDoneRequest")
             && let Err(vor::Error::Closed(why)) =
                 self.client.request("configurationDone", Value::Null).await

@@ -363,14 +363,16 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
     let ty = text(&config, "type");
     let adapter = table.for_type(&ty).map_err(err)?;
     let launcher = launcher(front, &p.root, &config, adapter).map_err(err)?;
+    let attach = text(&config, "request") == "attach";
     let start = Start {
         name: text(&config, "name"),
         adapter_id: ty,
-        request: if text(&config, "request") == "attach" {
+        request: if attach {
             Request::Attach
         } else {
             Request::Launch
         },
+        hold_configuration_done: adapter.holds_configuration_done(attach),
         arguments: launch::adapter_arguments(&config),
         breakpoints: vec![],
         functions: vec![],

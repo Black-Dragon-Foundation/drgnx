@@ -160,6 +160,36 @@ async fn a_refused_reverse_request_fails_the_script() {
 }
 
 #[tokio::test]
+async fn a_waiting_reverse_request_holds_the_script_and_refuses_requests_until_answered() {
+    // answered first: the script goes on to the next step
+    let (client, mut inc, mock) = start(json!([
+        {"reverse": "runInTerminal", "arguments": {}, "answer": {"processId": 1}, "wait": true},
+        {"expect": "threads", "ok": {}},
+    ]));
+    let Some(Incoming::Request(r)) = inc.recv().await else {
+        panic!()
+    };
+    r.ok(json!({"processId": 1}));
+    client.request("threads", Value::Null).await.unwrap();
+    drop(client);
+    mock.finish().await.unwrap();
+    // a request before the answer fails the script, naming both
+    let (client, mut inc, mock) = start(json!([
+        {"reverse": "runInTerminal", "arguments": {}, "wait": true},
+        {"expect": "threads", "ok": {}},
+    ]));
+    let Some(Incoming::Request(r)) = inc.recv().await else {
+        panic!()
+    };
+    let early = client.request("threads", Value::Null);
+    let _ = early.await;
+    r.ok(json!({}));
+    drop(client);
+    let e = mock.finish().await.unwrap_err();
+    assert!(e.contains("threads") && e.contains("runInTerminal"), "{e}");
+}
+
+#[tokio::test]
 async fn die_ends_the_connection() {
     let (client, mut inc, mock) = start(json!([{"expect": "threads", "ok": {}}, {"die": true}]));
     client.request("threads", Value::Null).await.unwrap();

@@ -53,6 +53,20 @@ pub struct Adapter {
     pub install: Option<Value>,
     #[serde(default)]
     pub not_built_in: bool,
+    /// An attach sends `configurationDone` only after the attach is answered. js-debug writes its bootloader into
+    /// the attached program's environment after the attach; a program let run before that (`--inspect-brk` waits
+    /// for `configurationDone`) forks children without a debugger. Never for adapters that answer only after
+    /// `configurationDone` (debugpy's launch): the session would wait forever.
+    #[serde(default)]
+    pub configure_after_attach: bool,
+}
+
+impl Adapter {
+    /// Whether a session of this adapter holds `configurationDone` until its request is answered (ATTACH: the
+    /// request is an attach).
+    pub fn holds_configuration_done(&self, attach: bool) -> bool {
+        attach && self.configure_after_attach
+    }
 }
 
 /// The table.
