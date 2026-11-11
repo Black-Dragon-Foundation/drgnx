@@ -150,8 +150,23 @@ green (`orch::groups`, `vordr::groups`):
 - **Each group** runs at the combined commit through the queue as the user's job (a detached worktree that goes when
   the job ends); its end is evidence of `batch:JOB@TREE`.
 - **Green:** every group's newest run at the tree passed, or failed only rows the base's `test/frozen.eld` lists.
-  Any other red holds the batch: a `gate` card on its first member (key `groups`, `tip` the combined tree), whose
-  `Waive once…` the gate honours for that tree.
+  Any other red goes to the reruns (next section).
+
+## Reruns, interaction reds, flakes
+
+When a batch's groups are red, the red groups run again in parallel, once (never a bisection), at the line's HEAD
+and at each member's tip merged alone onto it (`orch::groups`, judged by `vordr::reruns::verdict`). Each run is
+evidence of `batch:JOB@TREE` for its own tree. The gate waits until every rerun is in; then:
+
+- **The line itself is red:** no tip is blamed. The batch is held on a `gate` card and a `followup` entity (one open
+  per title) records the line's failing rows.
+- **Some tips are red alone:** exactly those go back to their agents, with the rows; the others form the next batch.
+- **Every tip is green alone:** an interaction red. The later tip in readiness order goes back, told which tips it
+  fails together with; it merges the line once they are in.
+
+A **flake** is a row that failed in one run and passed in a later run of the same selector on the same tree, env stamp
+and platform (`vordr::gates::flaky`). It holds the batch on a `gate` card and opens a `followup`; flakes are fixed at
+the cause, never listed. A held batch's card offers `Waive once…`, which the gate honours for that tree.
 
 ## Red first
 

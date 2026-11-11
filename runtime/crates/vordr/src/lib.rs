@@ -12,6 +12,7 @@
 //! - [`notes`]: a merge's structured intent notes and what they must cover.
 //! - [`batch`]: the merge queue's next batch.
 //! - [`groups`]: the affected groups a batch runs, and when it may merge.
+//! - [`reruns`]: a red batch's reruns at the line and at each tip alone, and whom they name.
 //!
 //! No clock, no threads, no files: `serde` only.
 
@@ -23,4 +24,5 @@ pub mod groups;
 pub mod notes;
 pub mod pack;
 pub mod redfirst;
+pub mod reruns;
 pub mod rows;
