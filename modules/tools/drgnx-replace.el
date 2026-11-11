@@ -32,6 +32,10 @@
 (require 'drgnx-large-file)             ; a large file: Replace needs it whole (lean), never asks; skips chunks and raw
 (require 'drgnx-no-prompt)              ; the saves of the hub's writes ask nothing
 (require 'drgnx-ui-kit)                 ; the sheet's buttons
+;; Edit Results: the results as an editable buffer, on the same write path
+(unless (featurep 'drgnx-search-edit)
+  (load (expand-file-name "drgnx-search-edit" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-search-edit-change "drgnx-search-edit")
 
 (declare-function eglot-current-server "eglot")
 (declare-function eglot-server-capable "eglot")
@@ -1978,7 +1982,9 @@ view shows.  A timer: never signals."
   (pcase event
     ("search-apply" (drgnx-replace--apply-later data))
     ("search-change"
-     (when-let* (((equal (plist-get data :view) drgnx-replace-view)) (buf (get-buffer drgnx-replace-buffer-name)))
+     ;; an Edit Results save or its undo is that buffer's
+     (when-let* (((not (drgnx-search-edit-change data)))
+                 ((equal (plist-get data :view) drgnx-replace-view)) (buf (get-buffer drgnx-replace-buffer-name)))
        (with-current-buffer buf (drgnx-replace--change-done data))))))
 
 (defun drgnx-replace--hub-event (event data)
@@ -2506,7 +2512,19 @@ The find bar's button; not a command of its own (it needs the bar)."
                    (search-sheet-next "Next File" drgnx-replace-sheet-next
                                       "On the Replace All sheet: the next file and its first hunk")
                    (search-sheet-previous "Previous File" drgnx-replace-sheet-previous
-                                          "On the Replace All sheet: the previous file and its first hunk")))
+                                          "On the Replace All sheet: the previous file and its first hunk")
+                   (search-edit-results "Edit Results" drgnx-search-edit-results
+                                        "The Search view's results as an editable buffer; save writes your changes")
+                   (search-edit-save "Save Edited Results" drgnx-search-edit-save
+                                     "In Edit Results: write the changed lines to their files")
+                   (search-edit-abort "Discard Edited Results" drgnx-search-edit-abort
+                                      "In Edit Results: drop the unsaved edits and close it")
+                   (search-edit-delete-line "Delete This Line (on save)" drgnx-search-edit-delete-line
+                                            "In Edit Results: delete the line at point from its file when you save")
+                   (search-edit-refresh-line "Take the File's Line" drgnx-search-edit-refresh-line
+                                             "In Edit Results: show the file's current text for the line at point")
+                   (search-edit-undo-saves "Undo All Saves of Edited Results" drgnx-search-edit-undo-saves
+                                           "In Edit Results: put back every save of it, newest first")))
     (drgnx-command-define id :category "Search" :title title :command fn :doc doc :scope scope))
   (drgnx-command-define 'replace-this :category "Search" :title "Replace This Match" :command #'drgnx-replace-this
                         :doc "Replace the match on this row of the Search view"

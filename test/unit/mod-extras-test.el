@@ -7,7 +7,7 @@
 (defconst drgnx-extras-test--modules
   '(("extra/drgnx-jump" extra/jump (avy) (go-jump))
     ("extra/drgnx-undo" extra/undo (vundo) (edit-undo-tree))
-    ("extra/drgnx-wgrep" extra/wgrep (wgrep) (search-edit-results search-apply-edits))
+    ("extra/drgnx-wgrep" extra/wgrep (wgrep) (grep-edit-results grep-apply-edits))
     ("extra/drgnx-keycast" extra/keycast (keycast) (view-keycast))
     ("extra/drgnx-magit" extra/magit (magit) (scm-view))
     ("extra/drgnx-completion" extra/completion (vertico orderless marginalia corfu) ()))

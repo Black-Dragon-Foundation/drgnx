@@ -472,6 +472,77 @@ pub struct EditsParams {
     /// The replacement, when the view's fields have one the search has not been told yet (`search/grep-replace`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replace: Option<String>,
+    /// Lines of an Edit Results buffer the user changed (`search/edit-doc`), in place of the run's matches; their
+    /// files are written only inside the run's root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<Vec<EditedLine>>,
+}
+
+/// One line of an Edit Results buffer as the user left it: its id (`l:K`, from `search/edit-doc`), its file, its first
+/// line (from 1) and the text it expects there (OLD: several lines once an earlier save split it), and what it becomes
+/// (NEW: one string per line; none: the line is deleted). EOL: a newline ends the line in the file (false: the file's
+/// last line, which a delete empties).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditedLine {
+    pub line_id: String,
+    pub path: AbsPath,
+    pub line: u32,
+    pub old: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new: Option<Vec<String>>,
+    #[serde(default = "yes")]
+    pub eol: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// `search/edit-doc`: the lines of VIEW's search for an Edit Results buffer, CONTEXT lines (0 to 3) around each match
+/// line; refused (none, OVER) past MAX lines (default 20,000).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditDocParams {
+    pub view: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<u32>,
+}
+
+/// What an Edit Results line is: a line with a match, or a line of context around one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum EditLineKind {
+    Match,
+    Context,
+}
+
+/// One source line of an Edit Results buffer, once however many matches or context windows name it: its id, its file,
+/// its line (from 1), its text (no newline), what it is, and whether a newline ends it in the file.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditLine {
+    pub line_id: String,
+    pub path: String,
+    pub line: u32,
+    pub text: String,
+    pub kind: EditLineKind,
+    pub eol: bool,
+}
+
+/// `search/edit-doc`'s answer: the lines by file and line, how many there are, OVER when they are more than the max
+/// (then no lines: the user narrows the search), and the files left out with why.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditDocAnswer {
+    pub lines: Vec<EditLine>,
+    pub total: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub over: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<EditSkip>,
 }
 
 /// One edit of a file: its id (a match's `m:RUN:N`, `e:K` for the K-th given edit), its range
@@ -1263,9 +1334,14 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "a view's grep rows after Replace All: only the matches it skipped, each with why; the search stops; false when the view has no search",
         ),
         method!(
+            "search/edit-doc", SearchEditDoc(EditDocParams) -> EditDocAnswer,
+            classes: [User], writes: false,
+            doc: "the lines of a view's search for an Edit Results buffer: each source line once (a match's, or context around one), with its id, file, line number and text; none past the max (over), files that cannot be written skipped with why",
+        ),
+        method!(
             "search/edits", SearchEdits(EditsParams) -> EditsAnswer,
             classes: [User], writes: false,
-            doc: "the edit set of a view's search (its ticked matches, the ids named, or edits the caller names): per file the edits with lines, character columns, byte ranges, old and new text; overlapping matches, files changed since the search, large and binary files skipped with why; kept as a change set for search/apply",
+            doc: "the edit set of a view's search (its ticked matches, the ids named, edits the caller names, or the changed lines of an Edit Results buffer): per file the edits with lines, character columns, byte ranges, old and new text; overlapping matches, files changed since the search, large and binary files skipped with why; kept as a change set for search/apply",
         ),
         method!(
             "search/preview", SearchPreview(PreviewParams) -> PreviewAnswer,
