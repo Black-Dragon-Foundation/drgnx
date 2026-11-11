@@ -418,5 +418,94 @@ hub or its worker."
       (drgnx-term-test--settle (lambda () (equal (buffer-local-value 'cursor-type b) '(bar . 2))) "the bar cursor")
       (should (equal (buffer-local-value 'cursor-type b) '(bar . 2))))))
 
+;;;; Reattach
+
+(defvar drgnx-session-quit-keep)
+
+(defun drgnx-term-test--row (id)
+  "Terminal ID's `term/list' row, or nil."
+  (seq-find (lambda (r) (equal (plist-get r :id) id)) (drgnx-term-test--ask "term/list" nil)))
+
+(defun drgnx-term-test--drop (buffer)
+  "BUFFER goes as its Emacs's end takes it: nothing is sent, its terminal runs on."
+  (with-current-buffer buffer
+    (remhash drgnx-term--id drgnx-term--buffers)
+    (setq drgnx-term--id nil drgnx-term--state nil))
+  (let ((kill-buffer-query-functions nil)) (kill-buffer buffer)))
+
+(defmacro drgnx-term-test--as-new-emacs (&rest body)
+  "BODY as the next Emacs: this connection gone, a new editor session subscribed (it looks for offered terminals)."
+  (declare (indent 0))
+  `(progn
+     (drgnx-hub-disconnect)
+     (let ((drgnx-hub-session (format "next-%x" (random (ash 1 30)))))
+       (drgnx-hub-connect)
+       (drgnx-term-test--settle (lambda () (process-live-p drgnx-hub--events)) "the next session's subscription")
+       ,@body)))
+
+(defun drgnx-term-test--offered (id)
+  "Wait until terminal ID is offered here; its row."
+  (drgnx-term-test--settle (lambda () (seq-find (lambda (r) (equal (plist-get r :id) id)) drgnx-term--offered))
+                           "the offer")
+  (seq-find (lambda (r) (equal (plist-get r :id) id)) drgnx-term--offered))
+
+(ert-deftest drgnx-term/kept-at-quit-reattaches-in-the-next-emacs ()
+  ;; Keep Running at quit: the terminal detaches and runs on; the next Emacs is offered it (a notice), and reattaching
+  ;; brings back the same worker with its scrollback
+  (drgnx-term-test--with
+    (let* ((b (drgnx-term-test--start)) (id (buffer-local-value 'drgnx-term--id b)))
+      (unwind-protect
+          (progn
+            (drgnx-term-test--run b "echo kep''t-1")
+            (drgnx-term-test--until-line b "kept-1" "the echo")
+            (let ((pid (plist-get (drgnx-term-test--row id) :pid)))
+              (let ((drgnx-term-on-quit 'ask) (drgnx-session-quit-keep 'keep) (drgnx-term--quit-keep (list id)))
+                (drgnx-term--session-end))
+              (drgnx-term-test--settle (lambda () (plist-get (drgnx-term-test--row id) :detached_at)) "detached")
+              (drgnx-term-test--drop b)
+              (drgnx-term-test--as-new-emacs
+                (let ((row (drgnx-term-test--offered id)))
+                  (should (seq-find (lambda (n) (equal (plist-get n :id) "term:reattach")) (drgnx-notices :source 'term)))
+                  (let ((nb (drgnx-term-reattach-one row t)))
+                    (drgnx-term-test--settle (lambda () (eq (buffer-local-value 'drgnx-term--state nb) 'open)) "the attach")
+                    (drgnx-term-test--until-line nb "kept-1" "the scrollback, back")
+                    (let ((now (drgnx-term-test--row id)))
+                      (should (eql (plist-get now :pid) pid))
+                      (should (eq (plist-get now :mine) t))
+                      (should-not (plist-get now :detached_at)))
+                    (should-not drgnx-term--offered)
+                    (drgnx-term-test--run nb "echo aga''in")
+                    (drgnx-term-test--until-line nb "again" "the shell answers here"))))))
+        (ignore-errors (drgnx-term-test--ask "term/close" (list :id id)))))))
+
+(ert-deftest drgnx-term/a-restart-within-the-grace-finds-its-terminals ()
+  ;; a crash (no session-end): the next Emacs, started at once, is offered the orphaned terminal
+  (drgnx-term-test--with
+    (let* ((b (drgnx-term-test--start)) (id (buffer-local-value 'drgnx-term--id b)))
+      (unwind-protect
+          (progn
+            (drgnx-term-test--drop b)
+            (drgnx-term-test--as-new-emacs
+              (drgnx-term-test--offered id)
+              (should (eq (plist-get (drgnx-term-test--row id) :orphaned) t))))
+        (ignore-errors (drgnx-term-test--ask "term/close" (list :id id)))))))
+
+(ert-deftest drgnx-term/a-quit-that-cannot-ask-keeps-running-programs ()
+  ;; no question (a daemon's shutdown): the terminal whose program runs is kept, the idle shell closes
+  (drgnx-term-test--with
+    (let* ((busy (drgnx-term-test--start)) (idle (drgnx-term-test--start))
+           (busy-id (buffer-local-value 'drgnx-term--id busy)) (idle-id (buffer-local-value 'drgnx-term--id idle)))
+      (unwind-protect
+          (progn
+            (drgnx-term-test--run busy "echo g''o; sleep 60")
+            (drgnx-term-test--until-line busy "go" "the echo before the sleep")
+            (cl-letf (((symbol-function 'drgnx-hub-call-sync) (lambda (m p &rest _) (drgnx-term-test--ask m p))))
+              (let ((drgnx-term-on-quit 'ask) (drgnx-session-quit-keep nil))
+                (drgnx-term--session-end)))
+            (drgnx-term-test--settle (lambda () (and (plist-get (drgnx-term-test--row busy-id) :detached_at)
+                                                     (null (drgnx-term-test--row idle-id))))
+                                     "the busy one kept, the idle one closed"))
+        (ignore-errors (drgnx-term-test--ask "term/close" (list :id busy-id)))))))
+
 (provide 'term-test)
 ;;; term-test.el ends here

@@ -56,16 +56,31 @@ fn record(dir: &Path, id: &str, session: &str) -> Record {
         class: "gui".into(),
         cwd: "/".into(),
         session: Some(session.into()),
+        ..Record::default()
     };
     rec.write(dir).unwrap();
     rec
 }
 
+/// The next message the worker hears but `term/list`'s status questions (a fake worker never answers them).
 async fn next(rx: &mut mpsc::UnboundedReceiver<In>) -> In {
-    crate::clock::timeout(Duration::from_secs(5), rx.recv())
-        .await
-        .expect("the worker heard nothing")
-        .expect("the hub dropped the worker")
+    loop {
+        match crate::clock::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("the worker heard nothing")
+            .expect("the hub dropped the worker")
+        {
+            In::Status { .. } => {}
+            m => return m,
+        }
+    }
+}
+
+/// What the worker heard so far, but status questions.
+fn heard(rx: &mut mpsc::UnboundedReceiver<In>) -> Vec<In> {
+    std::iter::from_fn(|| rx.try_recv().ok())
+        .filter(|m| !matches!(m, In::Status { .. }))
+        .collect()
 }
 
 async fn open(dir: &Path) -> (Terms, Arc<Events>) {
@@ -133,7 +148,7 @@ async fn major_mismatch_marks_terminal_old() {
         !t.send("aa", &In::Text { text: "x".into() }),
         "nothing but close is sent to it"
     );
-    let st = t.list(Duration::from_millis(200)).await;
+    let st = t.list(Duration::from_millis(200), None).await;
     assert!(
         st[0].old && st[0].running,
         "listed as old, its program counted as running: {st:?}"
@@ -142,27 +157,135 @@ async fn major_mismatch_marks_terminal_old() {
     assert!(matches!(next(&mut rx).await, In::Close { .. }));
 }
 
+/// Terminal ID's entry in `term/list` as session SESSION asks.
+async fn listed(t: &Terms, id: &str, session: Option<&str>) -> Status {
+    t.list(Duration::from_millis(200), session)
+        .await
+        .into_iter()
+        .find(|s| s.id == id)
+        .expect("listed")
+}
+
 #[tokio::test]
-async fn session_gone_after_60s_ends_worker() {
+async fn orphaned_at_once_detached_after_the_grace() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let rec = record(dir, "aa", "s1");
+    let mut rx = fake_worker(&rec.socket, PROTO);
+    let (t, ev) = open(dir).await;
+    t.hello(3, "s1");
+    assert!(matches!(next(&mut rx).await, In::Attach { .. }));
+    // another Emacs, live all along
+    t.hello(9, "s2");
+    let s = listed(&t, "aa", Some("s1")).await;
+    assert!(s.mine && !s.orphaned && s.detached_at.is_none(), "{s:?}");
+    t.gone_at(3, 1_000);
+    assert!(
+        matches!(next(&mut rx).await, In::Detach),
+        "no client: the worker stops drawing"
+    );
+    let s = listed(&t, "aa", Some("s2")).await;
+    assert!(s.orphaned && !s.mine, "offered at once: {s:?}");
+    t.tick(1_000 + life::GRACE_MS - 1);
+    // a reconnect within the grace keeps it
+    t.hello(4, "s1");
+    assert!(matches!(next(&mut rx).await, In::Attach { .. }));
+    assert!(!listed(&t, "aa", Some("s2")).await.orphaned);
+    t.gone_at(4, 100_000);
+    assert!(matches!(next(&mut rx).await, In::Detach));
+    t.tick(100_000 + life::GRACE_MS);
+    let s = listed(&t, "aa", Some("s2")).await;
+    assert!(s.detached_at.is_some(), "detached: {s:?}");
+    assert!(
+        registry::read_all(dir)[0].detached_at.is_some(),
+        "in the record"
+    );
+    assert!(
+        !heard(&mut rx).iter().any(|m| matches!(m, In::Close { .. })),
+        "a detached terminal keeps running"
+    );
+    let got: Vec<(u64, String, Value)> = ev.0.lock().unwrap().clone();
+    assert!(
+        got.contains(&(9, "term/detached".into(), json!({"ids": ["aa"]}))),
+        "the live session hears of it: {got:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_attached_terminal_is_not_offered() {
     let tmp = tempfile::tempdir().unwrap();
     let rec = record(tmp.path(), "aa", "s1");
     let mut rx = fake_worker(&rec.socket, PROTO);
     let (t, _ev) = open(tmp.path()).await;
     t.hello(3, "s1");
     assert!(matches!(next(&mut rx).await, In::Attach { .. }));
-    t.gone_at(3, 1_000);
-    t.tick(1_000 + life::GRACE_MS - 1);
-    // a reconnect within the grace keeps it
-    t.hello(4, "s1");
-    assert!(matches!(next(&mut rx).await, In::Attach { .. }));
-    t.tick(1_000 + life::GRACE_MS + 1);
-    t.gone_at(4, 100_000);
-    t.tick(100_000 + life::GRACE_MS - 1);
-    assert!(rx.try_recv().is_err(), "nothing before the grace ran out");
-    t.tick(100_000 + life::GRACE_MS);
+    t.hello(9, "s2");
     assert!(
-        matches!(next(&mut rx).await, In::Close { signal: None }),
-        "the session is gone: its worker ends"
+        t.attach_to(9, "aa", 80, 24, (8, 16)).is_err(),
+        "no stealing from a live Emacs"
+    );
+    t.gone_at(3, 1_000);
+    assert!(matches!(next(&mut rx).await, In::Detach));
+    let rec = t.attach_to(9, "aa", 80, 24, (8, 16)).unwrap();
+    assert_eq!(
+        rec.session.as_deref(),
+        Some("s2"),
+        "moved to the new session"
+    );
+    match next(&mut rx).await {
+        In::Resize {
+            cols: 80,
+            rows: 24,
+            redraw: true,
+            ..
+        } => {}
+        m => panic!("expected a redrawing resize, got {m:?}"),
+    }
+    assert!(matches!(next(&mut rx).await, In::Attach { .. }));
+    let s = listed(&t, "aa", Some("s2")).await;
+    assert!(s.mine && !s.orphaned && s.detached_at.is_none(), "{s:?}");
+    // the old session's grace no longer reaches it
+    t.tick(1_000 + life::GRACE_MS);
+    assert!(listed(&t, "aa", Some("s2")).await.detached_at.is_none());
+}
+
+#[tokio::test]
+async fn a_detached_terminal_survives_a_hub_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let mut rec = record(dir, "aa", "s1");
+    rec.session = None;
+    rec.detached_at = Some(1_700_000_000_000);
+    rec.write(dir).unwrap();
+    let mut rx = fake_worker(&rec.socket, PROTO);
+    let (t, _ev) = open(dir).await;
+    t.tick(10 * life::GRACE_MS);
+    let s = listed(&t, "aa", None).await;
+    assert_eq!(s.detached_at, Some(1_700_000_000_000), "{s:?}");
+    assert_eq!(heard(&mut rx), [], "nothing sent: not closed");
+}
+
+#[tokio::test]
+async fn session_end_keeps_the_terminals_it_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = record(tmp.path(), "aa", "s1");
+    let b = record(tmp.path(), "bb", "s1");
+    let mut ra = fake_worker(&a.socket, PROTO);
+    let mut rb = fake_worker(&b.socket, PROTO);
+    let (t, ev) = open(tmp.path()).await;
+    t.hello(3, "s1");
+    t.hello(9, "s2");
+    assert!(matches!(next(&mut ra).await, In::Attach { .. }));
+    assert!(matches!(next(&mut rb).await, In::Attach { .. }));
+    assert_eq!(t.end_session("s1", &["aa".to_owned()]), 1, "one closed");
+    assert!(matches!(next(&mut ra).await, In::Detach), "kept, detached");
+    assert!(matches!(next(&mut rb).await, In::Close { signal: None }));
+    let s = listed(&t, "aa", Some("s2")).await;
+    assert!(s.detached_at.is_some() && !s.mine, "{s:?}");
+    assert!(
+        ev.0.lock()
+            .unwrap()
+            .contains(&(9, "term/detached".into(), json!({"ids": ["aa"]})))
     );
 }
 
@@ -190,7 +313,7 @@ async fn clean_exit_closes_at_once() {
     let mut ra = fake_worker(&a.socket, PROTO);
     let mut rb = fake_worker(&b.socket, PROTO);
     let (t, _ev) = open(tmp.path()).await;
-    t.end_session("s1");
+    t.end_session("s1", &[]);
     assert!(matches!(next(&mut ra).await, In::Close { signal: None }));
     assert!(rb.try_recv().is_err(), "another session's terminal stays");
 }

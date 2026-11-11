@@ -23,6 +23,8 @@ pub const ENGINE_LINES_MIN: usize = 10_000;
 const PROMPTS_MAX: usize = 4096;
 /// The kitty keyboard protocol's "report event types" flag: repeats and releases reach the program.
 const KITTY_REPORT_EVENTS: u8 = 2;
+/// How long a terminal no editor draws keeps its program before it ends it (`detached-keep`, 24 hours).
+const DETACHED_KEEP_DEFAULT: Ms = 24 * 3_600_000;
 
 /// How a terminal starts.
 #[derive(Clone, Debug)]
@@ -89,6 +91,10 @@ pub struct Worker {
     /// the view was attached).
     model_version: u64,
     model: Option<serde_json::Value>,
+    /// Since when no editor draws this terminal (none: one does), and how long it may stay so before it ends its
+    /// program (`detached-keep`; none: forever).
+    alone_since: Option<Ms>,
+    keep: Option<Ms>,
 }
 
 impl Worker {
@@ -124,6 +130,9 @@ impl Worker {
             prompts: std::collections::VecDeque::new(),
             model_version: 0,
             model: None,
+            // a new worker waits for its first attach like a detached one
+            alone_since: Some(0),
+            keep: Some(DETACHED_KEEP_DEFAULT),
         })
     }
 
@@ -216,8 +225,10 @@ impl Worker {
                 // a new editor's replica: its model starts again
                 self.model_version = 0;
                 self.model = None;
+                self.alone_since = None;
                 self.resync();
             }
+            In::Detach => self.detach(now),
             In::Env { env_epoch } => {
                 if let Some(a) = &mut self.attach {
                     a.env_epoch = env_epoch;
@@ -262,6 +273,7 @@ impl Worker {
                 cols,
                 rows,
                 cell_px,
+                ..
             } => self.resize(cols, rows, cell_px),
             In::Ack { version } => self.ack(version),
             In::Resync { model: false } => self.resync(),
@@ -389,10 +401,12 @@ impl Worker {
         self.clock.touch();
     }
 
-    /// No hub draws this terminal (it went away, or a new one connected and has not attached yet): nothing is sent
-    /// until the next attach, which starts with a reset.
-    pub fn detach(&mut self) {
+    /// No hub draws this terminal from NOW (it went away, a new one connected and has not attached yet, or the editor
+    /// left it): nothing is sent until the next attach, which starts with a reset; `detached-keep` counts from the
+    /// first such moment.
+    pub fn detach(&mut self, now: Ms) {
         self.attach = None;
+        self.alone_since.get_or_insert(now);
         self.reset_due = true;
         self.clock.acked();
     }
@@ -439,6 +453,12 @@ impl Worker {
             "enquiry-response" => {
                 self.engine.sink().enquiry = value.as_str().unwrap_or_default().to_string()
             }
+            // hours alone before the program ends (0: never)
+            "detached-keep" => {
+                if let Some(h) = value.as_f64().filter(|h| *h >= 0.0) {
+                    self.keep = (h > 0.0).then_some((h * 3_600_000.0) as Ms);
+                }
+            }
             "title-report" => self
                 .engine
                 .set_title_report(value.as_bool().unwrap_or(false)),
@@ -474,9 +494,17 @@ impl Worker {
     /// What to do next at NOW.
     pub fn next(&self, now: Ms) -> Next {
         if self.attach.is_none() {
-            return Next::Idle;
+            return match self.lonely_until() {
+                Some(t) if self.closing.is_none() => Next::At(t),
+                _ => Next::Idle,
+            };
         }
         self.clock.next(now, self.backfill_due)
+    }
+
+    /// When the program ends for want of an editor (none: it does not).
+    fn lonely_until(&self) -> Option<Ms> {
+        Some(self.alone_since? + self.keep?)
     }
 
     /// Draw what changed now, whatever the clock says (the program ended).
@@ -488,6 +516,12 @@ impl Worker {
 
     /// Do what is due at NOW; returns what comes after.
     pub fn step(&mut self, now: Ms) -> Next {
+        if self.attach.is_none() && self.lonely_until().is_some_and(|t| now >= t) {
+            tracing::info!("no editor within detached-keep: ending the program");
+            self.alone_since = None;
+            self.closing = Some(libc::SIGHUP);
+            return Next::Idle;
+        }
         match self.next(now) {
             Next::Frame => self.frame(now),
             Next::Backfill => self.backfill(),

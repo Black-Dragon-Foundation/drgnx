@@ -137,21 +137,57 @@ you started — not drgnx's own background helpers."
                       (lambda (f) (setq others (append others (ignore-errors (funcall f)))) nil))
     (append (mapcar #'process-name (drgnx-session--running-programs)) others)))
 
+(defvar drgnx-session-keepable-functions nil
+  "Functions the quit question calls first, with no argument: each returns the names of running programs that can
+keep running after drgnx quits (drgnx's terminals, `drgnx-term-on-quit' `ask'), or nil.  With any, the question
+offers Keep Running, Close Them and Cancel and sets `drgnx-session-quit-keep'.  A failing one never stops the
+question.")
+
+(defvar drgnx-session-quit-keep nil
+  "What the last quit question chose for the programs `drgnx-session-keepable-functions' named: `keep', `close', or
+nil when it did not ask (none could be kept, or a quit that cannot ask).  Read by `kill-emacs-hook' functions.")
+
+(defun drgnx-session--keepable-names ()
+  "The names of the running programs that can keep running after drgnx quits (`drgnx-session-keepable-functions')."
+  (let ((names nil))
+    (run-hook-wrapped 'drgnx-session-keepable-functions
+                      (lambda (f) (setq names (append names (ignore-errors (funcall f)))) nil))
+    names))
+
+(defun drgnx-session--confirm-running ()
+  "Ask once about the programs still running: t when quitting may go on, nil to keep drgnx running.  When some can
+keep running, Keep Running, Close Them or Cancel (`drgnx-session-quit-keep'); else stop them, yes or no."
+  (let* ((keepable (drgnx-session--keepable-names))
+         (running (append (drgnx-session--running-names) keepable)))
+    (cond (keepable
+           (let ((use-dialog-box nil))
+             (pcase (car (read-multiple-choice
+                          (format "%d program%s still running (%s): " (length running)
+                                  (if (cdr running) "s are" " is") (string-join running ", "))
+                          '((?k "keep running" "terminals run on for the next drgnx to reattach; other programs stop")
+                            (?c "close them" "stop every one")
+                            (?q "cancel" "drgnx keeps running"))))
+               (?k (setq drgnx-session-quit-keep 'keep) t)
+               (?c (setq drgnx-session-quit-keep 'close) t)
+               (_ nil))))
+          (running (yes-or-no-p (format "%d program%s still running (%s); quit and stop %s? "
+                                        (length running) (if (cdr running) "s are" " is")
+                                        (string-join running ", ") (if (cdr running) "them" "it"))))
+          (t t))))
+
 (defun drgnx-session-quit-confirm ()
   "Ask what quitting needs: offer to save each changed file and New Untitled buffer, then confirm losing what
-stays unsaved, then — once — confirm stopping the programs still running (terminals, shells).  t when drgnx may
-quit; nil when it keeps running (the answer was no).  C-g or an error while saving leaves through the signal, so
-a caller that quits afterwards never gets there."
+stays unsaved, then — once — ask about the programs still running (terminals, shells; terminals may keep running).
+t when drgnx may quit; nil when it keeps running (the answer was no).  C-g or an error while saving leaves through
+the signal, so a caller that quits afterwards never gets there."
+  (setq drgnx-session-quit-keep nil)
   (save-some-buffers nil t)          ; t: buffers with `buffer-offer-save' too, as `save-buffers-kill-emacs' does
   (let ((unsaved (drgnx-session--unsaved-buffers)))
     (cond ((and unsaved (not (yes-or-no-p (format "%d buffer%s not saved; quit and lose the changes? "
                                                   (length unsaved) (if (cdr unsaved) "s are" " is")))))
            (message "drgnx keeps running; nothing was lost")
            nil)
-          ((when-let* ((running (drgnx-session--running-names)))
-             (not (yes-or-no-p (format "%d program%s still running (%s); quit and stop %s? "
-                                       (length running) (if (cdr running) "s are" " is")
-                                       (string-join running ", ") (if (cdr running) "them" "it")))))
+          ((not (drgnx-session--confirm-running))
            (message "drgnx keeps running; nothing was stopped")
            nil)
           (t t))))
