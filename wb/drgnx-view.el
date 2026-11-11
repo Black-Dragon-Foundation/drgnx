@@ -1420,6 +1420,12 @@ older epoch, held.  RESYNC: non-nil while a `view/resync' is outstanding.  STALE
 
 (defvar-local drgnx-view-patch nil "This buffer's hub-fed (view, class), or nil.")
 
+(defvar-local drgnx-view-patch-twin-function nil
+  "In a hub-fed view's buffer: called with (CLASS) to make the buffer that shows the view's rows in display CLASS, set
+up as this one is (its mode and keys) and attached to (view, CLASS) with `drgnx-view-patch-attach', not subscribed (the
+hub sends every class the env named).  Returns that buffer.  Nil: the view has one buffer, which holds the rows of the
+class it is paired with in every class it shows in (`drgnx-view-env', \"one buffer per class\").")
+
 (defvar-local drgnx-view-patch-id-prop 'drgnx-work-id
   "The text property whose value is a node's id over that node's span in this view's rows (the class step's).")
 

@@ -35,6 +35,10 @@
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-view-patch-env-sent "drgnx-view")
 (declare-function drgnx-view-patch-reclass "drgnx-view")
+(defvar drgnx-view-patch)
+(defvar drgnx-view-patch--buffers)
+(defvar drgnx-view-patch-twin-function)
+(declare-function drgnx-view-patch-class "drgnx-view")
 
 (defconst drgnx-view-env-delay 0.1
   "Seconds of idleness after a width change before its env is sent.")
@@ -73,6 +77,9 @@ Pruned with its view.")
 
 (defvar drgnx-view-env--hooked nil "Non-nil while the global hooks are on (the first view added them).")
 
+(defvar-local drgnx-view-env--twin-of nil
+  "In a twin (the buffer of a view in another display class, `drgnx-view-patch-twin-function'): the view's id.")
+
 ;;;; The facts
 
 (defun drgnx-view-env--scale-factor (buffer)
@@ -94,10 +101,10 @@ nil on a terminal or when FACE has no font."
       (list (aref info 12) 0 (funcall s (aref info 2)) (funcall s (aref info 8)) (funcall s (aref info 9))
             (funcall s (aref info 11)) (funcall s (aref info 10)) (aref info 0)))))
 
-(defun drgnx-view-env--window-facts (window)
-  "The facts of the display class WINDOW shows its buffer in: a plist :display :scale :fonts :cell.  FONTS is a list
-of (ROLE FILE INDEX PX ASCENT DESCENT AVG SPACE NAME)."
-  (let* ((frame (window-frame window)) (buffer (window-buffer window))
+(defun drgnx-view-env--window-facts (window &optional buffer)
+  "The facts of the display class WINDOW shows BUFFER in (default: its buffer; a twin is measured as its view's
+buffer): a plist :display :scale :fonts :cell.  FONTS is a list of (ROLE FILE INDEX PX ASCENT DESCENT AVG SPACE NAME)."
+  (let* ((frame (window-frame window)) (buffer (or buffer (window-buffer window)))
          (gui (display-graphic-p frame)) (factor (drgnx-view-env--scale-factor buffer)))
     (list :display (if gui "gui" "tty")
           :scale (if gui (drgnx-pixels-scale frame) 1.0)
@@ -141,26 +148,80 @@ of (ROLE FILE INDEX PX ASCENT DESCENT AVG SPACE NAME)."
   "The live windows on visible frames that show BUFFER."
   (cl-remove-if-not (lambda (w) (eq (frame-visible-p (window-frame w)) t)) (get-buffer-window-list buffer nil t)))
 
-(defun drgnx-view-env--envs (view)
-  "VIEW's env per display class it shows in now: a list of (CLASS . PARAMS), PARAMS without the epoch.  WIDTH_PX is
-the narrowest window of the class (Call 2: one buffer holds one fit)."
-  (let ((buffer (car (gethash view drgnx-view-env--views))) (classes nil))
+(defun drgnx-view-env--twins (view)
+  "VIEW's twins: ((CLASS . BUFFER) ...), the live buffers that show it in another display class."
+  (let (out)
+    (when (boundp 'drgnx-view-patch--buffers)
+      (maphash (lambda (pair b)
+                 (when (and (equal (car pair) view) (buffer-live-p b)
+                            (equal (buffer-local-value 'drgnx-view-env--twin-of b) view))
+                   (push (cons (cdr pair) b) out)))
+               drgnx-view-patch--buffers))
+    out))
+
+(defun drgnx-view-env--window-classes (view)
+  "((WINDOW . FACTS) ...): the windows that show VIEW (its buffer or a twin), or the selected one for a headless view."
+  (let ((buffer (car (gethash view drgnx-view-env--views))))
     (when (buffer-live-p buffer)
-      (dolist (w (or (drgnx-view-env--windows buffer)
-                     (and (gethash view drgnx-view-env--headless) (list (selected-window)))))
-        (let* ((facts (drgnx-view-env--window-facts w)) (class (drgnx-view-env--class facts))
-               (width (window-body-width w t)) (have (assoc class classes)))
-          (if have
-              (setf (plist-get (cdr have) :width_px) (min width (plist-get (cdr have) :width_px)))
-            (push (cons class (list :view view :class class :display (plist-get facts :display)
-                                    :scale (plist-get facts :scale)
-                                    :fonts (mapcar (lambda (f) (cl-subseq f 0 8)) (plist-get facts :fonts))
-                                    :cell (plist-get facts :cell) :width_px width
-                                    :palette (drgnx-view-env--palette)
-                                    :tty_widths (let ((t-w (drgnx-view-env--tty-widths))) (if (eq t-w :none) nil t-w))
-                                    :tz (format-time-string "%z")
-                                    :reduced_motion (if (eq (bound-and-true-p drgnx-look-motion) 'reduced) t :false)))
-                  classes)))))
+      (mapcar (lambda (w) (cons w (drgnx-view-env--window-facts w buffer)))
+              (or (apply #'append (drgnx-view-env--windows buffer)
+                         (mapcar (lambda (c) (drgnx-view-env--windows (cdr c))) (drgnx-view-env--twins view)))
+                  (and (gethash view drgnx-view-env--headless) (list (selected-window))))))))
+
+(defun drgnx-view-env--show (window buffer)
+  "Show BUFFER in WINDOW, which keeps its dedication."
+  (unless (eq (window-buffer window) buffer)
+    (let ((dedicated (window-dedicated-p window)))
+      (set-window-dedicated-p window nil)
+      (set-window-buffer window buffer t)
+      (set-window-dedicated-p window dedicated))))
+
+(defun drgnx-view-env--route (view wins)
+  "One buffer per display class (Call 2, RRO-BUFFER-PER-CLASS-1): of WINS ((WINDOW . FACTS) ...), the windows of the
+class VIEW's buffer is paired with show that buffer, each other class's a twin made by the buffer's
+`drgnx-view-patch-twin-function' (then the env of that class goes out and its rows come to the twin).  A twin whose
+class no window shows goes.  When no window shows the buffer's class, the buffer takes the first class shown."
+  (let* ((buffer (car (gethash view drgnx-view-env--views)))
+         (classes (delete-dups (mapcar (lambda (w) (drgnx-view-env--class (cdr w))) wins)))
+         (twins (drgnx-view-env--twins view))
+         (own (with-current-buffer buffer
+                (and (bound-and-true-p drgnx-view-patch) (drgnx-view-patch-class drgnx-view-patch)))))
+    (when (and classes (not (member own classes)))
+      ;; the twin of the class the buffer takes goes first: its kill forgets the (view, class) pair
+      (when-let* ((tw (cdr (assoc (car classes) twins)))) (kill-buffer tw))
+      (drgnx-view-patch-reclass buffer (car classes))
+      (setq own (car classes) twins (drgnx-view-env--twins view)))
+    (dolist (class classes)
+      (unless (or (equal class own) (assoc class twins))
+        (let ((tw (with-current-buffer buffer (funcall drgnx-view-patch-twin-function class))))
+          (when (buffer-live-p tw)
+            (with-current-buffer tw (setq-local drgnx-view-env--twin-of view))
+            (push (cons class tw) twins)))))
+    (dolist (w wins)
+      (let ((class (drgnx-view-env--class (cdr w))))
+        (drgnx-view-env--show (car w) (if (equal class own) buffer (or (cdr (assoc class twins)) buffer)))))
+    (dolist (tw twins)
+      (unless (member (car tw) classes) (kill-buffer (cdr tw))))))
+
+(defun drgnx-view-env--envs (view &optional wins)
+  "VIEW's env per display class it shows in now: a list of (CLASS . PARAMS), PARAMS without the epoch.  WIDTH_PX is
+the narrowest window of the class (Call 2: one buffer per class, which holds one fit).  WINS: VIEW's windows with
+their facts (`drgnx-view-env--window-classes'), read again when not given."
+  (let ((classes nil))
+    (dolist (wf (or wins (drgnx-view-env--window-classes view)))
+      (let* ((w (car wf)) (facts (cdr wf)) (class (drgnx-view-env--class facts))
+             (width (window-body-width w t)) (have (assoc class classes)))
+        (if have
+            (setf (plist-get (cdr have) :width_px) (min width (plist-get (cdr have) :width_px)))
+          (push (cons class (list :view view :class class :display (plist-get facts :display)
+                                  :scale (plist-get facts :scale)
+                                  :fonts (mapcar (lambda (f) (cl-subseq f 0 8)) (plist-get facts :fonts))
+                                  :cell (plist-get facts :cell) :width_px width
+                                  :palette (drgnx-view-env--palette)
+                                  :tty_widths (let ((t-w (drgnx-view-env--tty-widths))) (if (eq t-w :none) nil t-w))
+                                  :tz (format-time-string "%z")
+                                  :reduced_motion (if (eq (bound-and-true-p drgnx-look-motion) 'reduced) t :false)))
+                classes))))
     (nreverse classes)))
 
 ;;;; Sending
@@ -184,7 +245,12 @@ down (the reconnect sends again)."
   "Send VIEW's env for each class it shows in whose facts changed since the last send (FORCE: every class, as last
 numbered).  A changed look takes the next epoch; a width change alone keeps it.  The classes VIEW no longer shows are
 forgotten."
-  (let ((live nil) (envs (drgnx-view-env--envs view)))
+  (let* ((live nil) (buffer (car (gethash view drgnx-view-env--views))) (wins (drgnx-view-env--window-classes view))
+         (envs (drgnx-view-env--envs view wins)))
+    ;; a view with twins: each class's windows show its own buffer, made before that class's env goes out
+    (when (and wins (not (gethash view drgnx-view-env--headless))
+               (with-current-buffer buffer (bound-and-true-p drgnx-view-patch-twin-function)))
+      (drgnx-view-env--route view wins))
     ;; a buffer shown in one class follows it (the inserter re-pairs it) before that class's env goes out
     (when (and (= 1 (length envs)) (fboundp 'drgnx-view-patch-reclass))
       (drgnx-view-patch-reclass (car (gethash view drgnx-view-env--views)) (car (car envs))))
@@ -300,6 +366,7 @@ of the selected window's display class for it (rows that only Lisp reads).  The 
 (defun drgnx-view-env-unregister (view)
   "Forget VIEW: its envs, its buffer's hooks; the global hooks go with the last view."
   (let ((v (gethash view drgnx-view-env--views)))
+    (dolist (tw (drgnx-view-env--twins view)) (kill-buffer (cdr tw)))
     (remhash view drgnx-view-env--views)
     (remhash view drgnx-view-env--headless)
     (when (and v (buffer-live-p (car v)))

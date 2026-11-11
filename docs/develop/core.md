@@ -2046,8 +2046,14 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
 - **The agent mirror** (`core/drgnx-agents-mirror.el`) patches its transcript in place: an entry's cell takes the
   patched entry (`--complete-blocks`), a new index extends the list; behind `drgnx-view-old-path` it copies the whole
   transcript per event as before.
-- **One buffer, one fit:** a buffer shown in two classes (two frames) gets an env and a reset per class from the
-  hub, but holds the rows of the class it is paired with; both frames show that fit.
+- **One buffer per class:** a view shown in two classes (two monitors at two scales) gets an env and a reset per class
+  from the hub. When its buffer sets `drgnx-view-patch-twin-function` (the Explorer does), `drgnx-view-env` gives each
+  class but the buffer's own a twin: a buffer the function makes, set up as the view's (mode, keys, the handlers
+  after a draw) and attached to (view, class), so each monitor's windows show their own class's rows. The windows of
+  the buffer's class show the buffer, the others their class's twin (dedication kept); a twin whose class no window
+  shows goes, and so do the twins with the view. When no window shows the buffer's class, the buffer takes the first
+  class shown (its twin goes first). A view without the function keeps one buffer, which holds the rows of the class
+  it is paired with in every class (one fit).
 - **A class change** (`text-scale`, a font or a scale): `drgnx-view-env` re-pairs a buffer shown in one class with
   its new class (`drgnx-view-patch-reclass`) before that class's env goes out; its rows stay on screen until the
   class's first reset.
