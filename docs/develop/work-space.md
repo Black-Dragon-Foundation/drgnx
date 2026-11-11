@@ -592,7 +592,9 @@ chain, the edge selection, the item that finished) and the commands are in `drgn
   moved. Left, right, why and touches follow the `left` `right` `up` `down` links (from nothing, the team's first);
   next and previous agent walk `team`; `g N` walks to entry N of `needs-you` and `n`/`N` cycle it; search sets the
   model's search (non-matches dim on their spans) and selects the first matching agent of `outline`; Esc clears it;
-  `O` sets the model's form, so up and down walk `outline`. Open reads the label once; a file opens at the team's
+  `O` sets the model's form, so up and down walk `outline`. Back and forward follow Sjá's reserved links `back` and `forward` (the instance's
+  history; Nidhogg's `nidhogg/sja/README.md`, "History"): in the map through `drgnx-work-map--nav`, in a view of it
+  through `drgnx-view-nav`. Open reads the label once; a file opens at the team's
   agents on its chain. Motion capture's card rects (`drgnx-work-map--rect`) are the model's fields `x y w h`. The trailing notice is `work/map/set {view, selected}` (or `{view, clear}`). Tests:
   `test/unit/work-map-nav-test.el`.
 - **The switch.** A map opened when `drgnx-work-map-rows-p` holds (not `drgnx-view-old-path`, and this Emacs has
