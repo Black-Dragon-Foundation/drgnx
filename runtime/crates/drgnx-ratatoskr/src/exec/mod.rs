@@ -490,7 +490,7 @@ async fn facts_of(spec: &ExecSpec) -> Option<vordr::facts::Facts> {
     let argv = spec.argv.clone();
     let env = spec.user.env.clone();
     let image = spec.container.as_ref().map(|c| c.image.clone());
-    tokio::task::spawn_blocking(move || {
+    crate::clock::blocking(move || {
         let top = cwd
             .ancestors()
             .find(|d| d.join(".git").exists())?
