@@ -30,6 +30,8 @@ pub enum Gate {
     Wait(String),
     /// Held, with the tree key a waiver would name.
     Hold(String, String),
+    /// These tasks go back to their agents, with these words.
+    Back(Vec<(String, String)>),
 }
 
 /// The combined commit of BATCH on DIR's HEAD and its tree: (head, commit, tree).  Blocking.
@@ -156,6 +158,18 @@ pub async fn gate(
         tracing::info!("batch {key}: waived by the user: {why}");
         return Ok(Gate::Pass);
     }
+    // a row that failed, then passed on the same tree holds the batch: flakes are fixed at the cause
+    let flakes = vordr::gates::flake_holds(pack, &evidence);
+    if !flakes.is_empty() {
+        let why = format!("flaky rows in the batch's groups: {}", flakes.join(", "));
+        follow(
+            front,
+            &why,
+            serde_json::json!({"job": job, "tree": tree, "rows": flakes}),
+        )
+        .await;
+        return Ok(Gate::Hold(format!("{why} (a followup is open)"), tree));
+    }
     let policy = crate::orch::policy::Policy::at(dir, &head, pack).await?;
     let known = |row: &str| {
         policy
@@ -166,14 +180,12 @@ pub async fn gate(
     match judge(&groups, &evidence, &tree, known) {
         Outcome::Green => Ok(Gate::Pass),
         Outcome::Red(reds) => {
-            let said: Vec<String> = reds
+            let red: Vec<Check> = groups
                 .iter()
-                .map(|(g, rows)| format!("{g}: {}", rows.join(", ")))
+                .filter(|g| reds.iter().any(|(n, _)| *n == g.name))
+                .cloned()
                 .collect();
-            Ok(Gate::Hold(
-                format!("the batch's affected groups fail: {}", said.join("; ")),
-                tree,
-            ))
+            reruns(front, job, dir, &head, batch, &red, &tree, &known).await
         }
         Outcome::Missing(missing) => {
             for g in &missing {
@@ -186,6 +198,133 @@ pub async fn gate(
             )))
         }
     }
+}
+
+/// A followup TITLE (with DATA) the gates leave, one open per title (`norn::write::evidence::followup`).
+pub(crate) async fn follow(front: &Front, title: &str, data: serde_json::Value) {
+    let (t, tx) = (
+        title.to_owned(),
+        urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "orch/followup"),
+    );
+    let r = front
+        .writer
+        .db
+        .write(tx, move |tx| {
+            norn::write::evidence::followup(tx, &t, data, None)
+        })
+        .await;
+    match r {
+        Ok(_) => front.writer.signals.wrote(),
+        Err(e) => tracing::warn!("a gate's followup was not recorded: {e}"),
+    }
+}
+
+/// The batch's RED groups run again at the line's HEAD and at each member's tip merged alone onto it (in parallel,
+/// one round: `vordr::reruns`).  Rows red at the line hold it (a followup); tips red alone go back; every tip green
+/// alone, the later one goes back (an interaction red).  KNOWN rows (frozen) never count.
+#[allow(clippy::too_many_arguments)]
+async fn reruns(
+    front: &Front,
+    job: &str,
+    dir: &Path,
+    head: &str,
+    batch: &[Ready],
+    red: &[Check],
+    tree: &str,
+    known: &(dyn Fn(&str) -> bool + Sync),
+) -> Result<Gate, String> {
+    use vordr::gates::{State, selector_of, state};
+    use vordr::reruns::{Verdict, verdict};
+    // (task, commit, tree): the line's first ("" its task), then each tip alone
+    let (d, h, b) = (dir.to_owned(), head.to_owned(), batch.to_vec());
+    let runs: Vec<(String, String, String)> = crate::clock::blocking(move || {
+        let line = git(&d, &["rev-parse", &format!("{h}^{{tree}}")])?
+            .trim()
+            .to_owned();
+        let mut out = vec![(String::new(), h.clone(), line)];
+        for m in &b {
+            let (_, c, t) = combined(&d, std::slice::from_ref(m))?;
+            out.push((m.task.clone(), c, t));
+        }
+        Ok::<_, String>(out)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let keys: Vec<String> = runs
+        .iter()
+        .map(|(_, _, t)| format!("batch:{job}@{t}"))
+        .collect();
+    let k2 = keys.clone();
+    let evidence = front
+        .writer
+        .db
+        .read(move |c| {
+            k2.iter()
+                .map(|k| norn::read::evidence::of_task(c, k))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut rows: Vec<Option<Vec<String>>> = Vec::new();
+    for (i, (_, commit, t)) in runs.iter().enumerate() {
+        let mut failed: Option<Vec<String>> = Some(Vec::new());
+        for g in red {
+            match state(&evidence[i], t, &selector_of(g)) {
+                State::Green => {}
+                State::Red(r) => {
+                    if let Some(f) = failed.as_mut() {
+                        f.extend(r.into_iter().filter(|x| !known(x)));
+                    }
+                }
+                State::Missing => {
+                    start(front, &keys[i], dir, commit, t, &run_of(g)).await?;
+                    failed = None;
+                }
+            }
+        }
+        rows.push(failed);
+    }
+    let tips: Vec<(String, Option<Vec<String>>)> = runs[1..]
+        .iter()
+        .zip(&rows[1..])
+        .map(|((task, _, _), r)| (task.clone(), r.clone()))
+        .collect();
+    let names: Vec<&str> = red.iter().map(|g| g.name.as_str()).collect();
+    Ok(match verdict(rows[0].as_deref(), &tips) {
+        Verdict::Wait(p) => Gate::Wait(format!(
+            "the batch's red groups ({}) run again at {}",
+            names.join(", "),
+            p.join(", ")
+        )),
+        Verdict::Line(r) => {
+            let why = format!("job/{job} itself fails {}: {}", names.join(", "), r.join(", "));
+            follow(front, &why, serde_json::json!({"job": job, "head": head, "rows": r})).await;
+            Gate::Hold(format!("{why} (a followup is open)"), tree.to_owned())
+        }
+        Verdict::Culprits(c) => Gate::Back(
+            c.into_iter()
+                .map(|(t, r)| {
+                    let note = format!(
+                        "The affected groups {} fail with your tip alone on job/{job}: {}. Fix them, commit, then \
+                         call complete_task.",
+                        names.join(", "),
+                        r.join(", ")
+                    );
+                    (t, note)
+                })
+                .collect(),
+        ),
+        Verdict::Interaction { back, tips } => {
+            let others: Vec<&str> = tips.iter().map(String::as_str).filter(|t| *t != back).collect();
+            let note = format!(
+                "Your tip and {} each pass the affected groups {} alone on job/{job}, but fail together. Once they \
+                 merged, merge job/{job} into your branch, make both work, commit, then call complete_task.",
+                others.join(", "),
+                names.join(", ")
+            );
+            Gate::Back(vec![(back, note)])
+        }
+    })
 }
 
 #[cfg(test)]
@@ -243,5 +382,60 @@ mod tests {
         assert_eq!(sh(p, &["rev-parse", &format!("{c}^{{tree}}")]), tree);
         // the same members in the other order: the same tree, so the same groups' runs count
         assert_eq!(combined(p, &[r("t2", &b), r("t1", &a)]).unwrap().2, tree);
+    }
+
+    /// Three tips, the reruns' commits (the line, each tip alone on it) and a stand-in group that fails a tree with
+    /// `broken` in it, or with both `x` and `y` (two tips that only fail together): the culprit, then the later tip.
+    #[test]
+    fn three_tips_rerun_alone_name_the_culprit_or_the_later_of_an_interaction() {
+        use vordr::reruns::{Verdict, verdict};
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path();
+        sh(p, &["init", "-q", "-b", "line"]);
+        commit(p, "base", "b\n");
+        let tip = |name: &str, file: &str| {
+            sh(p, &["checkout", "-q", "-b", name, "line"]);
+            let c = commit(p, file, "1\n");
+            sh(p, &["checkout", "-q", "line"]);
+            Ready {
+                task: name.into(),
+                tip: c,
+                at: 0.0,
+            }
+        };
+        let group = |commit: &str| -> Vec<String> {
+            let files = sh(p, &["ls-tree", "--name-only", commit]);
+            let has = |f: &str| files.lines().any(|l| l == f);
+            if has("broken") || (has("x") && has("y")) {
+                vec!["g::t".into()]
+            } else {
+                vec![]
+            }
+        };
+        let rerun = |batch: &[Ready]| {
+            let (head, all, _) = combined(p, batch).unwrap();
+            assert_eq!(group(&all), vec!["g::t".to_string()], "the batch is red");
+            let tips: Vec<(String, Option<Vec<String>>)> = batch
+                .iter()
+                .map(|m| {
+                    let (_, c, _) = combined(p, std::slice::from_ref(m)).unwrap();
+                    (m.task.clone(), Some(group(&c)))
+                })
+                .collect();
+            verdict(Some(&group(&head)), &tips)
+        };
+        let (a, b, c) = (tip("a", "a"), tip("b", "broken"), tip("c", "c"));
+        assert_eq!(
+            rerun(&[a, b, c]),
+            Verdict::Culprits(vec![("b".into(), vec!["g::t".into()])])
+        );
+        let (x, m, y) = (tip("x", "x"), tip("m", "m"), tip("y", "y"));
+        assert_eq!(
+            rerun(&[x, m, y]),
+            Verdict::Interaction {
+                back: "y".into(),
+                tips: vec!["x".into(), "m".into(), "y".into()]
+            }
+        );
     }
 }
