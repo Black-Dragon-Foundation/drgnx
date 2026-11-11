@@ -1,7 +1,7 @@
 //! The hub's sessions ([`Debug`]) with mock adapters: the events, which editor opens a stop's file, children, restarts,
 //! `runInTerminal` in a terminal, and the hub's end.
 use super::session::{Op, Proc, Request, Sig, Start};
-use super::{BoxFut, Connected, Debug, Launcher, Sink, Terminals};
+use super::{BoxFut, Connected, Debug, Launcher, Opened, Sink, Terminals};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -52,9 +52,15 @@ impl Terminals for NoTerms {
         cwd: String,
         args: Vec<String>,
         _: Vec<(String, String)>,
-    ) -> BoxFut<'_, Result<(String, i64), String>> {
+    ) -> BoxFut<'_, Result<Opened, String>> {
         self.0.lock().unwrap().push((conn, cwd, args));
-        Box::pin(async { Ok(("t1".to_owned(), 4242)) })
+        Box::pin(async {
+            Ok(Opened {
+                term: "t1".into(),
+                view: "term:t1".into(),
+                pid: 4242,
+            })
+        })
     }
 }
 
@@ -320,7 +326,10 @@ async fn run_in_terminal_opens_a_terminal_for_the_starting_editor() {
         )
     );
     let t = &ev.named("debug-terminal")[0];
-    assert_eq!((t.0, &t.2["term"]), (Some(7), &json!("t1")));
+    assert_eq!(
+        (t.0, &t.2["term"], &t.2["view"]),
+        (Some(7), &json!("t1"), &json!("term:t1"))
+    );
     d.control(
         &id,
         Op::Stop {

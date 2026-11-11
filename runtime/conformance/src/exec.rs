@@ -35,7 +35,8 @@ pub struct Runner<'a> {
 type R<T = ()> = Result<T, String>;
 
 /// Longest first, so `$SOCKET_DIR` is not read as `$SOCKET` and `_DIR`.
-const VAR_NAMES: [&str; 14] = [
+const VAR_NAMES: [&str; 15] = [
+    "HUB_BIN",
     "BACKEND_SOCKET",
     "SCENARIOS",
     "SOCKET_DIR",
@@ -481,6 +482,11 @@ impl Runner<'_> {
             "SCENARIOS".into(),
             self.cfg.scenarios.to_string_lossy().into_owned(),
         );
+        // the hub under test (its test-hooks build's `debug-mock` is the mock debug adapter)
+        // absolute: a helper started in another directory runs it too
+        let hub_bin =
+            std::fs::canonicalize(&self.cfg.hub_bin).unwrap_or_else(|_| self.cfg.hub_bin.clone());
+        m.insert("HUB_BIN".into(), hub_bin.to_string_lossy().into_owned());
         // ratatoskr-mock is built beside domr
         if let Some(dir) = std::env::current_exe()
             .ok()

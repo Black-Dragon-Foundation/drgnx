@@ -91,6 +91,9 @@ fn main() -> ExitCode {
         // Test builds only: one command under the sandbox, judged by its --result file.
         #[cfg(feature = "test-hooks")]
         Command::SandboxRun(args) => return code(drgnx_ratatoskr::sandbox::run(args)),
+        // Test builds only: the mock debug adapter on stdio.
+        #[cfg(feature = "test-hooks")]
+        Command::DebugMock { script } => return drgnx_ratatoskr::debug::mock_main(&script),
         Command::Serve(args) => {
             let supervisor = args.supervisor;
             let mut builder = tokio::runtime::Builder::new_multi_thread();

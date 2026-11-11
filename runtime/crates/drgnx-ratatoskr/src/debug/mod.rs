@@ -19,6 +19,7 @@ mod tests_adapters;
 mod tests_launch;
 #[cfg(test)]
 mod tests_registry;
+pub mod wire;
 
 use serde_json::{Value, json};
 use session::{End, Handle, Op, Proc, Start, Stop, Update};
@@ -27,6 +28,47 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::{mpsc, watch};
+
+/// `ratatoskr debug-mock SCRIPT.json` (test-hooks builds): the mock adapter on stdio; exit 1 with the reason on stderr
+/// when the script fails, 2 when it cannot be read.
+#[cfg(feature = "test-hooks")]
+pub fn mock_main(script: &std::ffi::OsStr) -> std::process::ExitCode {
+    use std::process::ExitCode;
+    let shown = std::path::Path::new(script).display().to_string();
+    let script: vor::mock::Script = match std::fs::read(script)
+        .map_err(|e| e.to_string())
+        .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
+    {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("debug-mock: {shown}: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("debug-mock: no runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    // inside the runtime: the mock starts its tasks at once
+    let r = rt.block_on(async {
+        vor::mock::Mock::start(script, tokio::io::stdin(), tokio::io::stdout())
+            .finish()
+            .await
+    });
+    match r {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("debug-mock: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
 
 /// A boxed future, for the traits below.
 pub type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -66,16 +108,24 @@ pub trait Launcher: Send + Sync {
     }
 }
 
+/// A terminal `runInTerminal` opened: its id, its view and its program's pid.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Opened {
+    pub term: String,
+    pub view: String,
+    pub pid: i64,
+}
+
 /// The program `runInTerminal` asks for, in a drgnx terminal.
 pub trait Terminals: Send + Sync {
-    /// Open a terminal for connection CONN running ARGS in CWD with ENV added: its id and the program's pid.
+    /// Open a terminal for connection CONN running ARGS in CWD with ENV added.
     fn open(
         &self,
         conn: u64,
         cwd: String,
         args: Vec<String>,
         env: Vec<(String, String)>,
-    ) -> BoxFut<'_, Result<(String, i64), String>>;
+    ) -> BoxFut<'_, Result<Opened, String>>;
 }
 
 /// The phase a session shows.
@@ -230,6 +280,16 @@ impl Debug {
             .sessions
             .get(id)
             .map(|e| e.handle.clone())
+    }
+
+    /// The sessions started in ROOT that have no parent.
+    pub fn in_root(&self, root: &str) -> Vec<String> {
+        lock(&self.inner.state)
+            .sessions
+            .iter()
+            .filter(|(_, e)| e.root == root && e.parent.is_none())
+            .map(|(id, _)| id.clone())
+            .collect()
     }
 
     /// The session ids, with their parents.
@@ -389,13 +449,13 @@ impl Debug {
                     crate::clock::spawn("debug:run-in-terminal", async move {
                         let (cwd, args, env) = terminal_args(&arguments);
                         match terms.open(conn, cwd, args, env).await {
-                            Ok((term, pid)) => {
+                            Ok(o) => {
                                 sink.send(
                                     conn,
                                     "debug-terminal",
-                                    json!({"session": sid, "term": term}),
+                                    json!({"session": sid, "term": o.term, "view": o.view}),
                                 );
-                                let _ = reply.send(Ok(pid));
+                                let _ = reply.send(Ok(o.pid));
                             }
                             Err(e) => {
                                 let _ = reply.send(Err(e));

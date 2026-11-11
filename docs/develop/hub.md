@@ -1365,6 +1365,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `coord/notify` | user, agent, service | `{}` | `boolean` | no |
 | `coord/prune` | user | `{}` | `{pruned: boolean}` | yes |
 | `coord/task-status` | user | `{agent?: AgentName, status: Status, task: TaskRef}` | `boolean` | yes |
+| `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
+| `debug/control` | user | `{op: string, session: string, thread?: integer}` | `boolean` | no |
+| `debug/select` | user | `{frame: integer, session: string, thread?: integer}` | `boolean` | no |
+| `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, root: string, selection?: string, user?: [JsonObject]}` | `{needs?: any, session?: string}` | no |
+| `debug/trust` | user | `{root: string, trusted: boolean}` | `boolean` | no |
 | `decisions/effects` | user | `{decision: string}` | `{commits?: [string], decision: string, label: string, later_hunks?: [Hunk]}` | no |
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no |
 | `events/add` | user | `{agent?: AgentName, best_effort?: boolean, data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text, task?: TaskRef}` | `{id?: natnum}` | yes |

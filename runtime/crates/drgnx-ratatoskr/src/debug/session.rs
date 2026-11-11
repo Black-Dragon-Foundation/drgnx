@@ -42,6 +42,10 @@ pub trait Proc: Send + Sync + 'static {
     fn signal(&mut self, sig: Sig);
     /// Resolves once the process has exited and was reaped (at once for none). Cancel-safe.
     fn wait(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+    /// The end of what it wrote to stderr (none: nothing kept).
+    fn stderr_tail(&self) -> String {
+        String::new()
+    }
 }
 
 /// No process of ours (a `debugServer` someone else started).
@@ -67,6 +71,9 @@ impl Proc for draugr::Child {
         Box::pin(async move {
             let _ = draugr::Child::wait(self).await;
         })
+    }
+    fn stderr_tail(&self) -> String {
+        draugr::Child::stderr_tail(self)
     }
 }
 
@@ -345,6 +352,8 @@ enum Ending {
         terminate: bool,
         terminate_debuggee: bool,
         restart: Option<Value>,
+        /// The session failed (not a stop anyone asked for): the adapter's stderr says why.
+        failed: bool,
     },
 }
 
@@ -372,21 +381,35 @@ impl Session {
     async fn run(mut self, mut cmds: mpsc::UnboundedReceiver<Cmd>) {
         let ending = self.main(&mut cmds).await;
         let mut restart = None;
-        let reason = match ending {
+        let (reason, failed) = match ending {
             Ending::Gone(why) => {
                 self.reap().await;
-                why
+                (why, true)
             }
             Ending::Stop {
                 reason,
                 terminate,
                 terminate_debuggee,
                 restart: r,
+                failed,
             } => {
                 restart = r;
                 self.stop_sequence(terminate, terminate_debuggee).await;
-                reason
+                (reason, failed)
             }
+        };
+        // a session that failed: what the adapter last said says why
+        let tail = if failed {
+            self.proc.stderr_tail()
+        } else {
+            String::new()
+        };
+        let tail = tail.trim();
+        let reason = if tail.is_empty() {
+            reason
+        } else {
+            let cut = tail.char_indices().rev().nth(499).map_or(0, |(i, _)| i);
+            format!("{reason}; the adapter said: {}", &tail[cut..])
         };
         // every queued control is told
         cmds.close();
@@ -483,6 +506,7 @@ impl Session {
             terminate: false,
             terminate_debuggee: self.start.request == Request::Launch,
             restart: None,
+            failed: true,
         }
     }
 
@@ -494,6 +518,7 @@ impl Session {
             terminate: launch && self.cap("supportsTerminateRequest"),
             terminate_debuggee: kill_debuggee.unwrap_or(launch),
             restart: None,
+            failed: false,
         }
     }
 
@@ -659,6 +684,7 @@ impl Session {
                     terminate: false,
                     terminate_debuggee: self.start.request == Request::Launch,
                     restart,
+                    failed: false,
                 });
             }
             "exited" => {
@@ -671,6 +697,7 @@ impl Session {
                     terminate: false,
                     terminate_debuggee: self.start.request == Request::Launch,
                     restart: None,
+                    failed: false,
                 });
             }
             _ => self.send(Update::Event {
@@ -866,6 +893,7 @@ impl Session {
                     terminate: false,
                     terminate_debuggee: false,
                     restart: None,
+                    failed: false,
                 });
             }
             Op::Select { thread: t, frame } => {

@@ -41,7 +41,8 @@ reads its end.
 with canned answers, events, reverse requests whose answers it checks, and the adapter's death. It fails on any request
 it did not expect, a request after the script's end, or a client that leaves early, and `Mock::finish` names what it
 expected and what came, with a log of every request and its arguments. The steps are JSON (the module's doc lists
-them); the `vor-mock SCRIPT.json` binary (built with the feature) plays one on stdio for ERT.
+them); the `vor-mock SCRIPT.json` binary (built with the feature) plays one on stdio for ERT, and so does a test-hooks
+hub's `ratatoskr debug-mock SCRIPT.json`, which the `debug/*` conformance rows name as their adapter (`$HUB_BIN`).
 
 ```json
 [{"expect": "initialize", "ok": {"supportsTerminateRequest": true}},
@@ -139,6 +140,37 @@ js-debug, delve, lldb-dap), how to find it and how to start it:
 The untested entries' command lines come from dape's recipes (credited in the file). Adapters drgnx cannot start are
 listed with `:not-built-in t`, so their type says to add them in the setting `debug.adapters`; an unknown type lists
 the known ones.
+
+## The `debug/*` methods
+
+`debug/wire.rs` serves them (runstav `methods::debug`, the user class) and keeps, in memory for the hub's life, the
+roots `debug/trust` called trusted and each root's last started configuration.
+
+- `debug/configs {root, file?, language?, user?, adapters?}` → `{configs: [{id, name, source, type, request,
+  needs_trust}], last?, error?}`: launch.json's (`launch:N`, in the picker's order, `hidden` ones left out), the user's
+  own configurations from the setting `debug.configurations`, which the editor sends (`user:N`), and the adapter table's
+  defaults for the language (`default:N`). A launch.json that does not parse comes back as `error {path, line, col,
+  message}`.
+- `debug/start {root, config, file?, line?, col?, selection?, language?, inputs?, user?, adapters?}`: a root never told
+  trusted answers `{needs: "trust"}` and runs nothing. Then the configuration's `${input:…}` and
+  `${command:pickProcess}` that `inputs` (`[{id, value}]`) does not answer come back as `{needs: [{input: {id, kind,
+  description, default, options, password}} | "pickProcess"]}`; a `pickString` answer outside its options is
+  `invalid-params` at `inputs`. With every answer: the platform section, the variables, the type's adapter (the user's
+  `adapters`, from the setting `debug.adapters` in the table's fields, before `etc/debug-adapters.eld`'s), and
+  `{session}`.
+- `debug/control {session, thread?, op}` (`continue`, `pause`, `next`, `step-in`, `step-out`, `restart`, `stop`,
+  `stop-and-kill`, `disconnect`), `debug/select {session, thread?, frame}`, and `debug/trust {root, trusted}`, whose
+  revocation stops the root's sessions.
+
+Adapters start in the root with the shell's environment (`env/set`), each in its own process group: a stdio adapter
+over pipes; a TCP adapter with stdin on `/dev/null`, on a free port of 127.0.0.1 that the hub connects to within 5 s
+(`LISTEN_WITHIN`), with a child session (`startDebugging`) on a second connection to the same port. They are found on
+`PATH` or in `<data>/debug-adapters` (debugpy in its `venv/`). `debugServer` connects to 127.0.0.1 and starts nothing.
+An adapter that goes on its own ends its session with the end of its stderr in the reason.
+
+`runInTerminal` opens a drgnx terminal in the panel (`term::Terms::spawn`, 80×24 until the editor sizes it) with the
+shell's environment and the adapter's `env` over it; `debug-terminal {session, term, view}` tells the starting editor,
+which shows the view. At the hub's end every session stops, children first, before the store closes.
 
 ## Live adapters: the image
 

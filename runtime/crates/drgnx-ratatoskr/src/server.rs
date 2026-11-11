@@ -453,6 +453,8 @@ pub async fn run(args: ServeArgs) -> Exit {
     drop(listener);
     // the hub's own sessions end with it (their rows, transcripts and queues stay for the next start)
     front.core.agents.shutdown().await;
+    // the debug sessions stop (children first) and their adapters are reaped
+    front.debug.shutdown().await;
     // networked jobs can't run on without the hub's relay: they end now, as the next start would end them
     front.core.exec.end_networked().await;
     // `--test-sequencer`: what it still holds is written before the connections close
