@@ -31,7 +31,7 @@ impl FakeProc {
         FakeProc {
             exit,
             signals: Arc::default(),
-            t0: Instant::now(),
+            t0: crate::clock::now(),
             gone: Arc::default(),
             dead: Arc::default(),
         }
@@ -47,7 +47,10 @@ impl FakeProc {
 
 impl Proc for FakeProc {
     fn signal(&mut self, sig: Sig) {
-        self.signals.lock().unwrap().push((sig, self.t0.elapsed()));
+        self.signals
+            .lock()
+            .unwrap()
+            .push((sig, crate::clock::now().duration_since(self.t0)));
         if (sig == Sig::Term && self.exit == Exit::OnTerm) || sig == Sig::Kill {
             self.die();
         }
@@ -387,7 +390,7 @@ async fn a_silent_adapter_gets_terminate_disconnect_sigterm_then_sigkill_on_time
             break;
         }
     }
-    let t0 = r.proc.t0.elapsed();
+    let t0 = crate::clock::now().duration_since(r.proc.t0);
     r.h.op(Op::Stop {
         kill_debuggee: None,
     })

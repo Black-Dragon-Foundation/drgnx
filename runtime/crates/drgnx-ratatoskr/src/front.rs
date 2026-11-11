@@ -697,9 +697,13 @@ impl Front {
             | Params::TermTextRange(_)
             | Params::TermClose(_)
             | Params::TermList(_)
-            | Params::TermSessionEnd(_)) => {
+            | Params::TermSessionEnd(_)
+            | Params::TermAttach(_)) => {
                 crate::term::methods::serve(&self.core.terms, s.conn, p).await
             }
+            Params::OrchEvidence(p) => crate::orch::evidence::list(self, &caller, p)
+                .await
+                .map(|b| json!(b)),
             Params::ViewEnv(p) => crate::view::env(self, &caller, p).map(|b| json!(b)),
             Params::ViewResync(p) => crate::view::resync(self, &caller, p).map(|b| json!(b)),
             Params::ViewAck(p) => crate::view::ack(self, &caller, p).map(|b| json!(b)),

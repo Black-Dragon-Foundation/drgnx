@@ -167,7 +167,7 @@ async fn until(mut cond: impl FnMut() -> bool) {
         if cond() {
             return;
         }
-        tokio::time::sleep(Duration::from_millis(1)).await;
+        crate::clock::sleep(Duration::from_millis(1)).await;
     }
     panic!("never happened");
 }
@@ -275,7 +275,7 @@ async fn start_debugging_starts_a_child_and_children_stop_before_their_parent() 
     let o = order.clone();
     let watch = {
         let ev = ev.clone();
-        tokio::spawn(async move {
+        crate::clock::spawn("debug:test-watch", async move {
             until(|| !ev.named("debug-ended").is_empty()).await;
             o.lock().unwrap().push(
                 ev.named("debug-ended")[0].2["session"]

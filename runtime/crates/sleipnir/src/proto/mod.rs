@@ -39,6 +39,7 @@ mod tests {
 
     fn spec() -> JobSpec {
         JobSpec {
+            os: Default::default(),
             name: "unit".into(),
             kind: Kind::Test,
             weight: Weight::Heavy,
@@ -138,6 +139,7 @@ mod tests {
                 running: vec![r()],
                 slots: vec!["s1".into()],
                 images: vec!["fedora@sha256:00".into()],
+                on_battery: true,
             },
             Frame::Offer {
                 r: r(),

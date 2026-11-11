@@ -131,10 +131,13 @@ subscription reads the setting)."
   "Type TEXT into this buffer's terminal, as it is (`term/text')."
   (drgnx-term--send "term/text" (list :text text)))
 
-(defun drgnx-term-send-key (key &optional mods text)
+(defun drgnx-term-send-key (key &optional mods text action)
   "Press KEY (a name: `return', `tab', `a', `f5') with MODS (a list of `ctrl', `shift', `alt', `super') in this
-buffer's terminal; TEXT is what it types.  The worker encodes it from the terminal's modes (`term/key')."
-  (drgnx-term--send "term/key" (append (list :key key :mods (vconcat mods)) (and text (list :text text)))))
+buffer's terminal; TEXT is what it types.  ACTION `repeat' or `release' sends a repeat or a release instead of a press
+\(the program sees them only while it asked for key event types).  The worker encodes it from the terminal's modes
+\(`term/key')."
+  (drgnx-term--send "term/key" (append (list :key key :mods (vconcat mods)) (and text (list :text text))
+                                       (and action (list :action (symbol-name action))))))
 
 (defconst drgnx-term--event-names
   '((13 . "return") (9 . "tab") (127 . "backspace") (return . "return") (tab . "tab") (backspace . "backspace")
@@ -163,7 +166,70 @@ deselects (`drgnx-term-selection-clear-on-typing') and goes back to the cursor (
   (when drgnx-term-selection-clear-on-typing (deactivate-mark))
   (when (memq 'keystroke drgnx-term-scroll-to-bottom) (drgnx-term--place-cursor t))
   (pcase (drgnx-term--event-key last-command-event)
-    (`(,key ,mods ,text) (drgnx-term-send-key key mods text))))
+    (`(,key ,mods ,text)
+     (let ((repeat (bound-and-true-p nidhogg-last-key-repeat)))
+       (drgnx-term-send-key key mods text (and repeat 'repeat))
+       (when (and (not repeat) (drgnx-term--key-events-p))
+         (drgnx-term--hold last-command-event key))))))
+
+;;;; Key releases (Nidhogg): a program that asked for key event types gets repeats and releases
+
+(defvar nidhogg-key-events)
+(defvar nidhogg-last-key-repeat)
+
+(defconst drgnx-term--held-max 32 "The most held keys `drgnx-term--held' remembers (a keyboard holds fewer).")
+
+(defvar drgnx-term--held nil
+  "The keys pressed in a terminal whose program asked for key event types and not released yet, newest first: each
+\(BASIC BUFFER KEY), BASIC the press's `event-basic-type', KEY its `term/key' name.  At most `drgnx-term--held-max'.")
+
+(defun drgnx-term--key-events-p (&optional buffer)
+  "Non-nil when BUFFER (default: the current one) is a terminal whose program asked for key event types (the kitty
+keyboard protocol's flag 2: the patch's `term' says `key_events')."
+  (with-current-buffer (or buffer (current-buffer))
+    (and (derived-mode-p 'drgnx-term-mode) drgnx-view-patch
+         (eq (plist-get (drgnx-view-patch-term drgnx-view-patch) :key_events) t))))
+
+(defun drgnx-term--key-gate ()
+  "Ask Nidhogg for key releases (`nidhogg-key-events') while the selected window shows a terminal whose program wants
+them, or a key pressed in one is still held; else let it drop them.  No-op on another Emacs."
+  (when (boundp 'nidhogg-key-events)
+    (setq nidhogg-key-events
+          (and (or drgnx-term--held (drgnx-term--key-events-p (window-buffer (selected-window)))) t))))
+
+(defun drgnx-term--hold (event key)
+  "Remember that EVENT (sent to this terminal as KEY) is held, for its release."
+  (let ((basic (event-basic-type event)))
+    (setq drgnx-term--held
+          (cons (list basic (current-buffer) key)
+                (seq-take (seq-remove (lambda (h) (or (equal (car h) basic) (not (buffer-live-p (nth 1 h)))))
+                                      drgnx-term--held)
+                          (1- drgnx-term--held-max))))))
+
+(defun drgnx-term--release (held mods)
+  "Send the release of HELD (an entry of `drgnx-term--held') with MODS to its terminal, and forget it."
+  (setq drgnx-term--held (delq held drgnx-term--held))
+  (when (buffer-live-p (nth 1 held))
+    (with-current-buffer (nth 1 held) (drgnx-term-send-key (nth 2 held) mods nil 'release))))
+
+(defun drgnx-term-key-release (event)
+  "A `key-release' special event from Nidhogg, (key-release KEY-EVENT): the release goes to the terminal that got the
+key's press, with the modifiers held at the release; a key no terminal holds is ignored."
+  (interactive "e")
+  (let ((ev (cadr event)))
+    (when-let* ((held (assoc (event-basic-type ev) drgnx-term--held)))
+      (drgnx-term--release held (nth 1 (drgnx-term--event-key ev)))))
+  (drgnx-term--key-gate))
+
+(defun drgnx-term--release-all (&optional buffer)
+  "Release every held key (of BUFFER only, when given): its terminal lost the keyboard, so no release will come."
+  (dolist (h drgnx-term--held)
+    (when (or (null buffer) (eq (nth 1 h) buffer)) (drgnx-term--release h nil)))
+  (drgnx-term--key-gate))
+
+(defun drgnx-term--focus-changed ()
+  "`after-focus-change-function': no frame has the focus, so the keys held in terminals are released."
+  (unless (seq-some #'frame-focus-state (frame-list)) (drgnx-term--release-all)))
 
 ;;;; Which keys reach drgnx, which the program
 
@@ -184,6 +250,7 @@ M-x, M-:, M-! and M-&.  As key vectors (M-x is [?\\e ?x]).")
 
 (defvar drgnx-surfaces-cheatsheet-sections)
 (defvar drgnx-session-running-functions)
+(defvar drgnx-session-keepable-functions)
 
 (defun drgnx-terminal--keys-vector (event)
   "EVENT as a key vector: M-x is [?\\e ?x]."
@@ -391,10 +458,13 @@ could run commands asks first (`drgnx-term-clipboard-paste-protection')."
                                                                  mods)))))))))
 
 (defun drgnx-term--selected (window)
-  "`window-selection-change-functions' of a terminal buffer: tell its program it gained or lost the focus."
+  "`window-selection-change-functions' of a terminal buffer: tell its program it gained or lost the focus; one that
+lost it gets the releases of the keys still held in it."
   (let ((in (eq window (selected-window))))
     (with-current-buffer (window-buffer window)
-      (drgnx-term--send "term/focus" (list :in (if in t :false))))))
+      (unless in (drgnx-term--release-all (current-buffer)))
+      (drgnx-term--send "term/focus" (list :in (if in t :false))))
+    (drgnx-term--key-gate)))
 
 ;;;; Settings
 
@@ -469,6 +539,7 @@ read again only after a theme change.  Shared: never changed in place."
           (vector "enquiry-response" drgnx-term-enquiry-response)
           (vector "title-report" (if drgnx-term-title-report t :false))
           (vector "grapheme-width-method" drgnx-term-grapheme-width-method)
+          (vector "detached-keep" drgnx-term-detached-keep)
           (vector "colours" (drgnx-term--colours))))
 
 (defun drgnx-term--apply-config ()
@@ -561,12 +632,14 @@ window scrolled away from the cursor stays where it is unless ALL or `drgnx-term
             (setq pos next)))))))
 
 (defun drgnx-term--patched (view keys)
-  "PATCHED of `drgnx-term-view': the inserter's overlays back, the links made buttons, then the cursor."
+  "PATCHED of `drgnx-term-view': the inserter's overlays back, the links made buttons, then the cursor; the key
+release gate follows the program's key event types."
   (drgnx-view-patch--patched view keys)
   (with-current-buffer (drgnx-view--buffer view)
     (unless drgnx-term-copy-mode
       (drgnx-term--buttons view keys)
-      (drgnx-term--place-cursor))))
+      (drgnx-term--place-cursor))
+    (when (eq (current-buffer) (window-buffer (selected-window))) (drgnx-term--key-gate))))
 
 (defun drgnx-term--link-file (uri)
   "The local file URI names (`file://' with no host or this host), or nil."
@@ -782,7 +855,8 @@ hub is not up, connect, and the subscription opens it (`drgnx-term--connected').
     (if (not (drgnx-term--up-p))
         (progn (setq drgnx-term--state nil) (drgnx-hub-connect))
       (setq drgnx-term--state 'opening)
-      (let ((size (drgnx-term--window-size (or (get-buffer-window buffer) (selected-window)))))
+      (let* ((window (or (get-buffer-window buffer) (selected-window)))
+             (size (drgnx-term--window-size window)))
         (setq drgnx-term--size (list (nth 0 size) (nth 1 size)))
         (setq drgnx-term--started (float-time))
         (drgnx-hub--call-on drgnx-hub--events "term/open"
@@ -790,7 +864,9 @@ hub is not up, connect, and the subscription opens it (`drgnx-term--connected').
                              (list :dir (expand-file-name default-directory) :command (vconcat drgnx-term--program)
                                    :env (drgnx-term--env) :cols (nth 0 size) :rows (nth 1 size)
                                    :cell_px (nth 2 size) :class drgnx-term-class :window drgnx-term-scrollback-lines
-                                   :config (drgnx-term--worker-config))
+                                   :config (drgnx-term--worker-config)
+                                   ;; where a reattach opens it again: the panel is a side window
+                                   :place (if (window-parameter window 'window-side) "panel" "editor"))
                              (and drgnx-term-linux-cgroup-memory-limit
                                   (list :memory_max drgnx-term-linux-cgroup-memory-limit))
                              (and drgnx-term-linux-cgroup-processes-limit
@@ -815,13 +891,16 @@ hub is not up, connect, and the subscription opens it (`drgnx-term--connected').
         (drgnx-term--flush)))))
 
 (defun drgnx-term--connected ()
-  "`drgnx-hub-connected-functions': terminals not opened yet open now; the others' queued input goes."
+  "`drgnx-hub-connected-functions': terminals not opened yet open now; the others' queued input goes; the terminals
+an earlier drgnx left running are offered (`drgnx-term-reattach')."
   (dolist (b (append (drgnx-term-buffers)
                      (seq-filter (lambda (b) (and (eq (buffer-local-value 'major-mode b) 'drgnx-term-mode)
                                                   (null (buffer-local-value 'drgnx-term--state b))))
                                  (buffer-list))))
     (with-current-buffer b
-      (if (null drgnx-term--state) (drgnx-term--open b) (drgnx-term--flush)))))
+      (if (null drgnx-term--state) (drgnx-term--open b) (drgnx-term--flush))))
+  ;; terminals an earlier drgnx left running
+  (drgnx-term--look))
 
 (defvar drgnx-term--notices nil "Terminal id → its last notification (a notice item), newest first.")
 
@@ -831,7 +910,7 @@ hub is not up, connect, and the subscription opens it (`drgnx-term--connected').
     (remhash drgnx-term--id drgnx-term--buffers)
     (when (assoc drgnx-term--id drgnx-term--notices)
       (setq drgnx-term--notices (cl-remove drgnx-term--id drgnx-term--notices :key #'car :test #'equal))
-      (drgnx-notice-set 'term (mapcar #'cdr drgnx-term--notices)))
+      (drgnx-term--post-notices))
     (when (and (eq drgnx-term--state 'open) (drgnx-term--up-p))
       (drgnx-hub--call-on drgnx-hub--events "term/close" (list :id drgnx-term--id) #'ignore))
     (setq drgnx-term--id nil)))
@@ -888,7 +967,10 @@ does a shell's that failed at once (`drgnx-term-abnormal-command-exit-runtime'),
     (force-mode-line-update)))
 
 (defun drgnx-term--event (event data)
-  "`drgnx-hub-event-functions': a `term/*' event goes to its terminal's buffer."
+  "`drgnx-hub-event-functions': a `term/*' event goes to its terminal's buffer; `term/detached' (terminals another
+drgnx left running) asks what is offered now."
+  (when (equal event "term/detached")
+    (drgnx-term--look))
   (when (and (stringp event) (string-prefix-p "term/" event))
     (when-let* ((b (gethash (plist-get data :id) drgnx-term--buffers)) ((buffer-live-p b)))
       (with-current-buffer b
@@ -955,7 +1037,7 @@ with the path raw, or a path): the buffer's `default-directory' follows, for a l
   (setf (alist-get drgnx-term--id drgnx-term--notices nil nil #'equal)
         (list :id (concat "term:" drgnx-term--id)
               :text (if (string-empty-p (or title "")) body (format "%s: %s" title body))))
-  (drgnx-notice-set 'term (mapcar #'cdr drgnx-term--notices)))
+  (drgnx-term--post-notices))
 
 (defconst drgnx-term--colour-faces
   (cons 'drgnx-term-default (cons 'drgnx-term-cursor
@@ -1097,7 +1179,7 @@ before closing a terminal whose program runs (or any, with `always'); nothing el
       (pcase drgnx-term-confirm-close-surface
         ('nil t)
         ('always (yes-or-no-p (format "Close the terminal %s? " (buffer-name))))
-        (_ (or (not (member (buffer-name) (drgnx-term-running)))
+        (_ (or (not (memq (current-buffer) (drgnx-term--running-buffers)))
                (yes-or-no-p (format "A program still runs in %s.  Close it? " (buffer-name))))))))
 
 ;;;; Quitting: what still runs, and the clean exit
@@ -1114,20 +1196,195 @@ does not; a terminal ROWS does not name counts as running."
                         (and (or (null row) (eq (plist-get row :running) t)) (buffer-name b))))
                     buffers)))
 
-(defun drgnx-term-running ()
-  "`drgnx-session-running-functions': this Emacs's terminals whose program still runs, by name.  Asks the hub
-\(`term/list'), waiting at most `drgnx-term-list-wait'; with no answer every open terminal counts as running, so the
-quit question never stops a program unasked."
+(defun drgnx-term--running-buffers ()
+  "This Emacs's open terminals whose program still runs.  Asks the hub (`term/list'), waiting at most
+`drgnx-term-list-wait'; with no answer every open terminal counts as running, so nothing stops unasked."
   (when-let* ((buffers (seq-filter (lambda (b) (eq (buffer-local-value 'drgnx-term--state b) 'open))
                                    (drgnx-term-buffers))))
     (let ((rows (condition-case nil (drgnx-hub-call-sync "term/list" nil drgnx-term-list-wait) (error :none))))
-      (if (eq rows :none) (mapcar #'buffer-name buffers) (drgnx-term--running-names rows buffers)))))
+      (if (eq rows :none)
+          buffers
+        (let ((names (drgnx-term--running-names rows buffers)))
+          (seq-filter (lambda (b) (member (buffer-name b) names)) buffers))))))
+
+
+(defun drgnx-term-running ()
+  "`drgnx-session-running-functions': with `drgnx-term-on-quit' `close', this Emacs's terminals whose program still
+runs, by name (`drgnx-term--running-buffers'); with `ask' they are named by `drgnx-term-keepable' instead, and with
+`keep' quitting stops none of them."
+  (and (eq drgnx-term-on-quit 'close) (mapcar #'buffer-name (drgnx-term--running-buffers))))
+
+(defvar drgnx-term--quit-keep nil
+  "The ids of the terminals the last quit question found running: Keep Running keeps these.")
+
+(defun drgnx-term-keepable ()
+  "`drgnx-session-keepable-functions': with `drgnx-term-on-quit' `ask', this Emacs's terminals whose program still
+runs, by name; the quit question then offers to keep them running."
+  (when (eq drgnx-term-on-quit 'ask)
+    (let ((buffers (drgnx-term--running-buffers)))
+      (setq drgnx-term--quit-keep (mapcar (lambda (b) (buffer-local-value 'drgnx-term--id b)) buffers))
+      (mapcar #'buffer-name buffers))))
+
+(defvar drgnx-session-quit-keep)
+
+(defun drgnx-term--kept-at-quit ()
+  "The ids of this Emacs's terminals that keep running after it quits: every one with `drgnx-term-on-quit' `keep',
+none with `close'; with `ask', those the question found running when it was answered Keep Running, none when Close
+Them, and those whose program runs when it did not ask (a daemon's shutdown, a script's `kill-emacs')."
+  (pcase drgnx-term-on-quit
+    ('keep (delq nil (mapcar (lambda (b) (and (eq (buffer-local-value 'drgnx-term--state b) 'open)
+                                              (buffer-local-value 'drgnx-term--id b)))
+                             (drgnx-term-buffers))))
+    ('close nil)
+    (_ (pcase (bound-and-true-p drgnx-session-quit-keep)
+         ('keep drgnx-term--quit-keep)
+         ('close nil)
+         (_ (mapcar (lambda (b) (buffer-local-value 'drgnx-term--id b)) (drgnx-term--running-buffers)))))))
 
 (defun drgnx-term--session-end ()
-  "`kill-emacs-hook': a clean exit ends this Emacs's terminals (`term/session-end'); after a crash they keep running
-and the next Emacs of the session adopts them."
+  "`kill-emacs-hook': a clean exit ends this Emacs's terminals (`term/session-end') but those that keep running
+\(`drgnx-term--kept-at-quit'), which wait detached for the next drgnx; after a crash they all keep running."
   (when (drgnx-term--up-p)
-    (ignore-errors (drgnx-hub--call-on drgnx-hub--events "term/session-end" nil #'ignore))))
+    (ignore-errors
+      (drgnx-hub--call-on drgnx-hub--events "term/session-end" (list :keep (vconcat (drgnx-term--kept-at-quit)))
+                          #'ignore))))
+
+;;;; Reattach: terminals an earlier drgnx left running
+
+
+(defvar drgnx-term--offered nil
+  "The terminals offered for reattach at the last look: `term/list' rows, orphaned or detached, shown by no Emacs.")
+
+(defun drgnx-term--offered-rows (rows)
+  "The rows of ROWS (`term/list''s answer) this Emacs may take: orphaned or detached, not this session's and not
+one a buffer here shows.  A terminal another live Emacs shows is never offered."
+  (seq-filter (lambda (r) (and (or (eq (plist-get r :orphaned) t) (plist-get r :detached_at))
+                               (not (eq (plist-get r :mine) t))
+                               (not (gethash (plist-get r :id) drgnx-term--buffers))))
+              rows))
+
+(defun drgnx-term--age (ms)
+  "How long ago MS (ms since the epoch) was, in words."
+  (let ((s (truncate (max 0 (- (float-time) (/ ms 1000.0))))))
+    (cond ((< s 120) "just now")
+          ((< s 7200) (format "%d min ago" (/ s 60)))
+          ((< s 172800) (format "%d h ago" (/ s 3600)))
+          (t (format "%d days ago" (/ s 86400))))))
+
+(defun drgnx-term--row-label (row)
+  "One line naming terminal ROW (a `term/list' row): its title (else its program), folder and age, and its id."
+  (let ((title (plist-get row :title)) (command (append (plist-get row :command) nil)) (at (plist-get row :detached_at)))
+    (string-join (delq nil (list (if (string-empty-p (or title "")) (file-name-nondirectory (or (car command) "")) title)
+                                 (abbreviate-file-name (or (plist-get row :cwd) ""))
+                                 (if (numberp at) (concat "kept " (drgnx-term--age at)) "its Emacs is gone")
+                                 (and (eq (plist-get row :old) t) "from before an update: Close only")
+                                 (plist-get row :id)))
+                 " · ")))
+
+(defun drgnx-term--offer-item ()
+  "The notice offering `drgnx-term--offered' (with `drgnx-term-reattach' `ask'), or nil."
+  (let ((n (length drgnx-term--offered)))
+    (and (> n 0) (eq drgnx-term-reattach 'ask)
+         (list :id "term:reattach" :command 'terminal-reattach
+               :text (format "%d terminal%s kept running from your last session" n (if (= n 1) "" "s"))))))
+
+(defun drgnx-term--post-notices ()
+  "The terminal notices: the reattach offer, then the programs' notifications."
+  (drgnx-notice-set 'term (append (delq nil (list (drgnx-term--offer-item))) (mapcar #'cdr drgnx-term--notices))))
+
+(defun drgnx-term--look ()
+  "Ask the hub which terminals are offered (`term/list'), then offer them (`drgnx-term--offer')."
+  (when (drgnx-term--up-p)
+    (drgnx-hub--call-on drgnx-hub--events "term/list" nil
+                        (lambda (rows error) (unless error (drgnx-term--offer rows))))))
+
+(defun drgnx-term--offer (rows)
+  "ROWS (`term/list''s answer) offer terminals: with `drgnx-term-reattach' `always' they open here at once (not
+those from before an update), with `ask' the notice says how many, with `never' only Reattach Terminal shows them."
+  (setq drgnx-term--offered (drgnx-term--offered-rows rows))
+  (when (eq drgnx-term-reattach 'always)
+    (dolist (r drgnx-term--offered)
+      (unless (eq (plist-get r :old) t) (drgnx-term-reattach-one r))))
+  (drgnx-term--post-notices))
+
+(defun drgnx-term--forget-offer (id)
+  "Terminal ID is no longer offered (reattached here, or closed)."
+  (setq drgnx-term--offered (seq-remove (lambda (r) (equal (plist-get r :id) id)) drgnx-term--offered))
+  (drgnx-term--post-notices))
+
+(defun drgnx-term--reattached (buffer id result error)
+  "`term/attach' answered RESULT (or ERROR) for terminal ID in BUFFER: it draws there, with this Emacs's settings;
+a refusal (another Emacs took it first) kills BUFFER."
+  (when (buffer-live-p buffer)
+    (if error
+        (let ((kill-buffer-query-functions nil))
+          (kill-buffer buffer)
+          (message "The terminal could not be reattached: %s" (or (plist-get error :message) error)))
+      (drgnx-term--opened buffer result nil)
+      (with-current-buffer buffer (drgnx-term--send "term/config" (list :config (drgnx-term--worker-config))))))
+  (drgnx-term--forget-offer id))
+
+(defun drgnx-term-reattach-one (row &optional select)
+  "Open terminal ROW (a `term/list' row) here (`term/attach'): a terminal buffer where it was shown (its `place',
+else the panel), drawn from a reset at this window's size; SELECT shows it selected.  Returns the buffer."
+  (let* ((buffer (generate-new-buffer "*terminal*"))
+         (command (append (plist-get row :command) nil))
+         (cwd (plist-get row :cwd))
+         (id (plist-get row :id)))
+    (with-current-buffer buffer
+      (drgnx-term-mode)
+      (setq default-directory (file-name-as-directory (if (and (stringp cwd) (file-directory-p cwd)) cwd "~/"))
+            drgnx-term--program command
+            drgnx-term--shell (null (cdr command))
+            drgnx-term--state 'opening)
+      (unless (string-empty-p (or (plist-get row :title) "")) (drgnx-term--title (plist-get row :title))))
+    (cond ((not select) (display-buffer buffer))
+          ((equal (plist-get row :place) "editor") (pop-to-buffer-same-window buffer))
+          (t (pop-to-buffer buffer)))
+    (with-current-buffer buffer
+      (let ((size (drgnx-term--window-size (or (get-buffer-window buffer) (selected-window)))))
+        (setq drgnx-term--size (list (nth 0 size) (nth 1 size)))
+        (drgnx-hub--call-on drgnx-hub--events "term/attach"
+                            (list :id id :cols (nth 0 size) :rows (nth 1 size) :cell_px (nth 2 size))
+                            (lambda (r e) (drgnx-term--reattached buffer id r e)))))
+    buffer))
+
+(defun drgnx-term--close-offered (row)
+  "End the program of offered terminal ROW (`term/close')."
+  (drgnx-hub--call-on drgnx-hub--events "term/close" (list :id (plist-get row :id)) #'ignore)
+  (drgnx-term--forget-offer (plist-get row :id)))
+
+(defun drgnx-term--choose (rows)
+  "Choose some of ROWS (offered terminals) and reattach or close them."
+  (let* ((labels (mapcar (lambda (r) (cons (drgnx-term--row-label r) r)) rows))
+         (picked (delq nil (mapcar (lambda (l) (cdr (assoc l labels)))
+                                   (completing-read-multiple "Terminals: " labels nil t)))))
+    (when picked
+      (let ((use-dialog-box nil))
+        (pcase (car (read-multiple-choice (format "%d chosen: " (length picked))
+                                          '((?r "reattach") (?k "close") (?q "cancel"))))
+          (?r (dolist (r picked)
+                (if (eq (plist-get r :old) t)
+                    (message "%s is from before an update: it can only be closed" (drgnx-term--row-label r))
+                  (drgnx-term-reattach-one r t))))
+          (?k (mapc #'drgnx-term--close-offered picked)))))))
+
+(defun drgnx-term-reattach ()
+  "Reattach Terminal: the terminals an earlier drgnx left running (kept at its quit, or after its crash) — reattach
+them all here, choose some, or close them.  A terminal another running drgnx shows is never offered."
+  (interactive)
+  (let ((rows (drgnx-term--offered-rows (drgnx-hub-call-sync "term/list" nil 5))))
+    (setq drgnx-term--offered rows)
+    (drgnx-term--post-notices)
+    (if (null rows)
+        (message "No terminals are left running to reattach")
+      (let ((use-dialog-box nil))
+        (pcase (car (read-multiple-choice
+                     (format "%d terminal%s kept running: " (length rows) (if (cdr rows) "s" ""))
+                     '((?a "reattach all") (?c "choose") (?k "close them") (?q "later"))))
+          (?a (dolist (r rows) (unless (eq (plist-get r :old) t) (drgnx-term-reattach-one r t))))
+          (?c (drgnx-term--choose rows))
+          (?k (mapc #'drgnx-term--close-offered rows)))))))
 
 (defun drgnx-term-usable-p (dir)
   "Non-nil when a terminal in DIR can be drgnx's own: not on Windows, DIR not remote, module tools/term has run."
@@ -1138,7 +1395,11 @@ and the next Emacs of the session adopts them."
 (defun drgnx-term--teardown ()
   "Turning the module off: every terminal ends (its buffer killed closes it), and its keymap sends every key again."
   (drgnx-term--fill-map drgnx-term-mode-map nil)
-  (setq drgnx-term--notices nil)
+  (setq drgnx-term--notices nil drgnx-term--held nil drgnx-term--offered nil drgnx-term--quit-keep nil)
+  (when (eq (lookup-key special-event-map [key-release]) #'drgnx-term-key-release)
+    (define-key special-event-map [key-release] nil t))
+  (remove-function after-focus-change-function #'drgnx-term--focus-changed)
+  (when (boundp 'nidhogg-key-events) (setq nidhogg-key-events nil))
   (let ((drgnx-term-confirm-close-surface nil))   ; turning the module off asks nothing
     (dolist (b (drgnx-term-buffers)) (kill-buffer b))
     (dolist (b (buffer-list))
@@ -1156,7 +1417,10 @@ and the next Emacs of the session adopts them."
                        (advice-add 'drgnx-keys-apply :after #'drgnx-term-apply-keys)
                        (add-hook 'drgnx-surfaces-cheatsheet-sections #'drgnx-terminal-cheatsheet-section)
                        (add-hook 'drgnx-session-running-functions #'drgnx-term-running)
+                       (add-hook 'drgnx-session-keepable-functions #'drgnx-term-keepable)
                        (add-hook 'kill-emacs-hook #'drgnx-term--session-end)
+                       (define-key special-event-map [key-release] #'drgnx-term-key-release)
+                       (add-function :after after-focus-change-function #'drgnx-term--focus-changed)
                        (drgnx-state-subscribe 'windows-changed #'drgnx-term--windows-changed)
                        (drgnx-notice-define-source 'term :title "Terminal")
                        (drgnx-command-define 'terminal-copy :category "Terminal" :title "Copy" :scope 'editing
@@ -1188,6 +1452,9 @@ and the next Emacs of the session adopts them."
                                              :map '(drgnx-term . drgnx-term-copy-mode-map)
                                              :when #'drgnx-terminal--in-terminal-p
                                              :doc "Go to the next newer match of the last Find in Terminal")
+                       (drgnx-command-define 'terminal-reattach :category "Terminal" :title "Reattach Terminal"
+                                             :command #'drgnx-term-reattach
+                                             :doc "Open the terminals an earlier drgnx left running, or close them")
                        (add-hook 'drgnx-hub-connected-functions #'drgnx-term--connected)
                        (add-hook 'drgnx-view-model-functions #'drgnx-term--model-queued)
                        (add-hook 'enable-theme-functions #'drgnx-term--theme-changed)

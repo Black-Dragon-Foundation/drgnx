@@ -2,10 +2,10 @@
 //! `view/*` messages of a terminal's view (`term:<id>`), which go to its worker rather than the hub's own views.
 
 use super::{Spawn, Terms};
-use drgnx_term::proto::{In, Out};
+use drgnx_term::proto::{In, KeyAction, Out};
 use drgnx_term::scope::Limits;
 use runstav::methods::Params;
-use runstav::methods::term::{TermOpened, TermStatus};
+use runstav::methods::term::{TermKeyAction, TermOpened, TermStatus};
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -77,6 +77,7 @@ pub async fn serve(t: &Terms, conn: u64, p: Params) -> Result<Value, Error> {
                     tasks_max: p.tasks_max,
                 },
                 config: p.config.into_iter().map(|(k, v)| (k, v.into())).collect(),
+                place: p.place,
             };
             let rec = t
                 .spawn(conn, t.session_of(conn), spawn)
@@ -102,6 +103,11 @@ pub async fn serve(t: &Terms, conn: u64, p: Params) -> Result<Value, Error> {
                 mods: p.mods,
                 text: p.text.unwrap_or_default(),
                 unshifted: p.unshifted.unwrap_or(0),
+                action: match p.action {
+                    TermKeyAction::Press => KeyAction::Press,
+                    TermKeyAction::Repeat => KeyAction::Repeat,
+                    TermKeyAction::Release => KeyAction::Release,
+                },
             },
         ),
         Params::TermText(p) => tell(t, &p.id, In::Text { text: p.text }),
@@ -125,6 +131,7 @@ pub async fn serve(t: &Terms, conn: u64, p: Params) -> Result<Value, Error> {
                 cols: p.cols,
                 rows: p.rows,
                 cell_px: p.cell_px,
+                redraw: false,
             },
         ),
         Params::TermScroll(p) => {
@@ -164,7 +171,7 @@ pub async fn serve(t: &Terms, conn: u64, p: Params) -> Result<Value, Error> {
         Params::TermClose(p) => Ok(json!(t.send(&p.id, &In::Close { signal: p.signal }))),
         Params::TermList(_) => {
             let list: Vec<TermStatus> = t
-                .list(LIST_WITHIN)
+                .list(LIST_WITHIN, t.session_of(conn).as_deref())
                 .await
                 .into_iter()
                 .map(|s| TermStatus {
@@ -174,16 +181,36 @@ pub async fn serve(t: &Terms, conn: u64, p: Params) -> Result<Value, Error> {
                     cwd: s.cwd,
                     title: s.title,
                     old: s.old,
+                    mine: s.mine,
+                    orphaned: s.orphaned,
+                    detached_at: s.detached_at,
+                    command: s.command,
+                    place: s.place,
                 })
                 .collect();
             Ok(json!(list))
         }
-        Params::TermSessionEnd(_) => {
+        Params::TermSessionEnd(p) => {
             let n = match t.session_of(conn) {
-                Some(s) => t.end_session(&s),
+                Some(s) => t.end_session(&s, &p.keep),
                 None => 0,
             };
             Ok(json!(n))
+        }
+        Params::TermAttach(p) => {
+            let rec = t
+                .attach_to(conn, &p.id, p.cols, p.rows, p.cell_px)
+                .map_err(|e| {
+                    if t.record(&p.id).is_none() {
+                        no_such(&p.id)
+                    } else {
+                        error(ErrorCode::InvalidParams, e, Some("id"))
+                    }
+                })?;
+            Ok(json!(TermOpened {
+                id: rec.id,
+                view: rec.view,
+            }))
         }
         _ => Err(error(ErrorCode::Internal, "not a term/ method", None)),
     }

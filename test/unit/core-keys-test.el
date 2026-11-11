@@ -771,7 +771,7 @@ keys); every binding is undone after."
 (ert-deftest drgnx-keys/vscode-on-macos-matches-vscode ()
   ;; VS Code's own macOS keys where they are not its Linux key with Ctrl → Cmd; every key valid.
   (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'macos)))
-    (pcase-dolist (`(,id ,key) '((toggle-panel "C-`") (terminal-new "C-S-`") (go-recent "C-<tab>") (go-back "C--")
+    (pcase-dolist (`(,id ,key) '((terminal-toggle "C-`") (toggle-panel "M-j") (terminal-new "C-S-`") (go-recent "C-<tab>") (go-back "C--")
                                  (go-forward "C-_") (next-tab "M-s-<right>") (previous-tab "M-s-<left>")
                                  (file-close-window "s-W") (move-editor-to-next-group "C-s-<right>")
                                  (edit-expand "C-S-s-<right>") (edit-shrink "C-S-s-<left>")
@@ -866,7 +866,7 @@ keys); every binding is undone after."
     (modules-toggle "RET" drgnx-modules-list-mode-map) (keyboard-profile "C-k C-p" nil) (open-file "C-o" nil)
     (save-file "C-s" nil) (file-save-as "C-S-s" nil) (file-new "C-n" nil) (file-reopen-tab "C-S-t" nil)
     (file-new-window "C-S-n" nil) (file-close-window "C-q" nil) (view-escape "<escape>" nil)
-    (toggle-panel "C-`" nil) (toggle-panel "M-j" nil) (toggle-panel "C-j" nil) (toggle-right-dock "C-M-b" nil)
+    (toggle-panel "M-j" nil) (toggle-panel "C-j" nil) (toggle-right-dock "C-M-b" nil)
     (split-editor-right "C-\\" nil) (split-editor-down "C-k C-\\" nil) (close-group-editors "C-k w" nil)
     (focus-group-1 "C-1" nil) (focus-group-1 "M-1" nil) (focus-group-2 "C-2" nil) (focus-group-2 "M-2" nil)
     (focus-group-3 "C-3" nil) (focus-group-3 "M-3" nil) (move-editor-to-next-group "C-M-<right>" nil)
@@ -966,6 +966,8 @@ The commands of modules that need no installed package are in it, the later stag
                               search-mode-next ; the Search view's mode chip
                               search-scope-next search-scope-changed search-scope-branch ; its scope chips
                               search-history-prev search-history-next search-save search-run-saved ; its history
+                              search-preview-file search-preview-keep search-preview-drop ; its preview tile
+                              search-sheet-confirm search-sheet-cancel search-sheet-next search-sheet-previous ; the sheet
                               layout-next browser-go keyboard-shortcuts shortcuts-change shortcuts-add shortcuts-filter
                               shortcuts-record-filter shortcuts-conflicts shortcuts-no-key shortcuts-changed
                               shortcuts-undo shortcuts-reset shortcuts-reset-all shortcuts-profile
@@ -1012,7 +1014,8 @@ The commands of modules that need no installed package are in it, the later stag
                               agents-panel-chip agents-panel-revoke-always
                               agents-panel-start agents-panel-move agents-panel-compact agents-panel-mode agents-panel-model
                               agents-here-mark agents-here-huddle agents-huddle agents-huddle-send agents-huddle-open
-                              work-huddle agents-view agents-open))   ; part 3: the agent panel (its list) and H on a map overlap
+                              work-huddle agents-view agents-open   ; part 3: the agent panel (its list) and H on a map overlap
+                              terminal-toggle))   ; C-` is Toggle Terminal, as in VS Code (the panel keeps M-j)
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

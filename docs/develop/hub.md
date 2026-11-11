@@ -1451,6 +1451,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `messages/mark` | user | `{id: natnum, state: "delivered" \| "read" \| "acted"}` | `{changed: boolean}` | yes |
 | `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes |
+| `orch/evidence` | user | `{task: TaskRef}` | `{evidence: [any]}` | no |
 | `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
 | `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |
 | `pair/closed` | user | `{file: AbsPath}` | `boolean` | no |
@@ -1526,19 +1527,20 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `tasks/find` | user | `{assignee?: string, cursor?: natnum, labels?: [string], project?: string, query?: Text, status?: Status}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/ready` | user | `{labels?: [string], limit?: natnum, project?: string}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/write` | user | `{acceptance?: Text, add?: [string], body?: Text, cwd?: AbsPath, dst?: string, id?: string, kind?: string, labels?: [string], lease?: integer, mode?: "children" \| "replace", note?: Text, op: "create" \| "update" \| "claim" \| "heartbeat" \| "release" \| "handoff" \| "reassign" \| "split" \| "complete" \| "link" \| "unlink" \| "label" \| "tools", parent?: string, parts?: [Text], priority?: integer, project?: string, remove?: [string], src?: string, status?: Status, title?: Text, to?: string, tracker?: boolean, ver?: integer}` | `any` | yes |
+| `term/attach` | user | `{cell_px?: [natnum, natnum], cols: natnum, id: string, rows: natnum}` | `{id: string, view: string}` | no |
 | `term/close` | user | `{id: string, signal?: integer}` | `boolean` | no |
 | `term/config` | user | `{config: [[string, SettingValue]], id: string}` | `boolean` | no |
 | `term/fetch` | user | `{before_key?: string, id: string, max_bytes?: natnum}` | `{version?: natnum}` | no |
 | `term/focus` | user | `{id: string, in: boolean}` | `boolean` | no |
-| `term/key` | user | `{id: string, key: string, mods?: [string], text?: string, unshifted?: natnum}` | `boolean` | no |
+| `term/key` | user | `{action?: "press" \| "repeat" \| "release", id: string, key: string, mods?: [string], text?: string, unshifted?: natnum}` | `boolean` | no |
 | `term/list` | user | `{}` | `[TermStatus]` | no |
 | `term/mouse` | user | `{button?: integer, col: natnum, id: string, kind: string, mods?: [string], row: natnum}` | `boolean` | no |
-| `term/open` | user | `{cell_px?: [natnum, natnum], class: string, cols: natnum, command?: [string], config?: [[string, SettingValue]], dir: string, env?: [[string, string]], memory_max?: string, rows: natnum, tasks_max?: string, window?: natnum}` | `{id: string, view: string}` | no |
+| `term/open` | user | `{cell_px?: [natnum, natnum], class: string, cols: natnum, command?: [string], config?: [[string, SettingValue]], dir: string, env?: [[string, string]], memory_max?: string, place?: string, rows: natnum, tasks_max?: string, window?: natnum}` | `{id: string, view: string}` | no |
 | `term/paste` | user | `{id: string, text: string}` | `boolean` | no |
 | `term/resize` | user | `{cell_px: [natnum, natnum], cols: natnum, id: string, rows: natnum}` | `boolean` | no |
 | `term/scroll` | user | `{delta?: integer, from?: string, id: string, prompt_delta?: integer, to?: string}` | `{key?: string}` | no |
 | `term/search` | user | `{dir?: string, id: string, query: string}` | `{found: natnum, held: natnum, model?: natnum}` | no |
-| `term/session-end` | user | `{}` | `natnum` | no |
+| `term/session-end` | user | `{keep?: [string]}` | `natnum` | no |
 | `term/text` | user | `{id: string, text: string}` | `boolean` | no |
 | `term/text-range` | user | `{from_key?: string, id: string, to_key?: string}` | `{text: string}` | no |
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
@@ -3206,6 +3208,16 @@ the `launch-sandboxed/*` rows (`tests/launch_sandboxed.rs`, a session's launch s
 container has no user namespaces for bwrap, so CI runs them in `escape-host`'s sandbox lane; the rows of the reduced
 tier run on it where the kernel has Landlock ABI 9 and on the full tier elsewhere (no runner has ABI 9 yet).
 
+**Rows and failure classes.** `result.json` keeps every row of the whole log (`End.rows`, read a line at a time by
+`vordr::rows::Reader`, whatever the job's kind: cargo test, ERT and domr lines don't overlap): its name, verdict
+(`pass`, `skip`, `fail`) and a failure's class — `assert` (a panic or a `should` in the test), `build` (a compile error,
+an ERT void function or a file that didn't load; it carries the symbols the errors say are missing: rustc's
+`vordr::rows::MISSING` codes, `(void-function S)`), `error`, `timeout` and `infra`. A compile error is the row
+`build:CRATE (TARGET)` from cargo's `could not compile` line. `vordr::rows::close` adds the row `(job)` for a job that
+timed out (`timeout`), was lost or ended `infra` (`infra`), was stopped, or failed with no failing row (`error`). The
+summary's `failing` names the failed rows (at most 50, `(job)` left out); `Runner::rows` reads them. The gates read
+rows only (`docs/develop/orchestration.md`).
+
 The editor's own jobs are the user's `exec/start` with four more fields (`StartParams`: `name`, `env`, `memory_max`,
 `nice`; `StartParams::user_only_field` names the first one a request sets). `exec::start` refuses them from a session
 (`user_job`: `invalid-params`), `env` and `memory_max` from a container job, and `memory_max` on macOS; the decode check
@@ -3569,7 +3581,10 @@ frames to `<id>/log` for the current attempt and `<id>/log.<n>` for a late one; 
 **Dialing** (`Queue::dial`, which the registry's `connect` calls): the transport opens the runner, its session starts
 and the queue takes it (adding a runner it doesn't know yet). A dial refused for a login the user must do, or for a
 changed host key, puts the runner in `needs login` with the command its card shows (`ssh HOST true`); a lost link
-leaves that state as it is, and nothing is placed there until the runner's next `hello`.
+leaves that state as it is, and nothing is placed there until the runner's next `hello`. A Mac runner whose last
+`ready` said `on_battery` and whose link is then lost is `sleeping` (its lid closed), not `unreachable`: no strike,
+its attempts detached for the grace, redialed like an unreachable one (`a_mac_on_battery_that_goes_quiet_is_sleeping`,
+`a_mac_on_mains_that_goes_quiet_is_unreachable`).
 
 **The local runner** (`runners/local.rs`, Calls 6 and 7): `Admission::Live` on Linux, `forseti::admit` over
 `sleipnir::linux::probe` under the `workstation` profile, with a reservation per admitted job in the reservation
@@ -3819,7 +3834,13 @@ graph's own door is shut to every other class (`write::runners::an_agent_write_o
 seam: `UrdrStore` in the hub, `MemStore` in tests.
 
 `Registry::add(host, trust, …)`, in order, each step a `sh -c` on the runner over the user's own ssh (the generated
-config, no terminal): `uname -m`, `uname -s` and `$HOME` (not Linux: refused); the bundle for that architecture from
+config, no terminal): `uname -m`, `uname -s`, `$HOME` and, on a Mac, `sysctl.proc_translated` (neither Linux nor
+Darwin, an architecture without a bundle, or an Intel Mac: refused; a Rosetta shell, x86_64 and translated, is Apple
+silicon). A Mac (`host_kind`) takes the `aarch64-apple-darwin` bundle (`sleipnir` alone, built and ad-hoc signed on a
+Mac by `drgnx build runner-bundle --target aarch64-apple-darwin`), checked with `shasum -a 256`, into the root
+`~/.drgnx-runner.noindex` (Spotlight skips `.noindex`), made 0700 and excluded from Time Machine (`tmutil
+addexclusion`). The hub's own boot id is `/proc/sys/kernel/random/boot_id`, or `kern.bootsessionuuid` on a Mac
+(`hub_boot_id`). A Linux host takes the bundle for its architecture from
 `DRGNX_RUNNER_BUNDLES` (default `runtime/target/bundle` beside the hub's build folder, where `drgnx build runner-bundle`
 puts `<arch>/sleipnir`, `drgnx-key`, `drgnx-px-<arch>-linux-musl`) copied to `<root>/bin/<hash>/` (written as `.part`, hash checked, moved
 into place; refused with the build command when there is none); `sleipnir serve` asked for `hello-ok` and `probe` over

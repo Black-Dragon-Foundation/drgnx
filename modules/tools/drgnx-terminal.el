@@ -19,6 +19,7 @@
 (declare-function drgnx-term-start "drgnx-term")
 (declare-function drgnx-term-start-directory "drgnx-term" (dir))
 (declare-function drgnx-term-usable-p "drgnx-term")
+(declare-function drgnx-wb-area-toggle-tab "drgnx-area" (area tab &optional start))
 
 (defun drgnx-terminal-shell ()
   "The user's shell: $SHELL when it names an executable file, else `shell-file-name'."
@@ -74,6 +75,12 @@ module is off."
         (drgnx-term-start dir)
       (drgnx-terminal-new-eshell dir))))
 
+(defun drgnx-terminal-toggle ()
+  "Show or hide the panel's Terminal tab (VS Code's Ctrl+`): shown, it is selected, and a new terminal starts when
+the tab has none; pressed while the tab shows, the panel hides."
+  (interactive)
+  (drgnx-wb-area-toggle-tab 'panel 'terminal #'drgnx-terminal-new))
+
 (defun drgnx-terminal-here ()
   "A new terminal in the folder of the Explorer row (or of this file)."
   (interactive)
@@ -88,6 +95,9 @@ module is off."
                      (lambda ()
                        (drgnx-command-define 'terminal-new :category "Terminal" :title "New Terminal" :scope 'window
                                              :command #'drgnx-terminal-new :doc "A new terminal in the panel")
+                       (drgnx-command-define 'terminal-toggle :category "Terminal" :title "Toggle Terminal" :scope 'window
+                                             :command #'drgnx-terminal-toggle
+                                             :doc "Show the panel's Terminal tab (a new terminal when it has none), or hide the panel when it shows")
                        (drgnx-command-define 'terminal-new-eshell :category "Terminal" :title "New Eshell" :scope 'window
                                              :command #'drgnx-terminal-new-eshell :doc "A new eshell in the panel")
                        (drgnx-command-define 'explorer-terminal-here :category "Terminal" :title "Open Terminal Here" :scope 'window

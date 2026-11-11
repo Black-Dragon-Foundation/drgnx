@@ -20,16 +20,14 @@
 pub mod admit;
 pub mod attempts;
 pub mod cleanup;
+pub mod platform;
+#[cfg(test)]
+mod platform_tests;
 
-use crate::helper::keys::{self as helper_keys, HELPER_SOCK, KEY_USE};
-use crate::linux::jobexec::HelperSpec;
-use crate::linux::jobexec::{self, JobExec};
-use crate::linux::parse::Parser;
-use crate::linux::podman::{self, Caps, ContainerImage, ContainerReq, RunnerArgs, RunnerMounts};
-use crate::linux::probe::{self, Probe};
-use crate::linux::reserve::{self, Reservation};
+use crate::linux::jobexec::{self, KEY_USE};
+use crate::linux::reserve::Reservation;
+use crate::linux::resize;
 use crate::linux::result::{RESULT, ResultJson};
-use crate::linux::{resize, run, slices, unit};
 use crate::proto::{
     AttemptState, Frame, FrameReader, FrameWriter, JobRef, Key, MAX_CHUNK, ManifestEntry,
     PROTO_VERSION, Sha256,
@@ -43,6 +41,7 @@ use attempts::{CANCELLED, COLLECTED, LOG, Meta};
 use forseti::classify::infra;
 use forseti::safety::Level;
 use forseti::{Action, JobId, Kind, Limits, Profile, RunningJob, Verdict};
+use platform::{LaunchReq, Platform};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
@@ -156,18 +155,6 @@ fn now_s() -> u64 {
         .unwrap_or(0)
 }
 
-/// Whether linger is on for this user (logind's live answer), so its jobs outlive the link.
-fn linger() -> bool {
-    let uid = rustix::process::getuid().as_raw().to_string();
-    run::limited(
-        Path::new("loginctl"),
-        &["show-user", &uid, "--property=Linger", "--value"],
-        &[],
-        run::SYSTEMCTL_LIMIT,
-    )
-    .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "yes")
-}
-
 /// An attempt this `serve` knows: admitted here, or found running in the folder.
 struct Live {
     dir: PathBuf,
@@ -242,35 +229,8 @@ fn entry(e: ManifestEntry) -> Entry {
 /// How many of the attempt's `key-use` lines went up as `key-use` frames (kept beside them, so a reconnect sends
 /// each read once).
 const KEY_USE_SENT: &str = "key-use.sent";
-/// The hub's allow-list for the attempt's proxy.
-/// How long the sidecar's image check or import may take.
-const PX_IMAGE_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
-
-/// A networked job's relay as its `job.json` names it: the sidecar ([`podman::JobNet`]) and the sidecar's `podman`
-/// arguments for the helper, for job ID under RA from the relay image IMAGE.
-fn net_helper(
-    ra: &RunnerArgs,
-    id: &str,
-    image: &str,
-    keyed: bool,
-) -> Result<(podman::JobNet, Vec<String>), String> {
-    let names = podman::net_names(ra, id).map_err(|r| r.message)?;
-    let argv = podman::sidecar_argv(&names, ra, image, keyed)
-        .map_err(|r| r.message)?
-        .into_iter()
-        .map(|a| {
-            a.into_string()
-                .map_err(|_| "a sidecar argument is not UTF-8".to_string())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok((
-        podman::JobNet {
-            sidecar: names.sidecar,
-        },
-        argv,
-    ))
-}
-
+/// The hub's allow-list for the attempt's proxy (Linux: a Mac job has no network yet).
+#[cfg(target_os = "linux")]
 const NET_ALLOW: &str = "net-allow";
 
 enum Event {
@@ -292,11 +252,10 @@ enum Next {
 pub struct Serve<W: Write> {
     cfg: Config,
     w: FrameWriter<W>,
-    probe: Probe,
+    /// The machine: everything `serve` asks of it goes through here.
+    platform: Box<dyn Platform>,
     limits: Limits,
     scheduler: String,
-    /// The `sleipnir` that runs job-exec: this one.
-    exe: PathBuf,
     /// The `bin/<name>` folder this one runs from (empty outside a bundle).
     bundle: String,
     live: BTreeMap<(String, u32), Live>,
@@ -385,15 +344,26 @@ pub fn run<R: Read + Send + 'static, W: Write>(cfg: Config, input: R, output: W)
 }
 
 impl<W: Write> Serve<W> {
+    /// `serve` on this machine's platform.
     pub fn new(cfg: Config, output: W) -> Result<Serve<W>, String> {
+        let exe = std::env::current_exe().map_err(|e| format!("this binary's path: {e}"))?;
+        #[cfg(target_os = "linux")]
+        let platform = platform::LinuxPlatform::new(&cfg, &exe)?;
+        #[cfg(target_os = "macos")]
+        let platform = platform::DarwinPlatform::new(&cfg, &exe)?;
+        Serve::with_platform(cfg, output, Box::new(platform))
+    }
+
+    /// `serve` on PLATFORM.
+    pub fn with_platform(
+        cfg: Config,
+        output: W,
+        platform: Box<dyn Platform>,
+    ) -> Result<Serve<W>, String> {
         fs::create_dir_all(attempts::jobs(&cfg.root))
             .map_err(|e| format!("{}: {e}", cfg.root.display()))?;
         let scheduler = cfg.scheduler();
-        let probe = Probe::system(&cfg.name, &scheduler, SLICE_ROOT, &cfg.root, cfg.profile)
-            .map_err(|e| format!("the probe: {e}"))?;
-        let mem = probe.memory().map(|m| m.total_mib).unwrap_or(0);
-        let cores = probe.cpus_usable().map(|c| c.len() as u32).unwrap_or(1);
-        let limits = Limits::for_profile(cfg.profile, mem, cores);
+        let limits = platform.limits(cfg.profile);
         let exe = std::env::current_exe().map_err(|e| format!("this binary's path: {e}"))?;
         let bin = cfg.root.join("bin");
         let bundle = exe
@@ -406,10 +376,9 @@ impl<W: Write> Serve<W> {
         let mut s = Serve {
             cfg,
             w: FrameWriter::new(output),
-            probe,
+            platform,
             limits,
             scheduler,
-            exe,
             bundle,
             live: BTreeMap::new(),
             hello: false,
@@ -438,7 +407,7 @@ impl<W: Write> Serve<W> {
 
     /// This hub's attempts in the folder.
     fn ours(&self) -> Vec<attempts::Found> {
-        attempts::scan(&self.cfg.root, &unit::active)
+        attempts::scan(&self.cfg.root, &|u| self.platform.active(u))
             .into_iter()
             .filter(|f| f.meta.hub_id == self.cfg.hub_id)
             .collect()
@@ -559,18 +528,15 @@ impl<W: Write> Serve<W> {
         }
         self.hello = true;
         self.load_running();
-        let missing = match probe::contract(&self.probe, Path::new("podman")) {
-            Ok(_) => vec![],
-            Err(m) => m,
-        };
+        let missing = self.platform.contract().err().unwrap_or_default();
         let attempts = self.ours().iter().map(attempts::Found::info).collect();
         let ok = Frame::HelloOk {
             version: PROTO_VERSION,
             bundle: self.bundle.clone(),
             hub_id: self.cfg.hub_id.clone(),
             runner_id: self.cfg.name.clone(),
-            boot_id: self.probe.boot_id().unwrap_or_default(),
-            linger: linger(),
+            boot_id: self.platform.boot_id(),
+            linger: self.platform.survives_link(),
             attempts,
             missing,
         };
@@ -581,25 +547,11 @@ impl<W: Write> Serve<W> {
     }
 
     fn probe_result(&mut self) -> Next {
-        let (facts, missing) = match probe::contract(&self.probe, Path::new("podman")) {
+        let (facts, missing) = match self.platform.contract() {
             Ok(f) => (Some(f), vec![]),
             Err(m) => (None, m),
         };
-        let env: Vec<(std::ffi::OsString, std::ffi::OsString)> = [
-            "PATH",
-            "HOME",
-            "XDG_RUNTIME_DIR",
-            "DBUS_SESSION_BUS_ADDRESS",
-        ]
-        .iter()
-        .filter_map(|k| Some((k.into(), std::env::var_os(k)?)))
-        .collect();
-        let limits = podman::check_limits(Path::new("podman"), &env, run::SYSTEMCTL_LIMIT).err();
-        let features = if limits.is_none() {
-            vec!["podman".to_string()]
-        } else {
-            vec![]
-        };
+        let (limits, features) = self.platform.job_runner();
         self.send(&Frame::ProbeResult {
             facts,
             missing,
@@ -614,13 +566,12 @@ impl<W: Write> Serve<W> {
             .values()
             .filter_map(|l| {
                 let started = l.meta.started?;
-                let slice = slices::job_slice(SLICE_ROOT, &l.meta.r.job).ok()?;
                 Some(RunningJob {
                     id: JobId(l.meta.r.job.clone()),
                     priority: l.meta.priority,
                     started,
                     reserve_mib: l.meta.grant.reserve_mib,
-                    current_mib: self.probe.cgroup(&slice).map(|c| c.used_mib()).unwrap_or(0),
+                    current_mib: self.platform.current_mib(&l.meta.r.job).unwrap_or(0),
                     cores: l.meta.grant.cores,
                     expected: l
                         .meta
@@ -637,7 +588,7 @@ impl<W: Write> Serve<W> {
 
     fn ready(&mut self) -> Next {
         self.last_ready = Instant::now();
-        let mut m = match self.probe.machine(now_s(), &self.limits) {
+        let mut m = match self.platform.machine(now_s(), &self.limits) {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("sleipnir serve: the machine can't be read: {e}");
@@ -648,6 +599,7 @@ impl<W: Write> Serve<W> {
                     running: vec![],
                     slots: vec![],
                     images: vec![],
+                    on_battery: false,
                 });
             }
         };
@@ -671,6 +623,7 @@ impl<W: Write> Serve<W> {
             running,
             slots: slot::present(&self.cfg.root),
             images,
+            on_battery: !m.on_ac,
         })
     }
 
@@ -683,7 +636,7 @@ impl<W: Write> Serve<W> {
             self.level2_since = None;
             // the pressure is gone: the paused builds go on
             for id in std::mem::take(&mut self.paused) {
-                if let Err(e) = resize::unpause(&self.container(&id)) {
+                if let Err(e) = self.platform.unpause(&id) {
                     eprintln!("sleipnir serve: {e}");
                 }
             }
@@ -722,12 +675,7 @@ impl<W: Write> Serve<W> {
         }
     }
 
-    /// Job ID's container.
-    fn container(&self, id: &str) -> String {
-        format!("{}-{id}", self.cfg.prefix)
-    }
-
-    /// Pauses job ID's container once, marking its attempt disturbed first.
+    /// Pauses job ID once, marking its attempt disturbed first.
     fn pause(&mut self, id: &str) {
         let Some(l) = self.live.values().find(|l| l.meta.r.job == id) else {
             return;
@@ -736,7 +684,7 @@ impl<W: Write> Serve<W> {
             return;
         }
         let _ = jobexec::disturbed(&l.dir, "paused");
-        match resize::pause(&self.container(id)) {
+        match self.platform.pause(id) {
             Ok(()) => {
                 eprintln!("sleipnir serve: the ladder pauses {id}");
                 self.paused.insert(id.to_string());
@@ -745,9 +693,8 @@ impl<W: Write> Serve<W> {
         }
     }
 
-    /// Grows each running job near its cap while the machine has room ([`admit::grow`]): the slice's
-    /// `memory.current` (its container and job-exec) sorts out the jobs well under it, the container's own reading
-    /// decides. The grown grant is recorded in the attempt's folder.
+    /// Grows each running job near its cap while the machine has room ([`admit::grow`]; the platform says which are
+    /// near, [`Platform::grow_candidate`]). The grown grant is recorded in the attempt's folder.
     fn grow(&mut self, ours: &[RunningJob]) {
         let keys: Vec<(String, u32)> = self
             .live
@@ -760,40 +707,29 @@ impl<W: Write> Serve<W> {
                 continue;
             };
             let id = l.meta.r.job.clone();
-            let cap = l.meta.grant.mem_cap_mib;
-            let near = slices::job_slice(SLICE_ROOT, &id)
-                .ok()
-                .and_then(|s| self.probe.cgroup(&s).ok())
-                .is_some_and(|c| c.current / (1024 * 1024) * 100 > cap * resize::GROW_AT_PCT);
-            if !near || self.paused.contains(&id) {
+            if self.paused.contains(&id) {
                 continue;
             }
-            let container = self.container(&id);
-            let Ok(current_mib) =
-                resize::container_cgroup(&container).and_then(|cg| resize::current_mib(&cg))
-            else {
+            let Some(job) = self.platform.grow_candidate(
+                &id,
+                l.meta.grant.mem_cap_mib,
+                l.meta.spec.mem_mib.max,
+            ) else {
                 continue;
             };
             let g = admit::Grow {
-                job: resize::Sized {
-                    job: JobId(id.clone()),
-                    container,
-                    machine: self.cfg.name.clone(),
-                    cap_mib: cap,
-                    current_mib,
-                    max_mib: l.meta.spec.mem_mib.max,
-                },
+                job,
                 reservation: admit::reservation_job(&id, l.meta.r.attempt),
                 head: self.head,
             };
             match admit::grow(
-                &self.probe,
+                &*self.platform,
                 &self.limits,
                 &self.scheduler,
                 ours,
                 now_s(),
                 &g,
-                resize::apply,
+                |r| self.platform.resize(r),
             ) {
                 Ok(Some(r)) => {
                     eprintln!(
@@ -819,7 +755,7 @@ impl<W: Write> Serve<W> {
     fn weigh(&mut self, ours: &[RunningJob]) {
         let running: Vec<(String, forseti::Priority)> = ours
             .iter()
-            .filter_map(|r| Some((slices::job_slice(SLICE_ROOT, &r.id.0).ok()?, r.priority)))
+            .filter_map(|r| Some((self.platform.weight_unit(&r.id.0)?, r.priority)))
             .collect();
         let want = resize::weights(&running, std::mem::take(&mut self.p12_waiting));
         self.weights.retain(|u, _| want.iter().any(|(w, _)| w == u));
@@ -833,7 +769,7 @@ impl<W: Write> Serve<W> {
             {
                 continue;
             }
-            match resize::set_weight(&unit, w) {
+            match self.platform.set_weight(&unit, w) {
                 Ok(()) => {
                     self.weights.insert(unit, w);
                 }
@@ -842,20 +778,14 @@ impl<W: Write> Serve<W> {
         }
     }
 
-    /// Writes REASON in DIR, then kills job ID's container: job-exec sees the command end and writes the verdict the
-    /// reason names.
+    /// Writes REASON in DIR, then kills job ID's command: job-exec sees it end and writes the verdict the reason
+    /// names.
     fn kill(&self, dir: &Path, id: &str, reason: &str) {
         if let Err(e) = jobexec::kill_reason(dir, reason) {
             eprintln!("sleipnir serve: the kill reason of {id}: {e}");
         }
-        let name = self.container(id);
-        if let Err(e) = run::limited(
-            Path::new("podman"),
-            &["kill", &name],
-            &[],
-            run::SYSTEMCTL_LIMIT,
-        ) {
-            eprintln!("sleipnir serve: podman kill {name}: {e}");
+        if let Err(e) = self.platform.kill(id) {
+            eprintln!("sleipnir serve: {e}");
         }
     }
 
@@ -917,7 +847,7 @@ impl<W: Write> Serve<W> {
         };
         let ours = self.running_jobs();
         match admit::admit(
-            &self.probe,
+            &*self.platform,
             &self.limits,
             &self.scheduler,
             &ours,
@@ -970,7 +900,7 @@ impl<W: Write> Serve<W> {
 
     fn unreserve(&self, r: &JobRef) {
         let _ = self
-            .probe
+            .platform
             .reservations()
             .remove(&self.scheduler, &admit::reservation_job(&r.job, r.attempt));
     }
@@ -1008,15 +938,16 @@ impl<W: Write> Serve<W> {
         };
         let ran_in = image.clone();
         let launched = src.and_then(|src| {
-            self.launch(
-                &dir,
-                &meta,
-                &src,
+            self.platform.launch(&LaunchReq {
+                dir: &dir,
+                meta: &meta,
+                src: &src,
                 image,
-                &env,
-                (net_hosts.as_slice(), pins),
+                env: &env,
+                net_hosts: &net_hosts,
+                pins,
                 parser,
-            )
+            })
         });
         match launched {
             Ok((unit, pid)) => {
@@ -1084,186 +1015,9 @@ impl<W: Write> Serve<W> {
         Ok((src, key.id()))
     }
 
-    /// The relay sidecar's image, imported from the bundle's `drgnx-px-<arch>-linux-musl` beside this binary if it
-    /// isn't there yet (tagged by content: a new bundle is a new image).
-    fn px_image(&self) -> Result<String, String> {
-        let arch = if std::env::consts::ARCH == "aarch64" {
-            "arm64"
-        } else {
-            "amd64"
-        };
-        let dir = self.exe.parent().unwrap_or(Path::new("."));
-        let bin = drgnx_px::image::binary_for(dir, arch);
-        let px = fs::read(&bin).map_err(|e| {
-            format!(
-                "drgnx could not build its proxy image: {}: {e}",
-                bin.display()
-            )
-        })?;
-        let env: Vec<_> = std::env::vars_os().collect();
-        drgnx_px::image::ensure_image(
-            Path::new("podman"),
-            &env,
-            &drgnx_px::image::image_tar(&px),
-            PX_IMAGE_LIMIT,
-        )
-        .map_err(|e| format!("drgnx could not build its proxy image: {e}"))
-    }
-
-    /// Starts the attempt's unit on the source SRC: its job slice, its `job.json`, `sleipnir job-exec` in a transient
-    /// service. The unit and its main pid.
-    #[allow(clippy::too_many_arguments)]
-    fn launch(
-        &self,
-        dir: &Path,
-        meta: &Meta,
-        src: &Path,
-        image: Option<String>,
-        env: &[(String, String)],
-        (net_hosts, pins): (&[String], Pins),
-        parser: &str,
-    ) -> Result<(String, u32), String> {
-        let id = &meta.r.job;
-        if !env.is_empty() {
-            return Err("variables for the container aren't carried yet".into());
-        }
-        let image = image.ok_or("a runner job is a container job: it needs an image")?;
-        if let Some(why) = crate::linux::confined::refusal() {
-            return Err(why);
-        }
-        // the job's own copy of the bundle's drgnx-key: each container relabels its mounts (`Z`)
-        let own_copy = |name: &str| -> Result<PathBuf, String> {
-            let from = self.exe.with_file_name(name);
-            let to = dir.join(name);
-            fs::copy(&from, &to)
-                .map(|_| to)
-                .map_err(|e| format!("{name} from the bundle ({}): {e}", from.display()))
-        };
-        let keys = if meta.spec.keys.is_empty() {
-            None
-        } else {
-            Some(podman::KeyMounts {
-                helper: own_copy("drgnx-key")?,
-                vars: meta
-                    .spec
-                    .keys
-                    .iter()
-                    .map(|k| (k.clone(), k.clone()))
-                    .collect(),
-            })
-        };
-        let hub_allow = if net_hosts.is_empty() {
-            None
-        } else {
-            let text = net_hosts.join("\n") + "\n";
-            crate::helper::net::allow_list(&text)?;
-            let f = dir.join(NET_ALLOW);
-            fs::write(&f, text).map_err(|e| format!("{NET_ALLOW}: {e}"))?;
-            Some(f)
-        };
-        let parser: Parser =
-            serde_json::from_value(serde_json::Value::String(if parser.is_empty() {
-                "exit".into()
-            } else {
-                parser.to_string()
-            }))
-            .map_err(|_| format!("no row parser {parser:?}"))?;
-        slices::ensure_tree(SLICE_ROOT, self.cfg.profile)?;
-        let slice = slices::job_slice(SLICE_ROOT, id)?;
-        let ra = RunnerArgs::runner(&self.cfg.prefix, &self.cfg.hub_id, &slice);
-        // a networked or keyed job's relay: the sidecar's image from the bundle's binary, its name and its argv for the
-        // helper (a keyed job reads its keys through it)
-        let relay = if hub_allow.is_none() && keys.is_none() {
-            None
-        } else {
-            Some(net_helper(&ra, id, &self.px_image()?, keys.is_some())?)
-        };
-        let proxy = relay.as_ref().map(|r| r.0.clone());
-        let caps = Caps {
-            proxy,
-            ..job_caps(&meta.grant, image, pins)
-        };
-        let keyed = keys.is_some();
-        let req = ContainerReq {
-            image: "job".into(),
-            argv: meta.spec.command.clone(),
-            worktree: src.to_path_buf(),
-            subdir: if meta.spec.cwd == Path::new(".") {
-                PathBuf::new()
-            } else {
-                meta.spec.cwd.clone()
-            },
-            job: id.clone(),
-            net: hub_allow.is_some(),
-            runner: Some(RunnerMounts {
-                writes_tree: meta.spec.writes_tree,
-                target: dir.join("target"),
-                caches: vec![],
-                keys,
-            }),
-        };
-        let container = podman::name_of(&ra.name_prefix, id).map_err(|r| r.message)?;
-        let mut argv = vec!["podman".to_string()];
-        for a in podman::argv(&req, &caps, &ra).map_err(|r| r.message)? {
-            argv.push(
-                a.into_string()
-                    .map_err(|_| "a podman argument is not UTF-8")?,
-            );
-        }
-        let log = dir.join(LOG);
-        JobExec {
-            id: id.clone(),
-            attempt: meta.r.attempt,
-            machine: self.cfg.name.clone(),
-            slice: slice.clone(),
-            argv,
-            env: vec![],
-            cwd: None,
-            log: log.clone(),
-            state_logs: vec![],
-            keyed,
-            parser,
-            expect: meta.spec.expect,
-            grant: meta.grant,
-            timeout_s: meta.spec.timeout_s,
-            // every runner job has its helper: the disk watch, and its keys and proxy when it has them
-            helper: Some(HelperSpec {
-                root: self.cfg.root.clone(),
-                keys: meta.spec.keys.clone(),
-                hub_allow,
-                net: relay.as_ref().map(|r| r.0.clone()),
-                sidecar_argv: relay.map(|r| r.1).unwrap_or_default(),
-                container: Some(container),
-            }),
-        }
-        .write(dir)
-        .map_err(|e| format!("job.json: {e}"))?;
-        let name = format!("{}-{id}-{}", self.cfg.prefix, meta.r.attempt);
-        let unit = unit::start(&unit::UnitReq {
-            unit: name,
-            id: id.clone(),
-            attempt: meta.r.attempt,
-            slice,
-            runtime_max_s: meta.spec.timeout_s + UNIT_SLACK_S,
-            log,
-            env: vec![],
-            argv: vec![
-                self.exe.display().to_string(),
-                "job-exec".into(),
-                dir.display().to_string(),
-            ],
-            binds_to: None,
-        })?;
-        let pid = run::systemctl_ok(&["show", "--property=MainPID", "--value", &unit])
-            .ok()
-            .and_then(|p| p.parse::<u32>().ok())
-            .unwrap_or(0);
-        Ok((unit, pid))
-    }
-
     /// The attempt's reservation passes to its job-exec (PID), which outlives this `serve`.
     fn hand_reservation(&self, meta: &Meta, pid: u32) {
-        let Ok(start_time) = reserve::start_time(pid) else {
+        let Ok(start_time) = self.platform.start_time(pid) else {
             eprintln!(
                 "sleipnir serve: {}'s job-exec pid {pid}: its reservation stays with this serve",
                 meta.r.job
@@ -1273,14 +1027,14 @@ impl<W: Write> Serve<W> {
         let r = Reservation {
             scheduler: self.scheduler.clone(),
             pid,
-            boot_id: self.probe.boot_id().unwrap_or_default(),
+            boot_id: self.platform.boot_id(),
             start_time,
             job: admit::reservation_job(&meta.r.job, meta.r.attempt),
             reserve_mib: meta.grant.reserve_mib,
             current_mib: 0,
             expires: now_s() + meta.spec.timeout_s + admit::RESERVATION_SLACK_S,
         };
-        if let Err(e) = self.probe.reservations().put(&r) {
+        if let Err(e) = self.platform.reservations().put(&r) {
             eprintln!("sleipnir serve: the reservation of {}: {e}", meta.r.job);
         }
     }
@@ -1402,9 +1156,10 @@ impl<W: Write> Serve<W> {
         let Some(l) = self.live.get_mut(key) else {
             return;
         };
-        let sock = l.dir.join(HELPER_SOCK);
+        let platform = &self.platform;
+        let dir = l.dir.clone();
         l.keys.retain(
-            |k| match helper_keys::hand(&sock, &k.name, k.value.expose().as_bytes()) {
+            |k| match platform.hand_key(&dir, &k.name, k.value.expose().as_bytes()) {
                 Ok(()) => false,
                 Err(e)
                     if matches!(
@@ -1703,18 +1458,12 @@ impl<W: Write> Serve<W> {
     }
 
     fn cleanup(&self) {
-        let seen = cleanup::Seen {
-            containers: cleanup::containers(&self.cfg.prefix, &self.cfg.hub_id),
-            units: cleanup::units(&self.cfg.prefix),
-            folders: attempts::scan(&self.cfg.root, &unit::active),
-            bundles: cleanup::bundles(&self.cfg.root),
-        };
         let owner = cleanup::Owner {
             hub_id: &self.cfg.hub_id,
             prefix: &self.cfg.prefix,
             own_bundle: &self.bundle,
         };
-        cleanup::apply(&self.cfg.root, &cleanup::plan(&owner, &seen));
+        self.platform.cleanup(&self.cfg.root, &owner);
     }
 
     /// A frame from the hub: with `--watchdog`, the heartbeat the watchdog reads (`contact` at every frame, `offer` at
@@ -1829,7 +1578,10 @@ impl<W: Write> Serve<W> {
         let (dir, meta) = (l.dir.clone(), l.meta.clone());
         let has_result = dir.join(RESULT).exists();
         if !has_result && check_unit && meta.started.is_some() {
-            let up = meta.unit.as_deref().is_some_and(unit::active);
+            let up = meta
+                .unit
+                .as_deref()
+                .is_some_and(|u| self.platform.active(u));
             // the unit ended without job-exec's result: killed from outside
             if !up && !dir.join(RESULT).exists() {
                 let _ = fs::OpenOptions::new()
@@ -2026,28 +1778,13 @@ fn read_some(f: &mut fs::File, buf: &mut [u8]) -> io::Result<usize> {
 
 /// The grant a test fixture uses.
 /// Names a job's proxy resolves to a fixed address (`Frame::Start`'s `pins`).
-type Pins = Vec<(String, std::net::IpAddr)>;
-
-/// The caps of a container job in IMAGE under GRANT, its proxy pinning PINS.
-fn job_caps(grant: &forseti::Grant, image: String, pins: Pins) -> Caps {
-    Caps {
-        images: vec![ContainerImage {
-            name: "job".into(),
-            image,
-        }],
-        memory: format!("{}M", grant.mem_cap_mib.max(6)),
-        cpus: grant.cores.max(1),
-        pids: podman::PIDS,
-        proxy: None,
-        net_hosts: vec![],
-        pins,
-    }
-}
+pub type Pins = Vec<(String, std::net::IpAddr)>;
 
 #[cfg(test)]
 pub(crate) fn tests_spec() -> forseti::JobSpec {
     use forseti::{Expect, JobTrust, Kind, Lane, Range, Weight};
     forseti::JobSpec {
+        os: Default::default(),
         name: "t".into(),
         kind: Kind::Test,
         weight: Weight::Light,
@@ -2084,8 +1821,9 @@ pub(crate) fn tests_spec() -> forseti::JobSpec {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod caps_tests {
+    use super::platform::job_caps;
     use super::*;
     use crate::proto::Nonce;
 
@@ -2119,9 +1857,11 @@ mod caps_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod net_tests {
-    use super::*;
+    use super::platform::net_helper;
+    use crate::linux::jobexec::HelperSpec;
+    use crate::linux::podman::RunnerArgs;
 
     /// [D] Under Q8 a networked job's `job.json` names its relay: the sidecar `<prefix>-px-<id>` labelled with the hub
     /// and the job, and the `podman run` that starts it from the relay image, for the helper; it reads back whole.

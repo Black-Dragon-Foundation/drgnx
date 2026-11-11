@@ -16,7 +16,9 @@ pub struct LinkKind {
 /// `option` (a setting's history: Urdr Task 10b, unified-settings design §12), plus schema 8's `exec` (a job: a
 /// command the hub runs), `report` (what an agent ends a task with) and `proposal` (a generated view's edit, as a
 /// proposal the user decides: agent system part 1, Tasks 4 and 14b), `huddle` (two agents' positions on a clash,
-/// for the user to decide: agent system part 3) and `always` (an Always the user gave a session: part 3).
+/// for the user to decide: agent system part 3), `always` (an Always the user gave a session: part 3), and the
+/// orchestration records: `evidence` (one fact a gate reads), `rule_pack` (a project's gate rules), `batch` (a merge
+/// batch) and `followup` (a held line's DEFERRED row).
 pub const ENTITY_KINDS: &[&str] = &[
     "task",
     "decision",
@@ -46,6 +48,10 @@ pub const ENTITY_KINDS: &[&str] = &[
     "key_use",
     "huddle",
     "always",
+    "evidence",
+    "rule_pack",
+    "batch",
+    "followup",
 ];
 
 const ANY: &[&str] = &["*"];
@@ -186,7 +192,11 @@ mod tests {
                 "key_sent",
                 "key_use",
                 "huddle",
-                "always"
+                "always",
+                "evidence",
+                "rule_pack",
+                "batch",
+                "followup"
             ]
         );
         let rows: Vec<(&str, Vec<&str>, Vec<&str>, bool)> = LINKS

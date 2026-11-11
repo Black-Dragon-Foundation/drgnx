@@ -103,6 +103,7 @@ fn jr(job: &str, n: u8) -> JobRef {
 
 fn spec(script: &str) -> JobSpec {
     JobSpec {
+        os: Default::default(),
         name: "fleet".into(),
         kind: Kind::Test,
         weight: Weight::Light,

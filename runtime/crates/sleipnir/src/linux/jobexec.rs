@@ -88,6 +88,10 @@ pub struct HelperSpec {
 
 /// The record of key requests that got no key in time (the helper writes it before `drgnx-key` exits 75).
 pub const KEY_TIMEOUT: &str = "key-timeout";
+/// The socket `serve` hands keys over, in the attempt's folder.
+pub const HELPER_SOCK: &str = "helper.sock";
+/// The record of delivered reads (`{"name":…,"at":…}` per line).
+pub const KEY_USE: &str = "key-use";
 
 impl JobExec {
     /// Writes the spec into the attempt's folder DIR.
@@ -125,7 +129,7 @@ pub fn disturbed(dir: &Path, why: &str) -> io::Result<()> {
     write_atomic(dir, DISTURBED, why.as_bytes())
 }
 
-fn read_kill_reason(dir: &Path) -> Option<String> {
+pub(crate) fn read_kill_reason(dir: &Path) -> Option<String> {
     fs::read_to_string(dir.join(KILL_REASON))
         .ok()
         .map(|s| s.trim().to_string())

@@ -86,6 +86,7 @@ hermod = { path = "../hermod", version = "0.1.0" }  # the ACP client of every se
 bifrost = { path = "../bifrost", version = "0.1.0" }
 sleipnir = { path = "../sleipnir", version = "0.1.0", default-features = false, features = ["linux", "sync"] }  # the shared podman argv; inputs frozen at submit
 vegvisir = { path = "../vegvisir", version = "0.1.0" }  # the Work map's model and layout (work::map)
+vordr = { path = "../vordr", version = "0.1.0" }  # the orchestration gates' pure core: job rows and failure classes (exec)
 pulldown-cmark.workspace = true  # agent messages as Markdown blocks (agents::markdown)
 forseti = { path = "../forseti", version = "0.1.0" }  # the scheduler core: the queue's order, placement and admission
 hrafn-embed = { path = "../hrafn-embed", version = "0.1.0" }  # the model table, the cache's checks, the embed worker's engine

@@ -17,12 +17,23 @@ terminal's buffer only shows the screen it sends. So:
   itself remembers at least 10,000 lines whatever the setting.
 - **The hub can restart under it.** Your shell keeps running; while the hub is away the terminal dims, and what you
   type waits (up to 4 kB) and goes when it is back. The terminal then draws afresh.
-- **Quitting drgnx** asks once when a terminal runs a program (a shell at its prompt does not count), and a clean
-  quit ends its terminals; after a crash they keep running and the next drgnx adopts them.
+- **Quitting drgnx** asks once when a terminal runs a program (a shell at its prompt does not count): **Keep
+  Running** keeps those terminals running for the next drgnx (idle shells close), **Close Them** ends them, **Cancel**
+  keeps drgnx running. `drgnx-term-on-quit` makes it `keep` (every terminal, no question) or `close` (they end). A
+  quit that cannot ask (a daemon's shutdown) keeps the terminals whose program runs; after a crash they all keep
+  running.
+- **The next drgnx** offers the terminals left running: a notice says how many, and **Reattach Terminal** (the
+  palette, or the notice) reattaches them all, lets you choose some, or closes them. A reattached terminal comes back
+  with its screen and scrollback, the same program still running. `drgnx-term-reattach` makes it `always` (they open
+  at once) or `never` (only the command). A terminal another running drgnx shows is never offered. A terminal no
+  drgnx shows ends after `drgnx-term-detached-keep` hours (24; 0: never), and a reboot ends them all. Only you can
+  reach them: their folder and sockets are yours alone, and another user's connection is refused.
 - **When the shell ends**, its buffer closes. A program drgnx runs for you in a terminal (Export Keys) leaves its buffer
   open, its exit status in the mode line, so you can read what it printed.
 - **Keys**: the terminal gets every key the active profile does not keep for drgnx ([keys](keys.md#in-the-terminal));
-  a paste is bracketed when the program asks for it, so a shell does not run a pasted line on its own.
+  a paste is bracketed when the program asks for it, so a shell does not run a pasted line on its own. On drgnx's
+  own Emacs (Nidhogg), a program that asks for key releases and repeats (the kitty keyboard protocol, as games, Helix
+  and some TUIs do) gets them; a key still held when you switch away from the terminal is released there.
 - **Copy mode** (*Terminal: Copy Mode*, `C-c C-e` in the Emacs profile) stops the screen so you can move, search and
   copy in it; `C-g` leaves it and draws what the program printed meanwhile. *Find in Terminal* searches the screen and
   the terminal's scrollback; *Find Next* and *Find Previous in Terminal* step through the matches without asking again.

@@ -92,7 +92,9 @@
  (typing (:alloc :p50) 13757) (typing (:cpu_ms :p50) 12) (typing (:cpu_ms :p90) 16) (typing (:rows) 1)
  (scrolling (:alloc :p50) 14840) (scrolling (:cpu_ms :p90) 28.4) (scrolling (:rows) 0)
  (tabs (:alloc :p50) 6234) (tabs (:cpu_ms :p90) 11.2) (tabs (:rows) 0)
- (explorer (:alloc :p50) 5115) (explorer (:cpu_ms :p90) 6.0) (explorer (:rows) 0)
+ ;; explorer on the hub's rows (plan sja-complete F1, 2026-11-11, pinned, release hub, 3 runs): alloc p50 3286 in each
+ ;; (the Lisp listing's was 2509: Sjá's navigation and the tail repaint, docs/develop/perf.md), x 1.25
+ (explorer (:alloc :p50) 4108) (explorer (:cpu_ms :p90) 6.0) (explorer (:rows) 0)
  (agent-typing (:alloc :p50) 15008) (agent-typing (:cpu_ms :p90) 23.1) (agent-typing (:rows) 1)
  (code-scrolling (:alloc :p50) 15439) (code-scrolling (:cpu_ms :p90) 26.9) (code-scrolling (:rows) 0)
  (diff-scrolling (:alloc :p50) 6027) (diff-scrolling (:cpu_ms :p90) 26.7) (diff-scrolling (:rows) 0)
@@ -113,6 +115,9 @@
  ;; 330-337 ms; the budgets sit at 16800 kB (10 % over, so a return to 17771 fails) and 400 ms.  Without framing (the default until
  ;; gate 26) the same run is 26910 kB, 448 ms, so these rows stay report-only until the combined pass decides the path.
  (replace-typing-rows (:complete-kb) 16800 :report-only rro-scan) (replace-typing-rows (:complete-cpu_ms) 400 :report-only rro-scan)
+ ;; The model's lag (a model line's arrival to its drain; plan sja-complete D3, re-measured 2026-11-11 after the pushed
+ ;; path, pinned, release hub): p50 20-21.5 ms, x 1.25.  The cadence's bar is one throttle (100 ms).
+ (replace-typing-rows (:model_lag_ms :p50) 27 :report-only ot5)
  ;; search-retype: retyping the Search view's query over 10k matches on the hub's rows path, a search per key (plan
  ;; sja-complete S2, the hub-path pair of the retired replace-retype): its keys within the input budget; what the user
  ;; sees: a search's first rows drawn within 50 ms of its start (115 ms while a quiet view's first draw waited the whole
@@ -169,7 +174,10 @@
  (image-open (:stalls-ge16) 0 :report-only ot6)
  (image-open (:image :screenshot_ms) 16 :report-only ot6)      ; first draw within one frame
  (image-open (:image :preview_drawn_ms) 500 :report-only ot6)  ; every picture drawn within 500 ms
- (explorer-expand (:expand_ms) 80 :report-only ot8) (explorer-expand (:stalls-ge16) 0 :report-only ot8)
+ ;; explorer-expand on the hub's rows (plan sja-complete F1 gate: the first file's row within the key's own frame, 10 ms;
+ ;; 2026-11-11, pinned, release hub, 3 runs: 4.5, 4.6, 4.3 ms; alloc p50 6565-6670, cpu p90 3.6-3.8: no rows for them
+ ;; while it is in `drgnx-perf-run-unseeded' (its step ot8 seeds all three))
+ (explorer-expand (:expand_ms) 10 :report-only ot8) (explorer-expand (:stalls-ge16) 0 :report-only ot8)
  (explorer-git-rows (:input :p95) 16 :report-only ot5) (explorer-git-rows (:stalls-ge16) 0 :report-only ot5)
  ;; The render offload's rows (measured x 1.25, rounded up; :rows exact): one source run, GUI container on the desktop,
  ;; 2026-11-07, with Nidhogg's framing and the worktree's test-hooks hub.  explorer-git (the Lisp listing's, gone with
@@ -183,15 +191,24 @@
  ;; The target is reset: 856 (a tenth of explorer-git's 8555) was seeded before git status was framed in every locale, when
  ;; the old path cost 10281; the real old-path numbers are 6574 to 6589 objects per command, and the hub path cannot go
  ;; far below them (the key command and redisplay are the cost, the rows are few).  The target is the measured 6542 x 1.25.
- (explorer-git-rows (:alloc :p50) 8180 :report-only ot5) (explorer-git-rows (:cpu_ms :p90) 3.9 :report-only ot5)
+ ;; Again on the Explorer's rows path (plan sja-complete F1, 2026-11-11, pinned, release hub, 3 runs): alloc p50 6684-6685,
+ ;; cpu p90 3.5-3.7, complete 674-737 kB and 51-64 ms; x 1.25 here and in the two `complete' rows below.
+ (explorer-git-rows (:alloc :p50) 8357 :report-only ot5) (explorer-git-rows (:cpu_ms :p90) 4.7 :report-only ot5)
  (explorer-git-rows (:rows) 1 :report-only ot5)
  ;; explorer-git, the whole operation (first key to the letters applied), same session: old path 1549 kB, 47 ms; hub path
  ;; 1640 kB, 54 ms (x 1.25 below).  The hub path is no cheaper here: the rows are few (52 for the 25k-file repository) and
  ;; the cost is the key and its redisplay.
- (explorer-git-rows (:complete-kb) 2050 :report-only ot5) (explorer-git-rows (:complete-cpu_ms) 68 :report-only ot5)
+ (explorer-git-rows (:complete-kb) 922 :report-only ot5) (explorer-git-rows (:complete-cpu_ms) 80 :report-only ot5)
  ;; explorer-watch: 50 files made in a folder the Explorer shows, on the hub's rows path (plan sja-complete E1): every row
- ;; drawn within 300 ms of the last write (the hub settles 30-100 ms, then relists the one folder)
+ ;; drawn within 300 ms of the last write (the hub settles 30-100 ms, then relists the one folder); the design's bar, not
+ ;; the measure x 1.25 (2026-11-11, pinned, release hub: 52.2-52.5 ms), since a wall-clock settle on a loaded host varies
  (explorer-watch (:settle_ms) 300)
+ ;; trail-long and search-window: a key that pages into the hub's next window (plan sja-complete W1, S1; 2026-11-11,
+ ;; pinned, release hub): trail-long page p50 18.4, max 19.0 ms; search-window page p50 24.6, max 29 ms with no
+ ;; collection in it; x 1.25.  The design bars (perf.md: key p95 16, page p95 50) hold above them.
+ (trail-long (:key_ms :p95) 16 :report-only ot5) (trail-long (:page_ms :p95) 24 :report-only ot5)
+ (trail-long (:list_max) 500 :report-only ot5)
+ (search-window (:page_nogc_ms :p95) 37 :report-only ot5) (search-window (:list_max) 20000 :report-only ot5)
  (quick-open-typing (:alloc :p50) 4905 :report-only ot5) (quick-open-typing (:cpu_ms :p90) 1.4 :report-only ot5)
  (quick-open-typing (:rows) 0 :report-only ot5)
  (quick-open-typing-old (:alloc :p50) 8003808 :report-only ot5)

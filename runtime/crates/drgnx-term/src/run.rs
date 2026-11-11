@@ -32,6 +32,50 @@ fn write_out(ctl: &mut UnixStream, out: Vec<Out>) -> io::Result<()> {
     ctl.write_all(&buf)
 }
 
+/// The worker's socket at PATH (a stale one replaced), mode 0600: only this user connects, and [`ours`] checks each
+/// peer as well.
+pub fn listen(path: &std::path::Path) -> io::Result<UnixListener> {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::remove_file(path);
+    let l = UnixListener::bind(path)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(l)
+}
+
+/// The uid of the process at the other end of C.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn peer_uid(c: &UnixStream) -> io::Result<u32> {
+    Ok(rustix::net::sockopt::socket_peercred(c)?.uid.as_raw())
+}
+
+/// The uid of the process at the other end of C.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn peer_uid(c: &UnixStream) -> io::Result<u32> {
+    use std::os::fd::AsRawFd;
+    let (mut uid, mut gid) = (0, 0);
+    // SAFETY: getpeereid(3) writes the two ids of a connected socket
+    if unsafe { libc::getpeereid(c.as_raw_fd(), &mut uid, &mut gid) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(uid)
+}
+
+/// Whether connection C is this user's: another uid's is dropped unread (the trust boundary is the uid, as for tmux).
+fn ours(c: &UnixStream) -> bool {
+    let me = rustix::process::geteuid().as_raw();
+    match peer_uid(c) {
+        Ok(uid) if uid == me => true,
+        Ok(uid) => {
+            tracing::warn!(uid, "a connection of another user: dropped");
+            false
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "a connection whose user does not read: dropped");
+            false
+        }
+    }
+}
+
 /// Run WORKER on PTY until the program ends, serving the hub on CTL and on each connection LISTENER accepts (a new one
 /// replaces the last: a restarted hub adopts the worker, `docs/develop/terminal.md`, "Lifetime"). The hub going away
 /// never ends the program.
@@ -74,7 +118,7 @@ pub fn run(
             tracing::info!("hub connection lost");
             ctl = None;
             inbuf.clear();
-            worker.detach();
+            worker.detach(now());
         }
         if !pty_open {
             break;
@@ -110,12 +154,13 @@ pub fn run(
         if new_hub
             && let Some(l) = &listener
             && let Ok((c, _)) = l.accept()
+            && ours(&c)
         {
             c.set_nonblocking(false)?;
             tracing::info!("hub connected");
             ctl = Some(c);
             inbuf.clear();
-            worker.detach();
+            worker.detach(now());
             write_out(ctl.as_mut().expect("just set"), vec![hello()])?;
         }
         if pty_ready.intersects(PollFlags::IN | PollFlags::HUP | PollFlags::ERR) {
@@ -172,10 +217,18 @@ pub fn run(
                             cols,
                             rows,
                             cell_px,
+                            redraw,
                         } = &msg
-                            && let Err(e) = pty.resize(crate::pty::winsize(*cols, *rows, *cell_px))
                         {
-                            tracing::warn!(error = %e, "resizing the pty");
+                            match pty.resize(crate::pty::winsize(*cols, *rows, *cell_px)) {
+                                // a reattach at the same size: the program redraws all the same
+                                // SAFETY: a plain kill(2) of the program's process group.
+                                Ok(false) if *redraw => unsafe {
+                                    libc::kill(-(shell_pid as i32), libc::SIGWINCH);
+                                },
+                                Ok(_) => {}
+                                Err(e) => tracing::warn!(error = %e, "resizing the pty"),
+                            }
                         }
                         worker.handle(msg, now())
                     }
@@ -193,7 +246,7 @@ pub fn run(
                 tracing::info!("hub connection closed");
                 ctl = None;
                 inbuf.clear();
-                worker.detach();
+                worker.detach(now());
             }
         }
         pending.append(&mut worker.take_pty());
@@ -227,6 +280,7 @@ pub fn run(
         };
         if matches!(poll(&mut fds, Some(&t)), Ok(n) if n > 0)
             && let Ok((mut c, _)) = l.accept()
+            && ours(&c)
         {
             c.set_nonblocking(false)?;
             let _ = write_out(&mut c, vec![hello()]);

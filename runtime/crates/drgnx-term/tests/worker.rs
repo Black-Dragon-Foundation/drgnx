@@ -3,7 +3,7 @@
 
 use drgnx_rows::{Colour, Op, Patch, Row, Style};
 use drgnx_term::frame::Next;
-use drgnx_term::proto::{In, Out};
+use drgnx_term::proto::{In, KeyAction, Out};
 use drgnx_term::worker::{BACKFILL_MAX_BYTES, Opts, Worker};
 
 fn worker(cols: u16, rows: u16, window: usize) -> Worker {
@@ -129,7 +129,7 @@ fn echo_frame_is_immediate_after_key() {
         116,
     );
     // a key, then its echo 3 ms later: drawn at once
-    w.key("c", 0, "c", 0, 120);
+    w.key("c", 0, "c", 0, KeyAction::Press, 120);
     assert_eq!(w.take_pty(), b"c");
     w.output(b"c", 123);
     assert_eq!(w.next(123), Next::Frame);
@@ -333,6 +333,7 @@ fn resize_sends_reset() {
             cols: 10,
             rows: 3,
             cell_px: (10, 20),
+            redraw: false,
         },
         100,
     );
@@ -374,16 +375,84 @@ fn eviction_never_renumbers() {
 }
 
 fn typed(w: &mut Worker, key: &str, mods: &[&str], text: &str) -> Vec<u8> {
+    acted(w, key, mods, text, KeyAction::Press)
+}
+
+fn acted(w: &mut Worker, key: &str, mods: &[&str], text: &str, action: KeyAction) -> Vec<u8> {
     w.handle(
         In::Key {
             key: key.into(),
             mods: mods.iter().map(|s| s.to_string()).collect(),
             text: text.into(),
             unshifted: 0,
+            action,
         },
         0,
     );
     w.take_pty()
+}
+
+#[test]
+fn kitty_event_types_send_repeats_and_releases() {
+    let (mut w, mut m) = (worker(20, 4, 10), Model::default());
+    // without the report-event-types flag a repeat is a press and a release sends nothing
+    assert_eq!(acted(&mut w, "a", &[], "a", KeyAction::Repeat), b"a");
+    assert_eq!(acted(&mut w, "a", &[], "a", KeyAction::Release), b"");
+    assert_eq!(acted(&mut w, "i", &["ctrl"], "", KeyAction::Release), b"");
+    let ps = draw(&mut w, &mut m, 0);
+    assert!(
+        ps.iter()
+            .rev()
+            .find_map(|p| p.term.as_ref())
+            .is_some_and(|t| !t.key_events)
+    );
+    // CSI > 3 u: disambiguate, and report event types; the editor learns it should send releases
+    w.output(b"\x1b[>3u", 1000);
+    let ps = draw(&mut w, &mut m, 1000);
+    assert!(
+        ps.iter()
+            .rev()
+            .find_map(|p| p.term.as_ref())
+            .is_some_and(|t| t.key_events)
+    );
+    // with event types on, the encoder names the press's type too
+    assert_eq!(
+        acted(&mut w, "up", &[], "", KeyAction::Press),
+        b"\x1b[1;1:1A"
+    );
+    assert_eq!(
+        acted(&mut w, "up", &[], "", KeyAction::Repeat),
+        b"\x1b[1;1:2A"
+    );
+    assert_eq!(
+        acted(&mut w, "up", &[], "", KeyAction::Release),
+        b"\x1b[1;1:3A"
+    );
+    assert_eq!(
+        acted(&mut w, "i", &["ctrl"], "", KeyAction::Release),
+        b"\x1b[105;5:3u"
+    );
+    // the kitty spec: Enter, Tab and Backspace report no release unless every key is an escape code (flag 8)
+    for key in ["return", "tab", "backspace"] {
+        assert_eq!(
+            acted(&mut w, key, &[], "", KeyAction::Release),
+            b"",
+            "{key}"
+        );
+    }
+    w.output(b"\x1b[>11u", 2000);
+    assert_eq!(
+        acted(&mut w, "return", &[], "", KeyAction::Release),
+        b"\x1b[13;1:3u"
+    );
+    assert_eq!(
+        acted(&mut w, "tab", &[], "", KeyAction::Release),
+        b"\x1b[9;1:3u"
+    );
+    assert_eq!(
+        acted(&mut w, "backspace", &[], "", KeyAction::Release),
+        b"\x1b[127;1:3u"
+    );
 }
 
 #[test]
@@ -827,4 +896,62 @@ fn deccolm_is_refused_the_grid_keeps_its_width() {
             "case {n}: the grid kept 20 columns: {texts:?}"
         );
     }
+}
+
+#[test]
+fn detached_keep_ends_a_worker_with_no_client() {
+    const HOUR: u64 = 3_600_000;
+    let mut w = worker(20, 4, 100);
+    w.handle(
+        In::Config {
+            config: [("detached-keep".to_owned(), serde_json::json!(2))].into(),
+        },
+        0,
+    );
+    // attached: no end however long
+    w.step(10 * HOUR);
+    assert_eq!(w.take_close(), None, "a client is attached");
+    w.handle(In::Detach, 10 * HOUR);
+    assert_eq!(
+        w.next(10 * HOUR + 1),
+        Next::At(12 * HOUR),
+        "wakes when its time runs out"
+    );
+    w.step(12 * HOUR - 1);
+    assert_eq!(w.take_close(), None);
+    // a client back in time keeps it
+    w.handle(
+        In::Attach {
+            view: "term:1".into(),
+            class: "gui".into(),
+            hub: 7,
+            env_epoch: 1,
+        },
+        12 * HOUR - 1,
+    );
+    w.step(20 * HOUR);
+    assert_eq!(w.take_close(), None);
+    w.detach(20 * HOUR);
+    w.step(22 * HOUR);
+    assert_eq!(w.take_close(), Some(1), "SIGHUP after two hours alone");
+    w.step(30 * HOUR);
+    assert_eq!(w.take_close(), None, "once");
+    // 0: never
+    let mut w = worker(20, 4, 100);
+    w.handle(
+        In::Config {
+            config: [("detached-keep".to_owned(), serde_json::json!(0))].into(),
+        },
+        0,
+    );
+    w.handle(In::Detach, 0);
+    assert_eq!(w.next(1), Next::Idle);
+    w.step(1000 * HOUR);
+    assert_eq!(w.take_close(), None);
+}
+
+#[test]
+fn a_new_worker_ends_after_a_day_alone_by_default() {
+    let w = Worker::new(&Opts::default()).expect("engine");
+    assert_eq!(w.next(0), Next::At(24 * 3_600_000));
 }

@@ -66,7 +66,7 @@ Emacs has to shrink them."
 (ert-deftest drgnx-wm/i11-docks-keep-their-size-when-the-wm-resizes ()
   (skip-unless (equal (drgnx-ui-default-compositor) "sway"))
   (drgnx-tiling--with sess
-    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`") (list :keys "C-M-b")))
+    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "M-j") (list :keys "C-M-b")))
     ;; Tab switches first: Emacs preserves a size only for the buffer it was set with.
     (drgnx-ui-measure sess (list (list :keys "M-x") (list :type "describe-function") (list :keys "RET") (list :type "car") (list :keys "RET")))   ; the panel's Help tab
     (drgnx-ui-call sess "(progn (drgnx-wb-define-tab 'right 'notes :title \"Notes\")
@@ -118,7 +118,7 @@ Emacs has to shrink them."
   ;; tile, and the frame's windows are where they were.
   (skip-unless (equal (drgnx-ui-default-compositor) "sway"))
   (drgnx-tiling--with sess
-    (drgnx-ui-measure sess (list (list :keys "C-`")))
+    (drgnx-ui-measure sess (list (list :keys "M-j")))
     (drgnx-ui-call sess "(progn (require 'transient)
                                 (transient-define-prefix drgnx-tiling-tr () [(\"a\" \"Do A\" ignore)])
                                 (keymap-global-set \"<f19>\" #'drgnx-tiling-tr)

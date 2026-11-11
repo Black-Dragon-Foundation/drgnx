@@ -4,6 +4,12 @@ Pair mode lets a chat edit your own checkout, live, in the files you have open, 
 unless the matrix's `chat.project-edit` row allows it: Cautious never, Balanced lets you turn Pair on for a chat,
 Autonomous starts chats paired ([security.md](security.md), the matrix).
 
+When a chat that is not paired asks to change a file with its own tools, the request waits on a card in the chat,
+"Pair this chat so it can make this change?", where Pair may be turned on. Allow (once or always) turns pair mode on
+for that chat and refuses the request itself: the chat is told to make the change again with drgnx's edit tools.
+The chat stays paired, so later changes do not ask again, until you turn Pair off. Deny refuses the change. Where
+`chat.project-edit` is never there is no card: the chat shows the refusal and why.
+
 ## What a paired chat can and cannot do
 
 - **Its own tools stay read-only.** The sandbox still shows the checkout read-only to the chat: its shell, its own edit
