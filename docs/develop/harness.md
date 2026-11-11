@@ -751,6 +751,11 @@ per monitor (a count other than the monitors' fails with "scales need one per mo
 scale is applied before Emacs starts, and `ui start` then waits up to 10 s for the root frame to show the first
 monitor's scale, else stops the session and fails with `scale S not applied`.
 
+A test that puts a frame on another monitor (sway: `swaymsg '[title="T"] move to output HEADLESS-2'`, the frame made
+with a `title`) waits with `sit-for`: a new frame becomes a compositor window only while Emacs runs its event loop,
+so a wait that only reads process output (`drgnx-test-wait`) leaves it unmapped and the move finds no node
+(`drgnx-ui-rows-fit/a-view-in-two-classes-shows-each-its-own-rows`, scales 1 and 2).
+
 | Compositor | How the scale is applied |
 |---|---|
 | `mutter` | `gdctl set --logical-monitor [--primary] --monitor Meta-k --scale S --x X --y 0` per monitor, run (retried) in front of Emacs; X is the sum of the monitors' logical widths (W / S). mutter 50 takes fractional scales on its headless virtual monitor. `gdctl` is a Python script that needs `python3-gobject-base` (in `Containerfile.gui`); when all 50 tries (10 s) fail, the session's log gets `scale not applied: gdctl set failed 50 times: ERROR` and Emacs never starts, so `ui start` fails with it |

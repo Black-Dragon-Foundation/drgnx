@@ -217,17 +217,47 @@ holds: the class it was paired with, never stale."
         (remove-hook 'drgnx-hub-event-functions count)
         (delete-frame frame)))))
 
+(defun drgnx-rows-fit-ui-test--scales ()
+  "The session's monitor scales (one per monitor), from DRGNX_UI_SESSION_SCALES; nil at scale 1."
+  (mapcar #'string-to-number (split-string (or (getenv "DRGNX_UI_SESSION_SCALES") "") " " t)))
+
+(defun drgnx-rows-fit-ui-test--until (secs pred)
+  "Redisplay and read events (`sit-for') until PRED is non-nil or SECS pass; PRED's value.  A new frame becomes a
+compositor window only while Emacs runs its event loop: a wait that only reads process output never maps it."
+  (let ((end (+ (float-time) secs)) v)
+    (while (and (not (setq v (funcall pred))) (< (float-time) end)) (sit-for 0.1))
+    v))
+
+(defun drgnx-rows-fit-ui-test--second-frame (px)
+  "A new frame in a display class of its own, as (FRAME . HOW): on the second monitor when the session has two at two
+scales under sway (`swaymsg' moves its window there; the class then differs by its scale), else with a default font
+twice PX."
+  (let ((scales (drgnx-rows-fit-ui-test--scales)) (root (selected-frame))
+        (frame (make-frame '((width . 60) (height . 10) (title . "drgnx-rows-twin")))))
+    (if (and (= 2 (length scales)) (/= (nth 0 scales) (nth 1 scales))
+             (getenv "SWAYSOCK") (executable-find "swaymsg"))
+        (progn
+          (should (drgnx-rows-fit-ui-test--until
+                   10 (lambda () (zerop (call-process "swaymsg" nil nil nil
+                                                      "[title=\"drgnx-rows-twin\"] move to output HEADLESS-2")))))
+          (should (drgnx-rows-fit-ui-test--until
+                   10 (lambda () (/= (drgnx-pixels-scale frame) (drgnx-pixels-scale root)))))
+          (select-frame-set-input-focus root)
+          (cons frame (format "two monitors, scales %S and %S" (drgnx-pixels-scale root) (drgnx-pixels-scale frame))))
+      (set-face-attribute 'default frame :font (font-spec :family "Inter" :size (* 2 px)))
+      (cons frame "one monitor: the second frame's font twice the first's"))))
+
 (ert-deftest drgnx-ui-rows-fit/a-view-in-two-classes-shows-each-its-own-rows ()
   "One buffer per class (RRO-BUFFER-PER-CLASS-1): the view's buffer, with a twin function, shown in a second frame of
-another class (a default font twice the size: a frame this test makes is not a window sway places, so it cannot be
-put on a second monitor of another scale, ledger CLASS-BUFFERS).  That
+another class: the second monitor at another scale when the session has two under sway (`DRGNX_UI_MONITORS=2
+DRGNX_UI_SCALES=\"1 2\"`), else a default font twice the size.  That
 frame's window shows a twin paired with its class, the first keeps the buffer; the hub sends each its own class's
 reset, and each holds its own fit of the label (the second's cut shorter), neither stale."
   (skip-unless (display-graphic-p))
+  (require 'drgnx-pixels)
   (drgnx-rows-demo-with
     (let* ((b (drgnx-rows-demo-open)) (twins nil) (px (aref (font-info (face-font 'default)) 2))
-           (frame (make-frame '((width . 60) (height . 10)))))
-      (set-face-attribute 'default frame :font (font-spec :family "Inter" :size (* 2 px)))
+           (made (drgnx-rows-fit-ui-test--second-frame px)) (frame (car made)) (how (cdr made)))
       (with-current-buffer b
         (setq-local drgnx-view-patch-twin-function
                     (lambda (class)
@@ -256,7 +286,7 @@ reset, and each holds its own fit of the label (the second's cut shorter), neith
                 (should-not (drgnx-view-patch-stale sb))
                 (should-not (drgnx-view-patch-stale st)))
               (let ((one (drgnx-rows-demo-text b)) (two (drgnx-rows-demo-text tw)))
-                (drgnx-rows-fit-ui-test--report (format "per-class rows: %S | %S" one two))
+                (drgnx-rows-fit-ui-test--report (format "per-class rows (%s): %S | %S" how one two))
                 (should (string-prefix-p "The" one))
                 (should (string-prefix-p "The" two))
                 (should-not (equal one two)))))
