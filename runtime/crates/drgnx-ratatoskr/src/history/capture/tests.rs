@@ -302,6 +302,32 @@ fn a_file_removed_after_a_hub_restart_empties_its_document() {
 }
 
 #[test]
+fn an_agents_pure_deletion_keeps_its_line_mark_across_a_hub_restart() {
+    let Fixture {
+        repo,
+        hist,
+        hub,
+        tree,
+    } = fixture(&[("a.txt", "one\ntwo\nthree\n")]);
+    std::fs::write(repo.path().join("a.txt"), "one\nthree\n").unwrap();
+    hub.on_agent_write(&tree, "a.txt", b"one\nthree\n", "s1", cause("1"), 10.0)
+        .unwrap();
+    let by = |hub: &Hub| hub.lines_by(&tree, "a.txt").unwrap().unwrap();
+    let marked = vec![(
+        "agent:s1".to_string(),
+        vec![crate::editor::project::LineRange { start: 2, end: 2 }],
+    )];
+    assert_eq!(by(&hub), marked, "the deletion marks the line it joined");
+    drop(hub);
+    let hub = Hub::open(hist.path()).unwrap();
+    assert_eq!(
+        by(&hub),
+        marked,
+        "and still does after a restart (made again from the recorded edits)"
+    );
+}
+
+#[test]
 fn crlf_file_blob_id_matches_git() {
     let f = fixture(&[("a.txt", "x\n")]);
     git(f.repo.path(), &["config", "core.autocrlf", "true"]);
