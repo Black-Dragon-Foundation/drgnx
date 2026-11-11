@@ -1365,8 +1365,10 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `coord/notify` | user, agent, service | `{}` | `boolean` | no |
 | `coord/prune` | user | `{}` | `{pruned: boolean}` | yes |
 | `coord/task-status` | user | `{agent?: AgentName, status: Status, task: TaskRef}` | `boolean` | yes |
+| `debug/breakpoints` | user | `{op?: {condition?: string, enabled?: boolean, hit?: string, id?: natnum, line?: natnum, log?: string, name?: string, op: string, path?: string}, path?: string, root: string}` | `DebugBreakpointsView` | no |
 | `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
 | `debug/control` | user | `{op: string, session: string, thread?: integer}` | `boolean` | no |
+| `debug/run-to-cursor` | user | `{line: natnum, path: string, session: string}` | `boolean` | no |
 | `debug/select` | user | `{frame: integer, session: string, thread?: integer}` | `boolean` | no |
 | `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, root: string, selection?: string, user?: [JsonObject]}` | `{needs?: any, session?: string}` | no |
 | `debug/trust` | user | `{root: string, trusted: boolean}` | `boolean` | no |

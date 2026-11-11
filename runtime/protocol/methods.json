@@ -1848,6 +1848,54 @@
     {
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A file's breakpoints (`debug/breakpoints`' answer, and the event `debug-breakpoints`): PATH's VERSION and its\nBREAKPOINTS (`{id, line, enabled, condition?, hit?, log?, verified, message?, bound_line?, unsupported}`), with the\nproject's ROOT; the answer also has the function breakpoints and the id ADDED.",
+        "properties": {
+          "added": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "breakpoints": {
+            "items": true,
+            "type": "array"
+          },
+          "functions": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "root",
+          "path",
+          "version",
+          "breakpoints"
+        ],
+        "title": "DebugBreakpointsView",
+        "type": "object"
+      },
+      "doc": "a file's breakpoints changed, or what an adapter made of them (verified, message, its line): to every editor",
+      "name": "debug-breakpoints"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "`debug-ended`: SESSION ended, with why and its program's exit code.",
         "properties": {
           "exit_code": {
@@ -11231,6 +11279,154 @@
       "classes": [
         "user"
       ],
+      "doc": "a project's breakpoints: a change by id (add, remove, edit, move, function breakpoints) that reaches its sessions at once, and the file's breakpoints with what the adapters made of them",
+      "name": "debug/breakpoints",
+      "params": {
+        "$defs": {
+          "DebugBreakpointOp": {
+            "description": "One change to the breakpoint store, by id: `add` (PATH, LINE; the breakpoint already on that line if any),\n`remove` (ID), `edit` (ID and the fields given; an empty text clears one), `move` (ID, LINE: the saved line),\n`add-function` (NAME, CONDITION) and `remove-function` (NAME).",
+            "properties": {
+              "condition": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "enabled": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "hit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "log": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "op": {
+                "type": "string"
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/breakpoints`: ROOT's breakpoints. OP changes them (it reaches ROOT's sessions at once); the answer is the\nview of the file OP changed, else of PATH.",
+        "properties": {
+          "op": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DebugBreakpointOp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "DebugBreakpoints",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A file's breakpoints (`debug/breakpoints`' answer, and the event `debug-breakpoints`): PATH's VERSION and its\nBREAKPOINTS (`{id, line, enabled, condition?, hit?, log?, verified, message?, bound_line?, unsupported}`), with the\nproject's ROOT; the answer also has the function breakpoints and the id ADDED.",
+        "properties": {
+          "added": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "breakpoints": {
+            "items": true,
+            "type": "array"
+          },
+          "functions": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "root",
+          "path",
+          "version",
+          "breakpoints"
+        ],
+        "title": "DebugBreakpointsView",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the launch configurations the Start picker shows for a project: launch.json's (a syntax error with its line and column), the user's own, and the adapters' defaults for the file's language once the project is trusted",
       "name": "debug/configs",
       "params": {
@@ -11409,6 +11605,43 @@
           "op"
         ],
         "title": "DebugControl",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "Run to Cursor: a session stops once at a line (a breakpoint for it alone, gone at its next stop), continuing if it is stopped",
+      "name": "debug/run-to-cursor",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/run-to-cursor`: SESSION stops once at PATH's LINE (a breakpoint for it alone), continuing if it is stopped.",
+        "properties": {
+          "line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "path",
+          "line"
+        ],
+        "title": "DebugRunToCursor",
         "type": "object"
       },
       "result": {

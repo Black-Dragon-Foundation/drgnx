@@ -3,6 +3,7 @@
 //! `runInTerminal`'s terminals through the hub's [`crate::term::Terms`].
 
 use super::adapters::{self, Adapter, Table, Transport};
+use super::breakpoints::Op as BpOp;
 use super::launch::{self, LaunchFile, Need, Os, Vars};
 use super::session::{NoProc, Op, Request, Start};
 use super::{BoxFut, Connected, Debug, Launcher, Opened, Terminals};
@@ -10,8 +11,9 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::Params;
 use runstav::methods::debug::{
-    DebugConfig, DebugConfigList, DebugConfigs, DebugControl, DebugFileError, DebugSelect,
-    DebugStart, DebugStarted, DebugTrust,
+    DebugBreakpointOp, DebugBreakpoints, DebugBreakpointsView, DebugConfig, DebugConfigList,
+    DebugConfigs, DebugControl, DebugFileError, DebugRunToCursor, DebugSelect, DebugStart,
+    DebugStarted, DebugTrust,
 };
 use runstav::types::JsonObject;
 use runstav::wire::{Error, ErrorCode};
@@ -459,6 +461,60 @@ async fn trust(front: &Front, p: DebugTrust) -> Result<bool, Error> {
     Ok(true)
 }
 
+fn bp_op(o: DebugBreakpointOp) -> Result<BpOp, Error> {
+    let id = |o: &DebugBreakpointOp| o.id.ok_or_else(|| bad("op.id", "required"));
+    Ok(match o.op.as_str() {
+        "add" => BpOp::Add {
+            path: o.path.clone().unwrap_or_default(),
+            line: o.line.unwrap_or(1),
+            enabled: o.enabled.unwrap_or(true),
+            condition: o.condition,
+            hit: o.hit,
+            log: o.log,
+        },
+        "remove" => BpOp::Remove { id: id(&o)? },
+        "edit" => BpOp::Edit {
+            id: id(&o)?,
+            enabled: o.enabled,
+            condition: o.condition,
+            hit: o.hit,
+            log: o.log,
+        },
+        "move" => BpOp::Move {
+            id: id(&o)?,
+            line: o.line.unwrap_or(1),
+        },
+        "add-function" => BpOp::AddFunction {
+            name: o.name.unwrap_or_default(),
+            condition: o.condition,
+        },
+        "remove-function" => BpOp::RemoveFunction {
+            name: o.name.unwrap_or_default(),
+        },
+        other => return Err(bad("op.op", format!("no breakpoint operation {other}"))),
+    })
+}
+
+async fn breakpoints(front: &Front, p: DebugBreakpoints) -> Result<DebugBreakpointsView, Error> {
+    let op = p.op.map(bp_op).transpose()?;
+    let v = front
+        .debug
+        .debug(front)
+        .breakpoints(&p.root, op, p.path.as_deref())
+        .await;
+    serde_json::from_value(v).map_err(|e| err(e.to_string()))
+}
+
+async fn run_to_cursor(front: &Front, p: DebugRunToCursor) -> Result<bool, Error> {
+    front
+        .debug
+        .debug(front)
+        .run_to_cursor(&p.session, &p.path, p.line)
+        .await
+        .map_err(err)?;
+    Ok(true)
+}
+
 fn answer<T: serde::Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
     r.map(|v| json!(v))
 }
@@ -475,6 +531,8 @@ pub async fn serve(
         Params::DebugControl(p) => answer(control(front, p).await),
         Params::DebugSelect(p) => answer(select(front, p).await),
         Params::DebugTrust(p) => answer(trust(front, p).await),
+        Params::DebugBreakpoints(p) => answer(breakpoints(front, p).await),
+        Params::DebugRunToCursor(p) => answer(run_to_cursor(front, p).await),
         other => return Err(Box::new(other)),
     })
 }

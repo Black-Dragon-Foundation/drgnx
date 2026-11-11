@@ -164,7 +164,8 @@ root>.json`, written atomically. If the file is damaged, it is moved aside to `â
   stop or end. The registry then sends the file again.
 
 The registry starts each session with the store's breakpoints, and sends a changed file to every session of the
-root at once. It tells the editors with the `debug-breakpoints` event: the file's view, with its root. Tests:
+root at once. It tells the editors with the `debug-breakpoints` event: the file's view, with its root. The editors use `debug/breakpoints` (`{root, path?, op?}`: an operation by id, answered with the file's view) and
+`debug/run-to-cursor` (`{session, path, line}`). Tests:
 `tests_breakpoints.rs` (the store) and `tests_registry.rs` (with mock adapters).
 
 ## The `debug/*` methods

@@ -909,7 +909,9 @@ impl Front {
             | Params::DebugStart(_)
             | Params::DebugControl(_)
             | Params::DebugSelect(_)
-            | Params::DebugTrust(_)) => crate::debug::wire::serve(self, &caller, p)
+            | Params::DebugTrust(_)
+            | Params::DebugBreakpoints(_)
+            | Params::DebugRunToCursor(_)) => crate::debug::wire::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
             // the Extensions view's catalog (`extensions/*`)
