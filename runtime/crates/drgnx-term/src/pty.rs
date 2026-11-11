@@ -36,7 +36,15 @@ impl Pty {
         env: &[(String, String)],
         size: Winsize,
     ) -> io::Result<Pty> {
+        #[cfg(not(target_os = "macos"))]
         let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC)?;
+        // macOS's posix_openpt takes no O_CLOEXEC: the flag is set right after (no other thread forks meanwhile)
+        #[cfg(target_os = "macos")]
+        let master = {
+            let m = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY)?;
+            rustix::io::fcntl_setfd(&m, rustix::io::FdFlags::CLOEXEC)?;
+            m
+        };
         grantpt(&master)?;
         unlockpt(&master)?;
         let name = ptsname(&master, Vec::new())?;

@@ -555,7 +555,9 @@ How it works:
   `search-preview` and `search-sheet` (mockup `search-view`), search the project for `(gateway)--pending` replaced by
   `\1--queued` (regexp) with the third match unticked, in the dark theme, then show the first file's preview tile and
   the Replace All sheet. They need the hub: the scene starts `DRGNX_RATATOSKR_BIN` in the foreground (a session starts
-  none).
+  none). `debugging` opens the debugging mockup's `inventory.py` at line 24 with its breakpoints (18, a condition on
+  22, 24, a logpoint on 25, 30 disabled) in the breakpoint column; the hub's answer is given to the column directly,
+  since no session runs.
 - It writes `NAME-sN-facts.eld` beside each shot: the themes, the fonts the chrome faces got, the windows, the
   modules, the visible child frames, `:palette` while a minibuffer is open (whether the palette floats and why: its
   category's multiform entry, the display action, the frame), and `:limits`, what the line cannot show of that mockup yet (`drgnx-look-scene-limits`). A limit is
@@ -1421,8 +1423,9 @@ switches for the whole suite.
   (pauses skipped) and every held line in connection open order, and repeats while the client sent more. It returns
   the marker, or nil once no hub answers (a test that stopped the hub). A barrier answer with `unnamed` > 0 (the hub
   wrote from a task without an origin), one whose `waiting` names an origin `drgnx-test-gate-waiting-ok` does not
-  list (a hub task, a job's watcher, still inside a real wait after the barrier waited 5 s for it:
-  docs/develop/hub.md, "The sequencer and the barrier"), or a step that cannot be met fails the test.
+  list (a job's watcher still inside its wait after the barrier waited 5 s for it; a blocking call or store answer is
+  waited for to its end, and one that never ends fails through `drgnx-test-gate-block-secs`: docs/develop/hub.md, "The
+  sequencer and the barrier"), or a step that cannot be met fails the test.
   Assertions come after it (the
   lint `drgnx-lint/gated-asserts-follow-deliver-all`). `(drgnx-test-hub-advance MS)` moves the hub's clock
   (`__test_advance`), then delivers all; `(drgnx-test-hub-advance MS t)` only moves it, for a test that lets the hub

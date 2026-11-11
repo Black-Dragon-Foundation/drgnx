@@ -442,6 +442,7 @@ async fn serve_conn(stream: UnixStream, front: Arc<Front>, socket: Socket) {
                 || advance::serve(&out, &l).await
                 || matrix_ask::serve(&front, &out, &l).await
                 || browser_endpoint::serve(&out, &l)
+                || real_wait::serve(&out, &l)
                 || buffer_views::serve(&front, &out, &l)
                 || view_rows::serve(&front, id, &out, &l)
                 || barrier_refused(&out, &l)
@@ -508,6 +509,7 @@ async fn sequenced(
                             || advance::serve(out, &l).await
                             || matrix_ask::serve(front, out, &l).await
                             || browser_endpoint::serve(out, &l)
+                            || real_wait::serve(out, &l)
                             || buffer_views::serve(front, out, &l))
                     {
                         front.line(session, out, &l).await;
@@ -878,6 +880,48 @@ mod browser_endpoint {
             let a = serde_json::to_string(&Answer {
                 id,
                 result,
+                ignored: vec![],
+            })
+            .expect("an answer serializes");
+            out.push(format!("{a}\n").into());
+        }
+        true
+    }
+}
+
+/// `__test_real_wait {ms?}` (test-hooks): a task `test:real-wait` inside a real wait (a blocking thread) for MS of real
+/// time, or one that never ends without MS; answered true at once.  A barrier waits for the first, and the second holds
+/// it until the asker's own deadline ([`crate::clock::settle_barrier`]).
+#[cfg(feature = "test-hooks")]
+mod real_wait {
+    use super::Outbox;
+    use crate::clock;
+    use runstav::wire::{Answer, Request};
+    use serde_json::json;
+    use std::time::Duration;
+
+    /// Serve LINE when it is a `__test_real_wait` request (true), else leave it to the dispatcher.
+    pub(super) fn serve(out: &Outbox, line: &str) -> bool {
+        let Ok(req) = serde_json::from_str::<Request>(line) else {
+            return false;
+        };
+        if req.method != "__test_real_wait" {
+            return false;
+        }
+        let ms = req.params["ms"].as_u64();
+        clock::spawn("test:real-wait", async move {
+            match ms {
+                Some(ms) => {
+                    let _ = clock::blocking(move || std::thread::sleep(Duration::from_millis(ms)))
+                        .await;
+                }
+                None => clock::real(std::future::pending::<()>()).await,
+            }
+        });
+        if let Some(id) = req.id {
+            let a = serde_json::to_string(&Answer {
+                id,
+                result: json!(true),
                 ignored: vec![],
             })
             .expect("an answer serializes");

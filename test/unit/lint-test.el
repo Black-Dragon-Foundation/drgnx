@@ -93,7 +93,7 @@ spec's `:box' colour too) or :distant-foreground."
     (cond ((stringp k) (not (string-match-p "mouse\\|wheel\\|\\`<remap>" k)))
           ((vectorp k)
            (let ((first (and (> (length k) 0) (aref k 0))))
-             (not (or (memq first '(remap header-line tab-line mode-line left-fringe right-fringe))
+             (not (or (memq first '(remap header-line tab-line mode-line left-fringe right-fringe left-margin right-margin))
                       (and (symbolp first) (string-match-p "mouse\\|wheel" (symbol-name first))))))))))
 
 (ert-deftest drgnx-lint/the-key-check-tells-keys-from-mouse ()
@@ -103,6 +103,7 @@ spec's `:box' colour too) or :distant-foreground."
   (should-not (drgnx-lint--keyboard-key-p "<mouse-1>"))
   (should-not (drgnx-lint--keyboard-key-p "<remap> <self-insert-command>"))
   (should-not (drgnx-lint--keyboard-key-p [header-line mouse-1]))
+  (should-not (drgnx-lint--keyboard-key-p [left-margin mouse-1]))
   (should-not (drgnx-lint--keyboard-key-p [remap kill-line])))
 
 (ert-deftest drgnx-lint/keys-come-from-the-profiles ()

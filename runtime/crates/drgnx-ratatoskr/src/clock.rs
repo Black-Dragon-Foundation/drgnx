@@ -239,14 +239,14 @@ pub async fn advance(d: Duration) -> Advanced {
 }
 
 /// The hub's barrier (`__test_barrier`'s), for a test that runs the hub's tasks in its own process: waits until every
-/// [`spawn`]ed task is parked and outside any real wait, at most [`BUSY_AFTER`] of real time, then advances by no
-/// time.  The origins still inside a real wait or running after that, sorted, once each: none when it held.  Panics on
-/// the real clock (test-hooks).
+/// [`spawn`]ed task is parked and outside any real wait ([`settle_barrier`]: a [`real`] one with no limit, the rest at
+/// most [`BUSY_AFTER`] of real time), then advances by no time.  The origins still inside a real wait or running after
+/// that, sorted, once each: none when it held.  Panics on the real clock (test-hooks).
 #[cfg(feature = "test-hooks")]
 pub async fn barrier() -> Vec<String> {
     let Settled {
         mut waiting, busy, ..
-    } = settle_real(BUSY_AFTER, &[]).await;
+    } = settle_barrier(&[]).await;
     waiting.extend(busy);
     waiting.extend(advance(Duration::ZERO).await.busy);
     waiting.sort();
@@ -361,11 +361,23 @@ pub(crate) struct Settled {
 /// any real wait ([`real`], [`real_long`], a store thread's answer), and nothing [`outside`] is in flight; then what is
 /// left (sorted, once each): in `waiting` the origins of the tasks still inside a real wait (those OK lists, and after
 /// WITHIN the others) and the outside names still in flight, in `busy` the other tasks still running after WITHIN.
-/// Empty on the real clock (test-hooks).
-#[cfg(feature = "test-hooks")]
+/// Empty on the real clock (test-hooks; the hub's barriers use [`settle_barrier`]).
+#[cfg(all(test, feature = "test-hooks"))]
 pub(crate) async fn settle_real(within: Duration, ok: &[String]) -> Settled {
     match virt::current() {
-        Some(v) => v.settle_real(within, ok).await,
+        Some(v) => v.settle_real(within, ok, false).await,
+        None => Settled::default(),
+    }
+}
+
+/// A barrier's settle: [`settle_real`] within [`BUSY_AFTER`], except that a task inside a [`real`] wait (a blocking
+/// call, a store thread's answer: a wait that ends by itself) is waited for with no limit, and the limit counts again
+/// from its end.  A real wait that never ends is a red through the deadline of whoever asked for the barrier; a
+/// [`real_long`] wait, what is in flight [`outside`] and a task still running are named after [`BUSY_AFTER`] as before.
+#[cfg(feature = "test-hooks")]
+pub(crate) async fn settle_barrier(ok: &[String]) -> Settled {
+    match virt::current() {
+        Some(v) => v.settle_real(BUSY_AFTER, ok, true).await,
         None => Settled::default(),
     }
 }
@@ -967,8 +979,15 @@ mod virt {
             }
         }
 
-        pub(super) async fn settle_real(&self, within: Duration, ok: &[String]) -> super::Settled {
-            let give_up = tokio::time::Instant::now() + within;
+        /// HOLD (a barrier's): a task OK does not list inside a [`super::real`] wait holds the settle past WITHIN, and
+        /// WITHIN counts again from the moment it is seen out of it ([`super::settle_barrier`]).
+        pub(super) async fn settle_real(
+            &self,
+            within: Duration,
+            ok: &[String],
+            hold: bool,
+        ) -> super::Settled {
+            let mut give_up = tokio::time::Instant::now() + within;
             // the origins last seen running: named if the limit passes while a deferred wake hides them
             let mut last: Vec<String> = Vec::new();
             let mut polls = HashMap::new();
@@ -977,13 +996,14 @@ mod virt {
                 let mut note = std::pin::pin!(note);
                 note.as_mut().enable();
                 let before = self.workers_quiet();
-                let (outside, waited) = {
+                let (outside, waited, held) = {
                     let mut st = self.state();
                     // what is in flight outside first: what it sends wakes a task, which the look below then sees
                     let outside = st.outside.iter().any(|(_, pending)| pending() > 0);
                     st.live.retain(|t| !t.flags().ended);
                     let mine = |t: &&Arc<Task>| !ok.iter().any(|o| o == t.origin.as_str());
                     let waited = st.live.iter().filter(mine).any(|t| !t.settled());
+                    let held = hold && st.live.iter().filter(mine).any(|t| t.flags().real > 0);
                     let running: Vec<String> = moving(&st.live, &mut polls)
                         .iter()
                         .filter(mine)
@@ -992,10 +1012,17 @@ mod virt {
                     if !running.is_empty() {
                         last = running;
                     }
-                    (outside, waited)
+                    (outside, waited, held)
                 };
                 if !outside && !waited && before.is_some() && self.workers_quiet() == before {
                     return self.left(ok, None);
+                }
+                // past the limit inside a real wait: its end (an exit from it notifies) is waited for, and the limit
+                // counts again from there for what the task then does
+                if held && tokio::time::Instant::now() >= give_up {
+                    note.await;
+                    give_up = tokio::time::Instant::now() + within;
+                    continue;
                 }
                 // nothing outside, and no deferred wake, tells the clock it is done: looked at again each
                 // millisecond while one may be what is left
@@ -1006,6 +1033,7 @@ mod virt {
                 };
                 if tokio::time::timeout_at(next, note).await.is_err()
                     && tokio::time::Instant::now() >= give_up
+                    && !held
                 {
                     return self.left(ok, Some(&last));
                 }

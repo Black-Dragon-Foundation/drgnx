@@ -58,6 +58,25 @@ font-lock (`lisp--el-funcall-position-p', through `forward-sexp') scanned the re
   "The perf sessions' monitor size: $DRGNX_UI_SIZE (WxH) when set, else 1400x800."
   (let ((e (getenv "DRGNX_UI_SIZE"))) (if (member e '(nil "")) "1400x800" e)))
 
+(defun drgnx-perf-run--debug-setup-form ()
+  "The debug workloads' setup: the breakpoint column's files, `drgnx-hub-call' answered by a store in the session (its
+`debug/breakpoints' adds and removes by line, as the hub's), F9 toggling; `drgnx-perf--debug-stop' undoes it."
+  (format "(progn (dolist (m '(\"drgnx-debug-launch\" \"drgnx-debug-gutter\")) (load (expand-file-name (concat \"modules/extra/\" m) %S) nil t))
+     (defvar drgnx-perf--debug-store nil) (defvar drgnx-perf--debug-version 0)
+     (defun drgnx-perf--debug-hub (method params cb &rest _)
+       (when (equal method \"debug/breakpoints\")
+         (let ((op (plist-get params :op)))
+           (pcase (plist-get op :op)
+             (\"add\" (push (list :id (cl-incf drgnx-perf--debug-version) :line (plist-get op :line) :enabled t :verified t) drgnx-perf--debug-store))
+             (\"remove\" (setq drgnx-perf--debug-store (seq-remove (lambda (b) (eql (plist-get b :id) (plist-get op :id))) drgnx-perf--debug-store)))))
+         (funcall cb (list :version (cl-incf drgnx-perf--debug-version) :breakpoints (reverse drgnx-perf--debug-store)) nil))
+       1)
+     (defun drgnx-perf--debug-stop ()
+       (advice-remove 'drgnx-hub-call #'drgnx-perf--debug-hub) (global-unset-key (kbd \"<f9>\")) t)
+     (advice-add 'drgnx-hub-call :override #'drgnx-perf--debug-hub)
+     (global-set-key (kbd \"<f9>\") #'drgnx-debug-gutter-toggle) t)"
+          drgnx-ui-repo-dir))
+
 (defun drgnx-perf-run--visit-fixture-form ()
   "The form that visits the fixture and puts point where the keys go: the line under `drgnx-perf-run--fixture-mark'."
   (format "(let ((f %S)) (when-let* ((b (find-buffer-visiting f))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
@@ -1247,6 +1266,26 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                       " (goto-char (point-min)) (drgnx-sticky-mode 1) (when (require 'indent-bars nil t) (drgnx-guides--maybe)) t)")
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
        :teardown ,kill-fixture)
+      ;; the breakpoint column: the hub's `debug/breakpoints' answered at once by a store in the session
+      ;; (`drgnx-perf--debug-hub'), so what is timed is the editor's half: placing and dressing the marks
+      (debug-gutter-scroll
+       :setup ,(drgnx-perf-run--debug-setup-form)
+       ;; the 12k-line fixture with a breakpoint every 40 lines (300), of every kind; then as code-scrolling
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min)) (drgnx-debug-gutter-mode 1)"
+                      " (drgnx-debug-gutter--apply (list :version 1 :breakpoints"
+                      "   (mapcar (lambda (i) (list :id i :line (* 40 i) :enabled (/= 0 (% i 5)) :verified (/= 0 (% i 7))"
+                      "                             :condition (and (= 0 (% i 3)) \"x > 1\") :log (and (= 0 (% i 11)) \"{x}\")))"
+                      "           (number-sequence 1 300)))) t)")
+       :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
+       :teardown ,(concat "(progn (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
+      ;; F9 on 20 lines in a row: each key a `debug/breakpoints' add, its answer and the column redrawn
+      (debug-breakpoint-click
+       :setup ,(drgnx-perf-run--debug-setup-form)
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
+                      " (setq drgnx-perf--debug-store nil) (drgnx-debug-gutter-mode 1) t)")
+       :actions ,(apply #'append (make-list 20 (list (list :keys "<f9>") (list :keys "<down>"))))
+       :check "(= 20 (length drgnx-perf--debug-store))"
+       :teardown ,(concat "(progn (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
       ;; the diff view, split, on a 10k-line diff (built in the session: no git needed)
       (diff-scrolling
        :setup ,(format "(progn (load (expand-file-name \"modules/tools/drgnx-diff\" %S) nil t) t)" drgnx-ui-repo-dir)
@@ -1875,6 +1914,8 @@ version and the commit, as JSON in FILE."
               '(terminal-typing terminal-output terminal-output-10mb terminal-output-100mb terminal-echo terminal-echo-idle
                                 terminal-backfill terminal-flood))
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
+    ,@(mapcar (lambda (w) (cons w "graphical debugging: its allocation, CPU and rows are set from three pinned runs on the desktop island (the plan's perf step)"))
+              '(debug-gutter-scroll debug-breakpoint-click))
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))
     ,@(mapcar (lambda (w) (cons w "the Work space's rows are time budgets on the desktop island (typing p95 and the relative +1 ms rules); allocation, CPU and rows follow once the first runs set them"))
