@@ -161,7 +161,8 @@ mod tests {
             );
             seen += 1;
         }
-        assert_eq!(seen, 13, "the fixtures the plan names");
+        // the plugin plan's 11 and the shaping hooks' 4 (change-edit, deny-edit, change-tool-arg, http-commit-hook)
+        assert_eq!(seen, 15, "the fixtures the plans name");
     }
 
     #[test]
@@ -194,9 +195,12 @@ mod tests {
         // every fixture is a component, and `scan` reads the folder it was installed to
         let root = out_dir().join("plugins");
         let found = scan(&root);
+        let manifests = fs::read_dir(fixtures_dir().join("manifests"))
+            .unwrap()
+            .count();
         assert_eq!(
             found.len(),
-            13,
+            manifests,
             "{:?}",
             found
                 .iter()
