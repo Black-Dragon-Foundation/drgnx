@@ -9,15 +9,16 @@
 //! burst of changes settles, reads the changed folders again and sends what differs; it ends with its listing.
 
 use super::model::Doc;
-use super::{Key, Views, lock};
+use super::{Key, Views, git, icons, lock};
 use crate::dispatch::Caller;
 use crate::front::Front;
-use drgnx_rows::{Row, RowBuilder};
+use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::search::{ExplorerParams, ExplorerStarted};
+use runstav::methods::view::{Display, ViewEnv};
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
 use std::cmp::Ordering as Cmp;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
@@ -298,30 +299,190 @@ fn explorer_doc_in(entries: &[Entry], window: usize, from: Option<usize>) -> Doc
     d
 }
 
-/// E's row: the guides and chevron, then the name; the path over all of it.
-fn entry_row(e: &Entry) -> Row {
-    let chevron = match (e.dir, e.open) {
-        (false, _) => "  ",
-        (true, true) => "▾ ",
-        (true, false) => "▸ ",
-    };
+/// A level's indent in logical px when the editor names none (the comfortable density's `tree-indent`).
+pub const INDENT: u32 = 12;
+
+/// How one display class draws the rows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RowLook {
+    /// On a graphical display, in device px: a level's indent, an icon's size and the gap either side of the icon
+    /// (window-dark.html `.row`, 6 px); none on a terminal (text guides and chevrons).
+    pub gui: Option<(u32, u32, u32)>,
+    /// The listing has one root, whose row is hidden (the island's header names it).
+    pub one_root: bool,
+}
+
+impl RowLook {
+    /// The look of ENV's class for a listing of ROOTS roots with levels INDENT logical px apart, sizes in device px at
+    /// the env's scale rounded half up (`drgnx-px`).
+    pub fn of(env: &ViewEnv, indent: u32, roots: usize) -> Self {
+        let px = |v: f32| (f64::from(v) * f64::from(env.scale) + 0.5 + 1e-9).floor() as u32;
+        RowLook {
+            gui: matches!(env.display, Display::Gui)
+                .then(|| (px(indent as f32), px(icons::SIZE), px(6.0))),
+            one_root: roots == 1,
+        }
+    }
+}
+
+/// Each entry's git status (by path) where its repository's status was read: a file's own, a folder's strongest
+/// inside it, `Ignored` (or `Untracked`) under an ignored (or untracked) folder.
+pub type Marks = HashMap<String, git::Kind>;
+
+/// Who is here by path (`agents/presence/subscribe`'s model, [`crate::work::presence::here`]): the ordinals of the
+/// agents changing a file, or a file inside a folder.
+pub type Here = BTreeMap<String, BTreeSet<u32>>;
+
+/// What a listing's rows show besides the entries: the git marks, and who is here.
+#[derive(Default)]
+pub struct Decor {
+    pub git: Marks,
+    pub here: Arc<Here>,
+}
+
+/// The marks of ENTRIES from STATUSES, each a repository's root and its last read status.
+pub fn marks_of(entries: &[Entry], statuses: &[(PathBuf, Arc<git::Status>)]) -> Marks {
+    let mut marks = Marks::new();
+    for (root, st) in statuses {
+        let root = root_id(root);
+        let rel = |p: &str| -> Option<String> {
+            if p == root {
+                Some(".".into())
+            } else {
+                p.strip_prefix(root.as_str())?
+                    .strip_prefix('/')
+                    .map(str::to_owned)
+            }
+        };
+        let shown: BTreeSet<String> = entries
+            .iter()
+            .filter(|e| e.dir)
+            .filter_map(|e| rel(&e.path))
+            .collect();
+        let folders = git::rollup(&st.files, &shown);
+        for e in entries {
+            let Some(r) = rel(&e.path) else { continue };
+            // an ignored or untracked folder's entries are not listed one by one: they take its status
+            let mut above = r.as_str();
+            let inherited = loop {
+                match above.rfind('/') {
+                    Some(i) => above = &above[..i],
+                    None => break None,
+                }
+                if let Some(k @ (git::Kind::Ignored | git::Kind::Untracked)) = st.files.get(above) {
+                    break Some(*k);
+                }
+            };
+            let own = if e.dir {
+                st.files
+                    .get(&r)
+                    .filter(|k| matches!(k, git::Kind::Ignored | git::Kind::Untracked))
+                    .or_else(|| folders.get(&r))
+            } else {
+                st.files.get(&r)
+            };
+            if let Some(k) = inherited.or(own.copied()) {
+                marks.insert(e.path.clone(), k);
+            }
+        }
+    }
+    marks
+}
+
+/// E's row in LOOK: the guides and chevron (on a graphical display the indents as spaces, the chevron and the file
+/// or folder icon as images with the gap either side), then the name; the path over all of it, the git status over
+/// the name (`drgnx-git-status`, which the editor draws as the mark at the right edge), an ignored name dimmed. A
+/// single root's row is invisible. The ordinals of the agents here go over the name too (`drgnx-agents-here`, a list:
+/// the editor draws their badge, whose marks and colours are its own). Icons go into IMAGES.
+fn entry_row(
+    e: &Entry,
+    mark: Option<git::Kind>,
+    here: Option<&BTreeSet<u32>>,
+    look: &RowLook,
+    images: &mut BTreeMap<ImageId, String>,
+) -> Row {
+    let guide = "drgnx-explorer-guide";
     let mut b = RowBuilder::new(e.path.clone());
-    let guides = "│ ".repeat(e.depth.saturating_sub(1));
-    b.push(&format!("{guides}{chevron}"), Some("drgnx-explorer-guide"));
-    let face = match (e.depth, e.dir) {
-        (0, _) => "drgnx-explorer-root",
-        (_, true) => "drgnx-explorer-directory",
+    match look.gui {
+        Some((indent, icon, gap)) => {
+            for _ in 1..e.depth.max(1) {
+                b.space(indent, icon, guide);
+            }
+            let mut image = |b: &mut RowBuilder, name: &str, alt: &str| {
+                if let Some((id, svg)) = icons::svg(name, icon) {
+                    images.insert(id, svg);
+                    b.image(id, alt);
+                } else {
+                    b.push(alt, None);
+                }
+            };
+            let at = b.pos();
+            match (e.dir, e.open) {
+                (true, true) => image(&mut b, "chevron-down", "▾"),
+                (true, false) => image(&mut b, "chevron-right", "▸"),
+                (false, _) => {
+                    b.push(" ", None);
+                }
+            }
+            b.space(gap, icon, guide);
+            let kind = match (e.dir, e.open) {
+                (true, true) => "folder-open",
+                (true, false) => "folder",
+                (false, _) => icons::file_icon(&e.label),
+            };
+            image(&mut b, kind, " ");
+            b.space(gap, icon, guide);
+            let end = b.pos();
+            b.face(at, end, guide);
+        }
+        None => {
+            let chevron = match (e.dir, e.open) {
+                (false, _) => "  ",
+                (true, true) => "▾ ",
+                (true, false) => "▸ ",
+            };
+            let guides = "│ ".repeat(e.depth.saturating_sub(1));
+            b.push(&format!("{guides}{chevron}"), Some(guide));
+        }
+    }
+    let name = b.pos();
+    let face = match (e.depth, e.dir, mark) {
+        (_, _, Some(git::Kind::Ignored)) => "drgnx-git-ignored",
+        (0, _, _) => "drgnx-explorer-root",
+        (_, true, _) => "drgnx-explorer-directory",
         _ => "drgnx-explorer-file",
     };
     b.push(&display(&e.label), Some(face));
     let end = b.pos();
+    if let Some(k) = mark.filter(|k| *k != git::Kind::Ignored) {
+        b.prop(name, end, "drgnx-git-status", json!(k.name()));
+    }
+    if let Some(ords) = here.filter(|o| !o.is_empty()) {
+        b.prop(name, end, "drgnx-agents-here", json!(ords));
+    }
     b.prop(0, end, "drgnx-work-id", json!(e.path));
+    if e.depth == 0 && look.one_root {
+        b.prop(0, end, "invisible", json!(true));
+    }
     b.finish()
 }
 
-/// The rows of ENTRIES, one per entry, keyed by its path.
-pub fn explorer_rows(entries: &[Entry]) -> Vec<Row> {
-    entries.iter().map(entry_row).collect()
+/// The rows of ENTRIES in LOOK with their DECOR, one per entry keyed by its path, and the icons they name (each
+/// once).
+pub fn explorer_rows(
+    entries: &[Entry],
+    decor: &Decor,
+    look: &RowLook,
+) -> (Vec<Row>, Vec<(ImageId, String)>) {
+    let mut images = BTreeMap::new();
+    let rows = entries
+        .iter()
+        .map(|e| {
+            let mark = decor.git.get(&e.path).copied();
+            entry_row(e, mark, decor.here.get(&e.path), look, &mut images)
+        })
+        .collect();
+    (rows, images.into_iter().collect())
 }
 
 /// What a listing's thread hears after its listing: changed paths, a watch that lost events (read every folder
@@ -376,7 +537,8 @@ fn rewatch(
 
 /// List ROOTS (EXPANDED open, COMPACT joining chains) and hand the entries to SEND; then watch every folder that listing
 /// read and, after each burst of changes settles (`SETTLE`, at most `SETTLE_MAX`), read the changed folders again and
-/// hand over the entries when they differ from the last. The watcher sends on TX; RX hears it and `Heard::Stop`. Ends
+/// hand over the entries when they differ from the last (SEND's second argument says the watch found them). The
+/// watcher sends on TX; RX hears it and `Heard::Stop`. Ends
 /// on `Heard::Stop`, CANCEL, a closed channel, or SEND answering false; the watcher goes with it.
 pub(crate) fn list_and_watch(
     roots: &[PathBuf],
@@ -385,7 +547,7 @@ pub(crate) fn list_and_watch(
     cancel: &AtomicBool,
     tx: Sender<Heard>,
     rx: Receiver<Heard>,
-    send: &mut dyn FnMut(Vec<Entry>) -> bool,
+    send: &mut dyn FnMut(Vec<Entry>, bool) -> bool,
 ) {
     let mut cache: HashMap<PathBuf, Vec<(String, bool)>> = HashMap::new();
     let list = |cache: &mut HashMap<PathBuf, Vec<(String, bool)>>| {
@@ -403,7 +565,7 @@ pub(crate) fn list_and_watch(
     let mut w = watcher(tx);
     let mut watching = HashSet::new();
     rewatch(&mut w, &mut watching, cache.keys().cloned().collect());
-    if !send(last.clone()) {
+    if !send(last.clone(), false) {
         return;
     }
     loop {
@@ -455,7 +617,7 @@ pub(crate) fn list_and_watch(
         let Some(now) = list(&mut cache) else { return };
         rewatch(&mut w, &mut watching, cache.keys().cloned().collect());
         if now != last {
-            if !send(now.clone()) {
+            if !send(now.clone(), true) {
                 return;
             }
             last = now;
@@ -469,6 +631,9 @@ struct Run {
     cancel: Arc<AtomicBool>,
     stop: Sender<Heard>,
     entries: Option<Arc<Vec<Entry>>>,
+    /// A level's indent in logical px, and how many roots the listing has (what the rows' look needs).
+    indent: u32,
+    roots: usize,
 }
 
 impl Run {
@@ -483,6 +648,8 @@ impl Run {
 pub(super) struct Explorers {
     runs: Mutex<BTreeMap<(u64, String), Run>>,
     next: AtomicU64,
+    /// Who is here per connection, the last its presence subscription saw.
+    here: Mutex<BTreeMap<u64, Arc<Here>>>,
 }
 
 impl Explorers {
@@ -492,6 +659,8 @@ impl Explorers {
         &self,
         conn: u64,
         view: &str,
+        indent: u32,
+        roots: usize,
     ) -> (u64, Arc<AtomicBool>, Sender<Heard>, Receiver<Heard>) {
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         let cancel = Arc::new(AtomicBool::new(false));
@@ -508,6 +677,8 @@ impl Explorers {
                 cancel: cancel.clone(),
                 stop: tx.clone(),
                 entries,
+                indent,
+                roots,
             },
         );
         (id, cancel, tx, rx)
@@ -520,8 +691,24 @@ impl Explorers {
         }
     }
 
+    /// CONN's who is here (empty before its presence came).
+    fn here(&self, conn: u64) -> Arc<Here> {
+        lock(&self.here).get(&conn).cloned().unwrap_or_default()
+    }
+
+    /// Keep HERE as CONN's; whether it changed.
+    fn keep_here(&self, conn: u64, here: Here) -> bool {
+        let mut all = lock(&self.here);
+        if all.get(&conn).is_some_and(|h| **h == here) {
+            return false;
+        }
+        all.insert(conn, Arc::new(here));
+        true
+    }
+
     /// Stop every listing of CONN.
     pub(super) fn gone(&self, conn: u64) {
+        lock(&self.here).remove(&conn);
         lock(&self.runs).retain(|(c, _), r| {
             if *c == conn {
                 r.end();
@@ -538,45 +725,97 @@ impl Explorers {
         view: &str,
         id: u64,
         entries: Vec<Entry>,
-        then: impl FnOnce(&[Entry]) -> R,
+        then: impl FnOnce(&[Entry], u32, usize) -> R,
     ) -> Option<R> {
         let mut runs = lock(&self.runs);
         let run = runs.get_mut(&(conn, view.to_owned()))?;
         if run.id != id {
             return None;
         }
-        let r = then(&entries);
+        let r = then(&entries, run.indent, run.roots);
         run.entries = Some(Arc::new(entries));
         Some(r)
     }
 
-    /// VIEW's entries, when a listing sent some.
-    fn entries(&self, conn: u64, view: &str) -> Option<Arc<Vec<Entry>>> {
+    /// VIEW's entries, when a listing sent some, with its indent and its number of roots.
+    fn entries(&self, conn: u64, view: &str) -> Option<(Arc<Vec<Entry>>, u32, usize)> {
+        let runs = lock(&self.runs);
+        let run = runs.get(&(conn, view.to_owned()))?;
+        Some((run.entries.clone()?, run.indent, run.roots))
+    }
+
+    /// The views of CONN with a listing.
+    fn views_of(&self, conn: u64) -> Vec<String> {
         lock(&self.runs)
-            .get(&(conn, view.to_owned()))?
-            .entries
-            .clone()
+            .keys()
+            .filter(|(c, _)| *c == conn)
+            .map(|(_, v)| v.clone())
+            .collect()
     }
 }
 
 impl Views {
     /// The model and rows of VIEW's listing for a class that just got its env; false when VIEW has no listing.
     pub(super) fn explorer_build(&self, f: &Front, key: &Key) -> bool {
-        let Some(entries) = self.explorers.entries(key.0, &key.1) else {
+        let Some((entries, indent, roots)) = self.explorers.entries(key.0, &key.1) else {
             return false;
         };
         let from = self.window_from(key.0, &key.1, "order");
         self.publish_model(f, key.0, &key.1, explorer_doc(&entries, from));
-        if let Some(p) = lock(&self.store).publish(key, explorer_rows(&entries), &[]) {
-            f.send_to(key.0, "view-patch", json!(p));
-        }
+        let decor = self.explorer_decor(key.0, &entries);
+        self.explorer_rows_to(f, key, &entries, &decor, indent, roots);
         true
+    }
+
+    /// The decor of CONN's listing of ENTRIES: the marks from CONN's statuses, and who is here.
+    fn explorer_decor(&self, conn: u64, entries: &[Entry]) -> Decor {
+        Decor {
+            git: marks_of(entries, &self.letters.statuses(conn)),
+            here: self.explorers.here(conn),
+        }
+    }
+
+    /// ENTRIES' rows with their DECOR for KEY's class (its env's look), and the icons they name.
+    fn explorer_rows_to(
+        &self,
+        f: &Front,
+        key: &Key,
+        entries: &[Entry],
+        decor: &Decor,
+        indent: u32,
+        roots: usize,
+    ) {
+        self.publish_built(f, key, |env, _| {
+            explorer_rows(entries, decor, &RowLook::of(env, indent, roots))
+        });
+    }
+
+    /// CONN's decor changed (`git/letters` read a status, who is here moved): every listing of CONN draws its rows
+    /// again; only the rows that changed go out.
+    pub(super) fn explorer_decor_changed(&self, f: &Front, conn: u64) {
+        for view in self.explorers.views_of(conn) {
+            let Some((entries, indent, roots)) = self.explorers.entries(conn, &view) else {
+                continue;
+            };
+            let decor = self.explorer_decor(conn, &entries);
+            let classes = lock(&self.store).classes(conn, &view);
+            for class in classes {
+                self.explorer_rows_to(
+                    f,
+                    &(conn, view.clone(), class),
+                    &entries,
+                    &decor,
+                    indent,
+                    roots,
+                );
+            }
+        }
     }
 
     /// `view/window` of CONN's VIEW: its listing's model again, with `order`'s window where the editor asked; false
     /// when VIEW has no listing.
     pub(super) fn explorer_window(&self, f: &Front, conn: u64, view: &str) -> bool {
-        let Some(entries) = self.explorers.entries(conn, view) else {
+        let Some((entries, ..)) = self.explorers.entries(conn, view) else {
             return false;
         };
         let from = self.window_from(conn, view, "order");
@@ -595,19 +834,31 @@ impl Views {
         entries: Vec<Entry>,
     ) -> bool {
         self.explorers
-            .finish(conn, view, id, entries, |entries| {
+            .finish(conn, view, id, entries, |entries, indent, roots| {
                 let from = self.window_from(conn, view, "order");
                 self.publish_model(f, conn, view, explorer_doc(entries, from));
-                let rows = explorer_rows(entries);
-                let mut store = lock(&self.store);
-                for class in store.classes(conn, view) {
-                    let key = (conn, view.to_owned(), class);
-                    if let Some(p) = store.publish(&key, rows.clone(), &[]) {
-                        f.send_to(conn, "view-patch", json!(p));
-                    }
+                let decor = self.explorer_decor(conn, entries);
+                let classes = lock(&self.store).classes(conn, view);
+                for class in classes {
+                    self.explorer_rows_to(
+                        f,
+                        &(conn, view.to_owned(), class),
+                        entries,
+                        &decor,
+                        indent,
+                        roots,
+                    );
                 }
             })
             .is_some()
+    }
+
+    /// Who is here for CONN's workspace (by path, the ordinals there) after a presence change: kept, and CONN's
+    /// listings drawn again when it differs from the last.
+    pub fn explorer_here(&self, f: &Front, conn: u64, here: Here) {
+        if self.explorers.keep_here(conn, here) {
+            self.explorer_decor_changed(f, conn);
+        }
     }
 }
 
@@ -643,7 +894,10 @@ pub fn subscribe(f: &Front, c: &Caller, p: ExplorerParams) -> Result<ExplorerSta
         .collect();
     let compact = p.compact.unwrap_or(true);
     let (conn, view) = (c.conn_id, p.view);
-    let (id, cancel, tx, rx) = views.explorers.start(conn, &view);
+    let (id, cancel, tx, rx) =
+        views
+            .explorers
+            .start(conn, &view, p.indent.unwrap_or(INDENT), roots.len());
     let Some(front) = views.front.get().cloned() else {
         return Err(invalid("view", "the hub is starting"));
     };
@@ -657,10 +911,14 @@ pub fn subscribe(f: &Front, c: &Caller, p: ExplorerParams) -> Result<ExplorerSta
                 &cancel,
                 tx,
                 rx,
-                &mut |entries| {
-                    front
-                        .upgrade()
-                        .is_some_and(|f| f.core.views.explorer_listed(&f, conn, &view, id, entries))
+                &mut |entries, watched| {
+                    front.upgrade().is_some_and(|f| {
+                        // a name made or removed outside Emacs may change git's status too
+                        if watched {
+                            f.core.views.letters.poke(conn, &roots);
+                        }
+                        f.core.views.explorer_listed(&f, conn, &view, id, entries)
+                    })
                 },
             );
         })

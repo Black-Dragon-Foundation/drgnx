@@ -137,7 +137,12 @@ fn explorer_model_and_rows() {
     assert!(doc.nodes["/r"].get("parent").is_none());
     assert!(doc.windows.is_empty());
 
-    let rows = explorer_rows(&got);
+    let tty = RowLook {
+        gui: None,
+        one_root: false,
+    };
+    let (rows, images) = explorer_rows(&got, &Decor::default(), &tty);
+    assert!(images.is_empty());
     let texts: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
     assert_eq!(texts, vec!["▾ R", "▸ a", "▾ lib", "│   m.el", "  z.txt"]);
     let m = &rows[3];
@@ -162,6 +167,160 @@ fn explorer_model_and_rows() {
 }
 
 /// The next listing the watching thread handed over within SECS, or none.
+fn entry(path: &str, depth: usize, dir: bool, open: bool) -> Entry {
+    let label = path.rsplit('/').next().unwrap_or(path).to_owned();
+    Entry {
+        path: path.into(),
+        parent: path
+            .rsplit_once('/')
+            .map(|(p, _)| p.to_owned())
+            .filter(|_| depth > 0),
+        label: if depth == 0 {
+            label.to_uppercase()
+        } else {
+            label
+        },
+        depth,
+        dir,
+        open,
+    }
+}
+
+fn gui_env(scale: f32) -> ViewEnv {
+    ViewEnv {
+        view: "x".into(),
+        class: "c".into(),
+        epoch: 1,
+        display: Display::Gui,
+        scale,
+        fonts: vec![],
+        cell: (8, 16),
+        width_px: 400,
+        palette: vec![],
+        tty_widths: vec![],
+        tz: String::new(),
+        reduced_motion: false,
+        attach: false,
+    }
+}
+
+/// Pattern D, the look-fix layout on the hub's rows (plan sja-complete E2): on a graphical display a level's indent is
+/// a space of `tree-indent` device px, a folder's chevron and every icon are images (each sent once), the icon has
+/// 6 px either side, then the name; the git status rides on the name (a folder's is the strongest inside it), an
+/// ignored name is dimmed, who is here rides on the name as ordinals, and a single root's row is invisible.  Sizes are device px at the env's scale.
+#[test]
+fn explorer_rows_draw_the_look() {
+    let entries = vec![
+        entry("/r", 0, true, true),
+        entry("/r/src", 1, true, true),
+        entry("/r/src/a.rs", 2, false, false),
+        entry("/r/target", 1, true, false),
+        entry("/r/notes.md", 1, false, false),
+    ];
+    let status = git::Status {
+        files: BTreeMap::from([
+            ("src/a.rs".to_owned(), git::Kind::Modified),
+            ("target".to_owned(), git::Kind::Ignored),
+        ]),
+        branch: None,
+    };
+    let here: Here = BTreeMap::from([
+        ("/r/src".to_owned(), BTreeSet::from([1, 3])),
+        ("/r/src/a.rs".to_owned(), BTreeSet::from([3])),
+    ]);
+    let decor = Decor {
+        git: marks_of(&entries, &[(PathBuf::from("/r/"), Arc::new(status))]),
+        here: Arc::new(here),
+    };
+    let look = RowLook::of(&gui_env(2.0), 12, 1);
+    assert_eq!(look.gui, Some((24, 32, 12)));
+    let (rows, images) = explorer_rows(&entries, &decor, &look);
+    let id = |name: &str| icons::svg(name, 32).unwrap().0;
+    let prop = |r: &Row, name: &str| r.props.iter().find(|p| p.2 == name).cloned();
+
+    // the root: invisible, as the only root
+    assert_eq!(prop(&rows[0], "invisible").map(|p| p.3), Some(json!(true)));
+    // src: chevron (open), gap, folder-open, gap, the name; changes inside it
+    let src = &rows[1];
+    assert_eq!(src.text, "    src");
+    assert_eq!(
+        src.images,
+        vec![
+            (0, id("chevron-down"), "▾".to_owned()),
+            (2, id("folder-open"), " ".to_owned())
+        ]
+    );
+    assert_eq!(src.spaces, vec![(1, 12, 32), (3, 12, 32)]);
+    assert_eq!(
+        prop(src, "drgnx-git-status"),
+        Some((4, 7, "drgnx-git-status".to_owned(), json!("modified")))
+    );
+    // a.rs: one indent, no chevron, the code icon; modified
+    let a = &rows[2];
+    assert_eq!(a.text, "     a.rs");
+    assert_eq!(a.spaces, vec![(0, 24, 32), (2, 12, 32), (4, 12, 32)]);
+    assert_eq!(a.images, vec![(3, id("file-code"), " ".to_owned())]);
+    assert!(a.runs.contains(&(5, 9, "drgnx-explorer-file".to_owned())));
+    assert!(a.runs.contains(&(1, 5, "drgnx-explorer-guide".to_owned())));
+    assert_eq!(
+        prop(a, "drgnx-git-status").map(|p| p.3),
+        Some(json!("modified"))
+    );
+    // who is here: the agents' ordinals over the name, none where nobody is
+    assert_eq!(
+        prop(src, "drgnx-agents-here"),
+        Some((4, 7, "drgnx-agents-here".to_owned(), json!([1, 3])))
+    );
+    assert_eq!(prop(a, "drgnx-agents-here").map(|p| p.3), Some(json!([3])));
+    assert_eq!(prop(&rows[4], "drgnx-agents-here"), None);
+    // target: ignored, dimmed, no mark
+    let t = &rows[3];
+    assert!(t.runs.iter().any(|r| r.2 == "drgnx-git-ignored"));
+    assert_eq!(prop(t, "drgnx-git-status"), None);
+    assert_eq!(t.images[0].1, id("chevron-right"));
+    // notes.md: clean, the text icon
+    assert_eq!(prop(&rows[4], "drgnx-git-status"), None);
+    assert_eq!(rows[4].images[0].1, id("file-text"));
+    // each icon once
+    let mut ids: Vec<ImageId> = images.iter().map(|i| i.0).collect();
+    ids.dedup();
+    assert_eq!(ids.len(), 6);
+    assert_eq!(images.len(), 6);
+    // two roots: both rows show
+    let two = RowLook::of(&gui_env(1.0), 14, 2);
+    assert_eq!(two.gui, Some((14, 16, 6)));
+    let (rows, _) = explorer_rows(&entries, &decor, &two);
+    assert_eq!(prop(&rows[0], "invisible"), None);
+}
+
+/// Pattern D: an untracked or ignored folder's entries take its status (git lists the folder, not what is in it).
+#[test]
+fn explorer_marks_inherit_from_untracked_and_ignored_folders() {
+    let entries = vec![
+        entry("/r", 0, true, true),
+        entry("/r/new", 1, true, true),
+        entry("/r/new/x.rs", 2, false, false),
+        entry("/r/out", 1, true, true),
+        entry("/r/out/y.o", 2, false, false),
+    ];
+    let status = git::Status {
+        files: BTreeMap::from([
+            ("new".to_owned(), git::Kind::Untracked),
+            ("out".to_owned(), git::Kind::Ignored),
+        ]),
+        branch: None,
+    };
+    let marks = marks_of(&entries, &[(PathBuf::from("/r"), Arc::new(status))]);
+    assert_eq!(marks["/r/new"], git::Kind::Untracked);
+    assert_eq!(marks["/r/new/x.rs"], git::Kind::Untracked);
+    assert_eq!(marks["/r/out/y.o"], git::Kind::Ignored);
+    assert_eq!(
+        marks["/r"],
+        git::Kind::Added,
+        "the root rolls up the untracked folder as added"
+    );
+}
+
 fn next_listing(got: &std::sync::mpsc::Receiver<Vec<Entry>>, secs: f32) -> Option<Vec<String>> {
     got.recv_timeout(std::time::Duration::from_secs_f32(secs))
         .ok()
@@ -185,7 +344,7 @@ fn explorer_watch_relists_open_folders_only() {
     let stop = tx.clone();
     let thread = std::thread::spawn(move || {
         let cancel = AtomicBool::new(false);
-        list_and_watch(&roots, &expanded, false, &cancel, tx, rx, &mut |es| {
+        list_and_watch(&roots, &expanded, false, &cancel, tx, rx, &mut |es, _| {
             out.send(es).is_ok()
         });
     });

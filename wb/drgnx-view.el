@@ -1362,7 +1362,7 @@ own (Ghostty's `bold-color')."
   "Faces a hub row may name besides the `drgnx-' ones.  A name not interned, not a face, or neither of these is
 dropped.")
 
-(defconst drgnx-view-patch-props '(help-echo mouse-face)
+(defconst drgnx-view-patch-props '(help-echo mouse-face invisible)
   "Text properties a hub row may set besides the `drgnx-' ones; any other name is dropped (never interned).")
 
 (defconst drgnx-view-patch-image-max 256

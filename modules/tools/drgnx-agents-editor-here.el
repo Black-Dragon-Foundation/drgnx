@@ -201,6 +201,11 @@ none."
 
 ;;;; The Explorer decorator and the status segment
 
+(defun drgnx-agents-editor-here--explorer-badge (ordinals dirp)
+  "`drgnx-explorer-badge-functions': the badge of the agents ORDINALS on an Explorer row of the hub's (DIRP: a
+folder, six marks; a file: three, each with its agent's initial)."
+  (drgnx-agents-editor-here--badge ordinals (if dirp 6 3) (not dirp)))
+
 (defun drgnx-agents-editor-here--decorate (_bol eol path _dirp _name-start)
   "The Explorer decorator: the row's badge, from the cache, in an overlay the row's next paint removes."
   (when-let* ((s (gethash (directory-file-name path) drgnx-agents-editor-here--badges)))
@@ -511,6 +516,7 @@ agent's row is among them, the agents and the status segment; a reset makes ever
     (drgnx-command-define id :category "Agents" :title title :command fn :doc doc
                           :map 'drgnx-agents-here-mode-map :when (lambda () (derived-mode-p 'drgnx-agents-here-mode))))
   (eval-after-load 'drgnx-explorer (drgnx-modules-with-owner (drgnx-explorer-add-decorator #'drgnx-agents-editor-here--decorate)))
+  (add-hook 'drgnx-explorer-badge-functions #'drgnx-agents-editor-here--explorer-badge)
   (eval-after-load 'drgnx-statusbar
     (drgnx-modules-with-owner
       (drgnx-statusbar-define-segment 'agents-here :fn #'drgnx-agents-editor-here--segment :click 'drgnx-agents-editor-here
@@ -523,6 +529,7 @@ agent's row is among them, the agents and the status segment; a reset makes ever
   "Take the badges out of the Explorer and forget the cached presence."
   (when (fboundp 'drgnx-explorer-remove-decorator)
     (drgnx-explorer-remove-decorator #'drgnx-agents-editor-here--decorate))
+  (remove-hook 'drgnx-explorer-badge-functions #'drgnx-agents-editor-here--explorer-badge)
   (clrhash drgnx-agents-editor-here--files)
   (clrhash drgnx-agents-editor-here--badges)
   (clrhash drgnx-agents-editor-here--initials)
