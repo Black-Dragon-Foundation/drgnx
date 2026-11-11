@@ -733,6 +733,20 @@ jobs:
           set -o pipefail
           SLEIPNIR_BIN="$MR_OUT/bundle/sleipnir" cargo test --locked --manifest-path runtime/Cargo.toml -p sleipnir --no-fail-fast --lib darwin::tools -- --ignored 2>&1 | tee "$MR_OUT/tools-row.log"
           bash test/runners/mac/spike.sh tools "$MR_OUT/bundle/sleipnir" rust@1.95
+      # the hub's own registry and queue against the runner account over localhost (design §10's fake Mac runner): add,
+      # a host job, the watchdog, the link stopped and serve killed, remove. The hub reads the user's ssh config, so the
+      # account gets an alias there with the spike's throwaway key
+      - name: a fake Mac runner end to end (the hub's registry and queue over localhost ssh)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 20
+        run: |
+          set -o pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          sed -e 's/^Host mr$/Host mac-runner-ci/' -e '/^  Control/d' "$MR_KEYS/ssh_config" >> ~/.ssh/config
+          skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == "drgnx-ratatoskr" { printf " --skip %s", $3 }')
+          {
+          DRGNX_TEST_MAC_RUNNER=mac-runner-ci DRGNX_TEST_MAC_BUNDLE="$MR_OUT/bundle/sleipnir" cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --test mac_runner -- --ignored --test-threads 1 $skips
+          } 2>&1 | tee "$MR_OUT/mac-runner-rows.log"
       - name: S2 drgnx ERT selectors under the build profile
         if: ${{ !cancelled() }}
         timeout-minutes: 20

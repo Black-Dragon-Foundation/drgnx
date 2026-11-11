@@ -348,8 +348,9 @@ Returns (EXIT . OUTPUT)."
                  (member (match-string 1 line) timed))
         (setq runs (1+ runs))
         (should (string-suffix-p " $skips" line))))
-    ;; two runs: the escape-host's sandbox lane and the macos job's ssh rows (--test macos)
-    (should (= runs 2))
+    ;; three runs: the escape-host's sandbox lane, the macos job's ssh rows (--test macos) and the Mac runner's
+    ;; end-to-end rows (--test mac_runner)
+    (should (= runs 3))
     (drgnx-ci-test--has (drgnx-ci-test--job rt "escape-host")
                         "skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == \"drgnx-ratatoskr\" { printf \" --skip %s\", $3 }')\n")))
 

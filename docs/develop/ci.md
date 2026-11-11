@@ -156,8 +156,11 @@ passed, never the check `main`'s protection requires. A narrowed run goes throug
 runs less than it asks for; it saves caches like any `ci/*` run.
 
 `runtime.yml` has two jobs outside the table, `fleet` (the fake SSH runners of `test/runners/`) and `mac-runner` (a
-Mac as a runner: its spikes on a macOS host, `test/runners/mac/README.md`), which run only on a manual dispatch of
-`runtime.yml` that names them, never on a push or in a gate:
+Mac as a runner on a macOS host: its spikes, `test/runners/mac/README.md`; sleipnir's darwin rows; and a fake Mac
+runner end to end, `drgnx-ratatoskr`'s `tests/mac_runner.rs`, `#[ignore = "macos-runner"]`: the hub's own registry and
+queue add the host's `drgnx-runner` account over its localhost `sshd`, run host jobs under the build profile, see the
+watchdog kill a job past its grant, survive the link's `-O stop` and a killed `serve`, and `remove` it), which run only
+on a manual dispatch of `runtime.yml` that names them, never on a push or in a gate:
 
 ```
 gh workflow run runtime.yml --ref ci/my-lane -f only=rt-fleet
