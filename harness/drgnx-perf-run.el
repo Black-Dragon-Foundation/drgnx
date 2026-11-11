@@ -1277,14 +1277,17 @@ error if it does not hold).  With :actions, :measure runs after the input and it
       ;; (`drgnx-perf--debug-hub'), so what is timed is the editor's half: placing and dressing the marks
       (debug-gutter-scroll
        :setup ,(drgnx-perf-run--debug-setup-form)
-       ;; the 12k-line fixture with a breakpoint every 40 lines (300), of every kind; then as code-scrolling
-       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min)) (drgnx-debug-gutter-mode 1)"
-                      " (drgnx-debug-gutter--apply (list :version 1 :breakpoints"
+       ;; the 12k-line fixture with a breakpoint every 40 lines (300), of every kind, in the session's store, which the
+       ;; mode asks for as it turns on (a view handed to `--apply' would be older than the store's version and dropped);
+       ;; then as code-scrolling
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
+                      " (setq drgnx-perf--debug-store (reverse"
                       "   (mapcar (lambda (i) (list :id i :line (* 40 i) :enabled (/= 0 (% i 5)) :verified (/= 0 (% i 7))"
                       "                             :condition (and (= 0 (% i 3)) \"x > 1\") :log (and (= 0 (% i 11)) \"{x}\")))"
-                      "           (number-sequence 1 300)))) t)")
+                      "           (number-sequence 1 300))))"
+                      " (drgnx-debug-gutter-mode 1) t)")
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
-       :check "(with-current-buffer (window-buffer) (and (seq-some (lambda (o) (overlay-get o 'drgnx-debug-hover)) (overlays-in (window-start) (window-end))) t))"   ; the hover pool was laid out
+       :check "(with-current-buffer (window-buffer) (and (= 300 (length drgnx-debug-gutter--overlays)) (seq-some (lambda (o) (overlay-get o 'drgnx-debug-hover)) (overlays-in (window-start) (window-end))) t))"   ; the marks and the hover pool were drawn
        :teardown ,(concat "(progn (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
       ;; F9 on 20 lines in a row: each key a `debug/breakpoints' add, its answer and the column redrawn
       (debug-breakpoint-click
