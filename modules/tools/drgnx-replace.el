@@ -2685,11 +2685,14 @@ warning colour: a group that matched nothing), one line per distinct capture, \"
               (mapcar (lambda (c)
                         (mapconcat #'identity
                                    (cl-loop for g in (append (plist-get c :groups) nil) for n from 1
-                                            collect (propertize
-                                                     (if (stringp g) (format " \\%d = %s " n g)
-                                                       (concat (format " \\%d = " n)
-                                                               (propertize "∅" 'face 'drgnx-replace-preview-empty) " "))
-                                                     'face 'drgnx-replace-preview-group))
+                                            collect (let ((chip (if (stringp g) (format " \\%d = %s " n g)
+                                                                  (concat (format " \\%d = " n)
+                                                                          (propertize "∅" 'face 'drgnx-replace-preview-empty)
+                                                                          " "))))
+                                                      ;; under the ∅'s warning colour, not over it
+                                                      (add-face-text-property 0 (length chip) 'drgnx-replace-preview-group
+                                                                              t chip)
+                                                      chip))
                                    " "))
                       (append captures nil)))
              ""))
