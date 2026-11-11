@@ -115,6 +115,8 @@ notice source, so its set is emptied: what waits there cannot be answered once t
                        (drgnx-timer-start 'agents-ui-mirror-first 3 #'drgnx-agents-session--maybe-mirror :idle t)
                        (drgnx-timer-start 'agents-ui-mirror 30 #'drgnx-agents-session--maybe-mirror :repeat t :idle t)
                        (when (fboundp 'drgnx-wb-place) (drgnx-wb-place "\\`\\*job: " 'editor))
+                       ;; the title row's agents chip counts the sessions at work
+                       (drgnx-module-set 'drgnx-topline-agents-function #'drgnx-agents-at-work)
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((agents-new "New Agent Session…" drgnx-agents-session-new "Start an agent (a profile) in this project")
                                         (agents-ask "Ask an Agent…" drgnx-agents-session-ask
