@@ -2142,6 +2142,10 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   after the rows drawn from that model. Nothing waits for the hub: keys pressed meanwhile answer from the window
   held. The hub keeps the from per (view, list) and its builder sends the model with that window; a search that has not
   grown since sends the move alone (the nodes it adds, the ids it drops, the list: `Sent::move_window`, hub.md).
+  One window per view means a twin shares it: the Explorer's twin (a dock on another monitor) pages it on scroll as
+  the Explorer does (`drgnx-explorer--rows-scrolled` on its `window-scroll-functions`), and the other buffer, whose
+  rows the move took, does not ask it back on the scroll the move caused (`drgnx-explorer--window-asker`); its user's
+  next scroll does. Two displays far apart in one listing take turns (a window per class is a later step).
 - **A broken view** (Sjá's breaker tripped after two panics): a key answers nil and the buffer posts a `render` `fail`
   condition keyed `(view-broken . VIEW)`, which the doctor's `views` row fails on; the view's last instance closing
   clears it. The doctor's `view-model` row fails on an Emacs without `nidhogg-view-push` (no Sjá, or a Nidhogg older

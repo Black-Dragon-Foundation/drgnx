@@ -1052,8 +1052,10 @@ redrawn row gets a new one; a badge of a row that went is deleted here."
 
 (defun drgnx-explorer--rows-twin (class)
   "The Explorer's buffer in display CLASS (a dock on a monitor at another scale; `drgnx-view-patch-twin-function'), made
-from the Explorer's buffer: its mode and keys, the hub's rows of CLASS and the same handlers after a draw.  The
-folders' watches and the find stay the Explorer buffer's: the twin's kill leaves them."
+from the Explorer's buffer: its mode and keys, the hub's rows of CLASS and the same handlers after a draw.  Its scroll
+pages the hub's window as the Explorer's does (`drgnx-explorer--rows-scrolled': the window is the view's, so both
+buffers hold the same entries), and with the hub down it says it waits.  The folders' watches and the find stay the
+Explorer buffer's: the twin's kill leaves them."
   (let ((patched (buffer-local-value 'drgnx-view-patch-patched-functions (current-buffer))))
     (with-current-buffer (generate-new-buffer (format " *drgnx-explorer %s*" class))
       (drgnx-explorer-mode)
@@ -1063,7 +1065,16 @@ folders' watches and the find stay the Explorer buffer's: the twin's kill leaves
       (drgnx-view-patch-attach drgnx-explorer--hub-view class)
       (dolist (f patched) (unless (eq f t) (add-hook 'drgnx-view-patch-patched-functions f nil t)))
       (setq-local drgnx-view-nav-faces '(("ticked" . drgnx-explorer-selected)))   ; the marks, as in the Explorer
+      (add-hook 'window-scroll-functions #'drgnx-explorer--rows-scrolled nil t)  ; its scroll pages the view's window
+      (drgnx-explorer--wait-for-hub)
       (current-buffer))))
+
+(defun drgnx-explorer--wait-for-hub ()
+  "With the hub not up, show the line saying the Explorer waits for it; its first rows take the line away."
+  (unless (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))   ; Q2: the frame, filled when it comes
+    (setq drgnx-explorer--waiting (make-overlay (point-min) (point-min)))
+    (overlay-put drgnx-explorer--waiting 'before-string
+                 (propertize "  Waiting for the hub to list the folders…\n" 'face 'shadow))))
 
 (defun drgnx-explorer-rows-attach (view class)
   "Make the Explorer the hub-fed VIEW in display CLASS: the hub lists it, and its keys answer from Sjá."
@@ -1077,10 +1088,7 @@ folders' watches and the find stay the Explorer buffer's: the twin's kill leaves
     (add-hook 'kill-buffer-hook #'drgnx-explorer--rows-unhook nil t)
     (setq-local drgnx-view-patch-twin-function #'drgnx-explorer--rows-twin)
     (add-hook 'window-scroll-functions #'drgnx-explorer--rows-scrolled nil t)
-    (unless (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))   ; Q2: the frame, filled when it comes
-      (setq drgnx-explorer--waiting (make-overlay (point-min) (point-min)))
-      (overlay-put drgnx-explorer--waiting 'before-string
-                   (propertize "  Waiting for the hub to list the folders…\n" 'face 'shadow)))
+    (drgnx-explorer--wait-for-hub)
     (require 'drgnx-view-env)
     (drgnx-view-env-register view (current-buffer) #'drgnx-explorer--rows-subscribe)
     (drgnx-explorer--rows-subscribe)))
@@ -1092,26 +1100,41 @@ folders' watches and the find stay the Explorer buffer's: the twin's kill leaves
 
 (defvar-local drgnx-explorer--asked-from nil "The `from' the last `view/window' the scroll asked for named.")
 
+(defvar-local drgnx-explorer--seen-from nil "The window's `from' at this buffer's last scroll.")
+
+(defvar drgnx-explorer--window-asker nil
+  "(FROM . BUFFER): the last `view/window' an Explorer buffer (the Explorer's or a twin) asked for, and which.  The
+hub holds one window per view, so another buffer's scroll moves this one's rows too; its scroll then asks nothing.")
+
 (defun drgnx-explorer--rows-scrolled (window start)
   "`window-scroll-functions' on the rows path: WINDOW scrolled to START.  The rows near it without a tail get one
 \(`drgnx-explorer--rows-tails-in').  Within a page of the end of the rows held
 (past which the listing has more) the hub is asked for the window half of it further on; within a page of their start
 (with entries before them), half of it back.  Each `from' is asked once; the rows that go and come keep the shown ones
-in place (window starts are markers)."
+in place (window starts are markers).  The window is the view's: when another of its buffers (a twin) moved it, the
+first scroll after asks nothing (`drgnx-explorer--window-asker'), so two displays never ask each other back."
   (with-current-buffer (window-buffer window)
     (drgnx-explorer--rows-tails-in window start)
     (when-let* ((drgnx-view-patch) (h (drgnx-view-patch-handle drgnx-view-patch))
                 (w (nidhogg-view-get h 'window "order")))
       (let* ((from (nth 0 w)) (len (nth 1 w)) (total (nth 2 w))
              (page (window-body-height window)) (step (max 1 (/ len 2)))
-             (want (cond ((and (< (+ from len) total)
+             ;; another buffer of the view (the Explorer in another class) asked for this window: these rows moved
+             ;; under this window, which keeps them; asking back would take that buffer's away
+             (moved (and (eql from (car drgnx-explorer--window-asker))
+                         (not (eq (cdr drgnx-explorer--window-asker) (current-buffer)))
+                         (not (eql from drgnx-explorer--seen-from))))
+             (want (cond (moved nil)
+                         ((and (< (+ from len) total)
                                (save-excursion (goto-char start) (/= 0 (forward-line (* 2 page)))))
                           (min (- total len) (+ from step)))
                          ((and (> from 0)
                                (save-excursion (goto-char start) (/= 0 (forward-line (- page)))))
                           (max 0 (- from step))))))
+        (setq drgnx-explorer--seen-from from)
         (when (and want (/= want from) (not (eql want drgnx-explorer--asked-from)))
           (setq drgnx-explorer--asked-from want
+                drgnx-explorer--window-asker (cons want (current-buffer))
                 drgnx-view-patch-hurry t)
           (funcall drgnx-view-patch-send-function "view/window"
                    (list :view (drgnx-view-patch-view drgnx-view-patch) :list "order" :from want)))))))
