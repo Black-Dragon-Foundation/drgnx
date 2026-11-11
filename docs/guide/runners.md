@@ -43,12 +43,16 @@ drgnx runner add desktop --trust mine            # a host as your ssh knows it
 drgnx runner list                                # every runner, in 60 columns; one out of rotation says why
 drgnx runner check desktop | bench desktop | unbench desktop
 drgnx runner trust desktop shared                # mine, my-cloud or shared
+drgnx runner profile mac workstation --reserve-mib 2048   # a new profile or reserve, applied at once
 drgnx runner remove desktop --yes                # stops our units and containers there, untags its image, deletes its folder
 ```
 
 `add` options: `--name` (default: the host's first label), `--profile dedicated|workstation` (default dedicated: nobody
 sits at the machine), `--accept all|heavy`, `--root DIR` (the one folder drgnx keeps there, an absolute path on the runner: no `~`; default `.drgnx-runner` in its home)
-and `--prefix` (what its units and containers are named after, default `drgnx`). Two more widen which account a
+and `--prefix` (what its units and containers are named after, default `drgnx`). A workstation keeps 4096 MiB for you
+and a floor of 1536 MiB that jobs never get; `--reserve-mib N` sets a smaller or larger reserve (at least 1024; refused on
+a dedicated runner, which keeps none). `drgnx runner profile NAME dedicated|workstation [--reserve-mib N]` changes either
+later; the runner reconnects with it at once, and a new profile without `--reserve-mib` takes its own. Two more widen which account a
 runner may run as, each your own yes (**Add Runner…** asks for them with a prefix argument):
 
 - `--allow-admin`: an administrator's account on a Mac (one in the `admin` group), which is refused without it. The
@@ -86,7 +90,21 @@ refuses while a job is on it.
 60 columns. A runner is a dot (full while it takes jobs, empty while it is out of rotation), its name, trust, profile and
 what it accepts; the second line is its size, the jobs running there, its free disk and when it was last checked (UTC),
 with the numbers in the code face. A runner out of rotation says why on lines of its own, for example
-`benched: image pull failed twice (14:02, 14:20)`. A runner of trust `my-cloud` carries a cloud mark. The list follows the
+`benched: image pull failed twice (14:02, 14:20)`. A workstation with its own reserve shows it after its profile
+(`workstation 2048M`). A runner of trust `my-cloud` carries a cloud mark.
+
+A runner whose floor and reserve leave no room for jobs in the memory it has says so under its row, in a card in the
+editor, and after `add` or `profile` (on stderr), instead of only waiting with a queue line. An 8 GB MacBook added as a
+workstation is the common case:
+
+```
+mac has no room for jobs: 5376 MiB available, less the floor of 1536 MiB and your reserve of 4096 MiB, leaves -256 MiB.
+If nobody works at it, make it dedicated (drgnx runner profile mac dedicated: floor 2048 MiB, no reserve, leaves
+3328 MiB); or keep a smaller reserve (drgnx runner profile mac workstation --reserve-mib 1024 leaves 2816 MiB).
+```
+
+The memory available is the runner's own reading, renewed every 2 s, so the line comes and goes with what the machine
+has free; it is shown only while no job of ours runs there. The list follows the
 hub: a change shows at once, and **g** reads it again.
 
 The commands for the row at point (all in the palette; none has a key of its own):

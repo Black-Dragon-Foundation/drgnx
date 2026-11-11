@@ -5,8 +5,10 @@
 //! runner list [--json]
 //! runner add HOST --trust mine|my-cloud|shared [--name N] [--profile dedicated|workstation]
 //!                 [--accept all|heavy] [--root DIR] [--prefix P] [--allow-own-account] [--allow-admin]
+//!                 [--reserve-mib N]
 //! runner check NAME | bench NAME | unbench NAME
 //! runner trust NAME mine|my-cloud|shared
+//! runner profile NAME dedicated|workstation [--reserve-mib N]   (applied at once)
 //! runner remove NAME [--yes]
 //! runner audit [--key K] [--job J]          (the keys sent to jobs and read by them, oldest first)
 //! runner cloud setup aws --regions R[,R…] --sizes S[,S…] [--hub ID]     (prints the role's policy; no hub call)
@@ -14,7 +16,8 @@
 //! runner cloud cost | rotate-ca | off [--yes]
 //! ```
 //!
-//! The output is plain text in 60 columns ([`format_list`]); a runner that is out of rotation shows its reason.
+//! The output is plain text in 60 columns ([`format_list`]); a runner that is out of rotation shows its reason, and one
+//! whose floor and reserve leave no room for jobs says so (after `add` and `profile` too, on stderr).
 //! Exit 0 when the hub did it, 1 when it answered with an error (its text on stderr), 2 for arguments that do not parse.
 
 use std::ffi::OsString;
@@ -112,7 +115,10 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
         Some(Word(v)) => v.string().map_err(e)?,
         Some(other) => return Err(other.unexpected().to_string()),
         None => {
-            return Err("runner needs a subcommand (list, add, check, bench, trust, unbench, remove, audit, cloud)".into());
+            return Err(
+                "runner needs a subcommand (list, add, check, bench, trust, profile, unbench, remove, audit, cloud)"
+                    .into(),
+            );
         }
     };
     let mut words: Vec<String> = Vec::new();
@@ -131,7 +137,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
             "prefix",
             "allow-own-account",
             "allow-admin",
+            "reserve-mib",
         ],
+        "profile" => &["reserve-mib"],
         "remove" => &["yes"],
         "audit" => &["key", "job"],
         "cloud" => &["hub", "regions", "sizes", "project", "member", "yes"],
@@ -164,6 +172,15 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
             Err(format!("usage: runner {usage}"))
         }
     };
+    // a workstation's reserve for its user, a number of MiB (the hub checks the rest)
+    let reserve = || -> Result<Option<u64>, String> {
+        opt("reserve-mib")
+            .map(|v| {
+                v.parse::<u64>()
+                    .map_err(|_| format!("--reserve-mib is a number of MiB, not {v:?}"))
+            })
+            .transpose()
+    };
     let by_name = |method: &'static str, words: &[String]| RunnerCommand::Call {
         method,
         params: json!({"name": words[0]}),
@@ -177,7 +194,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
             want(
                 1,
                 "add HOST --trust mine|my-cloud|shared [--name N] [--profile P] [--accept A] [--root DIR] [--prefix P] \
-                 [--allow-own-account] [--allow-admin]",
+                 [--allow-own-account] [--allow-admin] [--reserve-mib N]",
             )?;
             let trust = opt("trust").ok_or("runner add needs --trust mine|my-cloud|shared")?;
             let mut params = json!({"host": words[0], "trust": one_of("--trust", trust, &TRUSTS)?});
@@ -197,6 +214,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
             }
             for k in &allowed {
                 params[*k] = json!(true);
+            }
+            if let Some(n) = reserve()? {
+                params["reserve_mib"] = json!(n);
             }
             Ok(RunnerCommand::Call {
                 method: "runners/add",
@@ -221,6 +241,18 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
             Ok(RunnerCommand::Call {
                 method: "runners/set",
                 params: json!({"name": words[0], "trust": trust}),
+            })
+        }
+        "profile" => {
+            want(2, "profile NAME dedicated|workstation [--reserve-mib N]")?;
+            let profile = one_of("profile", words[1].clone(), &PROFILES)?;
+            let mut params = json!({"name": words[0], "profile": profile});
+            if let Some(n) = reserve()? {
+                params["reserve_mib"] = json!(n);
+            }
+            Ok(RunnerCommand::Call {
+                method: "runners/set",
+                params,
             })
         }
         "remove" => {
@@ -348,11 +380,14 @@ pub fn format_list(list: &Value) -> String {
         let state = s("state");
         let ready = state == "ready";
         let dot = if ready { "●" } else { "○" };
+        let profile = match r["reserve_mib"].as_u64() {
+            Some(n) => format!("{} {n}M", s("profile")),
+            None => s("profile"),
+        };
         let head = format!(
-            "{dot} {:<14} {:<9} {} · {}",
+            "{dot} {:<14} {:<9} {profile} · {}",
             s("name").chars().take(14).collect::<String>(),
             s("trust"),
-            s("profile"),
             s("accept")
         );
         out.push_str(&head.chars().take(WIDTH).collect::<String>());
@@ -371,6 +406,12 @@ pub fn format_list(list: &Value) -> String {
         out.push('\n');
         if !ready {
             for l in wrap(&state, 2) {
+                out.push_str(&l);
+                out.push('\n');
+            }
+        }
+        if let Some(why) = r["no_room"].as_str() {
+            for l in wrap(why, 2) {
                 out.push_str(&l);
                 out.push('\n');
             }
@@ -450,6 +491,10 @@ pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
     match Client::user(env, Duration::from_secs(5)).and_then(|mut c| c.call(method, params, within))
     {
         Ok(a) => {
+            // `add` and `profile` answer the runner: its lack of room is said plainly, not only in the JSON
+            if let Some(why) = a["no_room"].as_str() {
+                eprintln!("{}", wrap(why, 0).join("\n"));
+            }
             if json_out || method != "runners/list" {
                 println!("{a}");
             } else {
@@ -505,6 +550,23 @@ mod tests {
         assert!(format_list(&json!({"runners": []})).starts_with("no runners"));
     }
 
+    /// Pattern D: a workstation's set reserve is shown with its profile, and a runner whose floor and reserve leave no
+    /// room for jobs says so in full, wrapped to the width.
+    #[test]
+    fn the_list_shows_the_reserve_and_no_room() {
+        let mut r = runner("mac", "ready");
+        r["profile"] = json!("workstation");
+        r["reserve_mib"] = json!(2048);
+        r["no_room"] = json!("mac has no room for jobs: 5376 MiB available");
+        let text = format_list(&json!({"runners": [r]}));
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines[0],
+            "● mac            mine      workstation 2048M · all"
+        );
+        assert_eq!(lines[2], "  mac has no room for jobs: 5376 MiB available");
+    }
+
     // [D] pure
     #[test]
     fn the_arguments_become_the_hubs_calls() {
@@ -543,6 +605,39 @@ mod tests {
                 params: json!({"host": "me@mac", "trust": "mine", "allow_own_account": true, "allow_admin": true}),
             })
         );
+        // a workstation's reserve for its user, at add and after; a profile change is applied at once
+        assert_eq!(
+            p(&[
+                "add",
+                "mac",
+                "--trust",
+                "mine",
+                "--profile",
+                "workstation",
+                "--reserve-mib",
+                "2048"
+            ]),
+            Ok(RunnerCommand::Call {
+                method: "runners/add",
+                params: json!({"host": "mac", "trust": "mine", "profile": "workstation", "reserve_mib": 2048}),
+            })
+        );
+        assert_eq!(
+            p(&["profile", "mac", "workstation", "--reserve-mib", "1024"]),
+            Ok(RunnerCommand::Call {
+                method: "runners/set",
+                params: json!({"name": "mac", "profile": "workstation", "reserve_mib": 1024}),
+            })
+        );
+        assert_eq!(
+            p(&["profile", "mac", "dedicated"]),
+            Ok(RunnerCommand::Call {
+                method: "runners/set",
+                params: json!({"name": "mac", "profile": "dedicated"}),
+            })
+        );
+        assert!(p(&["add", "mac", "--trust", "mine", "--reserve-mib", "lots"]).is_err());
+        assert!(p(&["profile", "mac", "big"]).is_err());
         assert_eq!(
             p(&["trust", "desk", "shared"]),
             Ok(RunnerCommand::Call {

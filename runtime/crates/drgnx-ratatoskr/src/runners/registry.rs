@@ -158,6 +158,14 @@ pub struct Record {
     pub allow_own_account: bool,
     #[serde(default)]
     pub allow_admin: bool,
+    /// A workstation's reserve for its user, MiB, when the user set one (`--reserve-mib`); `serve` gets it at every
+    /// start.
+    #[serde(default)]
+    pub reserve_mib: Option<u64>,
+    /// The memory the host had available at its last probe, MiB: the runner list's room for jobs until the runner's
+    /// first ready.
+    #[serde(default)]
+    pub mem_available_mib: Option<u64>,
 }
 
 /// Where the records are kept.
@@ -383,15 +391,83 @@ fn profile_word(p: Profile) -> &'static str {
     }
 }
 
-/// `serve`'s flags for what the user allowed of RECORD's account.
-fn allow_flags(r: &Record) -> Vec<&'static str> {
-    [
+/// `serve`'s flags for what the user allowed of RECORD's account, and a workstation's set reserve.
+fn serve_flags(r: &Record) -> Vec<String> {
+    let mut f: Vec<String> = [
         (r.allow_own_account, "--allow-own-account"),
         (r.allow_admin, "--allow-admin"),
     ]
     .into_iter()
-    .filter_map(|(on, flag)| on.then_some(flag))
-    .collect()
+    .filter(|(on, _)| *on)
+    .map(|(_, flag)| flag.to_string())
+    .collect();
+    if let Some(n) = r.reserve_mib {
+        f.extend(["--reserve-mib".to_string(), n.to_string()]);
+    }
+    f
+}
+
+/// The scheduler's limits for PROFILE with RESERVE_MIB (refused as [`forseti::Limits::with_reserve`] refuses).
+fn limits(profile: Profile, reserve_mib: Option<u64>) -> Result<forseti::Limits, String> {
+    let p = match profile {
+        Profile::Dedicated => forseti::Profile::Dedicated,
+        Profile::Workstation => forseti::Profile::Workstation,
+    };
+    forseti::Limits::for_profile(p, 0, 1).with_reserve(p, reserve_mib)
+}
+
+/// A reserve for the user is a workstation's, of at least [`forseti::MIN_RESERVE_MIB`].
+fn check_reserve(profile: Profile, reserve_mib: Option<u64>) -> Result<(), RegError> {
+    limits(profile, reserve_mib).map(|_| ()).map_err(refused)
+}
+
+/// Below this much memory for jobs, hardly a job fits: the runner list says the runner has no room.
+const ROOM_MIB: i64 = 512;
+
+/// What the runner list says of runner NAME when its floor and reserve leave no room for jobs in AVAILABLE_MIB: the
+/// numbers, and the ways out (dedicated, or a smaller reserve while the reserve is above the minimum), each with what it
+/// would leave. None while there is room.
+fn no_room(
+    name: &str,
+    profile: Profile,
+    reserve_mib: Option<u64>,
+    available_mib: u64,
+) -> Option<String> {
+    let l = limits(profile, reserve_mib).ok()?;
+    let left =
+        |l: &forseti::Limits| available_mib as i64 - l.floor_mib as i64 - l.reserve_user_mib as i64;
+    let room = left(&l);
+    if room >= ROOM_MIB {
+        return None;
+    }
+    let mut m = format!(
+        "{name} has no room for jobs: {available_mib} MiB available, less the floor of {} MiB",
+        l.floor_mib
+    );
+    if profile == Profile::Dedicated {
+        m.push_str(&format!(
+            ", leaves {room} MiB; it takes jobs once more memory is free"
+        ));
+        return Some(m);
+    }
+    let d = limits(Profile::Dedicated, None).ok()?;
+    m.push_str(&format!(
+        " and your reserve of {} MiB, leaves {room} MiB. If nobody works at it, make it dedicated \
+         (drgnx runner profile {name} dedicated: floor {} MiB, no reserve, leaves {} MiB)",
+        l.reserve_user_mib,
+        d.floor_mib,
+        left(&d)
+    ));
+    let min = forseti::MIN_RESERVE_MIB;
+    if l.reserve_user_mib > min {
+        let small = limits(profile, Some(min)).ok()?;
+        m.push_str(&format!(
+            "; or keep a smaller reserve (drgnx runner profile {name} workstation --reserve-mib {min} leaves {} MiB)",
+            left(&small)
+        ));
+    }
+    m.push('.');
+    Some(m)
 }
 
 /// What `serve`'s `hello-ok` and `probe-result` said.
@@ -402,6 +478,8 @@ struct Probe {
     missing: Vec<Missing>,
     limits: Option<String>,
     features: Vec<String>,
+    /// The memory the host had available, MiB.
+    mem_available_mib: Option<u64>,
 }
 
 impl Registry {
@@ -443,9 +521,7 @@ impl Registry {
             "--profile".into(),
             profile_word(r.profile).into(),
         ];
-        c.remote
-            .control
-            .extend(allow_flags(r).into_iter().map(String::from));
+        c.remote.control.extend(serve_flags(r));
         // the sync channels are Task 20's; until then they hold the sessions open and carry nothing
         c.remote.bulk_in = vec!["cat".into()];
         c.remote.bulk_out = vec!["cat".into()];
@@ -586,7 +662,8 @@ impl Registry {
                         missing,
                         limits,
                         features,
-                    })) => result = Some((facts, missing, limits, features)),
+                        mem_available_mib,
+                    })) => result = Some((facts, missing, limits, features, mem_available_mib)),
                     Ok(Some(_)) => {}
                     Ok(None) => {
                         return Err(failed(format!("{name}: serve ended before it answered")));
@@ -596,7 +673,7 @@ impl Registry {
             }
             Ok((hello.expect("hello-ok"), result.expect("probe-result")))
         };
-        let ((boot_id, linger, mut missing), (facts, more, limits, features)) =
+        let ((boot_id, linger, mut missing), (facts, more, limits, features, mem_available_mib)) =
             crate::clock::timeout(PROBE, read).await.map_err(|_| {
                 failed(format!(
                     "{}: serve didn't answer in {} s",
@@ -623,6 +700,7 @@ impl Registry {
             missing,
             limits,
             features,
+            mem_available_mib,
         })
     }
 
@@ -781,9 +859,12 @@ impl Registry {
             image: None,
             allow_own_account: own_account,
             allow_admin: admin,
+            reserve_mib: None,
+            mem_available_mib: None,
         };
         let probe = self.probe_serve(&rec).await?;
         rec.linger = probe.linger;
+        rec.mem_available_mib = probe.mem_available_mib;
         if let Some(f) = &probe.facts {
             rec.os = f.os.clone();
             rec.cores = f.cores;
@@ -837,6 +918,7 @@ impl Registry {
             .map(|n| n.as_str().to_string())
             .unwrap_or_else(|| default_name(&host));
         self.base_cfg(&name, &host).check().map_err(refused)?;
+        check_reserve(p.profile.unwrap_or(Profile::Dedicated), p.reserve_mib)?;
         let known = self.cfg.store.list().await.map_err(failed)?;
         if known.iter().any(|r| r.name == name) {
             return Err(refused(format!("{name} is a runner already")));
@@ -882,6 +964,7 @@ impl Registry {
         }
         rec.trust = p.trust;
         rec.profile = p.profile.unwrap_or(Profile::Dedicated);
+        rec.reserve_mib = p.reserve_mib;
         rec.accept = p.accept.unwrap_or(Accept::All);
         let cfg = self.base_cfg(&rec.name, &rec.host);
         let images = (self.cfg.images)();
@@ -1031,6 +1114,7 @@ impl Registry {
             Some(row) => (row.state, row.strikes, row.last),
             None => ("not connected".to_string(), 0, None),
         };
+        let jobs = self.cfg.queue.runner_jobs(&r.name);
         Ok(wire::Runner {
             name: r.name.clone(),
             host: r.host.clone(),
@@ -1052,8 +1136,19 @@ impl Registry {
             state,
             strikes,
             last_strike,
-            jobs: self.cfg.queue.runner_jobs(&r.name),
+            jobs,
             checked: r.checked,
+            reserve_mib: r.reserve_mib,
+            no_room: (jobs == 0)
+                .then(|| {
+                    let available = self
+                        .cfg
+                        .queue
+                        .available_mib(&r.name)
+                        .or(r.mem_available_mib)?;
+                    no_room(&r.name, r.profile, r.reserve_mib, available)
+                })
+                .flatten(),
         })
     }
 
@@ -1118,9 +1213,18 @@ impl Registry {
     pub async fn set(&self, p: wire::SetParams) -> Result<wire::Runner, RegError> {
         let _g = self.busy.lock().await;
         let mut rec = self.record(p.name.as_str()).await?;
-        let new_profile = p.profile.is_some_and(|x| x != rec.profile);
+        let profile = p.profile.unwrap_or(rec.profile);
+        // a new profile without a reserve takes the profile's own
+        let reserve = match (p.reserve_mib, profile == rec.profile) {
+            (Some(n), _) => Some(n),
+            (None, true) => rec.reserve_mib,
+            (None, false) => None,
+        };
+        check_reserve(profile, reserve)?;
+        let new_profile = profile != rec.profile || reserve != rec.reserve_mib;
         rec.trust = p.trust.unwrap_or(rec.trust);
-        rec.profile = p.profile.unwrap_or(rec.profile);
+        rec.profile = profile;
+        rec.reserve_mib = reserve;
         rec.accept = p.accept.unwrap_or(rec.accept);
         self.cfg.store.put(&rec).await.map_err(failed)?;
         self.cfg.queue.set_runner(
@@ -1307,11 +1411,67 @@ mod tests {
             "disk_free_gb": 1, "podman": "", "linger": true, "landlock_abi": 0
         }))
         .unwrap();
-        assert!(allow_flags(&r).is_empty());
+        assert!(serve_flags(&r).is_empty());
         r.allow_admin = true;
-        assert_eq!(allow_flags(&r), ["--allow-admin"]);
+        assert_eq!(serve_flags(&r), ["--allow-admin"]);
         r.allow_own_account = true;
-        assert_eq!(allow_flags(&r), ["--allow-own-account", "--allow-admin"]);
+        assert_eq!(serve_flags(&r), ["--allow-own-account", "--allow-admin"]);
+        r.reserve_mib = Some(2048);
+        assert_eq!(
+            serve_flags(&r),
+            [
+                "--allow-own-account",
+                "--allow-admin",
+                "--reserve-mib",
+                "2048"
+            ]
+        );
+    }
+
+    // [D] pure: a reserve is a workstation's, of at least 1024 MiB; anything else is refused at add and set
+    #[test]
+    fn a_reserve_below_1024_or_off_a_workstation_is_refused() {
+        assert!(check_reserve(Profile::Workstation, Some(1024)).is_ok());
+        assert!(check_reserve(Profile::Workstation, None).is_ok());
+        assert!(check_reserve(Profile::Dedicated, None).is_ok());
+        for (p, n) in [
+            (Profile::Workstation, 1023),
+            (Profile::Workstation, 0),
+            (Profile::Dedicated, 2048),
+        ] {
+            assert!(
+                matches!(check_reserve(p, Some(n)), Err(RegError::Refused(_))),
+                "{p:?} {n}"
+            );
+        }
+    }
+
+    // [D] pure: a runner whose floor and reserve leave no memory for jobs says so with the numbers and both ways out
+    // (dedicated, or a smaller reserve and what it would leave); one with room says nothing; a dedicated runner under
+    // its floor says only that
+    #[test]
+    fn no_room_for_jobs_is_said_with_the_numbers_and_the_ways_out() {
+        // the CI Mac of round 17: 5376 MiB available, a workstation's 4096 + 1536
+        let m = no_room("mac", Profile::Workstation, None, 5376).unwrap();
+        for want in [
+            "5376 MiB",
+            "4096 MiB",
+            "1536 MiB",
+            "-256 MiB",
+            "drgnx runner profile mac dedicated",
+            "drgnx runner profile mac workstation --reserve-mib 1024",
+            "--reserve-mib",
+            "2816 MiB",
+        ] {
+            assert!(m.contains(want), "{want}: {m}");
+        }
+        assert_eq!(no_room("mac", Profile::Workstation, None, 16000), None);
+        assert_eq!(no_room("mac", Profile::Workstation, Some(1024), 5376), None);
+        let d = no_room("box", Profile::Dedicated, None, 1500).unwrap();
+        assert!(
+            d.contains("2048 MiB") && !d.contains("--reserve-mib"),
+            "{d}"
+        );
     }
 
     // [D] pure

@@ -431,6 +431,8 @@ const SYNCED_KEPT: usize = 64;
 /// A runner's last `ready`.
 struct ReadyNow {
     budget: forseti::Budget,
+    /// The memory the runner had available, MiB (none from an older runner).
+    available_mib: Option<u64>,
     slots: Vec<String>,
     images: Vec<String>,
     on_battery: bool,
@@ -1308,6 +1310,12 @@ impl Queue {
             .values()
             .filter(|j| matches!(&j.state, QState::Remote(r) if r == name))
             .count() as u32
+    }
+
+    /// The memory runner NAME had available at its last ready, MiB: what the runner list counts its room for jobs from.
+    pub fn available_mib(&self, name: &str) -> Option<u64> {
+        let st = self.lock();
+        st.runners.get(name)?.ready.as_ref()?.available_mib
     }
 
     /// Runner NAME forgotten (its session ends). Refused, with the reason, while a job is on it.
@@ -2514,6 +2522,8 @@ impl Queue {
                 missing,
                 limits,
                 features,
+                // the runner's readies carry it too, every 2 s
+                mem_available_mib: _,
             } => {
                 if let Some(r) = st.runners.get_mut(runner) {
                     r.features = features;
@@ -2559,6 +2569,7 @@ impl Queue {
             }
             Frame::Ready {
                 free_mib,
+                mem_available_mib,
                 free_cpu,
                 slots,
                 images,
@@ -2571,6 +2582,7 @@ impl Queue {
                             mem_mib: free_mib,
                             cpu: free_cpu,
                         },
+                        available_mib: mem_available_mib,
                         slots,
                         images,
                         on_battery,
@@ -3753,6 +3765,7 @@ mod tests {
     fn ready(q: &Queue, runner: &str, free_mib: i64, slots: &[String], images: &[&str], now: u64) {
         let f = Frame::Ready {
             free_mib,
+            mem_available_mib: Some(7000),
             free_cpu: 8.0,
             psi: Default::default(),
             running: vec![],
@@ -3920,6 +3933,7 @@ mod tests {
         hello(&q, "m1", true, 100);
         let f = Frame::Ready {
             free_mib: 8192,
+            mem_available_mib: None,
             free_cpu: 8.0,
             psi: Default::default(),
             running: vec![],
@@ -3954,7 +3968,10 @@ mod tests {
             Session::start("m1", idle(), q.route(), q.link_events()),
         );
         hello(&q, "m1", true, 100);
+        assert_eq!(q.available_mib("m1"), None);
         ready(&q, "m1", 8192, &[], &[], 100);
+        // what the runner list counts the room for jobs from
+        assert_eq!(q.available_mib("m1"), Some(7000));
         let mut s = job("x1", Priority::P3, 64);
         s.spec.os = Os::Macos;
         s.spec.features = vec!["brew:cmake@3.31".into(), "tool:rust@1.95".into()];
@@ -3985,6 +4002,7 @@ mod tests {
                 missing: vec![],
                 limits: None,
                 features: features.iter().map(|f| f.to_string()).collect(),
+                mem_available_mib: None,
             };
             frame(&q, "r1", probe(&["podman"]), 100);
             let mut s = job("x1", Priority::P3, 64);

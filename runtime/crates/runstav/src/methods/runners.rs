@@ -67,6 +67,9 @@ pub struct AddParams {
     /// sudo with its password, and on a Mac through admin authorisation prompts; the sandbox still applies to every job.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_admin: bool,
+    /// A workstation's reserve for its user, MiB (`--reserve-mib`, at least 1024; default the profile's 4096).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserve_mib: Option<u64>,
 }
 
 /// `runners/probe-host`'s params.
@@ -94,6 +97,10 @@ pub struct SetParams {
     pub profile: Option<Profile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accept: Option<Accept>,
+    /// A workstation's reserve for its user, MiB (at least 1024). A new profile without it takes the profile's; a
+    /// profile or reserve change reconnects the runner, so it applies at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserve_mib: Option<u64>,
 }
 
 /// `runners/remove`'s params: `confirm` must be true.
@@ -185,6 +192,13 @@ pub struct Runner {
     /// When it was last checked (seconds since the epoch).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checked: Option<f64>,
+    /// A workstation's reserve for its user, MiB, when the user set one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserve_mib: Option<u64>,
+    /// Why the runner gets no job: its floor and reserve leave no room in the memory it has, with the numbers and the
+    /// ways out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_room: Option<String>,
 }
 
 /// `runners/list`'s answer, and the data of `runners-changed`.

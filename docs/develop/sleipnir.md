@@ -676,8 +676,8 @@ does not parse.
 | Frame | Direction | Fields |
 |---|---|---|
 | `hello` / `hello-ok` | hub → runner / back | the version, the hub id; the bundle version, the runner id, the boot id, linger, the attempts in the runner's folder (`{r, state, log_offset}`, state `running`, `finished` or `lost`), what the contract finds missing (re-probed at every hello) |
-| `probe` / `probe-result` | hub → runner / back | the facts (`linux::probe::Facts`), what is missing, why container caps don't hold (`check_limits`), the features |
-| `ready` | runner → hub | free memory and CPU, PSI, running attempts, slots and images present, `on_battery` |
+| `probe` / `probe-result` | hub → runner / back | the facts (`linux::probe::Facts`), what is missing, why container caps don't hold (`check_limits`), the features, the memory available now |
+| `ready` | runner → hub | free memory and CPU, PSI, running attempts, slots and images present, `on_battery`, the memory available it was counted from |
 | `offer` / `admit` / `refuse` | hub → runner / back | the job spec, its priority, the frozen input key, the grant hint and expected time; the grant; why not (text, and `forseti`'s `WaitReason`) |
 | `head` | hub → runner | the queue's head is reserved here: its start (`at`, 0 when no longer) and its memory and CPU need, which a grow here leaves |
 | `sync-have` / `sync-need` / `blob` / `bundle` / `origin-fetch` | both | the repository's mirror id, the commit, tree and overlay manifest (paths as raw bytes); the missing blobs and commit, and the mirror's ref tips; a blob's chunk at its offset of its total; a bundle chunk at its offset, each with the bundle's hash; a fetch from the project's origin (with `cred`: through the key of that name, sent before it) |
@@ -703,12 +703,14 @@ and the value is zeroed when the frame drops.
 
 ```
 sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation [--watchdog DIR]
-               [--allow-own-account] [--allow-admin]
+               [--allow-own-account] [--allow-admin] [--reserve-mib N]
 ```
 
 The runner's end of the hub's control channel. On a cloud machine `--watchdog DIR` names the watchdog's folder ("The
 watchdog"). `--allow-own-account` and `--allow-admin` are what the user allowed at `runner add` (kept in the runner's
-record): the Mac contract reads them; Linux takes an administrator's login without them. It lives on stdin and stdout and exits at their end, at `bye`, or
+record): the Mac contract reads them; Linux takes an administrator's login without them. `--reserve-mib N` is a
+workstation's reserve for its user (`forseti::Limits::with_reserve`; `serve` refuses to start below 1024 or on a dedicated
+runner). It lives on stdin and stdout and exits at their end, at `bye`, or
 after 45 s without a frame (the hub pings every 10 s, and so does `serve`). Nothing is installed or enabled: between
 connections the runner has its folder and, with linger, the attempts still running in their own units. It is blocking
 and threaded (one thread reads frames, the main loop handles them and ticks every 100 ms); no async runtime.

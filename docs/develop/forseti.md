@@ -39,7 +39,7 @@ total, power, the last start, the running jobs, features, and `others`, the othe
 | | `Limits::for_profile(Dedicated, …)` | `Limits::for_profile(Workstation, …)` |
 |---|---|---|
 | floor | 2 GiB | 1.5 GiB |
-| the user's reserve | none | 4 GiB and 4 threads (out of `cores_usable`) |
+| the user's reserve | none | 4 GiB (`with_reserve`: the user's own, at least `MIN_RESERVE_MIB` = 1 GiB) and 4 threads (out of `cores_usable`) |
 | PSI limits (`avg10`) | memory `some` 10 %, CPU 40 %, IO `full` 10 % | memory 2 %, the user's apps 1 %, CPU 20 %, IO 5 % |
 | CPU overcommit | up to 1.5 × while the jobs are mostly idle | none |
 | on battery | runs | no jobs |

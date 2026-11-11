@@ -291,11 +291,18 @@ pub enum Frame {
         limits: Option<String>,
         #[serde(default)]
         features: Vec<String>,
+        /// The memory the machine has available now, MiB: with the profile's floor and reserve, the hub tells a user
+        /// whose machine leaves no room for jobs (none from an older runner, or when it can't be read).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mem_available_mib: Option<u64>,
     },
     /// runner → hub, every 2 s and at every job end.
     Ready {
         #[serde(default)]
         free_mib: i64,
+        /// As in `ProbeResult`: what `free_mib` was counted from.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mem_available_mib: Option<u64>,
         #[serde(default)]
         free_cpu: f64,
         #[serde(default)]

@@ -3066,6 +3066,13 @@
               "name": {
                 "type": "string"
               },
+              "no_room": {
+                "description": "Why the runner gets no job: its floor and reserve leave no room in the memory it has, with the numbers and the\nways out.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "os": {
                 "type": "string"
               },
@@ -3077,6 +3084,15 @@
               },
               "profile": {
                 "$ref": "#/$defs/Profile"
+              },
+              "reserve_mib": {
+                "description": "A workstation's reserve for its user, MiB, when the user set one.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "root": {
                 "type": "string"
@@ -26786,6 +26802,15 @@
             ],
             "description": "Default `dedicated`."
           },
+          "reserve_mib": {
+            "description": "A workstation's reserve for its user, MiB (`--reserve-mib`, at least 1024; default the profile's 4096).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "root": {
             "anyOf": [
               {
@@ -26914,6 +26939,13 @@
           "name": {
             "type": "string"
           },
+          "no_room": {
+            "description": "Why the runner gets no job: its floor and reserve leave no room in the memory it has, with the numbers and the\nways out.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "os": {
             "type": "string"
           },
@@ -26925,6 +26957,15 @@
           },
           "profile": {
             "$ref": "#/$defs/Profile"
+          },
+          "reserve_mib": {
+            "description": "A workstation's reserve for its user, MiB, when the user set one.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "root": {
             "type": "string"
@@ -27243,6 +27284,13 @@
           "name": {
             "type": "string"
           },
+          "no_room": {
+            "description": "Why the runner gets no job: its floor and reserve leave no room in the memory it has, with the numbers and the\nways out.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "os": {
             "type": "string"
           },
@@ -27254,6 +27302,15 @@
           },
           "profile": {
             "$ref": "#/$defs/Profile"
+          },
+          "reserve_mib": {
+            "description": "A workstation's reserve for its user, MiB, when the user set one.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "root": {
             "type": "string"
@@ -27439,6 +27496,13 @@
           "name": {
             "type": "string"
           },
+          "no_room": {
+            "description": "Why the runner gets no job: its floor and reserve leave no room in the memory it has, with the numbers and the\nways out.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "os": {
             "type": "string"
           },
@@ -27450,6 +27514,15 @@
           },
           "profile": {
             "$ref": "#/$defs/Profile"
+          },
+          "reserve_mib": {
+            "description": "A workstation's reserve for its user, MiB, when the user set one.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "root": {
             "type": "string"
@@ -27683,6 +27756,13 @@
               "name": {
                 "type": "string"
               },
+              "no_room": {
+                "description": "Why the runner gets no job: its floor and reserve leave no room in the memory it has, with the numbers and the\nways out.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "os": {
                 "type": "string"
               },
@@ -27694,6 +27774,15 @@
               },
               "profile": {
                 "$ref": "#/$defs/Profile"
+              },
+              "reserve_mib": {
+                "description": "A workstation's reserve for its user, MiB, when the user set one.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "root": {
                 "type": "string"
@@ -28061,6 +28150,15 @@
               }
             ]
           },
+          "reserve_mib": {
+            "description": "A workstation's reserve for its user, MiB (at least 1024). A new profile without it takes the profile's; a\nprofile or reserve change reconnects the runner, so it applies at once.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "trust": {
             "anyOf": [
               {
@@ -28184,6 +28282,13 @@
           "name": {
             "type": "string"
           },
+          "no_room": {
+            "description": "Why the runner gets no job: its floor and reserve leave no room in the memory it has, with the numbers and the\nways out.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "os": {
             "type": "string"
           },
@@ -28195,6 +28300,15 @@
           },
           "profile": {
             "$ref": "#/$defs/Profile"
+          },
+          "reserve_mib": {
+            "description": "A workstation's reserve for its user, MiB, when the user set one.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "root": {
             "type": "string"
@@ -28380,6 +28494,13 @@
           "name": {
             "type": "string"
           },
+          "no_room": {
+            "description": "Why the runner gets no job: its floor and reserve leave no room in the memory it has, with the numbers and the\nways out.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "os": {
             "type": "string"
           },
@@ -28391,6 +28512,15 @@
           },
           "profile": {
             "$ref": "#/$defs/Profile"
+          },
+          "reserve_mib": {
+            "description": "A workstation's reserve for its user, MiB, when the user set one.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "root": {
             "type": "string"

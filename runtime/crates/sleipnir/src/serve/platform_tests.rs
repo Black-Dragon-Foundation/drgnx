@@ -178,6 +178,16 @@ fn serve_with(
     profile: Profile,
     pressure: Rc<Cell<Option<Level>>>,
 ) -> (Serve<Out>, Out, Rc<RefCell<Calls>>, Up) {
+    serve_reserving(d, profile, pressure, None)
+}
+
+/// [`serve_with`], with `--reserve-mib`.
+fn serve_reserving(
+    d: &Path,
+    profile: Profile,
+    pressure: Rc<Cell<Option<Level>>>,
+    reserve_mib: Option<u64>,
+) -> (Serve<Out>, Out, Rc<RefCell<Calls>>, Up) {
     let calls = Rc::new(RefCell::new(Calls::default()));
     let up = Rc::new(RefCell::new(BTreeSet::new()));
     let runtime = d.join("run");
@@ -196,6 +206,7 @@ fn serve_with(
         name: "fake".into(),
         watchdog: None,
         allow: Default::default(),
+        reserve_mib,
     };
     let out = Out::default();
     let s = Serve::with_platform(cfg, out.clone(), Box::new(fake)).unwrap();
@@ -241,6 +252,43 @@ fn hello_and_probe_come_from_the_platform() {
         panic!("no probe-result: {frames:?}");
     };
     assert_eq!(features, &vec!["fake-feature".to_string()]);
+}
+
+/// [D] The probe and every ready say the memory the machine has available, so the hub can tell a user whose floor and
+/// reserve leave no room for jobs; a workstation's `--reserve-mib` is the reserve the budget takes.
+#[test]
+fn the_available_memory_and_the_set_reserve_reach_the_hub() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut s, out, _, _) =
+        serve_reserving(d.path(), Profile::Workstation, Rc::default(), Some(1024));
+    assert!(
+        s.handle(Frame::Hello {
+            version: PROTO_VERSION,
+            hub_id: "hubA".into()
+        }) == Next::Go
+    );
+    out.take();
+    assert!(s.handle(Frame::Probe) == Next::Go);
+    let frames = out.take();
+    let Some(Frame::ProbeResult {
+        mem_available_mib, ..
+    }) = frames.first()
+    else {
+        panic!("no probe-result: {frames:?}");
+    };
+    assert_eq!(*mem_available_mib, Some(16_384));
+    assert!(s.ready() == Next::Go);
+    let frames = out.take();
+    let Some(Frame::Ready {
+        free_mib,
+        mem_available_mib,
+        ..
+    }) = frames.first()
+    else {
+        panic!("no ready: {frames:?}");
+    };
+    assert_eq!(*mem_available_mib, Some(16_384));
+    assert_eq!(*free_mib, 16_384 - 1536 - 1024);
 }
 
 /// [D] An attempt from offer to finished through the platform: admitted on its machine, launched by it (on the

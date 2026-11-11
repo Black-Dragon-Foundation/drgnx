@@ -65,8 +65,8 @@ A list replaces the runners; an ask adds names; a hand-over removes the names it
     (_ state)))
 
 (defun drgnx-runners-cards (state)
-  "The notice items (plists with :id :text) for STATE: a card per runner that waits for a login or is benched, and one
-card while keys are asked for."
+  "The notice items (plists with :id :text) for STATE: a card per runner that waits for a login, is benched or has no
+room for jobs (the hub's words), and one card while keys are asked for."
   (append
    (cl-loop for r in (car state)
             for name = (plist-get r :name) for st = (or (plist-get r :state) "")
@@ -74,7 +74,9 @@ card while keys are asked for."
             collect (list :id (list 'login name)
                           :text (format "Log in to %s: run `ssh %s true` in a terminal" name (plist-get r :host)))
             when (string-prefix-p "benched" st)
-            collect (list :id (list 'benched name) :text (format "%s %s" name st)))
+            collect (list :id (list 'benched name) :text (format "%s %s" name st))
+            when (plist-get r :no_room)
+            collect (list :id (list 'no-room name) :text (plist-get r :no_room)))
    (when (cdr state)
      (list (list :id '(keys) :text "needs your keys: run Runners: Load Keys" :detail (string-join (cdr state) ", ")
                  :command 'runners-load-keys)))))

@@ -1488,7 +1488,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `reports/get` | user | `{id?: string, task?: string}` | `{reports?: [Report]}` | no |
 | `restart` | user | `{}` | `boolean` | no |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes |
-| `runners/add` | user | `{accept?: "all" \| "heavy", allow_admin?: boolean, allow_own_account?: boolean, host: string, name?: Id, prefix?: string, profile?: "dedicated" \| "workstation", root?: AbsPath, trust: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
+| `runners/add` | user | `{accept?: "all" \| "heavy", allow_admin?: boolean, allow_own_account?: boolean, host: string, name?: Id, prefix?: string, profile?: "dedicated" \| "workstation", reserve_mib?: natnum, root?: AbsPath, trust: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
 | `runners/audit` | user | `{job?: Id, key?: KeyName}` | `{rows?: [AuditRow]}` | no |
 | `runners/bench` | user | `{name: Id}` | `Runner` | yes |
 | `runners/check` | user | `{name: Id}` | `Runner` | yes |
@@ -1497,7 +1497,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `runners/list` | user | `{}` | `{runners?: [Runner]}` | no |
 | `runners/probe-host` | user | `{host: string}` | `{effective: Effective, facts?: HostFacts, missing?: [Missing]}` | no |
 | `runners/remove` | user | `{confirm: boolean, name: Id}` | `{name: string}` | yes |
-| `runners/set` | user | `{accept?: "all" \| "heavy", name: Id, profile?: "dedicated" \| "workstation", trust?: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
+| `runners/set` | user | `{accept?: "all" \| "heavy", name: Id, profile?: "dedicated" \| "workstation", reserve_mib?: natnum, trust?: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
 | `runners/unbench` | user | `{name: Id}` | `Runner` | yes |
 | `say/end` | user | `{id: Id}` | `boolean` | yes |
 | `say/revise` | user | `{id: Id, text: Text}` | `boolean` | yes |
