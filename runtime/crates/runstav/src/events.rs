@@ -353,6 +353,11 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "a pair write whose answer did not come in its time to live: the editor answers pair/answer from what it applied"
         ),
         event!(
+            "debug-breakpoints",
+            crate::methods::debug::DebugBreakpointsView,
+            "a file's breakpoints changed, or what an adapter made of them (verified, message, its line): to every editor"
+        ),
+        event!(
             "debug-state",
             crate::methods::debug::DebugState,
             "every debug session (id, name, parent, root, state, reason, the adapter's capabilities), to every editor, whenever one starts, runs, stops or ends"
@@ -560,6 +565,7 @@ mod tests {
                     "term/clipboard-write",
                     "term/prompt",
                     // debugging
+                    "debug-breakpoints",
                     "debug-state",
                     "debug-frame",
                     "debug-terminal",
@@ -578,7 +584,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 58);
+        assert_eq!(events().len(), 59);
         // names only: a value-shaped name is no key name, and nothing but `names` is taken
         let need = event("runners/need-keys").unwrap();
         assert_eq!(

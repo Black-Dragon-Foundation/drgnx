@@ -14,6 +14,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-wb)
+(require 'drgnx-margins)
 (require 'drgnx-state)                  ; the cards follow the windows and the frame's scale through the store
 ;; the decorations module sits beside this file (modules are not on the load path)
 (unless (featurep 'drgnx-decor)
@@ -562,9 +563,9 @@ only the one remap is reapplied."
 (declare-function drgnx-wb-area-show "drgnx-area")
 
 (defun drgnx-look--margins (on)
+  "Zen's centring of every editor window while ON (`drgnx-margins': the other claims stay)."
   (dolist (w (seq-filter #'drgnx-signal-editor-window-p (window-list nil 'nomini)))
-    (let ((m (if on (max 0 (/ (- (window-total-width w) drgnx-look-zen-width) 2)) 0)))
-      (set-window-margins w m m))))
+    (drgnx-margins-centre w (and on (max 0 (/ (- (window-total-width w) drgnx-look-zen-width) 2))))))
 
 (defun drgnx-look-zen ()
   "Only the text: hide the sidebar, panel and right dock, centre the text; again to give them back."

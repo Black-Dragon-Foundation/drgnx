@@ -24,6 +24,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-color)
 (require 'drgnx-agent-identity)
+(require 'drgnx-margins)
 (unless (featurep 'drgnx-decor)
   (load (expand-file-name "../ui/drgnx-decor" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
@@ -255,7 +256,9 @@ Two agents of one colour, and the agent you follow, keep their tags on whatever 
                                    ,face))
                     'help-echo help)
       (propertize " " 'display (list '(margin left-margin)
-                                     (propertize (drgnx-agents-editor-draw--margin-char kind first ord) 'face face))
+                                     (concat (drgnx-margins-pad 'agents)
+                                             (propertize (drgnx-agents-editor-draw--margin-char kind first ord)
+                                                         'face face)))
                   'help-echo help))))
 
 (declare-function drgnx-agent-panel-huddle-of "drgnx-agent-panel-huddle")
@@ -292,13 +295,12 @@ Two agents of one colour, and the agent you follow, keep their tags on whatever 
   (and drgnx-agents-editor-draw--lines (gethash line drgnx-agents-editor-draw--lines) t))
 
 (defun drgnx-agents-editor-draw--margin (buffer on)
-  "Hold a one-column left margin in BUFFER (and its windows) while ON, for the terminal's strip."
+  "Claim one column of BUFFER's left margin while ON, for the terminal's strip (`drgnx-margins': after the debug
+column, before the change marks)."
   (with-current-buffer buffer
     (unless (eq on drgnx-agents-editor-draw--margin)
       (setq drgnx-agents-editor-draw--margin on)
-      (if on (setq-local left-margin-width 1) (kill-local-variable 'left-margin-width))
-      (dolist (w (get-buffer-window-list buffer nil t))
-        (set-window-margins w (and on 1) (cdr (window-margins w)))))))
+      (drgnx-margins-claim 'agents (and on 1) :order 1))))
 
 (defun drgnx-agents-editor-draw--redraw-marks (&optional buffer)
   "Draw the change marks again in BUFFER (default: every buffer that has them): the strip came or went."

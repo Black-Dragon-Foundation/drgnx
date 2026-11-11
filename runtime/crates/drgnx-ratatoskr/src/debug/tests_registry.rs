@@ -138,7 +138,8 @@ fn start() -> Start {
         request: Request::Launch,
         arguments: json!({"program": "/p/app.js"}),
         breakpoints: vec![],
-        exception_filters: vec![],
+        functions: vec![],
+        exception_filters: None,
     }
 }
 
@@ -424,4 +425,180 @@ async fn the_hubs_end_stops_every_session_and_refuses_new_ones() {
     assert_eq!(ev.named("debug-ended").len(), 2);
     assert!(d.start(7, "/p", start(), m.clone()).await.is_err());
     assert!(m.finish().await.into_iter().all(|r| r.is_ok()));
+}
+
+fn add_bp(path: &str, line: u32, condition: Option<&str>) -> super::breakpoints::Op {
+    super::breakpoints::Op::Add {
+        path: path.into(),
+        line,
+        enabled: true,
+        condition: condition.map(str::to_owned),
+        hit: None,
+        log: None,
+    }
+}
+
+fn last_bps(ev: &Events, path: &str) -> Option<Value> {
+    ev.named("debug-breakpoints")
+        .into_iter()
+        .rev()
+        .map(|(_, _, d)| d)
+        .find(|d| d["path"] == path)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_breakpoint_reaches_a_running_session_at_once_and_its_answer_is_shown() {
+    let mut s = launch(vec![json!({"expect": "setBreakpoints",
+        "args": {"source": {"path": "/p/app.js"}, "breakpoints": [{"line": 4}]},
+        "ok": {"breakpoints": [{"id": 11, "verified": true, "line": 5}]}})]);
+    s.extend(end());
+    let (d, ev, m, _) = setup(vec![s]);
+    let id = d.start(1, "/p", start(), m.clone()).await.unwrap();
+    until(|| last_states(&ev) == [format!("{id}:running")]).await;
+    let view = d
+        .breakpoints("/p", Some(add_bp("/p/app.js", 4, None)), None)
+        .await;
+    assert_eq!(view["version"], 1);
+    until(|| last_bps(&ev, "/p/app.js").is_some_and(|v| v["breakpoints"][0]["verified"] == true))
+        .await;
+    assert_eq!(
+        last_bps(&ev, "/p/app.js").unwrap()["breakpoints"][0]["bound_line"],
+        5
+    );
+    // the editors' view: by path, without an operation
+    assert_eq!(
+        d.breakpoints("/p", None, Some("/p/app.js")).await["breakpoints"][0]["id"],
+        1
+    );
+    d.control(
+        &id,
+        Op::Stop {
+            kill_debuggee: None,
+        },
+    )
+    .await
+    .unwrap();
+    // the session ended: nothing verifies it now
+    assert_eq!(
+        last_bps(&ev, "/p/app.js").unwrap()["breakpoints"][0]["verified"],
+        false
+    );
+    assert!(m.finish().await.into_iter().all(|r| r.is_ok()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_session_starts_with_the_projects_breakpoints_cut_to_its_adapter() {
+    let steps = vec![
+        json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true,
+               "supportsFunctionBreakpoints": true,
+               "exceptionBreakpointFilters": [{"filter": "uncaught", "label": "Uncaught", "default": true}]}}),
+        json!({"expect": "launch", "ok": {}}),
+        json!({"event": "initialized"}),
+        json!({"expect": "setBreakpoints", "args": {"source": {"path": "/p/a.js"}, "breakpoints": [{"line": 3}]},
+               "ok": {"breakpoints": [{"id": 1, "verified": true}]}}),
+        json!({"expect": "setFunctionBreakpoints", "args": {"breakpoints": [{"name": "main"}]}, "ok": {}}),
+        json!({"expect": "setExceptionBreakpoints", "args": {"filters": ["uncaught"]}, "ok": {}}),
+        json!({"expect": "configurationDone"}),
+    ];
+    let mut steps = steps;
+    steps.extend(end());
+    let (d, ev, m, _) = setup(vec![steps]);
+    d.breakpoints("/p", Some(add_bp("/p/a.js", 3, Some("x > 1"))), None)
+        .await;
+    d.breakpoints(
+        "/p",
+        Some(super::breakpoints::Op::AddFunction {
+            name: "main".into(),
+            condition: None,
+        }),
+        None,
+    )
+    .await;
+    // another project's breakpoints stay out
+    d.breakpoints("/q", Some(add_bp("/q/b.js", 8, None)), None)
+        .await;
+    let id = d.start(1, "/p", start(), m.clone()).await.unwrap();
+    until(|| last_bps(&ev, "/p/a.js").is_some_and(|v| v["breakpoints"][0]["verified"] == true))
+        .await;
+    assert_eq!(
+        last_bps(&ev, "/p/a.js").unwrap()["breakpoints"][0]["unsupported"],
+        json!(["condition"])
+    );
+    d.control(
+        &id,
+        Op::Stop {
+            kill_debuggee: None,
+        },
+    )
+    .await
+    .unwrap();
+    let logs = m.finish().await;
+    let log = logs[0].as_ref().unwrap();
+    let sent = &log
+        .requests
+        .iter()
+        .find(|(c, _)| c == "setBreakpoints")
+        .unwrap()
+        .1;
+    assert!(sent["breakpoints"][0].get("condition").is_none(), "{sent}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn run_to_cursor_goes_at_the_next_stop() {
+    let stop = |line: u32| {
+        vec![
+            json!({"event": "stopped", "body": {"reason": "breakpoint", "threadId": 1}}),
+            json!({"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}),
+            json!({"expect": "stackTrace", "ok": {"stackFrames": [{"id": 5, "name": "f", "line": line, "column": 1, "source": {"path": "/p/app.js"}}]}}),
+            json!({"expect": "scopes", "ok": {"scopes": []}}),
+        ]
+    };
+    let mut s = launch(stop(2));
+    s.push(json!({"expect": "setBreakpoints", "args": {"source": {"path": "/p/app.js"}, "breakpoints": [{"line": 12}]},
+                  "ok": {"breakpoints": [{"id": 3, "verified": true}]}}));
+    s.push(json!({"expect": "continue", "ok": {}}));
+    s.extend(stop(12));
+    s.push(json!({"expect": "setBreakpoints", "args": {"source": {"path": "/p/app.js"}, "breakpoints": []},
+                  "ok": {"breakpoints": []}}));
+    s.extend(end());
+    let (d, ev, m, _) = setup(vec![s]);
+    let id = d.start(1, "/p", start(), m.clone()).await.unwrap();
+    until(|| ev.named("debug-frame").len() == 2).await;
+    d.run_to_cursor(&id, "/p/app.js", 12).await.unwrap();
+    until(|| ev.named("debug-frame").len() == 4).await;
+    // the user's breakpoints never showed it
+    assert!(last_bps(&ev, "/p/app.js").is_none_or(|v| v["breakpoints"] == json!([])));
+    // every answer is shown: the Run to Cursor's and the one after it went
+    until(|| ev.named("debug-breakpoints").len() == 2).await;
+    d.control(
+        &id,
+        Op::Stop {
+            kill_debuggee: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(m.finish().await.into_iter().all(|r| r.is_ok()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_store_is_kept_per_project_in_the_state_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let ev = Arc::new(Events::default());
+    let terms = Arc::new(NoTerms(Mutex::default()));
+    let d = Debug::with_store(ev.clone(), terms.clone(), Some(dir.path().to_owned()));
+    d.breakpoints("/p", Some(add_bp("/p/a.js", 3, None)), None)
+        .await;
+    d.breakpoints("/q", Some(add_bp("/q/b.js", 8, None)), None)
+        .await;
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    let again = Debug::with_store(ev, terms, Some(dir.path().to_owned()));
+    assert_eq!(
+        again.breakpoints("/p", None, Some("/p/a.js")).await["breakpoints"][0]["line"],
+        3
+    );
+    assert_eq!(
+        again.breakpoints("/p", None, Some("/q/b.js")).await["breakpoints"],
+        json!([])
+    );
 }
