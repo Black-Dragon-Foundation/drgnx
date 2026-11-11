@@ -104,6 +104,55 @@ which the lease reaper leaves alone, so nothing needs renewing.)
 path as a manager's rotation (when its turn ends, a fresh session in the same worktree), told its task's brief and to
 read the tree's log and status first.
 
+## Merge notes
+
+With `merge-notes` on (the org's pack), every two-parent merge in a task's base..tip is resolved by both sides'
+intent and says so. For a merge of the line (theirs) into the task's branch (ours), `orch::notes` diffs both sides
+from their merge base and needs a note for:
+
+- each **hunk both sides changed**, as `PATH:FIRST-LAST` in the base's lines (ranges that overlap or touch, joined:
+  git conflicts on neighbouring lines too; `vordr::notes::conflicts`);
+- each **shared file** (the pack's `:shared-paths`) both sides changed apart, as `PATH`: a clean merge there is
+  still audited.
+
+A note is a line of the merge commit's message:
+
+```text
+Merge-note: core/x.el:12-18 ours=1a2b3c4 theirs=5d6e7f8 resolution=both | the new key and the renamed one both stay
+```
+
+`resolution` is `ours`, `theirs`, `both` or `new`; the reason after `|` is required. Each cited commit (7 characters
+or more) must have touched its hunk on its side: `git log -L FIRST,LAST:PATH base..side` over the hunk's lines on that
+side, or `git log base..side -- PATH` for a shared file. A merge with a hunk uncovered, a citation that didn't touch it
+or a note without a reason holds the task's merge (a `gate` card naming each); like the trailers, no waiver passes it.
+
+## The merge queue
+
+A task whose gates passed is **ready** (`orch::queue`, in memory: after a restart tasks are ready again as their
+gates pass again). The next **batch** is the earliest ready tasks, up to the pack's `:batch-size`, leaving out a task
+whose tip conflicts with an earlier member's (`git merge-tree`): it waits for the next batch, after the earlier one
+merged. A batch stays until its members merged or left the job's review (dropped, sent back, a card); members merge
+one at a time in readiness order, each `--no-ff`. A member whose merge onto the line would cleanly join shared files
+both sides changed since they parted goes back to its agent, told to merge the line in with a note per file. A job
+with no rule pack merges as before, each task as it passes.
+
+## Affected groups
+
+With `affected-groups` on and a `:groups` command in the pack (`drgnx-org`: `bin/drgnx test --affected %r --json`;
+`drgnx-default` names none, so it runs no groups), the batch's first member merges only when the batch's groups are
+green (`orch::groups`, `vordr::groups`):
+
+- **The combined commit:** the line's HEAD with each member's tip merged in order (`git merge-tree`, `git
+  commit-tree`: no worktree, no ref moves). Its tree key is the batch's: the same members in any order give the same
+  tree, and so do the later members once the first merged, so their turn reuses the runs.
+- **The groups** come from the base's own tool: the command runs in a detached worktree of the line's HEAD with `%r`
+  = `HEAD..COMBINED` (its `test/affected.eld`, never the batch's); listed once per tree.
+- **Each group** runs at the combined commit through the queue as the user's job (a detached worktree that goes when
+  the job ends); its end is evidence of `batch:JOB@TREE`.
+- **Green:** every group's newest run at the tree passed, or failed only rows the base's `test/frozen.eld` lists.
+  Any other red holds the batch: a `gate` card on its first member (key `groups`, `tip` the combined tree), whose
+  `Waive once…` the gate honours for that tree.
+
 ## Red first
 
 `vordr::redfirst::decide` over the task's commits base..tip (`orch::red_first::inputs`):

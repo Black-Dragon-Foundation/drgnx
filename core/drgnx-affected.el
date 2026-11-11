@@ -343,20 +343,41 @@ exit code), :stamp.  Returns ((ID . green|red|cached)…); every group runs, wha
         (error "git diff %s failed" range))
       (split-string (buffer-string) "\0" t))))
 
-(defconst drgnx-affected--usage "usage: drgnx test --affected A..B [--run] [--no-cache]")
+(defconst drgnx-affected--usage "usage: drgnx test --affected A..B [--run [--no-cache] | --json]")
+
+(defun drgnx-affected-json (range plan)
+  "PLAN (`drgnx-affected-plan') for RANGE as the JSON the hub's merge queue reads: the range, each group's id, folder
+\(null: the top) and command, and why."
+  (json-serialize
+   (list :range range
+         :groups (vconcat (mapcar (lambda (g)
+                                    (list :id (plist-get g :id)
+                                          :dir (or (plist-get g :dir) :null)
+                                          :run (vconcat (plist-get g :run))))
+                                  (plist-get plan :groups)))
+         :why (vconcat (plist-get plan :why)))))
 
 (defun drgnx-affected-cli-run (args)
-  "`drgnx test --affected A..B [--run] [--no-cache]'; the exit code (2: bad arguments)."
-  (let (range run no-cache bad)
+  "`drgnx test --affected A..B [--run [--no-cache] | --json]'; the exit code (2: bad arguments)."
+  (let (range run no-cache json bad)
     (dolist (a args)
       (cond ((equal a "--run") (setq run t))
             ((equal a "--no-cache") (setq no-cache t))
+            ((equal a "--json") (setq json t))
             ((and (null range) (string-match-p "\\`[[:alnum:]._~^@{}/][[:alnum:]._~^@{}/-]*\\.\\.\\.?[[:alnum:]._~^@{}/-]+\\'" a))
              (setq range a))
             (t (setq bad t))))
     (cond
      ((or bad (null range)) (princ (concat drgnx-affected--usage "\n")) 2)
      ((and no-cache (not run)) (princ "drgnx test --affected: --no-cache goes with --run\n") 2)
+     ((and json run) (princ "drgnx test --affected: --json lists, --run runs: one of them\n") 2)
+     (json
+      (let* ((root (directory-file-name drgnx-dir))
+             (files (drgnx-affected--changed-files root range)))
+        (princ (drgnx-affected-json
+                range (drgnx-affected-plan root files :crates (lambda () (drgnx-affected-crates root)))))
+        (terpri)
+        0))
      (t
       (let* ((root (directory-file-name drgnx-dir))
              (files (drgnx-affected--changed-files root range))
