@@ -172,10 +172,10 @@ column's claim drawn into it), else the pad and a character in KIND's face."
 ;;;; Marks
 
 (defun drgnx-debug-gutter--line-bounds (line)
-  "(BEG . END) of LINE, its newline included; the last line ends at the buffer's end."
+  "(BEG . END) of LINE, its newline included; the last line ends at the buffer's end.  It moves from point's line, not
+the buffer's start (a click deep in a long file was 10 ms of `forward-line')."
   (save-excursion
-    (goto-char (point-min))
-    (forward-line (1- line))
+    (forward-line (- line (line-number-at-pos)))
     (cons (point) (progn (forward-line 1) (point)))))
 
 (defun drgnx-debug-gutter--help (bp)
