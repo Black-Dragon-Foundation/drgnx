@@ -224,6 +224,28 @@ adapters are found (`:path` on `PATH`, `:python-module` importable by `python3`,
 
 Its tests (`test/unit/debug-launch-test.el`) script the hub's answers.
 
+## The breakpoint column: `drgnx-debug-gutter.el`
+
+`drgnx-debug-gutter-mode` draws a file's breakpoints in the left margin, in a column claimed through
+`core/drgnx-margins.el` (owner `debug`, order 0: outermost, 18 px rounded up to whole columns; one column in a
+terminal). The hub holds the breakpoints; the mode asks `debug/breakpoints` for the file when it turns on, sends each
+change as an op by id and draws the answer, and redraws on the hub's `debug-breakpoints` event (a newer `version`
+only).
+
+- Glyphs follow the mockup's legend (`docs/specs/drgnx/the-look/debugging.html`): ten kinds (`bp`, `unverified`,
+  `cond`, `log`, `off`, `hover`, `stop`, `stop-bp`, `frame`, `exception`) as SVGs coloured from the role faces
+  (`drgnx-debug-breakpoint`, `-unverified`, `-hover`, `-stopped`, `-frame`, `-exception`) through `drgnx-color`, cached
+  per kind, size and colours; a terminal shows `● ◐ ◆ ○ ▶ ▷` (ASCII `B C L o > -` where it is not UTF-8) in the face.
+- Each mark is an overlay over its line. While the buffer has unsaved changes a moved mark is a draft and a hub event
+  leaves it where the text put it; on save each moved mark sends `move` (the store's line plus how far it moved), each
+  mark whose line was deleted sends `remove`; a revert puts the marks back on the store's lines. A breakpoint the
+  adapter bound elsewhere (`bound_line`) sits on that line.
+- `drgnx-debug-gutter-show`: `auto` (while the file has breakpoints or a session runs in its project, from
+  `debug-state`), `always` or `never`.
+- Mouse: `mouse-1` in the column toggles (`drgnx-debug-gutter-toggle`), `S-mouse-1` adds a logpoint.
+
+Its tests (`test/unit/debug-gutter-test.el`) script the hub with a small store of their own.
+
 ## Live adapters: the image
 
 The tests that run real adapters (debugpy, js-debug, delve, lldb-dap) use `drgnx-debug-adapters:f45`, built from
