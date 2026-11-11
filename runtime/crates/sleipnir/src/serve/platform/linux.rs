@@ -213,7 +213,7 @@ impl Platform for LinuxPlatform {
             None
         } else {
             let text = req.net_hosts.join("\n") + "\n";
-            crate::helper::net::allow_list(&text)?;
+            crate::net::allow_list(&text)?;
             let f = dir.join(NET_ALLOW);
             fs::write(&f, text).map_err(|e| format!("{NET_ALLOW}: {e}"))?;
             Some(f)
@@ -291,6 +291,7 @@ impl Platform for LinuxPlatform {
                 net: relay.as_ref().map(|r| r.0.clone()),
                 sidecar_argv: relay.map(|r| r.1).unwrap_or_default(),
                 container: Some(container),
+                ..HelperSpec::default()
             }),
         }
         .write(dir)

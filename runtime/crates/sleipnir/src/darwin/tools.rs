@@ -395,6 +395,7 @@ mod tests {
             tools_dir: &tools_dir,
             tools: &records,
             bin: &root.join("bin"),
+            proxy_port: None,
         });
         let ctx = gleipnir::Context {
             home: std::env::var_os("HOME")

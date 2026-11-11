@@ -1,6 +1,6 @@
 //! A Mac job's sandbox: the Gleipnir spec its Seatbelt profile is made from. It reads the job's source, writes its
 //! attempt folder (and the source, for a job that writes its tree), has its home and temporary folder in the attempt
-//! folder, and no network. It runs Homebrew read-only (no update or cleanup; its cache, logs and temporary files in the
+//! folder, and no network but its proxy's loopback port when the hub granted it hosts ([`super::proxy`]). It runs Homebrew read-only (no update or cleanup; its cache, logs and temporary files in the
 //! attempt's tmp). A job placed with `tool:` features reads the runner's toolchains and has them in its
 //! environment ([`super::tools`]). It reads the runner's programs, and its `brew` is the runner's shim ([`super::brew`]).
 //! Pure: the rows run on Linux.
@@ -30,6 +30,8 @@ pub struct Job<'a> {
     pub tools: &'a [super::tools::Record],
     /// The runner's programs (`<root>/bin`): read, and its brew shim ([`super::brew`]) first in the job's PATH.
     pub bin: &'a Path,
+    /// A networked job's proxy (job-exec's, on this loopback port, [`super::proxy`]): its only network.
+    pub proxy_port: Option<u16>,
 }
 
 /// The Seatbelt context of a Mac runner's job: the developer dir by true name, and the build addition with the
@@ -77,7 +79,7 @@ pub fn spec(job: &Job) -> Spec {
     if !job.tools.is_empty() {
         read.push(job.tools_dir.to_path_buf());
     }
-    let env = vec![
+    let mut env = vec![
         ("HOME".into(), home.display().to_string()),
         ("TMPDIR".into(), format!("{}/", tmp.display())),
         // the brew shim first: Homebrew can't answer a package's prefix offline (super::brew)
@@ -105,6 +107,15 @@ pub fn spec(job: &Job) -> Spec {
         ),
         ("HOMEBREW_TEMP".into(), tmp.display().to_string()),
     ];
+    if let Some(port) = job.proxy_port {
+        let url = format!("http://127.0.0.1:{port}");
+        for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            env.push((k.into(), url.clone()));
+        }
+        for k in ["NO_PROXY", "no_proxy"] {
+            env.push((k.into(), "localhost,127.0.0.1,::1".into()));
+        }
+    }
     Spec {
         read,
         write,
@@ -121,7 +132,7 @@ pub fn spec(job: &Job) -> Spec {
         chdir,
         net: Net::Isolated {
             relay: vec![],
-            mac_tcp_ports: vec![],
+            mac_tcp_ports: job.proxy_port.into_iter().collect(),
             loopback: false,
             mac_loopback_ports: vec![],
         },
@@ -153,6 +164,7 @@ mod tests {
             tools_dir: Path::new("/runner/.drgnx-runner.noindex/tools"),
             tools: &[],
             bin: Path::new("/runner/.drgnx-runner.noindex/bin"),
+            proxy_port: None,
         };
         let s = spec(&job);
         assert_eq!(
@@ -202,6 +214,7 @@ mod tests {
             tools_dir,
             tools: std::slice::from_ref(&rec),
             bin: Path::new("/r/bin"),
+            proxy_port: None,
         };
         let s = spec(&job);
         assert_eq!(
@@ -241,6 +254,7 @@ mod tests {
             tools_dir: Path::new("/r/tools"),
             tools: &[],
             bin: Path::new("/r/bin"),
+            proxy_port: None,
         });
         assert!(s.read.contains(&PathBuf::from("/r/bin")));
         assert!(!s.write.iter().any(|w| w.starts_with("/r/bin")));
@@ -251,6 +265,50 @@ mod tests {
         assert_eq!(
             super::super::brew::shim_dir(Path::new("/r")),
             Path::new("/r/bin/brew-shim")
+        );
+    }
+
+    /// [D] A networked job reaches its proxy's loopback port and nothing else: the port is its spec's only network
+    /// (Gleipnir's profile allows outbound to `localhost` on those ports only: its row
+    /// `isolated_only_listed_localhost_ports_and_no_trustd`), and the proxy variables name it; a job without one has
+    /// neither.
+    #[test]
+    fn a_networked_job_reaches_only_its_proxy_port() {
+        let job = Job {
+            dir: Path::new("/r/jobs/j1.1"),
+            src: Path::new("/r/slots/s1"),
+            cwd: Path::new("."),
+            writes_tree: false,
+            marker: "h/j1/1",
+            tools_dir: Path::new("/r/tools"),
+            tools: &[],
+            bin: Path::new("/r/bin"),
+            proxy_port: Some(41234),
+        };
+        let s = spec(&job);
+        assert!(
+            matches!(&s.net, Net::Isolated { relay, mac_tcp_ports, loopback: false, .. }
+                if relay.is_empty() && mac_tcp_ports == &[41234]),
+            "{:?}",
+            s.net
+        );
+        for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            assert!(
+                s.env.contains(&(k.into(), "http://127.0.0.1:41234".into())),
+                "{k}"
+            );
+        }
+        assert!(
+            s.env
+                .contains(&("NO_PROXY".into(), "localhost,127.0.0.1,::1".into()))
+        );
+        let none = spec(&Job {
+            proxy_port: None,
+            ..job
+        });
+        assert!(!none.env.iter().any(|(k, _)| k.ends_with("_PROXY")));
+        assert!(
+            matches!(&none.net, Net::Isolated { mac_tcp_ports, .. } if mac_tcp_ports.is_empty())
         );
     }
 
@@ -283,6 +341,7 @@ mod tests {
             tools_dir: Path::new("/r/tools"),
             tools: &[],
             bin: Path::new("/r/bin"),
+            proxy_port: None,
         });
         let tmp = dir.join("tmp").display().to_string();
         for (k, v) in [

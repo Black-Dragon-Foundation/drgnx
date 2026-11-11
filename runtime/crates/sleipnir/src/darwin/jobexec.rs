@@ -16,7 +16,7 @@
 
 use super::memwatch::{self, MARKER};
 use crate::linux::disk;
-use crate::linux::jobexec::{JobExec, KILL_REASON, read_kill_reason};
+use crate::linux::jobexec::{HelperSpec, JobExec, KILL_REASON, read_kill_reason};
 use crate::linux::parse::{self, RowVerdict};
 use crate::linux::probe::Probe;
 use crate::linux::result::{ResultJson, RowResult};
@@ -45,10 +45,26 @@ fn mono_s() -> f64 {
     ts.tv_sec as f64 + ts.tv_nsec as f64 / 1e9
 }
 
-/// Why SPEC can't run on a Mac: no command, a command not under `sandbox-exec -f <profile>`, keys or a helper.
+/// Why SPEC can't run on a Mac: no command, a command not under `sandbox-exec -f <profile>`, keys, or a helper that
+/// is anything but the job's proxy (its allow-list, socket and port: `darwin::proxy`).
 pub fn refusal(spec: &JobExec) -> Option<String> {
-    if spec.keyed || spec.helper.is_some() {
-        return Some("a Mac runner takes no keyed job and runs no job helper".into());
+    if spec.keyed {
+        return Some("a Mac runner takes no keyed job".into());
+    }
+    if let Some(h) = &spec.helper {
+        let proxy_only = HelperSpec {
+            hub_allow: h.hub_allow.clone(),
+            proxy_fd: h.proxy_fd,
+            proxy_port: h.proxy_port,
+            ..HelperSpec::default()
+        };
+        if *h != proxy_only
+            || h.hub_allow.is_none()
+            || h.proxy_fd.is_none()
+            || h.proxy_port.is_none()
+        {
+            return Some("a Mac job's only helper is its proxy".into());
+        }
     }
     match spec.argv.as_slice() {
         [] => Some("the job has no command".into()),
@@ -86,7 +102,12 @@ fn leads_session() -> bool {
 /// Runs SPEC from the attempt's folder DIR and writes `result.json` there; the result. However the job ended (by
 /// itself, a timeout, a kill reason), this process's group goes after the result is written: nothing of it lives on.
 pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
-    let (result, _stop) = run_unchecked(dir, spec, refusal(spec));
+    run_with(dir, spec, None)
+}
+
+/// [`run`], with SETUP as a failure found before it (the job's proxy couldn't start): the job then runs nothing.
+pub fn run_with(dir: &Path, spec: &JobExec, setup: Option<String>) -> ResultJson {
+    let (result, _stop) = run_unchecked(dir, spec, refusal(spec).or(setup));
     if leads_session() {
         // SAFETY: SIGKILL to our own process group (job-exec and every process of the job that stayed in it)
         unsafe { libc::killpg(0, libc::SIGKILL) };
@@ -391,6 +412,48 @@ mod tests {
         let mut keyed = ok.clone();
         keyed.keyed = true;
         assert!(refusal(&keyed).unwrap().contains("keyed"));
+    }
+
+    /// [D] A Mac job's only helper is its proxy (its allow-list, its socket and port, all three); anything of
+    /// Linux's helper (keys, a relay, a container) or a part of the proxy alone is refused.
+    #[test]
+    fn a_mac_jobs_only_helper_is_its_proxy() {
+        let d = PathBuf::from("/x");
+        let proxy = HelperSpec {
+            hub_allow: Some("/x/net.allow".into()),
+            proxy_fd: Some(5),
+            proxy_port: Some(41234),
+            ..Default::default()
+        };
+        let mut s = spec(&d, &[SANDBOX_EXEC, "-f", "/x/job.sb", "/bin/true"]);
+        s.helper = Some(proxy.clone());
+        assert_eq!(refusal(&s), None);
+        for bad in [
+            HelperSpec {
+                keys: vec!["K".into()],
+                ..proxy.clone()
+            },
+            HelperSpec {
+                container: Some("c".into()),
+                ..proxy.clone()
+            },
+            HelperSpec {
+                sidecar_argv: vec!["run".into()],
+                ..proxy.clone()
+            },
+            HelperSpec {
+                proxy_fd: None,
+                ..proxy.clone()
+            },
+            HelperSpec {
+                hub_allow: None,
+                ..proxy.clone()
+            },
+            HelperSpec::default(),
+        ] {
+            s.helper = Some(bad.clone());
+            assert!(refusal(&s).is_some(), "{bad:?}");
+        }
     }
 
     /// [D] A refused job writes an infra result (setup) and runs nothing.

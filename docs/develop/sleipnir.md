@@ -106,7 +106,7 @@ each toolchain record under the root, and `account:admin` / `account:own` for an
 runner list shows what it exposes; a Linux runner's `account:admin` is a login in `wheel` or `sudo`). The boot id is `kern.bootsessionuuid`.
 
 **Toolchains** (`darwin::tools`, `sleipnir tools --root DIR PIN...`). The hub runs it at `runner add` and
-`runner check`, as the runner account and outside any job (a job has no network; mise downloads). For each pin
+`runner check`, as the runner account and outside any job (mise downloads from hosts a job isn't granted). For each pin
 (`rust@1.95`) the user's Homebrew `mise` runs `install` and then `env --json` in the root, with mise's data, state,
 config and cache folders and Rust's `RUSTUP_HOME`/`CARGO_HOME` all under the root, so nothing lands in the account's
 home; the record `<root>/tools/env/<pin>.json` keeps the folders mise put on `PATH` and its other variables (never
@@ -123,20 +123,33 @@ while that pid has that start time (a reused pid is not), and `kill` is SIGKILL 
 whatever stayed in it); a process that left the group is the watchdog's to find, by session and marker. However a
 job ends (by itself, its timeout, a kill reason), job-exec kills what is left of it once the result is written: the
 session and the marked processes the watchdog's scan finds, then its own group. job-exec
-runs the command only as `/usr/bin/sandbox-exec -f job.sb …` and refuses anything else (a keyed job, a helper, a
-bare command) as `infra: setup`, so a job never runs unconfined. `job.sb` is Gleipnir's profile of the attempt's
+runs the command only as `/usr/bin/sandbox-exec -f job.sb …` and refuses anything else (a keyed job, a helper other
+than its proxy, a bare command) as `infra: setup`, so a job never runs unconfined. `job.sb` is Gleipnir's profile of the attempt's
 spec (`darwin::sandbox::spec`): it reads the source and the runner's programs (`<root>/bin`), writes only `HOME` and
 `TMPDIR`, both inside the attempt folder (and the source when the job writes its tree; never the attempt folder
 itself, whose `job-exec.pid`, `kill_reason` and `result.json` are job-exec's), `PATH` the brew shim's folder,
 then Homebrew's and the system's (after its toolchains'), the marker
 `DRGNX_RUNNER_ATTEMPT`, Homebrew read-only (`HOMEBREW_NO_AUTO_UPDATE` and the like; `HOMEBREW_NO_INSTALL_FROM_API`, so formulae load from the
 installed kegs instead of a JSON API fetch, which needs the network and a lock in Homebrew's var; its cache, logs and temporary
-files in the attempt's tmp: a configure asks `brew` where a package is), and no network. Every job a Mac runner takes is a
+files in the attempt's tmp: a configure asks `brew` where a package is), and no network but its proxy's (below). Every job a Mac runner takes is a
 build or a test, so its profile has Gleipnir's build addition (`darwin::sandbox::mac_context`: the developer dir and
 the account's per-user folder, `getconf DARWIN_USER_DIR`'s parent, by true name; docs/develop/gleipnir.md, "The build
 addition"); a per-user folder that can't be resolved refuses the launch. The timeout is read on `CLOCK_MONOTONIC`, `caffeinate -i -w` keeps the Mac
 awake while the job runs, and the verdict comes from `forseti::classify` like Linux's. A Mac has no pause, live
 resize, CPU weights or keys: those methods answer none or refuse.
+
+**A Mac job's network** (`darwin::proxy`). A job the hub grants hosts (its `net_hosts`) gets Gleipnir's CONNECT proxy
+with that allow-list (`crate::net`, shared with Linux's job helper: no metadata service, no address that isn't public,
+connections only to public addresses), served by its own job-exec on a loopback port for the job's life; a Mac has no
+network namespace and no relay sidecar. `launch` checks the list, writes it to the attempt's `net.allow`, binds
+`127.0.0.1:0` and starts job-exec with that listener kept open (every other descriptor is close-on-exec), naming the
+descriptor and port in `job.json`'s helper. The port is in the job's profile as its only network (outbound to
+`localhost:<port>`) and in its `HTTP(S)_PROXY` variables, `NO_PROXY` the loopback names. job-exec takes the listener
+only if it is on `127.0.0.1:<port>`, makes it close-on-exec again so the job never holds it, and serves it on a thread
+of its own; a proxy that can't start fails the job `infra: setup`, and a refused request is logged in
+`job-exec.log`. Binding in `serve` means no other process can take the port between the profile and the proxy. The
+loopback is the whole Mac's: while the job runs, another local process could reach the job's allow-listed hosts
+through the port, and nothing else.
 
 **Homebrew in a job** (`darwin::brew`): offline and read-only, Homebrew can't name a package's prefix. `brew --prefix
 --installed NAME`, which Emacs's configure asks for libgccjit, loads the formula from the JSON API (a download, under a
@@ -158,7 +171,7 @@ their `ri_phys_footprint` (`proc_pid_rusage`; the resident set on Linux, where t
 grant less 192 MiB (the overshoot the spike measured at this tick, rounded up; never under half the grant), it
 SIGKILLs every one: the verdict is `oom` (the kill counts as the job's own OOM, never `red` and never `infra`), and
 `result.json`'s `mem_overshoot_mib` records the peak past the grant for every Mac job (none on Linux, where the kernel
-caps it). A Mac has no job helper (no keys, no network yet), so job-exec also runs the disk watch (`linux::disk`,
+caps it). A Mac has no job helper (no keys; job-exec serves the proxy), so job-exec also runs the disk watch (`linux::disk`,
 every 10 s, `disk-start` written before the command): below the floor, the running job that grew most is stopped
 `infra: disk`. **The sweep**: setsid loses launchd's group cleanup, so a Mac's `cleanup` (at start and after each job)
 first SIGKILLs the runner user's processes whose marker names this hub and an attempt that no longer runs

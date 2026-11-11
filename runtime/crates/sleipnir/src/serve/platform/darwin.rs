@@ -6,8 +6,8 @@ use super::super::Config;
 use super::super::attempts::{self, LOG};
 use super::super::cleanup;
 use super::{LaunchReq, Platform};
-use crate::darwin::{attempt, jobexec, memwatch, pressure, probe, sandbox, tools};
-use crate::linux::jobexec::JobExec;
+use crate::darwin::{attempt, jobexec, memwatch, pressure, probe, proxy, sandbox, tools};
+use crate::linux::jobexec::{HelperSpec, JobExec};
 use crate::linux::parse::Parser;
 use crate::linux::reserve::{self, Reservations};
 use crate::linux::resize::{Resize, Sized};
@@ -16,6 +16,7 @@ use forseti::{Limits, MachineState, Profile};
 use std::cell::RefCell;
 use std::fs;
 use std::io;
+use std::os::fd::{AsFd, AsRawFd};
 use std::path::{Path, PathBuf};
 
 /// A Mac runner, in its own standard account.
@@ -177,9 +178,19 @@ impl Platform for DarwinPlatform {
         if !meta.spec.keys.is_empty() {
             return Err("a Mac runner never gets keys".into());
         }
-        if !req.env.is_empty() || !req.net_hosts.is_empty() {
-            return Err("a Mac job has no extra variables and no network yet".into());
+        if !req.env.is_empty() {
+            return Err("a Mac job has no extra variables".into());
         }
+        // a networked job's proxy port, bound here so the profile names it and job-exec inherits it (darwin::proxy)
+        let net = if req.net_hosts.is_empty() {
+            None
+        } else {
+            let text = req.net_hosts.join("\n") + "\n";
+            crate::net::allow_list(&text)?;
+            fs::write(dir.join(proxy::ALLOW), text)
+                .map_err(|e| format!("{}: {e}", proxy::ALLOW))?;
+            Some(proxy::bind().map_err(|e| format!("the job's proxy port: {e}"))?)
+        };
         let parser: Parser =
             serde_json::from_value(serde_json::Value::String(if req.parser.is_empty() {
                 "exit".into()
@@ -206,6 +217,7 @@ impl Platform for DarwinPlatform {
             tools_dir: &tools_dir,
             tools: &records,
             bin: &bin,
+            proxy_port: net.as_ref().map(|(_, port)| *port),
         });
         let env = spec.env.clone();
         let ctx = gleipnir::Context {
@@ -260,7 +272,12 @@ impl Platform for DarwinPlatform {
             expect: meta.spec.expect,
             grant: meta.grant,
             timeout_s: meta.spec.timeout_s,
-            helper: None,
+            helper: net.as_ref().map(|(l, port)| HelperSpec {
+                hub_allow: Some(dir.join(proxy::ALLOW)),
+                proxy_fd: Some(l.as_raw_fd()),
+                proxy_port: Some(*port),
+                ..HelperSpec::default()
+            }),
         }
         .write(dir)
         .map_err(|e| format!("job.json: {e}"))?;
@@ -274,6 +291,7 @@ impl Platform for DarwinPlatform {
             } else {
                 0
             },
+            net.as_ref().map(|(l, _)| l.as_fd()),
         )
         .map_err(|e| format!("job-exec: {e}"))?;
         Ok((dir.display().to_string(), pid))

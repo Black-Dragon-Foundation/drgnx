@@ -393,4 +393,43 @@ mod mac_runner {
         assert!(log.contains("survived"), "{log}");
         hub.reg.remove("mac").await.expect("removed");
     }
+
+    /// [C] A job granted a host reaches it through its proxy (the port its proxy variables name), and only it: another
+    /// host is refused by the proxy, and a direct connection by the sandbox.
+    #[tokio::test]
+    #[ignore = "macos-runner"]
+    async fn a_networked_job_reaches_only_its_hosts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root("net");
+        let mut hub = Hub::new(dir.path());
+        hub.add("mac", &root).await;
+        let (work, blobs) = project(dir.path());
+        let script = r#"/usr/bin/perl - github.com:443 example.org:443 <<'EOF'
+use IO::Socket::INET;
+my ($h, $p) = $ENV{HTTPS_PROXY} =~ m{//([^:/]+):(\d+)} or die "no HTTPS_PROXY\n";
+for my $t (@ARGV) {
+    my $s = IO::Socket::INET->new(PeerAddr => $h, PeerPort => $p) or die "the proxy: $!\n";
+    print $s "CONNECT $t HTTP/1.1\r\nHost: $t\r\n\r\n";
+    my $l = <$s>;
+    print "$t: $l";
+    close $s;
+}
+my $d = IO::Socket::INET->new(PeerAddr => "1.1.1.1", PeerPort => 443, Timeout => 10);
+print $d ? "direct: open\n" : "direct: refused\n";
+EOF"#;
+        let mut s = job("xnet", script, freeze(&work, &blobs), 512);
+        s.place.net_hosts = vec!["github.com:443".into()];
+        hub.q.submit(s, now());
+        let r = hub.result("xnet").await;
+        let log = log(dir.path(), "xnet");
+        assert_eq!(r["verdict"], "Pass", "{r} {log}");
+        for want in [
+            "github.com:443: HTTP/1.1 200",
+            "example.org:443: HTTP/1.1 403",
+            "direct: refused",
+        ] {
+            assert!(log.contains(want), "{want}: {log}");
+        }
+        hub.reg.remove("mac").await.expect("removed");
+    }
 }
