@@ -231,7 +231,7 @@ keys); every binding is undone after."
                                             "View: Command Palette"))
                   "")))
        (drgnx-palette))
-     (should (string-search "Ctrl C P" (string-join (split-string annotation) " "))))))   ; the key as keycaps
+     (should (string-search "Ctrl C p" (string-join (split-string annotation) " "))))))   ; the key as keycaps
 
 (ert-deftest drgnx-keys/a-broken-settings-el-is-not-an-error ()
   ;; the default stack applies; the applier (not the keys) says what is wrong with the file

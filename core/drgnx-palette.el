@@ -38,8 +38,8 @@ the ring's colour), radius 4 where the compositor rounds."
   :group 'drgnx-look)
 
 (defconst drgnx-palette--key-names
-  '(("SPC" . "Space") ("RET" . "Enter") ("TAB" . "Tab") ("ESC" . "Esc") ("DEL" . "Backspace")
-    ("<escape>" . "Esc") ("<return>" . "Enter"))
+  '(("SPC" . "Space") ("RET" . "↵") ("TAB" . "Tab") ("ESC" . "Esc") ("DEL" . "Backspace")
+    ("<escape>" . "Esc") ("<return>" . "↵"))
   "Emacs key names that read differently on a cap.")
 
 (defconst drgnx-palette--modifier-names
@@ -48,19 +48,22 @@ the ring's colour), radius 4 where the compositor rounds."
 
 (defun drgnx-palette-keycap-names (key)
   "The caps of the key description KEY (\"C-S-p\", \"SPC f f\", \"<f1>\") as a list of names: modifiers first
-\(Ctrl, Alt, Shift), then the key, for each key of a chord.  A capital letter is that letter with Shift (M-F is
-Alt Shift F, not M-f's Alt F)."
+\(Ctrl, Alt, Shift), then the key, for each key of a chord.  With another modifier a capital letter is that letter
+with Shift (M-F is Alt Shift F, not M-f's Alt F) and a letter reads as a capital; alone, a letter reads as typed (`a',
+`D'), and Shift with a letter is its capital (S-d is D), as the mockups draw them."
   (mapcan (lambda (chord)
             (let (mods)
               (while (string-match "\\`\\([CMASsH]\\)-\\(.+\\)\\'" chord)
                 (push (cdr (assq (aref (match-string 1 chord) 0) drgnx-palette--modifier-names)) mods)
                 (setq chord (match-string 2 chord)))
-              (when (and (= (length chord) 1) (not (equal chord (downcase chord))) (not (member "Shift" mods)))
-                (push "Shift" mods))
+              (when (= (length chord) 1)
+                (cond ((equal mods '("Shift")) (setq mods nil chord (upcase chord)))    ; S-d is D
+                      ((and mods (not (equal chord (downcase chord))) (not (member "Shift" mods)))
+                       (push "Shift" mods))))
               (nconc (nreverse mods)
                      (list (cond ((cdr (assoc chord drgnx-palette--key-names)))
                                  ((string-match "\\`<\\(.+\\)>\\'" chord) (capitalize (match-string 1 chord)))
-                                 ((= (length chord) 1) (upcase chord))
+                                 ((and (= (length chord) 1) mods) (upcase chord))
                                  (t chord))))))
           (split-string key " " t)))
 

@@ -88,7 +88,8 @@
                                     "  (when (process-live-p p)"
                                     (format "    (process-put p 'drgnx-step %d)" i)
                                     "    (drgnx-gateway--reply p msg)))" ""))))
-    (setq head (seq-take head 200))
+    ;; whole definitions only (32 of them end on line 199): a definition cut open would hold everything after it
+    (setq head (append (seq-take head 199) (list "")))
     (concat (mapconcat #'identity head "\n") "\n"
             (if committed
                 (string-replace "  (if (process-live-p p)\n      (process-send-string p reply)\n    (drgnx-gateway--queue p reply)))"

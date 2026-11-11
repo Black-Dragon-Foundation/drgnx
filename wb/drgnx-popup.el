@@ -122,7 +122,7 @@ reused (`display-buffer-in-child-frame' makes it the first time)."
 (declare-function drgnx-palette-frame-ring "drgnx-palette-frame" (frame))
 (declare-function drgnx-palette-frame--look "drgnx-palette-frame" ())
 
-(defconst drgnx-popup--modal-keys '(shadow backdrop-blur corner-radius)
+(defconst drgnx-popup--modal-keys '(shadow backdrop-blur corner-radius alpha-background ring)
   "The look's child-frame parameters a modal lane takes (the palette's, `drgnx-palette-frame--look') and a plain one
 clears.")
 
@@ -132,13 +132,17 @@ else plain (no pad, no ring)."
   (let* ((root (or (frame-parent child) child))
          (look (and modal (fboundp 'drgnx-palette-frame--look) (drgnx-palette-frame--look)))
          (want `((internal-border-width . ,(if modal (drgnx-px 12 root) 0))
+                 ;; the box's text starts at its padding, as the palette's
+                 (left-fringe . ,(and modal 0)) (right-fringe . ,(and modal 0))
                  (child-frame-border-width . ,(if (and modal (fboundp 'drgnx-palette-frame-ring))
                                                   (drgnx-palette-frame-ring root)
                                                 0))
                  ,@(mapcar (lambda (k) (cons k (alist-get k look))) drgnx-popup--modal-keys))))
     (dolist (p want)
       (unless (equal (frame-parameter child (car p)) (cdr p))
-        (set-frame-parameter child (car p) (cdr p))))))
+        (set-frame-parameter child (car p) (cdr p))))
+    ;; the padding is the box's surface (the buffer's is `drgnx-surface-overlay'), read from the theme at each show
+    (set-face-background 'internal-border (and modal (face-background 'drgnx-surface-overlay nil t)) child)))
 
 (defun drgnx-popup--show-float (buffer &optional fraction modal)
   "The lane in the popup child frame: shown with BUFFER, fitted (at most FRACTION of the frame's height, default 0.33)

@@ -329,7 +329,8 @@ change); `C-u' Replace All writes at once, no sheet."
                   (should (string-match-p "a.txt \\+2 −2" text))
                   (should (string-match-p "^       1 - let needle;$" text))   ; the selected file's first hunk
                   (should (string-match-p "1 skipped: changed on disk since the search" text))
-                  (should (string-match-p "3   let needle;   ← unticked, kept" text)))
+                  ;; the hunk's changed lines only, as the mockup's sheet: no context line
+                  (should-not (string-match-p "3   let needle;" text)))
                 ;; the hunk comes after the sheet shows: the lane fits it again; the sheet's foot replaces a mode line
                 (should (memq (current-buffer) refits))
                 (should-not mode-line-format)

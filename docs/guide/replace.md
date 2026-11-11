@@ -137,7 +137,7 @@ diff in the editor area, "NAME · preview": the file before and after its ticked
 Replace All writes (the hub's `search/preview`), each line with its number and the words that change marked. Its header
 line says how many of the file's matches are ticked and the lines added and removed; **Open File** opens the file and
 **Replace in This File** writes the file's ticked matches only. Each hunk has a band with its tick box, `hunk N` and the
-definition it is in (`ƒ drgnx-gateway--queue`); `a` keeps the hunk (its matches are ticked in the view), `D` drops it
+definition it is in (`defun drgnx-gateway--queue`); `a` keeps the hunk (its matches are ticked in the view), `D` drops it
 (unticked); the view's boxes and the tile follow each other. A line whose match you unticked stays in the hunk as it
 is, marked `← unticked, kept`. With **.\*** on, a groups line under each hunk shows what each group took, `\1 = pending`
 `\2 = p`, and `\2 = ∅` in the warning colour for a group that matched nothing, so a wrong group number shows before
@@ -145,7 +145,7 @@ anything is written.
 
 **Replace All** first shows the **Replace All sheet**, a box in the middle of the window (the popup lane, modal): every
 file with its lines added and removed
-and how many of its matches are skipped, the selected file's first hunk (`n`/`p` or the arrows move), what is skipped
+and how many of its matches are skipped, the selected file's first hunk, its changed lines (`n`/`p` or the arrows move), what is skipped
 and why, and how many files with unsaved edits stay unsaved. **Replace** writes exactly the changes the sheet shows (the
 hub's change set); **Cancel** writes nothing. The setting `drgnx-search-preview-threshold` (default 1) is how many
 matches it takes to show the sheet; 0 never shows it, and `C-u` Replace All skips it once.

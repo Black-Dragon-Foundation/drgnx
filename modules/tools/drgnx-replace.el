@@ -2539,8 +2539,8 @@ The find bar's button; not a command of its own (it needs the bar)."
 (defface drgnx-replace-preview-group '((t :inherit drgnx-chip))
   "What a group took, on a groups line (`\\1 = gateway')." :group 'drgnx)
 
-(defface drgnx-replace-tick-on '((t :inherit drgnx-chip-accent))
-  "A ticked box (every match of the hunk or file written)." :group 'drgnx)
+(defface drgnx-replace-tick-on '((t :inherit drgnx-control-primary :box nil))
+  "A ticked box (every match of the hunk or file written): filled with the accent." :group 'drgnx)
 
 (defface drgnx-replace-tick-off '((t :inherit drgnx-text-subtle))
   "An unticked box." :group 'drgnx)
@@ -2605,10 +2605,10 @@ word faces: what is between their common start and common end."
           (setq i (max k j)))))
     (append v nil)))
 
-(defun drgnx-replace--hunk-lines (indent hunk &optional face kept)
+(defun drgnx-replace--hunk-lines (indent hunk &optional face kept changed)
   "HUNK's lines (`drgnx-replace--hunks-of') after INDENT, each with its number: the old file's for a removed line,
 the new file's for the others; changed words marked; FACE under each line (the sheet's code font).  KEPT: the old
-file's lines of unticked matches, noted `← unticked, kept'."
+file's lines of unticked matches, noted `← unticked, kept'.  CHANGED: the removed and added lines only (the sheet's)."
   (let* ((head (plist-get hunk :header))
          (old (if (string-match "-\\([0-9]+\\)" head) (string-to-number (match-string 1 head)) 1))
          (new (if (string-match "\\+\\([0-9]+\\)" head) (string-to-number (match-string 1 head)) 1))
@@ -2617,7 +2617,7 @@ file's lines of unticked matches, noted `← unticked, kept'."
                  (pcase (aref l 0)
                    (?- (prog1 (drgnx-replace--diff-line indent l old face) (cl-incf old)))
                    (?+ (prog1 (drgnx-replace--diff-line indent l new face) (cl-incf new)))
-                   (_ (prog1 (drgnx-replace--diff-line indent l new face (and (memql old kept) note))
+                   (_ (prog1 (if changed "" (drgnx-replace--diff-line indent l new face (and (memql old kept) note)))
                         (cl-incf old) (cl-incf new)))))
                (drgnx-replace--refined (plist-get hunk :lines)) "")))
 
@@ -2753,9 +2753,15 @@ groups line; the hunk's match ids on the whole row)."
           (propertize (format "+%d" (or (plist-get answer :plus) 0)) 'face 'diff-added) " "
           (propertize (format "−%d" (or (plist-get answer :minus) 0)) 'face 'diff-removed)
           (drgnx-replace--right
-           (concat (drgnx-ui-button "Open File" 'search-preview-open :where 'header-line) " "
-                   (drgnx-ui-button "Replace in This File" 'search-preview-replace-file :where 'header-line
-                                    :face 'drgnx-ui-button-primary))))))
+           (concat (drgnx-replace--header-button "Open File" 'search-preview-open 'drgnx-ui-button) " "
+                   (drgnx-replace--header-button "Replace in This File" 'search-preview-replace-file
+                                                 'drgnx-ui-button-primary))))))
+
+(defun drgnx-replace--header-button (label id face)
+  "LABEL as a button in FACE on the header line running registry command ID, with a button's room at either end (a
+line's buttons have none of their own)."
+  (let ((pad (propertize " " 'display (drgnx-ui-button-pad face))))
+    (drgnx-ui-button (concat pad label pad) id :where 'header-line :face face)))
 
 (defun drgnx-replace--preview-draw (answer)
   "Draw ANSWER (`search/preview') in this tile, point kept on its line; the head goes to the header line."
@@ -2844,8 +2850,7 @@ groups line; the hunk's match ids on the whole row)."
 
 (defvar-local drgnx-replace--sheet nil
   "The sheet's edit set: plist :change :files :skipped (the hub's `search/edits' answer), :sel the selected file's
-index, :hunk its first hunk's diff text when it came, :captures and :kept that hunk's groups and its unticked
-matches' lines.")
+index, :hunk its first hunk's diff text when it came, :captures that hunk's groups.")
 
 (defvar drgnx-replace-sheet-keys-map (make-sparse-keymap)
   "The Replace All sheet's keys (Replace, Cancel, next and previous file), from the key profiles.")
@@ -2857,6 +2862,7 @@ matches' lines.")
 (define-derived-mode drgnx-replace-sheet-mode special-mode "Replace All"
   "The Replace All sheet: every file's changes; Replace writes them, Cancel leaves everything as it is."
   (setq-local truncate-lines t mode-line-format nil)   ; its foot says what it is and what ends it
+  (face-remap-add-relative 'default 'drgnx-surface-overlay)   ; a popup's surface, as the palette's
   (buffer-disable-undo))
 
 (defconst drgnx-replace-sheet-buffer-name "*drgnx replace all*")
@@ -2884,57 +2890,78 @@ matches' lines.")
   "The sheet's name of file F: relative to the Search view's folder."
   (file-relative-name (plist-get f :path) drgnx-replace--sheet-root))
 
+(defun drgnx-replace--sheet-tail (f skipped)
+  "File F's tail on the sheet: its +/−, how many of its matches SKIPPED holds, and a note when it is open unsaved."
+  (let ((k (drgnx-replace--lines-changed (plist-get f :edits)))
+        (skips (cl-count-if (lambda (x) (equal (plist-get x :path) (plist-get f :path))) skipped))
+        (b (find-buffer-visiting (plist-get f :path))))
+    (concat (propertize (format "+%d" k) 'face 'diff-added) " " (propertize (format "−%d" k) 'face 'diff-removed)
+            (if (> skips 0) (propertize (format "  %d skipped" skips) 'face 'warning) "")
+            (if (and b (buffer-modified-p b)) (propertize "  open, unsaved: stays unsaved" 'face 'warning) ""))))
+
+(defun drgnx-replace--sheet-head (f open)
+  "File F's head on the sheet: its chevron (OPEN: down), its icon and its name."
+  (concat " " (drgnx-look-icon (if open 'chevron-down 'chevron-right) 'drgnx-text-subtle 14) " "
+          (drgnx-look-file-icon (plist-get f :path) 'drgnx-text-muted) " " (drgnx-replace--sheet-name f)))
+
+(defun drgnx-replace--sheet-edge (files skipped)
+  "The sheet's right edge in pixels, in this buffer: the widest head, a gap, the widest tail; the tails end there."
+  (let ((px (lambda (str) (string-pixel-width str (current-buffer)))))
+    (+ (apply #'max 0 (mapcar (lambda (f) (funcall px (drgnx-replace--sheet-head f t))) files))
+       (drgnx-px 32)
+       (apply #'max (funcall px (drgnx-replace--sheet-buttons))
+              (mapcar (lambda (f) (funcall px (drgnx-replace--sheet-tail f skipped))) files)))))
+
+(defun drgnx-replace--sheet-at-edge (edge text)
+  "TEXT ending at EDGE pixels (`drgnx-replace--sheet-edge'): a stretch space before it."
+  (concat (propertize " " 'display `(space :align-to (,(- edge (string-pixel-width text (current-buffer))))))
+          text))
+
+(defun drgnx-replace--sheet-buttons ()
+  "The sheet's Cancel and Replace, their keys as keycaps."
+  (concat (drgnx-replace--sheet-button "Cancel" 'search-sheet-cancel 'drgnx-ui-button) " "
+          (drgnx-replace--sheet-button "Replace" 'search-sheet-confirm 'drgnx-ui-button-primary)))
+
 (defun drgnx-replace--sheet-render (key)
-  "The sheet's row KEY: its title, a file (chevron, icon, name, its +/− lined up, skipped and unsaved notes; when
-selected, in the selection's ring with its first hunk under it), its foot (what is skipped and why, what Undo does,
-Cancel and Replace)."
-  (let* ((s drgnx-replace--sheet) (files (plist-get s :files)) (skipped (plist-get s :skipped))
-         (col (+ 8 (apply #'max 20 (mapcar (lambda (f) (string-width (drgnx-replace--sheet-name f))) files)))))
+  "The sheet's row KEY: its title, a file (chevron, icon, name; its +/−, skipped and unsaved notes at the right edge;
+when selected, in the selection's ring with its first hunk's changed lines under it), its foot (what is skipped and
+why, what Undo does, Cancel and Replace)."
+  (let* ((s drgnx-replace--sheet) (files (plist-get s :files)) (skipped (plist-get s :skipped)))
     (pcase key
       (`(:title)
        (let ((n (apply #'+ (mapcar (lambda (f) (length (plist-get f :edits))) files))))
-         (concat (propertize (format "Replace %d match%s in %d file%s" n (if (= n 1) "" "es") (length files)
+         (concat " " (drgnx-look-icon 'replace-all 'drgnx-text-muted) " "
+                 (propertize (format "Replace %d match%s in %d file%s" n (if (= n 1) "" "es") (length files)
                                      (if (= (length files) 1) "" "s"))
                              'face 'drgnx-ui-heading)
                  (if skipped (propertize (format " · %d skipped" (length skipped)) 'face 'drgnx-text-subtle) "")
                  "\n\n")))
       (`(:file ,i)
-       (let* ((f (nth i files)) (k (drgnx-replace--lines-changed (plist-get f :edits)))
-              (sel (= i (plist-get s :sel)))
-              (skips (cl-count-if (lambda (x) (equal (plist-get x :path) (plist-get f :path))) skipped))
-              (b (find-buffer-visiting (plist-get f :path)))
-              (h (and sel (plist-get s :hunk)))
-              (row (concat " " (drgnx-look-icon (if sel 'chevron-down 'chevron-right) 'drgnx-text-subtle 14) " "
-                           (drgnx-look-file-icon (plist-get f :path) 'drgnx-text-muted) " "
-                           (drgnx-replace--sheet-name f)
-                           (propertize " " 'display `(space :align-to ,col))
-                           (propertize (format "+%d" k) 'face 'diff-added) " "
-                           (propertize (format "−%d" k) 'face 'diff-removed)
-                           (if (> skips 0) (propertize (format "  %d skipped" skips) 'face 'warning) "")
-                           (if (and b (buffer-modified-p b)) (propertize "  open, unsaved: stays unsaved" 'face 'warning)
-                             "")
+       (let* ((f (nth i files)) (sel (= i (plist-get s :sel))) (h (and sel (plist-get s :hunk)))
+              (row (concat (drgnx-replace--sheet-head f sel)
+                           (drgnx-replace--sheet-at-edge (drgnx-replace--sheet-edge files skipped)
+                                                         (drgnx-replace--sheet-tail f skipped))
                            " \n")))
          (when sel (add-face-text-property 0 (length row) 'drgnx-replace-sheet-selected t row))
          (propertize
           (concat row
-                  (if h (concat (drgnx-replace--hunk-lines "    " h 'drgnx-replace-sheet-code (plist-get s :kept))
+                  (if h (concat (drgnx-replace--hunk-lines "    " h 'drgnx-replace-sheet-code nil t)
                                 (drgnx-replace--groups-line "          " (plist-get s :captures)))
                     ""))
           'drgnx-replace-sheet-file i)))
       (`(:foot)
        (concat "\n"
                (if skipped
-                   (propertize (format "%d skipped: %s\n" (length skipped)
+                   (propertize (format " %d skipped: %s\n" (length skipped)
                                        (mapconcat #'identity
                                                   (delete-dups (mapcar (lambda (x) (plist-get x :why)) skipped))
                                                   "; "))
                                'face 'warning)
                  "")
-               "\n" (propertize (format "Undo puts all %d file%s back" (length files) (if (= (length files) 1) "" "s"))
-                                'face 'drgnx-text-subtle)
-               (propertize " " 'display `(space :align-to ,(+ col 2)))
-               (drgnx-replace--sheet-button "Cancel" 'search-sheet-cancel 'drgnx-ui-button)
-               " " (drgnx-replace--sheet-button "Replace" 'search-sheet-confirm 'drgnx-ui-button-primary) "\n"))
+               "\n " (propertize (format "Undo puts all %d file%s back" (length files) (if (= (length files) 1) "" "s"))
+                                 'face 'drgnx-text-subtle)
+               (drgnx-replace--sheet-at-edge (drgnx-replace--sheet-edge files skipped) (drgnx-replace--sheet-buttons))
+               "\n"))
       (_ "\n"))))
 
 (drgnx-view-define 'replace-sheet :render #'drgnx-replace--sheet-render :slice drgnx-view-slice :delay 0)
@@ -2968,10 +2995,9 @@ Cancel and Replace)."
              (with-current-buffer buf
                (let ((h (and (> (length (plist-get r :hunks)) 0) (seq-elt (plist-get r :hunks) 0))))
                  (setq drgnx-replace--sheet
-                       (plist-put (plist-put (plist-put drgnx-replace--sheet :hunk
-                                                        (car (drgnx-replace--hunks-of (or (plist-get r :diff) ""))))
-                                             :captures (plist-get h :captures))
-                                  :kept (append (plist-get h :kept) nil))))
+                       (plist-put (plist-put drgnx-replace--sheet :hunk
+                                             (car (drgnx-replace--hunks-of (or (plist-get r :diff) ""))))
+                                  :captures (plist-get h :captures))))
                (drgnx-replace--sheet-draw)
                (when (fboundp 'drgnx-popup-refit) (drgnx-popup-refit buf))))))))))       ; the lane fits the hunk too
 
