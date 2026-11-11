@@ -134,6 +134,19 @@ second, after reading, sends the hash the page now shows."
       (funcall (car calls) 'new nil)
       (should (equal listed '(new))))))
 
+(ert-deftest drgnx-extensions-plugins/the-diff-sees-the-advisory-flag-and-the-store-size ()
+  "M9: a hook that stops being advisory and a bigger key-value store are new; a smaller store, a hook turning advisory
+and a stored reach that never had the size are not."
+  (let ((old '(:abilities ("a") :hosts nil :kv_bytes 1000
+                          :hooks ((:point "before-commit" :verdicts ("allow") :advisory t))))
+        (hook (lambda (advisory) `(:point "before-commit" :verdicts ("allow") :advisory ,advisory))))
+    (should (equal (drgnx-extensions-plugins-diff `(:abilities ("a") :kv_bytes 4096 :hooks (,(funcall hook nil))) old)
+                   '("Not advisory any more at before-commit: a failure of the hook now denies"
+                     "Bigger key-value store: 4096 bytes, was 1000")))
+    (should (null (drgnx-extensions-plugins-diff `(:abilities ("a") :kv_bytes 500 :hooks (,(funcall hook t))) old)))
+    (should (null (drgnx-extensions-plugins-diff `(:abilities ("a") :kv_bytes 4096 :hooks (,(funcall hook nil)))
+                                                 '(:abilities ("a") :hooks ((:point "before-commit" :verdicts ("allow")))))))))
+
 (ert-deftest drgnx-extensions-plugins/settings-plugins-opens-the-view ()
   (let (applied)
     (cl-letf (((symbol-function 'drgnx-module-running-p) (lambda (m) (eq m 'tools/extensions)))

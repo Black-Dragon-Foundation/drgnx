@@ -201,11 +201,19 @@ now."
           (dolist (v (append (plist-get hook :verdicts) nil))
             (unless (seq-some (lambda (o) (member v (append (plist-get o :verdicts) nil))) olds)
               (push (format "New verdict %s at %s" v point) out)))
+          ;; M9: a hook that stops being advisory can now deny; one point's hooks are advisory while all of them are
+          (when (and (not (eq (plist-get hook :advisory) t))
+                     (seq-every-p (lambda (o) (eq (plist-get o :advisory) t)) olds))
+            (push (format "Not advisory any more at %s: a failure of the hook now denies" point) out))
           (dolist (key '(:tool_kinds :tools :paths))
             (when-let* ((extra (drgnx-extensions-plugins--wider
                                 (append (plist-get hook key) nil)
                                 (mapcar (lambda (o) (append (plist-get o key) nil)) olds))))
               (push (format "Wider %s at %s: %s" (substring (symbol-name key) 1) point extra) out))))))
+    ;; M9: a bigger key-value store (an approval stored before the hub kept the size says nothing to compare)
+    (let ((new-kv (plist-get new :kv_bytes)) (old-kv (plist-get old :kv_bytes)))
+      (when (and (integerp new-kv) (integerp old-kv) (> new-kv old-kv))
+        (push (format "Bigger key-value store: %d bytes, was %d" new-kv old-kv) out)))
     (nreverse out)))
 
 (defun drgnx-extensions-plugins--diff-section (_name row)

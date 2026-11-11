@@ -326,8 +326,9 @@ It runs nothing; it hands the host the plugins it would run.
 - **`plugins/approve {name, hash}`** (user class only) reads the folder again and refuses a hash that is not the files'
   now (`invalid-params` at `hash`; a name not installed or broken at `name`). It stores the hash and the manifest's
   whole reach as JSON (`approved_reach`), so that a `changed` plugin's `plugins/list` entry carries
-  `approved_reach: {abilities, hosts, hooks: [{point, verdicts, tool_kinds, tools, paths}]}` beside the reach it asks
-  for now. `plugins/disable {name}` sets `enabled` to 0. Neither is reachable by an agent connection (the class
+  `approved_reach: {abilities, hosts, hooks: [{point, verdicts, tool_kinds, tools, paths, advisory}], kv_bytes}` beside
+  the reach it asks for now (`kv_bytes`, the store's size, is absent from a reach stored before the hub kept it; the page's
+  diff says a hook that stopped being advisory and a bigger store). `plugins/disable {name}` sets `enabled` to 0. Neither is reachable by an agent connection (the class
   matrix) or by a tool.
 - **Cards:** one card of kind `plugin` for each plugin that is `unapproved` or `changed`, with
   `data: {plugin, hash, why: "unapproved" | "changed", choices: ["review"]}`. A card is raised when the state is entered
