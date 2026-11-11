@@ -15,7 +15,7 @@ use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// More ignored entries than this are not listed (a `node_modules` tree is not a row each).
 pub const IGNORED_LIMIT: usize = 20_000;
@@ -245,16 +245,42 @@ pub fn rows(status: &Status, shown: &BTreeSet<String>) -> Vec<Row> {
 /// A read's number and its rows.
 type Read = (u64, Vec<Row>);
 
-/// The latest rows of each (connection, view) and the number of the read that made them.
+/// A repository's last read status and the number of the read.
+type Kept = (u64, Arc<Status>);
+
+/// The latest rows of each (connection, view) and the number of the read that made them; the last status read of
+/// each (connection, repository root), which the connection's Explorer listings mark their rows from.
 #[derive(Default)]
 pub(super) struct Letters {
     views: Mutex<BTreeMap<(u64, String), Read>>,
+    statuses: Mutex<BTreeMap<(u64, PathBuf), Kept>>,
     next: std::sync::atomic::AtomicU64,
 }
 
 impl Letters {
     pub(super) fn gone(&self, conn: u64) {
         lock(&self.views).retain(|(c, _), _| *c != conn);
+        lock(&self.statuses).retain(|(c, _), _| *c != conn);
+    }
+
+    /// CONN's repositories' roots and their last read statuses.
+    pub(super) fn statuses(&self, conn: u64) -> Vec<(PathBuf, Arc<Status>)> {
+        lock(&self.statuses)
+            .iter()
+            .filter(|((c, _), _)| *c == conn)
+            .map(|((_, root), (_, st))| (root.clone(), st.clone()))
+            .collect()
+    }
+
+    /// Keep READ's STATUS of ROOT for CONN unless a newer read of it came first; whether it changed.
+    fn keep(&self, conn: u64, root: PathBuf, read: u64, status: Status) -> bool {
+        let mut statuses = lock(&self.statuses);
+        let slot = statuses.entry((conn, root)).or_insert((0, Arc::default()));
+        if slot.0 > read || *slot.1 == status {
+            return false;
+        }
+        *slot = (read, Arc::new(status));
+        true
     }
 
     pub(super) fn stop(&self, conn: u64, view: &str) {
@@ -385,9 +411,13 @@ pub fn letters(f: &Front, c: &Caller, p: LettersParams) -> Result<bool, Error> {
                     return;
                 }
             };
-            let rows = rows(&parse(&out, IGNORED_LIMIT), &shown);
+            let status = parse(&out, IGNORED_LIMIT);
+            let rows = rows(&status, &shown);
             if let Some(f) = front.upgrade() {
                 f.core.views.git_publish(&f, conn, &view, read, rows);
+                if f.core.views.letters.keep(conn, root, read, status) {
+                    f.core.views.explorer_marks_changed(&f, conn);
+                }
             }
         })
         .map_err(|e| invalid("view", &e.to_string()))?;

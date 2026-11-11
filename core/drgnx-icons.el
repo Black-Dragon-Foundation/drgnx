@@ -9,8 +9,8 @@
 ;; from the face of the text around the image, so an icon in a `shadow' run is `shadow' in any theme: no colour
 ;; is named here or in the files.  The setting `drgnx-look-icons' (`svg' or `glyphs') chooses.  Images are kept per
 ;; (NAME SIZE SCALE); the icon set is finite (about 60 names, two sizes, a few scales), so the cache needs no bound.
-;; `drgnx-look-file-icon' picks the file-kind icon, kept per extension in a bounded cache (`icons-file-kinds'): an
-;; Explorer row asks for it on every fontification.  See docs/guide/look.md ("Icons").
+;; `drgnx-look-file-icon' picks the file-kind icon by the name's extension from etc/icons/files.eld, the table the
+;; hub's Explorer rows read too, so both name the same icon.  See docs/guide/look.md ("Icons").
 
 ;;; Code:
 (require 'cl-lib)
@@ -18,9 +18,7 @@
 (require 'drgnx-setting)
 (require 'drgnx-paths)
 (require 'drgnx-ui-kit)
-(require 'drgnx-memo)                   ; the file kinds' cache
-
-(defvar drgnx-icons--file-kinds-modes)
+(require 'drgnx-file)                   ; the file-kind table
 
 (drgnx-defsetting drgnx-look-icons 'svg
   "How the look draws its icons: `svg' (Lucide line icons in the text colour, on graphical frames) or `glyphs' (the
@@ -41,9 +39,8 @@ pixels at 16 px, 0.93 at 14.")
   "(NAME SIZE SCALE) → the image, or `none' for a name with no file.  A finite set (see the commentary).")
 
 (defun drgnx-icons-clear ()
-  "Forget the images and the file kinds: the next icon is read and sized again."
-  (clrhash drgnx-icons--cache)
-  (setq drgnx-icons--file-kinds-modes nil))
+  "Forget the images: the next icon is read and sized again."
+  (clrhash drgnx-icons--cache))
 
 (defun drgnx-icons--scale ()
   "The selected frame's scale (1.0 without one)."
@@ -86,62 +83,31 @@ through the text around it, on a graphical frame with SVG and `drgnx-look-icons'
 
 ;;;; File kinds
 
-(defconst drgnx-icons--extensions
-  '((text . "\\.\\(md\\|markdown\\|txt\\|org\\|rst\\|adoc\\|tex\\|log\\)\\'")
-    (cog . "\\.\\(json\\|jsonc\\|json5\\|ya?ml\\|toml\\|ini\\|conf\\|cfg\\|properties\\|env\\|lock\\|editorconfig\\)\\'")
-    (image . "\\.\\(png\\|jpe?g\\|gif\\|webp\\|bmp\\|svg\\|ico\\|tiff?\\|avif\\)\\'")
-    (archive . "\\.\\(zip\\|tar\\|tgz\\|gz\\|bz2\\|xz\\|7z\\|rar\\|zst\\|jar\\|deb\\|rpm\\)\\'")
-    (code . "\\.\\(el\\|lisp\\|scm\\|clj\\|rs\\|py\\|js\\|mjs\\|ts\\|tsx\\|jsx\\|go\\|c\\|h\\|cc\\|cpp\\|hpp\\|cs\\|java\\|kt\\|rb\\|php\\|swift\\|lua\\|sh\\|bash\\|zsh\\|fish\\|hs\\|ml\\|sql\\|css\\|scss\\|html\\|vue\\|zig\\|nix\\|make\\|mk\\)\\'"))
-  "File name patterns by class, tried before the major mode: they hold without loading a mode.")
-
-(defun drgnx-icons--mode-class (file)
-  "The class of FILE's major mode in `auto-mode-alist': code, text, cog, image, archive, or nil."
-  (let* ((case-fold-search t)
-         (mode (assoc-default (file-name-nondirectory file) auto-mode-alist #'string-match-p))
-         (mode (if (consp mode) (car mode) mode)))
-    (when (and mode (symbolp mode))
-      (cond ((memq mode '(image-mode)) 'image)
-            ((memq mode '(archive-mode tar-mode)) 'archive)
-            ((provided-mode-derived-p mode 'conf-mode) 'cog)
-            ((provided-mode-derived-p mode 'text-mode) 'text)
-            ((provided-mode-derived-p mode 'prog-mode) 'code)))))
+(defconst drgnx-icons--file-kinds
+  (let ((kinds (make-hash-table :test #'equal))
+        (r (drgnx-file-read (expand-file-name "files.eld" drgnx-icons-dir))))
+    (unless (eq (plist-get r :status) 'ok)
+      (error "etc/icons/files.eld: %s" (or (plist-get r :problem) (plist-get r :status))))
+    (dolist (line (plist-get r :data))
+      (dolist (ext (cdr line)) (unless (gethash ext kinds) (puthash ext (car line) kinds))))
+    kinds)
+  "Lowercase extension → its file-kind icon name, from etc/icons/files.eld (the first line naming it), read once.
+The hub reads the same table for the Explorer's rows (runtime/crates/drgnx-ratatoskr/src/view/icons.rs).")
 
 (defun drgnx-look-file-icon-name (file &optional open)
-  "The icon name for FILE: a folder (OPEN: an open one), or the file kind from its name and major mode."
+  "The icon name for FILE: a folder (OPEN: an open one), or the file kind from its name."
   (if (or (directory-name-p file) (file-directory-p file))
       (if open 'folder-open 'folder)
     (drgnx-look-file-name-icon-name file)))
 
-(defconst drgnx-icons-file-kinds-cap 256 "How many file kinds `icons-file-kinds' keeps.")
-
-(drgnx-cache-define 'icons-file-kinds :key 'string :cap drgnx-icons-file-kinds-cap
-                    :doc "Downcased extension (or, for a name with none, the downcased bare name) → its file-kind icon
-name.  An Explorer row asks on every fontification, and working a kind out matches the kind table and, for a name
-it does not know, walks `auto-mode-alist' (hundreds of regexps).  Bounded: past `drgnx-icons-file-kinds-cap' entries
-the least recently used goes.  Emptied when `auto-mode-alist' is another list than the one the kinds were worked out
-with, and by `drgnx-icons-clear'.")
-
-(defvar drgnx-icons--file-kinds-modes nil "The `auto-mode-alist' the kept file kinds were worked out with.")
-
-(defun drgnx-icons--file-kind (name)
-  "The icon name of the file called NAME, worked out: its kind from the name, then from its major mode."
-  (let ((class (or (car (cl-find-if (lambda (e) (let ((case-fold-search t)) (string-match-p (cdr e) name)))
-                                    drgnx-icons--extensions))
-                   (drgnx-icons--mode-class name))))
-    (pcase class
-      ('code 'file-code) ('text 'file-text) ('cog 'file-cog) ('image 'file-image) ('archive 'file-archive)
-      (_ 'file))))
-
 (defun drgnx-look-file-name-icon-name (name)
-  "The icon name for the file called NAME (a path or a bare name; nothing is read from disk): its kind from the name
-and the major mode, kept per extension (`icons-file-kinds': the first name seen with an extension decides it)."
-  (unless (eq auto-mode-alist drgnx-icons--file-kinds-modes)
-    (drgnx-cache--clear 'icons-file-kinds)
-    (setq drgnx-icons--file-kinds-modes auto-mode-alist))
-  (let* ((base (file-name-nondirectory name))
-         (key (downcase (or (file-name-extension base) base))))
-    (or (drgnx-cache-get 'icons-file-kinds key)
-        (drgnx-cache-put 'icons-file-kinds key (drgnx-icons--file-kind base)))))
+  "The icon name for the file called NAME (a path or a bare name; nothing is read from disk): the kind of the text
+after its last dot in `drgnx-icons--file-kinds' (any case; `.editorconfig' counts), else `file'.  The major mode is
+not asked: the hub names the same icon without one."
+  (let ((base (file-name-nondirectory name)))
+    (or (and (string-match "\\.\\([^.]+\\)\\'" base)
+             (gethash (downcase (match-string 1 base)) drgnx-icons--file-kinds))
+        'file)))
 
 (defun drgnx-look-file-icon (file &optional face size open)
   "The icon of FILE's kind (`drgnx-look-file-icon-name') as `drgnx-look-icon' draws it."

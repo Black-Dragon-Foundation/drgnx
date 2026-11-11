@@ -726,6 +726,9 @@ pub struct ExplorerParams {
     /// Join single-folder chains on one row; default on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compact: Option<bool>,
+    /// A level's indent on a graphical display, in logical px (the density's `tree-indent`); default 12.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indent: Option<u32>,
 }
 
 /// `explorer/subscribe`'s answer: LISTING numbers the listing.

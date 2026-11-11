@@ -12660,6 +12660,15 @@
             },
             "type": "array"
           },
+          "indent": {
+            "description": "A level's indent on a graphical display, in logical px (the density's `tree-indent`); default 12.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "roots": {
             "description": "The roots, 1 to 16 existing folders.",
             "items": {

@@ -339,18 +339,21 @@ text's colour, which shows the hidden control."
   "The overlay putting the selected row's face on its newline: the face at the line's end then has the row's box,
 so Emacs runs the box on into the tail at the end instead of closing it after the text.")
 
-(defun drgnx-wb-row-tail-overlay (eol mark face &optional control)
+(defun drgnx-wb-row-tail-overlay (eol mark face &optional control reuse)
   "Put the tail (see `drgnx-wb-row-tail') of the row ending at EOL in an overlay over the row that remembers MARK,
 FACE and CONTROL and carries the row's mouse face (Emacs lights an overlay's string with its text: one run).  On the
 selected row (the selection overlay's, `drgnx-wb-selection-sync') it is drawn in the selection's face, and becomes
-the tail the next sync draws plain again when the selection moves."
+the tail the next sync draws plain again when the selection moves.  REUSE, an overlay of an earlier call, is moved
+there instead of making a new one (drawn again only when its tail changed)."
   (let* ((bol (save-excursion (goto-char eol) (pos-bol)))
-         (o (make-overlay bol eol))
+         (tail (list mark face control))
+         (o (if (and (overlayp reuse) (overlay-buffer reuse)) (move-overlay reuse bol eol) (make-overlay bol eol)))
          (sel drgnx-wb--selected-overlay)
          (row (and (overlayp sel) (eq (overlay-buffer sel) (current-buffer)) (= bol (overlay-start sel))
                    (overlay-get sel 'face))))
     (overlay-put o 'drgnx-git t)
-    (overlay-put o 'drgnx-row-tail (list mark face control))
+    (unless (equal tail (overlay-get o 'drgnx-row-tail)) (overlay-put o 'after-string nil))
+    (overlay-put o 'drgnx-row-tail tail)
     (drgnx-wb--tail-paint o row)
     (when row (setq drgnx-wb--selected-tail o))
     o))

@@ -39,10 +39,16 @@
                                              :ids ["/r" "/r/a" "/r/lib" "/r/lib/m.el" "/r/z.txt"])))))))))
 
 (defun drgnx-explorer-rows-nav-test--rows ()
-  "The hub's rows of that listing, each row's path over all of it."
-  (mapcar (lambda (r) (list :key (car r) :text (cdr r)
-                            :props (list (list 0 (length (cdr r)) "drgnx-work-id" (car r)))))
-          '(("/r" . "▾ R") ("/r/a" . "▸ a") ("/r/lib" . "▾ lib") ("/r/lib/m.el" . "│   m.el") ("/r/z.txt" . "  z.txt"))))
+  "The hub's rows of that listing, each row's path over all of it; the single root's row invisible, lib/ and z.txt
+with a git status on the name (lib/ has the change inside it)."
+  (mapcar (lambda (r)
+            (let ((len (length (cadr r))))
+              (list :key (car r) :text (cadr r)
+                    :props (append (list (list 0 len "drgnx-work-id" (car r)))
+                                   (and (nth 2 r) (list (list (- len (nth 3 r)) len "drgnx-git-status" (nth 2 r))))
+                                   (and (equal (car r) "/r") (list (list 0 len "invisible" t)))))))
+          '(("/r" "▾ R") ("/r/a" "▸ a") ("/r/lib" "▾ lib" "modified" 3) ("/r/lib/m.el" "│   m.el")
+            ("/r/z.txt" "  z.txt" "modified" 5))))
 
 (defmacro drgnx-explorer-rows-nav-test--with (&rest body)
   "BODY in the Explorer's buffer attached as hub-fed VIEW (roots /r, lib open), the model and rows applied; CALLS holds
@@ -94,7 +100,8 @@ hub sends the view), tagged :call-connection or :other-connection elsewhere.  No
   "Pattern D: attached, the Explorer asks `explorer/subscribe' for its roots and open folders and shows the hub's rows;
 a row's node is its path; a refresh asks again and draws nothing itself."
   (drgnx-explorer-rows-nav-test--with
-    (should (equal (list (cons "explorer/subscribe" (list :view view :roots ["/r"] :expanded ["/r/lib"] :compact t)))
+    (should (equal (list (cons "explorer/subscribe" (list :view view :roots ["/r"] :expanded ["/r/lib"] :compact t
+                                                          :indent (drgnx-explorer--tree-indent))))
                    calls))
     (should (equal "▾ R\n▸ a\n▾ lib\n│   m.el\n  z.txt\n" (buffer-substring-no-properties (point-min) (point-max))))
     (goto-char (point-min))
@@ -105,6 +112,44 @@ a row's node is its path; a refresh asks again and draws nothing itself."
     (drgnx-explorer-refresh)
     (should (= 2 (length calls)))
     (should (equal "▾ R\n▸ a\n▾ lib\n│   m.el\n  z.txt\n" (buffer-substring-no-properties (point-min) (point-max))))))
+
+(defun drgnx-explorer-rows-nav-test--tails ()
+  "Each line's tail overlay as (LINE MARK FACE), in line order."
+  (let (out)
+    (dolist (o (overlays-in (point-min) (point-max)))
+      (when-let* ((tail (overlay-get o 'drgnx-row-tail)))
+        (push (list (1- (line-number-at-pos (overlay-start o))) (nth 0 tail) (nth 1 tail)) out)))
+    (sort out (lambda (a b) (< (car a) (car b))))))
+
+(ert-deftest drgnx-explorer-rows/marks-and-the-control-at-the-right-edge ()
+  "Pattern D (plan sja-complete E2): on the rows path each drawn row gets the old path's tail at the right edge (the
+⋯ control, the hover's mouse face), with the git mark of the status the hub put on its name: a file's letter in its
+status face, ● for a folder with changes inside.  A patch moves the overlays it keeps instead of making new ones, and
+the single root's row is invisible."
+  (drgnx-explorer-rows-nav-test--with
+    (should (get-text-property (point-min) 'invisible))
+    (should (equal (list (list 0 nil nil) (list 1 nil nil) (list 2 "●" 'drgnx-status-warn) (list 3 nil nil)
+                         (list 4 "M" 'drgnx-status-warn))
+                   (drgnx-explorer-rows-nav-test--tails)))
+    (should (get-char-property (save-excursion (goto-char (point-min)) (forward-line 4) (point)) 'mouse-face))
+    (let ((before (seq-filter (lambda (o) (overlay-get o 'drgnx-row-tail)) (overlays-in (point-min) (point-max)))))
+      (drgnx-view-apply-patch (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 0 :model 1
+                                    :ops (list (list :remove (list "/r/a")))))
+      (drgnx-view-draw-now drgnx-view)
+      (should (equal (list (list 0 nil nil) (list 1 "●" 'drgnx-status-warn) (list 2 nil nil)
+                           (list 3 "M" 'drgnx-status-warn))
+                     (drgnx-explorer-rows-nav-test--tails)))
+      (should (cl-every (lambda (o) (memq o before))
+                        (seq-filter (lambda (o) (overlay-get o 'drgnx-row-tail)) (overlays-in (point-min) (point-max))))))))
+
+(ert-deftest drgnx-explorer-rows/a-density-change-asks-again-at-once ()
+  "Pattern D: the indent the hub draws is the density's `tree-indent', sent with the subscription; a density change
+asks the hub again with the new indent at once (no restart)."
+  (drgnx-explorer-rows-nav-test--with
+    (cl-letf (((symbol-function 'drgnx-explorer--tree-indent) (lambda () 14)))
+      (setq calls nil)
+      (run-hooks 'drgnx-look-density-changed-hook)
+      (should (equal 14 (plist-get (cdr (car calls)) :indent))))))
 
 (ert-deftest drgnx-explorer-rows/no-lisp-watches-on-the-rows-path ()
   "Pattern D: on the rows path the hub watches the listed folders (plan sja-complete E1): the Explorer adds no Lisp
@@ -127,7 +172,9 @@ asks the hub with it closed.  Point follows the selection."
     (should (equal "/r/a" (drgnx-explorer-node-at (point))))
     (drgnx-explorer-expand)
     (should (equal "/r/a" (drgnx-view-nav-selection)))
-    (should (equal (list :view view :roots ["/r"] :expanded ["/r/a" "/r/lib"] :compact t) (cdar calls)))
+    (should (equal (list :view view :roots ["/r"] :expanded ["/r/a" "/r/lib"] :compact t
+                         :indent (drgnx-explorer--tree-indent))
+                   (cdar calls)))
     (drgnx-explorer-next)
     (drgnx-explorer-next)
     (should (equal "/r/lib/m.el" (drgnx-view-nav-selection)))
@@ -139,7 +186,9 @@ asks the hub with it closed.  Point follows the selection."
     (should (equal "/r/lib" (drgnx-view-nav-selection)))
     (drgnx-explorer-collapse)
     (should (equal "/r/lib" (drgnx-view-nav-selection)))
-    (should (equal (list :view view :roots ["/r"] :expanded ["/r/a"] :compact t) (cdar calls)))))
+    (should (equal (list :view view :roots ["/r"] :expanded ["/r/a"] :compact t
+                         :indent (drgnx-explorer--tree-indent))
+                   (cdar calls)))))
 
 (ert-deftest drgnx-explorer-rows/typing-and-open ()
   "Pattern D: typing selects the next visible sibling whose name starts with what was typed; a click on another row

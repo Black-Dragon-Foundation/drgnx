@@ -869,10 +869,53 @@ sends the rows to the connection that asked.  While it is down nothing is asked;
                                   :roots (vconcat (mapcar (lambda (r) (directory-file-name (expand-file-name r)))
                                                           (seq-remove #'file-remote-p drgnx-explorer--roots)))
                                   :expanded (vconcat (sort (hash-table-keys drgnx-explorer--expanded) #'string<))
-                                  :compact (if drgnx-explorer-compact-folders t :false))
+                                  :compact (if drgnx-explorer-compact-folders t :false)
+                                  :indent (drgnx-explorer--tree-indent))
                             #'ignore)
       (error nil)))
   (drgnx-explorer--sync-watches))
+
+(defun drgnx-explorer--rows-subscribe (&optional _view)
+  "Subscribe (`drgnx-explorer--subscribe') and read the roots' git status: the hub marks the rows from the statuses
+read on the same connection (`git/letters'), which a new hub has lost.  At attach and when the hub is up again."
+  (drgnx-explorer--subscribe)
+  (when drgnx-explorer-git
+    (dolist (r drgnx-explorer--roots)
+      (unless (file-remote-p r) (drgnx-git-refresh (file-name-as-directory (expand-file-name r)))))))
+
+(defun drgnx-explorer--tree-indent ()
+  "A level's indent in logical px for the hub's rows: the density's `tree-indent'."
+  (if (fboundp 'drgnx-look-density-value) (drgnx-look-density-value 'tree-indent) 12))
+
+(defun drgnx-explorer--density-changed ()
+  "On `drgnx-look-density-changed-hook': the hub draws the rows again with the new indent, at once."
+  (when (drgnx-explorer--rows-p)
+    (with-current-buffer (get-buffer drgnx-explorer-buffer-name) (drgnx-explorer--subscribe))))
+
+(defvar-local drgnx-explorer--tails nil
+  "On the rows path, the tail overlay of each drawn row by its key (`drgnx-wb-row-tail-overlay'), moved with the row.")
+
+(defun drgnx-explorer--rows-patched (view keys)
+  "`drgnx-view-patch-patched-functions' of the Explorer: the drawn rows KEYS get their tail at the right edge (the ⋯
+control and the hover, the git mark of the status the hub put on the name: a file's letter, ● for a folder with
+changes inside), each row's overlay moved rather than made again.  An overlay goes with its row's text
+\(`evaporate'): a removed or redrawn row's is gone, and a redrawn row gets a new one."
+  (let ((tails (or drgnx-explorer--tails (setq drgnx-explorer--tails (make-hash-table :test #'equal)))))
+    (dolist (key keys)
+      (let ((beg (drgnx-view-row-start view key)) (o (gethash key tails)))
+        (if (not beg)
+            (when o (delete-overlay o) (remhash key tails))
+          (let* ((eol (save-excursion (goto-char beg) (pos-eol)))
+                 (status (and (< beg eol) (intern-soft (get-text-property (1- eol) 'drgnx-git-status))))
+                 (status (and (assq status drgnx-git--looks) status))
+                 (mark (and status (if (and (not (memq status '(ignored untracked)))
+                                            (eql 1 (drgnx-view-nav-field "dir" key)))
+                                       "●" (car (drgnx-git-look status))))))
+            (setq o (drgnx-wb-row-tail-overlay eol mark (and mark (drgnx-wb-git-mark-face status)) nil o))
+            (overlay-put o 'evaporate t)
+            (puthash key o tails)))))
+    (when (> (hash-table-count tails) (drgnx-view-row-count view))
+      (maphash (lambda (key o) (unless (overlay-buffer o) (remhash key tails))) tails))))
 
 (defun drgnx-explorer-rows-attach (view class)
   "Make the Explorer the hub-fed VIEW in display CLASS: the hub lists it, and its keys answer from Sjá."
@@ -880,9 +923,16 @@ sends the rows to the connection that asked.  While it is down nothing is asked;
     (jit-lock-unregister #'drgnx-explorer--fontify)   ; the hub's rows come with their faces
     (drgnx-view-patch-attach view class)
     (setq drgnx-explorer--hub-view view)
+    (add-hook 'drgnx-view-patch-patched-functions #'drgnx-explorer--rows-patched nil t)
+    (add-hook 'drgnx-look-density-changed-hook #'drgnx-explorer--density-changed)
+    (add-hook 'kill-buffer-hook #'drgnx-explorer--rows-unhook nil t)
     (require 'drgnx-view-env)
-    (drgnx-view-env-register view (current-buffer) #'drgnx-explorer--subscribe)
-    (drgnx-explorer--subscribe)))
+    (drgnx-view-env-register view (current-buffer) #'drgnx-explorer--rows-subscribe)
+    (drgnx-explorer--rows-subscribe)))
+
+(defun drgnx-explorer--rows-unhook ()
+  "The rows path's Explorer goes: the density no longer asks the hub for it."
+  (remove-hook 'drgnx-look-density-changed-hook #'drgnx-explorer--density-changed))
 
 (defun drgnx-explorer--rows-here ()
   "The node of the row at point, made the selection when it is not (a click moved point), or nil."

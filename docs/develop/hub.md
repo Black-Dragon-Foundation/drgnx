@@ -1375,7 +1375,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
 | `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, rows?: {listed: [string], parser: string}, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
-| `explorer/subscribe` | user | `{compact?: boolean, expanded?: [AbsPath], roots: [AbsPath], view: string}` | `{listing: natnum}` | no |
+| `explorer/subscribe` | user | `{compact?: boolean, expanded?: [AbsPath], indent?: natnum, roots: [AbsPath], view: string}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
 | `extensions/list` | user | `{dense?: boolean, glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
 | `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
@@ -2422,7 +2422,8 @@ letter in its git face; ignored paths too, unless more than 20,000), `d:<folder>
 for `.` that holds a change) and `branch`; a later call sends only what changed.  When git cannot read the status (no
 repository, git's ownership check, a missing git) the hub sends the event `git-letters-error {view, root, error}` to the
 asking connection with git's first complaint, and the view keeps its rows; the editor shows it as a warning notice and in
-` *drgnx git errors*`.  A root that is no folder is an `invalid-params` error of the call.
+` *drgnx git errors*`.  A root that is no folder is an `invalid-params` error of the call. The status read is also kept per (connection,
+repository) for the Explorer's marks (`explorer/subscribe`, "Git marks").
 
 ### Ranked file names as rows (`search/files`)
 
@@ -2453,7 +2454,7 @@ and the ranking are `hrafn::rank`).
 
 The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/drgnx-ratatoskr/src/view/explorer.rs`).
 
-- `explorer/subscribe {view, roots, expanded?, compact?}` stops the view's earlier listing and answers `{listing}`. A
+- `explorer/subscribe {view, roots, expanded?, compact?, indent?}` stops the view's earlier listing and answers `{listing}`. A
   thread then reads each root (1 to 16 existing folders) and, inside it, each folder of `expanded` (at most 10000, no
   trailing slash) that is shown, and sends the view its model (`view-model`), then its rows to every class: the first
   listing a reset, a later one the difference. The editor opens or closes a folder by asking again with the new set,
@@ -2475,10 +2476,21 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
   fields `label` (as shown; a root's name in capitals), `path` and `dir` (1 or 0). The list `order` holds the rows in
   pre-order; past 20,000 it is a window of the first ones, or from where `view/window` asked (with the folders above
   its first entry as nodes outside `order`); the rows hold every entry.
-- **Row:** the key is the path; the indent guides (`│ ` per level below the first) and the chevron (`▾ `, `▸ `, or two
-  spaces for a file) in `drgnx-explorer-guide`, then the name in `drgnx-explorer-root`, `-directory` or `-file`, a
-  control character as `^X`; the path is the `drgnx-work-id` over the whole row.
-- The hub does not watch the folders: the editor's own watches ask again when a shown folder changes.
+- **Row,** per display class (`view/env`): the key is the path. On a terminal, the indent guides (`│ ` per level below
+  the first) and the chevron (`▾ `, `▸ `, or two spaces for a file) in `drgnx-explorer-guide`. On a graphical display
+  the look-fix layout (window-dark.html `.row`), sizes in device px at the env's scale: a space of `indent` (default 12,
+  the density's `tree-indent`) per level below the first, the chevron as an image (a space for a file), 6 px, the folder
+  (open or closed) or file-kind icon as an image, 6 px. The icons are drgnx's Lucide files, 16 logical px, stroke 1.6, in
+  `currentColor` (each image sent once); a file's kind is the first line of `etc/icons/files.eld` naming its extension,
+  the table the editor reads too (`drgnx-look-file-name-icon-name`). Then the name in `drgnx-explorer-root`,
+  `-directory` or `-file` (`drgnx-git-ignored` when ignored), a control character as `^X`; the path is the
+  `drgnx-work-id` over the whole row. A listing with one root makes the root's row `invisible` (the island's header
+  names it).
+- **Git marks.** The hub keeps each repository's last status read on the connection (`git/letters`) and puts the
+  `drgnx-git-status` of each entry on its name: a file's own, a folder's strongest change inside it (untracked as
+  added), an untracked or ignored folder's on everything under it; ignored ones carry none. A read that changes a status
+  draws the connection's listings again (only the changed rows go out). The editor draws the mark at the right edge with
+  the ⋯ control (`drgnx-explorer--rows-patched`).
 
 ### The agent panel's rows
 
