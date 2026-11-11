@@ -537,7 +537,8 @@ fn rewatch(
 
 /// List ROOTS (EXPANDED open, COMPACT joining chains) and hand the entries to SEND; then watch every folder that listing
 /// read and, after each burst of changes settles (`SETTLE`, at most `SETTLE_MAX`), read the changed folders again and
-/// hand over the entries when they differ from the last. The watcher sends on TX; RX hears it and `Heard::Stop`. Ends
+/// hand over the entries when they differ from the last (SEND's second argument says the watch found them). The
+/// watcher sends on TX; RX hears it and `Heard::Stop`. Ends
 /// on `Heard::Stop`, CANCEL, a closed channel, or SEND answering false; the watcher goes with it.
 pub(crate) fn list_and_watch(
     roots: &[PathBuf],
@@ -546,7 +547,7 @@ pub(crate) fn list_and_watch(
     cancel: &AtomicBool,
     tx: Sender<Heard>,
     rx: Receiver<Heard>,
-    send: &mut dyn FnMut(Vec<Entry>) -> bool,
+    send: &mut dyn FnMut(Vec<Entry>, bool) -> bool,
 ) {
     let mut cache: HashMap<PathBuf, Vec<(String, bool)>> = HashMap::new();
     let list = |cache: &mut HashMap<PathBuf, Vec<(String, bool)>>| {
@@ -564,7 +565,7 @@ pub(crate) fn list_and_watch(
     let mut w = watcher(tx);
     let mut watching = HashSet::new();
     rewatch(&mut w, &mut watching, cache.keys().cloned().collect());
-    if !send(last.clone()) {
+    if !send(last.clone(), false) {
         return;
     }
     loop {
@@ -616,7 +617,7 @@ pub(crate) fn list_and_watch(
         let Some(now) = list(&mut cache) else { return };
         rewatch(&mut w, &mut watching, cache.keys().cloned().collect());
         if now != last {
-            if !send(now.clone()) {
+            if !send(now.clone(), true) {
                 return;
             }
             last = now;
@@ -910,10 +911,14 @@ pub fn subscribe(f: &Front, c: &Caller, p: ExplorerParams) -> Result<ExplorerSta
                 &cancel,
                 tx,
                 rx,
-                &mut |entries| {
-                    front
-                        .upgrade()
-                        .is_some_and(|f| f.core.views.explorer_listed(&f, conn, &view, id, entries))
+                &mut |entries, watched| {
+                    front.upgrade().is_some_and(|f| {
+                        // a name made or removed outside Emacs may change git's status too
+                        if watched {
+                            f.core.views.letters.poke(conn, &roots);
+                        }
+                        f.core.views.explorer_listed(&f, conn, &view, id, entries)
+                    })
                 },
             );
         })

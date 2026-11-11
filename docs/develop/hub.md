@@ -2425,6 +2425,13 @@ asking connection with git's first complaint, and the view keeps its rows; the e
 ` *drgnx git errors*`.  A root that is no folder is an `invalid-params` error of the call. The status read is also kept per (connection,
 repository) for the Explorer's marks (`explorer/subscribe`, "Git marks").
 
+Once read for a connection, a repository is **watched** until the connection goes or its view closes
+(`view/close`): its gitdir (the index, `HEAD`, `packed-refs`; a linked worktree's own and the common dir) and the
+common dir's `refs`, not recursive except `refs`. A commit, checkout, `git add` or branch move from a terminal reads
+the status again once its burst is quiet for 50 ms (at most 250 ms after its first change) and sends what changed; a
+lock file's events and reads (the hub's own `git status` runs with `GIT_OPTIONAL_LOCKS=0`) are not changes. An
+Explorer listing that its watch relisted (a name made or removed outside Emacs) also reads its repositories again.
+
 ### Ranked file names as rows (`search/files`)
 
 Quick Open's and Find's candidates are a row stream too (`runtime/crates/drgnx-ratatoskr/src/view/files.rs`; the list

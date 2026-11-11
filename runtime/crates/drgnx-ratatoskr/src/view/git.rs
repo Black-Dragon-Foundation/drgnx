@@ -1,7 +1,9 @@
 //! Git letters as rows: `git/letters` reads a repository's status (`git status --porcelain=v2 -z`, the trusted git
 //! of `draugr::git`) on a thread of its own and sends the view one row per changed path and per shown folder; a
 //! later call patches only what changed (the store diffs the rows). The letters are the Explorer's and Buffers'
-//! git marks; the editor reads them from its view instead of parsing the status itself.
+//! git marks; the editor reads them from its view instead of parsing the status itself. Once read, a repository is
+//! watched (`watch_repo`: its gitdir and refs, so a commit, checkout or `git add` in a terminal is seen) and read
+//! again after each burst of changes, until the connection goes or its view closes.
 
 use super::{Key, Store, Views, lock};
 use crate::dispatch::Caller;
@@ -13,9 +15,11 @@ use runstav::methods::view::VIEW_MAX;
 use runstav::wire::{Error, ErrorCode};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// More ignored entries than this are not listed (a `node_modules` tree is not a row each).
 pub const IGNORED_LIMIT: usize = 20_000;
@@ -255,12 +259,47 @@ pub(super) struct Letters {
     views: Mutex<BTreeMap<(u64, String), Read>>,
     statuses: Mutex<BTreeMap<(u64, PathBuf), Kept>>,
     next: std::sync::atomic::AtomicU64,
+    /// Each (connection, repository root)'s watch: the view it reads for, its folders shown, and the channel that
+    /// pokes or stops it.
+    watches: Mutex<BTreeMap<(u64, PathBuf), Watch>>,
+}
+
+/// A repository's watch ([`watch_repo`]): what a read gives the view, and its channel.
+struct Watch {
+    view: String,
+    shown: Arc<Mutex<BTreeSet<String>>>,
+    tx: Sender<Heard>,
 }
 
 impl Letters {
     pub(super) fn gone(&self, conn: u64) {
         lock(&self.views).retain(|(c, _), _| *c != conn);
         lock(&self.statuses).retain(|(c, _), _| *c != conn);
+        lock(&self.watches).retain(|(c, _), w| {
+            if *c == conn {
+                let _ = w.tx.send(Heard::Stop);
+            }
+            *c != conn
+        });
+    }
+
+    /// The next read's number.
+    fn number(&self) -> u64 {
+        self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+    }
+
+    /// CONN's repositories that hold or sit in one of PATHS were perhaps changed outside git (a file made or removed
+    /// under a watched Explorer folder): their watches read them again.
+    pub(super) fn poke(&self, conn: u64, paths: &[PathBuf]) {
+        for ((c, root), w) in lock(&self.watches).iter() {
+            if *c == conn
+                && paths
+                    .iter()
+                    .any(|p| p.starts_with(root) || root.starts_with(p))
+            {
+                let _ = w.tx.send(Heard::Changed);
+            }
+        }
     }
 
     /// CONN's repositories' roots and their last read statuses.
@@ -285,6 +324,13 @@ impl Letters {
 
     pub(super) fn stop(&self, conn: u64, view: &str) {
         lock(&self.views).remove(&(conn, view.to_owned()));
+        lock(&self.watches).retain(|(c, _), w| {
+            let mine = *c == conn && w.view == view;
+            if mine {
+                let _ = w.tx.send(Heard::Stop);
+            }
+            !mine
+        });
     }
 }
 
@@ -390,38 +436,170 @@ pub fn letters(f: &Front, c: &Caller, p: LettersParams) -> Result<bool, Error> {
         return Err(invalid("root", "an existing folder"));
     }
     let shown: BTreeSet<String> = p.shown.unwrap_or_default().into_iter().collect();
-    let read = views
-        .letters
-        .next
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        + 1;
     let Some(front) = views.front.get().cloned() else {
         return Err(invalid("view", "the hub is starting"));
     };
     let (conn, view) = (c.conn_id, p.view);
+    let read = views.letters.number();
+    // the repository's watch: started once per (connection, root); a later call names the view and folders it reads for
+    let mut watches = lock(&views.letters.watches);
+    match watches.get(&(conn, root.clone())) {
+        Some(w) if w.view == view => *lock(&w.shown) = shown.clone(),
+        _ => {
+            let (tx, rx) = channel();
+            let shown = Arc::new(Mutex::new(shown.clone()));
+            let (w_front, w_root, w_view, kept) =
+                (front.clone(), root.clone(), view.clone(), shown.clone());
+            let watch_tx = tx.clone();
+            std::thread::Builder::new()
+                .name("git-watch".into())
+                .spawn(move || {
+                    watch_repo(&w_root, watch_tx, rx, &mut || {
+                        let Some(f) = w_front.upgrade() else {
+                            return false;
+                        };
+                        let read = f.core.views.letters.number();
+                        let shown = lock(&kept).clone();
+                        read_and_publish(&f, conn, &w_view, &w_root, &shown, read);
+                        true
+                    });
+                })
+                .map_err(|e| invalid("view", &e.to_string()))?;
+            if let Some(old) = watches.insert(
+                (conn, root.clone()),
+                Watch {
+                    view: view.clone(),
+                    shown,
+                    tx,
+                },
+            ) {
+                let _ = old.tx.send(Heard::Stop);
+            }
+        }
+    }
+    drop(watches);
     std::thread::Builder::new()
         .name("git-letters".into())
         .spawn(move || {
-            let out = match read_status(&root) {
-                Ok(out) => out,
-                Err(e) => {
-                    if let Some(f) = front.upgrade() {
-                        f.send_to(conn, "git-letters-error", error_event(&view, &root, &e));
-                    }
-                    return;
-                }
-            };
-            let status = parse(&out, IGNORED_LIMIT);
-            let rows = rows(&status, &shown);
             if let Some(f) = front.upgrade() {
-                f.core.views.git_publish(&f, conn, &view, read, rows);
-                if f.core.views.letters.keep(conn, root, read, status) {
-                    f.core.views.explorer_decor_changed(&f, conn);
-                }
+                read_and_publish(&f, conn, &view, &root, &shown, read);
             }
         })
         .map_err(|e| invalid("view", &e.to_string()))?;
     Ok(true)
+}
+
+/// Read ROOT's status (read number READ) and give CONN's VIEW its rows (SHOWN: the folders it shows), the error event
+/// when git cannot; a changed status draws CONN's Explorer listings again.
+fn read_and_publish(
+    f: &Front,
+    conn: u64,
+    view: &str,
+    root: &Path,
+    shown: &BTreeSet<String>,
+    read: u64,
+) {
+    let out = match read_status(root) {
+        Ok(out) => out,
+        Err(e) => {
+            f.send_to(conn, "git-letters-error", error_event(view, root, &e));
+            return;
+        }
+    };
+    let status = parse(&out, IGNORED_LIMIT);
+    let rows = rows(&status, shown);
+    f.core.views.git_publish(f, conn, view, read, rows);
+    if f.core
+        .views
+        .letters
+        .keep(conn, root.to_path_buf(), read, status)
+    {
+        f.core.views.explorer_decor_changed(f, conn);
+    }
+}
+
+/// What a repository's watch hears: a change (from its watcher, or a poke), or the end.
+#[derive(Debug)]
+pub(crate) enum Heard {
+    Changed,
+    Stop,
+}
+
+/// A burst of changes is read once it is quiet this long...
+const SETTLE: Duration = Duration::from_millis(50);
+/// ...or this long after its first change (a `git commit` writes the index, the ref and the log in turn).
+const SETTLE_MAX: Duration = Duration::from_millis(250);
+
+/// The gitdir and the common dir of the repository at ROOT: `.git` itself, or for a linked worktree the folder its
+/// `.git` file names and that folder's `commondir`; none outside a repository's top.
+pub(crate) fn git_dirs(root: &Path) -> Option<(PathBuf, PathBuf)> {
+    let dot = root.join(".git");
+    if dot.is_dir() {
+        return Some((dot.clone(), dot));
+    }
+    let text = std::fs::read_to_string(&dot).ok()?;
+    let gitdir = root.join(text.strip_prefix("gitdir:")?.trim());
+    let common = std::fs::read_to_string(gitdir.join("commondir"))
+        .map(|c| gitdir.join(c.trim()))
+        .unwrap_or_else(|_| gitdir.clone());
+    Some((gitdir, common))
+}
+
+/// Watch the repository at ROOT for changes git makes (its gitdir's files: index, HEAD, packed-refs; the common
+/// dir's refs, for a branch moved from anywhere) and call READ once after each burst settles (`SETTLE`, at most
+/// `SETTLE_MAX`); a lock file's events and reads are not changes. TX is the watcher's sending end, RX hears it,
+/// pokes (`Letters::poke`) and `Heard::Stop`. Ends on `Heard::Stop`, a closed channel, or READ answering false; the
+/// watcher goes with it. Nothing is watched outside a repository's top (the pokes still read).
+pub(crate) fn watch_repo(
+    root: &Path,
+    tx: Sender<Heard>,
+    rx: Receiver<Heard>,
+    read: &mut dyn FnMut() -> bool,
+) {
+    use notify::event::EventKind;
+    use notify::{RecursiveMode, Watcher};
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        if let Ok(ev) = &res {
+            let locks = !ev.paths.is_empty()
+                && ev
+                    .paths
+                    .iter()
+                    .all(|p| p.extension().is_some_and(|e| e == "lock"));
+            if matches!(ev.kind, EventKind::Access(_)) || locks {
+                return;
+            }
+        }
+        let _ = tx.send(Heard::Changed);
+    })
+    .ok();
+    if let (Some(w), Some((gitdir, common))) = (watcher.as_mut(), git_dirs(root)) {
+        let _ = w.watch(&gitdir, RecursiveMode::NonRecursive);
+        if common != gitdir {
+            let _ = w.watch(&common, RecursiveMode::NonRecursive);
+        }
+        let _ = w.watch(&common.join("refs"), RecursiveMode::Recursive);
+    }
+    loop {
+        match rx.recv() {
+            Ok(Heard::Changed) => {}
+            Ok(Heard::Stop) | Err(_) => return,
+        }
+        let end = Instant::now() + SETTLE_MAX;
+        loop {
+            let left = end.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            match rx.recv_timeout(SETTLE.min(left)) {
+                Ok(Heard::Changed) => {}
+                Ok(Heard::Stop) | Err(RecvTimeoutError::Disconnected) => return,
+                Err(RecvTimeoutError::Timeout) => break,
+            }
+        }
+        if !read() {
+            return;
+        }
+    }
 }
 
 #[cfg(test)]

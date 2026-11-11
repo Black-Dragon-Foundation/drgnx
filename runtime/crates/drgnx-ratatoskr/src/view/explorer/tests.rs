@@ -344,7 +344,7 @@ fn explorer_watch_relists_open_folders_only() {
     let stop = tx.clone();
     let thread = std::thread::spawn(move || {
         let cancel = AtomicBool::new(false);
-        list_and_watch(&roots, &expanded, false, &cancel, tx, rx, &mut |es| {
+        list_and_watch(&roots, &expanded, false, &cancel, tx, rx, &mut |es, _| {
             out.send(es).is_ok()
         });
     });
