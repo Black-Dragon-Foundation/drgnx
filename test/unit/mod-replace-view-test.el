@@ -131,6 +131,38 @@ bar's keymaps), one editor window, no view or bar left over."
   (set-frame-parameter nil 'drgnx-wb-view nil)
   (delete-other-windows))
 
+(defvar drgnx-hub--events)
+
+;; Symbol mode's Replace All sends the server's edits to the hub (`search/edits' `edits'), which sends each file open
+;; here back (`search-apply'): the files are open, so the fake hub below does just that.
+(defmacro drgnx-replace-view-test--as-hub (&rest body)
+  "BODY with a hub that writes the edits it is given into the buffers open here, then ends the write."
+  `(let ((given nil) (orig (symbol-function 'drgnx-hub--call-on)) (drgnx-hub--events nil))
+     (cl-letf (((symbol-function 'drgnx-hub--call-on)
+                (lambda (conn method params &optional cb &rest more)
+                  (pcase method
+                    ("search/edits" (setq given (append (plist-get params :edits) nil))
+                     (funcall cb '(:change 1 :files [] :skipped []) nil))
+                    ("search/apply"
+                     (let ((k -1) (files (seq-uniq (mapcar (lambda (e) (plist-get e :path)) given))))
+                       (dolist (path files)
+                         (drgnx-replace-apply-edits
+                          (list :change 1 :path path
+                                :edits (vconcat (delq nil (mapcar (lambda (e)
+                                                                    (cl-incf k)
+                                                                    (when (equal (plist-get e :path) path)
+                                                                      (append (list :id (format "e:%d" k)
+                                                                                    :end_line (plist-get e :line))
+                                                                              e)))
+                                                                  given)))))
+                         (setq k -1))
+                       (funcall cb t nil)
+                       (drgnx-replace--hub-event "search-change"
+                                                 (list :view drgnx-replace-view :change 1 :origin "replace-all"
+                                                       :written (length given) :files (length files) :skipped []))))
+                    (_ (apply orig conn method params cb more))))))
+       ,@body)))
+
 (ert-deftest drgnx-replace/f2-opens-with-symbol-on ()
   (drgnx-replace-view-test--with
     (drgnx-git-test-with-repo
@@ -172,7 +204,7 @@ bar's keymaps), one editor window, no view or bar left over."
           (with-current-buffer (drgnx-replace-view-test--view)
             (goto-char (point-min))
             (should (search-forward "foobar" nil t))
-            (drgnx-replace-all))
+            (drgnx-replace-view-test--as-hub (drgnx-replace-all)))
           (should (equal (drgnx-replace-view-test--read a) "(defun bar () (bar))\n;; foo in a comment\n"))
           (should (equal (drgnx-replace-view-test--read b) "(bar)\n"))
           ;; Text mode ends Rename: the toggles come back

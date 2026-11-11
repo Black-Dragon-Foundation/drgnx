@@ -11,6 +11,8 @@
 //!
 //! `rows.rs` builds the rows and the model, `run.rs` keeps a run's records (numbers, snapshots, remap keys).
 
+mod apply;
+mod edits;
 mod modes;
 mod rows;
 mod run;
@@ -30,8 +32,9 @@ use rows::{
 };
 use run::{Buffer, Found, Read};
 use runstav::methods::search::{
-    BufferParams, FindQuery, GrepLookParams, GrepReplaceParams, GrepSkippedParams, RunDone,
-    RunParams, RunStarted, ScopeDone, ScopeKind,
+    AppliedParams, ApplyParams, BufferParams, ChangeOrigin, EditsAnswer, EditsParams, FileEdits,
+    FindQuery, GrepLookParams, GrepReplaceParams, GrepSkippedParams, PreviewAnswer, PreviewParams,
+    RunDone, RunParams, RunStarted, ScopeDone, ScopeKind, UndoParams,
 };
 use runstav::methods::view::ViewModel;
 use runstav::wire::{Error, ErrorCode};
@@ -110,6 +113,8 @@ pub(super) struct Greps {
     next: AtomicU64,
     /// (connection, view) → file → its buffer (`search/buffer`), until the editor says the buffer is saved or gone.
     buffers: Mutex<BTreeMap<(u64, String), BTreeMap<String, Buffer>>>,
+    /// The change sets of the views' writes (`apply.rs`).
+    changes: apply::Changes,
 }
 
 impl Greps {
@@ -1167,6 +1172,214 @@ pub fn replace(f: &Front, c: &Caller, p: GrepReplaceParams) -> Result<bool, Erro
             }
         })
         .is_some())
+}
+
+/// The files of RUN's matches P asks for (`ids`, else all but `off`), as the edit set takes them, and the buffers'
+/// texts the run searched in their files' place (BUFS).
+fn plans_of(
+    run: &Run,
+    p: &EditsParams,
+    bufs: &BTreeMap<String, std::sync::Arc<str>>,
+) -> Vec<edits::FilePlan> {
+    let ids: Option<HashSet<&str>> = p
+        .ids
+        .as_ref()
+        .map(|v| v.iter().map(String::as_str).collect());
+    let off: HashSet<&str> = p.off.iter().flatten().map(String::as_str).collect();
+    run.files
+        .iter()
+        .filter_map(|f| {
+            let wants: Vec<edits::Want> =
+                f.ms.iter()
+                    .zip(&f.ns)
+                    .filter_map(|(m, n)| {
+                        let id = run::match_id(run.id, *n);
+                        let take = match &ids {
+                            Some(ids) => ids.contains(id.as_str()),
+                            None => !off.contains(id.as_str()),
+                        };
+                        take.then(|| edits::Want {
+                            new: grep::new_text(
+                                &run.query,
+                                &m.text,
+                                p.replace.as_deref().unwrap_or(&run.replace),
+                            ),
+                            id,
+                            line: m.line,
+                            col: m.col,
+                            end_line: m.line,
+                            end_col: m.end,
+                            old: m.text.clone(),
+                        })
+                    })
+                    .collect();
+            (!wants.is_empty()).then(|| edits::FilePlan {
+                path: f.file.clone(),
+                snap: f.snap.clone(),
+                large: f.large,
+                buffer: bufs.get(&f.file).cloned(),
+                wants,
+            })
+        })
+        .collect()
+}
+
+/// The edits P names itself, by file in the order first named; each `e:K` (its place in P's list).
+fn given_plans(given: &[runstav::methods::search::GivenEdit]) -> Vec<edits::FilePlan> {
+    let mut by: Vec<edits::FilePlan> = Vec::new();
+    for (k, g) in given.iter().enumerate() {
+        let want = edits::Want {
+            id: format!("e:{k}"),
+            line: g.line,
+            col: g.col,
+            end_line: g.end_line.unwrap_or(g.line),
+            end_col: g.end_col,
+            old: g.old.clone(),
+            new: Some(g.new.clone()),
+        };
+        match by.iter_mut().find(|f| f.path == g.path.as_str()) {
+            Some(f) => f.wants.push(want),
+            None => by.push(edits::FilePlan {
+                path: g.path.as_str().to_owned(),
+                snap: None,
+                large: false,
+                buffer: None,
+                wants: vec![want],
+            }),
+        }
+    }
+    by
+}
+
+/// `search/edits`: the edit set of VIEW's search (or of the edits P names), kept as a change set for `search/apply`.
+/// The files are read on a blocking thread, outside every lock.
+pub async fn edits(f: &Front, c: &Caller, p: EditsParams) -> Result<EditsAnswer, Error> {
+    let views = &f.core.views;
+    let conn = c.conn_id;
+    let (root, plans) = match &p.edits {
+        Some(given) => {
+            let Some(root) = &p.root else {
+                return Err(invalid("root", "the project the edits are in"));
+            };
+            (std::path::PathBuf::from(root.as_str()), given_plans(given))
+        }
+        None => {
+            let bufs: BTreeMap<String, std::sync::Arc<str>> = views
+                .greps
+                .buffers_of(conn, &p.view)
+                .into_iter()
+                .filter_map(|(f, b)| Some((f, b.text?)))
+                .collect();
+            views
+                .greps
+                .current(conn, &p.view, |run| {
+                    (run.query.root.clone(), plans_of(run, &p, &bufs))
+                })
+                .ok_or_else(|| invalid("view", "the view has no search"))?
+        }
+    };
+    let made = crate::clock::blocking(move || {
+        plans.into_iter().map(edits::file_edits).collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|e| invalid("view", &e.to_string()))?;
+    let (mut files, mut skipped) = (Vec::new(), Vec::new());
+    for (planned, skips) in made {
+        files.extend(planned);
+        skipped.extend(skips);
+    }
+    let answer_files = files
+        .iter()
+        .map(|p| FileEdits {
+            path: p.path.clone(),
+            source: p.source,
+            edits: p.edits.clone(),
+        })
+        .collect();
+    let change =
+        views
+            .greps
+            .changes
+            .add(conn, &p.view, root, ChangeOrigin::ReplaceAll, None, files);
+    Ok(EditsAnswer {
+        change,
+        files: answer_files,
+        skipped,
+    })
+}
+
+/// `search/preview`: P.path's changes of VIEW's search as a diff (the preview tile). Read on a blocking thread.
+pub async fn preview(f: &Front, c: &Caller, p: PreviewParams) -> Result<PreviewAnswer, Error> {
+    let views = &f.core.views;
+    let conn = c.conn_id;
+    let path = p.path.as_str().to_owned();
+    let bufs: BTreeMap<String, std::sync::Arc<str>> = views
+        .greps
+        .buffers_of(conn, &p.view)
+        .into_iter()
+        .filter(|(f, _)| *f == path)
+        .filter_map(|(f, b)| Some((f, b.text?)))
+        .collect();
+    let edits_params = EditsParams {
+        view: p.view.clone(),
+        root: None,
+        ids: None,
+        off: p.off.clone(),
+        edits: None,
+        replace: p.replace.clone(),
+    };
+    let (query, plan) = views
+        .greps
+        .current(conn, &p.view, |run| {
+            let plan = plans_of(run, &edits_params, &bufs)
+                .into_iter()
+                .find(|f| f.path == path);
+            (run.query.clone(), plan)
+        })
+        .ok_or_else(|| invalid("view", "the view has no search"))?;
+    let Some(plan) = plan else {
+        return Ok(PreviewAnswer {
+            path,
+            diff: String::new(),
+            plus: 0,
+            minus: 0,
+            hunks: Vec::new(),
+            skipped: Vec::new(),
+        });
+    };
+    let (answer, skipped) =
+        crate::clock::blocking(move || edits::preview(plan, |old| grep::captures(&query, old)))
+            .await
+            .map_err(|e| invalid("view", &e.to_string()))?;
+    let mut answer = answer.unwrap_or(PreviewAnswer {
+        path: p.path.as_str().to_owned(),
+        diff: String::new(),
+        plus: 0,
+        minus: 0,
+        hunks: Vec::new(),
+        skipped: Vec::new(),
+    });
+    answer.skipped = skipped;
+    Ok(answer)
+}
+
+/// `search/apply`: change set P.change written (`apply.rs`); false when there is none of the caller's to write.
+pub fn apply_change(f: &Front, c: &Caller, p: ApplyParams) -> Result<bool, Error> {
+    let front = f.core.views.front.get().and_then(std::sync::Weak::upgrade);
+    let front = front.ok_or_else(|| invalid("view", "the hub is starting"))?;
+    Ok(apply::apply(&front, c.conn_id, p.change, p.open))
+}
+
+/// `search/applied`: the editor's answer to `search-apply`.
+pub fn applied(f: &Front, _c: &Caller, p: AppliedParams) -> Result<bool, Error> {
+    Ok(f.core.views.greps.changes.answer(p))
+}
+
+/// `search/undo`: change set P.change put back (`apply.rs`); false when there is none of the caller's.
+pub fn undo_change(f: &Front, c: &Caller, p: UndoParams) -> Result<bool, Error> {
+    let front = f.core.views.front.get().and_then(std::sync::Weak::upgrade);
+    let front = front.ok_or_else(|| invalid("view", "the hub is starting"))?;
+    Ok(apply::undo(&front, c.conn_id, p.change, p.open))
 }
 
 #[cfg(test)]

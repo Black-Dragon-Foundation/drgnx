@@ -53,6 +53,10 @@ a soft wash of its colours and never as text.
 
 `drgnx-palette-frame-width` (640 logical pixels, at any display scale) and `drgnx-palette-frame-top` (0.12, the fraction
 of the frame's height above the box) place it. No colours are set here: the theme's faces colour everything.
+Every size (the box's width and border, its rows, the footer) is the logical size times the display scale and the UI
+scale, rounded half up to whole device pixels; the high-contrast box's 2 px ring follows the rule for lines (3 device
+pixels at 1.25, 4/3 and 1.5, 4 at 2). The box opened after the UI scale changed, or over a frame on a monitor at another scale,
+takes that scale's sizes.
 
 ## Rows
 

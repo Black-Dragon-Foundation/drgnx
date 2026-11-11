@@ -151,6 +151,58 @@ and the probe runs from that minibuffer's `post-command-hook' once the last of t
            (with-current-buffer (window-buffer (frame-root-window f))
              (should (= vertico-count (default-value 'vertico-count))))))))))
 
+(require 'drgnx-monitors-fixture (expand-file-name "../fixtures/monitors-fixture" (file-name-directory (macroexp-file-name))))
+(declare-function drgnx-pixels-set-ui-scale "drgnx-pixels")
+(declare-function drgnx-pixels-scale "drgnx-pixels")
+(declare-function drgnx-px "drgnx-pixels")
+(declare-function drgnx-px-line "drgnx-pixels")
+(declare-function drgnx-palette-frame--look "drgnx-palette-frame")
+
+(defun drgnx-palette-float-test--sizes-at (f root s footer)
+  "The palette's frame F under ROOT is sized by the pixel rule at total scale S: its ring, its width and, with FOOTER
+\(the box shown and dressed), its footer.  A child frame's border is its `child-frame-border-width' (the ring), which
+the line rule sizes."
+  (should (= (frame-parameter f 'child-frame-border-width)
+             (let ((w (or (alist-get 'child-frame-border-width (drgnx-palette-frame--look)) 0)))
+               (if (> w 0) (drgnx-px-line w root s) 0))))
+  (should (= (frame-text-width f) (min (drgnx-px 640 root s)
+                                       (max (drgnx-px 100 root s) (- (frame-pixel-width root) (drgnx-px 32 root s))))))
+  (when footer
+    (redisplay t)
+    (should (<= (abs (- (car (window-line-height 'mode-line (frame-root-window f))) (drgnx-px 30 root s))) 1))))
+
+(ert-deftest palette-float-sizes-follow-the-scale ()
+  "palette.html at the frame's scale: the box's ring, width and footer are `drgnx-px' of the mockup's sizes at the
+parent's scale (the display scale × the UI scale: 110 % here), and the box, made once and reused, takes the scale's
+sizes again when it is placed after the UI scale changed (back to 100 %).  With a second monitor at another scale,
+the box's sizes for a frame there are that monitor's."
+  (require 'drgnx-pixels)
+  (drgnx-palette-float-test--with-palette
+    (let* ((root (drgnx-uitest-root-frame)) (s (float (frame-scale-factor root))) f)
+      (unwind-protect
+          (progn
+            (drgnx-pixels-set-ui-scale root 1.1)
+            (drgnx-palette-float-test--reading
+             "Test"
+             (lambda ()
+               (setq f (drgnx-test-wait (lambda () (drgnx-palette-float-test--palette-frame)) :what "the palette's frame"))
+               (drgnx-palette-float-test--wait-shown f)
+               (drgnx-test-wait-presented)
+               (drgnx-palette-float-test--sizes-at f root (* s 1.1) t)))
+            ;; the next use reuses the frame: placed at the UI scale's new value, it has that scale's sizes
+            (drgnx-pixels-set-ui-scale root nil)
+            (should (eq (drgnx-palette-frame--ensure root) f))
+            (drgnx-palette-frame--place f root (default-line-height))
+            (drgnx-palette-float-test--sizes-at f root s nil))
+        (drgnx-pixels-set-ui-scale root nil))
+      (when (drgnx-test-second-monitor-p)
+        (let ((g (drgnx-test-frame-on-second-monitor "drgnx-palette-second")))
+          (unwind-protect
+              (let ((params (drgnx-palette-frame--params g)) (s2 (float (frame-scale-factor g))))
+                (should (= (alist-get 'internal-border-width params) (drgnx-px 8 g s2)))
+                (should-not (= (drgnx-px 8 g s2) (drgnx-palette-frame--px root 8))))
+            (delete-frame g)))))))
+
 (ert-deftest palette-float-floats-over-the-workbench-rules ()
   "With the workbench's placement rules on (every drgnx session), the palette still floats: the rules' entry in
 `display-buffer-alist' leaves the palette's frame to it, and no editor window shows the minibuffer's buffer."

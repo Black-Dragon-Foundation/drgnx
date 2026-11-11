@@ -101,24 +101,47 @@
     (cl-letf (((symbol-function 'frame-pixel-width) (lambda (f) (if (eq f 'parent) parent-width (car sized))))
               ((symbol-function 'frame-pixel-height) (lambda (_) 2000))
               ((symbol-function 'frame-scale-factor) (lambda (_) 2.0))
+              ((symbol-function 'drgnx-pixels-ui-scale) (lambda (&optional _f) 1.0))
               ((symbol-function 'set-frame-size) (lambda (_f w h _pixelwise) (setq sized (list w h))))
               ((symbol-function 'set-frame-position) #'ignore))
       (drgnx-palette-frame--place 'child 'parent 20))
     sized))
 
 (ert-deftest core-palette-float-sizes-are-logical-pixels ()
-  ;; a frame of Nidhogg's Wayland shell counts device pixels: 640 logical at scale 2 are 1280 of them
-  ;; `dlet': `features' is not special, so a `let' of it would be lexical here and change nothing
-  (dlet ((features (cons 'nidhogg-wayland features)))
+  ;; a frame of a native shell counts device pixels (the seam `drgnx-pixels-device-p'): 640 logical at scale 2 are
+  ;; 1280 of them
+  (cl-letf (((symbol-function 'drgnx-pixels-device-p) (lambda () t))
+            ((symbol-function 'drgnx-pixels-ui-scale) (lambda (&optional _f) 1.0)))
     ;; the input row and 10 rows of 20 px, then 6 + 30 logical pixels of gap and footer
     (should (equal (drgnx-test--palette-placed 3000) '(1280 292)))
     (should (equal (drgnx-test--palette-placed 1000) '(936 292)))
     (cl-letf (((symbol-function 'frame-scale-factor) (lambda (_) 2.0)))
       (should (= 16 (alist-get 'internal-border-width (drgnx-palette-frame--params 'parent))))))
   ;; elsewhere a frame counts logical pixels already
-  (dlet ((features (remq 'nidhogg-wayland features)))
+  (cl-letf (((symbol-function 'drgnx-pixels-device-p) #'ignore)
+            ((symbol-function 'drgnx-pixels-ui-scale) (lambda (&optional _f) 1.0)))
     (should (equal (drgnx-test--palette-placed 3000) '(640 256)))
     (should (= 8 (alist-get 'internal-border-width (drgnx-palette-frame--params 'parent))))))
+
+(ert-deftest core-palette-float-sizes-go-through-the-pixel-rule ()
+  "The palette's sizes in the parent's own pixels by the pixel rule (`drgnx-pixels-scale': the display scale times the
+UI scale), half up; its ring by the line rule (1 device px at 1.5, not `round''s 2); its rows' spacing too."
+  (let ((f (selected-frame)))
+    (dolist (case '((1.0 8 1 2 0) (1.25 10 1 3 8) (1.3333333333333333 11 1 3 11) (1.5 12 1 3 16) (2.0 16 2 4 32)
+                    (1.375 11 1 3 12)))
+      (cl-letf (((symbol-function 'drgnx-pixels-scale) (lambda (&optional _f) (nth 0 case)))
+                ((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                ((symbol-function 'drgnx-wb--natural-row-height) (lambda () 32)))
+        (should (= (drgnx-palette-frame--px f 8) (nth 1 case)))
+        (dolist (ring '((1 . 2) (2 . 3)))
+          (cl-letf (((symbol-function 'drgnx-palette-frame--look)
+                     (lambda () `((child-frame-border-width . ,(car ring))))))
+            (let ((params (drgnx-palette-frame--params f)))
+              (should (= (alist-get 'internal-border-width params) (nth 1 case)))
+              (should (= (alist-get 'child-frame-border-width params) (nth (cdr ring) case))))))
+        ;; a 32 px palette row over a 32 px natural row: the extra is the scaled row's
+        (let ((sp (drgnx-palette-frame--spacing 32)))
+          (should (= (+ (car sp) (cdr sp)) (nth 4 case))))))))
 
 (ert-deftest core-palette-float-stays-for-a-minibuffer-on-top ()
   ;; a question on top of the open palette ends: the palette's own minibuffer still reads, so its box stays
