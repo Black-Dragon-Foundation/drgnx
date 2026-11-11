@@ -41,6 +41,9 @@ pub struct HookReach {
     pub tools: Vec<String>,
     #[serde(default, deserialize_with = "null_as_empty")]
     pub paths: Vec<String>,
+    /// An advisory hook's failure is a note, not a deny: one that stops being advisory can block.
+    #[serde(default)]
+    pub advisory: bool,
 }
 
 /// Everything a manifest lets a plugin do.
@@ -55,6 +58,10 @@ pub struct Reach {
     pub hosts: Vec<String>,
     #[serde(default, deserialize_with = "null_as_empty")]
     pub hooks: Vec<HookReach>,
+    /// The most its key-value store may hold (key and value lengths summed), the manifest's `kv_bytes` or the default;
+    /// none in a reach stored before the hub kept it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kv_bytes: Option<u32>,
 }
 
 /// One installed plugin.

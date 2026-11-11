@@ -245,10 +245,21 @@ buffers.  A package that cannot be off in one project is a `user-error' saying w
     (dolist (b (buffer-list))
       (with-current-buffer b
         (when (and buffer-file-name
-                   (string-prefix-p root (drgnx-settings-workspace--norm (file-name-directory buffer-file-name))))
+                   (string-prefix-p root (drgnx-settings-workspace--norm (file-name-directory buffer-file-name)))
+                   (drgnx-extensions-project--belongs-p pkg))
           (let ((enable-local-variables :safe) (inhibit-interaction t))
             (condition-case nil (normal-mode) (error nil))))))
     new))
+
+(defun drgnx-extensions-project--belongs-p (pkg)
+  "Non-nil when the current file buffer has to do with PKG: its major mode or an active minor mode is PKG's, or the
+file's name would pick one of PKG's major modes.  Only those buffers are set up again by a toggle (M6): another
+buffer's local state is none of its business."
+  (or (eq (cdr (assq major-mode drgnx-extensions-project--modes)) pkg)
+      (seq-some (lambda (cell) (and (eq (cdr cell) pkg) (boundp (car cell)) (symbol-value (car cell))))
+                drgnx-extensions-project--minors)
+      (let ((chosen (assoc-default buffer-file-name auto-mode-alist #'string-match)))
+        (and (symbolp chosen) chosen (eq (cdr (assq chosen drgnx-extensions-project--modes)) pkg)))))
 
 (defun drgnx-extensions-project-toggle (pkg root)
   "Turn PKG off in the project at ROOT, or back on.  A package that changes Emacs as a whole is a `user-error'

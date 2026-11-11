@@ -177,6 +177,8 @@ async fn a_changed_plugin_stops_and_lists_its_approved_reach() {
     let was = row.approved_reach.clone().expect("the approved reach");
     assert_eq!(was.abilities, ["echo"]);
     assert_eq!(was.hosts, ["api.example.com:443"]);
+    // the reach carries the store's size (the default here) for the page's diff
+    assert_eq!(was.kv_bytes, Some(brokkr::manifest::MAX_KV_BYTES));
     assert_eq!(
         s.changes,
         [Change {

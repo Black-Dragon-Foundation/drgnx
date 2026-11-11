@@ -234,18 +234,32 @@ checked, never dropped."
       (drgnx-extensions-trust--maybe-done buffer))))
 
 (defun drgnx-extensions-trust--maybe-done (buffer)
-  (with-current-buffer buffer
-    (when (and (<= (plist-get drgnx-extensions-trust--card :pending) 0) (plist-get drgnx-extensions-trust--card :info)
-               (not (plist-get drgnx-extensions-trust--card :done)))
-      (setq drgnx-extensions-trust--card (plist-put drgnx-extensions-trust--card :done t)))
-    (drgnx-extensions-trust--render buffer)))
+  (let (go)
+    (with-current-buffer buffer
+      (when (and (<= (plist-get drgnx-extensions-trust--card :pending) 0) (plist-get drgnx-extensions-trust--card :info)
+                 (not (plist-get drgnx-extensions-trust--card :done)))
+        (setq drgnx-extensions-trust--card (plist-put drgnx-extensions-trust--card :done t))
+        ;; a card made quietly for a package seen before (M10): when everything it brings was seen too, the install goes
+        ;; on with no card; else the card shows
+        (when (plist-get drgnx-extensions-trust--card :quiet)
+          (if (and (not (plist-get drgnx-extensions-trust--card :unchecked))
+                   (not (plist-get (plist-get drgnx-extensions-trust--card :info) :error))
+                   (seq-every-p #'drgnx-extensions-trusted-p (plist-get drgnx-extensions-trust--card :deps)))
+              (setq go (plist-get drgnx-extensions-trust--card :then))
+            (setq drgnx-extensions-trust--card (plist-put drgnx-extensions-trust--card :quiet nil))
+            (pop-to-buffer buffer))))
+      (unless go (drgnx-extensions-trust--render buffer)))
+    (when go
+      (kill-buffer buffer)
+      (funcall go))))
 
-(defun drgnx-extensions-trust--show-card (id row info then)
-  "Show the trust card of ID (its ROW, its DETAILS when known); THEN runs on Install."
+(defun drgnx-extensions-trust--show-card (id row info then &optional quiet)
+  "Show the trust card of ID (its ROW, its DETAILS when known); THEN runs on Install.  QUIET: the card is made but
+shown only when it has something unseen to say (`drgnx-extensions-trust--maybe-done'); THEN runs at once otherwise."
   (let* ((name (plist-get row :name)) (buffer (get-buffer-create (drgnx-extensions-trust-card-name name))))
     (with-current-buffer buffer
       (drgnx-extensions-trust-mode)
-      (setq drgnx-extensions-trust--card (list :id id :name name :row row :info info :then then :deps nil :unchecked nil
+      (setq drgnx-extensions-trust--card (list :id id :name name :row row :info info :then then :quiet quiet :deps nil :unchecked nil
                                                :seen (make-hash-table :test #'equal) :pending 0 :done nil))
       (puthash name t (plist-get drgnx-extensions-trust--card :seen)))
     (drgnx-extensions-trust--render buffer)
@@ -259,15 +273,16 @@ checked, never dropped."
                       (plist-put drgnx-extensions-trust--card :info
                                  (if (or err (null info)) (list :error (or err "the hub sent nothing")) info))))
               (drgnx-extensions-trust--visit buffer (plist-get info :requires))))))
-    (pop-to-buffer buffer)
+    (unless quiet (pop-to-buffer buffer))
     buffer))
 
 (defun drgnx-extensions-trust--decide (id row info then)
-  "THEN at once for a source that signs or a package whose card was seen here; else its card."
-  (if (or (drgnx-extensions-trust--signs-p row) (drgnx-extensions-trusted-p (plist-get row :name)))
-      (progn (funcall then) t)
-    (drgnx-extensions-trust--show-card id row info then)
-    t))
+  "THEN at once for a source that signs; for a package whose card was seen here too, unless it now brings an unsigned
+package never seen (M10: trust is per name, what it needs may have changed); else its card."
+  (cond ((drgnx-extensions-trust--signs-p row) (funcall then))
+        ((drgnx-extensions-trusted-p (plist-get row :name)) (drgnx-extensions-trust--show-card id row info then t))
+        (t (drgnx-extensions-trust--show-card id row info then)))
+  t)
 
 (defun drgnx-extensions-trust-before-install (id then)
   "Before installing the package ID (\"pkg:NAME\"): THEN (a function of no arguments) runs at once for a signed
@@ -440,6 +455,8 @@ the installed copy; the review is ready when every comparison is."
         (user-error "The downloaded update of %s changed since you reviewed it: Update again" name)))
     (drgnx-extensions-trust--review-put name :state 'applying)
     (drgnx-extensions-jobs-run 'upgrade (list name) :staged t
+                               :expect (mapcar (lambda (e) (cons (symbol-name (car e)) (plist-get (cdr e) :sha256)))
+                                               (plist-get (drgnx-extensions-trust-review name) :entries))
                                :callback (lambda (id why)
                                            (if id (drgnx-extensions-trust--review-put name :job id)
                                              (drgnx-extensions-trust--review-put name :state 'failed :error why))))))

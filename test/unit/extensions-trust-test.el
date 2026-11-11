@@ -293,6 +293,22 @@ has no card."
       (should (= ran 2))
       (should-not (drgnx-extensions-trust-test--card "magit")))))
 
+(ert-deftest drgnx-extensions-trust/a-seen-package-that-now-brings-an-unseen-unsigned-one-shows-its-card ()
+  "M10: trust is recorded per name, but a package seen before that now needs unsigned packages never seen (magit
+recorded alone, as a dependency of something once) shows its card again, with no install yet; once those are seen too
+the install goes on with no card."
+  (drgnx-extensions-trust-test--with
+    (let ((this-command 'extensions-install) (ran 0))
+      (drgnx-extensions-trust--record '(magit))
+      (drgnx-extensions-trust-before-install "pkg:magit" (lambda () (cl-incf ran)))
+      (should (= ran 0))
+      (should (string-search "magit-section, transient, with-editor" (drgnx-extensions-trust-test--card "magit")))
+      (drgnx-extensions-trust-test--click "magit" #'drgnx-extensions-trust-install)
+      (should (= ran 1))
+      (drgnx-extensions-trust-before-install "pkg:magit" (lambda () (cl-incf ran)))
+      (should (= ran 2))
+      (should-not (drgnx-extensions-trust-test--card "magit")))))
+
 (ert-deftest drgnx-extensions-trust/cancel-queues-nothing ()
   "D: the list's Install of a MELPA package, then Cancel on its card: no ticket, nothing recorded."
   (drgnx-extensions-trust-test--with
@@ -347,7 +363,8 @@ package staged over it) is refused: no job."
         (drgnx-extensions-trust-apply "magit")
         (let ((apply (car drgnx-extensions-trust-test--starts)))
           (should (= 2 (length drgnx-extensions-trust-test--starts)))
-          (should (equal (cdr (plist-get apply :argv)) (list "upgrade" "--staged" "--progress"
+          ;; the hashes the review showed travel with the job: the run compares them with the file it finds
+          (should (equal (cdr (plist-get apply :argv)) (list "upgrade" "--staged" "--expect" "magit=abc123" "--progress"
                                                              (car (last (plist-get apply :argv))))))))
       ;; again, but another review staged over magit's before Apply
       (cl-letf (((symbol-function 'drgnx-extensions-trust--diff) (lambda (_n _e callback) (funcall callback "x\n" nil))))
@@ -359,5 +376,15 @@ package staged over it) is refused: no job."
         (drgnx-file-write (drgnx-pkg-staged-file) '((forge :version "0.5" :file "forge-0.5.tar" :sha256 "fff" :verified nil)))
         (should-error (drgnx-extensions-trust-apply "magit") :type 'user-error)
         (should (= 3 (length drgnx-extensions-trust-test--starts)))))))
+
+(ert-deftest drgnx-extensions-trust/a-staged-update-that-differs-from-the-reviewed-one-stops-the-run ()
+  "M12: `drgnx upgrade --staged --expect NAME=SHA256' stops before any change when the staged file is not exactly the
+reviewed packages at the reviewed hashes (a second review replaced it after the Apply, before the job read it)."
+  (drgnx-extensions-trust-test--with
+    (drgnx-file-write (drgnx-pkg-staged-file) '((magit :version "4.2" :file "magit-4.2.tar" :sha256 "abc123" :verified nil)))
+    (dolist (expect '((("magit" . "other")) (("forge" . "abc123")) (("magit" . "abc123") ("forge" . "fff"))))
+      (let ((err (should-error (drgnx-pkg-upgrade :staged t :expect expect))))
+        (should (string-search "changed since it was reviewed" (error-message-string err)))))
+    (should (file-exists-p (drgnx-pkg-staged-file)))))   ; nothing ran: the list is still there
 
 ;;; extensions-trust-test.el ends here

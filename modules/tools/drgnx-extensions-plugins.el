@@ -44,6 +44,9 @@
 (defvar-local drgnx-extensions-plugins--shown nil
   "((NAME . HASH)…) in a details page: the hash its page displayed, which Approve sends.")
 
+(defvar-local drgnx-extensions-plugins--changed nil
+  "The names whose hash the page displayed changed while it was open (M13): Approve holds once, so the user reads it.")
+
 (defvar-local drgnx-extensions-plugins--root nil "The project root a plugin page's \"In this project\" is about, or nil.")
 
 ;;;; Which plugin
@@ -109,20 +112,26 @@
     (when (eq (buffer-local-value 'major-mode b) 'drgnx-extensions-details-mode)
       (with-current-buffer b (drgnx-extensions-details--refresh)))))
 
+(defvar drgnx-extensions-plugins--asked 0 "The number of the newest `plugins/list' asked: an older answer is dropped.")
+
 (defun drgnx-extensions-plugins-refresh ()
-  "Ask the hub for the plugins and draw the view's rows and plugin pages again.  Does not wait."
+  "Ask the hub for the plugins and draw the view's rows and plugin pages again.  Does not wait.  Only the newest
+question's answer counts: a late answer to an older one never overwrites a newer list (M4)."
   (unless (fboundp 'drgnx-hub-call) (require 'drgnx-hub-client))
-  (drgnx-hub-call "plugins/list" nil
-                  (lambda (result err)
-                    (drgnx-plugins--listed result err)
-                    (unless err (drgnx-extensions-plugins--redraw)))))
+  (let ((n (cl-incf drgnx-extensions-plugins--asked)))
+    (drgnx-hub-call "plugins/list" nil
+                    (lambda (result err)
+                      (when (= n drgnx-extensions-plugins--asked)
+                        (drgnx-plugins--listed result err)
+                        (unless err (drgnx-extensions-plugins--redraw)))))))
 
 (defun drgnx-extensions-plugins--event (event _data)
   "A `drgnx-hub-event-functions' handler: a `plugin' event reads the plugins again while the view shows any."
   (when (and (equal event "plugin")
              (or (get-buffer drgnx-extensions-list-buffer-name)
                  (seq-some (lambda (b) (eq (buffer-local-value 'major-mode b) 'drgnx-extensions-details-mode)) (buffer-list))))
-    (drgnx-extensions-plugins-refresh)))
+    ;; a burst of events is one question, asked a moment after the last (M4)
+    (drgnx-timer-debounce 'extensions-plugins-refresh 0.1 #'drgnx-extensions-plugins-refresh :owner :core)))
 
 ;;;; The page
 
@@ -139,6 +148,11 @@ hash it displays is kept for Approve."
              (drgnx-plugins-page-insert name drgnx-extensions-plugins--root)
              (setq shown drgnx-plugins--shown)
              (buffer-string))
+      ;; a page drawn again with another hash than the one the user may have read: the next Approve holds once
+      (dolist (cell shown)
+        (let ((was (assoc (car cell) drgnx-extensions-plugins--shown)))
+          (when (and was (not (equal (cdr was) (cdr cell))))
+            (cl-pushnew (car cell) drgnx-extensions-plugins--changed :test #'equal))))
       (setq drgnx-extensions-plugins--shown shown))))
 
 (defun drgnx-extensions-plugin-open (name)
@@ -158,6 +172,9 @@ now."
   (interactive)
   (let* ((name (drgnx-extensions-plugins--name)) (hash (cdr (assoc name drgnx-extensions-plugins--shown))))
     (unless hash (user-error "Open the page of %s first: Approve sends the hash the page shows" name))
+    (when (member name drgnx-extensions-plugins--changed)
+      (setq drgnx-extensions-plugins--changed (delete name drgnx-extensions-plugins--changed))
+      (user-error "%s changed while this page was open: read the page again, then Approve" name))
     (drgnx-plugins-approve name hash)))
 
 ;;;; The replace diff
@@ -184,11 +201,19 @@ now."
           (dolist (v (append (plist-get hook :verdicts) nil))
             (unless (seq-some (lambda (o) (member v (append (plist-get o :verdicts) nil))) olds)
               (push (format "New verdict %s at %s" v point) out)))
+          ;; M9: a hook that stops being advisory can now deny; one point's hooks are advisory while all of them are
+          (when (and (not (eq (plist-get hook :advisory) t))
+                     (seq-every-p (lambda (o) (eq (plist-get o :advisory) t)) olds))
+            (push (format "Not advisory any more at %s: a failure of the hook now denies" point) out))
           (dolist (key '(:tool_kinds :tools :paths))
             (when-let* ((extra (drgnx-extensions-plugins--wider
                                 (append (plist-get hook key) nil)
                                 (mapcar (lambda (o) (append (plist-get o key) nil)) olds))))
               (push (format "Wider %s at %s: %s" (substring (symbol-name key) 1) point extra) out))))))
+    ;; M9: a bigger key-value store (an approval stored before the hub kept the size says nothing to compare)
+    (let ((new-kv (plist-get new :kv_bytes)) (old-kv (plist-get old :kv_bytes)))
+      (when (and (integerp new-kv) (integerp old-kv) (> new-kv old-kv))
+        (push (format "Bigger key-value store: %d bytes, was %d" new-kv old-kv) out)))
     (nreverse out)))
 
 (defun drgnx-extensions-plugins--diff-section (_name row)

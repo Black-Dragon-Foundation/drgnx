@@ -23916,6 +23916,11 @@
             "additionalProperties": false,
             "description": "What one hook of a plugin may see and say: the manifest's declaration, as written.",
             "properties": {
+              "advisory": {
+                "default": false,
+                "description": "An advisory hook's failure is a note, not a deny: one that stops being advisory can block.",
+                "type": "boolean"
+              },
               "paths": {
                 "default": [],
                 "items": {
@@ -24011,6 +24016,15 @@
                   "type": "string"
                 },
                 "type": "array"
+              },
+              "kv_bytes": {
+                "description": "The most its key-value store may hold (key and value lengths summed), the manifest's `kv_bytes` or the default;\nnone in a reach stored before the hub kept it.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               }
             },
             "type": "object"
@@ -24136,6 +24150,11 @@
             "additionalProperties": false,
             "description": "What one hook of a plugin may see and say: the manifest's declaration, as written.",
             "properties": {
+              "advisory": {
+                "default": false,
+                "description": "An advisory hook's failure is a note, not a deny: one that stops being advisory can block.",
+                "type": "boolean"
+              },
               "paths": {
                 "default": [],
                 "items": {
@@ -24231,6 +24250,15 @@
                   "type": "string"
                 },
                 "type": "array"
+              },
+              "kv_bytes": {
+                "description": "The most its key-value store may hold (key and value lengths summed), the manifest's `kv_bytes` or the default;\nnone in a reach stored before the hub kept it.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               }
             },
             "type": "object"
@@ -24346,6 +24374,11 @@
             "additionalProperties": false,
             "description": "What one hook of a plugin may see and say: the manifest's declaration, as written.",
             "properties": {
+              "advisory": {
+                "default": false,
+                "description": "An advisory hook's failure is a note, not a deny: one that stops being advisory can block.",
+                "type": "boolean"
+              },
               "paths": {
                 "default": [],
                 "items": {
@@ -24524,6 +24557,15 @@
                   "type": "string"
                 },
                 "type": "array"
+              },
+              "kv_bytes": {
+                "description": "The most its key-value store may hold (key and value lengths summed), the manifest's `kv_bytes` or the default;\nnone in a reach stored before the hub kept it.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               }
             },
             "type": "object"
