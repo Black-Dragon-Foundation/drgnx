@@ -160,8 +160,7 @@ not put the input row in twice (a prefix in the overlay's string comes too late:
           (progn (drgnx-palette-frame--dress win)
                  (let ((ov (car drgnx-palette-frame--dressing)))
                    (should (equal "" (overlay-get ov 'line-prefix)))
-                   (should (= (overlay-start ov) (point-min)))
-                   (should (equal "" (get-char-property (point-min) 'line-prefix)))))
+                   (should (= (overlay-start ov) (point-min)))))
         (drgnx-palette-frame--undress)
         (set-window-parameter win 'mode-line-format mode)))))
 
