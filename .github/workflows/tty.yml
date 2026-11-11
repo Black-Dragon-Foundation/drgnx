@@ -24,3 +24,25 @@ jobs:
       # Nidhogg's integration line while drgnx's next release is unreleased (drgnx-tiers.yml; release: the pinned one)
       nidhogg: line
       tiers: tty
+
+  # A nightly that fails (a tier red, or a job before the tiers dead: a package fetch, the image, the Nidhogg line) must not
+  # sit unseen: it opens one issue (or adds a comment to the open one) naming the run. Scheduled runs only.
+  alert:
+    name: Alert on a failed nightly
+    needs: tiers
+    if: ${{ always() && github.event_name == 'schedule' && needs.tiers.result != 'success' && needs.tiers.result != 'skipped' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the nightly-failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULT: ${{ needs.tiers.result }}
+        run: |
+          title="Nightly terminal tier is failing"
+          n=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          body="The nightly ended $RESULT: $RUN"
+          if [ -n "$n" ]; then gh issue comment "$n" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"; fi
