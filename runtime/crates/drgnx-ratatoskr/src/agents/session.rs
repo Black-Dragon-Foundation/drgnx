@@ -5970,6 +5970,21 @@ impl Session {
         // between the two runs the prompt again at the next start; it never loses it)
         self.flush_transcript();
         self.persist_queue();
+        // `RATATOSKR_TEST_ASK_DELAY_MS` (test-hooks): the turn's step is out but its ask not yet told, for a scenario
+        // that must wait for the ask rather than the step
+        #[cfg(feature = "test-hooks")]
+        {
+            static DELAY: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+            let ms = *DELAY.get_or_init(|| {
+                std::env::var("RATATOSKR_TEST_ASK_DELAY_MS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0)
+            });
+            if ms > 0 {
+                crate::clock::sleep(std::time::Duration::from_millis(ms)).await;
+            }
+        }
         // the user's words reach the agent: its current ask from here on (told before the agent can write)
         if item.origin == Origin::User {
             let (session, text, at) = (self.id.clone(), item.text.clone(), now());
