@@ -276,6 +276,29 @@ barrier, and the test goes on."
       (should id)
       (should (natnump m)))))
 
+(ert-deftest drgnx-delivery-gate/a-real-wait-longer-than-five-seconds-is-waited-for ()
+  "A hub task inside a real wait that ends by itself after more than the barrier's 5 s (a store write on a loaded
+disk): the barrier waits for its end and the test goes on; it is not named `waiting' (which fails the test)."
+  (drgnx-delivery-gate-test--with-hub
+    (let (started m)
+      (drgnx-test-gated nil
+        (setq started (drgnx-test-gate--control-call "__test_real_wait" (list :ms 6500)))
+        (setq m (drgnx-test-deliver-all)))
+      (should (eq (plist-get started :result) t))
+      (should (natnump m)))))
+
+(ert-deftest drgnx-delivery-gate/a-real-wait-that-never-ends-fails-through-the-gate-deadline ()
+  "A hub task inside a real wait that never ends: the barrier does not answer as if the hub had settled; the test's
+own deadline (`drgnx-test-gate-block-secs', here past the barrier's 5 s) fails it."
+  (drgnx-delivery-gate-test--with-hub
+    (let ((err (should-error (let ((drgnx-test-gate-block-secs 8))
+                               (drgnx-test-gated nil
+                                 (drgnx-test-gate--control-call "__test_real_wait" nil)
+                                 (drgnx-test-deliver-all)))
+                             :type 'ert-test-failed)))
+      (should (string-match-p "did not answer the gate" (car (cadr err))))
+      (should (equal (plist-get (cdr (cadr err)) :waiting-for) "__test_barrier")))))
+
 (ert-deftest drgnx-delivery-gate/answers-t-releases-every-answer-as-it-is-due ()
   "With (:answers t) every answer is released like a handshake line, so a call the code under test waits on returns
 with no step of its own; the events stay held until a step or `drgnx-test-deliver-all'."

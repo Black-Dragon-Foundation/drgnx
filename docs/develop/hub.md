@@ -342,13 +342,19 @@ lowest pending line:
    - `clock::real_long(f)`: a job's watcher (`exec:watch`), from the child's start to its recorded end.
    - outside the tasks, `gateway:requests`: the gateway's requests from their send until their `request` (and
      `budget`) event is on the channel, so a client that read its whole answer sees the event before the marker.
+   The first two end by themselves, however long a loaded machine makes them (a commit's fsync can take seconds), so
+   the barrier waits for them with no limit of its own (`clock::settle_barrier`), and the 5 s count again from the
+   end of the last one. One that never ends is a hang: the barrier does not answer, and the asker's own deadline
+   fails the test (the gate's `drgnx-test-gate-block-secs`, "the hub did not answer the gate"). The 5 s stay for a
+   job's watcher, `gateway:requests` and tasks still running. `__test_real_wait {ms?}` (test-hooks) starts a task
+   `test:real-wait` inside a blocking wait of MS ms, or one that never ends without MS: the gate's tests use it.
 3. The tasks spawned since then are run once (an advance of 0 ms), and the held writes are released.
 4. `{"event": "__test_marker", "data": {"marker": M}}` is written on every live connection. M counts from 1 per hub.
 5. The answer: `{"marker": M, "unnamed": n, "busy": [origins], "waiting": [origins], "sites": [sites]}`. `n` counts the writes from
    tasks without an origin since the last barrier. The gate fails a test when n > 0, since such writes are released
    here and not by the test's own advance. `busy` names tasks still running after 5 s. `waiting` names the tasks
-   still inside a real wait (and `gateway:requests` while requests are in flight): the allowed ones, and those still
-   inside after the 5 s. The gate fails a test on any its `drgnx-test-gate-waiting-ok` does not list, since what they
+   still inside a real wait (and `gateway:requests` while requests are in flight): the allowed ones, and the
+   watchers still inside after the 5 s. The gate fails a test on any its `drgnx-test-gate-waiting-ok` does not list, since what they
    write later is not ordered by the test. `sites` says where each of those waits began and for how long, as
    `"ORIGIN at FILE:LINE for N ms"`: the line of the `clock::blocking`, `clock::real` or `clock::real_long` call (they
    are `#[track_caller]`), or for a store thread's answer the urdr line that waits. The gate's failure prints them, so

@@ -133,6 +133,10 @@ Called on the bus's edges and by commands — never while drawing, so a buffer s
     (drgnx-chrome--record-closed-position w b)
     (drgnx-chrome--close w b)))
 
+(defvar-local drgnx-chrome-tab-icon nil
+  "The icon name (an `etc/icons' name, as `server') this buffer's tab shows; nil: the file kind of its file's or
+buffer's name (`drgnx-look-file-icon-name').  A remote terminal sets `server'.")
+
 (defvar drgnx-chrome--tab-map
   (let ((m (make-sparse-keymap)))
     (define-key m [tab-line mouse-1] #'drgnx-chrome--select-tab)
@@ -203,7 +207,8 @@ shown tab is lifted off the row (PAINT's LIFT), the others are on its hairline (
          (tab (lambda (s) (propertize s 'face face 'help-echo "Show; middle-click closes" 'local-map drgnx-chrome--tab-map)))
          (close (lambda (s) (propertize s 'help-echo "Close this tab" 'local-map drgnx-chrome--close-map)))
          (s (if rows
-                (let ((icon (and shown (drgnx-look-icon (drgnx-look-file-icon-name (or (buffer-file-name b) (buffer-name b)))
+                (let ((icon (and shown (drgnx-look-icon (or (buffer-local-value 'drgnx-chrome-tab-icon b)
+                                                            (drgnx-look-file-icon-name (or (buffer-file-name b) (buffer-name b))))
                                                         face 14)))
                       (pad (lambda (n) (propertize " " 'display (drgnx-chrome--px n frame)))))
                   (concat

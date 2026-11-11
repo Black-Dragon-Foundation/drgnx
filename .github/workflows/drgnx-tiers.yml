@@ -19,7 +19,7 @@ on:
         type: string
         default: release
       tiers:
-        description: "Space-separated jobs to run: unit no-lisp-writes hub-chaos ui scenario perf tty timing macos"
+        description: "Space-separated jobs to run: unit no-lisp-writes hub-chaos ui scenario perf tty ssh timing macos"
         type: string
         required: true
       selector:
@@ -544,6 +544,57 @@ jobs:
           DRGNX_CONTAINER: podman
           DRGNX_TEST_SELECTOR: ${{ inputs.selector }}
         run: bin/drgnx test --container --tty --fedora 45
+
+  # The remote-terminal rows (test/ssh/; docs/develop/terminal.md, "Remote terminals"): test/container/ssh-row.sh on
+  # the run's test image plus Containerfile.ssh, with the hub (test hooks) and the terminal worker built here (the
+  # worker's engine needs Zig and libghostty-vt's pinned tarballs). sshd listens on 127.0.0.1 inside the container;
+  # every key and user is made there per run. An image the script cannot have exits 75, which fails the job: never a skip
+  ssh:
+    name: Remote terminals (ssh row, Fedora 45)
+    needs: nidhogg-line
+    if: ${{ !cancelled() && needs.nidhogg-line.result != 'failure' && contains(format(' {0} ', inputs.tiers), ' ssh ') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
+          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}
+          path: drgnx
+          persist-credentials: false
+      - name: drgnx_ref is a commit on one of drgnx's own branches
+        if: ${{ inputs.drgnx_ref != '' }}
+        env:
+          ASKED: ${{ inputs.drgnx_ref }}
+        run: |
+          case "$ASKED" in refs/pull/*|pull/*) echo "::error::drgnx_ref $ASKED is a pull request's, not a branch of drgnx's"; exit 1 ;; esac
+          sha=$(git -C drgnx rev-parse HEAD)
+          git clone -q --bare --no-tags --filter=tree:0 https://github.com/Black-Dragon-Foundation/drgnx.git "$RUNNER_TEMP/drgnx-branches"
+          [ -n "$(git -C "$RUNNER_TEMP/drgnx-branches" branch --contains "$sha" 2>/dev/null)" ] ||
+            { echo "::error::drgnx_ref $ASKED ($sha) is on none of drgnx's branches (a fork's or a pull request's commit)"; exit 1; }
+      - name: Zig and libghostty-vt's pinned tarballs (the terminal worker's engine)
+        working-directory: drgnx
+        run: |
+          sudo bash test/container/zig.sh linux
+          bash runtime/crates/ghostty-vt-sys/fetch.sh
+      - name: Ratatoskr (test hooks) and the terminal worker beside it
+        working-directory: drgnx
+        run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p drgnx-term --bins --features drgnx-ratatoskr/test-hooks
+      - uses: ./drgnx/.github/actions/test-image
+        with:
+          containerfile: Containerfile
+          image: drgnx-test
+          variable: DRGNX_TEST_IMAGE
+          nidhogg-artifact: ${{ (inputs.nidhogg == 'artifact' || inputs.nidhogg == 'line') && 'tarball-fedora-45' || '' }}
+      - name: The ssh row in test/container/Containerfile.ssh (on the test image)
+        working-directory: drgnx
+        env:
+          DRGNX_CONTAINER: podman
+          DRGNX_TEST_SELECTOR: ${{ inputs.selector }}
+        run: DRGNX_RATATOSKR_BIN="$PWD/runtime/target/debug/ratatoskr" bash test/container/ssh-row.sh
 
   # The timing lane (report only): the tests tagged :timing, which every other tier leaves out (DRGNX_TEST_NO_TIMING),
   # judged against the runner's own speed (test/timing-lane.sh). Report only because the lane script reports and exits 0

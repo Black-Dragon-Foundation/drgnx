@@ -197,12 +197,20 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: ${{ github.workspace }}
         run: bash .github/ci/wasm-target.sh
+      # cargo-nextest runs the workspace's tests, each in a process of its own (the same tests by name as libtest's runner,
+      # the ignored ones still ignored), with no retries; it runs no doc tests, so they have their own step
+      - name: cargo-nextest 0.9.151 (checksum verified)
+        if: ${{ !cancelled() }}
+        working-directory: ${{ github.workspace }}
+        run: bash .github/ci/nextest.sh
       # --no-fail-fast: every crate's failures in one run. The GPU tests run the real shaders on llvmpipe, Mesa's
       # software Vulkan driver (rust-packages.sh installs it), so they need no GPU
       - if: ${{ !cancelled() }}
         env:
           DRGNX_TEST_ADAPTER: llvmpipe
-        run: cargo test --locked --no-fail-fast --workspace --features drgnx-ratatoskr/test-hooks,drgnx-px/test-hooks
+        run: cargo nextest run --locked --no-fail-fast --retries 0 --workspace --features drgnx-ratatoskr/test-hooks,drgnx-px/test-hooks
+      - if: ${{ !cancelled() }}
+        run: cargo test --locked --no-fail-fast --workspace --doc --features drgnx-ratatoskr/test-hooks,drgnx-px/test-hooks
       # the test-hooks binary and the harness for the steps below
       # (+ gleipnir-probe and gleipnir-escape, the escape suite's two binaries: glibc builds, so the same ones run on a VM)
       - id: build
@@ -1068,7 +1076,22 @@ jobs:
         run: /bin/bash test/container/zig.sh macos
       - name: libghostty-vt's pinned tarballs (build.rs never downloads)
         run: /bin/bash runtime/crates/ghostty-vt-sys/fetch.sh
+      # drgnx-term's vttest rows drive the real vttest (the Linux test images carry it; a missing one fails the rows)
+      - name: vttest (the terminal's conformance rows)
+        run: brew install vttest
       - run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
+      # The terminal worker's peer check on a Mac (getpeereid): the workspace run above checks that this user's
+      # connection is served; another uid's needs root, so the same test runs again under sudo (the runner's user has
+      # passwordless sudo), and a run that did not check (no root) fails. The worker's log goes to the job's log.
+      - name: a terminal worker drops another uid's connection (getpeereid, as root)
+        if: ${{ !cancelled() }}
+        run: |
+          bin=$(cargo test --locked --no-fail-fast --no-run --manifest-path runtime/Cargo.toml -p drgnx-term --test running --message-format=json |
+            jq -r 'select(.profile.test == true and .target.name == "running") | .executable' | tail -n 1)
+          [ -x "$bin" ] || { echo "::error::no test binary for drgnx-term's running tests"; exit 1; }
+          out=$(sudo env RUST_LOG=debug "$bin" --exact the_socket_is_private_and_another_uid_is_dropped --nocapture 2>&1) || { echo "$out"; exit 1; }
+          echo "$out"
+          if grep -q "not checked" <<< "$out"; then echo "::error::another uid's connection was not checked"; exit 1; fi
       # The hub on a Mac: the runner rows of tests/macos.rs ran above with the workspace; this is the one that needs a
       # real sshd. Remote Login on with a throwaway key (.github/ci/macos-sshd.sh), then the generated ssh config and
       # the transport against it. The key's folder is removed with the step, whatever it said.

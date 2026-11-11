@@ -824,7 +824,7 @@ fn done_of(view: &str, run: &Run, error: Option<String>, off: Vec<String>) -> Ru
         error,
         off,
         scope: run.scope.clone(),
-        kinds: run.kinds.clone(),
+        kinds: run.kinds.as_ref().map(modes::kind_list),
     }
 }
 

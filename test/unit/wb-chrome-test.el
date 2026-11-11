@@ -723,6 +723,19 @@ split, then more.  Pattern D (the frame's kind and fonts are stubbed)."
                   (should (< split more)))))))
       (disable-theme 'drgnx-dark))))
 
+(ert-deftest drgnx-chrome/a-buffer-can-name-its-tab-icon ()
+  "A shown tab's icon is its file's kind, unless the buffer names one (`drgnx-chrome-tab-icon': a remote terminal's
+`server')."
+  (drgnx-chrome-test--with dir
+    (let ((w (selected-window)) (a (drgnx-chrome-test--open dir "a.el")) (other (generate-new-buffer "*terminal: box*")))
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-look-icon) (lambda (name &rest _) (format "<%s>" name))))
+            (should (string-search (format "<%s>" (drgnx-look-file-name-icon-name "a.el"))
+                                   (drgnx-chrome--tab w a t t t)))
+            (with-current-buffer other (setq-local drgnx-chrome-tab-icon 'server))
+            (should (string-search "<server>" (drgnx-chrome--tab w other t t t))))
+        (kill-buffer other)))))
+
 (ert-deftest drgnx-chrome/a-preview-tab-is-italic-until-kept ()
   "As VS Code's preview: a file opened as a preview (the Explorer's single click) is an italic tab that the next
 preview replaces; an edit, or opening it to work in (a double click, Open), keeps it as a normal tab.  A file that
