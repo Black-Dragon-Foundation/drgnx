@@ -134,7 +134,8 @@ saved. Symbol mode's rename sends the language server's edits the same way, as e
 
 **Preview** (the view's Preview button, or Preview This File's Changes on a row) opens the row's file as a read-only
 diff in the editor area, "NAME · preview": the file before and after its ticked replacements, the same edit set
-Replace All writes (the hub's `search/preview`). Each hunk has a tick box: `a` keeps the hunk (its matches are ticked
+Replace All writes (the hub's `search/preview`), each line with its number. **Open File** opens the file; **Replace in
+This File** writes the file's ticked matches only. Each hunk has a tick box: `a` keeps the hunk (its matches are ticked
 in the view), `D` drops it (unticked); the view's boxes and the tile follow each other. With **.\*** on, a groups line
 under each hunk shows what each group took, `\1 = pending · \2 = p`, and `\2 = ∅` in the warning colour for a group
 that matched nothing, so a wrong group number shows before anything is written.

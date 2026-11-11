@@ -452,6 +452,8 @@
         (search-scope-changed "SPC s g")
         (search-scope-branch "SPC s b")
         (search-preview-file "C-c C-v" :map (drgnx-replace . drgnx-replace-keys-map))
+        (search-preview-open :none "the preview's Open File button; the palette")
+        (search-preview-replace-file :none "the preview's Replace in This File button; the palette")
         (search-preview-keep "a" :map (drgnx-replace . drgnx-replace-preview-keys-map))
         (search-preview-drop "D" :map (drgnx-replace . drgnx-replace-preview-keys-map))
         (search-sheet-confirm "C-c C-c" :map (drgnx-replace . drgnx-replace-sheet-keys-map))

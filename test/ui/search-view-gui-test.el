@@ -191,7 +191,7 @@ temp dir; print where."
                               ;; the module's rule sends the sheet to the popup lane (`drgnx-wb-place'); this test
                               ;; runs without the rules
                               ((symbol-function 'pop-to-buffer)
-                               (lambda (b &rest _) (select-window (drgnx-popup--show b nil nil)))))
+                               (lambda (b &rest _) (select-window (drgnx-popup--show b nil '(:height 0.8))))))
                       (drgnx-replace--sheet-show
                        (list :change 3
                              :files (vector (list :path file :source "disk"
@@ -201,10 +201,19 @@ temp dir; print where."
                              :skipped (vector (list :id "m:4:3" :path (expand-file-name "src/old.rs" dir)
                                                     :why "changed on disk since the search")))))
                     (with-current-buffer drgnx-replace-sheet-buffer-name
-                      (goto-char (point-min))
-                      (should (search-forward "Replace All  3 matches in 2 files" nil t))
-                      (should (search-forward "@@ -1,3 +1,3 @@" nil t))
-                      (should (search-forward "1 skipped: changed on disk since the search" nil t)))
+                      (save-excursion
+                        (goto-char (point-min))
+                        (should (search-forward "Replace 3 matches in 2 files" nil t))
+                        (should (search-forward "1 - fn parse" nil t))
+                        (should (search-forward "1 skipped: changed on disk since the search" nil t))
+                        ;; the whole sheet shows, its buttons too, at every scale: no line cut, none scrolled away
+                        (redisplay t)
+                        (let ((w (get-buffer-window (current-buffer) t)))
+                          (should w)
+                          (should (pos-visible-in-window-p (point) w))
+                          (should (search-forward "Cancel" nil t))
+                          (should (pos-visible-in-window-p (point) w))
+                          (should (zerop (window-hscroll w))))))
                     (drgnx-search-ui-test--shot shots "search-view-sheet.png")
                     (when-let* ((b (get-buffer drgnx-replace-sheet-buffer-name)))
                       (quit-window t (get-buffer-window b t)))

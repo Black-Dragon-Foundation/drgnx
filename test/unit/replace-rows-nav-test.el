@@ -263,12 +263,12 @@ tile is asked for again."
                 (should buffer-read-only)
                 (let ((text (buffer-string)))
                   (should (string-match-p "2 of 2 matches ticked · \\+2 −2" text))
-                  (should (string-match-p "^\\[x\\] @@ -1,2 \\+1,2 @@" text))
-                  (should (string-match-p "^    -let needle;$" text))
-                  (should (string-match-p "^    \\+let pin;$" text))
-                  (should (string-match-p "\\\\1 = need · \\\\2 = ∅" text)))
+                  (should (string-match-p "^\\[x\\] hunk 1" text))
+                  (should (string-match-p "^   1 - let needle;$" text))   ; the old file's line number
+                  (should (string-match-p "^   2 \\+ let pin;$" text))     ; the new file's
+                  (should (string-match-p "groups  \\\\1 = need · \\\\2 = ∅" text)))
                 (goto-char (point-min))
-                (search-forward "@@")
+                (search-forward "hunk 1")
                 (setq calls nil)
                 (drgnx-replace-preview-drop)))
             (should (equal '("[ ]" "[ ]" "[ ]" "[x]" "[x]") (drgnx-replace-rows-nav-test--boxes)))
@@ -277,7 +277,7 @@ tile is asked for again."
                                  #'string<)))
             (with-current-buffer (drgnx-replace-rows-nav-test--tile)
               (goto-char (point-min))
-              (search-forward "@@")
+              (search-forward "hunk 1")
               (drgnx-replace-preview-keep))
             (should-not (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'ticked)))
         (when-let* ((b (drgnx-replace-rows-nav-test--tile))) (kill-buffer b))))))
@@ -307,9 +307,9 @@ change); `C-u' Replace All writes at once, no sheet."
               (with-current-buffer drgnx-replace-sheet-buffer-name
                 (should (derived-mode-p 'drgnx-replace-sheet-mode))
                 (let ((text (buffer-string)))
-                  (should (string-match-p "Replace All  2 matches in 1 file" text))
-                  (should (string-match-p "a.txt  \\+2 −2" text))
-                  (should (string-match-p "@@ -1,2 \\+1,2 @@" text))   ; the selected file's first hunk
+                  (should (string-match-p "Replace 2 matches in 1 file · 1 skipped" text))
+                  (should (string-match-p "a.txt \\+2 −2" text))
+                  (should (string-match-p "^       1 - let needle;$" text))   ; the selected file's first hunk
                   (should (string-match-p "1 skipped: changed on disk since the search" text)))
                 (should-not (assoc "search/apply" calls))
                 (cl-letf (((symbol-function 'quit-window) (lambda (&rest _) nil)))
