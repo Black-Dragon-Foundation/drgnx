@@ -1535,7 +1535,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `term/key` | user | `{action?: "press" \| "repeat" \| "release", id: string, key: string, mods?: [string], text?: string, unshifted?: natnum}` | `boolean` | no |
 | `term/list` | user | `{}` | `[TermStatus]` | no |
 | `term/mouse` | user | `{button?: integer, col: natnum, id: string, kind: string, mods?: [string], row: natnum}` | `boolean` | no |
-| `term/open` | user | `{cell_px?: [natnum, natnum], class: string, cols: natnum, command?: [string], config?: [[string, SettingValue]], dir: string, env?: [[string, string]], memory_max?: string, place?: string, rows: natnum, tasks_max?: string, window?: natnum}` | `{id: string, view: string}` | no |
+| `term/open` | user | `{cell_px?: [natnum, natnum], class: string, cols: natnum, command?: [string], config?: [[string, SettingValue]], dir: string, env?: [[string, string]], memory_max?: string, place?: string, remote?: string, rows: natnum, tasks_max?: string, window?: natnum}` | `{id: string, view: string}` | no |
 | `term/paste` | user | `{id: string, text: string}` | `boolean` | no |
 | `term/resize` | user | `{cell_px: [natnum, natnum], cols: natnum, id: string, rows: natnum}` | `boolean` | no |
 | `term/scroll` | user | `{delta?: integer, from?: string, id: string, prompt_delta?: integer, to?: string}` | `{key?: string}` | no |

@@ -2270,6 +2270,42 @@ Reattach Terminal shows them).  A terminal another running drgnx shows is never 
 | `:agents` | `never` |
 | `:schema` | `(enum ask always never)` |
 
+## drgnx-term-remote-clipboard-hosts
+
+The hosts whose programs may set the clipboard from a remote terminal without asking (Always for HOST adds one).
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat string)` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
+
+## drgnx-term-remote-clipboard-write
+
+What a program in a remote terminal may do when it sets the clipboard (OSC 52): `ask', a notice asks (Allow, Always
+for that host, Deny; the text is not shown); `allow'; `deny'.  The hosts in `drgnx-term-remote-clipboard-hosts' are
+allowed without asking.  Reading the clipboard is never allowed.
+
+| Key | Value |
+| --- | --- |
+| Default | `ask` |
+| Type | `(choice (const ask) (const allow) (const deny))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum ask allow deny)` |
+
 ## drgnx-term-scroll-to-bottom
 
 When a terminal scrolled back to earlier output goes back to its cursor: on a keystroke (`keystroke'), on new
