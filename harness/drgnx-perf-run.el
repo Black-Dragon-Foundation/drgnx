@@ -1222,6 +1222,7 @@ before or after).  An error when a regroup drew nothing or never asked for the w
    '(progn
       (defvar drgnx-perf--wr-dir nil "The project the write workloads search and write.")
       (defvar drgnx-perf--wr-t nil "When the step the running measure waits for ended (`float-time'), or nil.")
+      (defvar drgnx-perf--wr-from "needle" "What the next write replaces (the fixture's text, else what the last wrote).")
       (defvar drgnx-perf--wr-lisp nil "While a write runs: (MS . CALLS), the Lisp time and calls of its open buffers.")
       (defun drgnx-perf--wr-mark (&rest _) (setq drgnx-perf--wr-t (float-time)))
       (defun drgnx-perf--wr-applied (apply &rest args)
@@ -1234,7 +1235,7 @@ before or after).  An error when a regroup drew nothing or never asked for the w
       (defun drgnx-perf--wr-up (files lines &optional open)
         "The Search view listing FILES Rust files' matches of \"needle\", file I holding (funcall LINES I) lines
 that call it; OPEN: every file open in a buffer.  The view's project is the fixture's folder."
-        (setq drgnx-perf--wr-dir (make-temp-file "drgnx-perf-write" t))
+        (setq drgnx-perf--wr-dir (make-temp-file "drgnx-perf-write" t) drgnx-perf--wr-from "needle")
         (let ((total 0))
           (dotimes (i files)
             (let ((n (funcall lines i)))
@@ -1280,6 +1281,16 @@ that call it; OPEN: every file open in a buffer.  The view's project is the fixt
             (with-current-buffer b (set-buffer-modified-p nil))
             (kill-buffer b)))
         (when drgnx-perf--wr-dir (delete-directory drgnx-perf--wr-dir t) (setq drgnx-perf--wr-dir nil)))
+      (defun drgnx-perf--wr-said ()
+        "The last 4 lines of *Messages*: what a failed premise heard."
+        (with-current-buffer (messages-buffer)
+          (save-excursion (goto-char (point-max)) (forward-line -4)
+                          (buffer-substring-no-properties (point) (point-max)))))
+      (defun drgnx-perf--wr-guard (what fn)
+        "FN, an error naming WHAT when it has not returned in 20 s (a prompt it waits on, or a wait that never ends)."
+        (with-timeout (20 (error "Premise: %s hung (prompt %S, said %S)" what (minibuffer-prompt)
+                                 (string-replace "\n" " | " (drgnx-perf--wr-said))))
+          (funcall fn)))
       (defun drgnx-perf--wr-stats (xs) (mapcar #'drgnx-perf--round (drgnx-perf-stats xs)))
       (defun drgnx-perf--wr-sheet-measure ()
         "(:show_ms STATS :hunk_ms STATS): Replace All over 10k matches in 500 files to its sheet shown (the edit set
@@ -1287,11 +1298,12 @@ asked, answered and drawn; spec §8: ≤ 300 ms), and to the selected file's hun
 each sheet cancelled."
         (let ((v (drgnx-perf--replace-view)) show hunk)
           (with-current-buffer v (drgnx-replace--fill 'replace "pin"))
-          (dotimes (i 21)
+          (dotimes (i 101)
             (setq drgnx-perf--wr-t nil)
             (let ((t0 (float-time)))
-              (with-current-buffer v (drgnx-replace-all))
-              (unless (drgnx-perf--wait 30 (lambda () drgnx-perf--wr-t))
+              (drgnx-perf--wr-guard (format "round %d: Replace All" i)
+                                    (lambda () (with-current-buffer v (drgnx-replace-all))))
+              (unless (drgnx-perf--wait 15 (lambda () drgnx-perf--wr-t))
                 (error "Premise: Replace All showed no sheet"))
               (let* ((shown drgnx-perf--wr-t)
                      (sheet (get-buffer drgnx-replace-sheet-buffer-name))
@@ -1304,40 +1316,48 @@ each sheet cancelled."
                 (when (> i 0)
                   (push (* 1000 (- shown t0)) show)
                   (push (* 1000 (- h t0)) hunk))
-                (with-selected-window (or (get-buffer-window sheet t) (selected-window))
-                  (with-current-buffer sheet (drgnx-replace-sheet-cancel))))))
+                (drgnx-perf--wr-guard (format "round %d: Cancel" i)
+                                      (lambda ()
+                                        (with-selected-window (or (get-buffer-window sheet t) (selected-window))
+                                          (with-current-buffer sheet (drgnx-replace-sheet-cancel))))))))
           (list :show_ms (drgnx-perf--wr-stats show) :hunk_ms (drgnx-perf--wr-stats hunk))))
       (defun drgnx-perf--wr-apply-measure ()
         "(:lisp_ms STATS :done_ms STATS): Replace All (no sheet) of 200 matches in 50 files, every one open in a
 buffer: the Lisp time writing the hub's edits into the 50 buffers, one undo group each and saved (spec §8:
 ≤ 100 ms), and from the command to the write's end (`search-change', reported); `needle' to `pin' and back, 20
 times after one."
-        (let ((v (drgnx-perf--replace-view)) lisp done (from "needle") (to "pin"))
-          (dotimes (i 21)
-            (when (> i 0) (drgnx-perf--wr-search from 200))
-            (with-current-buffer v (drgnx-replace--fill 'replace to))
-            (setq drgnx-perf--wr-t nil drgnx-perf--wr-lisp (cons 0.0 0))
-            (let ((t0 (float-time)))
-              (with-current-buffer v (drgnx-replace-all t))
-              (unless (drgnx-perf--wait 10 (lambda () drgnx-perf--wr-t))
-                (error "Premise: Replace All of %S never ended (round %d, Lisp %S, writes %S, applies %d, status %S)"
-                       from i drgnx-perf--wr-lisp (buffer-local-value 'drgnx-replace--writes v)
-                       (length drgnx-replace--applies) (buffer-local-value 'drgnx-replace--status v)))
-              (unless (= 50 (cdr drgnx-perf--wr-lisp))
-                (error "Premise: %d open buffers took the write, not 50" (cdr drgnx-perf--wr-lisp)))
-              (when-let* ((b (seq-find (lambda (b) (and (buffer-file-name b)
-                                                        (string-prefix-p drgnx-perf--wr-dir (buffer-file-name b))
-                                                        (or (buffer-modified-p b)
-                                                            (with-current-buffer b
-                                                              (save-excursion (goto-char (point-min))
-                                                                              (search-forward from nil t))))))
-                                       (buffer-list))))
-                (error "Premise: %s is unsaved or still holds %S" (buffer-name b) from))
-              (when (> i 0)
-                (push (car drgnx-perf--wr-lisp) lisp)
-                (push (* 1000 (- drgnx-perf--wr-t t0)) done)))
-            (setq drgnx-perf--wr-lisp nil)
-            (cl-rotatef from to))
+        (let ((v (drgnx-perf--replace-view)) lisp done)
+          (dotimes (i 101)
+            (let ((from drgnx-perf--wr-from) (to (if (equal drgnx-perf--wr-from "needle") "pin" "needle")))
+              (drgnx-perf--wr-search from 200)
+              (with-current-buffer v (drgnx-replace--fill 'replace to))
+              (setq drgnx-perf--wr-t nil drgnx-perf--wr-lisp (cons 0.0 0))
+              (let ((t0 (float-time)))
+                (with-current-buffer v
+                  (condition-case e (drgnx-replace-all t)
+                    (user-error
+                     (error "Premise: round %d: %s (counts %S, unticked %d, status %S)" i (error-message-string e)
+                            drgnx-replace--hub-counts
+                            (length (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'ticked))
+                            drgnx-replace--status))))
+                (unless (drgnx-perf--wait 10 (lambda () drgnx-perf--wr-t))
+                  (error "Premise: Replace All of %S never ended (round %d, Lisp %S, writes %S, applies %d, status %S)"
+                         from i drgnx-perf--wr-lisp (buffer-local-value 'drgnx-replace--writes v)
+                         (length drgnx-replace--applies) (buffer-local-value 'drgnx-replace--status v)))
+                (unless (= 50 (cdr drgnx-perf--wr-lisp))
+                  (error "Premise: %d open buffers took the write, not 50" (cdr drgnx-perf--wr-lisp)))
+                (when-let* ((b (seq-find (lambda (b) (and (buffer-file-name b)
+                                                          (string-prefix-p drgnx-perf--wr-dir (buffer-file-name b))
+                                                          (or (buffer-modified-p b)
+                                                              (with-current-buffer b
+                                                                (save-excursion (goto-char (point-min))
+                                                                                (search-forward from nil t))))))
+                                         (buffer-list))))
+                  (error "Premise: %s is unsaved or still holds %S" (buffer-name b) from))
+                (when (> i 0)
+                  (push (car drgnx-perf--wr-lisp) lisp)
+                  (push (* 1000 (- drgnx-perf--wr-t t0)) done)))
+              (setq drgnx-perf--wr-lisp nil drgnx-perf--wr-from to)))
           (list :lisp_ms (drgnx-perf--wr-stats lisp) :done_ms (drgnx-perf--wr-stats done))))
       (defun drgnx-perf--wr-edit-open ()
         "Open Edit Results of the view's search: ms to the buffer made and shown."
@@ -1351,7 +1371,7 @@ times after one."
 \(spec §8: ≤ 400 ms), 20 times after one; then 500 of its lines changed in 100 files (the first 5 of each),
 `needle' to `pin' and back, saved to \"Saved\" (spec §8: ≤ 600 ms), 20 times after one."
         (let (opens saves (from "needle") (to "pin"))
-          (dotimes (i 21)
+          (dotimes (i 101)
             (let ((ms (drgnx-perf--wr-edit-open))) (when (> i 0) (push ms opens))))
           (let ((buf (get-buffer (drgnx-search-edit--buffer-name "needle"))))
             (unless (= 5000 (length (buffer-local-value 'drgnx-search-edit--lines buf)))
@@ -1367,16 +1387,27 @@ times after one."
                                        do (puthash p (1+ n) seen) (push l out))
                               (nreverse out))))
                 (unless (= 500 (length chosen)) (error "Premise: %d lines chosen, not 500" (length chosen)))
-                (dotimes (i 21)
-                  (dolist (l chosen)
-                    (goto-char (drgnx-search-edit--line-start l))
-                    (unless (search-forward from (drgnx-search-edit--line-end l) t)
-                      (error "Premise: a chosen line has no %S" from))
-                    (replace-match to t t))
+                (dotimes (i 101)
+                  ;; as typing does: the harness's own call runs with the change hooks off
+                  (let ((inhibit-modification-hooks nil))
+                    (dolist (l chosen)
+                      (goto-char (drgnx-search-edit--line-start l))
+                      (unless (search-forward from (drgnx-search-edit--line-end l) t)
+                        (error "Premise: a chosen line has no %S" from))
+                      (condition-case e (replace-match to t t)
+                        (error (error "Premise: round %d: the edit signalled %S (after-change %S)" i e
+                                      after-change-functions)))
+                      (unless (gethash l drgnx-search-edit--marked)
+                        (error "Premise: round %d: an edited line is not marked (after-change %S, line-at %S, said %S)"
+                               i after-change-functions (and (drgnx-search-edit--line-at (point)) t)
+                               (string-replace "\n" " | " (drgnx-perf--wr-said))))))
                   (setq drgnx-perf--wr-t nil)
-                  (let ((t0 (float-time)))
+                  (let ((t0 (float-time)) (marked (hash-table-count drgnx-search-edit--marked)))
                     (drgnx-search-edit-save)
-                    (unless (drgnx-perf--wait 30 (lambda () drgnx-perf--wr-t)) (error "Premise: the save never ended"))
+                    (unless (drgnx-perf--wait 15 (lambda () drgnx-perf--wr-t))
+                      (error "Premise: round %d: the save of %d marked lines never ended (pending %S, status %S, said %S)" i marked
+                             (mapcar #'car drgnx-search-edit--pending) drgnx-search-edit--status
+                             (string-replace "\n" " | " (drgnx-perf--wr-said))))
                     (unless (string-prefix-p "Saved 500 lines in 100 files" (or drgnx-search-edit--status ""))
                       (error "Premise: the save says %S" drgnx-search-edit--status))
                     (when (> i 0) (push (* 1000 (- drgnx-perf--wr-t t0)) saves)))
@@ -1892,21 +1923,24 @@ a :measure without :actions each have :timeout seconds to answer (120)."
       ;; files; Replace All into 50 open buffers (200 edits); Edit Results open (5,000 lines in 300 files) and save
       ;; (500 lines in 100 files).  The hub's halves (the edit set, the closed files' write, the preview, the hand-off
       ;; brief) are the conformance rows perf/search-write, perf/search-preview and perf/search-handoff.
-      (search-sheet
-       :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) " (drgnx-perf-run--replace-setup-form)
-                       " " drgnx-perf-run--search-write-form " (drgnx-perf--wr-up 500 (lambda (_) 20)))")
-       :measure "(drgnx-perf--wr-sheet-measure)"
-       :teardown ,(concat "(progn (drgnx-perf--wr-down) (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
       (search-apply-open
        :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) " (drgnx-perf-run--replace-setup-form)
                        " " drgnx-perf-run--search-write-form " (drgnx-perf--wr-up 50 (lambda (_) 4) t))")
+       :repeat 1 :timeout 600               ; 21 rounds of 20 samples after one, each a search and a write
        :measure "(drgnx-perf--wr-apply-measure)"
        :teardown ,(concat "(progn (drgnx-perf--wr-down) (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
       (search-edit
        :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) " (drgnx-perf-run--replace-setup-form)
                        " (require 'drgnx-search-edit) " drgnx-perf-run--search-write-form
                        " (drgnx-perf--wr-up 300 (lambda (i) (if (< i 200) 17 16))))")
+       :repeat 1 :timeout 600               ; 21 rounds of 20 samples after one, each a search and a write
        :measure "(drgnx-perf--wr-edit-measure)"
+       :teardown ,(concat "(progn (drgnx-perf--wr-down) (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
+      (search-sheet
+       :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) " (drgnx-perf-run--replace-setup-form)
+                       " " drgnx-perf-run--search-write-form " (drgnx-perf--wr-up 500 (lambda (_) 20)))")
+       :repeat 1 :timeout 600               ; 21 rounds of 20 samples after one, each a search and a write
+       :measure "(drgnx-perf--wr-sheet-measure)"
        :teardown ,(concat "(progn (drgnx-perf--wr-down) (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
       ;; retyping the Search view's query over 10k matches on the hub's rows path, a character at a time: "needle" to
       ;; "needl", "need", "needl", "needle" 25 times (100 keys, each a search of 10k matches); a pause of 0.6 s
