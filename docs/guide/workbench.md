@@ -65,7 +65,8 @@ focused (so you can keep browsing; a row cut off at the bottom of the list is br
 Emacs profile, `j`/`k` in Vim), right expands or enters a folder, left collapses or goes to the parent, `RET`
 opens (and focuses), `SPC` opens and stays (`g o` in Vim), `TAB` toggles a folder (Emacs), `g` / `R` refreshes.
 Folders come first, names sort naturally (`file2` before `file10`) and case-insensitively; `.git` and other
-clutter is hidden (`drgnx-explorer-exclude`). Dragging does nothing — the Explorer never moves files by drag.
+clutter is hidden (`drgnx-explorer-exclude-names`: exact names or globs with `*` and `?`, by default `.git`, `.hg`,
+`.svn`, `.DS_Store`, `__pycache__` and `.#*` lock files). Dragging does nothing — the Explorer never moves files by drag.
 
 **Compact folders:** an open folder whose only entry is a folder shares its row (`src/app`), as in VS Code; the row
 is the last folder (opening, renaming, deleting act on it) and the chain ends at the first closed folder. Only

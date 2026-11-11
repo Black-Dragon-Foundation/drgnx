@@ -27,7 +27,7 @@
            (vector
             (list :reset
                   (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"] :lists ["order"]
-                                          :classes ["selected" "match" "dim"] :flags ["expanded"] :forms []
+                                          :classes ["selected" "match" "dim" "ticked"] :flags ["expanded"] :forms []
                                           :start "order")
                         :nodes (vector (funcall node "/r" "root" 1 nil "R" 1)
                                        (funcall node "/r/a" "dir" 0 "/r" "a" 1)
@@ -101,7 +101,8 @@ hub sends the view), tagged :call-connection or :other-connection elsewhere.  No
 a row's node is its path; a refresh asks again and draws nothing itself."
   (drgnx-explorer-rows-nav-test--with
     (should (equal (list (cons "explorer/subscribe" (list :view view :roots ["/r"] :expanded ["/r/lib"] :compact t
-                                                          :indent (drgnx-explorer--tree-indent))))
+                                                          :indent (drgnx-explorer--tree-indent)
+                                                          :exclude (vconcat drgnx-explorer-exclude-names))))
                    calls))
     (should (equal "▾ R\n▸ a\n▾ lib\n│   m.el\n  z.txt\n" (buffer-substring-no-properties (point-min) (point-max))))
     (goto-char (point-min))
@@ -177,6 +178,95 @@ it is one) after the name, moves it with its row, and takes it away when the hub
         (drgnx-view-draw-now drgnx-view)
         (should (equal '((1 . " [1,2/]")) (drgnx-explorer-rows-nav-test--badges)))))))
 
+;;;; E3: Find, marks, ranges, exclusions, reveal (plan sja-complete)
+
+(ert-deftest drgnx-explorer-rows/find-lists-only-what-it-found ()
+  "Pattern D: Find on the rows path asks the hub for the tree of the files it found (`only'), with no row vector of
+its own; leaving Find asks for the tree as it was."
+  (drgnx-explorer-rows-nav-test--with
+    (cl-letf (((symbol-function 'drgnx-explorer--find-load) (lambda () (list "/r/lib/m.el" "/r/z.txt" "/r/a/mm.c")))
+              ((symbol-function 'drgnx-explorer--find-ask) #'ignore)
+              ((symbol-function 'drgnx-explorer--find-stop) #'ignore))
+      (let ((rows-before drgnx-explorer--rows))
+        (drgnx-explorer--find-apply "m")
+        (should (equal ["/r/lib/m.el" "/r/a/mm.c"] (plist-get (cdar calls) :only)))
+        (should (eq rows-before drgnx-explorer--rows)))
+      (drgnx-explorer-find-clear)
+      (should (equal "explorer/subscribe" (caar calls)))
+      (should-not (plist-member (cdar calls) :only))
+      (should (equal ["/r/lib"] (plist-get (cdar calls) :expanded))))))
+
+(ert-deftest drgnx-explorer-rows/marks-are-sja-s-ticked-set ()
+  "Pattern D: a mark (Ctrl-click, `drgnx-explorer-mark') puts the row in Sjá's ticked set, drawn in the class
+`ticked'; unmarking takes it out; file operations act on the marks."
+  (drgnx-explorer-rows-nav-test--with
+    (let ((h (drgnx-view-patch-handle drgnx-view-patch))
+          (ticked (lambda (h) (sort (append (nidhogg-view-get h 'ticked) nil) #'string<))))
+      (drgnx-explorer--set-selection (list "/r/a" "/r/z.txt"))
+      (should (equal '("/r/a" "/r/z.txt") (funcall ticked h)))
+      (should (equal 3 (nidhogg-view-get h 'class "/r/a")))     ; the descriptor's `ticked'
+      (should (eq 'drgnx-explorer-selected (drgnx-view-nav--face-of 3)))
+      (drgnx-explorer--set-selection (list "/r/z.txt"))
+      (should (equal '("/r/z.txt") (funcall ticked h)))
+      (goto-char (point-min)) (forward-line 4)                   ; on z.txt, which is marked
+      (cl-letf (((symbol-function 'file-exists-p) (lambda (_) t)))
+        (should (equal '("/r/z.txt") (drgnx-explorer--targets))))
+      (drgnx-explorer--clear-selection)
+      (should-not (funcall ticked h)))))
+
+(ert-deftest drgnx-explorer-rows/a-shift-click-marks-the-visible-range ()
+  "Pattern D: a range marks the drawn rows between the anchor and the row, in order: the tree's visible rows."
+  (drgnx-explorer-rows-nav-test--with
+    (setq drgnx-explorer--anchor "/r/a")
+    (drgnx-explorer--select-range-to (save-excursion (goto-char (point-min)) (forward-line 3) (point)))
+    (should (equal '("/r/a" "/r/lib" "/r/lib/m.el") drgnx-explorer--selection))
+    (should (equal '("/r/a" "/r/lib" "/r/lib/m.el")
+                   (sort (append (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'ticked) nil) #'string<)))))
+
+(ert-deftest drgnx-explorer-rows/the-exclusions-reach-the-hub ()
+  "Pattern D (Q4): `drgnx-explorer-exclude-names' (names and globs) goes with the subscription; the old path's names
+match the same way."
+  (drgnx-explorer-rows-nav-test--with
+    (let ((drgnx-explorer-exclude-names '("*.o" "node_modules")))
+      (drgnx-explorer-refresh)
+      (should (equal ["*.o" "node_modules"] (plist-get (cdar calls) :exclude)))
+      (should (drgnx-explorer--excluded-name-p "main.o"))
+      (should-not (drgnx-explorer--excluded-name-p ".git")))
+    (should (drgnx-explorer--excluded-name-p ".#init.el"))
+    (should-not (drgnx-explorer--excluded-name-p ".gitignore"))))
+
+(ert-deftest drgnx-explorer-rows/a-reveal-waits-for-its-listing ()
+  "Pattern D (SJA-EXPLORER-1 (6)): revealing a file in a closed folder opens its folders and asks the hub; the file
+is selected when the listing that holds it is drawn."
+  (drgnx-explorer-rows-nav-test--with
+    (should (drgnx-explorer-reveal "/r/a/new.el"))
+    (should (equal ["/r/a" "/r/lib"] (plist-get (cdar calls) :expanded)))
+    (should (equal "/r/a/new.el" drgnx-explorer--reveal-pending))
+    (should-not (equal "/r/a/new.el" (drgnx-view-nav-selection)))
+    (let ((node (lambda (id kind flags parent label dir)
+                  (append (list :id id :kind kind :flags flags) (and parent (list :parent parent))
+                          (list :fields (vector (vector "label" label) (vector "path" id) (vector "dir" dir)))))))
+      (drgnx-view-model-event
+       (list :view view :hub 7 :base 1 :version 2 :reset t
+             :model (json-serialize
+                     (list :ops (vector (list :reset
+                                              (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"]
+                                                                      :lists ["order"] :classes ["selected" "match" "dim" "ticked"]
+                                                                      :flags ["expanded"] :forms [] :start "order")
+                                                    :nodes (vector (funcall node "/r" "root" 1 nil "R" 1)
+                                                                   (funcall node "/r/a" "dir" 1 "/r" "a" 1)
+                                                                   (funcall node "/r/a/new.el" "file" 0 "/r/a" "new.el" 0))
+                                                    :edges []
+                                                    :lists (vector (list :name "order" :ids ["/r" "/r/a" "/r/a/new.el"])))))))))
+      (drgnx-view-apply-patch
+       (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 0 :model 2
+             :ops (list (list :insert (list :after "/r/a"
+                                            :rows (list (list :key "/r/a/new.el" :text "│   new.el"
+                                                              :props (list (list 0 9 "drgnx-work-id" "/r/a/new.el")))))))))
+      (drgnx-view-draw-now drgnx-view)
+      (should-not drgnx-explorer--reveal-pending)
+      (should (equal "/r/a/new.el" (drgnx-view-nav-selection))))))
+
 (ert-deftest drgnx-explorer-rows/a-density-change-asks-again-at-once ()
   "Pattern D: the indent the hub draws is the density's `tree-indent', sent with the subscription; a density change
 asks the hub again with the new indent at once (no restart)."
@@ -208,7 +298,8 @@ asks the hub with it closed.  Point follows the selection."
     (drgnx-explorer-expand)
     (should (equal "/r/a" (drgnx-view-nav-selection)))
     (should (equal (list :view view :roots ["/r"] :expanded ["/r/a" "/r/lib"] :compact t
-                         :indent (drgnx-explorer--tree-indent))
+                         :indent (drgnx-explorer--tree-indent)
+                         :exclude (vconcat drgnx-explorer-exclude-names))
                    (cdar calls)))
     (drgnx-explorer-next)
     (drgnx-explorer-next)
@@ -222,7 +313,8 @@ asks the hub with it closed.  Point follows the selection."
     (drgnx-explorer-collapse)
     (should (equal "/r/lib" (drgnx-view-nav-selection)))
     (should (equal (list :view view :roots ["/r"] :expanded ["/r/a"] :compact t
-                         :indent (drgnx-explorer--tree-indent))
+                         :indent (drgnx-explorer--tree-indent)
+                         :exclude (vconcat drgnx-explorer-exclude-names))
                    (cdar calls)))))
 
 (ert-deftest drgnx-explorer-rows/typing-and-open ()

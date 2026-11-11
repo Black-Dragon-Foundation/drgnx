@@ -45,7 +45,7 @@ fn explorer_lists_folders_first_in_natural_order() {
         std::fs::create_dir(dir.path().join(d)).unwrap();
     }
     std::os::unix::fs::symlink(dir.path().join("alpha"), dir.path().join("link")).unwrap();
-    let got = read_folder(dir.path());
+    let got = read_folder(dir.path(), &Exclude::default());
     let want: Vec<(String, bool)> = [
         ("alpha", true),
         ("link", true),
@@ -344,9 +344,15 @@ fn explorer_watch_relists_open_folders_only() {
     let stop = tx.clone();
     let thread = std::thread::spawn(move || {
         let cancel = AtomicBool::new(false);
-        list_and_watch(&roots, &expanded, false, &cancel, tx, rx, &mut |es, _| {
-            out.send(es).is_ok()
-        });
+        list_and_watch(
+            &roots,
+            &expanded,
+            false,
+            &Exclude::default(),
+            &cancel,
+            (tx, rx),
+            &mut |es, _| out.send(es).is_ok(),
+        );
     });
     let first = next_listing(&got, 10.0).expect("the first listing");
     assert_eq!(
@@ -374,4 +380,60 @@ fn explorer_watch_relists_open_folders_only() {
     let t0 = std::time::Instant::now();
     thread.join().unwrap();
     assert!(t0.elapsed() < std::time::Duration::from_secs(2));
+}
+
+/// Pattern D (plan sja-complete E3, Q4): `exclude` takes names and globs (`*`, `?`), replacing the default set.
+#[test]
+fn exclude_takes_names_and_globs() {
+    let d = Exclude::default();
+    for n in [".git", ".DS_Store", "__pycache__", ".#init.el"] {
+        assert!(d.matches(n), "{n}");
+    }
+    for n in ["git", "src", "a.git", ".gitignore"] {
+        assert!(!d.matches(n), "{n}");
+    }
+    let e = Exclude::new(vec!["*.o".into(), "node_modules".into(), "?.tmp".into()]);
+    assert!(e.matches("main.o") && e.matches("node_modules") && e.matches("a.tmp"));
+    assert!(!e.matches("main.oo") && !e.matches("ab.tmp") && !e.matches(".git"));
+    let dir = tempfile::tempdir().unwrap();
+    for f in ["main.o", "main.c", ".DS_Store"] {
+        std::fs::write(dir.path().join(f), "x").unwrap();
+    }
+    let names = |e: &Exclude| -> Vec<String> {
+        read_folder(dir.path(), e)
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect()
+    };
+    assert_eq!(names(&e), [".DS_Store", "main.c"]);
+    assert_eq!(names(&Exclude::default()), ["main.c", "main.o"]);
+}
+
+/// Pattern D (plan sja-complete E3): Find lists only the files it found, each with every folder above it open, in the
+/// listing's order; a file under no root is left out.
+#[test]
+fn find_lists_only_the_found_files() {
+    let roots = [PathBuf::from("/r")];
+    let files: Vec<PathBuf> = ["/r/src/b.rs", "/r/src/a/x.rs", "/r/top.md", "/elsewhere/y"]
+        .iter()
+        .map(PathBuf::from)
+        .collect();
+    let (kids, open) = only_tree(&roots, &files);
+    let got = list_tree(&roots, &open, false, &AtomicBool::new(false), &mut |d| {
+        kids.get(d).cloned().unwrap_or_default()
+    })
+    .unwrap();
+    let paths: Vec<&str> = got.iter().map(|e| e.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        [
+            "/r",
+            "/r/src",
+            "/r/src/a",
+            "/r/src/a/x.rs",
+            "/r/src/b.rs",
+            "/r/top.md"
+        ]
+    );
+    assert!(got.iter().filter(|e| e.dir).all(|e| e.open));
 }

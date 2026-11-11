@@ -36,8 +36,49 @@ const MODEL_WINDOW: usize = 20_000;
 const SETTLE: Duration = Duration::from_millis(30);
 /// ... or this long after its first change, whichever comes first.
 const SETTLE_MAX: Duration = Duration::from_millis(100);
-/// Names never shown (the Explorer's `drgnx-explorer-exclude` default), besides `.#…` lock files.
-const EXCLUDED: [&str; 5] = [".git", ".hg", ".svn", ".DS_Store", "__pycache__"];
+/// Names never shown by default (`drgnx-explorer-exclude-names`'s default).
+const EXCLUDED: [&str; 6] = [".git", ".hg", ".svn", ".DS_Store", "__pycache__", ".#*"];
+/// The most names `exclude` takes, and the most files `only` (Find) takes.
+const EXCLUDE_MAX: usize = 256;
+const ONLY_MAX: usize = 5000;
+
+/// Names a listing leaves out: exact names, or globs with `*` (any run) and `?` (one character).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Exclude(Vec<String>);
+
+impl Default for Exclude {
+    fn default() -> Self {
+        Exclude(EXCLUDED.iter().map(|s| (*s).to_owned()).collect())
+    }
+}
+
+impl Exclude {
+    pub fn new(names: Vec<String>) -> Self {
+        Exclude(names)
+    }
+
+    /// Whether NAME is left out.
+    pub fn matches(&self, name: &str) -> bool {
+        self.0.iter().any(|p| glob(p.as_bytes(), name.as_bytes()))
+    }
+}
+
+/// Whether NAME matches the glob PAT (`*` any run, `?` one byte, else itself).
+fn glob(pat: &[u8], name: &[u8]) -> bool {
+    let (mut p, mut n, mut star, mut mark) = (0, 0, None, 0);
+    while n < name.len() {
+        if p < pat.len() && (pat[p] == b'?' || pat[p] == name[n]) {
+            (p, n) = (p + 1, n + 1);
+        } else if p < pat.len() && pat[p] == b'*' {
+            (star, mark, p) = (Some(p), n, p + 1);
+        } else if let Some(s) = star {
+            (p, mark, n) = (s + 1, mark + 1, mark + 1);
+        } else {
+            return false;
+        }
+    }
+    pat[p..].iter().all(|c| *c == b'*')
+}
 
 /// One row of the tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,10 +92,6 @@ pub struct Entry {
     pub depth: usize,
     pub dir: bool,
     pub open: bool,
-}
-
-fn excluded(name: &str) -> bool {
-    EXCLUDED.contains(&name) || name.starts_with(".#")
 }
 
 /// A digit run's value as a comparable (length, digits) pair without leading zeros.
@@ -91,16 +128,16 @@ pub fn natural(a: &str, b: &str) -> Cmp {
     (a.len() - i).cmp(&(b.len() - j))
 }
 
-/// DIR's entries as (NAME, FOLDER), folders first, then in natural order; excluded names left out. A link to a
+/// DIR's entries as (NAME, FOLDER), folders first, then in natural order; EXCLUDE's names left out. A link to a
 /// folder is a folder. A folder that cannot be read has none.
-pub fn read_folder(dir: &Path) -> Vec<(String, bool)> {
+pub fn read_folder(dir: &Path, exclude: &Exclude) -> Vec<(String, bool)> {
     let mut out: Vec<(String, bool)> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
-            if excluded(&name) {
+            if exclude.matches(&name) {
                 return None;
             }
             let folder = match e.file_type() {
@@ -111,8 +148,46 @@ pub fn read_folder(dir: &Path) -> Vec<(String, bool)> {
             Some((name, folder))
         })
         .collect();
-    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| natural(&a.0, &b.0)));
+    sort_folder(&mut out);
     out
+}
+
+/// Folders first, then natural order.
+fn sort_folder(out: &mut [(String, bool)]) {
+    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| natural(&a.0, &b.0)));
+}
+
+/// Each folder read: its entries, (name, folder?) pairs.
+type Folders = HashMap<PathBuf, Vec<(String, bool)>>;
+
+/// Find's tree: the FILES under ROOTS and the folders above them, as each folder's entries (sorted) and the set of
+/// open folders (every one of them). A file under no root is left out.
+pub fn only_tree(roots: &[PathBuf], files: &[PathBuf]) -> (Folders, HashSet<String>) {
+    let mut kids: Folders = HashMap::new();
+    let mut open = HashSet::new();
+    for file in files {
+        let Some(root) = roots.iter().find(|r| file.starts_with(r) && file != *r) else {
+            continue;
+        };
+        let mut at = file.as_path();
+        let mut dir = false;
+        while at != root.as_path() {
+            let (Some(parent), Some(name)) = (at.parent(), at.file_name()) else {
+                break;
+            };
+            let entry = (name.to_string_lossy().into_owned(), dir);
+            let list = kids.entry(parent.to_path_buf()).or_default();
+            if !list.contains(&entry) {
+                list.push(entry);
+            }
+            open.insert(root_id(parent));
+            (at, dir) = (parent, true);
+        }
+    }
+    for list in kids.values_mut() {
+        sort_folder(list);
+    }
+    (kids, open)
 }
 
 fn join(dir: &str, name: &str) -> String {
@@ -266,7 +341,7 @@ fn explorer_doc_in(entries: &[Entry], window: usize, from: Option<usize>) -> Doc
             "chain_kinds": [],
             "match_fields": ["label"],
             "lists": ["order"],
-            "classes": ["selected", "match", "dim"],
+            "classes": ["selected", "match", "dim", "ticked"],
             "flags": ["expanded"],
             "forms": [],
             "start": "order",
@@ -535,26 +610,26 @@ fn rewatch(
     }
 }
 
-/// List ROOTS (EXPANDED open, COMPACT joining chains) and hand the entries to SEND; then watch every folder that listing
+/// List ROOTS (EXPANDED open, COMPACT joining chains, EXCLUDE's names left out) and hand the entries to SEND; then watch every folder that listing
 /// read and, after each burst of changes settles (`SETTLE`, at most `SETTLE_MAX`), read the changed folders again and
 /// hand over the entries when they differ from the last (SEND's second argument says the watch found them). The
-/// watcher sends on TX; RX hears it and `Heard::Stop`. Ends
+/// watcher sends on CHAN's sender; its receiver hears it and `Heard::Stop`. Ends
 /// on `Heard::Stop`, CANCEL, a closed channel, or SEND answering false; the watcher goes with it.
 pub(crate) fn list_and_watch(
     roots: &[PathBuf],
     expanded: &HashSet<String>,
     compact: bool,
+    exclude: &Exclude,
     cancel: &AtomicBool,
-    tx: Sender<Heard>,
-    rx: Receiver<Heard>,
+    (tx, rx): (Sender<Heard>, Receiver<Heard>),
     send: &mut dyn FnMut(Vec<Entry>, bool) -> bool,
 ) {
-    let mut cache: HashMap<PathBuf, Vec<(String, bool)>> = HashMap::new();
-    let list = |cache: &mut HashMap<PathBuf, Vec<(String, bool)>>| {
+    let mut cache: Folders = HashMap::new();
+    let list = |cache: &mut Folders| {
         list_tree(roots, expanded, compact, cancel, &mut |d| {
             cache
                 .entry(d.to_path_buf())
-                .or_insert_with(|| read_folder(d))
+                .or_insert_with(|| read_folder(d, exclude))
                 .clone()
         })
     };
@@ -893,6 +968,18 @@ pub fn subscribe(f: &Front, c: &Caller, p: ExplorerParams) -> Result<ExplorerSta
         .map(|e| root_id(Path::new(e.as_str())))
         .collect();
     let compact = p.compact.unwrap_or(true);
+    let exclude = match p.exclude {
+        Some(names) if names.len() > EXCLUDE_MAX => {
+            return Err(invalid("exclude", "at most 256 names"));
+        }
+        Some(names) => Exclude::new(names),
+        None => Exclude::default(),
+    };
+    let only: Option<Vec<PathBuf>> = match p.only {
+        Some(files) if files.len() > ONLY_MAX => return Err(invalid("only", "at most 5000 files")),
+        Some(files) => Some(files.iter().map(|f| PathBuf::from(f.as_str())).collect()),
+        None => None,
+    };
     let (conn, view) = (c.conn_id, p.view);
     let (id, cancel, tx, rx) =
         views
@@ -904,13 +991,24 @@ pub fn subscribe(f: &Front, c: &Caller, p: ExplorerParams) -> Result<ExplorerSta
     std::thread::Builder::new()
         .name("explorer".into())
         .spawn(move || {
+            if let Some(files) = only {
+                // Find: the tree of the files it found, from nothing on disk, not watched
+                let (kids, open) = only_tree(&roots, &files);
+                let entries = list_tree(&roots, &open, compact, &cancel, &mut |d| {
+                    kids.get(d).cloned().unwrap_or_default()
+                });
+                if let (Some(entries), Some(f)) = (entries, front.upgrade()) {
+                    f.core.views.explorer_listed(&f, conn, &view, id, entries);
+                }
+                return;
+            }
             list_and_watch(
                 &roots,
                 &expanded,
                 compact,
+                &exclude,
                 &cancel,
-                tx,
-                rx,
+                (tx, rx),
                 &mut |entries, watched| {
                     front.upgrade().is_some_and(|f| {
                         // a name made or removed outside Emacs may change git's status too

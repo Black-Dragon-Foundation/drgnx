@@ -12653,6 +12653,16 @@
               "null"
             ]
           },
+          "exclude": {
+            "description": "Names never listed, at most 256: exact names or globs (`*` any run, `?` one character); default `.git`,\n`.hg`, `.svn`, `.DS_Store`, `__pycache__` and `.#*`.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "expanded": {
             "description": "The open folders under the roots (no trailing slash), at most 10000.",
             "items": {
@@ -12666,6 +12676,16 @@
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "only": {
+            "description": "Find: list only these files (at most 5000) under the roots, each with the folders above it open; nothing is\nread from disk and nothing watched.",
+            "items": {
+              "$ref": "#/$defs/AbsPath"
+            },
+            "type": [
+              "array",
               "null"
             ]
           },

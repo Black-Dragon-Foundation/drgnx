@@ -1375,7 +1375,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
 | `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, rows?: {listed: [string], parser: string}, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
-| `explorer/subscribe` | user | `{compact?: boolean, expanded?: [AbsPath], indent?: natnum, roots: [AbsPath], view: string}` | `{listing: natnum}` | no |
+| `explorer/subscribe` | user | `{compact?: boolean, exclude?: [string], expanded?: [AbsPath], indent?: natnum, only?: [AbsPath], roots: [AbsPath], view: string}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
 | `extensions/list` | user | `{dense?: boolean, glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
 | `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
@@ -2461,7 +2461,7 @@ and the ranking are `hrafn::rank`).
 
 The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/drgnx-ratatoskr/src/view/explorer.rs`).
 
-- `explorer/subscribe {view, roots, expanded?, compact?, indent?}` stops the view's earlier listing and answers `{listing}`. A
+- `explorer/subscribe {view, roots, expanded?, compact?, indent?, exclude?, only?}` stops the view's earlier listing and answers `{listing}`. A
   thread then reads each root (1 to 16 existing folders) and, inside it, each folder of `expanded` (at most 10000, no
   trailing slash) that is shown, and sends the view its model (`view-model`), then its rows to every class: the first
   listing a reset, a later one the difference. The editor opens or closes a folder by asking again with the new set,
@@ -2475,7 +2475,11 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
   differ. A watch that lost events reads every folder again; a folder that cannot be watched (the inotify limit) is
   tried again at the next relisting. The editor adds no watch of its own on this path (`drgnx-explorer--sync-watches`).
 - **The entries.** Folders first, then names in natural, case-insensitive order (`file2` before `file10`); a link to a
-  folder is a folder. `.git`, `.hg`, `.svn`, `.DS_Store`, `__pycache__` and `.#…` lock files never show. With
+  folder is a folder. The names of `exclude` (at most 256, exact or globs with `*` and `?`; the editor sends
+  `drgnx-explorer-exclude-names`) never show; without it `.git`, `.hg`, `.svn`, `.DS_Store`, `__pycache__` and `.#*`.
+- **Find** sends `only`, the files it found (at most 5000): the listing is those files under the roots with every
+  folder above them open, made from the names alone (nothing read from disk) and not watched. The model's descriptor
+  names the class `ticked`: the editor's marks are Sjá's ticked set. With
   `compact` (default on), an open folder whose only entry is a folder shares its row with it (`src/app`, the node being
   the last folder); the chain ends at the first closed folder, which is not read.
 - **The model** is a `tree`: one node per row, its id the path (a root's without the trailing slash), kind `root`, `dir`
