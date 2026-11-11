@@ -828,7 +828,7 @@ pub fn start(f: &crate::front::Front) {
 
 /// Milliseconds since the epoch (a record's `detached_at` outlives this hub).
 fn epoch_ms() -> u64 {
-    std::time::SystemTime::now()
+    crate::clock::wall()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)
 }
