@@ -1421,8 +1421,9 @@ switches for the whole suite.
   (pauses skipped) and every held line in connection open order, and repeats while the client sent more. It returns
   the marker, or nil once no hub answers (a test that stopped the hub). A barrier answer with `unnamed` > 0 (the hub
   wrote from a task without an origin), one whose `waiting` names an origin `drgnx-test-gate-waiting-ok` does not
-  list (a hub task, a job's watcher, still inside a real wait after the barrier waited 5 s for it:
-  docs/develop/hub.md, "The sequencer and the barrier"), or a step that cannot be met fails the test.
+  list (a job's watcher still inside its wait after the barrier waited 5 s for it; a blocking call or store answer is
+  waited for to its end, and one that never ends fails through `drgnx-test-gate-block-secs`: docs/develop/hub.md, "The
+  sequencer and the barrier"), or a step that cannot be met fails the test.
   Assertions come after it (the
   lint `drgnx-lint/gated-asserts-follow-deliver-all`). `(drgnx-test-hub-advance MS)` moves the hub's clock
   (`__test_advance`), then delivers all; `(drgnx-test-hub-advance MS t)` only moves it, for a test that lets the hub
