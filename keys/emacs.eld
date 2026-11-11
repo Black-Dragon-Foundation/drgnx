@@ -321,6 +321,7 @@
         (terminal-find :none "the palette")
         (terminal-find-next :none "the palette")
         (terminal-find-previous :none "the palette")
+        (terminal-reattach :none "the palette, or the notice an earlier drgnx's terminals post")
         (shell-reload-environment :none "in the palette")
         (go-quick-open :none "C-x p f (stock)")
         (search-project :none "C-x p g (stock)")
