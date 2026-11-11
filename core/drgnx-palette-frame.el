@@ -202,6 +202,28 @@ gap above the footer and the footer (FOOTER pixels, its measured height; else `d
 
 (defvar vertico--candidates-ov)
 
+(defun drgnx-palette-frame--selected-in-p (string start end)
+  "Non-nil when a face of STRING between START and END is `vertico-current' (the selected row)."
+  (let ((i start) found)
+    (while (and (not found) (< i end))
+      (let ((face (get-text-property i 'face string)))
+        (setq found (if (and (consp face) (not (keywordp (car face)))) (memq 'vertico-current face)
+                      (eq face 'vertico-current))
+              i (next-single-property-change i 'face string end))))
+    found))
+
+(defun drgnx-palette-frame--hairline (rows color)
+  "ROWS (vertico's lines after the input row, from the newline that ends it) with the hairline under the input row
+\(palette.html `.in'): an overline in COLOR over the first line, a group's title or the first row, stretched to the
+right edge.  Unchanged without COLOR or a first line, or when the first line is the selected row: an overline would
+cross its rounded fill (a face has one box and the line is drawn inside it)."
+  (let ((end (and color (> (length rows) 1) (eq (aref rows 0) ?\n) (string-search "\n" rows 1))))
+    (if (or (not end) (drgnx-palette-frame--selected-in-p rows 1 end))
+        rows
+      (let ((line (concat (substring rows 1 end) (propertize " " 'display '(space :align-to right)))))
+        (add-face-text-property 0 (length line) (list :overline color) t line)
+        (concat "\n" line (substring rows end))))))
+
 (defun drgnx-palette-frame-after-candidates (lines)
   "After vertico draws LINES (its overlay's string: a space that takes the cursor, then the rows): put the hint between
 that space and the rows, so it ends the input row and the cursor stays after the typed text; and fit the box to its
@@ -212,7 +234,9 @@ the palette's frame shows."
               (ov (bound-and-true-p vertico--candidates-ov))
               (s (overlay-get ov 'before-string))
               ((> (length s) 0)))
-    (overlay-put ov 'before-string (concat (substring s 0 1) (cadr d) (substring s 1)))
+    (overlay-put ov 'before-string (concat (substring s 0 1) (cadr d)
+                                           (drgnx-palette-frame--hairline (substring s 1)
+                                                                          (face-background 'drgnx-border nil t))))
     (when (frame-live-p drgnx-palette-frame--frame)
       (let ((h (drgnx-palette-frame--height (or (frame-parent drgnx-palette-frame--frame) drgnx-palette-frame--frame)
                                             (min (length lines) (default-value 'vertico-count)) (default-line-height)

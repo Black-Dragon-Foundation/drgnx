@@ -154,6 +154,28 @@ name; a terminal, or a frame with no SVG, gets the text keycap."
   (should (equal "Ctrl" (substring-no-properties (drgnx-palette-row-keycap "Ctrl"))))
   (should (eq 'drgnx-keycap (get-text-property 0 'face (drgnx-palette-row-keycap "Ctrl")))))
 
+(ert-deftest drgnx-look-palette/a-hairline-under-the-input-row ()
+  "palette.html `.in': a 1 px hairline in the border colour runs the box's width under the input row: an overline on
+the line that follows it (a group's title, or the first row when the typed text leaves no titles), stretched to the
+right edge; the lines after it are untouched."
+  (let* ((rows (concat "\n" (propertize "Commands" 'face 'drgnx-palette-group) "\nRun Tests\nOther\n"))
+         (out (drgnx-palette-frame--hairline rows "#123456"))
+         (first-end (string-search "\n" out 1)))
+    (should (equal "\n" (substring out 0 1)))
+    (should (string-search "Commands" out))
+    (should (string-search "\nRun Tests\nOther\n" out))
+    (cl-loop for i from 1 below first-end
+             do (should (equal "#123456" (plist-get (cl-find-if (lambda (f) (and (consp f) (plist-get f :overline)))
+                                                                (drgnx-look-palette-test--faces
+                                                                 (get-text-property i 'face out)))
+                                                    :overline))))
+    (should (string-match-p "align-to right" (format "%S" (get-text-property (1- first-end) 'display out))))
+    (should-not (get-text-property (1+ first-end) 'face out))
+    (should (memq 'drgnx-palette-group (drgnx-look-palette-test--faces (get-text-property 1 'face out)))))
+  ;; the selected row first (no titles): its rounded fill keeps its edge, so no hairline crosses it
+  (let ((rows (concat "\n" (propertize "Run Tests" 'face '(vertico-current (:box (:line-width 1)))) "\nOther\n")))
+    (should (equal rows (drgnx-palette-frame--hairline rows "#123456")))))
+
 (ert-deftest drgnx-look-palette/rows-own-their-inset ()
   "palette.html `.row' and `.it': a row's fill sits 6 logical pixels in and its text 8 more, inside the fill; a group
 title's text lines up with a row's.  The minibuffer the palette dresses has a `line-prefix' (the input row's inset),
