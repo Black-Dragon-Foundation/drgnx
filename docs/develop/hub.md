@@ -1496,7 +1496,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
 | `search/grep-replace` | user | `{replace: string, view: string}` | `boolean` | no |
 | `search/grep-skipped` | user | `{skipped: [{id: string, why: string}], view: string}` | `boolean` | no |
-| `search/handoff` | user | `{hidden?: boolean, ids?: [string], instruction: Prompt, off?: [string], to: {new: {profile: string}} \| {session: {id: Id}}, view: string}` | `HandoffAnswer` | yes |
+| `search/handoff` | user | `{hidden?: boolean, ids?: [string], instruction: Prompt, mark?: {face: string, glyph: string}, off?: [string], to: {new: {profile: string}} \| {session: {id: Id}}, view: string}` | `HandoffAnswer` | yes |
 | `search/handoff-state` | user | `{handoff: string}` | `HandoffState` | no |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
 | `search/map` | user | `{base?: boolean, budget?: natnum, focus?: [string], names?: [string], root: AbsPath, scope?: "code" \| "all"}` | `{files: [MapFile], files_total: natnum, fresh: Fresh, text: string, tokens: natnum}` | no |

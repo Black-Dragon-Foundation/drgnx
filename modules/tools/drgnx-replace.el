@@ -36,6 +36,10 @@
 (unless (featurep 'drgnx-search-edit)
   (load (expand-file-name "drgnx-search-edit" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-search-edit-change "drgnx-search-edit")
+(unless (featurep 'drgnx-search-handoff)
+  (load (expand-file-name "drgnx-search-handoff" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-search-handoff-event "drgnx-search-handoff")
+(declare-function drgnx-search-handoff-chip "drgnx-search-handoff")
 
 (declare-function eglot-current-server "eglot")
 (declare-function eglot-server-capable "eglot")
@@ -896,6 +900,8 @@ Branch's base and `±'."
      (delete-region drgnx-replace--status-beg drgnx-replace--status-end)
      (goto-char drgnx-replace--status-beg)
      (insert (propertize line 'face 'drgnx-replace-dim))
+     ;; the newest hand-off to an agent: its state chip
+     (insert (drgnx-search-handoff-chip))
      ;; Branch with no base to take (a detached HEAD, no upstream, main or master): its menu
      (when (plist-get drgnx-replace--scope-done :needs_base)
        (insert (propertize " · " 'face 'drgnx-replace-dim))
@@ -1978,7 +1984,9 @@ view shows.  A timer: never signals."
       (drgnx-replace--rows-boxes drgnx-view (delete-dups shown)))))
 
 (defun drgnx-replace--write-event (event data)
-  "`drgnx-hub-event-functions': `search-apply' (a file of the view's write) and `search-change' (the write ended)."
+  "`drgnx-hub-event-functions': `search-apply' (a file of the view's write) and `search-change' (the write ended);
+`search-handoff-state' is Ask an Agent's."
+  (drgnx-search-handoff-event event data)
   (pcase event
     ("search-apply" (drgnx-replace--apply-later data))
     ("search-change"
@@ -2524,7 +2532,19 @@ The find bar's button; not a command of its own (it needs the bar)."
                    (search-edit-refresh-line "Take the File's Line" drgnx-search-edit-refresh-line
                                              "In Edit Results: show the file's current text for the line at point")
                    (search-edit-undo-saves "Undo All Saves of Edited Results" drgnx-search-edit-undo-saves
-                                           "In Edit Results: put back every save of it, newest first")))
+                                           "In Edit Results: put back every save of it, newest first")
+                   (search-to-agent "Ask an Agent" drgnx-search-to-agent
+                                    "Hand the Search view's ticked matches (or this row's) to an agent with what to do")
+                   (search-handoff-send "Send to the Agent" drgnx-search-handoff-send
+                                        "On the Ask an Agent card: send the brief to the agent")
+                   (search-handoff-cancel "Cancel Asking an Agent" drgnx-search-handoff-cancel
+                                          "On the Ask an Agent card: close it, nothing sent")
+                   (search-handoff-next-who "Next Agent" drgnx-search-handoff-next-who
+                                            "On the Ask an Agent card: who it goes to next (a new worker, a live session)")
+                   (search-handoff-hidden "Hidden Files In or Out" drgnx-search-handoff-hidden
+                                          "On the Ask an Agent card: put the matches in dot paths and secret-looking files in the brief, or not")
+                   (search-handoff-rerun "Re-run in Worktree" drgnx-search-handoff-rerun
+                                         "Run the search again in the worktree of the worker it was handed to: what is left")))
     (drgnx-command-define id :category "Search" :title title :command fn :doc doc :scope scope))
   (drgnx-command-define 'replace-this :category "Search" :title "Replace This Match" :command #'drgnx-replace-this
                         :doc "Replace the match on this row of the Search view"
@@ -3181,6 +3201,7 @@ cancels those."
                               (add-hook 'drgnx-hub-connected-functions #'drgnx-replace--hub-up)
                               (drgnx-state-define-role 'bar) ; the find bar's window: no editor, no chrome
                               (drgnx-wb-place 'drgnx-replace-sheet-mode 'popup :height 0.8 :modal t) ; the sheet: the popup lane, tall
+                              (drgnx-wb-place 'drgnx-search-handoff-mode 'popup :height 0.3 :modal t) ; Ask an Agent's card
                               (eval-after-load 'evil (drgnx-modules-with-owner (drgnx-replace--evil-states)))
                               ;; wb/drgnx-persist.el saves the main area with `window-state-get': the bar's window would be in it.
                               (advice-add 'drgnx-persist-save :before #'drgnx-replace--close-bars)))

@@ -555,7 +555,8 @@ pub enum HandoffTo {
 }
 
 /// `search/handoff`: hand VIEW's matches to an agent with INSTRUCTION: the matches IDS names (else all but OFF), to TO.
-/// Paths the index never reads (dot paths, secret-looking names) are left out unless HIDDEN.
+/// Paths the index never reads (dot paths, secret-looking names) are left out unless HIDDEN. The handed-off rows show
+/// MARK.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HandoffParams {
@@ -568,6 +569,17 @@ pub struct HandoffParams {
     pub to: HandoffTo,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark: Option<HandoffMark>,
+}
+
+/// The mark the handed-off rows show: the agent's colour (a face name) and its glyph (one column), as the editor gives
+/// them (the agents' identity scheme).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffMark {
+    pub face: String,
+    pub glyph: String,
 }
 
 /// `search/handoff`'s answer: the hand-off's id, the session it went to (and the worktree of a new worker), the match

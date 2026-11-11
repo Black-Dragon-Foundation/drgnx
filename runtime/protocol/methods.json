@@ -28864,6 +28864,23 @@
       "name": "search/handoff",
       "params": {
         "$defs": {
+          "HandoffMark": {
+            "additionalProperties": false,
+            "description": "The mark the handed-off rows show: the agent's colour (a face name) and its glyph (one column), as the editor gives\nthem (the agents' identity scheme).",
+            "properties": {
+              "face": {
+                "type": "string"
+              },
+              "glyph": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "face",
+              "glyph"
+            ],
+            "type": "object"
+          },
           "HandoffTo": {
             "description": "Who a Search view's hand-off goes to: a new worker of PROFILE in a worktree of its own, or the live session ID\n(a chat, a worker, a paired chat in this checkout).",
             "oneOf": [
@@ -28925,7 +28942,7 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`search/handoff`: hand VIEW's matches to an agent with INSTRUCTION: the matches IDS names (else all but OFF), to TO.\nPaths the index never reads (dot paths, secret-looking names) are left out unless HIDDEN.",
+        "description": "`search/handoff`: hand VIEW's matches to an agent with INSTRUCTION: the matches IDS names (else all but OFF), to TO.\nPaths the index never reads (dot paths, secret-looking names) are left out unless HIDDEN. The handed-off rows show\nMARK.",
         "properties": {
           "hidden": {
             "type": "boolean"
@@ -28941,6 +28958,16 @@
           },
           "instruction": {
             "$ref": "#/$defs/Prompt"
+          },
+          "mark": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/HandoffMark"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "off": {
             "items": {

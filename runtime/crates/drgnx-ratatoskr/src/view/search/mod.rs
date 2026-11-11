@@ -48,6 +48,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::Instant;
 
+/// The mark of the agent a match was handed to, as the editor gives it: the face of its colour and its glyph.
+#[derive(Clone, Debug)]
+pub(super) struct AgentMark {
+    pub face: String,
+    pub glyph: String,
+}
+
 /// The rows a search sends a view: the first this many, and as many again each time the editor asks (the panel's shape,
 /// `agents/panel/look`); the model holds every match.
 pub(super) const WINDOW: usize = 200;
@@ -76,6 +83,8 @@ pub(super) struct Run {
     block: Option<std::ops::Range<usize>>,
     /// Match id → why Replace All skipped it (`search/grep-skipped`): its row shows it.
     reasons: BTreeMap<String, String>,
+    /// Match id → the mark of the agent it was handed to (`search/handoff`): its row shows it.
+    handed: BTreeMap<String, AgentMark>,
     /// The remap keys of the matches the user unticked in the runs before (`run.rs`): resolved at the run's end, or
     /// handed to the next run when a newer one stops this one first.
     carry: HashSet<u64>,
@@ -154,6 +163,7 @@ impl Greps {
             sent: 0,
             block: None,
             reasons: BTreeMap::new(),
+            handed: BTreeMap::new(),
             carry,
             done: false,
             context: true,
@@ -1738,6 +1748,21 @@ pub async fn handoff(f: &Front, c: &Caller, p: HandoffParams) -> Result<HandoffA
     if let Err(e) = f.core.agents.send(&session, text) {
         views.greps.handoffs.forget(&id);
         return Err(e);
+    }
+    // the handed-off rows show the agent's mark
+    if let Some(mark) = &p.mark {
+        let mark = AgentMark {
+            face: mark.face.clone(),
+            glyph: mark.glyph.clone(),
+        };
+        views.greps.current(c.conn_id, &p.view, |run| {
+            for i in &ids {
+                run.handed.insert(i.clone(), mark.clone());
+            }
+            for patch in rebuild_patches(&mut lock(&views.store), c.conn_id, &p.view, run) {
+                f.send_to(c.conn_id, "view-patch", json!(patch));
+            }
+        });
     }
     if let Some(front) = views.front.get().and_then(std::sync::Weak::upgrade) {
         handoff::watch(front, c.clone(), id.clone(), session.clone());
