@@ -1575,6 +1575,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `work/conclusions` | user | `{session: string}` | `{conclusions?: [Conclusion]}` | no |
 | `work/file-at` | user | `{path: string, seq: natnum, session: Id}` | `{bytes: string, seq: natnum}` | no |
 | `work/files` | user | `{session: Id}` | `{files: [EditedFile]}` | no |
+| `work/flow/subscribe` | user | `{detail?: string, job?: string, map: string, rules?: boolean, view: string}` | `{hub: natnum}` | no |
 | `work/hunks` | user | `{path: string, session: Id}` | `{diff: string}` | no |
 | `work/map/close` | user | `{view: string}` | `boolean` | no |
 | `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |

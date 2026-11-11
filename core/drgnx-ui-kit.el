@@ -35,7 +35,7 @@
     (circle-dot "◉" . "o") (play "▶" . ">") (pause "⏸" . "||") (git-fork "⑂" . "Y") (arrow-up "↑" . "^") (sparkle "✦" . "*") (square "■" . "#") (refresh-cw "↻" . "r")
     (trash-2 "⌫" . "d") (copy "⎘" . "c") (settings "⚙" . "*") (terminal "›_" . ">_") (bell "◔" . "!")
     (eye "◉" . "o") (lock "▮" . "#") (tag "⌗" . "#") (shield "⛨" . "!") (panel-right "◫" . "|")
-    (triangle "▲" . "^") (hexagon "⬢" . "H") (star "★" . "*")
+    (triangle "▲" . "^") (hexagon "⬢" . "H") (star "★" . "*") (flask-conical "⚗" . "T")
     ;; the Search view's kind chips, as the hub's kind icons on definition rows
     (square-function "ƒ" . "f") (type "◇" . "T") (wand "#" . "#") (variable "≡" . "="))
   "The glyphs of the icons (NAME → (UNICODE . ASCII)), named after the icon files.  Several look alike on a terminal
