@@ -3334,11 +3334,25 @@ between each (the mockup's `.fl')."
           (drgnx-replace--gap 8) (drgnx-look-file-icon (plist-get f :path) 'drgnx-text-muted)
           (drgnx-replace--gap 8) (drgnx-replace--sheet-name f)))
 
+(defvar-local drgnx-replace--sheet-edge-memo nil
+  "`drgnx-replace--sheet-edge' as last measured: (FILES SKIPPED HUNK SCALE . EDGE), the first three compared by `eq',
+SCALE (`drgnx-px' of 100) by `eql'.  Every row and the card ask for the edge; measured once per edit set, hunk and
+scale (a theme change clears it).")
+
 (defun drgnx-replace--sheet-edge (files skipped)
   "The sheet's right edge in pixels, in this buffer: the widest head, a gap, the widest tail; the tails end there.
-Further when the selected file's hunk (shown under it) has a wider line: the code stays inside the rows' ring."
-  (let ((px (lambda (str) (string-pixel-width str (current-buffer))))
-        (h (plist-get drgnx-replace--sheet :hunk)))
+Further when the selected file's hunk (shown under it) has a wider line: the code stays inside the rows' ring.
+Measured once per FILES, SKIPPED and hunk (`drgnx-replace--sheet-edge-memo'): every row asks."
+  (let ((h (plist-get drgnx-replace--sheet :hunk)) (scale (drgnx-px 100)) (m drgnx-replace--sheet-edge-memo))
+    (if (and m (eq (nth 0 m) files) (eq (nth 1 m) skipped) (eq (nth 2 m) h) (eql (nth 3 m) scale))
+        (nthcdr 4 m)
+      (let ((edge (drgnx-replace--sheet-measure-edge files skipped h)))
+        (setq drgnx-replace--sheet-edge-memo (cl-list* files skipped h scale edge))
+        edge))))
+
+(defun drgnx-replace--sheet-measure-edge (files skipped h)
+  "`drgnx-replace--sheet-edge' of FILES, SKIPPED and the selected file's hunk H, measured."
+  (let ((px (lambda (str) (string-pixel-width str (current-buffer)))))
     (max (+ (drgnx-px 6)                                     ; the row's inset (outside its ring)
             (apply #'max 0 (mapcar (lambda (f) (funcall px (drgnx-replace--sheet-head f t))) files))
             (drgnx-px 32)
@@ -3480,6 +3494,7 @@ the text again, so the markers collapsed) only puts its markers back: the window
   (when-let* ((b (get-buffer drgnx-replace-sheet-buffer-name)))
     (with-current-buffer b
       (when (derived-mode-p 'drgnx-replace-sheet-mode)
+        (setq drgnx-replace--sheet-edge-memo nil)
         (drgnx-replace--sheet-blocks)))))
 
 (defun drgnx-replace--sheet-unblock ()

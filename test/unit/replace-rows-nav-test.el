@@ -10,6 +10,7 @@
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-view)
 (require 'drgnx-view-nav)
+(defvar drgnx-hub--events)
 (load (expand-file-name "modules/tools/drgnx-replace" drgnx-dir) nil t)
 
 (defvar drgnx-replace-rows-nav-test--n 0 "Each run's view gets a name of its own in Sjá.")
@@ -702,3 +703,36 @@ profile."
       (with-temp-buffer
         (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
         (should (search-forward (format "(%s " id) nil t))))))
+
+(ert-deftest drgnx-replace-rows/a-long-sheet-measures-its-edge-once ()
+  "Pattern D: every row of the Replace All sheet ends at its edge (the widest head and tail), which is measured once
+per edit set and hunk, not once per row: a sheet of 500 files draws in one measurement, and its hunk's coming in one
+more."
+  (drgnx-replace-rows-nav-test--with
+    (let ((drgnx-hub--events nil)       ; the hub client is stubbed, never loaded: its connection's name only
+          (answer (list :change 7 :skipped nil
+                        :files (mapcar (lambda (i) (list :path (format "/r/f%03d.txt" i) :source "disk"
+                                                         :edits (list (list :id (format "m:%d:1" i) :line 1))))
+                                       (number-sequence 0 499))))
+          (measured 0) (measure (symbol-function 'drgnx-replace--sheet-measure-edge)))
+      (cl-letf (((symbol-function 'drgnx-hub--call-on)
+                 (lambda (_conn method _params cb &rest _)
+                   (pcase method
+                     ("search/edits" (funcall cb answer nil))
+                     ("search/preview" (funcall cb drgnx-replace-rows-nav-test--preview nil))
+                     (_ (funcall cb t nil)))))
+                ((symbol-function 'drgnx-replace--live-view) (lambda () (get-buffer drgnx-replace-buffer-name)))
+                ((symbol-function 'drgnx-replace--text) (lambda (_) "pin"))
+                ((symbol-function 'drgnx-popup-refit) #'ignore)
+                ((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'drgnx-replace--sheet-measure-edge)
+                 (lambda (&rest args) (setq measured (1+ measured)) (apply measure args))))
+        (unwind-protect
+            (progn
+              (drgnx-replace--rows-replace-all "pin" t)
+              (with-current-buffer drgnx-replace-sheet-buffer-name
+                (should (string-match-p "Replace 500 matches in 500 files" (buffer-string)))
+                (should (plist-get drgnx-replace--sheet :hunk))
+                ;; the rows before the hunk came, then the rows with it
+                (should (<= measured 2))))
+          (when-let* ((b (get-buffer drgnx-replace-sheet-buffer-name))) (kill-buffer b)))))))
