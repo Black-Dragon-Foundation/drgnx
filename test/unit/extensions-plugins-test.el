@@ -116,6 +116,24 @@ second, after reading, sends the hash the page now shows."
         (should (equal (car calls) (cons "plugins/approve"
                                          (list :name "rewrite-msg" :hash drgnx-extensions-plugins-test--hash-b))))))))
 
+(ert-deftest drgnx-extensions-plugins/a-burst-of-events-is-one-question-and-a-late-answer-is-dropped ()
+  "M4: five `plugin' events are one debounced `plugins/list'; of two questions asked, only the newest answer is read."
+  (let (debounced calls listed)
+    (cl-letf (((symbol-function 'drgnx-timer-debounce) (lambda (key _s fn &rest _) (push (cons key fn) debounced) key))
+              ((symbol-function 'drgnx-hub-call) (lambda (_m _p cb &rest _) (push cb calls) 1))
+              ((symbol-function 'drgnx-plugins--listed) (lambda (result _err) (push result listed)))
+              ((symbol-function 'drgnx-extensions-plugins--redraw) #'ignore)
+              ((symbol-function 'get-buffer) (lambda (_n) t)))
+      (dotimes (_ 5) (drgnx-extensions-plugins--event "plugin" nil))
+      (should (equal (delete-dups (mapcar #'car debounced)) '(extensions-plugins-refresh)))
+      (should-not calls)                              ; nothing asked until the debounce fires
+      (funcall (cdr (car debounced)))
+      (funcall (cdr (car debounced)))                 ; two questions in flight
+      (should (= 2 (length calls)))
+      (funcall (cadr calls) 'old nil)                 ; the older answer comes last-but-first: dropped
+      (funcall (car calls) 'new nil)
+      (should (equal listed '(new))))))
+
 (ert-deftest drgnx-extensions-plugins/settings-plugins-opens-the-view ()
   (let (applied)
     (cl-letf (((symbol-function 'drgnx-module-running-p) (lambda (m) (eq m 'tools/extensions)))

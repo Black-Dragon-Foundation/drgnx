@@ -112,20 +112,26 @@
     (when (eq (buffer-local-value 'major-mode b) 'drgnx-extensions-details-mode)
       (with-current-buffer b (drgnx-extensions-details--refresh)))))
 
+(defvar drgnx-extensions-plugins--asked 0 "The number of the newest `plugins/list' asked: an older answer is dropped.")
+
 (defun drgnx-extensions-plugins-refresh ()
-  "Ask the hub for the plugins and draw the view's rows and plugin pages again.  Does not wait."
+  "Ask the hub for the plugins and draw the view's rows and plugin pages again.  Does not wait.  Only the newest
+question's answer counts: a late answer to an older one never overwrites a newer list (M4)."
   (unless (fboundp 'drgnx-hub-call) (require 'drgnx-hub-client))
-  (drgnx-hub-call "plugins/list" nil
-                  (lambda (result err)
-                    (drgnx-plugins--listed result err)
-                    (unless err (drgnx-extensions-plugins--redraw)))))
+  (let ((n (cl-incf drgnx-extensions-plugins--asked)))
+    (drgnx-hub-call "plugins/list" nil
+                    (lambda (result err)
+                      (when (= n drgnx-extensions-plugins--asked)
+                        (drgnx-plugins--listed result err)
+                        (unless err (drgnx-extensions-plugins--redraw)))))))
 
 (defun drgnx-extensions-plugins--event (event _data)
   "A `drgnx-hub-event-functions' handler: a `plugin' event reads the plugins again while the view shows any."
   (when (and (equal event "plugin")
              (or (get-buffer drgnx-extensions-list-buffer-name)
                  (seq-some (lambda (b) (eq (buffer-local-value 'major-mode b) 'drgnx-extensions-details-mode)) (buffer-list))))
-    (drgnx-extensions-plugins-refresh)))
+    ;; a burst of events is one question, asked a moment after the last (M4)
+    (drgnx-timer-debounce 'extensions-plugins-refresh 0.1 #'drgnx-extensions-plugins-refresh :owner :core)))
 
 ;;;; The page
 
