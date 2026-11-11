@@ -94,6 +94,8 @@ pub struct Front {
     pub queue: crate::orch::queue::Queue,
     /// The affected groups each batch tree needs ([`crate::orch::groups`]).
     pub groups: crate::orch::groups::Listed,
+    /// The debug sessions, the trusted roots and each root's last start ([`crate::debug::wire`]).
+    pub debug: crate::debug::wire::Hub,
     /// Test hooks (`--test-ignore-shutdown`): `shutdown` is answered and ignored, so `stop` reaches its signal.
     pub ignore_shutdown: AtomicBool,
     /// The store's other folders (home, config, `<state>/hub`), once the server opened it.
@@ -190,6 +192,7 @@ impl Front {
             orch: crate::orch::gates::Runs::default(),
             queue: crate::orch::queue::Queue::default(),
             groups: crate::orch::groups::Listed::default(),
+            debug: crate::debug::wire::Hub::default(),
             ignore_shutdown: AtomicBool::new(false),
             dirs: OnceLock::new(),
             shell_env: crate::shell_env::ShellEnv::default(),
@@ -698,6 +701,7 @@ impl Front {
             | Params::TermText(_)
             | Params::TermPaste(_)
             | Params::TermFocus(_)
+            | Params::TermVisible(_)
             | Params::TermMouse(_)
             | Params::TermResize(_)
             | Params::TermScroll(_)
@@ -743,6 +747,9 @@ impl Front {
             }
             // the Search view's writes: edit sets, change sets, their apply and undo
             Params::SearchEdits(p) => crate::view::search::edits(self, &caller, p)
+                .await
+                .map(|r| json!(r)),
+            Params::SearchEditDoc(p) => crate::view::search::edit_doc(self, &caller, p)
                 .await
                 .map(|r| json!(r)),
             Params::SearchPreview(p) => crate::view::search::preview(self, &caller, p)
@@ -908,6 +915,14 @@ impl Front {
             | Params::SearchSavedShare(_)
             | Params::SearchScopeBases(_)
             | Params::SearchTyping(_)) => crate::search::methods::serve(self, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
+            // debugging (`debug/*`)
+            p @ (Params::DebugConfigs(_)
+            | Params::DebugStart(_)
+            | Params::DebugControl(_)
+            | Params::DebugSelect(_)
+            | Params::DebugTrust(_)) => crate::debug::wire::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
             // the Extensions view's catalog (`extensions/*`)

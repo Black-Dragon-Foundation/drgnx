@@ -278,6 +278,7 @@ fn probe(name: &str, a: &[String]) -> Full {
         "tfo" => tfo(&need(name, a, 1)[0]),
         "udp" => udp(&need(name, a, 1)[0]),
         "unix-self" => unix_self(&need(name, a, 1)[0]),
+        "tcp-self" => tcp_self(&need(name, a, 1)[0]),
         "bind-tcp" => resolve(&need(name, a, 1)[0])
             .and_then(|addr| std::net::TcpListener::bind(addr).map_err(os))
             .map(|_| None),
@@ -534,6 +535,17 @@ fn unix_self(path: &str) -> Res {
     drop(listener);
     let _ = std::fs::remove_file(path);
     r
+}
+
+/// Binds HOST:PORT, connects to it and accepts: a program's own loopback traffic (a debug adapter and its debuggee).
+/// The detail of a refusal says which step.
+fn tcp_self(addr: &str) -> Res {
+    let step = |s: &'static str| move |e: std::io::Error| (os(e).0, Some(s.to_string()));
+    let addr = resolve(addr)?;
+    let listener = std::net::TcpListener::bind(addr).map_err(step("bind"))?;
+    let bound = listener.local_addr().map_err(step("bind"))?;
+    let _client = std::net::TcpStream::connect(bound).map_err(step("connect"))?;
+    listener.accept().map(|_| None).map_err(step("accept"))
 }
 
 /// `socket(DOMAIN, TYPE, PROTO)` and nothing more: the reduced tier's seccomp rules refuse by these three alone.

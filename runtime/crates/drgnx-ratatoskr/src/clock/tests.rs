@@ -217,6 +217,46 @@ fn a_blocking_call_is_a_real_wait() {
 }
 
 #[test]
+fn a_real_wait_left_at_the_settle_names_its_line_and_its_time() {
+    // a red at a barrier names the wait, not only its task: the line of the blocking or real call (a store wait: the
+    // urdr line that waits) and how long it has lasted, so a rare red points at its cause
+    on_virtual(async {
+        let (hold, held) = std::sync::mpsc::channel::<()>();
+        let (go, rx) = tokio::sync::oneshot::channel::<()>();
+        spawn("work:edits", async move {
+            let _ = blocking(move || held.recv()).await;
+        });
+        let at_blocking = line!() - 2;
+        spawn("job:watch", async move {
+            let _ = real(rx).await;
+        });
+        let at_real = line!() - 2;
+        advance(Duration::ZERO).await;
+        let s = settle_real(ms(100), &[]).await;
+        assert_eq!(s.waiting, ["job:watch", "work:edits"]);
+        let want = [
+            format!("job:watch at {}:{at_real} for ", file!()),
+            format!("work:edits at {}:{at_blocking} for ", file!()),
+        ];
+        assert_eq!(s.sites.len(), 2, "{:?}", s.sites);
+        for (site, want) in s.sites.iter().zip(&want) {
+            assert!(
+                site.starts_with(want.as_str()) && site.ends_with(" ms"),
+                "{site:?} is not {want}… ms"
+            );
+            let ms: u64 = site[want.len()..site.len() - 3].parse().unwrap();
+            assert!(ms >= 100, "{site}: it waited the settle's 100 ms at least");
+        }
+        hold.send(()).unwrap();
+        go.send(()).unwrap();
+        assert_eq!(
+            settle_real(Duration::from_secs(30), &[]).await,
+            Settled::default()
+        );
+    });
+}
+
+#[test]
 fn what_is_in_flight_outside_is_waited_for() {
     // Pattern C: something outside the tasks (the gateway's answered requests) counts one in flight: a settle names
     // it after its limit; at zero it returns at once
@@ -230,7 +270,8 @@ fn what_is_in_flight_outside_is_waited_for() {
             settle_real(ms(50), &[]).await,
             Settled {
                 waiting: vec!["gateway:requests".into()],
-                busy: vec![]
+                busy: vec![],
+                sites: vec![]
             }
         );
         n.store(0, std::sync::atomic::Ordering::SeqCst);
@@ -257,7 +298,8 @@ fn a_task_still_running_after_the_settle_is_named_busy() {
             settle_real(ms(100), &[]).await,
             Settled {
                 waiting: vec![],
-                busy: vec!["t".into()]
+                busy: vec!["t".into()],
+                sites: vec![]
             }
         );
     });

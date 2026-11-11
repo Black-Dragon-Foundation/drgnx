@@ -30,6 +30,11 @@ rustix = { workspace = true, features = ["pty", "termios", "event", "process", "
 tracing.workspace = true
 tracing-subscriber.workspace = true
 libc.workspace = true
+# images (docs/develop/terminal.md, "Images"): kitty PNG decode and the canvases, sixel, iTerm2
+png = "0.18"
+icy_sixel = "0.7"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
+base64 = "0.23"
 
 [dev-dependencies]
 skuld = { path = "../skuld", version = "0.1.0" }  # bounded waits in the tests

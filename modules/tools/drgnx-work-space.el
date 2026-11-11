@@ -433,6 +433,9 @@ follows the windows; the commands."
                    (work-right "Select the Next Item" drgnx-work-map-right "Along the layer, to the right")
                    (work-why "Select What It Came From" drgnx-work-map-why "Follow why up, to the nearest by position")
                    (work-touches "Select What It Touches" drgnx-work-map-touches "Follow touches down")
+                   (work-back "Go Back" drgnx-work-map-back
+                              "Back to the selection before the last move (a run of arrows is one move)")
+                   (work-forward "Go Forward" drgnx-work-map-forward "Redo the move Go Back undid")
                    (work-next-agent "Select the Next Agent" drgnx-work-map-next-agent "The next agent, in team order")
                    (work-previous-agent "Select the Previous Agent" drgnx-work-map-previous-agent
                                         "The previous agent, in team order")

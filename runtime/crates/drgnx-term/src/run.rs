@@ -127,12 +127,16 @@ pub fn run(
             tv_sec: (ms / 1000) as i64,
             tv_nsec: ((ms % 1000) * 1_000_000) as i64,
         });
-        let pty_events = if pending.is_empty() {
+        // while output waits behind an image's decode the PTY is not read: the kernel holds the program back
+        let mut pty_events = if worker.wants_output() {
             PollFlags::IN
         } else {
-            PollFlags::IN | PollFlags::OUT
+            PollFlags::empty()
         };
-        let (pty_ready, ctl_ready, new_hub) = {
+        if !pending.is_empty() {
+            pty_events |= PollFlags::OUT;
+        }
+        let (pty_ready, ctl_ready, new_hub, images_ready) = {
             let none = PollFlags::empty();
             let mut fds = vec![PollFd::new(&pty.master, pty_events)];
             let ci = ctl.as_ref().map(|c| {
@@ -143,14 +147,26 @@ pub fn run(
                 fds.push(PollFd::new(l, PollFlags::IN));
                 fds.len() - 1
             });
+            let wi = worker.images_wake().map(|w| {
+                fds.push(PollFd::new(w, PollFlags::IN));
+                fds.len() - 1
+            });
             match poll(&mut fds, timeout.as_ref()) {
                 Ok(_) => {}
                 Err(rustix::io::Errno::INTR) => continue,
                 Err(e) => return Err(e.into()),
             }
             let at = |i: Option<usize>| i.map_or(none, |i| fds[i].revents());
-            (fds[0].revents(), at(ci), !at(li).is_empty())
+            (
+                fds[0].revents(),
+                at(ci),
+                !at(li).is_empty(),
+                !at(wi).is_empty(),
+            )
         };
+        if images_ready {
+            worker.images(now(), false);
+        }
         if new_hub
             && let Some(l) = &listener
             && let Ok((c, _)) = l.accept()

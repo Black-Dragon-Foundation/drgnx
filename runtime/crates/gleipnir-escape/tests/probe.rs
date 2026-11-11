@@ -77,12 +77,15 @@ fn files_sockets_and_environment() {
         "--and",
         "write",
         &b,
+        "--and",
+        "tcp-self",
+        "127.0.0.1:0",
     ]);
     let r: Vec<&str> = lines.iter().map(|l| l.result.as_str()).collect();
     assert_eq!(
         r,
         [
-            "reached", "reached", "reached", "reached", "reached", "blocked", "reached"
+            "reached", "reached", "reached", "reached", "reached", "blocked", "reached", "reached"
         ],
         "{lines:?}"
     );

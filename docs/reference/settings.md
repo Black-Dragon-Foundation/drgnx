@@ -2071,6 +2071,96 @@ can still switch it (mode 2027).  Applies to every terminal at once.
 | `:agents` | `never` |
 | `:schema` | `(enum "unicode" "legacy")` |
 
+## drgnx-term-image-disk-max
+
+Bytes of drawn image files a terminal keeps on disk (in the user's runtime directory).  Past it the oldest file no
+screen row shows goes, and the rows above the screen that showed it show the image's size instead.
+
+| Key | Value |
+| --- | --- |
+| Default | `268435456` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-config` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
+## drgnx-term-image-file-medium
+
+Whether a program may show an image from any file it names (kitty's file medium).  Off, as in Ghostty: a program
+can then only send image data, a temporary file or shared memory.  Never on in a remote terminal.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-config` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-term-image-fps
+
+The most new frames a second of an animated image (kitty animation); 0: animations stand still.  An animation
+plays only while a window shows its terminal.
+
+| Key | Value |
+| --- | --- |
+| Default | `10` |
+| Type | `number` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-config` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `number` |
+
+## drgnx-term-image-max-bytes
+
+The longest sixel or iTerm2 image sequence, in encoded bytes; a longer one is dropped to its end.
+
+| Key | Value |
+| --- | --- |
+| Default | `33554432` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-config` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
+## drgnx-term-image-storage-limit
+
+Bytes of decoded images a terminal keeps (kitty, sixel and iTerm2 images alike; Ghostty's `image-storage-limit');
+the oldest unplaced images go first.  0: no images, the kitty graphics protocol off.  Also the largest image decoded:
+one larger (or larger than a quarter of the terminal's memory limit) is refused before it is decoded.
+
+| Key | Value |
+| --- | --- |
+| Default | `67108864` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-config` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
 ## drgnx-term-input
 
 Text typed into a new terminal as soon as it starts, as if from the keyboard; nil: none.  Applies to new

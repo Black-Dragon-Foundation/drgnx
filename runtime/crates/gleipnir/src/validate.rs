@@ -598,9 +598,22 @@ fn malformed(spec: &Spec, target: Target) -> Result<(), Refusal> {
         Net::Isolated {
             relay,
             mac_tcp_ports,
+            ..
         } => (relay, mac_tcp_ports),
     };
-    let ports = spec.extra_tcp_ports.iter().chain(mac_ports);
+    let (loopback, loop_ports): (bool, &[u16]) = match &spec.net {
+        Net::Shared => (false, &[]),
+        Net::Isolated {
+            loopback,
+            mac_loopback_ports,
+            ..
+        } => (*loopback, mac_loopback_ports),
+    };
+    let ports = spec
+        .extra_tcp_ports
+        .iter()
+        .chain(mac_ports)
+        .chain(loop_ports);
     if relay.iter().map(|r| &r.port).chain(ports).any(|&p| p == 0) {
         return bad("a port is 0".into());
     }
@@ -627,6 +640,18 @@ fn malformed(spec: &Spec, target: Target) -> Result<(), Refusal> {
     }
     if linux && !mac_ports.is_empty() {
         return bad("net: mac_tcp_ports on Linux".into());
+    }
+    if target == Target::LinuxReduced && loopback {
+        return bad(
+            "net: loopback in the reduced tier, which has no network namespace to keep it in"
+                .into(),
+        );
+    }
+    if linux && !loop_ports.is_empty() {
+        return bad("net: mac_loopback_ports on Linux".into());
+    }
+    if !loopback && !loop_ports.is_empty() {
+        return bad("net: mac_loopback_ports without loopback".into());
     }
     if target == Target::LinuxReduced && spec.tmp.is_none() {
         return bad("tmp: the reduced tier has no private /tmp, so its spec needs a tmp".into());
@@ -927,6 +952,8 @@ mod tests {
                 Target::Macos => Net::Isolated {
                     relay: vec![],
                     mac_tcp_ports: vec![3128],
+                    loopback: false,
+                    mac_loopback_ports: vec![],
                 },
                 _ => Net::Isolated {
                     relay: vec![RelayPort {
@@ -938,6 +965,8 @@ mod tests {
                         },
                     }],
                     mac_tcp_ports: vec![],
+                    loopback: false,
+                    mac_loopback_ports: vec![],
                 },
             };
             Spec {
@@ -1602,6 +1631,8 @@ mod tests {
             s.net = Net::Isolated {
                 relay: vec![],
                 mac_tcp_ports: vec![],
+                loopback: false,
+                mac_loopback_ports: vec![],
             };
             refused(&fx, "isolated without a relay", t, s, Rule::Malformed);
             let mut s = fx.spec(t);
@@ -1636,10 +1667,61 @@ mod tests {
                 Rule::Malformed,
             );
         }
+        // loopback: never in the reduced tier (no namespace), its ports only on macOS and only with the flag
+        let flag = |s: &mut Spec, on: bool, ports: Vec<u16>| {
+            if let Net::Isolated {
+                loopback,
+                mac_loopback_ports,
+                ..
+            } = &mut s.net
+            {
+                *loopback = on;
+                *mac_loopback_ports = ports;
+            }
+        };
+        let mut s = fx.spec(Target::LinuxReduced);
+        flag(&mut s, true, vec![]);
+        refused(
+            &fx,
+            "loopback in the reduced tier",
+            Target::LinuxReduced,
+            s,
+            Rule::Malformed,
+        );
+        let mut s = fx.spec(Target::LinuxBwrap);
+        flag(&mut s, true, vec![]);
+        validate(s, &fx.ctx(), Target::LinuxBwrap)
+            .expect("the full tier keeps loopback in its namespace");
+        let mut s = fx.spec(Target::LinuxBwrap);
+        flag(&mut s, true, vec![47001]);
+        refused(
+            &fx,
+            "mac_loopback_ports on Linux",
+            Target::LinuxBwrap,
+            s,
+            Rule::Malformed,
+        );
+        let mut s = fx.spec(Target::Macos);
+        flag(&mut s, false, vec![47001]);
+        refused(
+            &fx,
+            "loopback ports without the flag",
+            Target::Macos,
+            s,
+            Rule::Malformed,
+        );
+        let mut s = fx.spec(Target::Macos);
+        flag(&mut s, true, vec![0]);
+        refused(&fx, "loopback port 0", Target::Macos, s, Rule::Malformed);
+        let mut s = fx.spec(Target::Macos);
+        flag(&mut s, true, vec![47001]);
+        validate(s, &fx.ctx(), Target::Macos).expect("macOS loopback on its own ports");
         let mut s = fx.spec(Target::Macos);
         s.net = Net::Isolated {
             relay: vec![],
             mac_tcp_ports: vec![0],
+            loopback: false,
+            mac_loopback_ports: vec![],
         };
         refused(&fx, "mac port 0", Target::Macos, s, Rule::Malformed);
     }

@@ -46,6 +46,13 @@ terminal's buffer only shows the screen it sends. So:
 - **Mouse** clicks and the wheel go to the program only while it asks for the mouse; otherwise they select text.
 - **Links** a program prints (OSC 8, `ls --hyperlink`) open on a click: a file in the other window, a URL in the
   browser, on the screen and in the rows scrolled off it alike.
+- **Images** a program shows (`kitten icat`, `chafa`, `img2sixel`, `imgcat`, yazi's previews; the kitty graphics
+  protocol, sixel and iTerm2 inline images) are drawn in the terminal, sharp at any scale, and scroll with the text;
+  kitty animations play while a window shows the terminal (at most `drgnx-term-image-fps` frames a second). In a text
+  terminal, or where Emacs has no PNG support, an image's place says `[image 640×480]`. The settings
+  `drgnx-term-image-storage-limit` (64 MB per terminal; 0 turns images off), `-image-max-bytes`, `-image-disk-max`
+  and `-image-file-medium` bound them. A program in a remote terminal can only send an image's data: it can never make
+  drgnx read a file on your machine; one that saves a file (`inline=0`) is refused.
 - **Programs can copy to the clipboard** (OSC 52, as tmux and neovim over ssh do): the text lands in the kill ring.
   The setting `drgnx-term-clipboard-write` turns that off. Reading the clipboard is always refused.
 - **The shell's directory** (OSC 7) is the buffer's directory, so `C-x C-f` starts where the shell is; the program's

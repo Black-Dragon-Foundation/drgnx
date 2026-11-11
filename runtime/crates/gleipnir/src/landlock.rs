@@ -268,7 +268,7 @@ pub fn plan_for(spec: &ValidSpec, tier: Tier) -> LandlockPlan {
                 .chain(rw_binds.map(|b| &b.dest))
                 .chain(rw_home.map(|b| &b.dest));
             let tcp_connect_ports = match &s.net {
-                Net::Shared => None,
+                Net::Shared | Net::Isolated { loopback: true, .. } => None,
                 Net::Isolated { relay, .. } => {
                     let mut ports: Vec<u16> = relay
                         .iter()
@@ -782,6 +782,8 @@ mod tests {
                 },
             ],
             mac_tcp_ports: vec![],
+            loopback: false,
+            mac_loopback_ports: vec![],
         }
     }
 
@@ -915,6 +917,23 @@ mod tests {
         // Below ABI 4 there is no TCP right; isolation is the network namespace, never Landlock.
         let d3 = rules_for_abi(&p, 3);
         assert!(d3.handled_net.is_empty() && d3.tcp_connect_ports.is_empty());
+    }
+
+    /// A debug session's spec (`loopback`) in the full tier: no TCP port rule, so its adapter and debuggee reach each
+    /// other on any loopback port of the sandbox's own namespace; binds stay unhandled as in every full-tier run.
+    #[test]
+    fn isolated_loopback_handles_no_tcp() {
+        let mut net = isolated();
+        if let Net::Isolated { loopback, .. } = &mut net {
+            *loopback = true;
+        }
+        let p = plan(fixture(net), Target::LinuxBwrap, Tier::Full);
+        assert_eq!(p.tcp_connect_ports, None);
+        assert_eq!(p.tcp_bind_ports, None);
+        for abi in 1..=9 {
+            let d = rules_for_abi(&p, abi);
+            assert!(d.handled_net.is_empty(), "abi {abi}");
+        }
     }
 
     #[test]
@@ -1552,6 +1571,8 @@ mod tests {
                 Net::Isolated {
                     relay,
                     mac_tcp_ports: vec![],
+                    loopback: false,
+                    mac_loopback_ports: vec![],
                 },
             );
             TcpStream::connect(other.local_addr().unwrap()).expect("control: reachable before");

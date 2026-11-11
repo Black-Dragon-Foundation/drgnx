@@ -233,6 +233,20 @@ taller (Nidhogg's compositor).  Asked once: a face that sets it is refused where
        ;; diffs and version control
        `((diff-added :foreground ,(c 'add-fg) :background ,(c 'add-bg))
          (diff-removed :foreground ,(c 'del-fg) :background ,(c 'del-bg))
+         ;; the Search preview's hunk band, a card (search-view.html `.hk'), and the Replace All sheet's selected file in
+         ;; the focus ring (`.sheet .fl.sel'): rounded where the compositor rounds a box
+         (drgnx-replace-preview-head :inherit drgnx-ui-text :foreground ,(c 'muted) :background ,(c 'sel-quiet)
+                                     :box (:line-width (1 . 6) :color ,(c 'sel-quiet)
+                                                       ,@(and (featurep 'glitnir) '(:corner-radius 6))))
+         ;; a ticked box's mark (its image carries the fill) and the Replace button's key chip, ringed in its text
+         (drgnx-replace-tick-mark :foreground ,(c 'on-accent))
+         (drgnx-replace-sheet-key :inherit drgnx-ui-caption :foreground ,(c 'on-accent)
+                                  :box (:line-width (1 . 1) :color ,(c 'on-accent)
+                                                    ,@(and (featurep 'glitnir) '(:corner-radius 4))
+                                                    ,@(and (drgnx-theme--box-fit-p) '(:fit text))))
+         (drgnx-replace-sheet-selected :background ,(c 'sel)
+                                       :box (:line-width (1 . 6) :color ,(c 'focus)
+                                                         ,@(and (featurep 'glitnir) '(:corner-radius 6))))
          (diff-changed :background ,(c 'warn-tint))
          ;; refined words: rounded in-text runs, as the region (boxes inside the glyphs)
          (diff-refine-added :background ,(c 'refine-add) :extend nil

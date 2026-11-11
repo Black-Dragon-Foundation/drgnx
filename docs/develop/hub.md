@@ -344,12 +344,15 @@ lowest pending line:
      `budget`) event is on the channel, so a client that read its whole answer sees the event before the marker.
 3. The tasks spawned since then are run once (an advance of 0 ms), and the held writes are released.
 4. `{"event": "__test_marker", "data": {"marker": M}}` is written on every live connection. M counts from 1 per hub.
-5. The answer: `{"marker": M, "unnamed": n, "busy": [origins], "waiting": [origins]}`. `n` counts the writes from
+5. The answer: `{"marker": M, "unnamed": n, "busy": [origins], "waiting": [origins], "sites": [sites]}`. `n` counts the writes from
    tasks without an origin since the last barrier. The gate fails a test when n > 0, since such writes are released
    here and not by the test's own advance. `busy` names tasks still running after 5 s. `waiting` names the tasks
    still inside a real wait (and `gateway:requests` while requests are in flight): the allowed ones, and those still
    inside after the 5 s. The gate fails a test on any its `drgnx-test-gate-waiting-ok` does not list, since what they
-   write later is not ordered by the test.
+   write later is not ordered by the test. `sites` says where each of those waits began and for how long, as
+   `"ORIGIN at FILE:LINE for N ms"`: the line of the `clock::blocking`, `clock::real` or `clock::real_long` call (they
+   are `#[track_caller]`), or for a store thread's answer the urdr line that waits. The gate's failure prints them, so
+   a rare red names its line.
 
 An advance waits for a woken task's `clock::real` waits too (it is not parked inside one, whatever clock timer it also
 holds), but not for a `clock::real_long` one: the advance may be what ends it (a job's time box). A job's kill after
@@ -1365,6 +1368,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `coord/notify` | user, agent, service | `{}` | `boolean` | no |
 | `coord/prune` | user | `{}` | `{pruned: boolean}` | yes |
 | `coord/task-status` | user | `{agent?: AgentName, status: Status, task: TaskRef}` | `boolean` | yes |
+| `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
+| `debug/control` | user | `{op: string, session: string, thread?: integer}` | `boolean` | no |
+| `debug/select` | user | `{frame: integer, session: string, thread?: integer}` | `boolean` | no |
+| `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, root: string, selection?: string, user?: [JsonObject]}` | `{needs?: any, session?: string}` | no |
+| `debug/trust` | user | `{root: string, trusted: boolean}` | `boolean` | no |
 | `decisions/effects` | user | `{decision: string}` | `{commits?: [string], decision: string, label: string, later_hunks?: [Hunk]}` | no |
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no |
 | `events/add` | user | `{agent?: AgentName, best_effort?: boolean, data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text, task?: TaskRef}` | `{id?: natnum}` | yes |
@@ -1489,7 +1497,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/applied` | user | `{applied?: [string], change: natnum, inverse?: [{byte_end?: natnum, byte_start?: natnum, col: natnum, end_col: natnum, end_line: natnum, id: string, line: natnum, new: string, old: string}], not_open?: boolean, path: string, saved?: boolean, skipped?: [{id: string, why: string}], tick?: natnum}` | `boolean` | no |
 | `search/apply` | user | `{change: natnum, open?: [string], view: string}` | `boolean` | yes |
 | `search/buffer` | user | `{large?: boolean, path: AbsPath, text?: string, tick?: natnum, view: string}` | `boolean` | no |
-| `search/edits` | user | `{edits?: [{col: natnum, end_col: natnum, end_line?: natnum, line: natnum, new: string, old: string, path: AbsPath}], ids?: [string], off?: [string], replace?: string, root?: AbsPath, view: string}` | `{change: natnum, files: [FileEdits], skipped: [EditSkip]}` | no |
+| `search/edit-doc` | user | `{context?: natnum, max?: natnum, view: string}` | `{lines: [EditLine], over?: boolean, skipped?: [EditSkip], total: natnum}` | no |
+| `search/edits` | user | `{edits?: [{col: natnum, end_col: natnum, end_line?: natnum, line: natnum, new: string, old: string, path: AbsPath}], ids?: [string], lines?: [{eol?: boolean, line: natnum, line_id: string, new?: [string], old: string, path: AbsPath}], off?: [string], replace?: string, root?: AbsPath, view: string}` | `{change: natnum, files: [FileEdits], skipped: [EditSkip]}` | no |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
 | `search/files` | user | `{ignore?: "index" \| "real", n?: natnum, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
 | `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
@@ -1543,6 +1552,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `term/session-end` | user | `{keep?: [string]}` | `natnum` | no |
 | `term/text` | user | `{id: string, text: string}` | `boolean` | no |
 | `term/text-range` | user | `{from_key?: string, id: string, to_key?: string}` | `{text: string}` | no |
+| `term/visible` | user | `{id: string, visible: boolean}` | `boolean` | no |
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
 | `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `view/close` | user | `{view: string}` | `boolean` | no |
@@ -2506,12 +2516,23 @@ Replace This, Undo Replace and Symbol mode's rename go through it, so a write ne
   columns, checks its old text, and gives both ranges, character and byte. Skipped with why: an overlapping match (the
   first stays), a file changed since the search (size, mtime, inode, xxh3 of its snapshot), a buffer edited since,
   binary (NUL in the first 8 KiB), not UTF-8, over 16 MiB, open in chunks, gone. The answer `{change, files: [{path,
-  source: disk|buffer, edits}], skipped}` names a change set the hub keeps (the last 20 per hub).
+  source: disk|buffer, edits}], skipped}` names a change set the hub keeps (the last 20 per hub). With `lines` (an Edit
+  Results buffer's changed lines, `{line_id, path, line, old, new?, eol?}`) the edits are those lines: `old` (one line,
+  or several once a save split it) replaced by `new` joined with newlines, or with no `new` deleted with its newline
+  (`eol` false, the file's last line: emptied); each is checked by its old text where it was ("its text changed"), not
+  by the run's snapshot, so a buffer saved before keeps working; the change set's origin is `edit-results`.
+- `search/edit-doc {view, context?, max?}` is the Edit Results document: each source line of the run's matches once
+  (`{line_id: "l:K", path, line, text, kind: match|context, eol}`), `context` lines (0 to 3) around each match line,
+  by file and line; past `max` lines (default 20,000; counted from the match lines first, so a huge search reads no
+  file) it gives no lines and `over`, with `total`. A file that could not be written is left out with why, as
+  `search/edits` would skip it.
 - `search/preview {view, path, off?, replace?}` is one file's part of the same edit set as a diff (the preview tile):
-  the unified diff (3 lines of context; `similar`), its lines added and removed, the hunks (`old_start`, `old_lines`,
+  the unified diff (1 line of context, so nearby changes in different definitions are hunks of their own; `similar`),
+  its lines added and removed, the hunks (`old_start`, `old_lines`,
   `new_start`, `new_lines`, the ids of the matches in each) and, for a regexp search, each match's groups (at most 8,
-  200 characters each, `null` for a group that matched nothing: the groups line), and what is skipped, with why. It
-  reads the file and keeps nothing.
+  200 characters each, `null` for a group that matched nothing: the groups line), each hunk's `label` (the head of the
+  definition its first match is in: its first line up to its name, `defvar drgnx-gateway--pending`, `pub fn queue`) and `kept` (the old file's lines of
+  the unticked matches inside it), and what is skipped, with why. It reads the file and keeps nothing.
 - `search/apply {view, change, open}` writes it (false when the change set is unknown or written already) and answers at
   once; the writes run in the background, a file at a time, each in its turn of the pair door's queue for that file
   (`pair/door.rs`, a user turn: an agent's write to the same file waits, and the search waits for one in flight). A
