@@ -155,9 +155,10 @@ untracked, drgnx.lock.eld ignored."
 
 (defvar drgnx-look-scene-limits
   '((window-dark "the agent panel opens as a tab of the editor group, not the right island (look step 8)"
-                 "no `1 needs you' or `2 agents' chips: the mock agent's turn does not run yet (look step 8)"
+                 "the title row counts 1 agent, not 2: the scene starts one mock agent"
                  "no agent badges (C, R) in the Explorer: agent system part 3 (G9)"
-                 "the status bar has no `1 job', `● Claude editing' or `● 1 needs you': no job or agent turn runs yet (look step 8)"
+                 "the status bar has no `1 job' or `● Claude editing': no job or agent edit runs yet; its `1 waiting on you' is
+the mockup's `● 1 needs you'"
                  "the status bar's problems are Flymake's real ones for the file (the mockup's `✕ 1' is made up), and
 no `● eglot': the session runs no language server")
     (agent-panel "the mockup is the Work space (mission strip, Board, Timeline: G9, other plans); compare its right-hand panel"
@@ -188,10 +189,12 @@ changed to hide a gap: the gap is named here instead.")
      (error (push (format "%s: %s" ,what (error-message-string err)) drgnx-look-scene--errors) nil)))
 
 (defun drgnx-look-scene--answer (&rest more)
-  "The step's JSON answer: its errors and MORE, then the echo area cleared."
+  "The step's JSON answer: its errors and MORE, then the echo area cleared, and the status bar's message with it (a
+message there lasts some seconds, so the previous scene's last one, its palette's \"Quit\", would show in this one's)."
   (prog1 (drgnx-uitest--json (append (list :errors (vconcat (nreverse drgnx-look-scene--errors))) more))
     (setq drgnx-look-scene--errors nil)
-    (message nil)))
+    (message nil)
+    (when (fboundp 'drgnx-look-echo--status-clear) (drgnx-look-echo--status-clear))))
 
 (defun drgnx-look-scene--theme (theme)
   (drgnx-look-scene--try "theme"
@@ -560,6 +563,12 @@ chrome faces, frame metrics, windows, modules."
                                                      :header (window-header-line-height w)
                                                      :line (window-default-line-height w)
                                                      :end (cdr (posn-x-y (posn-at-point (window-end w t) w)))
+                                                     ;; the gutter: fringes, margins and where the text area starts
+                                                     :fringes (window-fringes w) :margins (window-margins w)
+                                                     :text-left (car (window-body-pixel-edges w))
+                                                     :numbers (with-selected-window w
+                                                                (and (bound-and-true-p display-line-numbers-mode)
+                                                                     (line-number-display-width t)))
                                                      :mode (buffer-local-value 'major-mode (window-buffer w))))
                                    (window-list f 'no-mini))
                   :children (cl-count-if (lambda (c) (and (frame-visible-p c) (frame-parent c))) (frame-list))

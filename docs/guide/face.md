@@ -103,7 +103,8 @@ turns them off in one buffer.
 
 ### The editor
 
-A code buffer (the buffers that show line numbers) has a two-pixel bar cursor, and its current line is marked across the
+A code buffer (the buffers that show line numbers) has 18 pixels between its numbers and its code (the numbers'
+space and a `line-prefix` of 0.8 columns on a graphical frame), a two-pixel bar cursor, and its current line is marked across the
 full width of the window. A cursor a mode chose, such as Vim's box in normal state, stays. The blame hint at the end of
 a line (`extra/blame`) is italic, in the subtle text colour and the caption font, after a gap of 24 logical pixels. An
 inlay hint from the language server (`eglot-inlay-hint-face`) takes the same caption font and subtle colour, on the

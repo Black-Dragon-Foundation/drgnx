@@ -157,7 +157,22 @@ too, no stubs — and turned off after, strictly: the state after equals the sta
     (drgnx-face-test--file-buffer "x.el"
       (should (bound-and-true-p display-line-numbers-mode))
       (should (eq display-line-numbers-width-start t))      ; the number column never grows while typing
-      (should (eq display-line-numbers-grow-only t)))
+      (should (eq display-line-numbers-grow-only t))
+      ;; window-dark.html `.ln .n': 18 px from the numbers to the code, the number's own trailing space and 0.8
+      ;; columns more on a graphical frame (a terminal keeps the one space)
+      (dolist (prefix (list line-prefix wrap-prefix))
+        (should (equal '(when (display-graphic-p) space :width 0.8) (get-text-property 0 'display prefix)))
+        (should (get-text-property 0 'invisible prefix)))
+      ;; on the current line the gap is in the current line's colour, so its band runs unbroken to the numbers
+      (should (memq #'drgnx-face--current-line-gap post-command-hook))
+      (hl-line-highlight)
+      (drgnx-face--current-line-gap)
+      (dolist (prop '(line-prefix wrap-prefix))
+        (let ((gap (overlay-get hl-line-overlay prop)))
+          (should (equal (get-text-property 0 'display gap) (get-text-property 0 'display line-prefix)))
+          (should (eq 'hl-line (get-text-property 0 'face gap))))))
+    (drgnx-face-test--file-buffer "x.txt"
+      (should-not line-prefix))
     (drgnx-face-test--file-buffer "x.conf"
       (should (bound-and-true-p display-line-numbers-mode)))
     (drgnx-face-test--file-buffer "x.txt"
