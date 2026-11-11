@@ -97,7 +97,27 @@ and Vim profiles), goes Text → Symbol → Meaning → Text and searches again.
   with a score bar (how close it is, against the best one; hover for the score), its symbol and its first line; a
   piece that moved since it was indexed is found where it is now and says `(moved)`. Nothing but the words applies.
 
-Symbol and Meaning only find: Replace All and Replace This say so. A Text search that finds nothing offers **Try
+### Pattern: structural search
+
+The **{}** toggle beside .\* (the two exclude each other; **Search: Toggle Pattern Search** in the palette) makes
+Find a code pattern, matched in each file's syntax tree rather than its text. It uses ast-grep's syntax: `$NAME`
+matches one node, `$$$NAME` any number of them (`foo($$$ARGS)` matches `foo()` and `foo(a, b)`), `$_` one node it
+does not name, and the same name twice must match the same text (`(eq $A $A)` finds `(eq x x)`, not `(eq x y)`).
+The mode chip says `Pattern` while it is on.
+
+- **Language.** A line over the status line names the pattern's language: the one of the file the view was opened
+  from, else `any` (each file is parsed in its own language). Click it, or **Search: Pattern Language…**, to choose.
+  The languages are Hrafn's grammars: Emacs Lisp, Rust, C, shell, Python, JavaScript, TypeScript, TSX, Go and Java.
+- **Rows.** A match over several lines shows its first line with `+N lines` after it, dim; hover a row for its
+  metavariables (`$K = …`).
+- **A pattern that does not parse** in the language says so on the status line with the column
+  (`pattern is not valid Rust at col 14`), and those files are skipped, never searched as text.
+- **Speed.** The files holding the pattern's longest name that is not a metavariable are the only ones parsed; a
+  pattern made of metavariables only parses every file of its language.
+- **Not yet:** Replace (a rewrite template using the same names; Hrafn expands them already) and the editor's unsaved
+  buffers (their files are skipped). Aa, ab and Replace are greyed out; the scopes and the globs apply.
+
+Symbol, Meaning and Pattern only find: Replace All and Replace This say so. A Text search that finds nothing offers **Try
 Meaning** on the status line; the view never changes mode by itself. Symbol and Meaning need the index: before it is
 built the status line says why.
 
@@ -245,6 +265,7 @@ view, scope This file.
 | Close Find Bar | `<escape>` | `<escape>` | `<escape>` |
 | Next Mode (the Search view) | `M-m` | `C-c C-m` | `C-c C-m` |
 | Text / Symbol / Meaning Mode | palette | palette | palette |
+| Toggle Pattern Search, Pattern Language… | the `{}` toggle, the language chip; palette | the same | the same |
 | Next Scope (the Search view) | `M-s` | `C-c C-o` | `C-c C-o` |
 | In Changed Files | `C-k C-g` (anywhere) | `C-c s g` | `SPC s g` |
 | In Files Changed on This Branch | palette | `C-c s b` | `SPC s b` |
@@ -280,7 +301,9 @@ palette, category Search.
 symbol edits, undo), `test/conformance/search/write.jsonl` (the hub's: the edit set, writes on disk, a file changed
 since, undo), `test/unit/search-edit-test.el` and `test/conformance/search/edit-results.jsonl` (Edit Results: the
 document, read-only headers, saves of changed, split and deleted lines, conflicts, undo; `:w` and `save-buffer`),
-`test/unit/isolated/search-vim-isolated.el` (the Vim keys with real evil, in an Emacs of its own: `i`, `C-p` / `C-n`
+`test/unit/search-pattern-test.el` and `test/conformance/search/run-pattern.jsonl` (Pattern: the `{}` toggle and
+.\* excluding each other, the language chip, the spec sent, a saved pattern search restored; the hub's rows with
+`+N lines`, a refused pattern, a refused replacement), `test/unit/isolated/search-vim-isolated.el` (the Vim keys with real evil, in an Emacs of its own: `i`, `C-p` / `C-n`
 in Find, `d d`, `Z Q`, `:w`, and `d w` / `Z Z` still evil's; the module turned off takes its state maps out),
 `test/unit/search-handoff-test.el` and `test/conformance/search/handoff.jsonl` (Ask an Agent: the card, who, Send by
 ids or by the unticked, the chip, a hand-off to a mock session and its state) and

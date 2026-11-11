@@ -31063,6 +31063,30 @@
                   "question"
                 ],
                 "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A code pattern with metavariables (`$A` one node, `$$$A` any number, `$_` one unnamed; ast-grep's syntax),\nmatched in each file's syntax tree (`hrafn::structural`). LANG (Hrafn's name: `rust`, `elisp`, …) narrows to\none language's files; none is every language the pattern parses in.",
+                "properties": {
+                  "lang": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "const": "pattern",
+                    "type": "string"
+                  },
+                  "pattern": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "pattern"
+                ],
+                "type": "object"
               }
             ]
           },
@@ -31305,6 +31329,30 @@
                 "required": [
                   "mode",
                   "question"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A code pattern with metavariables (`$A` one node, `$$$A` any number, `$_` one unnamed; ast-grep's syntax),\nmatched in each file's syntax tree (`hrafn::structural`). LANG (Hrafn's name: `rust`, `elisp`, …) narrows to\none language's files; none is every language the pattern parses in.",
+                "properties": {
+                  "lang": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "const": "pattern",
+                    "type": "string"
+                  },
+                  "pattern": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "pattern"
                 ],
                 "type": "object"
               }
@@ -31685,6 +31733,30 @@
                   "question"
                 ],
                 "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A code pattern with metavariables (`$A` one node, `$$$A` any number, `$_` one unnamed; ast-grep's syntax),\nmatched in each file's syntax tree (`hrafn::structural`). LANG (Hrafn's name: `rust`, `elisp`, …) narrows to\none language's files; none is every language the pattern parses in.",
+                "properties": {
+                  "lang": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "const": "pattern",
+                    "type": "string"
+                  },
+                  "pattern": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "pattern"
+                ],
+                "type": "object"
               }
             ]
           },
@@ -31962,6 +32034,30 @@
                 "required": [
                   "mode",
                   "question"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A code pattern with metavariables (`$A` one node, `$$$A` any number, `$_` one unnamed; ast-grep's syntax),\nmatched in each file's syntax tree (`hrafn::structural`). LANG (Hrafn's name: `rust`, `elisp`, …) narrows to\none language's files; none is every language the pattern parses in.",
+                "properties": {
+                  "lang": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "const": "pattern",
+                    "type": "string"
+                  },
+                  "pattern": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "pattern"
                 ],
                 "type": "object"
               }

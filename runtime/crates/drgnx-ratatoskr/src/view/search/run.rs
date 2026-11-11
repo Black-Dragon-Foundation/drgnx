@@ -54,12 +54,24 @@ pub(super) fn snapshot(file: &Path) -> Option<Snap> {
 /// Each match's innermost definition (none at the top level), shared by the matches in it.
 pub(super) type Ctx = Vec<Option<std::sync::Arc<crate::search::context::Def>>>;
 
-/// What an index mode knows of a match past its text: a definition's kind and signature (Symbol), a hit's score, its
-/// share of the best hit's and whether its lines moved since they were indexed (Meaning).
+/// What a mode knows of a match past its text: a definition's kind and signature (Symbol), a hit's score, its share of
+/// the best hit's and whether its lines moved since they were indexed (Meaning); a structural match's lines past its
+/// first and its metavariables' text (Pattern).
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Mark {
-    Def { kind: String, sig: String },
-    Score { score: f64, share: f64, moved: bool },
+    Def {
+        kind: String,
+        sig: String,
+    },
+    Score {
+        score: f64,
+        share: f64,
+        moved: bool,
+    },
+    Span {
+        more: u32,
+        captures: Vec<(String, String)>,
+    },
 }
 
 /// A file as a run read it for its matches: its snapshot, with context on each match's definition, and an index

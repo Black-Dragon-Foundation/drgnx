@@ -313,6 +313,7 @@ pub(super) fn match_row(
 fn row_of(run: &Run, m: &Match, n: u32, mark: Option<&Mark>) -> Row {
     let id = match_id(run.id, n);
     match mark {
+        Some(Mark::Span { more, captures }) => span_row(id, m, *more, captures),
         Some(mark) => marked_row(id, m, mark),
         None => {
             let why = run.reasons.get(&id).map(String::as_str);
@@ -351,6 +352,35 @@ fn bar(share: f64) -> (String, usize) {
     let filled = s.chars().count();
     s.push_str(&" ".repeat(BAR_CELLS - filled));
     (s, filled)
+}
+
+/// M's row (key ID) in a Pattern search: its first line, the match lit; `+N lines` dim when it runs MORE lines on; its
+/// metavariables (CAPTURES) on hover, `$K = …` one a line. The tick box, the match and the id as a match row's.
+fn span_row(id: String, m: &Match, more: u32, captures: &[(String, String)]) -> Row {
+    let mut b = RowBuilder::new(id.clone());
+    b.push("  ", None);
+    let at = b.pos();
+    b.push("[x]", None)
+        .prop(at, at + 3, "drgnx-replace-box", match_json(m));
+    b.push(" ", None)
+        .push(&flat(m.before.trim_start()), None)
+        .push(&flat(&m.text), Some("drgnx-replace-match"))
+        .push(&flat(&m.after), None);
+    if more > 0 {
+        let s = if more == 1 { "" } else { "s" };
+        b.push(&format!("  +{more} line{s}"), Some("drgnx-replace-dim"));
+    }
+    let end = b.pos();
+    if !captures.is_empty() {
+        let echo: Vec<String> = captures
+            .iter()
+            .map(|(k, v)| format!("${k} = {}", flat(v)))
+            .collect();
+        b.prop(0, end, "help-echo", json!(echo.join("\n")));
+    }
+    b.prop(0, end, "drgnx-replace-match", match_json(m));
+    b.prop(0, end, "drgnx-work-id", json!(id));
+    b.finish()
 }
 
 /// M's row (key ID) in an index mode, by its MARK: a definition's kind icon and signature (the name lit as a match), or
@@ -399,6 +429,10 @@ fn marked_row(id: String, m: &Match, mark: &Mark) -> Row {
             if *moved {
                 b.push("  (moved)", Some("drgnx-replace-dim"));
             }
+        }
+        // drawn by `span_row`
+        Mark::Span { .. } => {
+            b.push(&flat(&m.text), Some("drgnx-replace-match"));
         }
     }
     let end = b.pos();

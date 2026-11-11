@@ -15,6 +15,7 @@ mod apply;
 mod edits;
 mod handoff;
 mod modes;
+mod pattern;
 mod rows;
 mod run;
 mod scoped;
@@ -844,13 +845,32 @@ fn query_of(f: &Front, p: &RunParams) -> Result<(Query, Mode, Option<GitScope>),
     if !root.is_dir() {
         return Err(invalid("root", "an existing folder"));
     }
-    let (text, case, word, regexp) = match &p.search.query {
+    let (text, case, word, regexp, mode) = match &p.search.query {
         FindQuery::Text {
             text,
             case,
             word,
             regexp,
-        } => (text, case, word, regexp),
+        } => (text, case, word, regexp, Mode::Text),
+        // Text's files; its rewrite templates come with their write path
+        FindQuery::Pattern { pattern, lang } => {
+            if p.search.replace.as_deref().is_some_and(|r| !r.is_empty()) {
+                return Err(invalid(
+                    "search.replace",
+                    "a Pattern search is read-only for now",
+                ));
+            }
+            let lang = lang
+                .as_deref()
+                .map(pattern::lang_of)
+                .transpose()
+                .map_err(|e| invalid("search.query.lang", &e))?;
+            let find = pattern::Find {
+                pattern: pattern.clone(),
+                lang,
+            };
+            (pattern, &None, &None, &None, Mode::Pattern(find))
+        }
         other => {
             if p.search.replace.as_deref().is_some_and(|r| !r.is_empty()) {
                 return Err(invalid(
@@ -919,8 +939,9 @@ fn query_of(f: &Front, p: &RunParams) -> Result<(Query, Mode, Option<GitScope>),
         include: p.search.include.clone().unwrap_or_default(),
         exclude: p.search.exclude.clone().unwrap_or_default(),
         ignore: super::files::ignore_for(f, p.ignore),
+        first: false,
     };
-    Ok((q, Mode::Text, git))
+    Ok((q, mode, git))
 }
 
 /// `search/run`: stop VIEW's search, send its classes a reset, and search on a thread of its own (Text), or ask the
@@ -958,7 +979,7 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
     let Some(front) = views.front.get().cloned() else {
         return Err(invalid("view", "the hub is starting"));
     };
-    if !matches!(mode, Mode::Text) {
+    if !matches!(mode, Mode::Text | Mode::Pattern(_)) {
         let root = p.root.clone();
         crate::clock::spawn("search:modes", async move {
             let Some(f) = front.upgrade() else { return };
@@ -1046,6 +1067,31 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
                     cancel.store(true, Ordering::Relaxed);
                 }
             };
+            // a Pattern search reads and parses each file itself (`pattern`), its marks kept with the matches a
+            // `±` scope leaves; the editor's unsaved buffers are not searched (their files neither)
+            if let Mode::Pattern(find) = &mode {
+                let result = pattern::run(&query, find, &cancel, |batch| {
+                    let marks: std::collections::HashMap<(u32, u32), run::Mark> = batch
+                        .iter()
+                        .map(|(m, k)| ((m.line, m.col), k.clone()))
+                        .collect();
+                    let ms = batch.into_iter().map(|(m, _)| m).collect();
+                    if let Some((file, ms, read)) = read_file(ms) {
+                        let read = read.map(|mut r| {
+                            r.marks = ms
+                                .iter()
+                                .map(|m| marks.get(&(m.line, m.col)).cloned())
+                                .collect();
+                            r
+                        });
+                        send((file, ms, read));
+                    }
+                });
+                if let Some(f) = front.upgrade() {
+                    f.core.views.grep_done(&f, conn, &view, id, result.err());
+                }
+                return;
+            }
             // with context, a file's read parses it: a few readers take the files as grep finds them (its order is
             // already unordered) and hand them to this thread
             let result = if context {

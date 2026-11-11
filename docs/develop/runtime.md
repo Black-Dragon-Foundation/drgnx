@@ -1230,8 +1230,8 @@ name's exact definitions, then the view's `ref` rows for it without the lines in
 file, each under the innermost definition holding its first line, ranked by the file's rank × `ln(1 + n)`, tests after
 code. It is by name only: same-named things in other scopes show up too.
 
-For Emacs Lisp (`tree-sitter` 0.25, ABI 15, with `tree-sitter-elisp` 1.7; 0.26 and later needed Rust 1.90, above the
-workspace's MSRV of the time, 1.88) the units are the top-level forms, each with the comments right above it, and the stretches between
+For Emacs Lisp (`tree-sitter` 0.27, which loads grammar ABI 13–15, with `tree-sitter-elisp` 1.7; moved from 0.25 for
+`ast-grep-core`, below, with the chunker's goldens and the eval unchanged) the units are the top-level forms, each with the comments right above it, and the stretches between
 them. Adjacent units merge greedily up to the budget and never across a section heading (a `;;;` line with text, at
 column 0). A form over the budget splits at its child forms; every part's header repeats the signature, the first
 docstring line and "part i/n". A `defconst`, `defvar` or `defcustom` whose value is a literal list or vector and
@@ -1286,6 +1286,28 @@ rows with its header rows repeated in `embed_text`. Plain text is line windows u
 The test fixtures' form spans come from the Emacs reader: `tests/fixtures/elisp/gen.el` writes `NAME.forms.json` for
 each `NAME.el` next to it (run it once in a Nidhogg 31 container, `emacs --batch -Q -l …/gen.el`), and the test holds
 the grammar's top-level spans to them.
+
+### Structural search
+
+`hrafn::structural` matches a code pattern with metavariables (ast-grep's syntax) in a file's syntax tree, for the
+Search view's Pattern toggle. The engine is `ast-grep-core` (pinned exactly, its one feature `tree-sitter`), fed
+Hrafn's own grammars through its `Language` trait: `Grammar::of(Lang)` gives each grammar and the character a
+metavariable's `$` becomes before the pattern is parsed (`µ` where `$` cannot start a name: Rust, C, shell, Python,
+Go). The engine stays behind the module, so a bump or a swap touches nothing else.
+
+- `Pattern::new(lang, pattern, rewrite)` parses the pattern once per language. An error node inside the pattern's own
+  node refuses it with the language and the column (`pattern is not valid Rust at col 14`); the error node a grammar
+  wraps a lone expression in at a file's top level does not.
+- `Pattern::find(bytes)` gives the outermost matches: bytes, line and column (characters) of the start and end, each
+  named metavariable's text, and the rewrite template's expansion. Bytes that are not UTF-8 are skipped with a reason.
+- `Pattern::literals()` lists the pattern's names that are not metavariables (identifiers, symbols; never strings or
+  numbers, which can be written several ways). A file that matches holds every one, so the hub reads only the files
+  `hrafn::grep` finds holding the longest (`Query::first`: each file's first match only). The golden test
+  `the_pre_filter_never_drops_a_match` holds that over a corpus per language.
+
+The hub's side is `view/search/pattern.rs`: `FindQuery::Pattern {pattern, lang?}` runs on the search's thread over
+Text's files (scopes and globs apply), and each match carries a `Span` mark (lines past its first, its metavariables)
+that its row draws as `+N lines` and a hover.
 
 ### The embedder
 
