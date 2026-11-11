@@ -45,8 +45,11 @@ pub(crate) enum Chip {
 const TEXT: &str = "drgnx-work-flow-text";
 const LABEL: &str = "drgnx-work-flow-label";
 const HEAD: &str = "drgnx-work-flow-heading";
-/// A card's fill (drgnx-work-flow.el: the panel's surface).
+/// A card's fill (drgnx-work-flow.el: the panel's surface), and the text faces on it.
 const CARD: &str = "drgnx-work-flow-card";
+const CARD_TEXT: &str = "drgnx-work-flow-card-text";
+const CARD_LABEL: &str = "drgnx-work-flow-card-label";
+const CARD_HEAD: &str = "drgnx-work-flow-card-heading";
 /// The text property that marks a block Glitnir draws over the rows (`glitnir-blocks`): `["ring", ID, X0, X1]` on a
 /// card's span of each of its rows, `["rule", KEY, X0, X1]` on a row with a hairline under it (device px).
 const BLOCK: &str = "drgnx-work-flow-block";
@@ -754,9 +757,28 @@ fn line_lines(flow: &Flow, cw: u32, fonts: &dyn Measure) -> Vec<Vec<Piece>> {
     out
 }
 
+/// FACE on a card: the text faces have card twins that carry its fill (one face per span: a fill run under the text's
+/// runs replaced their faces where the rows were inserted, so they never overlap); a chip keeps its own tint.
+fn on_card(face: &'static str) -> &'static str {
+    match face {
+        TEXT => CARD_TEXT,
+        LABEL => CARD_LABEL,
+        HEAD => CARD_HEAD,
+        f => f,
+    }
+}
+
+/// B's next piece starts at PX, the space up to it in the card's fill.
+fn card_gap(b: &mut RowBuilder, px: u32) {
+    let s = b.pos();
+    b.stop(px);
+    let e = b.pos();
+    b.face(s, e, CARD);
+}
+
 /// LINE of card ID drawn on B between X0 and X1 (device px), its content PAD in: the space before X0 bare, the card's
-/// span filled in [`CARD`] up to X1 and marked as the ring block ID (`BLOCK`: Glitnir draws the ring).
-#[allow(clippy::too_many_arguments)]
+/// span filled up to X1 (its gaps in [`CARD`], its text in the faces' card twins: [`on_card`]) and marked as the ring
+/// block ID (`BLOCK`: Glitnir draws the ring).
 fn put_line(
     b: &mut RowBuilder,
     pics: &mut Pics,
@@ -770,27 +792,24 @@ fn put_line(
         b.stop(x0);
     }
     let start = b.pos();
-    b.stop(x0 + pad);
+    card_gap(b, x0 + pad);
     for p in line {
         match p {
             Piece::Text(t, f) => {
-                b.push(&t, Some(f));
+                b.push(&t, Some(on_card(f)));
             }
             Piece::Icon(name, alt, f) => {
                 let s = b.pos();
                 pics.put(b, name, alt);
                 let e = b.pos();
-                b.face(s, e, f);
+                b.face(s, e, on_card(f));
             }
             Piece::Chip(icon, t, f) => chip(b, pics, icon, &t, f),
-            Piece::At(px) => {
-                b.stop(x0 + pad + px);
-            }
+            Piece::At(px) => card_gap(b, x0 + pad + px),
         }
     }
-    b.stop(x1);
+    card_gap(b, x1);
     let end = b.pos();
-    b.face(start, end, CARD);
     b.prop(start, end, BLOCK, json!(["ring", id, x0, x1]));
 }
 
@@ -1392,6 +1411,16 @@ mod tests {
                 "{k}: {b:?}"
             );
             assert!(row(k).runs.iter().any(|r| r.2 == CARD), "{k}");
+            // one face per span: a fill under text would replace its face where the rows are inserted
+            let mut runs = row(k).runs.clone();
+            runs.sort();
+            assert!(runs.windows(2).all(|w| w[0].1 <= w[1].0), "{k}: {runs:?}");
+            assert!(
+                row(k)
+                    .runs
+                    .iter()
+                    .any(|r| r.2 == CARD_TEXT || r.2 == CARD_HEAD)
+            );
         }
         // the batch's 4th line: the line gate has none there, so only the batch's ring
         assert_eq!(blocks(row("cards:3")).len(), 1);

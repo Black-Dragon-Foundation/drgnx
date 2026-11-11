@@ -138,6 +138,13 @@ rows or its pass count; a waiver says its reason."
 
 (defface drgnx-work-flow-card '((t :inherit drgnx-surface-panel)) "A Flow card's fill: the batch, the line gate."
   :group 'drgnx-work-space)
+;; a span of the rows has one face, so the text on a card names its twin, which carries the fill
+(defface drgnx-work-flow-card-text '((t :inherit (drgnx-work-flow-text drgnx-work-flow-card)))
+  "The Flow's text on a card." :group 'drgnx-work-space)
+(defface drgnx-work-flow-card-label '((t :inherit (drgnx-work-flow-label drgnx-work-flow-card)))
+  "The Flow's labels on a card." :group 'drgnx-work-space)
+(defface drgnx-work-flow-card-heading '((t :inherit (drgnx-work-flow-heading drgnx-work-flow-card)))
+  "A card's heading." :group 'drgnx-work-space)
 
 (defvar-local drgnx-work-flow--blocks nil "The Flow's blocks as last set (`glitnir-blocks'), with markers.")
 (defvar-local drgnx-work-flow--blocks-key nil
