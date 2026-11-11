@@ -13,6 +13,7 @@
 
 mod apply;
 mod edits;
+mod handoff;
 mod modes;
 mod rows;
 mod run;
@@ -34,18 +35,25 @@ use run::{Buffer, Found, Read};
 use runstav::methods::search::{
     AppliedParams, ApplyParams, BufferParams, ChangeOrigin, EditDocAnswer, EditDocParams,
     EditsAnswer, EditsParams, FileEdits, FindQuery, GrepLookParams, GrepReplaceParams,
-    GrepSkippedParams, PreviewAnswer, PreviewParams, RunDone, RunParams, RunStarted, ScopeDone,
-    ScopeKind, UndoParams,
+    GrepSkippedParams, HandoffAnswer, HandoffParams, HandoffState, HandoffStateParams, HandoffTo,
+    PreviewAnswer, PreviewParams, RunDone, RunParams, RunStarted, ScopeDone, ScopeKind, UndoParams,
 };
 use runstav::methods::view::ViewModel;
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::Instant;
+
+/// The mark of the agent a match was handed to, as the editor gives it: the face of its colour and its glyph.
+#[derive(Clone, Debug)]
+pub(super) struct AgentMark {
+    pub face: String,
+    pub glyph: String,
+}
 
 /// The rows a search sends a view: the first this many, and as many again each time the editor asks (the panel's shape,
 /// `agents/panel/look`); the model holds every match.
@@ -75,6 +83,8 @@ pub(super) struct Run {
     block: Option<std::ops::Range<usize>>,
     /// Match id → why Replace All skipped it (`search/grep-skipped`): its row shows it.
     reasons: BTreeMap<String, String>,
+    /// Match id → the mark of the agent it was handed to (`search/handoff`): its row shows it.
+    handed: BTreeMap<String, AgentMark>,
     /// The remap keys of the matches the user unticked in the runs before (`run.rs`): resolved at the run's end, or
     /// handed to the next run when a newer one stops this one first.
     carry: HashSet<u64>,
@@ -86,6 +96,8 @@ pub(super) struct Run {
     keep: Option<Arc<Keep>>,
     /// What a git scope searched, for the end (`search-run-done`).
     scope: Option<ScopeDone>,
+    /// A Symbol search: its definitions' counts per kind, for the end (`search-run-done`).
+    kinds: Option<BTreeMap<String, u64>>,
     /// Only the totals go out (`count`): no model, no rows.
     count: bool,
     /// The entries (files and matches) the model last sent held. Up to [`MODEL_WINDOW`] the batches' nodes and ids
@@ -117,6 +129,8 @@ pub(super) struct Greps {
     buffers: Mutex<BTreeMap<(u64, String), BTreeMap<String, Buffer>>>,
     /// The change sets of the views' writes (`apply.rs`).
     changes: apply::Changes,
+    /// The hand-offs to agents (`handoff.rs`).
+    handoffs: handoff::Handoffs,
 }
 
 impl Greps {
@@ -151,11 +165,13 @@ impl Greps {
             sent: 0,
             block: None,
             reasons: BTreeMap::new(),
+            handed: BTreeMap::new(),
             carry,
             done: false,
             context: true,
             keep: None,
             scope: None,
+            kinds: None,
             count: false,
             model_sent: 0,
             model_every: MODEL_EVERY,
@@ -808,6 +824,7 @@ fn done_of(view: &str, run: &Run, error: Option<String>, off: Vec<String>) -> Ru
         error,
         off,
         scope: run.scope.clone(),
+        kinds: run.kinds.as_ref().map(modes::kind_list),
     }
 }
 
@@ -842,9 +859,10 @@ fn query_of(f: &Front, p: &RunParams) -> Result<(Query, Mode, Option<GitScope>),
                 ));
             }
             let mode = match other {
-                FindQuery::Symbol { name, case } => Mode::Symbol {
+                FindQuery::Symbol { name, case, kinds } => Mode::Symbol {
                     name: name.clone(),
                     case: case.unwrap_or(true),
+                    kinds: kinds.clone().unwrap_or_default(),
                 },
                 _ => Mode::Meaning {
                     question: other.typed().to_owned(),
@@ -946,7 +964,13 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
             let Some(f) = front.upgrade() else { return };
             let found = modes::found(&f, &root, &mode, context).await;
             let error = match found {
-                Ok(files) => {
+                Ok((files, kinds)) => {
+                    if kinds.is_some() {
+                        f.core
+                            .views
+                            .greps
+                            .with(conn, &view, id, |r| r.kinds = kinds);
+                    }
                     for (file, ms, read) in files {
                         if !f.core.views.grep_batch(&f, conn, &view, id, file, ms, read) {
                             return;
@@ -1523,6 +1547,279 @@ pub fn undo_change(f: &Front, c: &Caller, p: UndoParams) -> Result<bool, Error> 
     let front = f.core.views.front.get().and_then(std::sync::Weak::upgrade);
     let front = front.ok_or_else(|| invalid("view", "the hub is starting"))?;
     Ok(apply::undo(&front, c.conn_id, p.change, p.open))
+}
+
+/// RUN's matches P hands off (P.ids, else all but P.off), by file in the run's order: (handed, hidden paths left out).
+fn handed_of(run: &Run, p: &HandoffParams) -> (Vec<handoff::Handed>, Vec<String>) {
+    let ids: Option<HashSet<&str>> = p
+        .ids
+        .as_ref()
+        .map(|v| v.iter().map(String::as_str).collect());
+    let off: HashSet<&str> = p.off.iter().flatten().map(String::as_str).collect();
+    let (mut handed, mut hidden) = (Vec::new(), Vec::new());
+    for f in &run.files {
+        let rel = Path::new(&f.file)
+            .strip_prefix(&run.query.root)
+            .map(|r| r.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| f.file.clone());
+        let shown = p.hidden || grep::searched(grep::Ignore::Index, &rel);
+        for (i, (m, n)) in f.ms.iter().zip(&f.ns).enumerate() {
+            let id = run::match_id(run.id, *n);
+            let take = match &ids {
+                Some(ids) => ids.contains(id.as_str()),
+                None => !off.contains(id.as_str()),
+            };
+            if !take {
+                continue;
+            }
+            if !shown {
+                if hidden.last() != Some(&rel) {
+                    hidden.push(rel.clone());
+                }
+                continue;
+            }
+            handed.push(handoff::Handed {
+                id,
+                path: f.file.clone(),
+                rel: rel.clone(),
+                line: m.line,
+                col: m.col,
+                old: m.text.clone(),
+                text: format!("{}{}{}", m.before, m.text, m.after),
+                ctx: f.ctx.get(i).cloned().flatten().map(|d| d.name.clone()),
+                snap: f.snap.clone(),
+            });
+        }
+    }
+    (handed, hidden)
+}
+
+/// What RUN searched, in a line: the text (a regexp, case, word) and the globs.
+fn query_line(q: &Query) -> String {
+    let mut s = format!("{:?}", q.text);
+    let how: Vec<&str> = [
+        (q.regexp, "a regular expression"),
+        (q.case, "case matched"),
+        (q.word, "whole words"),
+    ]
+    .into_iter()
+    .filter_map(|(on, w)| on.then_some(w))
+    .collect();
+    if !how.is_empty() {
+        s.push_str(&format!(" ({})", how.join(", ")));
+    }
+    if !q.include.is_empty() {
+        s.push_str(&format!(", in {}", q.include.join(" ")));
+    }
+    if !q.exclude.is_empty() {
+        s.push_str(&format!(", not in {}", q.exclude.join(" ")));
+    }
+    s
+}
+
+/// A new worker of PROFILE for ROOT's hand-off, in a worktree of its own from ROOT's HEAD, registered as a worker so
+/// the Work space's review lists it: its session id and worktree.
+async fn handoff_worker(
+    f: &Front,
+    c: &Caller,
+    root: &Path,
+    profile: &str,
+) -> Result<(String, PathBuf), Error> {
+    let base = crate::runner::tick::git(root, &["rev-parse", "--verify", "HEAD"])
+        .await
+        .map_err(|e| {
+            invalid(
+                "to",
+                &format!("no commit to start a worktree from: {}", e.stderr),
+            )
+        })?;
+    let name = format!(
+        "search-{}",
+        &runstav::proof::nonce().map_err(|e| invalid("to", &e.to_string()))?[..8]
+    );
+    let tree = f
+        .core
+        .runs
+        .git()
+        .task_worktree(root, "search", &name, base.trim())
+        .await
+        .map_err(|e| invalid("to", &format!("no worktree: {}", e.stderr)))?;
+    let started = f
+        .core
+        .agents
+        .start(
+            f,
+            runstav::methods::agents::StartParams {
+                profile: runstav::types::Bounded(profile.to_owned()),
+                cwd: runstav::types::AbsPath::new(tree.path.to_string_lossy().into_owned()).ok(),
+                task: None,
+                job: None,
+                role: Some(runstav::methods::matrix::Role::Worker),
+                about: None,
+                document: None,
+                env: None,
+            },
+            c,
+        )
+        .await?;
+    let _ = f.core.runs.git().touched(&tree.path).await;
+    let cwd = tree.path.to_string_lossy().into_owned();
+    let reg = norn::write::agents::AgentRegister {
+        id: started.id.clone(),
+        kind: Some("worker".into()),
+        cwd: Some(cwd.clone()),
+        worktree: Some(cwd),
+        branch: Some(tree.branch.clone()),
+        base: Some(tree.base.clone()),
+        ..Default::default()
+    };
+    let now = crate::clock::wall_secs();
+    if let Err(e) = f
+        .writer
+        .write(
+            &crate::runner::service(),
+            "coord/agent-register",
+            move |tx| norn::write::agents::agent_register(tx, reg.clone(), now).map(|_| ()),
+        )
+        .await
+    {
+        tracing::warn!(
+            sid = started.id,
+            "the hand-off's worker is not registered: {e:?}"
+        );
+    }
+    Ok((started.id, tree.path))
+}
+
+/// `search/handoff`: VIEW's matches to an agent with a brief (`handoff.rs`): a new worker in its own worktree, or a live
+/// session (which edits in its own folder: a worker's worktree, a paired chat's checkout). The hand-off is watched.
+pub async fn handoff(f: &Front, c: &Caller, p: HandoffParams) -> Result<HandoffAnswer, Error> {
+    let views = &f.core.views;
+    let (root, query, replace, (handed, hidden)) = views
+        .greps
+        .current(c.conn_id, &p.view, |run| {
+            (
+                run.query.root.clone(),
+                query_line(&run.query),
+                run.replace.clone(),
+                handed_of(run, &p),
+            )
+        })
+        .ok_or_else(|| invalid("view", "the view has no search"))?;
+    if handed.is_empty() {
+        return Err(invalid(
+            "ids",
+            "no match to hand off (hidden paths are left out unless asked)",
+        ));
+    }
+    let (session, tree, new) = match &p.to {
+        HandoffTo::Session { id } => {
+            let s = f.core.agents.find(id.as_str())?;
+            let tree = f
+                .core
+                .agents
+                .worktree(id.as_str())
+                .unwrap_or_else(|| root.clone());
+            drop(s);
+            (id.as_str().to_owned(), tree, false)
+        }
+        HandoffTo::New { profile } => {
+            let (sid, tree) = handoff_worker(f, c, &root, profile).await?;
+            (sid, tree, true)
+        }
+    };
+    let rows: Vec<String> = handed.iter().map(handoff::row).collect();
+    let changed = {
+        let h = handed.clone();
+        crate::clock::blocking(move || handoff::changed_since(&h))
+            .await
+            .unwrap_or_default()
+    };
+    let ids: Vec<String> = handed.iter().map(|m| m.id.clone()).collect();
+    let id = views.greps.handoffs.add(handoff::Handoff {
+        conn: c.conn_id,
+        view: p.view.clone(),
+        session: session.clone(),
+        tree: tree.clone(),
+        matches: handed,
+        rows: rows.clone(),
+        at: crate::clock::now(),
+        served: 0,
+        edited: false,
+    });
+    let replace = (!replace.is_empty()).then_some(replace.as_str());
+    let (text, sent, more) = handoff::brief(
+        &id,
+        p.instruction.as_str(),
+        &query,
+        replace,
+        &rows,
+        &changed,
+    );
+    if let Err(e) = f.core.agents.send(&session, text) {
+        views.greps.handoffs.forget(&id);
+        return Err(e);
+    }
+    // the handed-off rows show the agent's mark
+    if let Some(mark) = &p.mark {
+        let mark = AgentMark {
+            face: mark.face.clone(),
+            glyph: mark.glyph.clone(),
+        };
+        views.greps.current(c.conn_id, &p.view, |run| {
+            for i in &ids {
+                run.handed.insert(i.clone(), mark.clone());
+            }
+            for patch in rebuild_patches(&mut lock(&views.store), c.conn_id, &p.view, run) {
+                f.send_to(c.conn_id, "view-patch", json!(patch));
+            }
+        });
+    }
+    if let Some(front) = views.front.get().and_then(std::sync::Weak::upgrade) {
+        handoff::watch(front, c.clone(), id.clone(), session.clone());
+    }
+    Ok(HandoffAnswer {
+        handoff: id,
+        session,
+        worktree: new.then(|| tree.to_string_lossy().into_owned()),
+        ids,
+        sent,
+        more,
+        hidden,
+    })
+}
+
+/// `search/handoff-state`: where hand-off P.handoff is (`handoff.rs`); the asking connection's own only.
+pub async fn handoff_state(
+    f: &Front,
+    c: &Caller,
+    p: HandoffStateParams,
+) -> Result<HandoffState, Error> {
+    let mine = f
+        .core
+        .views
+        .greps
+        .handoffs
+        .with(&p.handoff, |h| h.conn == c.conn_id);
+    if mine != Some(true) {
+        return Err(invalid(
+            "handoff",
+            "no such hand-off (ended, older than 24 h, or another window's)",
+        ));
+    }
+    handoff::state_of(f, c, &p.handoff)
+        .await
+        .ok_or_else(|| invalid("handoff", "the hand-off ended"))
+}
+
+/// `search_results` (the drgnx-search tool): page PAGE of hand-off ID's matches for SESSION, its own only.
+pub(crate) fn handoff_page(
+    f: &Front,
+    id: &str,
+    session: &str,
+    page: usize,
+) -> Result<String, String> {
+    f.core.views.greps.handoffs.page(id, session, page)
 }
 
 #[cfg(test)]

@@ -374,7 +374,13 @@ pub async fn compare(f: &Front, c: &Caller, p: w::CompareParams) -> Result<w::Co
 fn mode_of(dir: std::os::fd::BorrowedFd<'_>, rel: &str) -> Option<u32> {
     let o = eitri::open_beneath(dir, Path::new(rel), eitri::Kind::File).ok()?;
     let st = rustix::fs::fstat(&o.fd).ok()?;
-    Some(st.st_mode & 0o777)
+    Some(perm_bits(st.st_mode))
+}
+
+/// The permission bits of a `stat` mode, as `u32` on every platform (`st_mode` is `u16` on macOS).
+#[allow(clippy::useless_conversion)]
+pub(super) fn perm_bits(mode: rustix::fs::RawMode) -> u32 {
+    u32::from(mode) & 0o777
 }
 
 /// `history/take`.

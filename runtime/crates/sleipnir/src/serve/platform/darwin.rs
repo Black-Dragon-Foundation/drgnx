@@ -6,7 +6,7 @@ use super::super::Config;
 use super::super::attempts::{self, LOG};
 use super::super::cleanup;
 use super::{LaunchReq, Platform};
-use crate::darwin::{attempt, jobexec, memwatch, pressure, probe, sandbox};
+use crate::darwin::{attempt, jobexec, memwatch, pressure, probe, sandbox, tools};
 use crate::linux::jobexec::JobExec;
 use crate::linux::parse::Parser;
 use crate::linux::reserve::{self, Reservations};
@@ -189,12 +189,20 @@ impl Platform for DarwinPlatform {
             fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
         }
         let marker = format!("{}/{id}/{}", self.hub_id, meta.r.attempt);
+        let records = tools::records_for(&self.root, &meta.spec.features)?;
+        let tools_dir = self.root.join("tools");
+        let bin = self.root.join("bin");
+        let shim = crate::darwin::brew::ensure_shim(&self.root, &self.exe)
+            .map_err(|e| format!("the brew shim: {e}"))?;
         let spec = sandbox::spec(&sandbox::Job {
             dir,
             src: req.src,
             cwd: &meta.spec.cwd,
             writes_tree: meta.spec.writes_tree,
             marker: &marker,
+            tools_dir: &tools_dir,
+            tools: &records,
+            bin: &bin,
         });
         let env = spec.env.clone();
         let ctx = gleipnir::Context {
@@ -205,20 +213,27 @@ impl Platform for DarwinPlatform {
             open_inside_closed: vec![],
             user_sockets: vec![],
             run_parents: vec![],
-            program_dirs: sandbox::PATH.split(':').map(PathBuf::from).collect(),
+            program_dirs: sandbox::PATH
+                .split(':')
+                .map(PathBuf::from)
+                .chain([shim])
+                .chain(
+                    records
+                        .iter()
+                        .flat_map(|r| r.path.iter().map(PathBuf::from)),
+                )
+                .collect(),
             env_deny: vec![],
         };
         let valid = gleipnir::validate(spec, &ctx, gleipnir::spec::Target::Macos)
             .map_err(|r| format!("the job's sandbox: {}", r.message))?;
-        let developer_dir = fs::canonicalize(probe_developer_dir(&self.raw.borrow())).ok();
-        let profile = gleipnir::sbpl::profile(
-            &valid,
-            &gleipnir::sbpl::MacContext {
-                developer_dir,
-                ..Default::default()
-            },
-        )
-        .map_err(|r| format!("the job's profile: {}", r.message))?;
+        let mac = {
+            let raw = self.raw.borrow();
+            sandbox::mac_context(&raw.developer_dir, &raw.darwin_user_dir)
+                .map_err(|e| format!("the job's profile: {e}"))?
+        };
+        let profile = gleipnir::sbpl::profile(&valid, &mac)
+            .map_err(|r| format!("the job's profile: {}", r.message))?;
         let sb = dir.join("job.sb");
         fs::write(&sb, profile).map_err(|e| format!("job.sb: {e}"))?;
         let mut argv = vec![
@@ -324,9 +339,4 @@ impl Platform for DarwinPlatform {
     fn pressure(&self) -> Option<forseti::safety::Level> {
         Some(pressure::level())
     }
-}
-
-/// The developer dir `xcode-select` names (none: the system roots only).
-fn probe_developer_dir(raw: &probe::Raw) -> PathBuf {
-    PathBuf::from(raw.developer_dir.trim())
 }

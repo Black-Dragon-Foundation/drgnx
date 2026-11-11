@@ -106,7 +106,8 @@ fn running_from_child_without_integration() {
 }
 
 /// What a connection of uid 65534 to SOCKET reads, in a child process: 0 when the worker drops it unread, 2 when it
-/// says hello, 3 when the connection fails.
+/// says hello; 3 when the child cannot become that uid, 4 when it cannot connect, 5 when nothing comes in 5 s, 6 when
+/// the read fails.
 fn connect_as_nobody(socket: &std::path::Path) -> i32 {
     use std::os::unix::ffi::OsStrExt;
     // SAFETY: a zeroed sockaddr_un is valid; the path fits (a temp dir's)
@@ -126,7 +127,7 @@ fn connect_as_nobody(socket: &std::path::Path) -> i32 {
                 let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
                 let len = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
                 if libc::connect(fd, (&raw const addr).cast(), len) != 0 {
-                    return 3;
+                    return 4;
                 }
                 let mut pfd = libc::pollfd {
                     fd,
@@ -134,13 +135,13 @@ fn connect_as_nobody(socket: &std::path::Path) -> i32 {
                     revents: 0,
                 };
                 if libc::poll(&mut pfd, 1, 5000) != 1 {
-                    return 3;
+                    return 5;
                 }
                 let mut b = [0u8; 64];
                 match libc::read(fd, b.as_mut_ptr().cast(), b.len()) {
                     0 => 0,
                     n if n > 0 => 2,
-                    _ => 3,
+                    _ => 6,
                 }
             })();
             libc::_exit(code);
@@ -154,7 +155,9 @@ fn connect_as_nobody(socket: &std::path::Path) -> i32 {
 #[test]
 fn the_socket_is_private_and_another_uid_is_dropped() {
     use std::os::unix::fs::PermissionsExt;
-    let tmp = tempfile::tempdir().unwrap();
+    // under /tmp, which every user can cross: another uid must reach the socket, so only the worker stands in its way
+    // (macOS's per-user temp directory is 0700 all the way up)
+    let tmp = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let socket = tmp.path().join("t.sock");
     let l = drgnx_term::run::listen(&socket).unwrap();
     let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;

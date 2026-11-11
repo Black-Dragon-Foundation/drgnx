@@ -171,7 +171,11 @@ branch gateway-queue, staged file and history come with the Magit adapter (look 
     (palette "the mockup's palette rows come from its own commands; the line lists the registry's")
     (explorer-focused-dark "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
     (explorer-focused-light "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
-    (explorer-focused-hc "no agent badges (C, R) in the Explorer: agent system part 3 (G9)"))
+    (explorer-focused-hc "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
+    (debugging "no session runs: no stopped line (arrow and band on 24), toolbar, inline values, Run and Debug view or
+Debug Console (graphical debugging's later tasks); compare the breakpoint column"
+               "no hover dot on 32: the margin's mouse-face needs Nidhogg's margin patch"
+               "no change bars: the scene's inventory.py is new, not a changed file"))
   "What the line cannot show of each scene's mockup yet, written to the scene's facts (:limits).  A scene is never
 changed to hide a gap: the gap is named here instead.")
 
@@ -669,6 +673,48 @@ match on line 209 (the `puthash' line) unticked; the view's buffer, or nil."
       (drgnx-look-scene--until 10 "sheet" (lambda () (when-let* ((b (get-buffer drgnx-replace-sheet-buffer-name)))
                                                        (plist-get (buffer-local-value 'drgnx-replace--sheet b) :hunk)))))
     (drgnx-look-scene--answer)))
+
+;; The debugging mockup's file (the-look/debugging.html): its lines 13-33, after twelve lines of header.
+(defconst drgnx-look-scene--inventory
+  (concat "\"\"\"Stock levels and the weekly order.\"\"\"\n\nimport logging\nfrom dataclasses import dataclass\n\n"
+          "log = logging.getLogger(__name__)\nPACK_SIZE = 6\n\n\n@dataclass\nclass Item:\n    sku: str; qty: int; min: int\n\n"
+          "def reorder_quantities(items: list[Item], threshold: int) -> dict[str, int]:\n"
+          "    \"\"\"Packs to order so that no item falls under its minimum.\"\"\"\n"
+          "    order: dict[str, int] = {}\n    for i, item in enumerate(items):\n        if item.qty >= item.min:\n"
+          "            continue\n        shortfall = item.min - item.qty\n        # large gaps are worth a warning in the log\n"
+          "        if shortfall > threshold:\n            log.warning(\"large shortfall: %s\", item.sku)\n"
+          "        packs = -(-shortfall // PACK_SIZE)\n        order[item.sku] = packs * PACK_SIZE\n    return order\n\n\n"
+          "def plan_week(stock: Stock) -> Plan:\n    items = [i for i in stock.items if i.active]\n"
+          "    order = reorder_quantities(items, threshold=10)\n"
+          "    cost = sum(prices[s] * n for s, n in order.items())\n    return Plan(order=order, cost=cost)\n"))
+
+(declare-function drgnx-debug-gutter-mode "drgnx-debug-gutter")
+(declare-function drgnx-debug-gutter--apply "drgnx-debug-gutter")
+
+(defun drgnx-look-scene-debugging ()
+  "The debugging mockup's editor: inventory.py from line 13, with its breakpoints in the column (18 verified, 22 a
+condition, 24 verified, 25 a logpoint, 30 disabled).  No session runs yet, so there is no stopped line, toolbar or
+views: the scene is the column's (the mockup's stop arrow on 24 is a plain breakpoint here, its hover dot on 32 is not
+drawn)."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--try "debugging"
+    (drgnx-wb-focus-editor)
+    (let ((f (expand-file-name "inventory.py" drgnx-look-scene--project)))
+      (unless (file-exists-p f) (with-temp-file f (insert drgnx-look-scene--inventory)))
+      (dolist (m '("drgnx-debug-launch" "drgnx-debug-gutter"))
+        (load (expand-file-name (concat "modules/extra/" m) (bound-and-true-p drgnx-dir)) nil t))
+      (drgnx-look-scene--goto "inventory.py" 24 8 13)
+      ;; the store's answer, as the hub would give it (the scene has no hub)
+      (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore))
+        (drgnx-debug-gutter-mode 1))
+      (drgnx-debug-gutter--apply
+       (list :version 1 :breakpoints
+             (list (list :id 1 :line 18 :enabled t :verified t)
+                   (list :id 2 :line 22 :enabled t :verified t :condition "shortfall > 20")
+                   (list :id 3 :line 24 :enabled t :verified t)
+                   (list :id 4 :line 25 :enabled t :verified t :log "order {item.sku}")
+                   (list :id 5 :line 30 :enabled nil :verified t))))))
+  (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-start-page ()
   "The start page in the editor, dark (no mockup: its buttons, keycaps and shield are the components of design §3.5)."

@@ -1,6 +1,6 @@
 //! What a Mac runner reports about itself, and the Mac contract: macOS 15 or newer on Apple silicon, a root-owned
-//! `sandbox-exec`, a standard (non-admin) account, the Command Line Tools with any Xcode licence accepted, and 40 GB
-//! free on the runner root's volume. Everything is read once into a [`Raw`] (the live read, [`read`], on macOS only);
+//! `sandbox-exec`, a standard (non-admin) account, the Command Line Tools with any Xcode licence accepted, `mise` from
+//! Homebrew (the project's toolchains go into the root through it), and 40 GB free on the runner root's volume. Everything is read once into a [`Raw`] (the live read, [`read`], on macOS only);
 //! [`facts`], [`features`] and [`contract`] are pure.
 
 use crate::proto::{Facts, Missing};
@@ -35,11 +35,17 @@ pub struct Raw {
     pub sandbox_exec: Option<String>,
     /// `xcode-select -p`: the developer dir.
     pub developer_dir: String,
+    /// `getconf DARWIN_USER_DIR`: the account's per-user folder (`/var/folders/xx/yyy/0/`); a job's profile reads and
+    /// writes its parent.
+    pub darwin_user_dir: String,
     /// `/usr/bin/clang --version`, stdout and stderr together: a licence not accepted shows here.
     pub clang: String,
     /// `brew --prefix`, and `brew list --versions` (one call per probe).
     pub brew_prefix: String,
     pub brew_versions: String,
+    /// The user's `mise` (empty: none), and the toolchain records under the root (`tools::installed`).
+    pub mise: String,
+    pub tools: Vec<String>,
 }
 
 /// `15.6.1` → (15, 6); none when unreadable.
@@ -64,17 +70,24 @@ pub fn on_ac(batt: &str) -> bool {
     !has_battery(batt) || batt.contains("'AC Power'")
 }
 
-/// The versioned features of `brew list --versions`: `gnutls 3.8.4 3.8.5` → `brew:gnutls@3.8` (the newest version
-/// installed, major and minor); a name without a dotted version is left out.
+/// The features of `brew list --versions`: `gnutls 3.8.4 3.8.5` → `brew:gnutls` (any version: what a project's
+/// `drgnx-runners-mac-tools` asks) and `brew:gnutls@3.8` (the newest version installed, major and minor; none for a
+/// name without a dotted version).
 pub fn brew_features(list: &str) -> Vec<String> {
     let mut out: Vec<String> = list
         .lines()
-        .filter_map(|l| {
+        .flat_map(|l| {
             let mut w = l.split_whitespace();
-            let name = w.next()?;
-            let newest = w.filter_map(|v| parse_version(v).map(|p| (p, v))).max()?;
-            let ((major, minor), _) = newest;
-            Some(format!("brew:{name}@{major}.{minor}"))
+            let Some(name) = w.next() else {
+                return vec![];
+            };
+            let mut f = vec![format!("brew:{name}")];
+            if let Some(((major, minor), _)) =
+                w.filter_map(|v| parse_version(v).map(|p| (p, v))).max()
+            {
+                f.push(format!("brew:{name}@{major}.{minor}"));
+            }
+            f
         })
         .collect();
     out.sort();
@@ -111,14 +124,15 @@ pub fn facts(raw: &Raw, others_present: Vec<String>) -> Facts {
     }
 }
 
-/// The features a Mac advertises: `arch:aarch64`, `host-jobs`, `xcode-clt` when the tools answer, and the Homebrew
-/// packages with their versions.
+/// The features a Mac advertises: `arch:aarch64`, `host-jobs`, `xcode-clt` when the tools answer, the Homebrew
+/// packages with their versions, and `tool:NAME@VER` for each toolchain installed into the root.
 pub fn features(raw: &Raw) -> Vec<String> {
     let mut f = vec!["arch:aarch64".to_string(), "host-jobs".to_string()];
     if clt_ok(raw) {
         f.push("xcode-clt".into());
     }
     f.extend(brew_features(&raw.brew_versions));
+    f.extend(super::tools::features(&raw.tools));
     f
 }
 
@@ -169,6 +183,12 @@ pub fn contract(raw: &Raw, others_present: Vec<String>) -> Result<Facts, Vec<Mis
         miss(
             "the Command Line Tools",
             "run `xcode-select --install` in your own account",
+        );
+    }
+    if raw.mise.trim().is_empty() {
+        miss(
+            "mise, from Homebrew (the project's toolchains are installed through it)",
+            "run `brew install mise` in your own account",
         );
     }
     let free = raw.disk_free / 1_000_000_000;
@@ -236,11 +256,16 @@ pub fn read(root: &std::path::Path) -> Raw {
         ),
         sandbox_exec: gleipnir::backend::macos::find().err().map(|r| r.message),
         developer_dir: out("/usr/bin/xcode-select", &["-p"]),
+        darwin_user_dir: out("/usr/bin/getconf", &["DARWIN_USER_DIR"]),
         clang: both("/usr/bin/clang", &["--version"]),
         brew_prefix: brew.map(|b| out(b, &["--prefix"])).unwrap_or_default(),
         brew_versions: brew
             .map(|b| out(b, &["list", "--versions"]))
             .unwrap_or_default(),
+        mise: super::tools::find_mise()
+            .map(|m| m.display().to_string())
+            .unwrap_or_default(),
+        tools: super::tools::installed(root),
     }
 }
 
@@ -263,15 +288,19 @@ mod tests {
             admin: "no drgnx-runner is NOT a member of admin\n".into(),
             sandbox_exec: None,
             developer_dir: "/Library/Developer/CommandLineTools".into(),
+            darwin_user_dir: "/var/folders/6m/g3m822tx5754yy400ffqz8km0000gp/0/".into(),
             clang: "Apple clang version 17.0.0 (clang-1700.0.13.5)\nTarget: arm64-apple-darwin24.6.0\n".into(),
             brew_prefix: "/opt/homebrew".into(),
             brew_versions: "gnutls 3.8.4 3.8.10\nautoconf 2.72\ntexinfo 7.2\nlibgccjit 15.1.0\nweird HEAD-abc\n"
                 .into(),
+            mise: "/opt/homebrew/bin/mise".into(),
+            tools: vec!["rust@1.95.json".into()],
         }
     }
 
     /// [D] A Mac that meets the contract: its facts (macOS version, cores, memory in MiB, disk in GB, no battery) and
-    /// features (arch, host jobs, the Command Line Tools, Homebrew packages at their newest major.minor).
+    /// features (arch, host jobs, the Command Line Tools, each Homebrew package by name and at its newest major.minor,
+    /// each toolchain in the root).
     #[test]
     fn a_mac_that_meets_the_contract_reports_its_facts() {
         let f = contract(&mini(), vec!["jobq".into()]).unwrap();
@@ -289,16 +318,22 @@ mod tests {
                 "arch:aarch64",
                 "host-jobs",
                 "xcode-clt",
+                "brew:autoconf",
                 "brew:autoconf@2.72",
+                "brew:gnutls",
                 "brew:gnutls@3.8",
+                "brew:libgccjit",
                 "brew:libgccjit@15.1",
+                "brew:texinfo",
                 "brew:texinfo@7.2",
+                "brew:weird",
+                "tool:rust@1.95",
             ]
         );
     }
 
     /// [D] Every item a Mac lacks is in the refusal, each with its fix: an old macOS, an Intel Mac, a sandbox-exec
-    /// anyone could change, an admin account, no Command Line Tools, too little disk.
+    /// anyone could change, an admin account, no Command Line Tools, no `mise`, too little disk.
     #[test]
     fn the_contract_lists_everything_missing() {
         let raw = Raw {
@@ -309,17 +344,19 @@ mod tests {
             developer_dir: String::new(),
             clang: "xcode-select: note: no developer tools were found".into(),
             disk_free: 12_000_000_000,
+            mise: String::new(),
             ..mini()
         };
         let missing = contract(&raw, vec![]).unwrap_err();
         let whats: Vec<&str> = missing.iter().map(|m| m.what.as_str()).collect();
-        assert_eq!(missing.len(), 6, "{whats:?}");
+        assert_eq!(missing.len(), 7, "{whats:?}");
         for (i, want) in [
             "macOS 15",
             "Apple silicon",
             "sandbox-exec (owned by uid 501)",
             "standard (non-admin)",
             "Command Line Tools",
+            "mise, from Homebrew",
             "40 GB free on the runner folder's volume (12 GB)",
         ]
         .iter()
@@ -330,6 +367,7 @@ mod tests {
         }
         assert!(missing[3].fix.contains("drgnx-runner"));
         assert!(missing[4].fix.contains("xcode-select --install"));
+        assert!(missing[5].fix.contains("brew install mise"));
     }
 
     /// [D] A full Xcode whose licence is not accepted: `clang` refuses, the contract names the licence (not the tools),
@@ -370,8 +408,8 @@ mod tests {
         assert_eq!(parse_version(""), None);
     }
 
-    /// [D] The live read on the macOS CI host: a whole `Raw` (the runner account there is an admin, so only the
-    /// account item may be missing).
+    /// [D] The live read on the macOS CI host: a whole `Raw`. The CI account is an admin and the VM's disk can sit
+    /// under the runner's free-space floor, so only those two items may be missing there.
     #[cfg(all(target_os = "macos", feature = "runner"))]
     #[test]
     fn the_live_read_is_whole() {
@@ -382,7 +420,11 @@ mod tests {
         assert!(raw.boot_session.len() >= 32, "{raw:?}");
         match contract(&raw, vec![]) {
             Ok(_) => {}
-            Err(m) => assert!(m.iter().all(|m| m.what.contains("standard")), "{m:?}"),
+            Err(m) => assert!(
+                m.iter()
+                    .all(|m| m.what.contains("standard") || m.what.contains("GB free")),
+                "{m:?}"
+            ),
         }
     }
 }

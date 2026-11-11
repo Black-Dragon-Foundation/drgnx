@@ -200,6 +200,74 @@ pub struct DebugEnded {
     pub exit_code: Option<i64>,
 }
 
+/// `debug/breakpoints`: ROOT's breakpoints. OP changes them (it reaches ROOT's sessions at once); the answer is the
+/// view of the file OP changed, else of PATH.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugBreakpoints {
+    pub root: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op: Option<DebugBreakpointOp>,
+}
+
+/// One change to the breakpoint store, by id: `add` (PATH, LINE; the breakpoint already on that line if any),
+/// `remove` (ID), `edit` (ID and the fields given; an empty text clears one), `move` (ID, LINE: the saved line),
+/// `add-function` (NAME, CONDITION) and `remove-function` (NAME).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugBreakpointOp {
+    pub op: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// The operations `debug/breakpoints` knows.
+pub const BP_OPS: &[&str] = &[
+    "add",
+    "remove",
+    "edit",
+    "move",
+    "add-function",
+    "remove-function",
+];
+
+/// A file's breakpoints (`debug/breakpoints`' answer, and the event `debug-breakpoints`): PATH's VERSION and its
+/// BREAKPOINTS (`{id, line, enabled, condition?, hit?, log?, verified, message?, bound_line?, unsupported}`), with the
+/// project's ROOT; the answer also has the function breakpoints and the id ADDED.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugBreakpointsView {
+    pub root: String,
+    pub path: String,
+    pub version: u64,
+    pub breakpoints: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub functions: Option<Vec<Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added: Option<u64>,
+}
+
+/// `debug/run-to-cursor`: SESSION stops once at PATH's LINE (a breakpoint for it alone), continuing if it is stopped.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugRunToCursor {
+    pub session: String,
+    pub path: String,
+    pub line: u32,
+}
+
 fn check_text(path: &str, s: &str) -> Result<(), Error> {
     if s.is_empty() || s.len() > TEXT_MAX {
         return Err(invalid(path, "a non-empty text of at most 4096 bytes"));
@@ -251,8 +319,73 @@ fn check_trust(p: &DebugTrust) -> Result<(), Error> {
     check_root(&p.root)
 }
 
+fn check_path(path: &str, s: &str) -> Result<(), Error> {
+    check_text(path, s)?;
+    if !s.starts_with('/') {
+        return Err(invalid(path, "an absolute path"));
+    }
+    Ok(())
+}
+
+fn check_breakpoints(p: &DebugBreakpoints) -> Result<(), Error> {
+    check_root(&p.root)?;
+    if let Some(path) = &p.path {
+        check_path("path", path)?;
+    }
+    let Some(op) = &p.op else { return Ok(()) };
+    if !BP_OPS.contains(&op.op.as_str()) {
+        return Err(invalid(
+            "op.op",
+            "one of add, remove, edit, move, add-function, remove-function",
+        ));
+    }
+    for (k, v) in [
+        ("op.condition", &op.condition),
+        ("op.hit", &op.hit),
+        ("op.log", &op.log),
+    ] {
+        if v.as_ref().is_some_and(|t| t.len() > TEXT_MAX) {
+            return Err(invalid(k, "at most 4096 bytes"));
+        }
+    }
+    let need = |k: &str, ok: bool| {
+        if ok {
+            Ok(())
+        } else {
+            Err(invalid(k, "required by this op"))
+        }
+    };
+    match op.op.as_str() {
+        "add" => {
+            check_path("op.path", op.path.as_deref().unwrap_or_default())?;
+            need("op.line", op.line.is_some_and(|l| l > 0))
+        }
+        "remove" | "edit" => need("op.id", op.id.is_some()),
+        "move" => {
+            need("op.id", op.id.is_some())?;
+            need("op.line", op.line.is_some_and(|l| l > 0))
+        }
+        _ => check_text("op.name", op.name.as_deref().unwrap_or_default()),
+    }
+}
+
+fn check_run_to(p: &DebugRunToCursor) -> Result<(), Error> {
+    check_text("session", &p.session)?;
+    check_path("path", &p.path)?;
+    if p.line == 0 {
+        return Err(invalid("line", "a line number from 1"));
+    }
+    Ok(())
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
+        method!(
+            "debug/breakpoints", DebugBreakpoints(DebugBreakpoints) -> DebugBreakpointsView,
+            classes: [User], writes: false,
+            doc: "a project's breakpoints: a change by id (add, remove, edit, move, function breakpoints) that reaches its sessions at once, and the file's breakpoints with what the adapters made of them",
+            check: check_breakpoints,
+        ),
         method!(
             "debug/configs", DebugConfigs(DebugConfigs) -> DebugConfigList,
             classes: [User], writes: false,
@@ -270,6 +403,12 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "continue, pause, step, restart, stop or disconnect a session (stop and disconnect stop its children first and answer once all have ended)",
             check: check_control,
+        ),
+        method!(
+            "debug/run-to-cursor", DebugRunToCursor(DebugRunToCursor) -> bool,
+            classes: [User], writes: false,
+            doc: "Run to Cursor: a session stops once at a line (a breakpoint for it alone, gone at its next stop), continuing if it is stopped",
+            check: check_run_to,
         ),
         method!(
             "debug/select", DebugSelect(DebugSelect) -> bool,

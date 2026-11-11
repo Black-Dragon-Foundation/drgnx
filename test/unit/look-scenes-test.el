@@ -10,7 +10,7 @@
 
 (ert-deftest drgnx-look-scenes/one-scene-per-mockup ()
   "Every mockup the look was approved on has a scene of the same name, and every scene has its setup function."
-  (dolist (mockup '(window-dark window-light window-hc palette agent-panel magit))
+  (dolist (mockup '(window-dark window-light window-hc palette agent-panel magit debugging))
     (should (assq mockup drgnx-look-scenes)))
   (should (eq (plist-get (cdr (assq 'work-flow drgnx-look-scenes)) :mockup) 'hub-orchestration))
   (dolist (scene drgnx-look-scenes)

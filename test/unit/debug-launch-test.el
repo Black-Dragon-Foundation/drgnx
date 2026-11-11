@@ -146,4 +146,35 @@ holds (METHOD . PARAMS) of every call, in order."
                      (:name "attach-go" :type "go" :request "attach" :processId 7))))
     (should (equal (cdr r) '(("no-type" . "no :type"))))))
 
+;;;; drgnx doctor: the adapters
+
+(ert-deftest drgnx-debug-launch/doctor-lists-the-adapters ()
+  "Each built-in adapter of the table, found or not and how to get it; nothing in the table is evaluated."
+  (require 'drgnx-doctor)
+  (let* ((dir (make-temp-file "dbg" t))
+         (table (expand-file-name "a.eld" dir))
+         (data (expand-file-name "data" dir)))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "debug-adapters/js/src" data) t)
+          (with-temp-file (expand-file-name "debug-adapters/js/src/server.js" data) (insert ""))
+          (with-temp-file table
+            (insert "((:id \"lldb-dap\" :name \"LLDB\" :tested t :find (:path \"lldb-dap\") :install (:system \"dnf install lldb\"))\n"
+                    " (:id \"js-debug\" :name \"JS\" :tested t :find (:tools \"js/src/server.js\"))\n"
+                    " (:id \"gdb\" :name \"GDB\" :tested nil :find (:path \"gdb\") :install (:system \"dnf install gdb\"))\n"
+                    " (:id \"evil\" :name \"E\" :tested nil :find (:path (eval (error \"evaluated\"))))\n"
+                    " (:id \"cpptools\" :name \"C\" :not-built-in t))\n"))
+          (cl-letf (((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "lldb-dap") "/usr/bin/lldb-dap")))
+                    ((symbol-function 'drgnx-data-dir) (lambda () data)))
+            (let ((rows (drgnx-doctor--debug-adapters table)))
+              (should (equal (mapcar (lambda (r) (list (plist-get r :id) (and (plist-get r :found) t))) rows)
+                             '(("lldb-dap" t) ("js-debug" t) ("gdb" nil) ("evil" nil))))
+              (let ((r (drgnx-doctor-check 'debug-adapters (list :debug-adapters rows))))
+                (should (eq (car r) 'ok))
+                (should (string-match-p "lldb-dap" (cadr r)))
+                (should (string-match-p "not installed: gdb (dnf install gdb)" (cadr r))))
+              (should (eq (car (drgnx-doctor-check 'debug-adapters (list :debug-adapters '((:id "gdb" :tested nil)))))
+                          'info)))))
+      (delete-directory dir t))))
+
 ;;; debug-launch-test.el ends here

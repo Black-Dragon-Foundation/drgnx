@@ -541,6 +541,7 @@ mod cloud {
             keys: vec![],
             local_only: false,
             writes: vec![],
+            os: Default::default(),
         };
         Submit {
             id: id.into(),

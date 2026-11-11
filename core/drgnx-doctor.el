@@ -274,6 +274,35 @@ default; it never reads ~/.profile), else ~/.profile.  With SHELL unset or empty
 (declare-function drgnx-commands-get "drgnx-registry")
 (defvar drgnx-trust-mode)
 
+(defun drgnx-doctor--debug-adapter-found (find)
+  "Where FIND (an adapter's `:find': (:path P), (:python-module M) or (:tools REL)) finds it, or nil.
+Data only: a value that is not a plain string finds nothing."
+  (let ((v (cadr find)))
+    (when (stringp v)
+      (pcase (car find)
+        (:path (executable-find v))
+        (:python-module
+         (let ((py (executable-find "python3")))
+           (and py (string-match-p "\\`[A-Za-z_][A-Za-z0-9_.]*\\'" v)
+                (eq 0 (ignore-errors (call-process py nil nil nil "-c" (concat "import " v))))
+                (format "%s -m %s" py v))))
+        (:tools (let ((f (expand-file-name v (expand-file-name "debug-adapters" (drgnx-data-dir)))))
+                  (and (file-exists-p f) f)))))))
+
+(defun drgnx-doctor--debug-adapters (&optional table)
+  "The built-in debug adapters of TABLE (default etc/debug-adapters.eld), read as data: (:id :name :tested :found
+:install) each, `:found' where it is or nil.  Entries marked `:not-built-in' are left out."
+  (let* ((r (drgnx-file-read (or table (expand-file-name "etc/debug-adapters.eld" drgnx-dir))))
+         (rows (if (eq (plist-get r :status) 'ok) (plist-get r :data)
+                 (error "%s" (or (plist-get (plist-get r :problem) :text) (plist-get r :status))))))
+    (delq nil
+          (mapcar (lambda (a)
+                    (unless (plist-get a :not-built-in)
+                      (list :id (plist-get a :id) :name (plist-get a :name) :tested (plist-get a :tested)
+                            :found (drgnx-doctor--debug-adapter-found (plist-get a :find))
+                            :install (plist-get a :install))))
+                  rows))))
+
 (defun drgnx-doctor--trust-guards ()
   "The facts of the `security' check: `drgnx-trust-guards-status', or (:error MESSAGE).
 A batch doctor runs in a bare Emacs where drgnx's startup has not run (its commands are not registered): it
@@ -508,6 +537,8 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :coord-configs (drgnx-doctor--coord-configs)
            :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram))
            :trust-guards (drgnx-doctor--trust-guards)
+           :debug-adapters (condition-case err (drgnx-doctor--debug-adapters)
+                             (error (list (list :error (error-message-string err)))))
            :config-dir (drgnx-doctor--config-dir)
            :state-in-temp (drgnx-doctor--state-in-temp)
            :config-files (drgnx-doctor--config-files)
@@ -1675,6 +1706,27 @@ state dir): a list of (:file NAME :stopped PLISTS :time WRITTEN), one per file t
                                                            stopped "; ")
                                                 (if time (format " (from the last session, %s)" (drgnx-doctor--age time)) ""))
                                         "report the error; drgnx starts the timer again at the next start")))))
+
+(drgnx-doctor-define 'debug-adapters :group "Tools" :doc "Debug adapters: which of drgnx's built-in ones are installed"
+                     :check (lambda (f)
+                              (let* ((rows (plist-get f :debug-adapters))
+                                     (bad (seq-find (lambda (r) (plist-get r :error)) rows))
+                                     (found (seq-filter (lambda (r) (plist-get r :found)) rows))
+                                     (missing (seq-remove (lambda (r) (plist-get r :found)) rows))
+                                     (how (lambda (r)
+                                            (let ((i (plist-get r :install)))
+                                              (cond ((plist-get i :system) (format "%s (%s)" (plist-get r :id) (plist-get i :system)))
+                                                    ((plist-get i :pip) (format "%s (pip install %s)" (plist-get r :id) (plist-get i :pip)))
+                                                    ((plist-get i :url) (format "%s (Install from the picker)" (plist-get r :id)))
+                                                    (t (plist-get r :id))))))
+                                     (text (string-join
+                                            (delq nil (list (and found (concat "found: " (mapconcat (lambda (r) (plist-get r :id)) found ", ")))
+                                                            (and missing (concat "not installed: " (mapconcat how missing ", ")))))
+                                            "; ")))
+                                (cond (bad (list 'warn (format "etc/debug-adapters.eld does not read: %s" (plist-get bad :error))
+                                                 "reinstall drgnx (the table ships with it)"))
+                                      (found (list 'ok text nil))
+                                      (t (list 'info text "install an adapter for your language to debug it"))))))
 
 (drgnx-doctor-define 'statusbar-misc :group "drgnx"
                      :doc "Mode-line entries of other packages too slow to format on every redisplay (from the last session)"

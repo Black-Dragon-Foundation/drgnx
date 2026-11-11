@@ -216,7 +216,7 @@ seen inside.
 | `run` | bind or absent | the session's dir: one session's socket dir, always `ro` |
 | `env` | `[[name, value], …]` | the program's whole environment; it travels in the inner spec over a sealed memfd, never in argv |
 | `chdir` | path | the working directory, as a path inside |
-| `net` | `"shared"` or `{"isolated": {"relay": [{port, socket}], "mac_tcp_ports": [port], "loopback": false, "mac_loopback_ports": [port]}}` | Linux isolation is a new network namespace plus the relay (loopback port inside → Unix socket); macOS allows only `localhost` on `mac_tcp_ports`. `loopback` (a debug session's, set by nothing else): the program's own loopback traffic. Linux full tier: no Landlock TCP port rule, the namespace alone isolates; macOS: `localhost` bound, accepted and connected to on `mac_loopback_ports` only (the hub picks them free), Unix sockets bound and accepted under `tmp`, and an Xcode developer dir's `../SharedFrameworks` read (LLDB.framework). Refused: `loopback` in the reduced tier, `mac_loopback_ports` on Linux or without `loopback` |
+| `net` | `"shared"` or `{"isolated": {"relay": [{port, socket}], "mac_tcp_ports": [port], "loopback": false, "mac_loopback_ports": [port]}}` | Linux isolation is a new network namespace plus the relay (loopback port inside → Unix socket); macOS allows only `localhost` on `mac_tcp_ports`. `loopback` (a debug session's, set by nothing else): the program's own loopback traffic. Linux full tier: no Landlock TCP port rule, the namespace alone isolates; macOS: `localhost` bound, accepted and connected to on `mac_loopback_ports` only (the hub picks them free), Unix sockets bound, accepted and connected to under `tmp` (nothing outside it), and an Xcode developer dir's `../SharedFrameworks` read (LLDB.framework). Refused: `loopback` in the reduced tier, `mac_loopback_ports` on Linux or without `loopback` |
 | `tmp` | path or absent | the temporary directory; required by the reduced tier, which has no private `/tmp` |
 | `layers` | `{landlock_min_abi}` | the lowest Landlock ABI the run accepts; seccomp is not a field (always on) |
 | `extra_tcp_ports` | ports | TCP ports besides the relay's (Landlock's port rule, never counted as isolation); the full tier only, the reduced tier grants none |
@@ -813,7 +813,17 @@ the program may touch is the profile's allow list.
 - **`MacContext`** carries the caller's facts: `users_dir` (`/Users`) and `developer_dir`, the true name of the dir
   xcode-select's link selects. `/usr/bin/git` is xcrun's shim and runs the git there (the Command Line Tools under
   `/Library`, or Xcode's under `/Applications`, which nothing else reads), so the profile reads it. Both must be
-  absolute and in canonical form; a developer dir that is `/` or holds `users_dir` is refused.
+  absolute and in canonical form; a developer dir that is `/` or holds `users_dir` is refused. `build` is a Mac
+  runner's job only (below); a session's profile never has it.
+- **The build addition** (`MacContext::build`, `sbpl::MacBuild`): what a build or test job on a Mac runner needs beyond
+  a session's profile, measured by the spike under it (a Nidhogg build with Naglfar, drgnx's ERT selectors): every
+  `sysctl-read` (the compilers' and cargo's hardware queries go beyond the base's list); the whole Xcode app read-only
+  when the developer dir is in one (`…/X.app/Contents/Developer`: xcodebuild, which make's shim runs, loads the app's
+  SharedFrameworks); the account's per-user folder (`getconf DARWIN_USER_DIR`'s parent, by true name) read and written
+  (clang's module cache, the compilers' temporary files); `/dev/autofs_nowait` read; `/dev/dtracehelper` and
+  `/dev/tty` written (`file-write-data` only, never created or unlinked); the metadata of `/private/tmp` and
+  `/private/var/tmp`; and the mach services `com.apple.system.opendirectoryd.membership` (the xcrun shims' group check)
+  and `com.apple.bsd.dirhelper`. A per-user folder that is `/` or meets `users_dir` is refused.
 
 ### The profile, in order
 
@@ -828,6 +838,7 @@ policy:
 (allow file-read-metadata (literal …))          ;    directory above an allowed path (stat, never list)
 (allow file-read* (subpath …))                  ; 5. system roots, developer dir, read, write, home, run, tmp
 (allow file-read* (literal "/dev/null") …)      ; 6. the devices, each by name
+(allow sysctl-read) …                           ;    a build's addition: sysctls, its devices, services
 (deny file-read* (subpath "/opt/homebrew/var") (regex …) …)          ; 7. Homebrew's data
 (allow file-write* (subpath …))                 ; 8. write, home (rw), tmp
 (allow file-read* (subpath B)) (allow file-write* (subpath B))       ; 9. each bind, in order: rw…

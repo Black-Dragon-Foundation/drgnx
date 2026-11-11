@@ -109,7 +109,10 @@ pub struct Start {
     /// `launch` / `attach`'s arguments.
     pub arguments: Value,
     pub breakpoints: Vec<SourceBps>,
-    pub exception_filters: Vec<String>,
+    /// The function breakpoints (`FunctionBreakpoint`s).
+    pub functions: Vec<Value>,
+    /// The exception filters chosen; none: the adapter's defaults.
+    pub exception_filters: Option<Vec<String>>,
 }
 
 impl Start {
@@ -539,7 +542,8 @@ impl Session {
                 .client
                 .request(
                     "setBreakpoints",
-                    json!({"source": {"path": s.path}, "breakpoints": s.breakpoints}),
+                    json!({"source": {"path": s.path},
+                           "breakpoints": super::breakpoints::fit(&s.breakpoints, &self.caps)}),
                 )
                 .await;
             match r {
@@ -553,13 +557,26 @@ impl Session {
                 }
             }
         }
+        if !self.start.functions.is_empty()
+            && self.cap("supportsFunctionBreakpoints")
+            && let Err(vor::Error::Closed(why)) = self
+                .client
+                .request(
+                    "setFunctionBreakpoints",
+                    json!({"breakpoints": super::breakpoints::fit(&self.start.functions, &self.caps)}),
+                )
+                .await
+        {
+            return Err(why);
+        }
         let has_filters = self
             .caps
             .get("exceptionBreakpointFilters")
             .and_then(Value::as_array)
             .is_some_and(|a| !a.is_empty());
         if has_filters {
-            let filters = self.start.exception_filters.clone();
+            let filters = (self.start.exception_filters.clone())
+                .unwrap_or_else(|| super::breakpoints::default_filters(&self.caps));
             if let Err(vor::Error::Closed(why)) = self
                 .client
                 .request("setExceptionBreakpoints", json!({"filters": filters}))

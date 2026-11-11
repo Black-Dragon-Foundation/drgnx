@@ -4,7 +4,8 @@
 
 ;; Pattern D: every picture is taken after `drgnx-test-wait-presented'.  The hover row moves a real pointer
 ;; (`drgnx-uitest-pointer-set': sway only), so it skips elsewhere and the integration's sway pass must report it
-;; passed.  The Explorer buffer is shown in the selected window of a bare frame, over a temporary folder.
+;; passed.  The Explorer buffer is shown in the selected window of a bare frame, over a temporary folder; its rows come
+;; from a real hub (`drgnx-rows-demo-with': a test-hooks build), and every row first checks there are rows to look at.
 
 (require 'ert)
 (require 'cl-lib)
@@ -17,6 +18,7 @@
   (expand-file-name "../../" (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory))))
 (dolist (d '("core" "wb" "harness"))
   (add-to-list 'load-path (expand-file-name d drgnx-ui-look-explorer--repo)))
+(load (expand-file-name "test/fixtures/rows-demo-fixture" drgnx-ui-look-explorer--repo) nil t)
 (require 'drgnx)
 (require 'drgnx-color)
 (require 'drgnx-explorer)
@@ -28,26 +30,47 @@
   "BODY with the Explorer rooted at ROOT (a temporary folder with a.txt, b.txt and c.txt, all `modified' in git) shown
 in the selected window of a bare frame under the dark theme.  Everything undone after."
   (declare (indent 1))
-  `(let* ((,root (file-name-as-directory (make-temp-file "look-explorer" t)))
-          (drgnx-explorer--roots nil) (drgnx-explorer-compact-folders nil))
-     (dolist (n '("a.txt" "b.txt" "c.txt")) (write-region "" nil (expand-file-name n ,root) nil 'silent))
-     (drgnx-uitest-bare-frame)
-     (delete-other-windows)
-     (mapc #'disable-theme custom-enabled-themes)
-     (load-theme 'drgnx-dark t)
-     (unwind-protect
-         (cl-letf (((symbol-function 'drgnx-git-unread-p) (lambda (&rest _) nil))
-                   ((symbol-function 'drgnx-git-status) (lambda (&rest _) 'modified)))
-           (drgnx-look-density-on)
-           (setq drgnx-explorer--roots (list ,root))
-           (set-window-buffer (selected-window) (drgnx-explorer--buffer))
-           (with-current-buffer (drgnx-explorer--buffer) (drgnx-explorer--render))
-           (drgnx-test-wait-presented)
-           ,@body)
-       (drgnx-look-density-off)
+  ;; the folder under a name of its own: `drgnx-rows-demo-with' binds `root' (its hub's) around BODY
+  (let ((dir (make-symbol "dir")))
+    `(let* ((,dir (file-name-as-directory (make-temp-file "look-explorer" t)))
+            (drgnx-explorer--roots nil) (drgnx-explorer-compact-folders nil) (drgnx-explorer--hub-view nil)
+            (drgnx-explorer--expanded (make-hash-table :test #'equal)) (drgnx-explorer--window-asker nil))
+       (dolist (n '("a.txt" "b.txt" "c.txt")) (write-region "" nil (expand-file-name n ,dir) nil 'silent))
+       ;; a repository whose three files are modified: the hub reads git itself and marks the rows from it
+       (let ((default-directory ,dir))
+         (dolist (args '(("init" "-q") ("add" ".")
+                         ("-c" "user.name=t" "-c" "user.email=t@t" "commit" "-q" "--no-gpg-sign" "-m" "t")))
+           (should (eq 0 (apply #'call-process "git" nil nil nil args)))))
+       (dolist (n '("a.txt" "b.txt" "c.txt")) (write-region "x\n" nil (expand-file-name n ,dir) nil 'silent))
+       (drgnx-uitest-bare-frame)
+       (delete-other-windows)
        (mapc #'disable-theme custom-enabled-themes)
-       (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
-       (delete-directory ,root t))))
+       (load-theme 'drgnx-dark t)
+       (unwind-protect
+           (drgnx-rows-demo-with
+             (cl-letf (((symbol-function 'drgnx-git-unread-p) (lambda (&rest _) nil))
+                       ((symbol-function 'drgnx-git-status) (lambda (&rest _) 'modified)))
+               (drgnx-look-density-on)
+               (setq drgnx-explorer--roots (list ,dir))
+               (let ((b (drgnx-explorer--buffer)))
+                 (set-window-buffer (selected-window) b)
+                 (with-current-buffer b (drgnx-explorer--render))   ; attaches to the hub's view and subscribes
+                 (drgnx-view-env-update drgnx-explorer-hub-view-name)
+                 ;; rows to look at, or the row fails here: never a pass over an empty Explorer
+                 (condition-case err
+                     (drgnx-test-wait (lambda () (with-current-buffer b (string-match-p "c\\.txt" (buffer-string))))
+                                      :secs 20 :what "the Explorer's rows from the hub")
+                   (ert-test-failed
+                    (ert-fail (list "no Explorer rows from the hub" (cadr err)
+                                    :text (with-current-buffer b (buffer-substring-no-properties
+                                                                  (point-min) (min (point-max) 400)))
+                                    :view drgnx-explorer--hub-view :hub-lists (drgnx-explorer--hub-lists-p))))))
+               (drgnx-test-wait-presented)
+               (let ((,root ,dir)) ,@body)))
+         (drgnx-look-density-off)
+         (mapc #'disable-theme custom-enabled-themes)
+         (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
+         (delete-directory ,dir t)))))
 
 (defun drgnx-ui-look-explorer--row-y (line)
   "The y pixel (in the window's text area) of the middle of the Explorer's LINE-th line.  The row's padding grows
@@ -146,6 +169,9 @@ H the density's `tree-row' (22 compact, 30 roomy)."
   (skip-unless (display-graphic-p))
   (drgnx-ui-look-explorer--with root
     (with-current-buffer drgnx-explorer-buffer-name (goto-char (point-min)))   ; the point row shows its ⋯: not these
+    ;; the pointer off the rows (a hover row before this one leaves it on a tail): a lit row's tint ends right of its
+    ;; mark, and the scan would stop there
+    (when (eq t (drgnx-uitest-pointer-set 0 0)) (drgnx-uitest-run nil))
     (drgnx-test-wait-presented)
     (let* ((snap (drgnx-uitest-snapshot))
            (a (drgnx-ui-look-explorer--right-edge snap 3)) (b (drgnx-ui-look-explorer--right-edge snap 4)))
@@ -171,11 +197,42 @@ the row, and again after the pointer leaves."
                                                  thereis (cl-every (lambda (p c) (<= (abs (- p c)) 24))
                                                                    (cdr (drgnx-uitest-pixel snap x yy)) fg)))))))
       (should-not (funcall has-fg))
-      (should (eq t (drgnx-uitest-pointer-set (round (/ (+ x0 x1) 2.0 s)) (round (/ px-y s)))))
+      ;; a Lisp pixel is a device pixel; sway takes logical ones
+      (should (eq t (drgnx-uitest-pointer-set (round (/ (+ x0 x1) 2.0 (drgnx-pixels-scale)))
+                                              (round (/ px-y (drgnx-pixels-scale) 1.0)))))
       (drgnx-uitest-run nil)
       (drgnx-test-wait-presented)
       (skip-unless (cadr (mouse-pixel-position)))
       (should (funcall has-fg)))))
+
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/the-pointer-on-a-row-tail-tints-the-whole-row ()
+  "Pattern D (sway, LOOK-FIX-OPEN-HOVER-TINT-1): with the pointer on a row's tail (where its ⋯ is), the hover tint
+reaches the row's first glyph too: the row and the tail its after-string draws are one lit run (Nidhogg)."
+  (skip-unless (display-graphic-p))
+  (skip-unless (eq t (drgnx-uitest-pointer-set 0 0)))
+  (drgnx-ui-look-explorer--with root
+    (with-current-buffer drgnx-explorer-buffer-name (goto-char (point-min)))
+    (drgnx-test-wait-presented)
+    (let* ((s (drgnx-uitest-device-scale (selected-frame))) (e (window-body-pixel-edges))
+           (px-y (round (* s (+ (nth 1 e) (drgnx-ui-look-explorer--row-y 4)))))
+           (bol-x (with-current-buffer drgnx-explorer-buffer-name
+                    (save-excursion (goto-char (point-min)) (forward-line 3)
+                                    (car (posn-x-y (posn-at-point (point) (get-buffer-window)))))))
+           (start (round (* s (+ (nth 0 e) bol-x 2))))   ; the row's first glyph, left of its icon
+           (at (lambda () (cdr (drgnx-uitest-pixel (drgnx-uitest-snapshot) start px-y))))
+           (rest (funcall at))
+           (shot (lambda (name)                  ; the look crops, when the session keeps evidence
+                   (when-let* ((dir (getenv "DRGNX_UI_EVIDENCE")) ((file-directory-p dir)))
+                     (copy-file (plist-get (drgnx-uitest-capture (make-temp-file "explorer-hover" t)) :root)
+                                (expand-file-name (format "%s-s%g.png" name (drgnx-pixels-scale)) dir) t)))))
+      (funcall shot "explorer-rest")
+      (should (eq t (drgnx-uitest-pointer-set (round (/ (- (nth 2 e) 30) (drgnx-pixels-scale) 1.0))   ; logical, as sway
+                                              (round (/ px-y (drgnx-pixels-scale) 1.0)))))
+      (drgnx-uitest-run nil)
+      (drgnx-test-wait-presented)
+      (skip-unless (cadr (mouse-pixel-position)))
+      (funcall shot "explorer-hovered")
+      (should-not (equal rest (funcall at))))))
 
 (drgnx-look-gui-deftest drgnx-ui-look-explorer/the-selected-row-is-one-inset-run ()
   "Pattern D, window-dark.html `.row.sel.focus': the focused selection is one fill from the card's inset to the inset

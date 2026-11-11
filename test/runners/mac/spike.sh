@@ -6,10 +6,15 @@
 #   spike.sh s1                  launchd (`bootstrap user/<uid>`) and the setsid launcher: does a job outlive its ssh?
 #   spike.sh s3                  the watchdog: a 512 MiB grant with an escaped child; its CPU idle and in a 16-way build
 #   spike.sh s2-build NIDHOGG    a Nidhogg build with Naglfar under the draft build profile, as the runner account
-#   spike.sh s2-ert              drgnx ERT selectors under the same profile
+#   spike.sh s2-ert DRGNX EMACS SELECTOR FILES   drgnx ERT selectors (a Lisp string) in FILES under the same profile
+#   spike.sh tools SLEIPNIR PIN  the runner's toolchain step (`sleipnir tools`, the real bundle) as the runner account
 #   spike.sh denials             what Seatbelt denied, from the unified log
 # Results: $MR_OUT/results.md (the summary) and its logs. Keys stay in $MR_KEYS (never uploaded).
 # bash 3.2 (macOS).
+# commands sent over ssh expand on the runner, not here (quoted $, ~, the `mr` function name)
+# shellcheck disable=SC2016,SC2032,SC2033,SC2088
+# listings below are for a person reading the log
+# shellcheck disable=SC2012
 set -uo pipefail
 
 U=drgnx-runner
@@ -190,8 +195,13 @@ s3() {
 }
 
 # The draft build addition (design §5.4) on Gleipnir's base: shell text here for the spike; M5 builds it in Rust.
+absolute() { # NAME PATH: PATH is absolute, or the script stops (a missing folder's `cd -P` gives "": round 4 looped)
+  case $2 in /*) ;; *) echo "spike.sh: $1 is not an absolute path: '$2'" >&2; exit 2 ;; esac
+}
+
 ancestors() { # PATH...: every directory above each path, once
   for p in "$@"; do
+    absolute ancestor "$p"
     q=$(dirname "$p")
     while [ "$q" != / ]; do echo "$q"; q=$(dirname "$q"); done
   done | sort -u
@@ -199,6 +209,8 @@ ancestors() { # PATH...: every directory above each path, once
 
 profile() { # SLOT ATTEMPT CACHE TOOLS DEVDIR USERDIR
   slot=$1 att=$2 cache=$3 tools=$4 dev=$5 udir=$6
+  absolute slot "$slot"; absolute attempt "$att"; absolute cache "$cache"; absolute tools "$tools"
+  absolute developer-dir "$dev"; absolute user-dir "$udir"
   cat "$HERE/../../../runtime/crates/gleipnir/src/sbpl/base.sbpl" 2>/dev/null || cat "$HERE/base.sbpl"
   echo '; the build addition (draft, spike S2)'
   echo '(allow system-socket (socket-domain AF_UNIX))'
@@ -206,7 +218,8 @@ profile() { # SLOT ATTEMPT CACHE TOOLS DEVDIR USERDIR
   echo '(deny file-read* (subpath "/Users"))'
   echo '(allow file-read* (literal "/"))'
   printf '(allow file-read-metadata'
-  for p in /tmp /var /etc $(ancestors "$slot" "$att" "$cache" "$tools" "$dev" "$udir"); do printf ' (literal "%s")' "$p"; done
+  # round 10: brew's ruby realpaths itself through /opt; as Gleipnir's profile, the system roots' parents too
+  for p in /tmp /var /etc /private/tmp /private/var/tmp $(ancestors /opt/homebrew "$slot" "$att" "$cache" "$tools" "$dev" "$udir"); do printf ' (literal "%s")' "$p"; done
   echo ')'
   printf '(allow file-read*'
   for p in /usr /bin /sbin /System /Library /opt/homebrew /private/etc /dev/fd /private/var/select /private/var/db/timezone /private/var/db/xcode_select_link \
@@ -214,8 +227,10 @@ profile() { # SLOT ATTEMPT CACHE TOOLS DEVDIR USERDIR
   echo ')'
   echo '(allow file-read* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/random") (literal "/dev/urandom") (literal "/dev/tty") (literal "/dev/dtracehelper") (literal "/dev/autofs_nowait"))'
   echo '(allow file-write-data (literal "/dev/dtracehelper") (literal "/dev/tty"))'
-  # round 3: the xcrun shims (make, cc) read the developer dir's bundle plist and ask opendirectoryd for groups
-  printf '(allow file-read* (literal "%s/Info.plist") (literal "%s/version.plist"))\n' "$(dirname "$dev")" "$(dirname "$dev")"
+  # the xcrun shims (make, cc) read the developer dir's bundle (round 3: its plists; round 5: under an Xcode, make's shim
+  # runs xcodebuild, which loads the app's SharedFrameworks) and ask opendirectoryd for groups. The whole app, read-only
+  # (for the Command Line Tools this is /Library, read already)
+  printf '(allow file-read* (subpath "%s"))\n' "$(dirname "$(dirname "$dev")")"
   echo '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.membership"))'
   echo '(deny file-read* (subpath "/opt/homebrew/var") (subpath "/usr/local/var"))'
   printf '(allow file-write*'
@@ -239,38 +254,87 @@ remote_s2_build() { # the runner side: the profile, then the build under it, und
   profile "$(cd -P "$r/slot-nidhogg" && pwd -P)" "$(cd -P "$a" && pwd -P)" "$(cd -P "$r/cache" && pwd -P)" "$(cd -P "$r/tools" && pwd -P)" "$dev" "$udir" > "$a/build.sb"
   echo "developer dir: $dev; user dir: $udir"
   cd "$r/slot-nidhogg" || return 1
+  # round 9: configure asks brew where libgccjit is (`brew --prefix --installed libgccjit`, `brew ls -v`), and under the
+  # profile brew's ruby was denied writing /opt/homebrew/bin/brew: brew probed bare, then with a read-only Homebrew
+  # environment (no update, no analytics, its cache, logs and temp in the attempt folder), which the build gets too
+  # round 12: offline and read-only, brew can't name a package's prefix (the JSON API is a download, the core tap a
+  # clone): the runner's brew shim answers it (sleipnir started as brew, linked into bin/brew-shim, first on PATH, as a
+  # Mac job's environment); the tools step put the bundle's sleipnir in bin
+  brew_env=(HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_ENV_HINTS=1
+    HOMEBREW_NO_INSTALL_FROM_API=1
+    HOMEBREW_CACHE="$a/tmp/brew-cache" HOMEBREW_LOGS="$a/tmp/brew-logs" HOMEBREW_TEMP="$a/tmp")
+  mkdir -p "$r/bin/brew-shim" && ln -sfn "$(cd -P "$r/bin" && pwd -P)/sleipnir" "$r/bin/brew-shim/brew"
+  printf '(allow file-read* (subpath "%s"))\n' "$(cd -P "$r/bin" && pwd -P)" >> "$a/build.sb"
+  job_path="$r/tools/rust/bin:$r/bin/brew-shim:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  /usr/bin/sandbox-exec -f "$a/build.sb" /usr/bin/env -i \
+    HOME="$a/home" TMPDIR="$a/tmp/" PATH="$job_path" \
+    CARGO_HOME="$r/cache/cargo" LANG=en_US.UTF-8 __CF_USER_TEXT_ENCODING="$(cf_enc)" \
+    "${brew_env[@]}" \
+    /bin/bash -c 'echo "which: $(command -v brew)"; p=$(brew --prefix --installed libgccjit 2>&1); rc=$?; echo "prefix: $p"; echo "prefix-rc=$rc"
+      i=$(brew install gmp 2>&1); echo "install-rc=$? $i"
+      brew ls -v libgccjit 2>&1 | grep -E "libgccjit\.(so|dylib)|rror" | head -n 3; echo "ls-rc=${PIPESTATUS[0]}"' \
+    > "$a/brew-probe.txt" 2>&1
+  echo "--- brew under the profile (the shim)"; cut -c1-300 "$a/brew-probe.txt"
+  echo "--- the CI user's toolchain, copied to tools/rust/bin"; ls -la "$r/tools/rust/bin" 2>&1 | head -n 8
   start=$(date +%s)
   "$r/mrspike" watch --grant-mib 100000 --report "$a/watch.txt" -- /usr/bin/sandbox-exec -f "$a/build.sb" /usr/bin/env -i \
-    HOME="$a/home" TMPDIR="$a/tmp/" PATH="$r/tools/cargo/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
-    RUSTUP_HOME="$r/tools/rustup" CARGO_HOME="$r/cache/cargo" LANG=en_US.UTF-8 __CF_USER_TEXT_ENCODING="$(cf_enc)" \
+    HOME="$a/home" TMPDIR="$a/tmp/" PATH="$job_path" \
+    CARGO_HOME="$r/cache/cargo" LANG=en_US.UTF-8 __CF_USER_TEXT_ENCODING="$(cf_enc)" \
+    "${brew_env[@]}" \
     /bin/bash nidhogg/build.sh --host --naglfar --dev --stage build --jobs 3 --build-dir "$a/nbuild" > "$a/build.log" 2>&1
   rc=$?
   echo "build-rc=$rc seconds=$(( $(date +%s) - start ))"
   cat "$a/watch.txt"
   tail -n 30 "$a/build.log"
+  # configure's own record of the make check (config.log, wherever build.sh's build dir put it)
+  find "$a/nbuild" -maxdepth 3 -name config.log 2>/dev/null | while read -r l; do
+    echo "--- $l"; grep -n -A 12 'checking for GNU Make' "$l" | cut -c1-300
+    # round 9: past the vendored crates, configure's Rust step (the native libraries Glitnir links)
+    echo "--- $l: the Rust step"; grep -n -A 20 'checking the native libraries' "$l" | cut -c1-300
+    # round 10: where configure looked for libgccjit
+    echo "--- $l: libgccjit"; grep -n -B 4 -A 14 'gcc_jit_context_acquire' "$l" | cut -c1-300 | head -n 60
+  done
+  # cargo's own logs (configure's probe, then make's builds of the glue and Glitnir)
+  find "$a/nbuild" -maxdepth 4 -name '*cargo*.log' 2>/dev/null | while read -r l; do
+    echo "--- $l (last 40 lines)"; tail -n 40 "$l" | cut -c1-300
+  done
 }
 
 s2_build() { # NIDHOGG_CHECKOUT
   say "## S2: a Nidhogg build with Naglfar under the draft build profile"
   r=$(root_of)
+  # round 8: a Mac job has no network, so the crates are vendored here, outside the sandbox, as Nidhogg's release
+  # tarball lays them out (nidhogg/ci/vendor.sh: shell/vendor, glitnir/vendor, and each crate's .cargo/config.toml)
+  local c d
+  for c in shell glitnir; do
+    ( cd "$1/nidhogg/$c" && cargo vendor --locked vendor > /dev/null ) || { say "- **S2 build: FAIL** (cargo vendor $c)"; return 1; }
+  done
+  for c in shell glitnir glue; do
+    d=vendor; [ "$c" != glue ] || d=../shell/vendor
+    mkdir -p "$1/nidhogg/$c/.cargo"
+    printf '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "%s"\n' "$d" \
+      > "$1/nidhogg/$c/.cargo/config.toml"
+  done
   sudo ditto "$1" "$r/slot-nidhogg"
-  # the toolchain: the CI image's rustup, copied into the runner root (the design's setup job would install it there)
+  # the toolchain: the CI image's active one (its sysroot holds cargo and rustc), copied into the runner root (the
+  # design's `sleipnir tools` step installs it there). Round 7: the image's rustup is Homebrew's, with no ~/.cargo/bin
   sudo mkdir -p "$r/tools"
-  sudo ditto "$HOME/.rustup" "$r/tools/rustup"
-  sudo ditto "$HOME/.cargo/bin" "$r/tools/cargo/bin"
+  sys=$(rustc --print sysroot) || { say "- **S2 build: FAIL** (no rustc on the CI host)"; return 1; }
+  sudo ditto "$sys" "$r/tools/rust"
+  say "- the CI user's Rust: $(command -v cargo rustc | tr '\n' ' ')sysroot $sys"
   sudo chown -R "$U:staff" "$r/slot-nidhogg" "$r/tools"
   out=$(mr "bash ~/$ROOT_REL/spike.sh remote s2_build" 2>&1)
   printf '%s\n' "$out" > "$OUT/s2-build.log"
   sudo cp "$r/att-s2/build.sb" "$OUT/s2-build.sb" 2>/dev/null; sudo chmod 644 "$OUT/s2-build.sb" 2>/dev/null
   sudo cp "$r/att-s2/build.log" "$OUT/s2-build-full.log" 2>/dev/null; sudo chmod 644 "$OUT/s2-build-full.log" 2>/dev/null
-  say "- $(printf '%s' "$out" | grep -E 'build-rc=|developer dir' | tr '\n' ' ')"
+  say "- $(printf '%s' "$out" | grep -E 'build-rc=|developer dir|not an absolute path' | tr '\n' ' ')"
   say "- watchdog during the build: $(printf '%s' "$out" | grep -E '^verdict=' | head -n 1)"
   # the job's own exit, from the watch report (the watcher's exit is always 0)
   if printf '%s' "$out" | grep -qE '^verdict=exited exit=Some\(0\)'; then say "- **S2 build: PASS**"; else say "- **S2 build: FAIL** (tail in s2-build.log; denials below)"; fi
 }
 
-remote_s2_ert() { # SELECTOR EMACS (relative to tools/nidhogg)
-  r=~/$ROOT_REL; a=$r/att-ert; mkdir -p "$a/home" "$a/tmp"
+remote_s2_ert() { # SELECTOR EMACS (relative to tools/nidhogg) FILES (test/unit names, space-separated)
+  r=~/$ROOT_REL; a=$r/att-ert; mkdir -p "$a/home" "$a/tmp" "$r/cache"
   udir=$(cd -P "$(getconf DARWIN_USER_DIR)/.." && pwd -P)
   dev=$(cd -P "$(xcode-select -p)" && pwd -P)
   profile "$(cd -P "$r/slot-drgnx" && pwd -P)" "$(cd -P "$a" && pwd -P)" "$(cd -P "$r/cache" && pwd -P)" "$(cd -P "$r/tools" && pwd -P)" "$dev" "$udir" > "$a/ert.sb"
@@ -281,11 +345,11 @@ remote_s2_ert() { # SELECTOR EMACS (relative to tools/nidhogg)
   # 20), then the process list and SIGKILL to the session
   "$r/mrspike" detach "$a/ert.log" -- /usr/bin/sandbox-exec -f "$a/ert.sb" /usr/bin/env -i HOME="$a/home" TMPDIR="$a/tmp/" \
     PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" LANG=en_US.UTF-8 __CF_USER_TEXT_ENCODING="$(cf_enc)" \
-    DRGNX_EMACS="$emacs" DRGNX_TEST_SELECTOR="$1" \
-    /bin/bash -c 'bin/drgnx test; echo "ert-rc=$?"' > "$a/pid" 2>&1
+    DRGNX_EMACS="$emacs" DRGNX_TEST_SELECTOR="$1" DRGNX_ERT_FILES="$3" \
+    /bin/bash -c 'rc=0; for t in $DRGNX_ERT_FILES; do DRGNX_TEST_ONLY="test/unit/$t" bin/drgnx test || rc=1; done; echo "ert-rc=$rc"' > "$a/pid" 2>&1
   pid=$(tail -n 1 "$a/pid"); stamp "session leader: $pid"
   waited=0
-  while kill -0 "$pid" 2>/dev/null && [ $waited -lt 600 ]; do sleep 5; waited=$((waited + 5)); done
+  while kill -0 "$pid" 2>/dev/null && [ $waited -lt "${MR_ERT_WAIT:-600}" ]; do sleep 5; waited=$((waited + 5)); done
   if kill -0 "$pid" 2>/dev/null; then
     echo "ert-hung after ${waited}s; the runner account's processes (pgid $pid is the job's):"
     ps -U "$(id -u)" -o pid,ppid,pgid,stat,etime,time,command | cut -c1-300
@@ -299,7 +363,7 @@ remote_s2_ert() { # SELECTOR EMACS (relative to tools/nidhogg)
   echo "--- log tail"; tail -n 40 "$a/ert.log"
 }
 
-s2_ert() { # DRGNX_CHECKOUT DRGNX_EMACS SELECTOR (DRGNX_EMACS inside an .app: the whole bundle is copied)
+s2_ert() { # DRGNX_CHECKOUT DRGNX_EMACS SELECTOR FILES (DRGNX_EMACS inside an .app: the whole bundle is copied)
   say "## S2: drgnx ERT selectors under the draft build profile"
   r=$(root_of)
   # the committed tree only: the checkout's runtime/target holds GBs from the earlier steps (rounds 1-2 spent the
@@ -315,10 +379,10 @@ s2_ert() { # DRGNX_CHECKOUT DRGNX_EMACS SELECTOR (DRGNX_EMACS inside an .app: th
   stamp "the remote run"
   # watched from here, outside the ssh call (rounds 1-3 hung somewhere inside it with nothing back): its output goes
   # to a file; after 12 minutes the runner account's processes and their stacks go to the step log, then it is stopped
-  mr "bash ~/$ROOT_REL/spike.sh remote s2_ert '$3' '$rel'" > "$OUT/s2-ert.log" 2>&1 &
+  mr "bash ~/$ROOT_REL/spike.sh remote s2_ert '$3' '$rel' '$4'" > "$OUT/s2-ert.log" 2>&1 &
   bg=$!
   waited=0
-  while kill -0 "$bg" 2>/dev/null && [ $waited -lt 720 ]; do sleep 10; waited=$((waited + 10)); done
+  while kill -0 "$bg" 2>/dev/null && [ $waited -lt "${MR_ERT_WATCH:-720}" ]; do sleep 10; waited=$((waited + 10)); done
   if kill -0 "$bg" 2>/dev/null; then
     stamp "the remote run is stuck after ${waited}s; its output so far:"
     cut -c1-300 "$OUT/s2-ert.log"
@@ -335,7 +399,23 @@ s2_ert() { # DRGNX_CHECKOUT DRGNX_EMACS SELECTOR (DRGNX_EMACS inside an .app: th
   stamp "done"
   sudo cp "$r/att-ert/ert.log" "$OUT/s2-ert-full.log" 2>/dev/null; sudo chmod 644 "$OUT/s2-ert-full.log" 2>/dev/null
   say "- $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-600)"
-  if printf '%s' "$out" | grep -q 'ert-rc=0'; then say "- **S2 ERT: PASS**"; else say "- **S2 ERT: FAIL**"; fi
+  # a pass that ran no test proves nothing (round 5: the selector, not read as a Lisp string, matched none)
+  if printf '%s' "$out" | grep -q 'ert-rc=0' && grep -qE 'Ran [1-9][0-9]* tests' "$OUT/s2-ert-full.log" 2>/dev/null; then
+    say "- **S2 ERT: PASS** ($(grep -E 'Ran [1-9][0-9]* tests' "$OUT/s2-ert-full.log" | cut -c1-80 | tr '\n' ' '))"
+  else say "- **S2 ERT: FAIL**"; fi
+}
+
+tools() { # SLEIPNIR PIN: the bundle copied into the runner root, then its toolchain step as the runner account, as
+  # the hub runs it at `runner add` (outside any job; mise is the CI image's Homebrew one)
+  say "## Toolchains: \`sleipnir tools\` as the runner account"
+  mr "mkdir -p ~/$ROOT_REL/bin && cat > ~/$ROOT_REL/bin/sleipnir && chmod 755 ~/$ROOT_REL/bin/sleipnir" < "$1"
+  out=$(mr "~/$ROOT_REL/bin/sleipnir tools --root \$HOME/$ROOT_REL $2; echo tools-rc=\$?" 2>&1)
+  printf '%s\n' "$out" > "$OUT/tools.log"
+  json=$(printf '%s\n' "$out" | grep '^{' | tail -n 1)
+  say "- $(printf '%s' "$json" | cut -c1-400) $(printf '%s\n' "$out" | grep '^tools-rc=')"
+  if printf '%s' "$json" | grep -q "\"tool:$2\"" && ! printf '%s' "$json" | grep -q '"failed":"'; then
+    say "- **tools: PASS**"
+  else say "- **tools: FAIL** (tools.log)"; return 1; fi
 }
 
 denials() {
@@ -355,7 +435,8 @@ case "$cmd" in
   s3) s3 ;;
   s2-build) s2_build "$@" ;;
   s2-ert) s2_ert "$@" ;;
+  tools) tools "$@" ;;
   denials) denials ;;
   remote) remote "$@" ;;
-  *) echo "usage: spike.sh up|s1|s3|s2-build DIR|s2-ert DRGNX NIDHOGG SELECTOR|denials" >&2; exit 2 ;;
+  *) echo "usage: spike.sh up|s1|s3|s2-build DIR|s2-ert DRGNX NIDHOGG SELECTOR FILES|tools SLEIPNIR PIN|denials" >&2; exit 2 ;;
 esac
