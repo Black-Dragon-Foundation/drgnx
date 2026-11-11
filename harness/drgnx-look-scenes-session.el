@@ -415,6 +415,11 @@ a map off the rows path or without a hub draws a placeholder, and a shot of that
   (drgnx-look-scene--answer))
 
 (declare-function drgnx-work-flow-open "drgnx-work-flow")
+(declare-function drgnx-work-flow-detail-show "drgnx-work-flow")
+(declare-function drgnx-work-flow-detail-buffer "drgnx-work-flow")
+(declare-function drgnx-work-flow-rules-buffer "drgnx-work-flow")
+(declare-function drgnx-work-flow-rules "drgnx-work-flow")
+(declare-function drgnx-view-nav "drgnx-view")
 
 (defun drgnx-look-scene-work-flow ()
   "The Flow lens beside the scene's map (the mockup hub-orchestration), on the hub's seeded plan run: its tasks in each
@@ -430,7 +435,20 @@ gate state, the held one, the batch.  A Flow without the run's task rows (its wa
                                  (with-current-buffer flow
                                    (and (member "scene-run#5" (drgnx-look-scene--row-ids "scene-run#"))
                                         (save-excursion (goto-char (point-min))
-                                                        (search-forward "Merge batch" nil t))))))))
+                                                        (search-forward "Merge batch" nil t))))))
+      ;; the held task selected (Tab walks the held ones): its detail tile where the map's side panel was, and the
+      ;; Rules tile in the bottom panel, each waited for with its rows, not its placeholder
+      (with-selected-window (get-buffer-window flow) (drgnx-view-nav 'walk "held" 1))
+      (drgnx-work-flow-detail-show flow)
+      (with-current-buffer flow (drgnx-work-flow-rules))
+      (drgnx-look-scene--until 15 "the detail tile of the held task and the Rules tile"
+                               (lambda ()
+                                 (and (with-current-buffer (drgnx-work-flow-detail-buffer flow)
+                                        (save-excursion (goto-char (point-min))
+                                                        (search-forward "Why it is held" nil t)))
+                                      (with-current-buffer (drgnx-work-flow-rules-buffer flow)
+                                        (save-excursion (goto-char (point-min))
+                                                        (search-forward "Rules · scene-pack" nil t))))))))
   (drgnx-look-scene--answer))
 
 ;; The highlights (look step 5b's audit): no mockup of their own; each is judged against the mockups' tokens

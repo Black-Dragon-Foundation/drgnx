@@ -558,7 +558,8 @@ How it works:
   none). The scenes share that hub, started with `RATATOSKR_SEED_SCENE=1`: the hub writes one plan run into its fresh
   store (`orch::scene`, test-hooks only). It is a paused job, `scene-run`, with a rule pack, tasks in each gate state
   and their evidence, a held `gate` card and a batch of two. `work-space-dark` and `work-flow` (mockup
-  `hub-orchestration`) open the Work map on that hub, then the Flow lens beside it, in the dark theme. Both need
+  `hub-orchestration`) open the Work map on that hub, then the Flow lens beside it, in the dark theme; `work-flow`
+  then selects the held task (its detail tile in the side panel) and opens the Rules tile below. Both need
   Nidhogg's view model (Sjá; the line, not the tarball). A map or Flow drawn without the hub's rows shows only its
   placeholder text, so it is an error of the scene, not a shot.
 - It writes `NAME-sN-facts.eld` beside each shot: the themes, the fonts the chrome faces got, the windows, the
