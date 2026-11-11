@@ -1729,6 +1729,24 @@ Non-nil turns a project's semantic search off.
 | `:agents` | `never` |
 | `:schema` | `boolean` |
 
+## drgnx-search-preview-threshold
+
+Replace All with at least this many ticked matches first shows the Replace All sheet (every file's changes, then
+Replace or Cancel); 0 never shows it.  `C-u' Replace All skips it once.
+
+| Key | Value |
+| --- | --- |
+| Default | `1` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
 ## drgnx-session-keep-running
 
 Non-nil: drgnx keeps running in the background when its last window closes (reopening is instant).
