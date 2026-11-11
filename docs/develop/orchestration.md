@@ -61,8 +61,9 @@ languages whose build reds count when they name a symbol the task adds), `:batch
 groups a range affects; `%r` is the range), `:no-cache`, `:shared-paths` (clean merges there still need intent
 notes) and `:context-share`.
 
-drgnx ships `etc/orch/drgnx-default.eld`: red first, the author check, affected groups and the push gate, with no
-project's commands (any project's: its author check is the task's own tests at the tip). A plan names another with a `**Pack:** FILE` line (relative to the plan);
+drgnx ships `etc/orch/drgnx-default.eld`: red first, the author check and affected groups, with no project's
+commands (any project's: its author check is the task's own tests at the tip). The push gate needs a project's own
+tiers, so a project's pack turns it on; a pack whose push gate names no `:push-tiers` doesn't read. A plan names another with a `**Pack:** FILE` line (relative to the plan);
 a pack that doesn't read, or names a rule or kind the hub doesn't know, refuses the proposal. The proposal carries
 the pack, so the user approves it with the plan, and the approval records it as the job's `rule_pack` entity
 (`norn::write::evidence::rule_pack`); the gates read that record, never the file again.
@@ -167,6 +168,16 @@ evidence of `batch:JOB@TREE` for its own tree. The gate waits until every rerun 
 A **flake** is a row that failed in one run and passed in a later run of the same selector on the same tree, env stamp
 and platform (`vordr::gates::flaky`). It holds the batch on a `gate` card and opens a `followup`; flakes are fixed at
 the cause, never listed. A held batch's card offers `Waive once…`, which the gate honours for that tree.
+
+## The push gate
+
+Under a pack with `push-gate` on, a job's agent asking to push (the matrix's `push.ci` or `push.main`) is refused
+until each of the pack's `:push-tiers` has a green run on the exact commit's tree (the agent's `HEAD`) with the env
+stamp the hub has now, on Linux (`vordr::push::judge`, `orch::push`). Runs on another tree, env stamp or platform
+never count. The refusal names the missing tiers, which start through the queue as evidence of `push:JOB@TREE`, or the
+red tiers with their rows; the agent asks again once they are green. A push the gate lets through still meets the
+matrix, so the push itself stays the user's. A pack whose push gate names no tiers doesn't read, and the gate refuses
+every push of a job recorded with one.
 
 ## Red first
 

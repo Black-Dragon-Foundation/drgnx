@@ -157,13 +157,10 @@ mod tests {
     fn the_shipped_pack_reads() {
         let p = default_pack();
         assert_eq!(p.name, "drgnx-default");
-        // red first, the author check, affected groups and the push gate; a project's own pack adds the rest
-        assert!(
-            p.on("red-first")
-                && p.on("author-check")
-                && p.on("affected-groups")
-                && p.on("push-gate")
-        );
+        // red first, the author check and affected groups; a project's own pack adds the rest (the push gate needs
+        // the project's tiers)
+        assert!(p.on("red-first") && p.on("author-check") && p.on("affected-groups"));
+        assert!(!p.on("push-gate"));
         assert!(!p.on("merge-notes") && !p.on("trailers"));
         assert!(p.build_reds("rust") && p.build_reds("elisp"));
         assert_eq!(p.batch(), 3);

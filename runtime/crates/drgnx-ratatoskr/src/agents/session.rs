@@ -4559,6 +4559,16 @@ impl Session {
                 return;
             }
             let (action, facts) = classify(req.get("toolCall"));
+            // the push gate: a job's push waits for one full run on the exact commit (the matrix still decides after)
+            if matches!(action, Action::PushCi | Action::PushMain)
+                && let Some(job) = s.job_id()
+                && let Some(front) = s.tool_hub.front()
+                && let Some(why) = crate::orch::push::refusal(&front, job, &s.cwd).await
+            {
+                s.refused(req.get("toolCall"), &why);
+                reply(resp, pick_reject(&options));
+                return;
+            }
             match s
                 .seam_hooks(req.get("toolCall"), action, &facts, &options, turn)
                 .await
