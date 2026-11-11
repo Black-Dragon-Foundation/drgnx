@@ -476,8 +476,10 @@ there whether the popup borrows the panel or has a window of its own, borrowing 
 **Floating lane.** `drgnx-popup-style` is `auto` (the default), `window` or `float`. Under Glitnir (Nidhogg's
 compositor) `auto` is `float`: the popup shows in one child frame of the window, bottom-centre above the echo area,
 as wide as its text (at most 0.9 of the frame; lines below the visible part count too, so scrolling never scrolls
-sideways) and at most a third of the frame high, or the rule's `:height` (`(drgnx-wb-place 'MODE 'popup :height 0.8)`:
-the Replace All sheet). The frame is made once per
+sideways) and at most a third of the frame high, or the rule's `:height`. A rule's `:modal t` makes the popup a box in
+the middle of the window, as the palette is, with the palette's padding, ring, shadow and corners and no lane header
+(`(drgnx-wb-place 'MODE 'popup :height 0.8 :modal t)`: the Replace All sheet). A popup whose text comes later (a hub's
+answer) calls `(drgnx-popup-refit BUFFER)` to fit the lane again. The frame is made once per
 window and reused; ending the popup (`delete-window`, `quit-window`, `bury-buffer`, killing the buffer) hides it, and
 it is never deleted while the window lives. A popup that came up while you were in the minibuffer (`*Completions*`)
 ends when you leave it, with `RET` or `C-g`, as the window lane's does. It never takes focus: transient and which-key keep their keys in the

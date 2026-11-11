@@ -518,6 +518,108 @@ sections' with the inactive selection."
 (defun drgnx-look-scene-explorer-focused-light () (drgnx-look-scene--explorer-focused 'drgnx-light))
 (defun drgnx-look-scene-explorer-focused-hc () (drgnx-look-scene--explorer-focused 'drgnx-high-contrast))
 
+;;;; The Search view's preview tile and Replace All sheet (search-view.html)
+
+(defvar drgnx-replace-buffer-name)
+(defvar drgnx-replace-sheet-buffer-name)
+(defvar drgnx-replace--hub-counts)
+(defvar drgnx-replace--preview)
+(defvar drgnx-replace--sheet)
+(declare-function drgnx-replace-in-files "drgnx-replace")
+(declare-function drgnx-replace--opt "drgnx-replace")
+(declare-function drgnx-replace--toggle "drgnx-replace")
+(declare-function drgnx-replace--fill "drgnx-replace")
+(declare-function drgnx-replace--search-now "drgnx-replace")
+(declare-function drgnx-replace--rows-tick "drgnx-replace")
+(declare-function drgnx-replace--preview-params "drgnx-replace")
+(declare-function drgnx-replace-preview-file "drgnx-replace")
+(declare-function drgnx-replace-all "drgnx-replace")
+(declare-function drgnx-replace--hub-ready-p "drgnx-replace")
+(declare-function drgnx-hub-running-p "drgnx-hub-client")
+(declare-function drgnx-hub-connect "drgnx-hub-client")
+
+(defun drgnx-look-scene--until (secs what pred)
+  "Wait (SECS at most) for PRED, as the user does for the hub; an error under WHAT when it never holds."
+  (let ((end (+ (float-time) secs)))
+    (while (and (not (funcall pred)) (< (float-time) end))
+      (accept-process-output nil 0.02)
+      (redisplay))
+    (or (funcall pred) (progn (push (format "%s: not within %d s" what secs) drgnx-look-scene--errors) nil))))
+
+(defun drgnx-look-scene--search ()
+  "The mockup's search in the Search view: regexp `(gateway)--pending' replaced by `\\1--queued' in the project, the
+match on line 209 (the `puthash' line) unticked; the view's buffer, or nil."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "hub"                 ; the Search view's rows come from the hub
+    ;; a session starts no hub (DRGNX_NO_HUB_START): the scene runs the worktree's own ($DRGNX_RATATOSKR_BIN) in the
+    ;; foreground, as the perf workloads do, ended with the session
+    (unless (drgnx-replace--hub-ready-p)
+      (unless (drgnx-hub-running-p)
+        (let ((bin (getenv "DRGNX_RATATOSKR_BIN"))
+              (process-environment (cons "RATATOSKR_SUPERVISOR=none" process-environment)))
+          (unless (and bin (file-executable-p bin)) (error "No ratatoskr binary (DRGNX_RATATOSKR_BIN)"))
+          (make-process :name "ratatoskr" :noquery t :connection-type 'pipe
+                        :buffer (generate-new-buffer " *ratatoskr*")
+                        :command (list bin "serve" "--foreground" "--parent-pid" (number-to-string (emacs-pid))))
+          (drgnx-look-scene--until 30 "hub start" #'drgnx-hub-running-p)))
+      (drgnx-hub-connect)
+      (drgnx-look-scene--until 20 "hub" #'drgnx-replace--hub-ready-p)))
+  (drgnx-look-scene--try "search"
+    (drgnx-replace-in-files)
+    (with-current-buffer (get-buffer drgnx-replace-buffer-name)
+      (unless (drgnx-replace--opt :regexp) (drgnx-replace--toggle :regexp))
+      (drgnx-replace--fill 'replace "\\1--queued")
+      (drgnx-replace--fill 'find "(gateway)--pending")
+      (drgnx-replace--search-now)
+      (when (drgnx-look-scene--until 15 "search" (lambda () drgnx-replace--hub-counts))
+        ;; the third match (line 209, `(puthash p (nconc'): its row's text is cut short, so found by its place
+        (when-let* ((id (drgnx-look-scene--until 10 "match rows" (lambda () (nth 2 (drgnx-look-scene--row-ids "m:"))))))
+          ;; once: the scenes share a session, and a tick toggles
+          (unless (member id (append (plist-get (drgnx-replace--preview-params "") :off) nil))
+            (drgnx-replace--rows-tick id))))
+      (current-buffer))))
+
+(defun drgnx-look-scene--row-ids (prefix)
+  "The Search view's row ids (`drgnx-work-id') that start with PREFIX, in order."
+  (let ((pos (point-min)) ids)
+    (while (setq pos (next-single-property-change pos 'drgnx-work-id))
+      (let ((id (get-text-property pos 'drgnx-work-id)))
+        (when (and (stringp id) (string-prefix-p prefix id) (not (member id ids))) (push id ids))))
+    (nreverse ids)))
+
+(defun drgnx-look-scene--file-row ()
+  "The start of the Search view's first file row (its `drgnx-work-id' `f:…'), or nil."
+  (let ((pos (point-min)) found)
+    (while (and (not found) (setq pos (next-single-property-change pos 'drgnx-work-id)))
+      (let ((id (get-text-property pos 'drgnx-work-id)))
+        (when (and (stringp id) (string-prefix-p "f:" id)) (setq found pos))))
+    found))
+
+(defun drgnx-look-scene-search-preview ()
+  "The preview tile of the first file (core/drgnx-gateway.el) beside the Search view (search-view.html's dark window)."
+  (when-let* ((view (drgnx-look-scene--search)))
+    (drgnx-look-scene--try "preview"
+      (with-current-buffer view
+        ;; the first file's row (its id `f:…'), once the hub's rows are drawn: the run's end can come before them
+        (goto-char (or (drgnx-look-scene--until 10 "file row" #'drgnx-look-scene--file-row) (point-min)))
+        (drgnx-replace-preview-file))
+      (drgnx-look-scene--until 10 "preview"
+                               (lambda () (cl-some (lambda (b) (and (eq (buffer-local-value 'major-mode b)
+                                                                        'drgnx-replace-preview-mode)
+                                                                    (cdr (buffer-local-value 'drgnx-replace--preview b))))
+                                                   (buffer-list)))))
+    (drgnx-look-scene--answer)))
+
+(defun drgnx-look-scene-search-sheet ()
+  "The Replace All sheet over the editor (search-view.html's sheet, dark)."
+  (when-let* ((view (drgnx-look-scene--search)))
+    (drgnx-look-scene--try "sheet"
+      (with-current-buffer view (drgnx-replace-all))
+      (drgnx-look-scene--until 10 "sheet" (lambda () (when-let* ((b (get-buffer drgnx-replace-sheet-buffer-name)))
+                                                       (plist-get (buffer-local-value 'drgnx-replace--sheet b) :hunk)))))
+    (drgnx-look-scene--answer)))
+
 (defun drgnx-look-scene-start-page ()
   "The start page in the editor, dark (no mockup: its buttons, keycaps and shield are the components of design §3.5)."
   (drgnx-look-scene--theme 'drgnx-dark)

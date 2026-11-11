@@ -231,10 +231,11 @@ what it left (none here: `search/grep-skipped' with no match), not a new search,
 
 (defconst drgnx-replace-rows-nav-test--preview
   '(:path "/r/a.txt" :plus 2 :minus 2
-          :diff "--- /r/a.txt\n+++ /r/a.txt\n@@ -1,2 +1,2 @@\n-let needle;\n-let needle;\n+let pin;\n+let pin;\n"
-          :hunks ((:old_start 1 :old_lines 2 :new_start 1 :new_lines 2 :ids ("m:a.txt:1:4" "m:a.txt:2:4")
-                              :captures ((:id "m:a.txt:1:4" :groups ("need" nil))))))
-  "The hub's `search/preview' of a.txt: one hunk with both matches, a regexp's groups for the first.  Arrays are
+          :diff "--- /r/a.txt\n+++ /r/a.txt\n@@ -1,3 +1,3 @@\n-let needle;\n-let needle;\n+let pin;\n+let pin;\n let needle;\n"
+          :hunks ((:old_start 1 :old_lines 3 :new_start 1 :new_lines 3 :ids ("m:a.txt:1:4" "m:a.txt:2:4")
+                              :captures ((:id "m:a.txt:1:4" :groups ("need" nil))) :kept (3))))
+  "The hub's `search/preview' of a.txt: one hunk with two matches, a regexp's groups for the first, and line 3's match
+unticked (kept).  Arrays are
 lists, as the hub client decodes them (`:array-type' `list').")
 
 (defun drgnx-replace-rows-nav-test--tile ()
@@ -263,11 +264,16 @@ tile is asked for again."
                 (should (derived-mode-p 'drgnx-replace-preview-mode))
                 (should buffer-read-only)
                 (let ((text (buffer-string)))
-                  (should (string-match-p "2 of 2 matches ticked · \\+2 −2" text))
-                  (should (string-match-p "^\\[x\\] hunk 1" text))
+                  (should (string-match-p "2 of 3 matches ticked · \\+2 −2"   ; the head is the header line
+                                          (mapconcat (lambda (x) (if (stringp x) x "")) header-line-format "")))
+                  (should (string-match-p "hunk 1" text))
+                  (should (equal "[x]" (get-text-property (text-property-not-all (point-min) (point-max)
+                                                                                 'drgnx-replace-tick nil)
+                                                          'drgnx-replace-tick)))
                   (should (string-match-p "^   1 - let needle;$" text))   ; the old file's line number
                   (should (string-match-p "^   2 \\+ let pin;$" text))     ; the new file's
-                  (should (string-match-p "groups  \\\\1 = need · \\\\2 = ∅" text)))
+                  (should (string-match-p "^   3   let needle;   ← unticked, kept$" text))
+                  (should (string-match-p "groups   \\\\1 = need   \\\\2 = ∅" text)))
                 (goto-char (point-min))
                 (search-forward "hunk 1")
                 (setq calls nil)
@@ -283,6 +289,16 @@ tile is asked for again."
             (should-not (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'ticked)))
         (when-let* ((b (drgnx-replace-rows-nav-test--tile))) (kill-buffer b))))))
 
+(ert-deftest drgnx-replace-rows/a-preview-tile-has-its-own-header-line-at-once ()
+  "Pattern D: a preview tile has a header line of its own from the start, before the hub's answer: the editor's chrome
+shows a buffer's own header line (Open File, Replace in This File) only when it has one as the window shows it."
+  (let ((buf (drgnx-replace--preview-buffer "/r/a.txt")))
+    (unwind-protect
+        (with-current-buffer buf
+          (should (local-variable-p 'header-line-format))
+          (should header-line-format))
+      (kill-buffer buf))))
+
 (ert-deftest drgnx-replace-rows/replace-all-shows-the-sheet-first ()
   "Pattern D: Replace All shows the Replace All sheet (threshold 1) with the edit set: every file with its lines added
 and removed, what is skipped and why; Cancel writes nothing, Replace writes that edit set (`search/apply' of its
@@ -291,7 +307,7 @@ change); `C-u' Replace All writes at once, no sheet."
     (let ((answer '(:change 7 :skipped ((:id "m:b.txt:5:4" :path "/r/b.txt" :why "changed on disk since the search"))
                             :files ((:path "/r/a.txt" :source "disk"
                                            :edits ((:id "m:a.txt:1:4" :line 1) (:id "m:a.txt:2:4" :line 2))))))
-          (calls nil))
+          (calls nil) (refits nil))
       (cl-letf (((symbol-function 'drgnx-hub--call-on)
                  (lambda (_conn method params cb &rest _)
                    (push (cons method params) calls)
@@ -301,6 +317,7 @@ change); `C-u' Replace All writes at once, no sheet."
                      (_ (funcall cb t nil)))))
                 ((symbol-function 'drgnx-replace--live-view) (lambda () (get-buffer drgnx-replace-buffer-name)))
                 ((symbol-function 'drgnx-replace--text) (lambda (_) "pin"))
+                ((symbol-function 'drgnx-popup-refit) (lambda (b) (push b refits)))
                 ((symbol-function 'pop-to-buffer) #'set-buffer))
         (unwind-protect
             (progn
@@ -311,7 +328,11 @@ change); `C-u' Replace All writes at once, no sheet."
                   (should (string-match-p "Replace 2 matches in 1 file · 1 skipped" text))
                   (should (string-match-p "a.txt \\+2 −2" text))
                   (should (string-match-p "^       1 - let needle;$" text))   ; the selected file's first hunk
-                  (should (string-match-p "1 skipped: changed on disk since the search" text)))
+                  (should (string-match-p "1 skipped: changed on disk since the search" text))
+                  (should (string-match-p "3   let needle;   ← unticked, kept" text)))
+                ;; the hunk comes after the sheet shows: the lane fits it again; the sheet's foot replaces a mode line
+                (should (memq (current-buffer) refits))
+                (should-not mode-line-format)
                 (should-not (assoc "search/apply" calls))
                 (cl-letf (((symbol-function 'quit-window) (lambda (&rest _) nil)))
                   (drgnx-replace-sheet-confirm)))
