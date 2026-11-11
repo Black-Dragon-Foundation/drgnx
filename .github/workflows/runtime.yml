@@ -197,8 +197,8 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: ${{ github.workspace }}
         run: bash .github/ci/wasm-target.sh
-      # cargo-nextest runs the workspace's tests, one process per test (the same tests by name as cargo test, the
-      # ignored ones still ignored), with no retries
+      # cargo-nextest runs the workspace's tests, each in a process of its own (the same tests by name as libtest's runner,
+      # the ignored ones still ignored), with no retries; it runs no doc tests, so they have their own step
       - name: cargo-nextest 0.9.151 (checksum verified)
         if: ${{ !cancelled() }}
         working-directory: ${{ github.workspace }}
@@ -209,6 +209,8 @@ jobs:
         env:
           DRGNX_TEST_ADAPTER: llvmpipe
         run: cargo nextest run --locked --no-fail-fast --retries 0 --workspace --features drgnx-ratatoskr/test-hooks,drgnx-px/test-hooks
+      - if: ${{ !cancelled() }}
+        run: cargo test --locked --no-fail-fast --workspace --doc --features drgnx-ratatoskr/test-hooks,drgnx-px/test-hooks
       # the test-hooks binary and the harness for the steps below
       # (+ gleipnir-probe and gleipnir-escape, the escape suite's two binaries: glibc builds, so the same ones run on a VM)
       - id: build

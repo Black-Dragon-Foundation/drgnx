@@ -292,6 +292,8 @@ Returns (EXIT . OUTPUT)."
         (should (string-search "env.CACHE_SAVE == 'true' && steps.models.outputs.cache-hit != 'true'" text))))
     (should (string-match-p "DRGNX_TEST_ADAPTER: llvmpipe\n *run: cargo nextest run --locked --no-fail-fast --retries 0 --workspace"
                             (drgnx-ci-test--job rt "linux")))
+    ;; nextest runs no doc tests: the Linux job runs them in a step of their own
+    (should (string-search "run: cargo test --locked --no-fail-fast --workspace --doc " (drgnx-ci-test--job rt "linux")))
     (should-not (string-search "DRGNX_TEST_ADAPTER:" (drgnx-ci-test--job rt "macos")))
     (drgnx-ci-test--has packages "vulkan-loader mesa-vulkan-drivers")
     (should (string-search "https://huggingface.co/$repo/resolve/$rev/$name" (drgnx-ci-test--file ".github/ci/models.sh")))))
