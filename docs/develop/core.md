@@ -2059,8 +2059,12 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
   is marked (`drgnx-view-patch-twin-p`) and left out of a module's buffer finders: it subscribes nothing. Twins: the
   Explorer, the Work map, trail, Timeline, detail and Board, the Extensions list, and the Search view, whose twin is a
   mirror of its results (its query on the header line, no fields or tick boxes; Next/Previous Match and File and a
-  visit run there, the other Search commands are refused). The agent panel has none (its cards and composer are Lisp
-  entries of its buffer); git letters need none (headless).
+  visit run there, the other Search commands are refused). The agent panel's twin holds the hub's rows of its class
+  between the panel's own rows (header, chips, cards, composer), which it draws from the panel's state (taken before
+  each of its own rows and each command, given back after a command; the strip's width is each buffer's own); its
+  own rows follow the panel's through `(drgnx-view-mirror VIEW OTHER PRED)`: an insert, remove, dirty, grow or touch
+  of a key PRED accepts in either view reaches the other (the hub's string keys stay each class's). Git letters need
+  none (headless).
 - **A class change** (`text-scale`, a font or a scale): `drgnx-view-env` re-pairs a buffer shown in one class with
   its new class (`drgnx-view-patch-reclass`) before that class's env goes out; its rows stay on screen until the
   class's first reset.
