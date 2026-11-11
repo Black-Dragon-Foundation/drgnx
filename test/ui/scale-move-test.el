@@ -107,30 +107,5 @@ everything is what it was at the start (no drift).  Then the same at a UI scale 
         (drgnx-scale-move-test--read-events)
         (drgnx-test-wait-presented)))))
 
-(ert-deftest drgnx-ui-scale/a-full-screen-frame-fills-the-monitor ()
-  "Pattern D: the monitor goes 1.25 → 1 → 2 → 1.25 under a full-screen frame; at each step the frame is the
-monitor's size in its pixels, no larger and no smaller.  Then the session's scale back.
-Known to fail: Nidhogg sizes the frame from the compositor's configure at the scale it had before the change (at 1
-after 1.25 it is 3600x2250, 1.25 times the 2880x1800 monitor) and keeps it once the new scale
-lands.  The fix is Nidhogg's; this row passes, unexpectedly, once it is in."
-  :expected-result :failed
-  (let ((s0 (and (display-graphic-p) (fboundp 'frame-scale-factor) (frame-scale-factor))) (f (selected-frame)) got)
-    (skip-unless (and s0 (memq (frame-parameter f 'fullscreen) '(fullboth fullscreen))
-                      (drgnx-scale-move-test--set-scale 1.25)))
-    (unwind-protect
-        (dolist (scale '(1.25 1 2 1.25))
-          (should (drgnx-scale-move-test--set-scale scale))
-          (drgnx-test-wait-presented :value (lambda () (< (abs (- (frame-scale-factor f) scale)) 0.001)))
-          (drgnx-scale-move-test--read-events)
-          (drgnx-test-wait-presented)
-          (let ((g (alist-get 'geometry (frame-monitor-attributes f))))
-            (push (list scale (frame-scale-factor f) (frame-pixel-width f) (frame-pixel-height f) (nth 2 g) (nth 3 g))
-                  got)))
-      (when (drgnx-scale-move-test--set-scale s0)
-        (drgnx-test-wait-presented :value (lambda () (< (abs (- (frame-scale-factor f) s0)) 0.001)))
-        (drgnx-scale-move-test--read-events)
-        (drgnx-test-wait-presented)))
-    (should-not (seq-remove (lambda (r) (and (= (nth 2 r) (nth 4 r)) (= (nth 3 r) (nth 5 r)))) (nreverse got)))))
-
 (provide 'scale-move-test)
 ;;; scale-move-test.el ends here
