@@ -353,6 +353,11 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "a pair write whose answer did not come in its time to live: the editor answers pair/answer from what it applied"
         ),
         event!(
+            "debug-breakpoints",
+            crate::methods::debug::DebugBreakpointsView,
+            "a file's breakpoints changed, or what an adapter made of them (verified, message, its line): to every editor"
+        ),
+        event!(
             "debug-state",
             crate::methods::debug::DebugState,
             "every debug session (id, name, parent, root, state, reason, the adapter's capabilities), to every editor, whenever one starts, runs, stops or ends"
@@ -453,6 +458,11 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "a change set of the Search view (search/apply, search/undo) is final: what it wrote, in how many files, what it skipped and why, the files an undo left alone; to the asking connection only"
         ),
         event!(
+            "search-handoff-state",
+            crate::methods::search::HandoffState,
+            "where a Search view's hand-off (search/handoff) is, after its agent's edits and when its agent stops: which handed-off matches are done, still there or not found again; to the handing-off connection only"
+        ),
+        event!(
             "agent-follow",
             crate::methods::editor::AgentFollow,
             "where the session a follow view follows is now, to that view's connection only (agents/follow): at most one move per 200 ms, a read's file switch after a 500 ms dwell, a search never switches; the line is the agent's own plan entry or step title"
@@ -546,6 +556,7 @@ mod tests {
                     "search-run-done",
                     "search-apply",
                     "search-change",
+                    "search-handoff-state",
                     "git-letters-error",
                     // the native view model
                     "view-model",
@@ -560,6 +571,7 @@ mod tests {
                     "term/clipboard-write",
                     "term/prompt",
                     // debugging
+                    "debug-breakpoints",
                     "debug-state",
                     "debug-frame",
                     "debug-terminal",
@@ -578,7 +590,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 58);
+        assert_eq!(events().len(), 60);
         // names only: a value-shaped name is no key name, and nothing but `names` is taken
         let need = event("runners/need-keys").unwrap();
         assert_eq!(

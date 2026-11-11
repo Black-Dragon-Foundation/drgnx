@@ -141,6 +141,33 @@ The untested entries' command lines come from dape's recipes (credited in the fi
 listed with `:not-built-in t`, so their type says to add them in the setting `debug.adapters`; an unknown type lists
 the known ones.
 
+## Breakpoints: the store (`debug/breakpoints.rs`)
+
+Each project (by root) has one store, saved in the hub's state directory as `debug-breakpoints/<hash of the
+root>.json`, written atomically. If the file is damaged, it is moved aside to `….damaged` and the store starts empty.
+
+- **Operations by id** (`Op`): add, remove, edit, move, add or remove a function breakpoint.
+  - Adding a line that already has a breakpoint gives that one. Removing or editing one that is gone is no change.
+    So two editors toggling one file never undo each other.
+  - Every change raises the file's version.
+  - The line held is the saved line: the editor keeps a moved line as a draft and sends `move` on save.
+- **What each session made of a breakpoint:** its adapter id, verified, message and line. These come from the
+  `setBreakpoints` answer, read in the order sent, and from `breakpoint` events by adapter id.
+  - A breakpoint shows verified when any session verified it.
+  - It shows `bound_line` when the adapter put it on another line.
+  - When a session ends, what it made of the breakpoints goes with it.
+- **Adapter capabilities:** conditions, hit counts and log messages go only to adapters whose capabilities take them
+  (`fit`). The store keeps them and shows them as `unsupported` for that session.
+- **Function breakpoints** go to adapters with `supportsFunctionBreakpoints`.
+- **Exception filters:** the ones chosen are remembered per adapter type; otherwise the adapter's defaults.
+- **Run to Cursor:** a breakpoint for one session only. It is never shown or saved, and goes at that session's next
+  stop or end. The registry then sends the file again.
+
+The registry starts each session with the store's breakpoints, and sends a changed file to every session of the
+root at once. It tells the editors with the `debug-breakpoints` event: the file's view, with its root. The editors use `debug/breakpoints` (`{root, path?, op?}`: an operation by id, answered with the file's view) and
+`debug/run-to-cursor` (`{session, path, line}`). Tests:
+`tests_breakpoints.rs` (the store) and `tests_registry.rs` (with mock adapters).
+
 ## The `debug/*` methods
 
 `debug/wire.rs` serves them (runstav `methods::debug`, the user class) and keeps, in memory for the hub's life, the
@@ -190,6 +217,10 @@ which shows the view. At the hub's end every session stops, children first, befo
 - `drgnx-debug-convert-dape-configs`: once, with dape installed, each of `dape-configs` is evaluated here (a function
   value is called once), dape's own keys (`command`, `port`, `modes`, `fn` …) are dropped, and the plain result is
   added to `drgnx-debug-configurations` in settings.el; one without `:type` is named and left out.
+
+`drgnx doctor`'s `debug-adapters` line (group Tools) reads `etc/debug-adapters.eld` as data and says which built-in
+adapters are found (`:path` on `PATH`, `:python-module` importable by `python3`, `:tools` under
+`<data>/debug-adapters/`) and how to get the others.
 
 Its tests (`test/unit/debug-launch-test.el`) script the hub's answers.
 

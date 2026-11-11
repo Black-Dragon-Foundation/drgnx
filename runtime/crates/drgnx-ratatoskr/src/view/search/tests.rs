@@ -334,7 +334,7 @@ fn replace_preview_runs() {
 #[test]
 fn a_preview_tints_only_the_changed_characters() {
     let mt = m("/r/a.txt", 1, "let ", "needle", ";");
-    let row = |new: &str| rows::match_row(&query(), new, "m:1:0".into(), &mt, None);
+    let row = |new: &str| rows::match_row(&query(), new, "m:1:0".into(), &mt, None, None);
     let r = row("needles");
     assert_eq!(r.text, "  [x] let needles;");
     assert_eq!(r.runs, vec![(16, 17, "drgnx-replace-new".into())]);

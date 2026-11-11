@@ -570,8 +570,8 @@ it go, from its module's setup through `drgnx-module-hook`, so the teardown remo
 (the swap clears OLD's role first, so `drgnx-frames--deleted` hands it to no other window). Today's owners: the panes'
 last buffers (`drgnx-pane--last`, moved), the popup lanes (their `quit-restore` moved; a floating popup ends, as its
 child frame goes with OLD), the agent follow window (moved), the Work map's layout motion (stopped on both frames)
-and the side-by-side diffs' saved layout (`drgnx-work-code--saved-windows`: a window configuration cannot move to
-another frame, so it is let go and closing the diffs leaves the windows as they are). A swap waits while the platform
+and the side-by-side diffs' saved layout (`drgnx-work-code--saved-windows`: a `window-state-get` state, which
+belongs to no frame, so it moves and closing the diffs puts the layout back on the new frame). A swap waits while the platform
 moves the frame (`drgnx-platform-moving`), since the window manager may still be looking for it by its title.
 
 ## No prompts in automatic paths (`drgnx-guard.el`)
@@ -1500,6 +1500,20 @@ function and one rounding rule:
 Never multiply by `frame-scale-factor` yourself, and never test `(featurep 'nidhogg-wayland)` for it: a Naglfar
 frame counts device pixels too. Tests pass SCALE to check the four scales (1, 1.25, 4/3, 2) without a display
 (`test/unit/look-pixels-test.el`).
+
+## The window margins (`drgnx-margins.el`)
+
+Nothing sets a window's margins directly. Owners make **claims** on a buffer:
+`(drgnx-margins-claim OWNER COLUMNS :side 'left :order N)`, where nil or 0 takes the claim back. Zen sets a
+**centring** per window: `(drgnx-margins-centre WINDOW COLUMNS)`. A window's margin on a side is its centring plus
+the sum of its buffer's claims there. It is set again on every claim or centring, when a window shows another
+buffer, and when a window's size changes. The window hooks are on only while some claim or centring exists. Claims
+sit side by side, lowest order outermost. On the left in terminals that is the debug column (0), the agents' strip
+(1), then the change marks (2).
+
+An owner starts each margin string with `(drgnx-margins-pad OWNER)`: blanks up to its claim, computed for the
+buffer's first window. `drgnx-margins-changed-functions` runs with the buffer when places may have moved. Tests:
+`test/unit/margins-test.el`.
 
 ## Epochs, memos and caches (`drgnx-memo.el`)
 

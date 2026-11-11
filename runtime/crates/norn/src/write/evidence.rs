@@ -72,6 +72,46 @@ pub fn register(guard: &mut Guard) {
     guard::register_rule(guard, "evidence", rule);
 }
 
+/// A followup the gates leave (a red line, a flake): an entity of kind `followup`, status `open`, its DATA what was
+/// seen; one open followup per TITLE (a gate that holds again finds the one it made).  Answers its id.
+pub fn followup(
+    tx: &mut WTx<'_>,
+    title: &str,
+    data: serde_json::Value,
+    project: Option<i64>,
+) -> Result<String, CoordError> {
+    let open: Option<String> = tx
+        .sql()
+        .query_row(
+            "select id from entity where kind = 'followup' and status = 'open' and retired_tx is null \
+             and title = ?1",
+            [title],
+            |r| r.get(0),
+        )
+        .ok();
+    if let Some(id) = open {
+        return Ok(id);
+    }
+    let id = crate::tracker::new_id(tx, "followup", project)?;
+    entity::create(
+        tx,
+        EntityNew {
+            id: id.clone(),
+            kind: "followup".into(),
+            project,
+            title: Some(title.to_owned()),
+            status: Some("open".into()),
+            body: None,
+            priority: None,
+            assignee: None,
+            data,
+            origin: Origin::Recorded,
+            source: None,
+        },
+    )?;
+    Ok(id)
+}
+
 /// Record PACK as job JOB's rule pack (`rule_pack`, frozen at the job's approval: the gates read this record, never
 /// the plan's file again); answers its id.
 pub fn rule_pack(
@@ -177,6 +217,28 @@ mod tests {
         );
         // and the user's connection records no other kind
         assert!(record(&mut tx, &ev("green", "task:J#1"), None).is_err());
+    }
+
+    #[test]
+    fn a_held_gate_leaves_one_open_followup_per_title() {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        let a = followup(
+            &mut tx,
+            "flaky: a::t",
+            serde_json::json!({"rows": ["a::t"]}),
+            None,
+        )
+        .unwrap();
+        assert!(a.starts_with("followup:"), "{a}");
+        assert_eq!(
+            followup(&mut tx, "flaky: a::t", serde_json::json!({}), None).unwrap(),
+            a
+        );
+        assert_ne!(
+            followup(&mut tx, "flaky: b::u", serde_json::json!({}), None).unwrap(),
+            a
+        );
     }
 
     #[test]

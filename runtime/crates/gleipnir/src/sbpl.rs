@@ -331,6 +331,15 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
         }
     }
     push(Some("(deny network-outbound (remote unix-socket))".into()));
+    // the loopback flag: connect to the session's own sockets under tmp (after the deny, which would undo it)
+    if let Net::Isolated { loopback: true, .. } = &s.net
+        && let Some(t) = tmp
+    {
+        push(Some(format!(
+            "(allow network-outbound (remote unix-socket (subpath {})))",
+            quote(t)?
+        )));
+    }
     for sock in unix {
         push(Some(format!(
             "(allow network-outbound (remote unix-socket (path-literal {})))",
@@ -1246,9 +1255,30 @@ mod tests {
         }
         want.push(tmp("network-bind", "local"));
         want.push(tmp("network-inbound", "local"));
+        // connect under tmp (node's inspector, js-debug's watchdog): after the unix deny, so it is not undone
+        want.push(tmp("network-outbound", "remote"));
         // the session dir's one socket (step 13), as without the flag
         want.push("network-outbound remote path-literal /w/run/s/S1/gw.sock".into());
         assert_eq!(seen, want);
+        let unix_deny = one(&rs, "the unix deny", |r| {
+            is(r, "deny", &["network-outbound"])
+                && r.filters
+                    .iter()
+                    .any(|f| items(f).iter().any(|x| atom(x) == Some("unix-socket")))
+        });
+        let tmp_connect = rs
+            .iter()
+            .position(|r| {
+                is(r, "allow", &["network-outbound"])
+                    && r.filters.iter().any(|f| {
+                        items(f)
+                            .iter()
+                            .filter(|x| matches!(x, Sexp::List(_)))
+                            .any(|x| items(x).iter().any(|y| atom(y) == Some("subpath")))
+                    })
+            })
+            .expect("connect under tmp");
+        assert!(tmp_connect > unix_deny);
         assert!(!p.contains("localhost:*") && !p.contains("\"*:*\""));
         let fw = "/Applications/Xcode.app/Contents/SharedFrameworks";
         let names = |r: &R<'_>| -> Vec<String> {

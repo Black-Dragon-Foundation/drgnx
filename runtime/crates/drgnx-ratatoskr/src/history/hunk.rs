@@ -145,7 +145,7 @@ impl Hub {
         let mode = eitri::open_beneath(dir.as_fd(), Path::new(rel), eitri::Kind::File)
             .ok()
             .and_then(|o| rustix::fs::fstat(&o.fd).ok())
-            .map_or(0o644, |st| st.st_mode & 0o777);
+            .map_or(0o644, |st| super::branches::perm_bits(st.st_mode));
         eitri::write_regular(dir.as_fd(), Path::new(rel), after.as_bytes(), mode)
             .map_err(|e| Error::Refused(format!("{rel}: {e}")))?;
         Ok(Outcome::Applied(rev))

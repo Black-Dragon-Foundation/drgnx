@@ -42,7 +42,9 @@ requires that check, so it never stands for the full one.
 
 No other job has a `needs:` but the path filter's (`needs: changes`, whose outputs it takes): a job waits only on what
 it takes data from, and the unit suites build the Ratatoskr they test against, so a red runtime test never skips them. Nothing stops early: every `cargo test` runs with
-`--no-fail-fast`, every matrix with `fail-fast: false`, no job is `continue-on-error`, and each independent step runs
+`--no-fail-fast` (the Linux workspace tests run under cargo-nextest, pinned and checksum-verified by
+`.github/ci/nextest.sh`, with `--no-fail-fast --retries 0`, then the doc tests, which nextest does not run, with
+`cargo test --doc`), every matrix with `fail-fast: false`, no job is `continue-on-error`, and each independent step runs
 whatever the steps before it said (`if: ${{ !cancelled() }}`; a step that uses a build waits only for that build's
 outcome, `steps.<id>.outcome == 'success'`). The fuzz step runs every target and fails at the end naming each that
 failed. `drgnx-ci/each-push-workflow-ends-in-one-gate-over-its-push-jobs` and `drgnx-ci/nothing-stops-early` check it.

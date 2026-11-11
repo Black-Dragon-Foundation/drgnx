@@ -10,6 +10,7 @@
 (require 'drgnx-ai)                       ; loaded now: a command's `require' would replace a stubbed function
 (require 'drgnx-search-setup)
 (require 'project)
+(require 'xref)                         ; loaded now: Repo Map's and Find Usages' `require' would replace the stub
 (load (expand-file-name "modules/tools/drgnx-search" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
@@ -263,6 +264,106 @@ ROOT a git project with one file.  Skipped without the binary (test/no-skip.eld 
           (drgnx-search--show "/p/" "alpha" answer)
           (push (- (float-time) start) samples)))
       (should (<= (nth 10 (sort samples #'<)) 0.016)))))
+
+;;;; Show in Search View
+
+(ert-deftest drgnx-search/the-list-shows-in-the-search-view ()
+  "Pattern D: the Semantic Search list's header line has Show in Search view; the command asks the same question in
+the Search view, Meaning mode, in the list's project."
+  (drgnx-search-test--with-xref
+    (let ((answer (drgnx-search-test--answer :hits (list (drgnx-search-test--hit :line_start 1)))) (opened nil))
+      (drgnx-search--show "/p/" "where is alpha" answer)
+      (with-current-buffer "*xref*"
+        (should (string-match-p "Show in Search view" (format "%s" header-line-format)))
+        (should (equal drgnx-search--question '("/p/" . "where is alpha"))))
+      (cl-letf (((symbol-function 'drgnx-replace--open) (lambda (&rest args) (setq opened args))))
+        (drgnx-search-show-in-view))
+      (should (equal opened '(:text "where is alpha" :mode meaning :root "/p/"))))))
+
+;;;; Repo Map and Find Usages (search/map, search/usages)
+
+(defconst drgnx-search-test--map
+  (list :text "b.el\n  beta\na.el\n  alpha\n2 files, 2 shown, ~9 tokens" :tokens 9 :files_total 2
+        :fresh '(:files_pending 0 :view "checkout")
+        :files (list (list :path "b.el" :rank 0.7
+                           :defs (list (list :name "beta" :kind "function" :line_start 4 :line_end 6
+                                             :sig "(defun beta ()" :depth 0)))
+                     (list :path "a.el" :rank 0.3
+                           :defs (list (list :name "alpha" :kind "function" :line_start 1 :line_end 3
+                                             :sig "(defun alpha ()" :depth 0)))))
+  "An answer of `search/map': b.el ranks over a.el.")
+
+(defconst drgnx-search-test--usages
+  (list :fresh '(:files_pending 2 :view "checkout")
+        :defined (list (list :path "a.el" :name "alpha" :kind "function" :line_start 1 :line_end 3
+                             :sig "(defun alpha ()" :class "code"))
+        :usages (list (list :path "b.el" :line 5 :lines [5 9] :n 2 :enclosing "beta" :rank 0.9)))
+  "An answer of `search/usages' for alpha: defined in a.el, used twice in b.el (inside beta).")
+
+(ert-deftest drgnx-search/repo-map-lists-the-ranked-files-and-their-definitions ()
+  "Pattern D: Repo Map asks `search/map' for the project, centred on the current file, and lists each file's
+definitions in the map's order (the Results tab groups them by file); the header says the counts."
+  (drgnx-search-test--with-stub-hub `(("search/map" . ,drgnx-search-test--map))
+    (drgnx-search-test--with-xref
+      (with-current-buffer (find-file-noselect (expand-file-name "c.el" root))
+        (unwind-protect
+            (progn
+              (drgnx-search-repo-map)
+              (let ((call (car drgnx-search-test--calls)))
+                (should (equal (car call) "search/map"))
+                (should (equal (plist-get (cdr call) :root) (directory-file-name root)))
+                (should (equal (plist-get (cdr call) :focus) ["c.el"])))
+              (should (equal (mapcar (lambda (i) (list (file-name-nondirectory
+                                                        (xref-file-location-file (xref-item-location i)))
+                                                       (xref-location-line (xref-item-location i))
+                                                       (xref-item-summary i)))
+                                     items)
+                             '(("b.el" 4 "function beta  (defun beta ()") ("a.el" 1 "function alpha  (defun alpha ()"))))
+              (should (string-match-p "2 files, 2 shown"
+                                      (buffer-local-value 'header-line-format (get-buffer "*xref*")))))
+          (kill-buffer))))))
+
+(ert-deftest drgnx-search/find-usages-lists-the-definition-then-each-use ()
+  "Pattern D: Find Usages asks `search/usages' for the name at point; the definition comes first, then every line a
+file uses it on, under the definition that holds it; what is still being indexed is said."
+  (drgnx-search-test--with-stub-hub `(("search/usages" . ,drgnx-search-test--usages))
+    (drgnx-search-test--with-xref
+      (drgnx-search-usages "alpha")
+      (should (equal (plist-get (cdar drgnx-search-test--calls) :name) "alpha"))
+      (should (equal messages '("Usages of alpha; 2 files still to index")))
+      (should (equal (mapcar (lambda (i) (list (file-name-nondirectory (xref-file-location-file (xref-item-location i)))
+                                               (xref-location-line (xref-item-location i))
+                                               (xref-item-summary i)))
+                             items)
+                     '(("a.el" 1 "definition: (defun alpha ()") ("b.el" 5 "in beta") ("b.el" 9 "in beta"))))
+      (should (string-match-p "2 files still to index"
+                              (buffer-local-value 'header-line-format (get-buffer "*xref*")))))))
+
+(ert-deftest drgnx-search/xref-references-and-definitions-come-from-the-hub ()
+  "Pattern D, the real hub: in a project the xref backend answers references from `search/usages' and definitions
+from its exact matches; a use in another file is found by name."
+  (drgnx-search-test--with-hub
+    (write-region "(defun drgnx-search-test-beta ()\n  (drgnx-search-test-alpha))\n" nil (concat root "b.el") nil 'silent)
+    (drgnx-test-wait (lambda () (eql 0 (plist-get (plist-get (drgnx-hub-call-sync
+                                                              "search/usages" (list :root (directory-file-name root)
+                                                                                    :name "drgnx-search-test-alpha")
+                                                              10)
+                                                             :fresh)
+                                                  :files_pending)))
+                     :secs 60 :what "the hub's index of the two files")
+    (with-current-buffer (find-file-noselect (concat root "b.el"))
+      (unwind-protect
+          (let ((backend (drgnx-search-xref-backend)))
+            (should (eq backend 'drgnx-hrafn))
+            (should (equal (mapcar (lambda (i) (list (file-name-nondirectory
+                                                      (xref-file-location-file (xref-item-location i)))
+                                                     (xref-location-line (xref-item-location i))))
+                                   (xref-backend-references backend "drgnx-search-test-alpha"))
+                           '(("b.el" 2))))
+            (should (equal (mapcar (lambda (i) (xref-location-line (xref-item-location i)))
+                                   (xref-backend-definitions backend "drgnx-search-test-alpha"))
+                           '(1))))
+        (kill-buffer)))))
 
 (provide 'mod-search-test)
 ;;; mod-search-test.el ends here

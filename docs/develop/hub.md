@@ -342,13 +342,19 @@ lowest pending line:
    - `clock::real_long(f)`: a job's watcher (`exec:watch`), from the child's start to its recorded end.
    - outside the tasks, `gateway:requests`: the gateway's requests from their send until their `request` (and
      `budget`) event is on the channel, so a client that read its whole answer sees the event before the marker.
+   The first two end by themselves, however long a loaded machine makes them (a commit's fsync can take seconds), so
+   the barrier waits for them with no limit of its own (`clock::settle_barrier`), and the 5 s count again from the
+   end of the last one. One that never ends is a hang: the barrier does not answer, and the asker's own deadline
+   fails the test (the gate's `drgnx-test-gate-block-secs`, "the hub did not answer the gate"). The 5 s stay for a
+   job's watcher, `gateway:requests` and tasks still running. `__test_real_wait {ms?}` (test-hooks) starts a task
+   `test:real-wait` inside a blocking wait of MS ms, or one that never ends without MS: the gate's tests use it.
 3. The tasks spawned since then are run once (an advance of 0 ms), and the held writes are released.
 4. `{"event": "__test_marker", "data": {"marker": M}}` is written on every live connection. M counts from 1 per hub.
 5. The answer: `{"marker": M, "unnamed": n, "busy": [origins], "waiting": [origins], "sites": [sites]}`. `n` counts the writes from
    tasks without an origin since the last barrier. The gate fails a test when n > 0, since such writes are released
    here and not by the test's own advance. `busy` names tasks still running after 5 s. `waiting` names the tasks
-   still inside a real wait (and `gateway:requests` while requests are in flight): the allowed ones, and those still
-   inside after the 5 s. The gate fails a test on any its `drgnx-test-gate-waiting-ok` does not list, since what they
+   still inside a real wait (and `gateway:requests` while requests are in flight): the allowed ones, and the
+   watchers still inside after the 5 s. The gate fails a test on any its `drgnx-test-gate-waiting-ok` does not list, since what they
    write later is not ordered by the test. `sites` says where each of those waits began and for how long, as
    `"ORIGIN at FILE:LINE for N ms"`: the line of the `clock::blocking`, `clock::real` or `clock::real_long` call (they
    are `#[track_caller]`), or for a store thread's answer the urdr line that waits. The gate's failure prints them, so
@@ -1368,8 +1374,10 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `coord/notify` | user, agent, service | `{}` | `boolean` | no |
 | `coord/prune` | user | `{}` | `{pruned: boolean}` | yes |
 | `coord/task-status` | user | `{agent?: AgentName, status: Status, task: TaskRef}` | `boolean` | yes |
+| `debug/breakpoints` | user | `{op?: {condition?: string, enabled?: boolean, hit?: string, id?: natnum, line?: natnum, log?: string, name?: string, op: string, path?: string}, path?: string, root: string}` | `DebugBreakpointsView` | no |
 | `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
 | `debug/control` | user | `{op: string, session: string, thread?: integer}` | `boolean` | no |
+| `debug/run-to-cursor` | user | `{line: natnum, path: string, session: string}` | `boolean` | no |
 | `debug/select` | user | `{frame: integer, session: string, thread?: integer}` | `boolean` | no |
 | `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, root: string, selection?: string, user?: [JsonObject]}` | `{needs?: any, session?: string}` | no |
 | `debug/trust` | user | `{root: string, trusted: boolean}` | `boolean` | no |
@@ -1504,6 +1512,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
 | `search/grep-replace` | user | `{replace: string, view: string}` | `boolean` | no |
 | `search/grep-skipped` | user | `{skipped: [{id: string, why: string}], view: string}` | `boolean` | no |
+| `search/handoff` | user | `{hidden?: boolean, ids?: [string], instruction: Prompt, mark?: {face: string, glyph: string}, off?: [string], to: {new: {profile: string}} \| {session: {id: Id}}, view: string}` | `HandoffAnswer` | yes |
+| `search/handoff-state` | user | `{handoff: string}` | `HandoffState` | no |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
 | `search/map` | user | `{base?: boolean, budget?: natnum, focus?: [string], names?: [string], root: AbsPath, scope?: "code" \| "all"}` | `{files: [MapFile], files_total: natnum, fresh: Fresh, text: string, tokens: natnum}` | no |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
@@ -1511,10 +1521,10 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/preview` | user | `{off?: [string], path: AbsPath, replace?: string, view: string}` | `PreviewAnswer` | no |
 | `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
 | `search/recent` | user | `{root: AbsPath}` | `{recent: [SearchSpec]}` | no |
-| `search/run` | user | `{context?: boolean, count?: boolean, ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, view: string}` | `{run: natnum}` | no |
+| `search/run` | user | `{context?: boolean, count?: boolean, ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, kinds?: [string], mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, view: string}` | `{run: natnum}` | no |
 | `search/saved/delete` | user | `{name: string, root: AbsPath}` | `boolean` | yes |
 | `search/saved/list` | user | `{root: AbsPath}` | `{problems?: [string], saved: [SavedSearch]}` | no |
-| `search/saved/put` | user | `{name: string, pinned?: boolean, root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}}` | `boolean` | yes |
+| `search/saved/put` | user | `{name: string, pinned?: boolean, root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, kinds?: [string], mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}}` | `boolean` | yes |
 | `search/saved/share` | user | `{name: string, root: AbsPath}` | `{path: AbsPath}` | yes |
 | `search/scope-bases` | user | `{root: AbsPath}` | `{current?: string, default?: string, detached: boolean, recent: [string], upstream?: string}` | no |
 | `search/server-plan` | user | `{kind: "tei" \| "ollama"}` | `ServerPlan` | no |
@@ -2526,6 +2536,20 @@ Replace This, Undo Replace and Symbol mode's rename go through it, so a write ne
   by file and line; past `max` lines (default 20,000; counted from the match lines first, so a huge search reads no
   file) it gives no lines and `over`, with `total`. A file that could not be written is left out with why, as
   `search/edits` would skip it.
+- `search/handoff {view, ids?, off?, instruction, to: {new: {profile}} | {session: {id}}, hidden?}` (Ask an Agent,
+  `view/search/handoff.rs`) hands the run's matches (`ids`, else all but `off`) to an agent: a new worker of `profile`
+  in a worktree of its own from the project's HEAD (registered as a worker, so the Work space's review lists it), or a
+  live session, which edits where it is. The brief is the instruction, the search and the replacement, then the
+  matches by file as `path:line:col  in <definition>  <line>`, at most 300 lines or 32,000 characters (~8k tokens),
+  then "N more: call the `search_results` tool with handoff id h:N", the files changed since the search, and the rule
+  to edit only those places and say which were skipped. Paths the index never reads (dot paths, secret-looking names)
+  are left out unless `hidden` and named in the answer, `{handoff, session, worktree?, ids, sent, more, hidden?}`.
+  `search_results {handoff, page?}` is the drgnx-search MCP server's tool: 100 rows a page, to the session the
+  hand-off went to only (the server's own session, never the agent's word), for 24 hours, 2 MB in all; each page
+  names the files changed since. `search/handoff-state {handoff}` and the event `search-handoff-state` (after the
+  agent's steps settle, until its session ends) say where it is: `phase` sent, editing or done, and the matches
+  `done` (a hunk of the session's edit records near the match's line took out its line or its old text), `left`
+  (its line is still there near its place) and `unknown` (neither: never counted done).
 - `search/preview {view, path, off?, replace?}` is one file's part of the same edit set as a diff (the preview tile):
   the unified diff (1 line of context, so nearby changes in different definitions are hunks of their own; `similar`),
   its lines added and removed, the hunks (`old_start`, `old_lines`,

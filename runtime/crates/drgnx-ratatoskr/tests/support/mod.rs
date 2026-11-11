@@ -302,8 +302,12 @@ pub fn ping(socket: &Path) -> bool {
 
 /// The end of a child's exec, as a state a test can wait for.  `Command::spawn` can return while the child is still
 /// the forked copy of this test binary, so `/proc/PID/exe` names the test until the exec; the child holds a close-on-exec
-/// end of a pipe, which closes at the exec.
-pub struct ExecHandshake(std::io::PipeReader);
+/// end of a pipe, which closes at the exec. On Linux (7.2) the close-on-exec files close before `/proc/PID/exe` names the
+/// new image (seen on 1 child in 6000-8000 when 8 threads spawn at once), so the wait then also waits for that.
+pub struct ExecHandshake(
+    std::io::PipeReader,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))] u32,
+);
 
 impl ExecHandshake {
     /// Spawn CMD; the handshake ends when the child has exec'd.
@@ -311,12 +315,22 @@ impl ExecHandshake {
         let (reader, writer) = std::io::pipe()?;
         let child = cmd.spawn()?;
         drop(writer);
-        Ok((child, ExecHandshake(reader)))
+        let pid = child.id();
+        Ok((child, ExecHandshake(reader, pid)))
     }
 
-    /// Block until the child has exec'd.
+    /// Block until the child has exec'd and `/proc/PID/exe` names its new image.
     pub fn wait(mut self) {
         let mut sink = Vec::new();
         std::io::Read::read_to_end(&mut self.0, &mut sink).unwrap();
+        // past the exec's point of no return: the image change follows (the deadline only bounds a failure)
+        #[cfg(target_os = "linux")]
+        {
+            let me = std::fs::read_link("/proc/self/exe").unwrap();
+            skuld::wait_until("the child's /proc/PID/exe naming its new image", 10, || {
+                (!std::fs::read_link(format!("/proc/{}/exe", self.1)).is_ok_and(|exe| exe == me))
+                    .then_some(())
+            });
+        }
     }
 }

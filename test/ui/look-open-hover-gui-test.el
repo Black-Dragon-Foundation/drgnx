@@ -97,18 +97,24 @@ and off the row, not."
             (drgnx-ui-look-open-hover--settle)
             ;; headless sway may never give the frame the pointer: then there is no hover to see (a listed skip)
             (skip-unless (cadr (mouse-pixel-position)))
-            (should (equal (list (buffer-local-value 'drgnx-buffers--hovered (window-buffer open)) s edges y h
-                                 (mouse-pixel-position))
-                           (list dirty s edges y h (mouse-pixel-position))))
+            (should (eq dirty (buffer-local-value 'drgnx-buffers--hovered (window-buffer open))))
             (drgnx-ui-look-open-hover--shot "open-hovered")
-            ;; a clean row hovered at the same x, for the crops: the hover tint without a repaint
-            (let ((y2 (cdr (posn-x-y (posn-at-point (with-current-buffer drgnx-buffers-buffer-name
-                                                      (drgnx-buffers--row-pos (cadr opened)))
-                                                    open)))))
+            ;; a clean row hovered at the same x (its tail): the tint reaches the row's first glyph too, left of its
+            ;; icon (LOOK-FIX-OPEN-HOVER-TINT-1: the row and its tail are one lit run)
+            (let* ((pos2 (with-current-buffer drgnx-buffers-buffer-name (drgnx-buffers--row-pos (cadr opened))))
+                   (xy2 (posn-x-y (posn-at-point pos2 open)))
+                   (bol-x (car (posn-x-y (posn-at-point (with-current-buffer drgnx-buffers-buffer-name
+                                                          (save-excursion (goto-char pos2) (pos-bol)))
+                                                        open))))
+                   (px (lambda () (cdr (drgnx-uitest-pixel (drgnx-uitest-snapshot)
+                                                           (round (+ (nth 0 edges) bol-x 2))
+                                                           (round (+ (nth 1 edges) (cdr xy2) (/ h 2.0)))))))
+                   (rest (funcall px)))
               (should (eq t (drgnx-uitest-pointer-set (+ (car origin) (round (/ (+ (nth 0 edges) (nth 2 edges)) 2.0 s)))
-                                                      (+ (cdr origin) (round (/ (+ (nth 1 edges) y2 (/ h 2.0)) s))))))
+                                                      (+ (cdr origin) (round (/ (+ (nth 1 edges) (cdr xy2) (/ h 2.0)) s))))))
               (drgnx-ui-look-open-hover--settle)
-              (drgnx-ui-look-open-hover--shot "open-hovered-clean"))
+              (drgnx-ui-look-open-hover--shot "open-hovered-clean")
+              (should-not (equal rest (funcall px))))
             (should (eq t (drgnx-uitest-pointer-set (+ (car origin) (round (/ (frame-pixel-width root) s)) -40)
                                                     (+ (cdr origin) (round (/ (frame-pixel-height root) 2.0 s))))))
             (drgnx-ui-look-open-hover--settle)

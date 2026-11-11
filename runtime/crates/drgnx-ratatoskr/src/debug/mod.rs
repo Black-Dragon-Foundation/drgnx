@@ -9,6 +9,7 @@
 //!   stopping (children before their parent; every session at the hub's end).
 
 pub mod adapters;
+pub mod breakpoints;
 pub mod launch;
 pub mod session;
 #[cfg(test)]
@@ -16,15 +17,19 @@ mod tests;
 #[cfg(test)]
 mod tests_adapters;
 #[cfg(test)]
+mod tests_breakpoints;
+#[cfg(test)]
 mod tests_launch;
 #[cfg(test)]
 mod tests_registry;
 pub mod wire;
 
+use breakpoints::Store;
 use serde_json::{Value, json};
 use session::{End, Handle, Op, Proc, Start, Stop, Update};
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::{mpsc, watch};
@@ -175,6 +180,10 @@ struct Inner {
     sink: Arc<dyn Sink>,
     terms: Arc<dyn Terminals>,
     state: Mutex<State>,
+    /// Each project's breakpoints, by root (loaded on first use).
+    stores: Mutex<BTreeMap<String, Store>>,
+    /// Where the stores are saved (none: memory only).
+    store_dir: Option<PathBuf>,
 }
 
 /// The hub's debug sessions.
@@ -189,13 +198,172 @@ fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
 
 impl Debug {
     pub fn new(sink: Arc<dyn Sink>, terms: Arc<dyn Terminals>) -> Debug {
+        Debug::with_store(sink, terms, None)
+    }
+
+    /// The sessions, with each project's breakpoints saved in STORE_DIR (one file per root).
+    pub fn with_store(
+        sink: Arc<dyn Sink>,
+        terms: Arc<dyn Terminals>,
+        store_dir: Option<PathBuf>,
+    ) -> Debug {
         Debug {
             inner: Arc::new(Inner {
                 sink,
                 terms,
                 state: Mutex::new(State::default()),
+                stores: Mutex::new(BTreeMap::new()),
+                store_dir,
             }),
         }
+    }
+
+    /// F on ROOT's breakpoint store.
+    fn store<R>(&self, root: &str, f: impl FnOnce(&mut Store) -> R) -> R {
+        let mut stores = self
+            .inner
+            .stores
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let s = stores.entry(root.to_owned()).or_insert_with(|| {
+            let file = self.inner.store_dir.as_ref().map(|d| {
+                d.join(format!(
+                    "{:016x}.json",
+                    xxhash_rust::xxh3::xxh3_64(root.as_bytes())
+                ))
+            });
+            Store::open(file)
+        });
+        f(s)
+    }
+
+    fn root_of(&self, id: &str) -> Option<String> {
+        lock(&self.inner.state)
+            .sessions
+            .get(id)
+            .map(|e| e.root.clone())
+    }
+
+    /// Tell the editors PATH's breakpoints in ROOT.
+    fn publish_bps(&self, root: &str, path: &str) {
+        let mut v = self.store(root, |s| s.view(path));
+        v["root"] = json!(root);
+        self.inner.sink.broadcast("debug-breakpoints", v, None);
+    }
+
+    /// Send session ID PATH's breakpoints again (an edit, a Run to Cursor, one gone at a stop) and show its answer.
+    async fn resend(&self, id: &str, path: &str) {
+        let Some((h, root, caps)) = lock(&self.inner.state)
+            .sessions
+            .get(id)
+            .map(|e| (e.handle.clone(), e.root.clone(), e.caps.clone()))
+        else {
+            return;
+        };
+        // not initialized yet: its configuration sends them
+        if caps.is_null() {
+            return;
+        }
+        let bps = self.store(&root, |s| s.send_list(id, path));
+        let args = json!({"source": {"path": path}, "breakpoints": breakpoints::fit(&bps, &caps)});
+        match h.request("setBreakpoints", args).await {
+            Ok(body) => {
+                let got = body
+                    .get("breakpoints")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                self.store(&root, |s| s.answer(id, path, &got));
+                self.publish_bps(&root, path);
+            }
+            Err(e) => tracing::debug!(target: "drgnx::debug", "setBreakpoints {path}: {e}"),
+        }
+    }
+
+    async fn resend_functions(&self, id: &str) {
+        let Some((h, root, caps)) = lock(&self.inner.state)
+            .sessions
+            .get(id)
+            .map(|e| (e.handle.clone(), e.root.clone(), e.caps.clone()))
+        else {
+            return;
+        };
+        if caps
+            .get("supportsFunctionBreakpoints")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            return;
+        }
+        let fns = self.store(&root, |s| s.functions());
+        let args = json!({"breakpoints": breakpoints::fit(&fns, &caps)});
+        if let Err(e) = h.request("setFunctionBreakpoints", args).await {
+            tracing::debug!(target: "drgnx::debug", "setFunctionBreakpoints: {e}");
+        }
+    }
+
+    /// The sessions of ROOT, children too.
+    fn sessions_in(&self, root: &str) -> Vec<String> {
+        lock(&self.inner.state)
+            .sessions
+            .iter()
+            .filter(|(_, e)| e.root == root)
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// ROOT's breakpoints: OP applied (it reaches ROOT's sessions at once), then the view of the path it changed,
+    /// else of PATH, with the function breakpoints.
+    pub async fn breakpoints(
+        &self,
+        root: &str,
+        op: Option<breakpoints::Op>,
+        path: Option<&str>,
+    ) -> Value {
+        let change = op.and_then(|op| self.store(root, |s| s.apply(op)));
+        let shown = match &change {
+            Some(c) if !c.path.is_empty() => c.path.clone(),
+            _ => path.unwrap_or_default().to_owned(),
+        };
+        if let Some(c) = &change {
+            if c.path.is_empty() {
+                for id in self.sessions_in(root) {
+                    self.resend_functions(&id).await;
+                }
+            } else {
+                self.publish_bps(root, &c.path);
+                for id in self.sessions_in(root) {
+                    self.resend(&id, &c.path).await;
+                }
+            }
+        }
+        let mut v = self.store(root, |s| s.view(&shown));
+        v["root"] = json!(root);
+        v["functions"] = json!(self.store(root, |s| s.functions()));
+        if let Some(id) = change.and_then(|c| c.id) {
+            v["added"] = json!(id);
+        }
+        v
+    }
+
+    /// Run to Cursor: session ID stops at PATH's LINE once (a breakpoint for it alone, gone at its next stop or end),
+    /// continuing it when it is stopped.
+    pub async fn run_to_cursor(&self, id: &str, path: &str, line: u32) -> Result<(), String> {
+        let root = self
+            .root_of(id)
+            .ok_or_else(|| format!("no debug session {id}"))?;
+        self.store(&root, |s| s.add_temp(id, path, line));
+        self.resend(id, path).await;
+        if let Some(stop) = self.stop_of(id) {
+            self.control(
+                id,
+                Op::Continue {
+                    thread: Some(stop.thread),
+                },
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     /// Start START for connection CONN in project ROOT through LAUNCHER; its id.
@@ -227,13 +395,31 @@ impl Debug {
         self,
         conn: u64,
         root: String,
-        start: Start,
+        mut start: Start,
         launcher: Arc<dyn Launcher>,
         parent: Option<String>,
     ) -> Result<String, String> {
-        if lock(&self.inner.state).shut {
-            return Err("the hub is stopping".into());
-        }
+        let id = {
+            let mut st = lock(&self.inner.state);
+            if st.shut {
+                return Err("the hub is stopping".into());
+            }
+            st.next += 1;
+            format!("d{}", st.next)
+        };
+        // the project's breakpoints, as the store has them now
+        self.store(&root, |s| {
+            start.breakpoints = s
+                .paths_for(&id)
+                .into_iter()
+                .map(|path| session::SourceBps {
+                    breakpoints: s.send_list(&id, &path),
+                    path,
+                })
+                .collect();
+            start.functions = s.functions();
+            start.exception_filters = s.chosen_filters(&start.adapter_id);
+        });
         let c = if parent.is_some() {
             launcher.child().await?
         } else {
@@ -242,10 +428,8 @@ impl Debug {
         let (tx, rx) = mpsc::unbounded_channel();
         let handle = session::spawn(start.clone(), c.client, c.incoming, c.proc, tx);
         let (ended_tx, ended) = watch::channel(false);
-        let id = {
+        {
             let mut st = lock(&self.inner.state);
-            st.next += 1;
-            let id = format!("d{}", st.next);
             st.sessions.insert(
                 id.clone(),
                 Entry {
@@ -263,8 +447,7 @@ impl Debug {
                     ended,
                 },
             );
-            id
-        };
+        }
         self.publish_state();
         let me = self.clone();
         let sid = id.clone();
@@ -397,8 +580,12 @@ impl Debug {
         while let Some(u) = rx.recv().await {
             match u {
                 Update::Caps(c) => {
-                    if let Some(e) = lock(&self.inner.state).sessions.get_mut(&id) {
-                        e.caps = c;
+                    let root = lock(&self.inner.state).sessions.get_mut(&id).map(|e| {
+                        e.caps = c.clone();
+                        e.root.clone()
+                    });
+                    if let Some(root) = root {
+                        self.store(&root, |s| s.set_caps(&id, c));
                     }
                 }
                 Update::Running { all, thread } => {
@@ -435,6 +622,19 @@ impl Debug {
                     self.publish_state();
                     if let Some(conn) = conn {
                         self.publish_frame(&id, conn, &stop);
+                    }
+                    // Run to Cursor's breakpoint goes at the next stop
+                    if let Some(root) = self.root_of(&id) {
+                        let gone = self.store(&root, |s| s.stopped(&id));
+                        if !gone.is_empty() {
+                            let me = self.clone();
+                            let sid = id.clone();
+                            crate::clock::spawn("debug:run-to-cursor-gone", async move {
+                                for path in gone {
+                                    me.resend(&sid, &path).await;
+                                }
+                            });
+                        }
                     }
                 }
                 Update::RunInTerminal { arguments, reply } => {
@@ -492,7 +692,20 @@ impl Debug {
                         let _ = reply.send(r.map(|_| ()));
                     });
                 }
-                Update::Breakpoints { .. } | Update::Event { .. } => {}
+                Update::Breakpoints { path, breakpoints } => {
+                    if let Some(root) = self.root_of(&id) {
+                        self.store(&root, |s| s.answer(&id, &path, &breakpoints));
+                        self.publish_bps(&root, &path);
+                    }
+                }
+                Update::Event { event, body } => {
+                    if event == "breakpoint"
+                        && let Some(root) = self.root_of(&id)
+                        && let Some(path) = self.store(&root, |s| s.event(&id, &body))
+                    {
+                        self.publish_bps(&root, &path);
+                    }
+                }
                 Update::Ended(end) => {
                     self.ended(&id, end).await;
                     return;
@@ -505,6 +718,15 @@ impl Debug {
         let e = lock(&self.inner.state).sessions.remove(id);
         self.publish_state();
         let Some(e) = e else { return };
+        // what it made of the breakpoints goes with it
+        let paths = self.store(&e.root, |s| {
+            let paths = s.sent_paths(id);
+            s.ended(id);
+            paths
+        });
+        for path in paths {
+            self.publish_bps(&e.root, &path);
+        }
         self.inner.sink.broadcast(
             "debug-ended",
             json!({"session": id, "name": e.name, "reason": end.reason, "exit_code": end.exit_code}),

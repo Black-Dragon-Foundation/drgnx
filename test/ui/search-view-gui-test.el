@@ -115,8 +115,11 @@ temp dir; print where."
                                                     '((6 7 "drgnx-replace-kind") (11 16 "drgnx-replace-match")) file)
                          (drgnx-search-ui-test--row "c:2:1" "  ƒ parse" '((0 9 "drgnx-replace-ctx")))
                          (drgnx-search-ui-test--row "m:2:1" "  [x] parse_all(s)" '((6 11 "drgnx-replace-match")) file)))
-                  (drgnx-replace--hub-event "search-run-done" (list :view view :run 2 :files 1 :matches 2))
+                  (drgnx-replace--hub-event "search-run-done" (list :view view :run 2 :files 1 :matches 2
+                                                                    :kinds [(:kind "fn" :count 1) (:kind "macro" :count 1)]))
                   (should (string-match-p "by name" (drgnx-search-ui-test--status)))
+                  ;; the kind chips over the status line, with the definitions' counts (type and var dim, none)
+                  (should (string-match-p "Kinds .*fn 1 .*macro 1 .*var .*type" (drgnx-search-ui-test--status)))
                   (goto-char drgnx-replace--results)
                   (should (search-forward "ƒ fn parse" nil t))
                   (should (eq 'drgnx-replace-kind (get-text-property (match-beginning 0) 'face)))
