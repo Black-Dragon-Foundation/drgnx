@@ -2363,15 +2363,18 @@ snapshots; the search itself is `hrafn::grep`).
 
 - `search/run {view, root, search, ignore?, off?}` takes a `SearchSpec` (as the saved searches below): a Text query
   (`{mode: "text", text, case?, word?, regexp?}`; Symbol and Meaning below), `replace?`,
-  `scope?` (none or `project`, or `file` with one file in `files`; another kind is refused, at `search.scope.kind`),
-  `include?`, `exclude?`; `root` must be a folder. It stops the view's earlier search, records the search as recent,
+  `scope?` (none or `project`; `file` with one file in `files`; `open` with the editor's open files in `files`; a git
+  scope, [below](#git-scopes-searchscope-bases)), `include?`, `exclude?`; `root` must be a folder. A list of files
+  (Open, a git scope) is searched alone, the globs narrowing it (`hrafn::grep`: a name glob names any part of the path,
+  one with a slash the path from the root; a list goes to the searcher a thousand files at a time; files outside the
+  root are not searched). It stops the view's earlier search, records the search as recent,
   sends every class of `view` a `reset` of no rows at once, and answers `{run}`, the run's number. A thread then runs
   ripgrep (else `git grep` in a repository, else `grep`) and sends, as each file's lines are complete, one `insert`
   after the last row: the file's header row `f:<file>` and one row `m:<run>:<n>` per match (`n` from 0 in the run's
   order; the id is opaque, the row's props name the match). `<file>` is the path relative to `root` when it is under
   it, else whole (`key_path`; the editor's `drgnx-replace--key-path` names it the same way): a window move sends
   thousands of ids, and whole paths in them were most of its bytes. A class whose env changed meanwhile gets a
-  `reset` of every row so far instead. The event `search-run-done {view, run, files, matches, error?, off?}` ends the
+  `reset` of every row so far instead. The event `search-run-done {view, run, files, matches, error?, off?, scope?}` ends the
   search; a search a newer one stopped sends neither rows nor the event, so a late row of an old query never reaches
   the view (and the editor drops one by `base` as well).
 - **Symbol and Meaning** (`view/search/modes.rs`) ask the index on a task of their own and send all their files when
@@ -2509,6 +2512,14 @@ the index, or the merge base); a deleted-only hunk keeps nothing; a new file cou
 working-tree hunks of a file that also has unstaged changes. A git child, not gix: the workspace's gix has no
 `status` feature, and Branch needs a merge base and a diff anyway.
 
+- **In `search/run`** (`scope: {kind: "changed" | "staged" | "branch", base?, changed_lines?}`;
+  `view/search/scoped.rs`): the list (and with `changed_lines` the added lines) is found on the search's thread, not
+  on the request's path; until then the run searches no file, and an open buffer's text counts only when its file is
+  in the list. `search-run-done`'s `scope` says what it searched: `{files, submodules, deleted, base?, why_empty?,
+  needs_base?}` (`files` the list under the root, before the globs). A folder outside git, or git's refusal, ends the
+  run with that `error`; a Branch with no base to take also sets `needs_base` (the view offers its menu). A match is
+  kept by `±` when its line meets one of its file's added ranges (a buffer's text is held to the file's ranges on
+  disk). Symbol and Meaning search the project whatever the scope.
 - `search/scope-bases {root}` → `{current?, upstream?, default?, recent, detached}`: the Branch menu (the 20 branches
   most recently committed to, local and remote, without the current one).
 

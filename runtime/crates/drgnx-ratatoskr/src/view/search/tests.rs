@@ -1445,3 +1445,109 @@ fn context_off_or_a_text_file_gives_no_labels() {
         .collect();
     assert_eq!(names, [Some("outer"), Some("outer"), None, Some("other")]);
 }
+
+/// `git ARGS` in DIR, with no user or system configuration.
+fn git_in(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+}
+
+/// A repository on BRANCH with FILES committed.
+fn repo_of(branch: &str, files: &[(&str, &str)]) -> tempfile::TempDir {
+    let d = tempfile::tempdir().unwrap();
+    git_in(d.path(), &["init", "-q", "-b", branch]);
+    for (f, text) in files {
+        std::fs::write(d.path().join(f), text).unwrap();
+    }
+    git_in(d.path(), &["add", "-A"]);
+    git_in(d.path(), &["commit", "-q", "-m", "base"]);
+    d
+}
+
+fn git_scope(kind: ScopeKind, changed_lines: bool) -> scoped::GitScope {
+    scoped::GitScope {
+        kind,
+        base: None,
+        changed_lines,
+    }
+}
+
+#[test]
+fn a_changed_scope_lists_its_files_under_the_root_and_counts_the_rest() {
+    let body = "one\ntwo\nthree\n";
+    let d = repo_of("main", &[("a.txt", body), ("b.txt", body), ("c.txt", body)]);
+    let root = d.path();
+    std::fs::write(root.join("a.txt"), "one\nneedle\nthree\n").unwrap();
+    std::fs::remove_file(root.join("c.txt")).unwrap();
+    std::fs::write(root.join("new.txt"), "needle\n").unwrap();
+    let s = scoped::find(root, &git_scope(ScopeKind::Changed, false)).unwrap();
+    assert_eq!(s.files, [root.join("a.txt"), root.join("new.txt")]);
+    assert_eq!(
+        s.done,
+        ScopeDone {
+            files: 2,
+            deleted: 1,
+            ..ScopeDone::default()
+        }
+    );
+    assert!(s.keep.is_none());
+}
+
+#[test]
+fn changed_lines_keep_only_a_match_on_an_added_line() {
+    let d = repo_of("main", &[("a.txt", "needle one\ntwo\nthree\n")]);
+    let root = d.path();
+    std::fs::write(root.join("a.txt"), "needle one\nneedle two\nthree\n").unwrap();
+    let s = scoped::find(root, &git_scope(ScopeKind::Changed, true)).unwrap();
+    let a = root.join("a.txt").to_string_lossy().into_owned();
+    let mut ms = vec![
+        m(&a, 1, "", "needle", " one"),
+        m(&a, 2, "", "needle", " two"),
+    ];
+    scoped::kept(s.keep.as_ref(), &a, &mut ms);
+    assert_eq!(ms.iter().map(|m| m.line).collect::<Vec<_>>(), [2]);
+    let mut other = vec![m("/elsewhere/b.txt", 1, "", "needle", "")];
+    scoped::kept(s.keep.as_ref(), "/elsewhere/b.txt", &mut other);
+    assert!(
+        other.is_empty(),
+        "a file the scope does not list keeps nothing"
+    );
+}
+
+#[test]
+fn a_branch_with_no_base_asks_and_a_folder_outside_git_says_so() {
+    let d = repo_of("work", &[("a.txt", "one\n")]);
+    let (done, why) = scoped::find(d.path(), &git_scope(ScopeKind::Branch, false)).unwrap_err();
+    assert!(done.needs_base.is_some(), "{done:?} {why}");
+    let plain = tempfile::tempdir().unwrap();
+    let (done, why) =
+        scoped::find(plain.path(), &git_scope(ScopeKind::Changed, false)).unwrap_err();
+    assert_eq!(
+        (done.needs_base, why.as_str()),
+        (None, "not in a git repository")
+    );
+}
+
+#[test]
+fn a_listed_query_takes_only_its_files_buffers() {
+    let q = Query {
+        files: Some(vec!["/r/a.txt".into()]),
+        ..query()
+    };
+    assert!(in_scope(&q, "/r/a.txt"));
+    assert!(!in_scope(&q, "/r/b.txt"));
+}
