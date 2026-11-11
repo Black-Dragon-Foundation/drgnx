@@ -244,6 +244,10 @@ pub struct Fields {
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
+    /// An agent's task's id (`task:ID`), which tells two tasks of one title apart: the hub's Board puts the agent on
+    /// that card only. The hub's own; the editor gets the title.
+    #[serde(skip)]
+    pub task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spend: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -621,7 +625,9 @@ impl Model {
                         .and_then(|p| f.sessions.get(&p))
                         .and_then(|p| p.task)
                 });
-                fields.task = task.and_then(|t| f.tasks.get(&t)).map(|t| t.1.clone());
+                let task = task.filter(|t| f.tasks.contains_key(t));
+                fields.task = task.map(|t| f.tasks[&t].1.clone());
+                fields.task_id = task.map(|t| self.names.name(t).to_owned());
                 fields.progress = s.fact.progress;
                 fields.manager = s
                     .manager

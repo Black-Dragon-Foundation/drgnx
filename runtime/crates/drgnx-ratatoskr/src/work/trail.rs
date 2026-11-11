@@ -188,8 +188,8 @@ fn rows(data: &Data, env: &ViewEnv, fonts: &dyn drgnx_rows::fit::Measure) -> Vec
 const BOARD_PAGES: usize = 4;
 
 /// The Board's cards: the tasks of PLANS (each `plans/get`), else every task (`tasks/find`, up to [`BOARD_PAGES`]
-/// pages), each with the agent of connection CONN's map view MAP working on it (by the task's title, as the map's
-/// agents carry it). A read that fails leaves its cards out.
+/// pages), each with the agent of connection CONN's map view MAP working on it (by the task's id, which the
+/// map's agents carry: two tasks of one title never share one). A read that fails leaves its cards out.
 async fn board_cards(f: &Front, conn: u64, map: &str, plans: &[String]) -> Vec<board::Card> {
     let caller = hub_caller();
     let mut cards = Vec::new();
@@ -249,13 +249,7 @@ async fn board_cards(f: &Front, conn: u64, map: &str, plans: &[String]) -> Vec<b
             }));
         }
     }
-    let agents = f.core.map.agents_of(conn, map);
-    for c in &mut cards {
-        c.agent = agents
-            .iter()
-            .find(|(task, ..)| *task == c.title)
-            .map(|(_, id, label)| (id.clone(), label.clone()));
-    }
+    board::put_agents(&mut cards, &f.core.map.agents_of(conn, map));
     cards
 }
 

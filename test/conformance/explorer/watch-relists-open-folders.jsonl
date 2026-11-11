@@ -1,0 +1,24 @@
+{"scenario": "explorer/watch-relists-open-folders", "requires": ["v1"], "doc": "The hub watches the folders an Explorer listing read (plan sja-complete E1): a file made in an open folder goes out as a model change and a row insert, its removal as a remove, with no new explorer/subscribe; a change in a closed folder sends nothing; after view/close nothing is sent."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "x", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/w/open $ROOT/w/shut && echo x > $ROOT/w/open/a.txt"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "explorer/subscribe", "params": {"view": "x", "roots": ["$ROOT/w"], "expanded": ["$ROOT/w/open"]}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"listing": "$number"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "x", "hub": "$capture:hub", "base": 0, "version": 1, "reset": true}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "x", "class": "gui-1", "base": 0, "version": 1, "ops": [{"reset": [{"key": "$ROOT/w"}, {"key": "$ROOT/w/open"}, {"key": "$ROOT/w/open/a.txt"}, {"key": "$ROOT/w/shut"}]}]}}, "within_ms": 10000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "echo x > $ROOT/w/open/b.txt"], "expect_code": 0}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "x", "hub": "$hub", "base": 1, "version": 2}}, "within_ms": 5000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "x", "class": "gui-1", "base": 1, "version": 2, "ops": [{"insert": {"after": "$ROOT/w/open/a.txt", "rows": [{"key": "$ROOT/w/open/b.txt"}]}}]}}, "within_ms": 5000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "rm $ROOT/w/open/b.txt"], "expect_code": 0}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "x", "hub": "$hub", "base": 2, "version": 3}}, "within_ms": 5000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "x", "class": "gui-1", "base": 2, "version": 3, "ops": [{"remove": ["$ROOT/w/open/b.txt"]}]}}, "within_ms": 5000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "echo x > $ROOT/w/shut/c.txt"], "expect_code": 0}
+{"do": "expect_silent", "conn": "e", "for_ms": 600}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "view/close", "params": {"view": "x"}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "echo x > $ROOT/w/open/d.txt"], "expect_code": 0}
+{"do": "expect_silent", "conn": "e", "for_ms": 600}

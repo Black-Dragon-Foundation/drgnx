@@ -2064,12 +2064,13 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
 **The native view model.** A view whose keys move a selection also gets its model (`view-model`, docs/develop/hub.md
 "The native view model"), which Sjá, in Nidhogg (`nidhogg-views.el`, loaded by `require`), holds and answers keys
 from. drgnx never parses it: the hub client routes a line that starts `{"event":"view-model"` before any parse
-(`drgnx-hub--model-line-p`, a compare in place; framed, Nidhogg's reader passes it raw by `:raw-prefix`) to
-`drgnx-view-model-line`, which hands it whole to Sjá (`nidhogg-view-push`). Without Sjá the line is dropped. Framed,
-on a Nidhogg whose reader can (`nidhogg-view--pushed`) and with `drgnx-hub-model-lines-to-sja` on (the default), the
-reader pushes the line to Sjá itself (`:raw-to-sja`), so it never becomes a Lisp string (off, or a Nidhogg that
-refuses the keyword: the connection is framed without it, and Lisp pushes the line as before): a Search window move's line is 1.2 MB, 87 % of what a page consed before, and the
-reason the full collection came every ~42 pages. Its batch entry carries Sjá's answer, which goes to
+(`drgnx-hub--model-line-p`, a compare in place). Framed (`nidhogg-workers-framing`), Nidhogg's reader pushes the line
+to Sjá itself (`:raw-prefix` with `:raw-to-sja`), so it never becomes a Lisp string; there is no framed path that
+hands it to Lisp. A Search window move's line was 1.2 MB, 87 % of what a page consed, and the reason the full
+collection came every ~42 pages (with the push and the match nodes' paths cut, 2026-11-11, pinned, release hub, 3
+runs: a page conses 224 kB, was 1540; page p50 24.6 ms, was 36.6; no page with a collection, was 1 in 12). Unframed,
+the filter routes the line to `drgnx-view-model-line`, which hands it whole to Sjá (`nidhogg-view-push`); without
+Sjá it is dropped. Its batch entry carries Sjá's answer, which goes to
 `drgnx-view-model--pushed` (the same decisions as after `nidhogg-view-push`); Sjá's refusal is reported by the
 connection's guard, as a failed push is. The reader ends a batch before such a line, so it reaches Sjá after every
 message before it, as in the filter's order.
@@ -2102,8 +2103,9 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   name (`drgnx-view-nav-faces`, then `drgnx-view-nav-default-faces`: `drgnx-view-selected`, `drgnx-view-match`,
   `drgnx-view-chain`, `drgnx-view-lit`, `shadow` for dim), put as an overlay on the node's span (the text whose
   `drgnx-view-patch-id-prop`, `drgnx-work-id` by default, is its id), never on the whole line. Rendering a row notes
-  which rows hold which node (`drgnx-view-patch-ids`); after a draw, the rows it replaced get their nodes' classes
-  again (PATCHED), so a selection made while a patch waits is still shown once the patch lands. Row patches carry no
+  which rows hold which node (`drgnx-view-patch-ids`) and which nodes each row holds (`drgnx-view-patch-keys`, the
+  index the class step reads, so a draw costs the rows it replaced, never a walk of every node drawn); after a draw,
+  the rows it replaced get their nodes' classes again (PATCHED), so a selection made while a patch waits is still shown once the patch lands. Row patches carry no
   selection: a removed row takes nothing with it. A view's own marks over the hub's rows go back on after the classes
   through `drgnx-view-patch-patched-functions` (VIEW KEYS), added buffer-locally (the Search view's tick boxes).
 - **The trailing notice:** the view's `drgnx-view-nav-notice-method` gets `(:view V :selected ID)`, or

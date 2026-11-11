@@ -20,7 +20,7 @@
 
 (defconst drgnx-perf-workers-names
   '(lsp-burst lsp-typing ts-open ts-paste ts-typing ts-typing-unclosed compile-flood image-open
-              explorer-expand explorer-git explorer-git-rows quick-open-large quick-open-typing quick-open-typing-old
+              explorer-expand explorer-git explorer-git-rows explorer-watch quick-open-large quick-open-typing quick-open-typing-old
               agents-line-motion agents-line-motion-old presence-burst presence-burst-old autosave-typing)
   "The new workloads, in the order they run.")
 
@@ -178,6 +178,17 @@ whatever they found)."
         :digest "(drgnx-perf-w-explorer-git-digest)"
         :check "(and (drgnx-perf-w-explorer-git-done) (drgnx-git-letters-active-p))"
         :teardown ,(concat "(progn (drgnx-perf-w-explorer-git-teardown) " kill-fixture " (drgnx-perf--hub-stop) t)"))
+       ;; 50 files made in a folder the Explorer shows, on the rows path: the hub's watch relists it (plan sja-complete E1)
+       (explorer-watch
+        :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) "
+                        (drgnx-perf-workers--form "(drgnx-perf-w-explorer-watch-setup)") ")")
+        :each ,(concat "(progn " visit " (drgnx-perf-w-explorer-watch-each))")
+        :actions ,code
+        :complete-when "(drgnx-perf-w-explorer-watch-done)"
+        :digest "(drgnx-perf-w-explorer-watch-digest)"
+        :measure "(drgnx-perf-w-explorer-watch-measure)"
+        :check "(drgnx-perf-w-explorer-watch-check)"
+        :teardown ,(concat "(progn (drgnx-perf-w-explorer-watch-teardown) " kill-fixture " (drgnx-perf--hub-stop) t)"))
        ;; Quick Open's listing of a 200,000-file repository while the harness types
        (quick-open-large
         :setup ,(drgnx-perf-workers--form "(drgnx-perf-w-quick-open-setup)")

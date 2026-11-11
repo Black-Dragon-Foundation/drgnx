@@ -545,7 +545,13 @@ local roots and the open folders the hub was asked for)."
 
 (defun drgnx-explorer--sync-watches ()
   "Watch exactly the shown folders (a collapsed folder stops being watched; one that could not be
-watched — the inotify limit — is tried again)."
+watched — the inotify limit — is tried again).  On the rows path the hub watches them: no watch here."
+  (if (drgnx-explorer--rows-p)
+      (drgnx-explorer--unwatch-all)
+    (drgnx-explorer--sync-watches-old)))
+
+(defun drgnx-explorer--sync-watches-old ()
+  "`drgnx-explorer--sync-watches' off the rows path."
   (let ((want (make-hash-table :test #'equal)) gone)
     (dolist (d (drgnx-explorer--shown-folders)) (puthash d t want))
     (maphash (lambda (d desc)
@@ -853,9 +859,9 @@ stay.  Every window showing the Explorer then shows DIR's row at its top."
     (with-current-buffer b (and drgnx-view-patch (drgnx-view-patch-handle drgnx-view-patch) t))))
 
 (defun drgnx-explorer--subscribe (&optional _view)
-  "Ask the hub for the listing of the roots and the open folders (and watch them); nothing waits for it.  The hub lists
-local folders only: a remote root is left out.  On the subscribed connection, where the view's env went: the hub sends
-the rows to the connection that asked.  While it is down nothing is asked; the reconnect asks again."
+  "Ask the hub for the listing of the roots and the open folders, which it then watches; nothing waits for it.  The hub
+lists local folders only: a remote root is left out.  On the subscribed connection, where the view's env went: the hub
+sends the rows to the connection that asked.  While it is down nothing is asked; the reconnect asks again."
   (when (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
     (condition-case nil
         (drgnx-hub--call-on drgnx-hub--events "explorer/subscribe"

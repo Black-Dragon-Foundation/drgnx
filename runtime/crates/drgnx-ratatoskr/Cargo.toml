@@ -71,6 +71,7 @@ drgnx-rows = { path = "../drgnx-rows", version = "0.1.0" }
 # the terminals (term): the worker's wire, records and scopes, without the engine
 drgnx-term = { path = "../drgnx-term", version = "0.1.0", default-features = false }
 getrandom.workspace = true   # the hub's instance id on view patches (view)
+notify.workspace = true      # the Explorer's listing watches the folders it read (view::explorer)
 draugr = { path = "../draugr", version = "0.1.0" }
 drgnx-px = { path = "../drgnx-px", version = "0.1.0" }  # the networked container job's relay sidecar
 urdr = { path = "../urdr", version = "0.1.0" }

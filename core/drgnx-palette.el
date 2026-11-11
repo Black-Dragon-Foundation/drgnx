@@ -242,10 +242,11 @@ Closing the palette without choosing the file puts the window back."
   (use-local-map (make-composed-keymap drgnx-palette-minibuffer-map (current-local-map))))
 
 (defun drgnx-palette--group-title (group)
-  "The title line of GROUP: its name in `drgnx-palette-group', in from the left as a row's text is."
+  "The title line of GROUP: its name in `drgnx-palette-group', in from the left as a row's text is.  It starts with an
+empty `line-prefix', as a row does (`drgnx-completion--row')."
   (concat (if (display-graphic-p)
-              (propertize " " 'display `(space :width (,(drgnx-px (+ 6 drgnx-palette-row-padding)))))
-            " ")
+              (propertize " " 'display `(space :width (,(drgnx-px (+ 6 drgnx-palette-row-padding)))) 'line-prefix "")
+            (propertize " " 'line-prefix ""))
           (propertize group 'face 'drgnx-palette-group)))
 
 (defun drgnx-palette--right (s)

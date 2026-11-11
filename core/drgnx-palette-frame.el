@@ -168,6 +168,10 @@ echo area keeps the minibuffer as it is."
     ;; an image inside an overlay's `display' string is not drawn: the prompt is hidden and the icon is a before-string
     (overlay-put prompt 'window win)
     (overlay-put prompt 'invisible t)
+    ;; the echo box gives this minibuffer the input row's inset as its `line-prefix' (`drgnx-look-echo'), but the lead
+    ;; below is that inset here: no prefix while the palette shows it (redisplay does not take an overlay's empty one
+    ;; over a buffer's at a line that starts in hidden text)
+    (kill-local-variable 'line-prefix)
     (overlay-put prompt 'before-string
                  (concat (drgnx-palette-frame--lead) (drgnx-look-icon 'search 'drgnx-text-subtle) " "))
     (set-window-parameter win 'mode-line-format (drgnx-palette-frame--footer))

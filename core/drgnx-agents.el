@@ -348,9 +348,20 @@ applies through the gateway only."
                (list :data-collection (symbol-name (plist-get restrictions :data-collection))))
           (and (plist-get restrictions :zdr) (list :zdr t))))
 
+(defvar drgnx-agents--at-work 0 "How many mirrored sessions work (`drgnx-agents-at-work'), counted on each change.")
+
 (defun drgnx-agents--changed (s)
   (drgnx-agents--note-attention)
+  (let ((n 0))
+    (dolist (x drgnx-agents--sessions)
+      (when (or (eq (drgnx-agent-session-status x) 'busy) (drgnx-agent-session-permissions x)) (setq n (1+ n))))
+    (setq drgnx-agents--at-work n))
   (run-hook-with-args 'drgnx-agents-changed-functions s))
+
+(defun drgnx-agents-at-work ()
+  "How many of the mirrored sessions work: run a turn, or wait on you.  The title row's agents chip shows it (module
+tools/agents sets `drgnx-topline-agents-function'); it reads a variable, so redisplay may call it."
+  drgnx-agents--at-work)
 
 ;;;; What waits on you: the `agents' set of the one "needs you" count
 
