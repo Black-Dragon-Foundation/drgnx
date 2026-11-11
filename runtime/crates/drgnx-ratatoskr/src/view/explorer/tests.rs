@@ -395,9 +395,15 @@ fn explorer_watch_relists_open_folders_only() {
     assert!(seen.contains(&id(&more)), "{seen:?}");
 
     stop.send(Heard::Stop).unwrap();
-    let t0 = std::time::Instant::now();
-    thread.join().unwrap();
-    assert!(t0.elapsed() < std::time::Duration::from_secs(2));
+    // Stop ends the thread promptly: it is joined well within the bound (which only bounds a failure)
+    let (joined_tx, joined) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        thread.join().unwrap();
+        let _ = joined_tx.send(());
+    });
+    joined
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("Stop ends the watch's thread");
 }
 
 /// Pattern D (plan sja-complete E3, Q4): `exclude` takes names and globs (`*`, `?`), replacing the default set.

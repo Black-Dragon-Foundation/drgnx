@@ -4787,7 +4787,9 @@ impl Session {
                     if pair {
                         // after the lock: pairing reads the matrix
                         let me = self.clone();
-                        tokio::spawn(async move { me.pair_from_card().await });
+                        crate::clock::spawn("session:pair-card", async move {
+                            me.pair_from_card().await
+                        });
                     }
                     self.changed();
                     return Ok(true);

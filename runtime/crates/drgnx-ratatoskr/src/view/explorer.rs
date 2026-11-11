@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// The most roots a listing takes.
 pub const ROOTS_MAX: usize = 16;
@@ -724,9 +724,10 @@ pub(crate) fn list_and_watch(
             return;
         }
         // a burst settles; a relisting does not wait (the editor waits for it), but takes what is already heard
-        let end = Instant::now() + SETTLE_MAX;
+        // the watcher's thread waits for the file system, outside the hub: real time, whatever clock the hub runs on
+        let end = crate::clock::real_now() + SETTLE_MAX;
         loop {
-            let left = end.saturating_duration_since(Instant::now());
+            let left = end.saturating_duration_since(crate::clock::real_now());
             let h = if next.is_some() {
                 match rx.try_recv() {
                     Ok(h) => h,

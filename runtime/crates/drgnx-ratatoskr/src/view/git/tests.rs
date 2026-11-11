@@ -160,7 +160,12 @@ fn a_repository_s_watch_reads_again_after_git_changes_it() {
             reads_tx.send(()).is_ok()
         });
     });
-    std::thread::sleep(Duration::from_millis(200)); // the watch is set
+    // the watch is set once a change in the gitdir is read; then the probe's burst is drained
+    skuld::wait_until("the watch is set", 10, || {
+        std::fs::write(dir.join(".git").join("description"), "probe\n").unwrap();
+        reads.recv_timeout(Duration::from_millis(50)).ok()
+    });
+    while reads.recv_timeout(Duration::from_millis(600)).is_ok() {}
     let next = |what: &str| {
         reads
             .recv_timeout(Duration::from_secs(5))
