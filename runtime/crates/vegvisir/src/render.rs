@@ -469,7 +469,10 @@ fn dot(it: &Item) -> (&'static str, &'static str) {
             "drgnx-runners-attention"
         } else if st.starts_with("unreachable") {
             "drgnx-runners-error"
-        } else if st.starts_with("draining") || st.starts_with("preempting") {
+        } else if st.starts_with("draining")
+            || st.starts_with("preempting")
+            || st.starts_with("sleeping")
+        {
             "drgnx-runners-subtle"
         } else {
             "drgnx-runners-out"
@@ -679,6 +682,9 @@ fn chip_line(it: &Item) -> Line {
         _ => Vec::new(),
     };
     l.push(format!(" {}", it.label), None);
+    if runner.is_some_and(|r| r.mac) {
+        l.push(" macOS", Some("drgnx-runners-os"));
+    }
     if !extra.is_empty() {
         l.push(format!(" · {}", extra.join(" · ")), None);
     }
@@ -1195,4 +1201,50 @@ fn outline_block(s: &Scene, id: &ItemId, cols: usize, env: &Env) -> Vec<Line> {
         lines.push(Line::plain(format!("   → {c}")));
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Fields;
+    use crate::{Item, ItemId, Kind, RunnerFact};
+
+    fn machine(state: &str, mac: bool) -> Item {
+        Item {
+            id: ItemId("machine:mini".into()),
+            kind: Kind::Machine,
+            label: "mini".into(),
+            live: true,
+            block: None,
+            parent: None,
+            order: 0,
+            warn: false,
+            needs_you: false,
+            shared: false,
+            fields: Fields {
+                slots: Some((1, 2)),
+                runner: Some(RunnerFact {
+                    trust: "mine".into(),
+                    state: state.into(),
+                    jobs: 1,
+                    icon: "monitor".into(),
+                    cost: None,
+                    mac,
+                }),
+                ..Fields::default()
+            },
+        }
+    }
+
+    /// [D] A Mac runner's chip: the `macOS` chip in the code face after its name, then its load; a Mac that went quiet
+    /// on battery (`sleeping`) has the subtle dot, not the error one. Other machines have no chip.
+    #[test]
+    fn a_mac_runner_has_the_macos_chip_and_a_sleeping_dot() {
+        let l = chip_line(&machine("ready", true));
+        assert!(l.text().ends_with(" mini macOS · 1/2"), "{:?}", l.text());
+        assert!(l.0.contains(&(" macOS".to_string(), Some("drgnx-runners-os"))));
+        assert!(!chip_line(&machine("ready", false)).text().contains("macOS"));
+        assert_eq!(dot(&machine("sleeping", true)).1, "drgnx-runners-subtle");
+        assert_eq!(dot(&machine("unreachable", true)).1, "drgnx-runners-error");
+    }
 }

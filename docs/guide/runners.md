@@ -101,6 +101,27 @@ list or ask no longer says it:
 
 A card only says what to run. The editor never answers a login, and never reads your key store on its own.
 
+## A Mac as a runner
+
+Your own Mac (Apple silicon, macOS 15 or newer) can run the jobs only a Mac can: a Naglfar build, macOS tests. Such a
+job asks for it (`os: macos`) and never runs anywhere else. Prepare the Mac once, in your own account there; the
+palette's **Add Mac Runner…** shows these steps, then asks for the host:
+
+1. Create a standard account named `drgnx-runner` (System Settings, Users & Groups; not an administrator). Jobs run as
+   that account, so your own files and keychain stay out of their reach. drgnx never runs `sudo` on the Mac.
+2. Turn on Remote Login for that account only (System Settings, General, Sharing, Remote Login, "Only these users"),
+   and put this machine's ssh key in `~drgnx-runner/.ssh/authorized_keys`.
+3. Install the Command Line Tools (`xcode-select --install`) and the Homebrew packages your projects list in
+   `drgnx-runners-mac-tools`, in your own account: the runner never installs into Homebrew.
+4. If the Mac is not on this machine's network, reach it through `tailscaled`, the open-source Tailscale daemon
+   (`brew install tailscale`), or any VPN your ssh can use.
+
+Then `drgnx runner add drgnx-runner@your-mac --profile workstation` (or the palette). The runner refuses a Mac that
+lacks something and names the fix. In the runner list a Mac's row says `macOS` after its name and has a line of its
+own: `memory: watched` (the runner watches each job's memory itself, as a Mac has no cgroups), the account it runs as,
+and whether the Command Line Tools answer. A Mac that went quiet while on battery (its lid closed) is `sleeping`, not
+`unreachable`: its jobs wait for it, and it is no strike.
+
 ## Runners on the Work map
 
 On the Work space map (layer 6, with the files) every runner is a machine chip, and the hub's own machine stays as
@@ -111,7 +132,8 @@ On the Work space map (layer 6, with the files) every runner is a machine chip, 
 - **The chip** is the runner's name, its load as jobs over cores (`3/16`) and, for cloud, the cost. The dot before the
   icon follows the runner's state: green when it takes jobs, the accent while it runs them, the warning colour when it
   is benched, the attention colour when it needs a login, your keys or your confirm (each is also a card), the error
-  colour when it cannot be reached, and a dim one while it drains or is being preempted.
+  colour when it cannot be reached, and a dim one while it drains or is being preempted, or while a Mac on battery
+  sleeps. A Mac's chip says `macOS` after its name.
 - **A "runs on" edge** joins an agent to the machine its job runs on. It shows on the selected chain, like the others.
 - **An agent's card** says `job · desktop · 3:10/6m` while a job it started runs: the machine, the time so far and the
   time box. A job that waits says `job · NAME · waiting`.

@@ -191,6 +191,9 @@ pub struct RunnerFact {
     pub icon: String,
     #[serde(default)]
     pub cost: Option<String>,
+    /// A Mac runner: its chip says `macOS` after its name.
+    #[serde(default)]
+    pub mac: bool,
 }
 
 /// What a needs-you card is (part 1's cards).

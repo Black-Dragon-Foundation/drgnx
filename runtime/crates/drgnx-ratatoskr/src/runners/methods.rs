@@ -233,6 +233,7 @@ fn map_fact(r: &runstav::methods::runners::Runner) -> vegvisir::RunnerFact {
         jobs: r.jobs,
         icon: icon.into(),
         cost: None,
+        mac: r.os.starts_with("macos"),
     }
 }
 
