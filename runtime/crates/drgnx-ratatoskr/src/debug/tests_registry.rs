@@ -255,6 +255,51 @@ async fn only_the_starting_editor_is_told_to_open_the_file() {
     m.finish().await;
 }
 
+/// A parent that ends while its children are being stopped (js-debug ends its root session once the program is gone)
+/// has done what the stop asked: the stop succeeds.
+#[tokio::test(start_paused = true)]
+async fn a_parent_that_ends_while_its_children_stop_is_stopped() {
+    let mut parent = launch(vec![json!({"reverse": "startDebugging",
+        "arguments": {"request": "launch", "configuration": {"name": "worker", "__pendingTargetId": "t1"}}})]);
+    parent.extend([
+        json!({"expect": "evaluate", "ok": {"result": "1"}}),
+        json!({"die": true}),
+    ]);
+    let child = vec![
+        json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true}}),
+        json!({"expect": "launch", "args": {"__pendingTargetId": "t1"}, "ok": {}}),
+        json!({"event": "initialized"}),
+        json!({"expect": "configurationDone"}),
+        // the child's stop takes a while: its adapter does not answer the disconnect
+        json!({"expect": "disconnect", "silent": true}),
+    ];
+    let (d, ev, m, _) = setup(vec![parent, child]);
+    let id = d.start(7, "/p", start(), m.clone()).await.unwrap();
+    until(|| d.list().len() == 2).await;
+    let h = d.session(&id).unwrap();
+    let stop = {
+        let d = d.clone();
+        let id = id.clone();
+        crate::clock::spawn("debug:test-stop", async move {
+            d.control(
+                &id,
+                Op::Stop {
+                    kill_debuggee: None,
+                },
+            )
+            .await
+        })
+    };
+    // while the child is stopping, the parent's adapter goes
+    crate::clock::sleep(Duration::from_millis(10)).await;
+    h.request("evaluate", json!({"expression": "1"}))
+        .await
+        .unwrap();
+    assert_eq!(stop.await.unwrap(), Ok(()));
+    assert_eq!(ev.named("debug-ended").len(), 2);
+    m.finish().await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn start_debugging_starts_a_child_and_children_stop_before_their_parent() {
     let order = Arc::new(Mutex::new(Vec::<String>::new()));

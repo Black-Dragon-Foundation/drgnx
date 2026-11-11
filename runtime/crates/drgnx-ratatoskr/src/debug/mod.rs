@@ -9,17 +9,25 @@
 //!   stopping (children before their parent; every session at the hub's end).
 
 pub mod adapters;
+pub mod blocked;
 pub mod breakpoints;
 pub mod launch;
+pub mod ports;
 pub mod session;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_adapters;
 #[cfg(test)]
+mod tests_blocked;
+#[cfg(test)]
+mod tests_blocked_live;
+#[cfg(test)]
 mod tests_breakpoints;
 #[cfg(test)]
 mod tests_launch;
+#[cfg(test)]
+mod tests_ports;
 #[cfg(test)]
 mod tests_registry;
 pub mod wire;
@@ -506,7 +514,11 @@ impl Debug {
             for child in self.children(id) {
                 Box::pin(self.control(&child, op.clone())).await.ok();
             }
-            h.op(op).await?;
+            match h.op(op).await {
+                // it ended while its children stopped (js-debug ends its root session once the program is gone)
+                Err(e) if e == session::ENDED => {}
+                r => r?,
+            }
             self.wait_end(id).await;
             return Ok(());
         }

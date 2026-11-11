@@ -96,8 +96,9 @@ or on a port, or a `debugServer` connected to) and route its updates:
 - `runInTerminal` opens a drgnx terminal for the starting editor (`Terminals`), answers the program's pid and sends
   that editor `debug-terminal {session, term}`.
 - `startDebugging` starts a child session (`Launcher::child`: a second connection for a TCP adapter) under its parent.
-  A stop or disconnect stops the children first and resolves when all have ended; the hub's end stops every session
-  and refuses new ones.
+  A stop or disconnect stops the children first and resolves when all have ended (a parent that ends on its own
+  meanwhile, as js-debug's root session does once the program is gone, counts as stopped); the hub's end stops every
+  session and refuses new ones.
 - A restart without the adapter's request, or `terminated {restart}`, starts the same configuration again (with
   `__restart`).
 
@@ -278,3 +279,41 @@ container may not turn address randomisation off.
 
 Inside the sandbox (Gleipnir) `ptrace` stays refused in both tiers, so delve and lldb-dap run outside it; Python and
 JavaScript adapters run in the full tier.
+
+## Sessions inside a port block (spec §21)
+
+Under macOS's Seatbelt a session's adapter and program may use only the loopback ports its profile names
+(`mac_loopback_ports`), and debugpy's and js-debug's launch modes bind ephemeral ports of their own. So a sandboxed
+session gets a block of ports and its launch configuration becomes an attach the hub sets up
+(`debug/ports.rs`, `debug/blocked.rs`):
+
+- **The block** (`ports::Blocks`): 8 ports cut from 47000–48999, below macOS's ephemeral range (49152), so the system
+  never hands one out for an outgoing connection. Before a block is given out each port is bound once on 127.0.0.1,
+  ::1 and 0.0.0.0 and let go; a block with a port another process holds is passed over (the macOS runner had 47610
+  taken now and then), and when none is free the session is refused, naming the range. The block goes back when the
+  session's launcher is dropped.
+- **debugpy:** the adapter listens for the hub on the block's first port (`debugpy.adapter --host 127.0.0.1 --port
+  A`); the attach has `listen: {host, port: B}` and `subProcess`; the hub starts the program as `python -m debugpy
+  --connect 127.0.0.1:B --configure-subProcess BOOL (PROGRAM | -m MODULE) ARGS…`. debugpy connects once without
+  retrying, so the hub starts it once B listens: it probes B with a connection debugpy drops (it logs "Failed to
+  accept incoming server connection" and goes on listening) and gives up after 30 s, stopping the adapter.
+  Subprocesses connect to B too.
+- **js-debug:** the hub starts `node RUNTIME-ARGS… --inspect-brk=127.0.0.1:B PROGRAM ARGS…`, which waits at its first
+  line, then the adapter (`dapDebugServer.js A`), and attaches to B with `autoAttachChildProcesses` and
+  `continueOnAttach`. js-debug writes its bootloader into the program's `NODE_OPTIONS` only once attached (104–166
+  ms later on the macOS runner), and it answers the attach only after `configurationDone`, so the program already
+  runs by then (holding `configurationDone` for the answer deadlocks): a child started before the bootloader is there
+  would run without a debugger. So `etc/debug-node-preload.js`, first in `NODE_OPTIONS`, makes `child_process`'s
+  spawn, fork and exec functions wait for it first (`DRGNX_DEBUG_WAIT_BOOTLOADER`, set unless
+  `autoAttachChildProcesses` is off), at most 5 s, in 5 ms sleeps between which V8 runs the inspector's messages.
+  Children (`startDebugging`) are second connections to A. A child's `inspector.open(0)` goes through the preload
+  too: it takes the block's next port, claimed with an O_EXCL file under `TMP/drgnx-debug-ports/` (so the block caps the children at six), and drops
+  an inherited `--inspect-brk` from forked children's `execArgv`. The preload is written into each session's tmp.
+- TMPDIR is the session's tmp for the program (js-debug's inspector socket lands there). Its stdout is drained: the
+  adapters send what it prints as output events (debugpy with `redirectOutput`; js-debug the console's calls).
+- The hub owns both processes: they get the session's signals, and once the adapter is gone the program is killed.
+- lldb-dap runs outside the sandbox on macOS (no task port) and delve needs `ptrace`: both are refused here.
+
+The live tests (`debug/tests_blocked_live.rs`, ignored by default) run both adapters through the hub's sessions in
+the adapter image: each program starts a child at once (js-debug forks on its first line), the breakpoint is in the
+child, and while it is stopped every TCP listener in the container is one of the block's ports.

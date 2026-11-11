@@ -253,7 +253,8 @@ pub struct Handle {
     tx: mpsc::UnboundedSender<Cmd>,
 }
 
-const ENDED: &str = "the session has ended";
+/// What a request to a session that has ended gets.
+pub const ENDED: &str = "the session has ended";
 
 impl Handle {
     async fn ask<T>(
