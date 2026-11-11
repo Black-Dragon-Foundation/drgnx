@@ -1,15 +1,12 @@
-//! The red-first gate at `BeforeCommit` (`docs/develop/orchestration.md`, "Red first"): a task's commits base..tip
-//! read from git, its evidence and its job's rule pack read from the graph, the decision `vordr::redfirst`'s.
+//! The red-first gate's inputs (`docs/develop/orchestration.md`, "Red first"): a task's commits base..tip read from
+//! git; `orch::gates` adds the evidence and the job's rule pack, the decision is `vordr::redfirst`'s.
 
 use std::path::Path;
 use std::process::Command;
 
 use serde_json::{Map, Value};
 use vordr::pack::Pack;
-use vordr::redfirst::{self, Decision, Inputs};
-
-use crate::front::Front;
-use crate::runner::TaskTree;
+use vordr::redfirst::{self, Inputs};
 
 fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new("git")
@@ -68,6 +65,7 @@ pub fn inputs(
     let Some(test) = commits.first() else {
         return Ok(i);
     };
+    i.test_commit = test.clone();
     i.test_key = tree(test)?;
     i.tip_key = tree(tip)?;
     // the test commit's test lines, then those the tip deleted
@@ -110,7 +108,7 @@ pub fn inputs(
 }
 
 /// Task N's body in the job's DATA (as the user approved it).
-fn body_of(data: &Map<String, Value>, n: i64) -> String {
+pub(crate) fn body_of(data: &Map<String, Value>, n: i64) -> String {
     data.get("tasks")
         .and_then(Value::as_array)
         .and_then(|a| {
@@ -120,44 +118,6 @@ fn body_of(data: &Map<String, Value>, n: i64) -> String {
         .and_then(|t| t.get("body").and_then(Value::as_str))
         .unwrap_or("")
         .to_owned()
-}
-
-/// Task TID (number N) of JOB at TREE in REPO: the red-first decision.  A job approved with no rule pack passes.
-pub async fn check(
-    front: &Front,
-    job: &str,
-    tid: &str,
-    n: i64,
-    repo: &Path,
-    tree: &TaskTree,
-    data: &Map<String, Value>,
-) -> Result<Decision, String> {
-    let (j, t) = (job.to_owned(), tid.to_owned());
-    let (pack, evidence) = front
-        .writer
-        .db
-        .read(move |c| {
-            Ok((
-                norn::read::evidence::pack_of_job(c, &j)?,
-                norn::read::evidence::of_task(c, &t)?,
-            ))
-        })
-        .await
-        .map_err(|e| e.to_string())?;
-    let Some(pack) = pack else {
-        return Ok(Decision::Pass("the job has no rule pack".into()));
-    };
-    let (repo, base, tip, body) = (
-        repo.to_owned(),
-        tree.base.clone(),
-        tree.branch.clone(),
-        body_of(data, n),
-    );
-    let p = pack.clone();
-    let inputs = crate::clock::blocking(move || inputs(&repo, &base, &tip, &p, &body))
-        .await
-        .map_err(|e| e.to_string())??;
-    Ok(redfirst::decide(&pack, &inputs, &evidence))
 }
 
 #[cfg(test)]

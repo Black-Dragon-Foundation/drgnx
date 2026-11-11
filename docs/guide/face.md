@@ -512,7 +512,8 @@ them in the UI text role, with 12 px of room at either end and 26 px tall on a g
 `drgnx-badge`) is a tint with room inside it (7 px either side) and no ring, in the caption role, radius 4; high
 contrast rings it in its text colour, with the same room. A keycap (`drgnx-keycap`) is
 subtle caption text in a 1 px ring of the strong border, radius 4: the palette, the title row's search box and the
-start page show keys this way. A toggle pill (`drgnx-pill`, and `drgnx-pill-on` when it is on, on the quiet
+start page show keys this way. A key alone reads as typed (`a`, `D`: Shift with a letter is its capital), with another
+modifier a letter is a capital (`Ctrl Shift P`, `Alt X`), and Enter is `↵`. A toggle pill (`drgnx-pill`, and `drgnx-pill-on` when it is on, on the quiet
 selection) is caption text in a 1 px ring of the border colour, radius 6: the agent panel's step types. The rings' colours come from the theme (a box's colour cannot be inherited), so a
 theme that is not drgnx's draws them in the text colour. A theme's spec for a face replaces the face's own, its
 `:inherit` too, so drgnx's themes repeat a face's parents in theirs (the keycaps' and high contrast's chips' caption

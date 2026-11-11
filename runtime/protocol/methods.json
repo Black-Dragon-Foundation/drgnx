@@ -3485,17 +3485,26 @@
         "$defs": {
           "SupervisorRule": {
             "description": "The supervisor's rules (thresholds are settings, per kind of work).",
-            "enum": [
-              "silent",
-              "repeat",
-              "no-progress",
-              "dead-wait",
-              "lease",
-              "refusals",
-              "unrecorded",
-              "manager-context"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "silent",
+                  "repeat",
+                  "no-progress",
+                  "dead-wait",
+                  "lease",
+                  "refusals",
+                  "unrecorded",
+                  "manager-context"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "context",
+                "description": "A workflow task's agent past its rule pack's context share: rotated like a manager.",
+                "type": "string"
+              }
+            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -27955,7 +27964,147 @@
       "classes": [
         "user"
       ],
-      "doc": "the edit set of a view's search (its ticked matches, the ids named, or edits the caller names): per file the edits with lines, character columns, byte ranges, old and new text; overlapping matches, files changed since the search, large and binary files skipped with why; kept as a change set for search/apply",
+      "doc": "the lines of a view's search for an Edit Results buffer: each source line once (a match's, or context around one), with its id, file, line number and text; none past the max (over), files that cannot be written skipped with why",
+      "name": "search/edit-doc",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/edit-doc`: the lines of VIEW's search for an Edit Results buffer, CONTEXT lines (0 to 3) around each match\nline; refused (none, OVER) past MAX lines (default 20,000).",
+        "properties": {
+          "context": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "EditDocParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "EditLine": {
+            "additionalProperties": false,
+            "description": "One source line of an Edit Results buffer, once however many matches or context windows name it: its id, its file,\nits line (from 1), its text (no newline), what it is, and whether a newline ends it in the file.",
+            "properties": {
+              "eol": {
+                "type": "boolean"
+              },
+              "kind": {
+                "$ref": "#/$defs/EditLineKind"
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line_id": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "line_id",
+              "path",
+              "line",
+              "text",
+              "kind",
+              "eol"
+            ],
+            "type": "object"
+          },
+          "EditLineKind": {
+            "description": "What an Edit Results line is: a line with a match, or a line of context around one.",
+            "enum": [
+              "match",
+              "context"
+            ],
+            "type": "string"
+          },
+          "EditSkip": {
+            "additionalProperties": false,
+            "description": "An edit (or a whole file: no id) left out, and why.",
+            "properties": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "why"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/edit-doc`'s answer: the lines by file and line, how many there are, OVER when they are more than the max\n(then no lines: the user narrows the search), and the files left out with why.",
+        "properties": {
+          "lines": {
+            "items": {
+              "$ref": "#/$defs/EditLine"
+            },
+            "type": "array"
+          },
+          "over": {
+            "type": "boolean"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/$defs/EditSkip"
+            },
+            "type": "array"
+          },
+          "total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lines",
+          "total"
+        ],
+        "title": "EditDocAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the edit set of a view's search (its ticked matches, the ids named, edits the caller names, or the changed lines of an Edit Results buffer): per file the edits with lines, character columns, byte ranges, old and new text; overlapping matches, files changed since the search, large and binary files skipped with why; kept as a change set for search/apply",
       "name": "search/edits",
       "params": {
         "$defs": {
@@ -27964,6 +28113,46 @@
             "maxLength": 4096,
             "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
             "type": "string"
+          },
+          "EditedLine": {
+            "additionalProperties": false,
+            "description": "One line of an Edit Results buffer as the user left it: its id (`l:K`, from `search/edit-doc`), its file, its first\nline (from 1) and the text it expects there (OLD: several lines once an earlier save split it), and what it becomes\n(NEW: one string per line; none: the line is deleted). EOL: a newline ends the line in the file (false: the file's\nlast line, which a delete empties).",
+            "properties": {
+              "eol": {
+                "default": true,
+                "type": "boolean"
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line_id": {
+                "type": "string"
+              },
+              "new": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "old": {
+                "type": "string"
+              },
+              "path": {
+                "$ref": "#/$defs/AbsPath"
+              }
+            },
+            "required": [
+              "line_id",
+              "path",
+              "line",
+              "old"
+            ],
+            "type": "object"
           },
           "GivenEdit": {
             "additionalProperties": false,
@@ -28030,6 +28219,16 @@
           "ids": {
             "items": {
               "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "lines": {
+            "description": "Lines of an Edit Results buffer the user changed (`search/edit-doc`), in place of the run's matches; their\nfiles are written only inside the run's root.",
+            "items": {
+              "$ref": "#/$defs/EditedLine"
             },
             "type": [
               "array",
@@ -29242,6 +29441,22 @@
                   "type": "string"
                 },
                 "type": "array"
+              },
+              "kept": {
+                "description": "The lines (the old file's) of the unticked matches inside the hunk: they stay as they are.",
+                "items": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "label": {
+                "description": "The definition the hunk's first match is in, as the Search view's context label shows it (`ƒ name`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "new_lines": {
                 "format": "uint32",
@@ -33874,6 +34089,12 @@
                   "null"
                 ]
               },
+              "remote": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "running": {
                 "type": "boolean"
               },
@@ -34076,6 +34297,13 @@
           },
           "place": {
             "description": "Where the editor shows it (`panel`, `editor`): kept for a reattach.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remote": {
+            "description": "A terminal in a remote folder: TRAMP's prefix of it (`/ssh:host:`), kept for a reattach.",
             "type": [
               "string",
               "null"
@@ -34452,6 +34680,37 @@
         ],
         "title": "TermTextAnswer",
         "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "whether a window shows the terminal: its image animations advance only while one does",
+      "name": "term/visible",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/visible`: whether a window shows the terminal; image animations advance only while one does.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "visible": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "visible"
+        ],
+        "title": "TermVisible",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
       },
       "writes": false
     },

@@ -35,8 +35,11 @@
 (require 'drgnx-memo)
 (require 'drgnx-pixels)
 (require 'drgnx-term-settings (expand-file-name "drgnx-term-settings" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-term-remote (expand-file-name "drgnx-term-remote" (file-name-directory (macroexp-file-name))))
 (defvar drgnx-keys-last)
 (defvar drgnx-term-copy-mode)
+(declare-function drgnx-config-file "drgnx-config" (name &optional root))
+(declare-function drgnx-settings-file-put "drgnx-settings-file" (file head scope var value &rest args))
 (declare-function drgnx-terminal-environment "drgnx-terminal" ())
 (declare-function drgnx-terminal-shell "drgnx-terminal" ())
 
@@ -60,6 +63,11 @@
 
 (defface drgnx-term-cursor '((t :inherit cursor))
   "The terminal's cursor colour, as programs that ask for it are told."
+  :group 'drgnx)
+
+(defface drgnx-term-image-alt '((t :inherit shadow))
+  "An image's place where it cannot be drawn (a text terminal, no PNG support, a refused or evicted image):
+`[image 640×480]'."
   :group 'drgnx)
 
 ;;;; State
@@ -86,6 +94,13 @@ text scale or a font change never re-pairs the buffer.")
 (defvar-local drgnx-term--top-done nil "The first row's key when the worker last said nothing is missing above it.")
 (defvar-local drgnx-term--started nil "When this terminal's `term/open' was sent (`float-time').")
 (defvar-local drgnx-term--command-start nil "When the running command's output started (OSC 133 C), or nil.")
+(defvar-local drgnx-term--remote nil
+  "A terminal in a remote folder: TRAMP's prefix of that folder (\"/ssh:host:\"); its folders and links are there.")
+(defvar-local drgnx-term--remote-host nil
+  "The host name the remote shell's first OSC 7 gave: a later one naming another host (an ssh typed inside) is not
+followed.")
+(defvar-local drgnx-term--host-name nil "A remote terminal's host, as its name shows it (from its TRAMP folder).")
+(defvar-local drgnx-term--clipboard nil "The text a remote program last asked to put on the clipboard, while asked.")
 
 (defun drgnx-term--up-p ()
   "Non-nil while this Emacs's subscribed connection to the hub is up."
@@ -532,8 +547,15 @@ read again only after a theme change.  Shared: never changed in place."
                          (unless (member "" ansi) ansi)))))
 
 (defun drgnx-term--worker-config ()
-  "Every live setting the worker reads, as `term/config' entries `[NAME VALUE]'."
+  "Every live setting the worker reads, as `term/config' entries `[NAME VALUE]', for the current terminal (a remote
+one's images come only as direct data)."
   (vector (drgnx-term--clipboard-config)
+          (vector "remote" (if drgnx-term--remote t :false))
+          (vector "image-storage-limit" drgnx-term-image-storage-limit)
+          (vector "image-file-medium" (if drgnx-term-image-file-medium t :false))
+          (vector "image-max-bytes" drgnx-term-image-max-bytes)
+          (vector "image-disk-max" drgnx-term-image-disk-max)
+          (vector "image-fps" drgnx-term-image-fps)
           (vector "scrollback-bytes" drgnx-term-scrollback-bytes)
           (vector "cursor-style" drgnx-term-cursor-style)
           (vector "enquiry-response" drgnx-term-enquiry-response)
@@ -544,11 +566,10 @@ read again only after a theme change.  Shared: never changed in place."
 
 (defun drgnx-term--apply-config ()
   "`:apply' of the worker's live settings: every live terminal's worker takes them all at once."
-  (let ((config (drgnx-term--worker-config)))
-    (maphash (lambda (_ b)
-               (when (buffer-live-p b)
-                 (with-current-buffer b (drgnx-term--send "term/config" (list :config config)))))
-             drgnx-term--buffers)))
+  (maphash (lambda (_ b)
+             (when (buffer-live-p b)
+               (with-current-buffer b (drgnx-term--send "term/config" (list :config (drgnx-term--worker-config))))))
+           drgnx-term--buffers))
 
 (defun drgnx-term--word-syntax (chars)
   "A syntax table where CHARS end a word and every other printable ASCII character is part of one."
@@ -631,21 +652,69 @@ window scrolled away from the cursor stays where it is unless ALL or `drgnx-term
                                                     'help-echo (get-text-property pos 'drgnx-term-link)))))
             (setq pos next)))))))
 
+(defconst drgnx-term--images-max 64 "The most images a terminal's buffer keeps made (an LRU).")
+
+(defvar-local drgnx-term--images nil
+  "The images this terminal's rows show: (FILE . IMAGE), most recent first, at most `drgnx-term--images-max'; the
+evicted one is `image-flush'ed.")
+
+(defun drgnx-term--image (file)
+  "The image of canvas FILE, from this buffer's LRU."
+  (if-let* ((hit (assoc file drgnx-term--images)))
+      (progn (unless (eq hit (car drgnx-term--images))
+               (setq drgnx-term--images (cons hit (delq hit drgnx-term--images))))
+             (cdr hit))
+    (let ((image (create-image file 'png nil :scale 1 :ascent 100)))
+      (push (cons file image) drgnx-term--images)
+      (when (> (length drgnx-term--images) drgnx-term--images-max)
+        (let ((tail (nthcdr (1- drgnx-term--images-max) drgnx-term--images)))
+          (dolist (old (cdr tail)) (image-flush (cdr old)))
+          (setcdr tail nil)))
+      image)))
+
+(defun drgnx-term--draw-images (view keys)
+  "The image slices of VIEW's rows KEYS (their `drgnx-term-image' text, `[FILE X Y W H ALT]') shown: the cells display
+their row's slice of the canvas FILE, exactly one line tall; where PNGs cannot be drawn, or FILE is \"\", the
+placement's first row shows ALT."
+  (let ((graphic (and (display-images-p) (image-type-available-p 'png))))
+    (dolist (key keys)
+      (when-let* ((beg (drgnx-view-row-start view key)))
+        (let ((end (save-excursion (goto-char beg) (line-end-position))) (pos beg))
+          (while (< pos end)
+            (let ((next (next-single-property-change pos 'drgnx-term-image nil end))
+                  (v (get-text-property pos 'drgnx-term-image)))
+              (when v
+                (let ((file (elt v 0)) (y (elt v 2)))
+                  (with-silent-modifications
+                    (cond ((and graphic (not (equal file "")))
+                           (put-text-property pos next 'display
+                                              (list (list 'slice (elt v 1) y (elt v 3) (elt v 4))
+                                                    (drgnx-term--image file))))
+                          ((eql y 0)
+                           (put-text-property pos next 'display
+                                              (propertize (elt v 5) 'face 'drgnx-term-image-alt)))))))
+              (setq pos next))))))))
+
 (defun drgnx-term--patched (view keys)
-  "PATCHED of `drgnx-term-view': the inserter's overlays back, the links made buttons, then the cursor; the key
-release gate follows the program's key event types."
+  "PATCHED of `drgnx-term-view': the inserter's overlays back, the images drawn, the links made buttons, then the
+cursor; the key release gate follows the program's key event types."
   (drgnx-view-patch--patched view keys)
   (with-current-buffer (drgnx-view--buffer view)
+    (drgnx-term--draw-images view keys)
     (unless drgnx-term-copy-mode
       (drgnx-term--buttons view keys)
       (drgnx-term--place-cursor))
     (when (eq (current-buffer) (window-buffer (selected-window))) (drgnx-term--key-gate))))
 
 (defun drgnx-term--link-file (uri)
-  "The local file URI names (`file://' with no host or this host), or nil."
+  "The file URI names (`file://' with no host or this host), or nil.  In a remote terminal the file is on its host (a
+TRAMP name): with no host, `localhost' or the host its shell named; never a local file."
   (when (string-match "\\`file://\\([^/]*\\)\\(/.*\\)\\'" uri)
     (let ((host (match-string 1 uri)) (path (url-unhex-string (match-string 2 uri))))
-      (when (member host (list "" "localhost" (system-name))) path))))
+      (if drgnx-term--remote
+          (when (or (member host '("" "localhost")) (equal host drgnx-term--remote-host))
+            (concat drgnx-term--remote path))
+        (when (member host (list "" "localhost" (system-name))) path)))))
 
 (defun drgnx-term-open-link (&optional pos)
   "Open the OSC 8 link at POS (the click's position, or point): a local file is visited, any other URI browsed."
@@ -842,6 +911,32 @@ entry without `=' unsets its name.  The memo `term-env': shared, never changed i
                       (when i (push (vector name (substring e (1+ i))) out)))))
                 (vconcat (nreverse out)))))
 
+(defconst drgnx-term--local-only '("DRGNX_SERVER_NAME" "EDITOR" "VISUAL" "GIT_EDITOR")
+  "The environment names a remote terminal's ssh does not get: they name this machine's Emacs.")
+
+(defun drgnx-term--remote-env ()
+  "The environment of a remote terminal's local program (ssh): `drgnx-term--env' without the local-only names; TERM
+xterm-256color, which every host knows, unless `drgnx-term-ssh-terminfo' is `install' (its script sets TERM, and
+infocmp reads the local TERMINFO)."
+  (let ((install (eq drgnx-term-ssh-terminfo 'install)))
+    (vconcat (delq nil (mapcar (lambda (e)
+                                 (let ((name (aref e 0)))
+                                   (cond ((member name drgnx-term--local-only) nil)
+                                         ((and (equal name "TERMINFO") (not install)) nil)
+                                         ((and (equal name "TERM") (not install)) (vector "TERM" "xterm-256color"))
+                                         (t e))))
+                               (drgnx-term--env))))))
+
+(defun drgnx-term--remote-program (dir)
+  "The program of a terminal in remote DIR (`drgnx-term-remote-command'), or nil when its method has none.  With
+`drgnx-term-ssh-terminfo' `install', an ssh runs through etc/shell/drgnx-ssh-terminfo.sh, in the terminal's PTY."
+  (let ((command (drgnx-term-remote-command dir)))
+    (if (and command (equal (car command) "ssh") (eq drgnx-term-ssh-terminfo 'install))
+        ;; ssh -t ARGS… HOST SCRIPT → /bin/sh drgnx-ssh-terminfo.sh SCRIPT ARGS… HOST
+        (append (list "/bin/sh" (expand-file-name "etc/shell/drgnx-ssh-terminfo.sh" drgnx-dir) (car (last command)))
+                (butlast (cddr command)))
+      command)))
+
 (defun drgnx-term--window-size (window)
   "WINDOW's body in cells and its frame's cell in px: (COLS ROWS [W H])."
   (let ((f (window-frame window)))
@@ -861,12 +956,17 @@ hub is not up, connect, and the subscription opens it (`drgnx-term--connected').
         (setq drgnx-term--started (float-time))
         (drgnx-hub--call-on drgnx-hub--events "term/open"
                             (append
-                             (list :dir (expand-file-name default-directory) :command (vconcat drgnx-term--program)
-                                   :env (drgnx-term--env) :cols (nth 0 size) :rows (nth 1 size)
+                             ;; a remote terminal's program (ssh) runs locally, in the home folder
+                             (list :dir (if drgnx-term--remote (let ((default-directory "/")) (expand-file-name "~"))
+                                          (expand-file-name default-directory))
+                                   :command (vconcat drgnx-term--program)
+                                   :env (if drgnx-term--remote (drgnx-term--remote-env) (drgnx-term--env))
+                                   :cols (nth 0 size) :rows (nth 1 size)
                                    :cell_px (nth 2 size) :class drgnx-term-class :window drgnx-term-scrollback-lines
                                    :config (drgnx-term--worker-config)
                                    ;; where a reattach opens it again: the panel is a side window
                                    :place (if (window-parameter window 'window-side) "panel" "editor"))
+                             (and drgnx-term--remote (list :remote drgnx-term--remote))
                              (and drgnx-term-linux-cgroup-memory-limit
                                   (list :memory_max drgnx-term-linux-cgroup-memory-limit))
                              (and drgnx-term-linux-cgroup-processes-limit
@@ -908,9 +1008,10 @@ an earlier drgnx left running are offered (`drgnx-term-reattach')."
   "`kill-buffer-hook' of a terminal buffer: its terminal is closed and forgotten."
   (when drgnx-term--id
     (remhash drgnx-term--id drgnx-term--buffers)
-    (when (assoc drgnx-term--id drgnx-term--notices)
-      (setq drgnx-term--notices (cl-remove drgnx-term--id drgnx-term--notices :key #'car :test #'equal))
-      (drgnx-term--post-notices))
+    (let ((keys (list drgnx-term--id (concat "clipboard:" drgnx-term--id))))
+      (when (seq-some (lambda (k) (assoc k drgnx-term--notices)) keys)
+        (setq drgnx-term--notices (cl-remove-if (lambda (n) (member (car n) keys)) drgnx-term--notices))
+        (drgnx-term--post-notices)))
     (when (and (eq drgnx-term--state 'open) (drgnx-term--up-p))
       (drgnx-hub--call-on drgnx-hub--events "term/close" (list :id drgnx-term--id) #'ignore))
     (setq drgnx-term--id nil)))
@@ -930,13 +1031,21 @@ an earlier drgnx left running are offered (`drgnx-term-reattach')."
             (cl-incf drgnx-term--resizes)
             (drgnx-term--send "term/resize" (list :cols (nth 0 size) :rows (nth 1 size) :cell_px (nth 2 size)))))))))
 
+(defvar-local drgnx-term--visible t "Whether the worker was last told a window shows this terminal (`term/visible').")
+
 (defun drgnx-term--windows-changed (&rest _)
-  "The windows changed: each terminal whose window's size changed resizes once the sizes settle (50 ms)."
+  "The windows changed: each terminal whose window's size changed resizes once the sizes settle (50 ms); one a window
+shows now, or no longer, tells its worker (image animations play only while one does)."
   (dolist (b (drgnx-term-buffers))
-    (when-let* ((w (get-buffer-window b)))
-      (let ((size (drgnx-term--window-size w)))
-        (unless (equal (list (nth 0 size) (nth 1 size)) (buffer-local-value 'drgnx-term--size b))
-          (drgnx-timer-debounce (cons 'drgnx-term-resize b) 0.05 #'drgnx-term--resize :args (list b) :owner b))))))
+    (let ((w (get-buffer-window b)))
+      (unless (eq (and w t) (buffer-local-value 'drgnx-term--visible b))
+        (with-current-buffer b
+          (setq drgnx-term--visible (and w t))
+          (drgnx-term--send "term/visible" (list :visible (if w t :false)))))
+      (when w
+        (let ((size (drgnx-term--window-size w)))
+          (unless (equal (list (nth 0 size) (nth 1 size)) (buffer-local-value 'drgnx-term--size b))
+            (drgnx-timer-debounce (cons 'drgnx-term-resize b) 0.05 #'drgnx-term--resize :args (list b) :owner b)))))))
 
 ;;;; Events
 
@@ -959,12 +1068,21 @@ does a shell's that failed at once (`drgnx-term-abnormal-command-exit-runtime'),
   (remhash drgnx-term--id drgnx-term--buffers)
   (setq drgnx-term--id nil)
   (run-hook-with-args 'drgnx-term-exit-functions data)
-  (if (and drgnx-term--shell (not drgnx-term-wait-after-command) (not (drgnx-term--abnormal-p data)))
-      (kill-buffer (current-buffer))
+  (cond
+   ;; ssh's 255: the connection was lost, or never made; the buffer stays, with Reconnect
+   ((and drgnx-term--remote (eql (plist-get data :code) 255))
+    (setq mode-line-process ":connection lost"
+          header-line-format (list "Connection lost (exit 255)  "
+                                   (buttonize "Reconnect" (lambda (_) (drgnx-term-reconnect)) nil
+                                              "Run the same command in a new terminal here")))
+    (force-mode-line-update))
+   ((and drgnx-term--shell (not drgnx-term-wait-after-command) (not (drgnx-term--abnormal-p data)))
+    (kill-buffer (current-buffer)))
+   (t
     (setq mode-line-process
           (format ":%s" (if (plist-get data :signal) (format "signal %s" (plist-get data :signal))
                           (format "exit %s" (plist-get data :code)))))
-    (force-mode-line-update)))
+    (force-mode-line-update))))
 
 (defun drgnx-term--event (event data)
   "`drgnx-hub-event-functions': a `term/*' event goes to its terminal's buffer; `term/detached' (terminals another
@@ -986,11 +1104,87 @@ drgnx left running) asks what is offered now."
           ("term/prompt" (drgnx-term--prompt (plist-get data :kind)))
           ("term/clipboard-write"
            (when drgnx-term-clipboard-write
-             (kill-new (plist-get data :data)))))))))
+             (if drgnx-term--remote
+                 (drgnx-term--remote-clipboard (plist-get data :data))
+               (kill-new (plist-get data :data))))))))))
+
+;;;; A remote program sets the clipboard
+
+(defun drgnx-term--clipboard-host ()
+  "The host a remote terminal's clipboard question names."
+  (or drgnx-term--remote-host (drgnx-term-remote-host drgnx-term--remote) drgnx-term--remote))
+
+(defun drgnx-term--remote-clipboard (text)
+  "A remote program asked to put TEXT on the clipboard: `drgnx-term-remote-clipboard-write' says what happens; `ask'
+keeps TEXT (the last one) and a notice asks, naming the host, never the text."
+  (let ((host (drgnx-term--clipboard-host)))
+    (cond ((or (eq drgnx-term-remote-clipboard-write 'allow) (member host drgnx-term-remote-clipboard-hosts))
+           (kill-new text))
+          ((eq drgnx-term-remote-clipboard-write 'ask)
+           (setq drgnx-term--clipboard text)
+           (setf (alist-get (concat "clipboard:" drgnx-term--id) drgnx-term--notices nil nil #'equal)
+                 (list :id (concat "term:clipboard:" drgnx-term--id) :command 'terminal-clipboard-answer
+                       :text (format "%s wants to set the clipboard" host)))
+           (drgnx-term--post-notices)))))
+
+(defun drgnx-term--clipboard-asking ()
+  "The terminal buffers whose remote program waits for a clipboard answer."
+  (seq-filter (lambda (b) (buffer-local-value 'drgnx-term--clipboard b)) (drgnx-term-buffers)))
+
+(defun drgnx-term--clipboard-answered (buffer answer)
+  "ANSWER (`allow', `always' or `deny') for BUFFER's clipboard question: the text goes on the clipboard or is
+dropped; `always' adds the host to `drgnx-term-remote-clipboard-hosts' (written to your settings)."
+  (with-current-buffer buffer
+    (let ((text drgnx-term--clipboard) (host (drgnx-term--clipboard-host)))
+      (setq drgnx-term--clipboard nil)
+      (setq drgnx-term--notices (cl-remove (concat "clipboard:" drgnx-term--id) drgnx-term--notices
+                                           :key #'car :test #'equal))
+      (drgnx-term--post-notices)
+      (when (eq answer 'always)
+        (let ((hosts (append drgnx-term-remote-clipboard-hosts (list host))))
+          (setq drgnx-term-remote-clipboard-hosts hosts)
+          (require 'drgnx-settings-file)
+          (drgnx-settings-file-put (drgnx-config-file 'settings) 'drgnx-settings nil
+                                   'drgnx-term-remote-clipboard-hosts hosts)))
+      (when (memq answer '(allow always)) (kill-new text)))))
+
+(defun drgnx-term-clipboard-answer ()
+  "Answer a remote program that asked to set the clipboard: Allow, Always for its host, or Deny."
+  (interactive)
+  (let ((asking (drgnx-term--clipboard-asking)))
+    (if (null asking)
+        (message "No remote program is waiting to set the clipboard")
+      (with-current-buffer (car asking)
+        (let* ((host (drgnx-term--clipboard-host)) (use-dialog-box nil)
+               (answer (car (read-multiple-choice (format "%s wants to set the clipboard: " host)
+                                                  `((?a "allow") (?l ,(format "always for %s" host)) (?d "deny"))))))
+          (drgnx-term--clipboard-answered (current-buffer) (pcase answer (?a 'allow) (?l 'always) (_ 'deny))))))))
+
+(defun drgnx-term--remote-cwd (cwd)
+  "A remote terminal's CWD (as `drgnx-term--cwd' takes it) as a TRAMP folder on its host, or nil: the first host an
+OSC 7 names is learned as the terminal's own; one naming another host (an ssh typed inside) is not followed."
+  (let* ((parts (cond ((string-match "\\`file://\\([^/]*\\)\\(/.*\\)\\'" cwd)
+                       (cons (match-string 1 cwd) (url-unhex-string (match-string 2 cwd))))
+                      ((string-match "\\`kitty-shell-cwd://\\([^/]*\\)\\(/.*\\)\\'" cwd)
+                       (cons (match-string 1 cwd) (match-string 2 cwd)))))
+         ;; a bare path is the local folder ssh started in (the record's first cwd), never the host's
+         (host (car parts)))
+    (when parts
+      (unless (or drgnx-term--remote-host (member host '("" "localhost")))
+        (setq drgnx-term--remote-host host))
+      (when (or (member host '("" "localhost")) (equal host drgnx-term--remote-host))
+        (file-name-as-directory (concat drgnx-term--remote (cdr parts)))))))
 
 (defun drgnx-term--cwd (cwd)
   "The shell says its directory is CWD (OSC 7: a `file://' URL, Ghostty's bash and zsh's `kitty-shell-cwd://HOST/PATH'
-with the path raw, or a path): the buffer's `default-directory' follows, for a local folder."
+with the path raw, or a path): the buffer's `default-directory' follows, for a local folder; in a remote terminal, to
+that folder on its host (`drgnx-term--remote-cwd'; not checked: that would wait on the connection)."
+  (if drgnx-term--remote
+      (when-let* ((dir (drgnx-term--remote-cwd cwd))) (setq default-directory dir))
+    (drgnx-term--local-cwd cwd)))
+
+(defun drgnx-term--local-cwd (cwd)
+  "`drgnx-term--cwd' of a local terminal."
   (when-let* ((dir (cond ((string-prefix-p "file://" cwd) (drgnx-term--link-file cwd))
                          ((string-match "\\`kitty-shell-cwd://\\([^/]*\\)\\(/.*\\)\\'" cwd)
                           (and (member (match-string 1 cwd) (list "" "localhost" (system-name))) (match-string 2 cwd)))
@@ -1001,11 +1195,17 @@ with the path raw, or a path): the buffer's `default-directory' follows, for a l
 (defvar-local drgnx-term--title nil "The title the program set (OSC 0/2).")
 
 (defun drgnx-term--title (title)
-  "The program set TITLE: the buffer, and so its tab, is named after it (or after `drgnx-term-title')."
+  "The program set TITLE: the buffer, and so its tab, is named after it (or after `drgnx-term-title'); a remote
+terminal's name starts with its host."
   (setq drgnx-term--title title)
-  (let ((title (or drgnx-term-title title)))
-    (unless (string-empty-p title)
-      (rename-buffer (format "*terminal: %s*" title) t))))
+  (let* ((title (or drgnx-term-title title))
+         (host (and drgnx-term--remote
+                    (or drgnx-term--host-name (setq drgnx-term--host-name (drgnx-term-remote-host drgnx-term--remote)))))
+         (name (cond ((and host (string-empty-p title)) host)
+                     (host (format "%s: %s" host title))
+                     (t title))))
+    (unless (string-empty-p name)
+      (rename-buffer (format "*terminal: %s*" name) t))))
 
 (defun drgnx-term--prompt (kind)
   "An OSC 133 mark of KIND: 3 a command's output starts, 4 it ended.  A command that ran at least
@@ -1152,13 +1352,22 @@ Typing goes to the program (`drgnx-term-mode-map')."
 (defun drgnx-term-start (dir &optional command)
   "A new terminal in DIR running the user's shell, or COMMAND (a program and its arguments) instead, shown by
 `pop-to-buffer' (the rules put it in the panel); returns its buffer.  A shell's buffer goes when the shell ends; a
-command's stays, so what it printed can be read."
-  (let ((buffer (generate-new-buffer "*terminal*")))
+command's stays, so what it printed can be read.  In a remote DIR (a TRAMP name) the shell is the user's login shell on
+that host (`drgnx-term-remote-command'); a COMMAND runs in a local folder only."
+  (when (and command (file-remote-p dir)) (user-error "A command runs in a local folder only: %s" dir))
+  (let* ((remote (and (not command) (file-remote-p dir)))
+         (program (cond (command)
+                        (remote (or (drgnx-term--remote-program dir)
+                                    (user-error "No terminal reaches %s (method %s)" dir (file-remote-p dir 'method))))
+                        (t (or drgnx-term-command (list (drgnx-terminal-shell))))))
+         (buffer (generate-new-buffer "*terminal*")))
     (with-current-buffer buffer
       (drgnx-term-mode)
-      (setq default-directory (file-name-as-directory (expand-file-name dir))
-            drgnx-term--program (or command drgnx-term-command (list (drgnx-terminal-shell)))
-            drgnx-term--shell (not command)))
+      (setq default-directory (file-name-as-directory (if remote dir (expand-file-name dir)))
+            drgnx-term--program program
+            drgnx-term--remote remote
+            drgnx-term--shell (not command))
+      (when remote (drgnx-term--title "")))
     (pop-to-buffer buffer)
     (drgnx-term--open buffer)
     (when (and drgnx-term-input (not command))
@@ -1275,7 +1484,8 @@ one a buffer here shows.  A terminal another live Emacs shows is never offered."
   "One line naming terminal ROW (a `term/list' row): its title (else its program), folder and age, and its id."
   (let ((title (plist-get row :title)) (command (append (plist-get row :command) nil)) (at (plist-get row :detached_at)))
     (string-join (delq nil (list (if (string-empty-p (or title "")) (file-name-nondirectory (or (car command) "")) title)
-                                 (abbreviate-file-name (or (plist-get row :cwd) ""))
+                                 (if (stringp (plist-get row :remote)) (plist-get row :remote)
+                                   (abbreviate-file-name (or (plist-get row :cwd) "")))
                                  (if (numberp at) (concat "kept " (drgnx-term--age at)) "its Emacs is gone")
                                  (and (eq (plist-get row :old) t) "from before an update: Close only")
                                  (plist-get row :id)))
@@ -1330,14 +1540,19 @@ else the panel), drawn from a reset at this window's size; SELECT shows it selec
   (let* ((buffer (generate-new-buffer "*terminal*"))
          (command (append (plist-get row :command) nil))
          (cwd (plist-get row :cwd))
+         (remote (plist-get row :remote))
          (id (plist-get row :id)))
     (with-current-buffer buffer
       (drgnx-term-mode)
-      (setq default-directory (file-name-as-directory (if (and (stringp cwd) (file-directory-p cwd)) cwd "~/"))
+      (setq default-directory (if (stringp remote) remote (expand-file-name "~/"))
             drgnx-term--program command
-            drgnx-term--shell (null (cdr command))
+            drgnx-term--remote (and (stringp remote) remote)
+            drgnx-term--shell (or (stringp remote) (null (cdr command)))
             drgnx-term--state 'opening)
-      (unless (string-empty-p (or (plist-get row :title) "")) (drgnx-term--title (plist-get row :title))))
+      ;; the folder its shell named last (OSC 7); a remote one on its host, not checked (no connection waits)
+      (when (stringp cwd) (drgnx-term--cwd cwd))
+      (unless (and (not drgnx-term--remote) (string-empty-p (or (plist-get row :title) "")))
+        (drgnx-term--title (or (plist-get row :title) ""))))
     (cond ((not select) (display-buffer buffer))
           ((equal (plist-get row :place) "editor") (pop-to-buffer-same-window buffer))
           (t (pop-to-buffer buffer)))
@@ -1386,10 +1601,19 @@ them all here, choose some, or close them.  A terminal another running drgnx sho
           (?c (drgnx-term--choose rows))
           (?k (mapc #'drgnx-term--close-offered rows)))))))
 
+(defun drgnx-term-reconnect ()
+  "Run a remote terminal's command again in its buffer, after its connection was lost."
+  (interactive)
+  (unless (and (derived-mode-p 'drgnx-term-mode) drgnx-term--remote (eq drgnx-term--state 'exited))
+    (user-error "Not a remote terminal whose connection was lost"))
+  (setq header-line-format nil mode-line-process nil drgnx-term--state nil)
+  (drgnx-term--open (current-buffer)))
+
 (defun drgnx-term-usable-p (dir)
-  "Non-nil when a terminal in DIR can be drgnx's own: not on Windows, DIR not remote, module tools/term has run."
+  "Non-nil when a terminal in DIR can be drgnx's own: not on Windows, a local DIR or a remote one a command reaches
+(`drgnx-term-remote-command'), module tools/term has run."
   (and (not (eq system-type 'windows-nt))
-       (not (file-remote-p dir))
+       (or (not (file-remote-p dir)) (drgnx-term-remote-command dir))
        (drgnx-modules--ok-p 'tools/term)))
 
 (defun drgnx-term--teardown ()
@@ -1455,6 +1679,12 @@ them all here, choose some, or close them.  A terminal another running drgnx sho
                        (drgnx-command-define 'terminal-reattach :category "Terminal" :title "Reattach Terminal"
                                              :command #'drgnx-term-reattach
                                              :doc "Open the terminals an earlier drgnx left running, or close them")
+                       (drgnx-command-define 'terminal-reconnect :category "Terminal" :title "Reconnect Terminal"
+                                             :command #'drgnx-term-reconnect :scope 'editing
+                                             :doc "Run a remote terminal's command again after its connection was lost")
+                       (drgnx-command-define 'terminal-clipboard-answer :category "Terminal"
+                                             :title "Answer Clipboard Request" :command #'drgnx-term-clipboard-answer
+                                             :doc "Allow or deny a remote program that asked to set the clipboard")
                        (add-hook 'drgnx-hub-connected-functions #'drgnx-term--connected)
                        (add-hook 'drgnx-view-model-functions #'drgnx-term--model-queued)
                        (add-hook 'enable-theme-functions #'drgnx-term--theme-changed)

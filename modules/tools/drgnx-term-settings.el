@@ -165,6 +165,42 @@ the machine restarts.  The terminal's own worker counts the time, so no drgnx ne
 every terminal at once."
   :type 'natnum :group 'drgnx :scope 'global :agents 'never :schema 'natnum :apply #'drgnx-term--apply-config)
 
+(drgnx-defsetting drgnx-term-image-storage-limit (* 64 1024 1024)
+  "Bytes of decoded images a terminal keeps (kitty, sixel and iTerm2 images alike; Ghostty's `image-storage-limit');
+the oldest unplaced images go first.  0: no images, the kitty graphics protocol off.  Also the largest image decoded:
+one larger (or larger than a quarter of the terminal's memory limit) is refused before it is decoded."
+  :type 'natnum :group 'drgnx :scope 'global :agents 'never :schema 'natnum :apply #'drgnx-term--apply-config)
+
+(drgnx-defsetting drgnx-term-image-file-medium nil
+  "Whether a program may show an image from any file it names (kitty's file medium).  Off, as in Ghostty: a program
+can then only send image data, a temporary file or shared memory.  Never on in a remote terminal."
+  :type 'boolean :group 'drgnx :scope 'global :agents 'never :schema 'boolean :apply #'drgnx-term--apply-config)
+
+(drgnx-defsetting drgnx-term-image-max-bytes (* 32 1024 1024)
+  "The longest sixel or iTerm2 image sequence, in encoded bytes; a longer one is dropped to its end."
+  :type 'natnum :group 'drgnx :scope 'global :agents 'never :schema 'natnum :apply #'drgnx-term--apply-config)
+
+(drgnx-defsetting drgnx-term-image-disk-max (* 256 1024 1024)
+  "Bytes of drawn image files a terminal keeps on disk (in the user's runtime directory).  Past it the oldest file no
+screen row shows goes, and the rows above the screen that showed it show the image's size instead."
+  :type 'natnum :group 'drgnx :scope 'global :agents 'never :schema 'natnum :apply #'drgnx-term--apply-config)
+
+(drgnx-defsetting drgnx-term-image-fps 10
+  "The most new frames a second of an animated image (kitty animation); 0: animations stand still.  An animation
+plays only while a window shows its terminal."
+  :type 'number :group 'drgnx :scope 'global :agents 'never :schema 'number :apply #'drgnx-term--apply-config)
+
+(drgnx-defsetting drgnx-term-remote-clipboard-write 'ask
+  "What a program in a remote terminal may do when it sets the clipboard (OSC 52): `ask', a notice asks (Allow, Always
+for that host, Deny; the text is not shown); `allow'; `deny'.  The hosts in `drgnx-term-remote-clipboard-hosts' are
+allowed without asking.  Reading the clipboard is never allowed."
+  :type '(choice (const ask) (const allow) (const deny)) :group 'drgnx :scope 'global :agents 'never
+  :schema '(enum ask allow deny))
+
+(drgnx-defsetting drgnx-term-remote-clipboard-hosts nil
+  "The hosts whose programs may set the clipboard from a remote terminal without asking (Always for HOST adds one)."
+  :type '(repeat string) :group 'drgnx :scope 'global :agents 'never :schema '(list-of string))
+
 (drgnx-defsetting drgnx-term-progress-style t
   "Whether a program's progress (OSC 9;4) shows on its terminal's tab."
   :type 'boolean :group 'drgnx :scope 'global :agents 'never :schema 'boolean)
@@ -243,7 +279,7 @@ Applies to new terminals."
     (app . "Ghostty's own lifecycle, config files, IO loop and UI language; drgnx has its own")
     (scope . "under a user systemd every terminal runs in a scope of its own, which keeps it running across a hub restart: drgnx never starts one without it")
     (no-switch . "libghostty-vt 1.0 has no switch for it: the engine's own behaviour applies")
-    (images . "images are not shown in this release: the engine keeps none"))
+    )
   "Why an option has no place in drgnx: a key of `drgnx-term-settings-options' rows of class `none'.")
 
 (defconst drgnx-term-settings-options
@@ -251,7 +287,7 @@ Applies to new terminals."
     ("scrollback-limit" live drgnx-term-scrollback-bytes "the rows in the buffer: `drgnx-term-scrollback-lines'")
     ("cursor-style" live drgnx-term-cursor-style)
     ("cursor-style-blink" mapped "`blink-cursor-mode'" "Emacs blinks every cursor alike")
-    ("image-storage-limit" none images)
+    ("image-storage-limit" live drgnx-term-image-storage-limit)
     ("enquiry-response" live drgnx-term-enquiry-response)
     ("desktop-notifications" live drgnx-term-desktop-notifications)
     ("title-report" live drgnx-term-title-report)

@@ -88,6 +88,12 @@ pub struct Front {
     pub search: crate::search::Hub,
     /// The Extensions view's catalog, the lock and the module table, merged in memory ([`crate::extensions`]).
     pub extensions: crate::extensions::Hub,
+    /// The runs the orchestration gates started, in flight ([`crate::orch::gates`]).
+    pub orch: crate::orch::gates::Runs,
+    /// The merge queue's ready tasks and batches, by job ([`crate::orch::queue`]).
+    pub queue: crate::orch::queue::Queue,
+    /// The affected groups each batch tree needs ([`crate::orch::groups`]).
+    pub groups: crate::orch::groups::Listed,
     /// Test hooks (`--test-ignore-shutdown`): `shutdown` is answered and ignored, so `stop` reaches its signal.
     pub ignore_shutdown: AtomicBool,
     /// The store's other folders (home, config, `<state>/hub`), once the server opened it.
@@ -181,6 +187,9 @@ impl Front {
             follows,
             search: crate::search::Hub::default(),
             extensions: crate::extensions::Hub::default(),
+            orch: crate::orch::gates::Runs::default(),
+            queue: crate::orch::queue::Queue::default(),
+            groups: crate::orch::groups::Listed::default(),
             ignore_shutdown: AtomicBool::new(false),
             dirs: OnceLock::new(),
             shell_env: crate::shell_env::ShellEnv::default(),
@@ -689,6 +698,7 @@ impl Front {
             | Params::TermText(_)
             | Params::TermPaste(_)
             | Params::TermFocus(_)
+            | Params::TermVisible(_)
             | Params::TermMouse(_)
             | Params::TermResize(_)
             | Params::TermScroll(_)
@@ -734,6 +744,9 @@ impl Front {
             }
             // the Search view's writes: edit sets, change sets, their apply and undo
             Params::SearchEdits(p) => crate::view::search::edits(self, &caller, p)
+                .await
+                .map(|r| json!(r)),
+            Params::SearchEditDoc(p) => crate::view::search::edit_doc(self, &caller, p)
                 .await
                 .map(|r| json!(r)),
             Params::SearchPreview(p) => crate::view::search::preview(self, &caller, p)

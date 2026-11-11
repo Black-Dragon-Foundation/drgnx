@@ -68,6 +68,7 @@ pub struct Engine {
     rs: GhosttyRenderState,
     rows: GhosttyRenderStateRowIterator,
     cells: GhosttyRenderStateRowCells,
+    images: GhosttyRenderStateImageIterator,
     kenc: GhosttyKeyEncoder,
     kev: GhosttyKeyEvent,
     menc: GhosttyMouseEncoder,
@@ -258,6 +259,66 @@ fn without_40(seq: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// The decode cap of kitty PNGs, in bytes of RGBA (the worker sets it; one terminal per process).
+static DECODE_CAP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(64 << 20);
+
+/// Kitty PNGs larger than CAP bytes of RGBA are refused before they are decoded.
+pub fn set_decode_cap(cap: u64) {
+    DECODE_CAP.store(cap, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// `GHOSTTY_SYS_OPT_DECODE_PNG`: a kitty PNG through the `png` crate under the decode cap, into the library's memory.
+unsafe extern "C" fn decode_png(
+    _: *mut c_void,
+    allocator: *const GhosttyAllocator,
+    data: *const u8,
+    len: usize,
+    out: *mut GhosttySysImage,
+) -> bool {
+    if data.is_null() || out.is_null() {
+        return false;
+    }
+    // SAFETY: the library passes LEN bytes at DATA, valid for the call.
+    let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+    let cap = DECODE_CAP.load(std::sync::atomic::Ordering::Relaxed);
+    let Some(p) = crate::image::decode_png(bytes, cap) else {
+        tracing::info!(
+            bytes = len,
+            "a kitty PNG refused (over the limit, or not a PNG)"
+        );
+        return false;
+    };
+    // SAFETY: the buffer comes from the allocator the callback got, which frees it; OUT is the library's.
+    unsafe {
+        let buf = ghostty_alloc(allocator, p.rgba.len());
+        if buf.is_null() {
+            return false;
+        }
+        std::ptr::copy_nonoverlapping(p.rgba.as_ptr(), buf, p.rgba.len());
+        *out = GhosttySysImage {
+            width: p.w,
+            height: p.h,
+            data: buf,
+            data_len: p.rgba.len(),
+        };
+    }
+    true
+}
+
+/// Give the library the PNG decoder, once per process.
+fn install_png_decoder() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: a process-wide option set before any terminal decodes.
+        unsafe {
+            ghostty_sys_set(
+                GHOSTTY_SYS_OPT_DECODE_PNG,
+                decode_png as GhosttySysDecodePngFn as *const c_void,
+            )
+        };
+    });
+}
+
 impl Engine {
     /// A terminal of COLS × ROWS cells of CELL px, keeping at most SCROLLBACK lines and SCROLLBACK_BYTES of them.
     pub fn new(
@@ -267,11 +328,13 @@ impl Engine {
         scrollback: usize,
         scrollback_bytes: usize,
     ) -> Result<Engine, String> {
+        install_png_decoder();
         let mut e = Engine {
             term: null_mut(),
             rs: null_mut(),
             rows: null_mut(),
             cells: null_mut(),
+            images: null_mut(),
             kenc: null_mut(),
             kev: null_mut(),
             menc: null_mut(),
@@ -300,6 +363,10 @@ impl Engine {
             ok(
                 ghostty_render_state_row_cells_new(null(), &mut e.cells),
                 "row_cells_new",
+            )?;
+            ok(
+                ghostty_render_state_image_iterator_new(null(), &mut e.images),
+                "image_iterator_new",
             )?;
             ok(
                 ghostty_key_encoder_new(null(), &mut e.kenc),
@@ -659,6 +726,192 @@ impl Engine {
         self.get_string(GHOSTTY_TERMINAL_DATA_PWD)
     }
 
+    /// Kitty images: at most LIMIT bytes stored (0: none, the protocol off); the media a program may load from besides
+    /// direct data: temporary files in TEMP_DIR, shared memory (SHM), any file (FILE).
+    pub fn set_images(&mut self, limit: u64, temp_dir: Option<&str>, shm: bool, file: bool) {
+        // SAFETY: the options take a u64*, a GhosttyString* (NULL: off) and bool*s; the string is copied.
+        unsafe {
+            ghostty_terminal_set(
+                self.term,
+                GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT,
+                (&raw const limit).cast(),
+            );
+            let dir = temp_dir.map(|d| GhosttyString {
+                ptr: d.as_ptr(),
+                len: d.len(),
+            });
+            ghostty_terminal_set(
+                self.term,
+                GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_TEMP_FILE,
+                dir.as_ref()
+                    .map_or(null(), |d| (d as *const GhosttyString).cast()),
+            );
+            ghostty_terminal_set(
+                self.term,
+                GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_SHARED_MEM,
+                (&raw const shm).cast(),
+            );
+            ghostty_terminal_set(
+                self.term,
+                GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_FILE,
+                (&raw const file).cast(),
+            );
+        }
+    }
+
+    /// The cursor's column (0-based).
+    pub fn cursor_col(&self) -> u16 {
+        self.get::<u16>(GHOSTTY_TERMINAL_DATA_CURSOR_X).unwrap_or(0)
+    }
+
+    /// A value that changes when the placements captured by the last `update` change.
+    pub fn placements_generation(&self) -> u64 {
+        let mut g: u64 = 0;
+        // SAFETY: the data is a u64*.
+        unsafe {
+            ghostty_render_state_get(
+                self.rs,
+                GHOSTTY_RENDER_STATE_DATA_IMAGE_PLACEMENTS_GENERATION,
+                (&raw mut g).cast(),
+            )
+        };
+        g
+    }
+
+    /// The kitty placements the last `update` captured, lowest z first.
+    pub fn placements(&mut self) -> Vec<crate::image::Placement> {
+        let mut out = Vec::new();
+        // SAFETY: the iterator is filled from the render state and read on this thread; each value has its documented
+        // type.
+        unsafe {
+            let mut it = self.images;
+            if ghostty_render_state_get(
+                self.rs,
+                GHOSTTY_RENDER_STATE_DATA_IMAGE_ITERATOR,
+                (&raw mut it).cast(),
+            ) != GHOSTTY_SUCCESS
+            {
+                return out;
+            }
+            while ghostty_render_state_image_iterator_next(self.images) {
+                let it = self.images;
+                let u32_of = |k: i32| {
+                    let mut v: u32 = 0;
+                    ghostty_render_state_image_get(it, k, (&raw mut v).cast());
+                    v
+                };
+                let i32_of = |k: i32| {
+                    let mut v: i32 = 0;
+                    ghostty_render_state_image_get(it, k, (&raw mut v).cast());
+                    v
+                };
+                if i32_of(GHOSTTY_RENDER_STATE_IMAGE_DATA_PROTOCOL) != GHOSTTY_IMAGE_PROTOCOL_KITTY
+                {
+                    continue;
+                }
+                let mut generation: u64 = 0;
+                ghostty_render_state_image_get(
+                    it,
+                    GHOSTTY_RENDER_STATE_IMAGE_DATA_IMAGE_GENERATION,
+                    (&raw mut generation).cast(),
+                );
+                out.push(crate::image::Placement {
+                    image: u32_of(GHOSTTY_RENDER_STATE_IMAGE_DATA_IMAGE_ID),
+                    generation,
+                    z: i32_of(GHOSTTY_RENDER_STATE_IMAGE_DATA_Z),
+                    col: i32_of(GHOSTTY_RENDER_STATE_IMAGE_DATA_VIEWPORT_COL),
+                    row: i32_of(GHOSTTY_RENDER_STATE_IMAGE_DATA_VIEWPORT_ROW),
+                    cols: u32_of(GHOSTTY_RENDER_STATE_IMAGE_DATA_GRID_COLS),
+                    rows: u32_of(GHOSTTY_RENDER_STATE_IMAGE_DATA_GRID_ROWS),
+                    offset: (
+                        u32_of(GHOSTTY_RENDER_STATE_IMAGE_DATA_CELL_OFFSET_X),
+                        u32_of(GHOSTTY_RENDER_STATE_IMAGE_DATA_CELL_OFFSET_Y),
+                    ),
+                    px: (
+                        u32_of(GHOSTTY_RENDER_STATE_IMAGE_DATA_PIXEL_WIDTH),
+                        u32_of(GHOSTTY_RENDER_STATE_IMAGE_DATA_PIXEL_HEIGHT),
+                    ),
+                    source: (
+                        u32_of(GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_X),
+                        u32_of(GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_Y),
+                        u32_of(GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_WIDTH),
+                        u32_of(GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_HEIGHT),
+                    ),
+                });
+            }
+        }
+        out.sort_by_key(|p| p.z);
+        out
+    }
+
+    fn graphics(&self) -> GhosttyKittyGraphics {
+        self.get::<usize>(GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS)
+            .map_or(null_mut(), |p| p as GhosttyKittyGraphics)
+    }
+
+    /// A copy of image ID's current pixels as RGBA (none: no such image, or its pixels have not all arrived).
+    pub fn image(&self, id: u32) -> Option<crate::image::Pixels> {
+        // SAFETY: the storage and the image are borrowed for this call only; each value has its documented type.
+        unsafe {
+            let img = ghostty_kitty_graphics_image(self.graphics(), id);
+            if img.is_null() {
+                return None;
+            }
+            let (mut w, mut h, mut format) = (0u32, 0u32, 0i32);
+            ghostty_kitty_graphics_image_get(
+                img,
+                GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_WIDTH,
+                (&raw mut w).cast(),
+            );
+            ghostty_kitty_graphics_image_get(
+                img,
+                GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_HEIGHT,
+                (&raw mut h).cast(),
+            );
+            ghostty_kitty_graphics_image_get(
+                img,
+                GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_FORMAT,
+                (&raw mut format).cast(),
+            );
+            let mut s = GhosttyString {
+                ptr: null(),
+                len: 0,
+            };
+            if ghostty_kitty_graphics_image_get(
+                img,
+                GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_PIXELS,
+                (&raw mut s).cast(),
+            ) != GHOSTTY_SUCCESS
+                || s.ptr.is_null()
+            {
+                return None;
+            }
+            let px = std::slice::from_raw_parts(s.ptr, s.len);
+            let n = w as usize * h as usize;
+            let channels = match format {
+                GHOSTTY_KITTY_IMAGE_FORMAT_RGBA => 4,
+                GHOSTTY_KITTY_IMAGE_FORMAT_RGB => 3,
+                GHOSTTY_KITTY_IMAGE_FORMAT_GRAY_ALPHA => 2,
+                GHOSTTY_KITTY_IMAGE_FORMAT_GRAY => 1,
+                _ => return None,
+            };
+            if px.len() != n * channels {
+                return None;
+            }
+            let rgba = crate::image::rgba_from(px, channels)?;
+            Some(crate::image::Pixels { w, h, rgba })
+        }
+    }
+
+    /// Advance the animations to NOW (ms): when the next frame is due (none: nothing plays).
+    pub fn animation_tick(&mut self, now: u64) -> Option<u64> {
+        let mut next: u64 = 0;
+        // SAFETY: a live storage handle and a u64*.
+        (unsafe { ghostty_kitty_graphics_animation_tick(self.graphics(), now, &mut next) }
+            == GHOSTTY_SUCCESS)
+            .then_some(next)
+    }
+
     /// Capture the screen (and OVERSCAN rows above it) into the render state.
     pub fn update(&mut self, overscan: u16) {
         let o = GhosttyRenderStateOverscan {
@@ -926,6 +1179,9 @@ impl Drop for Engine {
             }
             if !self.kenc.is_null() {
                 ghostty_key_encoder_free(self.kenc);
+            }
+            if !self.images.is_null() {
+                ghostty_render_state_image_iterator_free(self.images);
             }
             if !self.cells.is_null() {
                 ghostty_render_state_row_cells_free(self.cells);

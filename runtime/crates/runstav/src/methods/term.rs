@@ -67,6 +67,9 @@ pub struct TermOpen {
     /// Where the editor shows it (`panel`, `editor`): kept for a reattach.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub place: Option<String>,
+    /// A terminal in a remote folder: TRAMP's prefix of it (`/ssh:host:`), kept for a reattach.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
 }
 
 /// `term/open`'s answer.
@@ -132,6 +135,13 @@ pub struct TermFocus {
     pub id: String,
     #[serde(rename = "in")]
     pub focus_in: bool,
+}
+
+/// `term/visible`: whether a window shows the terminal; image animations advance only while one does.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct TermVisible {
+    pub id: String,
+    pub visible: bool,
 }
 
 /// `term/mouse`: KIND `press`, `release` or `motion`, BUTTON 1–11 (0: none), the cell (0-based); sent to the
@@ -279,6 +289,8 @@ pub struct TermStatus {
     pub command: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub place: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
 }
 
 /// `term/detached`: terminals were left running by a session that is gone; a live editor may offer them.
@@ -372,6 +384,7 @@ has_id!(
     TermKey,
     TermText,
     TermFocus,
+    TermVisible,
     TermMouse,
     TermResize,
     TermAttach,
@@ -487,6 +500,12 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_id,
         ),
         method!(
+            "term/visible", TermVisible(TermVisible) -> bool,
+            classes: [User], writes: false,
+            doc: "whether a window shows the terminal: its image animations advance only while one does",
+            check: check_id,
+        ),
+        method!(
             "term/mouse", TermMouse(TermMouse) -> bool,
             classes: [User], writes: false,
             doc: "a mouse press, release or motion at a cell: sent to the program only while it tracks the mouse",
@@ -583,7 +602,7 @@ mod tests {
             .collect();
         assert_eq!(
             methods.len(),
-            16,
+            17,
             "the term/ methods: {:?}",
             methods.iter().map(|m| m.name).collect::<Vec<_>>()
         );

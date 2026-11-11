@@ -4,6 +4,7 @@
 
 use crate::engine::{Effect, Engine};
 use crate::frame::{Clock, Ms, Next};
+use crate::gallery::{Gallery, IMAGE_PROP, Slice};
 use crate::keys;
 use crate::proto::{In, KeyAction, Out};
 use crate::rows::{Key, RowId, Tracker};
@@ -39,6 +40,8 @@ pub struct Opts {
     /// The engine's scrollback in bytes, a ceiling over the lines (`drgnx-term-scrollback-bytes`).
     pub scrollback_bytes: usize,
     pub clipboard_write: bool,
+    /// Where image canvases are written (none: images are kept but not drawn).
+    pub img_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for Opts {
@@ -51,6 +54,7 @@ impl Default for Opts {
             scrollback: 10_000,
             scrollback_bytes: 64 << 20,
             clipboard_write: true,
+            img_dir: None,
         }
     }
 }
@@ -95,6 +99,7 @@ pub struct Worker {
     /// program (`detached-keep`; none: forever).
     alone_since: Option<Ms>,
     keep: Option<Ms>,
+    gallery: Gallery,
 }
 
 impl Worker {
@@ -107,6 +112,8 @@ impl Worker {
             opts.scrollback_bytes,
         )?;
         engine.sink().clipboard_write = opts.clipboard_write;
+        let mut gallery = Gallery::new(opts.img_dir.clone());
+        gallery.apply(&mut engine);
         Ok(Worker {
             engine,
             tracker: Tracker::new(opts.window),
@@ -133,6 +140,7 @@ impl Worker {
             // a new worker waits for its first attach like a detached one
             alone_since: Some(0),
             keep: Some(DETACHED_KEEP_DEFAULT),
+            gallery,
         })
     }
 
@@ -162,9 +170,32 @@ impl Worker {
 
     /// The program's output arrived at NOW.
     pub fn output(&mut self, bytes: &[u8], now: Ms) {
-        self.engine.write(bytes);
+        self.gallery.output(bytes, &mut self.engine);
         self.clock.output(now);
         self.effects(now);
+    }
+
+    /// The image helper's socket: readable when decoded images or canvases are ready (`images`).
+    pub fn images_wake(&self) -> Option<&std::os::unix::net::UnixStream> {
+        self.gallery.wake()
+    }
+
+    /// Whether the loop should read the program's output (not while output waits behind an image's decode).
+    pub fn wants_output(&self) -> bool {
+        self.gallery.wants_output()
+    }
+
+    /// Take the image helper's finished work at NOW (BLOCK: wait for the next result, for tests).
+    pub fn images(&mut self, now: Ms, block: bool) {
+        if self.gallery.collect(&mut self.engine, block) {
+            self.clock.output(now);
+            self.effects(now);
+        }
+    }
+
+    /// Whether the image helper has work out.
+    pub fn images_busy(&self) -> bool {
+        self.gallery.busy()
     }
 
     fn effects(&mut self, now: Ms) {
@@ -229,6 +260,12 @@ impl Worker {
                 self.resync();
             }
             In::Detach => self.detach(now),
+            In::Visible { visible } => {
+                self.gallery.visible = visible;
+                if visible {
+                    self.clock.touch();
+                }
+            }
             In::Env { env_epoch } => {
                 if let Some(a) = &mut self.attach {
                     a.env_epoch = env_epoch;
@@ -415,6 +452,7 @@ impl Worker {
         if version == self.version {
             self.clock.acked();
         }
+        self.gallery.acked(version);
     }
 
     /// The editor lost track (or attached): forget what is in flight, send a reset.
@@ -448,6 +486,28 @@ impl Worker {
             }
             "cursor-style" => {
                 self.engine.set_default_cursor(value.as_str(), None);
+                self.clock.touch();
+            }
+            "image-storage-limit"
+            | "image-file-medium"
+            | "image-max-bytes"
+            | "image-disk-max"
+            | "image-fps"
+            | "remote" => {
+                let s = &mut self.gallery.settings;
+                match (name, value) {
+                    ("image-storage-limit", v) => {
+                        s.storage_limit = v.as_u64().unwrap_or(s.storage_limit)
+                    }
+                    ("image-file-medium", v) => s.file_medium = v.as_bool().unwrap_or(false),
+                    ("image-max-bytes", v) => {
+                        s.max_bytes = v.as_u64().map_or(s.max_bytes, |n| n as usize)
+                    }
+                    ("image-disk-max", v) => s.disk_max = v.as_u64().unwrap_or(s.disk_max),
+                    ("image-fps", v) => s.fps = v.as_f64().filter(|f| *f >= 0.0).unwrap_or(s.fps),
+                    (_, v) => s.remote = v.as_bool().unwrap_or(false),
+                }
+                self.gallery.apply(&mut self.engine);
                 self.clock.touch();
             }
             "enquiry-response" => {
@@ -499,7 +559,24 @@ impl Worker {
                 _ => Next::Idle,
             };
         }
-        self.clock.next(now, self.backfill_due)
+        let next = self.clock.next(now, self.backfill_due);
+        match (next, self.animation_at()) {
+            (Next::Idle, Some(t)) => Next::At(t),
+            (Next::At(a), Some(t)) => Next::At(a.min(t)),
+            (n, _) => n,
+        }
+    }
+
+    /// When the next animation frame is drawn: when the engine says it is due, at most `image-fps` a second, and only
+    /// while a window shows the terminal (none: nothing plays).
+    fn animation_at(&self) -> Option<Ms> {
+        let g = &self.gallery;
+        if !g.visible || g.settings.fps <= 0.0 {
+            return None;
+        }
+        let due = g.animation_due?;
+        let gap = (1000.0 / g.settings.fps) as Ms;
+        Some(g.animation_last.map_or(due, |l| due.max(l + gap)))
     }
 
     /// When the program ends for want of an editor (none: it does not).
@@ -521,6 +598,9 @@ impl Worker {
             self.alone_since = None;
             self.closing = Some(libc::SIGHUP);
             return Next::Idle;
+        }
+        if self.animation_at().is_some_and(|t| now >= t) && !self.clock.in_flight() {
+            self.clock.touch();
         }
         match self.next(now) {
             Next::Frame => self.frame(now),
@@ -552,8 +632,12 @@ impl Worker {
         });
     }
 
-    fn build(&mut self, key: &str, cells: &[Cell]) -> Row {
-        let built = build(key, cells, self.engine.size().2.0, &mut self.styles);
+    /// Row KEY from CELLS, its image SLICES riding on the cells they cover (the row padded to them), for the next
+    /// patch.
+    fn build(&mut self, key: &str, cells: &[Cell], slices: &[Slice]) -> Row {
+        let mut built = build(key, cells, self.engine.size().2.0, &mut self.styles);
+        with_slices(&mut built, slices);
+        self.gallery.note(&built.row, slices, self.version + 1);
         self.sent
             .insert(key.to_owned(), (built.row.clone(), built.cols));
         built.row
@@ -567,27 +651,60 @@ impl Worker {
         }
         // a screen's height above it too: the rows that just scrolled off, still readable
         let rows_n = self.engine.size().1;
+        if self.gallery.visible {
+            self.gallery.animation_due = self.engine.animation_tick(now);
+            self.gallery.animation_last = Some(now);
+        }
         self.engine.update(rows_n);
         let alt = self.engine.alt_screen();
         let reset = self.reset_due || alt != self.alt;
+        let slices = self.gallery.slices(&mut self.engine, rows_n as i32);
         let mut screen: Vec<(RowId, bool)> = Vec::new();
         let mut cells: HashMap<RowId, Vec<Cell>> = HashMap::new();
+        let mut ys: HashMap<RowId, i32> = HashMap::new();
         {
             let tracker = &self.tracker;
-            let was = |id: &RowId| tracker.screen().iter().any(|(s, _)| s == id);
+            let gallery = &self.gallery;
+            let key_of = |id: &RowId| {
+                tracker
+                    .screen()
+                    .iter()
+                    .find(|(s, _)| s == id)
+                    .map(|(_, k)| k)
+            };
+            // a row whose images changed is read again, though its cells did not change
+            let images_changed = |id: &RowId, y: i32| {
+                key_of(id).is_some_and(|k| {
+                    gallery.sent(k) != slices.get(&y).map_or(&[][..], |v| v.as_slice())
+                })
+            };
             self.engine.rows(|id, dirty, y, r| {
+                ys.insert(id, y);
                 if y < 0 {
-                    if !reset && was(&id) {
+                    if !reset && key_of(&id).is_some() {
                         cells.insert(id, r.cells());
                     }
                     return;
                 }
+                let dirty = dirty || images_changed(&id, y);
                 screen.push((id, dirty));
-                if reset || dirty || !was(&id) {
+                if reset || dirty || key_of(&id).is_none() {
                     cells.insert(id, r.cells());
                 }
             });
         }
+        for (id, y) in &ys {
+            if let Some(s) = slices.get(y) {
+                self.gallery.seen(*id, s);
+            }
+        }
+        let none: Vec<Slice> = Vec::new();
+        let slices_of = |id: &RowId| {
+            ys.get(id)
+                .and_then(|y| slices.get(y))
+                .unwrap_or(&none)
+                .clone()
+        };
         let plan = if reset {
             None
         } else {
@@ -598,13 +715,14 @@ impl Worker {
             None => {
                 self.styles.clear();
                 self.sent.clear();
+                self.gallery.reset(self.version + 1);
                 let ids: Vec<RowId> = screen.iter().map(|(id, _)| *id).collect();
                 let keyed = self.tracker.reset(&ids);
                 let rows: Vec<Row> = keyed
                     .iter()
                     .map(|(id, k)| {
                         let c = cells.remove(id).unwrap_or_default();
-                        self.build(k, &c)
+                        self.build(k, &c, &slices_of(id))
                     })
                     .collect();
                 ops.push(Op::Reset(rows));
@@ -615,6 +733,7 @@ impl Worker {
                 for k in &plan.remove {
                     self.sent.remove(k);
                 }
+                self.gallery.gone(&plan.remove, self.version + 1);
                 if !plan.remove.is_empty() {
                     ops.push(Op::Remove(plan.remove.clone()));
                 }
@@ -626,7 +745,7 @@ impl Worker {
                     match cells.remove(id) {
                         Some(c) => {
                             let before = self.sent.get(k).map(|(r, _)| r.clone());
-                            let row = self.build(k, &c);
+                            let row = self.build(k, &c, &slices_of(id));
                             if before.as_ref() != Some(&row) {
                                 changed.push(row);
                             }
@@ -637,11 +756,15 @@ impl Worker {
                 for (id, k) in &plan.replace {
                     let Some(c) = cells.remove(id) else { continue };
                     let before = self.sent.get(k).map(|(r, _)| r.clone());
-                    let row = self.build(k, &c);
+                    let row = self.build(k, &c, &slices_of(id));
                     if before.as_ref() != Some(&row) {
                         changed.push(row);
                     }
                 }
+                // over image-disk-max: rows above the screen show an evicted file's alt
+                let on: std::collections::HashSet<String> =
+                    slices.values().flatten().map(|s| s.file.clone()).collect();
+                changed.extend(self.gallery.evict(&on));
                 if !changed.is_empty() {
                     ops.push(Op::Replace(changed));
                 }
@@ -650,7 +773,7 @@ impl Worker {
                         .iter()
                         .map(|(id, k)| {
                             let c = cells.remove(id).unwrap_or_default();
-                            self.build(k, &c)
+                            self.build(k, &c, &slices_of(id))
                         })
                         .collect();
                     ops.push(Op::Insert {
@@ -660,6 +783,7 @@ impl Worker {
                 }
                 let mut gone = self.tracker.take_trimmed();
                 gone.extend(self.tracker.forget(&stale));
+                self.gallery.gone(&gone, self.version + 1);
                 if !gone.is_empty() {
                     ops.push(Op::Remove(gone));
                 }
@@ -781,7 +905,11 @@ impl Worker {
         let mut chunk: Vec<(RowId, Row)> = Vec::new();
         let px = self.engine.size().2.0;
         for (id, cells) in read.iter().rev() {
-            let row = build("", cells, px, &mut self.styles).row;
+            // a row that scrolled past unseen gets the images it was last drawn with (their alt if a file went)
+            let slices = self.gallery.seen_slices(id);
+            let mut built = build("", cells, px, &mut self.styles);
+            with_slices(&mut built, &slices);
+            let row = built.row;
             let n = serde_json::to_vec(&row).map_or(0, |v| v.len()) + 16;
             if !chunk.is_empty() && bytes + n > max_bytes {
                 break;
@@ -796,8 +924,10 @@ impl Worker {
         let rows: Vec<Row> = chunk
             .into_iter()
             .zip(keyed)
-            .map(|((_, mut row), (_, key))| {
+            .map(|((id, mut row), (_, key))| {
                 row.key = key;
+                let slices = self.gallery.seen_slices(&id);
+                self.gallery.note(&row, &slices, self.version + 1);
                 row
             })
             .collect();
@@ -807,6 +937,7 @@ impl Worker {
             rows,
         }];
         let gone = self.tracker.take_trimmed();
+        self.gallery.gone(&gone, self.version + 1);
         if !gone.is_empty() {
             ops.push(Op::Remove(gone));
         }
@@ -970,6 +1101,29 @@ const MODEL_MATCHES_MAX: usize = 20_000;
 
 /// Find's model from a search's MATCHES: a `list` scheme whose list `matches` holds, in their order, those in rows the
 /// editor holds (id `KEY:COL`, fields `key`, `col`, `len`), as one reset op; and how many it holds.
+/// BUILT with its image SLICES riding on the cells they cover, the row padded to them.
+fn with_slices(built: &mut crate::style::Built, slices: &[Slice]) {
+    if let Some(need) = slices.iter().map(|s| s.col1 as usize).max()
+        && built.cols.len() < need
+    {
+        let mut pos = built.row.text.chars().count() as u32;
+        while built.cols.len() < need {
+            built.cols.push(pos);
+            built.row.text.push(' ');
+            pos += 1;
+        }
+    }
+    let len = built.row.text.chars().count() as u32;
+    for s in slices {
+        let start = built.cols[s.col0 as usize];
+        let end = built.cols.get(s.col1 as usize).copied().unwrap_or(len);
+        built
+            .row
+            .props
+            .push((start, end, IMAGE_PROP.to_owned(), s.value()));
+    }
+}
+
 fn matches_model(matches: &[(Option<Key>, u32, u32)]) -> (serde_json::Value, usize) {
     let (mut nodes, mut ids) = (Vec::new(), Vec::new());
     for (key, col, len) in matches {

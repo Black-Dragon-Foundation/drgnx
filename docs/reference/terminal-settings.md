@@ -12,6 +12,7 @@ A change reaches every open terminal.
 |---|---|---|
 \| `scrollback-limit` \| `drgnx-term-scrollback-bytes` \| The most bytes of scrollback a terminal remembers (Find in Terminal and copy reach that far), whatever `drgnx-term-scrollback-lines' keeps in its buffer (the rows in the buffer: `drgnx-term-scrollback-lines') \|
 \| `cursor-style` \| `drgnx-term-cursor-style` \| The cursor a terminal shows until its program chooses one: "block", "block_hollow", "bar" or "underline". A change applies to every terminal at once (a program's own choice is reset) \|
+\| `image-storage-limit` \| `drgnx-term-image-storage-limit` \| Bytes of decoded images a terminal keeps (kitty, sixel and iTerm2 images alike; Ghostty's `image-storage-limit'); the oldest unplaced images go first \|
 \| `enquiry-response` \| `drgnx-term-enquiry-response` \| What a terminal answers a program that sends ENQ (0x05); empty: nothing \|
 \| `desktop-notifications` \| `drgnx-term-desktop-notifications` \| Whether a program's notification (OSC 9, OSC 777) becomes a drgnx notice \|
 \| `title-report` \| `drgnx-term-title-report` \| Whether a program may read a terminal's title back (CSI 21 t) \|
@@ -141,7 +142,6 @@ A terminal's colours are faces, so the theme sets them; no setting holds a colou
 
 | Ghostty option | Why |
 |---|---|
-\| `image-storage-limit` \| images are not shown in this release: the engine keeps none \|
 \| `osc-color-report-format` \| libghostty-vt 1.0 has no switch for it: the engine's own behaviour applies \|
 \| `vt-kam-allowed` \| libghostty-vt 1.0 has no switch for it: the engine's own behaviour applies \|
 \| `linux-cgroup` \| under a user systemd every terminal runs in a scope of its own, which keeps it running across a hub restart: drgnx never starts one without it \|

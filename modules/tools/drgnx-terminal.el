@@ -14,6 +14,7 @@
 (require 'server)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-notice)
 (defvar eshell-buffer-name)
 (declare-function drgnx-explorer-node-at "drgnx-explorer")
 (declare-function drgnx-term-start "drgnx-term")
@@ -73,6 +74,10 @@ module is off."
                        default-directory))))
     (if (and (fboundp 'drgnx-term-usable-p) (drgnx-term-usable-p dir))
         (drgnx-term-start dir)
+      (when (and (fboundp 'drgnx-term-usable-p) (file-remote-p dir) (not (eq system-type 'windows-nt)))
+        (drgnx-notify 'terminal 'info (format "No terminal reaches %s folders: eshell instead"
+                                              (file-remote-p dir 'method))
+                      :id 'terminal-remote-method))
       (drgnx-terminal-new-eshell dir))))
 
 (defun drgnx-terminal-toggle ()

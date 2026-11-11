@@ -1489,7 +1489,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/applied` | user | `{applied?: [string], change: natnum, inverse?: [{byte_end?: natnum, byte_start?: natnum, col: natnum, end_col: natnum, end_line: natnum, id: string, line: natnum, new: string, old: string}], not_open?: boolean, path: string, saved?: boolean, skipped?: [{id: string, why: string}], tick?: natnum}` | `boolean` | no |
 | `search/apply` | user | `{change: natnum, open?: [string], view: string}` | `boolean` | yes |
 | `search/buffer` | user | `{large?: boolean, path: AbsPath, text?: string, tick?: natnum, view: string}` | `boolean` | no |
-| `search/edits` | user | `{edits?: [{col: natnum, end_col: natnum, end_line?: natnum, line: natnum, new: string, old: string, path: AbsPath}], ids?: [string], off?: [string], replace?: string, root?: AbsPath, view: string}` | `{change: natnum, files: [FileEdits], skipped: [EditSkip]}` | no |
+| `search/edit-doc` | user | `{context?: natnum, max?: natnum, view: string}` | `{lines: [EditLine], over?: boolean, skipped?: [EditSkip], total: natnum}` | no |
+| `search/edits` | user | `{edits?: [{col: natnum, end_col: natnum, end_line?: natnum, line: natnum, new: string, old: string, path: AbsPath}], ids?: [string], lines?: [{eol?: boolean, line: natnum, line_id: string, new?: [string], old: string, path: AbsPath}], off?: [string], replace?: string, root?: AbsPath, view: string}` | `{change: natnum, files: [FileEdits], skipped: [EditSkip]}` | no |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
 | `search/files` | user | `{ignore?: "index" \| "real", n?: natnum, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
 | `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
@@ -1535,7 +1536,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `term/key` | user | `{action?: "press" \| "repeat" \| "release", id: string, key: string, mods?: [string], text?: string, unshifted?: natnum}` | `boolean` | no |
 | `term/list` | user | `{}` | `[TermStatus]` | no |
 | `term/mouse` | user | `{button?: integer, col: natnum, id: string, kind: string, mods?: [string], row: natnum}` | `boolean` | no |
-| `term/open` | user | `{cell_px?: [natnum, natnum], class: string, cols: natnum, command?: [string], config?: [[string, SettingValue]], dir: string, env?: [[string, string]], memory_max?: string, place?: string, rows: natnum, tasks_max?: string, window?: natnum}` | `{id: string, view: string}` | no |
+| `term/open` | user | `{cell_px?: [natnum, natnum], class: string, cols: natnum, command?: [string], config?: [[string, SettingValue]], dir: string, env?: [[string, string]], memory_max?: string, place?: string, remote?: string, rows: natnum, tasks_max?: string, window?: natnum}` | `{id: string, view: string}` | no |
 | `term/paste` | user | `{id: string, text: string}` | `boolean` | no |
 | `term/resize` | user | `{cell_px: [natnum, natnum], cols: natnum, id: string, rows: natnum}` | `boolean` | no |
 | `term/scroll` | user | `{delta?: integer, from?: string, id: string, prompt_delta?: integer, to?: string}` | `{key?: string}` | no |
@@ -1543,6 +1544,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `term/session-end` | user | `{keep?: [string]}` | `natnum` | no |
 | `term/text` | user | `{id: string, text: string}` | `boolean` | no |
 | `term/text-range` | user | `{from_key?: string, id: string, to_key?: string}` | `{text: string}` | no |
+| `term/visible` | user | `{id: string, visible: boolean}` | `boolean` | no |
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
 | `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `view/close` | user | `{view: string}` | `boolean` | no |
@@ -2506,12 +2508,23 @@ Replace This, Undo Replace and Symbol mode's rename go through it, so a write ne
   columns, checks its old text, and gives both ranges, character and byte. Skipped with why: an overlapping match (the
   first stays), a file changed since the search (size, mtime, inode, xxh3 of its snapshot), a buffer edited since,
   binary (NUL in the first 8 KiB), not UTF-8, over 16 MiB, open in chunks, gone. The answer `{change, files: [{path,
-  source: disk|buffer, edits}], skipped}` names a change set the hub keeps (the last 20 per hub).
+  source: disk|buffer, edits}], skipped}` names a change set the hub keeps (the last 20 per hub). With `lines` (an Edit
+  Results buffer's changed lines, `{line_id, path, line, old, new?, eol?}`) the edits are those lines: `old` (one line,
+  or several once a save split it) replaced by `new` joined with newlines, or with no `new` deleted with its newline
+  (`eol` false, the file's last line: emptied); each is checked by its old text where it was ("its text changed"), not
+  by the run's snapshot, so a buffer saved before keeps working; the change set's origin is `edit-results`.
+- `search/edit-doc {view, context?, max?}` is the Edit Results document: each source line of the run's matches once
+  (`{line_id: "l:K", path, line, text, kind: match|context, eol}`), `context` lines (0 to 3) around each match line,
+  by file and line; past `max` lines (default 20,000; counted from the match lines first, so a huge search reads no
+  file) it gives no lines and `over`, with `total`. A file that could not be written is left out with why, as
+  `search/edits` would skip it.
 - `search/preview {view, path, off?, replace?}` is one file's part of the same edit set as a diff (the preview tile):
-  the unified diff (3 lines of context; `similar`), its lines added and removed, the hunks (`old_start`, `old_lines`,
+  the unified diff (1 line of context, so nearby changes in different definitions are hunks of their own; `similar`),
+  its lines added and removed, the hunks (`old_start`, `old_lines`,
   `new_start`, `new_lines`, the ids of the matches in each) and, for a regexp search, each match's groups (at most 8,
-  200 characters each, `null` for a group that matched nothing: the groups line), and what is skipped, with why. It
-  reads the file and keeps nothing.
+  200 characters each, `null` for a group that matched nothing: the groups line), each hunk's `label` (the head of the
+  definition its first match is in: its first line up to its name, `defvar drgnx-gateway--pending`, `pub fn queue`) and `kept` (the old file's lines of
+  the unticked matches inside it), and what is skipped, with why. It reads the file and keeps nothing.
 - `search/apply {view, change, open}` writes it (false when the change set is unknown or written already) and answers at
   once; the writes run in the background, a file at a time, each in its turn of the pair door's queue for that file
   (`pair/door.rs`, a user turn: an agent's write to the same file waits, and the search waits for one in flight). A

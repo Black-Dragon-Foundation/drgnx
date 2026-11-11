@@ -78,6 +78,7 @@ pub async fn serve(t: &Terms, conn: u64, p: Params) -> Result<Value, Error> {
                 },
                 config: p.config.into_iter().map(|(k, v)| (k, v.into())).collect(),
                 place: p.place,
+                remote: p.remote,
             };
             let rec = t
                 .spawn(conn, t.session_of(conn), spawn)
@@ -113,6 +114,7 @@ pub async fn serve(t: &Terms, conn: u64, p: Params) -> Result<Value, Error> {
         Params::TermText(p) => tell(t, &p.id, In::Text { text: p.text }),
         Params::TermPaste(p) => tell(t, &p.id, In::Paste { text: p.text }),
         Params::TermFocus(p) => tell(t, &p.id, In::Focus { gained: p.focus_in }),
+        Params::TermVisible(p) => tell(t, &p.id, In::Visible { visible: p.visible }),
         Params::TermMouse(p) => tell(
             t,
             &p.id,
@@ -186,6 +188,7 @@ pub async fn serve(t: &Terms, conn: u64, p: Params) -> Result<Value, Error> {
                     detached_at: s.detached_at,
                     command: s.command,
                     place: s.place,
+                    remote: s.remote,
                 })
                 .collect();
             Ok(json!(list))

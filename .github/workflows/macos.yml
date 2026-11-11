@@ -12,6 +12,11 @@ on:
   schedule:
     - cron: "23 4 * * 3"
   workflow_dispatch:
+    inputs:
+      only:
+        description: "Narrowed: launch-agent runs only the launch agent's job (empty: the real install and the tiers)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -31,7 +36,7 @@ jobs:
   # gate and jobs)
   changes:
     name: What the change can affect
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && !inputs.only
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -62,7 +67,7 @@ jobs:
   tiers:
     name: Tiers
     needs: changes
-    if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.tiers != '') }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && !inputs.only && (needs.changes.result != 'success' || needs.changes.outputs.tiers != '') }}
     permissions:
       contents: read
       packages: read
@@ -77,7 +82,7 @@ jobs:
 
   install:
     name: Real install (macOS 27)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.only)
     runs-on: xcode-27
     timeout-minutes: 180
     steps:
@@ -102,12 +107,31 @@ jobs:
       - name: drgnx open --check (a headless start)
         run: drgnx open --check
 
+  # drgnx's daemon launch agent on a real launchd: install, start, refresh, both restarts, stop
+  # (.github/ci/macos-launch-agent.sh). On demand only (`only: launch-agent`), one macOS slot.
+  launch-agent:
+    name: Launch agent (macOS 27)
+    if: github.event_name == 'workflow_dispatch' && contains(format(' {0} ', inputs.only), ' launch-agent ')
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Nidhogg 31.1 (writes DRGNX_EMACS to the environment)
+        env:
+          NIDHOGG_DOWNLOADS: ${{ runner.temp }}/nidhogg-downloads
+        run: /bin/bash test/container/nidhogg.sh macos
+      - name: the launch agent on launchd
+        run: /bin/bash .github/ci/macos-launch-agent.sh
+
   # The one check branch protection requires of this workflow: the push jobs (tiers) succeeded, or were skipped because
   # the change cannot affect them. It always runs, and a failed, cancelled or other skipped job fails it; the weekly
   # run has no tiers job and no gate (docs/develop/ci.md, "Gates").
   gate:
     name: macOS gate
-    if: ${{ always() && github.event_name != 'schedule' }}
+    if: ${{ always() && github.event_name != 'schedule' && !inputs.only }}
     needs: [changes, tiers]
     runs-on: ubuntu-24.04
     timeout-minutes: 5

@@ -176,10 +176,11 @@ The editor talks to its terminals through the hub (`runstav/src/methods/term.rs`
 | Method | Params | Answer |
 |---|---|---|
 | `term/open` | `dir`, `command?`, `env` (the program's whole environment, `[[name, value]…]`), `cols`, `rows`, `cell_px?`, `class`, `window?`, `config?`, `memory_max?`, `tasks_max?` (the scope's limits) | `{id, view}`; the view is `term:<id>` and its first patch a reset |
-| `term/config` | `id`, `config: [[name, value]…]` (`scrollback-lines`, `scrollback-bytes`, `clipboard-write`, `cursor-style`, `enquiry-response`, `title-report`, `grapheme-width-method`, `detached-keep`, `colours`) | `true` |
+| `term/config` | `id`, `config: [[name, value]…]` (`scrollback-lines`, `scrollback-bytes`, `clipboard-write`, `cursor-style`, `enquiry-response`, `title-report`, `grapheme-width-method`, `detached-keep`, `colours`, `remote`, `image-storage-limit`, `image-file-medium`, `image-max-bytes`, `image-disk-max`, `image-fps`) | `true` |
 | `term/key` | `id`, `key`, `mods`, `text?`, `unshifted?`, `action?` (`press`, the default, `repeat` or `release`) | `true` |
 | `term/text`, `term/paste` | `id`, `text` | `true` |
 | `term/focus` | `id`, `in` | `true` |
+| `term/visible` | `id`, `visible` (a window shows the terminal) | `true`; animations advance only while one does |
 | `term/mouse` | `id`, `kind`, `button`, `col`, `row`, `mods` | `true` |
 | `term/resize` | `id`, `cols`, `rows`, `cell_px` | `true`; the next patch is a reset |
 | `term/scroll` | `id`, `to: "bottom"`, or `delta` / `prompt_delta` from `from` (a row key; default the cursor's row) | `{key}` of the row to show, or none |
@@ -270,6 +271,127 @@ the protocol versions, orphaned at once and detached after the grace with `term/
 offered, a detached one surviving a hub restart, a clean exit that keeps some), `drgnx-term`'s `tests/running.rs`
 (both ways of telling a program runs; the socket's mode and another uid's connection dropped, the latter as root, as in
 the test container) and `tests/worker.rs` (`detached_keep_ends_a_worker_with_no_client`, on the fake clock).
+
+## Remote terminals
+
+New Terminal in a remote folder (a TRAMP name) runs the user's login shell on that host, in that folder: the PTY, the
+worker and the engine stay local, the terminal's program is one command, and nothing is installed on the host
+(`modules/tools/drgnx-term-remote.el`).
+
+- **The command** (`drgnx-term-remote-command`, pure, from `tramp-dissect-file-name` and `tramp-compute-multi-hops`, so
+  `tramp-default-proxies-alist` counts): for the ssh-like methods (`ssh`, `sshx`, `scp`, `scpx`, `rsync`) `ssh -t [-p
+  PORT] [-l USER] [-J HOP,…] HOST 'exec /bin/sh -c SCRIPT'`, earlier ssh hops as `-J`; a last `sudo`/`doas`/`su` hop on
+  the same host runs there (`sudo -u USER -H --`, `doas -u USER`, `su -l USER -s /bin/sh -c`); a container method as
+  the only hop (`docker`, `podman`, `kubernetes`, `toolbox`, `distrobox`, `flatpak`) its own exec. Any other method
+  (`ftp`, `smb`, `adb`, a local `sudo`, …) gets eshell and a notice naming the method (`drgnx-terminal-new`).
+- **Its own connection, never TRAMP's**: TRAMP's ControlMaster is a child of Emacs (`ControlPersist=no`), so a
+  terminal multiplexed through it would end with Emacs and could not be reattached. The terminal's ssh gets no control
+  options: the user's ssh config decides (a persistent master of the user's own is joined), and a password, OTP or
+  host-key question shows in the terminal. Host-key checking is never weakened.
+- **The script** (`drgnx-term-remote-script`) is POSIX sh whatever the login shell (fish, csh) that parses ssh's
+  command line: it holds no quote, `!`, newline or backslash of its own, and the folder goes as `\0NNN` escapes for
+  `printf %b`, so every byte of a folder's name arrives. It goes to the folder (nothing when it is gone) and becomes the
+  passwd entry's shell, else `$SHELL`, else `/bin/sh`, as a login shell.
+- **Environment** (`drgnx-term--remote-env`): the local terminal's, without the local-only `DRGNX_SERVER_NAME`,
+  `EDITOR`, `VISUAL`, `GIT_EDITOR`; `TERM=xterm-256color` and no `TERMINFO` with `drgnx-term-ssh-terminfo` `fallback`.
+  With `install` the command is `/bin/sh etc/shell/drgnx-ssh-terminfo.sh SCRIPT ARGS…`, in the terminal's PTY: the
+  first time for a host it sends Ghostty's entry to the host's `tic -x -` (both ssh's prompts show in the terminal)
+  and records the outcome in `<state>/terminal-ssh-hosts`, the file the shell integration's `ssh` keeps.
+- **The worker** runs locally in the home folder; `term/open`'s `remote` (TRAMP's prefix, `/ssh:host:`) goes into
+  the registry and `term/list`, so a reattach knows its host.
+- **Folders** (`drgnx-term--remote-cwd`): an OSC 7 `file://HOST/PATH` (or `kitty-shell-cwd://`) sets
+  `default-directory` to the prefix plus PATH, unchecked (no wait on the connection). The first host named is learned
+  as the terminal's own; another host's (an ssh typed inside) is not followed. A bare path is never the host's.
+- **Links**: a `file://` link opens the file on the host through TRAMP, never a local one.
+- **Clipboard**: an OSC 52 write from a remote terminal follows `drgnx-term-remote-clipboard-write` (`ask`, the
+  default: a notice "HOST wants to set the clipboard" whose command, Answer Clipboard Request, offers Allow, Always for
+  HOST (written to `drgnx-term-remote-clipboard-hosts` in your settings) and Deny; the text is never shown). Reads stay
+  refused.
+- **Running program**: the local program is ssh, always running, so only OSC 133 marks say a remote shell is at its
+  prompt; without them a remote terminal counts as running.
+- **Lost connection**: ssh's exit 255 keeps the buffer with "Connection lost (exit 255)" and **Reconnect**
+  (`terminal-reconnect`: the same command in a new terminal in that buffer).
+- **Title**: a remote terminal's buffer, and so its tab, is named after its host (`*terminal: HOST*`, then `HOST:
+  TITLE`).
+
+**Tests:** `test/unit/term-remote-test.el` (the command per method, hops, sudo/doas/su, containers, refused methods;
+the folder through sh, bash, zsh and fish; the environment; `install`'s script; folders, links, the clipboard,
+Reconnect, a reattached remote terminal) and the ssh row, `test/ssh/term-ssh-test.el`, which runs only through
+`test/container/ssh-row.sh`:
+
+```
+DRGNX_TEST_IMAGE=<the line's drgnx-test image> DRGNX_RATATOSKR_BIN=runtime/target/debug/ratatoskr test/container/ssh-row.sh
+```
+
+It builds `drgnx-test-ssh:<hash>` on the test image (`Containerfile.ssh`: sshd, ssh, tcsh, sudo, tic; tagged by a hash
+of that file and the base's image id, so a new base rebuilds it) and runs the batch tier on `test/ssh/`. The first
+test starts sshd on 127.0.0.1:2222 inside the container with keys and users (fish, tcsh, a password user, sudo) made
+there; the terminals' ssh reads a config from the run's folder (a wrapper first on PATH adds `-F`). Rows: fish and
+csh users reach a folder with a quote and a space; a sudo hop reaches root; OSC 7 follows the host, not a foreign
+one; an OSC 52 write asks; a dropped connection shows Reconnect and reconnects; `install` sends the terminfo after two
+password prompts in the terminal; a remote terminal kept at quit is reattached by the next Emacs, the same shell. With
+no image to be had the script exits 75, "image refused", never skipping.
+
+## Images
+
+One image model, kitty's, in the engine: libghostty-vt keeps kitty images and placements, scrolls, clips and deletes
+them, plays their animations and bounds their memory. It knows no other protocol, so the worker folds the other two
+into it (`runtime/crates/drgnx-term/src/image.rs`, `gallery.rs`):
+
+- **Cut out.** `Cutter` reads the program's output for a sixel (`DCS P1;P2;P3 q`, no intermediates: `DCS $ q`
+  DECRQSS and `DCS + q` XTGETTCAP go to the engine untouched) and iTerm2's `OSC 1337 ; File=` (with `MultipartFile`,
+  `FilePart`, `FileEnd`; other `OSC 1337` keys go on), wherever the reads split them. A sequence over
+  `image-max-bytes` is dropped to its end; an escape inside one cuts it short.
+- **Decoded off the worker's thread.** A cut-out sequence goes to one helper thread; the output after it waits in the
+  worker (at most 1 MB, then the loop stops reading the PTY, the kernel's back-pressure) until the helper answers, so
+  the engine sees the bytes in order. Keys, frames and acks go on meanwhile. Sixel is decoded with `icy_sixel` after
+  its size is bounded from the data (repeats, bands and raster attributes counted, nothing allocated); iTerm2 images
+  (PNG, JPEG, GIF) with `image` under its `Limits`, sized as `width`/`height` ask (cells, `px`, `%`, `auto`, the
+  aspect kept unless `preserveAspectRatio=0`); `inline=0` (save a file) is refused. Kitty PNGs are decoded by the
+  engine through `GHOSTTY_SYS_OPT_DECODE_PNG`, the `png` crate. Every decode refuses an image over the **decode cap**
+  (the smaller of `image-storage-limit` and a quarter of the scope's `memory.max`) or with a side over 16,384 px before
+  allocating its pixels; a refused image draws nothing and logs one line, never its bytes.
+- **Re-emitted** as a kitty command, `a=T,f=32` (RGBA, direct, chunked), `C=0` (the cursor moves past the image and
+  scrolls at the bottom row) and `q=2` (the program gets no answer to a command it did not send). After a sixel the
+  worker adds CR LF and CHA back to the column the image started in: xterm's sixel scrolling.
+- **Media.** Direct data always; temporary files (the engine's `tty-graphics-protocol` name rule, in the temp
+  directory) and shared memory on a local terminal; any file only with `image-file-medium`, off by default as in
+  Ghostty. A remote terminal (`remote` in its config) gets direct data only: a program on another host never makes the
+  worker read a local file. A local terminal where you ran `ssh` by hand keeps temporary files and shared memory, as
+  kitty does: a program on that host can make the worker read (and delete) a matching file in the temp directory.
+- **Drawn.** Each frame the worker reads the render state's placements (the screen and a screen's height above it). For
+  each it renders one **canvas**, the placement's cells (`cols × cell_w` by `rows × cell_h` device pixels) with the
+  source rectangle scaled to the placement's size at its cell offset, PNG-encoded on the helper thread from a copy of
+  the pixels, once per (image, generation, geometry, cell size), and written by a rename into `<socket>.img/` beside the
+  worker's socket in the user's term directory (directory `0700`, files `0600`). Until it is written the rows show
+  nothing; a refused canvas shows its alt.
+- **Rows.** A row a placement covers carries a text property `drgnx-term-image` `[FILE X Y W H ALT]` on the cells it
+  covers (the row padded to them; kitty placeholder cells, U+10EEEE, are blank): its rectangle of the canvas, one cell
+  row tall. Where placements overlap, the higher z wins. Lisp (`drgnx-term--draw-images`, from the view's PATCHED)
+  gives those cells `display ((slice X Y W H) IMAGE)`, IMAGE from `create-image FILE 'png nil :scale 1 :ascent 100`,
+  kept per buffer (an LRU of 64, `image-flush` on eviction), so no line grows and the canvas is sharp at any scale (the
+  cell size already counts the frame's scale). Where PNGs cannot be drawn (a text terminal, no PNG support) or FILE is
+  `""`, the first row shows ALT, `[image 640×480]`, in `drgnx-term-image-alt`.
+- **File lifetime.** A file lives while a row the editor holds names it: when the last such row is replaced, trimmed or
+  removed and the editor acked that patch, it goes. Over `image-disk-max` the oldest file no screen row shows goes and
+  the rows above the screen that named it are sent again showing the alt. The directory goes with the worker.
+- **Scrolling.** Rows keep their images after they scroll (a scroll only inserts rows). A row that scrolled past
+  unseen in a flood comes back by the backfill with the slices it was last drawn with (the worker remembers them for
+  the last 4,096 engine rows; a slice whose file went shows its alt); a placement never drawn comes back blank.
+- **Animation.** Each frame calls `ghostty_kitty_graphics_animation_tick`; the next frame is due when it says, at most
+  `image-fps` a second, and only while a window shows the terminal: the editor sends `term/visible` from the same
+  window-change hook as the resize.
+- **Layers.** Emacs draws a slice instead of the cells' text, so an image under the text (`z < 0`) shows as if on top.
+
+The worker's tests (`tests/images.rs`) draw a kitty PNG, a sixel (the text after it in order) and a sized iTerm2 image
+and read the canvases back; DECRQSS still answers and `inline=0` is refused; a remote terminal's temporary file is
+refused and the file medium is off; a canvas goes after the ack that dropped its last row and the directory with the
+worker; over `image-disk-max` a row above the screen shows its alt; an animation's next frame is due only while
+visible; a row that scrolled past unseen comes back by the backfill with its image. The editor's rows (`test/unit/term-test.el`) show
+a sixel's alt in batch Emacs and its slice where PNGs can be drawn, and send `term/visible`. The GUI rows
+(`test/ui/term-gui-test.el`) read the frame's pixels: a sixel two cells by two is red in its first cell row, blue in its
+second, nothing past its cells, the text after it on the next row; and a terminal kept at quit (coloured text and that
+image) is drawn by the next Emacs pixel for pixel as before, the cursor's row aside. `image.rs`'s own tests cut sequences split at every byte, bound sixels before decoding and size iTerm2 images.
 
 ## The editor's side
 

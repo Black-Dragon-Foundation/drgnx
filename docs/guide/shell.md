@@ -15,6 +15,12 @@ terminal's buffer only shows the screen it sends. So:
 - **Scrollback** is the setting `drgnx-term-scrollback-lines` (10,000 rows above the screen). Changing it trims or
   fills every open terminal at once. Scrolling to the top of the buffer fetches the rows it is missing. The terminal
   itself remembers at least 10,000 lines whatever the setting.
+- **In a remote folder** (`/ssh:build-box:/srv/app/`, a multi-hop name, a sudo hop on the host, a docker or podman
+  container), New Terminal runs your login shell on that host, in that folder, over its own ssh connection: your ssh
+  config applies, and a password or host-key question appears in the terminal. `cd` there keeps the buffer's folder on
+  that host, a link to a file opens the remote file, and the tab names the host. If the connection drops, the buffer
+  stays with **Reconnect**. A program there that sets the clipboard asks first (`drgnx-term-remote-clipboard-write`):
+  Allow, Always for that host, or Deny. Folders no terminal reaches (ftp, smb, adb) open eshell, and a notice says so.
 - **The hub can restart under it.** Your shell keeps running; while the hub is away the terminal dims, and what you
   type waits (up to 4 kB) and goes when it is back. The terminal then draws afresh.
 - **Quitting drgnx** asks once when a terminal runs a program (a shell at its prompt does not count): **Keep
@@ -40,6 +46,13 @@ terminal's buffer only shows the screen it sends. So:
 - **Mouse** clicks and the wheel go to the program only while it asks for the mouse; otherwise they select text.
 - **Links** a program prints (OSC 8, `ls --hyperlink`) open on a click: a file in the other window, a URL in the
   browser, on the screen and in the rows scrolled off it alike.
+- **Images** a program shows (`kitten icat`, `chafa`, `img2sixel`, `imgcat`, yazi's previews; the kitty graphics
+  protocol, sixel and iTerm2 inline images) are drawn in the terminal, sharp at any scale, and scroll with the text;
+  kitty animations play while a window shows the terminal (at most `drgnx-term-image-fps` frames a second). In a text
+  terminal, or where Emacs has no PNG support, an image's place says `[image 640×480]`. The settings
+  `drgnx-term-image-storage-limit` (64 MB per terminal; 0 turns images off), `-image-max-bytes`, `-image-disk-max`
+  and `-image-file-medium` bound them. A program in a remote terminal can only send an image's data: it can never make
+  drgnx read a file on your machine; one that saves a file (`inline=0`) is refused.
 - **Programs can copy to the clipboard** (OSC 52, as tmux and neovim over ssh do): the text lands in the kill ring.
   The setting `drgnx-term-clipboard-write` turns that off. Reading the clipboard is always refused.
 - **The shell's directory** (OSC 7) is the buffer's directory, so `C-x C-f` starts where the shell is; the program's
@@ -177,7 +190,9 @@ terminal (a function the line defines there only; `command ssh` skips it) does w
   `xterm-256color` when it did not (no `tic` there, say). Delete the host's line to try again. That first ssh
   connects twice, so you may be asked for a password twice.
 
-The host's name, user and port come from `ssh -G` with your arguments, so `~/.ssh/config` aliases count.
+The host's name, user and port come from `ssh -G` with your arguments, so `~/.ssh/config` aliases count. A terminal
+opened in a remote folder follows the same setting with no shell file on either side (the same record file, the
+password asked in the terminal).
 
 ## The integration is on by default inside the terminal
 

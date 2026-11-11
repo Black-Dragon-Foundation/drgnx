@@ -295,6 +295,8 @@ pub enum SupervisorRule {
     Refusals,
     Unrecorded,
     ManagerContext,
+    /// A workflow task's agent past its rule pack's context share: rotated like a manager.
+    Context,
 }
 
 /// The `supervisor` event: an agent was paused by a rule, with its card.
