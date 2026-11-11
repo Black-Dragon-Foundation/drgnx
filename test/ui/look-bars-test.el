@@ -303,6 +303,33 @@ real press with its item: NH-TITLE-CLICK-1); the .6 tarball predates it."
       (drgnx-topline--off)
       (kill-buffer buf))))
 
+(drgnx-look-gui-deftest drgnx-ui-look-bars/title-row-images-are-whole-pixels ()
+  "The title row's images (the mark, the branch chip, the search box, the window controls) take as many of the frame's
+pixels as the row counts for them, at any scale: at 1.25 a 26 px control is 33 wide, not 32.5 drawn and 32 counted,
+so the row never runs past the frame and its last control never wraps to a second line (the row stays one
+`title-row' high)."
+  (skip-unless (display-graphic-p))
+  (drgnx-uitest-bare-frame)
+  (let ((buf (get-buffer-create "*look-bars-whole*")) (frame (selected-frame)) (was drgnx-face-title-bar))
+    (switch-to-buffer buf)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-face--drawn-wanted-p) (lambda (_f) (eq drgnx-face-title-bar 'drgnx))))
+          (setq drgnx-face-title-bar 'drgnx)
+          (drgnx-face--apply-title frame)
+          (drgnx-topline-setup)
+          (drgnx-test-wait-presented)
+          (let (wrong)
+            (dolist (i (drgnx-topline--line))
+              (let* ((s (nth 2 i)) (known (drgnx-topline--known-px s)))
+                (when (and known (/= known (string-pixel-width s)))
+                  (push (list (car i) :counted known :drawn (string-pixel-width s)) wrong))))
+            (should-not wrong))
+          (should (= (tab-bar-height frame t) (drgnx-px (drgnx-look-density-value 'title-row) frame))))
+      (setq drgnx-face-title-bar was)
+      (cl-letf (((symbol-function 'drgnx-face--drawn-wanted-p) #'ignore)) (drgnx-face--apply-title frame))
+      (drgnx-topline--off)
+      (kill-buffer buf))))
+
 (drgnx-look-gui-deftest drgnx-ui-look-bars/title-row-control-hover-is-a-circle ()
   "Design §4 (`.wctl span:hover'): a real pointer (mutter's virtual one) resting on Close lights a 26 px circle in the
 hover colour: about 26 px across through its middle, and a chord of about 14 px 11 px above it (a square would be 26)."

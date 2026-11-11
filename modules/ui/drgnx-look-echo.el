@@ -85,7 +85,7 @@ once: each graphical frame is swapped for a new one with the same windows, buffe
            (width (min (funcall px drgnx-palette-frame-width)
                        (max (funcall px 100) (- (frame-pixel-width parent) (funcall px 32)))))
            (border (funcall px 8))
-           (ring (funcall px (or (alist-get 'child-frame-border-width (drgnx-palette-frame--look)) 0)))
+           (ring (drgnx-palette-frame-ring parent))
            (pad (* 2 border))
            (line (with-selected-frame box (default-line-height)))
            (h (if (active-minibuffer-window)
