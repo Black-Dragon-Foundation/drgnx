@@ -458,7 +458,8 @@ belongs, rather than write through it. The git dir's `info/attributes` unsets `t
 `working-tree-encoding` for every path, so the slot holds exactly the bytes captured.
 
 `private_copy(paths, dest)` copies the slot for a job that declares `writes_tree`. It clones each file where the
-filesystem can (`CopyKind::Reflink`) and copies it otherwise (`CopyKind::Plain`). Files keep their mode and mtime,
+filesystem can (`CopyKind::Reflink`: `FICLONE` on Linux, APFS `fclonefileat` on a Mac) and copies it otherwise
+(`CopyKind::Plain`). Files keep their mode and mtime,
 links are copied as links, and `dest` must not exist.
 
 `Locks::of(paths)` takes `flock`s on files in the git dir, so they hold across processes and go with a process that
