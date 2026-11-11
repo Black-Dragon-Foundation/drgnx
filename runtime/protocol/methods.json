@@ -12984,6 +12984,14 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
             "type": "string"
           },
+          "JobOs": {
+            "description": "The OS a job needs: `linux` (the default; this machine and Linux runners) or `macos` (a Mac runner's host job: it\nwaits for one and never runs on this machine).",
+            "enum": [
+              "linux",
+              "macos"
+            ],
+            "type": "string"
+          },
           "RowsParam": {
             "additionalProperties": false,
             "description": "`exec/start`'s `rows`: the parser that reads the rows from the job's log, and the rows in listing order.",
@@ -13145,6 +13153,17 @@
               "boolean",
               "null"
             ]
+          },
+          "os": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JobOs"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The OS it needs (default `linux`); a `macos` job needs a Mac runner with its project's Homebrew packages."
           },
           "priority": {
             "description": "The job's priority, 1 (highest) to 5: the user's connections only (a session's request is refused).",
