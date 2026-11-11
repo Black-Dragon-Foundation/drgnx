@@ -1383,7 +1383,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/get` | user | `{id: Id}` | `ExecRow` | no |
 | `exec/list` | user | `{running?: boolean, session?: Id}` | `{jobs?: [ExecRow]}` | no |
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
-| `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, rows?: {listed: [string], parser: string}, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
+| `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, os?: "linux" \| "macos", priority?: natnum, rows?: {listed: [string], parser: string}, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `explorer/subscribe` | user | `{around?: AbsPath, compact?: boolean, exclude?: [string], expanded?: [AbsPath], indent?: natnum, only?: [AbsPath], roots: [AbsPath], view: string, window?: natnum}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
@@ -3587,8 +3587,16 @@ job's log cut mid-stream and reattached equals the runner's file byte for byte.
 One queue holds every job but the user's servers (`runners/queue.rs`), for this machine and the runners alike. The
 job layer (`exec/`) records a job's folder and meta as before, then `Queue::submit`s it: its forseti `JobSpec`, its
 `Placement {machine (auto | local | runner), heavy, keys, local_only, background, writes, priority, send, machines_cell,
-image, weight, visibility, shared_overlay, origin_key, suite, net_hosts}`, its frozen inputs (below) and what to start it
-from (`Pending`). `net_hosts` is what a container job's network grant reaches (its cell over the caps' hosts, as its
+image, weight, visibility, shared_overlay, origin_key, suite, net_hosts, os, features}`, its frozen inputs (below) and what to start it
+from (`Pending`). `os` is the start's `os` (`macos`: a Mac runner's host job, counted heavy, refused for a container
+or `local_only` job); a Mac job's `features` are `xcode-clt` and a `brew:NAME` for each of the project's
+`drgnx-runners-mac-tools`, which the Mac's probe offers by name and at major.minor (`brew:cmake`, `brew:cmake@3.31`),
+and a `tool:PIN` for each of its `drgnx-runners-mac-toolchains` (`tool:rust@1.95`). The registry installs every
+project's pins on a Mac (`Settings::values_everywhere`) with `sleipnir tools` over the runner's ssh, as the runner
+account and outside any job, at `runner add` (before the probe) and at `runner check` (its session closed first, then
+dialled again); a pin that fails is logged, and its jobs wait with "`drgnx runner check` on the Mac installs the
+toolchains".
+`net_hosts` is what a container job's network grant reaches (its cell over the caps' hosts, as its
 proxy here allows them): a runner's `start` frame carries it, and the runner's proxy allows those hosts (it pins no
 name, so `pins` stay empty). `exec/start` lost `check_machine` and the agents' semaphore:
 `machine` names `auto` (the default), `local` or a runner the queue knows (else `invalid-params`); `priority` (1–5) is
@@ -3650,7 +3658,9 @@ Tests: `runners::queue::`, `runners::local::`, `runtime_db::`, `exec::tests::a_q
 
 **Rows** (design §6.9, "Partial results"). A test job whose suite supports row selection carries
 `Placement.suite = Suite {parser, listed}`: the row parser that reads its log (`ert`, `cargo-test`, `plist`), and its
-rows in listing order. Its command holds `{rows}` (`queue::ROWS`) where the selector goes; each attempt's spec
+rows in listing order. A suite whose parser counts rows (`ert`, `cargo-test`) sets the spec's `expect.min_ran` to 1, so a
+run that ran no row (a selector that matched nothing) is `suspect`, never `pass`. Its command holds `{rows}`
+(`queue::ROWS`) where the selector goes; each attempt's spec
 (`attempt_spec`) puts there `forseti::split::selector` of the listed rows that have no result yet
 (`forseti::split::remaining_rows`), all of them on a first attempt, and sets `select` to it. A job with no suite, a
 parser that reads no rows (`exit`), or no `{rows}` in its command (`selects_rows` false) reruns whole, as before. The

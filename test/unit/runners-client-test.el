@@ -35,6 +35,17 @@ client's session keys are empty before and after."
 (defun runners-client-test--texts ()
   (mapcar (lambda (i) (plist-get i :text)) (drgnx-needs-you-items)))
 
+;; pattern D: the Mac onboarding card names each step a person takes on the Mac (a standard account, Remote Login for it
+;; alone, the Command Line Tools and Homebrew in their own account, a way to reach it) and the host to add; no step asks
+;; for sudo or makes the runner an administrator
+(ert-deftest drgnx-runners-client/the-mac-card-names-the-steps ()
+  (dolist (s '("standard account named drgnx-runner" "Remote Login for that account only" "xcode-select --install"
+               "drgnx-runners-mac-tools" "brew install mise" "drgnx-runners-mac-toolchains" "tailscaled"
+               "drgnx-runner@YOUR-MAC"))
+    (should (string-search s drgnx-runners-mac-steps)))
+  (should (string-search "never runs sudo" drgnx-runners-mac-steps))
+  (should-not (string-search "sudo " (replace-regexp-in-string "never runs sudo" "" drgnx-runners-mac-steps))))
+
 (ert-deftest drgnx-runners-client/need-keys-event-never-reads-the-store ()
   "Pattern B: the hub's `runners/need-keys' raises a card saying what to run, and the store is read 0 times and the hub
 is called 0 times: only a command the user runs reads it."
