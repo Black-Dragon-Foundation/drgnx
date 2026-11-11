@@ -750,14 +750,21 @@ jobs:
       - name: room for the runner (its 40 GB floor)
         if: ${{ !cancelled() }}
         run: |
-          keep=$(xcode-select -p); keep=${keep%/Contents/Developer}
+          # the throwaway hosted VM only: anywhere else this step removes nothing and fails
+          if [ "${RUNNER_ENVIRONMENT:-}" != github-hosted ] || [ "${CI:-}" != true ]; then
+            echo "not a GitHub-hosted CI VM: nothing removed"; exit 1
+          fi
+          # the selected Xcode by its true name (Xcode.app is often a link to one of the Xcode_NN.app)
+          keep=$(cd -P "$(xcode-select -p)/../.." && pwd)
           before=$(df -g /Users | awk 'NR == 2 { print $4 }')
           gone() { echo "- removed $1 ($(du -sh "$1" 2>/dev/null | cut -f1))" | tee -a "$MR_OUT/results.md"; sudo rm -rf "$1"; }
           for x in /Applications/Xcode*.app; do
-            if [ -L "$x" ] || [ "$x" = "$keep" ]; then continue; fi
+            if [ -L "$x" ] || [ "$(cd -P "$x" && pwd)" = "$keep" ]; then continue; fi
             gone "$x"
           done
-          if [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME" ]; then gone "$ANDROID_HOME"; fi
+          case "${ANDROID_HOME:-}" in
+            "$HOME"/*) if [ -d "$ANDROID_HOME" ]; then gone "$ANDROID_HOME"; fi ;;
+          esac
           after=$(df -g /Users | awk 'NR == 2 { print $4 }')
           echo "- room for the runner: ${before} GB free, then ${after} GB (kept $keep)" | tee -a "$MR_OUT/results.md"
       # the hub's own registry and queue against the runner account over localhost (design §10's fake Mac runner): add,

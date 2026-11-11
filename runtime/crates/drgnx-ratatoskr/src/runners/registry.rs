@@ -426,13 +426,16 @@ const ROOM_MIB: i64 = 512;
 
 /// What the runner list says of runner NAME when its floor and reserve leave no room for jobs in AVAILABLE_MIB: the
 /// numbers, and the ways out (dedicated, or a smaller reserve while the reserve is above the minimum), each with what it
-/// would leave. None while there is room.
+/// would leave. None while there is room, and for 0 (the runner couldn't read its memory).
 fn no_room(
     name: &str,
     profile: Profile,
     reserve_mib: Option<u64>,
     available_mib: u64,
 ) -> Option<String> {
+    if available_mib == 0 {
+        return None;
+    }
     let l = limits(profile, reserve_mib).ok()?;
     let left =
         |l: &forseti::Limits| available_mib as i64 - l.floor_mib as i64 - l.reserve_user_mib as i64;
@@ -1467,6 +1470,8 @@ mod tests {
         }
         assert_eq!(no_room("mac", Profile::Workstation, None, 16000), None);
         assert_eq!(no_room("mac", Profile::Workstation, Some(1024), 5376), None);
+        // 0 is a runner that couldn't read its memory: nothing is said from a read error
+        assert_eq!(no_room("mac", Profile::Workstation, None, 0), None);
         let d = no_room("box", Profile::Dedicated, None, 1500).unwrap();
         assert!(
             d.contains("2048 MiB") && !d.contains("--reserve-mib"),

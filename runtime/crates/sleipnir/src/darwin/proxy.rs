@@ -6,13 +6,16 @@
 //! The job's profile lets it reach `localhost` on that port only ([`super::sandbox`]), and its proxy variables name
 //! it.
 //!
+//! The profile's `localhost` is both loopbacks, so job-exec holds the port on `::1` as well for the job's life: no
+//! other process can listen there for the job to reach past the allow-list (one that already does refuses the job).
+//!
 //! The port is on the Mac's loopback, which every local process shares: another process of the machine can reach
 //! the allow-listed hosts through it while the job runs, and nothing else (no other host, no address that isn't
 //! public).
 
 use std::fs;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
 use std::os::fd::{FromRawFd, RawFd};
 use std::path::Path;
 use std::sync::Arc;
@@ -23,17 +26,37 @@ use gleipnir::net::proxy::{self, Listener, ProxyEvent, SystemResolver};
 /// The hub's allow-list for the job, in its attempt folder.
 pub const ALLOW: &str = "net.allow";
 
-/// A loopback port for a job's proxy: the listener and its port.
+/// A loopback port for a job's proxy: the listener and its port, one also free on `::1` (where job-exec holds it,
+/// [`take`]).
 pub fn bind() -> io::Result<(TcpListener, u16)> {
-    let l = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
-    let port = l.local_addr()?.port();
-    Ok((l, port))
+    let mut last = None;
+    for _ in 0..16 {
+        let l = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let port = l.local_addr()?.port();
+        match hold_v6(port) {
+            Ok(_) => return Ok((l, port)),
+            Err(e) if e.kind() == io::ErrorKind::AddrInUse => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| io::ErrorKind::AddrInUse.into()))
+}
+
+/// PORT on `::1`, listened on so nobody else can: none on a machine without an IPv6 loopback.
+fn hold_v6(port: u16) -> io::Result<Option<TcpListener>> {
+    match TcpListener::bind((Ipv6Addr::LOCALHOST, port)) {
+        Ok(l) => Ok(Some(l)),
+        Err(e) if e.kind() == io::ErrorKind::AddrNotAvailable => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// A running proxy, on a runtime of its own; dropping it stops it.
 pub struct Proxy {
     _handle: proxy::ProxyHandle,
     _runtime: tokio::runtime::Runtime,
+    /// The port on `::1`, held (never accepted on) while the job runs.
+    _v6: Option<TcpListener>,
 }
 
 /// Job-exec's side: the inherited descriptor FD, made close-on-exec again (the job never gets it), which must be a
@@ -52,9 +75,12 @@ pub fn take(fd: RawFd, port: u16, dir: &Path) -> Result<Proxy, String> {
         Ok(a) => return Err(format!("its socket {fd} is {a}, not {want}")),
         Err(e) => return Err(format!("its socket {fd}: {e}")),
     }
+    let v6 = hold_v6(port).map_err(|e| format!("[::1]:{port}, which the job could reach: {e}"))?;
     let f = dir.join(ALLOW);
     let text = fs::read_to_string(&f).map_err(|e| format!("{}: {e}", f.display()))?;
-    serve(l, crate::net::allow_list(&text)?)
+    let mut p = serve(l, crate::net::allow_list(&text)?)?;
+    p._v6 = v6;
+    Ok(p)
 }
 
 /// Serves the proxy for ALLOW on L, on a thread of its own; refusals are said on stderr (job-exec's log).
@@ -86,6 +112,7 @@ pub fn serve(l: TcpListener, allow: Vec<Target>) -> Result<Proxy, String> {
     Ok(Proxy {
         _handle: handle,
         _runtime: runtime,
+        _v6: None,
     })
 }
 
@@ -152,5 +179,33 @@ mod tests {
         let fd = inherited(&mut port);
         let e = take(fd, port, &d.path().join("none")).err().unwrap();
         assert!(e.contains(ALLOW), "{e}");
+    }
+
+    /// [D] The profile's `localhost` is both loopbacks, so the job's port on `::1` is job-exec's too while the job
+    /// runs: nobody else can listen there for the job to reach. One already taken refuses the job; a Mac without an
+    /// IPv6 loopback has none to hold.
+    #[test]
+    fn the_jobs_port_on_the_ipv6_loopback_is_held_too() {
+        let v6 = |port: u16| TcpListener::bind((Ipv6Addr::LOCALHOST, port));
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join(ALLOW), "example.com:443\n").unwrap();
+        let (l, port) = bind().unwrap();
+        let p = take(l.into_raw_fd(), port, d.path()).unwrap();
+        match v6(port) {
+            Err(e) if e.kind() == io::ErrorKind::AddrNotAvailable => {
+                eprintln!("no IPv6 loopback here: only the refusal below is shown");
+            }
+            other => assert_eq!(
+                other.map(|_| ()).unwrap_err().kind(),
+                io::ErrorKind::AddrInUse
+            ),
+        }
+        drop(p);
+
+        let (l, port) = bind().unwrap();
+        if let Ok(_other) = v6(port) {
+            let e = take(l.into_raw_fd(), port, d.path()).err().unwrap();
+            assert!(e.contains("[::1]"), "{e}");
+        }
     }
 }

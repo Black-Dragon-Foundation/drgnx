@@ -146,7 +146,9 @@ network namespace and no relay sidecar. `launch` checks the list, writes it to t
 descriptor and port in `job.json`'s helper. The port is in the job's profile as its only network (outbound to
 `localhost:<port>`) and in its `HTTP(S)_PROXY` variables, `NO_PROXY` the loopback names. job-exec takes the listener
 only if it is on `127.0.0.1:<port>`, makes it close-on-exec again so the job never holds it, and serves it on a thread
-of its own; a proxy that can't start fails the job `infra: setup`, and a refused request is logged in
+of its own. Seatbelt's `localhost` is both loopbacks, so job-exec also listens on `[::1]:<port>` (never accepting) for
+the job's life: no other process can listen there for the job to reach. `launch` picks a port free on both, and a
+`::1` port taken by then refuses the job; a proxy that can't start fails the job `infra: setup`, and a refused request is logged in
 `job-exec.log`. Binding in `serve` means no other process can take the port between the profile and the proxy. The
 loopback is the whole Mac's: while the job runs, another local process could reach the job's allow-listed hosts
 through the port, and nothing else.
