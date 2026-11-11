@@ -59,6 +59,14 @@ pub struct AddParams {
     /// What the runner's units and containers are named after (default `drgnx-`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<Bounded<String, 32>>,
+    /// A Mac: run as an account other than `drgnx-runner` (`--allow-own-account`). Its home, keychain and privacy (TCC)
+    /// grants are reachable by file permissions; the sandbox still applies to every job.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_own_account: bool,
+    /// A Mac: run as an administrator (`--allow-admin`; Linux takes one without it). The account can gain root through
+    /// sudo with its password, and on a Mac through admin authorisation prompts; the sandbox still applies to every job.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_admin: bool,
 }
 
 /// `runners/probe-host`'s params.

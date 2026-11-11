@@ -135,7 +135,8 @@ impl Platform for LinuxPlatform {
         .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "yes")
     }
 
-    /// podman's caps check (a container's memory, CPU and pid limits take), and `podman` as the feature once they do.
+    /// podman's caps check (a container's memory, CPU and pid limits take), and `podman` as the feature once they do;
+    /// `account:admin` for an administrator's login.
     fn job_runner(&self) -> (Option<String>, Vec<String>) {
         let env: Vec<(std::ffi::OsString, std::ffi::OsString)> = [
             "PATH",
@@ -147,11 +148,15 @@ impl Platform for LinuxPlatform {
         .filter_map(|k| Some((k.into(), std::env::var_os(k)?)))
         .collect();
         let limits = podman::check_limits(Path::new("podman"), &env, run::SYSTEMCTL_LIMIT).err();
-        let features = if limits.is_none() {
+        let mut features = if limits.is_none() {
             vec!["podman".to_string()]
         } else {
             vec![]
         };
+        // an administrator's login is taken as any other; the runner list shows what that exposes
+        if probe::is_admin(&probe::own_groups()) {
+            features.push("account:admin".into());
+        }
         (limits, features)
     }
 

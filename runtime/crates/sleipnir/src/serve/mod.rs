@@ -76,6 +76,9 @@ pub struct Config {
     /// A cloud machine's watchdog folder (`--watchdog DIR`): `serve` writes the hub's heartbeat for it and sends what
     /// it notices (`preempting`, `idle`).
     pub watchdog: Option<PathBuf>,
+    /// What `runner add` allowed beyond a Mac's dedicated standard account (`--allow-own-account`, `--allow-admin`);
+    /// Linux takes an administrator's account without it, and neither ever takes root.
+    pub allow: crate::darwin::probe::Allow,
 }
 
 /// Letters, digits and `-`, not at either end: a prefix and a hub id are parts of unit, slice, container and file
@@ -88,10 +91,12 @@ fn plain(s: &str) -> bool {
 }
 
 impl Config {
-    /// `--root DIR --prefix P --hub-id H --profile dedicated|workstation [--watchdog DIR]`.
+    /// `--root DIR --prefix P --hub-id H --profile dedicated|workstation [--watchdog DIR] [--allow-own-account]
+    /// [--allow-admin]`.
     pub fn parse(args: &[&str]) -> Result<Config, String> {
         let (mut root, mut prefix, mut hub_id, mut profile) = (None, None, None, None);
         let mut watchdog = None;
+        let mut allow = crate::darwin::probe::Allow::default();
         let mut it = args.iter();
         while let Some(a) = it.next() {
             let mut val = || {
@@ -117,6 +122,8 @@ impl Config {
                     }
                     watchdog = Some(d);
                 }
+                "--allow-own-account" => allow.own_account = true,
+                "--allow-admin" => allow.admin = true,
                 other => return Err(format!("unknown option {other}")),
             }
         }
@@ -139,6 +146,7 @@ impl Config {
             profile: profile.ok_or("--profile is needed")?,
             name,
             watchdog,
+            allow,
         })
     }
 
@@ -1907,5 +1915,30 @@ mod net_tests {
         // a helper spec from before the relay still reads, with none
         let old: HelperSpec = serde_json::from_str(r#"{"root":"/r","keys":[]}"#).unwrap();
         assert_eq!((old.net, old.sidecar_argv.len()), (None, 0));
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    /// [D] `--allow-own-account` and `--allow-admin` reach the config (none given: neither allowed).
+    #[test]
+    fn the_allowances_are_parsed() {
+        let base = [
+            "--root",
+            "/r",
+            "--prefix",
+            "p",
+            "--hub-id",
+            "h",
+            "--profile",
+            "dedicated",
+        ];
+        assert_eq!(Config::parse(&base).unwrap().allow, Default::default());
+        let mut args = base.to_vec();
+        args.extend(["--allow-own-account", "--allow-admin"]);
+        let a = Config::parse(&args).unwrap().allow;
+        assert!(a.own_account && a.admin);
     }
 }

@@ -52,6 +52,7 @@ that lacks any item is refused with the whole list, each with its fix:
 
 | Item | Fix shown |
 |---|---|
+| a login other than root (uid 0) | add the runner as an ordinary user |
 | a login not confined as SELinux `user_u` (`user_t`, read from `/proc/self/attr/current`: `linux::confined`) | map the login to another SELinux user (`semanage login -m -s staff_u LOGIN`), or a subuid range plus a local policy module letting `user_t` run `newuidmap` |
 | a systemd user manager | log in, or `loginctl enable-linger` |
 | rootless podman ≥ 5 | install or upgrade podman; connect as an ordinary user |
@@ -94,12 +95,15 @@ containers, no keys. Its probe (`darwin::probe`) reads the machine once into a `
 fixtures on Linux.
 
 **The Mac contract** (`contract`), refused with the whole list: macOS 15 or newer; Apple silicon
-(`hw.optional.arm64`, so a Rosetta shell passes); a root-owned `sandbox-exec`; a standard (non-admin) account; the
+(`hw.optional.arm64`, so a Rosetta shell passes); a root-owned `sandbox-exec`; the standard (non-admin) account `drgnx-runner` (`id -un`, `dseditgroup`): another
+account only with `--allow-own-account`, an administrator only with `--allow-admin` (each refusal names its flag and
+what it exposes), root never; the
 Command Line Tools answering, with a full Xcode's licence accepted (`clang`'s refusal names it, its own item); `mise`
 from Homebrew; 40 GB free on the runner root's volume. **Facts**: `os` `macos 15.6`, `arch` `aarch64`, cores (`hw.ncpu`), memory, disk,
 battery; the Linux-only fields false. **Features**: `arch:aarch64`, `host-jobs`, `xcode-clt`, and `brew:<name>@<major>.<minor>`
-for each Homebrew package at its newest installed version (and `brew:<name>` alone), and `tool:<name>@<version>` for
-each toolchain record under the root. The boot id is `kern.bootsessionuuid`.
+for each Homebrew package at its newest installed version (and `brew:<name>` alone), `tool:<name>@<version>` for
+each toolchain record under the root, and `account:admin` / `account:own` for an account taken by an allowance (the
+runner list shows what it exposes; a Linux runner's `account:admin` is a login in `wheel` or `sudo`). The boot id is `kern.bootsessionuuid`.
 
 **Toolchains** (`darwin::tools`, `sleipnir tools --root DIR PIN...`). The hub runs it at `runner add` and
 `runner check`, as the runner account and outside any job (a job has no network; mise downloads). For each pin
@@ -116,11 +120,14 @@ takes no job from an ssh login (its Background session refuses `launchctl bootst
 which every process of the job inherits: Linux's CPU and IO weights of 20), and writes
 `job-exec.pid` (`<pid> <start time>`, atomically); its own early errors go to `job-exec.log`. The attempt is active
 while that pid has that start time (a reused pid is not), and `kill` is SIGKILL to its process group (job-exec and
-whatever stayed in it); a process that left the group is the watchdog's to find, by session and marker. job-exec
+whatever stayed in it); a process that left the group is the watchdog's to find, by session and marker. However a
+job ends (by itself, its timeout, a kill reason), job-exec kills what is left of it once the result is written: the
+session and the marked processes the watchdog's scan finds, then its own group. job-exec
 runs the command only as `/usr/bin/sandbox-exec -f job.sb …` and refuses anything else (a keyed job, a helper, a
 bare command) as `infra: setup`, so a job never runs unconfined. `job.sb` is Gleipnir's profile of the attempt's
-spec (`darwin::sandbox::spec`): it reads the source, writes the attempt folder (and the source when the job writes its
-tree) and the runner's programs (`<root>/bin`), `HOME` and `TMPDIR` inside the folder, `PATH` the brew shim's folder,
+spec (`darwin::sandbox::spec`): it reads the source and the runner's programs (`<root>/bin`), writes only `HOME` and
+`TMPDIR`, both inside the attempt folder (and the source when the job writes its tree; never the attempt folder
+itself, whose `job-exec.pid`, `kill_reason` and `result.json` are job-exec's), `PATH` the brew shim's folder,
 then Homebrew's and the system's (after its toolchains'), the marker
 `DRGNX_RUNNER_ATTEMPT`, Homebrew read-only (`HOMEBREW_NO_AUTO_UPDATE` and the like; `HOMEBREW_NO_INSTALL_FROM_API`, so formulae load from the
 installed kegs instead of a JSON API fetch, which needs the network and a lock in Homebrew's var; its cache, logs and temporary
@@ -674,10 +681,12 @@ and the value is zeroed when the frame drops.
 
 ```
 sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation [--watchdog DIR]
+               [--allow-own-account] [--allow-admin]
 ```
 
 The runner's end of the hub's control channel. On a cloud machine `--watchdog DIR` names the watchdog's folder ("The
-watchdog"). It lives on stdin and stdout and exits at their end, at `bye`, or
+watchdog"). `--allow-own-account` and `--allow-admin` are what the user allowed at `runner add` (kept in the runner's
+record): the Mac contract reads them; Linux takes an administrator's login without them. It lives on stdin and stdout and exits at their end, at `bye`, or
 after 45 s without a frame (the hub pings every 10 s, and so does `serve`). Nothing is installed or enabled: between
 connections the runner has its folder and, with linger, the attempts still running in their own units. It is blocking
 and threaded (one thread reads frames, the main loop handles them and ticks every 100 ms); no async runtime.

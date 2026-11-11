@@ -152,6 +152,12 @@ pub struct Record {
     /// The image its health check's canary and its bench ran in, by digest.
     #[serde(default)]
     pub image: Option<String>,
+    /// What the user allowed at `add` beyond a Mac's dedicated standard account (`--allow-own-account`,
+    /// `--allow-admin`); `serve` gets them at every start.
+    #[serde(default)]
+    pub allow_own_account: bool,
+    #[serde(default)]
+    pub allow_admin: bool,
 }
 
 /// Where the records are kept.
@@ -377,6 +383,17 @@ fn profile_word(p: Profile) -> &'static str {
     }
 }
 
+/// `serve`'s flags for what the user allowed of RECORD's account.
+fn allow_flags(r: &Record) -> Vec<&'static str> {
+    [
+        (r.allow_own_account, "--allow-own-account"),
+        (r.allow_admin, "--allow-admin"),
+    ]
+    .into_iter()
+    .filter_map(|(on, flag)| on.then_some(flag))
+    .collect()
+}
+
 /// What `serve`'s `hello-ok` and `probe-result` said.
 struct Probe {
     boot_id: String,
@@ -426,6 +443,9 @@ impl Registry {
             "--profile".into(),
             profile_word(r.profile).into(),
         ];
+        c.remote
+            .control
+            .extend(allow_flags(r).into_iter().map(String::from));
         // the sync channels are Task 20's; until then they hold the sessions open and carry nothing
         c.remote.bulk_in = vec!["cat".into()];
         c.remote.bulk_out = vec!["cat".into()];
@@ -621,7 +641,7 @@ impl Registry {
             proxy: effective.proxy,
         };
         let _g = self.busy.lock().await;
-        let staged = self.stage(&name, host, None, None).await;
+        let staged = self.stage(&name, host, None, None, false, false).await;
         self.cfg.transport.stop(&name).await;
         let (rec, probe) = staged?;
         let _ = rec;
@@ -640,13 +660,16 @@ impl Registry {
     }
 
     /// The host's architecture and home, the bundle copied into `<root>/bin/<version>/`, and `serve`'s probe of it:
-    /// a record with the facts filled in and no user choices (trust, profile) beyond the defaults.
+    /// a record with the facts filled in and no user choices (trust, profile) beyond the defaults and what the user
+    /// allowed of the account (OWN_ACCOUNT, ADMIN: `serve`'s contract reads them).
     async fn stage(
         &self,
         name: &str,
         host: &str,
         root: Option<&str>,
         prefix: Option<&str>,
+        own_account: bool,
+        admin: bool,
     ) -> Result<(Record, Probe), RegError> {
         let cfg = self.base_cfg(name, host);
         cfg.check().map_err(refused)?;
@@ -756,6 +779,8 @@ impl Registry {
             speed: None,
             checked: None,
             image: None,
+            allow_own_account: own_account,
+            allow_admin: admin,
         };
         let probe = self.probe_serve(&rec).await?;
         rec.linger = probe.linger;
@@ -822,6 +847,8 @@ impl Registry {
                 &host,
                 p.root.as_ref().map(|r| r.as_str()),
                 p.prefix.as_ref().map(|r| r.as_str()),
+                p.allow_own_account,
+                p.allow_admin,
             )
             .await;
         let (mut rec, probe) = match staged {
@@ -1269,6 +1296,22 @@ mod tests {
         for want in ["cgroup v2", "enable delegation", "git", "install git"] {
             assert!(t.contains(want), "{want}: {t}");
         }
+    }
+
+    // [D] pure: a record kept before the allowances existed has none; each allowance becomes its `serve` flag
+    #[test]
+    fn the_accounts_allowances_reach_serve() {
+        let mut r: Record = serde_json::from_value(serde_json::json!({
+            "name": "m", "host": "h", "trust": "mine", "profile": "dedicated", "accept": "all", "root": "/r",
+            "prefix": "drgnx-", "bundle": "b", "arch": "aarch64", "os": "macos 15.6", "cores": 10, "mem_mib": 1,
+            "disk_free_gb": 1, "podman": "", "linger": true, "landlock_abi": 0
+        }))
+        .unwrap();
+        assert!(allow_flags(&r).is_empty());
+        r.allow_admin = true;
+        assert_eq!(allow_flags(&r), ["--allow-admin"]);
+        r.allow_own_account = true;
+        assert_eq!(allow_flags(&r), ["--allow-own-account", "--allow-admin"]);
     }
 
     // [D] pure

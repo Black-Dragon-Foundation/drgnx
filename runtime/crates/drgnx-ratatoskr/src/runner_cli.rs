@@ -4,7 +4,7 @@
 //! ```text
 //! runner list [--json]
 //! runner add HOST --trust mine|my-cloud|shared [--name N] [--profile dedicated|workstation]
-//!                 [--accept all|heavy] [--root DIR] [--prefix P]
+//!                 [--accept all|heavy] [--root DIR] [--prefix P] [--allow-own-account] [--allow-admin]
 //! runner check NAME | bench NAME | unbench NAME
 //! runner trust NAME mine|my-cloud|shared
 //! runner remove NAME [--yes]
@@ -118,9 +118,20 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
     let mut words: Vec<String> = Vec::new();
     let mut opts: Vec<(&'static str, String)> = Vec::new();
     let (mut json_out, mut yes) = (false, false);
+    // `add`'s allowances: a Mac account other than drgnx-runner, an administrator's account
+    let mut allowed: Vec<&'static str> = Vec::new();
     let known: &[&'static str] = match sub.as_str() {
         "list" => &["json"],
-        "add" => &["trust", "name", "profile", "accept", "root", "prefix"],
+        "add" => &[
+            "trust",
+            "name",
+            "profile",
+            "accept",
+            "root",
+            "prefix",
+            "allow-own-account",
+            "allow-admin",
+        ],
         "remove" => &["yes"],
         "audit" => &["key", "job"],
         "cloud" => &["hub", "regions", "sizes", "project", "member", "yes"],
@@ -132,8 +143,12 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
             Word(v) => words.push(v.string().map_err(e)?),
             Long("json") if known.contains(&"json") => json_out = true,
             Long("yes") if known.contains(&"yes") => yes = true,
+            Long("allow-own-account") if known.contains(&"allow-own-account") => {
+                allowed.push("allow_own_account")
+            }
+            Long("allow-admin") if known.contains(&"allow-admin") => allowed.push("allow_admin"),
             Long(name) => match known.iter().find(|k| **k == name) {
-                Some(k) if *k != "json" && *k != "yes" => {
+                Some(k) if !matches!(*k, "json" | "yes" | "allow-own-account" | "allow-admin") => {
                     opts.push((k, p.value().map_err(e)?.string().map_err(e)?))
                 }
                 _ => return Err(format!("runner {sub}: unknown option --{name}")),
@@ -161,7 +176,8 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
         "add" => {
             want(
                 1,
-                "add HOST --trust mine|my-cloud|shared [--name N] [--profile P] [--accept A] [--root DIR] [--prefix P]",
+                "add HOST --trust mine|my-cloud|shared [--name N] [--profile P] [--accept A] [--root DIR] [--prefix P] \
+                 [--allow-own-account] [--allow-admin]",
             )?;
             let trust = opt("trust").ok_or("runner add needs --trust mine|my-cloud|shared")?;
             let mut params = json!({"host": words[0], "trust": one_of("--trust", trust, &TRUSTS)?});
@@ -178,6 +194,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
                 if let Some(v) = opt(k) {
                     params[k] = json!(v);
                 }
+            }
+            for k in &allowed {
+                params[*k] = json!(true);
             }
             Ok(RunnerCommand::Call {
                 method: "runners/add",
@@ -507,6 +526,21 @@ mod tests {
             Ok(RunnerCommand::Call {
                 method: "runners/add",
                 params: json!({"host": "desk", "trust": "mine", "profile": "workstation", "root": "/srv/r"}),
+            })
+        );
+        // a Mac in another account, or an administrator's: each allowance is its own flag
+        assert_eq!(
+            p(&[
+                "add",
+                "me@mac",
+                "--trust",
+                "mine",
+                "--allow-own-account",
+                "--allow-admin"
+            ]),
+            Ok(RunnerCommand::Call {
+                method: "runners/add",
+                params: json!({"host": "me@mac", "trust": "mine", "allow_own_account": true, "allow_admin": true}),
             })
         );
         assert_eq!(

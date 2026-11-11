@@ -2,6 +2,7 @@
 //!
 //! ```text
 //! sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation
+//!                [--watchdog DIR] [--allow-own-account] [--allow-admin]
 //!                                             the hub's control channel, on stdin and stdout
 //! sleipnir job-exec <attempt folder>          runs the folder's job.json, writes its result.json
 //! sleipnir job-helper --dir D [--hub-allow F] the attempt's keys, proxy and disk watch, until stdin ends
@@ -16,7 +17,7 @@
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation \
-                     [--watchdog DIR]\n       \
+                     [--watchdog DIR] [--allow-own-account] [--allow-admin]\n       \
                      sleipnir job-exec <attempt folder>\n       \
                      sleipnir watchdog --provider aws|gcp --idle S --lifetime S --unattended S --root DIR --dir DIR\n       \
                      sleipnir job-helper --dir D [--hub-allow FILE]\n       \

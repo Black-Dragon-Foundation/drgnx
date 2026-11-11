@@ -24,6 +24,8 @@ pub struct DarwinPlatform {
     hub_id: String,
     name: String,
     profile: Profile,
+    /// What `runner add` allowed beyond the dedicated standard account.
+    allow: probe::Allow,
     /// The `sleipnir` that runs job-exec.
     exe: PathBuf,
     /// The machine as last read (`hello`, `probe`, each `ready`'s re-read of the tools).
@@ -38,6 +40,7 @@ impl DarwinPlatform {
             hub_id: cfg.hub_id.clone(),
             name: cfg.name.clone(),
             profile: cfg.profile,
+            allow: cfg.allow,
             exe: exe.to_path_buf(),
             raw: RefCell::new(probe::read(&cfg.root)),
         })
@@ -140,7 +143,7 @@ impl Platform for DarwinPlatform {
             .into_iter()
             .map(|r| r.scheduler)
             .collect();
-        probe::contract(&self.raw.borrow(), others)
+        probe::contract(&self.raw.borrow(), others, self.allow)
     }
 
     /// Always: an attempt runs in a session of its own, which outlives the link.

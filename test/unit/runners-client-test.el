@@ -44,7 +44,33 @@ client's session keys are empty before and after."
                "drgnx-runner@YOUR-MAC"))
     (should (string-search s drgnx-runners-mac-steps)))
   (should (string-search "never runs sudo" drgnx-runners-mac-steps))
-  (should-not (string-search "sudo " (replace-regexp-in-string "never runs sudo" "" drgnx-runners-mac-steps))))
+  ;; what an allowed account exposes is stated, and is the only other mention of sudo
+  (dolist (s (list "--allow-own-account" "--allow-admin" drgnx-runners-own-account-exposure drgnx-runners-admin-exposure))
+    (should (string-search s drgnx-runners-mac-steps)))
+  (should-not (string-search "sudo " (string-replace drgnx-runners-admin-exposure ""
+                                                     (string-replace "never runs sudo" "" drgnx-runners-mac-steps)))))
+
+;; pattern B: an account other than drgnx-runner, and an administrator's, are each the user's own yes: Add Mac Runner…
+;; asks for them only for another account, saying what each exposes, and `runners/add' carries exactly what was allowed
+(ert-deftest drgnx-runners-client/allowances-are-asked-and-carried ()
+  (let ((reads 0) (calls nil) (asked nil) (answers nil))
+    (runners-client-test--with reads calls
+      (cl-letf (((symbol-function 'with-help-window) (lambda (&rest _) nil))
+                ((symbol-function 'y-or-n-p) (lambda (q) (push q asked) (pop answers))))
+        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "drgnx-runner@mini")))
+          (drgnx-runners-add-mac))
+        (should-not asked)
+        (setq answers '(t nil))
+        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "me@mini")))
+          (drgnx-runners-add-mac))
+        (should (= 2 (length asked)))
+        (should (string-search "keychain" (nth 1 asked)))
+        (should (string-search "sudo" (nth 0 asked)))
+        (drgnx-runners-add "desk" "mine" nil t)))
+    (should (equal (seq-filter (lambda (c) (equal (car c) "runners/add")) (reverse calls))
+                   '(("runners/add" (:host "drgnx-runner@mini" :trust "mine"))
+                     ("runners/add" (:host "me@mini" :trust "mine" :allow_own_account t))
+                     ("runners/add" (:host "desk" :trust "mine" :allow_admin t)))))))
 
 (ert-deftest drgnx-runners-client/need-keys-event-never-reads-the-store ()
   "Pattern B: the hub's `runners/need-keys' raises a card saying what to run, and the store is read 0 times and the hub

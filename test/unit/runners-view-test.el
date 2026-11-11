@@ -78,5 +78,23 @@ a machine of yours has no cost line; no line is over 60 columns."
     (should-not (string-search "memory: watched" linux)))
   (should (eq 'drgnx-runners-subtle (drgnx-runners-view-dot-face "sleeping" 0))))
 
+;; pattern D: an account the user allowed at `runner add` says what it exposes, on a line of its own: an administrator's
+;; (either platform) that sudo reaches root, another Mac account that its home, keychain and TCC grants are reachable;
+;; both that jobs are still sandboxed.  The dedicated account has no such line.
+(ert-deftest drgnx-runners-view/an-allowed-account-shows-its-exposure ()
+  (let* ((lines (lambda (r) (mapcar #'substring-no-properties (split-string (drgnx-runners-view-row r) "\n" t))))
+         (admin-linux (funcall lines (runners-view-test--runner "desktop" "ready" :os "fedora 45"
+                                                                :features ["podman" "account:admin"])))
+         (own-admin-mac (funcall lines (runners-view-test--runner "mini" "ready" :host "me@mini" :os "macos 15.6"
+                                                                  :features ["host-jobs" "account:admin" "account:own"])))
+         (plain (funcall lines (runners-view-test--runner "mini" "ready" :host "drgnx-runner@mini" :os "macos 15.6"
+                                                          :features ["host-jobs"]))))
+    (should (member "  admin account: sudo can reach root · jobs sandboxed" admin-linux))
+    (should (member "  admin account: sudo can reach root · jobs sandboxed" own-admin-mac))
+    (should (member "  own account: home, keychain, TCC open · jobs sandboxed" own-admin-mac))
+    (should-not (seq-some (lambda (l) (string-search "account:" l)) plain))
+    (should-not (seq-some (lambda (l) (string-search " account: " l)) plain))
+    (dolist (l (append admin-linux own-admin-mac)) (should (<= (string-width l) 60)))))
+
 (provide 'runners-view-test)
 ;;; runners-view-test.el ends here

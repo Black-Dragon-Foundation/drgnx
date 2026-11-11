@@ -1,5 +1,6 @@
 //! What a Mac runner reports about itself, and the Mac contract: macOS 15 or newer on Apple silicon, a root-owned
-//! `sandbox-exec`, a standard (non-admin) account, the Command Line Tools with any Xcode licence accepted, `mise` from
+//! `sandbox-exec`, the standard (non-admin) account `drgnx-runner` (another account or an administrator only as the
+//! user allowed at `runner add`, [`Allow`]; root never), the Command Line Tools with any Xcode licence accepted, `mise` from
 //! Homebrew (the project's toolchains go into the root through it), and 40 GB free on the runner root's volume. Everything is read once into a [`Raw`] (the live read, [`read`], on macOS only);
 //! [`facts`], [`features`] and [`contract`] are pure.
 
@@ -9,6 +10,16 @@ use crate::proto::{Facts, Missing};
 pub const MIN_DISK_GB: u64 = 40;
 /// The oldest macOS a runner takes.
 pub const MIN_MACOS: u32 = 15;
+/// The account a Mac runner runs as unless the user allows their own (`--allow-own-account`).
+pub const RUNNER_ACCOUNT: &str = "drgnx-runner";
+
+/// What the user allowed at `runner add` beyond the dedicated standard account: another account
+/// (`--allow-own-account`), an administrator (`--allow-admin`). Root is never allowed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Allow {
+    pub own_account: bool,
+    pub admin: bool,
+}
 
 /// The machine as read, before any judgement: each command's output (empty when it failed).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -29,6 +40,8 @@ pub struct Raw {
     pub batt: String,
     /// `kern.bootsessionuuid`: the boot id (the own-machine refusal compares it with the hub's).
     pub boot_session: String,
+    /// `id -un`: the account the runner runs as.
+    pub user: String,
     /// `dseditgroup -o checkmember admin`: `yes <user> is a member of admin` or `no …`.
     pub admin: String,
     /// `/usr/bin/sandbox-exec` checked as only root can change it: `None` when it passed, else why not.
@@ -125,19 +138,35 @@ pub fn facts(raw: &Raw, others_present: Vec<String>) -> Facts {
 }
 
 /// The features a Mac advertises: `arch:aarch64`, `host-jobs`, `xcode-clt` when the tools answer, the Homebrew
-/// packages with their versions, and `tool:NAME@VER` for each toolchain installed into the root.
+/// packages with their versions, and `tool:NAME@VER` for each toolchain installed into the root. An account taken by an
+/// allowance says so: `account:admin`, `account:own` (the runner list shows what that exposes).
 pub fn features(raw: &Raw) -> Vec<String> {
     let mut f = vec!["arch:aarch64".to_string(), "host-jobs".to_string()];
     if clt_ok(raw) {
         f.push("xcode-clt".into());
+    }
+    if is_admin(raw) {
+        f.push("account:admin".into());
+    }
+    if raw.user.trim() != RUNNER_ACCOUNT {
+        f.push("account:own".into());
     }
     f.extend(brew_features(&raw.brew_versions));
     f.extend(super::tools::features(&raw.tools));
     f
 }
 
+/// Whether the account is an administrator (`dseditgroup` said anything but `no …`).
+fn is_admin(raw: &Raw) -> bool {
+    !raw.admin.trim_start().starts_with("no ")
+}
+
 /// The Mac contract: every item the machine lacks, each with its fix; none missing gives the facts.
-pub fn contract(raw: &Raw, others_present: Vec<String>) -> Result<Facts, Vec<Missing>> {
+pub fn contract(
+    raw: &Raw,
+    others_present: Vec<String>,
+    allow: Allow,
+) -> Result<Facts, Vec<Missing>> {
     let mut missing = vec![];
     let mut miss = |what: &str, fix: &str| {
         missing.push(Missing {
@@ -167,12 +196,32 @@ pub fn contract(raw: &Raw, others_present: Vec<String>) -> Result<Facts, Vec<Mis
             "refused: jobs never run without Seatbelt",
         );
     }
-    if !raw.admin.trim_start().starts_with("no ") {
-        miss(
-            "a standard (non-admin) account for the runner",
-            "create a standard account `drgnx-runner` (System Settings, Users & Groups), allow it in Remote Login, \
-             and add the hub's key to its ~/.ssh/authorized_keys",
-        );
+    const CREATE: &str = "create a standard account `drgnx-runner` (System Settings, Users & Groups), allow it in \
+                          Remote Login, and add the hub's key to its ~/.ssh/authorized_keys";
+    let user = raw.user.trim();
+    if user == "root" {
+        miss("an account other than root for the runner", CREATE);
+    } else {
+        if is_admin(raw) && !allow.admin {
+            miss(
+                "a standard (non-admin) account for the runner",
+                &format!(
+                    "{CREATE}; or, to run jobs as this administrator, add the runner with --allow-admin: the account can \
+                     gain root through sudo with its password and through admin authorisation prompts (the sandbox \
+                     still applies to every job)"
+                ),
+            );
+        }
+        if user != RUNNER_ACCOUNT && !allow.own_account {
+            miss(
+                &format!("the runner's own account `{RUNNER_ACCOUNT}` (this is `{user}`)"),
+                &format!(
+                    "{CREATE}; or, to run jobs as `{user}`, add the runner with --allow-own-account: that account's \
+                     home, keychain and privacy (TCC) grants are reachable by file permissions (the sandbox still \
+                     applies to every job)"
+                ),
+            );
+        }
     }
     if licence_pending(&raw.clang) {
         miss(
@@ -250,6 +299,7 @@ pub fn read(root: &std::path::Path) -> Raw {
         disk_free,
         batt: out("/usr/bin/pmset", &["-g", "batt"]),
         boot_session: sysctl("kern.bootsessionuuid"),
+        user: user.clone(),
         admin: both(
             "/usr/sbin/dseditgroup",
             &["-o", "checkmember", "-m", &user, "admin"],
@@ -285,6 +335,7 @@ mod tests {
             disk_free: 200_000_000_000,
             batt: "Now drawing from 'AC Power'\n".into(),
             boot_session: "6A1D2C3B-0000-4000-8000-00000000AB12".into(),
+            user: "drgnx-runner\n".into(),
             admin: "no drgnx-runner is NOT a member of admin\n".into(),
             sandbox_exec: None,
             developer_dir: "/Library/Developer/CommandLineTools".into(),
@@ -303,7 +354,7 @@ mod tests {
     /// each toolchain in the root).
     #[test]
     fn a_mac_that_meets_the_contract_reports_its_facts() {
-        let f = contract(&mini(), vec!["jobq".into()]).unwrap();
+        let f = contract(&mini(), vec!["jobq".into()], Allow::default()).unwrap();
         assert_eq!(f.os, "macos 15.6");
         assert_eq!(f.arch, "aarch64");
         assert_eq!(f.cores, 10);
@@ -347,7 +398,7 @@ mod tests {
             mise: String::new(),
             ..mini()
         };
-        let missing = contract(&raw, vec![]).unwrap_err();
+        let missing = contract(&raw, vec![], Allow::default()).unwrap_err();
         let whats: Vec<&str> = missing.iter().map(|m| m.what.as_str()).collect();
         assert_eq!(missing.len(), 7, "{whats:?}");
         for (i, want) in [
@@ -370,6 +421,82 @@ mod tests {
         assert!(missing[5].fix.contains("brew install mise"));
     }
 
+    /// [D] The account: `drgnx-runner` (standard) is taken; another standard account is refused, naming
+    /// `--allow-own-account` and what it exposes, and taken with it; an administrator is refused even with that flag,
+    /// naming `--allow-admin` and what it exposes, and taken with it; root is refused whatever is allowed. An account
+    /// taken by an allowance says so in its features.
+    #[test]
+    fn the_account_is_drgnx_runner_unless_the_user_allows_another() {
+        let none = Allow::default();
+        let own = Allow {
+            own_account: true,
+            admin: false,
+        };
+        let admin = Allow {
+            own_account: false,
+            admin: true,
+        };
+        let both = Allow {
+            own_account: true,
+            admin: true,
+        };
+        let f = features(&mini());
+        assert!(!f.iter().any(|f| f.starts_with("account:")), "{f:?}");
+
+        let alice = Raw {
+            user: "alice".into(),
+            admin: "no alice is NOT a member of admin".into(),
+            ..mini()
+        };
+        let m = contract(&alice, vec![], none).unwrap_err();
+        assert_eq!(m.len(), 1, "{m:?}");
+        assert!(
+            m[0].what.contains("drgnx-runner") && m[0].what.contains("alice"),
+            "{m:?}"
+        );
+        assert!(m[0].fix.contains("--allow-own-account"), "{m:?}");
+        assert!(
+            m[0].fix.contains("keychain") && m[0].fix.contains("TCC"),
+            "{m:?}"
+        );
+        assert!(contract(&alice, vec![], own).is_ok());
+        assert!(features(&alice).contains(&"account:own".to_string()));
+
+        let admin_raw = Raw {
+            admin: "yes drgnx-runner is a member of admin".into(),
+            ..mini()
+        };
+        for a in [none, own] {
+            let m = contract(&admin_raw, vec![], a).unwrap_err();
+            assert_eq!(m.len(), 1, "{m:?}");
+            assert!(m[0].what.contains("non-admin"), "{m:?}");
+            assert!(
+                m[0].fix.contains("--allow-admin") && m[0].fix.contains("sudo"),
+                "{m:?}"
+            );
+        }
+        assert!(contract(&admin_raw, vec![], admin).is_ok());
+        assert!(features(&admin_raw).contains(&"account:admin".to_string()));
+        // the user's own administrator account: both allowances
+        let own_admin = Raw {
+            user: "alice".into(),
+            admin: "yes alice is a member of admin".into(),
+            ..mini()
+        };
+        assert_eq!(contract(&own_admin, vec![], admin).unwrap_err().len(), 1);
+        assert!(contract(&own_admin, vec![], both).is_ok());
+
+        let root = Raw {
+            user: "root".into(),
+            admin: "yes root is a member of admin".into(),
+            ..mini()
+        };
+        let m = contract(&root, vec![], both).unwrap_err();
+        assert_eq!(m.len(), 1, "{m:?}");
+        assert!(m[0].what.contains("root"), "{m:?}");
+        assert!(!m[0].fix.contains("--allow"), "{m:?}");
+    }
+
     /// [D] A full Xcode whose licence is not accepted: `clang` refuses, the contract names the licence (not the tools),
     /// and no `xcode-clt` feature is advertised.
     #[test]
@@ -381,7 +508,7 @@ mod tests {
                 .into(),
             ..mini()
         };
-        let missing = contract(&raw, vec![]).unwrap_err();
+        let missing = contract(&raw, vec![], Allow::default()).unwrap_err();
         assert_eq!(missing.len(), 1);
         assert!(missing[0].what.contains("licence"));
         assert!(missing[0].fix.contains("xcodebuild -license accept"));
@@ -418,7 +545,12 @@ mod tests {
         assert_eq!(raw.arm64, "1");
         assert!(num(&raw.ncpu) > 0 && num(&raw.memsize) > 0 && raw.disk_free > 0);
         assert!(raw.boot_session.len() >= 32, "{raw:?}");
-        match contract(&raw, vec![]) {
+        // the CI account is the host's own, not drgnx-runner: allowed here as `--allow-own-account` would
+        let own = Allow {
+            own_account: true,
+            admin: false,
+        };
+        match contract(&raw, vec![], own) {
             Ok(_) => {}
             Err(m) => assert!(
                 m.iter()

@@ -48,7 +48,19 @@ drgnx runner remove desktop --yes                # stops our units and container
 
 `add` options: `--name` (default: the host's first label), `--profile dedicated|workstation` (default dedicated: nobody
 sits at the machine), `--accept all|heavy`, `--root DIR` (the one folder drgnx keeps there, an absolute path on the runner: no `~`; default `.drgnx-runner` in its home)
-and `--prefix` (what its units and containers are named after, default `drgnx`).
+and `--prefix` (what its units and containers are named after, default `drgnx`). Two more widen which account a
+runner may run as, each your own yes (**Add Runner…** asks for them with a prefix argument):
+
+- `--allow-admin`: an administrator's account on a Mac (one in the `admin` group), which is refused without it. The
+  account can gain root through `sudo` with its password, and on a Mac through admin authorisation prompts; the
+  sandbox (Seatbelt on a Mac, Gleipnir's containers on Linux) still applies to every job. Linux takes an
+  administrator's login (in `wheel` or `sudo`) without the flag, so the flag changes nothing there; either way the
+  runner list shows `admin account: sudo can reach root` under its row.
+- `--allow-own-account`: a Mac account other than `drgnx-runner` (below), such as your own. That account's home,
+  keychain and privacy (TCC) grants are reachable by file permissions; the sandbox still applies to every job. Its row
+  says `own account: home, keychain, TCC open`.
+
+Root is never a runner, on either system, whatever is allowed.
 
 What `add` does, in order, and stops at the first thing that is wrong:
 
@@ -120,14 +132,16 @@ palette's **Add Mac Runner…** shows these steps, then asks for the host:
    (`brew install tailscale`), or any VPN your ssh can use.
 
 Then `drgnx runner add drgnx-runner@your-mac --profile workstation` (or the palette). The runner refuses a Mac that
-lacks something and names the fix. In the runner list a Mac's row says `macOS` after its name and has a line of its
+lacks something and names the fix: an account other than `drgnx-runner`, or an administrator's, is refused unless
+you add it with `--allow-own-account` or `--allow-admin` (above, with what each exposes; **Add Mac Runner…** asks
+when the host's user isn't `drgnx-runner`). In the runner list a Mac's row says `macOS` after its name and has a line of its
 own: `memory: watched` (the runner watches each job's memory itself, as a Mac has no cgroups), the account it runs as,
 and whether the Command Line Tools answer. A Mac that went quiet while on battery (its lid closed) is `sleeping`, not
 `unreachable`: its jobs wait for it, and it is no strike.
 
 **What a Mac job can reach.** Each job runs under the macOS sandbox (Seatbelt) as `drgnx-runner`: it reads its source,
-the system, Xcode or the Command Line Tools, Homebrew and its toolchains, and writes only its own folder (and its
-tree, when the job writes it). The account's home, your home and the other users' are out of reach, and so is the
+the system, Xcode or the Command Line Tools, Homebrew and its toolchains, and writes only its own home and temporary
+folder, the account's cache folder the compilers use (macOS's per-user folder), and its tree when the job writes it. The account's home, your home and the other users' are out of reach, and so is the
 network. A job that can't be sandboxed doesn't run. Homebrew is read-only there: a build that asks `brew --prefix
 NAME` (as Emacs's configure does for libgccjit) gets the answer from a small `brew` the runner puts first on the job's
 `PATH`, and `brew install` or `brew update` inside a job fails with a message saying so: install what your jobs

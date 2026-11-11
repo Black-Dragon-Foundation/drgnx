@@ -317,8 +317,9 @@ mod mac_runner {
         .await;
     }
 
-    /// [C] A job past its 512 MiB grant, with a double-forked child holding as much outside its group, is killed by
-    /// the watchdog: the verdict is `oom` (the job's own, no strike), and neither process is left.
+    /// [C] A job past its 512 MiB grant, with a double-forked child holding as much in a session of its own (found by
+    /// the attempt's marker alone), is killed by the watchdog: the verdict is `oom` (the job's own, no strike), and
+    /// neither process is left.
     #[tokio::test]
     #[ignore = "macos-runner"]
     async fn the_watchdog_kills_a_job_past_its_grant_and_its_escapee() {
@@ -327,8 +328,10 @@ mod mac_runner {
         let mut hub = Hub::new(dir.path());
         hub.add("mac", &root).await;
         let (work, blobs) = project(dir.path());
-        let hog = "/usr/bin/perl -e '$x = q(a) x (400*1024*1024); sleep 300'";
-        let script = format!("( {hog} & ) ; {hog}");
+        let hog = |pre: &str| {
+            format!("/usr/bin/perl -MPOSIX -e '{pre}$x = q(a) x (400*1024*1024); sleep 300'")
+        };
+        let script = format!("( {} & ) ; {}", hog("POSIX::setsid(); "), hog(""));
         hub.q
             .submit(job("xhog", &script, freeze(&work, &blobs), 512), now());
         let r = hub.result("xhog").await;
@@ -347,14 +350,14 @@ mod mac_runner {
         let mut hub = Hub::new(dir.path());
         hub.add("mac", &root).await;
         let (work, blobs) = project(dir.path());
-        // the job runs until the row writes `go` into its attempt's folder (the job's own TMPDIR's parent)
-        let script = "touch \"$TMPDIR/../started\"; while [ ! -e \"$TMPDIR/../go\" ]; do /bin/sleep 0.2; done; echo survived";
+        // the job runs until the row writes `go` into its TMPDIR (a job writes nothing else of its attempt folder)
+        let script = "touch \"$TMPDIR/started\"; while [ ! -e \"$TMPDIR/go\" ]; do /bin/sleep 0.2; done; echo survived";
         hub.q
             .submit(job("xlink", script, freeze(&work, &blobs), 512), now());
         hub.running("xlink", "mac").await;
         let started = |root: &str| {
             sh(&format!(
-                "ls -d '{root}'/jobs/*/started 2>/dev/null | head -n 1"
+                "ls -d '{root}'/jobs/*/tmp/started 2>/dev/null | head -n 1"
             ))
         };
         skuld::wait_until_async("the job started", WAIT, || {
@@ -382,8 +385,8 @@ mod mac_runner {
         .await;
         hub.reg.check("mac").await.expect("linked again");
         let s = started(&root);
-        let attempt = Path::new(&s).parent().unwrap().display().to_string();
-        sh(&format!("touch '{attempt}/go'"));
+        let tmp = Path::new(&s).parent().unwrap().display().to_string();
+        sh(&format!("touch '{tmp}/go'"));
         let r = hub.result("xlink").await;
         let log = log(dir.path(), "xlink");
         assert_eq!(r["verdict"], "Pass", "{r} {log}");

@@ -274,21 +274,48 @@ may.  Nothing else in drgnx reads it for the runners."
       (pop-to-buffer (current-buffer)))))
 
 ;;;###autoload
-(defun drgnx-runners-add (host trust)
+(defconst drgnx-runners-own-account-exposure
+  "its home, keychain and privacy (TCC) grants are reachable by file permissions; the sandbox still applies to every job"
+  "What running a Mac's jobs as an account other than drgnx-runner exposes (`--allow-own-account').")
+
+(defconst drgnx-runners-admin-exposure
+  "the account can gain root through sudo with its password, and on a Mac through admin authorisation prompts; the \
+sandbox still applies to every job"
+  "What running jobs as an administrator's account exposes (`--allow-admin').")
+
+(defun drgnx-runners--ask-own-account (user)
+  "Whether the user allows a Mac's jobs to run as USER, told what that exposes."
+  (y-or-n-p (format "Run this Mac's jobs as %s instead of drgnx-runner?  (%s) " user drgnx-runners-own-account-exposure)))
+
+(defun drgnx-runners--ask-admin ()
+  "Whether the user allows an administrator's account, told what that exposes."
+  (y-or-n-p (format "Is it an administrator's account, and run jobs there anyway?  (%s) " drgnx-runners-admin-exposure)))
+
+;;;###autoload
+(defun drgnx-runners-add (host trust &optional own-account admin)
   "Add the machine HOST (as your ssh knows it) as a runner of TRUST: mine, my-cloud or shared.  When this project lists job
-keys and the runner may have them, they are read from your key store first (this command may ask for a passphrase)."
-  (interactive (list (read-string "Host (as ssh knows it): ")
-                     (completing-read "Trust: " '("mine" "my-cloud" "shared") nil t nil nil "mine")))
+keys and the runner may have them, they are read from your key store first (this command may ask for a passphrase).
+OWN-ACCOUNT allows a Mac account other than drgnx-runner, ADMIN an administrator's account on a Mac (Linux takes one
+without it); each exposes more (`drgnx-runners-own-account-exposure', `drgnx-runners-admin-exposure').  With a prefix
+argument the command asks for both."
+  (interactive (let ((host (read-string "Host (as ssh knows it): "))
+                     (trust (completing-read "Trust: " '("mine" "my-cloud" "shared") nil t nil nil "mine")))
+                 (list host trust
+                       (and current-prefix-arg (drgnx-runners--ask-own-account host))
+                       (and current-prefix-arg (drgnx-runners--ask-admin)))))
   (drgnx-hub-ensure)
   (when (and (not (equal trust "shared")) (drgnx-runners--listed-names))
     (drgnx-runners--load (seq-difference (drgnx-runners--listed-names) (mapcar #'car drgnx-runners--session-keys) #'equal)))
   (message "Runners: adding %s (probe, copy, image, bench)…" host)
-  (drgnx-runners--act "runners/add" (list :host host :trust trust) (format "added %s" host)))
+  (drgnx-runners--act "runners/add" (append (list :host host :trust trust)
+                                            (and own-account '(:allow_own_account t))
+                                            (and admin '(:allow_admin t)))
+                      (format "added %s" host)))
 
 ;;;; A Mac as a runner
 
 (defconst drgnx-runners-mac-steps
-  "Prepare the Mac once, in your own account there (drgnx never runs sudo on it):
+  (concat "Prepare the Mac once, in your own account there (drgnx never runs sudo on it):
 
 1. Create a standard account named drgnx-runner (System Settings, Users & Groups; not an administrator).
    Jobs run as that account, so your own files and keychain stay out of their reach.
@@ -302,7 +329,12 @@ keys and the runner may have them, they are read from your key store first (this
    daemon (brew install tailscale), or any VPN your ssh can use.
 
 Then add it: Runners: Add Runner…, host drgnx-runner@YOUR-MAC.  The runner refuses a Mac that lacks
-something and names the fix."
+something and names the fix.
+
+Another account only if you allow it (--allow-own-account; Add Mac Runner… asks): "
+          drgnx-runners-own-account-exposure ".
+An administrator's account only if you allow that too (--allow-admin): " drgnx-runners-admin-exposure
+          ".  Never root.")
   "The steps that make a Mac ready to be a runner, as the onboarding card shows them (docs/guide/runners.md).")
 
 (defun drgnx-runners-add-mac ()
@@ -310,9 +342,13 @@ something and names the fix."
   (interactive)
   (with-help-window "*drgnx Mac Runner*"
     (princ drgnx-runners-mac-steps))
-  (let ((host (read-string "Mac host (drgnx-runner@your-mac), empty to stop: ")))
+  (let* ((host (read-string "Mac host (drgnx-runner@your-mac), empty to stop: "))
+         (user (and (string-search "@" host) (car (split-string host "@"))))
+         ;; another account is the user's own yes, and then whether it is an administrator's
+         (own (and (not (string-empty-p host)) (not (equal user "drgnx-runner"))
+                   (drgnx-runners--ask-own-account (or user "your ssh login")))))
     (unless (string-empty-p host)
-      (drgnx-runners-add host "mine"))))
+      (drgnx-runners-add host "mine" own (and own (drgnx-runners--ask-admin))))))
 
 ;;;; The module
 

@@ -83,11 +83,11 @@ fn leads_session() -> bool {
     unsafe { libc::getsid(0) == libc::getpid() }
 }
 
-/// Runs SPEC from the attempt's folder DIR and writes `result.json` there; the result. A stop (timeout, kill
-/// reason) ends this process's group after the result is written.
+/// Runs SPEC from the attempt's folder DIR and writes `result.json` there; the result. However the job ended (by
+/// itself, a timeout, a kill reason), this process's group goes after the result is written: nothing of it lives on.
 pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
-    let (result, stop) = run_unchecked(dir, spec, refusal(spec));
-    if stop && leads_session() {
+    let (result, _stop) = run_unchecked(dir, spec, refusal(spec));
+    if leads_session() {
         // SAFETY: SIGKILL to our own process group (job-exec and every process of the job that stayed in it)
         unsafe { libc::killpg(0, libc::SIGKILL) };
     }
@@ -241,22 +241,21 @@ fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, marker: &str, t0: f64, s
         std::thread::sleep(TICK);
     }
     if seen.timed_out || seen.stopped {
-        // the command now; what else stayed in job-exec's group goes once the result is written (`run`), or, in a
-        // session of its own, its group now
         let _ = child.kill();
-        if !leader {
-            // SAFETY: SIGKILL to the command's own process group (it leads its session)
-            unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
-        }
         if let Ok(st) = child.wait() {
             seen.exit_code = st.code();
             seen.signal = st.signal();
         }
-        if seen.oom {
-            // what the job started between the scan and the kill
-            memwatch::kill_all(&memwatch::scan(me, sid, born, marker).pids);
-        }
     }
+    // however it ended, nothing of the job outlives it: what stayed in job-exec's group goes once the result is
+    // written (`run`), or, in a session of its own, the command's group now; then the session and the marked
+    // escapees the scan finds (and what the job started between a watchdog scan and its kill)
+    if !leader {
+        // SAFETY: SIGKILL to the command's own process group (it led its session; the group id isn't reused while
+        // a member lives)
+        unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
+    }
+    memwatch::kill_all(&memwatch::scan(me, sid, born, marker).pids);
     if let Some(mut c) = awake {
         let _ = c.kill();
         let _ = c.wait();
@@ -432,6 +431,31 @@ mod tests {
         );
         let red = spec(d.path(), &["/bin/sh", "-c", "exit 3"]);
         assert_eq!(run_unchecked(d.path(), &red, None).0.verdict, Verdict::Red);
+    }
+
+    /// [D] A job that ends by itself leaves nothing running: what it left in the background is killed with it.
+    #[test]
+    fn a_job_that_exits_leaves_nothing_behind() {
+        let d = tempfile::tempdir().unwrap();
+        let s = spec(
+            d.path(),
+            &["/bin/sh", "-c", "sleep 300 & echo $! > left; exit 0"],
+        );
+        let (r, stop) = run_unchecked(d.path(), &s, None);
+        assert_eq!(r.verdict, Verdict::Pass, "{r:?}");
+        assert!(!stop);
+        let pid = fs::read_to_string(d.path().join("left")).unwrap();
+        // gone, or a zombie its new parent hasn't reaped yet: either way not running
+        let ps = Command::new("ps")
+            .args(["-o", "stat=", "-p", pid.trim()])
+            .output()
+            .unwrap();
+        let stat = String::from_utf8_lossy(&ps.stdout);
+        assert!(
+            stat.trim().is_empty() || stat.trim().starts_with('Z'),
+            "the background sleep {} still runs: {stat}",
+            pid.trim()
+        );
     }
 
     /// [D] A job past its grant is killed by the watchdog: verdict `oom` (never `red`), its overshoot recorded, nothing

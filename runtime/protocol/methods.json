@@ -26420,6 +26420,14 @@
             ],
             "description": "Default `all`."
           },
+          "allow_admin": {
+            "description": "A Mac: run as an administrator (`--allow-admin`; Linux takes one without it). The account can gain root through\nsudo with its password, and on a Mac through admin authorisation prompts; the sandbox still applies to every job.",
+            "type": "boolean"
+          },
+          "allow_own_account": {
+            "description": "A Mac: run as an account other than `drgnx-runner` (`--allow-own-account`). Its home, keychain and privacy (TCC)\ngrants are reachable by file permissions; the sandbox still applies to every job.",
+            "type": "boolean"
+          },
           "host": {
             "description": "The host as the user's ssh knows it (`ssh <host>`).",
             "maxLength": 255,

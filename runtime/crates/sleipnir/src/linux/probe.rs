@@ -667,12 +667,31 @@ pub struct Observed {
     pub files: FileFacts,
     /// The login's SELinux context (`/proc/self/attr/current`), none without SELinux.
     pub selinux: Option<String>,
+    /// The login's uid: root is never a runner.
+    pub uid: u32,
 }
 
 /// The controllers the caps need delegated: `--memory`, `--pids-limit`, `--cpus`.
 pub const CONTROLLERS: [&str; 3] = ["memory", "pids", "cpu"];
 
 /// The contract on what a host answered: its facts, or every item it lacks with the fix for each.
+/// Whether GROUPS (`id -Gn`: the login's group names) make it an administrator: wheel, sudo or admin, whose members
+/// reach root through sudo with their password.
+pub fn is_admin(groups: &str) -> bool {
+    groups
+        .split_whitespace()
+        .any(|g| matches!(g, "wheel" | "sudo" | "admin"))
+}
+
+/// The login's group names (`id -Gn`), empty when `id` fails.
+pub fn own_groups() -> String {
+    run::limited(Path::new("id"), &["-Gn"], &[], TOOL_LIMIT)
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+
 pub fn judge(o: &Observed) -> Result<Facts, Vec<Missing>> {
     let mut missing = vec![];
     let mut miss = |what: String, fix: &str| {
@@ -681,6 +700,12 @@ pub fn judge(o: &Observed) -> Result<Facts, Vec<Missing>> {
             fix: fix.to_string(),
         })
     };
+    if o.uid == 0 {
+        miss(
+            "a login other than root for the runner".into(),
+            "add the runner as an ordinary user (`user@host`): jobs never run as root",
+        );
+    }
     if let Some(ctx) = &o.selinux
         && super::confined::is_user_t(ctx)
     {
@@ -833,6 +858,7 @@ pub fn contract(probe: &Probe, podman: &Path) -> Result<Facts, Vec<Missing>> {
     .is_ok_and(|s| s == "yes");
     let cpuset_by_systemd = systemd_user.is_ok() && probe.cpuset_by_systemd().unwrap_or(false);
     judge(&Observed {
+        uid: rustix::process::getuid().as_raw(),
         systemd_user,
         podman_info,
         git,
@@ -869,6 +895,7 @@ mod tests {
             linger: true,
             cpuset_by_systemd: true,
             selinux: None,
+            uid: 1000,
             files: FileFacts {
                 arch: "x86_64".into(),
                 os: "fedora 45".into(),
@@ -876,6 +903,24 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    /// [D] Root is refused (no allowance takes it); an administrator's login (wheel, sudo) is taken as any other, and
+    /// says so in its features.
+    #[test]
+    fn root_is_refused_and_an_admin_is_taken() {
+        let good = info("5.6.1", true, "v2", "systemd", &["cpu", "memory", "pids"]);
+        let mut o = observed(Ok(good));
+        assert!(judge(&o).is_ok());
+        o.uid = 0;
+        let m = judge(&o).unwrap_err();
+        assert_eq!(m.len(), 1, "{m:?}");
+        assert!(m[0].what.contains("root"), "{m:?}");
+        assert!(!m[0].fix.contains("--allow"), "{m:?}");
+        assert!(is_admin("dev wheel docker"));
+        assert!(is_admin("u sudo"));
+        assert!(!is_admin("u users docker"));
+        assert!(!is_admin(""));
     }
 
     /// [D] A login confined as SELinux user_u (user_t) is refused by the contract with the cause and an admin's fix,

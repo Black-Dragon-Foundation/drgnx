@@ -706,6 +706,7 @@ jobs:
           rustup default stable
       - name: the Mac runner bundle (sleipnir, ad-hoc signed, codesign -v)
         run: |
+          set -o pipefail
           bin/drgnx build runner-bundle --target aarch64-apple-darwin
           mkdir -p "$MR_OUT/bundle" && cp runtime/target/bundle/aarch64-apple-darwin/sleipnir "$MR_OUT/bundle/"
           codesign -dv "$MR_OUT/bundle/sleipnir" 2>&1 | tee "$MR_OUT/bundle/codesign.txt"
@@ -725,7 +726,9 @@ jobs:
       - name: the Mac probe's live read (sleipnir's darwin rows, in the CI account)
         if: ${{ !cancelled() }}
         timeout-minutes: 20
-        run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p sleipnir --lib darwin 2>&1 | tee "$MR_OUT/darwin-rows.log"
+        run: |
+          set -o pipefail
+          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p sleipnir --lib darwin 2>&1 | tee "$MR_OUT/darwin-rows.log"
       - name: a pinned Rust through mise and the brew shim, in a sandboxed job (CI account); `sleipnir tools` as the runner account
         if: ${{ !cancelled() }}
         timeout-minutes: 20

@@ -195,6 +195,7 @@ fn serve_with(
         profile,
         name: "fake".into(),
         watchdog: None,
+        allow: Default::default(),
     };
     let out = Out::default();
     let s = Serve::with_platform(cfg, out.clone(), Box::new(fake)).unwrap();

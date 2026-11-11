@@ -63,7 +63,8 @@ pub fn home_tmp(dir: &Path) -> (PathBuf, PathBuf) {
 /// The spec of JOB, for [`Target::Macos`].
 pub fn spec(job: &Job) -> Spec {
     let (home, tmp) = home_tmp(job.dir);
-    let mut write = vec![job.dir.to_path_buf()];
+    // its home and tmp (the spec's own, below), never the attempt folder: its pid files and result are job-exec's
+    let mut write = vec![];
     if job.writes_tree {
         write.push(job.src.to_path_buf());
     }
@@ -136,10 +137,11 @@ pub fn spec(job: &Job) -> Spec {
 mod tests {
     use super::*;
 
-    /// [D] A job reads its source and writes only its attempt folder (and its source when it writes its tree); its
-    /// home and tmp are the attempt's; no network; every process carries the marker.
+    /// [D] A job reads its source and writes only its home and tmp (and its source when it writes its tree); its
+    /// home and tmp are the attempt's, its only writes (never the attempt folder: its pid files and result are
+    /// job-exec's); no network; every process carries the marker.
     #[test]
-    fn a_mac_job_reads_its_source_and_writes_its_attempt() {
+    fn a_mac_job_reads_its_source_and_writes_its_home_and_tmp() {
         let dir = Path::new("/runner/.drgnx-runner.noindex/jobs/j1.1");
         let src = Path::new("/runner/.drgnx-runner.noindex/slots/s1");
         let job = Job {
@@ -160,7 +162,7 @@ mod tests {
                 PathBuf::from("/runner/.drgnx-runner.noindex/bin")
             ]
         );
-        assert_eq!(s.write, vec![dir.to_path_buf()]);
+        assert!(s.write.is_empty(), "{:?}", s.write);
         assert_eq!(s.chdir, src.join("sub"));
         assert_eq!(s.tmp, Some(dir.join("tmp")));
         assert_eq!(s.home.as_ref().unwrap().source, dir.join("home"));
@@ -176,7 +178,7 @@ mod tests {
             cwd: Path::new("."),
             ..job
         });
-        assert_eq!(w.write, vec![dir.to_path_buf(), src.to_path_buf()]);
+        assert_eq!(w.write, vec![src.to_path_buf()]);
         assert_eq!(w.chdir, src.to_path_buf());
     }
 
