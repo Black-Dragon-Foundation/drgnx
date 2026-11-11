@@ -1576,6 +1576,8 @@ applied patch sets the version.  Returns the decision.  No buffer is touched."
                  (drgnx-view-patch-rows state))
         (maphash (lambda (id _) (unless (gethash id live) (remhash id images))) images)))))
 
+(defvar drgnx-view-nav--place-after-draw)
+
 (defun drgnx-view-patch--apply-ops (state view patch)
   "Store PATCH's images and rows in STATE and mark VIEW; the draw does the rest."
   (let ((table (drgnx-view-patch-rows state)))
@@ -1594,7 +1596,9 @@ applied patch sets the version.  Returns the decision.  No buffer is touched."
           (clrhash (drgnx-view-patch-ids state))
           (clrhash (drgnx-view-patch-keys state))
           (dolist (r rows) (puthash (plist-get r :key) r table))
-          (drgnx-view-reset view (drgnx-view-patch--keys rows))))
+          (drgnx-view-reset view (drgnx-view-patch--keys rows))
+          ;; a reset deletes every row, point with it: the draw's class step puts point back on the selection
+          (when (boundp 'drgnx-view-nav--place-after-draw) (setq drgnx-view-nav--place-after-draw t))))
        ((plist-member op :insert)
         (let* ((ins (plist-get op :insert)) (rows (plist-get ins :rows)))
           (dolist (r rows) (puthash (plist-get r :key) r table))

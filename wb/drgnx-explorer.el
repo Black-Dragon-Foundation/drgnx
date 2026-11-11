@@ -736,6 +736,16 @@ selected when its row is there."
   "On the rows path, the file a reveal waits for: its folders were opened and the hub asked; the draw that brings its
 row selects it (`drgnx-explorer--rows-patched').")
 
+(defconst drgnx-explorer--nav-faces '(("ticked" . drgnx-explorer-selected) ("selected") ("dim"))
+  "The Explorer's classes on the rows path (`drgnx-view-nav-faces'): the marks are Sjá's ticked set; the selected row is
+the workbench's (`drgnx-wb-selection-sync', the look's fill and ring at point), so Sjá's `selected' class draws none;
+and `dim' draws none: Sjá dims the rows off the selection's chain, and the Explorer has no chain (every other row).")
+
+(defun drgnx-explorer--rows-select (file)
+  "Select FILE's drawn row outside a command of the Explorer (a reveal): point and the selected row go to it."
+  (drgnx-view-nav 'select file)
+  (drgnx-wb-selection-sync))
+
 (defun drgnx-explorer--rows-reveal (file)
   "`drgnx-explorer-reveal' on the rows path: FILE's folders open now and the hub is asked again; FILE is selected now
 when its row is drawn, else when the listing that holds it arrives."
@@ -753,7 +763,7 @@ when its row is drawn, else when the listing that holds it arrives."
               (drgnx-explorer--await-answer)          ; a user's reveal: drawn (and selected) in its own frame
               (setq drawn (drgnx-view-row-start drgnx-view file)))
             (if drawn
-                (progn (setq drgnx-explorer--reveal-pending nil) (drgnx-view-nav 'select file))
+                (progn (setq drgnx-explorer--reveal-pending nil) (drgnx-explorer--rows-select file))
               (setq drgnx-explorer--reveal-pending file)))
           t)))))
 
@@ -1045,7 +1055,10 @@ redrawn row gets a new one; a badge of a row that went is deleted here."
       (maphash (lambda (key o) (unless (overlay-buffer o) (remhash key tails))) tails))
     (when-let* ((file drgnx-explorer--reveal-pending) ((drgnx-view-row-start view file)))
       (setq drgnx-explorer--reveal-pending nil)
-      (drgnx-view-nav 'select file))
+      (drgnx-explorer--rows-select file))
+    ;; a reset put point back on the selection (`drgnx-view-nav-class-step'): the selected row follows it
+    (let ((o drgnx-wb--selected-overlay))
+      (when (and (overlayp o) (overlay-buffer o) (/= (overlay-start o) (pos-bol))) (drgnx-wb-selection-sync)))
     (when drgnx-explorer--badges        ; a few rows at most: the badges of rows that went
       (maphash (lambda (key o) (unless (drgnx-view-row-start view key) (delete-overlay o) (remhash key drgnx-explorer--badges)))
                drgnx-explorer--badges))))
@@ -1064,7 +1077,7 @@ Explorer buffer's: the twin's kill leaves them."
       (jit-lock-unregister #'drgnx-explorer--fontify)
       (drgnx-view-patch-attach drgnx-explorer--hub-view class)
       (dolist (f patched) (unless (eq f t) (add-hook 'drgnx-view-patch-patched-functions f nil t)))
-      (setq-local drgnx-view-nav-faces '(("ticked" . drgnx-explorer-selected)))   ; the marks, as in the Explorer
+      (setq-local drgnx-view-nav-faces drgnx-explorer--nav-faces)                 ; the marks, as in the Explorer
       (add-hook 'window-scroll-functions #'drgnx-explorer--rows-scrolled nil t)  ; its scroll pages the view's window
       (drgnx-explorer--wait-for-hub)
       (current-buffer))))
@@ -1083,7 +1096,7 @@ Explorer buffer's: the twin's kill leaves them."
     (drgnx-view-patch-attach view class)
     (setq drgnx-explorer--hub-view view)
     (add-hook 'drgnx-view-patch-patched-functions #'drgnx-explorer--rows-patched nil t)
-    (setq-local drgnx-view-nav-faces '(("ticked" . drgnx-explorer-selected)))   ; multi-select (Sjá's ticked set)
+    (setq-local drgnx-view-nav-faces drgnx-explorer--nav-faces)
     (add-hook 'drgnx-look-density-changed-hook #'drgnx-explorer--density-changed)
     (add-hook 'kill-buffer-hook #'drgnx-explorer--rows-unhook nil t)
     (setq-local drgnx-view-patch-twin-function #'drgnx-explorer--rows-twin)

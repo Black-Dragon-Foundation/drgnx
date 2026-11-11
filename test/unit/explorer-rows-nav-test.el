@@ -267,7 +267,38 @@ is selected when the listing that holds it is drawn."
                                                               :props (list (list 0 9 "drgnx-work-id" "/r/a/new.el")))))))))
       (drgnx-view-draw-now drgnx-view)
       (should-not drgnx-explorer--reveal-pending)
-      (should (equal "/r/a/new.el" (drgnx-view-nav-selection))))))
+      (should (equal "/r/a/new.el" (drgnx-view-nav-selection)))
+      ;; the selected row (the workbench's, with its ring when focused) is the revealed file's
+      (should (equal "/r/a/new.el" (get-text-property (overlay-start drgnx-wb--selected-overlay) 'drgnx-work-id))))))
+
+(ert-deftest drgnx-explorer-rows/the-selection-is-the-workbench-s-row-alone ()
+  "Pattern D: on the rows path the selected row is drawn once, by the workbench's selection (`drgnx-wb-selection-sync':
+the look's fill and ring); Sjá's `selected' class puts no overlay of its own on the node, nor its `dim' on the
+others (the Explorer has no chain, so Sjá dims every row off the selection), a key moves the one row, and a reveal of
+a drawn row moves it too."
+  (drgnx-explorer-rows-nav-test--with
+    (let ((class-ovs (lambda () (seq-filter (lambda (o) (memq (overlay-get o 'face) '(drgnx-view-selected shadow)))
+                                            (overlays-in (point-min) (point-max))))))
+      (goto-char (point-min))
+      (drgnx-explorer--rows-key 'next)
+      (drgnx-wb-selection-sync)                     ; post-command's
+      (should-not (funcall class-ovs))
+      (should (drgnx-explorer-reveal "/r/z.txt"))
+      (should (equal "/r/z.txt" (drgnx-view-nav-selection)))
+      (should-not (funcall class-ovs))
+      (should (equal "/r/z.txt" (get-text-property (overlay-start drgnx-wb--selected-overlay) 'drgnx-work-id))))))
+
+(ert-deftest drgnx-explorer-rows/a-reset-keeps-the-selected-row ()
+  "Pattern D: the hub's reset of the rows (a theme's new env draws every row again) deletes them all; point and the
+workbench's selected row go back to Sjá's selection, not to the first row."
+  (drgnx-explorer-rows-nav-test--with
+    (should (drgnx-explorer-reveal "/r/z.txt"))
+    (drgnx-view-apply-patch (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 0 :model 1
+                                  :ops (list (list :reset (drgnx-explorer-rows-nav-test--rows)))))
+    (drgnx-view-draw-now drgnx-view)
+    (should (equal "/r/z.txt" (drgnx-view-nav-selection)))
+    (should (equal "/r/z.txt" (drgnx-explorer-node-at (point))))
+    (should (equal "/r/z.txt" (get-text-property (overlay-start drgnx-wb--selected-overlay) 'drgnx-work-id)))))
 
 (ert-deftest drgnx-explorer-rows/a-scroll-near-the-window-s-edge-asks-the-next ()
   "Pattern D (E4): the hub holds a window of the listing (60 of 200 entries from 0); a scroll within a page of the
