@@ -2021,8 +2021,10 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
   `s:<id>` names a style the patch's `styles` sent (kept until the next reset; one the view lacks sends
   `view/resync`): an ansi foreground is the face `drgnx-term-color-N`, the rest one anonymous face per distinct
   style from an LRU of `drgnx-view-patch-style-face-max` (4,096) entries (docs/develop/hub.md, "Rows"); faint adds
-  `drgnx-term-faint`. `drgnx-view-patch-repaint` draws every row again from the faces as they are (a theme change
-  in a view whose type has `:epoch-reset nil`), the LRU emptied, with no message to the hub. A terminal's patch also
+  `drgnx-term-faint`. A change of a colour face of the terminal outside a theme change (`set-face-attribute` of
+  `drgnx-term-default`, `drgnx-term-cursor` or `drgnx-term-color-N`, Customize) does the same once its 0.1 s debounce
+  passes (`drgnx-term--face-touched`, advice on `set-face-attribute`). `drgnx-view-patch-repaint` draws every row
+  again from the faces as they are (a theme change in a view whose type has `:epoch-reset nil`), the LRU emptied, with no message to the hub. A terminal's patch also
   carries `term` (cursor, alt screen, mouse tracking, title): the inserter keeps it (`drgnx-view-patch-term`) and
   draws the cursor's row again, so the view type's PATCHED can place the cursor after the draw.
 - **The fit guard:** a row with a stop is measured once (the text before its first stop, `string-pixel-width`); a

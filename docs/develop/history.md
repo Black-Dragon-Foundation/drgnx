@@ -321,6 +321,8 @@ changes so far, and the changes sent (the hub's shape, 0-based `:start`). With n
 that signals is skipped.
 
 The module `tools/work-space` turns the mode on in its setup and off in its teardown.
+The origin core, which knows each file's last version, is in the hub's memory: after a restart a file an agent made (not in the base) that is then removed (a revert does it) still empties its document, because the removal is staged for any file whose document holds text.
+
 A buffer that holds a large file (`drgnx-large-file-p`) is never registered, and one that becomes a large file is
 unregistered at the next drain.
 
