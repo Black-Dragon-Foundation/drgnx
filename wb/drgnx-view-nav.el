@@ -15,7 +15,8 @@
 ;; The class step: Sjá answers the nodes whose class changed; each class is a face (`drgnx-view-nav-faces', by the
 ;; descriptor's class name), put as an overlay on the node's span (the text whose `drgnx-view-patch-id-prop' is the
 ;; node's id) in the rows that hold it, never on the whole line.  The rows that hold a node are learned as rows are
-;; rendered (`drgnx-view-patch-ids'); a row a patch replaced gets its nodes' classes again after the draw.
+;; rendered (`drgnx-view-patch-ids', and per row `drgnx-view-patch-keys'); a row a patch replaced gets its nodes'
+;; classes again after the draw, found through that per-row index.
 ;;
 ;; The trailing notice tells the hub the selection once it has been still for `drgnx-view-delay', and at most once per
 ;; `drgnx-view-delay' while a key is held: the view's `drgnx-view-nav-notice-method' with (:view V :selected ID), or
@@ -135,14 +136,13 @@ draw replaced), every node drawn in them gets its current class again and the ov
         (drgnx-view-nav--put-class view (aref changes i) (aref changes (1+ i)))
         (setq i (+ i 2)))
       (when keys
-        (let ((ids (drgnx-view-patch-ids drgnx-view-patch)) (keyset (make-hash-table :test #'equal)))
-          (dolist (k keys) (puthash k t keyset))
-          ;; no closure per node: a panel draws one per step, and every draw walks them all
-          (maphash (lambda (id rows)
-                     (unless (gethash id done)
-                       (while (and rows (not (gethash (car rows) keyset))) (setq rows (cdr rows)))
-                       (when rows (drgnx-view-nav--put-class view id (nidhogg-view-get h 'class id)))))
-                   ids)
+        ;; the nodes drawn in the replaced rows, by the row → ids index: never a walk of every node drawn
+        (let ((index (drgnx-view-patch-keys drgnx-view-patch)))
+          (dolist (k keys)
+            (dolist (id (gethash k index))
+              (unless (gethash id done)
+                (puthash id t done)
+                (drgnx-view-nav--put-class view id (nidhogg-view-get h 'class id)))))
           ;; a draw may have deleted text under an overlay: the empty ones go (a key alone deletes no text)
           (let ((table (drgnx-view-patch-spans drgnx-view-patch)))
             (maphash (lambda (id ovs)
