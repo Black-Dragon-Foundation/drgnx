@@ -9,7 +9,9 @@ Turn it off with the module `tools/agent-panel` (see [modules](modules.md)); eve
 ## What you see
 
 - **Header:** the agent's icon and name, then what it is doing: "Claude · running 6 min", "held by you" (you paused
-  it) or "Pair · editing your checkout"; on the right the **watch · review · debug** lens, the preset in force raised.
+  it) or "Pair · editing your checkout"; on the right the **watch · review · debug** lens, the preset in force raised, then a pin button (pins the card at
+  point; a click leaves point where it is) and **⋯**, a menu of Fork the Chat, Compact the Context, Switch the Model,
+  Switch the Mode, List the Edits and Stop the Agent.
 - **Chips:** model, context ring, cost, mode, sandbox, MCP servers, files edited, checkpoints. A chip appears only when
   the hub reports it; none is made up.
 - **Steps:** a tool call is one line: a dot for its state, its title (a shell step: "Shell" and its command in the
