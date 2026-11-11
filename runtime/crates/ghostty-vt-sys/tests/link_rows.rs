@@ -58,6 +58,16 @@ fn the_library_is_the_version_this_crate_was_written_for() {
     );
 }
 
+/// A symbol as the C and Rust sources name it: Mach-O puts a `_` before every name (`___addtf3` is `__addtf3`, `__ZN3hwy…`
+/// is the C++ name `_ZN3hwy…`), ELF does not.
+fn source_name(name: &str) -> &str {
+    if cfg!(target_os = "macos") {
+        name.strip_prefix('_').unwrap_or(name)
+    } else {
+        name
+    }
+}
+
 #[test]
 fn no_duplicate_compiler_rt_symbols() {
     // The archive's compiler_rt must not clash with Rust's compiler_builtins: every global symbol it defines under a
@@ -67,7 +77,7 @@ fn no_duplicate_compiler_rt_symbols() {
         .lines()
         .filter_map(|l| {
             let mut w = l.split_whitespace().rev();
-            let name = w.next()?;
+            let name = source_name(w.next()?);
             let ty = w.next()?;
             (ty == "T"
                 && name.starts_with("__")
@@ -84,7 +94,11 @@ fn no_duplicate_compiler_rt_symbols() {
     let mut seen = BTreeSet::new();
     let dup: Vec<String> = tool("nm", &["--defined-only", "-g"], exe.to_str().unwrap())
         .lines()
-        .filter_map(|l| l.split_whitespace().last().map(String::from))
+        .filter_map(|l| {
+            l.split_whitespace()
+                .last()
+                .map(|n| source_name(n).to_string())
+        })
         .filter(|n| n.starts_with("__") && !seen.insert(n.clone()))
         .collect();
     assert!(
@@ -119,6 +133,9 @@ fn no_libstdcxx_reference() {
     );
 }
 
+/// Linux only: macOS has no network namespace to build in (`unshare` is util-linux). The build reads the same pinned
+/// tarballs there, so this row on Linux covers both.
+#[cfg(target_os = "linux")]
 #[test]
 fn builds_offline() {
     // The same crate, built in a network namespace of its own (no interface at all) from the pinned tarballs.
@@ -142,6 +159,9 @@ fn builds_offline() {
         .arg(dir.join("Cargo.toml"))
         .env("CARGO_TARGET_DIR", &target)
         .env("GHOSTTY_VT_TARBALLS", &tarballs)
+        // a compiler cache (sccache) is a client of a server it cannot reach from an empty namespace
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
         .status()
         .expect("unshare (util-linux)");
     let _ = std::fs::remove_dir_all(&target);
