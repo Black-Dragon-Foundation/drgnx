@@ -254,8 +254,8 @@ remote_s2_build() { # the runner side: the profile, then the build under it, und
   cd "$r/slot-nidhogg" || return 1
   # round 4: configure saw no GNU Make, with no denial for make; what the build's environment finds, under the profile
   /usr/bin/sandbox-exec -f "$a/build.sb" /usr/bin/env -i \
-    HOME="$a/home" TMPDIR="$a/tmp/" PATH="$r/tools/cargo/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
-    RUSTUP_HOME="$r/tools/rustup" CARGO_HOME="$r/cache/cargo" LANG=en_US.UTF-8 __CF_USER_TEXT_ENCODING="$(cf_enc)" \
+    HOME="$a/home" TMPDIR="$a/tmp/" PATH="$r/tools/rust/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    CARGO_HOME="$r/cache/cargo" LANG=en_US.UTF-8 __CF_USER_TEXT_ENCODING="$(cf_enc)" \
     /bin/bash -c 'echo "MAKE=${MAKE-unset}"; echo "command -v: $(command -v make gmake gnumake | tr "\n" " ")"
       make --version; echo "make-rc=$?"; (make --version) 2>/dev/null | head -n 1; echo "quiet-rc=${PIPESTATUS[0]}"
       # round 6: configure found no cargo
@@ -263,11 +263,11 @@ remote_s2_build() { # the runner side: the profile, then the build under it, und
       ls -la "${PATH%%:*}" | head -n 8; cargo --version; echo "cargo-rc=$?"; rustc --version; echo "rustc-rc=$?"' \
     > "$a/make-probe.txt" 2>&1
   echo "--- make and cargo under the profile"; cut -c1-300 "$a/make-probe.txt"
-  echo "--- the CI user's ~/.cargo/bin, copied to tools/cargo/bin"; ls -la "$r/tools/cargo/bin" 2>&1 | head -n 8
+  echo "--- the CI user's toolchain, copied to tools/rust/bin"; ls -la "$r/tools/rust/bin" 2>&1 | head -n 8
   start=$(date +%s)
   "$r/mrspike" watch --grant-mib 100000 --report "$a/watch.txt" -- /usr/bin/sandbox-exec -f "$a/build.sb" /usr/bin/env -i \
-    HOME="$a/home" TMPDIR="$a/tmp/" PATH="$r/tools/cargo/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
-    RUSTUP_HOME="$r/tools/rustup" CARGO_HOME="$r/cache/cargo" LANG=en_US.UTF-8 __CF_USER_TEXT_ENCODING="$(cf_enc)" \
+    HOME="$a/home" TMPDIR="$a/tmp/" PATH="$r/tools/rust/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    CARGO_HOME="$r/cache/cargo" LANG=en_US.UTF-8 __CF_USER_TEXT_ENCODING="$(cf_enc)" \
     /bin/bash nidhogg/build.sh --host --naglfar --dev --stage build --jobs 3 --build-dir "$a/nbuild" > "$a/build.log" 2>&1
   rc=$?
   echo "build-rc=$rc seconds=$(( $(date +%s) - start ))"
@@ -283,11 +283,12 @@ s2_build() { # NIDHOGG_CHECKOUT
   say "## S2: a Nidhogg build with Naglfar under the draft build profile"
   r=$(root_of)
   sudo ditto "$1" "$r/slot-nidhogg"
-  # the toolchain: the CI image's rustup, copied into the runner root (the design's setup job would install it there)
+  # the toolchain: the CI image's active one (its sysroot holds cargo and rustc), copied into the runner root (the
+  # design's `sleipnir tools` step installs it there). Round 7: the image's rustup is Homebrew's, with no ~/.cargo/bin
   sudo mkdir -p "$r/tools"
-  sudo ditto "$HOME/.rustup" "$r/tools/rustup"
-  sudo ditto "$HOME/.cargo/bin" "$r/tools/cargo/bin"
-  say "- the CI user's Rust: $(command -v cargo rustc | tr '\n' ' ')$(ls -la "$HOME/.cargo/bin" 2>&1 | head -n 4 | tr '\n' ' ')"
+  sys=$(rustc --print sysroot) || { say "- **S2 build: FAIL** (no rustc on the CI host)"; return 1; }
+  sudo ditto "$sys" "$r/tools/rust"
+  say "- the CI user's Rust: $(command -v cargo rustc | tr '\n' ' ')sysroot $sys"
   sudo chown -R "$U:staff" "$r/slot-nidhogg" "$r/tools"
   out=$(mr "bash ~/$ROOT_REL/spike.sh remote s2_build" 2>&1)
   printf '%s\n' "$out" > "$OUT/s2-build.log"

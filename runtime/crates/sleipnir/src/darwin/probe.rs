@@ -382,8 +382,8 @@ mod tests {
         assert_eq!(parse_version(""), None);
     }
 
-    /// [D] The live read on the macOS CI host: a whole `Raw` (the runner account there is an admin, so only the
-    /// account item may be missing).
+    /// [D] The live read on the macOS CI host: a whole `Raw`. The CI account is an admin and the VM's disk can sit
+    /// under the runner's free-space floor, so only those two items may be missing there.
     #[cfg(all(target_os = "macos", feature = "runner"))]
     #[test]
     fn the_live_read_is_whole() {
@@ -394,7 +394,11 @@ mod tests {
         assert!(raw.boot_session.len() >= 32, "{raw:?}");
         match contract(&raw, vec![]) {
             Ok(_) => {}
-            Err(m) => assert!(m.iter().all(|m| m.what.contains("standard")), "{m:?}"),
+            Err(m) => assert!(
+                m.iter()
+                    .all(|m| m.what.contains("standard") || m.what.contains("GB free")),
+                "{m:?}"
+            ),
         }
     }
 }
