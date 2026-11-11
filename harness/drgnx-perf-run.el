@@ -60,7 +60,10 @@ font-lock (`lisp--el-funcall-position-p', through `forward-sexp') scanned the re
 
 (defun drgnx-perf-run--debug-setup-form ()
   "The debug workloads' setup: the breakpoint column's files, `drgnx-hub-call' answered by a store in the session (its
-`debug/breakpoints' adds and removes by line, as the hub's), F9 toggling; `drgnx-perf--debug-stop' undoes it."
+`debug/breakpoints' adds and removes by line, as the hub's), F9 toggling, and the hover pool laid out as on a Nidhogg
+that lights a margin's mouse face (the feature provided where the Emacs lacks it: an advice on the gutter's own call
+would be bypassed by native code; the cost timed is the Lisp's, the C lights nothing until the pointer comes);
+`drgnx-perf--debug-stop' undoes it."
   (format "(progn (dolist (m '(\"drgnx-debug-launch\" \"drgnx-debug-gutter\")) (load (expand-file-name (concat \"modules/extra/\" m) %S) nil t))
      (defvar drgnx-perf--debug-store nil) (defvar drgnx-perf--debug-version 0)
      (defun drgnx-perf--debug-hub (method params cb &rest _)
@@ -72,8 +75,12 @@ font-lock (`lisp--el-funcall-position-p', through `forward-sexp') scanned the re
          (funcall cb (list :version (cl-incf drgnx-perf--debug-version) :breakpoints (reverse drgnx-perf--debug-store)) nil))
        1)
      (defun drgnx-perf--debug-stop ()
-       (advice-remove 'drgnx-hub-call #'drgnx-perf--debug-hub) (global-unset-key (kbd \"<f9>\")) t)
+       (advice-remove 'drgnx-hub-call #'drgnx-perf--debug-hub)
+       (when drgnx-perf--debug-feature (setq features (delq 'glitnir-margin-mouse-face features)))
+       (global-unset-key (kbd \"<f9>\")) t)
      (advice-add 'drgnx-hub-call :override #'drgnx-perf--debug-hub)
+     (defvar drgnx-perf--debug-feature (not (featurep 'glitnir-margin-mouse-face)))
+     (provide 'glitnir-margin-mouse-face)
      (global-set-key (kbd \"<f9>\") #'drgnx-debug-gutter-toggle) t)"
           drgnx-ui-repo-dir))
 
@@ -1458,13 +1465,17 @@ error if it does not hold).  With :actions, :measure runs after the input and it
       ;; (`drgnx-perf--debug-hub'), so what is timed is the editor's half: placing and dressing the marks
       (debug-gutter-scroll
        :setup ,(drgnx-perf-run--debug-setup-form)
-       ;; the 12k-line fixture with a breakpoint every 40 lines (300), of every kind; then as code-scrolling
-       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min)) (drgnx-debug-gutter-mode 1)"
-                      " (drgnx-debug-gutter--apply (list :version 1 :breakpoints"
+       ;; the 12k-line fixture with a breakpoint every 40 lines (300), of every kind, in the session's store, which the
+       ;; mode asks for as it turns on (a view handed to `--apply' would be older than the store's version and dropped);
+       ;; then as code-scrolling
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
+                      " (setq drgnx-perf--debug-store (reverse"
                       "   (mapcar (lambda (i) (list :id i :line (* 40 i) :enabled (/= 0 (% i 5)) :verified (/= 0 (% i 7))"
                       "                             :condition (and (= 0 (% i 3)) \"x > 1\") :log (and (= 0 (% i 11)) \"{x}\")))"
-                      "           (number-sequence 1 300)))) t)")
+                      "           (number-sequence 1 300))))"
+                      " (drgnx-debug-gutter-mode 1) t)")
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
+       :check "(with-current-buffer (window-buffer) (and (= 300 (length drgnx-debug-gutter--overlays)) (seq-some (lambda (o) (overlay-get o 'drgnx-debug-hover)) (overlays-in (window-start) (window-end))) t))"   ; the marks and the hover pool were drawn
        :teardown ,(concat "(progn (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
       ;; F9 on 20 lines in a row: each key a `debug/breakpoints' add, its answer and the column redrawn
       (debug-breakpoint-click

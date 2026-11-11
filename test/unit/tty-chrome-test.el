@@ -53,5 +53,22 @@
     (drgnx-chrome-apply nil t)
     (should (stringp (window-parameter (selected-window) 'header-line-format)))))
 
+(ert-deftest drgnx-chrome/a-buffer-with-its-own-tab-line-keeps-it ()
+  "A buffer that sets `drgnx-chrome-own-tab-line' (the Work space's lenses) shows its own tab line in an editor
+window in place of the editor's tabs; the row stays, so the window's text does not move."
+  (tty-chrome-test--with
+    (drgnx-chrome-apply nil t)
+    (should (stringp (window-parameter (selected-window) 'tab-line-format)))
+    (setq-local drgnx-chrome-own-tab-line t)
+    (setq-local tab-line-format '("" "Work · Flow"))
+    (drgnx-chrome-apply nil t)
+    (should (equal (window-parameter (selected-window) 'tab-line-format) drgnx-chrome--own-tab-line))
+    ;; an `:eval' form (a batch Emacs formats those as ""): its value is the buffer's own tab line
+    (should (equal (eval (cadr (window-parameter (selected-window) 'tab-line-format)) t) '("" "Work · Flow")))
+    (kill-local-variable 'drgnx-chrome-own-tab-line)
+    (kill-local-variable 'tab-line-format)
+    (drgnx-chrome-apply nil t)
+    (should (stringp (window-parameter (selected-window) 'tab-line-format)))))
+
 (provide 'tty-chrome-test)
 ;;; tty-chrome-test.el ends here

@@ -153,6 +153,29 @@ it takes `image-scaling-factor', a guess from the font: 1.6 at scale 2, and the 
       (let ((m (cdr (assoc "view/measured" drgnx-view-patch-test--sent))))
         (should (equal '(("ui" "abcdefgh" 80)) (plist-get m :measured)))))))
 
+(defface drgnx-view-patch-test-narrow '((t)) "A test face: its characters measure 5 px, the others 10.")
+
+(ert-deftest drgnx-view-patch/a-segment-is-measured-in-its-faces ()
+  "The fit guard measures the text before a stop with the row's faces and images on it, as it is drawn: a segment in
+a narrow (proportional) face that fits is kept whole and nothing is reported; an image measures as its picture."
+  (drgnx-view-patch-test--with
+    (let ((measure (lambda (s)
+                     (let ((w 0))
+                       (dotimes (i (length s))
+                         (setq w (+ w (cond ((eq (car-safe (get-text-property i 'display s)) 'image) 3)
+                                            ((eq (get-text-property i 'face s) 'drgnx-view-patch-test-narrow) 5)
+                                            (t 10)))))
+                       w))))
+      (let ((drgnx-view-patch-measure-function measure) (drgnx-view--text-width-function measure))
+        ;; "abcdefgh" in the narrow face is 40 px: it fits its stop at 50
+        (drgnx-view-apply-patch (drgnx-view-patch-test--patch
+                                 (list (list :reset (list (drgnx-view-patch-test--row
+                                                           "a" "abcdefgh rest" :stops '((8 50))
+                                                           :runs '((0 8 "drgnx-view-patch-test-narrow"))))))))
+        (should (string-prefix-p "abcdefgh rest" (drgnx-view-patch-test--draw)))
+        (should (= 0 (drgnx-view-patch-refits drgnx-view-patch)))
+        (should-not (assoc "view/measured" drgnx-view-patch-test--sent))))))
+
 (ert-deftest drgnx-view-patch/fitting-line-costs-one-measure ()
   (drgnx-view-patch-test--with
     (let ((n 0))

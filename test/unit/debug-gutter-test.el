@@ -222,4 +222,141 @@
       (should (equal (debug-gutter-test--marks) '((4 . bp))))
       (should (equal (car (last (debug-gutter-test--ops))) '("edit" 1))))))
 
+;; The hover pool: a dot on each shown line without a mark, lit by the pointer (Nidhogg's margin `mouse-face').  Batch
+;; Emacs is a terminal without the patch, so these rows say the frame has it and give the colours.
+
+(defconst debug-gutter-test--bg "#1e1f22" "The scripted margin background.")
+(defconst debug-gutter-test--bp "#e5484d" "The scripted breakpoint colour.")
+
+(defmacro debug-gutter-test--hovering (&rest body)
+  "BODY with the frame lighting margin mouse faces and the column's colours scripted."
+  (declare (indent 0))
+  `(cl-letf (((symbol-function 'drgnx-debug-gutter--hover-p) (lambda (&rest _) t))
+             ((symbol-function 'drgnx-debug-gutter--hover-colours)
+              (lambda () (cons debug-gutter-test--bg debug-gutter-test--bp))))
+     (let ((drgnx-debug-gutter-show 'always))
+       ,@body)))
+
+(defun debug-gutter-test--dots (&optional window)
+  "The lines of WINDOW's hover dots (default the selected window), in order."
+  (let ((window (or window (selected-window))))
+    (sort (mapcar (lambda (o) (line-number-at-pos (overlay-start o)))
+                  (seq-filter (lambda (o) (eq (overlay-get o 'drgnx-debug-hover) window))
+                              (overlays-in (point-min) (point-max))))
+          #'<)))
+
+(defun debug-gutter-test--shown (window)
+  "The lines WINDOW shows, from its start: as many as its body is high, up to the buffer's last."
+  (with-current-buffer (window-buffer window)
+    (let ((first (line-number-at-pos (window-start window))))
+      (number-sequence first (min (+ first (window-body-height window) -1)
+                                  (line-number-at-pos (point-max)))))))
+
+(ert-deftest drgnx-debug-gutter/the-hover-dot-hides-in-the-margin-and-shows-faint ()
+  ;; at rest the dot is the margin's own background; the pointer turns it the breakpoint colour at 38 % over it
+  (cl-letf (((symbol-function 'drgnx-margins-pad) (lambda (&rest _) " ")))
+    (let* ((s (drgnx-debug-gutter--hover-string debug-gutter-test--bg debug-gutter-test--bp))
+           (spec (get-text-property 0 'display s))
+           (dot (cadr spec)) (i (1- (length dot))))
+      (should (equal (car spec) '(margin left-margin)))
+      (should (equal (substring-no-properties dot) " ●"))
+      ;; in the UI font: its dot is the mockup's 10 px at 13 px (the code font's is 8) and its line is no taller
+      (should (equal (get-text-property i 'face dot) (list :inherit 'drgnx-ui-text :foreground debug-gutter-test--bg)))
+      (should (equal (get-text-property i 'mouse-face dot)
+                     (list :inherit 'drgnx-ui-text
+                           :foreground (drgnx-color-over debug-gutter-test--bp debug-gutter-test--bg 0.38))))
+      (should (equal (get-text-property i 'help-echo dot) "Click to add a breakpoint"))
+      ;; the pad lights nothing
+      (should-not (get-text-property 0 'mouse-face dot)))))
+
+(ert-deftest drgnx-debug-gutter/the-margin-background-is-the-buffers-default ()
+  ;; the margin draws in `default' as the buffer remaps it
+  (with-temp-buffer
+    (should (equal (drgnx-debug-gutter--margin-background) (face-background 'default nil t)))
+    (face-remap-add-relative 'default :background debug-gutter-test--bg)
+    (should (equal (drgnx-debug-gutter--margin-background) debug-gutter-test--bg))))
+
+(ert-deftest drgnx-debug-gutter/the-hover-pool-covers-the-shown-lines-without-a-mark ()
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0))
+    (debug-gutter-test--hovering
+      (debug-gutter-test--with 200
+        (drgnx-debug-gutter-toggle 3)
+        (drgnx-debug-gutter--pool-update (selected-window))
+        (should (equal (debug-gutter-test--dots) (remq 3 (debug-gutter-test--shown (selected-window)))))
+        ;; every dot is this window's and at its line's start
+        (dolist (o (overlays-in (point-min) (point-max)))
+          (when (overlay-get o 'drgnx-debug-hover)
+            (should (= (overlay-start o) (save-excursion (goto-char (overlay-start o)) (line-beginning-position))))))
+        ;; a breakpoint added takes its line's dot; removed, gives it back
+        (drgnx-debug-gutter-toggle 5)
+        (drgnx-debug-gutter--pool-update (selected-window))
+        (should-not (memq 5 (debug-gutter-test--dots)))
+        (drgnx-debug-gutter-toggle 5)
+        (drgnx-debug-gutter--pool-update (selected-window))
+        (should (memq 5 (debug-gutter-test--dots)))))))
+
+(ert-deftest drgnx-debug-gutter/the-hover-pool-follows-scroll-and-typing ()
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0))
+    (debug-gutter-test--hovering
+      (debug-gutter-test--with 200
+        (drgnx-debug-gutter--pool-update (selected-window))
+        (let ((n (length (debug-gutter-test--dots))))
+          ;; scrolled: the dots move to the new lines, no more of them
+          (set-window-start (selected-window) (save-excursion (goto-char (point-min)) (forward-line 99) (point)))
+          (drgnx-debug-gutter--pool-update (selected-window))
+          (should (equal (debug-gutter-test--dots) (debug-gutter-test--shown (selected-window))))
+          (should (= (length (debug-gutter-test--dots)) n))
+          ;; typing that adds lines on screen: one dot per line still, none doubled
+          (goto-char (window-start))
+          (insert "a\nb\nc\n")
+          (drgnx-debug-gutter--pool-update (selected-window))
+          (should (equal (debug-gutter-test--dots) (debug-gutter-test--shown (selected-window)))))))))
+
+(ert-deftest drgnx-debug-gutter/the-hover-pool-is-per-window ()
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0))
+    (debug-gutter-test--hovering
+      (debug-gutter-test--with 200
+        (let ((w1 (selected-window)) (w2 (split-window)))
+          (unwind-protect
+              (progn
+                (set-window-start w2 (save-excursion (goto-char (point-min)) (forward-line 49) (point)))
+                (drgnx-debug-gutter--pool-update w1)
+                (drgnx-debug-gutter--pool-update w2)
+                (should (equal (debug-gutter-test--dots w1) (debug-gutter-test--shown w1)))
+                (should (equal (debug-gutter-test--dots w2) (debug-gutter-test--shown w2)))
+                ;; a closed window's pool goes with the next update
+                (delete-window w2)
+                (drgnx-debug-gutter--pool-update w1)
+                (should-not (debug-gutter-test--dots w2)))
+            (when (window-live-p w2) (delete-window w2))))))))
+
+(ert-deftest drgnx-debug-gutter/the-hover-pool-skips-folded-lines ()
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0))
+    (debug-gutter-test--hovering
+      (debug-gutter-test--with 200
+        ;; lines 6 to 8 folded away (as outline and hideshow do, with an invisible overlay from line 5's end)
+        (let ((o (make-overlay (save-excursion (goto-char (point-min)) (forward-line 4) (line-end-position))
+                               (save-excursion (goto-char (point-min)) (forward-line 7) (line-end-position)))))
+          (overlay-put o 'invisible t)
+          (drgnx-debug-gutter--pool-update (selected-window))
+          (let ((dots (debug-gutter-test--dots)))
+            (should (memq 5 dots)) (should (memq 9 dots))
+            (should-not (or (memq 6 dots) (memq 7 dots) (memq 8 dots)))))))))
+
+(ert-deftest drgnx-debug-gutter/no-hover-pool-without-the-margin-mouse-face ()
+  ;; a terminal, or an Emacs whose margins light nothing: no pool; the column alone
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0) (drgnx-debug-gutter-show 'always))
+    (debug-gutter-test--with 50
+      (drgnx-debug-gutter--pool-update (selected-window))
+      (should-not (debug-gutter-test--dots))))
+  ;; the mode off takes the pool out
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0))
+    (debug-gutter-test--hovering
+      (debug-gutter-test--with 50
+        (drgnx-debug-gutter--pool-update (selected-window))
+        (should (debug-gutter-test--dots))
+        (drgnx-debug-gutter-mode -1)
+        (should-not (debug-gutter-test--dots))
+        (should-not (memq #'drgnx-debug-gutter--pool-update pre-redisplay-functions))))))
+
 ;;; debug-gutter-test.el ends here
