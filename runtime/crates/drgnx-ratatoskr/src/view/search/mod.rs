@@ -1332,13 +1332,17 @@ pub async fn preview(f: &Front, c: &Caller, p: PreviewParams) -> Result<PreviewA
         edits: None,
         replace: p.replace.clone(),
     };
-    let (query, plan) = views
+    let (query, plan, around) = views
         .greps
         .current(conn, &p.view, |run| {
             let plan = plans_of(run, &edits_params, &bufs)
                 .into_iter()
                 .find(|f| f.path == path);
-            (run.query.clone(), plan)
+            (
+                run.query.clone(),
+                plan,
+                around_of(run, &path, &edits_params),
+            )
         })
         .ok_or_else(|| invalid("view", "the view has no search"))?;
     let Some(plan) = plan else {
@@ -1351,10 +1355,11 @@ pub async fn preview(f: &Front, c: &Caller, p: PreviewParams) -> Result<PreviewA
             skipped: Vec::new(),
         });
     };
-    let (answer, skipped) =
-        crate::clock::blocking(move || edits::preview(plan, |old| grep::captures(&query, old)))
-            .await
-            .map_err(|e| invalid("view", &e.to_string()))?;
+    let (answer, skipped) = crate::clock::blocking(move || {
+        edits::preview(plan, |old| grep::captures(&query, old), &around)
+    })
+    .await
+    .map_err(|e| invalid("view", &e.to_string()))?;
     let mut answer = answer.unwrap_or(PreviewAnswer {
         path: p.path.as_str().to_owned(),
         diff: String::new(),
@@ -1365,6 +1370,25 @@ pub async fn preview(f: &Front, c: &Caller, p: PreviewParams) -> Result<PreviewA
     });
     answer.skipped = skipped;
     Ok(answer)
+}
+
+/// The preview's knowledge of PATH from RUN: each match's definition (its context label, `ƒ name`) and the lines of the
+/// matches P leaves unticked.
+fn around_of(run: &Run, path: &str, p: &EditsParams) -> edits::Around {
+    let off: HashSet<&str> = p.off.iter().flatten().map(String::as_str).collect();
+    let mut around = edits::Around::default();
+    for f in run.files.iter().filter(|f| f.file == path) {
+        for (i, (m, n)) in f.ms.iter().zip(&f.ns).enumerate() {
+            let id = run::match_id(run.id, *n);
+            if let Some(Some(def)) = f.ctx.get(i) {
+                around.labels.insert(id.clone(), rows::def_label(def));
+            }
+            if off.contains(id.as_str()) {
+                around.kept.push(m.line);
+            }
+        }
+    }
+    around
 }
 
 /// `search/apply`: change set P.change written (`apply.rs`); false when there is none of the caller's to write.

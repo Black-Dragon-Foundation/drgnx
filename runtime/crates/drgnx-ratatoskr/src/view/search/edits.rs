@@ -246,9 +246,18 @@ const CONTEXT: usize = 3;
 /// One file's preview (`search/preview`): the unified diff of its text before and after its edits, each hunk with the
 /// ids of the edits in it and their captures (GROUPS of an edit's old text: a regexp's groups, `None` for one that
 /// matched nothing); the skipped, each with why.
+/// What a preview knows of a file from its run: each match's definition label by id, and the lines of its unticked
+/// matches.
+#[derive(Debug, Default)]
+pub(super) struct Around {
+    pub labels: std::collections::HashMap<String, String>,
+    pub kept: Vec<u32>,
+}
+
 pub(super) fn preview(
     plan: FilePlan,
     groups: impl Fn(&str) -> Vec<Option<String>>,
+    around: &Around,
 ) -> (Option<PreviewAnswer>, Vec<EditSkip>) {
     let (text, _) = match text_of(&plan) {
         Ok(t) => t,
@@ -302,6 +311,13 @@ pub(super) fn preview(
                         groups: groups(&e.old),
                     })
                     .filter(|g| !g.groups.is_empty())
+                    .collect(),
+                label: mine.first().and_then(|e| around.labels.get(&e.id).cloned()),
+                kept: around
+                    .kept
+                    .iter()
+                    .copied()
+                    .filter(|l| old.contains(&(*l as usize - 1)))
                     .collect(),
             })
         })
@@ -465,6 +481,7 @@ mod tests {
                 ],
             ),
             |old| vec![Some(old[..1].to_owned()), None],
+            &Around::default(),
         );
         let a = answer.unwrap();
         assert_eq!(whys(&skipped), [("m:1:3".into(), TEXT_CHANGED.into())]);
@@ -485,6 +502,42 @@ mod tests {
         assert_eq!(h.captures[0].groups, [Some("f".to_owned()), None]);
         assert_eq!(a.hunks[1].ids, ["m:1:2"]);
         assert!(a.diff.contains("@@ -15,6 +15,6 @@"), "{}", a.diff);
+    }
+
+    /// [D] Each hunk is named by its first match's definition (the run's context label), and the lines of the file's
+    /// unticked matches inside it are listed: they stay as they are, between the changed lines.
+    #[test]
+    fn a_preview_hunk_names_its_definition_and_its_kept_lines() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("a.txt");
+        let text: String = (1..=20).map(|i| format!("line {i} food\n")).collect();
+        std::fs::write(&f, &text).unwrap();
+        let p = f.to_string_lossy().into_owned();
+        let around = Around {
+            labels: [("m:1:0".to_owned(), "ƒ eat".to_owned())].into(),
+            kept: vec![3, 19],
+        };
+        let (answer, _) = preview(
+            plan(
+                &p,
+                vec![
+                    want("m:1:0", 2, 7, "food", "d-f"),
+                    want("m:1:1", 4, 7, "food", "d-f"),
+                    want("m:1:2", 18, 8, "food", "d-f"),
+                ],
+            ),
+            |_| Vec::new(),
+            &around,
+        );
+        let a = answer.unwrap();
+        assert_eq!(a.hunks[0].label.as_deref(), Some("ƒ eat"));
+        assert_eq!(
+            a.hunks[0].kept,
+            [3],
+            "line 3's match is unticked, inside hunk 1"
+        );
+        assert_eq!(a.hunks[1].label, None, "no definition around line 18");
+        assert_eq!(a.hunks[1].kept, [19]);
     }
 
     /// [D] Overlapping and nested matches: sorted by start, the first kept, the others skipped with today's reason.

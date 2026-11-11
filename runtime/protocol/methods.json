@@ -29216,6 +29216,22 @@
                 },
                 "type": "array"
               },
+              "kept": {
+                "description": "The lines (the old file's) of the unticked matches inside the hunk: they stay as they are.",
+                "items": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "label": {
+                "description": "The definition the hunk's first match is in, as the Search view's context label shows it (`ƒ name`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "new_lines": {
                 "format": "uint32",
                 "minimum": 0,

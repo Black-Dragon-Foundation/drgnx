@@ -641,6 +641,12 @@ pub struct PreviewHunk {
     pub ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub captures: Vec<MatchGroups>,
+    /// The definition the hunk's first match is in, as the Search view's context label shows it (`ƒ name`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// The lines (the old file's) of the unticked matches inside the hunk: they stay as they are.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kept: Vec<u32>,
 }
 
 /// `search/preview`'s answer: the file's unified diff (3 lines of context), its lines added and removed, the hunks in
