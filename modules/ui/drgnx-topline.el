@@ -312,8 +312,8 @@ are not `equal', and `equal' ignores the text properties the width is in."
 (defconst drgnx-topline--search-text "Search files, commands, symbols" "The search box's placeholder.")
 
 (defun drgnx-topline--px (n)
-  "N logical pixels on the selected frame, in its pixels."
-  (round (* n (drgnx-pixels-scale))))
+  "N logical pixels on the selected frame, in its pixels (`drgnx-px': half up)."
+  (drgnx-px n))
 
 (defun drgnx-topline--space (n &optional face)
   "A space N logical pixels wide, in FACE."
@@ -329,13 +329,17 @@ are not `equal', and `equal' ignores the text properties the width is in."
   (or (drgnx-face-color face attr (selected-frame)) "currentColor"))
 
 (defun drgnx-topline--image (svg text)
-  "TEXT shown as the SVG image SVG (a string, logical pixels) on a frame that can, else as itself.  The image's width
-in the frame's pixels is on it (`drgnx-topline-px'), for `drgnx-topline--known-px'."
-  (if (drgnx-topline--svg-p)
-      ;; :scale, else Emacs takes `image-scaling-factor' (a guess from the font: 1.6 at scale 2)
-      (propertize text 'display (create-image svg 'svg t :ascent 'center :scale (drgnx-pixels-scale))
-                  'drgnx-topline-px (and (string-match "width=\"\\([0-9]+\\)\"" svg)
-                                         (drgnx-topline--px (string-to-number (match-string 1 svg)))))
+  "TEXT shown as the SVG image SVG (a string, logical pixels, with a `viewBox') on a frame that can, else as itself.
+The image is sized in the frame's pixels by the pixel rule (`drgnx-px' of its width and height: a whole number, so
+the row counts what is drawn; at 1.25 a 26 px control is 33, where an image scale would draw 32.5), and that width
+is on it (`drgnx-topline-px'), for `drgnx-topline--known-px'."
+  (if (and (drgnx-topline--svg-p) (string-match "width=\"\\([0-9]+\\)\" height=\"\\([0-9]+\\)\"" svg))
+      (let ((w (drgnx-topline--px (string-to-number (match-string 1 svg))))
+            (h (drgnx-topline--px (string-to-number (match-string 2 svg)))))
+        ;; sized already: `:scale' 1, or Emacs takes `image-scaling-factor' (a guess from the font: 1.6 at scale 2)
+        (propertize text 'display (create-image (replace-match (format "width=\"%d\" height=\"%d\"" w h) t t svg)
+                                                'svg t :ascent 'center :scale 1)
+                    'drgnx-topline-px w))
     text))
 
 (defun drgnx-topline--known-px (string)
