@@ -765,7 +765,7 @@ no globs; Symbol keeps Aa); Rename (the language server's edits) keeps the repla
         (pcase-dolist (`(,kind ,icon ,help) drgnx-replace--kinds)
           (let* ((n (or (plist-get counts (intern (format ":%s" kind))) 0))
                  (on (memq kind kinds-on))
-                 (face (cond (on 'drgnx-replace-on) ((zerop n) 'drgnx-text-subtle) (t 'drgnx-replace-dim))))
+                 (face (cond (on 'drgnx-pill-accent) ((zerop n) '(drgnx-text-subtle drgnx-pill)) (t 'drgnx-pill))))
             (insert-text-button (concat (drgnx-look-icon icon nil 14) " " (symbol-name kind)
                                         (if (> n 0) (format " %d" n) ""))
                                 'face face 'follow-link t 'help-echo (format "%s (%s)" help (if on "on" "off"))

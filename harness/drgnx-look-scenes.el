@@ -45,6 +45,7 @@
     (search-sheet :mockup search-view :then "C-g")
     (search-ask :mockup search-view :then "C-g")
     (search-handed :mockup search-view)
+    (search-kinds :mockup search-view)
     (debugging))
   "The scenes in the order they are drawn: (NAME . PLIST).  NAME is the mockup's (docs/specs, the-look/NAME.png; the
 start page, the highlights and the focused Explorer have none: they are judged against the components' spec and

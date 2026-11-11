@@ -678,6 +678,21 @@ match on line 209 (the `puthash' line) unticked; the view's buffer, or nil."
 (defvar drgnx-search-handoff-buffer-name)
 (defvar drgnx-search-handoff--ask)
 
+(defun drgnx-look-scene-search-kinds ()
+  "Symbol mode with its kind chips (search-view.html's \"Symbol with kind chips\"): `drgnx-gateway--queue' in the
+project, the fn chip on."
+  (when-let* ((view (drgnx-look-scene--search)))
+    (drgnx-look-scene--try "symbol"
+      (with-current-buffer view
+        (drgnx-replace--open :text "drgnx-gateway--queue" :mode 'symbol)
+        (when (drgnx-look-scene--until 30 "kinds" (lambda () drgnx-replace--kind-counts))
+          (unless (memq 'fn drgnx-replace--kinds-on) (drgnx-replace-kind-toggle 'fn))
+          (drgnx-look-scene--until 15 "symbol rows"
+                                   (lambda () (and drgnx-replace--hub-counts
+                                                   (not (save-excursion (goto-char (point-min))
+                                                                        (search-forward "--pending" nil t)))))))))
+    (drgnx-look-scene--answer)))
+
 (defun drgnx-look-scene-search-handed ()
   "The Search view with four matches handed to an agent (search-view.html's results, `Ada 9/14'): a pair of a
 mock profile (the scenes' ratatoskr-mock, written into the settings before the hub starts) in the project; its rows'
