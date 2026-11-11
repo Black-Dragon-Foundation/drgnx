@@ -109,6 +109,7 @@ to its top.  The hub gives at most 50."
 (defvar-local drgnx-agent-panel--open nil "A hash: row key → non-nil when its row is open (thinking and detail shown).")
 
 (defvar drgnx-agent-panel--disclosure)
+(defvar drgnx-agent-panel--strip-width)   ; drgnx-agent-panel-steps.el
 (defvar drgnx-agent-panel--stats-render 0 "Rows rendered since Emacs started (a test reads the difference).")
 
 (declare-function drgnx-agent-panel--header-row "drgnx-agent-panel-steps")
