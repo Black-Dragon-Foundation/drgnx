@@ -1112,6 +1112,13 @@ fn wrap(text: &str, chars: usize) -> Vec<String> {
     out
 }
 
+/// A button in B: LABEL in FACE with its KEY as a keycap badge (the key face) inside it, as in the mockup.
+fn button(b: &mut RowBuilder, label: &str, key: &str, face: &str) {
+    b.push(&format!(" {label} "), Some(face))
+        .push(key, Some(KEY))
+        .push(" ", Some(face));
+}
+
 /// What clears a hold of GATE (a column of [`GATES`]).
 fn clears(gate: &str) -> &'static str {
     match gate {
@@ -1250,17 +1257,17 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
             "Check again"
         };
         let mut act = RowBuilder::new("d:act");
-        act.push(&format!(" {first} r "), Some(Chip::Run.face()))
-            .push(" ", None)
-            .push(" Tell the agent s ", Some(Chip::Wait.face()));
+        button(&mut act, first, "r", Chip::Run.face());
+        act.push(" ", None);
+        button(&mut act, "Tell the agent", "s", Chip::Wait.face());
         out.push(act.finish());
     }
     let mut act = RowBuilder::new("d:act2");
     if t.card.is_some() {
-        act.push(" Waive once w ", Some(Chip::Wait.face()))
-            .push(" ", None);
+        button(&mut act, "Waive once", "w", Chip::Wait.face());
+        act.push(" ", None);
     }
-    act.push(" Evidence e ", Some(Chip::Wait.face()));
+    button(&mut act, "Evidence", "e", Chip::Wait.face());
     out.push(act.finish());
     if t.card.is_some() {
         for (i, l) in wrap(
@@ -2041,6 +2048,29 @@ mod tests {
             "yours only",
         ] {
             assert!(all.contains(want), "no {want:?} in\n{all}");
+        }
+        // each button's key is a keycap badge (the key face) inside the button
+        for button in [
+            "Run the red r",
+            "Tell the agent s",
+            "Waive once w",
+            "Evidence e",
+        ] {
+            let row = rows
+                .iter()
+                .find(|r| r.text.contains(button))
+                .expect("a button row");
+            let at = row.text[..row.text.find(button).expect("button")]
+                .chars()
+                .count()
+                + button.chars().count()
+                - 1;
+            let at = at as u32;
+            assert!(
+                row.runs.iter().any(|r| r.0 <= at && at < r.1 && r.2 == KEY),
+                "{button}: {:?}",
+                row.runs
+            );
         }
         // the lines fit the tile: none longer than its width in cells
         assert!(text.iter().all(|t| t.chars().count() <= 50), "{all}");
