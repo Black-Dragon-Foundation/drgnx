@@ -237,7 +237,9 @@ a line `FILE:OFFSET: KIND (HEAD…)` per finding).
   `$DRGNX_RECORDINGS` (default `recordings/` in the state dir) and runs `drgnx ARGS` with `DRGNX_RECORD` set (the hub
   that command starts records; one hub per run: a second hub in the same environment is refused, so the selected tests
   start one), `DRGNX_RECORD_PROVENANCE` (`mock` only when `DRGNX_SMOKE_PROFILES=mock`, else `live`) and the caps. The
-  tests default to the smoke script (`DRGNX_TEST_SELECTOR`). `--max-minutes` is a `timeout` around the command.
+  tests default to the smoke script: its tests (`DRGNX_TEST_SELECTOR`) and, unless the caller set a selector, its file
+  (`DRGNX_TEST_ONLY=test/ui/drgnx-agents-smoke-test.el`, which the batch suite does not read otherwise).
+  `--max-minutes` is a `timeout` around the command.
   Afterwards `bundle/run.json` holds its exit code. The command's own exit code is `record start`'s.
 - `record stop NAME` ends the record: `status`, `ended`, `lint` in the manifest, `report.md` (counts of exchanges,
   connections and lines, caps, the worst reader-thread stall, the lint), and exits 1 when the lint found anything.
@@ -271,7 +273,11 @@ in your own settings), with `DRGNX_REPLAY` (backed by that recording), and with 
 recording's and that the misses file is empty. Without the fixture it fails with "no recording at …".
 
 The mock fixture was made with `DRGNX_SMOKE_PROFILES=mock bin/drgnx record start smoke-mock -- test`, then `record
-stop smoke-mock` and `record export smoke-mock --to test/fixtures/recordings/smoke-mock`.
+stop smoke-mock` and `record export smoke-mock --to test/fixtures/recordings/smoke-mock` (with `DRGNX_RATATOSKR_BIN`
+naming a test-hooks hub, `ratatoskr-mock` beside it, in a container: the batch run is the host's otherwise).
+Re-record it, from the mocks only, when the hub's side of the ACP handshake changes: a replay then fails "replay
+miss: initialize differs … re-record" (last: 2026-11-11, `clientCapabilities._meta` for the `_drgnx/panel`
+extension).
 
 Not in the script yet: the fork of a turn into a new process (no wire method reaches `fork_conversation`), and the
 editor chat through the gateway on a cheap model (the mocks have no provider for it). The live run adds them when they
