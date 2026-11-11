@@ -841,6 +841,22 @@ async fn view_for_names_the_tree() {
     assert_eq!(tree_rows(&p, &key).await.len(), 1);
 }
 
+/// Pattern D. A worktree named through a link (macOS's temporary folders are under /var, a link to /private/var) is
+/// seeded and answers from its view: the overlay reads its true name, which `eitri` opens.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_worktree_named_through_a_link_is_seeded() {
+    let (f, p, trees) = with_trees(1).await;
+    let link = f.home.path().join("link");
+    std::os::unix::fs::symlink(f.home.path().join("src"), &link).unwrap();
+    let via = link.join(trees[0].file_name().unwrap());
+    edit(&trees[0], "core/f1.el", "wt-only-fn");
+    let key = seeded(&p, &via).await;
+    let v = p.view_for(&via, false).await.unwrap();
+    assert!(matches!(v.view, hrafn::View::Tree(_)), "{v:?}");
+    assert_eq!(v.root, std::fs::canonicalize(&trees[0]).unwrap());
+    assert_eq!(tree_rows(&p, &key).await.len(), 1);
+}
+
 /// Pattern D. A feed subscriber that lagged past the channel's 256 versions marks the trees stale and re-diffs them:
 /// the version it missed reaches the overlay.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
