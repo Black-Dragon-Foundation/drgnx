@@ -191,6 +191,10 @@ which shows the view. At the hub's end every session stops, children first, befo
   value is called once), dape's own keys (`command`, `port`, `modes`, `fn` …) are dropped, and the plain result is
   added to `drgnx-debug-configurations` in settings.el; one without `:type` is named and left out.
 
+`drgnx doctor`'s `debug-adapters` line (group Tools) reads `etc/debug-adapters.eld` as data and says which built-in
+adapters are found (`:path` on `PATH`, `:python-module` importable by `python3`, `:tools` under
+`<data>/debug-adapters/`) and how to get the others.
+
 Its tests (`test/unit/debug-launch-test.el`) script the hub's answers.
 
 ## Live adapters: the image
