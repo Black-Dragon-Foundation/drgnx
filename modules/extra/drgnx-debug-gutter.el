@@ -25,7 +25,7 @@
 (require 'drgnx-faces)
 (require 'drgnx-color)
 (declare-function drgnx-hub-call "drgnx-hub-client")
-(declare-function drgnx-debug-launch-root "drgnx-debug-launch")
+(require 'drgnx-debug-launch (expand-file-name "drgnx-debug-launch" (file-name-directory (macroexp-file-name))))
 (defvar drgnx-hub-event-functions)
 (defvar drgnx-debug-gutter-mode)
 

@@ -249,6 +249,12 @@ only).
 - The prompt (`drgnx-debug-gutter-edit`) starts from the field's text; an empty answer clears it (an `edit` op with
   `""`), and on a line without a breakpoint a non-empty answer adds one with that field.
 
+The module's global `drgnx-debug-mode` (turned on by `extra/debug`'s setup, off by its teardown) turns the column on
+in every file's buffer (`find-file-hook`) and holds `drgnx-debug-mode-map`, where the Emacs profile's `C-x C-a` keys
+go: a loaded gud binds `C-x C-a` in `global-map`, and a minor mode's map comes first. The breakpoint commands
+(`debug-breakpoint`, `-conditional`, `debug-logpoint`, `debug-breakpoint-enable`, `debug-run-to-cursor`) act on
+point's line through the column.
+
 Its tests (`test/unit/debug-gutter-test.el`) script the hub with a small store of their own.
 
 ## Live adapters: the image
