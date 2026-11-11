@@ -130,6 +130,21 @@ never interleave. Undo Replace is the hub's too (`search/undo`): it puts back ea
 buffer, unless the file or buffer was edited since; a buffer killed since gets its file put back on disk when it was
 saved. Symbol mode's rename sends the language server's edits the same way, as edits the hub is given.
 
+### Preview and the Replace All sheet
+
+**Preview** (the view's Preview button, or Preview This File's Changes on a row) opens the row's file as a read-only
+diff in the editor area, "NAME · preview": the file before and after its ticked replacements, the same edit set
+Replace All writes (the hub's `search/preview`). Each hunk has a tick box: `a` keeps the hunk (its matches are ticked
+in the view), `D` drops it (unticked); the view's boxes and the tile follow each other. With **.\*** on, a groups line
+under each hunk shows what each group took, `\1 = pending · \2 = p`, and `\2 = ∅` in the warning colour for a group
+that matched nothing, so a wrong group number shows before anything is written.
+
+**Replace All** first shows the **Replace All sheet** (in the popup lane): every file with its lines added and removed
+and how many of its matches are skipped, the selected file's first hunk (`n`/`p` or the arrows move), what is skipped
+and why, and how many files with unsaved edits stay unsaved. **Replace** writes exactly the changes the sheet shows (the
+hub's change set); **Cancel** writes nothing. The setting `drgnx-search-preview-threshold` (default 1) is how many
+matches it takes to show the sheet; 0 never shows it, and `C-u` Replace All skips it once.
+
 ## The list stays current
 
 When a listed file changes on disk (an agent, a checkout, a save) the search runs again half a second later; a
@@ -171,6 +186,10 @@ view, scope This file.
 | Previous / Next Search | `<up>` / `<down>` in Find | `M-p` / `M-n` | `M-p` / `M-n` |
 | Save This Search | `C-k C-b` | `C-c C-w` | `C-c C-w` |
 | Run Saved Search… | palette | `C-c s S` | `SPC s S` |
+| Preview This File's Changes (the Search view) | `C-k C-v` | `C-c C-v` | `C-c C-v` |
+| Keep / Drop This Hunk (a preview tile) | `a` / `D` | `a` / `D` | `a` / `D` |
+| Replace / Cancel (the Replace All sheet) | `C-<return>` / `<escape>` | `C-c C-c` / `C-c C-k` | `C-c C-c` / `C-c C-k` |
+| Next / Previous File (the sheet) | `<down>` / `<up>` | `n` / `p`, `<down>` / `<up>` | `n` / `p`, `<down>` / `<up>` |
 
 Except where marked, the keys work in the Search view and the find bar, their fields too; `RET` in a find bar field
 is its next match (in Replace: replace it). Next and Previous Match show the match in the editor; Next and Previous

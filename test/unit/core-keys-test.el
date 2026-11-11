@@ -966,6 +966,8 @@ The commands of modules that need no installed package are in it, the later stag
                               search-mode-next ; the Search view's mode chip
                               search-scope-next search-scope-changed search-scope-branch ; its scope chips
                               search-history-prev search-history-next search-save search-run-saved ; its history
+                              search-preview-file search-preview-keep search-preview-drop ; its preview tile
+                              search-sheet-confirm search-sheet-cancel search-sheet-next search-sheet-previous ; the sheet
                               layout-next browser-go keyboard-shortcuts shortcuts-change shortcuts-add shortcuts-filter
                               shortcuts-record-filter shortcuts-conflicts shortcuts-no-key shortcuts-changed
                               shortcuts-undo shortcuts-reset shortcuts-reset-all shortcuts-profile
