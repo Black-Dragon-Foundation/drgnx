@@ -261,6 +261,18 @@ hub or its worker."
                                                                w)))))
       (drgnx-term-test--settle (lambda () (drgnx-term-test--row-matching b "\\^\\[\\[M")) "the press reached the program"))))
 
+(ert-deftest drgnx-term/key-release-reaches-a-program-that-asks ()
+  ;; CSI > 11 u: every key as an escape code, with its event type; the tty echoes what reached it
+  (drgnx-term-test--with
+    (let ((b (drgnx-term-test--start)) (drgnx-term--held nil) (drgnx-term-scroll-to-bottom nil))
+      (drgnx-term-test--run b "printf '\\033[>11u'; echo kk''p-ready; cat -v")
+      (drgnx-term-test--until-line b "kkp-ready" "event types asked for")
+      (drgnx-term-test--settle (lambda () (drgnx-term--key-events-p b)) "the patch says the program wants key events")
+      (with-current-buffer b (let ((last-command-event ?a)) (drgnx-term-send-event)))
+      (drgnx-term-key-release '(key-release ?a))
+      (drgnx-term-test--settle (lambda () (drgnx-term-test--row-matching b "\\^\\[\\[97;1:3u"))
+                               "the release reached the program"))))
+
 (ert-deftest drgnx-term/copy-mode-pauses-and-isearch-works ()
   (drgnx-term-test--with
     (let ((b (drgnx-term-test--start)))

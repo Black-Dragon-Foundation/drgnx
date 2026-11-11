@@ -137,6 +137,10 @@ pub struct TermMeta {
     /// The program asked for bracketed paste (mode 2004).
     #[serde(default)]
     pub bracketed_paste: bool,
+    /// The program asked for key event types (the kitty keyboard protocol's flag 2): the editor sends repeats and
+    /// releases.
+    #[serde(default)]
+    pub key_events: bool,
     #[serde(default)]
     pub title: String,
 }

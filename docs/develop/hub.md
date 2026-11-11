@@ -1486,7 +1486,10 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `say/end` | user | `{id: Id}` | `boolean` | yes |
 | `say/revise` | user | `{id: Id, text: Text}` | `boolean` | yes |
 | `say/start` | user | `{profile?: string, project?: Id, repo: AbsPath, text: Text}` | `{id: string}` | yes |
+| `search/applied` | user | `{applied?: [string], change: natnum, inverse?: [{byte_end?: natnum, byte_start?: natnum, col: natnum, end_col: natnum, end_line: natnum, id: string, line: natnum, new: string, old: string}], not_open?: boolean, path: string, saved?: boolean, skipped?: [{id: string, why: string}], tick?: natnum}` | `boolean` | no |
+| `search/apply` | user | `{change: natnum, open?: [string], view: string}` | `boolean` | yes |
 | `search/buffer` | user | `{large?: boolean, path: AbsPath, text?: string, tick?: natnum, view: string}` | `boolean` | no |
+| `search/edits` | user | `{edits?: [{col: natnum, end_col: natnum, end_line?: natnum, line: natnum, new: string, old: string, path: AbsPath}], ids?: [string], off?: [string], replace?: string, root?: AbsPath, view: string}` | `{change: natnum, files: [FileEdits], skipped: [EditSkip]}` | no |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
 | `search/files` | user | `{ignore?: "index" \| "real", n?: natnum, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
 | `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
@@ -1496,6 +1499,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/map` | user | `{base?: boolean, budget?: natnum, focus?: [string], names?: [string], root: AbsPath, scope?: "code" \| "all"}` | `{files: [MapFile], files_total: natnum, fresh: Fresh, text: string, tokens: natnum}` | no |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
 | `search/outline` | user | `{base?: boolean, docs?: boolean, path: string, root: AbsPath}` | `{entries: [OutlineEntry], fresh: Fresh, lang: string, path: string}` | no |
+| `search/preview` | user | `{off?: [string], path: AbsPath, replace?: string, view: string}` | `PreviewAnswer` | no |
 | `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
 | `search/recent` | user | `{root: AbsPath}` | `{recent: [SearchSpec]}` | no |
 | `search/run` | user | `{context?: boolean, count?: boolean, ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, view: string}` | `{run: natnum}` | no |
@@ -1511,6 +1515,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/symbol-at` | user | `{file: string, line: natnum, root: AbsPath}` | `{name?: string}` | no |
 | `search/symbols` | user | `{base?: boolean, k?: natnum, kind?: [string], match?: "auto" \| "exact" \| "prefix" \| "contains" \| "regex", name: string, path?: string, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code"}` | `{fresh: Fresh, matched: "auto" \| "exact" \| "prefix" \| "contains" \| "regex", symbols: [SymbolHit]}` | no |
 | `search/typing` | user | `{}` | `{}` | no |
+| `search/undo` | user | `{change: natnum, open?: [string], view: string}` | `boolean` | yes |
 | `search/usages` | user | `{base?: boolean, k?: natnum, name: string, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code"}` | `{defined: [SymbolHit], fresh: Fresh, usages: [Usage]}` | no |
 | `settings/confirm` | user | `{error?: string, ok: boolean, tx: natnum}` | `{state: "accepted" \| "reverted" \| "blocked"}` | yes |
 | `settings/explained` | user | `{req: natnum, settings: [JsonObject]}` | `boolean` | no |
@@ -1526,7 +1531,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `term/config` | user | `{config: [[string, SettingValue]], id: string}` | `boolean` | no |
 | `term/fetch` | user | `{before_key?: string, id: string, max_bytes?: natnum}` | `{version?: natnum}` | no |
 | `term/focus` | user | `{id: string, in: boolean}` | `boolean` | no |
-| `term/key` | user | `{id: string, key: string, mods?: [string], text?: string, unshifted?: natnum}` | `boolean` | no |
+| `term/key` | user | `{action?: "press" \| "repeat" \| "release", id: string, key: string, mods?: [string], text?: string, unshifted?: natnum}` | `boolean` | no |
 | `term/list` | user | `{}` | `[TermStatus]` | no |
 | `term/mouse` | user | `{button?: integer, col: natnum, id: string, kind: string, mods?: [string], row: natnum}` | `boolean` | no |
 | `term/open` | user | `{cell_px?: [natnum, natnum], class: string, cols: natnum, command?: [string], config?: [[string, SettingValue]], dir: string, env?: [[string, string]], memory_max?: string, rows: natnum, tasks_max?: string, window?: natnum}` | `{id: string, view: string}` | no |
@@ -2485,6 +2490,40 @@ snapshots; the search itself is `hrafn::grep`).
 - `ignore` is `index` (no dot paths, no secret-looking names, the filters of the index) or `real` (only what
   `.gitignore` files and the globs name). Without it the setting `drgnx-search-ignore-rules` decides (`index` by
   default); it is a runtime setting, so the hub reads the user's value.
+
+### Search writes (`search/edits`, `search/apply`, `search/undo`)
+
+The Search view's one write path (`runtime/crates/drgnx-ratatoskr/src/view/search/edits.rs`, `apply.rs`): Replace All,
+Replace This, Undo Replace and Symbol mode's rename go through it, so a write never lands behind an open buffer.
+
+- `search/edits {view, ids?, off?, replace?, edits?, root?}` makes the edit set: the matches of the view's search (all
+  but `off`, or only `ids`; `replace` when the fields have one the run was not told yet), or `edits` the caller gives
+  (`{path, line, col, end_line?, end_col, old, new}`, ids `e:K` in their order; `root` required). Per file it reads the
+  text (a buffer's text sent with `search/buffer` in place of its file) and places each edit by line and character
+  columns, checks its old text, and gives both ranges, character and byte. Skipped with why: an overlapping match (the
+  first stays), a file changed since the search (size, mtime, inode, xxh3 of its snapshot), a buffer edited since,
+  binary (NUL in the first 8 KiB), not UTF-8, over 16 MiB, open in chunks, gone. The answer `{change, files: [{path,
+  source: disk|buffer, edits}], skipped}` names a change set the hub keeps (the last 20 per hub).
+- `search/preview {view, path, off?, replace?}` is one file's part of the same edit set as a diff (the preview tile):
+  the unified diff (3 lines of context; `similar`), its lines added and removed, the hunks (`old_start`, `old_lines`,
+  `new_start`, `new_lines`, the ids of the matches in each) and, for a regexp search, each match's groups (at most 8,
+  200 characters each, `null` for a group that matched nothing: the groups line), and what is skipped, with why. It
+  reads the file and keeps nothing.
+- `search/apply {view, change, open}` writes it (false when the change set is unknown or written already) and answers at
+  once; the writes run in the background, a file at a time, each in its turn of the pair door's queue for that file
+  (`pair/door.rs`, a user turn: an agent's write to the same file waits, and the search waits for one in flight). A
+  file open in an editor (the pair open set, or a path in `open`, the asking editor's visited files) goes to that
+  editor as the event `search-apply {view, change, path, edits, ttl_ms, tick?}`; it answers `search/applied {change,
+  path, applied, skipped, inverse, tick?, saved, not_open}` within `ttl_ms` (else every edit is skipped, "the editor
+  did not answer"; a late answer is still recorded for Undo). `not_open` (no buffer visits the file any more) sends the
+  file to the disk writer. Any other file is written on disk (`pair/disk.rs`'s `replace`: a temporary file in the same
+  folder, owner, mode and xattrs kept, fsynced, renamed over the file), and only when the file's bytes still hash to
+  what the edit set read ("changed on disk since the preview") and nothing replaced it between the read and the rename.
+  `search-change {view, change, origin: replace-all|edit-results|undo, undoes?, written, files, skipped, left}` ends it.
+- `search/undo {view, change, open}` puts a written change set back as a new one (origin `undo`, `undoes` the change):
+  a file written on disk is restored when its digest is still the one the write left, a buffer by its inverse edits
+  when its tick is still the one the editor answered (else "edited since the replacement"); a buffer killed since gets
+  its file restored on disk when it was saved. Files left alone are listed in `left`.
 
 ### Recent and saved searches (`search/recent`, `search/saved/*`)
 
@@ -3791,7 +3830,13 @@ graph's own door is shut to every other class (`write::runners::an_agent_write_o
 seam: `UrdrStore` in the hub, `MemStore` in tests.
 
 `Registry::add(host, trust, …)`, in order, each step a `sh -c` on the runner over the user's own ssh (the generated
-config, no terminal): `uname -m`, `uname -s` and `$HOME` (not Linux: refused); the bundle for that architecture from
+config, no terminal): `uname -m`, `uname -s`, `$HOME` and, on a Mac, `sysctl.proc_translated` (neither Linux nor
+Darwin, an architecture without a bundle, or an Intel Mac: refused; a Rosetta shell, x86_64 and translated, is Apple
+silicon). A Mac (`host_kind`) takes the `aarch64-apple-darwin` bundle (`sleipnir` alone, built and ad-hoc signed on a
+Mac by `drgnx build runner-bundle --target aarch64-apple-darwin`), checked with `shasum -a 256`, into the root
+`~/.drgnx-runner.noindex` (Spotlight skips `.noindex`), made 0700 and excluded from Time Machine (`tmutil
+addexclusion`). The hub's own boot id is `/proc/sys/kernel/random/boot_id`, or `kern.bootsessionuuid` on a Mac
+(`hub_boot_id`). A Linux host takes the bundle for its architecture from
 `DRGNX_RUNNER_BUNDLES` (default `runtime/target/bundle` beside the hub's build folder, where `drgnx build runner-bundle`
 puts `<arch>/sleipnir`, `drgnx-key`, `drgnx-px-<arch>-linux-musl`) copied to `<root>/bin/<hash>/` (written as `.part`, hash checked, moved
 into place; refused with the build command when there is none); `sleipnir serve` asked for `hello-ok` and `probe` over

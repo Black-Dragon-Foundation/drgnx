@@ -134,8 +134,11 @@
       (drgnx-tty-keys-test--quit s c 'legacy)
       ;; F6 ` : the panel
       (should-not (drgnx-tty-session-eval s `(drgnx-wb-area-window 'panel ,frame)))
+      ;; a terminal tab with a buffer of its own: Toggle Terminal shows it and starts no shell, which would take the keys after
+      (drgnx-tty-session-eval s `(with-selected-frame ,frame (drgnx-wb-area-show 'panel 'terminal (get-buffer-create "*terminal*"))
+                                                      (drgnx-wb-area-hide 'panel)))
       (drgnx-tty-session-send c (concat f6 "`"))
-      (drgnx-tty-keys-test--ran s 'drgnx-wb-toggle-panel "C-`")
+      (drgnx-tty-keys-test--ran s 'drgnx-terminal-toggle "C-`")
       (drgnx-tty-session-wait s `(drgnx-wb-area-window 'panel ,frame))
       ;; F6 p : the palette
       (drgnx-tty-session-send c (concat f6 "p"))

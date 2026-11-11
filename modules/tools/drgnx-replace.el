@@ -5,9 +5,10 @@
 ;;; Commentary:
 ;; VS Code's Search & Replace.  Text: the hub searches (`search/run') and streams the rows; Sjá holds the model the
 ;; keys walk; a search typed before the hub is up waits for it.  Symbol: the language server's rename edits (asked for
-;; with a placeholder name, never applied by the server), as matches of Emacs's own.  Replacing checks every
-;; match against the file as it is now (its buffer when visited) and skips the stale ones; each file is one change
-;; group, saved unless its buffer held unsaved edits (they stay unsaved), so one Undo puts every file back.
+;; with a placeholder name, never applied by the server), as matches of Emacs's own.  Replacing goes through the hub's
+;; write path (`search/edits', `search/apply'): every match is checked against the file as it is now and the stale ones
+;; are skipped; the hub writes closed files, this Emacs the files it has open (`search-apply', one change group each,
+;; saved unless the buffer held unsaved edits), so one Undo (`search/undo') puts every file back.
 ;; The UI: the Search view in the sidebar (fields, toggles, a result tree with tick boxes and old → new previews: the
 ;; hub's rows, or a view's own rows in Symbol mode, wb/drgnx-view.el, patched in place) and the
 ;; find bar above an editor, which searches its own buffer in Emacs.  See
@@ -29,6 +30,8 @@
 (require 'drgnx-view)
 (require 'drgnx-view-nav)
 (require 'drgnx-large-file)             ; a large file: Replace needs it whole (lean), never asks; skips chunks and raw
+(require 'drgnx-no-prompt)              ; the saves of the hub's writes ask nothing
+(require 'drgnx-ui-kit)                 ; the sheet's buttons
 
 (declare-function eglot-current-server "eglot")
 (declare-function eglot-server-capable "eglot")
@@ -40,6 +43,9 @@
 (declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
 (declare-function nidhogg-view-set "nidhogg-views" (h what value))
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
+(declare-function drgnx-wb-place "drgnx-rules")
+(declare-function drgnx-palette-keycaps "drgnx-palette" (key))
+(declare-function drgnx-surfaces-key-label "drgnx-surfaces")
 (declare-function drgnx-hub-call-sync "drgnx-hub-client")
 (declare-function drgnx-view-env-register "drgnx-view-env" (view buffer &optional resubscribe))
 (declare-function drgnx-view-env-unregister "drgnx-view-env" (view))
@@ -229,20 +235,18 @@ name renamed (the server read older text) are left out, and (:error REASON) afte
     nil))
 
 ;;;; Applying and undoing
+;; The hub writes (docs/guide/replace.md, "How Replace All writes"; spec: the shared write path).  Replace All, Replace
+;; This and Undo Replace ask the hub for an edit set (`search/edits'), then write it (`search/apply') or put a change set
+;; back (`search/undo'); the hub writes closed files itself and sends each file this Emacs has open here
+;; (`search-apply'), where its edits go into the buffer, each only where its old text is, as one undo group, saved
+;; unless the buffer held unsaved edits.  The answer (`search/applied') carries the inverse edits, so the hub's Undo
+;; reaches a buffer killed since.  `search-change' ends the write.
+
+(defvar drgnx-replace--applying nil "Non-nil while the hub's edits go into a buffer here: no change underneath.")
 
 (defun drgnx-replace--skip (m why)
   "Match M, skipped because of WHY."
   (append m (list :reason why)))
-
-(defun drgnx-replace--live-pos (m)
-  "Where match M's text starts in this buffer, when it is still there."
-  (save-excursion
-    (goto-char (point-min))
-    (when (zerop (forward-line (1- (plist-get m :line))))
-      (let ((pos (+ (point) (plist-get m :col))) (text (plist-get m :text)))
-        (when (and (<= pos (line-end-position)) (<= (+ pos (length text)) (point-max))
-                   (string= text (buffer-substring-no-properties pos (+ pos (length text)))))
-          pos)))))
 
 (defun drgnx-replace--partial (buf)
   "Why BUF, a file's visiting buffer (or nil), cannot take the whole file's lines and columns: a reason, else nil.
@@ -252,91 +256,120 @@ A large file open in chunks holds one part of the file; one open raw holds its b
     ('raw "open raw: Large File: Open Whole first")))
 
 (defun drgnx-replace--save ()
-  "Save this buffer quietly and without format on save (a formatter's rewrite would make Undo skip the file)."
-  (let ((save-silently t) (apheleia-format-after-save-in-progress t))
-    (save-buffer)))
+  "Save this buffer quietly, without format on save (a formatter's rewrite would make Undo skip the file), asking
+nothing: a question it would ask, or an error, leaves it unsaved.  Non-nil when it saved."
+  (condition-case nil
+      (drgnx-with-no-prompts
+        (let ((save-silently t) (apheleia-format-after-save-in-progress t) (create-lockfiles nil))
+          (save-buffer)))
+    (error nil))
+  (not (buffer-modified-p)))
 
-(defun drgnx-replace--apply-file (file ms new)
-  "Replace FILE's matches MS by NEW in one change group: (WRITTEN SKIPPED UNDO-ENTRY-or-nil).
-The buffer is saved unless it held unsaved edits before."
-  (let* ((buf (find-buffer-visiting file)) (partial (drgnx-replace--partial buf)))
+(defun drgnx-replace--revert ()
+  "Read the visited file again into this buffer, which has none of your edits, asking nothing: non-nil when read."
+  (condition-case nil
+      (progn (drgnx-with-no-prompts (revert-buffer t t t)) t)
+    (error nil)))
+
+(defun drgnx-replace--pos (line col)
+  "The position of LINE (from 1) and character column COL (from 0) of this buffer (widened), or nil past its end."
+  (save-excursion
+    (goto-char (point-min))
+    (and (zerop (forward-line (1- line))) (<= col (- (line-end-position) (point))) (+ (point) col))))
+
+(defun drgnx-replace--place (pos)
+  "The line (from 1) and character column (from 0) of POS: (LINE . COL)."
+  (save-excursion (goto-char pos) (cons (line-number-at-pos pos t) (- pos (line-beginning-position)))))
+
+(defun drgnx-replace--write-edits (edits)
+  "Write EDITS (the hub's, plists :id :line :col :end_line :end_col :old :new) into this buffer: each only where its
+old text is, the first of two that overlap; all in one undo group; saved when the buffer had no unsaved edits.
+The answer (`search/applied' params but the change and path)."
+  (save-restriction
+    (widen)
+    (let ((todo nil) (skipped nil) (ok nil) (limit nil))
+      (dolist (e edits)
+        (let* ((beg (drgnx-replace--pos (plist-get e :line) (plist-get e :col)))
+               (end (and beg (drgnx-replace--pos (plist-get e :end_line) (plist-get e :end_col)))))
+          (if (and end (<= beg end) (equal (buffer-substring-no-properties beg end) (plist-get e :old)))
+              (push (list beg end e) todo)
+            (push (list :id (plist-get e :id) :why "its text changed") skipped))))
+      ;; in file order; a range starting inside the one before it is skipped
+      (dolist (x (sort (nreverse todo) (lambda (a b) (< (car a) (car b)))))
+        (if (and limit (< (car x) limit))
+            (push (list :id (plist-get (nth 2 x) :id) :why "overlaps another match") skipped)
+          (push x ok)
+          (setq limit (nth 1 x))))
+      (setq ok (nreverse ok))
+      (if (null ok)
+          (list :applied [] :skipped (vconcat (nreverse skipped)) :saved :false)
+        (let* ((clean (not (buffer-modified-p))) (group (prepare-change-group)) (done nil) (create-lockfiles nil))
+          (undo-boundary)
+          (unwind-protect
+              (progn
+                (activate-change-group group)
+                (dolist (x (reverse ok))     ; from the end, so the positions before stay put
+                  (goto-char (car x))
+                  (delete-region (car x) (nth 1 x))
+                  (insert (plist-get (nth 2 x) :new)))
+                (undo-amalgamate-change-group group)
+                (setq done t))
+            (if done (accept-change-group group) (cancel-change-group group)))
+          (undo-boundary)
+          ;; each new text's range now: its old start moved by what the edits before it added
+          (let ((shift 0) (inverse nil))
+            (dolist (x ok)
+              (let* ((edit (nth 2 x)) (beg (+ (car x) shift)) (end (+ beg (length (plist-get edit :new))))
+                     (s (drgnx-replace--place beg)) (e (drgnx-replace--place end)))
+                (setq shift (+ shift (- end beg) (- (car x) (nth 1 x))))
+                (push (list :id (plist-get edit :id) :line (car s) :col (cdr s) :end_line (car e) :end_col (cdr e)
+                            :old (plist-get edit :new) :new (plist-get edit :old))
+                      inverse)))
+            (let ((saved (and clean (drgnx-replace--save))))
+              (list :applied (vconcat (mapcar (lambda (x) (plist-get (nth 2 x) :id)) ok))
+                    :skipped (vconcat (nreverse skipped)) :inverse (vconcat (nreverse inverse))
+                    :tick (buffer-chars-modified-tick) :saved (if saved t :false)))))))))
+
+(defun drgnx-replace-apply-edits (data)
+  "`search-apply' DATA written into the buffer visiting its file: the answer (`search/applied' params but the change and
+path).  No buffer visits it any more: `not_open' (the hub writes the file).  A buffer open in chunks or raw, one
+edited since the write an undo puts back (DATA's `tick'), or one changed on disk and in the buffer is left alone, every
+edit skipped with why; an unedited buffer whose file changed on disk is read again first."
+  (let* ((buf (find-buffer-visiting (plist-get data :path)))
+         (edits (append (plist-get data :edits) nil))
+         (all (lambda (why) (list :applied [] :saved :false
+                                  :skipped (vconcat (mapcar (lambda (e) (list :id (plist-get e :id) :why why)) edits)))))
+         (tick (plist-get data :tick)))
     (cond
-     ((not (file-exists-p file))
-      (list 0 (mapcar (lambda (m) (drgnx-replace--skip m "the file is gone")) ms) nil))
-     (partial (list 0 (mapcar (lambda (m) (drgnx-replace--skip m partial)) ms) nil))
-     ((and buf (buffer-modified-p buf) (not (verify-visited-file-modtime buf)))
-      (list 0 (mapcar (lambda (m) (drgnx-replace--skip m "changed on disk and in its buffer")) ms) nil))
-     (t
-      (when (and buf (not (verify-visited-file-modtime buf)))
-        (with-current-buffer buf (revert-buffer t t t)))
-      (setq buf (or buf (let ((large-file-warning-threshold nil) (drgnx-large-file-open 'whole)) (find-file-noselect file))))
-      (with-current-buffer buf
-        (save-restriction
-          (widen)
-          (let ((todo nil) (bad nil) (ok nil) (limit (point-max)) (create-lockfiles nil))
-            (dolist (m ms)
-              (let* ((pos (drgnx-replace--live-pos m))
-                     (rep (and pos (condition-case e (drgnx-replace-new-text m new)
-                                     (error (list 'error (error-message-string e)))))))
-                (cond ((not pos) (push (drgnx-replace--skip m "its text changed") bad))
-                      ((null rep) (push (drgnx-replace--skip m "the regexp no longer matches its text") bad))
-                      ((consp rep) (push (drgnx-replace--skip m (cadr rep)) bad))
-                      (t (push (list pos (+ pos (length (plist-get m :text))) rep m) todo)))))
-            ;; from the end, so the positions before stay put; a match overlapping the next is skipped
-            (dolist (e (sort todo (lambda (a b) (> (car a) (car b)))))
-              (if (> (nth 1 e) limit) (push (drgnx-replace--skip (nth 3 e) "overlaps another match") bad)
-                (push e ok) (setq limit (car e))))
-            (setq ok (nreverse ok))
-            (if (null ok)
-                (list 0 bad nil)
-              (let ((g (prepare-change-group))
-                    (save (not (buffer-modified-p)))) ; the user's unsaved edits stay unsaved, as in VS Code
-                (condition-case e
-                    (progn
-                      (activate-change-group g)
-                      (dolist (x ok) (goto-char (car x)) (delete-region (car x) (nth 1 x)) (insert (nth 2 x)))
-                      (undo-amalgamate-change-group g)
-                      (accept-change-group g)
-                      (when save (drgnx-replace--save))
-                      (list (length ok) bad
-                            (list :buffer buf :group g :file file :saved save :tick (buffer-chars-modified-tick))))
-                  (error (cancel-change-group g)
-                         (list 0 (append bad (mapcar (lambda (x) (drgnx-replace--skip (nth 3 x) (error-message-string e))) ok))
-                               nil))))))))))))
+     ((not buf) (list :not_open t))
+     ((drgnx-replace--partial buf) (funcall all (drgnx-replace--partial buf)))
+     ((and tick (/= tick (buffer-chars-modified-tick buf))) (funcall all "edited since the replacement"))
+     ((with-current-buffer buf
+        (and (not (verify-visited-file-modtime buf)) (or (buffer-modified-p) (not (drgnx-replace--revert)))))
+      (funcall all "changed on disk and in its buffer"))
+     (t (with-current-buffer buf (let ((drgnx-replace--applying t)) (drgnx-replace--write-edits edits)))))))
 
-(defun drgnx-replace-apply (matches new)
-  "Replace MATCHES (the hub's, read from the view's model, or `drgnx-replace-symbol-edits') by NEW, file by file.
-Each match is checked against its file as it is now (its buffer when visited; an unedited buffer whose file
-changed on disk is reverted first) and skipped when its text is no longer there.  A file's replacements are one
-change group; the file is saved unless its buffer held unsaved edits before (they stay unsaved).
-Returns (:written N :files F :skipped MATCHES :undo UNDO-DATA): N matches written in F files; each skipped match
-carries :reason; UNDO-DATA is for `drgnx-replace-undo'."
-  (let ((by-file nil) (written 0) (files 0) (skipped nil) (undo nil))
-    (dolist (m matches) (push m (alist-get (plist-get m :file) by-file nil nil #'equal)))
-    (pcase-dolist (`(,file . ,ms) (nreverse by-file))
-      (pcase-let ((`(,n ,bad ,u) (drgnx-replace--apply-file file (nreverse ms) new)))
-        (setq written (+ written n) skipped (append skipped bad))
-        (when u (push u undo) (cl-incf files))))
-    (list :written written :files files :skipped skipped :undo (nreverse undo))))
+(defvar drgnx-replace--applies nil "The hub's `search-apply' writes not done yet, newest first.")
 
-(defun drgnx-replace-undo (undo-data)
-  "Undo a `drgnx-replace-apply' (its UNDO-DATA): every file's change group, saved when apply saved it.
-A file edited, killed or changed on disk since is left alone.  Returns (:undone N :skipped FILES)."
-  (let ((n 0) (skipped nil))
-    (dolist (u undo-data)
-      (let ((b (plist-get u :buffer)))
-        (if (not (and (buffer-live-p b) (= (buffer-chars-modified-tick b) (plist-get u :tick))
-                      (verify-visited-file-modtime b)
-                      (with-current-buffer b
-                        (condition-case nil
-                            (let ((create-lockfiles nil))
-                              (cancel-change-group (plist-get u :group))
-                              (when (plist-get u :saved) (drgnx-replace--save))
-                              t)
-                          (error nil)))))
-            (push (plist-get u :file) skipped)
-          (cl-incf n))))
-    (list :undone n :skipped (nreverse skipped))))
+(defun drgnx-replace--apply-later (data)
+  "`search-apply' DATA came (in the hub's process filter): written from a timer, outside the filter."
+  (push data drgnx-replace--applies)
+  (drgnx-timer-soon 'replace-apply 0 #'drgnx-replace--apply-pending :owner 'tools/replace))
+
+(defun drgnx-replace--apply-pending ()
+  "Write the hub's waiting `search-apply's, oldest first, each answered (`search/applied').  A timer: never signals."
+  (while drgnx-replace--applies
+    (let* ((data (car (last drgnx-replace--applies)))
+           (answer (condition-case e (drgnx-replace-apply-edits data)
+                     (error (list :applied [] :saved :false
+                                  :skipped (vconcat (mapcar (lambda (x) (list :id (plist-get x :id)
+                                                                              :why (error-message-string e)))
+                                                            (plist-get data :edits))))))))
+      (setq drgnx-replace--applies (butlast drgnx-replace--applies))
+      (ignore-errors
+        (drgnx-hub--call-on drgnx-hub--events "search/applied"
+                            (append (list :change (plist-get data :change) :path (plist-get data :path)) answer)
+                            #'ignore)))))
 
 ;;;; The Search view (the sidebar) and the find bar
 
@@ -352,6 +385,11 @@ A file edited, killed or changed on disk since is left alone.  Returns (:undone 
   "Symbol mode's kind icon on a definition row; Meaning's hit names." :group 'drgnx)
 (defface drgnx-replace-score '((t :inherit font-lock-keyword-face))
   "Meaning's score bar: how close a hit is, as a share of the best one." :group 'drgnx)
+
+(drgnx-defsetting drgnx-search-preview-threshold 1
+  "Replace All with at least this many ticked matches first shows the Replace All sheet (every file's changes, then
+Replace or Cancel); 0 never shows it.  `C-u' Replace All skips it once."
+  :type 'natnum :group 'drgnx :scope 'global :agents 'never :schema 'natnum)
 
 (drgnx-defsetting drgnx-search-context t
   "Non-nil: the Search view shows a dim label row (the definition's name) above the first match of each definition."
@@ -415,12 +453,11 @@ matches of the new run in `search-run-done', which are unticked again.")
 (defvar-local drgnx-replace--waiting nil "Non-nil while a text search waits for the hub (`drgnx-replace--hub-up').")
 (defvar-local drgnx-replace--searching nil "Non-nil until the view's search sends :done.")
 (defvar-local drgnx-replace--want nil "What the pause after typing ends in: `search' or `redraw'.")
-(defvar-local drgnx-replace--undo nil "Undo data of the view's replacements, newest first.")
+(defvar-local drgnx-replace--undo nil "The hub's change sets of the view's replacements (`search/undo' puts one back), newest first.")
 (defvar-local drgnx-replace--shown nil "Overlay on the match shown in the editor.")
 (defvar-local drgnx-replace--bar-overlays nil "The find bar's matches: overlays in its target buffer, in order.")
 (defvar-local drgnx-replace--bar-index nil "The current match's index in `drgnx-replace--bar-overlays'.")
 (defvar drgnx-replace--quiet nil "Non-nil while the code, not the user, fills a field.")
-(defvar drgnx-replace--applying nil "Non-nil while the view writes files itself: no change underneath.")
 (defvar drgnx-replace-refresh-delay 0.5 "Seconds after a listed file changes before its rows are searched again.")
 (defvar drgnx-replace-watch-limit 200
   "The most listed files whose folders are watched for changes on disk (more: searched again when the view shows).")
@@ -809,6 +846,8 @@ Branch's base and `±'."
   (drgnx-replace--insert-field 'include "Include   " nil)
   (drgnx-replace--insert-field 'exclude "Exclude   " nil)
   (drgnx-replace--insert-button nil "Replace All" "Replace every ticked match" #'drgnx-replace-all)
+  (drgnx-replace--insert-button nil "Preview" "The changes of the selected row's file, as a diff"
+                                #'drgnx-replace-preview-file)
   (drgnx-replace--insert-button nil "Undo" "Undo the last replacement, in every file" #'drgnx-replace-view-undo)
   (drgnx-replace--insert-button nil "☆" "Save this search (the empty view lists the saved ones)"
                                 #'drgnx-replace-search-save)
@@ -1272,12 +1311,116 @@ buffers' text goes to the hub after a pause (`drgnx-replace--send-buffers'), whi
         (and (get-buffer-window bar)
              (eq (current-buffer) (with-current-buffer bar (and drgnx-replace--origin (marker-buffer drgnx-replace--origin))))))))
 
-(defun drgnx-replace--apply-report (res)
-  "Keep the undo data of RES (from `drgnx-replace-apply') and say what was written."
-  (when (plist-get res :undo) (push (plist-get res :undo) drgnx-replace--undo))
-  (let ((n (plist-get res :written)) (f (plist-get res :files)) (skipped (length (plist-get res :skipped))))
-    (format "Replaced %d in %d file%s%s" n f (if (= f 1) "" "s")
-            (if (> skipped 0) (format "; %d skipped (changed since the search)" skipped) ""))))
+(defun drgnx-replace--report (written files skipped)
+  "What a write said: WRITTEN matches in FILES files, SKIPPED of them left (\"Replaced 58 in 4 files · 2 skipped\")."
+  (format "Replaced %d in %d file%s%s" written files (if (= files 1) "" "s")
+          (if (> skipped 0) (format " · %d skipped" skipped) "")))
+
+(defvar-local drgnx-replace--writes nil
+  "The view's writes the hub has not ended: alist CHANGE → (KIND DATA SKIPPED), KIND and DATA what its end does
+\(`drgnx-replace--change-done'), SKIPPED what its edit set left out.")
+
+(defun drgnx-replace--open-paths ()
+  "The files this Emacs has open (every buffer visiting one): the hub sends their edits here (`search-apply')."
+  (vconcat (delq nil (mapcar #'buffer-file-name (buffer-list)))))
+
+(defun drgnx-replace--hub-write (method params then)
+  "METHOD with PARAMS to the hub on the subscribed connection; THEN with its result in this buffer; an error goes to
+the status line."
+  (let ((buf (current-buffer)))
+    (unless (fboundp 'drgnx-hub--call-on) (require 'drgnx-hub-client))
+    (condition-case err
+        (drgnx-hub--call-on drgnx-hub--events method params
+                            (lambda (result error)
+                              (when (buffer-live-p buf)
+                                (with-current-buffer buf
+                                  (if error (drgnx-replace--message "%s" error) (funcall then result))))))
+      (error (drgnx-replace--message "%s" (error-message-string err))))))
+
+(defun drgnx-replace--write (params kind &optional data sheet)
+  "Write what PARAMS (`search/edits' params but the view) name: the hub's edit set, then its apply (`search/apply').
+When it ends, KIND (`all', `this', `symbol-all', `symbol-this') and DATA say what the view does
+\(`drgnx-replace--change-done').  SHEET: the edit set goes to the Replace All sheet first when it has at least
+`drgnx-search-preview-threshold' edits (0: never)."
+  (drgnx-replace--hub-write
+   "search/edits" (append (list :view drgnx-replace-view) params)
+   (lambda (r)
+     (let ((n (apply #'+ (mapcar (lambda (f) (length (plist-get f :edits))) (plist-get r :files)))))
+       (if (and sheet (> drgnx-search-preview-threshold 0) (>= n drgnx-search-preview-threshold))
+           (drgnx-replace--sheet-show r)
+         (drgnx-replace--apply-change (plist-get r :change) kind data (append (plist-get r :skipped) nil)))))))
+
+(defun drgnx-replace--apply-change (change kind data skipped)
+  "Write the hub's change set CHANGE (`search/apply'), its edit set having left out SKIPPED; KIND and DATA as in
+`drgnx-replace--write'."
+  (push (list change kind data skipped) drgnx-replace--writes)
+  (drgnx-replace--hub-write "search/apply" (list :view drgnx-replace-view :change change
+                                                 :open (drgnx-replace--open-paths))
+                            #'ignore))
+
+(defun drgnx-replace--skipped-ids (skipped)
+  "SKIPPED (the hub's, :id :path :why) as `search/grep-skipped' takes them: the matches' ids and why."
+  (vconcat (delq nil (mapcar (lambda (s) (when-let* ((id (plist-get s :id))) (list :id id :why (plist-get s :why))))
+                             skipped))))
+
+(defun drgnx-replace--change-done (data)
+  "The hub's `search-change' DATA: one of the view's writes ended; the view shows what it wrote and what it left."
+  (let* ((change (plist-get data :change))
+         (entry (assoc change drgnx-replace--writes))
+         (undo (equal (plist-get data :origin) "undo")))
+    (when (or entry undo)
+      (setq drgnx-replace--writes (delq entry drgnx-replace--writes))
+      (pcase-let* ((`(,_ ,kind ,extra ,before) entry)
+                   (skipped (append before (plist-get data :skipped) nil))
+                   (written (or (plist-get data :written) 0))
+                   (files (or (plist-get data :files) 0))
+                   (msg (drgnx-replace--report written files (length skipped))))
+        (when (and (not undo) (> written 0)) (push change drgnx-replace--undo))
+        (pcase (if undo 'undo kind)
+          ('undo
+           (let ((left (append (plist-get data :left) nil)))
+             (drgnx-replace--search-now)
+             (drgnx-replace--message "Undone in %d file%s%s" files (if (= files 1) "" "s")
+                                     (if left (format "; left alone (changed since): %s"
+                                                      (mapconcat #'file-name-nondirectory left ", "))
+                                       ""))))
+          ('all
+           ;; what is left: the skipped, with their reasons (the hub lists them alone, by node id, and stops the search)
+           (drgnx-replace--clear)
+           (drgnx-replace--hub-call "search/grep-skipped"
+                                    (list :view drgnx-replace-view :skipped (drgnx-replace--skipped-ids skipped)))
+           (setq drgnx-replace--hub-counts (cons (length (seq-uniq (mapcar (lambda (s) (plist-get s :path)) skipped)))
+                                                 (length skipped)))
+           (drgnx-replace--message "%s" msg))
+          ('this
+           (drgnx-replace--search-now)
+           (drgnx-replace--message "%s" (if skipped (format "Skipped: %s" (plist-get (car skipped) :why)) msg)))
+          ('symbol-all
+           ;; EXTRA: the matches in the order the edits named them (`e:K')
+           (drgnx-replace--clear)
+           (drgnx-replace--add (delq nil (mapcar (lambda (s)
+                                                   (when-let* ((id (plist-get s :id)) ((string-prefix-p "e:" id))
+                                                               (m (nth (string-to-number (substring id 2)) extra)))
+                                                     (drgnx-replace--skip m (plist-get s :why))))
+                                                 skipped)))
+           (drgnx-replace--watch)
+           (drgnx-replace--message "%s" msg))
+          ('symbol-this
+           (if skipped
+               (progn (setq drgnx-replace--status (format "Skipped: %s" (plist-get (car skipped) :why)))
+                      (drgnx-replace--update-status))
+             (drgnx-replace--symbol-row-gone (car extra) (cadr extra))
+             (setq drgnx-replace--status msg)
+             (drgnx-replace--update-status))))))))
+
+(defun drgnx-replace--given (ms new)
+  "Symbol mode's matches MS (the server's edits, the view's own rows) as edits the hub takes (`search/edits' `edits'),
+each replaced by NEW."
+  (vconcat (mapcar (lambda (m)
+                     (list :path (plist-get m :file) :line (plist-get m :line) :col (plist-get m :col)
+                           :end_col (plist-get m :end) :old (plist-get m :text)
+                           :new (drgnx-replace-new-text m new)))
+                   ms)))
 
 (defun drgnx-replace--new-name ()
   "The replace field's text; a user error when a symbol would get an empty name."
@@ -1321,7 +1464,7 @@ buffers' text goes to the hub after a pause (`drgnx-replace--send-buffers'), whi
   (concat "f:" (drgnx-replace--key-path file)))
 
 (defun drgnx-replace--rows-match (id &optional extra)
-  "Match node ID of the model as `drgnx-replace-apply' takes a match, EXTRA appended.  Its file is its parent's
+  "Match node ID of the model as a match plist (:file :line :col :end :text), EXTRA appended.  Its file is its parent's
 `path' (the hub sends the path once, on the file node)."
   (let ((f (lambda (name) (drgnx-view-nav-field name id)))
         (parent (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'parent id)))
@@ -1396,7 +1539,8 @@ every one was unticked, else unticked)."
         (let* ((off (drgnx-replace--rows-off)) (tick (cl-every (lambda (m) (gethash m off)) ms)))
           (dolist (m ms) (when (eq tick (gethash m off)) (nidhogg-view-set h 'tick m))))
       (nidhogg-view-set h 'tick id))
-    (drgnx-replace--rows-boxes drgnx-view (cons file ms))))
+    (drgnx-replace--rows-boxes drgnx-view (cons file ms))
+    (drgnx-replace--previews-later)))
 
 
 (defun drgnx-replace--rows-step (dir)
@@ -1471,36 +1615,15 @@ when it shows the gap row of a far jump, ask for the rows before the gap (once p
                                   (append (nidhogg-view-get h 'list "visible") nil))))
         (when ms (drgnx-view-nav 'select (if (> dir 0) (car ms) (car (last ms)))))))))
 
-(defun drgnx-replace--rows-ticked (extra)
-  "The model's ticked matches in order, as `drgnx-replace-apply' takes them, EXTRA and `:id' (the node) appended to
-each."
-  (let ((off (drgnx-replace--rows-off)) ms)
-    (mapc (lambda (id) (when (and (not (gethash id off)) (drgnx-replace--rows-kind-p id "match"))
-                         (push (drgnx-replace--rows-match id (append extra (list :id id))) ms)))
-          (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'list "order"))
-    (nreverse ms)))
-
-(defun drgnx-replace--rows-replace-all (new)
-  "Replace All on the rows path: the ticked matches by NEW (a regexp search's matches carry its pattern); the list is
-then what it skipped, each with why (`search/grep-skipped'), as the old path leaves it."
-  (let ((ms (drgnx-replace--rows-ticked
-             (when (drgnx-replace--opt :regexp)
-               (list :pattern (drgnx-replace--emacs-regexp (drgnx-replace--text 'find))
-                     :case (drgnx-replace--opt :case))))))
-    (unless ms (user-error "Nothing to replace: no match is ticked"))
-    (let* ((res (let ((drgnx-replace--applying t)) (drgnx-replace-apply ms new)))
-           (skipped (plist-get res :skipped)))
-      (drgnx-replace--clear)
-      ;; what is left: the skipped, with their reasons (the hub lists them alone, by node id, and stops the search)
-      (drgnx-replace--hub-call "search/grep-skipped"
-                               (list :view drgnx-replace-view
-                                     :skipped (vconcat (delq nil (mapcar (lambda (m)
-                                                                           (when-let* ((id (plist-get m :id)))
-                                                                             (list :id id :why (plist-get m :reason))))
-                                                                         skipped)))))
-      (setq drgnx-replace--hub-counts (cons (length (seq-uniq (mapcar (lambda (m) (plist-get m :file)) skipped)))
-                                            (length skipped)))
-      (drgnx-replace--message "%s" (drgnx-replace--apply-report res)))))
+(defun drgnx-replace--rows-replace-all (new &optional sheet)
+  "Replace All on the rows path: every match of the hub's search but the unticked (Sjá's ticked set, sent as `off':
+the model may hold only a window of a long search) by NEW; the list is then what it skipped, each with why
+\(`search/grep-skipped').  SHEET: the Replace All sheet first (`drgnx-replace--write')."
+  (let ((off (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'ticked))
+        (all (cdr drgnx-replace--hub-counts)))
+    (when (or (eql all 0) (and all (>= (length off) all)))
+      (user-error "Nothing to replace: no match is ticked"))
+    (drgnx-replace--write (list :off (vconcat off) :replace new) 'all nil sheet)))
 
 ;;;;; On the rows path: the hub searches and streams the results (`search/run')
 ;; A text search goes to the hub (this Emacs has Sjá; a search typed before the hub is up waits for it): the view is
@@ -1847,9 +1970,19 @@ view shows.  A timer: never signals."
         (when-let* ((file (nidhogg-view-get h 'parent id))) (push file shown)))
       (drgnx-replace--rows-boxes drgnx-view (delete-dups shown)))))
 
+(defun drgnx-replace--write-event (event data)
+  "`drgnx-hub-event-functions': `search-apply' (a file of the view's write) and `search-change' (the write ended)."
+  (pcase event
+    ("search-apply" (drgnx-replace--apply-later data))
+    ("search-change"
+     (when-let* (((equal (plist-get data :view) drgnx-replace-view)) (buf (get-buffer drgnx-replace-buffer-name)))
+       (with-current-buffer buf (drgnx-replace--change-done data))))))
+
 (defun drgnx-replace--hub-event (event data)
   "`drgnx-hub-event-functions': `search-run-done' ends the Search view's search, counts what it found and unticks
-the matches the user had unticked before it (`:off')."
+the matches the user had unticked before it (`:off'); `search-apply' and `search-change' are the view's writes
+\(`drgnx-replace--write-event')."
+  (drgnx-replace--write-event event data)
   (when-let* (((equal event "search-run-done")) (view (plist-get data :view))
               ((string-prefix-p (concat drgnx-replace-view "~pin") view))
               (buf (get-buffer drgnx-replace-buffer-name)))
@@ -1941,28 +2074,20 @@ was sent were lost."
 
 (defun drgnx-replace--rows-this (new)
   "Replace the match on the row at point (else the selected one) by NEW, ticked or not, then search again."
-  (let* ((id (or (get-text-property (point) 'drgnx-work-id) (drgnx-view-nav-selection)))
-         (m (or (and id (drgnx-replace--rows-kind-p id "match")
-                     (drgnx-replace--rows-match id (when (drgnx-replace--opt :regexp)
-                                                     (list :pattern (drgnx-replace--emacs-regexp (drgnx-replace--text 'find))
-                                                           :case (drgnx-replace--opt :case)))))
-                (user-error "No match on this row")))
-         (res (let ((drgnx-replace--applying t)) (drgnx-replace-apply (list m) new)))
-         (msg (if (plist-get res :skipped)
-                  (format "Skipped: %s" (plist-get (car (plist-get res :skipped)) :reason))
-                (drgnx-replace--apply-report res))))
-    (drgnx-replace--search-now)
-    (drgnx-replace--message "%s" msg)))
+  (let ((id (or (get-text-property (point) 'drgnx-work-id) (drgnx-view-nav-selection))))
+    (unless (and id (drgnx-replace--rows-kind-p id "match")) (user-error "No match on this row"))
+    (drgnx-replace--write (list :ids (vector id) :replace new) 'this)))
 
-(defun drgnx-replace-all ()
-  "Replace every ticked match of the Search view (in the find bar: every match of its buffer)."
-  (interactive)
+(defun drgnx-replace-all (&optional now)
+  "Replace every ticked match of the Search view (in the find bar: every match of its buffer).  The Replace All sheet
+shows the changes first (`drgnx-search-preview-threshold'); NOW (\\[universal-argument]) writes them at once."
+  (interactive "P")
   (if (drgnx-replace--bar-context-p)
       (with-current-buffer drgnx-replace-bar-buffer-name (drgnx-replace--bar-replace-all))
     (with-current-buffer (drgnx-replace--live-view)
       (drgnx-replace--check-writable)
       (if (drgnx-replace--rows-p)
-          (drgnx-replace--rows-replace-all (drgnx-replace--new-name))
+          (drgnx-replace--rows-replace-all (drgnx-replace--new-name) (not now))
         (drgnx-replace--replace-all-symbol)))))
 
 (defun drgnx-replace--replace-all-symbol ()
@@ -1970,12 +2095,7 @@ was sent were lost."
   (let ((new (drgnx-replace--new-name))
         (ms (seq-remove (lambda (m) (gethash m drgnx-replace--off)) drgnx-replace--matches)))
     (unless ms (user-error "Nothing to replace: no match is ticked"))
-    (let* ((res (let ((drgnx-replace--applying t)) (drgnx-replace-apply ms new)))
-           (msg (drgnx-replace--apply-report res)))
-      (drgnx-replace--clear)
-      (drgnx-replace--add (plist-get res :skipped))       ; what is left: the skipped, with their reasons
-      (drgnx-replace--watch)
-      (drgnx-replace--message "%s" msg))))
+    (drgnx-replace--write (list :root drgnx-replace--root :edits (drgnx-replace--given ms new)) 'symbol-all ms)))
 
 (defun drgnx-replace-this ()
   "Replace the match on this row of the Search view, ticked or not."
@@ -1986,50 +2106,44 @@ was sent were lost."
 
 (defun drgnx-replace--this-symbol ()
   "`drgnx-replace-this' in Symbol mode (the view's own rows)."
-  (progn
-    (let ((m (or (get-text-property (point) 'drgnx-replace-match) (user-error "No match on this row")))
-          (new (drgnx-replace--new-name)))
-      (let* ((res (let ((drgnx-replace--applying t)) (drgnx-replace-apply (list m) new)))
-             (msg (drgnx-replace--apply-report res)))
-        (if (plist-get res :skipped)
-            (setq msg (format "Skipped: %s" (plist-get (car (plist-get res :skipped)) :reason)))
-          ;; the match is gone; later matches on its line moved
-          (let ((delta (- (length (or (drgnx-replace-new-text m new) "")) (length (plist-get m :text)))))
-            (setq drgnx-replace--matches (delq m drgnx-replace--matches)
-                  drgnx-replace--tail (last drgnx-replace--matches))
-            (dolist (o drgnx-replace--matches)
-              (when (and (equal (plist-get o :file) (plist-get m :file)) (= (plist-get o :line) (plist-get m :line))
-                         (>= (plist-get o :col) (plist-get m :end)))
-                (plist-put o :col (+ (plist-get o :col) delta))
-                (plist-put o :end (+ (plist-get o :end) delta))))
-            (cl-decf (gethash (plist-get m :file) drgnx-replace--seen 0))
-            (when (gethash m drgnx-replace--off)
-              (remhash m drgnx-replace--off)
-              (cl-decf (gethash (plist-get m :file) drgnx-replace--off-files 0)))
-            ;; its row goes; its file's header shows the new count, or goes with its last row
-            (let ((file (plist-get m :file)))
-              (drgnx-view-remove drgnx-view (list m))
-              (if (zerop (gethash file drgnx-replace--seen 0))
-                  (progn (remhash file drgnx-replace--seen) (drgnx-replace--drop-header file))
-                (drgnx-view-dirty drgnx-view (list (gethash file drgnx-replace--headers)))
-                (when (eq m (gethash file drgnx-replace--last-row))
-                  (puthash file (car (last (seq-filter (lambda (o) (equal (plist-get o :file) file))
-                                                       drgnx-replace--matches)))
-                           drgnx-replace--last-row))))))
-        (setq drgnx-replace--status msg)
-        (drgnx-replace--update-status)))))
+  (let ((m (or (get-text-property (point) 'drgnx-replace-match) (user-error "No match on this row")))
+        (new (drgnx-replace--new-name)))
+    (drgnx-replace--write (list :root drgnx-replace--root :edits (drgnx-replace--given (list m) new))
+                          'symbol-this (list m new))))
+
+(defun drgnx-replace--symbol-row-gone (m new)
+  "Symbol mode's match M was replaced by NEW: its row goes; later matches on its line moved."
+  (let ((delta (- (length (or (drgnx-replace-new-text m new) "")) (length (plist-get m :text))))
+        (file (plist-get m :file)))
+    (setq drgnx-replace--matches (delq m drgnx-replace--matches)
+          drgnx-replace--tail (last drgnx-replace--matches))
+    (dolist (o drgnx-replace--matches)
+      (when (and (equal (plist-get o :file) file) (= (plist-get o :line) (plist-get m :line))
+                 (>= (plist-get o :col) (plist-get m :end)))
+        (plist-put o :col (+ (plist-get o :col) delta))
+        (plist-put o :end (+ (plist-get o :end) delta))))
+    (cl-decf (gethash file drgnx-replace--seen 0))
+    (when (gethash m drgnx-replace--off)
+      (remhash m drgnx-replace--off)
+      (cl-decf (gethash file drgnx-replace--off-files 0)))
+    ;; its row goes; its file's header shows the new count, or goes with its last row
+    (drgnx-view-remove drgnx-view (list m))
+    (if (zerop (gethash file drgnx-replace--seen 0))
+        (progn (remhash file drgnx-replace--seen) (drgnx-replace--drop-header file))
+      (drgnx-view-dirty drgnx-view (list (gethash file drgnx-replace--headers)))
+      (when (eq m (gethash file drgnx-replace--last-row))
+        (puthash file (car (last (seq-filter (lambda (o) (equal (plist-get o :file) file)) drgnx-replace--matches)))
+                 drgnx-replace--last-row)))))
 
 (defun drgnx-replace-view-undo ()
-  "Undo the Search view's last replacement, in every file it wrote; then search again."
+  "Undo the Search view's last replacement, in every file it wrote (the hub's `search/undo'); then search again.
+A file edited since is left alone."
   (interactive)
   (with-current-buffer (drgnx-replace--live-view)
-    (let* ((u (or (pop drgnx-replace--undo) (user-error "Nothing to undo")))
-           (r (let ((drgnx-replace--applying t)) (drgnx-replace-undo u))) (skipped (plist-get r :skipped)))
-      (drgnx-replace--search-now)
-      (drgnx-replace--message "Undone in %d file%s%s" (plist-get r :undone) (if (= (plist-get r :undone) 1) "" "s")
-                              (if skipped (format "; left alone (changed since): %s"
-                                                  (mapconcat #'file-name-nondirectory skipped ", "))
-                                "")))))
+    (let ((change (or (pop drgnx-replace--undo) (user-error "Nothing to undo"))))
+      (drgnx-replace--hub-write "search/undo" (list :view drgnx-replace-view :change change
+                                                    :open (drgnx-replace--open-paths))
+                                #'ignore))))
 
 (defun drgnx-replace--next-row (pos dir)
   "The start of the next row with a match after (DIR 1) or before (DIR -1) POS's row, wrapping; nil without rows."
@@ -2371,11 +2485,424 @@ The find bar's button; not a command of its own (it needs the bar)."
                    (search-scope-changed "In Changed Files" drgnx-replace-search-scope-changed
                                          "The Search view in the working tree's changed files, the word at point to find")
                    (search-scope-branch "In Files Changed on This Branch" drgnx-replace-search-scope-branch
-                                        "The Search view in the files changed on this branch, the word at point to find")))
+                                        "The Search view in the files changed on this branch, the word at point to find")
+                   (search-preview-file "Preview This File's Changes" drgnx-replace-preview-file
+                                        "The changes of the file on this row of the Search view, as a read-only diff")
+                   (search-preview-open "Open File" drgnx-replace-preview-open
+                                        "In a preview: open its file in the editor")
+                   (search-preview-replace-file "Replace in This File" drgnx-replace-preview-replace-file
+                                                "In a preview: write its file's ticked matches")
+                   (search-preview-keep "Keep This Hunk" drgnx-replace-preview-keep
+                                        "In a preview: tick the matches of the hunk at point")
+                   (search-preview-drop "Drop This Hunk" drgnx-replace-preview-drop
+                                        "In a preview: untick the matches of the hunk at point")
+                   (search-sheet-confirm "Replace" drgnx-replace-sheet-confirm
+                                         "On the Replace All sheet: write the changes it shows")
+                   (search-sheet-cancel "Cancel" drgnx-replace-sheet-cancel
+                                        "On the Replace All sheet: close it, nothing written")
+                   (search-sheet-next "Next File" drgnx-replace-sheet-next
+                                      "On the Replace All sheet: the next file and its first hunk")
+                   (search-sheet-previous "Previous File" drgnx-replace-sheet-previous
+                                          "On the Replace All sheet: the previous file and its first hunk")))
     (drgnx-command-define id :category "Search" :title title :command fn :doc doc :scope scope))
   (drgnx-command-define 'replace-this :category "Search" :title "Replace This Match" :command #'drgnx-replace-this
                         :doc "Replace the match on this row of the Search view"
                         :when (lambda () (derived-mode-p 'drgnx-replace-mode))))
+
+;;;; Preview and the Replace All sheet
+;; A file's changes before they are written (docs/guide/replace.md, "Preview"): the hub's diff of the file after its
+;; ticked edits (`search/preview', the same edit set Replace All writes) in a read-only tile in the editor area, each
+;; hunk with its tick (`a' keep, `D' drop: the hunk's matches ticked or unticked in the view, both ways) and, for a
+;; regexp search, its groups line.  Replace All first shows the sheet (`drgnx-search-preview-threshold'): every file
+;; with its lines added and removed, the selected file's first hunk, what is skipped and why, and Replace / Cancel;
+;; Replace writes the edit set the sheet shows (`search/apply').
+
+(defface drgnx-replace-preview-head '((t :inherit diff-hunk-header))
+  "A preview tile's hunk headers." :group 'drgnx)
+
+(defface drgnx-replace-preview-empty '((t :inherit warning))
+  "A group that matched nothing (`\\2 = ∅') on a preview's groups line." :group 'drgnx)
+
+(defun drgnx-replace--hunks-of (diff)
+  "The hunks of the unified DIFF: plists (:header \"@@ -1,2 +1,2 @@\" :lines (\" a\" \"-b\" \"+c\"))."
+  (let (hunks)
+    (dolist (line (split-string diff "\n"))
+      (cond ((string-prefix-p "@@" line) (push (list :header line :lines nil) hunks))
+            ((and hunks (not (string-empty-p line)))
+             (setcar hunks (plist-put (car hunks) :lines (cons line (plist-get (car hunks) :lines)))))))
+    (mapcar (lambda (h) (plist-put h :lines (nreverse (plist-get h :lines)))) (nreverse hunks))))
+
+(defun drgnx-replace--diff-line (indent line &optional number)
+  "LINE of a diff (its first character `+', `-' or a space) after INDENT and its line NUMBER, in its face, with its
+newline: `208 - text'."
+  (let ((mark (aref line 0)))
+    (concat indent
+            (propertize (if number (format "%4d " number) "") 'face 'shadow)
+            (propertize (concat (if (memq mark '(?+ ?-)) (string mark) " ") " " (substring line 1) "\n")
+                        'face (pcase mark (?+ 'diff-added) (?- 'diff-removed) (_ nil))))))
+
+(defun drgnx-replace--hunk-lines (indent hunk)
+  "HUNK's lines (`drgnx-replace--hunks-of') after INDENT, each with its number: the old file's for a removed line,
+the new file's for the others."
+  (let* ((head (plist-get hunk :header))
+         (old (if (string-match "-\\([0-9]+\\)" head) (string-to-number (match-string 1 head)) 1))
+         (new (if (string-match "\\+\\([0-9]+\\)" head) (string-to-number (match-string 1 head)) 1)))
+    (mapconcat (lambda (l)
+                 (pcase (aref l 0)
+                   (?- (prog1 (drgnx-replace--diff-line indent l old) (cl-incf old)))
+                   (?+ (prog1 (drgnx-replace--diff-line indent l new) (cl-incf new)))
+                   (_ (prog1 (drgnx-replace--diff-line indent l new) (cl-incf old) (cl-incf new)))))
+               (plist-get hunk :lines) "")))
+
+(defun drgnx-replace--key-hint (id label)
+  "Registry command ID's key as keycaps, then LABEL dim: `[a] keep'; LABEL alone when ID has no key."
+  (let ((key (and (fboundp 'drgnx-surfaces-key-label) (drgnx-surfaces-key-label id :short t))))
+    (concat (if (and key (fboundp 'drgnx-palette-keycaps)) (concat (drgnx-palette-keycaps key) " ") "")
+            (propertize label 'face 'shadow))))
+
+(defun drgnx-replace--right (text)
+  "TEXT at the right edge of the window, a character's room after it (a stretch space before it, its width measured
+in pixels: buttons and keycaps are wider than their characters)."
+  (concat (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width text) (frame-char-width))))))
+          text))
+
+(defvar-local drgnx-replace--preview nil "This preview tile's file and its last answer: (PATH . ANSWER).")
+
+(defvar-local drgnx-replace--preview-root nil "The Search view's folder: the tile's file name is relative to it.")
+
+(defvar drgnx-replace-preview-keys-map (make-sparse-keymap)
+  "A preview tile's keys (Keep and Drop This Hunk), from the key profiles.")
+
+(defvar drgnx-replace-preview-mode-map
+  (let ((m (make-sparse-keymap))) (set-keymap-parent m (make-composed-keymap drgnx-replace-preview-keys-map special-mode-map)) m)
+  "A preview tile's keymap: the profiles' keys over `special-mode-map'.")
+
+(define-derived-mode drgnx-replace-preview-mode special-mode "Preview"
+  "One file's changes of the Search view's search, read-only: `a' keeps a hunk's matches, `D' drops them."
+  (setq-local truncate-lines t)
+  (buffer-disable-undo))
+
+(defun drgnx-replace--preview-buffer (path)
+  "The preview tile of PATH (made when there is none)."
+  (let ((buf (get-buffer-create (format "%s · preview" (file-name-nondirectory path)))))
+    (with-current-buffer buf
+      (unless (derived-mode-p 'drgnx-replace-preview-mode)
+        (drgnx-replace-preview-mode)
+        (drgnx-view-attach 'replace-preview))
+      (setq drgnx-replace--preview (cons path (cdr drgnx-replace--preview))))
+    (let ((root (and (boundp 'drgnx-replace--root) drgnx-replace--root)))
+      (when-let* ((view (get-buffer drgnx-replace-buffer-name)))
+        (setq root (or (buffer-local-value 'drgnx-replace--root view) root)))
+      (with-current-buffer buf (setq drgnx-replace--preview-root root)))
+    buf))
+
+(defun drgnx-replace--preview-params (path)
+  "`search/preview' params of PATH: the view's unticked matches and its replacement (from the Search view)."
+  (list :view drgnx-replace-view :path path
+        :off (vconcat (and drgnx-view-patch (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'ticked)))
+        :replace (drgnx-replace--text 'replace)))
+
+(defun drgnx-replace--preview-ask (path buf)
+  "Ask the hub for PATH's preview (from the Search view), drawn in BUF when it comes."
+  (drgnx-replace--hub-write "search/preview" (drgnx-replace--preview-params path)
+                            (lambda (r) (when (buffer-live-p buf)
+                                          (with-current-buffer buf (drgnx-replace--preview-draw r))))))
+
+(defun drgnx-replace--groups-line (indent captures)
+  "The groups line of CAPTURES (the hub's, :id :groups) after INDENT: `groups  \\1 = pending · \\2 = ∅' (∅ in the
+warning colour: a group that matched nothing), one line per distinct capture, \"\" without groups."
+  (mapconcat (lambda (line) (concat indent (propertize "groups  " 'face 'shadow) line "\n"))
+             (delete-dups
+              (mapcar (lambda (c)
+                        (mapconcat #'identity
+                                   (cl-loop for g in (append (plist-get c :groups) nil) for n from 1
+                                            collect (if (stringp g) (format "\\%d = %s" n g)
+                                                      (concat (format "\\%d = " n)
+                                                              (propertize "∅" 'face 'drgnx-replace-preview-empty))))
+                                   " · "))
+                      (append captures nil)))
+             ""))
+
+(defun drgnx-replace--hunk-box (ids off)
+  "The tick box of a hunk with match IDS, OFF the unticked: [x] all ticked, [ ] none, [-] some."
+  (let ((n (cl-count-if (lambda (id) (member id off)) ids)))
+    (cond ((zerop n) "[x]") ((= n (length ids)) "[ ]") (t "[-]"))))
+
+(defun drgnx-replace--preview-render (key)
+  "The preview tile's row KEY: the head, a skipped match, the empty note or a hunk (its tick box, header, lines and
+groups line; the hunk's match ids on the whole row)."
+  (let* ((path (car drgnx-replace--preview)) (answer (cdr drgnx-replace--preview))
+         (off (drgnx-replace--preview-off)))
+    (pcase key
+      (`(:head)
+       (let ((all (apply #'append (mapcar (lambda (h) (append (plist-get h :ids) nil))
+                                          (plist-get answer :hunks)))))
+         (concat (propertize "Preview  " 'face 'bold)
+                 (if drgnx-replace--preview-root (file-relative-name path drgnx-replace--preview-root)
+                   (abbreviate-file-name path))
+                 (propertize (format " · %d of %d matches ticked · " (cl-count-if-not (lambda (id) (member id off)) all)
+                                     (length all))
+                             'face 'shadow)
+                 (propertize (format "+%d" (or (plist-get answer :plus) 0)) 'face 'diff-added) " "
+                 (propertize (format "−%d" (or (plist-get answer :minus) 0)) 'face 'diff-removed)
+                 (drgnx-replace--right
+                  (concat (drgnx-ui-button "Open File" 'search-preview-open)
+                          " " (drgnx-ui-button "Replace in This File" 'search-preview-replace-file
+                                               :face 'drgnx-ui-button-primary)))
+                 "\n")))
+      (`(:skip ,i)
+       (propertize (format "  skipped: %s\n" (plist-get (aref (plist-get answer :skipped) i) :why)) 'face 'warning))
+      (`(:empty) "\n  Nothing to replace in this file.\n")
+      (`(:hunk ,i)
+       (let* ((h (aref (plist-get answer :hunks) i))
+              (p (nth i (drgnx-replace--hunks-of (or (plist-get answer :diff) ""))))
+              (ids (append (plist-get h :ids) nil)))
+         (propertize
+          (concat "\n" (propertize (concat (drgnx-replace--hunk-box ids off) " " (format "hunk %d" (1+ i)))
+                                   'face 'drgnx-replace-preview-head)
+                  (drgnx-replace--right (concat (drgnx-replace--key-hint 'search-preview-keep "keep") "  "
+                                                (drgnx-replace--key-hint 'search-preview-drop "drop")))
+                  "\n"
+                  (drgnx-replace--hunk-lines "" p)
+                  (drgnx-replace--groups-line "       " (plist-get h :captures)))
+          'drgnx-replace-hunk ids)))
+      (_ "\n"))))
+
+(drgnx-view-define 'replace-preview :render #'drgnx-replace--preview-render :slice drgnx-view-slice :delay 0)
+
+(defun drgnx-replace--preview-draw (answer)
+  "Draw ANSWER (`search/preview') in this tile, point kept on its line."
+  (setcdr drgnx-replace--preview answer)
+  (let ((line (line-number-at-pos)) (hunks (length (plist-get answer :hunks))))
+    (drgnx-view-reset drgnx-view
+                      (append '((:head))
+                              (cl-loop for i below (length (plist-get answer :skipped)) collect (list :skip i))
+                              (if (zerop hunks) '((:empty)) (cl-loop for i below hunks collect (list :hunk i)))))
+    (drgnx-view-draw-now drgnx-view)
+    (goto-char (point-min))
+    (forward-line (1- line))))
+
+(defun drgnx-replace--preview-off ()
+  "The Search view's unticked matches (Sjá's ticked set)."
+  (when-let* ((view (get-buffer drgnx-replace-buffer-name)))
+    (with-current-buffer view
+      (and drgnx-view-patch (append (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'ticked) nil)))))
+
+(defun drgnx-replace-preview-file ()
+  "Show the changes of the file on this row of the Search view (a match's file) in a preview tile, read-only."
+  (interactive)
+  (with-current-buffer (drgnx-replace--live-view)
+    (unless (drgnx-replace--rows-p) (user-error "Preview needs a text search"))
+    (let* ((h (drgnx-view-patch-handle drgnx-view-patch))
+           (id (or (get-text-property (point) 'drgnx-work-id) (drgnx-view-nav-selection)
+                   (user-error "No file on this row")))
+           (file (if (drgnx-replace--rows-kind-p id "file") id (nidhogg-view-get h 'parent id)))
+           (path (or (and file (nidhogg-view-get h 'field "path" file)) (user-error "No file on this row")))
+           (path (expand-file-name path drgnx-replace--root))
+           (buf (drgnx-replace--preview-buffer path)))
+      (drgnx-replace--preview-ask path buf)
+      (drgnx-wb-show-in-editor buf t))))
+
+(defun drgnx-replace--preview-set (keep)
+  "Tick (KEEP) or untick the matches of the hunk at point, in the Search view; the tile is drawn again."
+  (let ((ids (or (get-text-property (point) 'drgnx-replace-hunk) (user-error "No hunk here")))
+        (off (drgnx-replace--preview-off)))
+    (with-current-buffer (drgnx-replace--live-view)
+      (dolist (id ids)
+        ;; Sjá's ticked set holds the unticked: a tick toggles
+        (when (eq keep (and (member id off) t)) (drgnx-replace--rows-tick id))))))
+
+(defun drgnx-replace-preview-open ()
+  "Open the file of this preview tile in the editor."
+  (interactive)
+  (find-file (or (car drgnx-replace--preview) (user-error "Not a preview"))))
+
+(defun drgnx-replace-preview-replace-file ()
+  "Replace in This File: write this tile's ticked matches (its file only) through the hub."
+  (interactive)
+  (let* ((off (drgnx-replace--preview-off))
+         (ids (cl-loop for h across (or (plist-get (cdr drgnx-replace--preview) :hunks) [])
+                       append (cl-remove-if (lambda (id) (member id off)) (append (plist-get h :ids) nil)))))
+    (unless ids (user-error "Nothing ticked in this file"))
+    (with-current-buffer (drgnx-replace--live-view)
+      (drgnx-replace--write (list :ids (vconcat ids) :replace (drgnx-replace--text 'replace)) 'this))))
+
+(defun drgnx-replace-preview-keep ()
+  "Keep the hunk at point: its matches are ticked in the Search view."
+  (interactive)
+  (drgnx-replace--preview-set t))
+
+(defun drgnx-replace-preview-drop ()
+  "Drop the hunk at point: its matches are unticked in the Search view."
+  (interactive)
+  (drgnx-replace--preview-set nil))
+
+(defun drgnx-replace--previews-later ()
+  "The open preview tiles are asked for again once the current command's ticks are done."
+  (when (cl-some (lambda (b) (eq (buffer-local-value 'major-mode b) 'drgnx-replace-preview-mode)) (buffer-list))
+    (drgnx-timer-soon 'replace-previews 0 #'drgnx-replace--previews-refresh :owner 'tools/replace)))
+
+(defun drgnx-replace--previews-refresh ()
+  "Ask again for every open preview tile (the ticks or the replacement changed)."
+  (dolist (b (buffer-list))
+    (when (eq (buffer-local-value 'major-mode b) 'drgnx-replace-preview-mode)
+      (when-let* ((path (car (buffer-local-value 'drgnx-replace--preview b)))
+                  (view (get-buffer drgnx-replace-buffer-name)))
+        (with-current-buffer view (drgnx-replace--preview-ask path b))))))
+
+;;;;; The Replace All sheet
+
+(defvar-local drgnx-replace--sheet nil
+  "The sheet's edit set: plist :change :files :skipped (the hub's `search/edits' answer), :sel the selected file's
+index, :hunk its first hunk's diff text when it came.")
+
+(defvar drgnx-replace-sheet-keys-map (make-sparse-keymap)
+  "The Replace All sheet's keys (Replace, Cancel, next and previous file), from the key profiles.")
+
+(defvar drgnx-replace-sheet-mode-map
+  (let ((m (make-sparse-keymap))) (set-keymap-parent m (make-composed-keymap drgnx-replace-sheet-keys-map special-mode-map)) m)
+  "The Replace All sheet's keymap: the profiles' keys over `special-mode-map'.")
+
+(define-derived-mode drgnx-replace-sheet-mode special-mode "Replace All"
+  "The Replace All sheet: every file's changes; Replace writes them, Cancel leaves everything as it is."
+  (setq-local truncate-lines t)
+  (buffer-disable-undo))
+
+(defconst drgnx-replace-sheet-buffer-name "*drgnx replace all*")
+
+(defvar-local drgnx-replace--sheet-root nil "The Search view's folder: the sheet's file names are relative to it.")
+
+(defun drgnx-replace--lines-changed (edits)
+  "How many lines EDITS (one file's) change: the distinct lines they start on."
+  (length (delete-dups (mapcar (lambda (e) (plist-get e :line)) (append edits nil)))))
+
+(defun drgnx-replace--sheet-show (answer)
+  "Show the Replace All sheet of ANSWER (`search/edits'), the Search view's edit set (from the Search view)."
+  (let ((buf (get-buffer-create drgnx-replace-sheet-buffer-name)) (root drgnx-replace--root))
+    (with-current-buffer buf
+      (drgnx-replace-sheet-mode)
+      (drgnx-view-attach 'replace-sheet)
+      (setq drgnx-replace--sheet-root root)
+      (setq drgnx-replace--sheet (list :change (plist-get answer :change) :files (append (plist-get answer :files) nil)
+                                       :skipped (append (plist-get answer :skipped) nil) :sel 0))
+      (drgnx-replace--sheet-draw)
+      (drgnx-replace--sheet-hunk))
+    (pop-to-buffer buf)))
+
+(defun drgnx-replace--sheet-name (f)
+  "The sheet's name of file F: relative to the Search view's folder."
+  (file-relative-name (plist-get f :path) drgnx-replace--sheet-root))
+
+(defun drgnx-replace--sheet-render (key)
+  "The sheet's row KEY: its title, a file (its +/−, skipped and unsaved notes; its first hunk when selected), its foot
+\(what is skipped and why, what Undo does, Cancel and Replace).  The files' counts line up after the longest name."
+  (let* ((s drgnx-replace--sheet) (files (plist-get s :files)) (skipped (plist-get s :skipped))
+         (col (+ 6 (apply #'max 20 (mapcar (lambda (f) (string-width (drgnx-replace--sheet-name f))) files)))))
+    (pcase key
+      (`(:title)
+       (let ((n (apply #'+ (mapcar (lambda (f) (length (plist-get f :edits))) files))))
+         (concat (propertize (format "Replace %d match%s in %d file%s" n (if (= n 1) "" "es") (length files)
+                                     (if (= (length files) 1) "" "s"))
+                             'face 'bold)
+                 (if skipped (propertize (format " · %d skipped" (length skipped)) 'face 'shadow) "")
+                 "\n\n")))
+      (`(:file ,i)
+       (let* ((f (nth i files)) (k (drgnx-replace--lines-changed (plist-get f :edits)))
+              (sel (= i (plist-get s :sel)))
+              (skips (cl-count-if (lambda (x) (equal (plist-get x :path) (plist-get f :path))) skipped))
+              (b (find-buffer-visiting (plist-get f :path)))
+              (h (and sel (plist-get s :hunk))))
+         (propertize
+          (concat (if sel "⌄ " "› ") (drgnx-replace--sheet-name f)
+                  (propertize " " 'display `(space :align-to ,col))
+                  (propertize (format "+%d" k) 'face 'diff-added) " "
+                  (propertize (format "−%d" k) 'face 'diff-removed)
+                  (if (> skips 0) (propertize (format "  %d skipped" skips) 'face 'warning) "")
+                  (if (and b (buffer-modified-p b)) (propertize "  open, unsaved: stays unsaved" 'face 'warning) "")
+                  "\n"
+                  (if h (concat (drgnx-replace--hunk-lines "    " h)
+                                (drgnx-replace--groups-line "         " (plist-get s :captures)))
+                    ""))
+          'drgnx-replace-sheet-file i)))
+      (`(:foot)
+       (concat "\n"
+               (if skipped
+                   (propertize (format "%d skipped: %s\n" (length skipped)
+                                       (mapconcat #'identity
+                                                  (delete-dups (mapcar (lambda (x) (plist-get x :why)) skipped))
+                                                  "; "))
+                               'face 'warning)
+                 "")
+               "\n" (propertize (format "Undo puts all %d file%s back" (length files) (if (= (length files) 1) "" "s"))
+                                'face 'shadow)
+               (propertize " " 'display `(space :align-to ,(+ col 2)))
+               (drgnx-replace--sheet-button "Cancel" 'search-sheet-cancel 'drgnx-ui-button)
+               " " (drgnx-replace--sheet-button "Replace" 'search-sheet-confirm 'drgnx-ui-button-primary) "\n"))
+      (_ "\n"))))
+
+(drgnx-view-define 'replace-sheet :render #'drgnx-replace--sheet-render :slice drgnx-view-slice :delay 0)
+
+(defun drgnx-replace--sheet-draw ()
+  "Draw the sheet from `drgnx-replace--sheet', point on the selected file."
+  (drgnx-view-reset drgnx-view (append '((:title))
+                                       (cl-loop for i below (length (plist-get drgnx-replace--sheet :files))
+                                                collect (list :file i))
+                                       '((:foot))))
+  (drgnx-view-draw-now drgnx-view)
+  (goto-char (point-min))
+  (when (text-property-search-forward 'drgnx-replace-sheet-file (plist-get drgnx-replace--sheet :sel) #'eql)
+    (goto-char (line-beginning-position 0))))
+
+(defun drgnx-replace--sheet-button (label id face)
+  "LABEL as a button in FACE running registry command ID, its key as keycaps after the label."
+  (let ((key (and (fboundp 'drgnx-surfaces-key-label) (drgnx-surfaces-key-label id :short t))))
+    (drgnx-ui-button (if (and key (fboundp 'drgnx-palette-keycaps)) (concat label "  " (drgnx-palette-keycaps key)) label)
+                     id :face face)))
+
+(defun drgnx-replace--sheet-hunk ()
+  "Ask the hub for the selected file's first hunk (its preview), drawn under it when it comes."
+  (let* ((s drgnx-replace--sheet) (f (nth (plist-get s :sel) (plist-get s :files))) (buf (current-buffer)))
+    (when-let* ((view (and f (get-buffer drgnx-replace-buffer-name))))
+      (with-current-buffer view
+        (drgnx-replace--hub-write
+         "search/preview" (drgnx-replace--preview-params (plist-get f :path))
+         (lambda (r)
+           (when (buffer-live-p buf)
+             (with-current-buffer buf
+               (setq drgnx-replace--sheet
+                     (plist-put (plist-put drgnx-replace--sheet :hunk
+                                           (car (drgnx-replace--hunks-of (or (plist-get r :diff) ""))))
+                                :captures (let ((h (and (> (length (plist-get r :hunks)) 0) (aref (plist-get r :hunks) 0))))
+                                            (plist-get h :captures))))
+               (drgnx-replace--sheet-draw)))))))))
+
+(defun drgnx-replace-sheet-next (&optional n)
+  "Select the sheet's next file (N files on), showing its first hunk."
+  (interactive "p")
+  (let ((s drgnx-replace--sheet))
+    (setq drgnx-replace--sheet (plist-put (plist-put s :hunk nil) :sel
+                                          (mod (+ (plist-get s :sel) (or n 1)) (max 1 (length (plist-get s :files))))))
+    (drgnx-replace--sheet-draw)
+    (drgnx-replace--sheet-hunk)))
+
+(defun drgnx-replace-sheet-previous ()
+  "Select the sheet's previous file."
+  (interactive)
+  (drgnx-replace-sheet-next -1))
+
+(defun drgnx-replace-sheet-confirm ()
+  "Replace: write the edit set the sheet shows (`search/apply'); the sheet goes."
+  (interactive)
+  (let ((change (plist-get drgnx-replace--sheet :change)) (skipped (plist-get drgnx-replace--sheet :skipped)))
+    (quit-window t)
+    (with-current-buffer (drgnx-replace--live-view)
+      (drgnx-replace--apply-change change 'all nil skipped))))
+
+
+(defun drgnx-replace-sheet-cancel ()
+  "Cancel: the sheet goes, nothing is written."
+  (interactive)
+  (quit-window t))
 
 (defun drgnx-replace--teardown ()
   "Turn the Search view and the find bar off: close the bar, stop what the view runs (search, drawing, file
@@ -2385,6 +2912,9 @@ cancels those."
   (remove-hook 'drgnx-hub-connected-functions #'drgnx-replace--hub-up)
   (drgnx-replace-bar-close)
   (let ((kill-buffer-query-functions nil))
+    (dolist (b (buffer-list))                ; the preview tiles and the sheet
+      (when (memq (buffer-local-value 'major-mode b) '(drgnx-replace-preview-mode drgnx-replace-sheet-mode))
+        (kill-buffer b)))
     (dolist (name (list drgnx-replace-buffer-name drgnx-replace-bar-buffer-name))
       (when-let* ((buf (get-buffer name)))
         (with-current-buffer buf
@@ -2401,6 +2931,7 @@ cancels those."
                               (drgnx-replace--define-commands)
                               (add-hook 'drgnx-hub-connected-functions #'drgnx-replace--hub-up)
                               (drgnx-state-define-role 'bar) ; the find bar's window: no editor, no chrome
+                              (drgnx-wb-place 'drgnx-replace-sheet-mode 'popup :height 0.8) ; the sheet: the popup lane, tall
                               (eval-after-load 'evil (drgnx-modules-with-owner (drgnx-replace--evil-states)))
                               ;; wb/drgnx-persist.el saves the main area with `window-state-get': the bar's window would be in it.
                               (advice-add 'drgnx-persist-save :before #'drgnx-replace--close-bars)))

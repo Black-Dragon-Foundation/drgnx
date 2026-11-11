@@ -1564,8 +1564,9 @@ applied patch sets the version.  Returns the decision.  No buffer is touched."
   (mapcar (lambda (r) (plist-get r :key)) rows))
 
 (defun drgnx-view-patch--image (svg)
-  "SVG as an image spec on a graphic display, else `:alt' (the row's alt shows)."
-  (or (and (display-graphic-p) (image-type-available-p 'svg) (create-image svg 'svg t :ascent 'center)) :alt))
+  "SVG as an image spec on a graphic display, else `:alt' (the row's alt shows).  The hub sized it in device pixels
+for the class's scale, so Emacs scales it no further (`:scale' 1, not `image-scaling-factor''s guess from the font)."
+  (or (and (display-graphic-p) (image-type-available-p 'svg) (create-image svg 'svg t :ascent 'center :scale 1)) :alt))
 
 (defun drgnx-view-patch--evict-images (state)
   "Past `drgnx-view-patch-image-max', drop the images no live row names."
@@ -1575,6 +1576,8 @@ applied patch sets the version.  Returns the decision.  No buffer is touched."
         (maphash (lambda (_ r) (dolist (im (plist-get r :images)) (puthash (nth 1 im) t live)))
                  (drgnx-view-patch-rows state))
         (maphash (lambda (id _) (unless (gethash id live) (remhash id images))) images)))))
+
+(defvar drgnx-view-nav--place-after-draw)
 
 (defun drgnx-view-patch--apply-ops (state view patch)
   "Store PATCH's images and rows in STATE and mark VIEW; the draw does the rest."
@@ -1594,7 +1597,9 @@ applied patch sets the version.  Returns the decision.  No buffer is touched."
           (clrhash (drgnx-view-patch-ids state))
           (clrhash (drgnx-view-patch-keys state))
           (dolist (r rows) (puthash (plist-get r :key) r table))
-          (drgnx-view-reset view (drgnx-view-patch--keys rows))))
+          (drgnx-view-reset view (drgnx-view-patch--keys rows))
+          ;; a reset deletes every row, point with it: the draw's class step puts point back on the selection
+          (when (boundp 'drgnx-view-nav--place-after-draw) (setq drgnx-view-nav--place-after-draw t))))
        ((plist-member op :insert)
         (let* ((ins (plist-get op :insert)) (rows (plist-get ins :rows)))
           (dolist (r rows) (puthash (plist-get r :key) r table))

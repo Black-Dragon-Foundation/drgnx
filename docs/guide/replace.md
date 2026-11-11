@@ -109,10 +109,42 @@ With **.\*** on, Replace can use the regexp's groups: `\1`, `\2`.
 **Replace All** writes every ticked match; **Replace This Match** writes the one on the row, ticked or not. Each
 match is checked against the file as it is now: a match whose text changed since the search is skipped and listed
 with the reason, never written blind. So is every match in a large file open in chunks or raw ("open in chunks:
-Large File: Open Whole first"; [large-files.md](large-files.md)). A file's replacements are one change; files are saved, except a file whose
-buffer held unsaved edits: it gets the replacement and stays unsaved, as in VS Code. **Undo Replace** (the view's
-Undo button) puts every file of the last replacement back in one step; a file edited since is left alone. After
-Replace All the list holds what it skipped, each match with why after its text; a new search ticks every match again.
+Large File: Open Whole first"; [large-files.md](large-files.md)), and a binary file, a file that is not UTF-8 or one over
+16 MiB. A file's replacements are one change; files are saved, except a file whose buffer held unsaved edits: it gets
+the replacement and stays unsaved, as in VS Code. The status line says what happened: "Replaced 58 in 4 files · 2
+skipped". **Undo Replace** (the view's Undo button) puts every file of the last replacement back in one step; a file
+edited since is left alone and named. After Replace All the list holds what it skipped, each match with why after its
+text; a new search ticks every match again.
+
+### How Replace All writes
+
+The hub writes, not the view (the shared write path: [hub.md](../develop/hub.md), "Search writes"). Replace All asks
+it for the edit set of the search (`search/edits`: every match but the unticked, each with its line, columns, old and
+new text, read from the file as it is then) and then to write it (`search/apply`). A file no buffer of this Emacs
+visits is written on disk by the hub, atomically (a temporary file renamed over it, its mode, owner and line endings
+kept), and only when its bytes are still the ones the edit set read: else "changed on disk since the preview". A file
+this Emacs has open is never written behind its buffer: the hub sends its edits to Emacs, which puts them into the
+buffer (each only where its old text still is) as one undo step, saves it when it held no unsaved edits, and answers
+with the edits that undo them. Writes to a file take turns with an agent's writes to it (the pair door), so the two
+never interleave. Undo Replace is the hub's too (`search/undo`): it puts back each file it wrote, on disk or in its
+buffer, unless the file or buffer was edited since; a buffer killed since gets its file put back on disk when it was
+saved. Symbol mode's rename sends the language server's edits the same way, as edits the hub is given.
+
+### Preview and the Replace All sheet
+
+**Preview** (the view's Preview button, or Preview This File's Changes on a row) opens the row's file as a read-only
+diff in the editor area, "NAME · preview": the file before and after its ticked replacements, the same edit set
+Replace All writes (the hub's `search/preview`), each line with its number. **Open File** opens the file; **Replace in
+This File** writes the file's ticked matches only. Each hunk has a tick box: `a` keeps the hunk (its matches are ticked
+in the view), `D` drops it (unticked); the view's boxes and the tile follow each other. With **.\*** on, a groups line
+under each hunk shows what each group took, `\1 = pending · \2 = p`, and `\2 = ∅` in the warning colour for a group
+that matched nothing, so a wrong group number shows before anything is written.
+
+**Replace All** first shows the **Replace All sheet** (in the popup lane): every file with its lines added and removed
+and how many of its matches are skipped, the selected file's first hunk (`n`/`p` or the arrows move), what is skipped
+and why, and how many files with unsaved edits stay unsaved. **Replace** writes exactly the changes the sheet shows (the
+hub's change set); **Cancel** writes nothing. The setting `drgnx-search-preview-threshold` (default 1) is how many
+matches it takes to show the sheet; 0 never shows it, and `C-u` Replace All skips it once.
 
 ## The list stays current
 
@@ -155,6 +187,10 @@ view, scope This file.
 | Previous / Next Search | `<up>` / `<down>` in Find | `M-p` / `M-n` | `M-p` / `M-n` |
 | Save This Search | `C-k C-b` | `C-c C-w` | `C-c C-w` |
 | Run Saved Search… | palette | `C-c s S` | `SPC s S` |
+| Preview This File's Changes (the Search view) | `C-k C-v` | `C-c C-v` | `C-c C-v` |
+| Keep / Drop This Hunk (a preview tile) | `a` / `D` | `a` / `D` | `a` / `D` |
+| Replace / Cancel (the Replace All sheet) | `C-<return>` / `<escape>` | `C-c C-c` / `C-c C-k` | `C-c C-c` / `C-c C-k` |
+| Next / Previous File (the sheet) | `<down>` / `<up>` | `n` / `p`, `<down>` / `<up>` | `n` / `p`, `<down>` / `<up>` |
 
 Except where marked, the keys work in the Search view and the find bar, their fields too; `RET` in a find bar field
 is its next match (in Replace: replace it). Next and Previous Match show the match in the editor; Next and Previous
@@ -165,7 +201,9 @@ palette, category Search.
 
 ## Tests
 
-`test/unit/mod-replace-engine-test.el` (writing: stale matches, symbol edits, undo) and
+`test/unit/mod-replace-engine-test.el` (the editor's half of a write: edits into an open buffer, stale ones skipped,
+symbol edits, undo), `test/conformance/search/write.jsonl` (the hub's: the edit set, writes on disk, a file changed
+since, undo) and
 `test/unit/mod-replace-view-test.el` (the view, the find bar; on the virtual clock, the view's own rows Symbol mode
 uses: 10k rows streaming and a replacement patching them in slices of at most 576, a new search, a hidden view, no
 marker per file); `test/ui/editor-m11c1-test.el` walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each; `test/ui/search-view-gui-test.el` walks the hub-fed view (Sjá) through Text with a context label, Symbol, Meaning, a git scope and the empty view's saved and recent searches, the hub's rows handed in as it sends them, a screenshot of each in the evidence folder. The perf workload
@@ -180,8 +218,9 @@ button: `RET` or a click) unticks a match (its file's box: all of them) and stay
 row.  A new search empties Sjá's ticked set but keeps what you unticked: the view sends the unticked matches with it,
 and when it ends the hub names the same matches of the new search (by file, the text around the match and its column,
 not its line, so lines added above a match keep it), which are unticked again; two matches the hub cannot tell apart
-come back ticked.  Replace All writes the ticked matches from the model's fields, then tells
-the hub what it skipped (`search/grep-skipped`): the hub lists those alone, each with why, and stops the search.
+come back ticked.  Replace All sends the hub the unticked matches (`search/edits` `off`) and the hub writes the rest
+("How Replace All writes" above); when the write ends the view tells the hub what it skipped
+(`search/grep-skipped`): the hub lists those alone, each with why, and stops the search.
 `test/unit/replace-rows-nav-test.el` covers these with no hub.
 
 The hub keeps every match but sends the view a window of the rows, the first 200 (the agent panel's shape), and the

@@ -85,6 +85,11 @@ pub const NEVER_HERE: &str =
 pub const OFF_NOTE: &str = "[drgnx: the user turned pair mode off for this chat. Your edits of the project are \
     refused until they turn it on again; nothing you were doing was cancelled.]";
 
+/// What the agent is told, queued, when the user paired the chat from the card of a refused change.
+pub const ON_NOTE: &str = "[drgnx: the user turned pair mode on for this chat. Your last change was not made: \
+    make it again with edit_file {path, old, new} or write_file {path, content}, which edit the project through \
+    drgnx; shell commands that change files stay refused.]";
+
 /// A write's form.
 #[derive(Clone, Debug, PartialEq)]
 pub enum WriteKind {
@@ -169,6 +174,33 @@ struct St {
     reads: HashMap<u64, (u64, oneshot::Sender<PairReadAnswer>)>,
     refusals: HashMap<(String, PathBuf), Vec<tokio::time::Instant>>,
     waiting: HashMap<String, Waiting>,
+    /// The user's own writes waiting for their turn in a file's queue ([`Door::user_turn`]): told when it comes.
+    turns: HashMap<WriteId, oneshot::Sender<()>>,
+}
+
+/// The queue's name for the user's own writes (the Search view's): never a chat's, so no door closes on them.
+const USER: &str = "user:search";
+
+/// The user's turn in one file's queue ([`Door::user_turn`]): the writes after it wait until it is dropped.
+pub struct UserTurn {
+    door: Arc<Door>,
+    file: PathBuf,
+    id: WriteId,
+}
+
+impl Drop for UserTurn {
+    fn drop(&mut self) {
+        let mut st = lock(&self.door.st);
+        let fx = step(
+            &mut st,
+            &self.file,
+            Ev::Answer {
+                id: self.id,
+                outcome: Outcome::Applied,
+            },
+        );
+        self.door.run(&mut st, &self.file, fx);
+    }
 }
 
 /// The hub's door for paired chats: one per hub.
@@ -337,8 +369,36 @@ impl Door {
     }
 
     /// Where a write of FILE goes now.
-    fn route(&self, file: &Path) -> Route {
+    pub fn route(&self, file: &Path) -> Route {
         lock(&self.st).open.route(&file.to_path_buf())
+    }
+
+    /// The user's write of FILE (the Search view's) takes its turn in FILE's queue: it comes once every write before it
+    /// (a paired chat's, another of the user's) has ended, and the writes after it wait until the turn is dropped.  So
+    /// drgnx's own writers never interleave on one file.
+    pub async fn user_turn(self: &Arc<Self>, file: &Path) -> UserTurn {
+        let id = self.id();
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut st = lock(&self.st);
+            st.turns.insert(id, tx);
+            let fx = step(
+                &mut st,
+                file,
+                Ev::Submit {
+                    id,
+                    session: USER.to_string(),
+                },
+            );
+            self.run(&mut st, file, fx);
+        }
+        let turn = UserTurn {
+            door: self.clone(),
+            file: file.to_path_buf(),
+            id,
+        };
+        let _ = rx.await;
+        turn
     }
 
     /// SESSION's read of PATH in the checkout ROOT (cells EFF): the editor's text and version when an editor has it,
@@ -614,6 +674,25 @@ impl Door {
         while let Some(ev) = work.pop() {
             let more = match ev {
                 Ev::Send { id } => {
+                    if let Some(tx) = st.turns.remove(&id) {
+                        // the user's turn: its writer is told; one that gave up waiting ends it at once
+                        if tx.send(()).is_ok() {
+                            continue;
+                        }
+                        work.extend(
+                            step(
+                                st,
+                                file,
+                                Ev::Answer {
+                                    id,
+                                    outcome: Outcome::Applied,
+                                },
+                            )
+                            .into_iter()
+                            .rev(),
+                        );
+                        continue;
+                    }
                     let Some(p) = st.pending.get(&id) else {
                         continue;
                     };
@@ -1033,6 +1112,80 @@ mod tests {
         assert_eq!(sent[0]["event"], "pair-apply");
         assert_eq!(sent[0]["data"]["step"], 7, "{sent:?}");
         w.abort();
+    }
+
+    /// [D] The user's own write (the Search view's) and a paired chat's never interleave on one file: the user's turn
+    /// waits for the chat's write in the editor, and a chat write that comes during the turn is sent only once the turn
+    /// ends.  A turn given up before it came does not hold the queue.
+    #[tokio::test]
+    async fn a_users_turn_and_pair_writes_take_turns() {
+        use super::super::open_set::FileKind;
+        let (_d, root, door, out) = fixture();
+        let eff = chat(Preset::Autonomous);
+        let f = root.join("a.txt");
+        opened(&door, &f, FileKind::Normal);
+        let path = f.to_string_lossy().into_owned();
+        let edit = || WriteKind::Edit {
+            old: "a".into(),
+            new: "b".into(),
+        };
+        let (d2, r2, e2, p2) = (door.clone(), root.clone(), eff.clone(), path.clone());
+        let first = tokio::spawn(async move { d2.write("s1", &r2, &e2, &p2, edit()).await });
+        tokio::task::yield_now().await;
+        let sent = events(&out);
+        assert_eq!(sent[0]["event"], "pair-apply");
+        let id = sent[0]["data"]["write"].as_u64().unwrap();
+        // the user's turn waits behind the write in the editor
+        let d3 = door.clone();
+        let f3 = f.clone();
+        let turn = tokio::spawn(async move { d3.user_turn(&f3).await });
+        tokio::task::yield_now().await;
+        assert!(!turn.is_finished(), "the turn waits for the chat's write");
+        assert!(door.answer(
+            1,
+            PairAnswer {
+                write: id,
+                result: PairResult::Applied,
+                version: None,
+                reason: None,
+                lines: None,
+                saved: None,
+                not_saved: None,
+            }
+        ));
+        let held = turn.await.unwrap();
+        assert!(first.await.unwrap().is_ok());
+        // a chat write during the turn waits for its end
+        let (d4, r4, e4, p4) = (door.clone(), root.clone(), eff.clone(), path.clone());
+        let second = tokio::spawn(async move { d4.write("s1", &r4, &e4, &p4, edit()).await });
+        tokio::task::yield_now().await;
+        assert!(
+            events(&out).is_empty(),
+            "nothing sent during the user's turn"
+        );
+        drop(held);
+        tokio::task::yield_now().await;
+        let sent = events(&out);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0]["event"], "pair-apply");
+        second.abort();
+        // a turn given up while it waited: the queue goes on without it
+        let other = root.join("b.txt");
+        let a = door.user_turn(&other).await;
+        let d5 = door.clone();
+        let o5 = other.clone();
+        let gave_up = tokio::spawn(async move { d5.user_turn(&o5).await });
+        tokio::task::yield_now().await;
+        gave_up.abort();
+        let _ = gave_up.await;
+        drop(a);
+        let d6 = door.clone();
+        let next = tokio::spawn(async move { d6.user_turn(&other).await });
+        tokio::task::yield_now().await;
+        assert!(
+            next.is_finished(),
+            "the queue was not held by the turn given up"
+        );
     }
 
     /// [D] The user takes the wheel while a write of the session waits in the editor: the editor is told to drop the

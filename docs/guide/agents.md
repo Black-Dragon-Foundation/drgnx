@@ -107,7 +107,13 @@ blanked out). Nothing is recorded and no gateway token is made for it. The check
 
 A step an agent asked for can be refused before you see it:
 
-- **by the permissions matrix**, when its cell is `never` ([security.md](security.md#the-permissions-matrix));
+- **by the permissions matrix**, when its cell is `never` ([security.md](security.md#the-permissions-matrix)). Nothing
+  is refused unseen: the chat gets a line saying what was refused and why ("refused: Edit README (code.edit is never
+  allowed here)"). A chat's change of a file, which the presets never allow (a chat edits your checkout only through
+  pair mode), waits on a card instead when you may turn Pair on: a yes pairs the chat and it makes the change again
+  through pair mode ([pair-mode.md](pair-mode.md)). A shell command a chat runs counts as a change unless it is one
+  plain read (`ls`, `cat`, `head`, `tail`, `wc`, `rg`, `grep`, with no `;`, `|`, `>`, `$(` or the like); git always
+  counts as a change, since a repository's own git config can run commands;
 - **by the freshness check**, when the agent of a job has not read the job's decision log;
 - **by a rule or a plugin's hook** before the tool call ([plugins.md](plugins.md#before-a-tool-call)). The agent is
   told in drgnx's words, with the rule's or hook's quoted ("drgnx refused Bash; the hook deny-rm-hook said: «no rm

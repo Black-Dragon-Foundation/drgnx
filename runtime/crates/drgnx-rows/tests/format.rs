@@ -217,6 +217,7 @@ fn styles_serialise_as_arrays() {
             alt_screen: true,
             mouse_tracking: false,
             bracketed_paste: false,
+            key_events: true,
             title: "vim".into(),
         }),
         model: None,
@@ -230,7 +231,7 @@ fn styles_serialise_as_arrays() {
     assert_eq!(
         v["term"],
         json!({"cursor": ["41", 2, "bar", true], "alt_screen": true, "mouse_tracking": false,
-               "bracketed_paste": false, "title": "vim"})
+               "bracketed_paste": false, "key_events": true, "title": "vim"})
     );
     assert_eq!(
         v["ops"][0]["insert"]["rows"][0]["runs"],
@@ -270,6 +271,7 @@ fn styles_serialise_as_arrays() {
         "alt_screen",
         "mouse_tracking",
         "bracketed_paste",
+        "key_events",
         "title",
     ]
     .into_iter()

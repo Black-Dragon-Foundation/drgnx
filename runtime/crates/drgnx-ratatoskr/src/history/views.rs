@@ -960,7 +960,7 @@ mod tests {
     /// line file with 60 commits, the old way (one `git blame -L N,N` child per line asked) and the whole file in one
     /// answer, cold and from the cache.
     #[test]
-    #[ignore = "a measurement"]
+    #[ignore = "timing: measures blame's ways on a large file"]
     fn large_file_blame_times() {
         use std::time::Instant;
         let f = fx("x\n");

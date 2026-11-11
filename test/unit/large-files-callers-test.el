@@ -34,8 +34,7 @@
                                    ((symbol-function 'drgnx-layouts--reopen-groups) #'ignore))
                            (drgnx-large-files-callers-test--visit (drgnx-layouts--put-main (list :fill t :main nil))))
                          '(auto nil)))
-          ;; Replace's two visits: the whole file
-          (should (equal (drgnx-large-files-callers-test--visit (drgnx-replace--apply-file file nil "x")) '(whole nil)))
+          ;; Replace's visit (its writes go to buffers open already, or the hub): the whole file
           (with-temp-buffer
             (should (equal (drgnx-large-files-callers-test--visit
                             (drgnx-replace--show-match (list :file file :line 1 :col 0 :text "one") nil))
@@ -58,8 +57,6 @@
           (let ((b (drgnx-persist--visit file)))      ; it swallows errors: a question would give nil
             (should (buffer-live-p b))
             (kill-buffer b))
-          (should (equal (drgnx-replace--apply-file file nil "y") '(0 nil nil)))
-          (kill-buffer (find-buffer-visiting file))
           (with-temp-buffer
             (cl-letf (((symbol-function 'drgnx-wb-show-in-editor) (lambda (_buf _select) (selected-window))))
               (drgnx-replace--show-match (list :file file :line 1 :col 0 :text "x") nil)))

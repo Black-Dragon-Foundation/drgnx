@@ -1,0 +1,11 @@
+{"scenario": "perf/search-write", "requires": ["v1", "perf"], "doc": "The Search view's write path on 500 files of 20 matches each (10k matches), none open in an editor: the edit set of the whole search (search/edits), 5 samples, and its write on disk (search/apply to search-change), once (--perf records every sample, no budget; spec: edit set 250 ms, apply 1.5 s)."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/proj && cd $ROOT/proj && i=0; while [ $i -lt 20 ]; do echo \"let x = needle + needle; // line $i\"; i=$((i+1)); done | head -10 > one.txt && n=0; while [ $n -lt 500 ]; do cp one.txt f$n.txt; n=$((n+1)); done; rm one.txt"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "text", "text": "needle"}, "replace": "pin"}, "context": false}}}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": "$any", "files": 500, "matches": 10000}}, "within_ms": 60000}
+{"do": "measure", "name": "search-edit-set-10k", "repeat": 5, "steps": [{"do": "send", "conn": "e", "json": {"id": 3, "method": "search/edits", "params": {"view": "s"}}}, {"do": "expect", "conn": "e", "json": {"id": 3, "result": {"change": "$any", "files": "$any", "skipped": []}}, "within_ms": 30000}]}
+{"do": "measure", "name": "search-apply-500-closed", "repeat": 1, "steps": [{"do": "send", "conn": "e", "json": {"id": 4, "method": "search/edits", "params": {"view": "s"}}}, {"do": "expect", "conn": "e", "json": {"id": 4, "result": {"change": "$capture:ch", "files": "$any", "skipped": []}}, "within_ms": 30000}, {"do": "send", "conn": "e", "json": {"id": 5, "method": "search/apply", "params": {"view": "s", "change": "$ch"}}}, {"do": "expect", "conn": "e", "json": {"event": "search-change", "data": {"view": "s", "change": "$ch", "written": 10000, "files": 500}}, "within_ms": 60000}]}
+{"do": "file", "path": "$ROOT/proj/f499.txt", "contains": "let x = pin + pin;"}

@@ -61,6 +61,15 @@ Vim; a chord is one cap a key, a function key its number."
   ;; a terminal draws no ring: the names alone, one space between
   (should (equal "Ctrl Shift P" (substring-no-properties (drgnx-palette-keycaps "C-S-p")))))
 
+(ert-deftest drgnx-look-palette/a-shifted-letter-shows-its-shift ()
+  "M-F and M-f are different keys: the capital letter shows Shift, once, whether written M-F or M-S-f."
+  (should (equal '("Alt" "Shift" "F") (drgnx-palette-keycap-names "M-F")))
+  (should (equal '("Alt" "F") (drgnx-palette-keycap-names "M-f")))
+  (should (equal '("Alt" "Shift" "F") (drgnx-palette-keycap-names "M-S-f")))
+  (should (equal '("Ctrl" "Shift" "F") (drgnx-palette-keycap-names "C-S-F")))
+  (should (equal '("Shift" "G") (drgnx-palette-keycap-names "G")))
+  (should (equal '("?") (drgnx-palette-keycap-names "?"))))
+
 (ert-deftest drgnx-look-palette/echo-area-remap-on-and-off ()
   "Pattern D: the echo area's buffer and every minibuffer draw `default' as the gap surface while the module is on;
 off, the buffers have no such entry and the hook is gone."

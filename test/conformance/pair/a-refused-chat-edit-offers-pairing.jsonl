@@ -1,0 +1,23 @@
+{"scenario": "pair/a-refused-chat-edit-offers-pairing", "requires": ["v1", "test-hooks"], "doc": "A chat's file change that the preset never allows (code.edit is never for chat) is not refused unseen: it waits on a card titled 'Pair this chat to let it make this change?'. The user's yes turns pair mode on and refuses the request itself (the change is made again through the pair door, never directly); the agent is told so."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/project && echo readme > $ROOT/project/README"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset balanced)) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "e", "json": {"id": 901, "method": "agents/entries/subscribe", "params": {"session": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"id": 901, "result": {"seq": "$number"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "ask:permission edit"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "busy", "permissions": {"$contains": [{"id": "$capture:req", "title": "Pair this chat so it can make this change? It stays paired (Pair off in the panel ends it): edit request"}]}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/permission", "params": {"id": "$sid", "request": "$req", "option": "allow_once"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [[ "$any", {"type": "agent", "text": "permission: reject_once"}]]}}}, "within_ms": 10000}
+{"do": "poll", "conn": "c", "json": {"id": 4, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 4, "result": {"session": {"id": "$sid", "paired": true}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/stop", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": "$any"}, "within_ms": 10000}

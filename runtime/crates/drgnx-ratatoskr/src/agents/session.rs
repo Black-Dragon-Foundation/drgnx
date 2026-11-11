@@ -104,6 +104,9 @@ struct Pending {
     public: Permission,
     options: Vec<(String, String)>,
     resp: hermod::Responder<RequestPermissionResponse>,
+    /// A card that pairs the chat: a yes turns pair mode on and the request itself is refused (the change is made
+    /// again through the pair door).
+    pair: bool,
 }
 
 impl Pending {
@@ -120,6 +123,8 @@ impl Pending {
     /// The option to answer with: CHOSEN when it was offered and is of the verdict's kind, else the first allowing
     /// (ALLOW) or rejecting one.
     fn option(&self, allow: bool, chosen: Option<&str>) -> Option<String> {
+        // a pairing card never lets its request through: the change is made again through the pair door
+        let allow = allow && !self.pair;
         let kind = if allow { "allow" } else { "reject" };
         chosen
             .filter(|o| {
@@ -4573,7 +4578,16 @@ impl Session {
                 .decide(&s.settings, &s.writer, s.who(), action, ctx)
                 .await;
             match gate {
-                Gate::Never(_) => reply(resp, pick_reject(&options)),
+                // a chat's change of a file its preset never allows: a card that pairs the chat, so the change can
+                // be made again through the pair door (never directly); any other never is refused where the user
+                // sees it, with why
+                Gate::Never(_) if s.pair_offered(req.get("toolCall"), action).await => {
+                    s.hold_permission(&req, options, resp, None, turn, true)
+                }
+                Gate::Never(why) => {
+                    s.refused(req.get("toolCall"), &why);
+                    reply(resp, pick_reject(&options))
+                }
                 // a revoked Always makes the hub ask again, whatever the matrix says
                 Gate::Allow
                     if pick_allow(&options).is_some()
@@ -4588,7 +4602,7 @@ impl Session {
                         Gate::Ask(card) if card > 0 => Some(card),
                         _ => None,
                     };
-                    s.hold_permission(&req, options, resp, card, turn)
+                    s.hold_permission(&req, options, resp, card, turn, false)
                 }
             }
         });
@@ -4643,6 +4657,7 @@ impl Session {
         resp: hermod::Responder<RequestPermissionResponse>,
         card: Option<i64>,
         turn: u64,
+        pair: bool,
     ) {
         // an editor never gets a tool call's raw input (a Write carries the file)
         let tool = req.get("toolCall").cloned().map(|mut t| {
@@ -4661,7 +4676,13 @@ impl Session {
                 .as_ref()
                 .and_then(|t| t.get("title"))
                 .and_then(Value::as_str)
-                .map(str::to_string),
+                .map(|t| {
+                    if pair {
+                        format!("{PAIR_CARD} {t}")
+                    } else {
+                        t.to_string()
+                    }
+                }),
             tool,
             options: req
                 .get("options")
@@ -4675,6 +4696,7 @@ impl Session {
             public,
             options,
             resp,
+            pair,
         };
         {
             let mut st = lock(&self.state);
@@ -4707,15 +4729,19 @@ impl Session {
         // an Always the user gives is written down: the agent keeps the rule, the hub keeps the ledger
         let always = {
             let st = lock(&self.state);
-            st.permissions.iter().find(|p| p.is(request)).and_then(|p| {
-                option
-                    .filter(|o| {
-                        p.options
-                            .iter()
-                            .any(|(id, k)| id == o && k == "allow_always")
-                    })
-                    .map(|_| (p.public.tool.clone(), p.card))
-            })
+            // a pairing card's yes pairs the chat: no rule for the refused request itself
+            st.permissions
+                .iter()
+                .find(|p| p.is(request) && !p.pair)
+                .and_then(|p| {
+                    option
+                        .filter(|o| {
+                            p.options
+                                .iter()
+                                .any(|(id, k)| id == o && k == "allow_always")
+                        })
+                        .map(|_| (p.public.tool.clone(), p.card))
+                })
         };
         if let Some((tool, card)) = always {
             self.record_always(tool, card).await;
@@ -4750,11 +4776,21 @@ impl Session {
                     let request = p.request;
                     let mut stepped = st.turn_step(TurnEvent::PermissionAnswered { request });
                     drop(st);
+                    let mut pair = false;
                     for p in std::mem::take(&mut stepped.answered) {
+                        // a pairing card: the request is refused whatever the answer; a yes pairs the chat
+                        pair |= p.pair && allow;
                         let answer = p.option(allow, option);
                         self.settle(p, answer);
                     }
                     self.perform(stepped);
+                    if pair {
+                        // after the lock: pairing reads the matrix
+                        let me = self.clone();
+                        crate::clock::spawn("session:pair-card", async move {
+                            me.pair_from_card().await
+                        });
+                    }
                     self.changed();
                     return Ok(true);
                 }
@@ -5552,6 +5588,59 @@ impl Session {
 
     /// The user's pair toggle ON for this chat: on needs `chat.project-edit` not never; off closes the door at once
     /// and queues a note to the agent, cancelling nothing.
+    /// Whether a request for TOOL, which the matrix never allows as ACTION, gets a pairing card instead of a refusal:
+    /// a file change (an edit, delete or move; not a shell command, which the pair door cannot make) by a chat in a
+    /// project that is not paired yet and whose `chat.project-edit` lets the user pair it.
+    async fn pair_offered(&self, tool: Option<&Value>, action: Action) -> bool {
+        let kind = tool.and_then(|t| t.get("kind")).and_then(Value::as_str);
+        if !self.project_chat()
+            || action != Action::CodeEdit
+            || !matches!(kind, Some("edit" | "delete" | "move"))
+        {
+            return false;
+        }
+        let Ok(eff) = self.cells_now().await else {
+            return false;
+        };
+        !self.pair.paired(&self.id, &eff)
+            && norn::matrix::decide(&eff, Action::ChatProjectEdit, None)
+                != norn::matrix::Verdict::Never
+    }
+
+    /// A request for TOOL was refused for WHY with no card: the chat says so, so nothing is refused unseen.  A paired
+    /// chat is reminded of the pair door's tools.
+    fn refused(self: &Arc<Self>, tool: Option<&Value>, why: &str) {
+        let what = tool
+            .and_then(|t| t.get("title"))
+            .and_then(Value::as_str)
+            .unwrap_or("a tool call");
+        let mut text = format!("refused: {what} ({why})");
+        if self.project_chat() && self.pair.paired_now(&self.id) == Some(true) {
+            text.push_str("; ");
+            text.push_str(plock::PAIR_NATIVE_EDIT_HINT);
+        }
+        {
+            let mut st = lock(&self.state);
+            let mut rest = Map::new();
+            rest.insert("text".into(), json!(text));
+            st.push(EntryType::Error, rest);
+        }
+        self.changed();
+    }
+
+    /// The user said yes on a pairing card: pair mode goes on and the agent is told to make its change again through
+    /// the pair door; a pairing the matrix no longer allows is refused where the user sees it.
+    async fn pair_from_card(self: &Arc<Self>) {
+        match self.pair_toggle(true).await {
+            Ok(()) => {
+                if let Err(e) = self.prompt(crate::pair::door::ON_NOTE.to_string(), Origin::Hub) {
+                    tracing::warn!(session = %self.id, "pair note not queued: {e:?}");
+                }
+            }
+            Err(e) => self.refused(None, &e.message),
+        }
+    }
+
     pub(crate) async fn pair_toggle(self: &Arc<Self>, on: bool) -> Result<(), Error> {
         if !self.project_chat() {
             return Err(refuse("pair mode is a chat's in a project"));
@@ -6089,6 +6178,11 @@ enum SeamHooks {
     Answer(Option<String>),
 }
 
+/// The start of a pairing card's title (the tool call's title follows): a yes pairs the chat, the change itself is
+/// made again through the pair door.
+const PAIR_CARD: &str =
+    "Pair this chat so it can make this change? It stays paired (Pair off in the panel ends it):";
+
 /// The reject option of OPTIONS (once preferred), else none (the answer is "cancelled").
 fn pick_reject(options: &[(String, String)]) -> Option<String> {
     options
@@ -6105,6 +6199,37 @@ fn pick_allow(options: &[(String, String)]) -> Option<String> {
         .find(|(_, k)| k == "allow_once")
         .or_else(|| options.iter().find(|(_, k)| k.starts_with("allow")))
         .map(|(id, _)| id.clone())
+}
+
+/// Whether COMMAND is one plain read: a single command from a short list (`ls`, `cat`, `head`, `tail`, `wc`, `rg`,
+/// `grep`), with no shell syntax that could chain, redirect or substitute (`; | & ` $ ( ) < >`, a backslash or a line
+/// break) and no option that runs something (`--exec…`; rg's `--pre…`, `--search-zip` and `-z`).  Anything else is an
+/// edit, git too: git runs what the repository's own config names (`core.fsmonitor` on `git status`, `diff.external`,
+/// textconv drivers, the pager), and the hub does not know which folders the user trusts.
+fn is_plain_read(command: &str) -> bool {
+    const SHELL: &[char] = &[
+        ';', '|', '&', '`', '$', '(', ')', '<', '>', '\\', '\n', '\r',
+    ];
+    if command.contains(SHELL) {
+        return false;
+    }
+    let mut words = command.split_whitespace();
+    let Some(program) = words.next() else {
+        return false;
+    };
+    let args: Vec<&str> = words.collect();
+    // a cluster of short options (`-iz`) that holds C
+    let short = |a: &str, c: char| a.starts_with('-') && !a.starts_with("--") && a.contains(c);
+    if args.iter().any(|a| a.starts_with("--exec")) {
+        return false;
+    }
+    match program {
+        "ls" | "cat" | "head" | "tail" | "wc" | "grep" => true,
+        "rg" => !args
+            .iter()
+            .any(|a| a.starts_with("--pre") || a.starts_with("--search-zip") || short(a, 'z')),
+        _ => false,
+    }
 }
 
 /// What a tool call is in the matrix's words, and the facts a card shows (the hub's own reading of it).
@@ -6140,6 +6265,8 @@ fn classify(tool: Option<&Value>) -> (Action, runstav::methods::matrix::Facts) {
                 }
             } else if c.contains("git commit") {
                 Action::Commit
+            } else if is_plain_read(c) {
+                Action::CodeRead
             } else {
                 Action::CodeEdit
             }
@@ -7884,5 +8011,60 @@ mod wait_tests {
         }
         let read = json!({"kind": "read", "title": "sleep.txt"});
         assert!(!is_wait_loop(Some(&read)) && !is_wait_loop(None));
+    }
+
+    #[test]
+    fn only_a_plain_read_command_is_a_read() {
+        for c in [
+            "ls -la src",
+            "cat README.md",
+            "head -n 20 a.rs",
+            "tail -n 5 build.log",
+            "wc -l a.rs",
+            "rg -n foo src",
+            "grep -rn foo src",
+        ] {
+            assert_eq!(classify(Some(&exec(c))).0, Action::CodeRead, "{c}");
+        }
+        // every way around the list stays an edit: chained, piped, substituted or redirected commands, rg's
+        // preprocessor and decompression, anything not on the list; git always (a repository's core.fsmonitor runs on
+        // `git status`, its diff.external on `git diff`)
+        for c in [
+            "git status",
+            "git log --oneline -5",
+            "git diff HEAD~1",
+            "git show abc123",
+            "git blame a.rs",
+            "ls; rm x",
+            "ls && rm x",
+            "cat a | sh",
+            "cat a > b",
+            "cat < a",
+            "ls $(rm x)",
+            "ls `rm x`",
+            "ls\nrm x",
+            "git -c core.pager=sh log",
+            "git log -c",
+            "git --exec-path=/tmp log",
+            "git diff --output=x",
+            "git diff --ext-diff",
+            "git log --textconv",
+            "git commit -m x",
+            "git push",
+            "git checkout .",
+            "rg --pre sh foo",
+            "rg --pre=sh foo",
+            "rg -z foo",
+            "rg -iz foo",
+            "rg --search-zip foo",
+            "find . -exec rm {} +",
+            "ls --exec x",
+            "rm x",
+            "/bin/ls",
+            "FOO=1 ls",
+            "",
+        ] {
+            assert_ne!(classify(Some(&exec(c))).0, Action::CodeRead, "{c:?}");
+        }
     }
 }
