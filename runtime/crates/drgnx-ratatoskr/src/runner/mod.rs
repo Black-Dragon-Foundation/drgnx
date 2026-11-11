@@ -778,6 +778,13 @@ pub(crate) fn card_actions(kind: &str, data: &Value) -> Value {
                 ("stop", "Stop the job"),
             ])
         }
+        // the gates hold the merge (docs/develop/orchestration.md): a waiver is the user's alone
+        "gate" => a(&[
+            ("merge", "Check again"),
+            ("retry", "Tell the agent"),
+            ("waive", "Waive once…"),
+            ("drop", "Drop the task"),
+        ]),
         "merge-failed" => a(&[
             ("merge", "Merge again"),
             ("drop", "Drop the task"),
@@ -1827,6 +1834,22 @@ pub async fn resume(front: &Front, caller: &Caller, p: WithBudget) -> Result<Job
 #[cfg(test)]
 mod price_tests {
     use super::*;
+
+    /// Pure (D).
+    #[test]
+    fn a_held_gates_card_offers_a_waiver_and_telling_the_agent() {
+        let names = |v: Value| -> Vec<String> {
+            v.as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p[0].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(
+            names(card_actions("gate", &json!({"key": "gates", "tip": "T"}))),
+            vec!["merge", "retry", "waive", "drop"]
+        );
+    }
 
     /// Pure (D).
     #[test]
