@@ -253,22 +253,28 @@ remote_s2_build() { # the runner side: the profile, then the build under it, und
   profile "$(cd -P "$r/slot-nidhogg" && pwd -P)" "$(cd -P "$a" && pwd -P)" "$(cd -P "$r/cache" && pwd -P)" "$(cd -P "$r/tools" && pwd -P)" "$dev" "$udir" > "$a/build.sb"
   echo "developer dir: $dev; user dir: $udir"
   cd "$r/slot-nidhogg" || return 1
-  # round 4: configure saw no GNU Make, with no denial for make; what the build's environment finds, under the profile
-  /usr/bin/sandbox-exec -f "$a/build.sb" /usr/bin/env -i \
-    HOME="$a/home" TMPDIR="$a/tmp/" PATH="$r/tools/rust/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
-    CARGO_HOME="$r/cache/cargo" LANG=en_US.UTF-8 __CF_USER_TEXT_ENCODING="$(cf_enc)" \
-    /bin/bash -c 'echo "MAKE=${MAKE-unset}"; echo "command -v: $(command -v make gmake gnumake | tr "\n" " ")"
-      make --version; echo "make-rc=$?"; (make --version) 2>/dev/null | head -n 1; echo "quiet-rc=${PIPESTATUS[0]}"
-      # round 6: configure found no cargo
-      echo "PATH=$PATH"; echo "command -v: $(command -v cargo rustc rustup | tr "\n" " ")"
-      ls -la "${PATH%%:*}" | head -n 8; cargo --version; echo "cargo-rc=$?"; rustc --version; echo "rustc-rc=$?"' \
-    > "$a/make-probe.txt" 2>&1
-  echo "--- make and cargo under the profile"; cut -c1-300 "$a/make-probe.txt"
+  # round 9: configure asks brew where libgccjit is (`brew --prefix --installed libgccjit`, `brew ls -v`), and under the
+  # profile brew's ruby was denied writing /opt/homebrew/bin/brew: brew probed bare, then with a read-only Homebrew
+  # environment (no update, no analytics, its cache, logs and temp in the attempt folder), which the build gets too
+  brew_env=(HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_ENV_HINTS=1
+    HOMEBREW_CACHE="$a/tmp/brew-cache" HOMEBREW_LOGS="$a/tmp/brew-logs" HOMEBREW_TEMP="$a/tmp")
+  for how in bare read-only; do
+    extra=(); [ "$how" = bare ] || extra=("${brew_env[@]}")
+    /usr/bin/sandbox-exec -f "$a/build.sb" /usr/bin/env -i \
+      HOME="$a/home" TMPDIR="$a/tmp/" PATH="$r/tools/rust/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+      CARGO_HOME="$r/cache/cargo" LANG=en_US.UTF-8 __CF_USER_TEXT_ENCODING="$(cf_enc)" \
+      ${extra[@]+"${extra[@]}"} \
+      /bin/bash -c 'echo "prefix: $(brew --prefix --installed libgccjit 2>&1 | tail -n 3)"; echo "prefix-rc=$?"
+        brew ls -v libgccjit 2>&1 | grep -E "libgccjit\.(so|dylib)|Error|rror:" | head -n 5; echo "ls-rc=${PIPESTATUS[0]}"' \
+      > "$a/brew-probe-$how.txt" 2>&1
+    echo "--- brew under the profile ($how)"; cut -c1-300 "$a/brew-probe-$how.txt"
+  done
   echo "--- the CI user's toolchain, copied to tools/rust/bin"; ls -la "$r/tools/rust/bin" 2>&1 | head -n 8
   start=$(date +%s)
   "$r/mrspike" watch --grant-mib 100000 --report "$a/watch.txt" -- /usr/bin/sandbox-exec -f "$a/build.sb" /usr/bin/env -i \
     HOME="$a/home" TMPDIR="$a/tmp/" PATH="$r/tools/rust/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
     CARGO_HOME="$r/cache/cargo" LANG=en_US.UTF-8 __CF_USER_TEXT_ENCODING="$(cf_enc)" \
+    "${brew_env[@]}" \
     /bin/bash nidhogg/build.sh --host --naglfar --dev --stage build --jobs 3 --build-dir "$a/nbuild" > "$a/build.log" 2>&1
   rc=$?
   echo "build-rc=$rc seconds=$(( $(date +%s) - start ))"
@@ -279,6 +285,8 @@ remote_s2_build() { # the runner side: the profile, then the build under it, und
     echo "--- $l"; grep -n -A 12 'checking for GNU Make' "$l" | cut -c1-300
     # round 9: past the vendored crates, configure's Rust step (the native libraries Glitnir links)
     echo "--- $l: the Rust step"; grep -n -A 20 'checking the native libraries' "$l" | cut -c1-300
+    # round 10: where configure looked for libgccjit
+    echo "--- $l: libgccjit"; grep -n -B 4 -A 14 'gcc_jit_context_acquire' "$l" | cut -c1-300 | head -n 60
   done
   # cargo's own logs (configure's probe, then make's builds of the glue and Glitnir)
   find "$a/nbuild" -maxdepth 4 -name '*cargo*.log' 2>/dev/null | while read -r l; do

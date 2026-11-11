@@ -445,7 +445,9 @@ mod tests {
     #[test]
     fn install_records_each_pin() {
         use std::os::unix::fs::PermissionsExt;
-        let root = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        // by its true name: macOS's temporary folder is under /var, a link to /private/var, and mise sees $PWD resolved
+        let root = dir.path().canonicalize().unwrap();
         let bin = tempfile::tempdir().unwrap();
         let mise = bin.path().join("mise");
         std::fs::write(
@@ -459,10 +461,10 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&mise, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::fs::create_dir_all(root.path().join("tools")).unwrap();
+        std::fs::create_dir_all(root.as_path().join("tools")).unwrap();
         let out = install(
             &mise,
-            root.path(),
+            root.as_path(),
             "/usr/bin:/bin",
             &["rust@1.95".into(), "bad@1".into(), "x".into()],
         );
@@ -485,11 +487,11 @@ mod tests {
             out[2].failed.as_deref().unwrap().contains("NAME@VERSION"),
             "{out:?}"
         );
-        assert_eq!(features(&installed(root.path())), ["tool:rust@1.95"]);
-        let rec = records_for(root.path(), &["tool:rust@1.95".into()])
+        assert_eq!(features(&installed(root.as_path())), ["tool:rust@1.95"]);
+        let rec = records_for(root.as_path(), &["tool:rust@1.95".into()])
             .unwrap()
             .remove(0);
-        let tools = root.path().join("tools");
+        let tools = root.as_path().join("tools");
         assert_eq!(
             rec.path,
             [format!("{}/installs/x/bin", tools.join("mise").display())]
@@ -504,7 +506,7 @@ mod tests {
             first,
             format!(
                 "{}|{}|{}|{}|install rust@1.95",
-                root.path().display(),
+                root.as_path().display(),
                 tools.join("mise").display(),
                 tools.join("cargo").display(),
                 tools.join("rustup").display()
