@@ -12,6 +12,8 @@
 # bash 3.2 (macOS).
 # commands sent over ssh expand on the runner, not here (quoted $, ~, the `mr` function name)
 # shellcheck disable=SC2016,SC2032,SC2033,SC2088
+# listings below are for a person reading the log
+# shellcheck disable=SC2012
 set -uo pipefail
 
 U=drgnx-runner
@@ -215,7 +217,7 @@ profile() { # SLOT ATTEMPT CACHE TOOLS DEVDIR USERDIR
   echo '(deny file-read* (subpath "/Users"))'
   echo '(allow file-read* (literal "/"))'
   printf '(allow file-read-metadata'
-  for p in /tmp /var /etc $(ancestors "$slot" "$att" "$cache" "$tools" "$dev" "$udir"); do printf ' (literal "%s")' "$p"; done
+  for p in /tmp /var /etc /private/tmp /private/var/tmp $(ancestors "$slot" "$att" "$cache" "$tools" "$dev" "$udir"); do printf ' (literal "%s")' "$p"; done
   echo ')'
   printf '(allow file-read*'
   for p in /usr /bin /sbin /System /Library /opt/homebrew /private/etc /dev/fd /private/var/select /private/var/db/timezone /private/var/db/xcode_select_link \
@@ -253,10 +255,15 @@ remote_s2_build() { # the runner side: the profile, then the build under it, und
   # round 4: configure saw no GNU Make, with no denial for make; what the build's environment finds, under the profile
   /usr/bin/sandbox-exec -f "$a/build.sb" /usr/bin/env -i \
     HOME="$a/home" TMPDIR="$a/tmp/" PATH="$r/tools/cargo/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
-    LANG=en_US.UTF-8 __CF_USER_TEXT_ENCODING="$(cf_enc)" \
+    RUSTUP_HOME="$r/tools/rustup" CARGO_HOME="$r/cache/cargo" LANG=en_US.UTF-8 __CF_USER_TEXT_ENCODING="$(cf_enc)" \
     /bin/bash -c 'echo "MAKE=${MAKE-unset}"; echo "command -v: $(command -v make gmake gnumake | tr "\n" " ")"
-      make --version; echo "make-rc=$?"; (make --version) 2>/dev/null | head -n 1; echo "quiet-rc=${PIPESTATUS[0]}"' > "$a/make-probe.txt" 2>&1
-  echo "--- make under the profile"; cut -c1-300 "$a/make-probe.txt"
+      make --version; echo "make-rc=$?"; (make --version) 2>/dev/null | head -n 1; echo "quiet-rc=${PIPESTATUS[0]}"
+      # round 6: configure found no cargo
+      echo "PATH=$PATH"; echo "command -v: $(command -v cargo rustc rustup | tr "\n" " ")"
+      ls -la "${PATH%%:*}" | head -n 8; cargo --version; echo "cargo-rc=$?"; rustc --version; echo "rustc-rc=$?"' \
+    > "$a/make-probe.txt" 2>&1
+  echo "--- make and cargo under the profile"; cut -c1-300 "$a/make-probe.txt"
+  echo "--- the CI user's ~/.cargo/bin, copied to tools/cargo/bin"; ls -la "$r/tools/cargo/bin" 2>&1 | head -n 8
   start=$(date +%s)
   "$r/mrspike" watch --grant-mib 100000 --report "$a/watch.txt" -- /usr/bin/sandbox-exec -f "$a/build.sb" /usr/bin/env -i \
     HOME="$a/home" TMPDIR="$a/tmp/" PATH="$r/tools/cargo/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
@@ -280,6 +287,7 @@ s2_build() { # NIDHOGG_CHECKOUT
   sudo mkdir -p "$r/tools"
   sudo ditto "$HOME/.rustup" "$r/tools/rustup"
   sudo ditto "$HOME/.cargo/bin" "$r/tools/cargo/bin"
+  say "- the CI user's Rust: $(command -v cargo rustc | tr '\n' ' ')$(ls -la "$HOME/.cargo/bin" 2>&1 | head -n 4 | tr '\n' ' ')"
   sudo chown -R "$U:staff" "$r/slot-nidhogg" "$r/tools"
   out=$(mr "bash ~/$ROOT_REL/spike.sh remote s2_build" 2>&1)
   printf '%s\n' "$out" > "$OUT/s2-build.log"
