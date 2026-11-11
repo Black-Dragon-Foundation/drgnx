@@ -58,6 +58,35 @@ them); the `vor-mock SCRIPT.json` binary (built with the feature) plays one on s
 Its tests (`crates/vor/tests/client.rs`) drive the client against a hand-written adapter on an in-memory pipe and one
 TCP socket, and the mock's own (`tests/mock.rs`); the waits use tokio's paused clock.
 
+## Sessions in the hub
+
+`crates/drgnx-ratatoskr/src/debug/session.rs` runs one session as one task that owns the adapter's connection and its
+process; the hub holds a `Handle` and reads `Update`s in order. Its waits read the hub's clock.
+
+- **Launch** (spec §3.3 step 4): `initialize` (drgnx declares paging, types, `runInTerminal`, `startDebugging`,
+  progress, `invalidated`, ANSI styling), then `launch` / `attach` without waiting for the answer. On `initialized`:
+  `setBreakpoints` for each source, `setExceptionBreakpoints` when the adapter has filters, `configurationDone` when it
+  has the request. The launch answer may come before or after; a failed launch ends the session with its message.
+- **Stops and epochs:** each `stopped` opens a new epoch and fetches `threads`, `stackTrace` (20 frames;
+  `more_frames` fetches the next 20 while `totalFrames` says there are more), `scopes` of the top frame and the first
+  page of `variables` of every scope that is not `expensive`, published as one `Stop`. `variables(epoch, reference)`
+  refuses a reference from an older epoch, so it never reaches the adapter. `invalidated` fetches its areas again in
+  the same epoch; `Select` fetches another frame's scopes.
+- **Stop sequence:** a launch session sends `terminate` (with `supportsTerminateRequest`) and waits 2 s for
+  `terminated`; then `disconnect {terminateDebuggee}` with 2 s for the answer and the process's exit; then SIGTERM to
+  the adapter's process group, 1 s, SIGKILL. An attach session starts at `disconnect {terminateDebuggee: false}`. The
+  process is always waited for (an adapter that died gets 2 s, then the same signals).
+- **Restart:** `restart` with the launch arguments when the adapter has it; otherwise the session stops and ends with
+  `restart: Some(null)`, and the hub starts it again. `terminated {restart: V}` ends it with `restart: Some(V)`, which
+  the next start passes back as `__restart`.
+- **Reverse requests** go up as `Update::RunInTerminal` (answered with the terminal's pid) and
+  `Update::StartDebugging`; unanswered they are refused.
+- **The end** (`Update::Ended`) comes once: after a stop, `terminated`, `exited` (with its code), the adapter's death,
+  or the last handle dropped. Controls queued behind it are told the session has ended.
+
+The tests (`debug/tests.rs`) run each of these against the mock adapter on tokio's paused clock; the stop sequence's
+waits are checked to the second.
+
 ## Live adapters: the image
 
 The tests that run real adapters (debugpy, js-debug, delve, lldb-dap) use `drgnx-debug-adapters:f45`, built from

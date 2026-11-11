@@ -73,6 +73,7 @@ drgnx-term = { path = "../drgnx-term", version = "0.1.0", default-features = fal
 getrandom.workspace = true   # the hub's instance id on view patches (view)
 notify.workspace = true      # the Explorer's listing watches the folders it read (view::explorer)
 draugr = { path = "../draugr", version = "0.1.0" }
+vor = { path = "../vor", version = "0.1.0" }
 drgnx-px = { path = "../drgnx-px", version = "0.1.0" }  # the networked container job's relay sidecar
 urdr = { path = "../urdr", version = "0.1.0" }
 saga = { path = "../saga", version = "0.1.0" }
@@ -145,6 +146,7 @@ urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
 # `fixture`: the 30-agent fixture, for the map model's chain golden (work::map::tests)
 vegvisir = { path = "../vegvisir", version = "0.1.0", features = ["fixture"] }
 tokio = { workspace = true, features = ["test-util"] }  # paused time: the pacer's tests take their instants from it
+vor = { path = "../vor", version = "0.1.0", features = ["mock"] }  # the mock adapter for the debug sessions' tests
 skuld = { path = "../skuld", version = "0.1.0" }  # waits in tests; every order of a pure core (the connection's, a session's turn)
 rmcp = { workspace = true, features = ["client", "transport-async-rw"] }  # the MCP client of tests/search_query.rs (as mimir's interop test)
 tempfile.workspace = true
