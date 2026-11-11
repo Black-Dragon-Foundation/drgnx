@@ -752,8 +752,9 @@ scale is applied before Emacs starts, and `ui start` then waits up to 10 s for t
 monitor's scale, else stops the session and fails with `scale S not applied`.
 
 A test that puts a frame on another monitor (sway: `swaymsg '[title="T"] move to output HEADLESS-2'`, the frame made
-with a `title`) waits with `sit-for`: a new frame becomes a compositor window only while Emacs runs its event loop,
-so a wait that only reads process output (`drgnx-test-wait`) leaves it unmapped and the move finds no node
+with a `title`) waits for that frame's paint first (`drgnx-test-wait-presented :frame`): a new frame becomes a
+compositor window only when it is drawn and presented, so a wait that only reads process output leaves it unmapped
+and the move finds no node
 (`drgnx-ui-rows-fit/a-view-in-two-classes-shows-each-its-own-rows`, scales 1 and 2).
 
 | Compositor | How the scale is applied |
