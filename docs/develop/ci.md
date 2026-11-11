@@ -155,11 +155,13 @@ leaves out a job the change needs, or narrows the tests, its gate is `CI gate (p
 passed, never the check `main`'s protection requires. A narrowed run goes through the same path filter, so it never
 runs less than it asks for; it saves caches like any `ci/*` run.
 
-`runtime.yml` has one job outside the table, `fleet` (the fake SSH runners of `test/runners/`), which runs only on a
-manual dispatch of `runtime.yml` that names it, never on a push or in a gate:
+`runtime.yml` has two jobs outside the table, `fleet` (the fake SSH runners of `test/runners/`) and `mac-runner` (a
+Mac as a runner: its spikes on a macOS host, `test/runners/mac/README.md`), which run only on a manual dispatch of
+`runtime.yml` that names them, never on a push or in a gate:
 
 ```
 gh workflow run runtime.yml --ref ci/my-lane -f only=rt-fleet
+gh workflow run runtime.yml --ref ci/my-lane -f only=rt-macrunner
 ```
 
 ## Runners in CI
