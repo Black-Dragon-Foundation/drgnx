@@ -1,6 +1,6 @@
 //! job-exec on a Mac: the process [`super::attempt::launch`] starts in a session of its own. It runs the job's
-//! command, always under `sandbox-exec` (never unconfined: a command that isn't is refused), with its output in the
-//! attempt's log; keeps the Mac from idle sleep while it runs (`caffeinate -i -w`); stops it at its timeout, counted
+//! command, always under `sandbox-exec` (never unconfined: a command that isn't is refused), with its output on a pipe
+//! job-exec copies into the attempt's log (the job can't touch its attempt folder's files); keeps the Mac from idle sleep while it runs (`caffeinate -i -w`); stops it at its timeout, counted
 //! on `CLOCK_MONOTONIC` (which counts sleep: Rust's `Instant` on macOS doesn't), or when a kill reason appears; and
 //! writes `result.json` judged as on Linux (`forseti::classify`). On a stop the verdict is written first, then the
 //! whole process group goes, job-exec with it. Its memory cap is [`super::memwatch`]'s: past it every process of the
@@ -135,11 +135,15 @@ fn run_unchecked(dir: &Path, spec: &JobExec, refused: Option<String>) -> (Result
                     .env_clear()
                     .envs(spec.env.iter().map(|(k, v)| (k, v)))
                     .stdin(Stdio::null());
-                match log.try_clone() {
-                    Ok(out) => {
-                        cmd.stdout(out).stderr(log);
+                // a pipe, copied into the log: under Seatbelt the job can't stat or write its attempt folder's
+                // files, and a pipe has no path
+                let mut copier = None;
+                match std::io::pipe().and_then(|(r, w)| Ok((r, w.try_clone()?, w))) {
+                    Ok((r, out, err)) => {
+                        cmd.stdout(out).stderr(err);
+                        copier = Some(copy_into(r, log));
                     }
-                    Err(e) => seen.setup = Some(format!("the log: {e}")),
+                    Err(e) => seen.setup = Some(format!("the log's pipe: {e}")),
                 }
                 if let Some(c) = &spec.cwd {
                     cmd.current_dir(c);
@@ -173,6 +177,11 @@ fn run_unchecked(dir: &Path, spec: &JobExec, refused: Option<String>) -> (Result
                         &mut seen,
                     );
                 }
+                // our ends of the pipe closed: the copy ends once the job's processes (killed by `watch`) are gone
+                drop(cmd);
+                if let Some(done) = copier {
+                    let _ = done.recv_timeout(DRAIN);
+                }
             }
         }
     }
@@ -180,6 +189,20 @@ fn run_unchecked(dir: &Path, spec: &JobExec, refused: Option<String>) -> (Result
     let result = judge(dir, spec, &seen, mono_s() - t0);
     let _ = result.write(dir);
     (result, stop)
+}
+
+/// How long the log's copy may take to drain once the job is over: a process that slipped past the kill and still
+/// holds the pipe can't hold the result back (it dies with the group after the result is written).
+const DRAIN: Duration = Duration::from_secs(2);
+
+/// What reaches R copied into LOG on a thread of its own; the receiver hears when R reached its end.
+fn copy_into(mut r: std::io::PipeReader, mut log: fs::File) -> std::sync::mpsc::Receiver<()> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut r, &mut log);
+        let _ = tx.send(());
+    });
+    rx
 }
 
 fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, marker: &str, t0: f64, seen: &mut Seen) {
@@ -494,6 +517,27 @@ mod tests {
         );
         let red = spec(d.path(), &["/bin/sh", "-c", "exit 3"]);
         assert_eq!(run_unchecked(d.path(), &red, None).0.verdict, Verdict::Red);
+    }
+
+    /// [D] The job writes its output to a pipe that job-exec copies into the log, never to the log file itself: under
+    /// Seatbelt a job can't stat or write a file of its attempt folder (`cat` failed with "stdout: Operation not
+    /// permitted" on macOS CI), and a pipe has no path. What a job prints last is in the log when it is judged.
+    #[test]
+    fn the_job_writes_a_pipe_that_job_exec_copies_into_the_log() {
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join("in.txt"), "from a file\n").unwrap();
+        let s = spec(
+            d.path(),
+            &[
+                "/bin/sh",
+                "-c",
+                "if [ -p /dev/stdout ]; then echo piped; else echo not-piped; fi; cat in.txt; echo last >&2",
+            ],
+        );
+        let (r, _) = run_unchecked(d.path(), &s, None);
+        let log = fs::read_to_string(d.path().join("log")).unwrap();
+        assert_eq!(r.verdict, Verdict::Pass, "{log}");
+        assert_eq!(log, "piped\nfrom a file\nlast\n");
     }
 
     /// [D] A job that ends by itself leaves nothing running: what it left in the background is killed with it.

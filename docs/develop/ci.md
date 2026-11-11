@@ -161,7 +161,7 @@ runs less than it asks for; it saves caches like any `ci/*` run.
 Mac as a runner on a macOS host: its spikes, `test/runners/mac/README.md`; sleipnir's darwin rows; and a fake Mac
 runner end to end, `drgnx-ratatoskr`'s `tests/mac_runner.rs`, `#[ignore = "macos-runner"]`: the hub's own registry and
 queue add the host's `drgnx-runner` account over its localhost `sshd`, run host jobs under the build profile, see the
-watchdog kill a job past its grant, survive the link's `-O stop` and a killed `serve`, and `remove` it), which run only
+watchdog kill a job past its grant, survive the link's ssh master killed and a killed `serve`, and `remove` it), which run only
 on a manual dispatch of `runtime.yml` that names them, never on a push or in a gate:
 
 ```

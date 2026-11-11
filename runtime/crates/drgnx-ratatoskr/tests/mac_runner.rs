@@ -1,7 +1,7 @@
 //! A Mac runner end to end (design §10's macOS CI rows, `#[ignore = "macos-runner"]`): the hub's own registry and
 //! queue add the CI host's `drgnx-runner` account over its localhost `sshd` (the own-machine refusal is the hub's boot
 //! id, which these rows set apart), copy the bundle, link `serve`, run host jobs under the build profile, survive the
-//! link's `-O stop` and a killed `serve`, see the watchdog kill a job past its grant with its double-forked child, and
+//! link's ssh master killed and a killed `serve`, see the watchdog kill a job past its grant with its double-forked child, and
 //! `remove` the runner leaving nothing. The macOS lane makes the account, its Remote Login and a key, names the host
 //! in `DRGNX_TEST_MAC_RUNNER` (an ssh alias for `drgnx-runner@localhost`) and the bundle's `sleipnir` in
 //! `DRGNX_TEST_MAC_BUNDLE`, and runs `cargo test --test mac_runner -- --ignored --test-threads=1`
@@ -17,7 +17,7 @@ use drgnx_ratatoskr::runners::local::{Admission, LocalRunner};
 use drgnx_ratatoskr::runners::queue::{Outcome, Placement, Queue, QueueCfg, SendMode, Submit};
 use drgnx_ratatoskr::runners::registry::{Cfg, MAC_BUNDLE, MemStore, Registry};
 use drgnx_ratatoskr::runners::sync::{self, Frozen, Visibility};
-use drgnx_ratatoskr::runners::transport::{OpensshTransport, Transport};
+use drgnx_ratatoskr::runners::transport::OpensshTransport;
 use forseti::{Expect, JobSpec, Kind, Lane, Priority, Range, Weight};
 use runstav::methods::runners::AddParams;
 use serde_json::json;
@@ -441,7 +441,7 @@ mod mac_runner {
         hub.reg.remove("mac").await.expect("removed");
     }
 
-    /// [C] A running job outlives its link: the ssh master stopped (`-O stop`), then `serve` killed; each time
+    /// [C] A running job outlives its link: the ssh master killed, then `serve` killed; each time
     /// `runner check` links it again and the job's result arrives, a pass.
     #[tokio::test]
     #[ignore = "macos-runner"]
@@ -468,10 +468,14 @@ mod mac_runner {
         })
         .await;
 
-        // the ssh master stopped: the link is lost, the job runs on
-        OpensshTransport::new(dir.path().join("run"))
-            .stop("mac")
-            .await;
+        // the ssh master killed, as a dropped connection would end it (`-O stop` keeps open sessions by design): the
+        // link is lost, the job runs on
+        let run = dir.path().join("run");
+        let killed = std::process::Command::new("pkill")
+            .args(["-KILL", "-f", &run.display().to_string()])
+            .status()
+            .expect("pkill");
+        assert!(killed.success(), "no ssh master under {}", run.display());
         hub.drive_lost("the link lost", true, |q, _| {
             q.runner("mac").filter(|r| r.state != "ready").map(|_| ())
         })
@@ -506,7 +510,8 @@ mod mac_runner {
         let mut hub = Hub::new(dir.path());
         hub.add("mac", &root).await;
         let (work, blobs) = project(dir.path());
-        let script = r#"/usr/bin/perl - github.com:443 example.org:443 <<'EOF'
+        // `perl -e`, not a here-document: /bin/sh's (bash 3.2's) ignores TMPDIR and needs a writable /tmp or source
+        let script = r#"/usr/bin/perl -e '
 use IO::Socket::INET;
 my ($h, $p) = $ENV{HTTPS_PROXY} =~ m{//([^:/]+):(\d+)} or die "no HTTPS_PROXY\n";
 for my $t (@ARGV) {
@@ -518,7 +523,7 @@ for my $t (@ARGV) {
 }
 my $d = IO::Socket::INET->new(PeerAddr => "1.1.1.1", PeerPort => 443, Timeout => 10);
 print $d ? "direct: open\n" : "direct: refused\n";
-EOF"#;
+' github.com:443 example.org:443"#;
         let mut s = job("xnet", script, freeze(&work, &blobs), 512);
         s.place.net_hosts = vec!["github.com:443".into()];
         hub.submit(s);
