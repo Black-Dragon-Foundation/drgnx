@@ -3167,6 +3167,16 @@ the `launch-sandboxed/*` rows (`tests/launch_sandboxed.rs`, a session's launch s
 container has no user namespaces for bwrap, so CI runs them in `escape-host`'s sandbox lane; the rows of the reduced
 tier run on it where the kernel has Landlock ABI 9 and on the full tier elsewhere (no runner has ABI 9 yet).
 
+**Rows and failure classes.** `result.json` keeps every row of the whole log (`End.rows`, read a line at a time by
+`vordr::rows::Reader`, whatever the job's kind: cargo test, ERT and domr lines don't overlap): its name, verdict
+(`pass`, `skip`, `fail`) and a failure's class — `assert` (a panic or a `should` in the test), `build` (a compile error,
+an ERT void function or a file that didn't load; it carries the symbols the errors say are missing: rustc's
+`vordr::rows::MISSING` codes, `(void-function S)`), `error`, `timeout` and `infra`. A compile error is the row
+`build:CRATE (TARGET)` from cargo's `could not compile` line. `vordr::rows::close` adds the row `(job)` for a job that
+timed out (`timeout`), was lost or ended `infra` (`infra`), was stopped, or failed with no failing row (`error`). The
+summary's `failing` names the failed rows (at most 50, `(job)` left out); `Runner::rows` reads them. The gates read
+rows only (`docs/develop/orchestration.md`).
+
 The editor's own jobs are the user's `exec/start` with four more fields (`StartParams`: `name`, `env`, `memory_max`,
 `nice`; `StartParams::user_only_field` names the first one a request sets). `exec::start` refuses them from a session
 (`user_job`: `invalid-params`), `env` and `memory_max` from a container job, and `memory_max` on macOS; the decode check

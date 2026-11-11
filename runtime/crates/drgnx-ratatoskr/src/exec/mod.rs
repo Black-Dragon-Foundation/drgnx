@@ -261,6 +261,9 @@ struct End {
     exit: Option<i32>,
     ended: f64,
     summary: ExecSummary,
+    /// Every row of the log, with its verdict and a failure's class (`vordr::rows`), plus the job's own row.
+    #[serde(default)]
+    rows: Vec<vordr::rows::Row>,
 }
 
 struct Inner {
@@ -590,6 +593,11 @@ impl Runner {
             exit: end.exit,
             summary: end.summary,
         })
+    }
+
+    /// Job ID's rows (`vordr::rows`) once it ended; none while it runs or when it is unknown.
+    pub fn rows(&self, id: &str) -> Option<Vec<vordr::rows::Row>> {
+        Some(self.inner.get()?.end(id)?.rows)
     }
 
     /// Whether job ID's result may count for a gate or a job's `needs`: the job is known and didn't run on a `shared`
@@ -1619,11 +1627,30 @@ impl Inner {
                 .lines
                 .insert(0, crate::runners::returned::shared_label(runner.trim()));
         }
+        let mut rows = rows_of(&dir.join("log"));
+        let word = match status {
+            ExecStatus::Done => "done",
+            ExecStatus::Stopped => "stopped",
+            ExecStatus::TimedOut => "timed-out",
+            ExecStatus::Infra => "infra",
+            _ => "lost",
+        };
+        vordr::rows::close(&mut rows, word, exit);
+        // the summary names the failed rows (a build row too), the job's own row left out
+        let failed: Vec<String> = vordr::rows::failing(&rows)
+            .filter(|n| *n != vordr::rows::JOB_ROW)
+            .take(50)
+            .map(String::from)
+            .collect();
+        if !failed.is_empty() {
+            summary.failing = failed;
+        }
         let end = End {
             status,
             exit,
             ended: now(),
             summary,
+            rows,
         };
         let tmp = dir.join("result.tmp");
         let written = std::fs::write(&tmp, serde_json::to_vec(&end).unwrap_or_default())
@@ -1632,13 +1659,6 @@ impl Inner {
             tracing::warn!("job {id}: result not written: {e}");
         }
         if let (Some(w), Some(entity)) = (self.hooks.writer.as_ref(), meta.entity.clone()) {
-            let word = match status {
-                ExecStatus::Done => "done",
-                ExecStatus::Stopped => "stopped",
-                ExecStatus::TimedOut => "timed-out",
-                ExecStatus::Infra => "infra",
-                _ => "lost",
-            };
             let e = norn::write::exec::ExecEnd {
                 status: word.into(),
                 exit,
@@ -1927,6 +1947,23 @@ fn unsandboxed_for_tests(_hooks: &Hooks) -> bool {
         return true;
     }
     cfg!(any(test, feature = "test-hooks")) && std::env::var_os("DRGNX_TEST_PLAIN_JOBS").is_some()
+}
+
+/// The rows of the whole log at PATH (`vordr::rows`), read a line at a time; none when it cannot be read.
+fn rows_of(path: &Path) -> Vec<vordr::rows::Row> {
+    use std::io::BufRead;
+    let Ok(f) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let mut r = std::io::BufReader::new(f);
+    let mut reader = vordr::rows::Reader::new();
+    let mut buf = Vec::new();
+    while matches!(r.read_until(b'\n', &mut buf), Ok(n) if n > 0) {
+        let line = String::from_utf8_lossy(&buf);
+        reader.line(line.trim_end_matches(['\n', '\r']));
+        buf.clear();
+    }
+    reader.finish()
 }
 
 /// The last megabyte of a log, as text.

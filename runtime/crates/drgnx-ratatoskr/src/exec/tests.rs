@@ -1627,3 +1627,106 @@ async fn a_projects_own_runner_settings_reach_its_jobs_only() {
     assert!(overlay("alpha").await);
     assert!(!overlay("beta").await);
 }
+
+/// The rows a job's `result.json` keeps, as JSON (`[{name, verdict, class?, symbols?}]`).
+fn result_rows(root: &Path, id: &str) -> Vec<serde_json::Value> {
+    let text = std::fs::read_to_string(root.join("exec").join(id).join("result.json")).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    v["rows"].as_array().cloned().unwrap_or_default()
+}
+
+/// The row named NAME among ROWS as `(verdict, class, symbols)`.
+fn row_of(rows: &[serde_json::Value], name: &str) -> (String, String, Vec<String>) {
+    let r = rows
+        .iter()
+        .find(|r| r["name"] == name)
+        .unwrap_or_else(|| panic!("no row {name} in {rows:?}"));
+    let syms = r["symbols"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    (
+        r["verdict"].as_str().unwrap_or("").into(),
+        r["class"].as_str().unwrap_or("").into(),
+        syms,
+    )
+}
+
+/// Every local job's result keeps its rows with a verdict and, for a failure, its class: a cargo test's panic is
+/// `assert`, a compile error names the missing symbols as a `build` row; an ERT `should` is `assert`, a void function
+/// a `build` row naming it; a job that ran out of time gets a `timeout` row, a script that failed without rows an
+/// `error` row.
+#[tokio::test]
+async fn a_jobs_result_keeps_classified_rows() {
+    let d = tempfile::tempdir().unwrap();
+    let r = open(d.path());
+    let cargo = "printf '%s\\n' 'running 3 tests' 'test a::ok ... ok' 'test a::bad ... FAILED' 'test a::later ... ignored' \
+                 'error[E0425]: cannot find function `added_fn` in this scope' \
+                 'error: could not compile `demo` (lib test) due to 1 previous error'; exit 101";
+    let mut s = spec(Starter::User, d.path(), cargo, Duration::from_secs(30));
+    s.kind = CheckKind::Cargo;
+    let id = r.start(s).await.unwrap();
+    ended(&r, &id).await;
+    let rows = result_rows(d.path(), &id);
+    assert_eq!(row_of(&rows, "a::ok").0, "pass");
+    assert_eq!(
+        row_of(&rows, "a::bad"),
+        ("fail".into(), "assert".into(), vec![])
+    );
+    assert_eq!(row_of(&rows, "a::later").0, "skip");
+    assert_eq!(
+        row_of(&rows, "build:demo (lib test)"),
+        ("fail".into(), "build".into(), vec!["added_fn".into()])
+    );
+
+    let ert = "printf '%s\\n' 'Test t-two condition:' '    (ert-test-failed' '     ((should (= 1 2))))' \
+               '   passed  1/3  t-one (0.001 sec)' '   FAILED  2/3  t-two (0.001 sec) at x-test.el:3' \
+               'Test t-three condition:' '    (void-function drgnx-new-thing)' \
+               '   FAILED  3/3  t-three (0.001 sec) at x-test.el:9'; exit 1";
+    let mut s = spec(Starter::User, d.path(), ert, Duration::from_secs(30));
+    s.kind = CheckKind::Ert;
+    let id = r.start(s).await.unwrap();
+    ended(&r, &id).await;
+    let rows = result_rows(d.path(), &id);
+    assert_eq!(row_of(&rows, "t-one").0, "pass");
+    assert_eq!(
+        row_of(&rows, "t-two"),
+        ("fail".into(), "assert".into(), vec![])
+    );
+    assert_eq!(
+        row_of(&rows, "t-three"),
+        (
+            "fail".into(),
+            "build".into(),
+            vec!["drgnx-new-thing".into()]
+        )
+    );
+
+    let id = r
+        .start(spec(
+            Starter::User,
+            d.path(),
+            "sleep 60",
+            Duration::from_millis(400),
+        ))
+        .await
+        .unwrap();
+    ended(&r, &id).await;
+    assert_eq!(row_of(&result_rows(d.path(), &id), "(job)").1, "timeout");
+
+    let id = r
+        .start(spec(
+            Starter::User,
+            d.path(),
+            "echo nothing to read; exit 2",
+            Duration::from_secs(30),
+        ))
+        .await
+        .unwrap();
+    ended(&r, &id).await;
+    assert_eq!(row_of(&result_rows(d.path(), &id), "(job)").1, "error");
+}
