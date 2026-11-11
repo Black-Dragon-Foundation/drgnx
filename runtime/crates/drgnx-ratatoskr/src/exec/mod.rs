@@ -396,6 +396,8 @@ impl ExecSpec {
         if self.place.heavy {
             s.weight = forseti::Weight::Heavy;
         }
+        s.os = self.place.os;
+        s.features = self.place.features.clone();
         s
     }
 
@@ -2275,6 +2277,21 @@ async fn placement(f: &Front, c: &Caller, p: &StartParams, m: Machine, runners: 
             .or_else(|| f.settings.effective(name, None))
             .map(|(v, _)| v)
     };
+    // a Mac job needs the Command Line Tools and the project's Homebrew packages; it can't run here, so it is heavy
+    let os = match p.os {
+        Some(runstav::methods::exec::JobOs::Macos) => forseti::Os::Macos,
+        _ => forseti::Os::Linux,
+    };
+    let features: Vec<String> = if os == forseti::Os::Macos {
+        let tools = setting("drgnx-runners-mac-tools")
+            .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+            .unwrap_or_default();
+        std::iter::once("xcode-clt".to_string())
+            .chain(tools.iter().map(|t| format!("brew:{t}")))
+            .collect()
+    } else {
+        vec![]
+    };
     let send = setting("drgnx-runners-send")
         .and_then(|v| v.as_str().and_then(queue::SendMode::parse))
         .unwrap_or_default();
@@ -2297,11 +2314,12 @@ async fn placement(f: &Front, c: &Caller, p: &StartParams, m: Machine, runners: 
         .map(|a| a.to_string())
         .collect::<Vec<_>>()
         .join(" ");
-    let marked = setting("drgnx-runners-heavy")
-        .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
-        .unwrap_or_default()
-        .iter()
-        .any(|pat| !pat.is_empty() && line.contains(pat.as_str()));
+    let marked = os == forseti::Os::Macos
+        || setting("drgnx-runners-heavy")
+            .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+            .unwrap_or_default()
+            .iter()
+            .any(|pat| !pat.is_empty() && line.contains(pat.as_str()));
     // the starter's `machines` cell: a session's job leaves this machine only on an Allow (an Ask keeps it here); the
     // user's always may. Asked only of a job that could leave at all, so a job that stays raises no card.
     let could_leave = runners
@@ -2352,6 +2370,8 @@ async fn placement(f: &Front, c: &Caller, p: &StartParams, m: Machine, runners: 
         origin_key,
         suite: suite_of(p),
         net_hosts: vec![],
+        os,
+        features,
     }
 }
 
@@ -2611,6 +2631,13 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         _ => None,
     };
     let place = placement(f, c, &p, machine, runners).await;
+    // a Mac job runs on a Mac runner as a host job: never in a container, never on this machine
+    if place.os == forseti::Os::Macos && (container.is_some() || place.local_only) {
+        return Err(error(
+            ErrorCode::InvalidParams,
+            "os: a macos job runs on a Mac runner, never in a container or on this machine only",
+        ));
+    }
     if let Some(c) = &container
         && let Some(why) = keyed_and_pinned(&place.keys, &net_hosts_of(Some(c)), &c.caps.pins)
     {

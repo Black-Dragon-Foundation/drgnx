@@ -64,17 +64,24 @@ pub fn on_ac(batt: &str) -> bool {
     !has_battery(batt) || batt.contains("'AC Power'")
 }
 
-/// The versioned features of `brew list --versions`: `gnutls 3.8.4 3.8.5` → `brew:gnutls@3.8` (the newest version
-/// installed, major and minor); a name without a dotted version is left out.
+/// The features of `brew list --versions`: `gnutls 3.8.4 3.8.5` → `brew:gnutls` (any version: what a project's
+/// `drgnx-runners-mac-tools` asks) and `brew:gnutls@3.8` (the newest version installed, major and minor; none for a
+/// name without a dotted version).
 pub fn brew_features(list: &str) -> Vec<String> {
     let mut out: Vec<String> = list
         .lines()
-        .filter_map(|l| {
+        .flat_map(|l| {
             let mut w = l.split_whitespace();
-            let name = w.next()?;
-            let newest = w.filter_map(|v| parse_version(v).map(|p| (p, v))).max()?;
-            let ((major, minor), _) = newest;
-            Some(format!("brew:{name}@{major}.{minor}"))
+            let Some(name) = w.next() else {
+                return vec![];
+            };
+            let mut f = vec![format!("brew:{name}")];
+            if let Some(((major, minor), _)) =
+                w.filter_map(|v| parse_version(v).map(|p| (p, v))).max()
+            {
+                f.push(format!("brew:{name}@{major}.{minor}"));
+            }
+            f
         })
         .collect();
     out.sort();
@@ -271,7 +278,7 @@ mod tests {
     }
 
     /// [D] A Mac that meets the contract: its facts (macOS version, cores, memory in MiB, disk in GB, no battery) and
-    /// features (arch, host jobs, the Command Line Tools, Homebrew packages at their newest major.minor).
+    /// features (arch, host jobs, the Command Line Tools, each Homebrew package by name and at its newest major.minor).
     #[test]
     fn a_mac_that_meets_the_contract_reports_its_facts() {
         let f = contract(&mini(), vec!["jobq".into()]).unwrap();
@@ -289,10 +296,15 @@ mod tests {
                 "arch:aarch64",
                 "host-jobs",
                 "xcode-clt",
+                "brew:autoconf",
                 "brew:autoconf@2.72",
+                "brew:gnutls",
                 "brew:gnutls@3.8",
+                "brew:libgccjit",
                 "brew:libgccjit@15.1",
+                "brew:texinfo",
                 "brew:texinfo@7.2",
+                "brew:weird",
             ]
         );
     }

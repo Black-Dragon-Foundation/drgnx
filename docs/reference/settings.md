@@ -1443,6 +1443,25 @@ host and that user.  Read only by the commands you run (Runners: Load Keys), nev
 | `:agents` | `never` |
 | `:schema` | - |
 
+## drgnx-runners-mac-tools
+
+The Homebrew packages the project's Mac jobs need, by name ("cmake", "gnutls").
+A Mac job waits for a Mac runner that has each one, and its row names the `brew install' line to run in your own
+account: the runner never installs into Homebrew.  Never set by a repository's own files.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat string)` |
+| `:scope` | `project` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of (string :match "\\`[a-z0-9][-a-z0-9+_.@/]*\\'"))` |
+
 ## drgnx-runners-origin-key
 
 The name of the project's read-only deploy key or token for its private origin, or nil.

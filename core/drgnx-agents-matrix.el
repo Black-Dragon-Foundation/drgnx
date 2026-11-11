@@ -246,6 +246,13 @@ repository's own files."
   :type '(repeat string) :group 'drgnx :scope 'project :workspace 'never :on-error 'strict :agents 'never
   :runtime "Vec<String>" :schema '(list-of (string :match "\\`[A-Za-z_][A-Za-z0-9_]*\\'")))
 
+(drgnx-defsetting drgnx-runners-mac-tools nil
+  "The Homebrew packages the project's Mac jobs need, by name (\"cmake\", \"gnutls\").
+A Mac job waits for a Mac runner that has each one, and its row names the `brew install' line to run in your own
+account: the runner never installs into Homebrew.  Never set by a repository's own files."
+  :type '(repeat string) :group 'drgnx :scope 'project :workspace 'never :on-error 'strict :agents 'never
+  :runtime "Vec<String>" :schema '(list-of (string :match "\\`[a-z0-9][-a-z0-9+_.@/]*\\'")))
+
 (drgnx-defsetting drgnx-runners-origin-key nil
   "The name of the project's read-only deploy key or token for its private origin, or nil.
 Your own runners fetch the project from its origin with it instead of being sent a bundle.  A name only: the value

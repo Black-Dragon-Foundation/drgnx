@@ -1628,6 +1628,74 @@ async fn a_projects_own_runner_settings_reach_its_jobs_only() {
     assert!(!overlay("beta").await);
 }
 
+/// [D] A Mac job (`os: macos`) needs the Command Line Tools and its project's Homebrew packages
+/// (`drgnx-runners-mac-tools`) as features, and counts as heavy (it can't run here); a Linux job needs none of them.
+/// The spec the queue places carries both.
+#[tokio::test]
+async fn a_mac_job_needs_its_projects_homebrew_packages() {
+    let d = tempfile::tempdir().unwrap();
+    let f = crate::front::Front::new(
+        runstav::proof::Cap::generate().unwrap(),
+        d.path().join("hub-x.sock"),
+        crate::store::WorkDb::spawn(d.path().join("work.db")).unwrap(),
+        norn::store::CoordDb::spawn(d.path().join("work.db")),
+    );
+    let at = d.path().join("alpha");
+    std::fs::create_dir(&at).unwrap();
+    let ok = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&at)
+        .status()
+        .unwrap();
+    assert!(ok.success());
+    f.settings
+        .set_overrides(
+            Some("alpha"),
+            vec![crate::settings::overrides::Override {
+                name: "drgnx-runners-mac-tools".into(),
+                value: json!(["cmake", "ninja"]),
+                source: "workspace".into(),
+            }],
+        )
+        .await
+        .unwrap();
+    let c = Caller {
+        class: runstav::registry::Class::User,
+        sid: None,
+        job: None,
+        conn_id: 0,
+    };
+    let cwd = at.join("");
+    let mac = placement(
+        &f,
+        &c,
+        &params(json!({"cwd": cwd.to_str().unwrap(), "os": "macos"})),
+        Machine::Auto,
+        true,
+    )
+    .await;
+    assert_eq!(mac.os, forseti::Os::Macos);
+    assert_eq!(mac.features, ["xcode-clt", "brew:cmake", "brew:ninja"]);
+    assert!(mac.heavy);
+    let mut job = spec(Starter::User, &at, "true", Duration::from_secs(5));
+    job.place = mac;
+    let s = job.forseti_spec("x1", "1G");
+    assert_eq!(s.os, forseti::Os::Macos);
+    assert_eq!(s.features, ["xcode-clt", "brew:cmake", "brew:ninja"]);
+
+    let linux = placement(
+        &f,
+        &c,
+        &params(json!({"cwd": cwd.to_str().unwrap()})),
+        Machine::Auto,
+        true,
+    )
+    .await;
+    assert_eq!(linux.os, forseti::Os::Linux);
+    assert!(linux.features.is_empty());
+    assert!(!linux.heavy);
+}
+
 /// The rows a job's `result.json` keeps, as JSON (`[{name, verdict, class?, symbols?}]`).
 fn result_rows(root: &Path, id: &str) -> Vec<serde_json::Value> {
     let text = std::fs::read_to_string(root.join("exec").join(id).join("result.json")).unwrap();

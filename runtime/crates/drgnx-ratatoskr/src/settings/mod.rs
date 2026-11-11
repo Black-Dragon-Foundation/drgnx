@@ -145,6 +145,7 @@ pub const RUNTIME: &[RuntimeSetting] = &[
     ),
     setting("drgnx-runners-shared-overlay", "bool", OnError::Strict),
     setting("drgnx-runners-job-keys", "Vec<String>", OnError::Strict),
+    setting("drgnx-runners-mac-tools", "Vec<String>", OnError::Strict),
     setting(
         "drgnx-runners-origin-key",
         "Option<String>",
@@ -250,6 +251,8 @@ pub struct RuntimeValues {
     pub runners_shared_overlay: bool,
     /// The keys a project's jobs may name, by name (per project): any other is refused at submit.
     pub runners_job_keys: Vec<String>,
+    /// The Homebrew packages a project's Mac jobs need, by name (per project): each becomes a `brew:NAME` feature.
+    pub runners_mac_tools: Vec<String>,
     /// The name of a project's read-only deploy key or token for its private origin (per project).
     pub runners_origin_key: Option<String>,
     pub sandbox_proxy_pins: ProxyPins,
@@ -528,6 +531,7 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         }
         "drgnx-runners-shared-overlay" => values.runners_shared_overlay = de(node)?,
         "drgnx-runners-job-keys" => values.runners_job_keys = de(node)?,
+        "drgnx-runners-mac-tools" => values.runners_mac_tools = de(node)?,
         "drgnx-runners-origin-key" => values.runners_origin_key = de(node)?,
         "drgnx-sandbox-proxy-pinned-addresses" => {
             let profiles::Alist(pairs) = de::<profiles::Alist<std::net::IpAddr>>(node)?;

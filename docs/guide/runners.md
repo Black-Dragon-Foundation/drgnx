@@ -191,6 +191,7 @@ settings:
   `"all"` or `"none"`;
 - `drgnx-runners-heavy`: suite or command patterns whose jobs count as heavy;
 - `drgnx-runners-image`: the image (pinned by digest) a runner runs its command jobs in;
+- `drgnx-runners-mac-tools`: the Homebrew packages its Mac jobs (`os: macos`) need, by name; your own settings only;
 - `drgnx-runners-weight`: its share against other projects within a priority (default 1);
 - `drgnx-runners-project-visibility`: `"private"` (the default) or `"public"` (see below);
 - `drgnx-runners-shared-overlay`: off (the default) or on: whether a `shared` runner may have its uncommitted files.

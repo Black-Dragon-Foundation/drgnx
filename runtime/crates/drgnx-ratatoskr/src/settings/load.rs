@@ -387,6 +387,7 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
             values.runners_shared_overlay = default.runners_shared_overlay;
         }
         "drgnx-runners-job-keys" => values.runners_job_keys = default.runners_job_keys.clone(),
+        "drgnx-runners-mac-tools" => values.runners_mac_tools = default.runners_mac_tools.clone(),
         "drgnx-runners-origin-key" => {
             values.runners_origin_key = default.runners_origin_key.clone();
         }

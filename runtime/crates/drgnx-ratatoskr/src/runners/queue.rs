@@ -150,6 +150,11 @@ pub struct Placement {
     /// `drgnx-agents-net-hosts`, as its proxy here would allow them. A runner's job proxy gets the same list; none: the
     /// job has no network.
     pub net_hosts: Vec<String>,
+    /// The OS it needs (`exec/start`'s `os`): a `macos` job places only on a Mac runner.
+    pub os: Os,
+    /// The features it needs: for a Mac job, `xcode-clt` and a `brew:NAME` for each of its project's
+    /// `drgnx-runners-mac-tools`.
+    pub features: Vec<String>,
 }
 
 /// What a command takes in place of the selector of the rows an attempt runs (`forseti::split::selector`, an Emacs
@@ -183,6 +188,8 @@ impl Default for Placement {
             origin_key: None,
             suite: None,
             net_hosts: vec![],
+            os: Os::Linux,
+            features: vec![],
         }
     }
 }
