@@ -21,5 +21,12 @@ localhost `sshd`. Nobody is logged in to that account, as on a real Mac.
 | `s2-ert`, `s2-build` | drgnx ERT selectors, then a Nidhogg build with Naglfar, as the runner account under the draft build profile (Gleipnir's Seatbelt base plus the build addition) |
 | `denials` | every Seatbelt denial the unified log shows, counted by operation and path |
 
+`s1` and `s3` are decided (a launchd job can't be bootstrapped from an ssh login's Background session: `bootstrap`
+fails with error 5, so runners use the `setsid` launcher; the watchdog kills a job and its escaped child within 20 ms
+of the grant, at under 1 % CPU) and run again only with `-f only='rt-macrunner rt-macrunner-all'`. `s2-ert` runs the
+tests in their own session and stops them after 15 minutes with the session's process list and stacks. The job also
+builds the Mac runner bundle (`drgnx build runner-bundle --target aarch64-apple-darwin`, signed) and runs sleipnir's
+`darwin` rows, the probe's live read among them.
+
 `mrspike.rs` is std only, built with a bare `rustc -O` on the host. The results land in the `mac-runner-spikes`
 artifact (`results.md` and the logs).

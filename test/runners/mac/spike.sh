@@ -265,11 +265,25 @@ remote_s2_ert() { # SELECTOR EMACS (relative to the Nidhogg prefix)
   cd "$r/slot-drgnx" || return 1
   emacs=$r/tools/nidhogg/$2
   echo "emacs=$emacs"
-  /usr/bin/sandbox-exec -f "$a/ert.sb" /usr/bin/env -i HOME="$a/home" TMPDIR="$a/tmp/" \
+  # in its own session (the watchdog's way), so a hang can be seen and stopped whole: 15 minutes, then the process
+  # list and SIGKILL to the session
+  "$r/mrspike" detach "$a/ert.log" -- /usr/bin/sandbox-exec -f "$a/ert.sb" /usr/bin/env -i HOME="$a/home" TMPDIR="$a/tmp/" \
     PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" LANG=en_US.UTF-8 DRGNX_EMACS="$emacs" DRGNX_TEST_SELECTOR="$1" \
-    /bin/bash bin/drgnx test > "$a/ert.log" 2>&1
-  echo "ert-rc=$?"
-  grep -E 'Ran [0-9]+ tests|unexpected' "$a/ert.log" | tail -n 5
+    /bin/bash -c 'bin/drgnx test; echo "ert-rc=$?"' > "$a/pid" 2>&1
+  pid=$(tail -n 1 "$a/pid"); echo "session leader: $pid"
+  waited=0
+  while kill -0 "$pid" 2>/dev/null && [ $waited -lt 900 ]; do sleep 5; waited=$((waited + 5)); done
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "ert-hung after ${waited}s; the runner account's processes (pgid $pid is the job's):"
+    ps -U "$(id -u)" -o pid,ppid,pgid,stat,etime,time,command | cut -c1-300
+    for p in $(ps -U "$(id -u)" -o pid=,pgid= | awk -v g="$pid" '$2 == g { print $1 }'); do
+      echo "--- sample $p"; /usr/bin/sample "$p" 1 2>/dev/null | grep -E '^ +[0-9]+ ' | head -n 25
+    done
+    kill -KILL -- -"$pid" 2>/dev/null
+    echo "ert-rc=hung"
+  fi
+  grep -E 'ert-rc=|Ran [0-9]+ tests|unexpected' "$a/ert.log" | tail -n 5
+  echo "--- log tail"; tail -n 40 "$a/ert.log"
 }
 
 s2_ert() { # DRGNX_CHECKOUT DRGNX_EMACS SELECTOR (the Nidhogg prefix is DRGNX_EMACS's ../..)
