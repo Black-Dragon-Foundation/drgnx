@@ -19,6 +19,8 @@ draugr = { path = "../draugr", version = "0.1.0" }
 huginn = { path = "../huginn", version = "0.1.0" }  # settings_change reads an agent's value as data
 # the hook engine (hooks/): plugin manifests and their hook points
 brokkr = { path = "../brokkr", version = "0.1.0" }
+# the orchestration records (evidence, the rule pack, batches, followups): their shapes
+vordr = { path = "../vordr", version = "0.1.0" }
 regex.workspace = true
 serde_path_to_error.workspace = true
 serde.workspace = true

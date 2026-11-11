@@ -11,6 +11,7 @@ pub mod always;
 pub mod cards;
 pub mod decisions;
 pub mod event;
+pub mod evidence;
 pub mod exec;
 pub mod huddles;
 pub mod jobs;

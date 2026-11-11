@@ -63,6 +63,7 @@
 //! - [`brief`]: briefs built from the graph.
 //! - [`manager`]: the manager role.
 //! - [`records`]: the records importer and their views.
+//! - [`orch`]: orchestration in the hub: evidence and the gates on the plan runner.
 //!
 //! Runners (other machines that run jobs): [`runners`], the generated ssh config and the transport.
 //!
@@ -104,6 +105,7 @@ pub mod log;
 pub mod machines_cli;
 pub mod manager;
 pub mod matrix_gate;
+pub mod orch;
 pub mod pair;
 pub mod peer;
 pub mod plugins;

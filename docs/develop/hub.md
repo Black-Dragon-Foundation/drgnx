@@ -1451,6 +1451,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `messages/mark` | user | `{id: natnum, state: "delivered" \| "read" \| "acted"}` | `{changed: boolean}` | yes |
 | `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes |
+| `orch/evidence` | user | `{task: TaskRef}` | `{evidence: [any]}` | no |
 | `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
 | `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |
 | `pair/closed` | user | `{file: AbsPath}` | `boolean` | no |
@@ -3205,6 +3206,16 @@ jobs (`exec::visible`: "not yours", `not-allowed`); the norn tools refuse the sa
 the `launch-sandboxed/*` rows (`tests/launch_sandboxed.rs`, a session's launch spec run in a real sandbox): a
 container has no user namespaces for bwrap, so CI runs them in `escape-host`'s sandbox lane; the rows of the reduced
 tier run on it where the kernel has Landlock ABI 9 and on the full tier elsewhere (no runner has ABI 9 yet).
+
+**Rows and failure classes.** `result.json` keeps every row of the whole log (`End.rows`, read a line at a time by
+`vordr::rows::Reader`, whatever the job's kind: cargo test, ERT and domr lines don't overlap): its name, verdict
+(`pass`, `skip`, `fail`) and a failure's class — `assert` (a panic or a `should` in the test), `build` (a compile error,
+an ERT void function or a file that didn't load; it carries the symbols the errors say are missing: rustc's
+`vordr::rows::MISSING` codes, `(void-function S)`), `error`, `timeout` and `infra`. A compile error is the row
+`build:CRATE (TARGET)` from cargo's `could not compile` line. `vordr::rows::close` adds the row `(job)` for a job that
+timed out (`timeout`), was lost or ended `infra` (`infra`), was stopped, or failed with no failing row (`error`). The
+summary's `failing` names the failed rows (at most 50, `(job)` left out); `Runner::rows` reads them. The gates read
+rows only (`docs/develop/orchestration.md`).
 
 The editor's own jobs are the user's `exec/start` with four more fields (`StartParams`: `name`, `env`, `memory_max`,
 `nice`; `StartParams::user_only_field` names the first one a request sets). `exec::start` refuses them from a session

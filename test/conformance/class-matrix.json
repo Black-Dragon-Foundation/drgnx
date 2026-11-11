@@ -141,6 +141,7 @@
   "messages/mark": ["user"],
   "messages/retract": ["user"],
   "messages/send": ["user"],
+  "orch/evidence": ["user"],
   "pace/get": ["user"],
   "pair/answer": ["user"],
   "pair/closed": ["user"],
