@@ -95,10 +95,20 @@ fixtures on Linux.
 
 **The Mac contract** (`contract`), refused with the whole list: macOS 15 or newer; Apple silicon
 (`hw.optional.arm64`, so a Rosetta shell passes); a root-owned `sandbox-exec`; a standard (non-admin) account; the
-Command Line Tools answering, with a full Xcode's licence accepted (`clang`'s refusal names it, its own item); 40 GB
-free on the runner root's volume. **Facts**: `os` `macos 15.6`, `arch` `aarch64`, cores (`hw.ncpu`), memory, disk,
+Command Line Tools answering, with a full Xcode's licence accepted (`clang`'s refusal names it, its own item); `mise`
+from Homebrew; 40 GB free on the runner root's volume. **Facts**: `os` `macos 15.6`, `arch` `aarch64`, cores (`hw.ncpu`), memory, disk,
 battery; the Linux-only fields false. **Features**: `arch:aarch64`, `host-jobs`, `xcode-clt`, and `brew:<name>@<major>.<minor>`
-for each Homebrew package at its newest installed version. The boot id is `kern.bootsessionuuid`.
+for each Homebrew package at its newest installed version (and `brew:<name>` alone), and `tool:<name>@<version>` for
+each toolchain record under the root. The boot id is `kern.bootsessionuuid`.
+
+**Toolchains** (`darwin::tools`, `sleipnir tools --root DIR PIN...`). The hub runs it at `runner add` and
+`runner check`, as the runner account and outside any job (a job has no network; mise downloads). For each pin
+(`rust@1.95`) the user's Homebrew `mise` runs `install` and then `env --json` in the root, with mise's data, state,
+config and cache folders and Rust's `RUSTUP_HOME`/`CARGO_HOME` all under the root, so nothing lands in the account's
+home; the record `<root>/tools/env/<pin>.json` keeps the folders mise put on `PATH` and its other variables (never
+mise's own or the job's). It prints the outcomes and the features as JSON. A job placed with `tool:` features reads
+`<root>/tools` (never writes it), gets each record's folders first on its `PATH` and its variables where the job sets
+none; a feature without a record fails the launch with its name.
 
 **Attempts** (`darwin::attempt`, `darwin::jobexec`, `darwin::sandbox`; `serve::platform::DarwinPlatform`). launchd
 takes no job from an ssh login (its Background session refuses `launchctl bootstrap user/<uid>`), so `launch` starts
@@ -110,10 +120,28 @@ whatever stayed in it); a process that left the group is the watchdog's to find,
 runs the command only as `/usr/bin/sandbox-exec -f job.sb …` and refuses anything else (a keyed job, a helper, a
 bare command) as `infra: setup`, so a job never runs unconfined. `job.sb` is Gleipnir's profile of the attempt's
 spec (`darwin::sandbox::spec`): it reads the source, writes the attempt folder (and the source when the job writes its
-tree), `HOME` and `TMPDIR` inside the folder, `PATH` Homebrew's and the system's, the marker
-`DRGNX_RUNNER_ATTEMPT`, and no network. The timeout is read on `CLOCK_MONOTONIC`, `caffeinate -i -w` keeps the Mac
+tree) and the runner's programs (`<root>/bin`), `HOME` and `TMPDIR` inside the folder, `PATH` the brew shim's folder,
+then Homebrew's and the system's (after its toolchains'), the marker
+`DRGNX_RUNNER_ATTEMPT`, Homebrew read-only (`HOMEBREW_NO_AUTO_UPDATE` and the like; `HOMEBREW_NO_INSTALL_FROM_API`, so formulae load from the
+installed kegs instead of a JSON API fetch, which needs the network and a lock in Homebrew's var; its cache, logs and temporary
+files in the attempt's tmp: a configure asks `brew` where a package is), and no network. Every job a Mac runner takes is a
+build or a test, so its profile has Gleipnir's build addition (`darwin::sandbox::mac_context`: the developer dir and
+the account's per-user folder, `getconf DARWIN_USER_DIR`'s parent, by true name; docs/develop/gleipnir.md, "The build
+addition"); a per-user folder that can't be resolved refuses the launch. The timeout is read on `CLOCK_MONOTONIC`, `caffeinate -i -w` keeps the Mac
 awake while the job runs, and the verdict comes from `forseti::classify` like Linux's. A Mac has no pause, live
 resize, CPU weights or keys: those methods answer none or refuse.
+
+**Homebrew in a job** (`darwin::brew`): offline and read-only, Homebrew can't name a package's prefix. `brew --prefix
+--installed NAME`, which Emacs's configure asks for libgccjit, loads the formula from the JSON API (a download, under a
+lock in Homebrew's var) or, with `HOMEBREW_NO_INSTALL_FROM_API`, from the homebrew/core tap (a `git clone` into
+Homebrew). So a Mac job's `brew` is the runner's shim: `<root>/bin/brew-shim/brew`, a link to the runner's `sleipnir`
+(the launch makes it, `brew::ensure_shim`), first on the job's `PATH`; `sleipnir` started as `brew` is the shim. It
+answers the offline queries from the prefix's folders: `--prefix`, `--prefix [--installed] NAME…`
+(`/opt/homebrew/opt/NAME`; with `--installed`, one that is missing fails) and `--cellar [NAME…]`. What needs the network
+or writes Homebrew (`install`, `upgrade`, `update`, `tap`, `uninstall`, `fetch`, `link`, `cleanup` and the like) fails
+at once with a message naming the shim. Everything else (`ls`, `list`, `--version`, `config`, a query with an option the
+shim doesn't know) runs the real `/opt/homebrew/bin/brew` with the read-only environment above; if it fails, a line
+naming the shim follows brew's own error, so no call fails silently.
 
 **The memory cap** (`darwin::memwatch`): no kernel enforces a Mac job's grant, so job-exec's watchdog does. Every
 500 ms it lists the processes and takes the job's: job-exec's session less job-exec (a job-exec that leads no session,

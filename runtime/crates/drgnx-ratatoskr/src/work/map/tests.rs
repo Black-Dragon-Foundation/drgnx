@@ -309,6 +309,7 @@ fn runner_job_runs_on_edge_points_at_the_runner() {
         jobs: 1,
         icon: "server".into(),
         cost: None,
+        mac: false,
     };
     let desk = Machine {
         machine: "desktop".into(),

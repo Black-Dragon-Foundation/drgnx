@@ -91,6 +91,7 @@
         (runners-unbench :none "the Runners list's row; the palette")
         (runners-trust :none "the Runners list's row; the palette")
         (runners-accept :none "the Runners list's row; the palette")
+        (runners-add-mac :none "the palette")
         (runners-remove :none "the Runners list's row; the palette")
         (runners-show-log :none "the Runners list's row; the palette")
         (runners-cloud-setup :none "the palette")

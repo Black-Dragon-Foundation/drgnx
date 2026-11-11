@@ -643,7 +643,8 @@ epoch; default the present), or \"job · NAME · waiting\" while it has no machi
                                                          (when-let* ((c (plist-get runner :cost))) (and (stringp c) c))))))
                                (and bits (string-join bits " · ")))))))
     (concat (if (plist-get item :needs_you) (propertize "⚑ " 'face 'drgnx-work-needs-you) "")
-            glyph " " label (if extra (concat " · " extra) "")
+            glyph " " label (if (plist-get runner :mac) (propertize " macOS" 'face 'drgnx-runners-os) "")
+            (if extra (concat " · " extra) "")
             (if (plist-get item :warn) (propertize " ⚠" 'face 'drgnx-work-overlap) ""))))
 
 (defun drgnx-work-map--card-lines (state id)

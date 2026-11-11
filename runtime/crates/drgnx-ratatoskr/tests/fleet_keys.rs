@@ -311,6 +311,7 @@ fn job(id: &str, script: &str, keys: &[&str], image: &str) -> Submit {
         keys: keys.clone(),
         local_only: false,
         writes: vec![],
+        os: Default::default(),
     };
     Submit {
         id: id.into(),

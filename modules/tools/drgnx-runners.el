@@ -285,6 +285,35 @@ keys and the runner may have them, they are read from your key store first (this
   (message "Runners: adding %s (probe, copy, image, bench)…" host)
   (drgnx-runners--act "runners/add" (list :host host :trust trust) (format "added %s" host)))
 
+;;;; A Mac as a runner
+
+(defconst drgnx-runners-mac-steps
+  "Prepare the Mac once, in your own account there (drgnx never runs sudo on it):
+
+1. Create a standard account named drgnx-runner (System Settings, Users & Groups; not an administrator).
+   Jobs run as that account, so your own files and keychain stay out of their reach.
+2. Turn on Remote Login for that account only (System Settings, General, Sharing, Remote Login,
+   \"Only these users\"), and put this machine's ssh key in ~drgnx-runner/.ssh/authorized_keys.
+3. Install the Command Line Tools (xcode-select --install), mise (brew install mise) and the Homebrew
+   packages your projects list in drgnx-runners-mac-tools, in your own account: the runner never installs
+   into Homebrew.  The toolchains your projects pin in drgnx-runners-mac-toolchains (rust@1.95) the runner
+   installs itself, through your mise, into its own folder.
+4. If the Mac is not on this machine's network, reach it through tailscaled, the open-source Tailscale
+   daemon (brew install tailscale), or any VPN your ssh can use.
+
+Then add it: Runners: Add Runner…, host drgnx-runner@YOUR-MAC.  The runner refuses a Mac that lacks
+something and names the fix."
+  "The steps that make a Mac ready to be a runner, as the onboarding card shows them (docs/guide/runners.md).")
+
+(defun drgnx-runners-add-mac ()
+  "Show how to prepare a Mac as a runner, then ask for its host and add it as yours (`mine')."
+  (interactive)
+  (with-help-window "*drgnx Mac Runner*"
+    (princ drgnx-runners-mac-steps))
+  (let ((host (read-string "Mac host (drgnx-runner@your-mac), empty to stop: ")))
+    (unless (string-empty-p host)
+      (drgnx-runners-add host "mine"))))
+
 ;;;; The module
 
 (defun drgnx-runners--setup ()
@@ -298,6 +327,8 @@ keys and the runner may have them, they are read from your key store first (this
   (pcase-dolist (`(,id ,title ,fn ,doc ,global)
                  '((runners "Show Runners" drgnx-runners-show "Your runners: the machines that run your jobs" t)
                    (runners-add "Add Runner…" drgnx-runners-add "Add a machine as a runner of your jobs" t)
+                   (runners-add-mac "Add Mac Runner…" drgnx-runners-add-mac
+                                    "Prepare a Mac as a runner (its own account, Remote Login), then add it" t)
                    (runners-load-keys "Load Keys" drgnx-runners-load-keys
                                       "Hand the job keys the hub asks for from your key store to the hub" t)
                    (runners-check "Check Runner" drgnx-runners-check "Check the runner on this row now" nil)
