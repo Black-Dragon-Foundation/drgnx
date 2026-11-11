@@ -174,7 +174,7 @@ branch gateway-queue, staged file and history come with the Magit adapter (look 
     (explorer-focused-hc "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
     (debugging "no session runs: no stopped line (arrow and band on 24), toolbar, inline values, Run and Debug view or
 Debug Console (graphical debugging's later tasks); compare the breakpoint column"
-               "no hover dot on 32: the margin's mouse-face needs Nidhogg's margin patch"
+               "the hover dot on 32 only on a Nidhogg with the margin's mouse-face (glitnir-margin-mouse-face)"
                "no change bars: the scene's inventory.py is new, not a changed file"))
   "What the line cannot show of each scene's mockup yet, written to the scene's facts (:limits).  A scene is never
 changed to hide a gap: the gap is named here instead.")
@@ -690,12 +690,14 @@ match on line 209 (the `puthash' line) unticked; the view's buffer, or nil."
 
 (declare-function drgnx-debug-gutter-mode "drgnx-debug-gutter")
 (declare-function drgnx-debug-gutter--apply "drgnx-debug-gutter")
+(declare-function drgnx-debug-gutter--columns "drgnx-debug-gutter")
+(declare-function drgnx-margins-offset "drgnx-margins")
 
 (defun drgnx-look-scene-debugging ()
   "The debugging mockup's editor: inventory.py from line 13, with its breakpoints in the column (18 verified, 22 a
 condition, 24 verified, 25 a logpoint, 30 disabled).  No session runs yet, so there is no stopped line, toolbar or
-views: the scene is the column's (the mockup's stop arrow on 24 is a plain breakpoint here, its hover dot on 32 is not
-drawn)."
+views: the scene is the column's (the mockup's stop arrow on 24 is a plain breakpoint here).  The pointer is noted on
+line 32's hover dot, as the mockup shows it, where Nidhogg lights a margin's mouse face."
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--try "debugging"
     (drgnx-wb-focus-editor)
@@ -713,7 +715,19 @@ drawn)."
                    (list :id 2 :line 22 :enabled t :verified t :condition "shortfall > 20")
                    (list :id 3 :line 24 :enabled t :verified t)
                    (list :id 4 :line 25 :enabled t :verified t :log "order {item.sku}")
-                   (list :id 5 :line 30 :enabled nil :verified t))))))
+                   (list :id 5 :line 30 :enabled nil :verified t))))
+      (when (and (featurep 'glitnir-margin-mouse-face) (fboundp 'nidhogg--note-mouse))
+        (redisplay t)
+        ;; line 32's dot: the column's middle character, after the claim's pad, left of the fringe
+        (save-excursion
+          (goto-char (point-min)) (forward-line 31)
+          (pcase-let* ((`(,_ . ,y) (posn-x-y (posn-at-point (point))))
+                       (`(,left ,top . ,_) (window-inside-pixel-edges))
+                       (cw (frame-char-width))
+                       (l (- left (if (nth 2 (window-fringes)) 0 (car (window-fringes))) (* (car (window-margins)) cw))))
+            (nidhogg--note-mouse nil (+ l (* cw (+ (drgnx-margins-offset 'debug) (/ (1- (drgnx-debug-gutter--columns)) 2)))
+                                        (/ cw 2))
+                                 (+ top y (/ (line-pixel-height) 2))))))))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-start-page ()
@@ -746,6 +760,21 @@ chrome faces, frame metrics, windows, modules."
                                       :hub (and (fboundp 'drgnx-hub-running-p) (drgnx-hub-running-p))
                                       :view (bound-and-true-p drgnx-work-space--view)
                                       :message (bound-and-true-p drgnx-work-space--message))))
+                  ;; the Flow, where one is open: its first lines, with the text properties that hide or replace text
+                  :work-flow (when-let* ((b (seq-find (lambda (b) (eq (buffer-local-value 'major-mode b)
+                                                                      'drgnx-work-flow-mode))
+                                                      (buffer-list))))
+                               (with-current-buffer b
+                                 (let ((end (min (point-max) 400)))
+                                   (list :text (buffer-substring-no-properties (point-min) end)
+                                         :hidden (let (out (pos (point-min)))
+                                                   (while (< pos end)
+                                                     (let ((next (next-single-char-property-change pos 'invisible nil end)))
+                                                       (when (get-char-property pos 'invisible)
+                                                         (push (list pos next (get-char-property pos 'invisible)) out))
+                                                       (setq pos next)))
+                                                   (nreverse out))
+                                         :invisibility buffer-invisibility-spec))))
                   :palette (let ((pf (bound-and-true-p drgnx-palette-frame--frame)))
                              (when (and (frame-live-p pf) (frame-visible-p pf))
                                (let ((w (frame-root-window pf)))

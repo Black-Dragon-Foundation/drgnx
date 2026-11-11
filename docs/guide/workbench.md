@@ -272,7 +272,8 @@ mode line (ibuffer, Info) cannot change a window's height — text never jumps (
 needs at least 30 frame lines for the breadcrumb row, which is 31 terminal rows with the menu bar on (the menu bar
 is not a frame line); with fewer, the frame parameter `drgnx-chrome-breadcrumb` is `off` (set by the terminal layout)
 and the row is gone, sticky scroll's scopes with it. It comes back with room, and a buffer's own header line (column
-headings) stays.
+headings) stays. A buffer that sets `drgnx-chrome-own-tab-line` (the Work space's views) shows its own tab line in
+place of the editor's tabs; the row stays, so the text does not move.
 
 Hovering a file tab lights that one only, the whole tab. Tabs are dimmed; the shown tab joins the editor (its colour,
 in the body text's colour in the active editor group and muted in another group). The breadcrumb row is the header

@@ -45,6 +45,16 @@ pub(crate) enum Chip {
 const TEXT: &str = "drgnx-work-flow-text";
 const LABEL: &str = "drgnx-work-flow-label";
 const HEAD: &str = "drgnx-work-flow-heading";
+/// A key's badge (the keycap).
+const KEY: &str = "drgnx-work-flow-key";
+/// A card's fill (drgnx-work-flow.el: the panel's surface), and the text faces on it.
+const CARD: &str = "drgnx-work-flow-card";
+const CARD_TEXT: &str = "drgnx-work-flow-card-text";
+const CARD_LABEL: &str = "drgnx-work-flow-card-label";
+const CARD_HEAD: &str = "drgnx-work-flow-card-heading";
+/// The text property that marks a block Glitnir draws over the rows (`glitnir-blocks`): `["ring", ID, X0, X1]` on a
+/// card's span of each of its rows, `["rule", KEY, X0, X1]` on a row with a hairline under it (device px).
+const BLOCK: &str = "drgnx-work-flow-block";
 /// The font role the Flow's text is measured in (the UI font: `drgnx-view-env-roles`).
 const ROLE: &str = "card";
 
@@ -163,6 +173,10 @@ pub(crate) struct Flow {
     pub groups: Option<Runs>,
     /// The push tiers' runs at the line's head, once a push was asked.
     pub push: Option<Runs>,
+    /// The machines' load: (label, slots used, slots), as the map's strip has them.
+    pub machines: Vec<(String, u32, u32)>,
+    /// The run's spend in USD and its plan's USD budget, when it has one.
+    pub cost: Option<(f64, Option<f64>)>,
 }
 
 /// What one Flow view shows: the lens, one task's detail tile, or the Rules tile.
@@ -441,6 +455,111 @@ fn chip(b: &mut RowBuilder, pics: &mut Pics, icon: Option<(&str, &str)>, text: &
     b.face(start, end, face);
 }
 
+/// The strip under the run's line, when it has anything to say: a chip per task a gate holds (why, its card's words,
+/// carrying the task's id) with its jump key's badge (`g N`: the Nth held task), the push the line gate leaves to the
+/// user once its tiers are green; at the window's right edge the run's cost (against its plan's budget) and each
+/// machine's load.
+fn strip_row(
+    flow: &Flow,
+    ts: &[Task],
+    env: &ViewEnv,
+    fonts: &dyn Measure,
+    pics: &mut Pics,
+) -> Option<Row> {
+    let held: Vec<&Task> = ts.iter().filter(|t| t.held.is_some()).collect();
+    let push_green = flow
+        .push
+        .as_ref()
+        .is_some_and(|p| tally(p).0 == p.checks.len());
+    if held.is_empty() && !push_green && flow.cost.is_none() && flow.machines.is_empty() {
+        return None;
+    }
+    // the right part: the cost, then a chip per machine (" ", icon, " label u/n ")
+    let cost = flow.cost.map(|(spent, limit)| match limit {
+        Some(l) => format!("${spent:.2} / ${l:.0}"),
+        None => format!("${spent:.2}"),
+    });
+    let machines: Vec<String> = flow
+        .machines
+        .iter()
+        .map(|(label, used, total)| format!("{label} {used}/{total}"))
+        .collect();
+    let (sp, gap) = (text_px(fonts, " "), dpx(env, 6.0));
+    // a chip's width as `chip' draws it: its spaces, its icon (its placeholder counted too) and its text
+    let chip_px = |text: &str, icon: bool| {
+        2 * sp + text_px(fonts, text) + if icon { 2 * sp + pics.px } else { 0 }
+    };
+    let mut width = cost.as_ref().map_or(0, |c| chip_px(c, false) + sp + gap)
+        + machines
+            .iter()
+            .map(|m| chip_px(m, true) + sp + gap)
+            .sum::<u32>();
+    // the left part fits before it: the push's words stay whole, the held tasks' reasons share what is left (each
+    // keeps room for a word and its ellipsis); when even that does not fit, the right part gives way
+    let push = push_green.then(|| format!("push job/{}? gate green", flow.job));
+    let fixed = push.as_ref().map_or(0, |p| chip_px(p, true) + 2 * sp)
+        + held
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                chip_px(&format!("{} held: ", t.label), true)
+                    + text_px(fonts, &format!(" g{} ", i + 1))
+                    + 2 * sp
+            })
+            .sum::<u32>();
+    let least = u32::try_from(held.len()).unwrap_or(0) * text_px(fonts, "word…");
+    let room_with = |width: u32| {
+        if width > 0 {
+            env.width_px.saturating_sub(width + dpx(env, 4.0) + gap)
+        } else {
+            env.width_px
+        }
+    };
+    if room_with(width) < fixed + least {
+        width = 0;
+    }
+    let stop = env.width_px.saturating_sub(width + dpx(env, 4.0));
+    let room = room_with(width);
+    let each = room.saturating_sub(fixed) / u32::try_from(held.len().max(1)).unwrap_or(1);
+    let mut b = RowBuilder::new("needs");
+    for (i, t) in held.iter().enumerate() {
+        if i > 0 {
+            b.push("  ", None);
+        }
+        let start = b.pos();
+        let why = t.held.as_deref().unwrap_or_default();
+        let why = drgnx_rows::fit::fit(fonts, ROLE, why, each as f32);
+        chip(
+            &mut b,
+            pics,
+            Some(("flag", "⚑")),
+            &format!("{} held: {why}", t.label),
+            Chip::Held.face(),
+        );
+        b.push(&format!(" g{} ", i + 1), Some(KEY));
+        let end = b.pos();
+        b.prop(start, end, "drgnx-work-id", json!(t.id));
+    }
+    if let Some(p) = &push {
+        if !held.is_empty() {
+            b.push("  ", None);
+        }
+        chip(&mut b, pics, Some(("flag", "⚑")), p, Chip::Held.face());
+    }
+    if width > 0 {
+        b.stop(stop);
+        if let Some(c) = &cost {
+            chip(&mut b, pics, None, c, Chip::Wait.face());
+            b.push(" ", None);
+        }
+        for m in &machines {
+            chip(&mut b, pics, Some(("server", "▣")), m, Chip::Wait.face());
+            b.push(" ", None);
+        }
+    }
+    Some(b.finish())
+}
+
 /// A gate column's icon (Lucide, as the mockup's headings).
 fn gate_icon(gate: &str) -> &'static str {
     match gate {
@@ -514,27 +633,8 @@ pub(crate) fn flow_rows(
         Chip::Wait.face(),
     );
     let mut rows = vec![head.finish()];
-    // the needs-you chips: a task a gate holds, with why (its card's words)
-    let held: Vec<&Task> = ts.iter().filter(|t| t.held.is_some()).collect();
-    if !held.is_empty() {
-        let mut b = RowBuilder::new("needs");
-        for (i, t) in held.iter().enumerate() {
-            if i > 0 {
-                b.push("  ", None);
-            }
-            let start = b.pos();
-            let why = t.held.as_deref().unwrap_or_default();
-            chip(
-                &mut b,
-                &mut pics,
-                Some(("flag", "⚑")),
-                &format!("{} held: {}", t.label, fit(why, 48)),
-                Chip::Held.face(),
-            );
-            let end = b.pos();
-            b.prop(start, end, "drgnx-work-id", json!(t.id));
-        }
-        rows.push(b.finish());
+    if let Some(strip) = strip_row(flow, &ts, env, fonts, &mut pics) {
+        rows.push(strip);
     }
     let mut cols = RowBuilder::new("cols");
     for (i, name) in ["Task", "Agent"].iter().chain(GATES.iter()).enumerate() {
@@ -548,6 +648,7 @@ pub(crate) fn flow_rows(
         }
         cols.push(name, Some(LABEL));
     }
+    rule(&mut cols, "cols", env);
     rows.push(cols.finish());
     if ts.is_empty() {
         let mut b = RowBuilder::new("none");
@@ -574,19 +675,20 @@ pub(crate) fn flow_rows(
         if let Some(card) = t.card {
             b.prop(start, end, "drgnx-work-card", json!(card));
         }
+        rule(&mut b, &format!("task:{}", t.id), env);
         rows.push(b.finish());
     }
     let mut blank = RowBuilder::new("gap");
     blank.push("", None);
     rows.push(blank.finish());
-    rows.extend(batch_rows(flow, &at, env, fonts, &mut pics));
-    if flow.pack.as_ref().is_some_and(|p| p.on("push-gate")) {
-        let mut blank = RowBuilder::new("gap2");
-        blank.push("", None);
-        rows.push(blank.finish());
-        rows.extend(line_rows(flow, &mut pics));
-    }
+    rows.extend(card_rows(flow, env, fonts, &mut pics));
     (rows, pics.out)
+}
+
+/// B's row, keyed KEY, as a rule block (`BLOCK`): a hairline under it across the table, which Glitnir draws.
+fn rule(b: &mut RowBuilder, key: &str, env: &ViewEnv) {
+    let end = b.pos();
+    b.prop(0, end, BLOCK, json!(["rule", key, 0, env.width_px]));
 }
 
 /// RUNS' checks at their tree: (green, red).
@@ -611,9 +713,21 @@ fn machine(e: &Evidence) -> &str {
         .unwrap_or(&e.facts.platform)
 }
 
-/// A row per machine that ran any of RUNS' checks at their tree, keyed PREFIX-on:MACHINE: each check's newest run
-/// there, a tick in the ok face when it passed, a cross in the error face when it failed.
-fn per_machine(prefix: &str, r: &Runs, pics: &mut Pics) -> Vec<Row> {
+/// One piece of a card's line.
+enum Piece {
+    /// Text in a face.
+    Text(String, &'static str),
+    /// An icon (name, alt) in a face.
+    Icon(&'static str, &'static str, &'static str),
+    /// A chip: its icon, text and face ([`chip`]).
+    Chip(Option<(&'static str, &'static str)>, String, &'static str),
+    /// The next piece starts this many px into the card's content.
+    At(u32),
+}
+
+/// A line per machine that ran any of RUNS' checks at their tree: each check's newest run there, a tick in the ok
+/// face when it passed, a cross in the error face when it failed.
+fn machine_lines(r: &Runs) -> Vec<Vec<Piece>> {
     let mut machines: Vec<&str> = Vec::new();
     for e in r.evidence.iter().filter(|e| e.facts.tree_key == r.at) {
         if !machines.contains(&machine(e)) {
@@ -622,8 +736,7 @@ fn per_machine(prefix: &str, r: &Runs, pics: &mut Pics) -> Vec<Row> {
     }
     let mut out = Vec::new();
     for m in machines {
-        let mut b = RowBuilder::new(format!("{prefix}-on:{m}"));
-        b.push(&format!("  {m}:"), Some(LABEL));
+        let mut line = vec![Piece::Text(format!("{m}:"), LABEL)];
         for c in &r.checks {
             let sel = selector_of(c);
             let Some(e) =
@@ -634,23 +747,15 @@ fn per_machine(prefix: &str, r: &Runs, pics: &mut Pics) -> Vec<Row> {
                 continue;
             };
             let ok = failing(&e.rows).next().is_none();
-            b.push("   ", None);
-            let start = b.pos();
-            if ok {
-                pics.put(&mut b, "check", "✓");
+            line.push(Piece::Text("  ".into(), LABEL));
+            line.push(if ok {
+                Piece::Icon("check", "✓", Chip::Ok.face())
             } else {
-                pics.put(&mut b, "x", "✗");
-            }
-            let end = b.pos();
-            let face = if ok {
-                Chip::Ok.face()
-            } else {
-                Chip::Err.face()
-            };
-            b.face(start, end, face);
-            b.push(" ", None).push(&c.name, Some(TEXT));
+                Piece::Icon("x", "✗", Chip::Err.face())
+            });
+            line.push(Piece::Text(format!(" {}", c.name), TEXT));
         }
-        out.push(b.finish());
+        out.push(line);
     }
     out
 }
@@ -660,23 +765,39 @@ fn short(tree: &str) -> &str {
     &tree[..tree.len().min(7)]
 }
 
-/// The merge batch: its heading with the affected groups' chip (green of listed at the combined tree), a row per
-/// member at the columns AT (its label and title, its tip, what the queue said to it), and its groups' runs per
-/// machine.
-fn batch_rows(
-    flow: &Flow,
-    at: &[u32],
-    env: &ViewEnv,
-    fonts: &dyn Measure,
-    pics: &mut Pics,
-) -> Vec<Row> {
-    let mut rows = Vec::new();
-    let mut bh = RowBuilder::new("batch");
-    pics.put(&mut bh, "git-merge", " ");
-    bh.push(" ", None)
-        .push(&format!("Merge batch → job/{}", flow.job), Some(HEAD));
+/// A batch member's note: what the queue SAID to it, with the job's task ids named by their labels (NAMES, id to
+/// label), and what the merge-notes check found on it (AUDITED).
+pub fn note(
+    said: Option<&str>,
+    audited: Option<&str>,
+    names: &[(String, String)],
+) -> Option<String> {
+    let said = said.map(|s| {
+        let mut ids: Vec<&(String, String)> = names.iter().collect();
+        // longest first, so an id never replaces the head of a longer one
+        ids.sort_by_key(|(id, _)| std::cmp::Reverse(id.len()));
+        let mut s = s.to_owned();
+        for (id, label) in ids {
+            s = s.replace(id.as_str(), label);
+        }
+        s
+    });
+    match (said, audited) {
+        (Some(s), Some(a)) => Some(format!("{s} · {a}")),
+        (s, a) => s.or_else(|| a.map(str::to_owned)),
+    }
+}
+
+/// The merge batch card's lines, its content CW px wide (FONTS measure): its heading with the affected groups' chip
+/// (green of listed at the combined tree), a line per member (its label and title, its tip, what the queue said to
+/// it), and its groups' runs per machine.
+fn batch_lines(flow: &Flow, cw: u32, fonts: &dyn Measure) -> Vec<Vec<Piece>> {
+    let mut head = vec![
+        Piece::Icon("git-merge", " ", LABEL),
+        Piece::Text(format!(" Merge batch → job/{}", flow.job), HEAD),
+    ];
     if flow.batch.is_empty() {
-        bh.push("  empty", Some(LABEL));
+        head.push(Piece::Text("  empty".into(), LABEL));
     }
     if let Some(g) = &flow.groups {
         let (green, red) = tally(g);
@@ -687,56 +808,48 @@ fn batch_rows(
         } else {
             Chip::Run
         };
-        bh.push("  ", None);
-        chip(
-            &mut bh,
-            pics,
+        head.push(Piece::Text("  ".into(), LABEL));
+        head.push(Piece::Chip(
             None,
-            &format!("affected groups {green}/{}", g.checks.len()),
+            format!("affected groups {green}/{}", g.checks.len()),
             face.face(),
-        );
+        ));
     }
-    rows.push(bh.finish());
-    let said_at = at[4];
-    for (i, m) in flow.batch.iter().enumerate() {
-        let mut b = RowBuilder::new(format!("batch:{i}"));
-        let label = format!("  {}  ", m.label);
-        let room = at[2].saturating_sub(text_px(fonts, &label) + dpx(env, 10.0));
-        b.push(&label, Some(TEXT))
-            .push(
-                &drgnx_rows::fit::fit(fonts, ROLE, &m.title, room as f32),
-                Some(LABEL),
-            )
-            .stop(at[2])
-            .push(&format!("tip {}", m.tip), Some(LABEL));
+    let mut out = vec![head];
+    let (tip_at, said_at) = (cw * 2 / 5, cw * 3 / 5);
+    let fit = |s: &str, px: u32| drgnx_rows::fit::fit(fonts, ROLE, s, px as f32);
+    for m in &flow.batch {
+        let label = format!("{}  ", m.label);
+        let room = tip_at.saturating_sub(text_px(fonts, &label) + 8);
+        let mut line = vec![
+            Piece::Text(label, TEXT),
+            Piece::Text(fit(&m.title, room), LABEL),
+            Piece::At(tip_at),
+            Piece::Text(format!("tip {}", m.tip), LABEL),
+        ];
         if let Some(said) = &m.said {
-            let room = env.width_px.saturating_sub(said_at);
-            b.stop(said_at).push(
-                &drgnx_rows::fit::fit(fonts, ROLE, said, room as f32),
-                Some(LABEL),
-            );
+            line.push(Piece::At(said_at));
+            line.push(Piece::Text(fit(said, cw.saturating_sub(said_at)), LABEL));
         }
-        rows.push(b.finish());
+        out.push(line);
     }
     if let Some(g) = &flow.groups {
-        rows.extend(per_machine("batch", g, pics));
+        out.extend(machine_lines(g));
     }
-    rows
+    out
 }
 
-/// The line gate (the pack's push gate): its heading with the tiers' chip at the line's head (green, how many of
-/// the tiers, or red), the tiers' runs per machine and the note that the push stays the user's; before any push was
-/// asked, the heading says so.
-fn line_rows(flow: &Flow, pics: &mut Pics) -> Vec<Row> {
-    let mut rows = Vec::new();
-    let mut h = RowBuilder::new("line");
-    pics.put(&mut h, "git-branch", " ");
-    h.push(" ", None)
-        .push(&format!("Line gate · push job/{}", flow.job), Some(HEAD));
+/// The line gate card's lines (the pack's push gate), its content CW px wide: its heading with the tiers' chip at the
+/// tree it judged (green, how many of the tiers, or red), the tiers' runs per machine and the note that the push
+/// stays the user's; before any push was asked, the heading says so.
+fn line_lines(flow: &Flow, cw: u32, fonts: &dyn Measure) -> Vec<Vec<Piece>> {
+    let mut head = vec![
+        Piece::Icon("git-branch", " ", LABEL),
+        Piece::Text(format!(" Line gate · push job/{}", flow.job), HEAD),
+    ];
     let Some(p) = &flow.push else {
-        h.push("  no push asked yet", Some(LABEL));
-        rows.push(h.finish());
-        return rows;
+        head.push(Piece::Text("  no push asked yet".into(), LABEL));
+        return vec![head];
     };
     let (green, red) = tally(p);
     let n = p.checks.len();
@@ -747,16 +860,108 @@ fn line_rows(flow: &Flow, pics: &mut Pics) -> Vec<Row> {
     } else {
         (Chip::Run, format!("{green}/{n} at {}", short(&p.at)))
     };
-    h.push("  ", None);
-    chip(&mut h, pics, None, &text, face.face());
-    rows.push(h.finish());
-    rows.extend(per_machine("line", p, pics));
-    let mut note = RowBuilder::new("line-note");
-    note.push(
-        "  Pushing needs you (push.ci, Ask): the gate only refuses an early push, and reuses runs keyed by tree.",
-        Some(LABEL),
-    );
-    rows.push(note.finish());
+    head.push(Piece::Text("  ".into(), LABEL));
+    head.push(Piece::Chip(None, text, face.face()));
+    let mut out = vec![head];
+    out.extend(machine_lines(p));
+    let note = "Pushing needs you (push.ci, Ask): the gate only refuses an early push.";
+    out.push(vec![Piece::Text(
+        drgnx_rows::fit::fit(fonts, ROLE, note, cw as f32),
+        LABEL,
+    )]);
+    out
+}
+
+/// FACE on a card: the text faces have card twins that carry its fill (one face per span: a fill run under the text's
+/// runs replaced their faces where the rows were inserted, so they never overlap); a chip keeps its own tint.
+fn on_card(face: &'static str) -> &'static str {
+    match face {
+        TEXT => CARD_TEXT,
+        LABEL => CARD_LABEL,
+        HEAD => CARD_HEAD,
+        f => f,
+    }
+}
+
+/// B's next piece starts at PX, the space up to it in the card's fill.
+fn card_gap(b: &mut RowBuilder, px: u32) {
+    let s = b.pos();
+    b.stop(px);
+    let e = b.pos();
+    b.face(s, e, CARD);
+}
+
+/// LINE of card ID drawn on B between X0 and X1 (device px), its content PAD in: the space before X0 bare, the card's
+/// span filled up to X1 (its gaps in [`CARD`], its text in the faces' card twins: [`on_card`]) and marked as the ring
+/// block ID (`BLOCK`: Glitnir draws the ring).
+fn put_line(
+    b: &mut RowBuilder,
+    pics: &mut Pics,
+    line: Vec<Piece>,
+    id: &str,
+    x0: u32,
+    x1: u32,
+    pad: u32,
+) {
+    if x0 > 0 {
+        b.stop(x0);
+    }
+    let start = b.pos();
+    card_gap(b, x0 + pad);
+    for p in line {
+        match p {
+            Piece::Text(t, f) => {
+                b.push(&t, Some(on_card(f)));
+            }
+            Piece::Icon(name, alt, f) => {
+                let s = b.pos();
+                pics.put(b, name, alt);
+                let e = b.pos();
+                b.face(s, e, on_card(f));
+            }
+            Piece::Chip(icon, t, f) => chip(b, pics, icon, &t, f),
+            Piece::At(px) => card_gap(b, x0 + pad + px),
+        }
+    }
+    card_gap(b, x1);
+    let end = b.pos();
+    b.prop(start, end, BLOCK, json!(["ring", id, x0, x1]));
+}
+
+/// The batch and line gate cards side by side under the tasks (the line gate only when the pack runs the push gate;
+/// else the batch's card spans the table), a row per line, keyed `cards:N`.
+fn card_rows(flow: &Flow, env: &ViewEnv, fonts: &dyn Measure, pics: &mut Pics) -> Vec<Row> {
+    let (w, gap, pad, edge) = (env.width_px, dpx(env, 10.0), dpx(env, 10.0), dpx(env, 2.0));
+    let line_on = flow.pack.as_ref().is_some_and(|p| p.on("push-gate"));
+    let right_x1 = w.saturating_sub(edge);
+    let (left_x1, right_x0) = if line_on {
+        (w / 2 - gap / 2, w / 2 + gap / 2)
+    } else {
+        (right_x1, right_x1)
+    };
+    let cw = |x0: u32, x1: u32| x1.saturating_sub(x0 + 2 * pad);
+    let mut left = batch_lines(flow, cw(0, left_x1), fonts).into_iter();
+    let mut right = if line_on {
+        line_lines(flow, cw(right_x0, right_x1), fonts)
+    } else {
+        Vec::new()
+    }
+    .into_iter();
+    let mut rows = Vec::new();
+    for i in 0.. {
+        let (l, r) = (left.next(), right.next());
+        if l.is_none() && r.is_none() {
+            break;
+        }
+        let mut b = RowBuilder::new(format!("cards:{i}"));
+        if let Some(l) = l {
+            put_line(&mut b, pics, l, "batch", 0, left_x1, pad);
+        }
+        if let Some(r) = r {
+            put_line(&mut b, pics, r, "line", right_x0, right_x1, pad);
+        }
+        rows.push(b.finish());
+    }
     rows
 }
 
@@ -1158,6 +1363,8 @@ mod tests {
             }],
             groups: None,
             push: None,
+            machines: vec![],
+            cost: None,
         }
     }
 
@@ -1227,6 +1434,30 @@ mod tests {
         }
     }
 
+    /// [D] A member's note names the job's tasks by their labels, and adds what the merge-notes check found.
+    #[test]
+    fn a_members_note_names_tasks_by_label_and_adds_the_audit() {
+        let names = [("j#1", "T1"), ("j#10", "T10")].map(|(a, b)| (a.to_string(), b.to_string()));
+        assert_eq!(
+            note(Some("j#10 merges first"), None, &names).as_deref(),
+            Some("T10 merges first")
+        );
+        assert_eq!(
+            note(Some("waits for the batch ahead (j#1, j#10)"), None, &names).as_deref(),
+            Some("waits for the batch ahead (T1, T10)")
+        );
+        assert_eq!(
+            note(
+                Some("trial merge clean"),
+                Some("1 hunk by intent · notes"),
+                &names
+            )
+            .as_deref(),
+            Some("trial merge clean · 1 hunk by intent · notes")
+        );
+        assert_eq!(note(None, None, &names), None);
+    }
+
     /// [D] The batch and the line gate: the batch's heading with its affected groups' chip (green of listed at the
     /// combined tree), a row per member (its tip, title and what the queue said to it), a row per machine with each
     /// group's tick; the line gate's heading with its tiers' chip at the line's head, a row per machine, and a note
@@ -1257,55 +1488,113 @@ mod tests {
                 run_of(&gui, "L", "desktop", true),
             ],
         });
-        let (rows, _) = flow_rows(&f, &env(1.0), &fonts());
+        let e = env(1.0);
+        let (rows, _) = flow_rows(&f, &e, &fonts());
         let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
-        let tail: Vec<&str> = keys[keys.iter().position(|k| *k == "batch").unwrap()..].to_vec();
-        assert_eq!(
-            tail,
-            [
-                "batch",
-                "batch:0",
-                "batch-on:desktop",
-                "batch-on:mac-mini",
-                "gap2",
-                "line",
-                "line-on:desktop",
-                "line-note"
-            ]
-        );
+        let tail: Vec<&str> = keys[keys.iter().position(|k| *k == "gap").unwrap() + 1..].to_vec();
+        // the two cards side by side: the batch's 4 lines (heading, a member, 2 machines), the line gate's 3
+        assert_eq!(tail, ["cards:0", "cards:1", "cards:2", "cards:3"]);
         let row = |k: &str| rows.iter().find(|r| r.key == k).unwrap();
-        assert!(row("batch").text.contains("affected groups 1/2"));
-        assert!(row("batch").runs.iter().any(|r| r.2 == Chip::Err.face()));
-        let m = &row("batch:0").text;
-        assert!(m.contains("T2") && m.contains("7d21c0e") && m.contains("trial merge clean"));
+        let text: Vec<&str> = tail.iter().map(|k| row(k).text.as_str()).collect();
+        assert!(text[0].contains("Merge batch") && text[0].contains("affected groups 1/2"));
         assert!(
-            row("batch-on:desktop").text.contains("desktop")
-                && row("batch-on:desktop").text.contains("unit")
-        );
-        assert!(row("batch-on:mac-mini").text.contains("gui"));
-        assert!(
-            row("line").text.contains("green on L"),
+            text[0].contains("Line gate") && text[0].contains("green on L"),
             "{}",
-            row("line").text
+            text[0]
         );
-        assert!(row("line").runs.iter().any(|r| r.2 == Chip::Ok.face()));
-        assert!(row("line-note").text.contains("Pushing needs you"));
-        // no push gate in the pack: no line gate
+        assert!(row("cards:0").runs.iter().any(|r| r.2 == Chip::Err.face()));
+        assert!(row("cards:0").runs.iter().any(|r| r.2 == Chip::Ok.face()));
+        assert!(
+            text[1].contains("T2")
+                && text[1].contains("7d21c0e")
+                && text[1].contains("trial merge clean")
+        );
+        assert!(
+            text[1].contains("desktop") && text[1].contains("unit"),
+            "{}",
+            text[1]
+        );
+        // the batch's machines on its lines 3 and 4 (the line gate's note beside the first)
+        assert!(
+            text[2].contains("desktop:") && text[2].contains("Pushing needs you"),
+            "{}",
+            text[2]
+        );
+        assert!(
+            text[3].contains("mac-mini") && text[3].contains("gui"),
+            "{}",
+            text[3]
+        );
+        assert!(text.iter().any(|t| t.contains("Pushing needs you")));
+        // each card is a ring block on every one of its rows (Glitnir's `glitnir-blocks`), the batch on the left
+        // half and the line gate on the right, its rows filled to its edge in the card's face
+        let blocks = |r: &Row| -> Vec<Value> {
+            r.props
+                .iter()
+                .filter(|p| p.2 == BLOCK)
+                .map(|p| p.3.clone())
+                .collect()
+        };
+        let half = e.width_px / 2;
+        for k in &tail[..3] {
+            let b = blocks(row(k));
+            assert!(
+                b.iter().any(|v| v[0] == "ring"
+                    && v[1] == "batch"
+                    && v[2] == 0
+                    && v[3].as_u64().unwrap() < u64::from(half)),
+                "{k}: {b:?}"
+            );
+            assert!(
+                b.iter().any(|v| v[0] == "ring"
+                    && v[1] == "line"
+                    && v[2].as_u64().unwrap() > u64::from(half)),
+                "{k}: {b:?}"
+            );
+            assert!(row(k).runs.iter().any(|r| r.2 == CARD), "{k}");
+            // one face per span: a fill under text would replace its face where the rows are inserted
+            let mut runs = row(k).runs.clone();
+            runs.sort();
+            assert!(runs.windows(2).all(|w| w[0].1 <= w[1].0), "{k}: {runs:?}");
+            assert!(
+                row(k)
+                    .runs
+                    .iter()
+                    .any(|r| r.2 == CARD_TEXT || r.2 == CARD_HEAD)
+            );
+        }
+        // the batch's 4th line: the line gate has none there, so only the batch's ring
+        assert_eq!(blocks(row("cards:3")).len(), 1);
+        // the headings and every task row carry a rule (a hairline under the row, across the table)
+        for k in ["cols", "task:task:J#1", "task:task:J#5", "task:task:J#8"] {
+            let b = blocks(row(k));
+            assert!(
+                b.iter().any(|v| v[0] == "rule" && v[1] == k && v[2] == 0),
+                "{k}: {b:?}"
+            );
+        }
+        // no push gate in the pack: no line gate, the batch's card across the table
         let mut g = f.clone();
         g.pack
             .as_mut()
             .unwrap()
             .rules
             .retain(|r| r.id != "push-gate");
-        let (rows, _) = flow_rows(&g, &env(1.0), &fonts());
-        assert!(!rows.iter().any(|r| r.key.starts_with("line")));
+        let (rows, _) = flow_rows(&g, &e, &fonts());
+        assert!(!rows.iter().any(|r| r.text.contains("Line gate")));
+        let c0 = rows.iter().find(|r| r.key == "cards:0").unwrap();
+        assert!(
+            blocks(c0)
+                .iter()
+                .any(|v| v[1] == "batch" && v[3].as_u64().unwrap() > u64::from(half))
+        );
         // a push gate with no push asked yet says so
         let mut h = f.clone();
         h.push = None;
-        let (rows, _) = flow_rows(&h, &env(1.0), &fonts());
+        let (rows, _) = flow_rows(&h, &e, &fonts());
         assert!(
             rows.iter()
-                .any(|r| r.key == "line" && r.text.contains("no push asked"))
+                .any(|r| r.key == "cards:0" && r.text.contains("no push asked"))
         );
     }
 
@@ -1373,8 +1662,8 @@ mod tests {
                     "task:task:J#5",
                     "task:task:J#8",
                     "gap",
-                    "batch",
-                    "batch:0",
+                    "cards:0",
+                    "cards:1",
                 ]
             );
             assert!(
@@ -1437,6 +1726,107 @@ mod tests {
         };
         // no held task: no needs-you row
         assert_eq!(flow_rows(&empty, &env(1.0), &fonts()).0[2].key, "none");
+    }
+
+    /// [D] The strip under the run's line: a chip per held task with its jump key's badge (`g 1` …), the push the line
+    /// gate leaves to the user once it is green, and at the window's right edge the run's cost against its budget and
+    /// each machine's load, with a server icon.
+    #[test]
+    fn the_strip_says_what_needs_you_and_the_machines_load() {
+        let unit = check("unit");
+        for scale in [1.0, 2.0] {
+            let f = Flow {
+                push: Some(Runs {
+                    at: "9c41e07a".into(),
+                    checks: vec![unit.clone()],
+                    evidence: vec![run_of(&unit, "9c41e07a", "desktop", true)],
+                }),
+                machines: vec![("desk".into(), 4, 6), ("mac-mini".into(), 1, 2)],
+                cost: Some((6.2, Some(18.0))),
+                ..flow()
+            };
+            let e = env(scale);
+            let (rows, _) = flow_rows(&f, &e, &fonts());
+            let strip = &rows[1];
+            assert_eq!(strip.key, "needs");
+            assert!(strip.text.contains("T5 held: no red"), "{}", strip.text);
+            assert!(
+                strip.text.contains("push job/J? gate green"),
+                "{}",
+                strip.text
+            );
+            assert!(strip.text.contains("$6.20 / $18"), "{}", strip.text);
+            assert!(strip.text.contains("desk 4/6") && strip.text.contains("mac-mini 1/2"));
+            // the held chip's key badge in the key face
+            let g1 = strip.text[..strip.text.find("g1").expect("g1")]
+                .chars()
+                .count() as u32;
+            assert!(
+                strip
+                    .runs
+                    .iter()
+                    .any(|r| r.0 <= g1 && g1 < r.1 && r.2 == KEY),
+                "{:?}",
+                strip.runs
+            );
+            // a server icon per machine, and the right part starts past the window's middle, ending inside it
+            // two flags (the held task, the push) and two servers
+            assert!(strip.images.len() >= 4, "{:?}", strip.images);
+            let stop = strip.stops.last().expect("a stop").1;
+            assert!(stop > e.width_px / 2 && stop < e.width_px, "{stop}");
+        }
+        // a narrow window: the held reasons give way (ellipsis), the push's words stay whole, and the left part ends
+        // before the right part's stop
+        let mut f = Flow {
+            push: Some(Runs {
+                at: "9c41e07a".into(),
+                checks: vec![unit.clone()],
+                evidence: vec![run_of(&unit, "9c41e07a", "desktop", true)],
+            }),
+            machines: vec![("desk".into(), 4, 6), ("mac-mini".into(), 1, 2)],
+            cost: Some((6.2, Some(18.0))),
+            ..flow()
+        };
+        f.tasks[1].held =
+            Some("the gates hold the merge: no red for its test commit, so it waits".into());
+        let mut e = env(1.0);
+        e.width_px = 900;
+        let fs = fonts();
+        let (rows, _) = flow_rows(&f, &e, &fs);
+        let strip = &rows[1];
+        assert!(
+            strip.text.contains("push job/J? gate green"),
+            "{}",
+            strip.text
+        );
+        assert!(strip.text.contains('…'), "{}", strip.text);
+        let (at, stop) = *strip.stops.last().expect("a stop");
+        let left: String = strip.text.chars().take(at as usize).collect();
+        let icons = strip.images.iter().filter(|i| i.0 < at).count() as u32;
+        let px = text_px(&fs, &left) + icons * dpx(&e, 14.0);
+        assert!(px <= stop, "{px} > {stop}: {left}");
+        // narrower still: the cost and the machines give way to what needs you
+        e.width_px = 400;
+        let (rows, _) = flow_rows(&f, &e, &fs);
+        let strip = &rows[1];
+        assert!(
+            strip.stops.is_empty() && !strip.text.contains("desk 4/6"),
+            "{}",
+            strip.text
+        );
+        assert!(
+            strip.text.contains("push job/J? gate green"),
+            "{}",
+            strip.text
+        );
+        // a push gate not green yet: no push chip; no budget: the cost alone
+        let f = Flow {
+            cost: Some((1.5, None)),
+            ..flow()
+        };
+        let strip = &flow_rows(&f, &env(1.0), &fonts()).0[1];
+        assert!(!strip.text.contains("push job/"));
+        assert!(strip.text.contains("$1.50") && !strip.text.contains(" / $"));
     }
 
     /// [D] The Rules tile: its heading, the columns, a row per rule (its words, its kind as a chip, how the hub holds
