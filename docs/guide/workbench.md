@@ -19,7 +19,9 @@ indent for each level; on a terminal the plain `▾ ▸` stay. A git mark sits a
 is the same on every row (worked out in pixels, kept in columns, so a terminal showing the same Explorer keeps it and the
 `⋯` off its last two columns, whichever frame drew the rows): `M` and `R` in the warning colour, `U` and `A` in the success colour, `D` and conflicts in the
 failure colour, and `●` on a folder with changes. A `⋯` follows it in the Explorer, a `×` (close) in the Buffers panel,
-where a file with unsaved changes shows `●` there instead, always. The `⋯` and the `×`
+where a file with unsaved changes shows `●` there instead; on Nidhogg the `●` becomes the `×` while the pointer is on
+its row, as VS Code's does (Nidhogg's mouse sensors; elsewhere the `●` stays, and a click on it closes the file too).
+The `⋯` and the `×`
 are drawn in the row's own colour, so it is invisible, until the pointer is on the row, the row at point's too;
 every row on a terminal shows it. The row at point is the selection: in the selection colour while the panel
 has the focus, inside a 1-pixel ring of the focus colour where Glitnir draws (Nidhogg), and the inactive selection (`drgnx-selected-inactive`, a clearly visible grey) while another window
