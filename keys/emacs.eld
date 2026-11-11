@@ -310,6 +310,7 @@
         (buffers-diff :none "in the palette")
         (scm-blame :none "C-x v g (stock)")
         (terminal-new :none "in the palette")
+        (terminal-toggle :none "in the palette")
         (explorer-terminal-here :none "the Explorer's right-click menu")
         (terminal-toggle-mouse :none "the palette")
         (terminal-check :none "the palette")

@@ -35,8 +35,11 @@
                                  (derived-mode-p 'drgnx-explorer-mode)))
     ;; C-`: the panel, its tab row with the Terminal tab
     (should-not (drgnx-tty-session-eval s `(drgnx-wb-area-window 'panel ,frame)))
+    ;; a terminal tab with a buffer of its own: Toggle Terminal shows it and starts no shell, which would take the keys after
+    (drgnx-tty-session-eval s `(with-selected-frame ,frame (drgnx-wb-area-show 'panel 'terminal (get-buffer-create "*terminal*"))
+                                                    (drgnx-wb-area-hide 'panel)))
     (drgnx-tty-session-key c "C-`" caps)
-    (drgnx-tty-keys-test--ran s 'drgnx-wb-toggle-panel "C-`")
+    (drgnx-tty-keys-test--ran s 'drgnx-terminal-toggle "C-`")
     (drgnx-tty-session-wait s `(drgnx-wb-area-window 'panel ,frame))
     (drgnx-tty-session-wait-screen c "Problems +Output +Results +Terminal" 10)
     ;; C-.: the code actions (Quick Fix)

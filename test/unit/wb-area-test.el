@@ -70,6 +70,33 @@
      (should (= h (window-pixel-height (drgnx-wb-area-window 'panel))))
      (should (= wd (window-pixel-width (drgnx-wb-area-window 'right)))))))
 
+(ert-deftest drgnx-area/a-tab-toggle-shows-its-tab-or-hides-the-area ()
+  "VS Code's Ctrl+` (`drgnx-terminal-toggle'): the Terminal tab is shown and selected, a terminal started when it
+has none; pressed again while it shows, the panel hides; from another tab it switches."
+  (drgnx-area-test--with
+   (let ((started 0) (editor (selected-window)))
+     (cl-labels ((start () (cl-incf started) (pop-to-buffer (get-buffer-create "*terminal*")))
+                 (toggle () (drgnx-wb-area-toggle-tab 'panel 'terminal (lambda () (start)))))
+       (unwind-protect
+           (progn
+             (toggle)                                         ; no terminal yet: one is started in the tab
+             (should (= started 1))
+             (should (eq (drgnx-wb-area-tab 'panel) 'terminal))
+             (should (eq (window-buffer (drgnx-wb-area-window 'panel)) (get-buffer "*terminal*")))
+             (should (eq (selected-window) (drgnx-wb-area-window 'panel)))
+             (select-window editor)
+             (toggle)                                         ; the tab shows: the panel hides
+             (should-not (drgnx-wb-area-window 'panel))
+             (toggle)                                         ; its terminal again, none started
+             (should (= started 1))
+             (should (eq (window-buffer (drgnx-wb-area-window 'panel)) (get-buffer "*terminal*")))
+             (should (eq (selected-window) (drgnx-wb-area-window 'panel)))
+             (drgnx-wb-area-show 'panel 'output)
+             (toggle)                                         ; another tab shows: switch, don't hide
+             (should (eq (drgnx-wb-area-tab 'panel) 'terminal))
+             (should (drgnx-wb-area-window 'panel)))
+         (when (get-buffer "*terminal*") (kill-buffer "*terminal*")))))))
+
 (ert-deftest drgnx-area/killing-the-shown-buffer-shows-the-placeholder ()
   (drgnx-area-test--with
    (describe-function 'car)
