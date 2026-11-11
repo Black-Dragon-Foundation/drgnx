@@ -1273,6 +1273,14 @@ pub enum FindQuery {
     },
     /// A question about what the code does (Hrafn's hybrid query).
     Meaning { question: String },
+    /// A code pattern with metavariables (`$A` one node, `$$$A` any number, `$_` one unnamed; ast-grep's syntax),
+    /// matched in each file's syntax tree (`hrafn::structural`). LANG (Hrafn's name: `rust`, `elisp`, …) narrows to
+    /// one language's files; none is every language the pattern parses in.
+    Pattern {
+        pattern: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lang: Option<String>,
+    },
 }
 
 impl FindQuery {
@@ -1282,6 +1290,7 @@ impl FindQuery {
             FindQuery::Text { text, .. } => text,
             FindQuery::Symbol { name, .. } => name,
             FindQuery::Meaning { question } => question,
+            FindQuery::Pattern { pattern, .. } => pattern,
         }
     }
 }

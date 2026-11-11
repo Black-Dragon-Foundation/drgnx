@@ -925,6 +925,82 @@ with context labels and 10 without, alternating, after one of each to warm up."
       t))
   "The `search-context' workload's session side (with the replace workloads' and the hub's).")
 
+(defconst drgnx-perf-run--search-pattern-form
+  (prin1-to-string
+   '(progn
+      (defvar drgnx-perf--pt nil "The running search: [START RESET FIRST DONE], `float-time's (as search-context's).")
+      (defvar drgnx-perf--pt-dir nil "The directory of the 1,000 Rust files.")
+      (defun drgnx-perf--pt-up ()
+        "1,000 Rust files of 10 functions of 10 lines calling `other(2, x)'; in every tenth file each function's first
+line calls `needle(1, x)' instead (1,000 matches in 100 files)."
+        (setq drgnx-perf--pt-dir (make-temp-file "drgnx-perf-pat" t))
+        (let ((text (lambda (call)
+                      (apply #'concat (mapcar (lambda (i) (concat (format "fn f%d() {\n" i)
+                                                                  (format "    let y = %s;\n" call)
+                                                                  (apply #'concat (make-list 9 "    let y = other(2, x);\n"))
+                                                                  "}\n\n"))
+                                              (number-sequence 0 9))))))
+          (let ((hit (funcall text "needle(1, x)")) (miss (funcall text "other(2, x)")))
+            (dotimes (i 1000)
+              (with-temp-file (expand-file-name (format "f%04d.rs" i) drgnx-perf--pt-dir)
+                (insert (if (zerop (% i 10)) hit miss))))))
+        (let ((editor (selected-window)))
+          (drgnx-replace--open :text "needle($A, $B)"
+                               :origin (with-current-buffer (find-file-noselect (expand-file-name "f0000.rs" drgnx-perf--pt-dir))
+                                         (point-min-marker)))
+          (select-window editor))
+        (with-current-buffer (drgnx-perf--replace-view)
+          (drgnx-replace--set-pattern t))
+        (advice-add 'drgnx-view-apply-patch :before #'drgnx-perf--pt-patch)
+        (advice-add 'drgnx-replace--rows-boxes :after #'drgnx-perf--pt-drawn)
+        (advice-add 'drgnx-replace--hub-event :after #'drgnx-perf--pt-done)
+        t)
+      (defun drgnx-perf--pt-patch (patch)
+        (when-let* ((r drgnx-perf--pt) ((null (aref r 1))) ((equal (plist-get patch :view) drgnx-replace-view))
+                    ((drgnx-view-patch--reset-p patch)))
+          (aset r 1 (float-time))))
+      (defun drgnx-perf--pt-drawn (&rest _)
+        (when-let* ((r drgnx-perf--pt) ((aref r 1)) ((null (aref r 2)))
+                    ((> (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)) 0)))
+          (aset r 2 (float-time))))
+      (defun drgnx-perf--pt-done (event data)
+        (when-let* (((equal event "search-run-done")) ((equal (plist-get data :view) drgnx-replace-view))
+                    ((eql 1000 (plist-get data :matches))) (r drgnx-perf--pt) ((aref r 1)) ((null (aref r 3))))
+          (aset r 3 (float-time))))
+      (defun drgnx-perf--pt-once (pattern)
+        "One Pattern search of PATTERN (1,000 matches): (FIRST-MS DONE-MS), from the search's start."
+        (let ((v (drgnx-perf--replace-view)))
+          (setq drgnx-perf--pt (vector (float-time) nil nil nil))
+          (with-current-buffer v
+            (drgnx-replace--fill 'find pattern)
+            (drgnx-replace--search-now))
+          (unless (drgnx-perf--wait 60 (lambda () (and (aref drgnx-perf--pt 2) (aref drgnx-perf--pt 3)
+                                                       (with-current-buffer v (not (drgnx-replace--busy-p))))))
+            (error "Premise: the Pattern search %S did not draw rows and list 1,000 matches (%S)" pattern drgnx-perf--pt))
+          (let ((r drgnx-perf--pt))
+            (list (* 1000 (- (aref r 2) (aref r 0))) (* 1000 (- (max (aref r 2) (aref r 3)) (aref r 0)))))))
+      (defun drgnx-perf--pt-measure ()
+        "(:first_ms :done_ms STATS) of 100 searches of `needle($A, $B)' (its name narrows the files to 100), and
+(:meta_first_ms :meta_done_ms) of 5 of `$F(1, x)' (no name: all 1,000 files parsed; reported), after one of each."
+        (drgnx-perf--pt-once "needle($A, $B)")
+        (drgnx-perf--pt-once "$F(1, x)")
+        (let (lit meta)
+          (dotimes (_ 100) (push (drgnx-perf--pt-once "needle($A, $B)") lit))
+          (dotimes (_ 5) (push (drgnx-perf--pt-once "$F(1, x)") meta))
+          (let ((st (lambda (xs i) (mapcar #'drgnx-perf--round (drgnx-perf-stats (mapcar (lambda (x) (nth i x)) xs))))))
+            (list :first_ms (funcall st lit 0) :done_ms (funcall st lit 1)
+                  :meta_first_ms (funcall st meta 0) :meta_done_ms (funcall st meta 1)))))
+      (defun drgnx-perf--pt-down ()
+        (advice-remove 'drgnx-view-apply-patch #'drgnx-perf--pt-patch)
+        (advice-remove 'drgnx-replace--rows-boxes #'drgnx-perf--pt-drawn)
+        (advice-remove 'drgnx-replace--hub-event #'drgnx-perf--pt-done)
+        (dolist (b (buffer-list))
+          (when (and drgnx-perf--pt-dir (buffer-file-name b) (string-prefix-p drgnx-perf--pt-dir (buffer-file-name b)))
+            (kill-buffer b)))
+        (when drgnx-perf--pt-dir (delete-directory drgnx-perf--pt-dir t)))
+      t))
+  "The `search-pattern' workload's session side (with the replace workloads' and the hub's).")
+
 (defconst drgnx-perf-run--search-lists-form
   (prin1-to-string
    '(progn
@@ -1463,6 +1539,14 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                        " " drgnx-perf-run--search-context-form " (drgnx-perf--cx-up))")
        :measure "(drgnx-perf--cx-measure)"
        :teardown ,(concat "(progn (drgnx-perf--cx-down) (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
+      ;; the Search view's Pattern toggle: `needle($A, $B)' over 1,000 Rust files whose name narrows them to 100
+      ;; (1,000 matches), 100 times (a p95 needs 100); a metavariables-only pattern over all 1,000, reported (search
+      ;; view plan A6)
+      (search-pattern
+       :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) " (drgnx-perf-run--replace-setup-form)
+                       " " drgnx-perf-run--search-pattern-form " (drgnx-perf--pt-up))")
+       :measure "(drgnx-perf--pt-measure)"
+       :teardown ,(concat "(progn (drgnx-perf--pt-down) (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
       ;; the empty Search view's saved and recent searches: 100 saved (10 pinned) and 50 recent, drawn 100 times
       (search-lists
        :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) " (drgnx-perf-run--replace-setup-form)

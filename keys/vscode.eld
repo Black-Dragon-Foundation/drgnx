@@ -450,6 +450,8 @@
         (search-mode-text :none "in the palette (M-1… is Focus Group)")
         (search-mode-symbol :none "in the palette (M-1… is Focus Group)")
         (search-mode-meaning :none "in the palette (M-1… is Focus Group)")
+        (search-toggle-pattern :none "in the palette; the {} toggle")
+        (search-pattern-language :none "in the palette; the language chip under Find")
         (search-scope-next "M-s" :map (drgnx-replace . drgnx-replace-keys-map))
         (search-history-prev "<up>" :map (drgnx-replace . drgnx-replace-find-keys-map))
         (search-history-next "<down>" :map (drgnx-replace . drgnx-replace-find-keys-map))

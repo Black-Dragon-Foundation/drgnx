@@ -634,7 +634,7 @@ own keys under its prefixes, made again after each apply of the keys).  The undo
 
 (defun drgnx-replace--button-face (name)
   "The face of button NAME: on or off, for toggles and scopes."
-  (cond ((memq name '(:symbol :case :word :regexp :lines))
+  (cond ((memq name '(:symbol :case :word :regexp :pattern :lines))
          (if (drgnx-replace--opt name) 'drgnx-replace-on 'drgnx-replace-dim))
         ((assq name drgnx-replace--scopes) (if (eq (drgnx-replace--opt :scope) name) 'drgnx-replace-on 'drgnx-replace-dim))
         (t 'widget-button)))
@@ -647,9 +647,12 @@ own keys under its prefixes, made again after each apply of the keys).  The undo
       (save-excursion (widget-value-set w (widget-value w))))))
 
 (defun drgnx-replace--insert-toggles (&optional symbol)
-  "The Aa, ab and .* toggles; with SYMBOL (the find bar) the ⟨⟩ Symbol toggle before them."
+  "The Aa, ab and .* toggles; with SYMBOL (the find bar) the ⟨⟩ Symbol toggle before them, else (the view) the {}
+Pattern toggle after them."
   (pcase-dolist (`(,name ,label ,help) `(,@(and symbol '((:symbol "⟨⟩ Symbol" "Rename the symbol: the language server's edits")))
-                                         (:case "Aa" "Match case") (:word "ab" "Whole word") (:regexp ".*" "Regular expression")))
+                                         (:case "Aa" "Match case") (:word "ab" "Whole word") (:regexp ".*" "Regular expression")
+                                         ,@(and (not symbol)
+                                                '((:pattern "{}" "Pattern: code with $A (one node) and $$$A (any number)")))))
     (drgnx-replace--insert-button name label help (lambda () (drgnx-replace--toggle name)))))
 
 (defconst drgnx-replace--modes
@@ -657,22 +660,87 @@ own keys under its prefixes, made again after each apply of the keys).  The undo
     (meaning "Meaning" "describe what the code does"))
   "The Search view's modes, in the chip's order: (MODE LABEL HINT); HINT says what to type in Find.")
 
+(defun drgnx-replace--pattern-p ()
+  "Non-nil when Find is a code pattern: Text mode with {} on."
+  (and (drgnx-replace--opt :pattern) (eq (drgnx-replace--opt :mode) 'text) (not (drgnx-replace--opt :symbol))))
+
 (defun drgnx-replace--chip-label ()
-  "The mode chip's text: the mode, or Rename while the view shows the language server's edits."
-  (format "%-7s" (if (drgnx-replace--opt :symbol) "Rename"
-                   (nth 1 (assq (drgnx-replace--opt :mode) drgnx-replace--modes)))))
+  "The mode chip's text: the mode, Pattern while {} is on, or Rename while the view shows the language server's edits."
+  (format "%-7s" (cond ((drgnx-replace--opt :symbol) "Rename")
+                       ((drgnx-replace--pattern-p) "Pattern")
+                       (t (nth 1 (assq (drgnx-replace--opt :mode) drgnx-replace--modes))))))
 
 (defun drgnx-replace--hint ()
   "What to type in Find, for the view's mode."
-  (if (drgnx-replace--opt :symbol) "" (or (nth 2 (assq (drgnx-replace--opt :mode) drgnx-replace--modes)) "")))
+  (cond ((drgnx-replace--opt :symbol) "")
+        ((drgnx-replace--pattern-p) "code with $A for one node, $$$A for any number")
+        (t (or (nth 2 (assq (drgnx-replace--opt :mode) drgnx-replace--modes)) ""))))
+
+(defconst drgnx-replace--pattern-langs
+  '(("el" . "elisp") ("rs" . "rust") ("c" . "c") ("h" . "c") ("sh" . "shell") ("bash" . "shell") ("zsh" . "shell")
+    ("py" . "python") ("pyi" . "python") ("js" . "javascript") ("mjs" . "javascript") ("cjs" . "javascript")
+    ("jsx" . "javascript") ("ts" . "typescript") ("mts" . "typescript") ("cts" . "typescript") ("tsx" . "tsx")
+    ("go" . "go") ("java" . "java"))
+  "File extension → the language a Pattern search parses it as (Hrafn's names, the languages with a grammar).")
+
+(defun drgnx-replace--pattern-lang-of (file)
+  "The Pattern language of FILE (by its extension), or nil."
+  (and file (cdr (assoc (file-name-extension file) drgnx-replace--pattern-langs))))
+
+(defun drgnx-replace--set-pattern (on)
+  "Turn {} ON or off (on: .* off, the language the origin file's unless one was chosen); redraw what it changes."
+  (setq drgnx-replace--opts (plist-put drgnx-replace--opts :pattern on))
+  (when on
+    (setq drgnx-replace--opts (plist-put drgnx-replace--opts :regexp nil))
+    (unless (drgnx-replace--opt :lang)
+      (setq drgnx-replace--opts (plist-put drgnx-replace--opts :lang
+                                           (drgnx-replace--pattern-lang-of (drgnx-replace--origin-file))))))
+  (drgnx-replace--restyle :pattern)
+  (drgnx-replace--restyle :regexp)
+  (drgnx-replace--apply-mode))
+
+(defun drgnx-replace--set-regexp (on)
+  "Turn .* ON or off (on: {} off)."
+  (setq drgnx-replace--opts (plist-put drgnx-replace--opts :regexp on))
+  (when (and on (drgnx-replace--opt :pattern)) (drgnx-replace--set-pattern nil))
+  (drgnx-replace--restyle :regexp))
+
+(defun drgnx-replace-search-toggle-pattern ()
+  "Turn the Search view's {} Pattern toggle on or off: Find as code with metavariables, and search again."
+  (interactive)
+  (with-current-buffer (drgnx-replace--live-view)
+    (drgnx-replace--set-pattern (not (drgnx-replace--opt :pattern)))
+    (drgnx-replace--requery)))
+
+(defun drgnx-replace-search-pattern-language (lang)
+  "The language of the Search view's Pattern search: LANG (asked), `any' for every language with a grammar."
+  (interactive (list (completing-read "Pattern language: "
+                                      (cons "any" (delete-dups (mapcar #'cdr drgnx-replace--pattern-langs)))
+                                      nil t)))
+  (with-current-buffer (drgnx-replace--live-view)
+    (setq drgnx-replace--opts (plist-put drgnx-replace--opts :lang (unless (equal lang "any") lang)))
+    (drgnx-replace--search-now)))
+
+(defun drgnx-replace--pattern-line ()
+  "With {} on, the language chip and a newline (the chip chooses another), else \"\"."
+  (if (not (drgnx-replace--pattern-p)) ""
+    (let ((lang (or (drgnx-replace--opt :lang) "any")))
+      (with-temp-buffer
+        (insert (propertize "Pattern " 'face 'drgnx-text-subtle))
+        (insert-text-button (concat lang " ▾") 'face 'drgnx-replace-on 'follow-link t
+                            'help-echo "The pattern's language (any: each file's own)"
+                            'action (lambda (_) (call-interactively #'drgnx-replace-search-pattern-language)))
+        (insert "\n")
+        (buffer-string)))))
 
 (defun drgnx-replace--apply-mode ()
   "Name the mode on the chip and grey out what it does not use: Symbol and Meaning are read-only (no replace field,
 no globs; Symbol keeps Aa); Rename (the language server's edits) keeps the replace field only."
-  (let ((off (cond ((drgnx-replace--opt :symbol) '(include exclude :case :word :regexp))
-                   ((eq (drgnx-replace--opt :mode) 'symbol) '(replace include exclude :word :regexp))
-                   ((eq (drgnx-replace--opt :mode) 'meaning) '(replace include exclude :case :word :regexp)))))
-    (dolist (name '(replace include exclude :case :word :regexp))
+  (let ((off (cond ((drgnx-replace--opt :symbol) '(include exclude :case :word :regexp :pattern))
+                   ((drgnx-replace--pattern-p) '(replace :case :word))
+                   ((eq (drgnx-replace--opt :mode) 'symbol) '(replace include exclude :word :regexp :pattern))
+                   ((eq (drgnx-replace--opt :mode) 'meaning) '(replace include exclude :case :word :regexp :pattern)))))
+    (dolist (name '(replace include exclude :case :word :regexp :pattern))
       (when-let* ((w (drgnx-replace--widget name)))
         (let ((buffer-undo-list t)) (widget-apply w (if (memq name off) :deactivate :activate)))))
     (when-let* ((w (drgnx-replace--widget 'mode)))
@@ -724,7 +792,8 @@ no globs; Symbol keeps Aa); Rename (the language server's edits) keeps the repla
 
 (defun drgnx-replace--check-writable ()
   "A user error in a mode that finds without replacing (Symbol, Meaning)."
-  (when (and (not (drgnx-replace--opt :symbol)) (memq (drgnx-replace--opt :mode) '(symbol meaning)))
+  (when (and (not (drgnx-replace--opt :symbol))
+             (or (memq (drgnx-replace--opt :mode) '(symbol meaning)) (drgnx-replace--pattern-p)))
     (user-error "%s searches only find: Text mode replaces" (string-trim (drgnx-replace--chip-label)))))
 
 (defun drgnx-replace--mode-command (mode)
@@ -758,10 +827,12 @@ no globs; Symbol keeps Aa); Rename (the language server's edits) keeps the repla
   "Turn the toggle NAME (:symbol :case :word :regexp) on or off, and search again.  A greyed-out toggle stays."
   (let ((w (drgnx-replace--widget name)))
     (when (and w (widget-apply w :active))
-      (if (eq name :symbol)
-          (drgnx-replace--set-symbol (not (drgnx-replace--opt :symbol)))
-        (setq drgnx-replace--opts (plist-put drgnx-replace--opts name (not (drgnx-replace--opt name))))
-        (drgnx-replace--restyle name))
+      (pcase name
+        (:symbol (drgnx-replace--set-symbol (not (drgnx-replace--opt :symbol))))
+        (:pattern (drgnx-replace--set-pattern (not (drgnx-replace--opt :pattern))))
+        (:regexp (drgnx-replace--set-regexp (not (drgnx-replace--opt :regexp))))
+        (_ (setq drgnx-replace--opts (plist-put drgnx-replace--opts name (not (drgnx-replace--opt name))))
+           (drgnx-replace--restyle name)))
       (drgnx-replace--requery))))
 
 (defun drgnx-replace--git-scope-p ()
@@ -929,8 +1000,8 @@ Branch's base and `±'."
 
 (defun drgnx-replace--render-view ()
   "Draw the view's fields, toggles and buttons; the results go below."
-  (setq drgnx-replace--opts (list :mode 'text :symbol nil :case nil :word nil :regexp nil :scope 'project
-                                  :base nil :lines nil)
+  (setq drgnx-replace--opts (list :mode 'text :symbol nil :case nil :word nil :regexp nil :pattern nil :lang nil
+                                  :scope 'project :base nil :lines nil)
         drgnx-replace--widgets nil
         drgnx-replace--off (make-hash-table :test #'eq)
         drgnx-replace--seen (make-hash-table :test #'equal)
@@ -998,6 +1069,7 @@ Branch's base and `±'."
      (delete-region drgnx-replace--status-beg drgnx-replace--status-end)
      (goto-char drgnx-replace--status-beg)
      (insert (drgnx-replace--kinds-line))
+     (insert (drgnx-replace--pattern-line))
      (insert (propertize line 'face 'drgnx-replace-dim))
      ;; the newest hand-off to an agent: its state chip
      (insert (drgnx-search-handoff-chip))
@@ -1955,15 +2027,18 @@ mode's query, and in Text mode the replacement and the globs; the scope."
   (let* ((globs (lambda (name) (drgnx-replace--globs (drgnx-replace--text name))))
          (on (lambda (name) (if (drgnx-replace--opt name) t :false)))
          (mode (drgnx-replace--opt :mode))
+         (pattern (drgnx-replace--pattern-p))
          (text-p (not (memq mode '(symbol meaning)))))   ; Symbol and Meaning: no replacement, no globs
-    (append (list :query (pcase mode
+    (append (list :query (pcase (if pattern 'pattern mode)
                            ('symbol (append (list :mode "symbol" :name text :case (funcall on :case))
                                             (and drgnx-replace--kinds-on
                                                  (list :kinds (vconcat (mapcar #'symbol-name drgnx-replace--kinds-on))))))
                            ('meaning (list :mode "meaning" :question text))
+                           ('pattern (append (list :mode "pattern" :pattern text)
+                                             (when-let* ((l (drgnx-replace--opt :lang))) (list :lang l))))
                            (_ (list :mode "text" :text text :case (funcall on :case)
                                     :word (funcall on :word) :regexp (funcall on :regexp)))))
-            (and text-p (list :replace (drgnx-replace--text 'replace)))
+            (and text-p (not pattern) (list :replace (drgnx-replace--text 'replace)))
             (list :scope (drgnx-replace--scope-param file))
             (when-let* ((_ text-p) (g (funcall globs 'include))) (list :include (vconcat g)))
             (when-let* ((_ text-p) (g (funcall globs 'exclude))) (list :exclude (vconcat g))))))
@@ -1987,7 +2062,8 @@ it would draw stays as it was)."
 
 (defun drgnx-replace--spec-text (spec)
   "What SPEC's query searched for."
-  (let ((q (plist-get spec :query))) (or (plist-get q :text) (plist-get q :name) (plist-get q :question) "")))
+  (let ((q (plist-get spec :query)))
+    (or (plist-get q :text) (plist-get q :name) (plist-get q :question) (plist-get q :pattern) "")))
 
 (defun drgnx-replace--spec-label (spec)
   "SPEC as a line of the lists: its words, its mode unless Text, its scope unless Project."
@@ -2004,6 +2080,12 @@ it would draw stays as it was)."
     (when (drgnx-replace--opt :symbol) (drgnx-replace--set-symbol nil))
     (setq drgnx-replace--opts (plist-put drgnx-replace--opts :mode (intern (or (plist-get q :mode) "text")))
           drgnx-replace--kinds-on (mapcar #'intern (append (plist-get q :kinds) nil)))
+    ;; a pattern search is Text mode with {} on
+    (let ((pattern (equal (plist-get q :mode) "pattern")))
+      (when pattern (setq drgnx-replace--opts (plist-put drgnx-replace--opts :mode 'text)))
+      (setq drgnx-replace--opts (plist-put drgnx-replace--opts :pattern pattern)
+            drgnx-replace--opts (plist-put drgnx-replace--opts :lang (plist-get q :lang)))
+      (drgnx-replace--restyle :pattern))
     (dolist (k '(:case :word :regexp))
       (setq drgnx-replace--opts (plist-put drgnx-replace--opts k (drgnx-replace--true (plist-get q k))))
       (drgnx-replace--restyle k))
@@ -2714,6 +2796,10 @@ The find bar's button; not a command of its own (it needs the bar)."
                                        "The Search view finds a name's definitions, then its uses (read-only)")
                    (search-mode-meaning "Meaning Mode" drgnx-replace-search-mode-meaning
                                         "The Search view finds the code its words describe (read-only)")
+                   (search-toggle-pattern "Toggle Pattern Search" drgnx-replace-search-toggle-pattern
+                                          "The Search view's {} toggle: Find as code with $A metavariables (read-only)")
+                   (search-pattern-language "Pattern Language…" drgnx-replace-search-pattern-language
+                                            "The language a Pattern search parses its files as (any: each file's own)")
                    (search-history-prev "Previous Search" drgnx-replace-search-history-prev
                                         "The project's search before this one, restored whole and run")
                    (search-history-next "Next Search" drgnx-replace-search-history-next

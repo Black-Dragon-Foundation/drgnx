@@ -464,6 +464,8 @@
         (search-mode-text :none "in the palette; C-c C-m cycles")
         (search-mode-symbol :none "in the palette; C-c C-m cycles")
         (search-mode-meaning :none "in the palette; C-c C-m cycles")
+        (search-toggle-pattern :none "in the palette; the {} toggle")
+        (search-pattern-language :none "in the palette; the language chip under Find")
         (search-scope-next "C-c C-o" :map (drgnx-replace . drgnx-replace-keys-map))
         (search-history-prev "M-p" "C-p" :map (drgnx-replace . drgnx-replace-keys-map)
                              :key-map (("C-p" (drgnx-replace . drgnx-replace-find-insert-state-map))))
