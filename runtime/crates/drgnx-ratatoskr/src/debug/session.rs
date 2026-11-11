@@ -121,18 +121,33 @@ impl Start {
 /// A control from the toolbar or keys.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Op {
-    Continue { thread: Option<i64> },
-    Pause { thread: Option<i64> },
-    Next { thread: Option<i64> },
-    StepIn { thread: Option<i64> },
-    StepOut { thread: Option<i64> },
+    Continue {
+        thread: Option<i64>,
+    },
+    Pause {
+        thread: Option<i64>,
+    },
+    Next {
+        thread: Option<i64>,
+    },
+    StepIn {
+        thread: Option<i64>,
+    },
+    StepOut {
+        thread: Option<i64>,
+    },
     Restart,
     /// Stop: the stop sequence. `kill_debuggee`: an attach session's **Stop and Kill Debuggee** (`Some(true)`).
-    Stop { kill_debuggee: Option<bool> },
+    Stop {
+        kill_debuggee: Option<bool>,
+    },
     /// Disconnect: an attach-style end whatever the request (the debuggee keeps running when the adapter allows it).
     Disconnect,
     /// Show FRAME of THREAD: its scopes and variables, same epoch.
-    Select { thread: Option<i64>, frame: i64 },
+    Select {
+        thread: Option<i64>,
+        frame: i64,
+    },
 }
 
 /// A scope of the selected frame, with its first page of variables (`None`: expensive, not fetched yet).
@@ -174,25 +189,52 @@ pub enum Update {
     /// `initialize`'s answer.
     Caps(Value),
     /// Running (after the launch, a `continued`, a step).
-    Running { thread: Option<i64>, all: bool },
+    Running {
+        thread: Option<i64>,
+        all: bool,
+    },
     Stopped(Stop),
     /// `setBreakpoints`' answer for PATH: the adapter's `Breakpoint`s, in the order sent.
-    Breakpoints { path: String, breakpoints: Vec<Value> },
+    Breakpoints {
+        path: String,
+        breakpoints: Vec<Value>,
+    },
     /// An event the session does not handle itself (`output`, `breakpoint`, `module`, `process`, `progress*`, …).
-    Event { event: String, body: Value },
+    Event {
+        event: String,
+        body: Value,
+    },
     /// `runInTerminal`: open a terminal; answer its pid.
-    RunInTerminal { arguments: Value, reply: oneshot::Sender<Result<i64, String>> },
+    RunInTerminal {
+        arguments: Value,
+        reply: oneshot::Sender<Result<i64, String>>,
+    },
     /// `startDebugging`: start a child session.
-    StartDebugging { arguments: Value, reply: oneshot::Sender<Result<(), String>> },
+    StartDebugging {
+        arguments: Value,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// The end, once; nothing follows.
     Ended(End),
 }
 
 enum Cmd {
     Op(Op, oneshot::Sender<Result<(), String>>),
-    Variables { epoch: u64, reference: i64, reply: oneshot::Sender<Result<Vec<Value>, String>> },
-    MoreFrames { epoch: u64, thread: i64, reply: oneshot::Sender<Result<Vec<Value>, String>> },
-    Request { command: String, arguments: Value, reply: oneshot::Sender<Result<Value, String>> },
+    Variables {
+        epoch: u64,
+        reference: i64,
+        reply: oneshot::Sender<Result<Vec<Value>, String>>,
+    },
+    MoreFrames {
+        epoch: u64,
+        thread: i64,
+        reply: oneshot::Sender<Result<Vec<Value>, String>>,
+    },
+    Request {
+        command: String,
+        arguments: Value,
+        reply: oneshot::Sender<Result<Value, String>>,
+    },
 }
 
 /// The hub's side of a session. Dropping the last one stops it.
@@ -204,7 +246,10 @@ pub struct Handle {
 const ENDED: &str = "the session has ended";
 
 impl Handle {
-    async fn ask<T>(&self, make: impl FnOnce(oneshot::Sender<Result<T, String>>) -> Cmd) -> Result<T, String> {
+    async fn ask<T>(
+        &self,
+        make: impl FnOnce(oneshot::Sender<Result<T, String>>) -> Cmd,
+    ) -> Result<T, String> {
         let (tx, rx) = oneshot::channel();
         self.tx.send(make(tx)).map_err(|_| ENDED.to_owned())?;
         rx.await.unwrap_or_else(|_| Err(ENDED.to_owned()))
@@ -217,18 +262,33 @@ impl Handle {
 
     /// The variables of REFERENCE, from the stop EPOCH (refused unless it is the current one).
     pub async fn variables(&self, epoch: u64, reference: i64) -> Result<Vec<Value>, String> {
-        self.ask(|reply| Cmd::Variables { epoch, reference, reply }).await
+        self.ask(|reply| Cmd::Variables {
+            epoch,
+            reference,
+            reply,
+        })
+        .await
     }
 
     /// The next page of THREAD's frames in stop EPOCH.
     pub async fn more_frames(&self, epoch: u64, thread: i64) -> Result<Vec<Value>, String> {
-        self.ask(|reply| Cmd::MoreFrames { epoch, thread, reply }).await
+        self.ask(|reply| Cmd::MoreFrames {
+            epoch,
+            thread,
+            reply,
+        })
+        .await
     }
 
     /// Any other request (`evaluate`, `completions`, `source`, `setBreakpoints` …): its answer's body.
     pub async fn request(&self, command: &str, arguments: Value) -> Result<Value, String> {
         let command = command.to_owned();
-        self.ask(|reply| Cmd::Request { command, arguments, reply }).await
+        self.ask(|reply| Cmd::Request {
+            command,
+            arguments,
+            reply,
+        })
+        .await
     }
 
     pub fn is_ended(&self) -> bool {
@@ -280,19 +340,29 @@ enum Ending {
     /// The protocol is over (the adapter's input is closed): wait for the process, escalating.
     Gone(String),
     /// Run the stop sequence first (from a terminate step, or from disconnect).
-    Stop { reason: String, terminate: bool, terminate_debuggee: bool, restart: Option<Value> },
+    Stop {
+        reason: String,
+        terminate: bool,
+        terminate_debuggee: bool,
+        restart: Option<Value>,
+    },
 }
 
 fn msg(e: vor::Error) -> String {
     match e {
-        vor::Error::Failed { message, command, .. } if !message.is_empty() => format!("{command}: {message}"),
+        vor::Error::Failed {
+            message, command, ..
+        } if !message.is_empty() => format!("{command}: {message}"),
         e => e.to_string(),
     }
 }
 
 impl Session {
     fn cap(&self, name: &str) -> bool {
-        self.caps.get(name).and_then(Value::as_bool).unwrap_or(false)
+        self.caps
+            .get(name)
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
     }
 
     fn send(&self, u: Update) {
@@ -307,7 +377,12 @@ impl Session {
                 self.reap().await;
                 why
             }
-            Ending::Stop { reason, terminate, terminate_debuggee, restart: r } => {
+            Ending::Stop {
+                reason,
+                terminate,
+                terminate_debuggee,
+                restart: r,
+            } => {
                 restart = r;
                 self.stop_sequence(terminate, terminate_debuggee).await;
                 reason
@@ -318,7 +393,11 @@ impl Session {
         while let Ok(c) = cmds.try_recv() {
             refuse(c);
         }
-        let end = End { reason, exit_code: self.exit_code, restart };
+        let end = End {
+            reason,
+            exit_code: self.exit_code,
+            restart,
+        };
         self.send(Update::Ended(end));
     }
 
@@ -352,7 +431,10 @@ impl Session {
             }
             Err(e) => return self.fail(format!("the adapter did not start: {}", msg(e))),
         }
-        let mut launch = Some(self.client.request(self.start.request.command(), self.start.arguments.clone()));
+        let mut launch = Some(
+            self.client
+                .request(self.start.request.command(), self.start.arguments.clone()),
+        );
         let mut configured = false;
         loop {
             tokio::select! {
@@ -396,7 +478,12 @@ impl Session {
 
     /// The ending for an error before or during the launch: disconnect, as after any end.
     fn fail(&self, why: String) -> Ending {
-        Ending::Stop { reason: why, terminate: false, terminate_debuggee: self.start.request == Request::Launch, restart: None }
+        Ending::Stop {
+            reason: why,
+            terminate: false,
+            terminate_debuggee: self.start.request == Request::Launch,
+            restart: None,
+        }
     }
 
     /// The ending for a stop the user asked for.
@@ -425,23 +512,40 @@ impl Session {
         for s in self.start.breakpoints.clone() {
             let r = self
                 .client
-                .request("setBreakpoints", json!({"source": {"path": s.path}, "breakpoints": s.breakpoints}))
+                .request(
+                    "setBreakpoints",
+                    json!({"source": {"path": s.path}, "breakpoints": s.breakpoints}),
+                )
                 .await;
             match r {
-                Ok(body) => self.send(Update::Breakpoints { path: s.path, breakpoints: arr(&body, "breakpoints") }),
+                Ok(body) => self.send(Update::Breakpoints {
+                    path: s.path,
+                    breakpoints: arr(&body, "breakpoints"),
+                }),
                 Err(vor::Error::Closed(why)) => return Err(why),
-                Err(e) => tracing::debug!(target: "drgnx::debug", "setBreakpoints {}: {}", s.path, msg(e)),
+                Err(e) => {
+                    tracing::debug!(target: "drgnx::debug", "setBreakpoints {}: {}", s.path, msg(e))
+                }
             }
         }
-        let has_filters = self.caps.get("exceptionBreakpointFilters").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
+        let has_filters = self
+            .caps
+            .get("exceptionBreakpointFilters")
+            .and_then(Value::as_array)
+            .is_some_and(|a| !a.is_empty());
         if has_filters {
             let filters = self.start.exception_filters.clone();
-            if let Err(vor::Error::Closed(why)) = self.client.request("setExceptionBreakpoints", json!({"filters": filters})).await {
+            if let Err(vor::Error::Closed(why)) = self
+                .client
+                .request("setExceptionBreakpoints", json!({"filters": filters}))
+                .await
+            {
                 return Err(why);
             }
         }
         if self.cap("supportsConfigurationDoneRequest")
-            && let Err(vor::Error::Closed(why)) = self.client.request("configurationDone", Value::Null).await
+            && let Err(vor::Error::Closed(why)) =
+                self.client.request("configurationDone", Value::Null).await
         {
             return Err(why);
         }
@@ -452,7 +556,10 @@ impl Session {
         match r.command.as_str() {
             "runInTerminal" => {
                 let (tx, rx) = oneshot::channel();
-                self.send(Update::RunInTerminal { arguments: r.arguments.clone(), reply: tx });
+                self.send(Update::RunInTerminal {
+                    arguments: r.arguments.clone(),
+                    reply: tx,
+                });
                 clock::spawn("debug:run-in-terminal", async move {
                     match rx.await {
                         Ok(Ok(pid)) => r.ok(json!({"processId": pid})),
@@ -463,7 +570,10 @@ impl Session {
             }
             "startDebugging" => {
                 let (tx, rx) = oneshot::channel();
-                self.send(Update::StartDebugging { arguments: r.arguments.clone(), reply: tx });
+                self.send(Update::StartDebugging {
+                    arguments: r.arguments.clone(),
+                    reply: tx,
+                });
                 clock::spawn("debug:start-debugging", async move {
                     match rx.await {
                         Ok(Ok(())) => r.ok(json!({})),
@@ -480,15 +590,29 @@ impl Session {
     async fn event(&mut self, event: &str, body: Value) -> Option<Ending> {
         match event {
             "stopped" => {
-                let thread = body.get("threadId").and_then(Value::as_i64).or(self.stopped_thread).unwrap_or(0);
+                let thread = body
+                    .get("threadId")
+                    .and_then(Value::as_i64)
+                    .or(self.stopped_thread)
+                    .unwrap_or(0);
                 self.stopped_thread = Some(thread);
                 self.epoch += 1;
                 let stop = Stop {
                     epoch: self.epoch,
                     thread,
-                    reason: body.get("reason").and_then(Value::as_str).unwrap_or("pause").to_owned(),
-                    description: body.get("description").and_then(Value::as_str).map(str::to_owned),
-                    all_threads: body.get("allThreadsStopped").and_then(Value::as_bool).unwrap_or(false),
+                    reason: body
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("pause")
+                        .to_owned(),
+                    description: body
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    all_threads: body
+                        .get("allThreadsStopped")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
                     threads: vec![],
                     frames: vec![],
                     total_frames: None,
@@ -501,18 +625,31 @@ impl Session {
             }
             "continued" => {
                 let thread = body.get("threadId").and_then(Value::as_i64);
-                let all = body.get("allThreadsContinued").and_then(Value::as_bool).unwrap_or(true);
+                let all = body
+                    .get("allThreadsContinued")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
                 self.running(thread, all);
             }
             "invalidated" if self.stop.is_some() => {
                 let areas: Vec<String> = body
                     .get("areas")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    })
                     .unwrap_or_default();
                 let all = areas.is_empty() || areas.iter().any(|a| a == "all");
                 let has = |x: &str| all || areas.iter().any(|a| a == x);
-                self.fetch(has("threads"), has("stacks"), has("variables") || has("stacks")).await;
+                self.fetch(
+                    has("threads"),
+                    has("stacks"),
+                    has("variables") || has("stacks"),
+                )
+                .await;
                 self.publish();
             }
             "terminated" => {
@@ -527,13 +664,19 @@ impl Session {
             "exited" => {
                 self.exit_code = body.get("exitCode").and_then(Value::as_i64);
                 return Some(Ending::Stop {
-                    reason: format!("the program exited with code {}", self.exit_code.unwrap_or(0)),
+                    reason: format!(
+                        "the program exited with code {}",
+                        self.exit_code.unwrap_or(0)
+                    ),
                     terminate: false,
                     terminate_debuggee: self.start.request == Request::Launch,
                     restart: None,
                 });
             }
-            _ => self.send(Update::Event { event: event.to_owned(), body }),
+            _ => self.send(Update::Event {
+                event: event.to_owned(),
+                body,
+            }),
         }
         None
     }
@@ -554,19 +697,29 @@ impl Session {
     /// Fetch the current stop's parts again: THREADS, the stack (STACK) and the selected frame's scopes and variables
     /// (VARS).
     async fn fetch(&mut self, threads: bool, stack: bool, vars: bool) {
-        let Some(mut s) = self.stop.take() else { return };
+        let Some(mut s) = self.stop.take() else {
+            return;
+        };
         if threads && let Ok(b) = self.client.request("threads", Value::Null).await {
             s.threads = arr(&b, "threads");
         }
         if stack {
             let r = self
                 .client
-                .request("stackTrace", json!({"threadId": s.thread, "startFrame": 0, "levels": FRAMES_PAGE}))
+                .request(
+                    "stackTrace",
+                    json!({"threadId": s.thread, "startFrame": 0, "levels": FRAMES_PAGE}),
+                )
                 .await;
             if let Ok(b) = r {
                 s.frames = arr(&b, "stackFrames");
                 s.total_frames = b.get("totalFrames").and_then(Value::as_i64);
-                s.frame = s.frames.first().and_then(|f| f.get("id")).and_then(Value::as_i64).unwrap_or(0);
+                s.frame = s
+                    .frames
+                    .first()
+                    .and_then(|f| f.get("id"))
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
             }
         }
         if vars && !s.frames.is_empty() {
@@ -576,15 +729,31 @@ impl Session {
     }
 
     async fn scopes(&self, frame: i64) -> Vec<ScopeVars> {
-        let Ok(b) = self.client.request("scopes", json!({"frameId": frame})).await else { return vec![] };
+        let Ok(b) = self
+            .client
+            .request("scopes", json!({"frameId": frame}))
+            .await
+        else {
+            return vec![];
+        };
         let mut out = vec![];
         for scope in arr(&b, "scopes") {
-            let expensive = scope.get("expensive").and_then(Value::as_bool).unwrap_or(false);
-            let reference = scope.get("variablesReference").and_then(Value::as_i64).unwrap_or(0);
+            let expensive = scope
+                .get("expensive")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let reference = scope
+                .get("variablesReference")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
             let variables = if expensive || reference == 0 {
                 None
             } else {
-                match self.client.request("variables", json!({"variablesReference": reference})).await {
+                match self
+                    .client
+                    .request("variables", json!({"variablesReference": reference}))
+                    .await
+                {
                     Ok(v) => Some(arr(&v, "variables")),
                     Err(_) => Some(vec![]),
                 }
@@ -598,7 +767,11 @@ impl Session {
     async fn command(&mut self, c: Cmd) -> Option<Ending> {
         match c {
             Cmd::Op(op, reply) => self.op(op, reply).await,
-            Cmd::Variables { epoch, reference, reply } => {
+            Cmd::Variables {
+                epoch,
+                reference,
+                reply,
+            } => {
                 let r = if self.stop.as_ref().is_some_and(|s| s.epoch == epoch) {
                     self.client
                         .request("variables", json!({"variablesReference": reference}))
@@ -611,17 +784,25 @@ impl Session {
                 let _ = reply.send(r);
                 None
             }
-            Cmd::MoreFrames { epoch, thread, reply } => {
+            Cmd::MoreFrames {
+                epoch,
+                thread,
+                reply,
+            } => {
                 let r = match self.stop.as_mut() {
                     Some(s) if s.epoch == epoch && s.thread == thread => {
                         let start = s.frames.len() as i64;
-                        let args = json!({"threadId": thread, "startFrame": start, "levels": FRAMES_PAGE});
+                        let args =
+                            json!({"threadId": thread, "startFrame": start, "levels": FRAMES_PAGE});
                         match self.client.request("stackTrace", args).await {
                             Ok(b) => {
                                 let more = arr(&b, "stackFrames");
                                 if let Some(s) = self.stop.as_mut() {
                                     s.frames.extend(more.iter().cloned());
-                                    s.total_frames = b.get("totalFrames").and_then(Value::as_i64).or(s.total_frames);
+                                    s.total_frames = b
+                                        .get("totalFrames")
+                                        .and_then(Value::as_i64)
+                                        .or(s.total_frames);
                                 }
                                 Ok(more)
                             }
@@ -633,7 +814,11 @@ impl Session {
                 let _ = reply.send(r);
                 None
             }
-            Cmd::Request { command, arguments, reply } => {
+            Cmd::Request {
+                command,
+                arguments,
+                reply,
+            } => {
                 let _ = reply.send(self.client.request(&command, arguments).await.map_err(msg));
                 None
             }
@@ -641,7 +826,11 @@ impl Session {
     }
 
     async fn op(&mut self, op: Op, reply: oneshot::Sender<Result<(), String>>) -> Option<Ending> {
-        let thread = |t: Option<i64>, s: &Session| t.or(s.stop.as_ref().map(|s| s.thread)).or(s.stopped_thread).unwrap_or(0);
+        let thread = |t: Option<i64>, s: &Session| {
+            t.or(s.stop.as_ref().map(|s| s.thread))
+                .or(s.stopped_thread)
+                .unwrap_or(0)
+        };
         let step = |command: &str, t: i64| (command.to_owned(), json!({"threadId": t}));
         let (command, args) = match op {
             Op::Continue { thread: t } => step("continue", thread(t, self)),
@@ -651,7 +840,10 @@ impl Session {
             Op::StepOut { thread: t } => step("stepOut", thread(t, self)),
             Op::Restart => {
                 if self.cap("supportsRestartRequest") {
-                    let r = self.client.request("restart", json!({"arguments": self.start.arguments})).await;
+                    let r = self
+                        .client
+                        .request("restart", json!({"arguments": self.start.arguments}))
+                        .await;
                     self.stop = None;
                     let _ = reply.send(r.map(|_| ()).map_err(msg));
                     return None;
@@ -669,10 +861,18 @@ impl Session {
             }
             Op::Disconnect => {
                 let _ = reply.send(Ok(()));
-                return Some(Ending::Stop { reason: "disconnected".into(), terminate: false, terminate_debuggee: false, restart: None });
+                return Some(Ending::Stop {
+                    reason: "disconnected".into(),
+                    terminate: false,
+                    terminate_debuggee: false,
+                    restart: None,
+                });
             }
             Op::Select { thread: t, frame } => {
-                let ok = self.stop.as_ref().is_some_and(|s| t.is_none_or(|t| t == s.thread));
+                let ok = self
+                    .stop
+                    .as_ref()
+                    .is_some_and(|s| t.is_none_or(|t| t == s.thread));
                 if !ok {
                     let _ = reply.send(Err("not stopped there".into()));
                     return None;
@@ -692,7 +892,10 @@ impl Session {
             Ok(b) => {
                 if command != "pause" {
                     let t = args["threadId"].as_i64();
-                    let all = command == "continue" && b.get("allThreadsContinued").and_then(Value::as_bool).unwrap_or(true);
+                    let all = command == "continue"
+                        && b.get("allThreadsContinued")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(true);
                     self.running(t, all);
                 }
                 let _ = reply.send(Ok(()));
@@ -728,9 +931,17 @@ impl Session {
         }
         // disconnect, and 2 s for its answer and the process's exit; then SIGTERM, 1 s, SIGKILL
         let d = (!self.client.is_closed()).then(|| {
-            self.client.request("disconnect", json!({"restart": false, "terminateDebuggee": terminate_debuggee}))
+            self.client.request(
+                "disconnect",
+                json!({"restart": false, "terminateDebuggee": terminate_debuggee}),
+            )
         });
-        let Session { client, incoming, proc, .. } = &mut *self;
+        let Session {
+            client,
+            incoming,
+            proc,
+            ..
+        } = &mut *self;
         let polite = async {
             if let Some(d) = d {
                 let gone = async {
@@ -776,11 +987,16 @@ impl Session {
 fn refuse(c: Cmd) {
     match c {
         Cmd::Op(_, r) => drop(r.send(Err(ENDED.into()))),
-        Cmd::Variables { reply, .. } | Cmd::MoreFrames { reply, .. } => drop(reply.send(Err(ENDED.into()))),
+        Cmd::Variables { reply, .. } | Cmd::MoreFrames { reply, .. } => {
+            drop(reply.send(Err(ENDED.into())))
+        }
         Cmd::Request { reply, .. } => drop(reply.send(Err(ENDED.into()))),
     }
 }
 
 fn arr(v: &Value, key: &str) -> Vec<Value> {
-    v.get(key).and_then(Value::as_array).cloned().unwrap_or_default()
+    v.get(key)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
 }

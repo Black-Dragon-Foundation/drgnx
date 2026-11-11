@@ -114,7 +114,12 @@ impl Run {
     /// The next update that is not output or a passed-on event.
     async fn next(&mut self) -> Update {
         loop {
-            match self.up.recv().await.expect("the session's updates ended early") {
+            match self
+                .up
+                .recv()
+                .await
+                .expect("the session's updates ended early")
+            {
                 Update::Event { .. } | Update::Breakpoints { .. } => continue,
                 u => return u,
             }
@@ -183,8 +188,14 @@ fn polite_end() -> Vec<Value> {
 async fn the_launch_sequence_sends_breakpoints_and_configuration_done_before_the_launch_answer() {
     let mut start = start_of(Request::Launch, json!({"program": "/p/a.py"}));
     start.breakpoints = vec![
-        session::SourceBps { path: "/p/a.py".into(), breakpoints: vec![json!({"line": 9})] },
-        session::SourceBps { path: "/p/b.py".into(), breakpoints: vec![json!({"line": 3, "condition": "x > 1"})] },
+        session::SourceBps {
+            path: "/p/a.py".into(),
+            breakpoints: vec![json!({"line": 9})],
+        },
+        session::SourceBps {
+            path: "/p/b.py".into(),
+            breakpoints: vec![json!({"line": 3, "condition": "x > 1"})],
+        },
     ];
     start.exception_filters = vec!["uncaught".into()];
     let steps = vec![
@@ -212,7 +223,11 @@ async fn the_launch_sequence_sends_breakpoints_and_configuration_done_before_the
             break;
         }
     }
-    r.h.op(Op::Stop { kill_debuggee: None }).await.unwrap();
+    r.h.op(Op::Stop {
+        kill_debuggee: None,
+    })
+    .await
+    .unwrap();
     let (end, log, proc) = r.finish().await;
     assert_eq!(end.restart, None);
     assert!(proc.signals().is_empty(), "a polite adapter gets no signal");
@@ -231,7 +246,11 @@ async fn a_failed_launch_ends_the_session_with_its_message() {
     ];
     let r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
     let (end, _, _) = r.finish().await;
-    assert!(end.reason.contains("No such file: /p/a.py"), "{}", end.reason);
+    assert!(
+        end.reason.contains("No such file: /p/a.py"),
+        "{}",
+        end.reason
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -247,10 +266,21 @@ async fn a_stop_fetches_threads_frames_scopes_and_the_cheap_variables_in_one_epo
     assert_eq!(s.frame, 1000);
     assert_eq!(s.scopes.len(), 2);
     assert_eq!(s.scopes[0].variables.as_ref().unwrap()[0]["name"], "total");
-    assert!(s.scopes[1].variables.is_none(), "an expensive scope waits to be opened");
-    r.h.op(Op::Stop { kill_debuggee: None }).await.unwrap();
+    assert!(
+        s.scopes[1].variables.is_none(),
+        "an expensive scope waits to be opened"
+    );
+    r.h.op(Op::Stop {
+        kill_debuggee: None,
+    })
+    .await
+    .unwrap();
     let (_, log, _) = r.finish().await;
-    assert!(!log.requests.iter().any(|(c, a)| c == "variables" && a["variablesReference"] == 8));
+    assert!(
+        !log.requests
+            .iter()
+            .any(|(c, a)| c == "variables" && a["variablesReference"] == 8)
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -274,7 +304,11 @@ async fn more_frames_come_twenty_at_a_time_while_total_frames_says_there_are_mor
     assert_eq!((s.frames.len(), s.total_frames), (20, Some(45)));
     let frames = r.h.more_frames(s.epoch, 1).await.unwrap();
     assert_eq!(frames.len(), 20);
-    r.h.op(Op::Stop { kill_debuggee: None }).await.unwrap();
+    r.h.op(Op::Stop {
+        kill_debuggee: None,
+    })
+    .await
+    .unwrap();
     r.finish().await;
 }
 
@@ -300,9 +334,17 @@ async fn a_variables_reference_from_an_old_epoch_is_never_sent() {
     let old = r.h.variables(first.epoch, 8).await;
     assert!(old.is_err(), "an old epoch's reference is refused here");
     assert!(r.h.variables(second.epoch, 8).await.is_ok());
-    r.h.op(Op::Stop { kill_debuggee: None }).await.unwrap();
+    r.h.op(Op::Stop {
+        kill_debuggee: None,
+    })
+    .await
+    .unwrap();
     let (_, log, _) = r.finish().await;
-    let n8 = log.requests.iter().filter(|(c, a)| c == "variables" && a["variablesReference"] == 8).count();
+    let n8 = log
+        .requests
+        .iter()
+        .filter(|(c, a)| c == "variables" && a["variablesReference"] == 8)
+        .count();
     assert_eq!(n8, 1);
 }
 
@@ -324,7 +366,11 @@ async fn invalidated_areas_are_fetched_again_in_the_same_epoch() {
     let b = r.stopped().await;
     assert_eq!(a.epoch, b.epoch);
     assert_eq!(b.scopes[0].variables.as_ref().unwrap()[0]["value"], "11");
-    r.h.op(Op::Stop { kill_debuggee: None }).await.unwrap();
+    r.h.op(Op::Stop {
+        kill_debuggee: None,
+    })
+    .await
+    .unwrap();
     r.finish().await;
 }
 
@@ -342,12 +388,25 @@ async fn a_silent_adapter_gets_terminate_disconnect_sigterm_then_sigkill_on_time
         }
     }
     let t0 = r.proc.t0.elapsed();
-    r.h.op(Op::Stop { kill_debuggee: None }).await.unwrap();
+    r.h.op(Op::Stop {
+        kill_debuggee: None,
+    })
+    .await
+    .unwrap();
     let end = r.end().await;
     let sig = r.proc.signals();
-    assert_eq!(sig.len(), 2, "{:?}", sig.iter().map(|s| s.0).collect::<Vec<_>>());
+    assert_eq!(
+        sig.len(),
+        2,
+        "{:?}",
+        sig.iter().map(|s| s.0).collect::<Vec<_>>()
+    );
     assert_eq!(sig[0].0, Sig::Term);
-    assert_eq!(sig[0].1 - t0, Duration::from_secs(4), "terminate 2 s, disconnect 2 s");
+    assert_eq!(
+        sig[0].1 - t0,
+        Duration::from_secs(4),
+        "terminate 2 s, disconnect 2 s"
+    );
     assert_eq!(sig[1].0, Sig::Kill);
     assert_eq!(sig[1].1 - sig[0].1, Duration::from_secs(1));
     assert!(end.reason.contains("stopped"), "{}", end.reason);
@@ -368,13 +427,21 @@ async fn an_attach_session_disconnects_and_leaves_the_debuggee_running() {
         json!({"expect": "disconnect", "args": {"terminateDebuggee": false}, "ok": {}}),
         json!({"die": true}),
     ]);
-    let mut r = run(start_of(Request::Attach, json!({"processId": 42})), steps, Exit::Itself);
+    let mut r = run(
+        start_of(Request::Attach, json!({"processId": 42})),
+        steps,
+        Exit::Itself,
+    );
     loop {
         if let Update::Running { .. } = r.next().await {
             break;
         }
     }
-    r.h.op(Op::Stop { kill_debuggee: None }).await.unwrap();
+    r.h.op(Op::Stop {
+        kill_debuggee: None,
+    })
+    .await
+    .unwrap();
     let (_, log, proc) = r.finish().await;
     assert!(!log.commands().contains(&"terminate"));
     assert!(proc.signals().is_empty());
@@ -389,7 +456,11 @@ async fn without_terminate_support_a_stop_starts_at_disconnect() {
     ]);
     let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
     r.running().await;
-    r.h.op(Op::Stop { kill_debuggee: None }).await.unwrap();
+    r.h.op(Op::Stop {
+        kill_debuggee: None,
+    })
+    .await
+    .unwrap();
     r.finish().await;
 }
 
@@ -401,10 +472,18 @@ async fn restart_uses_the_request_when_the_adapter_has_it() {
         json!({"expect": "disconnect", "ok": {}}),
         json!({"die": true}),
     ]);
-    let mut r = run(start_of(Request::Launch, json!({"program": "/p/a.py"})), steps, Exit::Itself);
+    let mut r = run(
+        start_of(Request::Launch, json!({"program": "/p/a.py"})),
+        steps,
+        Exit::Itself,
+    );
     r.running().await;
     r.h.op(Op::Restart).await.unwrap();
-    r.h.op(Op::Stop { kill_debuggee: None }).await.unwrap();
+    r.h.op(Op::Stop {
+        kill_debuggee: None,
+    })
+    .await
+    .unwrap();
     let (end, _, _) = r.finish().await;
     assert_eq!(end.restart, None);
 }
@@ -420,7 +499,11 @@ async fn restart_without_the_request_stops_and_asks_for_a_new_start() {
     r.running().await;
     r.h.op(Op::Restart).await.unwrap();
     let (end, _, _) = r.finish().await;
-    assert_eq!(end.restart, Some(Value::Null), "start again, with no `__restart` value");
+    assert_eq!(
+        end.restart,
+        Some(Value::Null),
+        "start again, with no `__restart` value"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -461,7 +544,11 @@ async fn an_adapter_that_dies_ends_the_session_once_and_is_reaped() {
     let end = r.end().await;
     assert!(end.reason.contains("adapter"), "{}", end.reason);
     let sig = r.proc.signals();
-    assert_eq!(sig.iter().map(|s| s.0).collect::<Vec<_>>(), [Sig::Term], "reaped: SIGTERM after its 2 s");
+    assert_eq!(
+        sig.iter().map(|s| s.0).collect::<Vec<_>>(),
+        [Sig::Term],
+        "reaped: SIGTERM after its 2 s"
+    );
     while let Some(u) = r.up.recv().await {
         assert!(!matches!(u, Update::Ended(_)));
     }
@@ -488,7 +575,11 @@ async fn run_in_terminal_is_handed_up_and_answered_with_the_pid() {
             u => panic!("{u:?}"),
         }
     }
-    r.h.op(Op::Stop { kill_debuggee: None }).await.unwrap();
+    r.h.op(Op::Stop {
+        kill_debuggee: None,
+    })
+    .await
+    .unwrap();
     r.finish().await;
 }
 
@@ -513,7 +604,11 @@ async fn start_debugging_is_handed_up_and_answered() {
             u => panic!("{u:?}"),
         }
     }
-    r.h.op(Op::Stop { kill_debuggee: None }).await.unwrap();
+    r.h.op(Op::Stop {
+        kill_debuggee: None,
+    })
+    .await
+    .unwrap();
     r.finish().await;
 }
 
@@ -530,7 +625,9 @@ async fn dropping_the_handle_stops_the_session() {
             break;
         }
     }
-    let Run { h, mut up, mock, .. } = r;
+    let Run {
+        h, mut up, mock, ..
+    } = r;
     drop(h);
     loop {
         if let Update::Ended(_) = up.recv().await.expect("an end") {

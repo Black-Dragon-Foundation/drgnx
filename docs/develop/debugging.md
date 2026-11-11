@@ -84,7 +84,23 @@ process; the hub holds a `Handle` and reads `Update`s in order. Its waits read t
 - **The end** (`Update::Ended`) comes once: after a stop, `terminated`, `exited` (with its code), the adapter's death,
   or the last handle dropped. Controls queued behind it are told the session has ended.
 
-The tests (`debug/tests.rs`) run each of these against the mock adapter on tokio's paused clock; the stop sequence's
+The hub's sessions (`debug::Debug`, in `debug/mod.rs`) start each through a `Launcher` (the adapter started on stdio
+or on a port, or a `debugServer` connected to) and route its updates:
+
+- `debug-state` to every editor whenever a session starts, runs, stops or ends: `{sessions: [{id, name, parent, root,
+  state, reason, caps}]}`; `debug-ended` once per session, with its reason and exit code.
+- `debug-frame` on a stop: the selected frame's `path` (or `ref` for a `sourceReference`), `line`, `col`, `top`,
+  `reason` and `exception`. The editor that started the session gets it with `open: true` (it opens the file); the
+  others get `open: false` and draw it only in windows already showing the file (spec §3.3 step 12).
+- `runInTerminal` opens a drgnx terminal for the starting editor (`Terminals`), answers the program's pid and sends
+  that editor `debug-terminal {session, term}`.
+- `startDebugging` starts a child session (`Launcher::child`: a second connection for a TCP adapter) under its parent.
+  A stop or disconnect stops the children first and resolves when all have ended; the hub's end stops every session
+  and refuses new ones.
+- A restart without the adapter's request, or `terminated {restart}`, starts the same configuration again (with
+  `__restart`).
+
+The tests (`debug/tests.rs`, `debug/tests_registry.rs`) run each of these against the mock adapter on tokio's paused clock; the stop sequence's
 waits are checked to the second.
 
 ## Live adapters: the image
