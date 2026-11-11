@@ -358,7 +358,7 @@ mod tests {
     /// `rust@1.95`) installed by the user's mise into a root, then a job's Seatbelt profile with that pin finds
     /// `cargo --version` from the root, at the pinned version; and in the same job `brew --prefix --installed` answers
     /// (the runner's brew shim, `SLEIPNIR_BIN`: a built sleipnir), as a configure asks it, and `brew install` fails
-    /// naming the shim.
+    /// naming the shim; and the account's real home can't be listed.
     #[cfg(all(target_os = "macos", feature = "runner"))]
     #[test]
     #[ignore = "macos-tools"]
@@ -479,6 +479,27 @@ mod tests {
         let said = String::from_utf8_lossy(&install.stderr);
         assert!(
             !install.status.success() && said.contains("brew shim"),
+            "{said}"
+        );
+
+        // the account's real home is out of reach: listing it fails (read only; nothing is written there)
+        let real_home = std::env::var("HOME").expect("HOME");
+        let ls = std::process::Command::new("/usr/bin/sandbox-exec")
+            .arg("-f")
+            .arg(&sb)
+            .args(["/bin/ls", &real_home])
+            .env_clear()
+            .envs(valid.spec().env.iter().map(|(k, v)| (k, v)))
+            .current_dir(&valid.spec().chdir)
+            .output()
+            .unwrap();
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&ls.stdout),
+            String::from_utf8_lossy(&ls.stderr)
+        );
+        assert!(
+            !ls.status.success() && said.contains("Operation not permitted"),
             "{said}"
         );
     }

@@ -125,6 +125,14 @@ own: `memory: watched` (the runner watches each job's memory itself, as a Mac ha
 and whether the Command Line Tools answer. A Mac that went quiet while on battery (its lid closed) is `sleeping`, not
 `unreachable`: its jobs wait for it, and it is no strike.
 
+**What a Mac job can reach.** Each job runs under the macOS sandbox (Seatbelt) as `drgnx-runner`: it reads its source,
+the system, Xcode or the Command Line Tools, Homebrew and its toolchains, and writes only its own folder (and its
+tree, when the job writes it). The account's home, your home and the other users' are out of reach, and so is the
+network. A job that can't be sandboxed doesn't run. Homebrew is read-only there: a build that asks `brew --prefix
+NAME` (as Emacs's configure does for libgccjit) gets the answer from a small `brew` the runner puts first on the job's
+`PATH`, and `brew install` or `brew update` inside a job fails with a message saying so: install what your jobs
+need in your own account (step 3).
+
 ## Runners on the Work map
 
 On the Work space map (layer 6, with the files) every runner is a machine chip, and the hub's own machine stays as
