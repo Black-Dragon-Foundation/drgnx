@@ -535,9 +535,10 @@ mod tests {
         assert_eq!(parse_version(""), None);
     }
 
-    /// [D] The live read on the macOS CI host: a whole `Raw`. The CI account is an admin and the VM's disk can sit
-    /// under the runner's free-space floor, so only those two items may be missing there, and `mise` where the job
-    /// didn't install it (the read found none).
+    /// [D] The live read on any Mac: a whole `Raw` (the machine's facts are there), and the contract judges it
+    /// either way, every missing item with its fix. Which items a Mac lacks (the runner account, mise, free space)
+    /// depends on how it is set up, so this row asserts none of them: the contract's own rows run on fixtures, and a
+    /// set-up runner account's passing contract is the rt-macrunner rows' (`runner add`).
     #[cfg(all(target_os = "macos", feature = "runner"))]
     #[test]
     fn the_live_read_is_whole() {
@@ -546,19 +547,12 @@ mod tests {
         assert_eq!(raw.arm64, "1");
         assert!(num(&raw.ncpu) > 0 && num(&raw.memsize) > 0 && raw.disk_free > 0);
         assert!(raw.boot_session.len() >= 32, "{raw:?}");
-        // the CI account is the host's own, not drgnx-runner: allowed here as `--allow-own-account` would
-        let own = Allow {
-            own_account: true,
-            admin: false,
-        };
-        match contract(&raw, vec![], own) {
-            Ok(_) => {}
-            Err(m) => assert!(
-                m.iter().all(|m| m.what.contains("standard")
-                    || m.what.contains("GB free")
-                    || (raw.mise.is_empty() && m.what.starts_with("mise"))),
+        assert!(!raw.user.is_empty(), "{raw:?}");
+        if let Err(m) = contract(&raw, vec![], Allow::default()) {
+            assert!(
+                m.iter().all(|m| !m.what.is_empty() && !m.fix.is_empty()),
                 "{m:?}"
-            ),
+            );
         }
     }
 }
