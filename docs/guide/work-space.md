@@ -50,6 +50,9 @@ Everything here is computed in your Emacs from what the hub already sent, so a k
 | `m` `b` `t` `F` (every profile) | the Map, the Board, the Timeline or the Flow, in the same window |
 | `e` (in the Flow) | the selected task's evidence: the hub's records of its runs and any waiver |
 | `R` (in the Flow) | scroll to the run's rule pack |
+| `r` (in the Flow) | a held task: run its gates again (the red, the author check); it merges when they pass |
+| `s` (in the Flow) | a held task: send it back to its agent with what its gates hold it for |
+| `w` (in the Flow) | a held task: waive its gates once, for its tip, with a reason (yours only) |
 
 The **selected** card is raised; its **chain** (everything it came from, up, and everything it touches, down) keeps
 its normal look; everything else is dimmed. From any item, `↑` reaches the ask it came from in a handful of keys. If
@@ -78,7 +81,10 @@ appears in the needs-you strip; its key jumps to the agents in it.
   holds the task, red when it failed, outlined while it waits). Under the tasks are the merge batch and the run's rule
   pack. `↑` `↓` move between tasks, `Tab` walks the held ones, `e` shows the selected task's evidence (every run the
   hub recorded for it, with its failing rows, and any waiver you gave) and `R` scrolls to the rules. The Flow shows the
-  newest running job.
+  newest running job. A task the gates hold is a chip at the top ("T5 held: …"). The right dock shows the selected
+  task's detail: why it is held, what clears it, its evidence so far, and its actions. `r` runs its gates again, `s`
+  sends it back to its agent with what the gates found, and `w` waives the gates once for that commit, with a reason
+  you type, recorded on the task. Only you can waive; no agent or grant can.
 - `f` hides everything not on the selection's chain; while it is on, the arrow keys move inside the chain and ask the
   hub for nothing. `o` shows only the agents and branches that overlap. `1` to `6` collapse a layer to one thin row
   with its name and a count, `0` opens them all, `.` brings finished items back. Each of these is a layout you asked

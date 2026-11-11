@@ -128,7 +128,9 @@ map that is not on the rows path it says so instead."
                    (setq-local drgnx-view-patch-twin-function #'drgnx-work-flow--twin)
                    (require 'drgnx-view-env)
                    (drgnx-view-env-register (car rows) buffer)
-                   (nidhogg-view-set (drgnx-view-patch-handle drgnx-view-patch) 'form "flow"))
+                   (nidhogg-view-set (drgnx-view-patch-handle drgnx-view-patch) 'form "flow")
+                   ;; the selection is the Flow's own: its tile follows it
+                   (add-hook 'drgnx-view-selected-functions #'drgnx-work-flow--selected-moved nil t))
           (let ((inhibit-read-only t))
             (insert "The Flow needs Sjá, Nidhogg's view model: it is drawn from the hub's rows, and this Emacs has"
                     " no Sjá (or `drgnx-view-old-path' is set).\n"))))
@@ -166,10 +168,148 @@ map that is not on the rows path it says so instead."
     (unless at (user-error "Work: this run has no rule pack"))
     (set-window-start (selected-window) (save-excursion (goto-char at) (line-beginning-position)))))
 
-(defun drgnx-work-lens-show-flow ()
-  "Show the Flow lens of the map's newest running job."
+;;;; The detail tile: the selected task's why, what clears it, its evidence and its actions
+
+(defvar-local drgnx-work-flow--selected nil "The task the Flow's detail tile shows (the Flow's selection).")
+(defvar-local drgnx-work-flow--detail nil "In a Flow: its detail tile.  In a tile: the Flow it details.")
+
+(defun drgnx-work-flow--detail-params (view map job task)
+  "The params that make VIEW the detail tile of TASK, beside map view MAP, of job JOB (nil: the hub's newest)."
+  (append (list :view view :map map :detail task) (and job (list :job job))))
+
+(defvar drgnx-work-flow-detail-mode-map
+  (let ((m (make-sparse-keymap))) (set-keymap-parent m drgnx-work-flow-mode-map) m)
+  "Keys of the detail tile: the Flow's, so its actions answer from either.")
+
+(define-derived-mode drgnx-work-flow-detail-mode special-mode "Work flow detail"
+  "The Flow's detail tile: the hub's rows for the Flow's selected task, its actions on the Flow's keys."
+  (setq-local truncate-lines t cursor-type nil))
+
+(defun drgnx-work-flow--detail-twin (class)
+  "The tile's buffer in display CLASS (`drgnx-view-patch-twin-function')."
+  (drgnx-view-env-twin class '("drgnx-work-flow-")))
+
+(defun drgnx-work-flow-detail-buffers ()
+  "The live detail tiles."
+  (seq-filter (lambda (b) (and (eq (buffer-local-value 'major-mode b) 'drgnx-work-flow-detail-mode)
+                               (not (drgnx-view-patch-twin-p b))))
+              (buffer-list)))
+
+(defun drgnx-work-flow-detail-buffer (flow)
+  "FLOW's detail tile, made when there is none: the hub's rows of the view VIEW/detail beside the Flow's VIEW.  Nil
+off the rows path."
+  (with-current-buffer flow
+    (when (drgnx-work-flow--rows-p)
+      (unless (buffer-live-p drgnx-work-flow--detail)
+        (let ((view (concat (drgnx-view-patch-view drgnx-view-patch) "/detail"))
+              (class (drgnx-view-patch-class drgnx-view-patch))
+              (buffer (get-buffer-create (format "*drgnx work flow detail: %s*"
+                                                 (string-trim (buffer-name flow) "\\*drgnx work flow: " "\\*")))))
+          (with-current-buffer buffer
+            (drgnx-work-flow-detail-mode)
+            (drgnx-view-patch-attach view class)
+            (setq-local drgnx-view-patch-twin-function #'drgnx-work-flow--detail-twin)
+            (require 'drgnx-view-env)
+            (drgnx-view-env-register view buffer)
+            (setq drgnx-work-flow--detail flow))
+          (setq drgnx-work-flow--detail buffer)))
+      drgnx-work-flow--detail)))
+
+(defun drgnx-work-flow--ask-detail (flow)
+  "Ask the hub for FLOW's detail tile of its selected task (nothing while none is selected)."
+  (with-current-buffer flow
+    (when-let* ((task drgnx-work-flow--selected) ((buffer-live-p drgnx-work-flow--map))
+                (tile (drgnx-work-flow-detail-buffer flow)))
+      (drgnx-work-client--call "work/flow/subscribe"
+                               (drgnx-work-flow--detail-params
+                                (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch tile))
+                                (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch drgnx-work-flow--map))
+                                drgnx-work-flow--job task)
+                               #'ignore))))
+
+(defun drgnx-work-flow--selected-moved (buffer id)
+  "`drgnx-view-selected-functions' in a Flow: BUFFER's selection is ID now, and its tile shows that task."
+  (when (and id (buffer-live-p buffer))
+    (with-current-buffer buffer
+      (when (derived-mode-p 'drgnx-work-flow-mode)
+        (setq drgnx-work-flow--selected id)
+        (drgnx-work-flow--ask-detail buffer)))))
+
+(defun drgnx-work-flow--swap-window (from to)
+  "The window of the selected frame that shows FROM shows TO instead (none: nothing changes)."
+  (when-let* (((buffer-live-p to)) (w (and (buffer-live-p from) (get-buffer-window from))))
+    (set-window-buffer w to)))
+
+(defun drgnx-work-flow-detail-show (flow)
+  "FLOW's tile where its map's side panel shows: the right dock follows the lens."
+  (when-let* ((tile (drgnx-work-flow-detail-buffer flow))
+              (map (buffer-local-value 'drgnx-work-flow--map flow)))
+    (dolist (b (drgnx-work-detail-buffers))
+      (when (eq (buffer-local-value 'drgnx-work-detail--map b) map)
+        (drgnx-work-flow--swap-window b tile)))))
+
+(defun drgnx-work-flow-detail-hide (map)
+  "The lens left the Flow of MAP: its map's side panel where the tile showed."
+  (dolist (tile (drgnx-work-flow-detail-buffers))
+    (when-let* ((flow (buffer-local-value 'drgnx-work-flow--detail tile))
+                ((buffer-live-p flow))
+                ((eq (buffer-local-value 'drgnx-work-flow--map flow) map)))
+      (drgnx-work-flow--swap-window tile (drgnx-work-detail-buffer map)))))
+
+(defun drgnx-work-flow--card-of (task)
+  "The `gate' card on TASK's row in this Flow (the hub puts it there while a gate holds the task), or nil."
+  (let ((pos (point-min)) card)
+    (while (and (not card) pos)
+      (when (and (equal (get-text-property pos 'drgnx-work-id) task) (get-text-property pos 'drgnx-work-card))
+        (setq card (get-text-property pos 'drgnx-work-card)))
+      (setq pos (next-single-property-change pos 'drgnx-work-id)))
+    card))
+
+(defun drgnx-work-flow--held-card ()
+  "The card of the task selected in this Flow (or in the Flow this tile details); an error when no gate holds it."
+  (let ((flow (if (derived-mode-p 'drgnx-work-flow-detail-mode) drgnx-work-flow--detail (current-buffer))))
+    (unless (and (buffer-live-p flow) (with-current-buffer flow (derived-mode-p 'drgnx-work-flow-mode)))
+      (user-error "Work: not in a Flow"))
+    (with-current-buffer flow
+      (let ((task (or drgnx-work-flow--selected (user-error "Work: select a task first"))))
+        (or (drgnx-work-flow--card-of task) (user-error "Work: no gate holds %s" task))))))
+
+(defun drgnx-work-flow--act (card action &optional arg)
+  "Answer CARD with ACTION (and ARG) as the user (`job/card'); say how it went."
+  (drgnx-hub-call "job/card" (append (list :card card :action action) (and arg (list :arg arg)))
+                  (lambda (_result err)
+                    (message (if err (format "Work: %s: %s" action (or (plist-get err :message) err))
+                               (format "Work: %s sent" action))))
+                  :deadline 10))
+
+(defun drgnx-work-flow-run-red ()
+  "The held task's gates again: the hub runs what they miss (the red, the author check) and merges when they pass."
   (interactive)
-  (pop-to-buffer-same-window (drgnx-work-flow-open (drgnx-work-lens-map-buffer))))
+  (drgnx-work-flow--act (drgnx-work-flow--held-card) "merge"))
+
+(defun drgnx-work-flow-tell-agent ()
+  "Send the held task back to its agent with the gate card's words."
+  (interactive)
+  (drgnx-work-flow--act (drgnx-work-flow--held-card) "retry"))
+
+(defun drgnx-work-flow-waive (reason)
+  "Waive the held task's gates once, for its tip only, with REASON: recorded on the task as your waiver.  Only you can
+waive (the hub takes a waiver from the user's connection alone)."
+  (interactive (list (read-string "Waive once, the reason: ")))
+  (let ((card (drgnx-work-flow--held-card)))
+    (when (string-blank-p reason) (user-error "Work: a waiver needs its reason"))
+    (drgnx-work-flow--act card "waive" (string-trim reason))))
+
+(declare-function drgnx-work-detail-buffers "drgnx-work-detail")
+(declare-function drgnx-work-detail-buffer "drgnx-work-detail")
+(defvar drgnx-work-detail--map)
+
+(defun drgnx-work-lens-show-flow ()
+  "Show the Flow lens of the map's newest running job, its detail tile where the map's side panel was."
+  (interactive)
+  (let ((flow (drgnx-work-flow-open (drgnx-work-lens-map-buffer))))
+    (pop-to-buffer-same-window flow)
+    (drgnx-work-flow-detail-show flow)))
 
 (declare-function drgnx-work-lens-map-buffer "drgnx-work-board")
 

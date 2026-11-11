@@ -219,5 +219,17 @@ open `gate` cards, and builds the model and the rows (`work::trail::flow`, pure)
 - the model: a `task` node per task with the `flow` form's links up and down and the gates' states as fields, the
   lists `tasks` and `held` (the needs-you chips; `Tab` walks them).
 
+A held task is also a needs-you chip on the row under the run's line ("⚑ T5 held: …", carrying the task's id), and
+its row carries its `gate` card's id (`drgnx-work-card`).
+
 `e` asks `orch/evidence` for the selected task and lists each record (kind, job, tree, command, its failing rows or
 its pass count, a waiver's reason); `R` scrolls to the rules. The view is read again after every write.
+
+**The detail tile.** `work/flow/subscribe` with `detail: TASK` makes its view (the Flow's `VIEW/detail`) that task's
+detail tile: rows alone, no model, read again after every write like the Flow. The Flow subscribes it again each
+time its selection moves (`drgnx-view-selected-functions`, the Flow's own). It says what the task is and who works on
+it; for a held task why it is held (the card's words and each held gate) and what clears it; the evidence so far, one
+line per record; and the actions with their keys. `r` (**Run the red** for a red-first hold, else **Check again**:
+the card's `merge`), `s` (**Tell the agent**: `retry`) and `w` (**Waive once**: `waive`, asking for the reason) answer
+the card with `job/card` as the user; the hub takes the waiver only from the user's connection. The tile shows in the
+right dock where the map's side panel was, and the panel comes back when the lens leaves the Flow.

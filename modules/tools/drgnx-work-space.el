@@ -72,6 +72,10 @@
 (declare-function drgnx-work-flow-evidence "drgnx-work-flow")
 (declare-function drgnx-work-flow-rules "drgnx-work-flow")
 (declare-function drgnx-work-flow-buffers "drgnx-work-flow")
+(declare-function drgnx-work-flow-detail-buffers "drgnx-work-flow")
+(declare-function drgnx-work-flow-run-red "drgnx-work-flow")
+(declare-function drgnx-work-flow-tell-agent "drgnx-work-flow")
+(declare-function drgnx-work-flow-waive "drgnx-work-flow")
 (declare-function drgnx-work-detail-buffer "drgnx-work-detail")
 (declare-function drgnx-work-detail-update "drgnx-work-detail")
 (declare-function drgnx-work-detail-buffers "drgnx-work-detail")
@@ -143,7 +147,7 @@ it (a notes repository with the code repositories inside it)."
               work-open-beside work-needs-you-next work-needs-you-here-next work-needs-you-here-previous
               work-needs-you-1 work-needs-you-2 work-needs-you-3 work-needs-you-4 work-needs-you-5 work-needs-you-6
               work-needs-you-7 work-needs-you-8 work-needs-you-9 work-view-map work-view-board work-view-timeline work-view-flow
-              work-flow-evidence work-flow-rules work-trail
+              work-flow-evidence work-flow-rules work-flow-run-red work-flow-tell-agent work-flow-waive work-trail
               work-steer work-pause work-resume work-stop work-keys-sheet work-conclusion-steps work-step-conclusions
               work-review work-second-reviewer work-review-accept work-review-reject
               work-focus work-overlaps
@@ -463,6 +467,15 @@ follows the windows; the commands."
   (drgnx-command-define 'work-flow-rules :category "Work" :title "Show the Rule Pack"
                         :command #'drgnx-work-flow-rules :map 'drgnx-work-flow-mode-map
                         :doc "Scroll the Flow to its rule pack's rows")
+  (drgnx-command-define 'work-flow-run-red :category "Work" :title "Run the Held Task's Gates Again"
+                        :command #'drgnx-work-flow-run-red :map 'drgnx-work-flow-mode-map
+                        :doc "The hub runs what the held task's gates miss (its red, its author check) and merges when they pass")
+  (drgnx-command-define 'work-flow-tell-agent :category "Work" :title "Tell the Held Task's Agent"
+                        :command #'drgnx-work-flow-tell-agent :map 'drgnx-work-flow-mode-map
+                        :doc "Send the held task back to its agent with what its gates hold it for")
+  (drgnx-command-define 'work-flow-waive :category "Work" :title "Waive the Held Task's Gates Once"
+                        :command #'drgnx-work-flow-waive :map 'drgnx-work-flow-mode-map
+                        :doc "Yours only: pass the held task's gates for its tip, with a reason recorded on the task")
   (pcase-dolist (`(,id ,title ,fn ,doc)
                  '((work-view-timeline "Show the Timeline" drgnx-work-lens-show-timeline "A lane for each agent over time, keeping the selection")
                    (work-trail "Open the Research Trail" drgnx-work-trail-show "The selected agent's steps in order, with its conclusions")
@@ -536,7 +549,8 @@ windows lose the layout motion's parameters and the map buffers go."
   (dolist (b (buffer-list))
     (when (buffer-local-value 'drgnx-work-live-file-mode b)
       (with-current-buffer b (drgnx-work-live-file-mode -1))))
-  (dolist (b (append (drgnx-work-board-buffers) (drgnx-work-flow-buffers) (drgnx-work-timeline-buffers)
+  (dolist (b (append (drgnx-work-board-buffers) (drgnx-work-flow-buffers) (drgnx-work-flow-detail-buffers)
+                     (drgnx-work-timeline-buffers)
                      (drgnx-work-trail-buffers)
                      (drgnx-work-review-buffers)))
     (kill-buffer b))

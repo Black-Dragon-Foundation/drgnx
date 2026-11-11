@@ -200,7 +200,9 @@ Timeline's lane becomes the map's selection; the Board's selection is its own (`
        ('map map)
        ('board (drgnx-work-board-open map))
        ('timeline (if (fboundp 'drgnx-work-timeline-open) (drgnx-work-timeline-open map)
-                    (user-error "The Timeline is not loaded")))))))
+                    (user-error "The Timeline is not loaded")))))
+    ;; leaving the Flow: the map's side panel where its tile showed
+    (when (fboundp 'drgnx-work-flow-detail-hide) (drgnx-work-flow-detail-hide map))))
 
 (defun drgnx-work-lens-show-map () "Show the map, keeping the selection." (interactive) (drgnx-work-lens-switch 'map))
 (defun drgnx-work-lens-show-board () "Show the Board, keeping the selection." (interactive) (drgnx-work-lens-switch 'board))

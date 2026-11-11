@@ -104,6 +104,8 @@ pub(crate) struct TaskFacts {
     pub queue: Queue,
     /// Why a gate holds it (its open `gate` card), when one does.
     pub held: Option<String>,
+    /// That card's id (its actions: `job/card`).
+    pub card: Option<i64>,
 }
 
 /// One task's row.
@@ -115,6 +117,7 @@ pub(crate) struct Task {
     pub agent: Option<String>,
     pub cells: [Cell; 6],
     pub held: Option<String>,
+    pub card: Option<i64>,
 }
 
 /// The lens's facts: the job, its pack, its tasks, the batch's and the line gate's lines.
@@ -228,6 +231,7 @@ pub(crate) fn tasks(flow: &Flow) -> Vec<Task> {
             agent: t.agent.clone(),
             cells: cells(t, flow.pack.as_ref()),
             held: t.held.clone(),
+            card: t.card,
         })
         .collect()
 }
@@ -322,6 +326,25 @@ pub(crate) fn flow_rows(flow: &Flow, env: &ViewEnv) -> Vec<Row> {
         Some("drgnx-work-label"),
     );
     let mut rows = vec![head.finish()];
+    // the needs-you chips: a task a gate holds, with why (its card's words)
+    let held: Vec<&Task> = ts.iter().filter(|t| t.held.is_some()).collect();
+    if !held.is_empty() {
+        let mut b = RowBuilder::new("needs");
+        for (i, t) in held.iter().enumerate() {
+            if i > 0 {
+                b.push("  ", None);
+            }
+            let start = b.pos();
+            let why = t.held.as_deref().unwrap_or_default();
+            b.push(
+                &format!(" ⚑ {} held: {} ", t.label, fit(why, 48)),
+                Some(Chip::Held.face()),
+            );
+            let end = b.pos();
+            b.prop(start, end, "drgnx-work-id", json!(t.id));
+        }
+        rows.push(b.finish());
+    }
     let mut cols = RowBuilder::new("cols");
     for (i, name) in ["Task", "Agent"].iter().chain(GATES.iter()).enumerate() {
         cols.stop(at[i]).push(name, Some("drgnx-work-label"));
@@ -348,6 +371,9 @@ pub(crate) fn flow_rows(flow: &Flow, env: &ViewEnv) -> Vec<Row> {
         }
         let end = b.pos();
         b.prop(start, end, "drgnx-work-id", json!(t.id));
+        if let Some(card) = t.card {
+            b.prop(start, end, "drgnx-work-card", json!(card));
+        }
         rows.push(b.finish());
     }
     let mut blank = RowBuilder::new("gap");
@@ -384,6 +410,193 @@ pub(crate) fn flow_rows(flow: &Flow, env: &ViewEnv) -> Vec<Row> {
         }
     }
     rows
+}
+
+/// TEXT in lines of at most CHARS characters, broken at spaces (a word longer than a line is cut).
+fn wrap(text: &str, chars: usize) -> Vec<String> {
+    let chars = chars.max(8);
+    let mut out: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let n = line.chars().count();
+        if n > 0 && n + 1 + word.chars().count() > chars {
+            out.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+        if line.chars().count() > chars {
+            out.push(fit(&line, chars));
+            line.clear();
+        }
+    }
+    if !line.is_empty() {
+        out.push(line);
+    }
+    out
+}
+
+/// What clears a hold of GATE (a column of [`GATES`]).
+fn clears(gate: &str) -> &'static str {
+    match gate {
+        "Red first" => {
+            "Any run of the task's tests on its test commit's tree where those rows fail. The agent's own run \
+             counts; else Run the red starts one."
+        }
+        "Author check" => "The pack's author checks green on the tip's tree.",
+        "Build" => "A green run on the tip's tree.",
+        _ => "What the hold names, fixed on a new tip; then Check again.",
+    }
+}
+
+/// One evidence record in a line: its kind, its rows' counts, its run and its tree.
+fn evidence_line(e: &Evidence) -> String {
+    if e.kind == "waiver" {
+        return format!("waiver · {}", e.note.as_deref().unwrap_or(""));
+    }
+    let pass = e.rows.iter().filter(|r| r.verdict == Verdict::Pass).count();
+    let fail = failing(&e.rows).count();
+    let run = e.facts.selector.lines().last().unwrap_or_default();
+    let tree: String = e.facts.tree_key.chars().take(7).collect();
+    format!(
+        "{} · {pass} pass · {fail} failed · {run} · tree {tree}",
+        e.kind
+    )
+}
+
+/// The detail tile of task TASK of FLOW for ENV, one line per row: its head (the task's id and its card's on it),
+/// for a held task why it is held, what clears it, then the evidence so far and the actions with their keys (the
+/// waiver the user's alone).  A task FLOW does not have: one row saying to select one.
+pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
+    let chars = (env.width_px / env.cell.0.max(1)) as usize;
+    let Some((facts, t)) = flow
+        .tasks
+        .iter()
+        .zip(tasks(flow))
+        .find(|(f, _)| f.id == task)
+    else {
+        let mut b = RowBuilder::new("d:none");
+        b.push("Select a task in the Flow.", Some("drgnx-work-label"));
+        return vec![b.finish()];
+    };
+    let mut rows = Vec::new();
+    let mut line = |key: String, text: &str, face: Option<&str>| {
+        for (i, l) in wrap(text, chars).iter().enumerate() {
+            let mut b = RowBuilder::new(if i == 0 {
+                key.clone()
+            } else {
+                format!("{key}+{i}")
+            });
+            b.push(l, face);
+            rows.push(b.finish());
+        }
+    };
+    // the head: what it is, who works on it, where it stands
+    let mut head = RowBuilder::new("d:head");
+    let start = head.pos();
+    head.push(
+        &fit(&format!("{} · {}", t.label, t.title), chars),
+        Some("bold"),
+    );
+    let end = head.pos();
+    head.prop(start, end, "drgnx-work-id", json!(t.id));
+    if let Some(card) = t.card {
+        head.prop(start, end, "drgnx-work-card", json!(card));
+    }
+    let mut out = vec![head.finish()];
+    let mut sub = RowBuilder::new("d:sub");
+    sub.push(
+        &fit(
+            &format!(
+                "{} · {}",
+                t.agent.as_deref().unwrap_or("no agent"),
+                facts.status
+            ),
+            chars.saturating_sub(7),
+        ),
+        Some("drgnx-work-label"),
+    );
+    if t.held.is_some() {
+        sub.push(" ", None).push(" held ", Some(Chip::Held.face()));
+    }
+    out.push(sub.finish());
+    let held_gates: Vec<(&str, &Cell)> = GATES
+        .iter()
+        .zip(&t.cells)
+        .filter(|(_, c)| c.chip == Chip::Held)
+        .map(|(g, c)| (*g, c))
+        .collect();
+    if let Some(why) = &t.held {
+        line("d:gap1".into(), " ", None);
+        line("d:why-h".into(), "Why it is held", Some("bold"));
+        line("d:why".into(), why, None);
+        for (g, c) in &held_gates {
+            line(format!("d:why:{g}"), &format!("{g}: {}", c.text), None);
+        }
+        line("d:gap2".into(), " ", None);
+        line("d:clear-h".into(), "What clears it", Some("bold"));
+        let gates: Vec<&str> = match held_gates
+            .iter()
+            .map(|(g, _)| *g)
+            .find(|g| *g != "Merge batch")
+        {
+            Some(g) => vec![g],
+            None => vec!["Merge batch"],
+        };
+        for g in gates {
+            line(format!("d:clear:{g}"), clears(g), None);
+        }
+    }
+    line("d:gap3".into(), " ", None);
+    line("d:ev-h".into(), "Evidence so far", Some("bold"));
+    if facts.evidence.is_empty() {
+        line("d:ev".into(), "none recorded", Some("drgnx-work-label"));
+    }
+    for (i, e) in facts.evidence.iter().enumerate() {
+        let face = if e.kind == "red" || failing(&e.rows).next().is_none() {
+            "drgnx-work-label"
+        } else {
+            Chip::Err.face()
+        };
+        line(format!("d:ev:{i}"), &evidence_line(e), Some(face));
+    }
+    out.append(&mut rows);
+    // the actions, with their keys (the Flow's own map)
+    out.push(RowBuilder::new("d:gap4").finish());
+    if t.card.is_some() {
+        let first = if held_gates.iter().any(|(g, _)| *g == "Red first") {
+            "Run the red"
+        } else {
+            "Check again"
+        };
+        let mut act = RowBuilder::new("d:act");
+        act.push(&format!(" {first} r "), Some(Chip::Run.face()))
+            .push(" ", None)
+            .push(" Tell the agent s ", Some(Chip::Wait.face()));
+        out.push(act.finish());
+    }
+    let mut act = RowBuilder::new("d:act2");
+    if t.card.is_some() {
+        act.push(" Waive once w ", Some(Chip::Wait.face()))
+            .push(" ", None);
+    }
+    act.push(" Evidence e ", Some(Chip::Wait.face()));
+    out.push(act.finish());
+    if t.card.is_some() {
+        for (i, l) in wrap(
+            "Waiving is yours only (a user-only rule); it is recorded on the task.",
+            chars,
+        )
+        .iter()
+        .enumerate()
+        {
+            let mut b = RowBuilder::new(format!("d:waive:{i}"));
+            b.push(l, Some("drgnx-work-label"));
+            out.push(b.finish());
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -512,6 +725,7 @@ mod tests {
     fn flow() -> Flow {
         let mut held = task(5, "in-review");
         held.held = Some("no red".into());
+        held.card = Some(42);
         Flow {
             job: "J".into(),
             title: "Search view".into(),
@@ -578,6 +792,7 @@ mod tests {
                 keys,
                 [
                     "head",
+                    "needs",
                     "cols",
                     "task:task:J#1",
                     "task:task:J#5",
@@ -595,7 +810,23 @@ mod tests {
                 rows[0].text.contains("Search view") && rows[0].text.contains("rules drgnx-org")
             );
             let px = |v: f32| (v * scale).round() as u32;
-            let held = &rows[3];
+            // the needs-you chips: one per held task, in the attention face, carrying the task's id
+            let needs = &rows[1];
+            assert!(needs.text.contains("T5 held: no red"), "{}", needs.text);
+            assert!(needs.runs.iter().any(|r| r.2 == "drgnx-chip-attention"));
+            assert!(
+                needs
+                    .props
+                    .iter()
+                    .any(|p| p.2 == "drgnx-work-id" && p.3 == json!("task:J#5"))
+            );
+            let held = &rows[4];
+            // the held task's row carries its card, for the actions
+            assert!(
+                held.props
+                    .iter()
+                    .any(|p| p.2 == "drgnx-work-card" && p.3 == json!(42))
+            );
             let stops: Vec<u32> = held.stops.iter().map(|s| s.1).collect();
             assert_eq!(stops[0], px(200.0), "scale {scale}");
             assert_eq!(stops[1], px(318.0), "scale {scale}");
@@ -607,12 +838,68 @@ mod tests {
                     .iter()
                     .any(|p| p.2 == "drgnx-work-id" && p.3 == json!("task:J#5"))
             );
-            assert!(rows[1].text.contains("Red first") && rows[1].text.contains("Merge batch"));
+            assert!(rows[2].text.contains("Red first") && rows[2].text.contains("Merge batch"));
         }
         let empty = Flow {
             tasks: vec![],
             ..flow()
         };
+        // no held task: no needs-you row
         assert_eq!(flow_rows(&empty, &env(1.0))[2].key, "none");
+    }
+
+    /// [D] The detail tile of a held task: its head (id and card on it), why it is held (the card's words and the
+    /// held gates), what clears it, the evidence so far, and the actions with their keys, the waiver the user's
+    /// alone; a task the gates don't hold has no hold sections and only the evidence action; an unknown task says so.
+    #[test]
+    fn the_detail_tile_says_why_a_task_is_held_and_what_clears_it() {
+        let mut f = flow();
+        f.tasks[1].evidence = vec![ev("green", "s", parse("test a::x ... ok\n"))];
+        // the tile's width: 50 cells
+        let mut tile = env(1.0);
+        tile.width_px = 400;
+        let rows = detail_rows(&f, "task:J#5", &tile);
+        let text: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
+        let all = text.join("\n");
+        assert!(
+            text[0].starts_with("T5") && text[0].contains("Task 5"),
+            "{all}"
+        );
+        assert!(
+            rows[0]
+                .props
+                .iter()
+                .any(|p| p.2 == "drgnx-work-card" && p.3 == json!(42))
+        );
+        for want in [
+            "Why it is held",
+            "no red",
+            "Red first: no red",
+            "What clears it",
+            "test commit",
+            "Evidence so far",
+            "green",
+            "1 pass",
+            "Run the red r",
+            "Tell the agent s",
+            "Waive once w",
+            "Evidence e",
+            "yours only",
+        ] {
+            assert!(all.contains(want), "no {want:?} in\n{all}");
+        }
+        // the lines fit the tile: none longer than its width in cells
+        assert!(text.iter().all(|t| t.chars().count() <= 50), "{all}");
+        let free = detail_rows(&f, "task:J#1", &tile);
+        let free_all: Vec<&str> = free.iter().map(|r| r.text.as_str()).collect();
+        let free_all = free_all.join("\n");
+        assert!(
+            !free_all.contains("Why it is held") && !free_all.contains("Waive"),
+            "{free_all}"
+        );
+        assert!(free_all.contains("Evidence e") && free_all.contains("none recorded"));
+        let none = detail_rows(&f, "task:J#99", &tile);
+        assert_eq!(none.len(), 1);
+        assert!(none[0].text.contains("Select a task"));
     }
 }

@@ -55,9 +55,46 @@ says its reason."
     (should (string-match-p "\\`waiver +7d21c0e +by you: a docs change\\'" (nth 2 lines)))
     (should (equal (drgnx-work-flow--evidence-lines []) '("No evidence yet.")))))
 
+(ert-deftest drgnx-work-flow/a-held-task-s-card-is-on-its-row ()
+  "The hub puts a held task's `gate' card on its row (`drgnx-work-card'); a needs-you chip names the task alone."
+  (with-temp-buffer
+    (insert (propertize " ⚑ T5 held: no red " 'drgnx-work-id "J#5") "\n"
+            (propertize "T1 search/run" 'drgnx-work-id "J#1") "\n"
+            (propertize "T5 Git scopes" 'drgnx-work-id "J#5" 'drgnx-work-card 42) "\n")
+    (should (eql (drgnx-work-flow--card-of "J#5") 42))
+    (should-not (drgnx-work-flow--card-of "J#1"))
+    (should-not (drgnx-work-flow--card-of "J#9"))))
+
+(ert-deftest drgnx-work-flow/the-tile-asks-for-the-selected-task ()
+  "The detail tile is the Flow's subscription with `detail': its own view, the map's view, the job and the task."
+  (should (equal (drgnx-work-flow--detail-params "flow-1/detail" "map-1" nil "J#5")
+                 '(:view "flow-1/detail" :map "map-1" :detail "J#5")))
+  (should (equal (drgnx-work-flow--detail-params "flow-1/detail" "map-1" "J" "J#5")
+                 '(:view "flow-1/detail" :map "map-1" :detail "J#5" :job "J"))))
+
+(ert-deftest drgnx-work-flow/the-actions-answer-the-gate-card ()
+  "Run the red, Tell the agent and Waive once answer the held task's `gate' card (`job/card': merge, retry, waive with
+the reason); a waiver without a reason, or a task no gate holds, sends nothing."
+  (let (sent (card 42))
+    (cl-letf (((symbol-function 'drgnx-work-flow--held-card) (lambda () (or card (user-error "not held"))))
+              ((symbol-function 'drgnx-hub-call)
+               (lambda (method params _cb &rest _) (push (cons method params) sent))))
+      (drgnx-work-flow-run-red)
+      (drgnx-work-flow-tell-agent)
+      (drgnx-work-flow-waive "a docs change")
+      (should-error (drgnx-work-flow-waive "  ") :type 'user-error)
+      (setq card nil)
+      (should-error (drgnx-work-flow-waive "x") :type 'user-error))
+    (should (equal (nreverse sent)
+                   '(("job/card" :card 42 :action "merge")
+                     ("job/card" :card 42 :action "retry")
+                     ("job/card" :card 42 :action "waive" :arg "a docs change"))))))
+
 (ert-deftest drgnx-work-flow/its-keys-are-in-every-profile ()
-  "`F' shows the Flow from any view of the lens; `e' and `R' work in the Flow only; every profile names them."
-  (dolist (id '(work-view-flow work-flow-evidence work-flow-rules))
+  "`F' shows the Flow from any view of the lens; `e', `R' and the held task's actions (`r', `s', `w') work in the Flow
+only; every profile names them."
+  (dolist (id '(work-view-flow work-flow-evidence work-flow-rules work-flow-run-red work-flow-tell-agent
+                               work-flow-waive))
     (should (memq id drgnx-work-space-command-ids))
     (dolist (profile '("vscode" "emacs" "vim"))
       (let ((rows (plist-get (with-temp-buffer

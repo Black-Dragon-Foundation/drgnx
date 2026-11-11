@@ -279,6 +279,7 @@ mod tests {
                 evidence: t.evidence.clone(),
                 queue: if t.batch { Queue::Batch } else { Queue::None },
                 held: (t.n == r.held.0).then(|| r.held.1.to_owned()),
+                card: None,
             };
             seen.extend(cells(&f, Some(&r.pack)).map(|c| c.chip));
         }

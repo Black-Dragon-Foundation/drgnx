@@ -41,8 +41,9 @@ enum Sub {
     Timeline(Vec<TrailLane>),
     /// A Board: map view, plans.
     Board(String, Vec<String>),
-    /// A Flow lens: map view, job (none: the newest running job).
-    Flow(String, Option<String>),
+    /// A Flow lens: map view, job (none: the newest running job), and the task whose detail tile the view is (none:
+    /// the lens itself).
+    Flow(String, Option<String>, Option<String>),
 }
 
 /// What a view's rows are built from, read once per refresh for every class.
@@ -51,7 +52,8 @@ enum Data {
     Trail(Vec<trail::Step>, Vec<trail::Conclusion>, usize),
     Timeline(Vec<trail::Lane>),
     Board(Vec<board::Card>),
-    Flow(Box<flow::Flow>),
+    /// The lens's facts, and the task of a detail tile.
+    Flow(Box<flow::Flow>, Option<String>),
 }
 
 /// The trail and Timeline views of every connection, keyed (connection, view).
@@ -148,17 +150,22 @@ impl Trails {
                 Data::Timeline(out)
             }
             Sub::Board(map, plans) => Data::Board(board_cards(f, key.0, &map, &plans).await),
-            Sub::Flow(map, job) => Data::Flow(Box::new(flow_facts(f, key.0, &map, job).await)),
+            Sub::Flow(map, job, detail) => {
+                Data::Flow(Box::new(flow_facts(f, key.0, &map, job).await), detail)
+            }
         };
         let data = Arc::new(data);
         lock(&self.data).insert(key.clone(), data.clone());
         let near = match *data {
             Data::Timeline(_) => f.core.map.near(key.0),
-            Data::Trail(..) | Data::Board(_) | Data::Flow(_) => Vec::new(),
+            Data::Trail(..) | Data::Board(_) | Data::Flow(..) => Vec::new(),
         };
-        f.core
-            .views
-            .publish_model(f, key.0, &key.1, doc_of(&data, &near));
+        // a detail tile is rows alone, as the map's is
+        if !matches!(*data, Data::Flow(_, Some(_))) {
+            f.core
+                .views
+                .publish_model(f, key.0, &key.1, doc_of(&data, &near));
+        }
         for class in f.core.views.classes(key.0, &key.1) {
             let k3 = (key.0, key.1.clone(), class);
             f.core
@@ -174,7 +181,7 @@ fn doc_of(data: &Data, near: &[String]) -> crate::view::model::Doc {
         Data::Trail(steps, concs, total) => model::trail_doc(steps, concs, *total),
         Data::Timeline(lanes) => model::timeline_doc(lanes, near),
         Data::Board(cards) => board::board_doc(cards),
-        Data::Flow(flow) => flow::flow_doc(flow),
+        Data::Flow(flow, _) => flow::flow_doc(flow),
     }
 }
 
@@ -187,7 +194,8 @@ fn rows(data: &Data, env: &ViewEnv, fonts: &dyn drgnx_rows::fit::Measure) -> Vec
         Data::Trail(steps, concs, _) => trail::trail_rows(steps, concs, &renv, zone),
         Data::Timeline(lanes) => trail::timeline_rows(lanes, &renv, fonts, zone),
         Data::Board(cards) => board::board_rows(cards, env),
-        Data::Flow(flow) => flow::flow_rows(flow, env),
+        Data::Flow(flow, None) => flow::flow_rows(flow, env),
+        Data::Flow(flow, Some(task)) => flow::detail_rows(flow, task, env),
     }
 }
 
@@ -286,14 +294,12 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
             let mut tasks = Vec::new();
             for t in norn::read::tasks::tasks(c, &job)? {
                 let row = t.row;
-                let held = cards
-                    .iter()
-                    .find(|k| {
-                        k.task.as_deref() == Some(row.id.as_str())
-                            && k.kind.as_deref() == Some("gate")
-                    })
-                    .map(|k| k.title.clone().unwrap_or_default());
+                let card = cards.iter().find(|k| {
+                    k.task.as_deref() == Some(row.id.as_str()) && k.kind.as_deref() == Some("gate")
+                });
                 tasks.push(flow::TaskFacts {
+                    held: card.map(|k| k.title.clone().unwrap_or_default()),
+                    card: card.map(|k| k.id),
                     evidence: norn::read::evidence::of_task(c, &row.id)?,
                     id: row.id,
                     n: row.n,
@@ -301,7 +307,6 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
                     status: row.status.unwrap_or_default(),
                     agent: row.agent,
                     queue: flow::Queue::None,
-                    held,
                 });
             }
             Ok(Some((job, title, pack, tasks)))
@@ -479,15 +484,19 @@ pub async fn board_subscribe(
 }
 
 /// `work/flow/subscribe`: VIEW of CALLER's connection shows the Flow lens of `job` (else the newest running job), with
-/// the agents of map view `map`; its model and rows go out as a Board's do, before the answer.
+/// the agents of map view `map`; its model and rows go out as a Board's do, before the answer.  With `detail`, the
+/// view is that task's detail tile instead: rows alone, no model.
 pub async fn flow_subscribe(
     f: &Front,
     c: &Caller,
     p: FlowSubscribe,
 ) -> Result<TrailSubscribed, Error> {
     let key = (c.conn_id, p.view);
-    lock(&f.core.trails.views).insert(key.clone(), Sub::Flow(p.map, p.job));
-    f.core.views.model_restart(key.0, &key.1);
+    let tile = p.detail.is_some();
+    lock(&f.core.trails.views).insert(key.clone(), Sub::Flow(p.map, p.job, p.detail));
+    if !tile {
+        f.core.views.model_restart(key.0, &key.1);
+    }
     f.core.trails.refresh(f, &key).await;
     Ok(TrailSubscribed {
         hub: f.core.views.hub(),
