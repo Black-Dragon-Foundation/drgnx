@@ -10,6 +10,8 @@
 #   spike.sh denials             what Seatbelt denied, from the unified log
 # Results: $MR_OUT/results.md (the summary) and its logs. Keys stay in $MR_KEYS (never uploaded).
 # bash 3.2 (macOS).
+# commands sent over ssh expand on the runner, not here (quoted $, ~, the `mr` function name)
+# shellcheck disable=SC2016,SC2032,SC2033,SC2088
 set -uo pipefail
 
 U=drgnx-runner
@@ -190,8 +192,13 @@ s3() {
 }
 
 # The draft build addition (design §5.4) on Gleipnir's base: shell text here for the spike; M5 builds it in Rust.
+absolute() { # NAME PATH: PATH is absolute, or the script stops (a missing folder's `cd -P` gives "": round 4 looped)
+  case $2 in /*) ;; *) echo "spike.sh: $1 is not an absolute path: '$2'" >&2; exit 2 ;; esac
+}
+
 ancestors() { # PATH...: every directory above each path, once
   for p in "$@"; do
+    absolute ancestor "$p"
     q=$(dirname "$p")
     while [ "$q" != / ]; do echo "$q"; q=$(dirname "$q"); done
   done | sort -u
@@ -199,6 +206,8 @@ ancestors() { # PATH...: every directory above each path, once
 
 profile() { # SLOT ATTEMPT CACHE TOOLS DEVDIR USERDIR
   slot=$1 att=$2 cache=$3 tools=$4 dev=$5 udir=$6
+  absolute slot "$slot"; absolute attempt "$att"; absolute cache "$cache"; absolute tools "$tools"
+  absolute developer-dir "$dev"; absolute user-dir "$udir"
   cat "$HERE/../../../runtime/crates/gleipnir/src/sbpl/base.sbpl" 2>/dev/null || cat "$HERE/base.sbpl"
   echo '; the build addition (draft, spike S2)'
   echo '(allow system-socket (socket-domain AF_UNIX))'
@@ -239,6 +248,13 @@ remote_s2_build() { # the runner side: the profile, then the build under it, und
   profile "$(cd -P "$r/slot-nidhogg" && pwd -P)" "$(cd -P "$a" && pwd -P)" "$(cd -P "$r/cache" && pwd -P)" "$(cd -P "$r/tools" && pwd -P)" "$dev" "$udir" > "$a/build.sb"
   echo "developer dir: $dev; user dir: $udir"
   cd "$r/slot-nidhogg" || return 1
+  # round 4: configure saw no GNU Make, with no denial for make; what the build's environment finds, under the profile
+  /usr/bin/sandbox-exec -f "$a/build.sb" /usr/bin/env -i \
+    HOME="$a/home" TMPDIR="$a/tmp/" PATH="$r/tools/cargo/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    LANG=en_US.UTF-8 __CF_USER_TEXT_ENCODING="$(cf_enc)" \
+    /bin/bash -c 'echo "MAKE=${MAKE-unset}"; echo "command -v: $(command -v make gmake gnumake | tr "\n" " ")"
+      make --version; echo "make-rc=$?"; (make --version) 2>/dev/null | head -n 1; echo "quiet-rc=${PIPESTATUS[0]}"' > "$a/make-probe.txt" 2>&1
+  echo "--- make under the profile"; cut -c1-300 "$a/make-probe.txt"
   start=$(date +%s)
   "$r/mrspike" watch --grant-mib 100000 --report "$a/watch.txt" -- /usr/bin/sandbox-exec -f "$a/build.sb" /usr/bin/env -i \
     HOME="$a/home" TMPDIR="$a/tmp/" PATH="$r/tools/cargo/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
@@ -248,6 +264,10 @@ remote_s2_build() { # the runner side: the profile, then the build under it, und
   echo "build-rc=$rc seconds=$(( $(date +%s) - start ))"
   cat "$a/watch.txt"
   tail -n 30 "$a/build.log"
+  # configure's own record of the make check (config.log, wherever build.sh's build dir put it)
+  find "$a/nbuild" -maxdepth 3 -name config.log 2>/dev/null | while read -r l; do
+    echo "--- $l"; grep -n -A 12 'checking for GNU Make' "$l" | cut -c1-300
+  done
 }
 
 s2_build() { # NIDHOGG_CHECKOUT
@@ -263,14 +283,14 @@ s2_build() { # NIDHOGG_CHECKOUT
   printf '%s\n' "$out" > "$OUT/s2-build.log"
   sudo cp "$r/att-s2/build.sb" "$OUT/s2-build.sb" 2>/dev/null; sudo chmod 644 "$OUT/s2-build.sb" 2>/dev/null
   sudo cp "$r/att-s2/build.log" "$OUT/s2-build-full.log" 2>/dev/null; sudo chmod 644 "$OUT/s2-build-full.log" 2>/dev/null
-  say "- $(printf '%s' "$out" | grep -E 'build-rc=|developer dir' | tr '\n' ' ')"
+  say "- $(printf '%s' "$out" | grep -E 'build-rc=|developer dir|not an absolute path' | tr '\n' ' ')"
   say "- watchdog during the build: $(printf '%s' "$out" | grep -E '^verdict=' | head -n 1)"
   # the job's own exit, from the watch report (the watcher's exit is always 0)
   if printf '%s' "$out" | grep -qE '^verdict=exited exit=Some\(0\)'; then say "- **S2 build: PASS**"; else say "- **S2 build: FAIL** (tail in s2-build.log; denials below)"; fi
 }
 
 remote_s2_ert() { # SELECTOR EMACS (relative to tools/nidhogg)
-  r=~/$ROOT_REL; a=$r/att-ert; mkdir -p "$a/home" "$a/tmp"
+  r=~/$ROOT_REL; a=$r/att-ert; mkdir -p "$a/home" "$a/tmp" "$r/cache"
   udir=$(cd -P "$(getconf DARWIN_USER_DIR)/.." && pwd -P)
   dev=$(cd -P "$(xcode-select -p)" && pwd -P)
   profile "$(cd -P "$r/slot-drgnx" && pwd -P)" "$(cd -P "$a" && pwd -P)" "$(cd -P "$r/cache" && pwd -P)" "$(cd -P "$r/tools" && pwd -P)" "$dev" "$udir" > "$a/ert.sb"
@@ -285,7 +305,7 @@ remote_s2_ert() { # SELECTOR EMACS (relative to tools/nidhogg)
     /bin/bash -c 'bin/drgnx test; echo "ert-rc=$?"' > "$a/pid" 2>&1
   pid=$(tail -n 1 "$a/pid"); stamp "session leader: $pid"
   waited=0
-  while kill -0 "$pid" 2>/dev/null && [ $waited -lt 600 ]; do sleep 5; waited=$((waited + 5)); done
+  while kill -0 "$pid" 2>/dev/null && [ $waited -lt "${MR_ERT_WAIT:-600}" ]; do sleep 5; waited=$((waited + 5)); done
   if kill -0 "$pid" 2>/dev/null; then
     echo "ert-hung after ${waited}s; the runner account's processes (pgid $pid is the job's):"
     ps -U "$(id -u)" -o pid,ppid,pgid,stat,etime,time,command | cut -c1-300
@@ -318,7 +338,7 @@ s2_ert() { # DRGNX_CHECKOUT DRGNX_EMACS SELECTOR (DRGNX_EMACS inside an .app: th
   mr "bash ~/$ROOT_REL/spike.sh remote s2_ert '$3' '$rel'" > "$OUT/s2-ert.log" 2>&1 &
   bg=$!
   waited=0
-  while kill -0 "$bg" 2>/dev/null && [ $waited -lt 720 ]; do sleep 10; waited=$((waited + 10)); done
+  while kill -0 "$bg" 2>/dev/null && [ $waited -lt "${MR_ERT_WATCH:-720}" ]; do sleep 10; waited=$((waited + 10)); done
   if kill -0 "$bg" 2>/dev/null; then
     stamp "the remote run is stuck after ${waited}s; its output so far:"
     cut -c1-300 "$OUT/s2-ert.log"
