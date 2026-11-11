@@ -90,6 +90,24 @@ fn recent_is_newest_first_once_each_and_the_last_fifty() {
     assert_eq!(r.last().unwrap().query.typed(), "q10");
 }
 
+/// [D] An offer never writes on the search's path (an fsync there held a search's first rows past the next key): it
+/// says when a write is due, and `flush` (the hub runs it off that path) writes; a search recorded again while it is
+/// already the newest changes nothing and asks for no write.
+#[test]
+fn an_offer_writes_only_through_flush_and_only_a_change() {
+    let f = fx();
+    let file = f.saved.file(f.root());
+    assert!(!f.saved.offer(f.root(), "v", text("one"), f.at(0)));
+    assert!(f.saved.offer(f.root(), "v", text("one"), f.at(1000)));
+    assert!(!file.exists());
+    f.saved.flush(f.root()).unwrap();
+    let again = Saved::new(f.state.path().join("hub/search"));
+    assert_eq!(typed(&again.recent(f.root(), Instant::now())), vec!["one"]);
+    assert!(!f.saved.offer(f.root(), "v", text("one"), f.at(2000)));
+    assert!(!f.saved.offer(f.root(), "v", text("two"), f.at(3000)));
+    assert!(f.saved.offer(f.root(), "v", text("three"), f.at(4000)));
+}
+
 #[test]
 fn recent_is_per_project_and_kept_across_hubs() {
     let f = fx();

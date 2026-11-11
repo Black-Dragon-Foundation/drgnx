@@ -29,6 +29,8 @@ pub struct Query {
     pub root: PathBuf,
     /// Search this one file (globs then do not apply).
     pub file: Option<PathBuf>,
+    /// Search only these files (absolute; a git scope's, or the open ones), narrowed by the globs.
+    pub files: Option<Vec<PathBuf>>,
     pub text: String,
     /// Match case.
     pub case: bool,
@@ -92,10 +94,95 @@ fn git_glob(g: &str) -> String {
     }
 }
 
+/// GLOB as a regex over one name or a path: `*` and `?` stay within a name, `**` crosses folders, `[...]` and
+/// `{a,b}` as written.
+fn glob_regex(glob: &str) -> Option<regex::Regex> {
+    let cs: Vec<char> = glob.chars().collect();
+    let (mut re, mut i, mut braces) = (String::from("^"), 0, 0);
+    while i < cs.len() {
+        match cs[i] {
+            '*' if cs.get(i + 1) == Some(&'*') => {
+                let slash = cs.get(i + 2) == Some(&'/');
+                re.push_str(if slash { "(?:.*/)?" } else { ".*" });
+                i += if slash { 3 } else { 2 };
+                continue;
+            }
+            '*' => re.push_str("[^/]*"),
+            '?' => re.push_str("[^/]"),
+            '[' => match cs[i + 1..].iter().position(|&c| c == ']') {
+                Some(n) => {
+                    let body: String = cs[i + 1..i + 1 + n].iter().collect();
+                    let body = match body.strip_prefix('!') {
+                        Some(b) => format!("^{b}"),
+                        None => body,
+                    };
+                    re.push('[');
+                    re.push_str(&body.replace('\\', r"\\").replace('[', r"\["));
+                    re.push(']');
+                    i += n + 2;
+                    continue;
+                }
+                None => re.push_str(r"\["),
+            },
+            '{' => {
+                re.push_str("(?:");
+                braces += 1;
+            }
+            '}' if braces > 0 => {
+                re.push(')');
+                braces -= 1;
+            }
+            ',' if braces > 0 => re.push('|'),
+            c => re.push_str(&regex::escape(c.encode_utf8(&mut [0; 4]))),
+        }
+        i += 1;
+    }
+    re.push('$');
+    regex::Regex::new(&re).ok()
+}
+
+/// Whether GLOB names REL (a path relative to the root) as ripgrep reads it: one without a slash names any file or
+/// folder of the path by its name, one with a slash the path from the root or one of its folders; a trailing slash
+/// names folders only.
+fn glob_names(glob: &str, rel: &str) -> bool {
+    let folders = glob.ends_with('/');
+    let glob = glob.trim_end_matches('/');
+    let anchored = glob.contains('/');
+    let Some(re) = glob_regex(glob.trim_start_matches('/')) else {
+        return false;
+    };
+    let parts: Vec<&str> = rel.split('/').collect();
+    let upto = if folders { parts.len() - 1 } else { parts.len() };
+    if anchored {
+        (1..=upto).any(|k| re.is_match(&parts[..k].join("/")))
+    } else {
+        parts[..upto].iter().any(|p| re.is_match(p))
+    }
+}
+
+/// Q's list of files (relative to its root) that its include and exclude globs keep; a file outside the root is not
+/// searched. None when Q has no list.
+fn listed(q: &Query) -> Option<Vec<String>> {
+    let (inc, exc) = (globs(&q.include), globs(&q.exclude));
+    let files = q.files.as_ref()?;
+    Some(
+        files
+            .iter()
+            .filter_map(|f| {
+                let rel = f.strip_prefix(&q.root).ok()?.to_str()?;
+                let keep = (inc.is_empty() || inc.iter().any(|g| glob_names(g, rel)))
+                    && !exc.iter().any(|g| glob_names(g, rel));
+                (keep && !rel.is_empty()).then(|| rel.to_owned())
+            })
+            .collect(),
+    )
+}
+
 /// The command line (program first) searching Q with B, run in `q.root`.
 pub fn command(b: Backend, q: &Query) -> Vec<String> {
     let file = q.file.as_ref().map(|f| f.to_string_lossy().into_owned());
-    let (inc, exc) = if file.is_some() {
+    let listed = if file.is_none() { listed(q) } else { None };
+    let (inc, exc) = if file.is_some() || listed.is_some() {
         (vec![], vec![])
     } else {
         (globs(&q.include), globs(&q.exclude))
@@ -122,7 +209,10 @@ pub fn command(b: Backend, q: &Query) -> Vec<String> {
                 .collect();
             c.extend(gs);
             c.extend(["-e".into(), q.text.clone(), "--".into()]);
-            c.push(file.unwrap_or_else(|| ".".into()));
+            match listed {
+                Some(l) => c.extend(l),
+                None => c.push(file.unwrap_or_else(|| ".".into())),
+            }
         }
         Backend::Git => {
             add(&[
@@ -143,9 +233,10 @@ pub fn command(b: Backend, q: &Query) -> Vec<String> {
                 add(&["-w"]);
             }
             c.extend(["-e".into(), q.text.clone(), "--".into()]);
-            match file {
-                Some(f) => c.push(f),
-                None => {
+            match (file, listed) {
+                (Some(f), _) => c.push(f),
+                (None, Some(l)) => c.extend(l.iter().map(|r| format!(":(literal){r}"))),
+                (None, None) => {
                     c.extend(inc.iter().map(|g| format!(":(glob){}", git_glob(g))));
                     c.extend(
                         exc.iter()
@@ -155,7 +246,8 @@ pub fn command(b: Backend, q: &Query) -> Vec<String> {
             }
         }
         Backend::Grep => {
-            add(&["grep", if file.is_some() { "-H" } else { "-r" }]);
+            let one_by_one = file.is_some() || listed.is_some();
+            add(&["grep", if one_by_one { "-H" } else { "-r" }]);
             add(&["-n", "--null", "-I", "--color=never"]);
             add(&[if q.regexp { "-E" } else { "-F" }]);
             if !q.case {
@@ -168,7 +260,10 @@ pub fn command(b: Backend, q: &Query) -> Vec<String> {
             c.extend(inc.iter().map(|g| format!("--include={g}")));
             c.extend(exc.iter().map(|g| format!("--exclude={g}")));
             c.extend(["-e".into(), q.text.clone(), "--".into()]);
-            c.push(file.unwrap_or_else(|| ".".into()));
+            match listed {
+                Some(l) => c.extend(l),
+                None => c.push(file.unwrap_or_else(|| ".".into())),
+            }
         }
     }
     c
@@ -362,7 +457,8 @@ pub fn run_with(
     cancel: &AtomicBool,
     mut on_file: impl FnMut(Vec<Match>),
 ) -> Result<(), String> {
-    if q.text.is_empty() {
+    // a list the globs left empty names no file (the searchers would take the root)
+    if q.text.is_empty() || (q.file.is_none() && listed(q).is_some_and(|l| l.is_empty())) {
         return Ok(());
     }
     let re = (b != Backend::Rg).then(|| line_regex(q)).transpose()?;
@@ -468,8 +564,34 @@ pub fn match_at(file: &str, n: u32, text: &str, from: usize, to: usize) -> Match
 
 /// Search Q with the backend its root has.
 pub fn run(q: &Query, cancel: &AtomicBool, on_file: impl FnMut(Vec<Match>)) -> Result<(), String> {
-    run_with(backend(&q.root), q, cancel, on_file)
+    run_on(backend(&q.root), q, cancel, on_file)
 }
+
+/// Search Q with B; a long list of files in parts of [`LIST_PART`], one after the other (a command line has a limit).
+pub fn run_on(
+    b: Backend,
+    q: &Query,
+    cancel: &AtomicBool,
+    mut on_file: impl FnMut(Vec<Match>),
+) -> Result<(), String> {
+    let Some(files) = q.files.as_ref().filter(|_| q.file.is_none()) else {
+        return run_with(b, q, cancel, on_file);
+    };
+    for part in files.chunks(LIST_PART) {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        let q = Query {
+            files: Some(part.to_vec()),
+            ..q.clone()
+        };
+        run_with(b, &q, cancel, &mut on_file)?;
+    }
+    Ok(())
+}
+
+/// The most files of a list one searcher's command line names.
+const LIST_PART: usize = 1000;
 
 #[cfg(test)]
 mod tests {
@@ -532,6 +654,74 @@ mod tests {
         assert!(command(Backend::Rg, &query).contains(&"--hidden".to_owned()));
         assert!(searched(Ignore::Real, ".github/ci.yml"));
         assert!(searched(Ignore::Real, "a/.env"));
+    }
+
+    /// The files B's run of QUERY found matches in, relative to its root, sorted.
+    fn found(b: Backend, query: &Query) -> Vec<String> {
+        let mut files = Vec::new();
+        run_on(b, query, &AtomicBool::new(false), |ms| {
+            let rel = Path::new(&ms[0].file).strip_prefix(&query.root).unwrap();
+            files.push(rel.to_string_lossy().into_owned());
+        })
+        .unwrap();
+        files.sort();
+        files
+    }
+
+    #[test]
+    fn a_file_list_is_searched_alone_and_the_globs_narrow_it() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        for f in ["a.rs", "b.txt", "d.rs", "sub/c.rs", "sub/e.txt"] {
+            std::fs::create_dir_all(root.join(f).parent().unwrap()).unwrap();
+            std::fs::write(root.join(f), "needle\n").unwrap();
+        }
+        let mut backends = vec![Backend::Grep];
+        if on_path("rg") {
+            backends.push(Backend::Rg);
+        }
+        if on_path("git") {
+            let init = Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(root)
+                .status()
+                .unwrap();
+            assert!(init.success());
+            backends.push(Backend::Git);
+        }
+        for b in backends {
+            let mut query = q(root, "needle");
+            query.files = Some(
+                ["a.rs", "b.txt", "sub/c.rs", "sub/e.txt"]
+                    .iter()
+                    .map(|f| root.join(f))
+                    .collect(),
+            );
+            assert_eq!(found(b, &query), ["a.rs", "b.txt", "sub/c.rs", "sub/e.txt"], "{b:?}");
+            query.include = vec!["*.rs".into()];
+            assert_eq!(found(b, &query), ["a.rs", "sub/c.rs"], "{b:?}");
+            query.exclude = vec!["sub".into()];
+            assert_eq!(found(b, &query), ["a.rs"], "{b:?}");
+            query.include = Vec::new();
+            query.exclude = vec!["sub/*.txt, b.*".into()];
+            assert_eq!(found(b, &query), ["a.rs", "sub/c.rs"], "{b:?}");
+            query.files = Some(Vec::new());
+            assert!(found(b, &query).is_empty(), "{b:?}: an empty list is no file, not the root");
+        }
+    }
+
+    #[test]
+    fn a_long_file_list_is_searched_in_parts() {
+        let d = tempfile::tempdir().unwrap();
+        let files: Vec<PathBuf> = (0..2500)
+            .map(|i| d.path().join(format!("f{i:04}.txt")))
+            .collect();
+        for f in &files {
+            std::fs::write(f, "needle\n").unwrap();
+        }
+        let mut query = q(d.path(), "needle");
+        query.files = Some(files[..2400].to_vec());
+        assert_eq!(found(Backend::Grep, &query).len(), 2400);
     }
 
     #[test]

@@ -76,7 +76,7 @@ pub struct Hub {
     dirs: OnceLock<Dirs>,
     search: OnceLock<Search>,
     /// The Search view's recent and saved searches (`search/recent`, `search/saved/*`).
-    saved: OnceLock<Saved>,
+    saved: OnceLock<Arc<Saved>>,
     projects: Projects,
     /// Each open project's watch state, for `status.watch` (a closed project's entry dies with its watcher).
     watches: Mutex<Vec<(PathBuf, Weak<Mutex<hrafn::WatchState>>)>>,
@@ -297,9 +297,9 @@ impl Hub {
     /// RUNTIME for the model consent.
     pub fn configure(&self, env: &Env, home: PathBuf, config: PathBuf, runtime: urdr::Handle) {
         let _ = self.search.set(Search::new(env));
-        let _ = self
-            .saved
-            .set(Saved::new(paths::state_dir(env).join("hub").join("search")));
+        let _ = self.saved.set(Arc::new(Saved::new(
+            paths::state_dir(env).join("hub").join("search"),
+        )));
         let _ = self.dirs.set(Dirs {
             env: env.clone(),
             home,
@@ -338,16 +338,24 @@ impl Hub {
     }
 
     /// The Search view ran SPEC in ROOT (`search/run`): a recent search once it stands for the typing pause. Nothing
-    /// before the hub has its folders.
+    /// before the hub has its folders. The file is written on a thread of its own, never on the search's path (a
+    /// write and its sync took a key's search past the next key).
     pub fn offer_recent(&self, root: &std::path::Path, view: &str, spec: w::SearchSpec) {
-        if let Some(s) = self.saved.get() {
-            s.offer(root, view, spec, std::time::Instant::now());
+        let Some(s) = self.saved.get() else { return };
+        if s.offer(root, view, spec, std::time::Instant::now()) {
+            let (s, root) = (Arc::clone(s), root.to_path_buf());
+            let _ = std::thread::Builder::new()
+                .name("search-recent".into())
+                .spawn(move || {
+                    let _ = s.flush(&root);
+                });
         }
     }
 
     fn saved(&self) -> Result<&Saved, Error> {
         self.saved
             .get()
+            .map(Arc::as_ref)
             .ok_or_else(|| internal("search is not set up in this hub (no folders yet)"))
     }
 

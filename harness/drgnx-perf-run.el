@@ -890,7 +890,7 @@ with context labels and 10 without, alternating, after one of each to warm up."
             (push (drgnx-perf--cx-once nil) off))
           (let* ((st (lambda (xs i) (drgnx-perf-stats (mapcar (lambda (x) (nth i x)) xs))))
                  (p50 (lambda (s) (plist-get s :p50)))
-                 (of (st on 0)) (od (st on 1)) (ff (st off 0)) (fd (st off 1)))
+                 (of (funcall st on 0)) (od (funcall st on 1)) (ff (funcall st off 0)) (fd (funcall st off 1)))
             (list :on_first_ms (mapcar #'drgnx-perf--round of) :on_done_ms (mapcar #'drgnx-perf--round od)
                   :off_first_ms (mapcar #'drgnx-perf--round ff) :off_done_ms (mapcar #'drgnx-perf--round fd)
                   :first_ratio (drgnx-perf--round2 (/ (funcall p50 of) (funcall p50 ff)))
@@ -905,6 +905,35 @@ with context labels and 10 without, alternating, after one of each to warm up."
         (when drgnx-perf--cx-dir (delete-directory drgnx-perf--cx-dir t)))
       t))
   "The `search-context' workload's session side (with the replace workloads' and the hub's).")
+
+(defconst drgnx-perf-run--search-lists-form
+  (prin1-to-string
+   '(progn
+      (defun drgnx-perf--sl-measure ()
+        "(:draw_ms STATS): the empty view's lists drawn 100 times, 100 saved searches (10 of them pinned, with their
+counts) and 50 recent ones (the last 8 shown), as the hub gives them."
+        (with-current-buffer (drgnx-perf--replace-view)
+          (drgnx-replace--fill 'find "")
+          (setq drgnx-replace--saved
+                (mapcar (lambda (i) (list :name (format "saved search %d" i) :pinned (if (zerop (% i 10)) t :false)
+                                          :project :false
+                                          :search (list :query (list :mode "text" :text (format "needle-%d" i))
+                                                        :scope (list :kind (if (cl-oddp i) "changed" "project")))))
+                        (number-sequence 0 99))
+                drgnx-replace--pin-counts (mapcar (lambda (i) (cons (* 10 i) (* 3 i))) (number-sequence 0 9))
+                drgnx-replace--recent
+                (mapcar (lambda (i) (list :query (list :mode (if (cl-oddp i) "meaning" "text") :text (format "recent %d" i)
+                                                       :question (format "recent %d" i))))
+                        (number-sequence 0 49)))
+          (drgnx-replace--lists-draw)        ; warm-up
+          (let (ms)
+            (dotimes (_ 100)
+              (let ((t0 (float-time)))
+                (drgnx-replace--lists-draw)
+                (push (* 1000 (- (float-time) t0)) ms)))
+            (list :draw_ms (mapcar #'drgnx-perf--round (drgnx-perf-stats ms))))))
+      t))
+  "The `search-lists' workload's session side (with the replace workloads' and the hub's).")
 
 (defconst drgnx-perf-run--search-retype-form
   (prin1-to-string
@@ -1197,6 +1226,12 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                        " " drgnx-perf-run--search-context-form " (drgnx-perf--cx-up))")
        :measure "(drgnx-perf--cx-measure)"
        :teardown ,(concat "(progn (drgnx-perf--cx-down) (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
+      ;; the empty Search view's saved and recent searches: 100 saved (10 pinned) and 50 recent, drawn 100 times
+      (search-lists
+       :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) " (drgnx-perf-run--replace-setup-form)
+                       " " drgnx-perf-run--search-lists-form " (drgnx-perf--replace-arm) t)")
+       :measure "(drgnx-perf--sl-measure)"
+       :teardown ,(concat "(progn (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
       ;; retyping the Search view's query over 10k matches on the hub's rows path, a character at a time: "needle" to
       ;; "needl", "need", "needl", "needle" 25 times (100 keys, each a search of 10k matches); a pause of 0.6 s
       ;; after each key (the 0.25 s typing pause runs out, the next key may land while the rows stream) and 1.5 s after
@@ -1754,6 +1789,7 @@ version and the commit, as JSON in FILE."
     (view-patch . "report-only until the render offload's combined pass (its numbers on the island)")
     (work-nav-rows . "report-only until the combined pass (gates after core, editor and agents); needs Sjá's Nidhogg")
     (search-context . "its bar is a ratio of its own runs (labels against none: first rows ≤ 1.10×, end ≤ 1.15×), read from :first_ratio and :done_ratio")
+    (search-lists . "its bar is the lists' draw time (:draw_ms :p95 ≤ 5 ms, spec §8); no keys are typed")
     (search-retype . "its input rows are judged now; allocation, CPU and rows follow its first runs on the desktop island (the combined pass)")
     (typing-evil . "needs DRGNX_MODAL_ELPA (evil); not run in the container")
     (motions-evil . "needs DRGNX_MODAL_ELPA")

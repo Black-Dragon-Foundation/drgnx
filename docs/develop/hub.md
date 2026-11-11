@@ -1497,7 +1497,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/outline` | user | `{base?: boolean, docs?: boolean, path: string, root: AbsPath}` | `{entries: [OutlineEntry], fresh: Fresh, lang: string, path: string}` | no |
 | `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
 | `search/recent` | user | `{root: AbsPath}` | `{recent: [SearchSpec]}` | no |
-| `search/run` | user | `{context?: boolean, ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, view: string}` | `{run: natnum}` | no |
+| `search/run` | user | `{context?: boolean, count?: boolean, ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, view: string}` | `{run: natnum}` | no |
 | `search/saved/delete` | user | `{name: string, root: AbsPath}` | `boolean` | yes |
 | `search/saved/list` | user | `{root: AbsPath}` | `{problems?: [string], saved: [SavedSearch]}` | no |
 | `search/saved/put` | user | `{name: string, pinned?: boolean, root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}}` | `boolean` | yes |
@@ -2364,31 +2364,43 @@ The Search view's results are a row stream under the rules above (`runtime/crate
 `mod.rs` the runs, `rows.rs` the rows and the model, `run.rs` the match ids, the carried unticks and the files'
 snapshots; the search itself is `hrafn::grep`).
 
-- `search/run {view, root, search, ignore?, off?}` takes a `SearchSpec` (as the saved searches below): a Text query
+- `search/run {view, root, search, ignore?, off?, context?, count?}` takes a `SearchSpec` (as the saved searches below): a Text query
   (`{mode: "text", text, case?, word?, regexp?}`; Symbol and Meaning below), `replace?`,
-  `scope?` (none or `project`, or `file` with one file in `files`; another kind is refused, at `search.scope.kind`),
-  `include?`, `exclude?`; `root` must be a folder. It stops the view's earlier search, records the search as recent,
+  `scope?` (none or `project`; `file` with one file in `files`; `open` with the editor's open files in `files`; a git
+  scope, [below](#git-scopes-searchscope-bases)), `include?`, `exclude?`; `root` must be a folder. A list of files
+  (Open, a git scope) is searched alone, the globs narrowing it (`hrafn::grep`: a name glob names any part of the path,
+  one with a slash the path from the root; a list goes to the searcher a thousand files at a time; files outside the
+  root are not searched). It stops the view's earlier search, records the search as recent,
   sends every class of `view` a `reset` of no rows at once, and answers `{run}`, the run's number. A thread then runs
   ripgrep (else `git grep` in a repository, else `grep`) and sends, as each file's lines are complete, one `insert`
   after the last row: the file's header row `f:<file>` and one row `m:<run>:<n>` per match (`n` from 0 in the run's
   order; the id is opaque, the row's props name the match). `<file>` is the path relative to `root` when it is under
   it, else whole (`key_path`; the editor's `drgnx-replace--key-path` names it the same way): a window move sends
   thousands of ids, and whole paths in them were most of its bytes. A class whose env changed meanwhile gets a
-  `reset` of every row so far instead. The event `search-run-done {view, run, files, matches, error?, off?}` ends the
+  `reset` of every row so far instead. The event `search-run-done {view, run, files, matches, error?, off?, scope?}` ends the
   search; a search a newer one stopped sends neither rows nor the event, so a late row of an old query never reaches
-  the view (and the editor drops one by `base` as well).
+  the view (and the editor drops one by `base` as well). `count: true` sends only that event: no model, no rows, no
+  context labels, and the search is not recorded as recent (a pinned saved search's live count, on a view id of its
+  own, `<view>~pin<N>`).
 - **Symbol and Meaning** (`view/search/modes.rs`) ask the index on a task of their own and send all their files when
   it answers, then `search-run-done` (its `error` is the index's refusal, e.g. no index yet). Symbol (`{mode:
   "symbol", name, case?}`, case on by default) is `search/usages`' answer: the files that define the name first, each
-  definition's line and then the file's uses, then the files that use it in the index's rank (at most 100), each
-  line's whole-word occurrences of the name a match (the line read from disk; a definition whose line lacks the name
-  is a match of nothing at its start). Meaning (`{mode: "meaning", question}`) is `search/query`'s hits (code scope, at
-  most 100): one match per hit under its file, the hit's symbol as the match (else its first line), its first line
-  and score after it. Both are read-only: a non-empty `replace` is refused at `search.replace`; scopes, globs and the
-  open buffers do not apply.
+  definition's line and then the file's uses in line order, then the files that use it in the index's rank (at most
+  100), each line's whole-word occurrences of the name a match (the line read from disk; a definition whose line lacks
+  the name is a match of nothing at its start). A definition's row is its kind's icon (`ƒ` function or method, `◇`
+  type, `#` macro, `≡` variable or constant, `•` else; face `drgnx-replace-kind`, the kind on hover) and its
+  signature, the name lit as a match; with `context`, the uses inside a definition follow one label row of it (as
+  Text's), the definition's own row standing for its label. Meaning (`{mode: "meaning", question}`) is
+  `search/query`'s hits (code scope, at most 100, re-located in the files as they are now): one match per hit under
+  its file, a row of a four-cell score bar (the hit's share of the best one, in eighths; face `drgnx-replace-score`,
+  the score on hover), the hit's symbol (face `drgnx-replace-kind`; else its first line) and its first line, and
+  `(moved)` when its lines moved since indexing. Both kinds of row keep a match row's tick box, `drgnx-replace-match`
+  and id. Both modes are read-only: a non-empty `replace` is refused at `search.replace`; scopes, globs and the open
+  buffers do not apply.
 - **Context labels** (`context?`, default true; the editor sends false when `drgnx-search-context` is off): the thread
   that reads each file for its snapshot also parses it once (`search/context.rs`, Hrafn's definitions; code languages
-  only, none past 2 MB; an open buffer's text the same way) and gives each match its innermost definition. A label row
+  only, none past 2 MB; an open buffer's text the same way; with labels on, up to 4 reader threads take the files as
+  grep finds them, so the parses overlap) and gives each match its innermost definition. A label row
   `c:<run>:<n>` (`  ƒ name`, face `drgnx-replace-ctx`, the names around it in `help-echo`) goes above match `n` when
   it is the first of its definition in a row; a top-level match gets none. A label is a row, not a node: no tick, no
   `drgnx-work-id`, not in the model, not a stop for Next Match; the window and `upto` count it among the rows. The
@@ -2483,7 +2495,9 @@ never kept), `include?`, `exclude?`.
   replaces), `search/saved/delete {root, name}` → whether there was one, `search/saved/list {root}` → `{saved,
   problems?}`: the hub's, then the project's, each `{name, search, pinned, project, shared}`.
 - **Where:** the hub's state, `<state>/hub/search/<key>.json` (a digest of the root's path names the file; written
-  whole through a temporary file and a rename, mode 0600). At most 64 projects stay in memory.
+  whole through a temporary file and a rename, mode 0600). At most 64 projects stay in memory. A `search/run` never
+  writes: when it records a search that changes the recent list, a thread of its own writes the file, one at a time,
+  each writing the newest state (a write and its sync on the run's path held a key's reset past the next key).
 - **The project's searches** are `.drgnx/searches.eld`, one plist per search: `(:name "TODOs" :mode text :query
   "todo!(" :case t :scope changed :changed-lines t :include ("*.rs"))`; keys `:name`, `:mode` (`text`, `symbol`,
   `meaning`), `:query`, `:case`, `:word`, `:regexp` (`t` or `nil`), `:replace`, `:scope`, `:base`, `:changed-lines`,
@@ -2510,6 +2524,14 @@ the index, or the merge base); a deleted-only hunk keeps nothing; a new file cou
 working-tree hunks of a file that also has unstaged changes. A git child, not gix: the workspace's gix has no
 `status` feature, and Branch needs a merge base and a diff anyway.
 
+- **In `search/run`** (`scope: {kind: "changed" | "staged" | "branch", base?, changed_lines?}`;
+  `view/search/scoped.rs`): the list (and with `changed_lines` the added lines) is found on the search's thread, not
+  on the request's path; until then the run searches no file, and an open buffer's text counts only when its file is
+  in the list. `search-run-done`'s `scope` says what it searched: `{files, submodules, deleted, base?, why_empty?,
+  needs_base?}` (`files` the list under the root, before the globs). A folder outside git, or git's refusal, ends the
+  run with that `error`; a Branch with no base to take also sets `needs_base` (the view offers its menu). A match is
+  kept by `±` when its line meets one of its file's added ranges (a buffer's text is held to the file's ranges on
+  disk). Symbol and Meaning search the project whatever the scope.
 - `search/scope-bases {root}` → `{current?, upstream?, default?, recent, detached}`: the Branch menu (the 20 branches
   most recently committed to, local and remote, without the current one).
 
