@@ -232,9 +232,10 @@ what it left (none here: `search/grep-skipped' with no match), not a new search,
 (defconst drgnx-replace-rows-nav-test--preview
   '(:path "/r/a.txt" :plus 2 :minus 2
           :diff "--- /r/a.txt\n+++ /r/a.txt\n@@ -1,2 +1,2 @@\n-let needle;\n-let needle;\n+let pin;\n+let pin;\n"
-          :hunks [(:old_start 1 :old_lines 2 :new_start 1 :new_lines 2 :ids ["m:a.txt:1:4" "m:a.txt:2:4"]
-                              :captures [(:id "m:a.txt:1:4" :groups ["need" nil])])])
-  "The hub's `search/preview' of a.txt: one hunk with both matches, a regexp's groups for the first.")
+          :hunks ((:old_start 1 :old_lines 2 :new_start 1 :new_lines 2 :ids ("m:a.txt:1:4" "m:a.txt:2:4")
+                              :captures ((:id "m:a.txt:1:4" :groups ("need" nil))))))
+  "The hub's `search/preview' of a.txt: one hunk with both matches, a regexp's groups for the first.  Arrays are
+lists, as the hub client decodes them (`:array-type' `list').")
 
 (defun drgnx-replace-rows-nav-test--tile ()
   (get-buffer "a.txt · preview"))
@@ -287,9 +288,9 @@ tile is asked for again."
 and removed, what is skipped and why; Cancel writes nothing, Replace writes that edit set (`search/apply' of its
 change); `C-u' Replace All writes at once, no sheet."
   (drgnx-replace-rows-nav-test--with
-    (let ((answer '(:change 7 :skipped [(:id "m:b.txt:5:4" :path "/r/b.txt" :why "changed on disk since the search")]
-                            :files [(:path "/r/a.txt" :source "disk"
-                                           :edits [(:id "m:a.txt:1:4" :line 1) (:id "m:a.txt:2:4" :line 2)])]))
+    (let ((answer '(:change 7 :skipped ((:id "m:b.txt:5:4" :path "/r/b.txt" :why "changed on disk since the search"))
+                            :files ((:path "/r/a.txt" :source "disk"
+                                           :edits ((:id "m:a.txt:1:4" :line 1) (:id "m:a.txt:2:4" :line 2))))))
           (calls nil))
       (cl-letf (((symbol-function 'drgnx-hub--call-on)
                  (lambda (_conn method params cb &rest _)

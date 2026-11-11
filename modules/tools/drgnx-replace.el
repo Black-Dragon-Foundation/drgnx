@@ -2651,10 +2651,10 @@ groups line; the hunk's match ids on the whole row)."
                                                :face 'drgnx-ui-button-primary)))
                  "\n")))
       (`(:skip ,i)
-       (propertize (format "  skipped: %s\n" (plist-get (aref (plist-get answer :skipped) i) :why)) 'face 'warning))
+       (propertize (format "  skipped: %s\n" (plist-get (seq-elt (plist-get answer :skipped) i) :why)) 'face 'warning))
       (`(:empty) "\n  Nothing to replace in this file.\n")
       (`(:hunk ,i)
-       (let* ((h (aref (plist-get answer :hunks) i))
+       (let* ((h (seq-elt (plist-get answer :hunks) i))
               (p (nth i (drgnx-replace--hunks-of (or (plist-get answer :diff) ""))))
               (ids (append (plist-get h :ids) nil)))
          (propertize
@@ -2721,7 +2721,7 @@ groups line; the hunk's match ids on the whole row)."
   "Replace in This File: write this tile's ticked matches (its file only) through the hub."
   (interactive)
   (let* ((off (drgnx-replace--preview-off))
-         (ids (cl-loop for h across (or (plist-get (cdr drgnx-replace--preview) :hunks) [])
+         (ids (cl-loop for h in (append (plist-get (cdr drgnx-replace--preview) :hunks) nil)
                        append (cl-remove-if (lambda (id) (member id off)) (append (plist-get h :ids) nil)))))
     (unless ids (user-error "Nothing ticked in this file"))
     (with-current-buffer (drgnx-replace--live-view)
@@ -2872,7 +2872,7 @@ index, :hunk its first hunk's diff text when it came.")
                (setq drgnx-replace--sheet
                      (plist-put (plist-put drgnx-replace--sheet :hunk
                                            (car (drgnx-replace--hunks-of (or (plist-get r :diff) ""))))
-                                :captures (let ((h (and (> (length (plist-get r :hunks)) 0) (aref (plist-get r :hunks) 0))))
+                                :captures (let ((h (and (> (length (plist-get r :hunks)) 0) (seq-elt (plist-get r :hunks) 0))))
                                             (plist-get h :captures))))
                (drgnx-replace--sheet-draw)))))))))
 
