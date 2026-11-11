@@ -201,7 +201,9 @@ message (a callback: nothing to signal to)."
 (defun drgnx-search-edit--mark (l state)
   "Mark L as STATE (`edited', `deleted'; nil: unmarked) and show it."
   (setf (drgnx-search-edit--line-state l) state)
-  (if state (puthash l t drgnx-search-edit--marked) (remhash l drgnx-search-edit--marked))
+  ;; modified: a save (`:w' too) has something to write, a deletion included (it changes no text)
+  (if state (progn (puthash l t drgnx-search-edit--marked) (set-buffer-modified-p t))
+    (remhash l drgnx-search-edit--marked))
   (drgnx-search-edit--decorate l))
 
 (defun drgnx-search-edit--changed (beg _end _len)
@@ -298,10 +300,99 @@ message (a callback: nothing to signal to)."
     m)
   "Edit Results' keymap: the profiles' keys, and the profile's save.")
 
+(defvar drgnx-search-edit-normal-state-map (make-sparse-keymap)
+  "Edit Results' keys in Vim's normal state (`d d' Delete Line, `Z Q' Discard), from the key profiles.  Evil reads it
+through the mode's normal-state auxiliary map (`drgnx-search-edit-evil-aux').")
+
+;;;; Vim's states
+
+(defvar evil-normal-state-map)
+(declare-function evil-get-auxiliary-keymap "evil-core")
+(declare-function evil-set-auxiliary-keymap "evil-core")
+
+(defvar drgnx-search-edit--vim-own nil
+  "Non-nil while `drgnx-search-edit--vim-key' runs evil's own command: the view's Vim prefixes stand aside.")
+
+(defun drgnx-search-edit--vim-key ()
+  "A key under one of a view's Vim prefixes that the profile does not bind (`d w' once `d d' is Delete Line, `Z Z'
+once `Z Q' is Discard): what evil's normal state does with it.  A command of its own there (`Z Z') runs; else the
+prefix's own (the `d' operator) runs and reads the rest of the keys as it would have: while it runs, the
+prefixes stand aside (`drgnx-search-edit--vim-own'), so the operator looks its keys up and reads its motion in
+evil's own maps."
+  (interactive)
+  (let* ((keys (this-command-keys-vector))
+         (map (and (boundp 'evil-normal-state-map) evil-normal-state-map))
+         (whole (and map (lookup-key map keys)))
+         (first (and map (lookup-key map (vector (aref keys 0)))))
+         (drgnx-search-edit--vim-own t))
+    (cond ((commandp whole) (setq this-command whole) (call-interactively whole))
+          ((commandp first)
+           (setq unread-command-events (append (cdr (append keys nil)) unread-command-events)
+                 this-command first)
+           (call-interactively first))
+          (t (undefined)))))
+
+(defun drgnx-search-edit--vim-prefix (ev map)
+  "MAP, a view's Vim prefix map under EV; while evil's own command runs (`drgnx-search-edit--vim-own'), what evil's
+normal state binds EV to (the prefix map's parents would still make EV a prefix)."
+  (if drgnx-search-edit--vim-own (lookup-key evil-normal-state-map (vector ev)) map))
+
+(defun drgnx-search-edit--vim-prefixes (wrapper)
+  "Fill WRAPPER, a view's auxiliary map whose parent is a profile-filled state map: under each prefix the profile
+made there (`d' of `d d'), every other key is evil's own (`drgnx-search-edit--vim-key').  Made again from the
+parent each time (an Edit Results buffer opens, the keys are applied again), so a prefix the profile no longer has
+leaves nothing behind."
+  (let ((parent (keymap-parent wrapper)) own)
+    (map-keymap (lambda (ev _) (push ev own)) wrapper)
+    (dolist (ev own) (define-key wrapper (vector ev) nil t))
+    (when parent
+      (map-keymap (lambda (ev def)
+                    (when (keymapp def)
+                      (let ((m (make-sparse-keymap)))
+                        (set-keymap-parent m def)
+                        (define-key m [t] #'drgnx-search-edit--vim-key)
+                        (define-key wrapper (vector ev) `(menu-item "" ,m :filter ,(apply-partially #'drgnx-search-edit--vim-prefix ev))))))
+                  parent))))
+
+(defun drgnx-search-edit-evil-aux (mode-map state keys)
+  "Make the profile-filled keymap KEYS the keys of MODE-MAP's buffers in evil's STATE: a wrapper with KEYS as parent
+becomes MODE-MAP's auxiliary map for STATE, with evil's own keys under KEYS' prefixes
+\(`drgnx-search-edit--vim-prefixes').
+Needs evil loaded.  Returns a function that puts back what MODE-MAP had there (for the module's undo; nothing when
+another took the place since)."
+  (let* ((key (vector (intern (format "%s-state" state))))
+         (prev (lookup-key mode-map key))
+         (wrapper (make-sparse-keymap)))
+    (set-keymap-parent wrapper keys)
+    (evil-set-auxiliary-keymap mode-map state wrapper)
+    (drgnx-search-edit--vim-prefixes wrapper)
+    (lambda ()
+      (when (eq (lookup-key mode-map key) wrapper)
+        (if (keymapp prev) (define-key mode-map key prev) (define-key mode-map key nil t))))))
+
+(defun drgnx-search-edit--refresh-vim-prefixes (&rest _)
+  "Make Edit Results' normal-state prefixes again from the profile's keys (`drgnx-search-edit--vim-prefixes'), when
+evil reads them; `drgnx-keys-after-apply-functions' and every new Edit Results buffer call it."
+  (let ((aux (and (fboundp 'evil-get-auxiliary-keymap)
+                  (evil-get-auxiliary-keymap drgnx-search-edit-mode-map 'normal))))
+    (when (and aux (eq (keymap-parent aux) drgnx-search-edit-normal-state-map))
+      (drgnx-search-edit--vim-prefixes aux))))
+
+(defun drgnx-search-edit--write ()
+  "`write-contents-functions': saving the buffer (`save-buffer', Vim's `:w', the profile's Save) saves the edited
+lines, never a file named by the buffer; true, so nothing else writes."
+  (drgnx-search-edit-save)
+  t)
+
 (define-derived-mode drgnx-search-edit-mode nil "Edit Results"
   "The Search view's results as an editable buffer: change the lines with any command; save writes them to their
 files, each checked against its file; Delete Line deletes a line on save; Abort drops the edits."
   (setq-local truncate-lines t)
+  ;; `:w' and every save reach the edited lines; the global save hooks (whitespace, formatters) never see them
+  (setq-local write-contents-functions (list #'drgnx-search-edit--write))
+  (setq-local before-save-hook nil after-save-hook nil)
+  (setq-local require-final-newline nil)
+  (drgnx-search-edit--refresh-vim-prefixes)
   (setq-local header-line-format '(:eval (drgnx-search-edit--header-line)))
   (font-lock-mode -1)
   (jit-lock-register #'drgnx-search-edit--fontify)

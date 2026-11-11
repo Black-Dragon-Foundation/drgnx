@@ -1102,3 +1102,63 @@ The commands of modules that need no installed package are in it, the later stag
   (should (eq (let ((system-type 'darwin)) (drgnx-platform)) 'macos))
   (should (eq (let ((system-type 'gnu/linux)) (drgnx-platform)) 'linux))
   (should (eq (let ((system-type 'darwin)) (drgnx-keys-platform)) 'macos)))
+
+;;;; A key in its own keymap (`:key-map')
+
+(ert-deftest drgnx-keys/key-map-gives-one-key-its-own-keymap ()
+  ;; One entry, two places: M-p in the view's map, C-p in the Find field's insert-state map.
+  (should-not (drgnx-keys--entry-error '(open-file "M-p" "C-p" :map a-map :key-map (("C-p" (feat . b-map))))))
+  (should (string-search "not one of the entry's keys"
+                         (drgnx-keys--entry-error '(open-file "M-p" :key-map (("C-p" b-map))))))
+  (should (string-search "is not (KEY MAP)" (drgnx-keys--entry-error '(open-file "M-p" :key-map (("M-p"))))))
+  (should (drgnx-keys--entry-error '(open-file "M-p" :key-map "C-p")))
+  (let ((a (drgnx-keys--entry '(open-file "M-p" "C-p" :map a-map :key-map (("C-p" (feat . b-map)))) nil 'linux)))
+    (should (eq (drgnx-keys-entry-map a "M-p") 'a-map))
+    (should (equal (drgnx-keys-entry-map a "C-p") '(feat . b-map))))
+  ;; on macOS the key is turned as the others are; :mac's own keys take the entry's :map
+  (let ((a (drgnx-keys--entry '(open-file "C-p" :key-map (("C-p" b-map))) '(:mac-cmd t) 'macos)))
+    (should (equal (plist-get a :keys) '("s-p")))
+    (should (eq (drgnx-keys-entry-map a "s-p") 'b-map)))
+  (let ((r (drgnx-keys-test--resolve '((vscode app editing window))
+                                     :user '(:bind ((open-file "C-c o" "C-c O" :map a-map
+                                                               :key-map (("C-c O" drgnx-keys-test-late-map))))))))
+    (should (equal (mapcar (lambda (b) (list (plist-get b :key) (plist-get b :map)))
+                           (seq-filter (lambda (b) (eq (plist-get b :id) 'open-file)) (plist-get r :bindings)))
+                   '(("C-c o" a-map) ("C-c O" drgnx-keys-test-late-map))))))
+
+(defun drgnx-keys-test--placed (r id)
+  "The keys resolution R binds command ID to, each with its keymap symbol: ((KEY MAPSYM)…)."
+  (mapcar (lambda (b) (list (plist-get b :key) (cdr (drgnx-commands--keymap-spec (plist-get b :map)))))
+          (seq-filter (lambda (b) (eq (plist-get b :id) id)) (plist-get r :bindings))))
+
+(ert-deftest drgnx-keys/vim-search-keys-in-their-states ()
+  ;; Spec §7: Vim's i (normal state) in the Search view, d d and Z Q in Edit Results, C-p / C-n in the Find field's
+  ;; insert state beside the view's M-p / M-n; each in its own state map, none in a conflict.
+  (let* ((drgnx-keys-test--later-stages t)
+         (r (drgnx-keys-test--resolve '((vim app editing window)) :platform 'linux)))
+    (should (equal (drgnx-keys-test--placed r 'search-edit-results)
+                   '(("C-c C-e" drgnx-replace-keys-map) ("i" drgnx-replace-normal-state-map))))
+    (should (equal (drgnx-keys-test--placed r 'search-edit-delete-line)
+                   '(("C-c C-d" drgnx-search-edit-keys-map) ("d d" drgnx-search-edit-normal-state-map))))
+    (should (equal (drgnx-keys-test--placed r 'search-edit-abort)
+                   '(("C-c C-k" drgnx-search-edit-keys-map) ("Z Q" drgnx-search-edit-normal-state-map))))
+    (should (equal (drgnx-keys-test--placed r 'search-history-prev)
+                   '(("M-p" drgnx-replace-keys-map) ("C-p" drgnx-replace-find-insert-state-map))))
+    (should (equal (drgnx-keys-test--placed r 'search-history-next)
+                   '(("M-n" drgnx-replace-keys-map) ("C-n" drgnx-replace-find-insert-state-map))))
+    (dolist (key '("i" "d d" "Z Q" "C-p" "C-n"))
+      (should-not (seq-find (lambda (c) (and (equal (plist-get c :key) key)
+                                             (string-prefix-p "drgnx-" (format "%s" (plist-get c :map)))))
+                            (plist-get r :conflicts))))))
+
+(ert-deftest drgnx-keys/a-views-state-keys-show-with-their-state ()
+  ;; The sheet and the cheat sheet: the first key, then the keys of a view's state map with the state.
+  (should (equal (drgnx-modal-where 'drgnx-replace-normal-state-map) "normal state"))
+  (should (equal (drgnx-modal-where '(drgnx-replace . drgnx-replace-find-insert-state-map)) "insert state"))
+  (should-not (drgnx-modal-where 'drgnx-replace-keys-map))
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+    (drgnx-command-define 'search-history-prev :category "Search" :title "Previous Search" :command #'ignore :doc "test")
+    (let ((c (drgnx-commands-get 'search-history-prev)))
+      (setf (drgnx-cmd-bound c) '(("M-p" drgnx-replace . drgnx-replace-keys-map)
+                                  ("C-p" drgnx-replace . drgnx-replace-find-insert-state-map)))
+      (should (equal (drgnx-surfaces--sheet-key c t) "M-p (in drgnx-replace-keys), C-p (insert state)")))))
