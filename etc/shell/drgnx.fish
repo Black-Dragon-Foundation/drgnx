@@ -87,6 +87,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from build' -f -a runner-bundle -d 'The runner bundle (static)'
     complete -c drgnx -n '__fish_seen_subcommand_from build' -f -a terminfo -d "The terminal's terminfo entry"
     complete -c drgnx -n '__fish_seen_subcommand_from build; and __fish_seen_subcommand_from runner-bundle' -l arch -x -a 'x86_64 aarch64' -d "The bundle's architecture"
+    complete -c drgnx -n '__fish_seen_subcommand_from build; and __fish_seen_subcommand_from runner-bundle' -l target -x -a 'aarch64-apple-darwin' -d "A Mac runner's bundle, built on a Mac"
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l soak -d 'The workloads in a loop'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l day -d 'The synthetic day'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l container -d 'Inside a container'

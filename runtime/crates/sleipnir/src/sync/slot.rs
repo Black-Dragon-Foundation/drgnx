@@ -332,11 +332,17 @@ fn copy_tree(src: &Path, dst: &Path, plain: &mut bool) -> Result<()> {
         } else if ft.is_file() {
             let mut r = fs::File::open(&from)?;
             let meta = r.metadata()?;
-            let mut w = fs::File::options().write(true).create_new(true).open(&to)?;
-            if !clone(&w, &r) {
-                *plain = true;
-                io::copy(&mut r, &mut w)?;
-            }
+            // a Mac clones by name (APFS `fclonefileat` makes the file), elsewhere into an open file (FICLONE)
+            let w = if clone_new(&r, &to) {
+                fs::File::options().write(true).open(&to)?
+            } else {
+                let mut w = fs::File::options().write(true).create_new(true).open(&to)?;
+                if !clone(&w, &r) {
+                    *plain = true;
+                    io::copy(&mut r, &mut w)?;
+                }
+                w
+            };
             w.set_permissions(meta.permissions())?;
             w.set_times(
                 fs::FileTimes::new()
@@ -360,6 +366,30 @@ fn clone(to: &fs::File, from: &fs::File) -> bool {
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 fn clone(_: &fs::File, _: &fs::File) -> bool {
+    false
+}
+
+/// Makes TO a clone of FROM (APFS): false where the file system can't, and TO isn't made.
+#[cfg(target_os = "macos")]
+fn clone_new(from: &fs::File, to: &Path) -> bool {
+    use std::os::fd::AsRawFd;
+    unsafe extern "C" {
+        fn fclonefileat(
+            srcfd: libc::c_int,
+            dst_dirfd: libc::c_int,
+            dst: *const libc::c_char,
+            flags: u32,
+        ) -> libc::c_int;
+    }
+    let Ok(name) = std::ffi::CString::new(to.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: an open file, the current directory and a NUL-terminated path; no flags
+    unsafe { fclonefileat(from.as_raw_fd(), libc::AT_FDCWD, name.as_ptr(), 0) == 0 }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn clone_new(_: &fs::File, _: &Path) -> bool {
     false
 }
 
@@ -572,6 +602,23 @@ mod tests {
         assert!(!p.slot.join("a").exists(), "a deletion is removed");
         assert_eq!(fs::read(p.slot.join("b")).unwrap(), b"b in the overlay\n");
         assert_eq!(fs::read(p.slot.join("c")).unwrap(), b"c committed again\n");
+    }
+
+    // [D] a Mac's private copy is an APFS clone (the CI host's volume): every file shares its blocks
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn darwin_private_copies_are_clones() {
+        let t = tempfile::tempdir().unwrap();
+        let (repo, _) = testutil::repo(t.path(), &[(b"a", b"a\n")]);
+        let p = paths(&t.path().join("runner"), &key("w"));
+        sync(t.path(), &repo, &p);
+        let dest = t.path().join("job/tree");
+        fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        assert!(matches!(
+            private_copy(&p, &dest).unwrap(),
+            CopyKind::Reflink
+        ));
+        assert_eq!(testutil::tree(&dest), testutil::tree(&p.slot));
     }
 
     // [D] pure (a temp repo, real git)

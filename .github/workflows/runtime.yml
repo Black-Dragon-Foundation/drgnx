@@ -693,13 +693,11 @@ jobs:
           echo "MR_KEYS=$RUNNER_TEMP/mac-runner/keys" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: Black-Dragon-Foundation/nidhogg
-          ref: ${{ env.NIDHOGG_REF }}
-          path: nidhogg-src
-          persist-credentials: false
+      # Nidhogg's tree at a fixed ref, by a plain clone (a public repository; not a pull request's checkout)
+      - name: the Nidhogg tree for S2
+        run: git clone --quiet --depth 1 --branch "$NIDHOGG_REF" https://github.com/Black-Dragon-Foundation/nidhogg nidhogg-src
       - name: Build dependencies (Homebrew; Rust by rustup), as Naglfar's job
         run: |
           sed 's/#.*//' nidhogg-src/nidhogg/deps/macos.build | grep -vx 'rust' | xargs brew install
@@ -726,7 +724,7 @@ jobs:
       - name: the Mac probe's live read (sleipnir's darwin rows, in the CI account)
         if: ${{ !cancelled() }}
         timeout-minutes: 20
-        run: cargo test --locked --manifest-path runtime/Cargo.toml -p sleipnir --lib darwin 2>&1 | tee "$MR_OUT/darwin-rows.log"
+        run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p sleipnir --lib darwin 2>&1 | tee "$MR_OUT/darwin-rows.log"
       - name: S2 drgnx ERT selectors under the build profile
         if: ${{ !cancelled() }}
         timeout-minutes: 20

@@ -630,7 +630,9 @@ impl<W: Write> Serve<W> {
     /// The runner-wide ladder on our slice tree: tight stops admissions; at pressure and danger the scheduler
     /// holding the most memory evicts (dedicated) or kills our newest (workstation), writing the reason first.
     fn ladder(&mut self, m: &forseti::MachineState) {
-        let level = forseti::ladder_level(m, &self.limits);
+        // a platform with the kernel's own pressure event (a Mac) sets the level, and evicts rather than kills
+        let event = self.platform.pressure();
+        let level = event.unwrap_or_else(|| forseti::ladder_level(m, &self.limits));
         self.stop_admitting = level != Level::Normal;
         if level < Level::Pressure {
             self.level2_since = None;
@@ -654,6 +656,10 @@ impl<W: Write> Serve<W> {
             self.last_kill.map(|k| k.elapsed().as_secs()),
         );
         for a in acts {
+            let a = match a {
+                Action::Kill(id) if event.is_some() => Action::Evict(id),
+                a => a,
+            };
             let (id, reason) = match &a {
                 Action::Evict(id) => (id, jobexec::EVICTED.to_string()),
                 Action::Kill(id) => (id, format!("infra: {}", infra::KILLED)),
@@ -1066,6 +1072,7 @@ impl<W: Write> Serve<W> {
             wall_s: 0.0,
             cpu_s: 0.0,
             mem_peak_mib: 0,
+            mem_overshoot_mib: None,
             disturbed: false,
             log: dir.join(LOG).display().to_string(),
         };

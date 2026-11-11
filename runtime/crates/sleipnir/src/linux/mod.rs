@@ -1,6 +1,6 @@
 //! The Linux side of a runner: what a scheduler reads about the machine ([`probe`]), the files two schedulers on one
 //! machine share ([`reserve`]), and the executor: the slice tree ([`slices`]), a job's unit ([`unit`]), job-exec
-//! ([`jobexec`]) and its `result.json` ([`result`]), live resizing ([`resize`]), the row parsers ([`parse`]), the one
+//! ([`jobexec`]) and its `result.json` ([`result`]), a job's disk watch ([`disk`]), live resizing ([`resize`]), the row parsers ([`parse`]), the one
 //! podman argv ([`podman`]), whether podman can run a networked job ([`netcheck`]), a confined SELinux login that can't
 //! run containers ([`confined`]) and jobq's shim ([`shim`]).
 //!
@@ -16,6 +16,9 @@ pub mod podman;
 pub mod result;
 pub mod shim;
 
+/// also a Mac's job-exec's (no job helper there)
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod disk;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod jobexec;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
