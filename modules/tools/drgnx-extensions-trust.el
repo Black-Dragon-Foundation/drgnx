@@ -440,6 +440,8 @@ the installed copy; the review is ready when every comparison is."
         (user-error "The downloaded update of %s changed since you reviewed it: Update again" name)))
     (drgnx-extensions-trust--review-put name :state 'applying)
     (drgnx-extensions-jobs-run 'upgrade (list name) :staged t
+                               :expect (mapcar (lambda (e) (cons (symbol-name (car e)) (plist-get (cdr e) :sha256)))
+                                               (plist-get (drgnx-extensions-trust-review name) :entries))
                                :callback (lambda (id why)
                                            (if id (drgnx-extensions-trust--review-put name :job id)
                                              (drgnx-extensions-trust--review-put name :state 'failed :error why))))))

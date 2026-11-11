@@ -347,7 +347,8 @@ package staged over it) is refused: no job."
         (drgnx-extensions-trust-apply "magit")
         (let ((apply (car drgnx-extensions-trust-test--starts)))
           (should (= 2 (length drgnx-extensions-trust-test--starts)))
-          (should (equal (cdr (plist-get apply :argv)) (list "upgrade" "--staged" "--progress"
+          ;; the hashes the review showed travel with the job: the run compares them with the file it finds
+          (should (equal (cdr (plist-get apply :argv)) (list "upgrade" "--staged" "--expect" "magit=abc123" "--progress"
                                                              (car (last (plist-get apply :argv))))))))
       ;; again, but another review staged over magit's before Apply
       (cl-letf (((symbol-function 'drgnx-extensions-trust--diff) (lambda (_n _e callback) (funcall callback "x\n" nil))))
@@ -359,5 +360,15 @@ package staged over it) is refused: no job."
         (drgnx-file-write (drgnx-pkg-staged-file) '((forge :version "0.5" :file "forge-0.5.tar" :sha256 "fff" :verified nil)))
         (should-error (drgnx-extensions-trust-apply "magit") :type 'user-error)
         (should (= 3 (length drgnx-extensions-trust-test--starts)))))))
+
+(ert-deftest drgnx-extensions-trust/a-staged-update-that-differs-from-the-reviewed-one-stops-the-run ()
+  "M12: `drgnx upgrade --staged --expect NAME=SHA256' stops before any change when the staged file is not exactly the
+reviewed packages at the reviewed hashes (a second review replaced it after the Apply, before the job read it)."
+  (drgnx-extensions-trust-test--with
+    (drgnx-file-write (drgnx-pkg-staged-file) '((magit :version "4.2" :file "magit-4.2.tar" :sha256 "abc123" :verified nil)))
+    (dolist (expect '((("magit" . "other")) (("forge" . "abc123")) (("magit" . "abc123") ("forge" . "fff"))))
+      (let ((err (should-error (drgnx-pkg-upgrade :staged t :expect expect))))
+        (should (string-search "changed since it was reviewed" (error-message-string err)))))
+    (should (file-exists-p (drgnx-pkg-staged-file)))))   ; nothing ran: the list is still there
 
 ;;; extensions-trust-test.el ends here

@@ -318,13 +318,16 @@ packages, t for any, nil for none)."
   (let ((text (lambda (x) (format "%s" x))))
     (pcase kind
       ('upgrade
-       (cl-destructuring-bind (names &key stage staged &allow-other-keys) args
+       (cl-destructuring-bind (names &key stage staged expect &allow-other-keys) args
          (let* ((names (mapcar #'drgnx-extensions-jobs--name names)) (said (mapconcat #'symbol-name names ", ")))
            (list (cond (stage (concat "download the update of " said))
                        (staged (concat "install the reviewed update of " said))
                        (t (concat "update " said)))
-                 ;; --staged goes alone: it installs exactly the entries --stage listed, hashes checked
-                 (if staged '("upgrade" "--staged" progress)
+                 ;; --staged goes alone: it installs exactly the entries --stage listed, hashes checked; EXPECT ((NAME . SHA256)…)
+                 ;; is what the review showed, which the run compares with the staged file before it changes anything
+                 (if staged (append '("upgrade" "--staged")
+                                    (and expect (cons "--expect" (mapcar (lambda (e) (format "%s=%s" (car e) (cdr e))) expect)))
+                                    '(progress))
                    (append '("upgrade" "--only") (mapcar #'symbol-name names) (and stage '("--stage")) '(progress)))
                  names
                  (and (not stage) (if staged t names))))))   ; a staged update may bring what NAMES need
@@ -349,8 +352,10 @@ packages, t for any, nil for none)."
 (defun drgnx-extensions-jobs-run (kind &rest args)
   "Start the Extensions job KIND with ARGS; its token.  The job's id comes to the :callback in ARGS, called with (ID
 WHY) once the hub answers (ID nil: it did not start, for WHY).  KIND and ARGS:
-  upgrade NAMES [:stage t | :staged t]  update NAMES; :stage downloads and checks only, :staged installs what was
-                                        staged (`drgnx upgrade --only NAMES …')
+  upgrade NAMES [:stage t | :staged t [:expect ((NAME . SHA256)…)]]
+                                        update NAMES; :stage downloads and checks only, :staged installs what was
+                                        staged, :expect the hashes the review showed (`drgnx upgrade --staged
+                                        --expect NAME=SHA256 …' refuses a staged file that differs)
   upgrade-all                           update every package
   rollback N                            back to generation N (nil: the one before)
   refresh                               refresh the catalog
