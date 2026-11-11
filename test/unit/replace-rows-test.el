@@ -398,4 +398,80 @@ label row is drawn as the hub sends it and is no match: pressing it shows nothin
     (should (search-forward "ƒ outer" nil t))
     (should (eq 'drgnx-replace-ctx (get-text-property (match-beginning 0) 'face)))))
 
+(defun drgnx-replace-rows-test--scope ()
+  "The scope the last `search/run' sent."
+  (drgnx-replace-rows-test--search (cdar drgnx-replace-rows-test--calls) :scope))
+
+(ert-deftest drgnx-replace-rows/scope-chips-send-the-scope ()
+  "Pattern D: the scope row's chips (Project, This file, Open, Changed, Staged, Branch ▾), one on at a time, each a
+`search/run' of its scope; Open sends the files normal buffers visit under the root; `±' (changed lines only) is
+greyed out but in a git scope and goes with it; Next Scope cycles the chips."
+  (drgnx-replace-rows-test--with
+    (drgnx-replace--fill 'find "needle")
+    (should-not (drgnx-replace-rows-test--active :lines))
+    (drgnx-replace--set-scope 'changed)
+    (should (equal '(:kind "changed") (drgnx-replace-rows-test--scope)))
+    (should (eq 'drgnx-replace-on (widget-get (drgnx-replace--widget 'changed) :button-face)))
+    (should (eq 'drgnx-replace-dim (widget-get (drgnx-replace--widget 'project) :button-face)))
+    (should (drgnx-replace-rows-test--active :lines))
+    (drgnx-replace--toggle :lines)
+    (should (equal '(:kind "changed" :changed_lines t) (drgnx-replace-rows-test--scope)))
+    (drgnx-replace-search-scope-next)
+    (should (equal '(:kind "staged" :changed_lines t) (drgnx-replace-rows-test--scope)))
+    (let ((other (get-buffer-create " *rr-open*")) (open (get-buffer-create "rr-open.el")))
+      (unwind-protect
+          (progn
+            (with-current-buffer open (setq buffer-file-name "/r/a.el"))
+            (with-current-buffer other (setq buffer-file-name "/elsewhere/b.el"))
+            (drgnx-replace--set-scope 'open)
+            (should-not (drgnx-replace-rows-test--active :lines))
+            (should (equal '(:kind "open" :files ["/r/a.el"]) (drgnx-replace-rows-test--scope))))
+        (dolist (b (list other open)) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))))
+    (drgnx-replace--set-scope 'project)
+    (should (equal '(:kind "project") (drgnx-replace-rows-test--scope)))))
+
+(ert-deftest drgnx-replace-rows/a-git-scope-says-what-it-searched ()
+  "Pattern D: the end of a git scope's search counts its files on the chip and the status line, with the submodules
+and deleted files it skipped; an empty scope says why; a Branch with no base to take asks for one (a Choose… link)."
+  (drgnx-replace-rows-test--with
+    (drgnx-replace--fill 'find "needle")
+    (drgnx-replace--set-scope 'changed)
+    (drgnx-replace--hub-event "search-run-done"
+                              (list :view view :run 1 :files 2 :matches 3
+                                    :scope (list :files 7 :submodules 2 :deleted 1)))
+    (should (equal "Changed 7" (string-trim (widget-value (drgnx-replace--widget 'changed)))))
+    (should (string-match-p "Changed: 7 files · 2 submodules not searched · 1 deleted"
+                            (drgnx-replace-rows-test--status)))
+    (drgnx-replace--set-scope 'staged)
+    (should (equal "Changed" (string-trim (widget-value (drgnx-replace--widget 'changed)))))
+    (drgnx-replace--hub-event "search-run-done"
+                              (list :view view :run 2 :files 0 :matches 0
+                                    :scope (list :files 0 :why_empty "nothing staged")))
+    (should (string-match-p "Staged: nothing staged" (drgnx-replace-rows-test--status)))
+    (drgnx-replace--set-scope 'branch)
+    (drgnx-replace--hub-event "search-run-done"
+                              (list :view view :run 3 :files 0 :matches 0 :error "choose a base: detached HEAD"
+                                    :scope (list :files 0 :needs_base "choose a base: detached HEAD")))
+    (should (string-match-p "choose a base: detached HEAD.*Choose…" (drgnx-replace-rows-test--status)))))
+
+(ert-deftest drgnx-replace-rows/the-branch-menu-picks-a-base ()
+  "Pattern D: Branch ▾ pressed while Branch is on opens its menu (`search/scope-bases': the upstream, the default and
+recent branches); the base picked goes with the search and on the chip."
+  (drgnx-replace-rows-test--with
+    (drgnx-replace--fill 'find "needle")
+    (drgnx-replace--set-scope 'branch)
+    (should (equal '(:kind "branch") (drgnx-replace-rows-test--scope)))
+    (let (asked offered)
+      (cl-letf (((symbol-function 'drgnx-hub-call-sync)
+                 (lambda (method params &rest _) (setq asked (cons method params))
+                   (list :current "work" :upstream "origin/main" :default "origin/main" :recent ["main" "dev"]
+                         :detached :false)))
+                ((symbol-function 'completing-read)
+                 (lambda (_prompt coll &rest _) (setq offered (all-completions "" coll)) "dev")))
+        (drgnx-replace--branch-pressed))
+      (should (equal '("search/scope-bases" :root "/r/") asked))
+      (should (equal '("origin/main" "main" "dev") offered)))
+    (should (equal '(:kind "branch" :base "dev") (drgnx-replace-rows-test--scope)))
+    (should (equal "Branch dev ▾" (string-trim (widget-value (drgnx-replace--widget 'branch)))))))
+
 ;;; replace-rows-test.el ends here

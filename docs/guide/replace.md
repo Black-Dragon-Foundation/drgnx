@@ -12,7 +12,8 @@ brings it back) with the word at point, or the selected text, in **Find**. It ha
 - the **mode chip** at the left of **Find** (what Find means: **Text**, **Symbol** or **Meaning**; below), and
   **Replace**;
 - toggles: **Aa** (match case), **ab** (whole word), **.\*** (regular expression);
-- the scope: **Project** (the project of the file you were in) or **This file**;
+- the scope chips, one on at a time (below): **Project** (the project of the file you were in), **This file**,
+  **Open**, **Changed**, **Staged**, **Branch ▾**, and **±** (changed lines only);
 - **Include** and **Exclude**: globs, comma-separated (`src/**, *.el`); a glob without a slash matches at any depth;
 - **Replace All** and **Undo**, then a status line (how many results, what the last replacement did).
 
@@ -33,6 +34,29 @@ In code files, a dim label row (`ƒ` and a name) goes above the first match insi
 definition, so you see where a match is without opening it; the next matches in the same definition follow without
 one, and a match outside every definition has none. Hover a label for the names around it (`impl P › get`). Labels
 are not matches: no tick box, and Next Match skips them. Turn them off with the setting `drgnx-search-context`.
+
+## Scopes
+
+The scope chips say which files a Text search reads; **Include** and **Exclude** still narrow them. Clicking a chip,
+or **Search: Next Scope** (`M-s` in the view; `C-c C-o` in the Emacs and Vim profiles), searches again.
+
+- **Project**: every file of the project, as the ignore rules say. **This file**: the file the view was opened from.
+- **Open**: the files open in the editor under the project.
+- **Changed**: the working tree's modified, added and untracked files. **Search: In Changed Files** (`C-k C-g`;
+  `C-c s g`; `SPC s g`) opens the view there.
+- **Staged**: the files with staged changes. Their text in the working tree is what is searched (what an edit would
+  change).
+- **Branch ▾**: the files changed since this branch left its base, and the working tree's changes. The base is the
+  branch's upstream, else `main`, else `master`; pressing Branch again opens its menu (the upstream and the branches
+  committed to lately, or any name you type), and the chip shows the base you picked. On a detached HEAD or a branch
+  with no commit yet there is no base to take: the status line asks, with a **Choose…** link. **Search: In Files
+  Changed on This Branch** (`C-c s b`; `SPC s b`; the palette in VS Code) opens the view there.
+- **±** (Changed, Staged and Branch): only matches on lines the changes added; a new file counts whole. For a staged
+  file that also has unstaged changes, its working-tree changes count.
+
+The status line says what a git scope searched ("Changed: 7 files · 2 submodules not searched · 1 deleted"), and the
+chip shows the count. Submodules and deleted files are not searched; a renamed file is searched at its new name. An
+empty scope says why ("nothing staged"); a folder outside git says so. Symbol and Meaning search the whole project.
 
 ## Modes: Text, Symbol, Meaning
 
@@ -106,6 +130,9 @@ view, scope This file.
 | Close Find Bar | `<escape>` | `<escape>` | `<escape>` |
 | Next Mode (the Search view) | `M-m` | `C-c C-m` | `C-c C-m` |
 | Text / Symbol / Meaning Mode | palette | palette | palette |
+| Next Scope (the Search view) | `M-s` | `C-c C-o` | `C-c C-o` |
+| In Changed Files | `C-k C-g` (anywhere) | `C-c s g` | `SPC s g` |
+| In Files Changed on This Branch | palette | `C-c s b` | `SPC s b` |
 
 Except where marked, the keys work in the Search view and the find bar, their fields too; `RET` in a find bar field
 is its next match (in Replace: replace it). Next and Previous Match show the match in the editor; Next and Previous

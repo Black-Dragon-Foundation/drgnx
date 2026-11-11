@@ -40,6 +40,7 @@
 (declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
 (declare-function nidhogg-view-set "nidhogg-views" (h what value))
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
+(declare-function drgnx-hub-call-sync "drgnx-hub-client")
 (declare-function drgnx-view-env-register "drgnx-view-env" (view buffer &optional resubscribe))
 (declare-function drgnx-view-env-unregister "drgnx-view-env" (view))
 (defvar drgnx-hub--events)
@@ -358,9 +359,20 @@ A file edited, killed or changed on disk since is left alone.  Returns (:undone 
 (defconst drgnx-replace-bar-buffer-name "*drgnx find*")
 
 (defvar-local drgnx-replace--widgets nil
-  "Alist NAME → widget: fields `find' `replace' `include' `exclude', toggles :symbol :case :word :regexp, scopes
-`project' `file'.")
-(defvar-local drgnx-replace--opts nil "Plist (:symbol :case :word :regexp :scope).")
+  "Alist NAME → widget: fields `find' `replace' `include' `exclude', toggles :symbol :case :word :regexp :lines, the
+mode chip `mode' and the scope chips (`drgnx-replace--scopes').")
+(defvar-local drgnx-replace--opts nil
+  "Plist (:mode :symbol :case :word :regexp :scope :base :lines): :base is Branch's chosen base, :lines `±'.")
+(defconst drgnx-replace--scopes
+  '((project "Project" "Search every file of the project")
+    (file "This file" "Search only the file the view was opened from")
+    (open "Open" "Search the files open in the editor")
+    (changed "Changed" "Search the working tree's modified, added and untracked files")
+    (staged "Staged" "Search the files with staged changes (their working-tree text)")
+    (branch "Branch" "Search the files changed on this branch; pressed again, choose the base"))
+  "The Search view's scope chips, in order: (SCOPE LABEL HELP).  The last three are git scopes.")
+(defvar-local drgnx-replace--scope-done nil
+  "What the hub's last search said of its git scope (`search-run-done''s `:scope'), or nil.")
 (defvar-local drgnx-replace--origin nil "Marker: the buffer and point the view or the bar works for (a symbol, This file).")
 (defvar-local drgnx-replace--root nil "The directory the view searches.")
 (defvar-local drgnx-replace--matches nil "The view's matches, in order.")
@@ -493,8 +505,9 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
 
 (defun drgnx-replace--button-face (name)
   "The face of button NAME: on or off, for toggles and scopes."
-  (cond ((memq name '(:symbol :case :word :regexp)) (if (drgnx-replace--opt name) 'drgnx-replace-on 'drgnx-replace-dim))
-        ((memq name '(project file)) (if (eq (drgnx-replace--opt :scope) name) 'drgnx-replace-on 'drgnx-replace-dim))
+  (cond ((memq name '(:symbol :case :word :regexp :lines))
+         (if (drgnx-replace--opt name) 'drgnx-replace-on 'drgnx-replace-dim))
+        ((assq name drgnx-replace--scopes) (if (eq (drgnx-replace--opt :scope) name) 'drgnx-replace-on 'drgnx-replace-dim))
         (t 'widget-button)))
 
 (defun drgnx-replace--restyle (name)
@@ -585,12 +598,104 @@ no globs; Symbol keeps Aa); Rename (the language server's edits) keeps the repla
         (drgnx-replace--restyle name))
       (drgnx-replace--requery))))
 
+(defun drgnx-replace--git-scope-p ()
+  "Non-nil when the view searches a git scope (Changed, Staged, Branch)."
+  (memq (drgnx-replace--opt :scope) '(changed staged branch)))
+
+(defun drgnx-replace--scope-label (scope)
+  "Chip SCOPE's text: its name, Branch's base and ▾, and the file count the last search of it gave."
+  (let ((n (and (eq scope (drgnx-replace--opt :scope)) (plist-get drgnx-replace--scope-done :files)))
+        (base (and (eq scope 'branch) (drgnx-replace--opt :base))))
+    (concat (nth 1 (assq scope drgnx-replace--scopes)) (and base (concat " " base)) (and n (format " %d" n))
+            (and (eq scope 'branch) " ▾"))))
+
+(defun drgnx-replace--apply-scope ()
+  "Draw the scope chips as the view's scope makes them: on or off, their labels; `±' only in a git scope."
+  (let ((buffer-undo-list t))
+    (pcase-dolist (`(,scope . ,_) drgnx-replace--scopes)
+      (when-let* ((w (drgnx-replace--widget scope)))
+        (widget-put w :button-face (drgnx-replace--button-face scope))
+        (save-excursion (widget-value-set w (drgnx-replace--scope-label scope)))))
+    (when-let* ((w (drgnx-replace--widget :lines)))
+      (widget-apply w (if (drgnx-replace--git-scope-p) :activate :deactivate)))))
+
 (defun drgnx-replace--set-scope (scope)
-  "Search the project or this file (SCOPE `project' or `file'), and search again."
-  (setq drgnx-replace--opts (plist-put drgnx-replace--opts :scope scope))
-  (drgnx-replace--restyle 'project)
-  (drgnx-replace--restyle 'file)
+  "Search SCOPE (a chip of `drgnx-replace--scopes'), and search again."
+  (setq drgnx-replace--opts (plist-put drgnx-replace--opts :scope scope)
+        drgnx-replace--scope-done nil)
+  (drgnx-replace--apply-scope)
   (drgnx-replace--requery))
+
+(defun drgnx-replace--branch-pressed ()
+  "The Branch chip: Branch on, or, when it is, its menu of bases."
+  (if (eq (drgnx-replace--opt :scope) 'branch) (drgnx-replace--choose-base) (drgnx-replace--set-scope 'branch)))
+
+(defun drgnx-replace--choose-base ()
+  "The Branch menu: the base to search the branch's changes against (the upstream, the default, recent branches, or
+any name typed), from `search/scope-bases'.  Only from a command or a press: it asks."
+  (unless (fboundp 'drgnx-hub-call-sync) (require 'drgnx-hub-client))
+  (let* ((b (drgnx-hub-call-sync "search/scope-bases" (list :root drgnx-replace--root)))
+         (names (delete-dups (delq nil (append (list (plist-get b :upstream) (plist-get b :default))
+                                               (append (plist-get b :recent) nil)))))
+         (pick (string-trim (completing-read "Search the branch's changes against: " names))))
+    (unless (string-empty-p pick)
+      (setq drgnx-replace--opts (plist-put drgnx-replace--opts :base pick))
+      (drgnx-replace--set-scope 'branch))))
+
+(defun drgnx-replace--open-files ()
+  "The files normal buffers visit under the root, sorted, as a vector (the Open scope)."
+  (let ((root (file-name-as-directory (expand-file-name drgnx-replace--root))) out)
+    (dolist (b (buffer-list))
+      (when-let* ((f (buffer-file-name b)) ((not (string-prefix-p " " (buffer-name b))))
+                  ((not (file-remote-p f))) ((string-prefix-p root f)))
+        (push f out)))
+    (vconcat (sort (delete-dups out) #'string<))))
+
+(defun drgnx-replace--scope-param (file)
+  "The scope `search/run' takes: FILE's for This file (the project without one), the open files, or a git scope with
+Branch's base and `±'."
+  (pcase (drgnx-replace--opt :scope)
+    ('file (if file (list :kind "file" :files (vector file)) (list :kind "project")))
+    ('open (list :kind "open" :files (drgnx-replace--open-files)))
+    ((and s (or 'changed 'staged 'branch))
+     (append (list :kind (symbol-name s))
+             (when-let* (((eq s 'branch)) (base (drgnx-replace--opt :base))) (list :base base))
+             (and (drgnx-replace--opt :lines) (list :changed_lines t))))
+    (_ (list :kind "project"))))
+
+(defun drgnx-replace--scope-text ()
+  "What the status line says of the last search's git scope: its files and what it skipped, or why it is empty."
+  (when-let* ((d drgnx-replace--scope-done) ((not (plist-get d :needs_base)))
+              (name (nth 1 (assq (drgnx-replace--opt :scope) drgnx-replace--scopes))))
+    (if-let* ((why (plist-get d :why_empty)))
+        (format "%s: %s" name why)
+      (let ((n (or (plist-get d :files) 0)) (sub (or (plist-get d :submodules) 0)) (del (or (plist-get d :deleted) 0)))
+        (string-join (delq nil (list (format "%s: %d file%s" name n (if (= n 1) "" "s"))
+                                     (and (> sub 0) (format "%d submodule%s not searched" sub (if (= sub 1) "" "s")))
+                                     (and (> del 0) (format "%d deleted" del))))
+                     " · ")))))
+
+(defun drgnx-replace--scope-command (scope)
+  "Search the Search view in SCOPE (nil: the chip after its scope)."
+  (with-current-buffer (drgnx-replace--live-view)
+    (drgnx-replace--set-scope
+     (or scope (car (or (cadr (memq (assq (drgnx-replace--opt :scope) drgnx-replace--scopes) drgnx-replace--scopes))
+                        (car drgnx-replace--scopes)))))))
+
+(defun drgnx-replace-search-scope-next ()
+  "The Search view's next scope: Project → This file → Open → Changed → Staged → Branch → Project; it searches again."
+  (interactive)
+  (drgnx-replace--scope-command nil))
+
+(defun drgnx-replace-search-scope-changed ()
+  "Show the Search view searching the working tree's changed files, the word at point to find."
+  (interactive)
+  (drgnx-replace--open :scope 'changed))
+
+(defun drgnx-replace-search-scope-branch ()
+  "Show the Search view searching the files changed on this branch, the word at point to find."
+  (interactive)
+  (drgnx-replace--open :scope 'branch))
 
 (defun drgnx-replace--symbol-at (marker)
   "The name at MARKER, or nil."
@@ -657,7 +762,8 @@ no globs; Symbol keeps Aa); Rename (the language server's edits) keeps the repla
 
 (defun drgnx-replace--render-view ()
   "Draw the view's fields, toggles and buttons; the results go below."
-  (setq drgnx-replace--opts (list :mode 'text :symbol nil :case nil :word nil :regexp nil :scope 'project)
+  (setq drgnx-replace--opts (list :mode 'text :symbol nil :case nil :word nil :regexp nil :scope 'project
+                                  :base nil :lines nil)
         drgnx-replace--widgets nil
         drgnx-replace--off (make-hash-table :test #'eq)
         drgnx-replace--seen (make-hash-table :test #'equal)
@@ -672,10 +778,12 @@ no globs; Symbol keeps Aa); Rename (the language server's edits) keeps the repla
   (drgnx-replace--insert-field 'replace "Replace   " nil)
   (drgnx-replace--insert-toggles)
   (widget-insert "\n")
-  (drgnx-replace--insert-button 'project "Project" "Search every file of the project"
-                                (lambda () (drgnx-replace--set-scope 'project)))
-  (drgnx-replace--insert-button 'file "This file" "Search only the file the view was opened from"
-                                (lambda () (drgnx-replace--set-scope 'file)))
+  (pcase-dolist (`(,scope ,_ ,help) drgnx-replace--scopes)
+    (drgnx-replace--insert-button scope (drgnx-replace--scope-label scope) help
+                                  (if (eq scope 'branch) #'drgnx-replace--branch-pressed
+                                    (lambda () (drgnx-replace--set-scope scope)))))
+  (drgnx-replace--insert-button :lines "±" "Changed lines only: matches in the lines the scope's changes added"
+                                (lambda () (drgnx-replace--toggle :lines)))
   (widget-insert "\n")
   (drgnx-replace--insert-field 'include "Include   " nil)
   (drgnx-replace--insert-field 'exclude "Exclude   " nil)
@@ -688,6 +796,7 @@ no globs; Symbol keeps Aa); Rename (the language server's edits) keeps the repla
   (widget-insert "\n")
   (setq drgnx-replace--results (point-marker))
   (widget-setup)
+  (drgnx-replace--apply-scope)
   (goto-char (widget-field-start (drgnx-replace--widget 'find))))
 
 (defmacro drgnx-replace--drawing (&rest body)
@@ -703,13 +812,21 @@ no globs; Symbol keeps Aa); Rename (the language server's edits) keeps the repla
                        ((zerop n) (if (string-empty-p (drgnx-replace--text 'find)) (drgnx-replace--hint) "No results"))
                        (t (format "%s%d result%s in %d file%s" (if drgnx-replace--searching "Searching… " "")
                                   n (if (= n 1) "" "s") files (if (= files 1) "" "s")))))
-         (line (string-join (seq-remove #'string-empty-p (list counts drgnx-replace--status)) " · ")))
+         (line (string-join (seq-remove #'string-empty-p
+                                        (list counts (or (drgnx-replace--scope-text) "") drgnx-replace--status))
+                            " · ")))
     (drgnx-replace--drawing
      (delete-region drgnx-replace--status-beg drgnx-replace--status-end)
      (goto-char drgnx-replace--status-beg)
      (insert (propertize line 'face 'drgnx-replace-dim))
+     ;; Branch with no base to take (a detached HEAD, no upstream, main or master): its menu
+     (when (plist-get drgnx-replace--scope-done :needs_base)
+       (insert (propertize " · " 'face 'drgnx-replace-dim))
+       (insert-text-button "Choose…" 'face 'link 'follow-link t 'help-echo "Choose the branch's base"
+                           'action (lambda (_) (drgnx-replace--choose-base))))
      ;; no automatic mode: a text search that found nothing offers the same words by meaning
-     (when (and (equal counts "No results") (eq (drgnx-replace--opt :mode) 'text) (not (drgnx-replace--opt :symbol)))
+     (when (and (equal counts "No results") (eq (drgnx-replace--opt :mode) 'text) (not (drgnx-replace--opt :symbol))
+                (not (plist-get drgnx-replace--scope-done :needs_base)))
        (insert (propertize " · " 'face 'drgnx-replace-dim))
        (insert-text-button "Try Meaning" 'face 'link 'follow-link t 'help-echo "Search these words by meaning"
                            'action (lambda (_) (drgnx-replace-search-mode-meaning)))))))
@@ -1009,9 +1126,9 @@ ORIGIN: the marker the view works for (default: point in the editor)."
         (when (plist-member opts k)
           (setq drgnx-replace--opts (plist-put drgnx-replace--opts k (plist-get opts k)))
           (drgnx-replace--restyle k)))
-      (setq drgnx-replace--opts (plist-put drgnx-replace--opts :scope scope))
-      (drgnx-replace--restyle 'project)
-      (drgnx-replace--restyle 'file)
+      (setq drgnx-replace--opts (plist-put drgnx-replace--opts :scope scope)
+            drgnx-replace--scope-done nil)
+      (drgnx-replace--apply-scope)
       (when (if (eq symbol 'auto) (drgnx-replace--renamable-p origin) symbol) (drgnx-replace--set-symbol t)))
     (drgnx-wb-show-view 'search)
     (select-window (drgnx-wb-section-window 'search))
@@ -1427,9 +1544,7 @@ text is sent too: the hub empties the rows and stops the search before.  The mat
                                                   (_ (list :mode "text" :text text :case (funcall on :case)
                                                            :word (funcall on :word) :regexp (funcall on :regexp)))))
                                    (and text-p (list :replace (drgnx-replace--text 'replace)))
-                                   (list :scope (if file
-                                                    (list :kind "file" :files (vector file))
-                                                  (list :kind "project")))
+                                   (list :scope (drgnx-replace--scope-param file))
                                    (when-let* ((_ text-p) (g (funcall globs 'include))) (list :include (vconcat g)))
                                    (when-let* ((_ text-p) (g (funcall globs 'exclude))) (list :exclude (vconcat g)))))
              (and off (list :off (vconcat off)))
@@ -1462,6 +1577,8 @@ the matches the user had unticked before it (`:off')."
           (setq drgnx-replace--searching nil
                 drgnx-replace--hub-counts (cons (or (plist-get data :files) 0) (or (plist-get data :matches) 0)))
           (when-let* ((err (plist-get data :error))) (setq drgnx-replace--status (format "%s" err)))
+          (setq drgnx-replace--scope-done (plist-get data :scope))
+          (drgnx-replace--apply-scope)
           (drgnx-replace--hub-listed)
           (drgnx-replace--watch)
           (drgnx-replace--update-status))))))
@@ -1951,7 +2068,13 @@ The find bar's button; not a command of its own (it needs the bar)."
                    (search-mode-symbol "Symbol Mode" drgnx-replace-search-mode-symbol
                                        "The Search view finds a name's definitions, then its uses (read-only)")
                    (search-mode-meaning "Meaning Mode" drgnx-replace-search-mode-meaning
-                                        "The Search view finds the code its words describe (read-only)")))
+                                        "The Search view finds the code its words describe (read-only)")
+                   (search-scope-next "Next Scope" drgnx-replace-search-scope-next
+                                      "The Search view's next scope (Project → This file → Open → Changed → Staged → Branch)")
+                   (search-scope-changed "In Changed Files" drgnx-replace-search-scope-changed
+                                         "The Search view in the working tree's changed files, the word at point to find")
+                   (search-scope-branch "In Files Changed on This Branch" drgnx-replace-search-scope-branch
+                                        "The Search view in the files changed on this branch, the word at point to find")))
     (drgnx-command-define id :category "Search" :title title :command fn :doc doc :scope scope))
   (drgnx-command-define 'replace-this :category "Search" :title "Replace This Match" :command #'drgnx-replace-this
                         :doc "Replace the match on this row of the Search view"
