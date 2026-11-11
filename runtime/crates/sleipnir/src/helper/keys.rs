@@ -27,12 +27,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use zeroize::Zeroize;
 
-/// The socket `serve` hands keys over, in the attempt's folder.
-pub const HELPER_SOCK: &str = "helper.sock";
-/// The record of key requests that timed out (one name per line).
-pub const KEY_TIMEOUT: &str = crate::linux::jobexec::KEY_TIMEOUT;
-/// The record of delivered reads (`{"name":…,"at":…}` per line).
-pub const KEY_USE: &str = "key-use";
+/// The socket `serve` hands keys over, and the records of key requests that timed out (one name per line) and of
+/// delivered reads (`{"name":…,"at":…}` per line), in the attempt's folder.
+pub use crate::linux::jobexec::{HELPER_SOCK, KEY_TIMEOUT, KEY_USE};
 /// How long a request waits for its key.
 pub const KEY_WAIT: Duration = Duration::from_secs(60);
 /// `drgnx-key`'s exit status when its key never came.

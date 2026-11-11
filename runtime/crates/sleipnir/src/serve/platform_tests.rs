@@ -124,6 +124,9 @@ impl Platform for Fake {
     fn set_weight(&self, _unit: &str, _w: u32) -> Result<(), String> {
         Ok(())
     }
+    fn hand_key(&self, _dir: &Path, _name: &str, _value: &[u8]) -> io::Result<()> {
+        Err(io::ErrorKind::NotFound.into())
+    }
     fn cleanup(&self, _root: &Path, _owner: &cleanup::Owner) {
         self.calls.borrow_mut().cleanups += 1;
     }
@@ -269,10 +272,11 @@ fn an_attempt_runs_through_the_platform() {
     // a cancel while it runs is the platform's kill, after the reason is written
     s.handle(Frame::Cancel { r: jr() });
     assert_eq!(calls.borrow().killed, vec!["j1".to_string()]);
-    // the unit is down: the log, then finished
+    // the unit is down: the poll that checks units (tick's, every READY_EVERY) pumps the log, then finished; the
+    // ended attempt's cleanup goes through the platform
     up.borrow_mut().clear();
-    s.last_units = Instant::now() - READY_EVERY;
-    s.tick();
+    assert_eq!(s.pump(&("j1".to_string(), 1), true), Ok(true));
+    s.cleanup();
     let frames = out.take();
     assert!(
         frames.iter().any(|f| matches!(f, Frame::Log { .. })),

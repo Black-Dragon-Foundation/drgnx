@@ -239,7 +239,10 @@ job, in queue order, the hub builds a `Candidate` per machine (the local one wit
   | `private+keys` | yes | if every key is on that runner's list | no |
 
 - **`filter(job, c, send, machines_cell_allows)`**, the hard filters in this order: trust and the pin (`local_only`,
-  or `on` naming another machine), features, the runner's state (benched, needs login, needs keys, awaiting the
+  or `on` naming another machine), the OS (`JobSpec.os`, default `linux`, must equal the candidate's `os`: a
+  container job never places on a Mac runner, a `macos` job waits "needs a Mac runner"; the hub's own machine is
+  `linux`, since a hub on a Mac runs its container jobs in podman's Linux machine; and a keyed job is refused on a
+  Mac, `Trust` with the reason), features, the runner's state (benched, needs login, needs keys, awaiting the
   user's confirm, unreachable, draining or preempting), the project's send mode and the runner's accept mode (a job
   leaves only if the project sends it and the runner accepts it), and the starter's `machines` matrix cell. The local
   machine passes trust, the modes and the cell always.

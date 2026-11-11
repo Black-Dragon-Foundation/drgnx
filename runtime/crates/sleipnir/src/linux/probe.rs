@@ -612,7 +612,14 @@ pub fn os_release(text: &str) -> String {
     }
 }
 
+/// The kernel's Landlock ABI version; 0 without Landlock (and on a Mac, which builds this module for job-exec's types).
+#[cfg(not(target_os = "linux"))]
+pub fn landlock_abi() -> u32 {
+    0
+}
+
 /// The kernel's Landlock ABI version; 0 without Landlock.
+#[cfg(target_os = "linux")]
 pub fn landlock_abi() -> u32 {
     // landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION) answers the ABI version
     let r = unsafe {

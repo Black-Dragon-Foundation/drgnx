@@ -202,6 +202,7 @@ profile() { # SLOT ATTEMPT CACHE TOOLS DEVDIR USERDIR
   cat "$HERE/../../../runtime/crates/gleipnir/src/sbpl/base.sbpl" 2>/dev/null || cat "$HERE/base.sbpl"
   echo '; the build addition (draft, spike S2)'
   echo '(allow system-socket (socket-domain AF_UNIX))'
+  echo '(allow sysctl-read)'
   echo '(deny file-read* (subpath "/Users"))'
   echo '(allow file-read* (literal "/"))'
   printf '(allow file-read-metadata'
@@ -254,7 +255,8 @@ s2_build() { # NIDHOGG_CHECKOUT
   sudo cp "$r/att-s2/build.log" "$OUT/s2-build-full.log" 2>/dev/null; sudo chmod 644 "$OUT/s2-build-full.log" 2>/dev/null
   say "- $(printf '%s' "$out" | grep -E 'build-rc=|developer dir' | tr '\n' ' ')"
   say "- watchdog during the build: $(printf '%s' "$out" | grep -E '^verdict=' | head -n 1)"
-  if printf '%s' "$out" | grep -q 'build-rc=0'; then say "- **S2 build: PASS**"; else say "- **S2 build: FAIL** (tail in s2-build.log; denials below)"; fi
+  # the job's own exit, from the watch report (the watcher's exit is always 0)
+  if printf '%s' "$out" | grep -qE '^verdict=exited exit=Some\(0\)'; then say "- **S2 build: PASS**"; else say "- **S2 build: FAIL** (tail in s2-build.log; denials below)"; fi
 }
 
 remote_s2_ert() { # SELECTOR EMACS (relative to the Nidhogg prefix)
@@ -265,17 +267,34 @@ remote_s2_ert() { # SELECTOR EMACS (relative to the Nidhogg prefix)
   cd "$r/slot-drgnx" || return 1
   emacs=$r/tools/nidhogg/$2
   echo "emacs=$emacs"
-  /usr/bin/sandbox-exec -f "$a/ert.sb" /usr/bin/env -i HOME="$a/home" TMPDIR="$a/tmp/" \
+  # in its own session (the watchdog's way), so a hang can be seen and stopped whole: 10 minutes (inside the step's
+  # 20), then the process list and SIGKILL to the session
+  "$r/mrspike" detach "$a/ert.log" -- /usr/bin/sandbox-exec -f "$a/ert.sb" /usr/bin/env -i HOME="$a/home" TMPDIR="$a/tmp/" \
     PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" LANG=en_US.UTF-8 DRGNX_EMACS="$emacs" DRGNX_TEST_SELECTOR="$1" \
-    /bin/bash bin/drgnx test > "$a/ert.log" 2>&1
-  echo "ert-rc=$?"
-  grep -E 'Ran [0-9]+ tests|unexpected' "$a/ert.log" | tail -n 5
+    /bin/bash -c 'bin/drgnx test; echo "ert-rc=$?"' > "$a/pid" 2>&1
+  pid=$(tail -n 1 "$a/pid"); echo "session leader: $pid"
+  waited=0
+  while kill -0 "$pid" 2>/dev/null && [ $waited -lt 600 ]; do sleep 5; waited=$((waited + 5)); done
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "ert-hung after ${waited}s; the runner account's processes (pgid $pid is the job's):"
+    ps -U "$(id -u)" -o pid,ppid,pgid,stat,etime,time,command | cut -c1-300
+    for p in $(ps -U "$(id -u)" -o pid=,pgid= | awk -v g="$pid" '$2 == g { print $1 }'); do
+      echo "--- sample $p"; /usr/bin/sample "$p" 1 2>/dev/null | grep -E '^ +[0-9]+ ' | head -n 25
+    done
+    kill -KILL -- -"$pid" 2>/dev/null
+    echo "ert-rc=hung"
+  fi
+  grep -E 'ert-rc=|Ran [0-9]+ tests|unexpected' "$a/ert.log" | tail -n 5
+  echo "--- log tail"; tail -n 40 "$a/ert.log"
 }
 
 s2_ert() { # DRGNX_CHECKOUT DRGNX_EMACS SELECTOR (the Nidhogg prefix is DRGNX_EMACS's ../..)
   say "## S2: drgnx ERT selectors under the draft build profile"
   r=$(root_of)
-  sudo ditto "$1" "$r/slot-drgnx"
+  # the committed tree only: the checkout's runtime/target holds GBs from the earlier steps (rounds 1-2 spent the
+  # step copying it)
+  sudo mkdir -p "$r/slot-drgnx"
+  git -C "$1" archive HEAD | sudo tar -x -C "$r/slot-drgnx"
   sudo mkdir -p "$r/tools/nidhogg"
   prefix=$(cd -P "$(dirname "$2")/.." && pwd -P); rel=bin/$(basename "$2")
   sudo ditto "$prefix" "$r/tools/nidhogg"
