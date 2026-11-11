@@ -364,7 +364,15 @@ look-scenes' types them)."
 
 (defun drgnx-look-scene-work-space-dark ()
   (drgnx-look-scene--theme 'drgnx-dark)
-  (drgnx-look-scene--try "work space" (drgnx-work-space-open))
+  (drgnx-look-scene--try "work space"
+    (let ((map (drgnx-work-space-open)))
+      ;; the hub sends the map's rows after it opens and the view draws them on a timer once its window shows: the
+      ;; shot waits for the first of them (redisplay and timers run in `sit-for'), not an empty window
+      (let ((end (+ (float-time) 15)))
+        (while (and (zerop (buffer-size map)) (< (float-time) end))
+          (sit-for 0.05)))
+      (when (zerop (buffer-size map))
+        (push "work space: no map rows within 15 s" drgnx-look-scene--errors))))
   (drgnx-look-scene--answer))
 
 ;; The highlights (look step 5b's audit): no mockup of their own; each is judged against the mockups' tokens
@@ -499,6 +507,16 @@ chrome faces, frame metrics, windows, modules."
                   :emacs (list emacs-version (bound-and-true-p nidhogg-version) :glitnir (featurep 'glitnir))
                   :keycap-box (face-attribute 'drgnx-keycap :box f)
                   ;; the floating palette's frame and window, where it is shown: its insets come from these
+                  ;; the Work map, where one is open: what it holds and what feeds it
+                  :work-map (when-let* ((b (seq-find (lambda (b) (eq (buffer-local-value 'major-mode b)
+                                                                     'drgnx-work-map-mode))
+                                                     (buffer-list))))
+                              (with-current-buffer b
+                                (list :text (buffer-substring-no-properties (point-min) (min (point-max) 600))
+                                      :rows (and (fboundp 'drgnx-work-map-rows-p) (drgnx-work-map-rows-p))
+                                      :hub (and (fboundp 'drgnx-hub-running-p) (drgnx-hub-running-p))
+                                      :view (bound-and-true-p drgnx-work-space--view)
+                                      :message (bound-and-true-p drgnx-work-space--message))))
                   :palette (let ((pf (bound-and-true-p drgnx-palette-frame--frame)))
                              (when (and (frame-live-p pf) (frame-visible-p pf))
                                (let ((w (frame-root-window pf)))
