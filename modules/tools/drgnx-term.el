@@ -131,10 +131,13 @@ subscription reads the setting)."
   "Type TEXT into this buffer's terminal, as it is (`term/text')."
   (drgnx-term--send "term/text" (list :text text)))
 
-(defun drgnx-term-send-key (key &optional mods text)
+(defun drgnx-term-send-key (key &optional mods text action)
   "Press KEY (a name: `return', `tab', `a', `f5') with MODS (a list of `ctrl', `shift', `alt', `super') in this
-buffer's terminal; TEXT is what it types.  The worker encodes it from the terminal's modes (`term/key')."
-  (drgnx-term--send "term/key" (append (list :key key :mods (vconcat mods)) (and text (list :text text)))))
+buffer's terminal; TEXT is what it types.  ACTION `repeat' or `release' sends a repeat or a release instead of a press
+\(the program sees them only while it asked for key event types).  The worker encodes it from the terminal's modes
+\(`term/key')."
+  (drgnx-term--send "term/key" (append (list :key key :mods (vconcat mods)) (and text (list :text text))
+                                       (and action (list :action (symbol-name action))))))
 
 (defconst drgnx-term--event-names
   '((13 . "return") (9 . "tab") (127 . "backspace") (return . "return") (tab . "tab") (backspace . "backspace")
@@ -163,7 +166,70 @@ deselects (`drgnx-term-selection-clear-on-typing') and goes back to the cursor (
   (when drgnx-term-selection-clear-on-typing (deactivate-mark))
   (when (memq 'keystroke drgnx-term-scroll-to-bottom) (drgnx-term--place-cursor t))
   (pcase (drgnx-term--event-key last-command-event)
-    (`(,key ,mods ,text) (drgnx-term-send-key key mods text))))
+    (`(,key ,mods ,text)
+     (let ((repeat (bound-and-true-p nidhogg-last-key-repeat)))
+       (drgnx-term-send-key key mods text (and repeat 'repeat))
+       (when (and (not repeat) (drgnx-term--key-events-p))
+         (drgnx-term--hold last-command-event key))))))
+
+;;;; Key releases (Nidhogg): a program that asked for key event types gets repeats and releases
+
+(defvar nidhogg-key-events)
+(defvar nidhogg-last-key-repeat)
+
+(defconst drgnx-term--held-max 32 "The most held keys `drgnx-term--held' remembers (a keyboard holds fewer).")
+
+(defvar drgnx-term--held nil
+  "The keys pressed in a terminal whose program asked for key event types and not released yet, newest first: each
+\(BASIC BUFFER KEY), BASIC the press's `event-basic-type', KEY its `term/key' name.  At most `drgnx-term--held-max'.")
+
+(defun drgnx-term--key-events-p (&optional buffer)
+  "Non-nil when BUFFER (default: the current one) is a terminal whose program asked for key event types (the kitty
+keyboard protocol's flag 2: the patch's `term' says `key_events')."
+  (with-current-buffer (or buffer (current-buffer))
+    (and (derived-mode-p 'drgnx-term-mode) drgnx-view-patch
+         (eq (plist-get (drgnx-view-patch-term drgnx-view-patch) :key_events) t))))
+
+(defun drgnx-term--key-gate ()
+  "Ask Nidhogg for key releases (`nidhogg-key-events') while the selected window shows a terminal whose program wants
+them, or a key pressed in one is still held; else let it drop them.  No-op on another Emacs."
+  (when (boundp 'nidhogg-key-events)
+    (setq nidhogg-key-events
+          (and (or drgnx-term--held (drgnx-term--key-events-p (window-buffer (selected-window)))) t))))
+
+(defun drgnx-term--hold (event key)
+  "Remember that EVENT (sent to this terminal as KEY) is held, for its release."
+  (let ((basic (event-basic-type event)))
+    (setq drgnx-term--held
+          (cons (list basic (current-buffer) key)
+                (seq-take (seq-remove (lambda (h) (or (equal (car h) basic) (not (buffer-live-p (nth 1 h)))))
+                                      drgnx-term--held)
+                          (1- drgnx-term--held-max))))))
+
+(defun drgnx-term--release (held mods)
+  "Send the release of HELD (an entry of `drgnx-term--held') with MODS to its terminal, and forget it."
+  (setq drgnx-term--held (delq held drgnx-term--held))
+  (when (buffer-live-p (nth 1 held))
+    (with-current-buffer (nth 1 held) (drgnx-term-send-key (nth 2 held) mods nil 'release))))
+
+(defun drgnx-term-key-release (event)
+  "A `key-release' special event from Nidhogg, (key-release KEY-EVENT): the release goes to the terminal that got the
+key's press, with the modifiers held at the release; a key no terminal holds is ignored."
+  (interactive "e")
+  (let ((ev (cadr event)))
+    (when-let* ((held (assoc (event-basic-type ev) drgnx-term--held)))
+      (drgnx-term--release held (nth 1 (drgnx-term--event-key ev)))))
+  (drgnx-term--key-gate))
+
+(defun drgnx-term--release-all (&optional buffer)
+  "Release every held key (of BUFFER only, when given): its terminal lost the keyboard, so no release will come."
+  (dolist (h drgnx-term--held)
+    (when (or (null buffer) (eq (nth 1 h) buffer)) (drgnx-term--release h nil)))
+  (drgnx-term--key-gate))
+
+(defun drgnx-term--focus-changed ()
+  "`after-focus-change-function': no frame has the focus, so the keys held in terminals are released."
+  (unless (seq-some #'frame-focus-state (frame-list)) (drgnx-term--release-all)))
 
 ;;;; Which keys reach drgnx, which the program
 
@@ -391,10 +457,13 @@ could run commands asks first (`drgnx-term-clipboard-paste-protection')."
                                                                  mods)))))))))
 
 (defun drgnx-term--selected (window)
-  "`window-selection-change-functions' of a terminal buffer: tell its program it gained or lost the focus."
+  "`window-selection-change-functions' of a terminal buffer: tell its program it gained or lost the focus; one that
+lost it gets the releases of the keys still held in it."
   (let ((in (eq window (selected-window))))
     (with-current-buffer (window-buffer window)
-      (drgnx-term--send "term/focus" (list :in (if in t :false))))))
+      (unless in (drgnx-term--release-all (current-buffer)))
+      (drgnx-term--send "term/focus" (list :in (if in t :false))))
+    (drgnx-term--key-gate)))
 
 ;;;; Settings
 
@@ -561,12 +630,14 @@ window scrolled away from the cursor stays where it is unless ALL or `drgnx-term
             (setq pos next)))))))
 
 (defun drgnx-term--patched (view keys)
-  "PATCHED of `drgnx-term-view': the inserter's overlays back, the links made buttons, then the cursor."
+  "PATCHED of `drgnx-term-view': the inserter's overlays back, the links made buttons, then the cursor; the key
+release gate follows the program's key event types."
   (drgnx-view-patch--patched view keys)
   (with-current-buffer (drgnx-view--buffer view)
     (unless drgnx-term-copy-mode
       (drgnx-term--buttons view keys)
-      (drgnx-term--place-cursor))))
+      (drgnx-term--place-cursor))
+    (when (eq (current-buffer) (window-buffer (selected-window))) (drgnx-term--key-gate))))
 
 (defun drgnx-term--link-file (uri)
   "The local file URI names (`file://' with no host or this host), or nil."
@@ -1138,7 +1209,11 @@ and the next Emacs of the session adopts them."
 (defun drgnx-term--teardown ()
   "Turning the module off: every terminal ends (its buffer killed closes it), and its keymap sends every key again."
   (drgnx-term--fill-map drgnx-term-mode-map nil)
-  (setq drgnx-term--notices nil)
+  (setq drgnx-term--notices nil drgnx-term--held nil)
+  (when (eq (lookup-key special-event-map [key-release]) #'drgnx-term-key-release)
+    (define-key special-event-map [key-release] nil t))
+  (remove-function after-focus-change-function #'drgnx-term--focus-changed)
+  (when (boundp 'nidhogg-key-events) (setq nidhogg-key-events nil))
   (let ((drgnx-term-confirm-close-surface nil))   ; turning the module off asks nothing
     (dolist (b (drgnx-term-buffers)) (kill-buffer b))
     (dolist (b (buffer-list))
@@ -1157,6 +1232,8 @@ and the next Emacs of the session adopts them."
                        (add-hook 'drgnx-surfaces-cheatsheet-sections #'drgnx-terminal-cheatsheet-section)
                        (add-hook 'drgnx-session-running-functions #'drgnx-term-running)
                        (add-hook 'kill-emacs-hook #'drgnx-term--session-end)
+                       (define-key special-event-map [key-release] #'drgnx-term-key-release)
+                       (add-function :after after-focus-change-function #'drgnx-term--focus-changed)
                        (drgnx-state-subscribe 'windows-changed #'drgnx-term--windows-changed)
                        (drgnx-notice-define-source 'term :title "Terminal")
                        (drgnx-command-define 'terminal-copy :category "Terminal" :title "Copy" :scope 'editing

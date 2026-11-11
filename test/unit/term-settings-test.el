@@ -165,5 +165,38 @@
           (should (= asked 2))
           (should sent))))))
 
+(defvar nidhogg-last-key-repeat)
+
+(ert-deftest drgnx-term-settings/key-release-goes-to-the-pressing-terminal ()
+  (drgnx-term-settings-test--in-terminal
+    (let ((drgnx-term--held nil) (drgnx-term-scroll-to-bottom nil))
+      (set-window-buffer (selected-window) (current-buffer))
+      ;; the program did not ask for key event types: a press is not held, a release sends nothing
+      (let ((last-command-event ?a)) (drgnx-term-send-event))
+      (should (equal (cdar sent) '(:key "a" :mods [] :text "a")))
+      (should-not drgnx-term--held)
+      (drgnx-term-key-release '(key-release ?a))
+      (should (= (length sent) 1))
+      ;; it asked: the release goes to the terminal that got the press, with the modifiers held at the release
+      (setq-local drgnx-view-patch (drgnx-view-patch--make :view "term:t1" :class "term" :term (list :key_events t)))
+      (let ((last-command-event ?\C-a)) (drgnx-term-send-event))
+      (should (equal (cdar sent) '(:key "a" :mods ["ctrl"])))
+      (should (equal (mapcar #'car drgnx-term--held) '(?a)))
+      (with-temp-buffer (drgnx-term-key-release '(key-release ?a)))
+      (should (equal (cdar sent) '(:key "a" :mods [] :action "release")))
+      (should-not drgnx-term--held)
+      ;; a release no terminal holds sends nothing
+      (drgnx-term-key-release '(key-release ?z))
+      (should (= (length sent) 3))
+      ;; a repeat is marked, and holds nothing
+      (let ((last-command-event ?a) (nidhogg-last-key-repeat t)) (drgnx-term-send-event))
+      (should (equal (cdar sent) '(:key "a" :mods [] :text "a" :action "repeat")))
+      (should-not drgnx-term--held)
+      ;; the terminal loses the keyboard: what it holds is released
+      (let ((last-command-event ?b)) (drgnx-term-send-event))
+      (drgnx-term--release-all (current-buffer))
+      (should (equal (cdar sent) '(:key "b" :mods [] :action "release")))
+      (should-not drgnx-term--held))))
+
 (provide 'term-settings-test)
 ;;; term-settings-test.el ends here
