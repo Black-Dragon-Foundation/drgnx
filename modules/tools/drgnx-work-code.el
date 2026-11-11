@@ -385,8 +385,9 @@ the popup lane unless NO-DISPLAY.  Returns the picker buffer, filled when the hu
 ;;;; Side-by-side diffs
 
 (defvar drgnx-work-code--saved-windows nil
-  "The window configuration from before the diffs opened; nil while no diffs are open.  The first one is kept: opening
-the diffs again never replaces it.")
+  "The layout from before the diffs opened, (FRAME . STATE): STATE is `window-state-get' of FRAME's root window, which
+belongs to no frame, so a frame swap moves it (`drgnx-work-code--frame-replaced').  Nil while no diffs are open.  The
+first one is kept: opening the diffs again never replaces it.")
 
 (defconst drgnx-work-code--hunk-keywords
   '(("^\\(?:---\\|\\+\\+\\+\\) .*" . 'diff-file-header) ("^@@ .*" . 'diff-hunk-header)
@@ -426,7 +427,7 @@ profiles: q puts the windows back, a and D belong to the review view.")
   "Show BUFFERS: at most three windows side by side, the files beyond the second as tab-line tabs in the third.  The
 window configuration is saved first."
   (unless drgnx-work-code--saved-windows
-    (setq drgnx-work-code--saved-windows (current-window-configuration)))
+    (setq drgnx-work-code--saved-windows (cons (selected-frame) (window-state-get (frame-root-window) t))))
   (delete-other-windows)
   (let ((wins (list (selected-window))))
     (dotimes (_ (1- (min 3 (length buffers))))
@@ -485,9 +486,10 @@ configuration is saved first; \\[drgnx-work-diff-quit] puts it back.  Returns th
 (defun drgnx-work-diff-quit ()
   "Close the diffs and put the windows back the way they were."
   (interactive)
-  (let ((config drgnx-work-code--saved-windows))
+  (pcase-let ((`(,frame . ,state) drgnx-work-code--saved-windows))
     (setq drgnx-work-code--saved-windows nil)
-    (when config (set-window-configuration config))
+    (when state
+      (window-state-put state (frame-root-window (if (frame-live-p frame) frame (selected-frame))) 'safe))
     (mapc #'kill-buffer (drgnx-work-code--diff-buffers))))
 
 (defun drgnx-work-diff-accept-hunk ()
@@ -500,11 +502,11 @@ configuration is saved first; \\[drgnx-work-diff-quit] puts it back.  Returns th
   (interactive)
   (user-error "Rejecting a hunk is done in the review view"))
 
-(defun drgnx-work-code--frame-replaced (old _new)
-  "`drgnx-frame-replaced-functions': a window configuration cannot move to another frame, so the layout from before
-the diffs, saved on OLD, is let go; closing the diffs then leaves the windows as they are."
-  (when (and drgnx-work-code--saved-windows (eq (window-configuration-frame drgnx-work-code--saved-windows) old))
-    (setq drgnx-work-code--saved-windows nil)))
+(defun drgnx-work-code--frame-replaced (old new)
+  "`drgnx-frame-replaced-functions': the layout from before the diffs, saved on OLD, moves to NEW (its state belongs
+to no frame), so closing the diffs there puts it back."
+  (when (eq (car drgnx-work-code--saved-windows) old)
+    (setcar drgnx-work-code--saved-windows new)))
 
 (defun drgnx-work-code-teardown ()
   "The module is off: the diffs close and the saved window configuration is dropped."
