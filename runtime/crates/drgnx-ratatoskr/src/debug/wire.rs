@@ -611,6 +611,7 @@ impl Terminals for TermDoor {
                         },
                         config: vec![],
                         place: Some("panel".into()),
+                        remote: None,
                     },
                 )
                 .await?;
