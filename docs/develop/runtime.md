@@ -965,6 +965,9 @@ budgets (a recorded baseline, not a regression gate); the `agents-*` rows check 
 | `hook-overhead` | one permission request (an edit the matrix allows), `permission-bare` with no rule subscribed and `permission-hooked` with one annotating rule; the added cost is the difference of the p95s, bound 5 ms | 100 each |
 | `hook-overhead-parallel` | eight permission requests sent before the first answer is read (`ask:burst 8`, as Claude issues parallel tool calls), `burst-bare` and `burst-hooked`; none is refused as busy (the turn says `burst: 8/8 allowed`), same 5 ms bound on the difference | 50 each |
 | `ability-20-sessions` | 20 sessions started with a plugin ability (each holds a `drgnx-plugins` server): the `ping` round trip, `ping-no-sessions` before and `ping-20-ability-sessions` with them idle; bound 100 ms | 200 each |
+| `search-write` | the Search view's write path on 500 files of 20 matches (10k), none open: `search-edit-set-10k` the edit set (`search/edits`; spec §8: 250 ms), `search-apply-500-closed` the edit set and its write on disk to `search-change` (1.5 s, disk-bound) | 5, 1 |
+| `search-preview` | `search/preview` of a 2,000-line file with 50 matches: its diff, hunks and groups (spec §8: 15 ms) | 50 |
+| `search-handoff` | `search/handoff` of 1,000 ticked matches in 100 files to a live mock session, to its answer: the brief built, the hand-off recorded, the prompt sent (spec §8: 100 ms) | 20 |
 
 The three plugin rows only measure; their bounds are judged at the gate, from a run pinned with `DRGNX_PERF_CPUS=4`
 (`builder-run.sh perf-exclusive.sh …`), never from a whole-machine run.
