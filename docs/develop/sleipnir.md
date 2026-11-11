@@ -100,6 +100,20 @@ free on the runner root's volume. **Facts**: `os` `macos 15.6`, `arch` `aarch64`
 battery; the Linux-only fields false. **Features**: `arch:aarch64`, `host-jobs`, `xcode-clt`, and `brew:<name>@<major>.<minor>`
 for each Homebrew package at its newest installed version. The boot id is `kern.bootsessionuuid`.
 
+**Attempts** (`darwin::attempt`, `darwin::jobexec`, `darwin::sandbox`; `serve::platform::DarwinPlatform`). launchd
+takes no job from an ssh login (its Background session refuses `launchctl bootstrap user/<uid>`), so `launch` starts
+`sleipnir job-exec <dir>` with `setsid`, in a session of its own that outlives the link, and writes
+`job-exec.pid` (`<pid> <start time>`, atomically); its own early errors go to `job-exec.log`. The attempt is active
+while that pid has that start time (a reused pid is not), and `kill` is SIGKILL to its process group (job-exec and
+whatever stayed in it); a process that left the group is the watchdog's to find, by session and marker. job-exec
+runs the command only as `/usr/bin/sandbox-exec -f job.sb …` and refuses anything else (a keyed job, a helper, a
+bare command) as `infra: setup`, so a job never runs unconfined. `job.sb` is Gleipnir's profile of the attempt's
+spec (`darwin::sandbox::spec`): it reads the source, writes the attempt folder (and the source when the job writes its
+tree), `HOME` and `TMPDIR` inside the folder, `PATH` Homebrew's and the system's, the marker
+`DRGNX_RUNNER_ATTEMPT`, and no network. The timeout is read on `CLOCK_MONOTONIC`, `caffeinate -i -w` keeps the Mac
+awake while the job runs, and the verdict comes from `forseti::classify` like Linux's. A Mac has no pause, live
+resize, CPU weights or keys: those methods answer none or refuse.
+
 ## The podman argv
 
 `linux::podman::argv(req, caps, runner_args)` is the one builder of a `podman run` line, used by the hub's own container
@@ -622,7 +636,7 @@ and threaded (one thread reads frames, the main loop handles them and ticks ever
 
 `serve`'s protocol loop never calls the machine itself: everything it asks of it goes through a `Platform`, so one
 loop serves every runner kind. `LinuxPlatform` is the one above (transient units in job slices, rootless podman,
-cgroups and PSI); a Mac's is the next. What a platform answers:
+cgroups and PSI); `DarwinPlatform` is a Mac's ("A Mac runner", above). What a platform answers:
 
 | Area | Methods | Linux |
 |---|---|---|

@@ -24,8 +24,7 @@ pub mod platform;
 #[cfg(test)]
 mod platform_tests;
 
-use crate::helper::keys::{self as helper_keys, HELPER_SOCK, KEY_USE};
-use crate::linux::jobexec;
+use crate::linux::jobexec::{self, KEY_USE};
 use crate::linux::reserve::Reservation;
 use crate::linux::resize;
 use crate::linux::result::{RESULT, ResultJson};
@@ -42,7 +41,7 @@ use attempts::{CANCELLED, COLLECTED, LOG, Meta};
 use forseti::classify::infra;
 use forseti::safety::Level;
 use forseti::{Action, JobId, Kind, Limits, Profile, RunningJob, Verdict};
-use platform::{LaunchReq, LinuxPlatform, Platform};
+use platform::{LaunchReq, Platform};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
@@ -230,7 +229,8 @@ fn entry(e: ManifestEntry) -> Entry {
 /// How many of the attempt's `key-use` lines went up as `key-use` frames (kept beside them, so a reconnect sends
 /// each read once).
 const KEY_USE_SENT: &str = "key-use.sent";
-/// The hub's allow-list for the attempt's proxy.
+/// The hub's allow-list for the attempt's proxy (Linux: a Mac job has no network yet).
+#[cfg(target_os = "linux")]
 const NET_ALLOW: &str = "net-allow";
 
 enum Event {
@@ -347,7 +347,10 @@ impl<W: Write> Serve<W> {
     /// `serve` on this machine's platform.
     pub fn new(cfg: Config, output: W) -> Result<Serve<W>, String> {
         let exe = std::env::current_exe().map_err(|e| format!("this binary's path: {e}"))?;
-        let platform = LinuxPlatform::new(&cfg, &exe)?;
+        #[cfg(target_os = "linux")]
+        let platform = platform::LinuxPlatform::new(&cfg, &exe)?;
+        #[cfg(target_os = "macos")]
+        let platform = platform::DarwinPlatform::new(&cfg, &exe)?;
         Serve::with_platform(cfg, output, Box::new(platform))
     }
 
@@ -1151,9 +1154,10 @@ impl<W: Write> Serve<W> {
         let Some(l) = self.live.get_mut(key) else {
             return;
         };
-        let sock = l.dir.join(HELPER_SOCK);
+        let platform = &self.platform;
+        let dir = l.dir.clone();
         l.keys.retain(
-            |k| match helper_keys::hand(&sock, &k.name, k.value.expose().as_bytes()) {
+            |k| match platform.hand_key(&dir, &k.name, k.value.expose().as_bytes()) {
                 Ok(()) => false,
                 Err(e)
                     if matches!(
@@ -1815,7 +1819,7 @@ pub(crate) fn tests_spec() -> forseti::JobSpec {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod caps_tests {
     use super::platform::job_caps;
     use super::*;
@@ -1851,7 +1855,7 @@ mod caps_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod net_tests {
     use super::platform::net_helper;
     use crate::linux::jobexec::HelperSpec;

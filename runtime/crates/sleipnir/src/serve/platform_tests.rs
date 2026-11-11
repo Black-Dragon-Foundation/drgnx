@@ -124,6 +124,9 @@ impl Platform for Fake {
     fn set_weight(&self, _unit: &str, _w: u32) -> Result<(), String> {
         Ok(())
     }
+    fn hand_key(&self, _dir: &Path, _name: &str, _value: &[u8]) -> io::Result<()> {
+        Err(io::ErrorKind::NotFound.into())
+    }
     fn cleanup(&self, _root: &Path, _owner: &cleanup::Owner) {
         self.calls.borrow_mut().cleanups += 1;
     }
