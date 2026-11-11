@@ -353,6 +353,23 @@ pub struct BoardSubscribe {
     pub plans: Vec<String>,
 }
 
+/// `work/flow/subscribe`: view `view` shows the Flow lens of job `job` (else the newest running job), with the agents
+/// of map view `map` on its tasks.  With `detail` (a task id of that job), the view is the task's detail tile: why
+/// the gates hold it, what clears it, its evidence and its actions; with `rules`, the Rules tile (the run's rule pack:
+/// each rule, its kind, how the hub holds it). A tile is rows with no model.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FlowSubscribe {
+    pub view: String,
+    pub map: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rules: bool,
+}
+
 /// A map view's full frame: `work/map/subscribe`'s answer.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -555,6 +572,30 @@ fn check_board_subscribe(p: &BoardSubscribe) -> Result<(), Error> {
     Ok(())
 }
 
+fn check_flow_subscribe(p: &FlowSubscribe) -> Result<(), Error> {
+    check_view(&p.view)?;
+    check_view(&p.map).map_err(|_| invalid("map", "a map view id of 1 to 64 bytes"))?;
+    if p.job
+        .as_ref()
+        .is_some_and(|j| j.is_empty() || j.len() > NAME_MAX)
+    {
+        return Err(invalid("job", "a job id"));
+    }
+    if p.detail
+        .as_ref()
+        .is_some_and(|t| t.is_empty() || t.len() > NAME_MAX)
+    {
+        return Err(invalid("detail", "a task id"));
+    }
+    if p.rules && p.detail.is_some() {
+        return Err(invalid(
+            "rules",
+            "one tile: the Rules tile or a task's detail",
+        ));
+    }
+    Ok(())
+}
+
 fn check_conclusions(p: &ConclusionsParams) -> Result<(), Error> {
     if p.session.is_empty() || p.session.len() > NAME_MAX {
         return Err(invalid("session", "a session id"));
@@ -730,6 +771,12 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "open (or open again) one Board view of this connection: the tracker's tasks (of plans, else every task) by column, its model and its rows per display class, the first a reset, before the answer; read again after each write",
             check: check_board_subscribe,
+        ),
+        method!(
+            "work/flow/subscribe", WorkFlowSubscribe(FlowSubscribe) -> TrailSubscribed,
+            classes: [User], writes: false,
+            doc: "open (or open again) one Flow lens view of this connection: a plan run's tasks by gate (a chip per gate from the hub's evidence), its merge batch and rule pack, its model and its rows per display class, the first a reset, before the answer; read again after each write; with detail, one task's detail tile (why it is held, what clears it, its evidence, its actions), with rules the Rules tile (the rule pack), as rows alone",
+            check: check_flow_subscribe,
         ),
         method!(
             "work/files", WorkFiles(EditedFiles) -> EditedFilesList,
