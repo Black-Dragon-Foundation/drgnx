@@ -6,7 +6,7 @@
 #   spike.sh s1                  launchd (`bootstrap user/<uid>`) and the setsid launcher: does a job outlive its ssh?
 #   spike.sh s3                  the watchdog: a 512 MiB grant with an escaped child; its CPU idle and in a 16-way build
 #   spike.sh s2-build NIDHOGG    a Nidhogg build with Naglfar under the draft build profile, as the runner account
-#   spike.sh s2-ert              drgnx ERT selectors under the same profile
+#   spike.sh s2-ert DRGNX EMACS SELECTOR FILES   drgnx ERT selectors (a Lisp string) in FILES under the same profile
 #   spike.sh denials             what Seatbelt denied, from the unified log
 # Results: $MR_OUT/results.md (the summary) and its logs. Keys stay in $MR_KEYS (never uploaded).
 # bash 3.2 (macOS).
@@ -223,8 +223,10 @@ profile() { # SLOT ATTEMPT CACHE TOOLS DEVDIR USERDIR
   echo ')'
   echo '(allow file-read* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/random") (literal "/dev/urandom") (literal "/dev/tty") (literal "/dev/dtracehelper") (literal "/dev/autofs_nowait"))'
   echo '(allow file-write-data (literal "/dev/dtracehelper") (literal "/dev/tty"))'
-  # round 3: the xcrun shims (make, cc) read the developer dir's bundle plist and ask opendirectoryd for groups
-  printf '(allow file-read* (literal "%s/Info.plist") (literal "%s/version.plist"))\n' "$(dirname "$dev")" "$(dirname "$dev")"
+  # the xcrun shims (make, cc) read the developer dir's bundle (round 3: its plists; round 5: under an Xcode, make's shim
+  # runs xcodebuild, which loads the app's SharedFrameworks) and ask opendirectoryd for groups. The whole app, read-only
+  # (for the Command Line Tools this is /Library, read already)
+  printf '(allow file-read* (subpath "%s"))\n' "$(dirname "$(dirname "$dev")")"
   echo '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.membership"))'
   echo '(deny file-read* (subpath "/opt/homebrew/var") (subpath "/usr/local/var"))'
   printf '(allow file-write*'
@@ -289,7 +291,7 @@ s2_build() { # NIDHOGG_CHECKOUT
   if printf '%s' "$out" | grep -qE '^verdict=exited exit=Some\(0\)'; then say "- **S2 build: PASS**"; else say "- **S2 build: FAIL** (tail in s2-build.log; denials below)"; fi
 }
 
-remote_s2_ert() { # SELECTOR EMACS (relative to tools/nidhogg)
+remote_s2_ert() { # SELECTOR EMACS (relative to tools/nidhogg) FILES (test/unit names, space-separated)
   r=~/$ROOT_REL; a=$r/att-ert; mkdir -p "$a/home" "$a/tmp" "$r/cache"
   udir=$(cd -P "$(getconf DARWIN_USER_DIR)/.." && pwd -P)
   dev=$(cd -P "$(xcode-select -p)" && pwd -P)
@@ -301,8 +303,8 @@ remote_s2_ert() { # SELECTOR EMACS (relative to tools/nidhogg)
   # 20), then the process list and SIGKILL to the session
   "$r/mrspike" detach "$a/ert.log" -- /usr/bin/sandbox-exec -f "$a/ert.sb" /usr/bin/env -i HOME="$a/home" TMPDIR="$a/tmp/" \
     PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" LANG=en_US.UTF-8 __CF_USER_TEXT_ENCODING="$(cf_enc)" \
-    DRGNX_EMACS="$emacs" DRGNX_TEST_SELECTOR="$1" \
-    /bin/bash -c 'bin/drgnx test; echo "ert-rc=$?"' > "$a/pid" 2>&1
+    DRGNX_EMACS="$emacs" DRGNX_TEST_SELECTOR="$1" DRGNX_ERT_FILES="$3" \
+    /bin/bash -c 'rc=0; for t in $DRGNX_ERT_FILES; do DRGNX_TEST_ONLY="test/unit/$t" bin/drgnx test || rc=1; done; echo "ert-rc=$rc"' > "$a/pid" 2>&1
   pid=$(tail -n 1 "$a/pid"); stamp "session leader: $pid"
   waited=0
   while kill -0 "$pid" 2>/dev/null && [ $waited -lt "${MR_ERT_WAIT:-600}" ]; do sleep 5; waited=$((waited + 5)); done
@@ -319,7 +321,7 @@ remote_s2_ert() { # SELECTOR EMACS (relative to tools/nidhogg)
   echo "--- log tail"; tail -n 40 "$a/ert.log"
 }
 
-s2_ert() { # DRGNX_CHECKOUT DRGNX_EMACS SELECTOR (DRGNX_EMACS inside an .app: the whole bundle is copied)
+s2_ert() { # DRGNX_CHECKOUT DRGNX_EMACS SELECTOR FILES (DRGNX_EMACS inside an .app: the whole bundle is copied)
   say "## S2: drgnx ERT selectors under the draft build profile"
   r=$(root_of)
   # the committed tree only: the checkout's runtime/target holds GBs from the earlier steps (rounds 1-2 spent the
@@ -335,7 +337,7 @@ s2_ert() { # DRGNX_CHECKOUT DRGNX_EMACS SELECTOR (DRGNX_EMACS inside an .app: th
   stamp "the remote run"
   # watched from here, outside the ssh call (rounds 1-3 hung somewhere inside it with nothing back): its output goes
   # to a file; after 12 minutes the runner account's processes and their stacks go to the step log, then it is stopped
-  mr "bash ~/$ROOT_REL/spike.sh remote s2_ert '$3' '$rel'" > "$OUT/s2-ert.log" 2>&1 &
+  mr "bash ~/$ROOT_REL/spike.sh remote s2_ert '$3' '$rel' '$4'" > "$OUT/s2-ert.log" 2>&1 &
   bg=$!
   waited=0
   while kill -0 "$bg" 2>/dev/null && [ $waited -lt "${MR_ERT_WATCH:-720}" ]; do sleep 10; waited=$((waited + 10)); done
@@ -355,7 +357,10 @@ s2_ert() { # DRGNX_CHECKOUT DRGNX_EMACS SELECTOR (DRGNX_EMACS inside an .app: th
   stamp "done"
   sudo cp "$r/att-ert/ert.log" "$OUT/s2-ert-full.log" 2>/dev/null; sudo chmod 644 "$OUT/s2-ert-full.log" 2>/dev/null
   say "- $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-600)"
-  if printf '%s' "$out" | grep -q 'ert-rc=0'; then say "- **S2 ERT: PASS**"; else say "- **S2 ERT: FAIL**"; fi
+  # a pass that ran no test proves nothing (round 5: the selector, not read as a Lisp string, matched none)
+  if printf '%s' "$out" | grep -q 'ert-rc=0' && grep -qE 'Ran [1-9][0-9]* tests' "$OUT/s2-ert-full.log" 2>/dev/null; then
+    say "- **S2 ERT: PASS** ($(grep -E 'Ran [1-9][0-9]* tests' "$OUT/s2-ert-full.log" | cut -c1-80 | tr '\n' ' '))"
+  else say "- **S2 ERT: FAIL**"; fi
 }
 
 denials() {
@@ -377,5 +382,5 @@ case "$cmd" in
   s2-ert) s2_ert "$@" ;;
   denials) denials ;;
   remote) remote "$@" ;;
-  *) echo "usage: spike.sh up|s1|s3|s2-build DIR|s2-ert DRGNX NIDHOGG SELECTOR|denials" >&2; exit 2 ;;
+  *) echo "usage: spike.sh up|s1|s3|s2-build DIR|s2-ert DRGNX NIDHOGG SELECTOR FILES|denials" >&2; exit 2 ;;
 esac

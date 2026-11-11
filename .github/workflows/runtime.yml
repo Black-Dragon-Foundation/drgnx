@@ -728,7 +728,7 @@ jobs:
       - name: S2 drgnx ERT selectors under the build profile
         if: ${{ !cancelled() }}
         timeout-minutes: 20
-        run: bash test/runners/mac/spike.sh s2-ert "$GITHUB_WORKSPACE" "$DRGNX_EMACS" '^drgnx-\(registry\|memo\|color\)/'
+        run: bash test/runners/mac/spike.sh s2-ert "$GITHUB_WORKSPACE" "$DRGNX_EMACS" '"^drgnx-\\(registry\\|memo\\|color\\)/"' 'core-registry-test.el core-memo-test.el color-test.el'
       - name: S2 a Nidhogg build with Naglfar under the build profile
         if: ${{ !cancelled() }}
         timeout-minutes: 90
