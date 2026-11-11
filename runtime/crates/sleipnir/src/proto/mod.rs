@@ -128,11 +128,11 @@ mod tests {
                 missing: vec![],
                 limits: Some("no controllers".into()),
                 features: vec!["podman".into()],
-                mem_available_mib: Some(5376),
+                mem_available_mib: 5376,
             },
             Frame::Ready {
                 free_mib: -12,
-                mem_available_mib: Some(5376),
+                mem_available_mib: 5376,
                 free_cpu: 3.5,
                 psi: Psi {
                     mem_some10: 1.5,

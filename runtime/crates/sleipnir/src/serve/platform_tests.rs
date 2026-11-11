@@ -276,7 +276,7 @@ fn the_available_memory_and_the_set_reserve_reach_the_hub() {
     else {
         panic!("no probe-result: {frames:?}");
     };
-    assert_eq!(*mem_available_mib, Some(16_384));
+    assert_eq!(*mem_available_mib, 16_384);
     assert!(s.ready() == Next::Go);
     let frames = out.take();
     let Some(Frame::Ready {
@@ -287,7 +287,7 @@ fn the_available_memory_and_the_set_reserve_reach_the_hub() {
     else {
         panic!("no ready: {frames:?}");
     };
-    assert_eq!(*mem_available_mib, Some(16_384));
+    assert_eq!(*mem_available_mib, 16_384);
     assert_eq!(*free_mib, 16_384 - 1536 - 1024);
 }
 

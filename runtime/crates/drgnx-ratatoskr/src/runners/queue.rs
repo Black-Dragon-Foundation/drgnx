@@ -431,8 +431,8 @@ const SYNCED_KEPT: usize = 64;
 /// A runner's last `ready`.
 struct ReadyNow {
     budget: forseti::Budget,
-    /// The memory the runner had available, MiB (none from an older runner).
-    available_mib: Option<u64>,
+    /// The memory the runner had available, MiB.
+    available_mib: u64,
     slots: Vec<String>,
     images: Vec<String>,
     on_battery: bool,
@@ -1315,7 +1315,7 @@ impl Queue {
     /// The memory runner NAME had available at its last ready, MiB: what the runner list counts its room for jobs from.
     pub fn available_mib(&self, name: &str) -> Option<u64> {
         let st = self.lock();
-        st.runners.get(name)?.ready.as_ref()?.available_mib
+        Some(st.runners.get(name)?.ready.as_ref()?.available_mib)
     }
 
     /// Runner NAME forgotten (its session ends). Refused, with the reason, while a job is on it.
@@ -3765,7 +3765,7 @@ mod tests {
     fn ready(q: &Queue, runner: &str, free_mib: i64, slots: &[String], images: &[&str], now: u64) {
         let f = Frame::Ready {
             free_mib,
-            mem_available_mib: Some(7000),
+            mem_available_mib: 7000,
             free_cpu: 8.0,
             psi: Default::default(),
             running: vec![],
@@ -3933,7 +3933,7 @@ mod tests {
         hello(&q, "m1", true, 100);
         let f = Frame::Ready {
             free_mib: 8192,
-            mem_available_mib: None,
+            mem_available_mib: 8192,
             free_cpu: 8.0,
             psi: Default::default(),
             running: vec![],
@@ -4002,7 +4002,7 @@ mod tests {
                 missing: vec![],
                 limits: None,
                 features: features.iter().map(|f| f.to_string()).collect(),
-                mem_available_mib: None,
+                mem_available_mib: 16_384,
             };
             frame(&q, "r1", probe(&["podman"]), 100);
             let mut s = job("x1", Priority::P3, 64);

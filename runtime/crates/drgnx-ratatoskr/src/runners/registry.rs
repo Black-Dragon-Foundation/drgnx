@@ -479,7 +479,7 @@ struct Probe {
     limits: Option<String>,
     features: Vec<String>,
     /// The memory the host had available, MiB.
-    mem_available_mib: Option<u64>,
+    mem_available_mib: u64,
 }
 
 impl Registry {
@@ -864,7 +864,7 @@ impl Registry {
         };
         let probe = self.probe_serve(&rec).await?;
         rec.linger = probe.linger;
-        rec.mem_available_mib = probe.mem_available_mib;
+        rec.mem_available_mib = Some(probe.mem_available_mib);
         if let Some(f) = &probe.facts {
             rec.os = f.os.clone();
             rec.cores = f.cores;

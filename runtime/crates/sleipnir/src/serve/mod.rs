@@ -581,8 +581,7 @@ impl<W: Write> Serve<W> {
         let mem_available_mib = self
             .platform
             .machine(now_s(), &self.limits)
-            .ok()
-            .map(|m| m.mem_available_mib);
+            .map_or(0, |m| m.mem_available_mib);
         self.send(&Frame::ProbeResult {
             facts,
             missing,
@@ -626,7 +625,7 @@ impl<W: Write> Serve<W> {
                 eprintln!("sleipnir serve: the machine can't be read: {e}");
                 return self.send(&Frame::Ready {
                     free_mib: 0,
-                    mem_available_mib: None,
+                    mem_available_mib: 0,
                     free_cpu: 0.0,
                     psi: Default::default(),
                     running: vec![],
@@ -651,7 +650,7 @@ impl<W: Write> Serve<W> {
         let images = self.images.iter().cloned().collect();
         self.send(&Frame::Ready {
             free_mib: b.mem_mib,
-            mem_available_mib: Some(m.mem_available_mib),
+            mem_available_mib: m.mem_available_mib,
             free_cpu: b.cpu,
             psi: m.psi,
             running,
