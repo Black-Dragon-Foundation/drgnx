@@ -6,7 +6,7 @@ use drgnx_rows::Patch;
 use serde::{Deserialize, Serialize};
 
 /// The `term` protocol version: a newer hub adopts a worker of the same major version.
-pub const PROTO: (u32, u32) = (1, 1);
+pub const PROTO: (u32, u32) = (1, 2);
 
 /// From the hub.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -24,8 +24,8 @@ pub enum In {
     Env {
         env_epoch: u64,
     },
-    /// A key press: its name (`"a"`, `"return"`, `"f5"`), modifiers, the text it types and the codepoint it gives
-    /// without shift (0: from the name).
+    /// A key event: its name (`"a"`, `"return"`, `"f5"`), modifiers, the text it types, the codepoint it gives
+    /// without shift (0: from the name) and whether it is a press, a repeat or a release.
     Key {
         key: String,
         #[serde(default)]
@@ -34,6 +34,8 @@ pub enum In {
         text: String,
         #[serde(default)]
         unshifted: u32,
+        #[serde(default)]
+        action: KeyAction,
     },
     /// Text typed through an input method: sent as it is.
     Text {
@@ -124,6 +126,17 @@ pub enum In {
         #[serde(default)]
         signal: Option<i32>,
     },
+}
+
+/// A key event's kind. A repeat or a release reaches the program as itself only while it asked for event types (the
+/// kitty keyboard protocol's flag 2); otherwise a repeat is a press and a release sends nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyAction {
+    #[default]
+    Press,
+    Repeat,
+    Release,
 }
 
 /// To the hub.

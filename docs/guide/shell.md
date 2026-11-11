@@ -22,7 +22,9 @@ terminal's buffer only shows the screen it sends. So:
 - **When the shell ends**, its buffer closes. A program drgnx runs for you in a terminal (Export Keys) leaves its buffer
   open, its exit status in the mode line, so you can read what it printed.
 - **Keys**: the terminal gets every key the active profile does not keep for drgnx ([keys](keys.md#in-the-terminal));
-  a paste is bracketed when the program asks for it, so a shell does not run a pasted line on its own.
+  a paste is bracketed when the program asks for it, so a shell does not run a pasted line on its own. On drgnx's
+  own Emacs (Nidhogg), a program that asks for key releases and repeats (the kitty keyboard protocol, as games, Helix
+  and some TUIs do) gets them; a key still held when you switch away from the terminal is released there.
 - **Copy mode** (*Terminal: Copy Mode*, `C-c C-e` in the Emacs profile) stops the screen so you can move, search and
   copy in it; `C-g` leaves it and draws what the program printed meanwhile. *Find in Terminal* searches the screen and
   the terminal's scrollback; *Find Next* and *Find Previous in Terminal* step through the matches without asking again.
