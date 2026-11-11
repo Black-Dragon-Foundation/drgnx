@@ -602,6 +602,24 @@ after 45 s without a frame (the hub pings every 10 s, and so does `serve`). Noth
 connections the runner has its folder and, with linger, the attempts still running in their own units. It is blocking
 and threaded (one thread reads frames, the main loop handles them and ticks every 100 ms); no async runtime.
 
+### Platforms (`serve::platform`)
+
+`serve`'s protocol loop never calls the machine itself: everything it asks of it goes through a `Platform`, so one
+loop serves every runner kind. `LinuxPlatform` is the one above (transient units in job slices, rootless podman,
+cgroups and PSI); a Mac's is the next. What a platform answers:
+
+| Area | Methods | Linux |
+|---|---|---|
+| probe and contract | `machine`, `limits`, `boot_id`, `contract`, `survives_link`, `job_runner` | `linux::probe`, linger, podman's caps check (`podman` feature) |
+| reservations between schedulers | `reservations`, `start_time` | `linux::reserve` (`$XDG_RUNTIME_DIR`, `/proc` start times) |
+| attempts | `launch`, `active`, `kill` | `job.json`, `sleipnir job-exec` in a transient unit; `podman kill` |
+| caps | `current_mib`, `pause`, `unpause`, `grow_candidate`, `resize`, `weight_unit`, `set_weight` | the job slice's cgroup, `linux::resize` |
+| cleanup | `cleanup` | containers, units, attempt folders, bundles (`serve::cleanup`) |
+
+A platform that has no pause, grow or CPU weights says so (`grow_candidate` and `weight_unit` answer none), and the
+loop skips them. The rows in `serve/platform_tests.rs` run the loop on a fake platform: hello and probe answer from
+it, and an attempt goes from offer to `finished` through its `launch`, `active` and `kill`.
+
 **The runner folder** (`--root`): `bin/<name>/` holds bundles (the `sleipnir` that serves names its own folder in
 `hello-ok`, and runs every job-exec it starts); `jobs/<id>.<attempt>/` is an attempt's folder, its whole record:
 
