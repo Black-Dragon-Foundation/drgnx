@@ -2022,8 +2022,10 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
   `s:<id>` names a style the patch's `styles` sent (kept until the next reset; one the view lacks sends
   `view/resync`): an ansi foreground is the face `drgnx-term-color-N`, the rest one anonymous face per distinct
   style from an LRU of `drgnx-view-patch-style-face-max` (4,096) entries (docs/develop/hub.md, "Rows"); faint adds
-  `drgnx-term-faint`. `drgnx-view-patch-repaint` draws every row again from the faces as they are (a theme change
-  in a view whose type has `:epoch-reset nil`), the LRU emptied, with no message to the hub. A terminal's patch also
+  `drgnx-term-faint`. A change of a colour face of the terminal outside a theme change (`set-face-attribute` of
+  `drgnx-term-default`, `drgnx-term-cursor` or `drgnx-term-color-N`, Customize) does the same once its 0.1 s debounce
+  passes (`drgnx-term--face-touched`, advice on `set-face-attribute`). `drgnx-view-patch-repaint` draws every row
+  again from the faces as they are (a theme change in a view whose type has `:epoch-reset nil`), the LRU emptied, with no message to the hub. A terminal's patch also
   carries `term` (cursor, alt screen, mouse tracking, title): the inserter keeps it (`drgnx-view-patch-term`) and
   draws the cursor's row again, so the view type's PATCHED can place the cursor after the draw.
 - **The fit guard:** a row with a stop is measured once (the text before its first stop, `string-pixel-width`); a
@@ -2063,8 +2065,16 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
 **The native view model.** A view whose keys move a selection also gets its model (`view-model`, docs/develop/hub.md
 "The native view model"), which Sjá, in Nidhogg (`nidhogg-views.el`, loaded by `require`), holds and answers keys
 from. drgnx never parses it: the hub client routes a line that starts `{"event":"view-model"` before any parse
-(`drgnx-hub--model-line-p`, a compare in place; framed, Nidhogg's reader passes it raw by `:raw-prefix`) to
-`drgnx-view-model-line`, which hands it whole to Sjá (`nidhogg-view-push`). Without Sjá the line is dropped.
+(`drgnx-hub--model-line-p`, a compare in place). Framed (`nidhogg-workers-framing`), Nidhogg's reader pushes the line
+to Sjá itself (`:raw-prefix` with `:raw-to-sja`), so it never becomes a Lisp string; there is no framed path that
+hands it to Lisp. A Search window move's line was 1.2 MB, 87 % of what a page consed, and the reason the full
+collection came every ~42 pages (with the push and the match nodes' paths cut, 2026-11-11, pinned, release hub, 3
+runs: a page conses 224 kB, was 1540; page p50 24.6 ms, was 36.6; no page with a collection, was 1 in 12). Unframed,
+the filter routes the line to `drgnx-view-model-line`, which hands it whole to Sjá (`nidhogg-view-push`); without
+Sjá it is dropped. Its batch entry carries Sjá's answer, which goes to
+`drgnx-view-model--pushed` (the same decisions as after `nidhogg-view-push`); Sjá's refusal is reported by the
+connection's guard, as a failed push is. The reader ends a batch before such a line, so it reaches Sjá after every
+message before it, as in the filter's order.
 - **Instances:** every hub-fed buffer opens an instance of its view in Sjá at attach (`drgnx-view-patch-handle`),
   closed with the buffer or at teardown; the view (its queue and stream in Sjá, and `drgnx-view-model--views`, the
   editor's side: an outstanding resync) goes with its last buffer.
@@ -2094,8 +2104,9 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   name (`drgnx-view-nav-faces`, then `drgnx-view-nav-default-faces`: `drgnx-view-selected`, `drgnx-view-match`,
   `drgnx-view-chain`, `drgnx-view-lit`, `shadow` for dim), put as an overlay on the node's span (the text whose
   `drgnx-view-patch-id-prop`, `drgnx-work-id` by default, is its id), never on the whole line. Rendering a row notes
-  which rows hold which node (`drgnx-view-patch-ids`); after a draw, the rows it replaced get their nodes' classes
-  again (PATCHED), so a selection made while a patch waits is still shown once the patch lands. Row patches carry no
+  which rows hold which node (`drgnx-view-patch-ids`) and which nodes each row holds (`drgnx-view-patch-keys`, the
+  index the class step reads, so a draw costs the rows it replaced, never a walk of every node drawn); after a draw,
+  the rows it replaced get their nodes' classes again (PATCHED), so a selection made while a patch waits is still shown once the patch lands. Row patches carry no
   selection: a removed row takes nothing with it. A view's own marks over the hub's rows go back on after the classes
   through `drgnx-view-patch-patched-functions` (VIEW KEYS), added buffer-locally (the Search view's tick boxes).
 - **The trailing notice:** the view's `drgnx-view-nav-notice-method` gets `(:view V :selected ID)`, or
@@ -3012,7 +3023,7 @@ Agents' `fs/read_text_file` serves an open buffer only when it is not a large fi
 
 The producers that check it today: sticky scroll (`drgnx-sticky--maybe`), indent guides (`drgnx-guides--maybe`),
 inline blame (`drgnx-blame--maybe`), lang's language server (`drgnx-lang--maybe-eglot`), the gutter's changes
-(`extra/hunks` advises `diff-hl--global-turn-on`, `:before-while`, so diff-hl's global mode skips the buffer), the
+(`extra/hunks`: `drgnx-hunks--maybe` does not turn its mode on for the buffer), the
 Outline dock (`drgnx-outline--index`: "This file is too large for an outline", also for a small chunk buffer) and
 the status bar (`position` shows `Col N` without the line number, `indent` shows nothing, and the memo's key reads
 `tab-width` instead of scanning the first lines). **A new producer that reads or scans the buffer checks the flag
@@ -3062,7 +3073,7 @@ revisit the file normally, a timer's open included.
 that stays large across a revert gets no parser either. The sweep, in `find-file-hook` at depth -90, turns the mode on
 for a large file, or for a buffer whose text is above `:ask-above` (a compressed file that expands), never for a
 chunk buffer. The mode turns
-off every mode of `so-long-minor-modes` that is on (the module adds indent-bars, blame, sticky and diff-hl's margin
+off every mode of `so-long-minor-modes` that is on (the module adds indent-bars, blame, sticky and the change marks'
 mode to that one list), deletes the buffer's tree-sitter parsers and ends eglot's management (a buffer that turns
 lean on a revert kept them: auto-revert keeps the modes), then undo and auto-save. A raw visit (`find-file-noselect` with RAWFILE) runs no
 `find-file-hook`, so the door runs the sweep itself. A major mode changed by hand (`M-x text-mode`) resets the

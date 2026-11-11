@@ -344,7 +344,8 @@ branch the status bar shows, so a new file git does not track yet has it too; wi
 no git it leaves the branch out). The branch is a chip of its own on a graphical frame. The search box before the keys
 opens Quick Open: files by name, and `>` typed first turns it into the command palette, as in VS Code. At the right end, before the window controls, two chips show while they have something to
 say: `1 needs you` (the count of everything that waits on you; a click opens it) and the agents at work (`N agents`;
-the agents module tells the row how many through `drgnx-topline-agents-function`).
+the module `tools/agents` counts the sessions this Emacs mirrors that run a turn or wait on you, and tells the row
+through `drgnx-topline-agents-function`).
 
 A double click on the row's empty part maximises the window or restores it (**Maximize or Restore Window**,
 `title-row-maximize`, in the palette too).
@@ -509,7 +510,8 @@ them in the UI text role, with 12 px of room at either end and 26 px tall on a g
 `drgnx-badge`) is a tint with room inside it (7 px either side) and no ring, in the caption role, radius 4; high
 contrast rings it in its text colour, with the same room. A keycap (`drgnx-keycap`) is
 subtle caption text in a 1 px ring of the strong border, radius 4: the palette, the title row's search box and the
-start page show keys this way. The rings' colours come from the theme (a box's colour cannot be inherited), so a
+start page show keys this way. A toggle pill (`drgnx-pill`, and `drgnx-pill-on` when it is on, on the quiet
+selection) is caption text in a 1 px ring of the border colour, radius 6: the agent panel's step types. The rings' colours come from the theme (a box's colour cannot be inherited), so a
 theme that is not drgnx's draws them in the text colour. A theme's spec for a face replaces the face's own, its
 `:inherit` too, so drgnx's themes repeat a face's parents in theirs (the keycaps' and high contrast's chips' caption
 role); `drgnx-themes/a-theme-spec-keeps-the-defface-inherit` fails when a theme spec loses what a parent gave.

@@ -13,8 +13,9 @@
 //!   `Ready`) and the servers the gateway has. A change in that set opens the project again.
 
 use super::project::{Project, ProjectError, ProjectSpec, Tier2, ViewOf, project_id};
+use super::saved::Saved;
 use super::worker::WorkerEmbedder;
-use super::{DocEmbedder, Search, download, power, prefer, servers};
+use super::{DocEmbedder, Search, download, power, prefer, saved, scope, servers};
 use crate::clock;
 use crate::dispatch::Caller;
 use crate::embed::ProviderEmbedder;
@@ -74,6 +75,8 @@ pub struct Hub {
     front: OnceLock<Weak<Front>>,
     dirs: OnceLock<Dirs>,
     search: OnceLock<Search>,
+    /// The Search view's recent and saved searches (`search/recent`, `search/saved/*`).
+    saved: OnceLock<Saved>,
     projects: Projects,
     /// Each open project's watch state, for `status.watch` (a closed project's entry dies with its watcher).
     watches: Mutex<Vec<(PathBuf, Weak<Mutex<hrafn::WatchState>>)>>,
@@ -294,6 +297,9 @@ impl Hub {
     /// RUNTIME for the model consent.
     pub fn configure(&self, env: &Env, home: PathBuf, config: PathBuf, runtime: urdr::Handle) {
         let _ = self.search.set(Search::new(env));
+        let _ = self
+            .saved
+            .set(Saved::new(paths::state_dir(env).join("hub").join("search")));
         let _ = self.dirs.set(Dirs {
             env: env.clone(),
             home,
@@ -329,6 +335,20 @@ impl Hub {
                 .and_then(|t| t.trim().parse().ok()),
             projects,
         }
+    }
+
+    /// The Search view ran SPEC in ROOT (`search/run`): a recent search once it stands for the typing pause. Nothing
+    /// before the hub has its folders.
+    pub fn offer_recent(&self, root: &std::path::Path, view: &str, spec: w::SearchSpec) {
+        if let Some(s) = self.saved.get() {
+            s.offer(root, view, spec, std::time::Instant::now());
+        }
+    }
+
+    fn saved(&self) -> Result<&Saved, Error> {
+        self.saved
+            .get()
+            .ok_or_else(|| internal("search is not set up in this hub (no folders yet)"))
     }
 
     fn dirs(&self) -> Result<&Dirs, Error> {
@@ -1265,6 +1285,19 @@ async fn symbol_at(a: w::SymbolAtParams) -> Result<w::SymbolAt, Error> {
     Ok(w::SymbolAt { name })
 }
 
+/// A saved search's name: 1 to 200 characters, one line.
+fn saved_name(name: &str) -> Result<(), Error> {
+    let n = name.chars().count();
+    if n == 0 || n > 200 || name.contains('\n') {
+        return Err(error(
+            ErrorCode::InvalidParams,
+            "a name of 1 to 200 characters on one line",
+            Some("name"),
+        ));
+    }
+    Ok(())
+}
+
 /// P served by the search methods, or handed back (not one of theirs).
 pub async fn serve(
     front: &Front,
@@ -1303,6 +1336,52 @@ pub async fn serve(
         Params::SearchOutline(a) => hub.outline(front, a).await.map(|o| json!(o)),
         Params::SearchMap(a) => hub.map(front, a).await.map(|m| json!(m)),
         Params::SearchUsages(a) => hub.usages(front, a).await.map(|u| json!(u)),
+        Params::SearchRecent(r) => hub.saved().map(|s| {
+            json!(w::RecentAnswer {
+                recent: s.recent(Path::new(r.root.as_str()), std::time::Instant::now()),
+            })
+        }),
+        Params::SearchSavedList(r) => hub.saved().map(|s| {
+            let (saved, problems) = s.list(Path::new(r.root.as_str()));
+            json!(w::SavedList { saved, problems })
+        }),
+        Params::SearchSavedPut(p) => saved_name(&p.name).and_then(|()| {
+            hub.saved()?
+                .put(
+                    Path::new(p.root.as_str()),
+                    &p.name,
+                    p.search,
+                    p.pinned.unwrap_or(false),
+                )
+                .map(|()| json!(true))
+                .map_err(internal)
+        }),
+        Params::SearchSavedDelete(p) => hub.saved().and_then(|s| {
+            s.delete(Path::new(p.root.as_str()), &p.name)
+                .map(|gone| json!(gone))
+                .map_err(internal)
+        }),
+        Params::SearchSavedShare(p) => {
+            let s = hub.saved();
+            match s.map(|s| s.share(Path::new(p.root.as_str()), &p.name)) {
+                Ok(Ok(path)) => runstav::types::AbsPath::new(path.to_string_lossy().into_owned())
+                    .map(|path| json!(w::SavedShared { path }))
+                    .map_err(internal),
+                Ok(Err(e @ saved::ShareError::Io(_))) => Err(internal(e)),
+                Ok(Err(e)) => Err(error(ErrorCode::InvalidParams, e.to_string(), Some("name"))),
+                Err(e) => Err(e),
+            }
+        }
+        Params::SearchScopeBases(r) => {
+            let root = PathBuf::from(r.root.as_str());
+            tokio::task::spawn_blocking(move || scope::bases(&root))
+                .await
+                .map_err(internal)
+                .and_then(|b| {
+                    b.map(|b| json!(b))
+                        .map_err(|e| error(ErrorCode::InvalidParams, e.to_string(), Some("root")))
+                })
+        }
         Params::SearchTyping(_) => {
             hub.typing().await;
             Ok(json!({}))

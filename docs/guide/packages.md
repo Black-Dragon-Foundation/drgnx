@@ -82,6 +82,9 @@ version, the system, the native-code ABI and the build time). When you move to a
 or from GNU Emacs 30), the next `drgnx sync` deletes every package's `.elc` and compiles them all again for this
 build, dependencies first: byte code an older Emacs compiled can expand an older version of a macro (diff-hl's
 global mode, for one, then reads a variable the old code never defines, and every buffer's mode hook fails).
+Until that sync has run, a session keeps this Emacs's background native compiler away from those packages: it would
+compile their source with this build's macros and swap the functions in a minute or so after the old byte code loaded
+(`corfu-mode--set-explicitly` void again), so the packages run byte-compiled and the doctor says to run `drgnx sync`.
 
 A plain sync never removes a package: one that left the manifest (a module turned off) or was installed by hand
 stays and is locked too. `drgnx sync --prune` removes them: every installed package the manifest does not name and

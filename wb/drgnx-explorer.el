@@ -1803,6 +1803,7 @@ is read.  File events and timers read none."
   ;; A press on a partly visible row must not scroll: the row would move under the pointer.
   (setq-local scroll-margin 0 make-cursor-line-fully-visible nil)
   (drgnx-wb-rows-setup)
+  (setq-local drgnx-wb-selection-unfocused t)       ; the sidebar's one selection: the current buffer's file
   (jit-lock-register #'drgnx-explorer--fontify)
   (add-hook 'kill-buffer-hook #'drgnx-explorer--unwatch-all nil t)
   (add-hook 'kill-buffer-hook #'drgnx-explorer--forget-find nil t))

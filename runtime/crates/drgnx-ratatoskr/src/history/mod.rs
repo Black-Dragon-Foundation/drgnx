@@ -226,6 +226,8 @@ pub struct Hub {
     events: tokio::sync::broadcast::Sender<FileVersion>,
     /// The folder `history.db` is in; the sweep's report is written beside it.
     pub(crate) dir: std::path::PathBuf,
+    /// The last whole-file blames (`git/blame`), by path, HEAD and text.
+    pub(crate) blame_cache: Mutex<views::BlameCache>,
 }
 
 impl Hub {
@@ -244,6 +246,7 @@ impl Hub {
             }),
             events: tokio::sync::broadcast::channel(256).0,
             dir: dir.to_path_buf(),
+            blame_cache: Mutex::new(views::BlameCache::default()),
         })
     }
 

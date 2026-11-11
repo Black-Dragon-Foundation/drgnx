@@ -7,32 +7,6 @@
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/extra/drgnx-blame" drgnx-dir) nil t)
 
-(defconst drgnx-blame-test--committed
-  "abcdef0123456789abcdef0123456789abcdef01 2 2 1
-author Bob
-author-mail <bob@t.invalid>
-author-time 1700000000
-author-tz +0000
-committer Bob
-committer-mail <bob@t.invalid>
-committer-time 1700000000
-committer-tz +0000
-summary Add two
-filename a.txt
-\ttwo
-")
-
-(defconst drgnx-blame-test--uncommitted
-  "0000000000000000000000000000000000000000 1 1 1
-author Not Committed Yet
-author-mail <not.committed.yet>
-author-time 1700000100
-author-tz +0000
-summary Version of a.txt from a.txt
-filename a.txt
-\tnew
-")
-
 (defun drgnx-blame-test--shown ()
   "The blame text shown in this buffer, or nil."
   (and drgnx-blame--overlay (overlay-buffer drgnx-blame--overlay)
@@ -41,28 +15,58 @@ filename a.txt
 (defun drgnx-blame-test--wait-for (pred)
   (drgnx-test-wait pred :what "the blame's condition"))
 
-(defun drgnx-blame-test--live ()
-  (seq-count (lambda (p) (and (process-live-p p) (eq (process-type p) 'real) (string-prefix-p "drgnx-blame" (process-name p)))) (process-list)))
+(defvar drgnx-blame-test--asked nil "The questions `drgnx-history-ask' got: (METHOD . BUFFER), newest first.")
+(defvar drgnx-blame-test--waiting nil "The callbacks of the questions not answered yet, oldest first.")
+(defvar drgnx-blame-test--answer nil "What the canned hub answers, or `error'; nil: the history does not track the buffer.")
+
+(defun drgnx-blame-test--canned ()
+  "The hub's answer for a.txt of the fixture: line 1 by Ada (\"Start\"), line 2 by Bob (\"Add two\")."
+  (list :head "h"
+        :commits (list (list :sha "1111111111111111111111111111111111111111" :author "Ada" :time 1700000000 :summary "Start")
+                       (list :sha "2222222222222222222222222222222222222222" :author "Bob" :time 1700000100 :summary "Add two"))
+        :lines (list 0 1) :agents nil))
+
+(defun drgnx-blame-test--deliver ()
+  "The hub answers the oldest question."
+  (let ((cb (pop drgnx-blame-test--waiting)))
+    (if (eq drgnx-blame-test--answer 'error) (funcall cb nil "no such path") (funcall cb drgnx-blame-test--answer nil))))
 
 (defmacro drgnx-blame-test--with-history (&rest body)
-  "BODY visiting a.txt of a repo: line 1 by Ada (\"Start\"), line 2 by Bob (\"Add two\")."
+  "BODY visiting a.txt of a repo (\"one\\ntwo\\n\"), the hub answering `git/blame' with the canned answer when
+`drgnx-blame-test--deliver' says so; `drgnx-blame-test--asked' counts the questions."
   (declare (indent 0))
   `(drgnx-git-test-with-repo
-     (drgnx-git-test-write repo "a.txt" "one\n")
-     (drgnx-git-test repo "add" "-A") (drgnx-git-test repo "commit" "-q" "-m" "Start")
      (drgnx-git-test-write repo "a.txt" "one\ntwo\n")
-     (drgnx-git-test repo "commit" "-q" "-a" "-m" "Add two" "--author=Bob <bob@t.invalid>")
-     (with-current-buffer (find-file-noselect (expand-file-name "a.txt" repo))
-       (drgnx-blame-mode 1)
-       ,@body)))
+     (drgnx-git-test repo "add" "-A") (drgnx-git-test repo "commit" "-q" "-m" "Start")
+     (let ((drgnx-blame-test--asked nil) (drgnx-blame-test--waiting nil)
+           (drgnx-blame-test--answer (drgnx-blame-test--canned)))
+       (cl-letf (((symbol-function 'drgnx-history-ask)
+                  (lambda (buffer method callback)
+                    (when drgnx-blame-test--answer
+                      (push (cons method buffer) drgnx-blame-test--asked)
+                      (setq drgnx-blame-test--waiting (append drgnx-blame-test--waiting (list callback)))
+                      t))))
+         (with-current-buffer (find-file-noselect (expand-file-name "a.txt" repo))
+           (drgnx-blame-mode 1)
+           ,@body)))))
 
-(ert-deftest drgnx-blame/parse-porcelain ()
-  (should (equal (drgnx-blame--parse drgnx-blame-test--committed)
-                 '(:sha "abcdef0123456789abcdef0123456789abcdef01" :author "Bob" :time 1700000000 :summary "Add two")))
-  (let ((u (drgnx-blame--parse drgnx-blame-test--uncommitted)))
-    (should (equal (plist-get u :author) "You"))
-    (should (equal (plist-get u :summary) "Uncommitted changes")))
-  (should-not (drgnx-blame--parse "")))
+(ert-deftest drgnx-blame/info-follows-the-edits-made-since-the-answer ()
+  (with-temp-buffer
+    (setq drgnx-blame--data (list :commits (vector '(:sha "a" :author "Ada" :time 1 :summary "A")
+                                                   '(:sha "b" :author "Bob" :time 2 :summary "B"))
+                                  :lines (vector 0 0 1 1 0) :agents nil))
+    (let ((who (lambda (line) (plist-get (drgnx-blame--info-at line) :author))))
+      (should (equal (mapcar who '(1 2 3 4 5)) '("Ada" "Ada" "Bob" "Bob" "Ada")))
+      ;; a line inserted above line 3: every line from there moves down, the new one is the user's
+      (push '(3 0 . 1) drgnx-blame--edits)
+      (should (equal (mapcar who '(1 2 3 4 5 6)) '("Ada" "Ada" "You" "You" "Bob" "Ada")))
+      ;; a character typed on the old line 1 (no newline): that line is changed, the rest holds
+      (push '(1 0 . 0) drgnx-blame--edits)
+      (should (equal (funcall who 1) "You"))
+      (should (equal (funcall who 2) "Ada"))
+      ;; line 2 and the line after it deleted (two newlines): what was below comes up
+      (setq drgnx-blame--edits (list '(2 2 . 0)))
+      (should (equal (mapcar who '(1 2 3)) '("Ada" "You" "Ada"))))))
 
 (ert-deftest drgnx-blame/ago-steps ()
   (let ((now 2000000000))
@@ -167,50 +171,105 @@ filename a.txt
   (drgnx-blame-test--with-history
     (goto-char (point-min)) (forward-line 1)
     (drgnx-blame--update)
-    (should (drgnx-blame-test--wait-for (lambda () (string-search "Bob" (or (drgnx-blame-test--shown) "")))))
+    (should (= (length drgnx-blame-test--asked) 1))
+    (should (equal (car (car drgnx-blame-test--asked)) "git/blame"))
+    (should-not (drgnx-blame-test--shown))                  ; the answer is on its way
+    (drgnx-blame-test--deliver)
+    (drgnx-blame--update)
+    (should (string-search "Bob" (or (drgnx-blame-test--shown) "")))
     (should (string-search "Add two" (drgnx-blame-test--shown)))
     (should (= (overlay-start drgnx-blame--overlay) (line-end-position)))
     (forward-line -1)                                       ; leaving the line hides it
     (drgnx-blame--follow)
-    (should-not (drgnx-blame-test--shown))))
+    (should-not (drgnx-blame-test--shown))
+    (drgnx-blame--update)
+    (should (string-search "Ada" (drgnx-blame-test--shown)))
+    (should (= (length drgnx-blame-test--asked) 1))))       ; one question for the whole file
 
-(ert-deftest drgnx-blame/unsaved-lines-are-uncommitted ()
+(ert-deftest drgnx-blame/typing-asks-for-nothing-and-lines-follow-it ()
   (drgnx-blame-test--with-history
-    (goto-char (point-min)) (insert "new\n")
+    (drgnx-blame--update)
+    (drgnx-blame-test--deliver)
+    (goto-char (point-min)) (insert "new\n")                ; a line above: the old ones move down
     (goto-char (point-min))
     (drgnx-blame--update)
-    (should (drgnx-blame-test--wait-for (lambda () (equal (string-trim (or (drgnx-blame-test--shown) "")) "You · Uncommitted changes"))))
+    (should (equal (string-trim (drgnx-blame-test--shown)) "You · Uncommitted changes"))
     (forward-line 2)                                        ; "two", now line 3
     (drgnx-blame--update)
-    (should (drgnx-blame-test--wait-for (lambda () (string-search "Bob" (or (drgnx-blame-test--shown) "")))))))
+    (should (string-search "Bob" (drgnx-blame-test--shown)))
+    (insert "!")                                            ; a character on it: the line is the user's now
+    (drgnx-blame--hide)
+    (drgnx-blame--update)
+    (should (equal (string-trim (drgnx-blame-test--shown)) "You · Uncommitted changes"))
+    (should (= (length drgnx-blame-test--asked) 1))))
 
-(ert-deftest drgnx-blame/one-git-at-a-time ()
+(ert-deftest drgnx-blame/a-save-or-a-revert-asks-again ()
   (drgnx-blame-test--with-history
-    (insert (mapconcat (lambda (i) (format "l%d\n" i)) (number-sequence 1 5) ""))
-    (goto-char (point-min))
-    (dotimes (_ 5) (drgnx-blame--update) (forward-line 1))
-    (should (<= (drgnx-blame-test--live) 1))
-    (drgnx-blame-test--wait-for (lambda () (= 0 (drgnx-blame-test--live))))))
+    (drgnx-blame--update) (drgnx-blame-test--deliver)
+    (should (memq #'drgnx-blame--forget after-save-hook))
+    (should (memq #'drgnx-blame--forget after-revert-hook))
+    (run-hooks 'after-save-hook)
+    (should-not drgnx-blame--data)
+    (drgnx-blame--update)
+    (should (= (length drgnx-blame-test--asked) 2))))
+
+(ert-deftest drgnx-blame/one-question-at-a-time-and-a-forgotten-one-is-not-taken ()
+  (drgnx-blame-test--with-history
+    (drgnx-blame--update) (drgnx-blame--update)
+    (should (= (length drgnx-blame-test--asked) 1))
+    (drgnx-blame-mode -1)                                   ; the answer comes after the mode went
+    (drgnx-blame-test--deliver)
+    (should-not drgnx-blame--data)))
+
+(ert-deftest drgnx-blame/lines-an-agent-wrote-say-so ()
+  (drgnx-blame-test--with-history
+    (setq drgnx-blame-test--answer (plist-put (drgnx-blame-test--canned) :agents (list (list :from 2 :to 2 :session "s1" :step "7"))))
+    (goto-char (point-min)) (forward-line 1)
+    (drgnx-blame--update) (drgnx-blame-test--deliver) (drgnx-blame--update)
+    (should (string-prefix-p "agent s1" (string-trim (drgnx-blame-test--shown))))
+    (goto-char (point-min)) (drgnx-blame--hide) (drgnx-blame--update)
+    (should (string-search "Ada" (drgnx-blame-test--shown)))))
+
+(ert-deftest drgnx-blame/too-many-edits-ask-again ()
+  (drgnx-blame-test--with-history
+    (drgnx-blame--update) (drgnx-blame-test--deliver)
+    (let ((drgnx-blame-max-edits 3))
+      (dotimes (_ 4) (goto-char (point-max)) (insert "x"))
+      (should-not drgnx-blame--data))))
+
+(ert-deftest drgnx-blame/a-file-the-hub-refuses-is-not-asked-again ()
+  (drgnx-blame-test--with-history
+    (setq drgnx-blame-test--answer 'error)
+    (drgnx-blame--update) (drgnx-blame-test--deliver)
+    (should drgnx-blame--off)
+    (drgnx-blame--update)
+    (should (= (length drgnx-blame-test--asked) 1))
+    (should-not (drgnx-blame-test--shown))
+    (drgnx-blame-mode -1) (drgnx-blame-mode 1)               ; turned on again: asked again
+    (should-not drgnx-blame--off)))
+
+(ert-deftest drgnx-blame/a-buffer-the-history-does-not-track-is-quiet-and-tried-again ()
+  (drgnx-blame-test--with-history
+    (setq drgnx-blame-test--answer nil)                      ; no registration yet, or no hub
+    (drgnx-blame--update) (drgnx-blame--update)
+    (should-not drgnx-blame--off)
+    (should-not drgnx-blame--request)
+    (should-not (drgnx-blame-test--shown))
+    (setq drgnx-blame-test--answer (drgnx-blame-test--canned))
+    (drgnx-blame--update)
+    (should drgnx-blame--request)))
 
 (ert-deftest drgnx-blame/odd-buffers-stay-quiet ()
   (drgnx-git-test-with-repo
     (drgnx-git-test-write repo "a.txt" "one\n")
     (drgnx-git-test repo "add" "-A") (drgnx-git-test repo "commit" "-q" "-m" "Start")
-    ;; untracked: one try, then never again in that buffer
     (drgnx-git-test-write repo "new.txt" "x\n")
     (with-current-buffer (find-file-noselect (expand-file-name "new.txt" repo))
       (drgnx-blame--maybe)
-      (should-not drgnx-blame-mode)                           ; not a tracked file: not turned on
-      (drgnx-blame-mode 1)                                    ; on by hand: git refuses once
-      (drgnx-blame--update)
-      (should (drgnx-blame-test--wait-for (lambda () drgnx-blame--off)))
-      (drgnx-blame--update)
-      (should (= 0 (drgnx-blame-test--live)))
-      (should-not (drgnx-blame-test--shown)))
-    ;; a tracked file: on
+      (should-not drgnx-blame-mode))                         ; not a tracked file: not turned on
     (with-current-buffer (find-file-noselect (expand-file-name "a.txt" repo))
       (drgnx-blame--maybe)
-      (should drgnx-blame-mode)))
+      (should drgnx-blame-mode)))                            ; a tracked file: on
   ;; outside git, and a remote file: never on
   (let ((dir (make-temp-file "drgnx-blame" t)))
     (unwind-protect
@@ -227,63 +286,17 @@ filename a.txt
       (should-not drgnx-blame-mode))
     (setq buffer-file-name nil)))
 
-(ert-deftest drgnx-blame/a-git-that-ends-before-its-input-is-no-error ()
-  ;; git refuses an untracked file at once: it may have ended before the request sends its EOF (A-44)
-  (drgnx-git-test-with-repo
-    (drgnx-git-test-write repo "a.txt" "one\n")
-    (drgnx-git-test repo "add" "-A") (drgnx-git-test repo "commit" "-q" "-m" "Start")
-    (drgnx-git-test-write repo "new.txt" "x\n")
-    (with-current-buffer (find-file-noselect (expand-file-name "new.txt" repo))
-      (unwind-protect
-          (progn
-            (drgnx-blame-mode 1)
-            (drgnx-test-with-exit-before-read (drgnx-blame--update))
-            (should (drgnx-blame-test--wait-for (lambda () (null drgnx-blame--proc))))
-            (should (= 0 (drgnx-blame-test--live))))
-        (drgnx-blame-mode -1)
-        (kill-buffer)))))
-
 (ert-deftest drgnx-blame/show-commit-of-line ()
   (drgnx-blame-test--with-history
-    (let ((shown nil) (sha (drgnx-git-test repo "rev-parse" "HEAD")))
+    (let ((shown nil))
       (cl-letf (((symbol-function 'drgnx-diff-show) (lambda (source &rest _) (setq shown source))))
         (goto-char (point-min)) (forward-line 1)
+        (should-error (drgnx-blame-show-commit) :type 'user-error)      ; no answer yet
+        (drgnx-blame--update) (drgnx-blame-test--deliver)
         (drgnx-blame-show-commit)
-        (should (equal shown (list 'commit sha)))
+        (should (equal shown (list 'commit "2222222222222222222222222222222222222222")))
         (goto-char (point-min)) (insert "new\n") (goto-char (point-min))
-        (should-error (drgnx-blame-show-commit) :type 'user-error)))))
-
-;; review fixes (M11b final review)
-(ert-deftest drgnx-blame/never-switches-itself-off ()
-  ;; C2: the empty line after the last newline, a request replaced, the mode turned off mid-request: blame goes on
-  (drgnx-blame-test--with-history
-    (goto-char (point-max))
-    (drgnx-blame--update)
-    (drgnx-blame-test--wait-for (lambda () (= 0 (drgnx-blame-test--live))))
-    (should-not drgnx-blame--off)
-    (goto-char (point-min))
-    (drgnx-blame--update) (forward-line 1) (drgnx-blame--update)   ; the first is replaced
-    (should (drgnx-blame-test--wait-for (lambda () (string-search "Bob" (or (drgnx-blame-test--shown) "")))))
-    (should-not drgnx-blame--off)
-    (goto-char (point-min)) (drgnx-blame--forget)
-    (drgnx-blame--update) (drgnx-blame-mode -1) (drgnx-blame-mode 1)
-    (drgnx-blame--update)
-    (should (drgnx-blame-test--wait-for (lambda () (string-search "Ada" (or (drgnx-blame-test--shown) "")))))))
-
-(ert-deftest drgnx-blame/crlf-files-line-up ()
-  ;; I1: a committed CRLF file, unmodified and modified
-  (drgnx-git-test-with-repo
-    (let ((coding-system-for-write 'binary)) (drgnx-git-test-write repo "w.txt" "one\r\ntwo\r\n"))
-    (drgnx-git-test repo "add" "-A") (drgnx-git-test repo "commit" "-q" "-m" "Windows lines")
-    (with-current-buffer (find-file-noselect (expand-file-name "w.txt" repo))
-      (should (eq (coding-system-eol-type buffer-file-coding-system) 1))
-      (drgnx-blame-mode 1)
-      (goto-char (point-min)) (forward-line 1)
-      (drgnx-blame--update)
-      (should (drgnx-blame-test--wait-for (lambda () (string-search "Windows lines" (or (drgnx-blame-test--shown) "")))))
-      (goto-char (point-min)) (insert "new\n") (forward-line 1)
-      (drgnx-blame--update)
-      (should (drgnx-blame-test--wait-for (lambda () (string-search "Windows lines" (or (drgnx-blame-test--shown) ""))))))))
+        (should-error (drgnx-blame-show-commit) :type 'user-error)))))   ; not committed yet
 
 (ert-deftest drgnx-blame/timer-cancelled ()
   ;; M11b-12: the one idle timer lives while some buffer has inline blame, not for the rest of the session

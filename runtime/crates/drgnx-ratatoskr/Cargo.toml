@@ -94,6 +94,7 @@ verdandi = { path = "../verdandi", version = "0.1.0" }  # the edit history's sto
 # from a whole-file diff, three-way projection and whole-file writes as line hunks (pair::writes); 3.x is not in the
 # lock file yet
 similar = "2.7"
+xxhash-rust = { version = "0.8.19", features = ["xxh3"] }  # a search's file digests and match keys (view::search; already in the tree through loro)
 heimdall = { path = "../heimdall", version = "0.1.0" }  # the CDP broker's routing and codecs (browser::{host,broker})
 fastwebsockets.workspace = true  # the CDP broker's websocket (browser::broker)
 hyper.workspace = true           # the CDP broker's HTTP/1.1 upgrade (already in the tree through bifrost)

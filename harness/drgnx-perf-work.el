@@ -47,6 +47,7 @@ the map on the hub's rows (with Sjá); else on `drgnx-view-old-path', the frames
          (when (buffer-live-p drgnx-perf--work-buf) (kill-buffer drgnx-perf--work-buf))
          (setq drgnx-perf--work-buf nil)
          (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--wl-slice)
+         (when (fboundp 'drgnx-perf--wl-class-step) (advice-remove 'drgnx-view-nav-class-step #'drgnx-perf--wl-class-step))
          (ignore-errors (delete-other-windows))
          (drgnx-work-thirty-stop)
          (setq drgnx-view-old-path nil))
@@ -248,6 +249,10 @@ agents in turn, the tiles of the bands that carry that agent's chain, summed."
                   (push (list (drgnx-perf--round ms) (and touched t) (- (plist-get (drgnx-view-stats v) :rows-drawn) rows)
                               (drgnx-perf--round (* 1000 (- gc-elapsed gc0))))
                         drgnx-perf--wl-long)))))))
+      (defvar drgnx-perf--wl-class nil "Wall ms of each class step (`drgnx-view-nav-class-step') since the arm.")
+      (defun drgnx-perf--wl-class-step (orig &rest args)
+        (let ((t0 (float-time)))
+          (prog1 (apply orig args) (push (* 1000 (- (float-time) t0)) drgnx-perf--wl-class))))
       (defun drgnx-perf--wl-updates ()
         "The map's updates so far: on the hub's rows its patches' version, else the client's deltas."
         (let ((patch (buffer-local-value 'drgnx-view-patch drgnx-perf--work-buf)))
@@ -255,10 +260,11 @@ agents in turn, the tiles of the bands that carry that agent's chain, summed."
             (drgnx-work-client-counter (buffer-local-value 'drgnx-work-space--view drgnx-perf--work-buf) :deltas))))
       (defun drgnx-perf--wl-arm ()
         (setq drgnx-perf--wl-slices nil drgnx-perf--wl-long nil drgnx-perf--wl-consed nil drgnx-perf--wl-idle 0
-              drgnx-perf--wl-gcs nil
+              drgnx-perf--wl-gcs nil drgnx-perf--wl-class nil
               drgnx-perf--wl-start (list (plist-get (drgnx-view-stats (drgnx-perf--work-view)) :draw-ms)
                                          (drgnx-perf--wl-updates)))
-        (advice-add 'drgnx-view--draw-buffer :around #'drgnx-perf--wl-slice))
+        (advice-add 'drgnx-view--draw-buffer :around #'drgnx-perf--wl-slice)
+        (advice-add 'drgnx-view-nav-class-step :around #'drgnx-perf--wl-class-step))
       (defun drgnx-perf--wl-wait (secs)
         "Let the session run for SECS: one wait to the deadline, waking only for process output."
         (let ((deadline (+ (float-time) secs)))
@@ -274,6 +280,7 @@ agents in turn, the tiles of the bands that carry that agent's chain, summed."
                  (draw (- (plist-get (drgnx-view-stats (drgnx-perf--work-view)) :draw-ms) (car drgnx-perf--wl-start)))
                  (deltas (- (drgnx-perf--wl-updates) (cadr drgnx-perf--wl-start))))
             (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--wl-slice)
+            (advice-remove 'drgnx-view-nav-class-step #'drgnx-perf--wl-class-step)
             (when (< deltas 30) (error "Premise: the map got %d deltas in %.0f s" deltas secs))
             (append (list :draw_ms_s (drgnx-perf--round2 (/ draw secs)) :deltas deltas
                           :long (vconcat (mapcar (lambda (l) (format "%S" l)) (seq-take drgnx-perf--wl-long 12)))
@@ -281,6 +288,8 @@ agents in turn, the tiles of the bands that carry that agent's chain, summed."
                           :draw_kb (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--wl-consed))
                           :draw_mb_s (drgnx-perf--round2 (/ (apply #'+ 0.0 drgnx-perf--wl-consed) 1024 secs))
                           :draws (length drgnx-perf--wl-slices) :draws_idle drgnx-perf--wl-idle
+                          :class_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats drgnx-perf--wl-class))
+                          :class_ms_total (drgnx-perf--round2 (apply #'+ 0.0 drgnx-perf--wl-class))
                           :gcs (format "%S" drgnx-perf--wl-gcs)
                           :gc_env (format "%S" (list :threshold gc-cons-threshold :daemon (and (daemonp) t)
                                                      :clients (and (boundp 'server-clients) (length server-clients))
@@ -622,6 +631,7 @@ window (one `view/window' round trip and the model's apply); the longest list Sj
 step is not reached or Sjá held more than the window."
         (with-current-buffer drgnx-perf--tl-buf
           (advice-add 'drgnx-hub--model-line :around #'drgnx-perf--tl-line-ad)
+          (advice-add 'drgnx-hub--model-pushed :around #'drgnx-perf--tl-line-ad)
           (let ((h (drgnx-perf--tl-h)) keys pages lines handled (most 0) (n 0))
             ;; each run starts from the last 500 (the run before paged to the first)
             (funcall drgnx-view-patch-send-function "view/window" (list :view (drgnx-view-patch-view drgnx-view-patch)
@@ -655,7 +665,8 @@ step is not reached or Sjá held more than the window."
                   :page_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats pages))
                   :line_ms (mapcar #'drgnx-perf--round2
                                    (drgnx-perf-stats (prog1 lines
-                                                       (advice-remove 'drgnx-hub--model-line #'drgnx-perf--tl-line-ad))))
+                                                       (advice-remove 'drgnx-hub--model-line #'drgnx-perf--tl-line-ad)
+                                                       (advice-remove 'drgnx-hub--model-pushed #'drgnx-perf--tl-line-ad))))
                   :handled_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats handled))
                   :pages (length pages) :list_max most :keys n
                   :reached t))))

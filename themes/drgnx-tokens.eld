@@ -5,7 +5,9 @@
 ;; `overlay' is `raised'; the palette's 0.90 is the palette's own alpha.  Values are the design's palette
 ;; (docs/guide/look.md); high contrast adds `sel-fg', the foreground of text on the selection, and has no tints.
 ;; `sel-inactive' is drgnx's, not the design's: the selected row of a list without the focus, at least 1.25:1 against
-;; the panel (the design's `sel-quiet' is 1.15 there, too faint; it stays for buttons and chips).
+;; the panel (the design's `sel-quiet' is 1.15 there, too faint; it stays for buttons and chips).  The ladder is
+;; rest, hover, `sel-inactive' (the mockup's `.row.sel' is `sel-quiet', 1.15:1: contrast wins over the mockup, the
+;; manager's ruling of 2026-11-11), then `sel' with the focus ring; no bold anywhere on it.
 ;; `match' is the search matches' fill, `match-edge' the outline of a match that is not the current one.  Dark's
 ;; matches are 18 % and outlined in the accent at 72 % (3:1 on the selection, so a match inside one shows; the user's
 ;; ruling of 2026-11-10); light and high contrast keep the design's 25 %, unoutlined (the edge is the fill).

@@ -128,6 +128,76 @@ plain newline (no fill past the row).  Every row gets the same left inset, so th
       (should (equal "Run Test at Point\n" (substring other 1)))
       (should-not (drgnx-look-palette-test--boxed-p (get-text-property 1 'face other))))))
 
+(ert-deftest drgnx-look-palette/a-row-keycap-is-a-chip-image ()
+  "A keycap on a row that can be selected is an SVG chip, not a face `:box': a face has one box, so a keycap's would
+cut the selected row's rounded fill into pieces around it.  The chip is a rounded ring in the keycap's ring colour
+with the name in `currentColor' (the subtle text, muted on the selected row), as tall as the text; its text stays the
+name; a terminal, or a frame with no SVG, gets the text keycap."
+  (let ((svg (drgnx-palette--keycap-svg "<" '(:width 20 :height 18 :ascent 13 :pad 4 :line 1 :radius 4
+                                                     :family "Sans" :px 13 :weight normal :ring "#123456"))))
+    (should (string-match-p "<rect [^>]*rx=\"4\"[^>]*stroke=\"#123456\"" svg))
+    (should (string-match-p "<text [^>]*fill=\"currentColor\"[^>]*>&lt;</text>" svg))
+    (should (string-match-p "font-size=\"13px\"" svg))
+    (should (string-match-p "width=\"20\" height=\"18\"" svg)))
+  (cl-letf (((symbol-function 'display-graphic-p) #'always)
+            ((symbol-function 'image-type-available-p) #'always)
+            ((symbol-function 'drgnx-palette--keycap-image) (lambda (name) (list 'image :type 'svg :name name))))
+    (let ((cap (drgnx-palette-row-keycap "Ctrl")))
+      (should (equal "Ctrl" (substring-no-properties cap)))
+      (should (eq 'image (car (get-text-property 0 'display cap))))
+      (should-not (memq 'drgnx-keycap (drgnx-look-palette-test--faces (get-text-property 0 'face cap)))))
+    (let ((ann (drgnx-palette--annotation "Tests" nil "C-; f")))
+      (should (cl-some (lambda (i) (equal "Ctrl" (plist-get (cdr-safe (get-text-property i 'display ann)) :name)))
+                       (number-sequence 0 (1- (length ann)))))
+      (dotimes (i (length ann))
+        (should-not (memq 'drgnx-keycap (drgnx-look-palette-test--faces (get-text-property i 'face ann)))))))
+  (should (equal "Ctrl" (substring-no-properties (drgnx-palette-row-keycap "Ctrl"))))
+  (should (eq 'drgnx-keycap (get-text-property 0 'face (drgnx-palette-row-keycap "Ctrl")))))
+
+(ert-deftest drgnx-look-palette/rows-own-their-inset ()
+  "palette.html `.row' and `.it': a row's fill sits 6 logical pixels in and its text 8 more, inside the fill; a group
+title's text lines up with a row's.  The minibuffer the palette dresses has a `line-prefix' (the input row's inset),
+which would put every row in twice, so a candidate row and a group title start with an empty one of their own."
+  (load (expand-file-name "modules/extra/drgnx-completion" drgnx-dir) nil t)
+  (let* ((cand (let ((s (concat "Run Tests" "\n"))) (add-face-text-property 0 (length s) 'vertico-current t s) s))
+         (row (drgnx-completion--row cand t))
+         (other (drgnx-completion--row (copy-sequence "Run Test at Point\n") nil))
+         (title (drgnx-palette--group-title "Commands"))
+         (width (lambda (s i) (plist-get (cdr (memq 'space (flatten-tree (get-text-property i 'display s)))) :width))))
+    (dolist (s (list row other title))
+      (should (equal "" (get-text-property 0 'line-prefix s))))
+    (let ((pad (string-search "Run" row)))                      ; the pad: in the fill, before the text
+      (should (= pad 2))
+      (should (memq 'vertico-current (drgnx-look-palette-test--faces (get-text-property 1 'face row))))
+      (should (drgnx-look-palette-test--boxed-p (get-text-property 1 'face row)))
+      (should (= (funcall width row 1) (drgnx-px drgnx-palette-row-padding))))
+    (should (= (funcall width row 0) (drgnx-px drgnx-completion-row-inset)))
+    (should (= (funcall width other 0) (drgnx-px (+ drgnx-completion-row-inset drgnx-palette-row-padding))))))
+
+(ert-deftest drgnx-look-palette/the-input-row-owns-its-inset ()
+  "palette.html `.in': the search icon sits 14 logical pixels in, as a row's text.  The palette's input row brings its
+own inset, so the minibuffer it shows has no `line-prefix' (the echo box's dressing gives it the input row's inset as
+one), whichever of the two dresses it first."
+  (let ((win (selected-window)) (mode (window-parameter (selected-window) 'mode-line-format)))
+    (with-temp-buffer
+      (set-window-buffer win (current-buffer))
+      (insert "run te")
+      (unwind-protect
+          (progn (drgnx-look-echo--dress)                             ; the echo box first
+                 (should line-prefix)
+                 (drgnx-palette-frame--dress win)
+                 (should-not line-prefix)
+                 (drgnx-look-echo--undress)
+                 (drgnx-palette-frame--undress)
+                 (drgnx-palette-frame--dress win)                      ; the palette first
+                 (drgnx-look-echo--dress)
+                 (should-not line-prefix)
+                 (with-temp-buffer (drgnx-look-echo--dress)              ; another buffer keeps its inset
+                                   (should line-prefix)))
+        (drgnx-look-echo--undress)
+        (drgnx-palette-frame--undress)
+        (set-window-parameter win 'mode-line-format mode)))))
+
 (ert-deftest drgnx-look-palette/secondary-text-on-the-current-row-is-muted ()
   "Pattern D, the look's contrast rule: on the current candidate, text in the subtle colour (a keycap, an
 annotation) is `drgnx-selected-secondary' (muted: subtle is 3.8:1 on the dark selection, 4.3 on the light); the

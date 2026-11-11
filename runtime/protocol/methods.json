@@ -3062,7 +3062,7 @@
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`search-grep-done`: search QUERY of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not\nrun. A search a newer one stopped says nothing.",
+        "description": "`search-run-done`: search RUN of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not\nrun; OFF the matches that come back unticked (`search/run`'s `off`). A search a newer one stopped says nothing.",
         "properties": {
           "error": {
             "type": [
@@ -3080,7 +3080,13 @@
             "minimum": 0,
             "type": "integer"
           },
-          "query": {
+          "off": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "run": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -3091,15 +3097,15 @@
         },
         "required": [
           "view",
-          "query",
+          "run",
           "files",
           "matches"
         ],
-        "title": "GrepDone",
+        "title": "RunDone",
         "type": "object"
       },
-      "doc": "a text search (search/grep) ended: its query number, the files and matches it found, or why it could not run; to the searching connection only; a search a newer one stopped says nothing",
-      "name": "search-grep-done"
+      "doc": "a Search view's search (search/run) ended: its run number, the files and matches it found, or why it could not run, and the matches that come back unticked; to the searching connection only; a search a newer one stopped says nothing",
+      "name": "search-run-done"
     },
     {
       "data": {
@@ -15530,6 +15536,137 @@
       "classes": [
         "user"
       ],
+      "doc": "git's blame of a whole file in one answer: per line the commit that last changed it, for the text of the editor's tracked buffer (unsaved typing included) or else the file; lines an agent wrote ride along; cached by path, HEAD and text",
+      "name": "git/blame",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/blame`: PATH of the worktree at WORKTREE_ROOT, as the editor's tracked buffer holds it (else the file).",
+        "properties": {
+          "path": {
+            "description": "Relative to the worktree.",
+            "type": "string"
+          },
+          "worktree_root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "worktree_root"
+        ],
+        "title": "GitBlameParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "AgentLines": {
+            "additionalProperties": false,
+            "description": "Lines FROM..=TO (1-based) an agent wrote, from the edit history, not yet committed or committed unchanged by it.",
+            "properties": {
+              "from": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "session": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "step": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "to": {
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "type": "object"
+          },
+          "BlameCommit": {
+            "additionalProperties": false,
+            "description": "One commit of a blame.  The lines not committed yet name the commit `0000000000000000000000000000000000000000`, no\ntime and the summary `Uncommitted changes`.",
+            "properties": {
+              "author": {
+                "type": "string"
+              },
+              "sha": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "time": {
+                "description": "The author time, seconds since the epoch; none for uncommitted lines.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "sha",
+              "author",
+              "summary"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/blame`'s answer: COMMITS, and for each line of the text (in order) the index of its commit.",
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/$defs/AgentLines"
+            },
+            "type": "array"
+          },
+          "commits": {
+            "items": {
+              "$ref": "#/$defs/BlameCommit"
+            },
+            "type": "array"
+          },
+          "head": {
+            "description": "The commit HEAD named when the blame was made.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lines": {
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "commits",
+          "lines",
+          "agents"
+        ],
+        "title": "GitBlamed",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "read a repository's git status on a thread and give a hub-fed view its rows (a letter per changed path, a mark per shown folder with a change, the branch): the view-patch follows, only what changed after the first",
       "name": "git/letters",
       "params": {
@@ -15576,6 +15713,54 @@
         "type": "boolean"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "stage one hunk of the editor's tracked buffer against HEAD in git's index (git apply --cached); the work tree is untouched",
+      "name": "git/stage-hunk",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/stage-hunk`: stage one hunk of the tracked buffer's change against HEAD (as `history/hunks/head` numbered it)\nin the index, as `git apply --cached` does; the work tree is not touched.",
+        "properties": {
+          "new_start": {
+            "description": "Which of the hunks: the line the hunk starts at in the buffer (`new_start`; for a pure deletion, the line it\nsits before).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "path": {
+            "description": "Relative to the worktree.",
+            "type": "string"
+          },
+          "worktree_root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "worktree_root",
+          "new_start"
+        ],
+        "title": "StageHunkParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "staged": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "staged"
+        ],
+        "title": "Staged",
+        "type": "object"
+      },
+      "writes": true
     },
     {
       "classes": [
@@ -18450,6 +18635,95 @@
           "files"
         ],
         "title": "BranchHunks",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "what the editor's tracked buffer of a file changed against the last commit (HEAD), as hunks numbered as git diff --unified=0 numbers them; for the change marks in the margin",
+      "name": "history/hunks/head",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/hunks/head`: PATH of the worktree at WORKTREE_ROOT, the editor's tracked buffer against HEAD.",
+        "properties": {
+          "path": {
+            "description": "Relative to the worktree.",
+            "type": "string"
+          },
+          "worktree_root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "worktree_root"
+        ],
+        "title": "HeadHunksParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "HeadHunk": {
+            "additionalProperties": false,
+            "description": "A hunk against HEAD: git's numbers and the lines HEAD has there (the text a revert puts back and a stage applies).",
+            "properties": {
+              "new_count": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "new_start": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "old_count": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "old_lines": {
+                "description": "HEAD's lines OLD_START..OLD_START+OLD_COUNT, each with its line end.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "old_start": {
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "old_start",
+              "old_count",
+              "new_start",
+              "new_count",
+              "old_lines"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/hunks/head`'s answer.  `tracked` is false when no buffer of the file is tracked (no hunks were computed);\na file HEAD does not hold is one hunk of all its lines.",
+        "properties": {
+          "hunks": {
+            "items": {
+              "$ref": "#/$defs/HeadHunk"
+            },
+            "type": "array"
+          },
+          "tracked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tracked",
+          "hunks"
+        ],
+        "title": "HeadHunks",
         "type": "object"
       },
       "writes": false
@@ -27038,6 +27312,65 @@
       "classes": [
         "user"
       ],
+      "doc": "an editor buffer with unsaved edits: the Search view's searches search its text in place of its file (the current search at once), or say the buffer is too large and is searched on disk; without text or large the file is searched again",
+      "name": "search/buffer",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/buffer`: the editor's buffer of PATH holds unsaved edits: VIEW's searches search TEXT in place of the file\nfrom now on, and the current one takes its matches at once. A buffer over the editor's large-file threshold sends\n`large` and no text: the file is searched on disk, its header saying the buffer is open in chunks. Neither: the\nbuffer was saved or killed, and the next search reads the file again.",
+        "properties": {
+          "large": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "path": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tick": {
+            "default": 0,
+            "description": "The buffer's `buffer-chars-modified-tick`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "path"
+        ],
+        "title": "BufferParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the built-in model's state and device, the servers that can embed and which answer, and the model a query prefers",
       "name": "search/embedders",
       "params": {
@@ -27278,153 +27611,12 @@
       "classes": [
         "user"
       ],
-      "doc": "search a folder's files for text and stream the matches to a hub-fed view as rows (view-patch: a reset, then each file's header and matches), ending with search-grep-done; a newer search of the view stops the old one",
-      "name": "search/grep",
-      "params": {
-        "$defs": {
-          "AbsPath": {
-            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
-            "maxLength": 4096,
-            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
-            "type": "string"
-          },
-          "GrepIgnore": {
-            "description": "Which files a text search and the ranked file query look in (the setting `drgnx-search-ignore-rules`).",
-            "oneOf": [
-              {
-                "const": "index",
-                "description": "The index's filters: no dot paths, no secret-looking names.",
-                "type": "string"
-              },
-              {
-                "const": "real",
-                "description": "Only what `.gitignore` files and the globs name.",
-                "type": "string"
-              }
-            ]
-          }
-        },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "description": "`search/grep`: search ROOT's files for TEXT and send the matches to VIEW as rows (the event `view-patch`): a reset\nat once, then each file's header and matches as it is complete. A newer search of the same view stops this one.",
-        "properties": {
-          "case": {
-            "description": "Match case; default off.",
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "exclude": {
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "file": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/AbsPath"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Search this one file only (globs then do not apply)."
-          },
-          "ignore": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/GrepIgnore"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Default: the setting `drgnx-search-ignore-rules`."
-          },
-          "include": {
-            "description": "Globs; each string may hold several, comma-separated.",
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "regexp": {
-            "description": "TEXT is a regular expression.",
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "replace": {
-            "description": "The replacement the rows preview (old struck out, new beside it); a regexp search's `\\1` are the groups.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "root": {
-            "$ref": "#/$defs/AbsPath"
-          },
-          "text": {
-            "type": "string"
-          },
-          "view": {
-            "description": "The hub-fed view that shows the rows (`view/env`).",
-            "type": "string"
-          },
-          "word": {
-            "description": "Whole words only.",
-            "type": [
-              "boolean",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "view",
-          "root",
-          "text"
-        ],
-        "title": "GrepParams",
-        "type": "object"
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "description": "`search/grep`'s answer: QUERY numbers the search (the event `search-grep-done` names it).",
-        "properties": {
-          "query": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "query"
-        ],
-        "title": "GrepStarted",
-        "type": "object"
-      },
-      "writes": false
-    },
-    {
-      "classes": [
-        "user"
-      ],
       "doc": "a view's grep rows go on: one more window of rows (more), or the rows up to a match beyond them and a margin (upto); false when the view has no search; a search sends only its first 200 rows until asked",
       "name": "search/grep-look",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`search/grep-look`: VIEW's rows of its search go on. A search sends a view its first 200 rows (a file's header and\nits matches, in order), and the totals in `search-grep-done`; the hub keeps every match, and Sjá's model holds them.\nThe editor asks for more when its window nears the end of the rows (`more`), or when it goes to a match beyond them\n(`upto`: the row's key, and 100 rows after it come too). A match more than 400 rows past the rows sent comes with\nthe 100 rows before it too, after a gap row (key `gap`); `fill` (the gap row in sight) sends the 200 rows before\nit, and the gap row goes when they meet the rows after it.",
+        "description": "`search/grep-look`: VIEW's rows of its search go on. A search sends a view its first 200 rows (a file's header and\nits matches, in order), and the totals in `search-run-done`; the hub keeps every match, and Sjá's model holds them.\nThe editor asks for more when its window nears the end of the rows (`more`), or when it goes to a match beyond them\n(`upto`: the row's key, and 100 rows after it come too). A match more than 400 rows past the rows sent comes with\nthe 100 rows before it too, after a gap row (key `gap`); `fill` (the gap row in sight) sends the 200 rows before\nit, and the gap row goes when they meet the rows after it.",
         "properties": {
           "fill": {
             "description": "The rows before the gap row, one window more.",
@@ -27441,7 +27633,7 @@
             ]
           },
           "upto": {
-            "description": "The key of a row to reach (`f:FILE`, `m:FILE:LINE:COL`); over `more`.",
+            "description": "The key of a row to reach (`f:FILE`, `m:RUN:N`); over `more`.",
             "type": [
               "string",
               "null"
@@ -27506,7 +27698,7 @@
         "$defs": {
           "GrepSkip": {
             "additionalProperties": false,
-            "description": "One skipped match: its node id (`m:FILE:LINE:COL`) and why.",
+            "description": "One skipped match: its node id (`m:RUN:N`) and why.",
             "properties": {
               "id": {
                 "type": "string"
@@ -28336,6 +28528,1268 @@
           "view"
         ],
         "title": "QueryAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a project's recent searches, newest first (the last 50): each search that stood past the typing pause and was not empty, with its mode, toggles, replacement, scope and globs",
+      "name": "search/recent",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "RootParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "FindQuery": {
+            "description": "What the Search view's Find means: the mode and what was typed, with the mode's toggles.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "Text or a regular expression (`hrafn::grep`).",
+                "properties": {
+                  "case": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "const": "text",
+                    "type": "string"
+                  },
+                  "regexp": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "word": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "mode",
+                  "text"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Definitions and uses of a name, from the index (by name only).",
+                "properties": {
+                  "case": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "const": "symbol",
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "name"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A question about what the code does (Hrafn's hybrid query).",
+                "properties": {
+                  "mode": {
+                    "const": "meaning",
+                    "type": "string"
+                  },
+                  "question": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "question"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "ScopeKind": {
+            "description": "Which files a search looks in.",
+            "oneOf": [
+              {
+                "const": "project",
+                "description": "The root, the ignore rules as set.",
+                "type": "string"
+              },
+              {
+                "const": "file",
+                "description": "One file: the view's origin buffer.",
+                "type": "string"
+              },
+              {
+                "const": "open",
+                "description": "The files normal buffers visit under the root.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "The working tree's modified, added and untracked files.",
+                "type": "string"
+              },
+              {
+                "const": "staged",
+                "description": "The files whose index entry differs from HEAD (their working-tree text is searched).",
+                "type": "string"
+              },
+              {
+                "const": "branch",
+                "description": "The files changed since the merge base of HEAD and BASE, and the working tree's changes.",
+                "type": "string"
+              }
+            ]
+          },
+          "SearchScope": {
+            "additionalProperties": false,
+            "description": "A search's scope: its kind, Branch's base (none: the upstream, else `main`, else `master`), whether only matches\nin changed lines count (Changed, Staged, Branch), and the files of File and Open (the editor's state, never saved).",
+            "properties": {
+              "base": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "changed_lines": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "files": {
+                "items": {
+                  "$ref": "#/$defs/AbsPath"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/ScopeKind"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          "SearchSpec": {
+            "additionalProperties": false,
+            "description": "A search as the user made it: what recent and saved searches keep, and what a click runs again.",
+            "properties": {
+              "exclude": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "include": {
+                "description": "Globs; each string may hold several, comma-separated.",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "query": {
+                "$ref": "#/$defs/FindQuery"
+              },
+              "replace": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "scope": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SearchScope"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/recent`'s answer: ROOT's recent searches, newest first (at most 50).",
+        "properties": {
+          "recent": {
+            "items": {
+              "$ref": "#/$defs/SearchSpec"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "recent"
+        ],
+        "title": "RecentAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "run the Search view's search over a folder and stream the matches to a hub-fed view as rows (view-patch: a reset, then each file's header and matches; ids m:RUN:N), ending with search-run-done; a newer search of the view stops the old one, and the matches the user unticked in it stay unticked when found again",
+      "name": "search/run",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "FindQuery": {
+            "description": "What the Search view's Find means: the mode and what was typed, with the mode's toggles.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "Text or a regular expression (`hrafn::grep`).",
+                "properties": {
+                  "case": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "const": "text",
+                    "type": "string"
+                  },
+                  "regexp": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "word": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "mode",
+                  "text"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Definitions and uses of a name, from the index (by name only).",
+                "properties": {
+                  "case": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "const": "symbol",
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "name"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A question about what the code does (Hrafn's hybrid query).",
+                "properties": {
+                  "mode": {
+                    "const": "meaning",
+                    "type": "string"
+                  },
+                  "question": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "question"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "GrepIgnore": {
+            "description": "Which files a text search and the ranked file query look in (the setting `drgnx-search-ignore-rules`).",
+            "oneOf": [
+              {
+                "const": "index",
+                "description": "The index's filters: no dot paths, no secret-looking names.",
+                "type": "string"
+              },
+              {
+                "const": "real",
+                "description": "Only what `.gitignore` files and the globs name.",
+                "type": "string"
+              }
+            ]
+          },
+          "ScopeKind": {
+            "description": "Which files a search looks in.",
+            "oneOf": [
+              {
+                "const": "project",
+                "description": "The root, the ignore rules as set.",
+                "type": "string"
+              },
+              {
+                "const": "file",
+                "description": "One file: the view's origin buffer.",
+                "type": "string"
+              },
+              {
+                "const": "open",
+                "description": "The files normal buffers visit under the root.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "The working tree's modified, added and untracked files.",
+                "type": "string"
+              },
+              {
+                "const": "staged",
+                "description": "The files whose index entry differs from HEAD (their working-tree text is searched).",
+                "type": "string"
+              },
+              {
+                "const": "branch",
+                "description": "The files changed since the merge base of HEAD and BASE, and the working tree's changes.",
+                "type": "string"
+              }
+            ]
+          },
+          "SearchScope": {
+            "additionalProperties": false,
+            "description": "A search's scope: its kind, Branch's base (none: the upstream, else `main`, else `master`), whether only matches\nin changed lines count (Changed, Staged, Branch), and the files of File and Open (the editor's state, never saved).",
+            "properties": {
+              "base": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "changed_lines": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "files": {
+                "items": {
+                  "$ref": "#/$defs/AbsPath"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/ScopeKind"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          "SearchSpec": {
+            "additionalProperties": false,
+            "description": "A search as the user made it: what recent and saved searches keep, and what a click runs again.",
+            "properties": {
+              "exclude": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "include": {
+                "description": "Globs; each string may hold several, comma-separated.",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "query": {
+                "$ref": "#/$defs/FindQuery"
+              },
+              "replace": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "scope": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SearchScope"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/run`: run SEARCH over ROOT and send its matches to VIEW as rows (the event `view-patch`): a reset at once,\nthen each file's header and matches as it is complete. A newer search of the same view stops this one. The rows\npreview SEARCH's `replace` (old struck out, new beside it; a regexp search's `\\1` are the groups). Text mode with\nthe scopes Project and File (`scope.files`, the one file), so far; Symbol (a name's definitions, then its uses) and\nMeaning (the chunks a question finds, each with its symbol and score) ask the index, all their files at once, and\nare read-only: a `replace` is refused.",
+        "properties": {
+          "context": {
+            "description": "A dim label row above the first match of each definition (the innermost one around it), from one parse of the\nfile; none at the top level or for a language without definitions. Default true (the setting\n`drgnx-search-context`).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "ignore": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GrepIgnore"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default: the setting `drgnx-search-ignore-rules`."
+          },
+          "off": {
+            "description": "The match ids of the view's last run the user unticked: a match of this run that is the same match (its file,\ncolumns and the text around it) comes back unticked, named in `search-run-done`'s `off`, when exactly one match\nhas it.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "search": {
+            "$ref": "#/$defs/SearchSpec"
+          },
+          "view": {
+            "description": "The hub-fed view that shows the rows (`view/env`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "root",
+          "search"
+        ],
+        "title": "RunParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/run`'s answer: RUN numbers the search (its match ids are `m:RUN:N`; the event `search-run-done` names it).",
+        "properties": {
+          "run": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "title": "RunStarted",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "delete a project's saved search from the hub's state; false when there is none of that name",
+      "name": "search/saved/delete",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/saved/delete` and `search/saved/share`: ROOT's saved search NAME.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root",
+          "name"
+        ],
+        "title": "SavedNameParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a project's saved searches: the hub's, then the project's .drgnx/searches.eld (read as data only, nothing evaluated; a refused form is named in problems)",
+      "name": "search/saved/list",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "RootParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "FindQuery": {
+            "description": "What the Search view's Find means: the mode and what was typed, with the mode's toggles.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "Text or a regular expression (`hrafn::grep`).",
+                "properties": {
+                  "case": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "const": "text",
+                    "type": "string"
+                  },
+                  "regexp": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "word": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "mode",
+                  "text"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Definitions and uses of a name, from the index (by name only).",
+                "properties": {
+                  "case": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "const": "symbol",
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "name"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A question about what the code does (Hrafn's hybrid query).",
+                "properties": {
+                  "mode": {
+                    "const": "meaning",
+                    "type": "string"
+                  },
+                  "question": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "question"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "SavedSearch": {
+            "additionalProperties": false,
+            "description": "One saved search: its NAME, the search, whether it is PINNED to the view's header (a live count), whether it comes\nfrom the project's `.drgnx/searches.eld` (PROJECT: read-only here) and whether the user shared it there (SHARED).",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "pinned": {
+                "default": false,
+                "type": "boolean"
+              },
+              "project": {
+                "default": false,
+                "type": "boolean"
+              },
+              "search": {
+                "$ref": "#/$defs/SearchSpec"
+              },
+              "shared": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "name",
+              "search"
+            ],
+            "type": "object"
+          },
+          "ScopeKind": {
+            "description": "Which files a search looks in.",
+            "oneOf": [
+              {
+                "const": "project",
+                "description": "The root, the ignore rules as set.",
+                "type": "string"
+              },
+              {
+                "const": "file",
+                "description": "One file: the view's origin buffer.",
+                "type": "string"
+              },
+              {
+                "const": "open",
+                "description": "The files normal buffers visit under the root.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "The working tree's modified, added and untracked files.",
+                "type": "string"
+              },
+              {
+                "const": "staged",
+                "description": "The files whose index entry differs from HEAD (their working-tree text is searched).",
+                "type": "string"
+              },
+              {
+                "const": "branch",
+                "description": "The files changed since the merge base of HEAD and BASE, and the working tree's changes.",
+                "type": "string"
+              }
+            ]
+          },
+          "SearchScope": {
+            "additionalProperties": false,
+            "description": "A search's scope: its kind, Branch's base (none: the upstream, else `main`, else `master`), whether only matches\nin changed lines count (Changed, Staged, Branch), and the files of File and Open (the editor's state, never saved).",
+            "properties": {
+              "base": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "changed_lines": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "files": {
+                "items": {
+                  "$ref": "#/$defs/AbsPath"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/ScopeKind"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          "SearchSpec": {
+            "additionalProperties": false,
+            "description": "A search as the user made it: what recent and saved searches keep, and what a click runs again.",
+            "properties": {
+              "exclude": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "include": {
+                "description": "Globs; each string may hold several, comma-separated.",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "query": {
+                "$ref": "#/$defs/FindQuery"
+              },
+              "replace": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "scope": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SearchScope"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/saved/list`'s answer: the hub's saved searches of ROOT, then the project's; PROBLEMS names each form of\n`.drgnx/searches.eld` that was refused, and why.",
+        "properties": {
+          "problems": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "saved": {
+            "items": {
+              "$ref": "#/$defs/SavedSearch"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "saved"
+        ],
+        "title": "SavedList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "save a search under a name for a project (the hub's state, not the project's files); a search of that name is replaced",
+      "name": "search/saved/put",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "FindQuery": {
+            "description": "What the Search view's Find means: the mode and what was typed, with the mode's toggles.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "Text or a regular expression (`hrafn::grep`).",
+                "properties": {
+                  "case": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "const": "text",
+                    "type": "string"
+                  },
+                  "regexp": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "word": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "mode",
+                  "text"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Definitions and uses of a name, from the index (by name only).",
+                "properties": {
+                  "case": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "const": "symbol",
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "name"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A question about what the code does (Hrafn's hybrid query).",
+                "properties": {
+                  "mode": {
+                    "const": "meaning",
+                    "type": "string"
+                  },
+                  "question": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "question"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "ScopeKind": {
+            "description": "Which files a search looks in.",
+            "oneOf": [
+              {
+                "const": "project",
+                "description": "The root, the ignore rules as set.",
+                "type": "string"
+              },
+              {
+                "const": "file",
+                "description": "One file: the view's origin buffer.",
+                "type": "string"
+              },
+              {
+                "const": "open",
+                "description": "The files normal buffers visit under the root.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "The working tree's modified, added and untracked files.",
+                "type": "string"
+              },
+              {
+                "const": "staged",
+                "description": "The files whose index entry differs from HEAD (their working-tree text is searched).",
+                "type": "string"
+              },
+              {
+                "const": "branch",
+                "description": "The files changed since the merge base of HEAD and BASE, and the working tree's changes.",
+                "type": "string"
+              }
+            ]
+          },
+          "SearchScope": {
+            "additionalProperties": false,
+            "description": "A search's scope: its kind, Branch's base (none: the upstream, else `main`, else `master`), whether only matches\nin changed lines count (Changed, Staged, Branch), and the files of File and Open (the editor's state, never saved).",
+            "properties": {
+              "base": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "changed_lines": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "files": {
+                "items": {
+                  "$ref": "#/$defs/AbsPath"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/ScopeKind"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          "SearchSpec": {
+            "additionalProperties": false,
+            "description": "A search as the user made it: what recent and saved searches keep, and what a click runs again.",
+            "properties": {
+              "exclude": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "include": {
+                "description": "Globs; each string may hold several, comma-separated.",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "query": {
+                "$ref": "#/$defs/FindQuery"
+              },
+              "replace": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "scope": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SearchScope"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/saved/put`: save SEARCH under NAME in ROOT (a search of that name is replaced).",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "pinned": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "search": {
+            "$ref": "#/$defs/SearchSpec"
+          }
+        },
+        "required": [
+          "root",
+          "name",
+          "search"
+        ],
+        "title": "SavedPutParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "write a saved search into the project's .drgnx/searches.eld (atomically: a temporary file, then a rename; the rest of the file kept as it was), on the user's click",
+      "name": "search/saved/share",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/saved/delete` and `search/saved/share`: ROOT's saved search NAME.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root",
+          "name"
+        ],
+        "title": "SavedNameParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/saved/share`'s answer: the file it was written to.",
+        "properties": {
+          "path": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "SavedShared",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the Branch scope's menu for a folder's repository: the current branch, its upstream, the default base, the recent branches, and whether HEAD is detached",
+      "name": "search/scope-bases",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "RootParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/scope-bases`'s answer: the Branch scope's menu. CURRENT is the branch (none: detached or unborn),\nUPSTREAM its upstream, DEFAULT the base Branch uses when none is chosen (none: it must ask), RECENT the branches\nmost recently committed to.",
+        "properties": {
+          "current": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "default": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detached": {
+            "type": "boolean"
+          },
+          "recent": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "upstream": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "recent",
+          "detached"
+        ],
+        "title": "ScopeBases",
         "type": "object"
       },
       "writes": false

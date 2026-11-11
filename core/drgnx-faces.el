@@ -84,6 +84,13 @@ subtle does not (3.8:1 on the dark selection, 4.3 on the light); in high contras
 (defface drgnx-control-primary '((t :inherit region :box (:line-width (1 . 1))))
   "The primary button of a group: on-accent text on the accent's fill." :group 'drgnx-look)
 
+(defface drgnx-pill '((t :inherit drgnx-ui-caption :box (:line-width (1 . 1))))
+  "A toggle pill (agent-panel.html `.disc .t'): subtle text in a ring of the border colour (the themes give it), radius
+9 (half its 18 px) where the compositor rounds." :group 'drgnx-look)
+(defface drgnx-pill-on '((t :inherit drgnx-ui-caption :box (:line-width (1 . 1))))
+  "A toggle pill that is on (`.disc .t.open'): the text colour on the quiet selection, in the same ring."
+  :group 'drgnx-look)
+
 ;;;; Agents
 
 (defface drgnx-agent-1 '((t :inherit default)) "The first agent's colour." :group 'drgnx-look)

@@ -347,45 +347,57 @@ pub enum GrepIgnore {
     Real,
 }
 
-/// `search/grep`: search ROOT's files for TEXT and send the matches to VIEW as rows (the event `view-patch`): a reset
-/// at once, then each file's header and matches as it is complete. A newer search of the same view stops this one.
+/// `search/run`: run SEARCH over ROOT and send its matches to VIEW as rows (the event `view-patch`): a reset at once,
+/// then each file's header and matches as it is complete. A newer search of the same view stops this one. The rows
+/// preview SEARCH's `replace` (old struck out, new beside it; a regexp search's `\1` are the groups). Text mode with
+/// the scopes Project and File (`scope.files`, the one file), so far; Symbol (a name's definitions, then its uses) and
+/// Meaning (the chunks a question finds, each with its symbol and score) ask the index, all their files at once, and
+/// are read-only: a `replace` is refused.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct GrepParams {
+pub struct RunParams {
     /// The hub-fed view that shows the rows (`view/env`).
     pub view: String,
     pub root: AbsPath,
-    pub text: String,
-    /// Search this one file only (globs then do not apply).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file: Option<AbsPath>,
-    /// Match case; default off.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub case: Option<bool>,
-    /// Whole words only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub word: Option<bool>,
-    /// TEXT is a regular expression.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub regexp: Option<bool>,
-    /// Globs; each string may hold several, comma-separated.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exclude: Option<Vec<String>>,
+    pub search: SearchSpec,
     /// Default: the setting `drgnx-search-ignore-rules`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ignore: Option<GrepIgnore>,
-    /// The replacement the rows preview (old struck out, new beside it); a regexp search's `\1` are the groups.
+    /// The match ids of the view's last run the user unticked: a match of this run that is the same match (its file,
+    /// columns and the text around it) comes back unticked, named in `search-run-done`'s `off`, when exactly one match
+    /// has it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replace: Option<String>,
+    pub off: Option<Vec<String>>,
+    /// A dim label row above the first match of each definition (the innermost one around it), from one parse of the
+    /// file; none at the top level or for a language without definitions. Default true (the setting
+    /// `drgnx-search-context`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<bool>,
 }
 
-/// `search/grep`'s answer: QUERY numbers the search (the event `search-grep-done` names it).
+/// `search/run`'s answer: RUN numbers the search (its match ids are `m:RUN:N`; the event `search-run-done` names it).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct GrepStarted {
-    pub query: u64,
+pub struct RunStarted {
+    pub run: u64,
+}
+
+/// `search/buffer`: the editor's buffer of PATH holds unsaved edits: VIEW's searches search TEXT in place of the file
+/// from now on, and the current one takes its matches at once. A buffer over the editor's large-file threshold sends
+/// `large` and no text: the file is searched on disk, its header saying the buffer is open in chunks. Neither: the
+/// buffer was saved or killed, and the next search reads the file again.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BufferParams {
+    pub view: String,
+    pub path: AbsPath,
+    /// The buffer's `buffer-chars-modified-tick`.
+    #[serde(default)]
+    pub tick: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub large: Option<bool>,
 }
 
 /// `search/grep-replace`: VIEW's rows preview REPLACE now (no new search).
@@ -405,7 +417,7 @@ pub struct GrepSkippedParams {
     pub skipped: Vec<GrepSkip>,
 }
 
-/// One skipped match: its node id (`m:FILE:LINE:COL`) and why.
+/// One skipped match: its node id (`m:RUN:N`) and why.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GrepSkip {
@@ -414,7 +426,7 @@ pub struct GrepSkip {
 }
 
 /// `search/grep-look`: VIEW's rows of its search go on. A search sends a view its first 200 rows (a file's header and
-/// its matches, in order), and the totals in `search-grep-done`; the hub keeps every match, and Sjá's model holds them.
+/// its matches, in order), and the totals in `search-run-done`; the hub keeps every match, and Sjá's model holds them.
 /// The editor asks for more when its window nears the end of the rows (`more`), or when it goes to a match beyond them
 /// (`upto`: the row's key, and 100 rows after it come too). A match more than 400 rows past the rows sent comes with
 /// the 100 rows before it too, after a gap row (key `gap`); `fill` (the gap row in sight) sends the 200 rows before
@@ -426,7 +438,7 @@ pub struct GrepLookParams {
     /// One more window (200 rows).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub more: Option<bool>,
-    /// The key of a row to reach (`f:FILE`, `m:FILE:LINE:COL`); over `more`.
+    /// The key of a row to reach (`f:FILE`, `m:RUN:N`); over `more`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upto: Option<String>,
     /// The rows before the gap row, one window more.
@@ -434,17 +446,19 @@ pub struct GrepLookParams {
     pub fill: Option<bool>,
 }
 
-/// `search-grep-done`: search QUERY of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not
-/// run. A search a newer one stopped says nothing.
+/// `search-run-done`: search RUN of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not
+/// run; OFF the matches that come back unticked (`search/run`'s `off`). A search a newer one stopped says nothing.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct GrepDone {
+pub struct RunDone {
     pub view: String,
-    pub query: u64,
+    pub run: u64,
     pub files: u64,
     pub matches: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub off: Vec<String>,
 }
 
 /// `search/files`: rank ROOT's file names for QUERY and send VIEW the N best as rows (the event `view-patch`), one row
@@ -746,6 +760,163 @@ pub struct ExplorerStarted {
     pub listing: u64,
 }
 
+/// What the Search view's Find means: the mode and what was typed, with the mode's toggles.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "mode", rename_all = "lowercase", deny_unknown_fields)]
+pub enum FindQuery {
+    /// Text or a regular expression (`hrafn::grep`).
+    Text {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        case: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        word: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        regexp: Option<bool>,
+    },
+    /// Definitions and uses of a name, from the index (by name only).
+    Symbol {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        case: Option<bool>,
+    },
+    /// A question about what the code does (Hrafn's hybrid query).
+    Meaning { question: String },
+}
+
+impl FindQuery {
+    /// What was typed: the text, the name or the question.
+    pub fn typed(&self) -> &str {
+        match self {
+            FindQuery::Text { text, .. } => text,
+            FindQuery::Symbol { name, .. } => name,
+            FindQuery::Meaning { question } => question,
+        }
+    }
+}
+
+/// Which files a search looks in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ScopeKind {
+    /// The root, the ignore rules as set.
+    Project,
+    /// One file: the view's origin buffer.
+    File,
+    /// The files normal buffers visit under the root.
+    Open,
+    /// The working tree's modified, added and untracked files.
+    Changed,
+    /// The files whose index entry differs from HEAD (their working-tree text is searched).
+    Staged,
+    /// The files changed since the merge base of HEAD and BASE, and the working tree's changes.
+    Branch,
+}
+
+/// A search's scope: its kind, Branch's base (none: the upstream, else `main`, else `master`), whether only matches
+/// in changed lines count (Changed, Staged, Branch), and the files of File and Open (the editor's state, never saved).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchScope {
+    pub kind: ScopeKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_lines: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<AbsPath>>,
+}
+
+/// A search as the user made it: what recent and saved searches keep, and what a click runs again.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchSpec {
+    pub query: FindQuery,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<SearchScope>,
+    /// Globs; each string may hold several, comma-separated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
+}
+
+/// One saved search: its NAME, the search, whether it is PINNED to the view's header (a live count), whether it comes
+/// from the project's `.drgnx/searches.eld` (PROJECT: read-only here) and whether the user shared it there (SHARED).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SavedSearch {
+    pub name: String,
+    pub search: SearchSpec,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub project: bool,
+    #[serde(default)]
+    pub shared: bool,
+}
+
+/// `search/recent`'s answer: ROOT's recent searches, newest first (at most 50).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RecentAnswer {
+    pub recent: Vec<SearchSpec>,
+}
+
+/// `search/saved/list`'s answer: the hub's saved searches of ROOT, then the project's; PROBLEMS names each form of
+/// `.drgnx/searches.eld` that was refused, and why.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SavedList {
+    pub saved: Vec<SavedSearch>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub problems: Vec<String>,
+}
+
+/// `search/saved/put`: save SEARCH under NAME in ROOT (a search of that name is replaced).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SavedPutParams {
+    pub root: AbsPath,
+    pub name: String,
+    pub search: SearchSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<bool>,
+}
+
+/// `search/saved/delete` and `search/saved/share`: ROOT's saved search NAME.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SavedNameParams {
+    pub root: AbsPath,
+    pub name: String,
+}
+
+/// `search/saved/share`'s answer: the file it was written to.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SavedShared {
+    pub path: AbsPath,
+}
+
+/// `search/scope-bases`'s answer: the Branch scope's menu. CURRENT is the branch (none: detached or unborn),
+/// UPSTREAM its upstream, DEFAULT the base Branch uses when none is chosen (none: it must ask), RECENT the branches
+/// most recently committed to.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScopeBases {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+    pub recent: Vec<String>,
+    pub detached: bool,
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -774,9 +945,14 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "download the built-in model after the user agreed to its size; nothing downloads without this consent",
         ),
         method!(
-            "search/grep", SearchGrep(GrepParams) -> GrepStarted,
+            "search/run", SearchRun(RunParams) -> RunStarted,
             classes: [User], writes: false,
-            doc: "search a folder's files for text and stream the matches to a hub-fed view as rows (view-patch: a reset, then each file's header and matches), ending with search-grep-done; a newer search of the view stops the old one",
+            doc: "run the Search view's search over a folder and stream the matches to a hub-fed view as rows (view-patch: a reset, then each file's header and matches; ids m:RUN:N), ending with search-run-done; a newer search of the view stops the old one, and the matches the user unticked in it stay unticked when found again",
+        ),
+        method!(
+            "search/buffer", SearchBuffer(BufferParams) -> bool,
+            classes: [User], writes: false,
+            doc: "an editor buffer with unsaved edits: the Search view's searches search its text in place of its file (the current search at once), or say the buffer is too large and is searched on disk; without text or large the file is searched again",
         ),
         method!(
             "search/files", SearchFiles(FilesParams) -> FilesStarted,
@@ -822,6 +998,36 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/grep-look", SearchGrepLook(GrepLookParams) -> bool,
             classes: [User], writes: false,
             doc: "a view's grep rows go on: one more window of rows (more), or the rows up to a match beyond them and a margin (upto); false when the view has no search; a search sends only its first 200 rows until asked",
+        ),
+        method!(
+            "search/recent", SearchRecent(RootParams) -> RecentAnswer,
+            classes: [User], writes: false,
+            doc: "a project's recent searches, newest first (the last 50): each search that stood past the typing pause and was not empty, with its mode, toggles, replacement, scope and globs",
+        ),
+        method!(
+            "search/saved/list", SearchSavedList(RootParams) -> SavedList,
+            classes: [User], writes: false,
+            doc: "a project's saved searches: the hub's, then the project's .drgnx/searches.eld (read as data only, nothing evaluated; a refused form is named in problems)",
+        ),
+        method!(
+            "search/saved/put", SearchSavedPut(SavedPutParams) -> bool,
+            classes: [User], writes: true,
+            doc: "save a search under a name for a project (the hub's state, not the project's files); a search of that name is replaced",
+        ),
+        method!(
+            "search/saved/delete", SearchSavedDelete(SavedNameParams) -> bool,
+            classes: [User], writes: true,
+            doc: "delete a project's saved search from the hub's state; false when there is none of that name",
+        ),
+        method!(
+            "search/saved/share", SearchSavedShare(SavedNameParams) -> SavedShared,
+            classes: [User], writes: true,
+            doc: "write a saved search into the project's .drgnx/searches.eld (atomically: a temporary file, then a rename; the rest of the file kept as it was), on the user's click",
+        ),
+        method!(
+            "search/scope-bases", SearchScopeBases(RootParams) -> ScopeBases,
+            classes: [User], writes: false,
+            doc: "the Branch scope's menu for a folder's repository: the current branch, its upstream, the default base, the recent branches, and whether HEAD is detached",
         ),
         method!(
             "explorer/subscribe", ExplorerSubscribe(ExplorerParams) -> ExplorerStarted,

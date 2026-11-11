@@ -1,0 +1,19 @@
+{"scenario": "search/saved", "requires": ["v1"], "doc": "search/saved/put keeps a search under a name, search/saved/list gives it back with the project's .drgnx/searches.eld after it (read as data; a form that is not data is named in problems), search/saved/share writes it into that file, search/saved/delete drops it; search/scope-bases refuses a folder outside a repository."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/p/.drgnx && printf '%s\\n' '(:name \"Shared\" :query \"x\")' '(:name \"Code\" :query (shell-command \"x\"))' > $ROOT/p/.drgnx/searches.eld"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "search/saved/put", "params": {"root": "$ROOT/p", "name": "TODOs", "search": {"query": {"mode": "text", "text": "TODO", "case": true}, "scope": {"kind": "changed", "changed_lines": true}}, "pinned": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "search/saved/list", "params": {"root": "$ROOT/p"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"saved": [{"name": "TODOs", "search": {"query": {"mode": "text", "text": "TODO", "case": true}, "scope": {"kind": "changed", "changed_lines": true}}, "pinned": true, "project": false, "shared": false}, {"name": "Shared", "search": {"query": {"mode": "text", "text": "x"}}, "project": true}], "problems": ["$any"]}}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "search/saved/share", "params": {"root": "$ROOT/p", "name": "TODOs"}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"path": "$ROOT/p/.drgnx/searches.eld"}}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "grep -q '^(:name \"TODOs\" :mode text :query \"TODO\" :case t :scope changed :changed-lines t)$' $ROOT/p/.drgnx/searches.eld"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "search/saved/delete", "params": {"root": "$ROOT/p", "name": "TODOs"}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "search/saved/share", "params": {"root": "$ROOT/p", "name": "TODOs"}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "error": {"code": "invalid-params", "path": "name"}}}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "search/recent", "params": {"root": "$ROOT/p"}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": {"recent": []}}}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "search/scope-bases", "params": {"root": "$ROOT/p"}}}
+{"do": "expect", "conn": "e", "json": {"id": 7, "error": {"code": "invalid-params", "path": "root"}}}

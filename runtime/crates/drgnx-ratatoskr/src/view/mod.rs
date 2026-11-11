@@ -22,10 +22,10 @@ pub mod extensions;
 pub mod files;
 pub mod fonts;
 pub mod git;
-pub mod grep;
 pub mod icons;
 pub mod model;
 pub mod panel;
+pub mod search;
 #[cfg(test)]
 mod tests;
 
@@ -464,8 +464,8 @@ pub struct Views {
     fonts: Mutex<Fonts>,
     /// `__test_view_rows`: the rows and images of a fixture view per (connection, view), the same in every class.
     fixtures: Mutex<BTreeMap<(u64, String), Fixture>>,
-    /// The text searches streaming rows (`search/grep`).
-    greps: grep::Greps,
+    /// The Search view's searches streaming rows (`search/run`).
+    greps: search::Greps,
     /// The git letters streaming rows (`git/letters`).
     letters: git::Letters,
     /// The ranked file queries (`search/files`) and the names they rank.
@@ -486,7 +486,7 @@ impl Default for Views {
             store: Mutex::new(Store::new(instance_id())),
             fonts: Mutex::new(Fonts::default()),
             fixtures: Mutex::new(BTreeMap::new()),
-            greps: grep::Greps::default(),
+            greps: search::Greps::default(),
             letters: git::Letters::default(),
             files: files::Files::default(),
             explorers: explorer::Explorers::default(),
