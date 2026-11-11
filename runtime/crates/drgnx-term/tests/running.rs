@@ -104,3 +104,97 @@ fn running_from_child_without_integration() {
     h.becomes(true, "the shell's child (sleep) runs");
     h.close();
 }
+
+/// What a connection of uid 65534 to SOCKET reads, in a child process: 0 when the worker drops it unread, 2 when it
+/// says hello, 3 when the connection fails.
+fn connect_as_nobody(socket: &std::path::Path) -> i32 {
+    use std::os::unix::ffi::OsStrExt;
+    // SAFETY: a zeroed sockaddr_un is valid; the path fits (a temp dir's)
+    let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    for (d, s) in addr.sun_path.iter_mut().zip(socket.as_os_str().as_bytes()) {
+        *d = *s as libc::c_char;
+    }
+    // SAFETY: the child calls only async-signal-safe syscalls on memory made before the fork, then _exit
+    unsafe {
+        let pid = libc::fork();
+        if pid == 0 {
+            let code = (|| {
+                if libc::setgid(65534) != 0 || libc::setuid(65534) != 0 {
+                    return 3;
+                }
+                let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
+                let len = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
+                if libc::connect(fd, (&raw const addr).cast(), len) != 0 {
+                    return 3;
+                }
+                let mut pfd = libc::pollfd {
+                    fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                if libc::poll(&mut pfd, 1, 5000) != 1 {
+                    return 3;
+                }
+                let mut b = [0u8; 64];
+                match libc::read(fd, b.as_mut_ptr().cast(), b.len()) {
+                    0 => 0,
+                    n if n > 0 => 2,
+                    _ => 3,
+                }
+            })();
+            libc::_exit(code);
+        }
+        let mut status = 0;
+        libc::waitpid(pid, &mut status, 0);
+        libc::WEXITSTATUS(status)
+    }
+}
+
+#[test]
+fn the_socket_is_private_and_another_uid_is_dropped() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let socket = tmp.path().join("t.sock");
+    let l = drgnx_term::run::listen(&socket).unwrap();
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&socket), 0o600);
+    let pty = Pty::spawn(
+        "/bin/sh",
+        &["-c".into(), "read x".into()],
+        "/",
+        &[],
+        winsize(40, 4, (0, 0)),
+    )
+    .unwrap();
+    let t = std::thread::spawn(move || {
+        let w = Worker::new(&Opts::default()).expect("engine");
+        run(w, pty, None, Some(l))
+    });
+    let me = UnixStream::connect(&socket).unwrap();
+    let mut r = BufReader::new(me.try_clone().unwrap());
+    let mut line = String::new();
+    r.read_line(&mut line).unwrap();
+    assert!(
+        matches!(serde_json::from_str(&line), Ok(Out::Hello { .. })),
+        "this user's connection is served: {line}"
+    );
+    if rustix::process::geteuid().is_root() {
+        // the socket opened up, so only the worker's own check stands in the way
+        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert_eq!(
+            connect_as_nobody(&socket),
+            0,
+            "another uid's connection is dropped unread"
+        );
+    } else {
+        eprintln!("another uid's connection: not checked (needs root, as in the test container)");
+    }
+    // this user's connection is still the worker's hub
+    let mut w = me;
+    let mut msg = serde_json::to_vec(&In::Close { signal: Some(9) }).unwrap();
+    msg.push(b'\n');
+    w.write_all(&msg).unwrap();
+    let _ = t.join();
+}

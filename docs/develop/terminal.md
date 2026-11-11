@@ -176,7 +176,7 @@ The editor talks to its terminals through the hub (`runstav/src/methods/term.rs`
 | Method | Params | Answer |
 |---|---|---|
 | `term/open` | `dir`, `command?`, `env` (the program's whole environment, `[[name, value]…]`), `cols`, `rows`, `cell_px?`, `class`, `window?`, `config?`, `memory_max?`, `tasks_max?` (the scope's limits) | `{id, view}`; the view is `term:<id>` and its first patch a reset |
-| `term/config` | `id`, `config: [[name, value]…]` (`scrollback-lines`, `scrollback-bytes`, `clipboard-write`, `cursor-style`, `enquiry-response`, `title-report`, `grapheme-width-method`, `colours`) | `true` |
+| `term/config` | `id`, `config: [[name, value]…]` (`scrollback-lines`, `scrollback-bytes`, `clipboard-write`, `cursor-style`, `enquiry-response`, `title-report`, `grapheme-width-method`, `detached-keep`, `colours`) | `true` |
 | `term/key` | `id`, `key`, `mods`, `text?`, `unshifted?`, `action?` (`press`, the default, `repeat` or `release`) | `true` |
 | `term/text`, `term/paste` | `id`, `text` | `true` |
 | `term/focus` | `id`, `in` | `true` |
@@ -187,12 +187,14 @@ The editor talks to its terminals through the hub (`runstav/src/methods/term.rs`
 | `term/search` | `id`, `query`, `dir?` (`up`, `down`) | `{found, held, model}`: every match, those in rows the buffer holds, and the version of the view's model that holds these (a `view-model` sent first: list `matches`, newest first for `up`, nodes `KEY:COL` with fields `key`, `col`, `len`, at most 20,000; none with no editor attached) |
 | `term/text-range` | `id`, `from_key?`, `to_key?` | `{text}`; with no `from_key` from the oldest row the engine holds |
 | `term/close` | `id`, `signal?` | `true`, then `term/exit` |
-| `term/list` | | `[{id, pid, running, cwd, title, old}…]`; 200 ms per worker, a silent one counts as running |
-| `term/session-end` | | how many terminals of this connection's session were closed (a clean Emacs exit) |
+| `term/list` | | `[{id, pid, running, cwd, title, old, mine, orphaned, detached_at?, command, place?}…]`; 200 ms per worker, a silent one counts as running; `mine`: it draws for this connection's session |
+| `term/session-end` | `keep?` (ids) | how many terminals of this connection's session were closed (a clean Emacs exit); those in `keep` detach and run on |
+| `term/attach` | `id`, `cols`, `rows`, `cell_px?` | `{id, view}`: an orphaned or detached terminal now draws for this session, from a reset; refused for one another live session has |
 
 **Events**, to the connection of the editor session that opened the terminal: `term/exit {id, code, signal}`,
 `term/title`, `term/cwd`, `term/bell`, `term/notify`, `term/progress`, `term/clipboard-write` and `term/prompt` (the OSC
-133 marks, for notify-on-command-finish). The view's `view/env`, `view/ack` and `view/resync` go to the worker.
+133 marks, for notify-on-command-finish). `term/detached {ids}` goes to every live session when terminals detach. The
+view's `view/env`, `view/ack` and `view/resync` go to the worker.
 
 Where this differs from the design's sketch: the view id is the hub's (`term:<id>`, so an adopted terminal keeps
 it), `class` names the display class its patches are for, `term/scroll` takes the row it counts from (the editor owns
@@ -226,8 +228,14 @@ which the test clock stands still), then reads its hello within 5 s. The hub fin
 `DRGNX_TERM_BIN`, else beside its own.
 
 **Registry:** `<state>/term/<id>.json` holds the unit, the worker's pid and start time, the shell's pid, the view
-(`term:<id>`), the display class, the cwd and the editor session. It is written by a rename, and goes with the
-terminal.
+(`term:<id>`), the display class, the cwd, the editor session, the command, where the editor showed it (`place`) and
+when it was detached (`detached_at`, ms since the epoch). It is written by a rename, and goes with the terminal. No
+screen text is written anywhere: the screen and scrollback live in the worker's memory.
+
+**Trust:** the boundary is the user's uid, as for tmux. `<state>/term/` is made `0700` (narrowed when found wider,
+refused when another user's: nothing in it is adopted), each socket is `0600` (`drgnx_term::run::listen`), and the
+worker checks every connection's peer uid (`SO_PEERCRED` on Linux, `getpeereid` on macOS), dropping another user's
+unread.
 
 **Adoption:** at the hub's start (in the background), each record's worker is checked: by its unit (`systemctl --user
 is-active`) when there is one, then by its pid and start time (a reused pid is not it). A live one is connected to
@@ -236,18 +244,32 @@ marks the terminal "from before the update" (its program keeps running; the hub 
 `term/list` shows it as old). A newer minor version is adopted as it is.
 
 **Session end:** an editor's `hello` names its Emacs session. When the last connection carrying a session closes, its
-terminals wait 60 seconds for a hello with that session (a dropped socket, a hub restart); then they end (`close`,
-SIGHUP to the program's group). A clean Emacs exit ends them at once. A terminal draws on the subscribed connection
-of its session (the editor's `drgnx-hub-session`): until one subscribes again, an adopted terminal or one whose editor
-dropped its socket draws nowhere; the subscription re-attaches it, and its next patch is a reset. A hello alone (the
-editor's call connection) moves nothing.
+terminals are **orphaned** at once (the worker is told `detach`: it draws nothing) and wait 60 seconds for a hello with
+that session (a dropped socket, a hub restart); then they are **detached**: `detached_at` goes into the record and
+every live session hears `term/detached {ids}`. Neither ends the program. A clean Emacs exit (`term/session-end`) ends
+the session's terminals at once, but those it names in `keep`, which detach at once (their record keeps no session).
+A terminal draws on the subscribed connection of its session (the editor's `drgnx-hub-session`): until one subscribes
+again, an adopted terminal or one whose editor dropped its socket draws nowhere; the subscription re-attaches it
+(after the grace too), and its next patch is a reset. A hello alone (the editor's call connection) moves nothing. A
+hub restart while terminals are detached changes nothing: the records say so, and the grace does not start again.
+
+**Reattach:** `term/attach` takes an orphaned or detached terminal into the asking connection's session (never one
+whose session has a live connection: no stealing between two Emacs instances), writes the record, and sends the worker
+`resize` with `redraw` (when the size is unchanged the worker sends the program's group SIGWINCH itself, so a
+full-screen program draws its screen again) and `attach` (a reset: the screen, then the backfill).
+
+**Lifetime alone:** the worker ends its program (SIGHUP) after `detached-keep` (from `term/config`, hours; default 24,
+0 never) with no editor attached, counted by the worker itself from the first moment it was told `detach` or lost its
+hub, so no hub or Emacs needs to run. A new worker counts from its start until its first attach.
 
 **Program running:** the worker answers `status` from the shell's OSC 133 marks (C: a command's output started, D: it
 ended), else from whether the shell has a child: Linux `/proc/<pid>/task/<pid>/children`, macOS `proc_listchildpids`.
 
 **Tests:** `cargo test -p drgnx-ratatoskr --lib term::` (fake workers on the socket: adoption by pid and start time,
-the protocol versions, the grace, a clean exit) and `drgnx-term`'s `tests/running.rs` (both ways of telling a
-program runs).
+the protocol versions, orphaned at once and detached after the grace with `term/detached`, an attached terminal not
+offered, a detached one surviving a hub restart, a clean exit that keeps some), `drgnx-term`'s `tests/running.rs`
+(both ways of telling a program runs; the socket's mode and another uid's connection dropped, the latter as root, as in
+the test container) and `tests/worker.rs` (`detached_keep_ends_a_worker_with_no_client`, on the fake clock).
 
 ## The editor's side
 
@@ -323,9 +345,19 @@ program runs).
 - **End:** `term/exit` runs `drgnx-term-exit-functions` in the buffer (Export Keys forgets the typed keys there), then
   kills a shell's buffer, and leaves a command's with its status in `mode-line-process`. Killing the buffer sends
   `term/close`. Turning the module off kills every terminal buffer.
-- **Quitting:** `drgnx-term-running` is on core's `drgnx-session-running-functions`: it asks `term/list` (at most
-  `drgnx-term-list-wait`, 0.2 s, through `drgnx-hub-call-sync`) and names the open terminals whose program runs; no
-  answer names them all. `kill-emacs-hook` sends `term/session-end`, so a clean quit ends this session's terminals.
+- **Quitting:** `drgnx-term--running-buffers` asks `term/list` (at most `drgnx-term-list-wait`, 0.2 s, through
+  `drgnx-hub-call-sync`) for the open terminals whose program runs; no answer counts them all. With
+  `drgnx-term-on-quit` `ask` they go to core's `drgnx-session-keepable-functions` (`drgnx-term-keepable`), and the
+  quit question offers Keep Running, Close Them or Cancel (`drgnx-session-quit-keep`); with `close` they go to
+  `drgnx-session-running-functions` (`drgnx-term-running`), asked about as any running program; with `keep` nothing
+  asks. `kill-emacs-hook` sends `term/session-end` with `keep` (`drgnx-term--kept-at-quit`): every open terminal for
+  `keep`, the running ones for Keep Running or a quit that could not ask, none for Close Them or `close`.
+- **Reattach:** when the subscription comes up, and on `term/detached`, `drgnx-term--look` asks `term/list` and
+  offers the rows that are orphaned or detached, not this session's and shown by no buffer here
+  (`drgnx-term--offered-rows`; ids from the hub, never a Lisp cache): `drgnx-term-reattach` `ask` posts one notice
+  that runs Reattach Terminal (Reattach All, Choose… or Close Them), `always` opens them at once, `never` leaves them
+  to the command. `drgnx-term-reattach-one` makes a `drgnx-term-mode` buffer where the terminal was shown (`place`),
+  sends `term/attach` at its window's size, and on the answer attaches the view and sends this Emacs's settings.
 - **Callers:** Export and Import Keys run `drgnx secrets` through `drgnx-term-start` (else `term`); the key sheet's
   "In the terminal" section is on core's `drgnx-surfaces-cheatsheet-sections`; `drgnx-term-mode` is an input mode for
   the modal engines and Close Pane, and the panel's Terminal tab takes its buffers.
