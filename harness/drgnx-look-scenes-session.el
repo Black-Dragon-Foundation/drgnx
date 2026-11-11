@@ -508,7 +508,25 @@ chrome faces, frame metrics, windows, modules."
                                                        '(internal-border-width child-frame-border-width
                                                                                left-fringe right-fringe))
                                        :window (list :edges (window-pixel-edges w) :body (window-body-pixel-edges w)
-                                                     :margins (window-margins w) :fringes (window-fringes w))))))
+                                                     :margins (window-margins w) :fringes (window-fringes w))
+                                       ;; what starts the input row: the buffer's prefix and the overlays there
+                                       :start (with-current-buffer (window-buffer w)
+                                                (list :line-prefix line-prefix
+                                                      :prompt-end (minibuffer-prompt-end)
+                                                      :first-row (window-text-pixel-size w (point-min)
+                                                                                         (line-end-position))
+                                                      ;; the room before the typed text, with and without the prefix
+                                                      :lead (list (car (window-text-pixel-size
+                                                                        w (point-min) (minibuffer-prompt-end)))
+                                                                  (let ((p line-prefix))
+                                                                    (setq-local line-prefix nil)
+                                                                    (prog1 (car (window-text-pixel-size
+                                                                                 w (point-min) (minibuffer-prompt-end)))
+                                                                      (setq-local line-prefix p))))
+                                                      :overlays
+                                                      (mapcar (lambda (o) (list (overlay-start o) (overlay-end o)
+                                                                                (overlay-properties o)))
+                                                              (overlays-in (point-min) (1+ (point-min))))))))))
                   :fonts (mapcar (lambda (fc) (list fc (ignore-errors (face-font fc f))))
                                  '(default drgnx-ui-text drgnx-ui-heading drgnx-ui-caption tab-bar tab-line
                                            mode-line header-line))
