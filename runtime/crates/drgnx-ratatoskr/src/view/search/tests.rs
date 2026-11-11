@@ -1490,6 +1490,63 @@ fn git_scope(kind: ScopeKind, changed_lines: bool) -> scoped::GitScope {
     }
 }
 
+/// The git scopes' file lists at a checkout's size (spec §8): 5,000 files in 50 folders, a branch `work` off `main`
+/// that changed 50 of them, 50 more staged and 50 more changed in the tree; 20 lists of each scope after one to warm
+/// up, the p95 printed against its budget (Changed 60 ms, Staged 40 ms, Branch 120 ms). Reported, never failed: the
+/// time is git's and the disk's. Ignored in normal runs; run optimized and alone on the perf island:
+/// `cargo test --release -p drgnx-ratatoskr --lib -- git_scope_lists_at_a_checkouts_size --ignored --nocapture`.
+#[test]
+#[ignore]
+fn git_scope_lists_at_a_checkouts_size() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path();
+    git_in(root, &["init", "-q", "-b", "main"]);
+    let body: String = (0..20).map(|i| format!("line {i} of the file\n")).collect();
+    let file = |i: usize| format!("d{:02}/f{i:04}.rs", i % 50);
+    for i in 0..5000 {
+        let f = root.join(file(i));
+        std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+        std::fs::write(f, &body).unwrap();
+    }
+    git_in(root, &["add", "-A"]);
+    git_in(root, &["commit", "-q", "-m", "base"]);
+    git_in(root, &["switch", "-q", "-c", "work"]);
+    let touch = |from: usize| {
+        for i in (from..from + 50).map(|k| k * 7 % 5000) {
+            std::fs::write(root.join(file(i)), format!("{body}changed\n")).unwrap();
+        }
+    };
+    touch(0);
+    git_in(root, &["commit", "-q", "-am", "work"]);
+    touch(50);
+    git_in(root, &["add", "-A"]);
+    touch(100);
+    for (kind, name, budget) in [
+        (ScopeKind::Changed, "Changed", 60.0),
+        (ScopeKind::Staged, "Staged", 40.0),
+        (ScopeKind::Branch, "Branch", 120.0),
+    ] {
+        let g = scoped::GitScope {
+            kind,
+            base: Some("main".into()),
+            changed_lines: false,
+        };
+        let files = scoped::find(root, &g).unwrap().files.len();
+        let mut ms: Vec<f64> = (0..20)
+            .map(|_| {
+                let t = std::time::Instant::now();
+                scoped::find(root, &g).unwrap();
+                t.elapsed().as_secs_f64() * 1000.0
+            })
+            .collect();
+        ms.sort_by(f64::total_cmp);
+        println!(
+            "git-scope {name}: {files} files, p50 {:.1} ms, p95 {:.1} ms (budget {budget} ms)",
+            ms[10], ms[18]
+        );
+    }
+}
+
 #[test]
 fn a_changed_scope_lists_its_files_under_the_root_and_counts_the_rest() {
     let body = "one\ntwo\nthree\n";
