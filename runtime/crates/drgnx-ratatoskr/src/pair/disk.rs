@@ -10,7 +10,10 @@
 //!   gets the old file's mode, owner (when the hub may set it), ACLs, extended attributes and SELinux context (the last
 //!   two are extended attributes too), is synced and renamed over the file.  A hard link is broken on purpose: the
 //!   other names keep the old text.  The door's gate resolved a link to its target inside the checkout, so the target
-//!   is written; a link left at the name (one that names nothing) is refused.
+//!   is written; a link left at the name (one that names nothing) is refused.  Just before the rename the name is
+//!   looked at once more ([`replace`]): another file there (inode, size, change time) refuses the write.  A writer
+//!   outside drgnx between that look and the rename is not excluded (rename is no compare-and-swap); the Search view's
+//!   writes ([`replace`] too) share this path.
 //! - **Folders**: missing parents inside the checkout are made only after every check has passed, and removed again
 //!   when the write then fails, so a refused write leaves nothing behind.
 //! - **Recorded first**: the caller's record (the history's `on_agent_write`) runs before the rename, so the watcher's
@@ -224,6 +227,42 @@ pub fn write(
     kind: &WriteKind,
     record: Option<Record>,
 ) -> Result<String, Refusal> {
+    let mut new = String::new();
+    replace(
+        root,
+        real,
+        |raw| {
+            let raw = raw
+                .map(|b| {
+                    std::str::from_utf8(b).map_err(|_| {
+                        Refusal(format!(
+                            "{}: not UTF-8 text; it is not written",
+                            real.display()
+                        ))
+                    })
+                })
+                .transpose()?;
+            new = plan(raw, served, kind)?;
+            let form = raw.map(Form::of).unwrap_or_default();
+            Ok(form.render(&new).into_bytes())
+        },
+        record,
+        CHANGED,
+    )?;
+    Ok(new)
+}
+
+/// The bytes of REAL (resolved, inside ROOT) replaced by what MAKE gives for its bytes now (none: it does not exist),
+/// atomically, its mode, owner and attributes kept, RECORD told the bytes before the rename.  Just before the rename
+/// the name is looked at once more: a file that is not the one read (another inode, size or change time) refuses
+/// with RACED, and nothing is written.  Why not, else nothing; a refusal leaves nothing behind.  Blocking.
+pub fn replace(
+    root: &Path,
+    real: &Path,
+    make: impl FnOnce(Option<&[u8]>) -> Result<Vec<u8>, Refusal>,
+    record: Option<Record>,
+    raced: &str,
+) -> Result<(), Refusal> {
     let root = root
         .canonicalize()
         .map_err(|e| io(&root.display().to_string(), e))?;
@@ -276,18 +315,10 @@ pub fn write(
             let mut buf = Vec::new();
             std::io::Read::read_to_end(&mut f, &mut buf)
                 .map_err(|e| io(&real.display().to_string(), e))?;
-            let text = String::from_utf8(buf).map_err(|_| {
-                Refusal(format!(
-                    "{}: not UTF-8 text; it is not written",
-                    real.display()
-                ))
-            })?;
-            (Some(text), Some(st))
+            (Some(buf), Some(st))
         }
     };
-    let new = plan(raw.as_deref(), served, kind)?;
-    let form = raw.as_deref().map(Form::of).unwrap_or_default();
-    let bytes = form.render(&new).into_bytes();
+    let bytes = make(raw.as_deref())?;
     // the checks passed: the folders, the temporary file, its attributes, the record, the rename
     let mut made = Vec::new();
     let done = (|| -> Result<(), Refusal> {
@@ -327,6 +358,19 @@ pub fn write(
                 copy_xattrs(old.as_fd(), fd.as_fd());
             }
             rustix::fs::fsync(&fd).map_err(|e| io("the write", e))?;
+            // the name once more, just before the rename: still the file read (or still none)
+            let now = rustix::fs::statat(parent.as_fd(), name, AtFlags::SYMLINK_NOFOLLOW).ok();
+            let same = match (&st, &now) {
+                (None, None) => true,
+                (Some(a), Some(b)) => {
+                    (a.st_dev, a.st_ino, a.st_size, a.st_mtime, a.st_mtime_nsec)
+                        == (b.st_dev, b.st_ino, b.st_size, b.st_mtime, b.st_mtime_nsec)
+                }
+                _ => false,
+            };
+            if !same {
+                return Err(Refusal(raced.to_string()));
+            }
             if let Some(r) = record {
                 r(real, &bytes);
             }
@@ -339,7 +383,7 @@ pub fn write(
         rest
     })();
     match done {
-        Ok(()) => Ok(new),
+        Ok(()) => Ok(()),
         Err(e) => {
             unmake(made);
             Err(e)

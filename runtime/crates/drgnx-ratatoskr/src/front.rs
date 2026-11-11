@@ -728,6 +728,22 @@ impl Front {
             Params::SearchGrepSkipped(p) => {
                 crate::view::search::skipped(self, &caller, p).map(|b| json!(b))
             }
+            // the Search view's writes: edit sets, change sets, their apply and undo
+            Params::SearchEdits(p) => crate::view::search::edits(self, &caller, p)
+                .await
+                .map(|r| json!(r)),
+            Params::SearchPreview(p) => crate::view::search::preview(self, &caller, p)
+                .await
+                .map(|r| json!(r)),
+            Params::SearchApply(p) => {
+                crate::view::search::apply_change(self, &caller, p).map(|b| json!(b))
+            }
+            Params::SearchApplied(p) => {
+                crate::view::search::applied(self, &caller, p).map(|b| json!(b))
+            }
+            Params::SearchUndo(p) => {
+                crate::view::search::undo_change(self, &caller, p).map(|b| json!(b))
+            }
             // the Explorer's listing as a tree model and rows (`explorer/subscribe`)
             Params::ExplorerSubscribe(p) => {
                 crate::view::explorer::subscribe(self, &caller, p).map(|r| json!(r))
