@@ -52,6 +52,7 @@ runtime/
 | `sleipnir` | the runner: the Linux machine probe and runner contract, the reservation files two schedulers share, the executor; its `linux` and `sync` features are blocking, never tokio, so jobq takes them ([sleipnir.md](sleipnir.md)) |
 | `vegvisir` | the Work space's map core: its model (items in six layers, edges, chains, overlaps, needs-you) and its layout, stepped by typed events with effects out; pure, `serde` only ([work-space.md](work-space.md)) |
 | `verdandi` | the edit history: `history.db` (records, documents, branches) on urdr's store, a Loro document per tracked file and branch, the operation log and its settle rule, span revert on element ids; no hub or editor type ([history.md](history.md)) |
+| `vor` | a Debug Adapter Protocol client: framing, requests matched to answers, events and reverse requests, types generated from the protocol's schema; generic, used by the hub's debug sessions ([debugging.md](debugging.md)) |
 | `vordr` | the orchestration gates' pure core: a job's log as rows with failure classes, facts, evidence, the rule pack; pure, `serde` only ([orchestration.md](orchestration.md)) |
 | `skuld` | test support, never shipped: every order of a pure core, and the one real-time wait Rust tests may use ([below](#every-order-skuld)); crates name it under `[dev-dependencies]` only |
 | `heimdall` | the CDP broker's pure part: envelope parsing over `serde_json`'s `RawValue` (params never re-encoded), routing one browser connection between the agent and the hub by session owner, the refusal list, downloads, cleanup when the agent goes, and the pipe's NUL and frame codecs; no I/O, std and serde only, built for Android too ([hub.md](hub.md#the-cdp-broker)) |
@@ -781,7 +782,7 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   `--no-range`. `--cut` stops the first response for FILE after BYTES, `--bad` flips FILE's last byte. The log is JSONL:
   `{server, path, range, credentials}` per request.
 
-**Variables** in strings: `$MOCK $ROOT $HOME $RUN $STATE $DATA $CONFIG $SOCKET $SOCKET_DIR $BACKEND_SOCKET $CAP $LOCK $PID(hub)
+**Variables** in strings: `$HUB_BIN` (the hub under test), `$MOCK $ROOT $HOME $RUN $STATE $DATA $CONFIG $SOCKET $SOCKET_DIR $BACKEND_SOCKET $CAP $LOCK $PID(hub)
 $HARNESS_PID` (of the step's `hub`, else the latest started; `$BACKEND_SOCKET` is where an older hub's Emacs child
 kept its socket, for a row that plants its leftovers), `$SCENARIOS` (the scenarios' directory, absolute: its
 `fixtures/`), and `$NAME` for a capture. A string that is just `$PID(hub)`,
@@ -866,6 +867,7 @@ Rows with `"requires": ["v1"]` (all of them) run against Ratatoskr:
 |---|---|
 | `params/` | `bad-params-are-refused-with-a-path` (`bad_params` over `runtime/protocol/methods.json`), `named-types-refuse` (ids, absolute local paths, a 17-item `env/set`, an uppercase nonce: each `invalid-params` with its path), `duplicate-key-refused`, `unknown-keys-dropped-and-listed` |
 | `hello/` | `challenge-on-accept`, `valid-proof-makes-user-and-hub-proves`, `wrong-proof-refused-and-logged`, `replayed-hello-is-refused` (SB-T12-6), `no-hello-is-service`, `newer-proto-refused`, `a-second-hello-is-refused`; with `test-hooks`: `an-agent-socket-is-agent-class` |
+| `debug/` (`test-hooks`) | `start-select-stop` (trust first, then launch.json's `pickString` input, a wrong answer refused at `inputs`; the mock adapter `ratatoskr debug-mock` started over stdio from the user's `adapters`; a stop's `debug-frame` with `open: true` and `debug-state`; `debug/select` of the caller's frame; `last`; `debug/control stop` and `debug-ended`) |
 | `class/` | `matrix` (`test-hooks`: `class_matrix` over `class-matrix.json`, the agent class through `--agent-socket s1:j1`) |
 | `agents/` (`test-hooks`, probe) | `probe-answers` (a mock ACP agent answers `agents/probe` with its name and version; no session; an unknown profile and `wait_s` over 60 are `invalid-params`), `probe-times-out` (an agent that never answers: `ok: false`, "did not answer within 1 seconds"), `probe-bad-command` (a missing program, and one that exits 7 with a line on stderr: `ok: false`, the status and the stderr tail), `send-if-free-never-interrupts` (`agents/send` with `if_free` on a busy steer-mode session: false, nothing queued, steered or cancelled; on a free one: a turn) |
 | `hub/` | `env-set-served-by-the-front` (no backend: the front answers, a `PATH` that is no list of absolute directories is `invalid-params`), `env-set-applies-path` (the next job's `PATH` has the sent directory), `env-set-refuses-key-names` (a secret-looking name and a provider's key variable are left out of `applied` and out of the job's environment), `env-set-refuses-path-rule-names` (`HOME`, `TMPDIR`, `XDG_RUNTIME_DIR`, `DRGNX_DIR`, `SSH_AUTH_SOCK` are left out of `applied` and out of the job's environment; a plain name is kept) |

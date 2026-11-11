@@ -94,6 +94,24 @@ the selection is the map's (KIND . ID), point on the card."
     (should (equal '(agent . "agent:a") drgnx-work-map--selection))
     (should (equal '(drgnx-view-selected) (drgnx-work-map-nav-test--faces 3)))))
 
+(ert-deftest drgnx-work-map-nav/back-and-forward-retrace-the-moves ()
+  "Pattern D (SJA-HISTORY-1): back returns to where the selection was before the last move, a run of arrows counting
+as one move; forward redoes it; each keeps the map's (KIND . ID)."
+  (drgnx-work-map-nav-test--with
+    (drgnx-work-map-right)
+    (drgnx-work-map-why)
+    (drgnx-work-map-touches)
+    (should (equal '(agent . "agent:a") drgnx-work-map--selection))
+    (drgnx-work-map-back)
+    (should (equal '(agent . "agent:a") drgnx-work-map--selection))
+    (drgnx-work-map-next-agent)
+    (drgnx-work-map-back)
+    (should (equal '(agent . "agent:a") drgnx-work-map--selection))
+    (drgnx-work-map-forward)
+    (should-not (equal '(agent . "agent:a") drgnx-work-map--selection))
+    (drgnx-work-map-back)
+    (should (equal '(agent . "agent:a") drgnx-work-map--selection))))
+
 (ert-deftest drgnx-work-map-nav/next-agent-walks-team ()
   "Pattern A: next and previous agent walk the team list, wrapping, in every order of the two keys from a."
   (dolist (order '((next next) (next previous) (previous next) (previous previous)))

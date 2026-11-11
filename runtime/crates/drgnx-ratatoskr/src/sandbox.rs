@@ -1443,6 +1443,8 @@ pub fn session_spec(
                     vec![]
                 },
                 relay,
+                loopback: false,
+                mac_loopback_ports: vec![],
             }
         }
     };

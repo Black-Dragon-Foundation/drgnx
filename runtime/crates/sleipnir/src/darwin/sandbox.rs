@@ -114,6 +114,8 @@ pub fn spec(job: &Job) -> Spec {
         net: Net::Isolated {
             relay: vec![],
             mac_tcp_ports: vec![],
+            loopback: false,
+            mac_loopback_ports: vec![],
         },
         tmp: Some(tmp),
         layers: Layers::for_target(Target::Macos),
@@ -149,7 +151,7 @@ mod tests {
         assert_eq!(s.tmp, Some(dir.join("tmp")));
         assert_eq!(s.home.as_ref().unwrap().source, dir.join("home"));
         assert!(
-            matches!(&s.net, Net::Isolated { relay, mac_tcp_ports } if relay.is_empty() && mac_tcp_ports.is_empty())
+            matches!(&s.net, Net::Isolated { relay, mac_tcp_ports, .. } if relay.is_empty() && mac_tcp_ports.is_empty())
         );
         assert!(
             s.env
