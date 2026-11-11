@@ -6,8 +6,10 @@
 //! - [`rows`]: a job's log read as rows (a name, a verdict and, for a failure, its class), for cargo test, ERT and
 //!   domr output alike.
 //! - [`facts`]: what a job ran on (tree key, env stamp, platform, selector), which evidence must match.
+//! - [`evidence`]: one fact a gate reads, bound to a task.
 //!
 //! No clock, no threads, no files: `serde` only.
 
+pub mod evidence;
 pub mod facts;
 pub mod rows;

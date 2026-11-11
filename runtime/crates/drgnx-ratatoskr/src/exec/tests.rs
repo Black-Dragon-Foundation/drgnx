@@ -1828,3 +1828,73 @@ async fn a_green_job_is_reused_and_a_red_one_never() {
     assert!(!reused && e != c);
     ended(&r, &e).await;
 }
+
+/// A task's job that ended is evidence for the task: `red` with its failing rows and their classes, or `green`, on the
+/// job's facts; written to the graph and read back by task.  A job outside a git tree is no evidence.
+#[tokio::test]
+async fn a_tasks_jobs_are_its_evidence() {
+    let d = tempfile::tempdir().unwrap();
+    let w = d.path().join("w");
+    let tree = repo_with_a_commit(&w);
+    let r = open(d.path());
+    let red = spec(
+        Starter::User,
+        &w,
+        "printf '%s\\n' 'test a ... ok' 'test b ... FAILED'; exit 101",
+        Duration::from_secs(30),
+    );
+    let id = r.start(red).await.unwrap();
+    ended(&r, &id).await;
+    let ev = crate::orch::evidence::of_job(&r, &id, "task:J#1").expect("evidence");
+    assert_eq!(
+        (ev.kind.as_str(), ev.task.as_str(), ev.job.as_str()),
+        ("red", "task:J#1", id.as_str())
+    );
+    assert_eq!(ev.facts.tree_key, tree);
+    let failed: Vec<_> = ev
+        .rows
+        .iter()
+        .filter(|r| r.verdict == vordr::rows::Verdict::Fail)
+        .map(|r| r.name.as_str())
+        .collect();
+    assert_eq!(failed, vec!["b"]);
+
+    let green = spec(
+        Starter::User,
+        &w,
+        "echo 'test a ... ok'",
+        Duration::from_secs(30),
+    );
+    let gid = r.start(green).await.unwrap();
+    ended(&r, &gid).await;
+    let gev = crate::orch::evidence::of_job(&r, &gid, "task:J#1").unwrap();
+    assert_eq!(gev.kind, "green");
+
+    // written and read back by task
+    let db = norn::store::CoordDb::spawn(d.path().join("work.db"));
+    for e in [ev.clone(), gev] {
+        let tx = urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "evidence");
+        db.write(tx, move |tx| norn::write::evidence::record(tx, &e, None))
+            .await
+            .unwrap();
+    }
+    let back = db
+        .read(|c| norn::read::evidence::of_task(c, "task:J#1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        back.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(),
+        vec!["red", "green"]
+    );
+    assert_eq!(back[0], ev);
+    let none = db
+        .read(|c| norn::read::evidence::of_task(c, "task:J#2"))
+        .await
+        .unwrap();
+    assert!(none.is_empty());
+
+    let off = spec(Starter::User, d.path(), "true", Duration::from_secs(30));
+    let oid = r.start(off).await.unwrap();
+    ended(&r, &oid).await;
+    assert!(crate::orch::evidence::of_job(&r, &oid, "task:J#1").is_none());
+}

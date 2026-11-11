@@ -1451,6 +1451,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `messages/mark` | user | `{id: natnum, state: "delivered" \| "read" \| "acted"}` | `{changed: boolean}` | yes |
 | `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes |
+| `orch/evidence` | user | `{task: TaskRef}` | `{evidence: [any]}` | no |
 | `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
 | `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |
 | `pair/closed` | user | `{file: AbsPath}` | `boolean` | no |

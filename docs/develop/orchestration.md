@@ -37,3 +37,15 @@ At submit the hub records what a job runs on in its folder's `facts.json` (`vord
 A job outside a git tree, and a user's server, has no facts and is never evidence. `Runner::start_or_reuse` answers the
 newest **green** job with equal facts instead of running again (exit 0, no failed row, not on a `shared` runner); a red
 is never reused, and a selector holding one of the rule pack's `no-cache` words (`Runner::set_no_cache`) always runs.
+
+## Evidence
+
+An `evidence` entity (`norn::write::evidence`, its data a `vordr::evidence::Evidence`) is one fact a gate reads: its
+kind, the task, the hub job, the job's facts, its rows (at most 5000, every failed row kept; `truncated` says rows were
+left out), when, and a gate's note. Kinds: `red` and `green` (a task's own job as it ended: failed rows or a non-zero
+exit, or none), and the gates' own `author-check`, `group`, `full-run`, `review`, `merge-notes` and `waiver`.
+
+The hub task `orch::evidence::run` records every job that ends whose session works on a task (the session's
+snapshot names it) as that task's `red` or `green`. A job without facts, or one a `shared` runner ran, is never
+evidence. Any matching job counts: a gate never asks for a second run of a tree it has a record for.
+`orch/evidence {task}` (the user's connections) answers a task's records, oldest first.
