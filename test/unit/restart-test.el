@@ -24,6 +24,17 @@
         (should (equal (mapcar #'car spawned) '(("systemctl" "--user" "restart" "drgnx"))))
         (should-not killed)))))
 
+(ert-deftest drgnx-restart/a-launch-agent-session-restarts-the-agent ()
+  ;; macOS: launchd names the job of the daemon it started in XPC_SERVICE_NAME
+  (let ((process-environment (cons "XPC_SERVICE_NAME=org.blackdragonfoundation.drgnx" process-environment)))
+    (drgnx-restart-test--with t
+      (cl-letf (((symbol-function 'drgnx-restart--cgroup) #'ignore))
+        (drgnx-restart)
+        (should (equal (mapcar #'car spawned)
+                       (list (list "launchctl" "kickstart" "-k"
+                                   (format "gui/%d/org.blackdragonfoundation.drgnx" (user-uid))))))
+        (should-not killed)))))
+
 (ert-deftest drgnx-restart/asks-first-and-spawns-only-on-yes ()
   (let ((process-environment (cons "INVOCATION_ID=" (cl-remove-if (lambda (e) (string-prefix-p "INVOCATION_ID=" e))
                                                                   process-environment))))

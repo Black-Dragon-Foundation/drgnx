@@ -1613,9 +1613,88 @@ user's step (docs/guide/packages.md)."
 ;; SVC-EMACS-STALE-1: the unit names the Emacs by full path, so an Emacs that changes (stock to Nidhogg, a rebuild in
 ;; another prefix) leaves the installed unit starting the old one.  `drgnx update' refreshes it; the doctor warns.
 (defun drgnx-pkg-service-unit-file ()
-  "The user's unit: $XDG_CONFIG_HOME/systemd/user/drgnx.service, else ~/.config/systemd/user/drgnx.service."
+  "The user's daemon service: on macOS drgnx's launch agent (`drgnx-pkg-launch-agent-file'), else the systemd unit
+$XDG_CONFIG_HOME/systemd/user/drgnx.service, else ~/.config/systemd/user/drgnx.service."
   (let ((default-directory "/") (file-name-handler-alist nil))
-    (expand-file-name "systemd/user/drgnx.service" (or (drgnx-paths-env-dir "XDG_CONFIG_HOME") "~/.config"))))
+    (if (eq (drgnx-platform) 'macos)
+        (drgnx-pkg-launch-agent-file)
+      (expand-file-name "systemd/user/drgnx.service" (or (drgnx-paths-env-dir "XDG_CONFIG_HOME") "~/.config")))))
+
+;;;; The macOS launch agent: the systemd unit's counterpart
+
+(defconst drgnx-pkg-launch-agent-label "org.blackdragonfoundation.drgnx"
+  "The launchd label of drgnx's daemon (bin/drgnx's update agent is this with -update).")
+
+(defun drgnx-pkg-launch-agent-file ()
+  "Where drgnx's launch agent is installed: ~/Library/LaunchAgents/LABEL.plist."
+  (let ((default-directory "/") (file-name-handler-alist nil))
+    (expand-file-name (concat "Library/LaunchAgents/" drgnx-pkg-launch-agent-label ".plist") "~")))
+
+(defun drgnx-pkg--plist-string (s)
+  "S as the text of a plist <string>: & < > escaped."
+  (replace-regexp-in-string "[&<>]" (lambda (m) (pcase m ("&" "&amp;") ("<" "&lt;") (_ "&gt;"))) s t t))
+
+(defun drgnx-pkg--launch-agent-program ()
+  "The ProgramArguments key and array (one line) that start drgnx's daemon with the Emacs running this."
+  (concat "<key>ProgramArguments</key><array>"
+          (mapconcat (lambda (a) (concat "<string>" (drgnx-pkg--plist-string a) "</string>"))
+                     (list (expand-file-name invocation-name invocation-directory) "--fg-daemon=drgnx"
+                           (concat "--init-directory=" (expand-file-name "init" drgnx-dir))))
+          "</array>"))
+
+(defun drgnx-pkg-launch-agent (&optional dir)
+  "The launchd agent that runs drgnx as a daemon at login, with the Emacs running this; written to DIR/LABEL.plist
+when DIR is given.  Not kept alive: launchd has no limit on restarts, and a held server name would loop.  Installed
+only by onboarding, when the user says yes (docs/guide/packages.md)."
+  (let ((plist (concat "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                       "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+                       "<plist version=\"1.0\">\n<dict>\n"
+                       "  <key>Label</key><string>" drgnx-pkg-launch-agent-label "</string>\n"
+                       "  " (drgnx-pkg--launch-agent-program) "\n"
+                       "  <key>RunAtLoad</key><true/>\n"
+                       "  <key>ProcessType</key><string>Interactive</string>\n"
+                       "  <key>EnvironmentVariables</key>\n"
+                       "  <dict><key>PATH</key><string>"
+                       (drgnx-pkg--plist-string (expand-file-name "~/.local/bin"))
+                       ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string></dict>\n"
+                       "</dict>\n</plist>\n")))
+    (when dir
+      (drgnx-file-write-text (expand-file-name (concat drgnx-pkg-launch-agent-label ".plist") dir) plist))
+    plist))
+
+(defun drgnx-pkg--launchctl (&rest args)
+  "Run launchctl with ARGS (30 s at most, never asking): its exit status, or nil when it did not end or is absent."
+  (when-let* ((launchctl (executable-find "launchctl")))
+    (let* ((proc (make-process :name "drgnx-launchctl" :buffer nil :noquery t :connection-type 'pipe
+                               :command (cons launchctl args) :stderr nil :sentinel #'ignore))
+           (deadline (+ (float-time) 30)))
+      (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output proc 0.05))
+      (if (process-live-p proc) (progn (delete-process proc) nil) (process-exit-status proc)))))
+
+(defun drgnx-pkg-launch-agent-install ()
+  "Install drgnx's launch agent for this user and load it, which starts the daemon now and at every login:
+the plist written to `drgnx-pkg-launch-agent-file', taken out of launchd if it was loaded, then loaded.  Returns
+\(FILE . STATUS), STATUS being launchctl bootstrap's exit status (nil: it did not run)."
+  (let* ((file (drgnx-pkg-launch-agent-file))
+         (domain (format "gui/%d" (user-uid))))
+    (drgnx-pkg-launch-agent (file-name-directory file))
+    (drgnx-pkg--launchctl "bootout" (concat domain "/" drgnx-pkg-launch-agent-label))
+    (cons file (drgnx-pkg--launchctl "bootstrap" domain file))))
+
+(defun drgnx-pkg--agent-program (text)
+  "(LINE EMACS DRGNX-P) of the ProgramArguments array of the plist TEXT, or nil: LINE is the key and its array,
+EMACS the first string unescaped, DRGNX-P whether it starts drgnx's daemon (--fg-daemon=drgnx)."
+  (when (string-match "<key>ProgramArguments</key>[ \t\n]*<array>[^<]*\\(?:<string>\\([^<]*\\)</string>\\)?\\(?:.\\|\n\\)*?</array>" text)
+    (let ((line (match-string 0 text)) (first (match-string 1 text)))
+      (list line
+            (and first (replace-regexp-in-string "&\\(amp\\|lt\\|gt\\);"
+                                                 (lambda (m) (pcase m ("&amp;" "&") ("&lt;" "<") (_ ">"))) first t t))
+            (and (string-search "<string>--fg-daemon=drgnx</string>" line) t)))))
+
+(defun drgnx-pkg--daemon-start (text)
+  "(LINE EMACS DRGNX-P) of the daemon service TEXT on this platform: the launch agent's program on macOS
+\(`drgnx-pkg--agent-program'), else the unit's ExecStart= (`drgnx-pkg--unit-exec-start')."
+  (if (eq (drgnx-platform) 'macos) (drgnx-pkg--agent-program text) (drgnx-pkg--unit-exec-start text)))
 
 (defun drgnx-pkg--systemd-unword (word)
   "The inverse of `drgnx-pkg--systemd-word': WORD without its double quotes, \\\" and \\\\ unescaped, %% and $$ single."
@@ -1649,22 +1728,27 @@ DRGNX-P whether LINE starts drgnx's daemon (--fg-daemon=drgnx)."
 :status is `none' (no file), `foreign' (no drgnx daemon line: left alone; :line holds the ExecStart= line), `current'
 \(same Emacs, by truename: untouched) or `rewritten' (only the ExecStart= line replaced, every other line kept; :reload
 is `ok', `failed' or `absent' from systemd's daemon-reload).  BEFORE, a function, is called with the old and the new
-ExecStart= line after the check and before anything is written.  Never restarts the service and never asks."
-  (let* ((file (or file (drgnx-pkg-service-unit-file)))
+ExecStart= line after the check and before anything is written.  Never restarts the service and never asks.
+On macOS FILE is the launch agent and its ProgramArguments take the ExecStart= line's place; :reload is `later'
+\(launchd reads the file when the agent is loaded again: `drgnx update --restart', or at the next login)."
+  (let* ((macos (eq (drgnx-platform) 'macos))
+         (file (or file (drgnx-pkg-service-unit-file)))
          (text (drgnx-file-read-bounded file))
          (new (expand-file-name invocation-name invocation-directory)))
     (if (null text)
         (list :status 'none :file file :new new)
-      (pcase (drgnx-pkg--unit-exec-start text)
+      (pcase (drgnx-pkg--daemon-start text)
         ((and `(,line ,old ,drgnx) (guard drgnx))
          (if (equal (file-truename old) (file-truename new))
              (list :status 'current :file file :old old :new new)
-           (let ((fresh (car (drgnx-pkg--unit-exec-start (drgnx-pkg-service-unit)))))
+           (let ((fresh (if macos (drgnx-pkg--launch-agent-program)
+                          (car (drgnx-pkg--unit-exec-start (drgnx-pkg-service-unit))))))
              (when before (funcall before line fresh))
              (drgnx-file-write-text file (string-replace line fresh text))
-             (list :status 'rewritten :file file :old old :new new :reload (drgnx-pkg--systemctl-reload)))))
+             (list :status 'rewritten :file file :old old :new new
+                   :reload (if macos 'later (drgnx-pkg--systemctl-reload))))))
         (`(,line . ,_) (list :status 'foreign :file file :line line))
-        (_ (list :status 'foreign :file file :line "(no ExecStart= line)"))))))
+        (_ (list :status 'foreign :file file :line (if macos "(no ProgramArguments)" "(no ExecStart= line)")))))))
 
 ;; Nidhogg's native shell names its windows `nidhogg': a desktop entry that does not claim that name leaves the app
 ;; switcher with the bare name and no icon.  Nidhogg installs the logo under its own prefix as `emacs', where the
@@ -1929,25 +2013,51 @@ FILE (`drgnx-pkg-progress'), from start to done."
                                (_ (format "the problem comes with module %s (turn it off in Preferences: Modules)" m))))
            0))
         (`("service-unit" "--refresh")
-         (let* ((r (drgnx-pkg-service-unit-refresh
-                    nil (lambda (old new) (drgnx-pkg--print "drgnx.service ExecStart changes:\n- %s\n+ %s" old new))))
+         (let* ((name (if (eq (drgnx-platform) 'macos) "drgnx's launch agent" "drgnx.service"))
+                (r (drgnx-pkg-service-unit-refresh
+                    nil (lambda (old new) (drgnx-pkg--print (if (eq (drgnx-platform) 'macos) "%s's ProgramArguments change:\n- %s\n+ %s"
+                                                              "%s ExecStart changes:\n- %s\n+ %s")
+                                                            name old new))))
                 (file (plist-get r :file)))
            (pcase (plist-get r :status)
-             ('none (drgnx-pkg--print "drgnx.service is not installed (%s): nothing to refresh" file))
-             ('current (drgnx-pkg--print "drgnx.service runs %s: up to date" (plist-get r :new)))
-             ('rewritten (drgnx-pkg--print "drgnx.service ran %s; now %s (%s). Restart drgnx to use it: systemctl --user restart drgnx"
-                                           (plist-get r :old) (plist-get r :new)
-                                           (if (eq (plist-get r :reload) 'ok) "systemd reloaded" "run: systemctl --user daemon-reload")))
-             ('foreign (drgnx-pkg--print "drgnx.service's ExecStart is not drgnx's daemon line, left as it is: %s" (plist-get r :line))))
+             ('none (drgnx-pkg--print "%s is not installed (%s): nothing to refresh" name file))
+             ('current (drgnx-pkg--print "%s runs %s: up to date" name (plist-get r :new)))
+             ('rewritten (drgnx-pkg--print "%s ran %s; now %s (%s). Restart drgnx to use it: %s"
+                                           name (plist-get r :old) (plist-get r :new)
+                                           (pcase (plist-get r :reload)
+                                             ('ok "systemd reloaded")
+                                             ('later "launchd reads it when the agent is loaded again")
+                                             (_ "run: systemctl --user daemon-reload"))
+                                           (if (eq (plist-get r :reload) 'later) "drgnx update --restart"
+                                             "systemctl --user restart drgnx")))
+             ('foreign (drgnx-pkg--print (if (eq (drgnx-platform) 'macos) "%s does not start drgnx's daemon, left as it is: %s"
+                                           "%s's ExecStart is not drgnx's daemon line, left as it is: %s")
+                                         name (plist-get r :line))))
            (when (eq (drgnx-pkg-desktop-refresh) 'rewritten)
              (drgnx-pkg--print "drgnx.desktop has drgnx's icon and Nidhogg's windows: %s" (drgnx-pkg-desktop-file)))
            0))
+        (`("service-unit" "--install")
+         (if (not (eq (drgnx-platform) 'macos))
+             (progn (drgnx-pkg--print "drgnx service-unit --install is for macOS; on Linux: drgnx onboard --step daemon (it asks first)")
+                    2)
+           (pcase-let ((`(,file . ,status) (drgnx-pkg-launch-agent-install)))
+             (if (eql status 0)
+                 (progn (drgnx-pkg--print "installed and loaded drgnx's launch agent (%s): the daemon runs now and at every login; drgnx update --restart restarts it"
+                                          (abbreviate-file-name file))
+                        0)
+               (drgnx-pkg--print "wrote %s, but launchctl could not load it (%s): launchctl bootstrap gui/%d %s"
+                                 (abbreviate-file-name file) (if status (format "exit %s" status) "it did not run")
+                                 (user-uid) (shell-quote-argument file))
+               1))))
         (`("service-unit" . ,dir)
-         (let ((unit (drgnx-pkg-service-unit (car dir))))
-           (if dir (drgnx-pkg--print "wrote %s (not installed: see docs/guide/packages.md)" (expand-file-name "drgnx.service" (car dir)))
+         (let* ((macos (eq (drgnx-platform) 'macos))
+                (unit (if macos (drgnx-pkg-launch-agent (car dir)) (drgnx-pkg-service-unit (car dir)))))
+           (if dir (drgnx-pkg--print "wrote %s (not installed: see docs/guide/packages.md)"
+                                     (expand-file-name (if macos (concat drgnx-pkg-launch-agent-label ".plist") "drgnx.service")
+                                                       (car dir)))
              (princ unit)))
          0)
-        (_ (drgnx-pkg--print "usage: drgnx sync [--offline] [--seed DIR] [--prune] [--add NAME[@V]…] [--remove NAME…] [--pending] [--wait] | upgrade [--only NAME…] [--stage | --staged] | rollback [N] (each with [--progress FILE]) | generations | lock [--ship] | bisect [-- CMD…] | service-unit [DIR | --refresh]")
+        (_ (drgnx-pkg--print "usage: drgnx sync [--offline] [--seed DIR] [--prune] [--add NAME[@V]…] [--remove NAME…] [--pending] [--wait] | upgrade [--only NAME…] [--stage | --staged] | rollback [N] (each with [--progress FILE]) | generations | lock [--ship] | bisect [-- CMD…] | service-unit [DIR | --refresh | --install]")
            2))
     (drgnx-pkg-error (drgnx-pkg--print "drgnx: %s" (cadr err))
                      (setq drgnx-pkg--outcome (plist-put drgnx-pkg--outcome :error (cadr err)))
