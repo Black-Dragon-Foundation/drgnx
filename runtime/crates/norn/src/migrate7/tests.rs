@@ -451,12 +451,9 @@ fn tables_named(sql: &str) -> Vec<String> {
         .collect()
 }
 
-/// The constants a `format` select may name: their values are read from their `defconst` strings.
-const FORMAT_CONSTANTS: &[&str] = &[
-    "drgnx-coord--agent-cols",
-    "drgnx-coord--event-cols",
-    "drgnx-work--select",
-];
+/// The constants a `format` select may name: their values are read from their `defconst` strings.  (The
+/// coordination readers' column lists went with the views that used them.)
+const FORMAT_CONSTANTS: &[&str] = &["drgnx-work--select"];
 
 /// The symbol at the start of TEXT (after blanks).
 fn symbol_at(text: &str) -> String {
@@ -537,9 +534,9 @@ fn every_old_select_runs_on_the_views() {
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
-    // The extraction found the readers it must (a sanity bound: 19 once the Lisp writers' own reads and then the
-    // cockpit's files were deleted, and the fragment over two views).
-    assert!(checked.len() >= 19, "{}: {checked:#?}", checked.len());
+    // The extraction found the readers it must (a sanity bound: 18 once the Lisp writers' own reads, the cockpit's
+    // files and then the coordination readers were deleted, and the fragment over two views).
+    assert!(checked.len() >= 18, "{}: {checked:#?}", checked.len());
     assert!(
         checked
             .iter()

@@ -85,6 +85,11 @@ pub const NEVER_HERE: &str =
 pub const OFF_NOTE: &str = "[drgnx: the user turned pair mode off for this chat. Your edits of the project are \
     refused until they turn it on again; nothing you were doing was cancelled.]";
 
+/// What the agent is told, queued, when the user paired the chat from the card of a refused change.
+pub const ON_NOTE: &str = "[drgnx: the user turned pair mode on for this chat. Your last change was not made: \
+    make it again with edit_file {path, old, new} or write_file {path, content}, which edit the project through \
+    drgnx; shell commands that change files stay refused.]";
+
 /// A write's form.
 #[derive(Clone, Debug, PartialEq)]
 pub enum WriteKind {

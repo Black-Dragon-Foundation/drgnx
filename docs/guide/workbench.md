@@ -520,7 +520,9 @@ scrolls. Without Glitnir nothing changes.
 
 ### The panel and the right dock
 
-The **panel** (Toggle Panel: ``C-` `` · palette · `SPC j`) sits under the editors; the **right dock** (Toggle
+The **panel** (Toggle Panel: `M-j` · palette · `SPC j`) sits under the editors; Toggle Terminal (``C-` `` in the VS Code
+profile, as in VS Code) shows its Terminal tab, starting a terminal when the tab has none, and hides the panel when that
+tab already shows; the **right dock** (Toggle
 Right Dock: `C-M-b` · palette · `SPC R`) runs the frame's full height, like the left one. Each is one window with a
 **tab row** at the top (click a tab to show it). The right dock shows its tab row only while two of its tabs have
 something to show: with one (an agent panel, say) that pane's own header is the top row, and `q` or `C-w l` then

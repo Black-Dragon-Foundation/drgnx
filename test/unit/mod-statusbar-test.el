@@ -609,9 +609,10 @@ follow it when the fonts change."
 
 (ert-deftest drgnx-statusbar/problems-wait-for-a-backend-before-saying-all-clear ()
   (drgnx-statusbar-test--with
-    (let ((running '(b1)) (reporting nil) (counts '(0 . 0)))
+    (let ((running '(b1)) (reporting nil) (counts '(0 . 0)) (disabled nil))
       (cl-letf (((symbol-function 'flymake-running-backends) (lambda () running))
                 ((symbol-function 'flymake-reporting-backends) (lambda () reporting))
+                ((symbol-function 'flymake-disabled-backends) (lambda () disabled))
                 ((symbol-function 'flymake--mode-line-counter)
                  (lambda (type)
                    (let ((n (if (eq type :error) (car counts) (cdr counts))))
@@ -640,6 +641,13 @@ follow it when the fonts change."
                 (should (equal (substring-no-properties (funcall text)) "✓"))
                 (setq notes 2 counts '(1 . 0))                 ; errors or warnings: the ⚠ counts as before
                 (should (equal (substring-no-properties (funcall text)) "⚠ 1 0"))))
+            ;; a backend flymake turned off (an untrusted buffer: Emacs 31 runs no unsafe backend there) checked
+            ;; nothing: "not checked", dimmed, never ✓; problems another backend found still show
+            (setq counts '(0 . 0) disabled '(b2) reporting '(b1 b2))
+            (should (equal (substring-no-properties (funcall text)) "not checked"))
+            (should (eq (get-text-property 0 'face (funcall text)) 'shadow))
+            (setq counts '(1 . 0))
+            (should (equal (substring-no-properties (funcall text)) "⚠ 1 0"))
             (setq-local flymake-mode nil)
             (should-not (funcall text))))))))
 
@@ -725,6 +733,20 @@ follow it when the fonts change."
         (unwind-protect
             (progn (flymake-start)
                    (should (equal (substring-no-properties (drgnx-statusbar--seg-problems)) "⚠ 1 1")))
+          (flymake-mode -1))))))
+
+(ert-deftest drgnx-statusbar/an-untrusted-buffer-is-not-checked ()
+  "Emacs 31's flymake turns an unsafe backend off in untrusted content: the segment says so instead of ✓."
+  (require 'flymake)
+  (drgnx-statusbar-test--with
+    (with-temp-buffer
+      (insert "one\n")
+      (let ((trusted-content nil) (inhibit-message t)
+            (flymake-diagnostic-functions (list (lambda (report-fn &rest _) (funcall report-fn nil)))))
+        (flymake-mode 1)
+        (unwind-protect
+            (progn (flymake-start)
+                   (should (equal (substring-no-properties (drgnx-statusbar--seg-problems)) "not checked")))
           (flymake-mode -1))))))
 
 (ert-deftest drgnx-statusbar/a-flymake-report-redraws-the-bars ()

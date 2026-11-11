@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// More ignored entries than this are not listed (a `node_modules` tree is not a row each).
 pub const IGNORED_LIMIT: usize = 20_000;
@@ -584,9 +584,10 @@ pub(crate) fn watch_repo(
             Ok(Heard::Changed) => {}
             Ok(Heard::Stop) | Err(_) => return,
         }
-        let end = Instant::now() + SETTLE_MAX;
+        // the watcher's thread waits for the file system, outside the hub: real time, whatever clock the hub runs on
+        let end = crate::clock::real_now() + SETTLE_MAX;
         loop {
-            let left = end.saturating_duration_since(Instant::now());
+            let left = end.saturating_duration_since(crate::clock::real_now());
             if left.is_zero() {
                 break;
             }
