@@ -2266,3 +2266,39 @@ fn handed_rows_get_the_agents_bar_and_their_groups_a_chip() {
     assert!(m0.text.starts_with("▎ "), "{:?}", m0.text);
     assert!(row(&greps, "f:a.rs").text.ends_with("◆ Ada · editing 1/2 "));
 }
+
+/// [D] A group row's chips go in after its name: a face that ends where they go (the name's) stays short of them, the
+/// row's own properties take them in, and what follows (the count) moves along.
+#[test]
+fn chips_leave_the_names_face_short_of_them() {
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    let row = greps
+        .with(CONN, "s", id, |run| {
+            run.handed.insert(
+                match_id(run.id, 0),
+                AgentMark {
+                    face: "drgnx-agent-1".into(),
+                    glyph: "●".into(),
+                    name: "Ada".into(),
+                    handoff: "h:1".into(),
+                },
+            );
+            let mut b = drgnx_rows::RowBuilder::new("s:x");
+            b.push("name", Some("drgnx-replace-symbol"));
+            let at = b.pos();
+            b.push("  3", Some("drgnx-replace-dim"));
+            let end = b.pos();
+            b.prop(0, end, "drgnx-work-id", json!("s:x"));
+            rows::with_chips(run, b.finish(), at, [match_id(run.id, 0)].into_iter())
+        })
+        .unwrap();
+    assert_eq!(row.text, "name   ● Ada · sent 0/1   3");
+    let n = row.text.chars().count() as u32;
+    assert_eq!(row.runs[0], (0, 4, "drgnx-replace-symbol".to_owned()));
+    assert_eq!(row.runs[1], (n - 3, n, "drgnx-replace-dim".to_owned()));
+    assert_eq!(
+        row.props[0],
+        (0, n, "drgnx-work-id".to_owned(), json!("s:x"))
+    );
+}

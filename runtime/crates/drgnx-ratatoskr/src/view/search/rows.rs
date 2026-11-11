@@ -470,7 +470,12 @@ fn with_bar(run: &Run, mut row: Row) -> Row {
 /// Group row ROW of RUN with a chip for each hand-off its matches IDS went to after its name (at AT, before its folder
 /// or count, which a narrow panel cuts first), in that agent's colour (the editor's): `◆ Ada · editing 9/14`, its
 /// phase and how many of the group's handed-off matches its edits took out.
-fn with_chips(run: &Run, mut row: Row, at: u32, ids: impl Iterator<Item = String>) -> Row {
+pub(super) fn with_chips(
+    run: &Run,
+    mut row: Row,
+    at: u32,
+    ids: impl Iterator<Item = String>,
+) -> Row {
     if run.handed.is_empty() {
         return row;
     }
@@ -505,7 +510,8 @@ fn with_chips(run: &Run, mut row: Row, at: u32, ids: impl Iterator<Item = String
     if text.is_empty() {
         return row;
     }
-    // what lies after AT moves along; what spans it (the row's own properties) takes the chips in
+    // what lies after AT moves along; a property reaching it (the row's own: its id, its file) takes the chips in, a
+    // face ending at it (the name's) stays short of them
     let k = text.chars().count() as u32;
     let byte = row
         .text
@@ -518,11 +524,16 @@ fn with_chips(run: &Run, mut row: Row, at: u32, ids: impl Iterator<Item = String
             *p += k;
         }
     };
+    let shift_end = |p: &mut u32| {
+        if *p > at {
+            *p += k;
+        }
+    };
     for r in &mut row.runs {
         if r.0 >= at {
             r.0 += k;
         }
-        shift(&mut r.1);
+        shift_end(&mut r.1);
     }
     for p in &mut row.props {
         if p.0 >= at {

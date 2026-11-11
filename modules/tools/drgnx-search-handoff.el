@@ -338,15 +338,17 @@ brief's size; the hidden files left out, with the key that puts them in."
                     nil t))))
 
 (defun drgnx-search-handoff--context ()
-  "Ask the hub for the context box (`search/handoff-context'); the card is drawn again when it answers."
-  (let ((a drgnx-search-handoff--ask) (buf (current-buffer)))
+  "Ask the hub for the context box (`search/handoff-context'); the card is drawn again when it answers, unless the
+hidden switch moved since (a newer answer is on its way)."
+  (let* ((a drgnx-search-handoff--ask) (buf (current-buffer)) (hidden (plist-get a :hidden)))
     (drgnx-hub--call-on drgnx-hub--events "search/handoff-context"
                         (append (list :view (plist-get a :view))
                                 (if (plist-get a :ids) (list :ids (vconcat (plist-get a :ids)))
                                   (list :off (vconcat (plist-get a :off))))
                                 (and (plist-get a :hidden) (list :hidden t)))
                         (lambda (r err)
-                          (when (and (not err) (buffer-live-p buf))
+                          (when (and (not err) (buffer-live-p buf)
+                                     (eq hidden (plist-get (buffer-local-value 'drgnx-search-handoff--ask buf) :hidden)))
                             (with-current-buffer buf
                               (setq drgnx-search-handoff--ask (plist-put drgnx-search-handoff--ask :context r))
                               (drgnx-search-handoff--redraw)
