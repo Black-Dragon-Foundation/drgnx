@@ -44,8 +44,14 @@
                               :key (lambda (e) (plist-get (cdr e) :line)))
                (push (cons (cl-incf debug-gutter-test--next)
                            (list :id debug-gutter-test--next :line (plist-get op :line) :enabled t :verified t
-                                 :log (plist-get op :log)))
+                                 :log (plist-get op :log) :condition (plist-get op :condition)))
                      debug-gutter-test--store)))
+      ("edit" (let ((bp (cdr (assq (plist-get op :id) debug-gutter-test--store))))
+                (dolist (k '(:enabled :condition :hit :log))
+                  (when (plist-member op k)
+                    (let ((v (plist-get op k)))
+                      (setq bp (plist-put bp k (if (equal v "") nil (if (eq v :false) nil v)))))))
+                (setcdr (assq (plist-get op :id) debug-gutter-test--store) bp)))
       ("remove" (setq debug-gutter-test--store (assq-delete-all (plist-get op :id) debug-gutter-test--store)))
       ("move" (plist-put (cdr (assq (plist-get op :id) debug-gutter-test--store)) :line (plist-get op :line)))))
   (list :root "/r" :path (or (plist-get (plist-get params :op) :path) (plist-get params :path))
@@ -161,5 +167,44 @@
         ;; pad of its claim
         (should (string-suffix-p (drgnx-debug-gutter--char 'bp (drgnx-ui-ascii-frame-p))
                                  (substring-no-properties (cadr spec))))))))
+
+;; the menu's items: (LABEL . COMMAND-SYMBOL) of `drgnx-debug-gutter--menu-items' as labels only
+(defun debug-gutter-test--labels (line)
+  (mapcar #'car (drgnx-debug-gutter--menu-items line)))
+
+(ert-deftest drgnx-debug-gutter/the-menu-follows-the-line ()
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0))
+    (debug-gutter-test--with 10
+      (let ((drgnx-debug-gutter--sessions nil))
+        (should (equal (debug-gutter-test--labels 3)
+                       '("Add Breakpoint" "Add Conditional Breakpoint…" "Add Logpoint…")))
+        (drgnx-debug-gutter-toggle 3)
+        (should (equal (debug-gutter-test--labels 3)
+                       '("Remove Breakpoint" "Edit Condition…" "Edit Hit Count…" "Edit Log Message…"
+                         "Disable Breakpoint")))
+        (funcall (cdr (assoc "Disable Breakpoint" (drgnx-debug-gutter--menu-items 3))))
+        (should (equal (debug-gutter-test--marks) '((3 . off))))
+        (should (member "Enable Breakpoint" (debug-gutter-test--labels 3))))
+      ;; a session in the project adds Run to Cursor
+      (let ((drgnx-debug-gutter--sessions (list (list :id "s1" :root (drgnx-debug-launch-root)))))
+        (should (member "Run to Cursor" (debug-gutter-test--labels 5)))
+        (funcall (cdr (assoc "Run to Cursor" (drgnx-debug-gutter--menu-items 5))))
+        (should (equal (car (last debug-gutter-test--calls))
+                       (list "debug/run-to-cursor" :session "s1" :path buffer-file-name :line 5)))))))
+
+(ert-deftest drgnx-debug-gutter/the-prompt-edits-and-empty-clears ()
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0))
+    (debug-gutter-test--with 10
+      ;; on an empty line it adds a conditional breakpoint
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "x > 1")))
+        (drgnx-debug-gutter-edit 4 'condition))
+      (should (equal (debug-gutter-test--marks) '((4 . cond))))
+      ;; the prompt starts from the current text; empty clears it
+      (let (initial)
+        (cl-letf (((symbol-function 'read-string) (lambda (_p init &rest _) (setq initial init) "")))
+          (drgnx-debug-gutter-edit 4 'condition))
+        (should (equal initial "x > 1")))
+      (should (equal (debug-gutter-test--marks) '((4 . bp))))
+      (should (equal (car (last (debug-gutter-test--ops))) '("edit" 1))))))
 
 ;;; debug-gutter-test.el ends here

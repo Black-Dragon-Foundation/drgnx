@@ -242,7 +242,12 @@ only).
   adapter bound elsewhere (`bound_line`) sits on that line.
 - `drgnx-debug-gutter-show`: `auto` (while the file has breakpoints or a session runs in its project, from
   `debug-state`), `always` or `never`.
-- Mouse: `mouse-1` in the column toggles (`drgnx-debug-gutter-toggle`), `S-mouse-1` adds a logpoint.
+- Mouse: `mouse-1` in the column toggles (`drgnx-debug-gutter-toggle`), `S-mouse-1` adds a logpoint, `mouse-3`
+  opens the line's menu (`drgnx-debug-gutter--menu-items`): Add Breakpoint / Conditional / Logpoint on an empty line;
+  Remove, Edit Condition / Hit Count / Log Message and Enable or Disable on a breakpoint; Run to Cursor while a session
+  runs in the project (`debug/run-to-cursor`).
+- The prompt (`drgnx-debug-gutter-edit`) starts from the field's text; an empty answer clears it (an `edit` op with
+  `""`), and on a line without a breakpoint a non-empty answer adds one with that field.
 
 Its tests (`test/unit/debug-gutter-test.el`) script the hub with a small store of their own.
 

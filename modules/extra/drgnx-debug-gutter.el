@@ -52,7 +52,7 @@
 (defvar-local drgnx-debug-gutter--bps nil "The file's breakpoints as the hub last said: plists.")
 (defvar-local drgnx-debug-gutter--version 0 "The version of `drgnx-debug-gutter--bps'.")
 (defvar-local drgnx-debug-gutter--overlays nil "(ID . OVERLAY) of each mark.")
-(defvar drgnx-debug-gutter--running nil "The roots with a debug session (from `debug-state').")
+(defvar drgnx-debug-gutter--sessions nil "The debug sessions as `debug-state' last said: plists with :id and :root.")
 
 ;;;; Glyphs
 
@@ -153,7 +153,13 @@ unspecified."
     ('never nil)
     ('always t)
     (_ (or drgnx-debug-gutter--bps
-           (and drgnx-debug-gutter--running (member (drgnx-debug-launch-root) drgnx-debug-gutter--running) t)))))
+           (and (drgnx-debug-gutter--session) t)))))
+
+(defun drgnx-debug-gutter--session ()
+  "The id of a debug session in this buffer's project, or nil."
+  (when drgnx-debug-gutter--sessions
+    (let ((root (drgnx-debug-launch-root)))
+      (plist-get (seq-find (lambda (s) (equal (plist-get s :root) root)) drgnx-debug-gutter--sessions) :id))))
 
 (defun drgnx-debug-gutter--claim ()
   "Claim the column (or give it back) as `drgnx-debug-gutter-show' says."
@@ -261,8 +267,7 @@ changes (drafts); otherwise each sits on the store's line."
        (with-current-buffer b
          (when drgnx-debug-gutter-mode (drgnx-debug-gutter--apply data)))))
     ("debug-state"
-     (setq drgnx-debug-gutter--running
-           (delete-dups (delq nil (mapcar (lambda (s) (plist-get s :root)) (plist-get data :sessions)))))
+     (setq drgnx-debug-gutter--sessions (plist-get data :sessions))
      (dolist (b (buffer-list))
        (when (buffer-local-value 'drgnx-debug-gutter-mode b)
          (with-current-buffer b (drgnx-debug-gutter--claim)))))))
@@ -305,6 +310,71 @@ changes (drafts); otherwise each sits on the store's line."
   (with-current-buffer (window-buffer (posn-window (event-start event)))
     (drgnx-debug-gutter-add-logpoint (drgnx-debug-gutter--event-line event) (read-string "Log message: "))))
 
+;;;; Editing a breakpoint
+
+(defconst drgnx-debug-gutter--fields
+  '((condition :condition "Condition" "Add Conditional Breakpoint…" "Edit Condition…")
+    (hit :hit "Hit count" nil "Edit Hit Count…")
+    (log :log "Log message ({expression} is replaced)" "Add Logpoint…" "Edit Log Message…"))
+  "FIELD → (KEY PROMPT ADD-LABEL EDIT-LABEL): what the breakpoint prompt edits.")
+
+(defun drgnx-debug-gutter--bp (id)
+  "The breakpoint ID as the hub last said."
+  (seq-find (lambda (b) (eql (plist-get b :id) id)) drgnx-debug-gutter--bps))
+
+(defun drgnx-debug-gutter-edit (line field)
+  "Edit FIELD (`condition', `hit' or `log') of LINE's breakpoint in the minibuffer; on a line without one, add it.
+An empty answer clears the field."
+  (interactive (list (line-number-at-pos)
+                     (intern (completing-read "Edit: " '("condition" "hit" "log") nil t))))
+  (let* ((f (alist-get field drgnx-debug-gutter--fields))
+         (id (drgnx-debug-gutter--mark-at line))
+         (now (and id (plist-get (drgnx-debug-gutter--bp id) (car f))))
+         (text (read-string (format "%s (empty clears): " (nth 1 f)) now)))
+    (cond (id (drgnx-debug-gutter--ask (list :op "edit" :id id (car f) text)))
+          ((not (string-empty-p text))
+           (drgnx-debug-gutter--ask (list :op "add" :path buffer-file-name :line line (car f) text))))))
+
+(defun drgnx-debug-gutter-set-enabled (line enabled)
+  "Enable LINE's breakpoint, or disable it when ENABLED is nil."
+  (when-let* ((id (drgnx-debug-gutter--mark-at line)))
+    (drgnx-debug-gutter--ask (list :op "edit" :id id :enabled (if enabled t :false)))))
+
+(defun drgnx-debug-gutter-run-to-cursor (line)
+  "Continue the project's session until it reaches LINE."
+  (interactive (list (line-number-at-pos)))
+  (if-let* ((s (drgnx-debug-gutter--session)))
+      (drgnx-hub-call "debug/run-to-cursor" (list :session s :path buffer-file-name :line line) #'ignore)
+    (user-error "No debug session in this project")))
+
+(defun drgnx-debug-gutter--menu-items (line)
+  "The column's menu for LINE: (LABEL . FUNCTION) per item, by the line's state."
+  (let* ((id (drgnx-debug-gutter--mark-at line))
+         (bp (and id (drgnx-debug-gutter--bp id)))
+         (edit (lambda (field) (lambda () (interactive) (drgnx-debug-gutter-edit line field)))))
+    (append
+     (if id
+         (list (cons "Remove Breakpoint" (lambda () (interactive) (drgnx-debug-gutter-toggle line)))
+               (cons "Edit Condition…" (funcall edit 'condition))
+               (cons "Edit Hit Count…" (funcall edit 'hit))
+               (cons "Edit Log Message…" (funcall edit 'log))
+               (if (plist-get bp :enabled)
+                   (cons "Disable Breakpoint" (lambda () (interactive) (drgnx-debug-gutter-set-enabled line nil)))
+                 (cons "Enable Breakpoint" (lambda () (interactive) (drgnx-debug-gutter-set-enabled line t)))))
+       (list (cons "Add Breakpoint" (lambda () (interactive) (drgnx-debug-gutter-toggle line)))
+             (cons "Add Conditional Breakpoint…" (funcall edit 'condition))
+             (cons "Add Logpoint…" (funcall edit 'log))))
+     (when (drgnx-debug-gutter--session)
+       (list (cons "Run to Cursor" (lambda () (interactive) (drgnx-debug-gutter-run-to-cursor line))))))))
+
+(defun drgnx-debug-gutter-menu (event)
+  "Mouse EVENT in the column: the menu for that line."
+  (interactive "e")
+  (with-current-buffer (window-buffer (posn-window (event-start event)))
+    (popup-menu (cons "Breakpoint" (mapcar (lambda (it) (vector (car it) (cdr it) t))
+                                           (drgnx-debug-gutter--menu-items (drgnx-debug-gutter--event-line event))))
+                event)))
+
 ;;;; Saves and reverts
 
 (defun drgnx-debug-gutter--saved ()
@@ -331,8 +401,9 @@ it), a mark whose line was deleted sends `remove'."
   (let ((m (make-sparse-keymap)))
     (define-key m [left-margin mouse-1] #'drgnx-debug-gutter-click)
     (define-key m [left-margin S-mouse-1] #'drgnx-debug-gutter-shift-click)
+    (define-key m [left-margin mouse-3] #'drgnx-debug-gutter-menu)
     m)
-  "The column's mouse: click toggles a breakpoint, shift-click adds a logpoint.")
+  "The column's mouse: click toggles a breakpoint, shift-click adds a logpoint, the right button opens its menu.")
 
 (defun drgnx-debug-gutter--in-use-p ()
   "Whether some buffer has the column."
