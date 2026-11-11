@@ -27,7 +27,7 @@
                      (alpha-background . 0.90) (backdrop-blur . 16) (transition . pop))))
     (should (equal (drgnx-look-palette-for 'light)
                    `((corner-radius . 12) (shadow . ,(drgnx-look-float-test--shadow 48 16 0.22))
-                     (ring . (child-frame-shadow . 0.08))
+                     (ring . (default . 0.08))
                      (alpha-background . 0.90) (backdrop-blur . 16) (transition . pop))))
     (should (equal (drgnx-look-palette-for 'hc)
                    '((corner-radius . 12) (alpha-background . 1.0) (child-frame-border-width . 2)

@@ -43,7 +43,7 @@ open: when you have answered, the palette is there as you left it.
 |---|---|---|
 | `corner-radius` | 12 | logical pixels |
 | `shadow` | `(:blur 48 :offset (0 . 16) :spread 0 :opacity 0.5)` | 0.22 in the light theme, none in High Contrast; colour comes from the `child-frame-shadow` face |
-| `ring` | `(child-frame-shadow . 0.45)` | a 1 px edge just outside the box, in the shadow's colour; 0.08 in the light theme, none in High Contrast (its 2 px border instead) |
+| `ring` | `(child-frame-shadow . 0.45)` | a 1 px edge just outside the box, in the shadow's colour; the text's colour at 0.08 in the light theme, none in High Contrast (its 2 px border instead) |
 | `alpha-background` | 0.90 | 1.0 in High Contrast |
 | `backdrop-blur` | 16 | logical pixels of blur radius behind the box; none in High Contrast |
 | `transition` | `pop` | fade and pop in and out |
