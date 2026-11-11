@@ -45,6 +45,11 @@ pub(crate) enum Chip {
 const TEXT: &str = "drgnx-work-flow-text";
 const LABEL: &str = "drgnx-work-flow-label";
 const HEAD: &str = "drgnx-work-flow-heading";
+/// A card's fill (drgnx-work-flow.el: the panel's surface).
+const CARD: &str = "drgnx-work-flow-card";
+/// The text property that marks a block Glitnir draws over the rows (`glitnir-blocks`): `["ring", ID, X0, X1]` on a
+/// card's span of each of its rows, `["rule", KEY, X0, X1]` on a row with a hairline under it (device px).
+const BLOCK: &str = "drgnx-work-flow-block";
 /// The font role the Flow's text is measured in (the UI font: `drgnx-view-env-roles`).
 const ROLE: &str = "card";
 
@@ -548,6 +553,7 @@ pub(crate) fn flow_rows(
         }
         cols.push(name, Some(LABEL));
     }
+    rule(&mut cols, "cols", env);
     rows.push(cols.finish());
     if ts.is_empty() {
         let mut b = RowBuilder::new("none");
@@ -574,19 +580,20 @@ pub(crate) fn flow_rows(
         if let Some(card) = t.card {
             b.prop(start, end, "drgnx-work-card", json!(card));
         }
+        rule(&mut b, &format!("task:{}", t.id), env);
         rows.push(b.finish());
     }
     let mut blank = RowBuilder::new("gap");
     blank.push("", None);
     rows.push(blank.finish());
-    rows.extend(batch_rows(flow, &at, env, fonts, &mut pics));
-    if flow.pack.as_ref().is_some_and(|p| p.on("push-gate")) {
-        let mut blank = RowBuilder::new("gap2");
-        blank.push("", None);
-        rows.push(blank.finish());
-        rows.extend(line_rows(flow, &mut pics));
-    }
+    rows.extend(card_rows(flow, env, fonts, &mut pics));
     (rows, pics.out)
+}
+
+/// B's row, keyed KEY, as a rule block (`BLOCK`): a hairline under it across the table, which Glitnir draws.
+fn rule(b: &mut RowBuilder, key: &str, env: &ViewEnv) {
+    let end = b.pos();
+    b.prop(0, end, BLOCK, json!(["rule", key, 0, env.width_px]));
 }
 
 /// RUNS' checks at their tree: (green, red).
@@ -611,9 +618,21 @@ fn machine(e: &Evidence) -> &str {
         .unwrap_or(&e.facts.platform)
 }
 
-/// A row per machine that ran any of RUNS' checks at their tree, keyed PREFIX-on:MACHINE: each check's newest run
-/// there, a tick in the ok face when it passed, a cross in the error face when it failed.
-fn per_machine(prefix: &str, r: &Runs, pics: &mut Pics) -> Vec<Row> {
+/// One piece of a card's line.
+enum Piece {
+    /// Text in a face.
+    Text(String, &'static str),
+    /// An icon (name, alt) in a face.
+    Icon(&'static str, &'static str, &'static str),
+    /// A chip: its icon, text and face ([`chip`]).
+    Chip(Option<(&'static str, &'static str)>, String, &'static str),
+    /// The next piece starts this many px into the card's content.
+    At(u32),
+}
+
+/// A line per machine that ran any of RUNS' checks at their tree: each check's newest run there, a tick in the ok
+/// face when it passed, a cross in the error face when it failed.
+fn machine_lines(r: &Runs) -> Vec<Vec<Piece>> {
     let mut machines: Vec<&str> = Vec::new();
     for e in r.evidence.iter().filter(|e| e.facts.tree_key == r.at) {
         if !machines.contains(&machine(e)) {
@@ -622,8 +641,7 @@ fn per_machine(prefix: &str, r: &Runs, pics: &mut Pics) -> Vec<Row> {
     }
     let mut out = Vec::new();
     for m in machines {
-        let mut b = RowBuilder::new(format!("{prefix}-on:{m}"));
-        b.push(&format!("  {m}:"), Some(LABEL));
+        let mut line = vec![Piece::Text(format!("{m}:"), LABEL)];
         for c in &r.checks {
             let sel = selector_of(c);
             let Some(e) =
@@ -634,23 +652,15 @@ fn per_machine(prefix: &str, r: &Runs, pics: &mut Pics) -> Vec<Row> {
                 continue;
             };
             let ok = failing(&e.rows).next().is_none();
-            b.push("   ", None);
-            let start = b.pos();
-            if ok {
-                pics.put(&mut b, "check", "✓");
+            line.push(Piece::Text("  ".into(), LABEL));
+            line.push(if ok {
+                Piece::Icon("check", "✓", Chip::Ok.face())
             } else {
-                pics.put(&mut b, "x", "✗");
-            }
-            let end = b.pos();
-            let face = if ok {
-                Chip::Ok.face()
-            } else {
-                Chip::Err.face()
-            };
-            b.face(start, end, face);
-            b.push(" ", None).push(&c.name, Some(TEXT));
+                Piece::Icon("x", "✗", Chip::Err.face())
+            });
+            line.push(Piece::Text(format!(" {}", c.name), TEXT));
         }
-        out.push(b.finish());
+        out.push(line);
     }
     out
 }
@@ -660,23 +670,16 @@ fn short(tree: &str) -> &str {
     &tree[..tree.len().min(7)]
 }
 
-/// The merge batch: its heading with the affected groups' chip (green of listed at the combined tree), a row per
-/// member at the columns AT (its label and title, its tip, what the queue said to it), and its groups' runs per
-/// machine.
-fn batch_rows(
-    flow: &Flow,
-    at: &[u32],
-    env: &ViewEnv,
-    fonts: &dyn Measure,
-    pics: &mut Pics,
-) -> Vec<Row> {
-    let mut rows = Vec::new();
-    let mut bh = RowBuilder::new("batch");
-    pics.put(&mut bh, "git-merge", " ");
-    bh.push(" ", None)
-        .push(&format!("Merge batch → job/{}", flow.job), Some(HEAD));
+/// The merge batch card's lines, its content CW px wide (FONTS measure): its heading with the affected groups' chip
+/// (green of listed at the combined tree), a line per member (its label and title, its tip, what the queue said to
+/// it), and its groups' runs per machine.
+fn batch_lines(flow: &Flow, cw: u32, fonts: &dyn Measure) -> Vec<Vec<Piece>> {
+    let mut head = vec![
+        Piece::Icon("git-merge", " ", LABEL),
+        Piece::Text(format!(" Merge batch → job/{}", flow.job), HEAD),
+    ];
     if flow.batch.is_empty() {
-        bh.push("  empty", Some(LABEL));
+        head.push(Piece::Text("  empty".into(), LABEL));
     }
     if let Some(g) = &flow.groups {
         let (green, red) = tally(g);
@@ -687,56 +690,48 @@ fn batch_rows(
         } else {
             Chip::Run
         };
-        bh.push("  ", None);
-        chip(
-            &mut bh,
-            pics,
+        head.push(Piece::Text("  ".into(), LABEL));
+        head.push(Piece::Chip(
             None,
-            &format!("affected groups {green}/{}", g.checks.len()),
+            format!("affected groups {green}/{}", g.checks.len()),
             face.face(),
-        );
+        ));
     }
-    rows.push(bh.finish());
-    let said_at = at[4];
-    for (i, m) in flow.batch.iter().enumerate() {
-        let mut b = RowBuilder::new(format!("batch:{i}"));
-        let label = format!("  {}  ", m.label);
-        let room = at[2].saturating_sub(text_px(fonts, &label) + dpx(env, 10.0));
-        b.push(&label, Some(TEXT))
-            .push(
-                &drgnx_rows::fit::fit(fonts, ROLE, &m.title, room as f32),
-                Some(LABEL),
-            )
-            .stop(at[2])
-            .push(&format!("tip {}", m.tip), Some(LABEL));
+    let mut out = vec![head];
+    let (tip_at, said_at) = (cw * 2 / 5, cw * 3 / 5);
+    let fit = |s: &str, px: u32| drgnx_rows::fit::fit(fonts, ROLE, s, px as f32);
+    for m in &flow.batch {
+        let label = format!("{}  ", m.label);
+        let room = tip_at.saturating_sub(text_px(fonts, &label) + 8);
+        let mut line = vec![
+            Piece::Text(label, TEXT),
+            Piece::Text(fit(&m.title, room), LABEL),
+            Piece::At(tip_at),
+            Piece::Text(format!("tip {}", m.tip), LABEL),
+        ];
         if let Some(said) = &m.said {
-            let room = env.width_px.saturating_sub(said_at);
-            b.stop(said_at).push(
-                &drgnx_rows::fit::fit(fonts, ROLE, said, room as f32),
-                Some(LABEL),
-            );
+            line.push(Piece::At(said_at));
+            line.push(Piece::Text(fit(said, cw.saturating_sub(said_at)), LABEL));
         }
-        rows.push(b.finish());
+        out.push(line);
     }
     if let Some(g) = &flow.groups {
-        rows.extend(per_machine("batch", g, pics));
+        out.extend(machine_lines(g));
     }
-    rows
+    out
 }
 
-/// The line gate (the pack's push gate): its heading with the tiers' chip at the line's head (green, how many of
-/// the tiers, or red), the tiers' runs per machine and the note that the push stays the user's; before any push was
-/// asked, the heading says so.
-fn line_rows(flow: &Flow, pics: &mut Pics) -> Vec<Row> {
-    let mut rows = Vec::new();
-    let mut h = RowBuilder::new("line");
-    pics.put(&mut h, "git-branch", " ");
-    h.push(" ", None)
-        .push(&format!("Line gate · push job/{}", flow.job), Some(HEAD));
+/// The line gate card's lines (the pack's push gate), its content CW px wide: its heading with the tiers' chip at the
+/// tree it judged (green, how many of the tiers, or red), the tiers' runs per machine and the note that the push
+/// stays the user's; before any push was asked, the heading says so.
+fn line_lines(flow: &Flow, cw: u32, fonts: &dyn Measure) -> Vec<Vec<Piece>> {
+    let mut head = vec![
+        Piece::Icon("git-branch", " ", LABEL),
+        Piece::Text(format!(" Line gate · push job/{}", flow.job), HEAD),
+    ];
     let Some(p) = &flow.push else {
-        h.push("  no push asked yet", Some(LABEL));
-        rows.push(h.finish());
-        return rows;
+        head.push(Piece::Text("  no push asked yet".into(), LABEL));
+        return vec![head];
     };
     let (green, red) = tally(p);
     let n = p.checks.len();
@@ -747,16 +742,92 @@ fn line_rows(flow: &Flow, pics: &mut Pics) -> Vec<Row> {
     } else {
         (Chip::Run, format!("{green}/{n} at {}", short(&p.at)))
     };
-    h.push("  ", None);
-    chip(&mut h, pics, None, &text, face.face());
-    rows.push(h.finish());
-    rows.extend(per_machine("line", p, pics));
-    let mut note = RowBuilder::new("line-note");
-    note.push(
-        "  Pushing needs you (push.ci, Ask): the gate only refuses an early push, and reuses runs keyed by tree.",
-        Some(LABEL),
-    );
-    rows.push(note.finish());
+    head.push(Piece::Text("  ".into(), LABEL));
+    head.push(Piece::Chip(None, text, face.face()));
+    let mut out = vec![head];
+    out.extend(machine_lines(p));
+    let note = "Pushing needs you (push.ci, Ask): the gate only refuses an early push.";
+    out.push(vec![Piece::Text(
+        drgnx_rows::fit::fit(fonts, ROLE, note, cw as f32),
+        LABEL,
+    )]);
+    out
+}
+
+/// LINE of card ID drawn on B between X0 and X1 (device px), its content PAD in: the space before X0 bare, the card's
+/// span filled in [`CARD`] up to X1 and marked as the ring block ID (`BLOCK`: Glitnir draws the ring).
+#[allow(clippy::too_many_arguments)]
+fn put_line(
+    b: &mut RowBuilder,
+    pics: &mut Pics,
+    line: Vec<Piece>,
+    id: &str,
+    x0: u32,
+    x1: u32,
+    pad: u32,
+) {
+    if x0 > 0 {
+        b.stop(x0);
+    }
+    let start = b.pos();
+    b.stop(x0 + pad);
+    for p in line {
+        match p {
+            Piece::Text(t, f) => {
+                b.push(&t, Some(f));
+            }
+            Piece::Icon(name, alt, f) => {
+                let s = b.pos();
+                pics.put(b, name, alt);
+                let e = b.pos();
+                b.face(s, e, f);
+            }
+            Piece::Chip(icon, t, f) => chip(b, pics, icon, &t, f),
+            Piece::At(px) => {
+                b.stop(x0 + pad + px);
+            }
+        }
+    }
+    b.stop(x1);
+    let end = b.pos();
+    b.face(start, end, CARD);
+    b.prop(start, end, BLOCK, json!(["ring", id, x0, x1]));
+}
+
+/// The batch and line gate cards side by side under the tasks (the line gate only when the pack runs the push gate;
+/// else the batch's card spans the table), a row per line, keyed `cards:N`.
+fn card_rows(flow: &Flow, env: &ViewEnv, fonts: &dyn Measure, pics: &mut Pics) -> Vec<Row> {
+    let (w, gap, pad, edge) = (env.width_px, dpx(env, 10.0), dpx(env, 10.0), dpx(env, 2.0));
+    let line_on = flow.pack.as_ref().is_some_and(|p| p.on("push-gate"));
+    let right_x1 = w.saturating_sub(edge);
+    let (left_x1, right_x0) = if line_on {
+        (w / 2 - gap / 2, w / 2 + gap / 2)
+    } else {
+        (right_x1, right_x1)
+    };
+    let cw = |x0: u32, x1: u32| x1.saturating_sub(x0 + 2 * pad);
+    let mut left = batch_lines(flow, cw(0, left_x1), fonts).into_iter();
+    let mut right = if line_on {
+        line_lines(flow, cw(right_x0, right_x1), fonts)
+    } else {
+        Vec::new()
+    }
+    .into_iter();
+    let mut rows = Vec::new();
+    for i in 0.. {
+        let (l, r) = (left.next(), right.next());
+        if l.is_none() && r.is_none() {
+            break;
+        }
+        let mut b = RowBuilder::new(format!("cards:{i}"));
+        if let Some(l) = l {
+            put_line(&mut b, pics, l, "batch", 0, left_x1, pad);
+        }
+        if let Some(r) = r {
+            put_line(&mut b, pics, r, "line", right_x0, right_x1, pad);
+        }
+        rows.push(b.finish());
+    }
     rows
 }
 
@@ -1257,55 +1328,103 @@ mod tests {
                 run_of(&gui, "L", "desktop", true),
             ],
         });
-        let (rows, _) = flow_rows(&f, &env(1.0), &fonts());
+        let e = env(1.0);
+        let (rows, _) = flow_rows(&f, &e, &fonts());
         let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
-        let tail: Vec<&str> = keys[keys.iter().position(|k| *k == "batch").unwrap()..].to_vec();
-        assert_eq!(
-            tail,
-            [
-                "batch",
-                "batch:0",
-                "batch-on:desktop",
-                "batch-on:mac-mini",
-                "gap2",
-                "line",
-                "line-on:desktop",
-                "line-note"
-            ]
-        );
+        let tail: Vec<&str> = keys[keys.iter().position(|k| *k == "gap").unwrap() + 1..].to_vec();
+        // the two cards side by side: the batch's 4 lines (heading, a member, 2 machines), the line gate's 3
+        assert_eq!(tail, ["cards:0", "cards:1", "cards:2", "cards:3"]);
         let row = |k: &str| rows.iter().find(|r| r.key == k).unwrap();
-        assert!(row("batch").text.contains("affected groups 1/2"));
-        assert!(row("batch").runs.iter().any(|r| r.2 == Chip::Err.face()));
-        let m = &row("batch:0").text;
-        assert!(m.contains("T2") && m.contains("7d21c0e") && m.contains("trial merge clean"));
+        let text: Vec<&str> = tail.iter().map(|k| row(k).text.as_str()).collect();
+        assert!(text[0].contains("Merge batch") && text[0].contains("affected groups 1/2"));
         assert!(
-            row("batch-on:desktop").text.contains("desktop")
-                && row("batch-on:desktop").text.contains("unit")
-        );
-        assert!(row("batch-on:mac-mini").text.contains("gui"));
-        assert!(
-            row("line").text.contains("green on L"),
+            text[0].contains("Line gate") && text[0].contains("green on L"),
             "{}",
-            row("line").text
+            text[0]
         );
-        assert!(row("line").runs.iter().any(|r| r.2 == Chip::Ok.face()));
-        assert!(row("line-note").text.contains("Pushing needs you"));
-        // no push gate in the pack: no line gate
+        assert!(row("cards:0").runs.iter().any(|r| r.2 == Chip::Err.face()));
+        assert!(row("cards:0").runs.iter().any(|r| r.2 == Chip::Ok.face()));
+        assert!(
+            text[1].contains("T2")
+                && text[1].contains("7d21c0e")
+                && text[1].contains("trial merge clean")
+        );
+        assert!(
+            text[1].contains("desktop") && text[1].contains("unit"),
+            "{}",
+            text[1]
+        );
+        // the batch's machines on its lines 3 and 4 (the line gate's note beside the first)
+        assert!(
+            text[2].contains("desktop:") && text[2].contains("Pushing needs you"),
+            "{}",
+            text[2]
+        );
+        assert!(
+            text[3].contains("mac-mini") && text[3].contains("gui"),
+            "{}",
+            text[3]
+        );
+        assert!(text.iter().any(|t| t.contains("Pushing needs you")));
+        // each card is a ring block on every one of its rows (Glitnir's `glitnir-blocks`), the batch on the left
+        // half and the line gate on the right, its rows filled to its edge in the card's face
+        let blocks = |r: &Row| -> Vec<Value> {
+            r.props
+                .iter()
+                .filter(|p| p.2 == BLOCK)
+                .map(|p| p.3.clone())
+                .collect()
+        };
+        let half = e.width_px / 2;
+        for k in &tail[..3] {
+            let b = blocks(row(k));
+            assert!(
+                b.iter().any(|v| v[0] == "ring"
+                    && v[1] == "batch"
+                    && v[2] == 0
+                    && v[3].as_u64().unwrap() < u64::from(half)),
+                "{k}: {b:?}"
+            );
+            assert!(
+                b.iter().any(|v| v[0] == "ring"
+                    && v[1] == "line"
+                    && v[2].as_u64().unwrap() > u64::from(half)),
+                "{k}: {b:?}"
+            );
+            assert!(row(k).runs.iter().any(|r| r.2 == CARD), "{k}");
+        }
+        // the batch's 4th line: the line gate has none there, so only the batch's ring
+        assert_eq!(blocks(row("cards:3")).len(), 1);
+        // the headings and every task row carry a rule (a hairline under the row, across the table)
+        for k in ["cols", "task:task:J#1", "task:task:J#5", "task:task:J#8"] {
+            let b = blocks(row(k));
+            assert!(
+                b.iter().any(|v| v[0] == "rule" && v[1] == k && v[2] == 0),
+                "{k}: {b:?}"
+            );
+        }
+        // no push gate in the pack: no line gate, the batch's card across the table
         let mut g = f.clone();
         g.pack
             .as_mut()
             .unwrap()
             .rules
             .retain(|r| r.id != "push-gate");
-        let (rows, _) = flow_rows(&g, &env(1.0), &fonts());
-        assert!(!rows.iter().any(|r| r.key.starts_with("line")));
+        let (rows, _) = flow_rows(&g, &e, &fonts());
+        assert!(!rows.iter().any(|r| r.text.contains("Line gate")));
+        let c0 = rows.iter().find(|r| r.key == "cards:0").unwrap();
+        assert!(
+            blocks(c0)
+                .iter()
+                .any(|v| v[1] == "batch" && v[3].as_u64().unwrap() > u64::from(half))
+        );
         // a push gate with no push asked yet says so
         let mut h = f.clone();
         h.push = None;
-        let (rows, _) = flow_rows(&h, &env(1.0), &fonts());
+        let (rows, _) = flow_rows(&h, &e, &fonts());
         assert!(
             rows.iter()
-                .any(|r| r.key == "line" && r.text.contains("no push asked"))
+                .any(|r| r.key == "cards:0" && r.text.contains("no push asked"))
         );
     }
 
@@ -1373,8 +1492,8 @@ mod tests {
                     "task:task:J#5",
                     "task:task:J#8",
                     "gap",
-                    "batch",
-                    "batch:0",
+                    "cards:0",
+                    "cards:1",
                 ]
             );
             assert!(

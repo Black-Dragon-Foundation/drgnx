@@ -228,6 +228,14 @@ open `gate` cards, and builds the model and the rows (`work::trail::flow`, pure)
   last ("green on …", "g/n at …", "N red at …"; "no push asked yet" before one), a row per machine, and the note that
   the push stays the user's. The queue keeps what it said and the trees its gates judged in memory (`orch::queue`,
   `Seen`), so after a restart they show again once the gates run again;
+- the two cards side by side on shared rows (`cards:N`), the batch on the left half and the line gate on the right
+  (the batch's across the table without a push gate), each row of a card filled to its edge in
+  `drgnx-work-flow-card`. The rings and the rows' rules are Glitnir blocks (Nidhogg's `glitnir-blocks`): the hub
+  marks them on the rows with the text property `drgnx-work-flow-block` (`["ring" ID X0 X1]` on a card's span of each
+  of its rows, `["rule" KEY X0 X1]` on the headings and each task row, device px), and drgnx-work-flow.el turns the
+  marks into the window parameter after each patch, only when they changed (ring radius 8 in `drgnx-border` over
+  `default`, rules in `drgnx-border-subtle`; faces, so a theme change recolours them). A killed Flow takes its
+  blocks off every window;
 - the model: a `task` node per task with the `flow` form's links up and down and the gates' states as fields, the
   lists `tasks` and `held` (the needs-you chips; `Tab` walks them).
 

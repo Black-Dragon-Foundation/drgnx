@@ -121,4 +121,42 @@ only; every profile names them."
                              :bind)))
         (should (assq id rows))))))
 
+(ert-deftest drgnx-work-flow/its-cards-and-rules-are-glitnir-blocks ()
+  "Pattern D: the hub's block marks on the rows become `glitnir-blocks' on the window showing the Flow: a card's ring
+from its first row to the end of its last, a rule per marked row, colours as faces (Glitnir resolves them again on a
+theme change).  The parameter is set when the blocks change, not per patch; a killed Flow leaves no blocks behind."
+  (let ((buffer (generate-new-buffer "*flow-blocks*")) (sets 0)
+        (setp (symbol-function 'set-window-parameter)))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer buffer)
+          (add-hook 'kill-buffer-hook #'drgnx-work-flow--unblock nil t)
+          (let ((inhibit-read-only t))
+            (insert (propertize "T1 row" 'drgnx-work-flow-block ["rule" "task:1" 0 600]) "\n"
+                    (propertize "Merge batch" 'drgnx-work-flow-block ["ring" "batch" 0 290])
+                    (propertize " Line gate" 'drgnx-work-flow-block ["ring" "line" 300 598]) "\n"
+                    (propertize "T2 tip" 'drgnx-work-flow-block ["ring" "batch" 0 290]) "\n"))
+          (cl-letf (((symbol-function 'set-window-parameter)
+                     (lambda (w p v) (when (eq p 'glitnir-blocks) (cl-incf sets)) (funcall setp w p v))))
+            (drgnx-work-flow--patched nil nil)
+            (let* ((blocks (window-parameter (selected-window) 'glitnir-blocks))
+                   (kinds (mapcar #'car blocks)))
+              (should (equal kinds '(rule ring ring)))
+              (let ((batch (nth 1 blocks)))
+                ;; the batch's ring spans its two rows: from "Merge batch" to the end of "T2 tip"
+                (should (= (marker-position (nth 1 batch)) 8))
+                (should (= (marker-position (nth 2 batch)) (1- (point-max))))
+                (should (equal (plist-get (nthcdr 3 batch) :x1) 290))
+                (should (eq (plist-get (nthcdr 3 batch) :ring) 'drgnx-border))
+                (should (eq (plist-get (nthcdr 3 batch) :beneath) 'default)))
+              (should (eq (plist-get (nthcdr 3 (car blocks)) :ring) 'drgnx-border-subtle))
+              (should (equal (plist-get (nthcdr 3 (nth 2 blocks)) :x0) 300))
+              ;; the same rows again: the same object, not set again
+              (drgnx-work-flow--patched nil nil)
+              (should (eq (window-parameter (selected-window) 'glitnir-blocks) blocks))
+              (should (= sets 1))))
+          (kill-buffer buffer)
+          (should-not (window-parameter (selected-window) 'glitnir-blocks)))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
 ;;; work-flow-test.el ends here
