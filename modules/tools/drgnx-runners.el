@@ -294,8 +294,10 @@ keys and the runner may have them, they are read from your key store first (this
    Jobs run as that account, so your own files and keychain stay out of their reach.
 2. Turn on Remote Login for that account only (System Settings, General, Sharing, Remote Login,
    \"Only these users\"), and put this machine's ssh key in ~drgnx-runner/.ssh/authorized_keys.
-3. Install the Command Line Tools (xcode-select --install) and the Homebrew packages your projects
-   list in drgnx-runners-mac-tools, in your own account: the runner never installs into Homebrew.
+3. Install the Command Line Tools (xcode-select --install), mise (brew install mise) and the Homebrew
+   packages your projects list in drgnx-runners-mac-tools, in your own account: the runner never installs
+   into Homebrew.  The toolchains your projects pin in drgnx-runners-mac-toolchains (rust@1.95) the runner
+   installs itself, through your mise, into its own folder.
 4. If the Mac is not on this machine's network, reach it through tailscaled, the open-source Tailscale
    daemon (brew install tailscale), or any VPN your ssh can use.
 

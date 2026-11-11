@@ -1,6 +1,6 @@
 //! What a Mac runner reports about itself, and the Mac contract: macOS 15 or newer on Apple silicon, a root-owned
-//! `sandbox-exec`, a standard (non-admin) account, the Command Line Tools with any Xcode licence accepted, and 40 GB
-//! free on the runner root's volume. Everything is read once into a [`Raw`] (the live read, [`read`], on macOS only);
+//! `sandbox-exec`, a standard (non-admin) account, the Command Line Tools with any Xcode licence accepted, `mise` from
+//! Homebrew (the project's toolchains go into the root through it), and 40 GB free on the runner root's volume. Everything is read once into a [`Raw`] (the live read, [`read`], on macOS only);
 //! [`facts`], [`features`] and [`contract`] are pure.
 
 use crate::proto::{Facts, Missing};
@@ -40,6 +40,9 @@ pub struct Raw {
     /// `brew --prefix`, and `brew list --versions` (one call per probe).
     pub brew_prefix: String,
     pub brew_versions: String,
+    /// The user's `mise` (empty: none), and the toolchain records under the root (`tools::installed`).
+    pub mise: String,
+    pub tools: Vec<String>,
 }
 
 /// `15.6.1` → (15, 6); none when unreadable.
@@ -118,14 +121,15 @@ pub fn facts(raw: &Raw, others_present: Vec<String>) -> Facts {
     }
 }
 
-/// The features a Mac advertises: `arch:aarch64`, `host-jobs`, `xcode-clt` when the tools answer, and the Homebrew
-/// packages with their versions.
+/// The features a Mac advertises: `arch:aarch64`, `host-jobs`, `xcode-clt` when the tools answer, the Homebrew
+/// packages with their versions, and `tool:NAME@VER` for each toolchain installed into the root.
 pub fn features(raw: &Raw) -> Vec<String> {
     let mut f = vec!["arch:aarch64".to_string(), "host-jobs".to_string()];
     if clt_ok(raw) {
         f.push("xcode-clt".into());
     }
     f.extend(brew_features(&raw.brew_versions));
+    f.extend(super::tools::features(&raw.tools));
     f
 }
 
@@ -176,6 +180,12 @@ pub fn contract(raw: &Raw, others_present: Vec<String>) -> Result<Facts, Vec<Mis
         miss(
             "the Command Line Tools",
             "run `xcode-select --install` in your own account",
+        );
+    }
+    if raw.mise.trim().is_empty() {
+        miss(
+            "mise, from Homebrew (the project's toolchains are installed through it)",
+            "run `brew install mise` in your own account",
         );
     }
     let free = raw.disk_free / 1_000_000_000;
@@ -248,6 +258,10 @@ pub fn read(root: &std::path::Path) -> Raw {
         brew_versions: brew
             .map(|b| out(b, &["list", "--versions"]))
             .unwrap_or_default(),
+        mise: super::tools::find_mise()
+            .map(|m| m.display().to_string())
+            .unwrap_or_default(),
+        tools: super::tools::installed(root),
     }
 }
 
@@ -274,11 +288,14 @@ mod tests {
             brew_prefix: "/opt/homebrew".into(),
             brew_versions: "gnutls 3.8.4 3.8.10\nautoconf 2.72\ntexinfo 7.2\nlibgccjit 15.1.0\nweird HEAD-abc\n"
                 .into(),
+            mise: "/opt/homebrew/bin/mise".into(),
+            tools: vec!["rust@1.95.json".into()],
         }
     }
 
     /// [D] A Mac that meets the contract: its facts (macOS version, cores, memory in MiB, disk in GB, no battery) and
-    /// features (arch, host jobs, the Command Line Tools, each Homebrew package by name and at its newest major.minor).
+    /// features (arch, host jobs, the Command Line Tools, each Homebrew package by name and at its newest major.minor,
+    /// each toolchain in the root).
     #[test]
     fn a_mac_that_meets_the_contract_reports_its_facts() {
         let f = contract(&mini(), vec!["jobq".into()]).unwrap();
@@ -305,12 +322,13 @@ mod tests {
                 "brew:texinfo",
                 "brew:texinfo@7.2",
                 "brew:weird",
+                "tool:rust@1.95",
             ]
         );
     }
 
     /// [D] Every item a Mac lacks is in the refusal, each with its fix: an old macOS, an Intel Mac, a sandbox-exec
-    /// anyone could change, an admin account, no Command Line Tools, too little disk.
+    /// anyone could change, an admin account, no Command Line Tools, no `mise`, too little disk.
     #[test]
     fn the_contract_lists_everything_missing() {
         let raw = Raw {
@@ -321,17 +339,19 @@ mod tests {
             developer_dir: String::new(),
             clang: "xcode-select: note: no developer tools were found".into(),
             disk_free: 12_000_000_000,
+            mise: String::new(),
             ..mini()
         };
         let missing = contract(&raw, vec![]).unwrap_err();
         let whats: Vec<&str> = missing.iter().map(|m| m.what.as_str()).collect();
-        assert_eq!(missing.len(), 6, "{whats:?}");
+        assert_eq!(missing.len(), 7, "{whats:?}");
         for (i, want) in [
             "macOS 15",
             "Apple silicon",
             "sandbox-exec (owned by uid 501)",
             "standard (non-admin)",
             "Command Line Tools",
+            "mise, from Homebrew",
             "40 GB free on the runner folder's volume (12 GB)",
         ]
         .iter()
@@ -342,6 +362,7 @@ mod tests {
         }
         assert!(missing[3].fix.contains("drgnx-runner"));
         assert!(missing[4].fix.contains("xcode-select --install"));
+        assert!(missing[5].fix.contains("brew install mise"));
     }
 
     /// [D] A full Xcode whose licence is not accepted: `clang` refuses, the contract names the licence (not the tools),

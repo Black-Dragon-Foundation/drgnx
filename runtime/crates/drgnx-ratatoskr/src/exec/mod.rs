@@ -2277,17 +2277,29 @@ async fn placement(f: &Front, c: &Caller, p: &StartParams, m: Machine, runners: 
             .or_else(|| f.settings.effective(name, None))
             .map(|(v, _)| v)
     };
-    // a Mac job needs the Command Line Tools and the project's Homebrew packages; it can't run here, so it is heavy
+    // a Mac job needs the Command Line Tools, the project's Homebrew packages and its toolchains; it can't run here,
+    // so it is heavy
     let os = match p.os {
         Some(runstav::methods::exec::JobOs::Macos) => forseti::Os::Macos,
         _ => forseti::Os::Linux,
     };
     let features: Vec<String> = if os == forseti::Os::Macos {
-        let tools = setting("drgnx-runners-mac-tools")
-            .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
-            .unwrap_or_default();
+        let list = |name: &str| {
+            setting(name)
+                .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+                .unwrap_or_default()
+        };
         std::iter::once("xcode-clt".to_string())
-            .chain(tools.iter().map(|t| format!("brew:{t}")))
+            .chain(
+                list("drgnx-runners-mac-tools")
+                    .iter()
+                    .map(|t| format!("brew:{t}")),
+            )
+            .chain(
+                list("drgnx-runners-mac-toolchains")
+                    .iter()
+                    .map(|t| format!("tool:{t}")),
+            )
             .collect()
     } else {
         vec![]

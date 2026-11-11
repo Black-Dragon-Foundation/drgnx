@@ -242,6 +242,7 @@ the index does; \"real\" lists them, leaving out only what .gitignore files and 
     (drgnx-runners-shared-overlay . drgnx-settings-runtime--bool)
     (drgnx-runners-job-keys . drgnx-settings-runtime--strings)
     (drgnx-runners-mac-tools . drgnx-settings-runtime--strings)
+    (drgnx-runners-mac-toolchains . drgnx-settings-runtime--strings)
     (drgnx-runners-origin-key . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
     ;; plugins and hook rules: a project's values come from your private workspace file only
     (drgnx-agents-plugins . drgnx-settings-runtime--strings)

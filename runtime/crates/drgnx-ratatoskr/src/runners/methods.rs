@@ -85,6 +85,7 @@ mod on {
             let runtime_dir = link_dir(std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))?;
             let boot_id = hub_boot_id();
             let settings = f.settings.clone();
+            let pins = f.settings.clone();
             let cfg = Cfg {
                 transport: Arc::new(OpensshTransport::new(runtime_dir.clone())),
                 store: Arc::new(UrdrStore(f.writer.db.clone())),
@@ -100,6 +101,17 @@ mod on {
                         .filter(|s| !s.is_empty())
                         .into_iter()
                         .collect()
+                }),
+                toolchains: Arc::new(move || {
+                    let mut all: Vec<String> = pins
+                        .values_everywhere("drgnx-runners-mac-toolchains")
+                        .into_iter()
+                        .filter_map(|v| serde_json::from_value::<Vec<String>>(v).ok())
+                        .flatten()
+                        .collect();
+                    all.sort();
+                    all.dedup();
+                    all
                 }),
             };
             Ok(self

@@ -404,6 +404,7 @@ mod macos {
             runtime_dir: dir.path().to_path_buf(),
             bundles: dir.path().join("bundles"),
             images: Arc::new(Vec::new),
+            toolchains: Arc::new(Vec::new),
         });
         let p: AddParams =
             serde_json::from_value(json!({"host": "a-mac", "trust": "mine", "name": "mac"}))
@@ -427,6 +428,60 @@ mod macos {
         assert_eq!(tm.trim(), format!("addexclusion {}", root.display()));
         use drgnx_ratatoskr::runners::registry::Store;
         assert!(store.list().await.unwrap().is_empty());
+    }
+
+    /// [C] `runner add` of a Mac installs every project's toolchains before the probe: the bundle's `sleipnir tools`
+    /// runs in the runner root with each pin, as the runner account and outside any job. (The fake bundle answers
+    /// `tools` and refuses to serve, so the add then fails at the probe.)
+    #[tokio::test]
+    async fn runner_add_of_a_mac_installs_its_toolchains() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        mac_tools(&bin, "0", &dir.path().join("tm.log"));
+        let bundle = dir.path().join("bundles/aarch64-apple-darwin");
+        std::fs::create_dir_all(&bundle).unwrap();
+        let log = dir.path().join("sleipnir.log");
+        std::fs::write(
+            bundle.join("sleipnir"),
+            format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\n[ \"$1\" = tools ] && {{ echo '{{\"outcomes\":[],\"features\":[]}}'; exit 0; }}\nexit 3\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        let (queue, _events) = Queue::new(QueueCfg {
+            hub_id: "hub".into(),
+            exec_root: dir.path().join("exec"),
+            local: LocalRunner::new(Admission::Fixed(1), dir.path()),
+            db: None,
+        });
+        let reg = Registry::new(Cfg {
+            transport: Arc::new(MacHost {
+                bin,
+                home: home.clone(),
+            }),
+            store: Arc::new(MemStore::default()),
+            queue,
+            hub_id: "hub".into(),
+            hub_boot_id: "boot".into(),
+            runtime_dir: dir.path().to_path_buf(),
+            bundles: dir.path().join("bundles"),
+            images: Arc::new(Vec::new),
+            toolchains: Arc::new(|| vec!["node@22".into(), "rust@1.95".into()]),
+        });
+        let p: AddParams =
+            serde_json::from_value(json!({"host": "a-mac", "trust": "mine", "name": "mac"}))
+                .unwrap();
+        assert!(reg.add(p).await.is_err(), "the fake bundle served");
+        let root = home.join(".drgnx-runner.noindex");
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            calls.lines().next(),
+            Some(format!("tools --root {} node@22 rust@1.95", root.display()).as_str()),
+            "{calls}"
+        );
     }
 
     /// [C] `runner add` of an Intel Mac is refused (no bundle for it); a Mac whose shell runs under Rosetta (x86_64,
@@ -459,6 +514,7 @@ mod macos {
                 runtime_dir: dir.path().to_path_buf(),
                 bundles: dir.path().join("bundles"),
                 images: Arc::new(Vec::new),
+                toolchains: Arc::new(Vec::new),
             });
             let p: AddParams =
                 serde_json::from_value(json!({"host": "a-mac", "trust": "mine", "name": "mac"}))
@@ -508,6 +564,7 @@ mod macos {
             runtime_dir: dir.path().to_path_buf(),
             bundles: dir.path().join("bundles"),
             images: Arc::new(Vec::new),
+            toolchains: Arc::new(Vec::new),
         });
         let p: AddParams =
             serde_json::from_value(json!({"host": "a-bsd", "trust": "mine", "name": "bsd"}))

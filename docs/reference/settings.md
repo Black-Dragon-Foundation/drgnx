@@ -1443,6 +1443,25 @@ host and that user.  Read only by the commands you run (Runners: Load Keys), nev
 | `:agents` | `never` |
 | `:schema` | - |
 
+## drgnx-runners-mac-toolchains
+
+The language toolchains the project's Mac jobs need, as mise pins ("rust@1.95", "node@22").
+A Mac runner installs each one into its own folder through your Homebrew `mise' when it is added and at each
+`drgnx runner check', and a Mac job waits for a runner that has them all.  Never set by a repository's own files.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat string)` |
+| `:scope` | `project` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of (string :match "\\`[a-z0-9][-a-z0-9_.]*@[0-9A-Za-z][-0-9A-Za-z_.+]*\\'"))` |
+
 ## drgnx-runners-mac-tools
 
 The Homebrew packages the project's Mac jobs need, by name ("cmake", "gnutls").

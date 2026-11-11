@@ -111,8 +111,11 @@ palette's **Add Mac Runner…** shows these steps, then asks for the host:
    that account, so your own files and keychain stay out of their reach. drgnx never runs `sudo` on the Mac.
 2. Turn on Remote Login for that account only (System Settings, General, Sharing, Remote Login, "Only these users"),
    and put this machine's ssh key in `~drgnx-runner/.ssh/authorized_keys`.
-3. Install the Command Line Tools (`xcode-select --install`) and the Homebrew packages your projects list in
-   `drgnx-runners-mac-tools`, in your own account: the runner never installs into Homebrew.
+3. Install the Command Line Tools (`xcode-select --install`), `mise` (`brew install mise`) and the Homebrew packages
+   your projects list in `drgnx-runners-mac-tools`, in your own account: the runner never installs into Homebrew.
+   Language toolchains are different: the ones your projects pin in `drgnx-runners-mac-toolchains` (`"rust@1.95"`)
+   are installed by the runner itself, through your `mise`, into its own folder, when you add it and at each
+   `drgnx runner check`.
 4. If the Mac is not on this machine's network, reach it through `tailscaled`, the open-source Tailscale daemon
    (`brew install tailscale`), or any VPN your ssh can use.
 
@@ -198,7 +201,8 @@ started is stopped and ends as "disk", not as a failure.
 `drgnx build runner-bundle --arch aarch64` (or `x86_64`). A Mac runner (Apple silicon) takes `sleipnir` alone,
 built and signed on a Mac: `drgnx build runner-bundle --target aarch64-apple-darwin`. A Mac job that needs a
 Homebrew package the Mac lacks waits, and its row shows the line to run in your own account (for example "on the Mac,
-brew install cmake"); the runner account never installs into Homebrew.
+brew install cmake"); the runner account never installs into Homebrew. A Mac job that needs a toolchain the Mac
+doesn't have yet waits too, and its row says that `drgnx runner check` on the Mac installs it.
 
 ## Which jobs go where
 
@@ -214,6 +218,8 @@ settings:
 - `drgnx-runners-heavy`: suite or command patterns whose jobs count as heavy;
 - `drgnx-runners-image`: the image (pinned by digest) a runner runs its command jobs in;
 - `drgnx-runners-mac-tools`: the Homebrew packages its Mac jobs (`os: macos`) need, by name; your own settings only;
+- `drgnx-runners-mac-toolchains`: the toolchains its Mac jobs need, as mise pins (`"rust@1.95"`); a Mac runner installs
+  them into its own folder; your own settings only;
 - `drgnx-runners-weight`: its share against other projects within a priority (default 1);
 - `drgnx-runners-project-visibility`: `"private"` (the default) or `"public"` (see below);
 - `drgnx-runners-shared-overlay`: off (the default) or on: whether a `shared` runner may have its uncommitted files.

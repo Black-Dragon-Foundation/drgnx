@@ -102,6 +102,7 @@ fn hub(hub_boot: &str, images: Vec<String>) -> Hub {
         runtime_dir: run,
         bundles: dir.path().join("bundles"),
         images: Arc::new(move || images.clone()),
+        toolchains: Arc::new(Vec::new),
     });
     Hub {
         reg,

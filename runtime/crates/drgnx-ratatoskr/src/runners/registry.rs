@@ -272,6 +272,8 @@ pub struct Cfg {
     pub bundles: PathBuf,
     /// The images a new runner pulls, by digest (`name@sha256:...`); the first benches it and runs its canary.
     pub images: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    /// The toolchains a Mac runner installs at `add` and `check` (every project's `drgnx-runners-mac-toolchains`).
+    pub toolchains: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
 }
 
 /// The hub's runners.
@@ -731,6 +733,7 @@ impl Registry {
                 quote(&root)
             );
             self.sh_ok(&cfg, &tm, &[], SHORT).await?;
+            self.mac_toolchains(&cfg, &root, &bundle).await;
         }
         let mut rec = Record {
             name: name.into(),
@@ -766,6 +769,36 @@ impl Registry {
             rec.features = probe.features.clone();
         }
         Ok((rec, probe))
+    }
+
+    /// A Mac's toolchains: every project's pins installed into ROOT by `sleipnir tools` (the user's `mise`), as the
+    /// runner account and outside any job, before the probe reads them as `tool:` features. Nothing here refuses: a pin
+    /// that failed is logged and its jobs wait with the reason, and a Mac without `mise` fails the contract.
+    async fn mac_toolchains(&self, cfg: &RunnerCfg, root: &str, bundle: &str) {
+        let pins = (self.cfg.toolchains)();
+        if pins.is_empty() {
+            return;
+        }
+        let script = format!(
+            "{}/bin/{}/sleipnir tools --root {} {}",
+            quote(root),
+            quote(bundle),
+            quote(root),
+            pins.iter().map(|p| quote(p)).collect::<Vec<_>>().join(" ")
+        );
+        match self.sh_ok(cfg, &script, &[], LONG).await {
+            Ok(out) => {
+                let last = out.lines().rev().find(|l| l.trim_start().starts_with('{'));
+                let v: serde_json::Value =
+                    serde_json::from_str(last.unwrap_or("")).unwrap_or_default();
+                for o in v["outcomes"].as_array().into_iter().flatten() {
+                    if let Some(why) = o["failed"].as_str() {
+                        tracing::warn!("runners: {}: {} not installed: {why}", cfg.name, o["pin"]);
+                    }
+                }
+            }
+            Err(e) => tracing::warn!("runners: {}: the toolchains: {e:?}", cfg.name),
+        }
     }
 
     /// A host made a runner: the probe and the contract, the bundle, the images pulled by digest, a bench, the record,
@@ -1006,16 +1039,27 @@ impl Registry {
         Ok(out)
     }
 
-    /// NAME's health check now: linked again when its link is gone, then the queue's check at its next tick.
+    /// NAME's health check now: a Mac's toolchains installed again (any new pin), linked again when its link is gone,
+    /// then the queue's check at its next tick.
     pub async fn check(&self, name: &str) -> Result<wire::Runner, RegError> {
         let _g = self.busy.lock().await;
         let rec = self.record(name).await?;
+        // the sessions are free for one command only while serve isn't running on them (a Mac's attempts outlive
+        // the link); the probe at the new link reads the toolchains
+        let tools = rec.os.starts_with("macos") && !(self.cfg.toolchains)().is_empty();
+        if tools {
+            if let Some(old) = self.cfg.queue.session(name) {
+                old.close().await;
+            }
+            let cfg = self.base_cfg(&rec.name, &rec.host);
+            self.mac_toolchains(&cfg, &rec.root, &rec.bundle).await;
+        }
         let linked = self
             .cfg
             .queue
             .runner(name)
             .is_some_and(|r| r.state != "unreachable" && r.state != "sleeping");
-        if !linked {
+        if tools || !linked {
             self.connect(&rec).await?;
         }
         self.cfg.queue.check_now(name);

@@ -1628,8 +1628,8 @@ async fn a_projects_own_runner_settings_reach_its_jobs_only() {
     assert!(!overlay("beta").await);
 }
 
-/// [D] A Mac job (`os: macos`) needs the Command Line Tools and its project's Homebrew packages
-/// (`drgnx-runners-mac-tools`) as features, and counts as heavy (it can't run here); a Linux job needs none of them.
+/// [D] A Mac job (`os: macos`) needs the Command Line Tools, its project's Homebrew packages
+/// (`drgnx-runners-mac-tools`) and its toolchains (`drgnx-runners-mac-toolchains`) as features, and counts as heavy (it can't run here); a Linux job needs none of them.
 /// The spec the queue places carries both.
 #[tokio::test]
 async fn a_mac_job_needs_its_projects_homebrew_packages() {
@@ -1651,11 +1651,18 @@ async fn a_mac_job_needs_its_projects_homebrew_packages() {
     f.settings
         .set_overrides(
             Some("alpha"),
-            vec![crate::settings::overrides::Override {
-                name: "drgnx-runners-mac-tools".into(),
-                value: json!(["cmake", "ninja"]),
-                source: "workspace".into(),
-            }],
+            vec![
+                crate::settings::overrides::Override {
+                    name: "drgnx-runners-mac-tools".into(),
+                    value: json!(["cmake", "ninja"]),
+                    source: "workspace".into(),
+                },
+                crate::settings::overrides::Override {
+                    name: "drgnx-runners-mac-toolchains".into(),
+                    value: json!(["rust@1.95"]),
+                    source: "workspace".into(),
+                },
+            ],
         )
         .await
         .unwrap();
@@ -1675,13 +1682,19 @@ async fn a_mac_job_needs_its_projects_homebrew_packages() {
     )
     .await;
     assert_eq!(mac.os, forseti::Os::Macos);
-    assert_eq!(mac.features, ["xcode-clt", "brew:cmake", "brew:ninja"]);
+    assert_eq!(
+        mac.features,
+        ["xcode-clt", "brew:cmake", "brew:ninja", "tool:rust@1.95"]
+    );
     assert!(mac.heavy);
     let mut job = spec(Starter::User, &at, "true", Duration::from_secs(5));
     job.place = mac;
     let s = job.forseti_spec("x1", "1G");
     assert_eq!(s.os, forseti::Os::Macos);
-    assert_eq!(s.features, ["xcode-clt", "brew:cmake", "brew:ninja"]);
+    assert_eq!(
+        s.features,
+        ["xcode-clt", "brew:cmake", "brew:ninja", "tool:rust@1.95"]
+    );
 
     let linux = placement(
         &f,

@@ -6,7 +6,7 @@ use super::super::Config;
 use super::super::attempts::{self, LOG};
 use super::super::cleanup;
 use super::{LaunchReq, Platform};
-use crate::darwin::{attempt, jobexec, memwatch, pressure, probe, sandbox};
+use crate::darwin::{attempt, jobexec, memwatch, pressure, probe, sandbox, tools};
 use crate::linux::jobexec::JobExec;
 use crate::linux::parse::Parser;
 use crate::linux::reserve::{self, Reservations};
@@ -189,12 +189,16 @@ impl Platform for DarwinPlatform {
             fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
         }
         let marker = format!("{}/{id}/{}", self.hub_id, meta.r.attempt);
+        let records = tools::records_for(&self.root, &meta.spec.features)?;
+        let tools_dir = self.root.join("tools");
         let spec = sandbox::spec(&sandbox::Job {
             dir,
             src: req.src,
             cwd: &meta.spec.cwd,
             writes_tree: meta.spec.writes_tree,
             marker: &marker,
+            tools_dir: &tools_dir,
+            tools: &records,
         });
         let env = spec.env.clone();
         let ctx = gleipnir::Context {
@@ -205,7 +209,15 @@ impl Platform for DarwinPlatform {
             open_inside_closed: vec![],
             user_sockets: vec![],
             run_parents: vec![],
-            program_dirs: sandbox::PATH.split(':').map(PathBuf::from).collect(),
+            program_dirs: sandbox::PATH
+                .split(':')
+                .map(PathBuf::from)
+                .chain(
+                    records
+                        .iter()
+                        .flat_map(|r| r.path.iter().map(PathBuf::from)),
+                )
+                .collect(),
             env_deny: vec![],
         };
         let valid = gleipnir::validate(spec, &ctx, gleipnir::spec::Target::Macos)

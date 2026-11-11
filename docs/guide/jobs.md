@@ -54,7 +54,7 @@ it does not depend on the agent that started it or on the editor, and it survive
   `drgnx-runners-send heavy`, the default, only heavy jobs may leave this machine), `local_only`, name the `keys` it
   needs, and the `writes` it may make to the tree. A start with `os: macos` (a Naglfar build, macOS tests) runs only
   on a Mac runner, as a host job (never in a container): it counts as heavy, and waits for a Mac that has its
-  project's `drgnx-runners-mac-tools`.
+  project's `drgnx-runners-mac-tools` and `drgnx-runners-mac-toolchains`.
 
 ### The editor's jobs
 

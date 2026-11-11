@@ -1,6 +1,7 @@
 //! A Mac job's sandbox: the Gleipnir spec its Seatbelt profile is made from. It reads the job's source, writes its
 //! attempt folder (and the source, for a job that writes its tree), has its home and temporary folder in the attempt
-//! folder, and no network. Pure: the rows run on Linux.
+//! folder, and no network. A job placed with `tool:` features reads the runner's toolchains and has them in its
+//! environment ([`super::tools`]). Pure: the rows run on Linux.
 
 use gleipnir::spec::{Bind, Layers, Mode, Net, Spec, Target};
 use std::path::{Path, PathBuf};
@@ -21,6 +22,10 @@ pub struct Job<'a> {
     pub writes_tree: bool,
     /// The attempt's marker value (`<hub>/<job>/<attempt>`).
     pub marker: &'a str,
+    /// The runner's toolchains folder (`<root>/tools`) and the records of the job's `tool:` pins; read only when there
+    /// are some.
+    pub tools_dir: &'a Path,
+    pub tools: &'a [super::tools::Record],
 }
 
 /// The attempt's home and temporary folder, inside its folder.
@@ -40,8 +45,19 @@ pub fn spec(job: &Job) -> Spec {
     } else {
         job.src.join(job.cwd)
     };
+    let mut read = vec![job.src.to_path_buf()];
+    if !job.tools.is_empty() {
+        read.push(job.tools_dir.to_path_buf());
+    }
+    let env = vec![
+        ("HOME".into(), home.display().to_string()),
+        ("TMPDIR".into(), format!("{}/", tmp.display())),
+        ("PATH".into(), PATH.into()),
+        ("LANG".into(), "en_US.UTF-8".into()),
+        (MARKER.into(), job.marker.into()),
+    ];
     Spec {
-        read: vec![job.src.to_path_buf()],
+        read,
         write,
         hide: vec![],
         sockets: vec![],
@@ -52,13 +68,7 @@ pub fn spec(job: &Job) -> Spec {
             dest: home.clone(),
         }),
         run: None,
-        env: vec![
-            ("HOME".into(), home.display().to_string()),
-            ("TMPDIR".into(), format!("{}/", tmp.display())),
-            ("PATH".into(), PATH.into()),
-            ("LANG".into(), "en_US.UTF-8".into()),
-            (MARKER.into(), job.marker.into()),
-        ],
+        env: super::tools::job_env(env, job.tools),
         chdir,
         net: Net::Isolated {
             relay: vec![],
@@ -88,6 +98,8 @@ mod tests {
             cwd: Path::new("sub"),
             writes_tree: false,
             marker: "hubA/j1/1",
+            tools_dir: Path::new("/runner/.drgnx-runner.noindex/tools"),
+            tools: &[],
         };
         let s = spec(&job);
         assert_eq!(s.read, vec![src.to_path_buf()]);
@@ -109,5 +121,42 @@ mod tests {
         });
         assert_eq!(w.write, vec![dir.to_path_buf(), src.to_path_buf()]);
         assert_eq!(w.chdir, src.to_path_buf());
+    }
+
+    /// [D] A job with a pinned toolchain reads the runner's tools folder (never writes it) and finds the tool first on
+    /// its PATH; without one it doesn't read the folder.
+    #[test]
+    fn a_job_with_a_toolchain_reads_the_tools_folder() {
+        let dir = Path::new("/r/jobs/j1.1");
+        let src = Path::new("/r/slots/s1");
+        let tools_dir = Path::new("/r/tools");
+        let rec = crate::darwin::tools::Record {
+            path: vec!["/r/tools/cargo/bin".into()],
+            env: vec![("RUSTUP_HOME".into(), "/r/tools/rustup".into())],
+        };
+        let job = Job {
+            dir,
+            src,
+            cwd: Path::new("."),
+            writes_tree: true,
+            marker: "h/j1/1",
+            tools_dir,
+            tools: std::slice::from_ref(&rec),
+        };
+        let s = spec(&job);
+        assert_eq!(s.read, vec![src.to_path_buf(), tools_dir.to_path_buf()]);
+        assert!(!s.write.iter().any(|w| w.starts_with(tools_dir)));
+        assert!(
+            s.env
+                .contains(&("PATH".into(), format!("/r/tools/cargo/bin:{PATH}")))
+        );
+        assert!(
+            s.env
+                .contains(&("RUSTUP_HOME".into(), "/r/tools/rustup".into()))
+        );
+        assert_eq!(
+            spec(&Job { tools: &[], ..job }).read,
+            vec![src.to_path_buf()]
+        );
     }
 }

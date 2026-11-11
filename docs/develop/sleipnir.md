@@ -95,10 +95,20 @@ fixtures on Linux.
 
 **The Mac contract** (`contract`), refused with the whole list: macOS 15 or newer; Apple silicon
 (`hw.optional.arm64`, so a Rosetta shell passes); a root-owned `sandbox-exec`; a standard (non-admin) account; the
-Command Line Tools answering, with a full Xcode's licence accepted (`clang`'s refusal names it, its own item); 40 GB
-free on the runner root's volume. **Facts**: `os` `macos 15.6`, `arch` `aarch64`, cores (`hw.ncpu`), memory, disk,
+Command Line Tools answering, with a full Xcode's licence accepted (`clang`'s refusal names it, its own item); `mise`
+from Homebrew; 40 GB free on the runner root's volume. **Facts**: `os` `macos 15.6`, `arch` `aarch64`, cores (`hw.ncpu`), memory, disk,
 battery; the Linux-only fields false. **Features**: `arch:aarch64`, `host-jobs`, `xcode-clt`, and `brew:<name>@<major>.<minor>`
-for each Homebrew package at its newest installed version. The boot id is `kern.bootsessionuuid`.
+for each Homebrew package at its newest installed version (and `brew:<name>` alone), and `tool:<name>@<version>` for
+each toolchain record under the root. The boot id is `kern.bootsessionuuid`.
+
+**Toolchains** (`darwin::tools`, `sleipnir tools --root DIR PIN...`). The hub runs it at `runner add` and
+`runner check`, as the runner account and outside any job (a job has no network; mise downloads). For each pin
+(`rust@1.95`) the user's Homebrew `mise` runs `install` and then `env --json` in the root, with mise's data, state,
+config and cache folders and Rust's `RUSTUP_HOME`/`CARGO_HOME` all under the root, so nothing lands in the account's
+home; the record `<root>/tools/env/<pin>.json` keeps the folders mise put on `PATH` and its other variables (never
+mise's own or the job's). It prints the outcomes and the features as JSON. A job placed with `tool:` features reads
+`<root>/tools` (never writes it), gets each record's folders first on its `PATH` and its variables where the job sets
+none; a feature without a record fails the launch with its name.
 
 **Attempts** (`darwin::attempt`, `darwin::jobexec`, `darwin::sandbox`; `serve::platform::DarwinPlatform`). launchd
 takes no job from an ssh login (its Background session refuses `launchctl bootstrap user/<uid>`), so `launch` starts
@@ -110,7 +120,7 @@ whatever stayed in it); a process that left the group is the watchdog's to find,
 runs the command only as `/usr/bin/sandbox-exec -f job.sb …` and refuses anything else (a keyed job, a helper, a
 bare command) as `infra: setup`, so a job never runs unconfined. `job.sb` is Gleipnir's profile of the attempt's
 spec (`darwin::sandbox::spec`): it reads the source, writes the attempt folder (and the source when the job writes its
-tree), `HOME` and `TMPDIR` inside the folder, `PATH` Homebrew's and the system's, the marker
+tree), `HOME` and `TMPDIR` inside the folder, `PATH` Homebrew's and the system's (after its toolchains'), the marker
 `DRGNX_RUNNER_ATTEMPT`, and no network. The timeout is read on `CLOCK_MONOTONIC`, `caffeinate -i -w` keeps the Mac
 awake while the job runs, and the verdict comes from `forseti::classify` like Linux's. A Mac has no pause, live
 resize, CPU weights or keys: those methods answer none or refuse.

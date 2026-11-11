@@ -3551,7 +3551,12 @@ job layer (`exec/`) records a job's folder and meta as before, then `Queue::subm
 image, weight, visibility, shared_overlay, origin_key, suite, net_hosts, os, features}`, its frozen inputs (below) and what to start it
 from (`Pending`). `os` is the start's `os` (`macos`: a Mac runner's host job, counted heavy, refused for a container
 or `local_only` job); a Mac job's `features` are `xcode-clt` and a `brew:NAME` for each of the project's
-`drgnx-runners-mac-tools`, which the Mac's probe offers by name and at major.minor (`brew:cmake`, `brew:cmake@3.31`).
+`drgnx-runners-mac-tools`, which the Mac's probe offers by name and at major.minor (`brew:cmake`, `brew:cmake@3.31`),
+and a `tool:PIN` for each of its `drgnx-runners-mac-toolchains` (`tool:rust@1.95`). The registry installs every
+project's pins on a Mac (`Settings::values_everywhere`) with `sleipnir tools` over the runner's ssh, as the runner
+account and outside any job, at `runner add` (before the probe) and at `runner check` (its session closed first, then
+dialled again); a pin that fails is logged, and its jobs wait with "`drgnx runner check` on the Mac installs the
+toolchains".
 `net_hosts` is what a container job's network grant reaches (its cell over the caps' hosts, as its
 proxy here allows them): a runner's `start` frame carries it, and the runner's proxy allows those hosts (it pins no
 name, so `pins` stay empty). `exec/start` lost `check_machine` and the agents' semaphore:

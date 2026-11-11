@@ -40,7 +40,8 @@ client's session keys are empty before and after."
 ;; for sudo or makes the runner an administrator
 (ert-deftest drgnx-runners-client/the-mac-card-names-the-steps ()
   (dolist (s '("standard account named drgnx-runner" "Remote Login for that account only" "xcode-select --install"
-               "drgnx-runners-mac-tools" "tailscaled" "drgnx-runner@YOUR-MAC"))
+               "drgnx-runners-mac-tools" "brew install mise" "drgnx-runners-mac-toolchains" "tailscaled"
+               "drgnx-runner@YOUR-MAC"))
     (should (string-search s drgnx-runners-mac-steps)))
   (should (string-search "never runs sudo" drgnx-runners-mac-steps))
   (should-not (string-search "sudo " (replace-regexp-in-string "never runs sudo" "" drgnx-runners-mac-steps))))

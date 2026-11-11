@@ -167,6 +167,7 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         "drgnx-runners-shared-overlay" => values.runners_shared_overlay = de(v)?,
         "drgnx-runners-job-keys" => values.runners_job_keys = de(v)?,
         "drgnx-runners-mac-tools" => values.runners_mac_tools = de(v)?,
+        "drgnx-runners-mac-toolchains" => values.runners_mac_toolchains = de(v)?,
         "drgnx-runners-origin-key" => values.runners_origin_key = de(v)?,
         "drgnx-sandbox-proxy-pinned-addresses" => {
             let Alist(pairs) = de::<Alist<std::net::IpAddr>>(v)?;
@@ -315,6 +316,7 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-runners-shared-overlay" => json!(values.runners_shared_overlay),
         "drgnx-runners-job-keys" => json!(values.runners_job_keys),
         "drgnx-runners-mac-tools" => json!(values.runners_mac_tools),
+        "drgnx-runners-mac-toolchains" => json!(values.runners_mac_toolchains),
         "drgnx-runners-origin-key" => json!(values.runners_origin_key),
         "drgnx-sandbox-proxy-pinned-addresses" => object(
             values
@@ -374,6 +376,7 @@ pub const PER_PROJECT: &[&str] = &[
     "drgnx-runners-shared-overlay",
     "drgnx-runners-job-keys",
     "drgnx-runners-mac-tools",
+    "drgnx-runners-mac-toolchains",
     "drgnx-runners-origin-key",
     "drgnx-search-include",
     "drgnx-search-exclude",
