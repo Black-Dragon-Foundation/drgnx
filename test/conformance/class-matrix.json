@@ -217,6 +217,7 @@
   "tasks/find": ["user"],
   "tasks/ready": ["user"],
   "tasks/write": ["user"],
+  "term/attach": ["user"],
   "term/close": ["user"],
   "term/config": ["user"],
   "term/fetch": ["user"],

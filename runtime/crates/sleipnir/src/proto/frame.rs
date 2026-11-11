@@ -306,6 +306,9 @@ pub enum Frame {
         slots: Vec<String>,
         #[serde(default)]
         images: Vec<String>,
+        /// The machine runs on battery: a Mac that then goes quiet is asleep, not lost.
+        #[serde(default)]
+        on_battery: bool,
     },
 
     // ---- placement

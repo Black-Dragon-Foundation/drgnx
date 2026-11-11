@@ -54,6 +54,8 @@ pub struct Spawn {
     pub limits: Limits,
     /// The first settings, as `term/config`'s.
     pub config: Vec<(String, Value)>,
+    /// Where the editor shows it (`panel`, `editor`).
+    pub place: Option<String>,
 }
 
 /// What `term/list` tells of a terminal.
@@ -66,6 +68,14 @@ pub struct Status {
     pub title: String,
     /// From a worker of another major protocol (a hub updated since it started).
     pub old: bool,
+    /// It draws for the asking session.
+    pub mine: bool,
+    /// No live connection carries its session.
+    pub orphaned: bool,
+    /// When it was detached (ms since the epoch).
+    pub detached_at: Option<u64>,
+    pub command: Vec<String>,
+    pub place: Option<String>,
 }
 
 struct Term {
@@ -129,12 +139,17 @@ impl Terms {
     /// Serve terminals from DIR (`<state>/term`) with events to SINK, patches stamped with HUB, and adopt the workers a
     /// hub before this one left. Runs inside a tokio runtime; a second call changes nothing.
     pub async fn open(&self, dir: PathBuf, sink: Arc<dyn Sink>, hub: u64) {
+        // 0700 (a wider one from before is narrowed); another user's is refused: nothing in it is adopted
+        let private = runstav::paths::private_dir(&dir);
         if self.inner.dir.set(dir).is_err() {
             return;
         }
         let _ = self.inner.sink.set(sink);
         let _ = self.inner.hub.set(hub);
-        self.adopt().await;
+        match private {
+            Ok(()) => self.adopt().await,
+            Err(e) => tracing::warn!(error = %e, "terminals: their folder is not private"),
+        }
         let weak = Arc::downgrade(&self.inner);
         crate::clock::spawn("term:sessions", Terms::watch_sessions(weak));
     }
@@ -173,7 +188,8 @@ impl Terms {
             .dir()
             .ok_or("terminals: the store is not open yet")?
             .to_path_buf();
-        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        // 0700, made so, or refused when another user's: the workers' sockets and records are in it
+        runstav::paths::private_dir(&dir).map_err(|e| format!("terminals: {e}"))?;
         let id = new_id();
         let socket = dir.join(format!("{id}.sock"));
         let mut command = s.command.clone();
@@ -202,7 +218,7 @@ impl Terms {
             s.cwd.clone(),
             "--".into(),
         ];
-        worker.extend(command);
+        worker.extend(command.iter().cloned());
         let (program, args) = scope::command(&id, &worker, systemd, &s.limits);
         let log =
             std::fs::File::create(dir.join(format!("{id}.log"))).map_err(|e| e.to_string())?;
@@ -246,6 +262,9 @@ impl Terms {
             class: s.class.clone(),
             cwd: s.cwd.clone(),
             session: session.clone(),
+            detached_at: None,
+            command: command.clone(),
+            place: s.place.clone(),
         };
         rec.write(&dir).map_err(|e| e.to_string())?;
         // the worker binds its socket once it runs
@@ -439,8 +458,11 @@ impl Terms {
                         tracing::warn!(id = %rec.id, proto = ?hello.proto, "terminal from before the update");
                     }
                     let mut st = lock(&self.inner.state);
-                    // until its session says hello: then it draws again, from a reset
-                    if let Some(s) = &rec.session {
+                    // until its session says hello: then it draws again, from a reset (a detached one waits for a
+                    // term/attach, however long)
+                    if let Some(s) = &rec.session
+                        && rec.detached_at.is_none()
+                    {
                         st.life.closed(s, mono_ms());
                     }
                     drop(st);
@@ -459,33 +481,112 @@ impl Terms {
         st.sessions.insert(conn, session.to_owned());
     }
 
-    /// Connection CONN, subscribed, carries editor session SESSION: its terminals draw there again (a reset each).
+    /// Connection CONN, subscribed, carries editor session SESSION: its terminals draw there again (a reset each), the
+    /// ones detached after its grace too.
     pub fn hello(&self, conn: u64, session: &str) {
-        let ids: Vec<String> = {
+        let (ids, back): (Vec<String>, Vec<Record>) = {
             let mut st = lock(&self.inner.state);
             st.life.hello(session);
             st.sessions.insert(conn, session.to_owned());
-            st.terms
+            let mut back = Vec::new();
+            let ids = st
+                .terms
                 .iter_mut()
                 .filter(|(_, t)| t.rec.session.as_deref() == Some(session))
                 .map(|(id, t)| {
                     t.owner = Some(conn);
+                    if t.rec.detached_at.take().is_some() {
+                        back.push(t.rec.clone());
+                    }
                     id.clone()
                 })
-                .collect()
+                .collect();
+            (ids, back)
         };
+        if let Some(dir) = self.dir() {
+            for rec in back {
+                let _ = rec.write(dir);
+            }
+        }
         for id in ids {
             self.attach(&id);
         }
     }
 
-    /// Connection CONN is gone at NOW_MS: its terminals draw nowhere; its session's grace starts.
+    /// Take terminal ID into connection CONN's session at COLS × ROWS cells of CELL_PX (`term/attach`): only one
+    /// that is orphaned, detached or already this session's; it draws here from a reset and its program redraws.
+    pub fn attach_to(
+        &self,
+        conn: u64,
+        id: &str,
+        cols: u16,
+        rows: u16,
+        cell_px: (u32, u32),
+    ) -> Result<Record, String> {
+        let rec = {
+            let mut st = lock(&self.inner.state);
+            let session = st
+                .sessions
+                .get(&conn)
+                .cloned()
+                .ok_or("this connection named no editor session")?;
+            let live = |s: &str| st.sessions.values().any(|o| o == s);
+            let t = st
+                .terms
+                .get(id)
+                .ok_or_else(|| format!("no terminal {id}"))?;
+            if t.old {
+                return Err(format!(
+                    "terminal {id} is from before an update: it can only be closed"
+                ));
+            }
+            if let Some(s) = t.rec.session.as_deref()
+                && t.rec.detached_at.is_none()
+                && s != session
+                && live(s)
+            {
+                return Err(format!("terminal {id} is open in another Emacs"));
+            }
+            let t = st.terms.get_mut(id).expect("just found");
+            t.rec.session = Some(session);
+            t.rec.detached_at = None;
+            t.owner = Some(conn);
+            t.rec.clone()
+        };
+        if let Some(dir) = self.dir() {
+            let _ = rec.write(dir);
+        }
+        self.send(
+            id,
+            &In::Resize {
+                cols: cols.max(1),
+                rows: rows.max(1),
+                cell_px,
+                redraw: true,
+            },
+        );
+        self.attach(id);
+        Ok(rec)
+    }
+
+    /// Connection CONN is gone at NOW_MS: its terminals draw nowhere (their workers are told); its session's grace
+    /// starts.
     pub fn gone_at(&self, conn: u64, now_ms: u64) {
         let mut st = lock(&self.inner.state);
         let session = st.sessions.remove(&conn);
+        let mut left = Vec::new();
         for t in st.terms.values_mut() {
             if t.owner == Some(conn) {
                 t.owner = None;
+                left.push(t.rec.id.clone());
+            }
+        }
+        for id in &left {
+            if let Some(t) = st.terms.get(id)
+                && !t.old
+            {
+                let _ =
+                    t.tx.send(serde_json::to_string(&In::Detach).unwrap_or_default() + "\n");
             }
         }
         if let Some(s) = session
@@ -504,25 +605,90 @@ impl Terms {
         self.gone_at(conn, mono_ms());
     }
 
-    /// End the terminals of the sessions gone at NOW_MS.
+    /// Detach the terminals of the sessions gone at NOW_MS: they run on (until their worker's `detached-keep`).
     pub fn tick(&self, now_ms: u64) {
         let gone = lock(&self.inner.state).life.due(now_ms);
         for s in gone {
-            tracing::info!(session = %s, "editor session gone: its terminals end");
-            self.end_session(&s);
+            let ids: Vec<String> = {
+                let mut st = lock(&self.inner.state);
+                let at = epoch_ms();
+                st.terms
+                    .iter_mut()
+                    .filter(|(_, t)| {
+                        t.rec.session.as_deref() == Some(s.as_str()) && t.rec.detached_at.is_none()
+                    })
+                    .map(|(id, t)| {
+                        t.rec.detached_at = Some(at);
+                        id.clone()
+                    })
+                    .collect()
+            };
+            tracing::info!(session = %s, terminals = ids.len(), "editor session gone: its terminals detach");
+            self.detached(ids, &s);
         }
     }
 
-    /// End every terminal of editor session SESSION now (a clean exit, or the grace ran out).
-    pub fn end_session(&self, session: &str) -> u32 {
-        let ids: Vec<String> = lock(&self.inner.state)
-            .terms
-            .iter()
-            .filter(|(_, t)| t.rec.session.as_deref() == Some(session))
-            .map(|(id, _)| id.clone())
-            .collect();
+    /// Terminals IDS were just detached from session FROM: their records say so, their workers know, and every other
+    /// live session hears `term/detached`.
+    fn detached(&self, mut ids: Vec<String>, from: &str) {
+        if ids.is_empty() {
+            return;
+        }
+        ids.sort();
+        let (recs, conns): (Vec<Record>, Vec<u64>) = {
+            let st = lock(&self.inner.state);
+            let recs = ids
+                .iter()
+                .filter_map(|id| st.terms.get(id).map(|t| t.rec.clone()))
+                .collect();
+            let mut conns: Vec<u64> = st
+                .sessions
+                .iter()
+                .filter(|(_, s)| s.as_str() != from)
+                .map(|(c, _)| *c)
+                .collect();
+            conns.sort();
+            (recs, conns)
+        };
+        if let Some(dir) = self.dir() {
+            for rec in &recs {
+                let _ = rec.write(dir);
+            }
+        }
+        for id in &ids {
+            self.send(id, &In::Detach);
+        }
+        for c in conns {
+            self.send_event(Some(c), "term/detached", json!({"ids": ids}));
+        }
+    }
+
+    /// Editor session SESSION quits (`term/session-end`): its terminals in KEEP detach and run on, the others end now;
+    /// how many end.
+    pub fn end_session(&self, session: &str, keep: &[String]) -> u32 {
+        let (ends, kept): (Vec<String>, Vec<String>) = {
+            let mut st = lock(&self.inner.state);
+            let at = epoch_ms();
+            let mut ends = Vec::new();
+            let mut kept = Vec::new();
+            for (id, t) in st.terms.iter_mut() {
+                if t.rec.session.as_deref() != Some(session) {
+                    continue;
+                }
+                if keep.contains(id) {
+                    t.rec.session = None;
+                    t.rec.detached_at = Some(at);
+                    t.owner = None;
+                    kept.push(id.clone());
+                } else {
+                    ends.push(id.clone());
+                }
+            }
+            (ends, kept)
+        };
+        self.detached(kept, session);
         let mut n = 0;
-        for id in ids {
+        for id in ends {
             n += u32::from(self.send(&id, &In::Close { signal: None }));
         }
         n
@@ -537,11 +703,11 @@ impl Terms {
         }
     }
 
-    /// Every terminal's status, asked of its worker; one that does not answer within DEADLINE counts as running.
-    pub async fn list(&self, deadline: Duration) -> Vec<Status> {
-        // (id, pid, old, cwd, the answer when asked)
-        type Ask = (String, i32, bool, String, Option<oneshot::Receiver<Out>>);
-        let asks: Vec<Ask> = {
+    /// Every terminal's status as editor session SESSION sees it, asked of its worker; one that does not answer within
+    /// DEADLINE counts as running.
+    pub async fn list(&self, deadline: Duration, session: Option<&str>) -> Vec<Status> {
+        // the status without the worker's answer, and the answer when asked
+        let asks: Vec<(Status, Option<oneshot::Receiver<Out>>)> = {
             let mut st = lock(&self.inner.state);
             let ids: Vec<String> = st.terms.keys().cloned().collect();
             let mut asks = Vec::new();
@@ -553,12 +719,28 @@ impl Terms {
                 let t = &st.terms[&id];
                 let line = serde_json::to_string(&In::Status { req }).unwrap_or_default() + "\n";
                 let sent = !t.old && t.tx.send(line).is_ok();
-                asks.push((id, t.rec.pid, t.old, t.rec.cwd.clone(), sent.then_some(rx)));
+                let r = &t.rec;
+                let attached = r.detached_at.is_none();
+                let of = r.session.as_deref();
+                let status = Status {
+                    id: id.clone(),
+                    pid: r.pid,
+                    running: true,
+                    cwd: r.cwd.clone(),
+                    title: String::new(),
+                    old: t.old,
+                    mine: attached && of.is_some() && of == session,
+                    orphaned: attached && of.is_some_and(|s| !st.sessions.values().any(|o| o == s)),
+                    detached_at: r.detached_at,
+                    command: r.command.clone(),
+                    place: r.place.clone(),
+                };
+                asks.push((status, sent.then_some(rx)));
             }
             asks
         };
         let mut out = Vec::new();
-        for (id, pid, old, cwd, rx) in asks {
+        for (mut s, rx) in asks {
             let answer = match rx {
                 Some(rx) => crate::clock::timeout(deadline, rx)
                     .await
@@ -566,29 +748,16 @@ impl Terms {
                     .and_then(Result::ok),
                 None => None,
             };
-            out.push(match answer {
-                Some(Out::Status {
-                    running,
-                    cwd,
-                    title,
-                    ..
-                }) => Status {
-                    id,
-                    pid,
-                    running,
-                    cwd,
-                    title,
-                    old,
-                },
-                _ => Status {
-                    id,
-                    pid,
-                    running: true,
-                    cwd,
-                    title: String::new(),
-                    old,
-                },
-            });
+            if let Some(Out::Status {
+                running,
+                cwd,
+                title,
+                ..
+            }) = answer
+            {
+                (s.running, s.cwd, s.title) = (running, cwd, title);
+            }
+            out.push(s);
         }
         out.sort_by(|a, b| a.id.cmp(&b.id));
         out
@@ -655,6 +824,13 @@ pub fn start(f: &crate::front::Front) {
     let sink: Arc<dyn Sink> = f.editors.clone();
     let hub = f.core.views.hub_id();
     crate::clock::spawn("term:open", async move { terms.open(dir, sink, hub).await });
+}
+
+/// Milliseconds since the epoch (a record's `detached_at` outlives this hub).
+fn epoch_ms() -> u64 {
+    crate::clock::wall()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 /// Milliseconds on the hub's clock.

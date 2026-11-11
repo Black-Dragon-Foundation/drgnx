@@ -898,6 +898,11 @@ impl Registry {
             name: rec.name.clone(),
             trust: forseti_trust(rec.trust),
             accept: forseti_accept(rec.accept),
+            os: if rec.os.starts_with("macos") {
+                forseti::Os::Macos
+            } else {
+                forseti::Os::Linux
+            },
             grace_s: cfg.grace().as_secs(),
             image: rec.image.clone(),
         }
@@ -1007,7 +1012,7 @@ impl Registry {
             .cfg
             .queue
             .runner(name)
-            .is_some_and(|r| r.state != "unreachable");
+            .is_some_and(|r| r.state != "unreachable" && r.state != "sleeping");
         if !linked {
             self.connect(&rec).await?;
         }

@@ -229,6 +229,97 @@ what it left (none here: `search/grep-skipped' with no match), not a new search,
       (should (equal '(7) drgnx-replace--undo))
       (should (string-match-p "Replaced 3 in 2 files" drgnx-replace--status)))))
 
+(defconst drgnx-replace-rows-nav-test--preview
+  '(:path "/r/a.txt" :plus 2 :minus 2
+          :diff "--- /r/a.txt\n+++ /r/a.txt\n@@ -1,2 +1,2 @@\n-let needle;\n-let needle;\n+let pin;\n+let pin;\n"
+          :hunks [(:old_start 1 :old_lines 2 :new_start 1 :new_lines 2 :ids ["m:a.txt:1:4" "m:a.txt:2:4"]
+                              :captures [(:id "m:a.txt:1:4" :groups ["need" nil])])])
+  "The hub's `search/preview' of a.txt: one hunk with both matches, a regexp's groups for the first.")
+
+(defun drgnx-replace-rows-nav-test--tile ()
+  (get-buffer "a.txt · preview"))
+
+(ert-deftest drgnx-replace-rows/preview-shows-a-files-diff-and-its-hunks-tick-the-rows ()
+  "Pattern D: Preview This File's Changes asks the hub for the row's file (`search/preview', with the unticked and
+the replacement) and draws its diff read-only: the counts, each hunk with its tick box, its lines and the groups line
+\(a group that matched nothing is ∅).  `D' on the hunk unticks its matches in the view, `a' ticks them again; the
+tile is asked for again."
+  (drgnx-replace-rows-nav-test--with
+    (cl-letf (((symbol-function 'drgnx-replace--live-view) (lambda () (get-buffer drgnx-replace-buffer-name)))
+              ((symbol-function 'drgnx-replace--text) (lambda (_) "pin"))
+              ((symbol-function 'drgnx-wb-show-in-editor) #'ignore))
+      (unwind-protect
+          (let ((calls nil))
+            (cl-letf (((symbol-function 'drgnx-hub--call-on)
+                       (lambda (_conn method params cb &rest _)
+                         (push (cons method params) calls)
+                         (funcall cb drgnx-replace-rows-nav-test--preview nil))))
+              (drgnx-view-nav 'select "m:a.txt:2:4")
+              (drgnx-replace-preview-file)
+              (should (equal `("search/preview" :view ,drgnx-replace-view :path "/r/a.txt" :off [] :replace "pin")
+                             (car calls)))
+              (with-current-buffer (drgnx-replace-rows-nav-test--tile)
+                (should (derived-mode-p 'drgnx-replace-preview-mode))
+                (should buffer-read-only)
+                (let ((text (buffer-string)))
+                  (should (string-match-p "2 of 2 matches ticked · \\+2 −2" text))
+                  (should (string-match-p "^\\[x\\] hunk 1" text))
+                  (should (string-match-p "^   1 - let needle;$" text))   ; the old file's line number
+                  (should (string-match-p "^   2 \\+ let pin;$" text))     ; the new file's
+                  (should (string-match-p "groups  \\\\1 = need · \\\\2 = ∅" text)))
+                (goto-char (point-min))
+                (search-forward "hunk 1")
+                (setq calls nil)
+                (drgnx-replace-preview-drop)))
+            (should (equal '("[ ]" "[ ]" "[ ]" "[x]" "[x]") (drgnx-replace-rows-nav-test--boxes)))
+            (should (equal '("m:a.txt:1:4" "m:a.txt:2:4")
+                           (sort (append (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'ticked) nil)
+                                 #'string<)))
+            (with-current-buffer (drgnx-replace-rows-nav-test--tile)
+              (goto-char (point-min))
+              (search-forward "hunk 1")
+              (drgnx-replace-preview-keep))
+            (should-not (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'ticked)))
+        (when-let* ((b (drgnx-replace-rows-nav-test--tile))) (kill-buffer b))))))
+
+(ert-deftest drgnx-replace-rows/replace-all-shows-the-sheet-first ()
+  "Pattern D: Replace All shows the Replace All sheet (threshold 1) with the edit set: every file with its lines added
+and removed, what is skipped and why; Cancel writes nothing, Replace writes that edit set (`search/apply' of its
+change); `C-u' Replace All writes at once, no sheet."
+  (drgnx-replace-rows-nav-test--with
+    (let ((answer '(:change 7 :skipped [(:id "m:b.txt:5:4" :path "/r/b.txt" :why "changed on disk since the search")]
+                            :files [(:path "/r/a.txt" :source "disk"
+                                           :edits [(:id "m:a.txt:1:4" :line 1) (:id "m:a.txt:2:4" :line 2)])]))
+          (calls nil))
+      (cl-letf (((symbol-function 'drgnx-hub--call-on)
+                 (lambda (_conn method params cb &rest _)
+                   (push (cons method params) calls)
+                   (pcase method
+                     ("search/edits" (funcall cb answer nil))
+                     ("search/preview" (funcall cb drgnx-replace-rows-nav-test--preview nil))
+                     (_ (funcall cb t nil)))))
+                ((symbol-function 'drgnx-replace--live-view) (lambda () (get-buffer drgnx-replace-buffer-name)))
+                ((symbol-function 'drgnx-replace--text) (lambda (_) "pin"))
+                ((symbol-function 'pop-to-buffer) #'set-buffer))
+        (unwind-protect
+            (progn
+              (drgnx-replace--rows-replace-all "pin" t)
+              (with-current-buffer drgnx-replace-sheet-buffer-name
+                (should (derived-mode-p 'drgnx-replace-sheet-mode))
+                (let ((text (buffer-string)))
+                  (should (string-match-p "Replace 2 matches in 1 file · 1 skipped" text))
+                  (should (string-match-p "a.txt \\+2 −2" text))
+                  (should (string-match-p "^       1 - let needle;$" text))   ; the selected file's first hunk
+                  (should (string-match-p "1 skipped: changed on disk since the search" text)))
+                (should-not (assoc "search/apply" calls))
+                (cl-letf (((symbol-function 'quit-window) (lambda (&rest _) nil)))
+                  (drgnx-replace-sheet-confirm)))
+              (should (equal 7 (plist-get (cdr (assoc "search/apply" calls)) :change)))
+              (setq calls nil)
+              (drgnx-replace--rows-replace-all "pin" nil)
+              (should (equal '("search/apply" "search/edits") (mapcar #'car calls))))
+          (when-let* ((b (get-buffer drgnx-replace-sheet-buffer-name))) (kill-buffer b)))))))
+
 (ert-deftest drgnx-replace-rows/replace-all-leaves-the-skipped-with-their-reasons ()
   "Pattern D: a match Replace All skipped stays listed with its reason (SJA-SEARCH-1 (3)): the hub is told which
 \(`search/grep-skipped', by node id) and lists only those; the ticks start over."

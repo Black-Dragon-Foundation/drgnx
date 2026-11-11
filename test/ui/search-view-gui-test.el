@@ -17,6 +17,7 @@
 (require 'drgnx-wb)
 (require 'drgnx-area)
 (require 'drgnx-view)
+(require 'drgnx-popup)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-search-ui-test--repo) nil t)
 (load (expand-file-name "modules/tools/drgnx-replace" drgnx-search-ui-test--repo) nil t)
 
@@ -164,7 +165,59 @@ temp dir; print where."
                   (should (search-forward "TODOs on this branch · 3" drgnx-replace--lists-end t))
                   (should (search-forward "☆ where we parse keys.eld" drgnx-replace--lists-end t))
                   (should (search-forward "Recent" drgnx-replace--lists-end t))
-                  (drgnx-search-ui-test--shot shots "search-view-lists.png"))))
+                  (drgnx-search-ui-test--shot shots "search-view-lists.png")
+                  ;; 6. A file's preview tile: its diff, a hunk's tick box, a regexp's groups line (∅ for a group
+                  ;; that matched nothing); the hub's `search/preview' answer as its tests check it
+                  (let* ((answer (list :path file :plus 2 :minus 2
+                                       :diff (concat "--- " file "\n+++ " file "\n@@ -1,3 +1,3 @@\n"
+                                                     "-fn parse(s: &str) -> Tree {\n-    parse_all(s)\n"
+                                                     "+fn read(s: &str) -> Tree {\n+    read_all(s)\n }\n")
+                                       :hunks (vector (list :old_start 1 :old_lines 3 :new_start 1 :new_lines 3
+                                                            :ids ["m:4:0" "m:4:1"]
+                                                            :captures (vector (list :id "m:4:0" :groups ["pars" nil]))))))
+                         (tile (drgnx-replace--preview-buffer file)))
+                    (with-current-buffer tile (drgnx-replace--preview-draw answer))
+                    (drgnx-wb-show-in-editor tile)
+                    (with-current-buffer tile
+                      (goto-char (point-min))
+                      (should (search-forward "\\2 = ∅" nil t))
+                      (should (eq 'drgnx-replace-preview-empty (get-text-property (1- (point)) 'face))))
+                    (drgnx-search-ui-test--shot shots "search-view-preview.png")
+                    ;; 7. The Replace All sheet: every file's +/−, the selected file's first hunk, the skipped, the
+                    ;; buttons
+                    (cl-letf (((symbol-function 'drgnx-hub--call-on)
+                               (lambda (_conn method _params &optional cb &rest _)
+                                 (when (and cb (equal method "search/preview")) (funcall cb answer nil))))
+                              ;; the module's rule sends the sheet to the popup lane (`drgnx-wb-place'); this test
+                              ;; runs without the rules
+                              ((symbol-function 'pop-to-buffer)
+                               (lambda (b &rest _) (select-window (drgnx-popup--show b nil '(:height 0.8))))))
+                      (drgnx-replace--sheet-show
+                       (list :change 3
+                             :files (vector (list :path file :source "disk"
+                                                  :edits (vector (list :id "m:4:0" :line 1) (list :id "m:4:1" :line 2)))
+                                            (list :path (expand-file-name "src/lib.rs" dir) :source "disk"
+                                                  :edits (vector (list :id "m:4:2" :line 9))))
+                             :skipped (vector (list :id "m:4:3" :path (expand-file-name "src/old.rs" dir)
+                                                    :why "changed on disk since the search")))))
+                    (with-current-buffer drgnx-replace-sheet-buffer-name
+                      (save-excursion
+                        (goto-char (point-min))
+                        (should (search-forward "Replace 3 matches in 2 files" nil t))
+                        (should (search-forward "1 - fn parse" nil t))
+                        (should (search-forward "1 skipped: changed on disk since the search" nil t))
+                        ;; the whole sheet shows, its buttons too, at every scale: no line cut, none scrolled away
+                        (redisplay t)
+                        (let ((w (get-buffer-window (current-buffer) t)))
+                          (should w)
+                          (should (pos-visible-in-window-p (point) w))
+                          (should (search-forward "Cancel" nil t))
+                          (should (pos-visible-in-window-p (point) w))
+                          (should (zerop (window-hscroll w))))))
+                    (drgnx-search-ui-test--shot shots "search-view-sheet.png")
+                    (when-let* ((b (get-buffer drgnx-replace-sheet-buffer-name)))
+                      (quit-window t (get-buffer-window b t)))
+                    (kill-buffer tile)))))
           (drgnx-wb-hide-sidebar)
           (with-selected-frame root
             (delete-other-windows)

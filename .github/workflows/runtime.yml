@@ -716,17 +716,24 @@ jobs:
         run: /bin/bash test/container/nidhogg.sh macos
       - name: the runner account, Remote Login, the key
         run: bash test/runners/mac/spike.sh up
+      # S1 and S3 are decided (docs: test/runners/mac/README.md); they run again with `only: rt-macrunner rt-macrunner-all`
       - name: S1 a job outlives its ssh session
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && contains(format(' {0} ', inputs.only), ' rt-macrunner-all ') }}
         run: bash test/runners/mac/spike.sh s1
       - name: S3 the watchdog
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && contains(format(' {0} ', inputs.only), ' rt-macrunner-all ') }}
         run: bash test/runners/mac/spike.sh s3
+      - name: the Mac probe's live read (sleipnir's darwin rows, in the CI account)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 20
+        run: cargo test --locked --manifest-path runtime/Cargo.toml -p sleipnir --lib darwin 2>&1 | tee "$MR_OUT/darwin-rows.log"
       - name: S2 drgnx ERT selectors under the build profile
         if: ${{ !cancelled() }}
+        timeout-minutes: 20
         run: bash test/runners/mac/spike.sh s2-ert "$GITHUB_WORKSPACE" "$DRGNX_EMACS" '^drgnx-\(registry\|memo\|color\)/'
       - name: S2 a Nidhogg build with Naglfar under the build profile
         if: ${{ !cancelled() }}
+        timeout-minutes: 90
         run: bash test/runners/mac/spike.sh s2-build "$GITHUB_WORKSPACE/nidhogg-src"
       - name: Seatbelt denials
         if: ${{ !cancelled() }}

@@ -34,7 +34,7 @@ fn fx() -> Fx {
         state,
         root: tempfile::tempdir().unwrap(),
         saved,
-        t0: Instant::now(),
+        t0: crate::clock::now(),
     }
 }
 
@@ -102,7 +102,10 @@ fn an_offer_writes_only_through_flush_and_only_a_change() {
     assert!(!file.exists());
     f.saved.flush(f.root()).unwrap();
     let again = Saved::new(f.state.path().join("hub/search"));
-    assert_eq!(typed(&again.recent(f.root(), Instant::now())), vec!["one"]);
+    assert_eq!(
+        typed(&again.recent(f.root(), crate::clock::now())),
+        vec!["one"]
+    );
     assert!(!f.saved.offer(f.root(), "v", text("one"), f.at(2000)));
     assert!(!f.saved.offer(f.root(), "v", text("two"), f.at(3000)));
     assert!(f.saved.offer(f.root(), "v", text("three"), f.at(4000)));
@@ -120,7 +123,10 @@ fn recent_is_per_project_and_kept_across_hubs() {
         vec!["there"]
     );
     let again = Saved::new(f.state.path().join("hub/search"));
-    assert_eq!(typed(&again.recent(f.root(), Instant::now())), vec!["here"]);
+    assert_eq!(
+        typed(&again.recent(f.root(), crate::clock::now())),
+        vec!["here"]
+    );
 }
 
 #[test]

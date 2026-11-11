@@ -772,20 +772,22 @@ impl Engine {
     }
 
     /// The bytes KEY (a `GhosttyKey`) with MODS and its TEXT (UNSHIFTED: the key's codepoint without shift, 0 when
-    /// unknown) encodes to under the terminal's current modes (kitty flags, modifyOtherKeys, DECCKM, ...).
+    /// unknown) encodes to under the terminal's current modes (kitty flags, modifyOtherKeys, DECCKM, ...), for ACTION
+    /// (`GHOSTTY_KEY_ACTION_*`).
     pub fn encode_key(
         &mut self,
         key: GhosttyKey,
         mods: GhosttyMods,
         text: &str,
         unshifted: u32,
+        action: i32,
     ) -> Vec<u8> {
         let mut buf = [0u8; 128];
         let mut n = 0usize;
         // SAFETY: the event and encoder are live; TEXT outlives the encode call that reads it.
         unsafe {
             ghostty_key_encoder_set_from_terminal(self.kenc, self.term);
-            ghostty_key_event_set_action(self.kev, GHOSTTY_KEY_ACTION_PRESS);
+            ghostty_key_event_set_action(self.kev, action);
             ghostty_key_event_set_key(self.kev, key);
             ghostty_key_event_set_mods(self.kev, mods);
             let consumed = if !text.is_empty() && mods & GHOSTTY_MODS_SHIFT != 0 {
