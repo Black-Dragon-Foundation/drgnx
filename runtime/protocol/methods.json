@@ -28788,6 +28788,13 @@
               "null"
             ]
           },
+          "count": {
+            "description": "Only the totals (`search-run-done`): no rows, no model, and the search is not recorded as recent. For a search\nthe user did not type: a pinned saved search's live count. Default false.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "ignore": {
             "anyOf": [
               {

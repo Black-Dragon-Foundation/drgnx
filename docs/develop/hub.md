@@ -1494,7 +1494,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/outline` | user | `{base?: boolean, docs?: boolean, path: string, root: AbsPath}` | `{entries: [OutlineEntry], fresh: Fresh, lang: string, path: string}` | no |
 | `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
 | `search/recent` | user | `{root: AbsPath}` | `{recent: [SearchSpec]}` | no |
-| `search/run` | user | `{context?: boolean, ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, view: string}` | `{run: natnum}` | no |
+| `search/run` | user | `{context?: boolean, count?: boolean, ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, view: string}` | `{run: natnum}` | no |
 | `search/saved/delete` | user | `{name: string, root: AbsPath}` | `boolean` | yes |
 | `search/saved/list` | user | `{root: AbsPath}` | `{problems?: [string], saved: [SavedSearch]}` | no |
 | `search/saved/put` | user | `{name: string, pinned?: boolean, root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}}` | `boolean` | yes |
@@ -2361,7 +2361,7 @@ The Search view's results are a row stream under the rules above (`runtime/crate
 `mod.rs` the runs, `rows.rs` the rows and the model, `run.rs` the match ids, the carried unticks and the files'
 snapshots; the search itself is `hrafn::grep`).
 
-- `search/run {view, root, search, ignore?, off?}` takes a `SearchSpec` (as the saved searches below): a Text query
+- `search/run {view, root, search, ignore?, off?, context?, count?}` takes a `SearchSpec` (as the saved searches below): a Text query
   (`{mode: "text", text, case?, word?, regexp?}`; Symbol and Meaning below), `replace?`,
   `scope?` (none or `project`; `file` with one file in `files`; `open` with the editor's open files in `files`; a git
   scope, [below](#git-scopes-searchscope-bases)), `include?`, `exclude?`; `root` must be a folder. A list of files
@@ -2376,7 +2376,9 @@ snapshots; the search itself is `hrafn::grep`).
   thousands of ids, and whole paths in them were most of its bytes. A class whose env changed meanwhile gets a
   `reset` of every row so far instead. The event `search-run-done {view, run, files, matches, error?, off?, scope?}` ends the
   search; a search a newer one stopped sends neither rows nor the event, so a late row of an old query never reaches
-  the view (and the editor drops one by `base` as well).
+  the view (and the editor drops one by `base` as well). `count: true` sends only that event: no model, no rows, no
+  context labels, and the search is not recorded as recent (a pinned saved search's live count, on a view id of its
+  own, `<view>~pin<N>`).
 - **Symbol and Meaning** (`view/search/modes.rs`) ask the index on a task of their own and send all their files when
   it answers, then `search-run-done` (its `error` is the index's refusal, e.g. no index yet). Symbol (`{mode:
   "symbol", name, case?}`, case on by default) is `search/usages`' answer: the files that define the name first, each

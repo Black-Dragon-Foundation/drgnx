@@ -373,6 +373,10 @@ pub struct RunParams {
     /// `drgnx-search-context`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<bool>,
+    /// Only the totals (`search-run-done`): no rows, no model, and the search is not recorded as recent. For a search
+    /// the user did not type: a pinned saved search's live count. Default false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<bool>,
 }
 
 /// `search/run`'s answer: RUN numbers the search (its match ids are `m:RUN:N`; the event `search-run-done` names it).

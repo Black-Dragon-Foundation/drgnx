@@ -81,6 +81,8 @@ pub(super) struct Run {
     keep: Option<Arc<Keep>>,
     /// What a git scope searched, for the end (`search-run-done`).
     scope: Option<ScopeDone>,
+    /// Only the totals go out (`count`): no model, no rows.
+    count: bool,
     /// The entries (files and matches) the model last sent held. Up to [`MODEL_WINDOW`] the batches' nodes and ids
     /// are appended, at most one send per `model_every`; past it the model grows when the search has doubled it, when
     /// rows go out, and at the end.
@@ -144,6 +146,7 @@ impl Greps {
             context: true,
             keep: None,
             scope: None,
+            count: false,
             model_sent: 0,
             model_every: MODEL_EVERY,
             model_at: None,
@@ -705,6 +708,9 @@ impl Views {
             .with(conn, view, id, |run| {
                 let (model, patches) =
                     batch_patches(&mut lock(&self.store), conn, view, run, file, ms, read);
+                if run.count {
+                    return;
+                }
                 if let Some(m) = model {
                     f.send_to(conn, "view-model", super::Store::model_data(m));
                 }
@@ -735,10 +741,10 @@ impl Views {
                     return;
                 }
                 let (model, patches) = whole_patches(&mut lock(&self.store), conn, view, run);
-                if let Some(m) = model {
+                if let (Some(m), false) = (model, run.count) {
                     f.send_to(conn, "view-model", super::Store::model_data(m));
                 }
-                for p in patches {
+                for p in patches.into_iter().filter(|_| !run.count) {
                     f.send_to(conn, "view-patch", json!(p));
                 }
                 if run.done {
@@ -756,7 +762,10 @@ impl Views {
     fn grep_done(&self, f: &Front, conn: u64, view: &str, id: u64, error: Option<String>) {
         self.greps.with(conn, view, id, |run| {
             // the model is whole before the search is done: what waits goes now
-            if let Some(m) = flush_model(&mut lock(&self.store), conn, view, run) {
+            if let (Some(m), false) = (
+                flush_model(&mut lock(&self.store), conn, view, run),
+                run.count,
+            ) {
                 f.send_to(conn, "view-model", super::Store::model_data(m));
             }
             let off = run.off();
@@ -886,19 +895,28 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
         return Err(invalid("view", "a view id of 1 to 64 bytes"));
     }
     let (query, mode, git) = query_of(f, &p)?;
-    f.search
-        .offer_recent(&query.root, &p.view, p.search.clone());
+    // a count is not a search the user typed: it is not recent, and it sends only its totals (no labels to read)
+    let count = p.count.unwrap_or(false);
+    if !count {
+        f.search
+            .offer_recent(&query.root, &p.view, p.search.clone());
+    }
     let (conn, view) = (c.conn_id, p.view);
     let replace = p.search.replace.unwrap_or_default();
     let off = p.off.unwrap_or_default();
     let (id, cancel) = views.greps.start(conn, &view, query.clone(), replace, &off);
-    let context = p.context.unwrap_or(true);
-    views.greps.with(conn, &view, id, |r| r.context = context);
-    // a new search's model: no files yet, and its window from the start
-    lock(&views.store).forget_windows(conn, &view);
-    views.publish_model(f, conn, &view, grep_doc(Path::new("/"), id, &[], None));
-    for patch in start_patches(&mut lock(&views.store), conn, &view) {
-        f.send_to(conn, "view-patch", json!(patch));
+    let context = p.context.unwrap_or(true) && !count;
+    views.greps.with(conn, &view, id, |r| {
+        r.context = context;
+        r.count = count;
+    });
+    if !count {
+        // a new search's model: no files yet, and its window from the start
+        lock(&views.store).forget_windows(conn, &view);
+        views.publish_model(f, conn, &view, grep_doc(Path::new("/"), id, &[], None));
+        for patch in start_patches(&mut lock(&views.store), conn, &view) {
+            f.send_to(conn, "view-patch", json!(patch));
+        }
     }
     let Some(front) = views.front.get().cloned() else {
         return Err(invalid("view", "the hub is starting"));
