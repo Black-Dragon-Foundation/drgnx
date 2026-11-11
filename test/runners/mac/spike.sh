@@ -257,15 +257,24 @@ remote_s2_build() { # the runner side: the profile, then the build under it, und
   # round 9: configure asks brew where libgccjit is (`brew --prefix --installed libgccjit`, `brew ls -v`), and under the
   # profile brew's ruby was denied writing /opt/homebrew/bin/brew: brew probed bare, then with a read-only Homebrew
   # environment (no update, no analytics, its cache, logs and temp in the attempt folder), which the build gets too
+  # round 11: with an empty cache brew fetched its JSON API (no network) under a lock in /opt/homebrew/var (denied):
+  # formulae from the installed kegs instead (HOMEBREW_NO_INSTALL_FROM_API, as a Mac job's environment). Probed also
+  # with the stat of Homebrew's var allowed (var-stat: the fallback if the kegs' formulae are not enough), and with
+  # brew's own --debug output (debug)
   brew_env=(HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_ENV_HINTS=1
+    HOMEBREW_NO_INSTALL_FROM_API=1
     HOMEBREW_CACHE="$a/tmp/brew-cache" HOMEBREW_LOGS="$a/tmp/brew-logs" HOMEBREW_TEMP="$a/tmp")
-  for how in bare read-only; do
-    extra=(); [ "$how" = bare ] || extra=("${brew_env[@]}")
-    /usr/bin/sandbox-exec -f "$a/build.sb" /usr/bin/env -i \
+  { cat "$a/build.sb"
+    echo '(allow file-read-metadata (literal "/opt/homebrew/var") (literal "/opt/homebrew/var/homebrew") (literal "/opt/homebrew/var/homebrew/locks"))'
+  } > "$a/build-var-stat.sb"
+  for how in read-only var-stat debug; do
+    sb=$a/build.sb; [ "$how" = var-stat ] && sb=$a/build-var-stat.sb
+    extra=("${brew_env[@]}"); [ "$how" = debug ] && extra+=(HOMEBREW_DEBUG=1)
+    /usr/bin/sandbox-exec -f "$sb" /usr/bin/env -i \
       HOME="$a/home" TMPDIR="$a/tmp/" PATH="$r/tools/rust/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
       CARGO_HOME="$r/cache/cargo" LANG=en_US.UTF-8 __CF_USER_TEXT_ENCODING="$(cf_enc)" \
-      ${extra[@]+"${extra[@]}"} \
-      /bin/bash -c 'echo "prefix: $(brew --prefix --installed libgccjit 2>&1 | tail -n 3)"; echo "prefix-rc=$?"
+      "${extra[@]}" \
+      /bin/bash -c 'p=$(brew --prefix --installed libgccjit 2>&1); rc=$?; echo "prefix: $(printf "%s\n" "$p" | tail -n 30)"; echo "prefix-rc=$rc"
         brew ls -v libgccjit 2>&1 | grep -E "libgccjit\.(so|dylib)|Error|rror:" | head -n 5; echo "ls-rc=${PIPESTATUS[0]}"' \
       > "$a/brew-probe-$how.txt" 2>&1
     echo "--- brew under the profile ($how)"; cut -c1-300 "$a/brew-probe-$how.txt"

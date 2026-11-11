@@ -84,6 +84,9 @@ pub fn spec(job: &Job) -> Spec {
         ("HOMEBREW_NO_INSTALL_CLEANUP".into(), "1".into()),
         ("HOMEBREW_NO_ANALYTICS".into(), "1".into()),
         ("HOMEBREW_NO_ENV_HINTS".into(), "1".into()),
+        // formulae from the installed kegs, never the JSON API: with an empty cache brew would fetch it (no network)
+        // under a download lock in Homebrew's var (denied), and fail
+        ("HOMEBREW_NO_INSTALL_FROM_API".into(), "1".into()),
         (
             "HOMEBREW_CACHE".into(),
             format!("{}/brew-cache", tmp.display()),
@@ -213,7 +216,7 @@ mod tests {
         assert!(mac_context("", "/nowhere/at/all/0/").is_err());
     }
 
-    /// [D] A job runs Homebrew read-only: no update, cleanup or analytics, and its cache, logs and temporary files in
+    /// [D] A job runs Homebrew read-only: no update, cleanup, analytics or JSON API, and its cache, logs and temporary files in
     /// the attempt's tmp (a configure that asks `brew` where a package is, under a profile that can't write Homebrew).
     #[test]
     fn a_job_runs_homebrew_read_only() {
@@ -233,6 +236,7 @@ mod tests {
             ("HOMEBREW_NO_INSTALL_CLEANUP", "1".to_string()),
             ("HOMEBREW_NO_ANALYTICS", "1".to_string()),
             ("HOMEBREW_NO_ENV_HINTS", "1".to_string()),
+            ("HOMEBREW_NO_INSTALL_FROM_API", "1".to_string()),
             ("HOMEBREW_CACHE", format!("{tmp}/brew-cache")),
             ("HOMEBREW_LOGS", format!("{tmp}/brew-logs")),
             ("HOMEBREW_TEMP", tmp.clone()),

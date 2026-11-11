@@ -121,7 +121,8 @@ runs the command only as `/usr/bin/sandbox-exec -f job.sb …` and refuses anyth
 bare command) as `infra: setup`, so a job never runs unconfined. `job.sb` is Gleipnir's profile of the attempt's
 spec (`darwin::sandbox::spec`): it reads the source, writes the attempt folder (and the source when the job writes its
 tree), `HOME` and `TMPDIR` inside the folder, `PATH` Homebrew's and the system's (after its toolchains'), the marker
-`DRGNX_RUNNER_ATTEMPT`, Homebrew read-only (`HOMEBREW_NO_AUTO_UPDATE` and the like, its cache, logs and temporary
+`DRGNX_RUNNER_ATTEMPT`, Homebrew read-only (`HOMEBREW_NO_AUTO_UPDATE` and the like; `HOMEBREW_NO_INSTALL_FROM_API`, so formulae load from the
+installed kegs instead of a JSON API fetch, which needs the network and a lock in Homebrew's var; its cache, logs and temporary
 files in the attempt's tmp: a configure asks `brew` where a package is), and no network. Every job a Mac runner takes is a
 build or a test, so its profile has Gleipnir's build addition (`darwin::sandbox::mac_context`: the developer dir and
 the account's per-user folder, `getconf DARWIN_USER_DIR`'s parent, by true name; docs/develop/gleipnir.md, "The build
