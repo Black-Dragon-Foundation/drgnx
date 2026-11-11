@@ -167,6 +167,66 @@ async fn brief_has_the_findings_paragraph() {
     assert!(text.contains(f.as_str()));
 }
 
+/// Pattern D: a job under a rule pack gets a Gates block from it: each rule that gates the merge, what it checks and
+/// how to satisfy it; advice and routing rules are not gates; a job with no pack gets none.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_brief_says_what_the_merge_checks_and_how_to_pass() {
+    use vordr::pack::{Pack, Rule};
+    let (_d, db, _plan) = setup().await;
+    let (parts, _) = gathered(&db, "J#2").await;
+    let none = parts
+        .iter()
+        .find(|(p, _)| *p == BriefPart::Gates)
+        .map(|(_, t)| t.clone());
+    assert!(none.unwrap_or_default().is_empty());
+    let rule = |id: &str, kind: &str| Rule {
+        id: id.into(),
+        kind: kind.into(),
+        doc: format!("the {id} rule"),
+    };
+    let pack = Pack {
+        name: "drgnx-org".into(),
+        version: 4,
+        rules: vec![
+            rule("red-first", "enforced"),
+            rule("author-check", "enforced"),
+            rule("merge-notes", "checked"),
+            rule("review", "routing"),
+            rule("tidy", "advice"),
+        ],
+        test_globs: vec!["test/**".into()],
+        ..Pack::default()
+    };
+    db.write(meta(Class::System), move |tx| {
+        norn::write::evidence::rule_pack(tx, "J", &pack, None).map(|_| ())
+    })
+    .await
+    .unwrap();
+    let (parts, pointer) = gathered(&db, "J#2").await;
+    let (text, parts, _) = assemble("J#2", parts, &pointer);
+    let g = &parts
+        .iter()
+        .find(|(p, _)| *p == BriefPart::Gates)
+        .expect("gates")
+        .1;
+    assert!(g.contains("drgnx-org v4"), "{g}");
+    for want in [
+        "red-first",
+        "the red-first rule",
+        "commit the failing tests first",
+        "test/**",
+        "author-check",
+        "merge-notes",
+    ] {
+        assert!(g.contains(want), "no {want:?} in\n{g}");
+    }
+    assert!(!g.contains("tidy") && !g.contains("- review"), "{g}");
+    assert!(
+        text.contains("## The gates (what the merge checks)"),
+        "{text}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn missing_reports_leave_interfaces_empty() {
     let (_d, db, _) = setup().await;
@@ -176,7 +236,7 @@ async fn missing_reports_leave_interfaces_empty() {
         .find(|(p, _)| *p == BriefPart::Interfaces)
         .unwrap();
     assert!(i.1.is_empty());
-    assert_eq!(parts.len(), 8);
+    assert_eq!(parts.len(), 9);
 }
 
 #[tokio::test(flavor = "multi_thread")]

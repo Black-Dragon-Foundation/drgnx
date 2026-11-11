@@ -9476,6 +9476,11 @@
                 "type": "string"
               },
               {
+                "const": "gates",
+                "description": "What the merge checks under the job's rule pack, and how to satisfy each (empty without a pack).",
+                "type": "string"
+              },
+              {
                 "const": "findings",
                 "description": "How to record what the agent establishes (findings with sources, decisions).",
                 "type": "string"
