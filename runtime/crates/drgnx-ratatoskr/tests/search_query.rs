@@ -608,7 +608,9 @@ fn status_lists_the_trees() {
     assert_eq!(trees.len(), 1, "{s}");
     let t = &trees[0];
     assert!(t["worktree"].is_string(), "{s}");
-    assert_eq!(t["root"], wt.to_str().unwrap(), "{s}");
+    // the tree's true path: a temp root reached through a link (macOS's /var) is listed as /private/var
+    let true_root = std::fs::canonicalize(&wt).unwrap();
+    assert_eq!(t["root"], true_root.to_str().unwrap(), "{s}");
     assert_eq!(t["door"], "cli", "{s}");
     assert_eq!(t["differing_files"], 1, "{s}");
     assert!(t["watched"].is_boolean(), "{s}");
