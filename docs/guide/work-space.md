@@ -78,14 +78,16 @@ appears in the needs-you strip; its key jumps to the agents in it.
   in the same window, and the selection comes along: each view shows the nearest thing it can represent. It replaces
   the editor's tabs while a view of the Work space is shown: the Work space's own tab ("Work · drgnx", the
   workspace's folder), the views with the shown one marked, and the view's own keys as chips (the Flow's `evidence e`
-  and `rules R`). The Flow has the map's strip as its header too.
+  and `rules R`).
 - The **Flow** shows a plan run as the hub's gates see it: a row per task and a column per gate (Brief, Red first,
   Build, Author check, Merge batch, Review), each cell a chip (green when it passed, accent while it runs, amber when it
   holds the task with a lock, red when it failed, an empty ring while it waits). Under the tasks is the merge batch.
   `↑` `↓` move between tasks, `Tab` walks the held ones, `e` shows the selected task's evidence (every run the hub
   recorded for it, with its failing rows, and any waiver you gave) and `R` opens the run's rule pack in the bottom
   panel: each rule, whether the hub enforces it, checks it or only routes by it, and how. The Flow shows the
-  newest running job. A task the gates hold is a chip at the top ("T5 held: …"). The right dock shows the selected
+  newest running job. Its strip, under the run's line, has a chip for each task the gates hold ("T5 held: …", with
+  its jump key: `g 1` selects the first), the push the line gate leaves to you once it is green, and on the right the
+  run's cost against its plan's budget and each machine's load. The right dock shows the selected
   task's detail: why it is held, what clears it, its evidence so far, and its actions. `r` runs its gates again, `s`
   sends it back to its agent with what the gates found, and `w` waives the gates once for that commit, with a reason
   you type, recorded on the task. Only you can waive; no agent or grant can.

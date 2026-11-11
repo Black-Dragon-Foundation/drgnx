@@ -27,25 +27,18 @@ marked, then the lens's own keys as chips with their key badges."
     (should (string-match-p "Work .*Map" s))
     (should-not (string-match-p "evidence" s))))
 
-(ert-deftest drgnx-work-flow/its-window-shows-the-lens-bar-and-the-map-s-strip ()
-  "The Flow's window shows the lens bar as its tab line (the chrome keeps a buffer's own) and the map's strip (what
-needs you, the machines' load) as its header."
-  (let ((map (generate-new-buffer " map")) (flow (generate-new-buffer " flow")))
-    (unwind-protect
-        (progn
-          (with-current-buffer map (setq-local drgnx-work-map--strip "⚑ T5 held  g1"))
-          (with-current-buffer flow
-            (drgnx-work-flow-mode)
-            (setq drgnx-work-flow--map map)
-            (should (local-variable-p 'drgnx-chrome-own-tab-line))
-            ;; a mode line drops the faces of a variable's string unless the variable is risky
-            (should (get 'drgnx-work-map--lens 'risky-local-variable))
-            (should (get 'drgnx-work-map--strip 'risky-local-variable))
-            (should drgnx-chrome-own-tab-line)
-            ;; the header is an `:eval' form (a batch Emacs formats those as ""): its value is the map's strip
-            (should (eq (car header-line-format) :eval))
-            (should (string-search "T5 held" (eval (cadr header-line-format) t)))))
-      (kill-buffer flow) (kill-buffer map))))
+(ert-deftest drgnx-work-flow/its-window-shows-the-lens-bar ()
+  "The Flow's window shows the lens bar as its tab line (the chrome keeps a buffer's own) and no header: its strip
+(what needs you, the machines' load) is the hub's, in its rows."
+  (with-temp-buffer
+    (drgnx-work-flow-mode)
+    (should (local-variable-p 'drgnx-chrome-own-tab-line))
+    (should drgnx-chrome-own-tab-line)
+    (should (equal tab-line-format '("" drgnx-work-map--lens)))
+    (should-not header-line-format)
+    ;; a mode line drops the faces of a variable's string unless the variable is risky
+    (should (get 'drgnx-work-map--lens 'risky-local-variable))
+    (should (get 'drgnx-work-map--strip 'risky-local-variable))))
 
 (ert-deftest drgnx-work-flow/it-asks-the-hub-for-the-job-s-flow ()
   "The Flow asks `work/flow/subscribe' with its view, its map's view and the job (none: the hub picks the newest
@@ -112,11 +105,29 @@ says its reason."
 literal colour."
   (dolist (f '(drgnx-work-flow-text drgnx-work-flow-label drgnx-work-flow-heading drgnx-work-flow-chip-ok
                                     drgnx-work-flow-chip-run drgnx-work-flow-chip-held drgnx-work-flow-chip-err
-                                    drgnx-work-flow-chip-wait))
+                                    drgnx-work-flow-chip-wait drgnx-work-flow-key))
     (should (facep f))
     (let ((spec (face-default-spec f)))
       (should-not (string-match-p "#[0-9a-fA-F]\\{3\\}" (format "%S" spec)))
       (should (string-match-p "drgnx-ui-" (format "%S" spec))))))
+
+(ert-deftest drgnx-work-flow/g-n-selects-the-nth-held-task ()
+  "In the Flow, `g N' (the strip's badges) selects the Nth task a gate holds; on the map it stays the map's Nth thing
+that needs you; elsewhere it says where it works."
+  (let (moved)
+    (cl-letf (((symbol-function 'drgnx-work-flow--rows-p) (lambda () t))
+              ((symbol-function 'drgnx-view-nav) (lambda (&rest args) (push args moved)))
+              ((symbol-function 'drgnx-work-map-needs-you) (lambda (n) (push (list 'map n) moved))))
+      (with-temp-buffer
+        (drgnx-work-flow-mode)
+        (drgnx-work-needs-you 2))
+      (with-temp-buffer
+        (drgnx-work-map-mode)
+        (drgnx-work-needs-you 3))
+      (with-temp-buffer
+        (fundamental-mode)
+        (should-error (drgnx-work-needs-you 1) :type 'user-error)))
+    (should (equal (nreverse moved) '((walk-to "held" 1) (map 3))))))
 
 (ert-deftest drgnx-work-flow/the-actions-answer-the-gate-card ()
   "Run the red, Tell the agent and Waive once answer the held task's `gate' card (`job/card': merge, retry, waive with

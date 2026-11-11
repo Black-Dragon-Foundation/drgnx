@@ -45,6 +45,8 @@ pub(crate) enum Chip {
 const TEXT: &str = "drgnx-work-flow-text";
 const LABEL: &str = "drgnx-work-flow-label";
 const HEAD: &str = "drgnx-work-flow-heading";
+/// A key's badge (the keycap).
+const KEY: &str = "drgnx-work-flow-key";
 /// A card's fill (drgnx-work-flow.el: the panel's surface), and the text faces on it.
 const CARD: &str = "drgnx-work-flow-card";
 const CARD_TEXT: &str = "drgnx-work-flow-card-text";
@@ -171,6 +173,10 @@ pub(crate) struct Flow {
     pub groups: Option<Runs>,
     /// The push tiers' runs at the line's head, once a push was asked.
     pub push: Option<Runs>,
+    /// The machines' load: (label, slots used, slots), as the map's strip has them.
+    pub machines: Vec<(String, u32, u32)>,
+    /// The run's spend in USD and its plan's USD budget, when it has one.
+    pub cost: Option<(f64, Option<f64>)>,
 }
 
 /// What one Flow view shows: the lens, one task's detail tile, or the Rules tile.
@@ -449,6 +455,111 @@ fn chip(b: &mut RowBuilder, pics: &mut Pics, icon: Option<(&str, &str)>, text: &
     b.face(start, end, face);
 }
 
+/// The strip under the run's line, when it has anything to say: a chip per task a gate holds (why, its card's words,
+/// carrying the task's id) with its jump key's badge (`g N`: the Nth held task), the push the line gate leaves to the
+/// user once its tiers are green; at the window's right edge the run's cost (against its plan's budget) and each
+/// machine's load.
+fn strip_row(
+    flow: &Flow,
+    ts: &[Task],
+    env: &ViewEnv,
+    fonts: &dyn Measure,
+    pics: &mut Pics,
+) -> Option<Row> {
+    let held: Vec<&Task> = ts.iter().filter(|t| t.held.is_some()).collect();
+    let push_green = flow
+        .push
+        .as_ref()
+        .is_some_and(|p| tally(p).0 == p.checks.len());
+    if held.is_empty() && !push_green && flow.cost.is_none() && flow.machines.is_empty() {
+        return None;
+    }
+    // the right part: the cost, then a chip per machine (" ", icon, " label u/n ")
+    let cost = flow.cost.map(|(spent, limit)| match limit {
+        Some(l) => format!("${spent:.2} / ${l:.0}"),
+        None => format!("${spent:.2}"),
+    });
+    let machines: Vec<String> = flow
+        .machines
+        .iter()
+        .map(|(label, used, total)| format!("{label} {used}/{total}"))
+        .collect();
+    let (sp, gap) = (text_px(fonts, " "), dpx(env, 6.0));
+    // a chip's width as `chip' draws it: its spaces, its icon (its placeholder counted too) and its text
+    let chip_px = |text: &str, icon: bool| {
+        2 * sp + text_px(fonts, text) + if icon { 2 * sp + pics.px } else { 0 }
+    };
+    let mut width = cost.as_ref().map_or(0, |c| chip_px(c, false) + sp + gap)
+        + machines
+            .iter()
+            .map(|m| chip_px(m, true) + sp + gap)
+            .sum::<u32>();
+    // the left part fits before it: the push's words stay whole, the held tasks' reasons share what is left (each
+    // keeps room for a word and its ellipsis); when even that does not fit, the right part gives way
+    let push = push_green.then(|| format!("push job/{}? gate green", flow.job));
+    let fixed = push.as_ref().map_or(0, |p| chip_px(p, true) + 2 * sp)
+        + held
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                chip_px(&format!("{} held: ", t.label), true)
+                    + text_px(fonts, &format!(" g{} ", i + 1))
+                    + 2 * sp
+            })
+            .sum::<u32>();
+    let least = u32::try_from(held.len()).unwrap_or(0) * text_px(fonts, "word…");
+    let room_with = |width: u32| {
+        if width > 0 {
+            env.width_px.saturating_sub(width + dpx(env, 4.0) + gap)
+        } else {
+            env.width_px
+        }
+    };
+    if room_with(width) < fixed + least {
+        width = 0;
+    }
+    let stop = env.width_px.saturating_sub(width + dpx(env, 4.0));
+    let room = room_with(width);
+    let each = room.saturating_sub(fixed) / u32::try_from(held.len().max(1)).unwrap_or(1);
+    let mut b = RowBuilder::new("needs");
+    for (i, t) in held.iter().enumerate() {
+        if i > 0 {
+            b.push("  ", None);
+        }
+        let start = b.pos();
+        let why = t.held.as_deref().unwrap_or_default();
+        let why = drgnx_rows::fit::fit(fonts, ROLE, why, each as f32);
+        chip(
+            &mut b,
+            pics,
+            Some(("flag", "⚑")),
+            &format!("{} held: {why}", t.label),
+            Chip::Held.face(),
+        );
+        b.push(&format!(" g{} ", i + 1), Some(KEY));
+        let end = b.pos();
+        b.prop(start, end, "drgnx-work-id", json!(t.id));
+    }
+    if let Some(p) = &push {
+        if !held.is_empty() {
+            b.push("  ", None);
+        }
+        chip(&mut b, pics, Some(("flag", "⚑")), p, Chip::Held.face());
+    }
+    if width > 0 {
+        b.stop(stop);
+        if let Some(c) = &cost {
+            chip(&mut b, pics, None, c, Chip::Wait.face());
+            b.push(" ", None);
+        }
+        for m in &machines {
+            chip(&mut b, pics, Some(("server", "▣")), m, Chip::Wait.face());
+            b.push(" ", None);
+        }
+    }
+    Some(b.finish())
+}
+
 /// A gate column's icon (Lucide, as the mockup's headings).
 fn gate_icon(gate: &str) -> &'static str {
     match gate {
@@ -522,27 +633,8 @@ pub(crate) fn flow_rows(
         Chip::Wait.face(),
     );
     let mut rows = vec![head.finish()];
-    // the needs-you chips: a task a gate holds, with why (its card's words)
-    let held: Vec<&Task> = ts.iter().filter(|t| t.held.is_some()).collect();
-    if !held.is_empty() {
-        let mut b = RowBuilder::new("needs");
-        for (i, t) in held.iter().enumerate() {
-            if i > 0 {
-                b.push("  ", None);
-            }
-            let start = b.pos();
-            let why = t.held.as_deref().unwrap_or_default();
-            chip(
-                &mut b,
-                &mut pics,
-                Some(("flag", "⚑")),
-                &format!("{} held: {}", t.label, fit(why, 48)),
-                Chip::Held.face(),
-            );
-            let end = b.pos();
-            b.prop(start, end, "drgnx-work-id", json!(t.id));
-        }
-        rows.push(b.finish());
+    if let Some(strip) = strip_row(flow, &ts, env, fonts, &mut pics) {
+        rows.push(strip);
     }
     let mut cols = RowBuilder::new("cols");
     for (i, name) in ["Task", "Agent"].iter().chain(GATES.iter()).enumerate() {
@@ -1271,6 +1363,8 @@ mod tests {
             }],
             groups: None,
             push: None,
+            machines: vec![],
+            cost: None,
         }
     }
 
@@ -1632,6 +1726,107 @@ mod tests {
         };
         // no held task: no needs-you row
         assert_eq!(flow_rows(&empty, &env(1.0), &fonts()).0[2].key, "none");
+    }
+
+    /// [D] The strip under the run's line: a chip per held task with its jump key's badge (`g 1` …), the push the line
+    /// gate leaves to the user once it is green, and at the window's right edge the run's cost against its budget and
+    /// each machine's load, with a server icon.
+    #[test]
+    fn the_strip_says_what_needs_you_and_the_machines_load() {
+        let unit = check("unit");
+        for scale in [1.0, 2.0] {
+            let f = Flow {
+                push: Some(Runs {
+                    at: "9c41e07a".into(),
+                    checks: vec![unit.clone()],
+                    evidence: vec![run_of(&unit, "9c41e07a", "desktop", true)],
+                }),
+                machines: vec![("desk".into(), 4, 6), ("mac-mini".into(), 1, 2)],
+                cost: Some((6.2, Some(18.0))),
+                ..flow()
+            };
+            let e = env(scale);
+            let (rows, _) = flow_rows(&f, &e, &fonts());
+            let strip = &rows[1];
+            assert_eq!(strip.key, "needs");
+            assert!(strip.text.contains("T5 held: no red"), "{}", strip.text);
+            assert!(
+                strip.text.contains("push job/J? gate green"),
+                "{}",
+                strip.text
+            );
+            assert!(strip.text.contains("$6.20 / $18"), "{}", strip.text);
+            assert!(strip.text.contains("desk 4/6") && strip.text.contains("mac-mini 1/2"));
+            // the held chip's key badge in the key face
+            let g1 = strip.text[..strip.text.find("g1").expect("g1")]
+                .chars()
+                .count() as u32;
+            assert!(
+                strip
+                    .runs
+                    .iter()
+                    .any(|r| r.0 <= g1 && g1 < r.1 && r.2 == KEY),
+                "{:?}",
+                strip.runs
+            );
+            // a server icon per machine, and the right part starts past the window's middle, ending inside it
+            // two flags (the held task, the push) and two servers
+            assert!(strip.images.len() >= 4, "{:?}", strip.images);
+            let stop = strip.stops.last().expect("a stop").1;
+            assert!(stop > e.width_px / 2 && stop < e.width_px, "{stop}");
+        }
+        // a narrow window: the held reasons give way (ellipsis), the push's words stay whole, and the left part ends
+        // before the right part's stop
+        let mut f = Flow {
+            push: Some(Runs {
+                at: "9c41e07a".into(),
+                checks: vec![unit.clone()],
+                evidence: vec![run_of(&unit, "9c41e07a", "desktop", true)],
+            }),
+            machines: vec![("desk".into(), 4, 6), ("mac-mini".into(), 1, 2)],
+            cost: Some((6.2, Some(18.0))),
+            ..flow()
+        };
+        f.tasks[1].held =
+            Some("the gates hold the merge: no red for its test commit, so it waits".into());
+        let mut e = env(1.0);
+        e.width_px = 900;
+        let fs = fonts();
+        let (rows, _) = flow_rows(&f, &e, &fs);
+        let strip = &rows[1];
+        assert!(
+            strip.text.contains("push job/J? gate green"),
+            "{}",
+            strip.text
+        );
+        assert!(strip.text.contains('…'), "{}", strip.text);
+        let (at, stop) = *strip.stops.last().expect("a stop");
+        let left: String = strip.text.chars().take(at as usize).collect();
+        let icons = strip.images.iter().filter(|i| i.0 < at).count() as u32;
+        let px = text_px(&fs, &left) + icons * dpx(&e, 14.0);
+        assert!(px <= stop, "{px} > {stop}: {left}");
+        // narrower still: the cost and the machines give way to what needs you
+        e.width_px = 400;
+        let (rows, _) = flow_rows(&f, &e, &fs);
+        let strip = &rows[1];
+        assert!(
+            strip.stops.is_empty() && !strip.text.contains("desk 4/6"),
+            "{}",
+            strip.text
+        );
+        assert!(
+            strip.text.contains("push job/J? gate green"),
+            "{}",
+            strip.text
+        );
+        // a push gate not green yet: no push chip; no budget: the cost alone
+        let f = Flow {
+            cost: Some((1.5, None)),
+            ..flow()
+        };
+        let strip = &flow_rows(&f, &env(1.0), &fonts()).0[1];
+        assert!(!strip.text.contains("push job/"));
+        assert!(strip.text.contains("$1.50") && !strip.text.contains(" / $"));
     }
 
     /// [D] The Rules tile: its heading, the columns, a row per rule (its words, its kind as a chip, how the hub holds

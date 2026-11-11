@@ -294,7 +294,10 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
             let Some(job) = job else {
                 return Ok(None);
             };
-            let title = norn::read::jobs::job(c, &job)?
+            let row = norn::read::jobs::job(c, &job)?;
+            // the budget scope the runner books the run's spend under
+            let plan = row.as_ref().map(crate::runner::plan_scope);
+            let title = row
                 .and_then(|j| j.title.or(j.plan))
                 .unwrap_or_else(|| job.clone());
             let pack = norn::read::evidence::pack_of_job(c, &job)?;
@@ -317,10 +320,10 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
                     queue: flow::Queue::None,
                 });
             }
-            Ok(Some((job, title, pack, tasks)))
+            Ok(Some((job, title, plan, pack, tasks)))
         })
         .await;
-    let Ok(Some((job, title, pack, mut tasks))) = read else {
+    let Ok(Some((job, title, plan, pack, mut tasks))) = read else {
         return flow::Flow::default();
     };
     let (ready, batch) = (f.queue.ready(&job), f.queue.batch(&job));
@@ -395,7 +398,29 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
         batch,
         groups,
         push,
+        machines: f.core.map.machines_of(conn, map),
+        cost: plan.and_then(|p| plan_cost(&f.core.budgets, &p)),
     }
+}
+
+/// What the plan scope PLAN (`runner::plan_scope`) spent in USD (measured and estimated) and its USD budget: none when
+/// it has neither.
+fn plan_cost(b: &crate::budget::Budgets, plan: &str) -> Option<(f64, Option<f64>)> {
+    use runstav::methods::matrix::Unit;
+    use runstav::methods::timeline::BudgetScope;
+    let v = b.view(&BudgetScope::Plan(runstav::types::Bounded(plan.to_owned())));
+    let spent: f64 = v
+        .spent
+        .iter()
+        .filter(|l| matches!(l.unit, Unit::Usd | Unit::UsdEst))
+        .map(|l| l.amount)
+        .sum();
+    let limit = v
+        .limits
+        .iter()
+        .find(|l| matches!(l.unit, Unit::Usd))
+        .map(|l| l.amount);
+    (spent > 0.0 || limit.is_some()).then_some((spent, limit))
 }
 
 /// The caller the trail reads the store as.

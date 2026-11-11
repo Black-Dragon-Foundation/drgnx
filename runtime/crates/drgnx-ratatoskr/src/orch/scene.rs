@@ -12,6 +12,8 @@ use vordr::pack::{Check, Pack, Rule};
 
 /// The seeded job's id.
 pub const JOB: &str = "scene-run";
+/// Its plan.
+const PLAN: &str = "docs/plans/search-view.md";
 
 /// One seeded task: its number, title, status, agent, evidence and whether it is in the batch.
 pub(crate) struct SeedTask {
@@ -275,7 +277,7 @@ pub async fn seed(front: &Front) -> Result<(), String> {
                 NewJob {
                     id: JOB.into(),
                     title: "Search view · .6 part".into(),
-                    plan: Some("docs/plans/search-view.md".into()),
+                    plan: Some(PLAN.into()),
                     repo: None,
                     tasks: tasks
                         .iter()
@@ -341,6 +343,20 @@ pub async fn seed(front: &Front) -> Result<(), String> {
         .audit(JOB, &ready[0].task, &crate::orch::queue::audit_words(1));
     front.queue.at_groups(JOB, BATCH_TREE, groups);
     front.queue.at_push(JOB, LINE_HEAD, LINE_TREE);
+    // the run's plan has a USD budget, a third of it spent (the strip's cost chip)
+    {
+        use runstav::methods::matrix::{Limit, Unit};
+        use runstav::methods::timeline::BudgetScope;
+        let scope = BudgetScope::Plan(runstav::types::Bounded(format!("plan:{PLAN}")));
+        front.core.budgets.set(
+            &scope,
+            vec![Limit {
+                amount: 18.0,
+                unit: Unit::Usd,
+            }],
+        );
+        front.core.budgets.spend(&scope, Unit::Usd, 6.2);
+    }
     front.writer.signals.wrote();
     Ok(())
 }

@@ -28,7 +28,6 @@
 (declare-function drgnx-work-lens-string "drgnx-work-map")
 (declare-function drgnx-work-lens-name "drgnx-work-map")
 (defvar drgnx-work-lens--map)
-(defvar drgnx-work-map--strip)
 (defvar drgnx-chrome-own-tab-line)
 (defvar drgnx-work-lens-nav)
 (defvar drgnx-work-lens-map)
@@ -40,6 +39,8 @@
   :group 'drgnx-work-space)
 (defface drgnx-work-flow-label '((t :inherit (drgnx-ui-caption drgnx-text-muted)))
   "The Flow's labels: task ids, agents, column headings." :group 'drgnx-work-space)
+(defface drgnx-work-flow-key '((t :inherit (drgnx-ui-caption drgnx-keycap)))
+  "A key's badge on the Flow's chips (`g 1' on a held task)." :group 'drgnx-work-space)
 (defface drgnx-work-flow-heading '((t :inherit drgnx-ui-heading)) "The Flow's headings: the run, the batch, a tile's."
   :group 'drgnx-work-space)
 (defface drgnx-work-flow-chip-ok '((t :inherit (drgnx-ui-caption drgnx-chip-ok))) "A gate that passed."
@@ -97,13 +98,7 @@ rows or its pass count; a waiver says its reason."
 (define-derived-mode drgnx-work-flow-mode special-mode "Work flow"
   "The Work space's Flow lens: a plan run's tasks by gate, its merge batch and its rule pack."
   (setq-local truncate-lines t cursor-type nil drgnx-chrome-own-tab-line t
-              tab-line-format '("" drgnx-work-map--lens)
-              header-line-format '(:eval (drgnx-work-flow--strip))))
-
-(defun drgnx-work-flow--strip ()
-  "The Flow's header: its map's strip (what needs you with its jump keys, the machines' load), as the map last made
-it; redisplay only reads it."
-  (if (buffer-live-p drgnx-work-flow--map) (buffer-local-value 'drgnx-work-map--strip drgnx-work-flow--map) ""))
+              tab-line-format '("" drgnx-work-map--lens)))
 
 (defun drgnx-work-flow--twin (class)
   "The Flow's buffer in display CLASS (`drgnx-view-patch-twin-function')."
@@ -137,6 +132,11 @@ it; redisplay only reads it."
       ('next-agent (drgnx-view-nav 'walk "held" 1))
       ('previous-agent (drgnx-view-nav 'walk "held" -1))))
   t)
+
+(defun drgnx-work-flow-held (n)
+  "Select the Nth task a gate holds (the strip's `g N' badge).  It selects; nothing is merged, retried or waived."
+  (when (drgnx-work-flow--rows-p)
+    (drgnx-view-nav 'walk-to "held" (1- n))))
 
 ;;;; The cards' rings and the rows' rules: Glitnir blocks (`glitnir-blocks', Nidhogg's `glitnir.el')
 ;; The hub marks them on its rows (`drgnx-work-flow-block': ["ring" ID X0 X1] on a card's span of each of its rows,
