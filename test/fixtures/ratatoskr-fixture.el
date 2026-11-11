@@ -1,7 +1,7 @@
 ;;; ratatoskr-fixture.el --- the real Ratatoskr hub, started for one test -*- lexical-binding: t -*-
 ;; Only the hub holds provider keys (design §5.6): a test of a feature that hands over a key or asks a keyed provider
 ;; needs the hub itself, Ratatoskr from DRGNX_RATATOSKR_BIN, never a stand-in.  Without the binary the test skips
-;; (test/no-skip.eld lists such tests).
+;; (test/no-skip.eld lists such tests), or fails where the hub is required (DRGNX_TEST_HUB_REQUIRED=1: the GUI suite).
 (require 'ert)
 (require 'drgnx-hub-client)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
@@ -10,6 +10,13 @@
   "Ratatoskr: DRGNX_RATATOSKR_BIN when it is an absolute executable, else nil."
   (let ((b (getenv "DRGNX_RATATOSKR_BIN")))
     (and b (file-name-absolute-p b) (file-executable-p b) (not (file-directory-p b)) b)))
+
+(defun drgnx-test-no-hub ()
+  "A hub test found no Ratatoskr: skip it, or fail it with DRGNX_TEST_HUB_REQUIRED=1 (set for the GUI suite by
+`drgnx-ui-run-ui-session-tests'), where a skip would hide a row that never ran."
+  (if (equal (getenv "DRGNX_TEST_HUB_REQUIRED") "1")
+      (ert-fail "DRGNX_TEST_HUB_REQUIRED=1 and no Ratatoskr: build it (cargo build -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks) or set DRGNX_RATATOSKR_BIN")
+    (ert-skip "DRGNX_RATATOSKR_BIN is not set")))
 
 (defvar drgnx-test-gate-hub-args)        ; delivery-gate-fixture.el, which a `:gated' test loads
 
@@ -25,7 +32,7 @@ its clock and sequencer) and this Emacs does not connect: BODY connects inside `
 \(delivery-gate-fixture.el).  The binary's version is read first, so no hello waits for that read."
   (declare (indent 1))
   (let ((gated (and (eq (car body) :gated) (prog1 (cadr body) (setq body (cddr body))))))
-    `(let* ((bin (or (drgnx-test-ratatoskr-bin) (ert-skip "DRGNX_RATATOSKR_BIN is not set")))
+    `(let* ((bin (or (drgnx-test-ratatoskr-bin) (drgnx-test-no-hub)))
             (hub nil) (drgnx-test-ratatoskr-process nil)
             (process-environment (append (list (concat "XDG_RUNTIME_DIR=" (file-name-as-directory ,root) "run")
                                                (concat "DRGNX_RATATOSKR_BIN=" bin) "RATATOSKR_SUPERVISOR=none"
