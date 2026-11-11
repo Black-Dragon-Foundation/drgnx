@@ -233,6 +233,7 @@
   "term/session-end": ["user"],
   "term/text": ["user"],
   "term/text-range": ["user"],
+  "term/visible": ["user"],
   "timeline/get": ["user"],
   "view/ack": ["user"],
   "view/close": ["user"],

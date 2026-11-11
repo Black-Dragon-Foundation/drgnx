@@ -15,6 +15,7 @@ fn worker(cols: u16, rows: u16, window: usize) -> Worker {
         scrollback: window,
         scrollback_bytes: 64 << 20,
         clipboard_write: true,
+        img_dir: None,
     })
     .expect("engine");
     w.handle(

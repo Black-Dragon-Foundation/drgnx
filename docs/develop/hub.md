@@ -1543,6 +1543,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `term/session-end` | user | `{keep?: [string]}` | `natnum` | no |
 | `term/text` | user | `{id: string, text: string}` | `boolean` | no |
 | `term/text-range` | user | `{from_key?: string, id: string, to_key?: string}` | `{text: string}` | no |
+| `term/visible` | user | `{id: string, visible: boolean}` | `boolean` | no |
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
 | `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `view/close` | user | `{view: string}` | `boolean` | no |
