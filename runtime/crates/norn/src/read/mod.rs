@@ -4,6 +4,7 @@
 pub mod agents;
 pub mod cards;
 pub mod decisions;
+pub mod evidence;
 pub mod exec;
 pub mod jobs;
 pub mod messages;

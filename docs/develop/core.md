@@ -1494,6 +1494,8 @@ function and one rounding rule:
   `drgnx-pixels/the-scale-conses-nothing` holds.
 - A size made of parts adds the rounded parts (`(+ (drgnx-px 26) (drgnx-px 6))`), never `drgnx-px` of the sum, so a
   row and its gap add up to what is drawn.
+- An image already sized in device pixels (the hub's row images, `drgnx-view-patch--image`) is made with `:scale 1`;
+  without it Emacs applies `image-scaling-factor`, a guess from the font (1.6 at scale 2), on top.
 
 Never multiply by `frame-scale-factor` yourself, and never test `(featurep 'nidhogg-wayland)` for it: a Naglfar
 frame counts device pixels too. Tests pass SCALE to check the four scales (1, 1.25, 4/3, 2) without a display
@@ -2123,7 +2125,7 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   `drgnx-view-patch-id-prop`, `drgnx-work-id` by default, is its id), never on the whole line. Rendering a row notes
   which rows hold which node (`drgnx-view-patch-ids`) and which nodes each row holds (`drgnx-view-patch-keys`, the
   index the class step reads, so a draw costs the rows it replaced, never a walk of every node drawn); after a draw,
-  the rows it replaced get their nodes' classes again (PATCHED), so a selection made while a patch waits is still shown once the patch lands. Row patches carry no
+  the rows it replaced get their nodes' classes again (PATCHED), so a selection made while a patch waits is still shown once the patch lands; after a reset (which deletes every row, point with it) point goes back to the selection's span. A view names a class with no face to draw none (the Explorer: its selected row is the workbench's, and Sjá's `dim`, every row off the selection's chain, means every other row in a view with no chain). Row patches carry no
   selection: a removed row takes nothing with it. A view's own marks over the hub's rows go back on after the classes
   through `drgnx-view-patch-patched-functions` (VIEW KEYS), added buffer-locally (the Search view's tick boxes).
 - **The trailing notice:** the view's `drgnx-view-nav-notice-method` gets `(:view V :selected ID)`, or
@@ -2142,6 +2144,10 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   after the rows drawn from that model. Nothing waits for the hub: keys pressed meanwhile answer from the window
   held. The hub keeps the from per (view, list) and its builder sends the model with that window; a search that has not
   grown since sends the move alone (the nodes it adds, the ids it drops, the list: `Sent::move_window`, hub.md).
+  One window per view means a twin shares it: the Explorer's twin (a dock on another monitor) pages it on scroll as
+  the Explorer does (`drgnx-explorer--rows-scrolled` on its `window-scroll-functions`), and the other buffer, whose
+  rows the move took, does not ask it back on the scroll the move caused (`drgnx-explorer--window-asker`); its user's
+  next scroll does. Two displays far apart in one listing take turns (a window per class is a later step).
 - **A broken view** (Sjá's breaker tripped after two panics): a key answers nil and the buffer posts a `render` `fail`
   condition keyed `(view-broken . VIEW)`, which the doctor's `views` row fails on; the view's last instance closing
   clears it. The doctor's `view-model` row fails on an Emacs without `nidhogg-view-push` (no Sjá, or a Nidhogg older
@@ -2165,7 +2171,9 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   `with-local-quit`), and draws it before returning, so the rows show in the key's own frame as the Lisp listing's
   did; past the limit, and in every timer, hook or follower path, the answer is drawn when it comes. The tail overlays
   (the ⋯ control, the git mark) are made only for rows within a page of what a window shows, the rest when scrolled to
-  (`drgnx-explorer--rows-tails-in`); typing is Sjá's `prefix` over the
+  (`drgnx-explorer--rows-tails-in`). A single root's row takes no line: the hub sends it as bare invisible text (no
+  icon or chevron image, which a `display` property would show even on invisible text), and the Explorer hides its
+  newline with one overlay and gives it no tail (`drgnx-explorer--hide-line`); typing is Sjá's `prefix` over the
   visible siblings; a row's node (`drgnx-explorer-node-at`) is the path over it, so the file commands work as before.
   A key first selects the row at point (a click moved it). Marks are Sjá's ticked set (class `ticked`), Find asks for
   the found files only (`only`), Refresh and a reveal ask again. **A remote root** keeps the Lisp listing
