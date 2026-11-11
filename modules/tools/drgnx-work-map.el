@@ -22,6 +22,8 @@
 (require 'drgnx-pixels)
 (require 'drgnx-work-client)
 (require 'drgnx-hooks)
+(require 'drgnx-ui-kit)
+(defvar drgnx-chrome-own-tab-line)
 (unless (featurep 'drgnx-decor)
   (load (expand-file-name "../ui/drgnx-decor" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
@@ -71,6 +73,9 @@
   "The (NEEDS-YOU . CHIPS) lists of the frame the strip was made from: a draw makes the strip again when they differ.")
 (defvar-local drgnx-work-map--lens ""
   "The lens (Map · Board · Timeline), the buffer's tab line.")
+;; a mode line keeps the faces of a variable's string only when the variable is risky
+(put 'drgnx-work-map--strip 'risky-local-variable t)
+(put 'drgnx-work-map--lens 'risky-local-variable t)
 (defvar-local drgnx-work-map--filters nil
   "The filters sent to the hub: a plist (:focus ITEM-ID :overlaps BOOL :finished BOOL).")
 (defvar-local drgnx-work-map--collapsed nil "The collapsed layers (1 to 6).")
@@ -109,7 +114,7 @@ key profiles bind them (`drgnx-command-define' with this map); each view's own k
 (define-derived-mode drgnx-work-map-mode special-mode "Work map"
   "The Work space's map: layers of asks, specs, plans, agents, branches and files, and the edges between them."
   (setq-local drgnx-view-nav-notice-method "work/map/set")  ; the rows path tells the hub the selection, trailing
-  (setq-local truncate-lines t cursor-type nil
+  (setq-local truncate-lines t cursor-type nil drgnx-chrome-own-tab-line t
               header-line-format '("" drgnx-work-map--strip) tab-line-format '("" drgnx-work-map--lens)))
 
 (defconst drgnx-work-map--layer-names
@@ -924,17 +929,31 @@ mission chips (the machines' load) at the right."
                                                'face 'drgnx-work-chip))
                        (drgnx-work-client-chips state) " "))))
 
-(defun drgnx-work-lens-string (&optional current)
-  "The lens: Map · Board · Timeline · Flow, CURRENT (`map', `board', `timeline' or `flow'; default `map') in bold, the
-others in the label face (`m' `b' `t' `F' switch)."
+(defun drgnx-work-lens-string (&optional current name keys)
+  "The lens bar: the Work space's tab (Work · NAME, the workspace's name), then Map · Board · Timeline · Flow with
+CURRENT (`map', `board', `timeline' or `flow'; default `map') marked and the others in the label face (`m' `b' `t' `F'
+switch), then KEYS, the lens's own keys ((LABEL . KEY) …), as chips with their key badges."
   (let ((current (or current 'map)))
-    (mapconcat (lambda (v)
-                 (propertize (format " %s " (cdr v)) 'face (if (eq (car v) current) 'bold 'drgnx-work-label)))
-               '((map . "Map") (board . "Board") (timeline . "Timeline") (flow . "Flow")) "·")))
+    (concat (propertize (concat " " (or (drgnx-face-glyph 'layers) "") " " (if name (concat "Work · " name) "Work") " ")
+                        'face 'drgnx-work-lens-title)
+            "  "
+            (mapconcat (lambda (v)
+                         (propertize (format " %s " (cdr v))
+                                     'face (if (eq (car v) current) 'drgnx-work-lens-current 'drgnx-work-label)))
+                       '((map . "Map") (board . "Board") (timeline . "Timeline") (flow . "Flow")) " ")
+            (mapconcat (lambda (k)
+                         (concat "  " (propertize (format " %s " (car k)) 'face 'drgnx-work-chip)
+                                 (propertize (format " %s " (cdr k)) 'face 'drgnx-work-lens-key)))
+                       keys ""))))
+
+(defun drgnx-work-lens-name (&optional map)
+  "The workspace's name on the lens bar: the folder name of MAP's (default: the current buffer's) first root."
+  (with-current-buffer (if (buffer-live-p map) map (current-buffer))
+    (and default-directory (file-name-nondirectory (directory-file-name default-directory)))))
 
 (defun drgnx-work-map--lens-string ()
-  "The lens of the map: Map · Board · Timeline, the map in bold."
-  (drgnx-work-lens-string 'map))
+  "The lens bar of the map, the map marked."
+  (drgnx-work-lens-string 'map (drgnx-work-lens-name)))
 
 (defun drgnx-work-map--refresh-strip ()
   "Make the strip of the current buffer's frame; redisplay then only reads the variable."
