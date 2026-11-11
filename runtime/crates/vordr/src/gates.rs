@@ -122,6 +122,15 @@ pub fn flaky(evidence: &[Evidence]) -> Vec<String> {
     out
 }
 
+/// The flaky rows that hold a merge under PACK: [`flaky`]'s, when its `flake-hold` is on.
+pub fn flake_holds(pack: &Pack, evidence: &[Evidence]) -> Vec<String> {
+    if pack.on("flake-hold") {
+        flaky(evidence)
+    } else {
+        Vec::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,6 +258,13 @@ mod tests {
         let mut other = pass("P");
         other.facts.selector = "t".into();
         assert!(flaky(&[fail("P"), other]).is_empty());
+        // only under a pack whose flake-hold is on
+        let on = Pack {
+            rules: vec![rule("flake-hold")],
+            ..Pack::default()
+        };
+        assert_eq!(flake_holds(&on, &[fail("P"), pass("P")]), vec!["a::t"]);
+        assert!(flake_holds(&Pack::default(), &[fail("P"), pass("P")]).is_empty());
     }
 
     #[test]

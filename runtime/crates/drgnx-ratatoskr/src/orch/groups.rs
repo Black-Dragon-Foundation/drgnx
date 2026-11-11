@@ -159,7 +159,7 @@ pub async fn gate(
         return Ok(Gate::Pass);
     }
     // a row that failed, then passed on the same tree holds the batch: flakes are fixed at the cause
-    let flakes = vordr::gates::flaky(&evidence);
+    let flakes = vordr::gates::flake_holds(pack, &evidence);
     if !flakes.is_empty() {
         let why = format!("flaky rows in the batch's groups: {}", flakes.join(", "));
         follow(

@@ -166,7 +166,7 @@ evidence of `batch:JOB@TREE` for its own tree. The gate waits until every rerun 
   fails together with; it merges the line once they are in.
 
 A **flake** is a row that failed in one run and passed in a later run of the same selector on the same tree, env stamp
-and platform (`vordr::gates::flaky`). It holds the batch on a `gate` card and opens a `followup`; flakes are fixed at
+and platform (`vordr::gates::flaky`). Under a pack with `flake-hold` on, it holds the batch on a `gate` card and opens a `followup`; flakes are fixed at
 the cause, never listed. A held batch's card offers `Waive once…`, which the gate honours for that tree.
 
 ## The push gate
