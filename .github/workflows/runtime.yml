@@ -20,7 +20,7 @@ on:
         type: string
         default: "10"
       only:
-        description: "Narrowed: the jobs to run, of rt-linux rt-msrv rt-escape rt-containers rt-fleet rt-android rt-deny rt-fuzz rt-macos (empty: all)"
+        description: "Narrowed: the jobs to run, of rt-linux rt-msrv rt-escape rt-containers rt-fleet rt-android rt-deny rt-fuzz rt-macos rt-macrunner (empty: all but the on-demand rt-fleet and rt-macrunner)"
         type: string
         default: ""
   workflow_call:
@@ -674,6 +674,71 @@ jobs:
       - name: down
         if: ${{ always() }}
         run: bash test/runners/fleet.sh down
+
+  # A Mac as a runner, its spikes (test/runners/mac/README.md): a fresh standard account reached over a localhost sshd
+  # plays the runner. S1 a job outlives its ssh session (launchd, else a setsid launcher); S2 a Nidhogg build with
+  # Naglfar and drgnx ERT selectors under the draft build profile; S3 the memory watchdog. On demand only
+  # (`only: rt-macrunner`); never part of a push's gate. Each step runs whatever the one before said.
+  mac-runner:
+    name: Mac runner spikes (macOS 27)
+    if: ${{ github.event_name == 'workflow_dispatch' && contains(format(' {0} ', inputs.only), ' rt-macrunner ') }}
+    runs-on: xcode-27
+    timeout-minutes: 150
+    env:
+      NIDHOGG_REF: scratch/ng-fin-t24-dcda282f57
+    steps:
+      - name: the results and key folders (the key never leaves the host)
+        run: |
+          echo "MR_OUT=$RUNNER_TEMP/mac-runner/out" >> "$GITHUB_ENV"
+          echo "MR_KEYS=$RUNNER_TEMP/mac-runner/keys" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Black-Dragon-Foundation/nidhogg
+          ref: ${{ env.NIDHOGG_REF }}
+          path: nidhogg-src
+          persist-credentials: false
+      - name: Build dependencies (Homebrew; Rust by rustup), as Naglfar's job
+        run: |
+          sed 's/#.*//' nidhogg-src/nidhogg/deps/macos.build | grep -vx 'rust' | xargs brew install
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt,llvm-tools --no-self-update
+          rustup default stable
+      - name: the Mac runner bundle (sleipnir, ad-hoc signed, codesign -v)
+        run: |
+          bin/drgnx build runner-bundle --target aarch64-apple-darwin
+          mkdir -p "$MR_OUT/bundle" && cp runtime/target/bundle/aarch64-apple-darwin/sleipnir "$MR_OUT/bundle/"
+          codesign -dv "$MR_OUT/bundle/sleipnir" 2>&1 | tee "$MR_OUT/bundle/codesign.txt"
+      - name: Nidhogg 31.1 for the ERT rows (writes DRGNX_EMACS to the environment)
+        env:
+          NIDHOGG_DOWNLOADS: ${{ runner.temp }}/nidhogg-downloads
+        run: /bin/bash test/container/nidhogg.sh macos
+      - name: the runner account, Remote Login, the key
+        run: bash test/runners/mac/spike.sh up
+      - name: S1 a job outlives its ssh session
+        if: ${{ !cancelled() }}
+        run: bash test/runners/mac/spike.sh s1
+      - name: S3 the watchdog
+        if: ${{ !cancelled() }}
+        run: bash test/runners/mac/spike.sh s3
+      - name: S2 drgnx ERT selectors under the build profile
+        if: ${{ !cancelled() }}
+        run: bash test/runners/mac/spike.sh s2-ert "$GITHUB_WORKSPACE" "$DRGNX_EMACS" '^drgnx-\(registry\|memo\|color\)/'
+      - name: S2 a Nidhogg build with Naglfar under the build profile
+        if: ${{ !cancelled() }}
+        run: bash test/runners/mac/spike.sh s2-build "$GITHUB_WORKSPACE/nidhogg-src"
+      - name: Seatbelt denials
+        if: ${{ !cancelled() }}
+        run: |
+          bash test/runners/mac/spike.sh denials
+          cat "$MR_OUT/results.md"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: mac-runner-spikes
+          path: ${{ runner.temp }}/mac-runner/out
+          if-no-files-found: warn
 
   # The Android type-check (Android is not a target; the door stays open: docs/develop/runtime.md). The fake C compiler
   # is for urdr's bundled SQLite: a type-check does not link.

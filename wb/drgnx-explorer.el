@@ -736,6 +736,16 @@ selected when its row is there."
   "On the rows path, the file a reveal waits for: its folders were opened and the hub asked; the draw that brings its
 row selects it (`drgnx-explorer--rows-patched').")
 
+(defconst drgnx-explorer--nav-faces '(("ticked" . drgnx-explorer-selected) ("selected") ("dim"))
+  "The Explorer's classes on the rows path (`drgnx-view-nav-faces'): the marks are Sjá's ticked set; the selected row is
+the workbench's (`drgnx-wb-selection-sync', the look's fill and ring at point), so Sjá's `selected' class draws none;
+and `dim' draws none: Sjá dims the rows off the selection's chain, and the Explorer has no chain (every other row).")
+
+(defun drgnx-explorer--rows-select (file)
+  "Select FILE's drawn row outside a command of the Explorer (a reveal): point and the selected row go to it."
+  (drgnx-view-nav 'select file)
+  (drgnx-wb-selection-sync))
+
 (defun drgnx-explorer--rows-reveal (file)
   "`drgnx-explorer-reveal' on the rows path: FILE's folders open now and the hub is asked again; FILE is selected now
 when its row is drawn, else when the listing that holds it arrives."
@@ -753,7 +763,7 @@ when its row is drawn, else when the listing that holds it arrives."
               (drgnx-explorer--await-answer)          ; a user's reveal: drawn (and selected) in its own frame
               (setq drawn (drgnx-view-row-start drgnx-view file)))
             (if drawn
-                (progn (setq drgnx-explorer--reveal-pending nil) (drgnx-view-nav 'select file))
+                (progn (setq drgnx-explorer--reveal-pending nil) (drgnx-explorer--rows-select file))
               (setq drgnx-explorer--reveal-pending file)))
           t)))))
 
@@ -979,6 +989,18 @@ changes inside)."
     (overlay-put o 'evaporate t)
     (puthash key o drgnx-explorer--tails)))
 
+(defvar-local drgnx-explorer--hidden-line nil
+  "On the rows path, the overlay that hides the single root's line, its newline included (`drgnx-explorer--hide-line').")
+
+(defun drgnx-explorer--hide-line (beg eol)
+  "Hide the line of the invisible row from BEG to EOL, its newline too, with one overlay moved to it."
+  (let ((end (min (1+ eol) (point-max))))
+    (if (overlayp drgnx-explorer--hidden-line)
+        (move-overlay drgnx-explorer--hidden-line beg end)
+      (setq drgnx-explorer--hidden-line (make-overlay beg end nil t nil))
+      (overlay-put drgnx-explorer--hidden-line 'invisible t)
+      (overlay-put drgnx-explorer--hidden-line 'evaporate t))))
+
 (defun drgnx-explorer--shown-spans ()
   "Where this buffer's rows get tails: for each window showing it, (FROM . TO) from a page above its start to two pages
 below it; t when no window shows it (every row)."
@@ -1020,24 +1042,33 @@ redrawn row gets a new one; a badge of a row that went is deleted here."
             (progn (when o (delete-overlay o) (remhash key tails))
                    (drgnx-explorer--rows-badge key nil nil))
           (let ((eol (save-excursion (goto-char beg) (pos-eol))))
-            ;; a tail only near what a window shows (as the Lisp listing's fontify made them); the others when scrolled to
-            (if (or (eq spans t) (seq-some (lambda (s) (<= (car s) beg (cdr s))) spans))
-                (drgnx-explorer--rows-tail key beg eol)
-              (when o (delete-overlay o) (remhash key tails)))
+            ;; a tail only near what a window shows (as the Lisp listing's fontify made them); the others when scrolled to.
+            ;; The hidden root's row (invisible text) takes no line: its newline is hidden too, and it has no tail.
+            (if (get-text-property beg 'invisible)
+                (progn (when o (delete-overlay o) (remhash key tails))
+                       (drgnx-explorer--hide-line beg eol))
+              (if (or (eq spans t) (seq-some (lambda (s) (<= (car s) beg (cdr s))) spans))
+                  (drgnx-explorer--rows-tail key beg eol)
+                (when o (delete-overlay o) (remhash key tails))))
             (drgnx-explorer--rows-badge key eol (and (< beg eol) (get-text-property (1- eol) 'drgnx-agents-here)))))))
     (when (> (hash-table-count tails) (drgnx-view-row-count view))
       (maphash (lambda (key o) (unless (overlay-buffer o) (remhash key tails))) tails))
     (when-let* ((file drgnx-explorer--reveal-pending) ((drgnx-view-row-start view file)))
       (setq drgnx-explorer--reveal-pending nil)
-      (drgnx-view-nav 'select file))
+      (drgnx-explorer--rows-select file))
+    ;; a reset put point back on the selection (`drgnx-view-nav-class-step'): the selected row follows it
+    (let ((o drgnx-wb--selected-overlay))
+      (when (and (overlayp o) (overlay-buffer o) (/= (overlay-start o) (pos-bol))) (drgnx-wb-selection-sync)))
     (when drgnx-explorer--badges        ; a few rows at most: the badges of rows that went
       (maphash (lambda (key o) (unless (drgnx-view-row-start view key) (delete-overlay o) (remhash key drgnx-explorer--badges)))
                drgnx-explorer--badges))))
 
 (defun drgnx-explorer--rows-twin (class)
   "The Explorer's buffer in display CLASS (a dock on a monitor at another scale; `drgnx-view-patch-twin-function'), made
-from the Explorer's buffer: its mode and keys, the hub's rows of CLASS and the same handlers after a draw.  The
-folders' watches and the find stay the Explorer buffer's: the twin's kill leaves them."
+from the Explorer's buffer: its mode and keys, the hub's rows of CLASS and the same handlers after a draw.  Its scroll
+pages the hub's window as the Explorer's does (`drgnx-explorer--rows-scrolled': the window is the view's, so both
+buffers hold the same entries), and with the hub down it says it waits.  The folders' watches and the find stay the
+Explorer buffer's: the twin's kill leaves them."
   (let ((patched (buffer-local-value 'drgnx-view-patch-patched-functions (current-buffer))))
     (with-current-buffer (generate-new-buffer (format " *drgnx-explorer %s*" class))
       (drgnx-explorer-mode)
@@ -1046,8 +1077,17 @@ folders' watches and the find stay the Explorer buffer's: the twin's kill leaves
       (jit-lock-unregister #'drgnx-explorer--fontify)
       (drgnx-view-patch-attach drgnx-explorer--hub-view class)
       (dolist (f patched) (unless (eq f t) (add-hook 'drgnx-view-patch-patched-functions f nil t)))
-      (setq-local drgnx-view-nav-faces '(("ticked" . drgnx-explorer-selected)))   ; the marks, as in the Explorer
+      (setq-local drgnx-view-nav-faces drgnx-explorer--nav-faces)                 ; the marks, as in the Explorer
+      (add-hook 'window-scroll-functions #'drgnx-explorer--rows-scrolled nil t)  ; its scroll pages the view's window
+      (drgnx-explorer--wait-for-hub)
       (current-buffer))))
+
+(defun drgnx-explorer--wait-for-hub ()
+  "With the hub not up, show the line saying the Explorer waits for it; its first rows take the line away."
+  (unless (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))   ; Q2: the frame, filled when it comes
+    (setq drgnx-explorer--waiting (make-overlay (point-min) (point-min)))
+    (overlay-put drgnx-explorer--waiting 'before-string
+                 (propertize "  Waiting for the hub to list the folders…\n" 'face 'shadow))))
 
 (defun drgnx-explorer-rows-attach (view class)
   "Make the Explorer the hub-fed VIEW in display CLASS: the hub lists it, and its keys answer from Sjá."
@@ -1056,15 +1096,12 @@ folders' watches and the find stay the Explorer buffer's: the twin's kill leaves
     (drgnx-view-patch-attach view class)
     (setq drgnx-explorer--hub-view view)
     (add-hook 'drgnx-view-patch-patched-functions #'drgnx-explorer--rows-patched nil t)
-    (setq-local drgnx-view-nav-faces '(("ticked" . drgnx-explorer-selected)))   ; multi-select (Sjá's ticked set)
+    (setq-local drgnx-view-nav-faces drgnx-explorer--nav-faces)
     (add-hook 'drgnx-look-density-changed-hook #'drgnx-explorer--density-changed)
     (add-hook 'kill-buffer-hook #'drgnx-explorer--rows-unhook nil t)
     (setq-local drgnx-view-patch-twin-function #'drgnx-explorer--rows-twin)
     (add-hook 'window-scroll-functions #'drgnx-explorer--rows-scrolled nil t)
-    (unless (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))   ; Q2: the frame, filled when it comes
-      (setq drgnx-explorer--waiting (make-overlay (point-min) (point-min)))
-      (overlay-put drgnx-explorer--waiting 'before-string
-                   (propertize "  Waiting for the hub to list the folders…\n" 'face 'shadow)))
+    (drgnx-explorer--wait-for-hub)
     (require 'drgnx-view-env)
     (drgnx-view-env-register view (current-buffer) #'drgnx-explorer--rows-subscribe)
     (drgnx-explorer--rows-subscribe)))
@@ -1076,26 +1113,41 @@ folders' watches and the find stay the Explorer buffer's: the twin's kill leaves
 
 (defvar-local drgnx-explorer--asked-from nil "The `from' the last `view/window' the scroll asked for named.")
 
+(defvar-local drgnx-explorer--seen-from nil "The window's `from' at this buffer's last scroll.")
+
+(defvar drgnx-explorer--window-asker nil
+  "(FROM . BUFFER): the last `view/window' an Explorer buffer (the Explorer's or a twin) asked for, and which.  The
+hub holds one window per view, so another buffer's scroll moves this one's rows too; its scroll then asks nothing.")
+
 (defun drgnx-explorer--rows-scrolled (window start)
   "`window-scroll-functions' on the rows path: WINDOW scrolled to START.  The rows near it without a tail get one
 \(`drgnx-explorer--rows-tails-in').  Within a page of the end of the rows held
 (past which the listing has more) the hub is asked for the window half of it further on; within a page of their start
 (with entries before them), half of it back.  Each `from' is asked once; the rows that go and come keep the shown ones
-in place (window starts are markers)."
+in place (window starts are markers).  The window is the view's: when another of its buffers (a twin) moved it, the
+first scroll after asks nothing (`drgnx-explorer--window-asker'), so two displays never ask each other back."
   (with-current-buffer (window-buffer window)
     (drgnx-explorer--rows-tails-in window start)
     (when-let* ((drgnx-view-patch) (h (drgnx-view-patch-handle drgnx-view-patch))
                 (w (nidhogg-view-get h 'window "order")))
       (let* ((from (nth 0 w)) (len (nth 1 w)) (total (nth 2 w))
              (page (window-body-height window)) (step (max 1 (/ len 2)))
-             (want (cond ((and (< (+ from len) total)
+             ;; another buffer of the view (the Explorer in another class) asked for this window: these rows moved
+             ;; under this window, which keeps them; asking back would take that buffer's away
+             (moved (and (eql from (car drgnx-explorer--window-asker))
+                         (not (eq (cdr drgnx-explorer--window-asker) (current-buffer)))
+                         (not (eql from drgnx-explorer--seen-from))))
+             (want (cond (moved nil)
+                         ((and (< (+ from len) total)
                                (save-excursion (goto-char start) (/= 0 (forward-line (* 2 page)))))
                           (min (- total len) (+ from step)))
                          ((and (> from 0)
                                (save-excursion (goto-char start) (/= 0 (forward-line (- page)))))
                           (max 0 (- from step))))))
+        (setq drgnx-explorer--seen-from from)
         (when (and want (/= want from) (not (eql want drgnx-explorer--asked-from)))
           (setq drgnx-explorer--asked-from want
+                drgnx-explorer--window-asker (cons want (current-buffer))
                 drgnx-view-patch-hurry t)
           (funcall drgnx-view-patch-send-function "view/window"
                    (list :view (drgnx-view-patch-view drgnx-view-patch) :list "order" :from want)))))))

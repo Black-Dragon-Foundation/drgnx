@@ -238,8 +238,10 @@ fn explorer_rows_draw_the_look() {
     let id = |name: &str| icons::svg(name, 32).unwrap().0;
     let prop = |r: &Row, name: &str| r.props.iter().find(|p| p.2 == name).cloned();
 
-    // the root: invisible, as the only root
+    // the root: invisible, as the only root, and its name alone (an image shows even on invisible text)
     assert_eq!(prop(&rows[0], "invisible").map(|p| p.3), Some(json!(true)));
+    assert_eq!(rows[0].text, "R");
+    assert!(rows[0].images.is_empty() && rows[0].spaces.is_empty());
     // src: chevron (open), gap, folder-open, gap, the name; changes inside it
     let src = &rows[1];
     assert_eq!(src.text, "    src");

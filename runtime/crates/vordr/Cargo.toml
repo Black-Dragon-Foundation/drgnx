@@ -1,0 +1,12 @@
+[package]
+name = "vordr"
+description = "The orchestration gates' pure core: a job's rows and failure classes, the red-first decision, merge notes and the merge batch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
