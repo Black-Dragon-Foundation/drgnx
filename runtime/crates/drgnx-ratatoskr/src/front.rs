@@ -88,6 +88,8 @@ pub struct Front {
     pub search: crate::search::Hub,
     /// The Extensions view's catalog, the lock and the module table, merged in memory ([`crate::extensions`]).
     pub extensions: crate::extensions::Hub,
+    /// The runs the orchestration gates started, in flight ([`crate::orch::gates`]).
+    pub orch: crate::orch::gates::Runs,
     /// Test hooks (`--test-ignore-shutdown`): `shutdown` is answered and ignored, so `stop` reaches its signal.
     pub ignore_shutdown: AtomicBool,
     /// The store's other folders (home, config, `<state>/hub`), once the server opened it.
@@ -181,6 +183,7 @@ impl Front {
             follows,
             search: crate::search::Hub::default(),
             extensions: crate::extensions::Hub::default(),
+            orch: crate::orch::gates::Runs::default(),
             ignore_shutdown: AtomicBool::new(false),
             dirs: OnceLock::new(),
             shell_env: crate::shell_env::ShellEnv::default(),

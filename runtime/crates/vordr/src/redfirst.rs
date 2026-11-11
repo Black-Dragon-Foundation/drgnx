@@ -14,6 +14,8 @@ use crate::rows::{Class, JOB_ROW, Row, Verdict};
 pub struct Inputs {
     /// How many commits base..tip has.
     pub commits: usize,
+    /// The test commit (the first).
+    pub test_commit: String,
     /// The test commit's tree key and the tip's.
     pub test_key: String,
     pub tip_key: String,
@@ -409,6 +411,7 @@ mod tests {
     fn inputs() -> Inputs {
         Inputs {
             commits: 2,
+            test_commit: "c".into(),
             test_key: "T".into(),
             tip_key: "P".into(),
             added_symbols: vec!["start_or_reuse".into(), "drgnx-new".into()],
