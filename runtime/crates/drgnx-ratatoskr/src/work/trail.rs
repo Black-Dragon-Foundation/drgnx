@@ -201,7 +201,7 @@ fn rows(
         Data::Trail(steps, concs, _) => only(trail::trail_rows(steps, concs, &renv, zone)),
         Data::Timeline(lanes) => only(trail::timeline_rows(lanes, &renv, fonts, zone)),
         Data::Board(cards) => only(board::board_rows(cards, env)),
-        Data::Flow(flow, flow::Part::Lens) => flow::flow_rows(flow, env),
+        Data::Flow(flow, flow::Part::Lens) => flow::flow_rows(flow, env, fonts),
         Data::Flow(flow, flow::Part::Detail(task)) => only(flow::detail_rows(flow, task, env)),
         Data::Flow(flow, flow::Part::Rules) => flow::rules_rows(flow, env),
     }
@@ -335,27 +335,58 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
             t.agent = Some(label.clone());
         }
     }
-    let label = |id: &str| {
-        tasks
-            .iter()
-            .find(|t| t.id == id)
-            .map_or_else(|| id.to_owned(), |t| format!("T{}", t.n))
-    };
+    let seen = f.queue.seen(&job);
     let batch = batch
         .iter()
         .map(|b| {
-            (
-                label(&b.task),
-                format!("tip {}", &b.tip[..b.tip.len().min(9)]),
-            )
+            let t = tasks.iter().find(|t| t.id == b.task);
+            flow::Member {
+                label: t.map_or_else(|| b.task.clone(), |t| format!("T{}", t.n)),
+                title: t.map(|t| t.title.clone()).unwrap_or_default(),
+                tip: b.tip[..b.tip.len().min(7)].to_owned(),
+                said: seen.said.get(&b.task).cloned(),
+            }
         })
         .collect();
+    // the gates' runs at the trees they judged last: the batch's groups (`batch:JOB@TREE`), the push tiers
+    // (`push:JOB@TREE`, the pack's tiers)
+    let tiers = pack
+        .as_ref()
+        .map(|p| p.push_tiers.clone())
+        .unwrap_or_default();
+    let (j, g, p) = (job.clone(), seen.groups.clone(), seen.push.clone());
+    let runs = f
+        .writer
+        .db
+        .read(move |c| {
+            let groups = match g {
+                Some((tree, checks)) => Some(flow::Runs {
+                    evidence: norn::read::evidence::of_task(c, &format!("batch:{j}@{tree}"))?,
+                    at: tree,
+                    checks,
+                }),
+                None => None,
+            };
+            let push = match p {
+                Some((_head, tree)) => Some(flow::Runs {
+                    evidence: norn::read::evidence::of_task(c, &format!("push:{j}@{tree}"))?,
+                    at: tree,
+                    checks: tiers,
+                }),
+                None => None,
+            };
+            Ok((groups, push))
+        })
+        .await;
+    let (groups, push) = runs.unwrap_or_default();
     flow::Flow {
         job,
         title,
         pack,
         tasks,
         batch,
+        groups,
+        push,
     }
 }
 

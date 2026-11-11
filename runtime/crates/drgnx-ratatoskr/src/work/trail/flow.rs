@@ -7,6 +7,7 @@
 //! and `held` (the tasks a gate holds: the needs-you chips).
 
 use crate::view::model::Doc;
+use drgnx_rows::fit::Measure;
 use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::view::ViewEnv;
 use serde_json::{Map, Value, json};
@@ -44,6 +45,8 @@ pub(crate) enum Chip {
 const TEXT: &str = "drgnx-work-flow-text";
 const LABEL: &str = "drgnx-work-flow-label";
 const HEAD: &str = "drgnx-work-flow-heading";
+/// The font role the Flow's text is measured in (the UI font: `drgnx-view-env-roles`).
+const ROLE: &str = "card";
 
 impl Chip {
     /// The chip's face.
@@ -125,15 +128,41 @@ pub(crate) struct Task {
     pub card: Option<i64>,
 }
 
-/// The lens's facts: the job, its pack, its tasks, the batch's and the line gate's lines.
+/// One member of the merge batch.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Member {
+    pub label: String,
+    pub title: String,
+    /// Its tip, short.
+    pub tip: String,
+    /// What the queue said to it last (its turn).
+    pub said: Option<String>,
+}
+
+/// A gate's runs at one tree: the batch's affected groups at the combined tree, or the push tiers at the line's head.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Runs {
+    /// The tree the gate judged.
+    pub at: String,
+    /// The checks it needs there.
+    pub checks: Vec<vordr::pack::Check>,
+    /// Their runs, oldest first.
+    pub evidence: Vec<Evidence>,
+}
+
+/// The lens's facts: the job, its pack, its tasks, the batch and the line gate.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Flow {
     pub job: String,
     pub title: String,
     pub pack: Option<Pack>,
     pub tasks: Vec<TaskFacts>,
-    /// The merge batch being checked: (task label, what it is at).
-    pub batch: Vec<(String, String)>,
+    /// The merge batch being checked.
+    pub batch: Vec<Member>,
+    /// Its affected groups' runs, once the groups gate judged it.
+    pub groups: Option<Runs>,
+    /// The push tiers' runs at the line's head, once a push was asked.
+    pub push: Option<Runs>,
 }
 
 /// What one Flow view shows: the lens, one task's detail tile, or the Rules tile.
@@ -222,8 +251,8 @@ pub(crate) fn cells(t: &TaskFacts, pack: Option<&Pack>) -> [Cell; 6] {
     };
     let merge = if done {
         cell(Chip::Ok, "merged")
-    } else if let Some(why) = &t.held {
-        cell(Chip::Held, fit(why, 24))
+    } else if t.held.is_some() {
+        cell(Chip::Held, "held")
     } else {
         match t.queue {
             Queue::Batch => cell(Chip::Run, "checking"),
@@ -313,17 +342,55 @@ fn fit(text: &str, chars: usize) -> String {
     s
 }
 
-/// The columns' left edges for ENV: the task (200 px), the agent (118 px), then six gate columns sharing the rest,
-/// each at least 96 px (the mockup's grid, in device px).
-fn stops(env: &ViewEnv) -> (Vec<u32>, u32) {
-    let px = |v: f32| (f64::from(v) * f64::from(env.scale) + 0.5 + 1e-9).floor() as u32;
-    let (task, agent) = (px(200.0), px(118.0));
-    let gate = (env.width_px.saturating_sub(task + agent + px(20.0)) / 6).max(px(96.0));
-    let mut out = vec![0, task];
-    for i in 0..6 {
-        out.push(task + agent + i * gate);
+/// TEXT's width in device px in the Flow's font (M measures).
+fn text_px(m: &dyn Measure, text: &str) -> u32 {
+    drgnx_rows::fit::width(m, ROLE, text).ceil() as u32
+}
+
+/// The width CELL of GATE takes as [`draw_cell`] draws it, ICON the icons' size.
+fn cell_px(m: &dyn Measure, icon: u32, gate: &str, c: &Cell) -> u32 {
+    let sp = text_px(m, " ");
+    match c.chip {
+        Chip::Wait if c.text == "—" => icon,
+        Chip::Na => text_px(m, &c.text),
+        Chip::Held => 3 * sp + icon + text_px(m, &c.text),
+        Chip::Ok if gate == "Author check" => 3 * sp + icon + text_px(m, &c.text),
+        _ => 2 * sp + text_px(m, &c.text),
     }
-    (out, gate)
+}
+
+/// The least the task column keeps, in logical px.
+const TASK_MIN: f32 = 96.0;
+
+/// The columns' left edges for TS in ENV (device px, M measuring): the task, the agent, then the six gates.  Each gate
+/// column is as wide as its widest cell or heading, the agent's as its widest agent, each with a gap after; the task
+/// column takes the rest of the window (at least [`TASK_MIN`]), so the cells are never cut and the titles give way.
+fn columns(ts: &[Task], env: &ViewEnv, m: &dyn Measure) -> Vec<u32> {
+    let (icon, gap) = (dpx(env, 14.0), dpx(env, 10.0));
+    let mut gates: Vec<u32> = GATES
+        .iter()
+        .map(|g| icon + text_px(m, " ") + text_px(m, g))
+        .collect();
+    for t in ts {
+        for (i, c) in t.cells.iter().enumerate() {
+            gates[i] = gates[i].max(cell_px(m, icon, GATES[i], c));
+        }
+    }
+    let agent = ts
+        .iter()
+        .map(|t| text_px(m, t.agent.as_deref().unwrap_or("—")))
+        .chain([text_px(m, "Agent")])
+        .max()
+        .unwrap_or(0);
+    let right = agent + gap + gates.iter().map(|g| g + gap).sum::<u32>();
+    let task = env.width_px.saturating_sub(right).max(dpx(env, TASK_MIN));
+    let mut at = vec![0, task];
+    let mut x = task + agent + gap;
+    for g in &gates {
+        at.push(x);
+        x += g + gap;
+    }
+    at
 }
 
 /// V logical px in ENV's device px.
@@ -386,11 +453,11 @@ fn gate_icon(gate: &str) -> &'static str {
     }
 }
 
-/// CELL drawn at the cursor of B, its text cut to CHARS: a waiting cell with nothing to say is an empty ring; a
-/// passed author check carries a check, a held cell a lock; a gate the pack lacks (or one that waits on another) is
-/// its words in the label face.
-fn draw_cell(b: &mut RowBuilder, pics: &mut Pics, gate: &str, c: &Cell, chars: usize) {
-    let text = fit(&c.text, chars);
+/// CELL drawn whole at the cursor of B (its column fits it: [`columns`]): a waiting cell with nothing to say is an
+/// empty ring; a passed author check carries a check, a held cell a lock; a gate the pack lacks (or one that waits on
+/// another) is its words in the label face.
+fn draw_cell(b: &mut RowBuilder, pics: &mut Pics, gate: &str, c: &Cell) {
+    let text = &c.text;
     match c.chip {
         Chip::Wait if c.text == "—" => {
             let start = b.pos();
@@ -399,25 +466,29 @@ fn draw_cell(b: &mut RowBuilder, pics: &mut Pics, gate: &str, c: &Cell, chars: u
             b.face(start, end, LABEL);
         }
         Chip::Na => {
-            b.push(&text, Some(LABEL));
+            b.push(text, Some(LABEL));
         }
         Chip::Ok if gate == "Author check" => {
-            chip(b, pics, Some(("check", "✓")), &text, c.chip.face())
+            chip(b, pics, Some(("check", "✓")), text, c.chip.face())
         }
-        Chip::Held => chip(b, pics, Some(("lock", "!")), &text, c.chip.face()),
-        _ => chip(b, pics, None, &text, c.chip.face()),
+        Chip::Held => chip(b, pics, Some(("lock", "!")), text, c.chip.face()),
+        _ => chip(b, pics, None, text, c.chip.face()),
     }
 }
 
 /// The lens's rows for ENV and the icons they draw: the run's line, the needs-you chips (one per held task, carrying
 /// its id), the column headings with their icons, a row per task (its id, title, agent and a chip per gate, carrying
-/// the task's id and its gate card), then the merge batch's lines.  The rule pack is its own tile ([`rules_rows`]).
-pub(crate) fn flow_rows(flow: &Flow, env: &ViewEnv) -> (Vec<Row>, Vec<(ImageId, String)>) {
-    let cell_w = env.cell.0.max(1);
-    let (at, gate) = stops(env);
-    let chars = |w: u32| (w.saturating_sub(8) / cell_w) as usize;
+/// the task's id and its gate card), then the merge batch ([`batch_rows`]) and the line gate ([`line_rows`]).  FONTS
+/// measure the columns ([`columns`]).  The rule pack is its own tile ([`rules_rows`]).
+pub(crate) fn flow_rows(
+    flow: &Flow,
+    env: &ViewEnv,
+    fonts: &dyn Measure,
+) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let mut pics = Pics::new(env);
     let ts = tasks(flow);
+    let at = columns(&ts, env, fonts);
+    let gap = dpx(env, 10.0);
     let done = ts.iter().filter(|t| t.cells[4].chip == Chip::Ok).count();
     let mut head = RowBuilder::new("head");
     pics.put(&mut head, "list-checks", "≡");
@@ -486,21 +557,17 @@ pub(crate) fn flow_rows(flow: &Flow, env: &ViewEnv) -> (Vec<Row>, Vec<(ImageId, 
     for t in &ts {
         let mut b = RowBuilder::new(format!("task:{}", t.id));
         let start = b.pos();
-        b.push(&format!("{:<4}", t.label), Some(LABEL))
-            .push(&fit(&t.title, chars(at[1]).saturating_sub(4)), Some(TEXT));
-        b.stop(at[1]).push(
-            &fit(t.agent.as_deref().unwrap_or("—"), chars(at[2] - at[1])),
-            Some(LABEL),
+        let label = format!("{}  ", t.label);
+        let room = at[1].saturating_sub(text_px(fonts, &label) + gap);
+        b.push(&label, Some(LABEL)).push(
+            &drgnx_rows::fit::fit(fonts, ROLE, &t.title, room as f32),
+            Some(TEXT),
         );
+        b.stop(at[1])
+            .push(t.agent.as_deref().unwrap_or("—"), Some(LABEL));
         for (i, c) in t.cells.iter().enumerate() {
             b.stop(at[i + 2]);
-            draw_cell(
-                &mut b,
-                &mut pics,
-                GATES[i],
-                c,
-                chars(gate).saturating_sub(4),
-            );
+            draw_cell(&mut b, &mut pics, GATES[i], c);
         }
         let end = b.pos();
         b.prop(start, end, "drgnx-work-id", json!(t.id));
@@ -512,6 +579,98 @@ pub(crate) fn flow_rows(flow: &Flow, env: &ViewEnv) -> (Vec<Row>, Vec<(ImageId, 
     let mut blank = RowBuilder::new("gap");
     blank.push("", None);
     rows.push(blank.finish());
+    rows.extend(batch_rows(flow, &at, env, fonts, &mut pics));
+    if flow.pack.as_ref().is_some_and(|p| p.on("push-gate")) {
+        let mut blank = RowBuilder::new("gap2");
+        blank.push("", None);
+        rows.push(blank.finish());
+        rows.extend(line_rows(flow, &mut pics));
+    }
+    (rows, pics.out)
+}
+
+/// RUNS' checks at their tree: (green, red).
+fn tally(r: &Runs) -> (usize, usize) {
+    let (mut green, mut red) = (0, 0);
+    for c in &r.checks {
+        match state(&r.evidence, &r.at, &selector_of(c)) {
+            State::Green => green += 1,
+            State::Red(_) => red += 1,
+            State::Missing => {}
+        }
+    }
+    (green, red)
+}
+
+/// The machine a run ran on (its platform's part after `/`).
+fn machine(e: &Evidence) -> &str {
+    e.facts
+        .platform
+        .rsplit('/')
+        .next()
+        .unwrap_or(&e.facts.platform)
+}
+
+/// A row per machine that ran any of RUNS' checks at their tree, keyed PREFIX-on:MACHINE: each check's newest run
+/// there, a tick in the ok face when it passed, a cross in the error face when it failed.
+fn per_machine(prefix: &str, r: &Runs, pics: &mut Pics) -> Vec<Row> {
+    let mut machines: Vec<&str> = Vec::new();
+    for e in r.evidence.iter().filter(|e| e.facts.tree_key == r.at) {
+        if !machines.contains(&machine(e)) {
+            machines.push(machine(e));
+        }
+    }
+    let mut out = Vec::new();
+    for m in machines {
+        let mut b = RowBuilder::new(format!("{prefix}-on:{m}"));
+        b.push(&format!("  {m}:"), Some(LABEL));
+        for c in &r.checks {
+            let sel = selector_of(c);
+            let Some(e) =
+                r.evidence.iter().rev().find(|e| {
+                    e.facts.tree_key == r.at && e.facts.selector == sel && machine(e) == m
+                })
+            else {
+                continue;
+            };
+            let ok = failing(&e.rows).next().is_none();
+            b.push("   ", None);
+            let start = b.pos();
+            if ok {
+                pics.put(&mut b, "check", "✓");
+            } else {
+                pics.put(&mut b, "x", "✗");
+            }
+            let end = b.pos();
+            let face = if ok {
+                Chip::Ok.face()
+            } else {
+                Chip::Err.face()
+            };
+            b.face(start, end, face);
+            b.push(" ", None).push(&c.name, Some(TEXT));
+        }
+        out.push(b.finish());
+    }
+    out
+}
+
+/// TREE short.
+fn short(tree: &str) -> &str {
+    &tree[..tree.len().min(7)]
+}
+
+/// The merge batch: its heading with the affected groups' chip (green of listed at the combined tree), a row per
+/// member at the columns AT (its label and title, its tip, what the queue said to it), and its groups' runs per
+/// machine.
+fn batch_rows(
+    flow: &Flow,
+    at: &[u32],
+    env: &ViewEnv,
+    fonts: &dyn Measure,
+    pics: &mut Pics,
+) -> Vec<Row> {
+    let mut rows = Vec::new();
     let mut bh = RowBuilder::new("batch");
     pics.put(&mut bh, "git-merge", " ");
     bh.push(" ", None)
@@ -519,15 +678,86 @@ pub(crate) fn flow_rows(flow: &Flow, env: &ViewEnv) -> (Vec<Row>, Vec<(ImageId, 
     if flow.batch.is_empty() {
         bh.push("  empty", Some(LABEL));
     }
+    if let Some(g) = &flow.groups {
+        let (green, red) = tally(g);
+        let face = if red > 0 {
+            Chip::Err
+        } else if green == g.checks.len() {
+            Chip::Ok
+        } else {
+            Chip::Run
+        };
+        bh.push("  ", None);
+        chip(
+            &mut bh,
+            pics,
+            None,
+            &format!("affected groups {green}/{}", g.checks.len()),
+            face.face(),
+        );
+    }
     rows.push(bh.finish());
-    for (i, (who, what)) in flow.batch.iter().enumerate() {
+    let said_at = at[4];
+    for (i, m) in flow.batch.iter().enumerate() {
         let mut b = RowBuilder::new(format!("batch:{i}"));
-        b.push(&format!("  {who}"), Some(TEXT))
+        let label = format!("  {}  ", m.label);
+        let room = at[2].saturating_sub(text_px(fonts, &label) + dpx(env, 10.0));
+        b.push(&label, Some(TEXT))
+            .push(
+                &drgnx_rows::fit::fit(fonts, ROLE, &m.title, room as f32),
+                Some(LABEL),
+            )
             .stop(at[2])
-            .push(what, Some(LABEL));
+            .push(&format!("tip {}", m.tip), Some(LABEL));
+        if let Some(said) = &m.said {
+            let room = env.width_px.saturating_sub(said_at);
+            b.stop(said_at).push(
+                &drgnx_rows::fit::fit(fonts, ROLE, said, room as f32),
+                Some(LABEL),
+            );
+        }
         rows.push(b.finish());
     }
-    (rows, pics.out)
+    if let Some(g) = &flow.groups {
+        rows.extend(per_machine("batch", g, pics));
+    }
+    rows
+}
+
+/// The line gate (the pack's push gate): its heading with the tiers' chip at the line's head (green, how many of
+/// the tiers, or red), the tiers' runs per machine and the note that the push stays the user's; before any push was
+/// asked, the heading says so.
+fn line_rows(flow: &Flow, pics: &mut Pics) -> Vec<Row> {
+    let mut rows = Vec::new();
+    let mut h = RowBuilder::new("line");
+    pics.put(&mut h, "git-branch", " ");
+    h.push(" ", None)
+        .push(&format!("Line gate · push job/{}", flow.job), Some(HEAD));
+    let Some(p) = &flow.push else {
+        h.push("  no push asked yet", Some(LABEL));
+        rows.push(h.finish());
+        return rows;
+    };
+    let (green, red) = tally(p);
+    let n = p.checks.len();
+    let (face, text) = if red > 0 {
+        (Chip::Err, format!("{red} red at {}", short(&p.at)))
+    } else if green == n {
+        (Chip::Ok, format!("green on {}", short(&p.at)))
+    } else {
+        (Chip::Run, format!("{green}/{n} at {}", short(&p.at)))
+    };
+    h.push("  ", None);
+    chip(&mut h, pics, None, &text, face.face());
+    rows.push(h.finish());
+    rows.extend(per_machine("line", p, pics));
+    let mut note = RowBuilder::new("line-note");
+    note.push(
+        "  Pushing needs you (push.ci, Ask): the gate only refuses an early push, and reuses runs keyed by tree.",
+        Some(LABEL),
+    );
+    rows.push(note.finish());
+    rows
 }
 
 /// How the hub holds rule ID (the Rules tile's third column).
@@ -896,10 +1126,9 @@ mod tests {
             (c[1].chip, c[1].text.as_str()),
             (Chip::Held, "no red · held")
         );
-        // the author check waits for the red
+        // the author check waits for the red; the merge column says held (why is the needs-you chip's and the tile's)
         assert_eq!((c[3].chip, c[3].text.as_str()), (Chip::Na, "waits red"));
-        assert_eq!(c[4].chip, Chip::Held);
-        assert!(c[4].text.ends_with('…'), "{}", c[4].text);
+        assert_eq!((c[4].chip, c[4].text.as_str()), (Chip::Held, "held"));
         // no pack: no gates
         let none = cells(&t, None);
         assert_eq!(
@@ -921,8 +1150,163 @@ mod tests {
             title: "Search view".into(),
             pack: Some(pack()),
             tasks: vec![task(1, "running"), held, task(8, "open")],
-            batch: vec![("T2".into(), "trial merge clean".into())],
+            batch: vec![Member {
+                label: "T2".into(),
+                title: "Open buffers".into(),
+                tip: "7d21c0e".into(),
+                said: Some("trial merge clean".into()),
+            }],
+            groups: None,
+            push: None,
         }
+    }
+
+    fn fonts() -> drgnx_rows::fit::FontSet {
+        let mut f = drgnx_rows::fit::FontSet::new();
+        f.set_role(ROLE, None, 7.0);
+        f
+    }
+
+    fn check(name: &str) -> Check {
+        Check {
+            name: name.into(),
+            dir: String::new(),
+            run: vec!["bin/drgnx".into(), "test".into(), name.into()],
+        }
+    }
+
+    /// A run of CHECK at TREE on MACHINE, its rows passing or not.
+    fn run_of(c: &Check, tree: &str, machine: &str, ok: bool) -> Evidence {
+        let mut e = ev(
+            if ok { "green" } else { "red" },
+            &selector_of(c),
+            parse(if ok {
+                "test g::a ... ok\n"
+            } else {
+                "test g::a ... FAILED\n"
+            }),
+        );
+        e.facts.tree_key = tree.into();
+        e.facts.platform = format!("linux-x86_64/{machine}");
+        e
+    }
+
+    /// [D] The columns fit the window: each gate column is as wide as its widest cell (never cut), the agent's as its
+    /// widest agent, and the task column takes the rest, its titles cut to it.
+    #[test]
+    fn the_columns_fit_the_window_and_the_task_column_gives_way() {
+        let mut f = flow();
+        f.tasks[0].title =
+            "A task with a title far too long for a narrow window's task column".into();
+        f.tasks[0].evidence = vec![ev("red", "s", parse("test a::x ... FAILED\n"))];
+        for scale in [1.0, 2.0] {
+            let mut e = env(scale);
+            e.width_px = (760.0 * scale) as u32;
+            // the env's fonts are its scale's (device px)
+            let mut m = drgnx_rows::fit::FontSet::new();
+            m.set_role(ROLE, None, 7.0 * scale);
+            let (rows, _) = flow_rows(&f, &e, &m);
+            let t1 = &rows[3];
+            let stops: Vec<u32> = t1.stops.iter().map(|s| s.1).collect();
+            assert!(stops.windows(2).all(|w| w[0] < w[1]), "{stops:?}");
+            // the last column's widest cell ends inside the window
+            let review = drgnx_rows::fit::width(&m, ROLE, " at plan end ") as u32;
+            assert!(
+                stops[6] + review <= e.width_px,
+                "scale {scale}: {stops:?} + {review} > {}",
+                e.width_px
+            );
+            // the cells are whole; the title gave way
+            assert!(t1.text.contains("1 failed · base"), "{}", t1.text);
+            assert!(
+                t1.text.contains("A task") && t1.text.contains('…'),
+                "scale {scale}: {}",
+                t1.text
+            );
+            assert!(!rows[4].text.contains("no red · h…"), "{}", rows[4].text);
+        }
+    }
+
+    /// [D] The batch and the line gate: the batch's heading with its affected groups' chip (green of listed at the
+    /// combined tree), a row per member (its tip, title and what the queue said to it), a row per machine with each
+    /// group's tick; the line gate's heading with its tiers' chip at the line's head, a row per machine, and a note
+    /// that the push stays the user's.  A pack without a push gate has no line gate.
+    #[test]
+    fn the_batch_and_the_line_gate_show_their_runs_per_machine() {
+        let mut f = flow();
+        let (unit, gui) = (check("unit"), check("gui"));
+        f.pack.as_mut().unwrap().rules.push(Rule {
+            id: "push-gate".into(),
+            kind: "enforced".into(),
+            doc: "One full run before a push".into(),
+        });
+        f.pack.as_mut().unwrap().push_tiers = vec![unit.clone(), gui.clone()];
+        f.groups = Some(Runs {
+            at: "B".into(),
+            checks: vec![unit.clone(), gui.clone()],
+            evidence: vec![
+                run_of(&unit, "B", "desktop", true),
+                run_of(&gui, "B", "mac-mini", false),
+            ],
+        });
+        f.push = Some(Runs {
+            at: "L".into(),
+            checks: vec![unit.clone(), gui.clone()],
+            evidence: vec![
+                run_of(&unit, "L", "desktop", true),
+                run_of(&gui, "L", "desktop", true),
+            ],
+        });
+        let (rows, _) = flow_rows(&f, &env(1.0), &fonts());
+        let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+        let tail: Vec<&str> = keys[keys.iter().position(|k| *k == "batch").unwrap()..].to_vec();
+        assert_eq!(
+            tail,
+            [
+                "batch",
+                "batch:0",
+                "batch-on:desktop",
+                "batch-on:mac-mini",
+                "gap2",
+                "line",
+                "line-on:desktop",
+                "line-note"
+            ]
+        );
+        let row = |k: &str| rows.iter().find(|r| r.key == k).unwrap();
+        assert!(row("batch").text.contains("affected groups 1/2"));
+        assert!(row("batch").runs.iter().any(|r| r.2 == Chip::Err.face()));
+        let m = &row("batch:0").text;
+        assert!(m.contains("T2") && m.contains("7d21c0e") && m.contains("trial merge clean"));
+        assert!(
+            row("batch-on:desktop").text.contains("desktop")
+                && row("batch-on:desktop").text.contains("unit")
+        );
+        assert!(row("batch-on:mac-mini").text.contains("gui"));
+        assert!(
+            row("line").text.contains("green on L"),
+            "{}",
+            row("line").text
+        );
+        assert!(row("line").runs.iter().any(|r| r.2 == Chip::Ok.face()));
+        assert!(row("line-note").text.contains("Pushing needs you"));
+        // no push gate in the pack: no line gate
+        let mut g = f.clone();
+        g.pack
+            .as_mut()
+            .unwrap()
+            .rules
+            .retain(|r| r.id != "push-gate");
+        let (rows, _) = flow_rows(&g, &env(1.0), &fonts());
+        assert!(!rows.iter().any(|r| r.key.starts_with("line")));
+        // a push gate with no push asked yet says so
+        let mut h = f.clone();
+        h.push = None;
+        let (rows, _) = flow_rows(&h, &env(1.0), &fonts());
+        assert!(
+            rows.iter()
+                .any(|r| r.key == "line" && r.text.contains("no push asked"))
+        );
     }
 
     /// [D] The model: a task node per task, the `flow` form's links up and down, its gates' chips as fields; the held
@@ -977,7 +1361,7 @@ mod tests {
     #[test]
     fn the_flow_rows_put_a_chip_per_gate_at_its_column() {
         for scale in [1.0, 2.0] {
-            let (rows, images) = flow_rows(&flow(), &env(scale));
+            let (rows, images) = flow_rows(&flow(), &env(scale), &fonts());
             let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
             assert_eq!(
                 keys,
@@ -1031,9 +1415,9 @@ mod tests {
                     .any(|p| p.2 == "drgnx-work-card" && p.3 == json!(42))
             );
             let stops: Vec<u32> = held.stops.iter().map(|s| s.1).collect();
-            assert_eq!(stops[0], px(200.0), "scale {scale}");
-            assert_eq!(stops[1], px(318.0), "scale {scale}");
             assert_eq!(stops.len(), 7);
+            // at 1280 logical px the task column keeps the mockup's 220 px at least
+            assert!(stops[0] >= px(220.0), "scale {scale}: {stops:?}");
             let faces: Vec<&str> = held.runs.iter().map(|r| r.2.as_str()).collect();
             assert!(faces.contains(&Chip::Held.face()), "{faces:?}");
             assert!(faces.contains(&TEXT) && faces.contains(&LABEL), "{faces:?}");
@@ -1052,7 +1436,7 @@ mod tests {
             ..flow()
         };
         // no held task: no needs-you row
-        assert_eq!(flow_rows(&empty, &env(1.0)).0[2].key, "none");
+        assert_eq!(flow_rows(&empty, &env(1.0), &fonts()).0[2].key, "none");
     }
 
     /// [D] The Rules tile: its heading, the columns, a row per rule (its words, its kind as a chip, how the hub holds

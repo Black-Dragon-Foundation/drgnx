@@ -69,12 +69,73 @@ fn pack() -> Pack {
                 "checked",
                 "Merges resolved by both commits' intent",
             ),
+            rule(
+                "push-gate",
+                "enforced",
+                "One full Linux run on the exact commit before a push",
+            ),
             rule("review", "routing", "One review per finished plan"),
         ],
         batch_size: 3,
         author_check: vec![build()],
+        push_tiers: vec![check("unit"), check("gui"), check("scenario")],
+        groups: vec!["bin/drgnx".into(), "affected".into(), "%r".into()],
         ..Pack::default()
     }
+}
+
+/// A test tier or group NAME.
+fn check(name: &str) -> Check {
+    Check {
+        name: name.into(),
+        dir: String::new(),
+        run: vec!["bin/drgnx".into(), "test".into(), name.into()],
+    }
+}
+
+/// The batch's combined tree and the line's head tree the seeded gates judged.
+pub const BATCH_TREE: &str = "b47c9e1a";
+pub const LINE_HEAD: &str = "9c41e07";
+pub const LINE_TREE: &str = "e4a07f3c";
+
+/// A gate's run: CHECK on MACHINE for KEY (`batch:JOB@TREE`, `push:JOB@TREE`) at TREE, passing or not.
+fn gate_ev(key: &str, tree: &str, machine: &str, c: &Check, ok: bool, at: f64) -> Evidence {
+    Evidence {
+        kind: if ok { "green" } else { "red" }.into(),
+        task: key.into(),
+        job: format!("gate{at}"),
+        facts: Facts {
+            tree_key: tree.into(),
+            env_stamp: "scene".into(),
+            platform: format!("linux-x86_64/{machine}"),
+            selector: vordr::gates::selector_of(c),
+        },
+        rows: vordr::rows::parse(if ok {
+            "test all::rows ... ok\n"
+        } else {
+            "test all::rows ... FAILED\n"
+        }),
+        truncated: false,
+        at,
+        note: None,
+    }
+}
+
+/// The batch's affected groups and their runs, then the push tiers' runs at the line's head: the groups green on the
+/// desktop but one red on the second runner; every tier green.
+pub(crate) fn gate_runs() -> (Vec<Check>, Vec<Evidence>) {
+    let groups = vec![check("unit"), check("ert:search"), check("hub:view")];
+    let b = format!("batch:{JOB}@{BATCH_TREE}");
+    let p = format!("push:{JOB}@{LINE_TREE}");
+    let mut ev = vec![
+        gate_ev(&b, BATCH_TREE, "desktop", &groups[0], true, 30.0),
+        gate_ev(&b, BATCH_TREE, "desktop", &groups[1], true, 31.0),
+        gate_ev(&b, BATCH_TREE, "runner-1", &groups[2], false, 32.0),
+    ];
+    for (i, t) in pack().push_tiers.iter().enumerate() {
+        ev.push(gate_ev(&p, LINE_TREE, "desktop", t, true, 40.0 + i as f64));
+    }
+    (groups, ev)
 }
 
 /// Evidence of task N: KIND, run SELECTOR, ROWS (cargo test lines), at AT.
@@ -130,6 +191,14 @@ pub(crate) fn run() -> Run {
     Run {
         pack: pack(),
         tasks: vec![
+            task(
+                0,
+                "Base, baselines, fixture",
+                "in-review",
+                Some("Sonnet"),
+                vec![red(0), tip(0), built(0)],
+                true,
+            ),
             task(
                 1,
                 "search/run and ids",
@@ -193,9 +262,8 @@ pub async fn seed(front: &Front) -> Result<(), String> {
     let r = run();
     let now = crate::clock::wall_secs();
     let meta = urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "orch/scene");
-    let live: Vec<String> = r.tasks.iter().map(|t| format!("{JOB}#{}", t.n)).collect();
     let batch: Vec<i64> = r.tasks.iter().filter(|t| t.batch).map(|t| t.n).collect();
-    let size = r.pack.batch();
+    let (groups, gate_ev) = gate_runs();
     let Run { pack, tasks, held } = r;
     front
         .writer
@@ -242,18 +310,33 @@ pub async fn seed(front: &Front) -> Result<(), String> {
                 },
                 now,
             )?;
+            for e in &gate_ev {
+                norn::write::evidence::record(tx, e, None)?;
+            }
             Ok(())
         })
         .await
         .map_err(|e| e.to_string())?;
-    for n in batch {
-        let ready = Ready {
+    // the batch as the queue holds it: the first member's trial merge was clean, the others wait for it
+    let ready: Vec<Ready> = batch
+        .iter()
+        .map(|n| Ready {
             task: format!("{JOB}#{n}"),
             tip: format!("{:07x}", 0x7d21c0 + n),
-            at: now + n as f64,
+            at: now + *n as f64,
+        })
+        .collect();
+    front.queue.seed(JOB, ready.clone());
+    for (i, r) in ready.iter().enumerate() {
+        let said = if i == 0 {
+            "trial merge clean".to_owned()
+        } else {
+            format!("{} merges first", ready[0].task)
         };
-        front.queue.place(JOB, ready, &live, size, |_, _| false);
+        front.queue.say(JOB, &r.task, &said);
     }
+    front.queue.at_groups(JOB, BATCH_TREE, groups);
+    front.queue.at_push(JOB, LINE_HEAD, LINE_TREE);
     front.writer.signals.wrote();
     Ok(())
 }
@@ -287,6 +370,14 @@ mod tests {
             assert!(seen.contains(&chip), "no {chip:?} in {seen:?}");
         }
         assert!(r.pack.problems().is_empty(), "{:?}", r.pack.problems());
-        assert_eq!(r.tasks.iter().filter(|t| t.batch).count(), 2);
+        assert_eq!(r.tasks.iter().filter(|t| t.batch).count(), 3);
+        // the gates' runs: the groups at the batch's tree on two machines, one red; every push tier at the line's
+        let (groups, ev) = gate_runs();
+        assert_eq!(groups.len(), 3);
+        let batch: Vec<&Evidence> = ev.iter().filter(|e| e.task.starts_with("batch:")).collect();
+        assert!(batch.iter().all(|e| e.facts.tree_key == BATCH_TREE));
+        assert!(batch.iter().any(|e| e.kind == "red"));
+        let push = ev.iter().filter(|e| e.task.starts_with("push:")).count();
+        assert_eq!(push, r.pack.push_tiers.len());
     }
 }
