@@ -274,20 +274,29 @@ no item runs nothing (the x is never used to guess one)."
     (should-not (eq 'drgnx-topline-mouse-up (lookup-key tab-bar-map [mouse-1])))))
 
 (ert-deftest drgnx-topline/images-follow-the-frame-scale ()
-  "At scale 2 the frame counts device pixels: an image is drawn twice its logical size and says so, and a chip keeps
-the space before its dimmer part (SVG drops a leading space unless told to keep it)."
+  "At scale 2 the frame counts device pixels: an image is drawn twice its logical size, sized in whole pixels with no
+image scale, and says so (at 1.25, 26 px is 33, half up); and a chip keeps the space before its dimmer part (SVG drops
+a leading space unless told to keep it)."
+  (dolist (case '((2.0 52 76) (1.25 33 48)))
+    (cl-letf (((symbol-function 'drgnx-pixels-scale) (lambda (&optional _) (car case)))
+              ((symbol-function 'drgnx-topline--svg-p) (lambda () t)))
+      (let* ((s (drgnx-topline--image (concat "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"26\" height=\"38\""
+                                              " viewBox=\"0 0 26 38\"></svg>")
+                                      "x"))
+             (image (get-text-property 0 'display s)))
+        (should (equal (image-property image :scale) 1))
+        (should (string-match-p (format "width=\"%d\" height=\"%d\" viewBox" (nth 1 case) (nth 2 case))
+                                (image-property image :data)))
+        (should (equal (get-text-property 0 'drgnx-topline-px s) (nth 1 case))))))
   (cl-letf (((symbol-function 'drgnx-pixels-scale) (lambda (&optional _) 2.0))
             ((symbol-function 'drgnx-topline--svg-p) (lambda () t)))
-    (let* ((s (drgnx-topline--image "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"26\" height=\"26\"></svg>" "x"))
-           (image (get-text-property 0 'display s)))
-      (should (equal (image-property image :scale) 2.0))
-      (should (equal (get-text-property 0 'drgnx-topline-px s) 52)))
     (let ((svg (plist-get (cdr (get-text-property 0 'display (drgnx-topline--chip '("main" (" ↑2" . shadow))
                                                                                   'drgnx-chip-quiet 20 4)))
                           :data)))
       (should (string-match-p "xml:space=\"preserve\"" svg)))
-    ;; the icons too: without a :scale of its own an image takes `image-scaling-factor', a guess from the font
-    (should (equal (image-property (drgnx-icons--make 'x 16 2.0) :scale) 2.0))))
+    ;; the icons too: sized in whole pixels with `:scale' 1, or an image takes `image-scaling-factor', a guess from the font
+    (should (equal (image-property (drgnx-icons--make 'x 16 2.0) :scale) 1))
+    (should (string-match-p "width=\"32\" height=\"32\"" (image-property (drgnx-icons--make 'x 16 2.0) :data)))))
 
 (ert-deftest drgnx-topline/the-row-s-ends-count-the-frame-s-edge ()
   "The tab bar sits inside the frame's edge (the cards' gap, `internal-border-width'), so the mark's 14 px and the end's

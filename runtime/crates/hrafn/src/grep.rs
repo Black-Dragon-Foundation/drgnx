@@ -452,6 +452,34 @@ pub fn new_text(q: &Query, matched: &str, template: &str) -> Option<String> {
     Some(out)
 }
 
+/// The groups (`\1` …) of Q's regexp in MATCHED, a match's whole text: at most [`GROUPS_MAX`], each cut to
+/// [`GROUP_CHARS`] characters, `None` for a group that matched nothing. Empty for a literal search, a regexp without
+/// groups, or one that no longer matches MATCHED.
+pub fn captures(q: &Query, matched: &str) -> Vec<Option<String>> {
+    if !q.regexp {
+        return Vec::new();
+    }
+    let Ok(re) = RegexBuilder::new(&format!(r"\A(?:{})\z", q.text))
+        .case_insensitive(!q.case)
+        .build()
+    else {
+        return Vec::new();
+    };
+    let Some(caps) = re.captures(matched) else {
+        return Vec::new();
+    };
+    caps.iter()
+        .skip(1)
+        .take(GROUPS_MAX)
+        .map(|g| g.map(|m| m.as_str().chars().take(GROUP_CHARS).collect()))
+        .collect()
+}
+
+/// The most groups [`captures`] gives a match.
+pub const GROUPS_MAX: usize = 8;
+/// The most characters of a group [`captures`] gives.
+pub const GROUP_CHARS: usize = 200;
+
 /// Search Q with B, handing each file's matches to ON_FILE as that file's lines are complete. Stops when CANCEL is
 /// set (the child is killed). An empty text finds nothing. `Err` is the reason the search could not run or the
 /// pattern was refused.
@@ -781,6 +809,25 @@ mod tests {
             Some(r"12-ab ab-12 \".into())
         );
         assert_eq!(new_text(&query, "nope", "x"), None);
+    }
+
+    #[test]
+    fn captures_are_the_groups_none_for_one_that_matched_nothing() {
+        let mut query = q(Path::new("/r"), r"(\w+)-(\d+)?(x)?");
+        assert!(captures(&query, "ab-12").is_empty(), "a literal search");
+        query.regexp = true;
+        assert_eq!(
+            captures(&query, "ab-12"),
+            [Some("ab".to_owned()), Some("12".to_owned()), None]
+        );
+        assert!(captures(&query, "nope").is_empty());
+        query.text = format!("({})", "a".repeat(300));
+        assert_eq!(
+            captures(&query, &"a".repeat(300))[0]
+                .as_ref()
+                .map(|g| g.len()),
+            Some(GROUP_CHARS)
+        );
     }
 
     #[test]

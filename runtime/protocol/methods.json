@@ -3061,6 +3061,210 @@
     {
       "data": {
         "$defs": {
+          "SearchEdit": {
+            "additionalProperties": false,
+            "description": "One edit of a file: its id (a match's `m:RUN:N`, `e:K` for the K-th given edit), its range\nas lines (from 1) and character columns (from 0) for the editor and as UTF-8 byte offsets for the hub, the text it\nexpects there and the text it puts in.",
+            "properties": {
+              "byte_end": {
+                "default": 0,
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "byte_start": {
+                "default": 0,
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "col": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "end_col": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "end_line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "new": {
+                "type": "string"
+              },
+              "old": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "line",
+              "col",
+              "end_line",
+              "end_col",
+              "old",
+              "new"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search-apply`: the editor that has PATH open writes these edits of change set CHANGE into its buffer, each only\nwhere its `old` text is, one undo group, saving unless the buffer held unsaved edits; it answers `search/applied`\nwithin `ttl_ms` of the event's arrival, else the hub skips the file. TICK (an undo's) is the buffer's\n`buffer-chars-modified-tick` after the write it undoes: a buffer edited since is left alone.",
+        "properties": {
+          "change": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "edits": {
+            "items": {
+              "$ref": "#/$defs/SearchEdit"
+            },
+            "type": "array"
+          },
+          "path": {
+            "type": "string"
+          },
+          "tick": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ttl_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "change",
+          "path",
+          "edits",
+          "ttl_ms"
+        ],
+        "title": "SearchApply",
+        "type": "object"
+      },
+      "doc": "the Search view's write of a file the editor has open (search/apply, search/undo): it applies the edits in its buffer, each where its old text is, and answers search/applied within ttl_ms; to that editor's connection only",
+      "name": "search-apply"
+    },
+    {
+      "data": {
+        "$defs": {
+          "ChangeOrigin": {
+            "description": "What made a change set.",
+            "enum": [
+              "replace-all",
+              "edit-results",
+              "undo"
+            ],
+            "type": "string"
+          },
+          "EditSkip": {
+            "additionalProperties": false,
+            "description": "An edit (or a whole file: no id) left out, and why.",
+            "properties": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "why"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search-change`: change set CHANGE (ORIGIN; UNDOES the change set an undo puts back) of VIEW is final: WRITTEN\nedits in FILES files, the SKIPPED (each with why), and LEFT the files an undo left alone (edited since).",
+        "properties": {
+          "change": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "files": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "left": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "origin": {
+            "$ref": "#/$defs/ChangeOrigin"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/$defs/EditSkip"
+            },
+            "type": "array"
+          },
+          "undoes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          },
+          "written": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "view",
+          "change",
+          "origin",
+          "written",
+          "files"
+        ],
+        "title": "ChangeDone",
+        "type": "object"
+      },
+      "doc": "a change set of the Search view (search/apply, search/undo) is final: what it wrote, in how many files, what it skipped and why, the files an undo left alone; to the asking connection only",
+      "name": "search-change"
+    },
+    {
+      "data": {
+        "$defs": {
           "ScopeDone": {
             "additionalProperties": false,
             "description": "What a git scope (Changed, Staged, Branch) searched: FILES files of the repository (before the globs), the\nSUBMODULES and DELETED files it skipped, Branch's BASE, why it is empty (WHY_EMPTY), or why Branch has no base to\ntake (NEEDS_BASE: the view asks, `search/scope-bases`).",
@@ -27436,6 +27640,193 @@
       "classes": [
         "user"
       ],
+      "doc": "the editor's answer to search-apply: the edits applied and skipped, their inverse, the buffer's tick and whether it saved; true when the hub was waiting for it",
+      "name": "search/applied",
+      "params": {
+        "$defs": {
+          "GrepSkip": {
+            "additionalProperties": false,
+            "description": "One skipped match: its node id (`m:RUN:N`) and why.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "why"
+            ],
+            "type": "object"
+          },
+          "SearchEdit": {
+            "additionalProperties": false,
+            "description": "One edit of a file: its id (a match's `m:RUN:N`, `e:K` for the K-th given edit), its range\nas lines (from 1) and character columns (from 0) for the editor and as UTF-8 byte offsets for the hub, the text it\nexpects there and the text it puts in.",
+            "properties": {
+              "byte_end": {
+                "default": 0,
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "byte_start": {
+                "default": 0,
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "col": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "end_col": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "end_line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "new": {
+                "type": "string"
+              },
+              "old": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "line",
+              "col",
+              "end_line",
+              "end_col",
+              "old",
+              "new"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/applied`: the editor's answer to `search-apply`: the edits it APPLIED and SKIPPED (each with why), the\nINVERSE edits that put the buffer back (in the buffer's coordinates after the write), its TICK after it, whether it\nSAVED; NOT_OPEN when no buffer visits PATH any more (the hub then writes the file on disk).",
+        "properties": {
+          "applied": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "change": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "inverse": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/SearchEdit"
+            },
+            "type": "array"
+          },
+          "not_open": {
+            "default": false,
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "saved": {
+            "default": false,
+            "type": "boolean"
+          },
+          "skipped": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/GrepSkip"
+            },
+            "type": "array"
+          },
+          "tick": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "change",
+          "path"
+        ],
+        "title": "AppliedParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "write a change set from search/edits, one file at a time in the hub's write queue (shared with pair writes): a file an editor has open by that editor (search-apply), any other on disk atomically over a check that it is as the edit set read it; ends with search-change",
+      "name": "search/apply",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/apply`: write change set CHANGE (from `search/edits`). OPEN lists the files the asking editor has open:\nthose (and the ones any editor told the hub it has, `pair/open`) are written by their editor (`search-apply`), the\nrest by the hub on disk. The end is the event `search-change`.",
+        "properties": {
+          "change": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "open": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "change"
+        ],
+        "title": "ApplyParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "an editor buffer with unsaved edits: the Search view's searches search its text in place of its file (the current search at once), or say the buffer is too large and is searched on disk; without text or large the file is searched again",
       "name": "search/buffer",
       "params": {
@@ -27488,6 +27879,275 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "boolean",
         "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the edit set of a view's search (its ticked matches, the ids named, or edits the caller names): per file the edits with lines, character columns, byte ranges, old and new text; overlapping matches, files changed since the search, large and binary files skipped with why; kept as a change set for search/apply",
+      "name": "search/edits",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "GivenEdit": {
+            "additionalProperties": false,
+            "description": "One edit the caller names itself (the language server's rename, Replace This of Emacs's own rows): its file, its\nfirst line (from 1), its character columns (from 0) and the text it expects there (`old`).",
+            "properties": {
+              "col": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "end_col": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "end_line": {
+                "description": "Default: `line`.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "new": {
+                "type": "string"
+              },
+              "old": {
+                "type": "string"
+              },
+              "path": {
+                "$ref": "#/$defs/AbsPath"
+              }
+            },
+            "required": [
+              "path",
+              "line",
+              "col",
+              "end_col",
+              "old",
+              "new"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/edits`: the edit set of VIEW's search. IDS names the matches to write; without it, every match of the run\nbut those OFF names (the user's unticks). EDITS are edits the caller names itself, in place of the run's matches.",
+        "properties": {
+          "edits": {
+            "items": {
+              "$ref": "#/$defs/GivenEdit"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "off": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "replace": {
+            "description": "The replacement, when the view's fields have one the search has not been told yet (`search/grep-replace`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The project the given EDITS are in (their files are written only inside it); the run's own root otherwise."
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "EditsParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "EditSkip": {
+            "additionalProperties": false,
+            "description": "An edit (or a whole file: no id) left out, and why.",
+            "properties": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "why"
+            ],
+            "type": "object"
+          },
+          "EditSource": {
+            "description": "Where a file's text came from: its file on disk, or the editor's buffer of it (`search/buffer`).",
+            "enum": [
+              "disk",
+              "buffer"
+            ],
+            "type": "string"
+          },
+          "FileEdits": {
+            "additionalProperties": false,
+            "description": "One file of an edit set: its edits in order (none overlap).",
+            "properties": {
+              "edits": {
+                "items": {
+                  "$ref": "#/$defs/SearchEdit"
+                },
+                "type": "array"
+              },
+              "path": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/$defs/EditSource"
+              }
+            },
+            "required": [
+              "path",
+              "source",
+              "edits"
+            ],
+            "type": "object"
+          },
+          "SearchEdit": {
+            "additionalProperties": false,
+            "description": "One edit of a file: its id (a match's `m:RUN:N`, `e:K` for the K-th given edit), its range\nas lines (from 1) and character columns (from 0) for the editor and as UTF-8 byte offsets for the hub, the text it\nexpects there and the text it puts in.",
+            "properties": {
+              "byte_end": {
+                "default": 0,
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "byte_start": {
+                "default": 0,
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "col": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "end_col": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "end_line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "new": {
+                "type": "string"
+              },
+              "old": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "line",
+              "col",
+              "end_line",
+              "end_col",
+              "old",
+              "new"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/edits`' answer: the change set it made (`search/apply` writes it), its files and what it left out.",
+        "properties": {
+          "change": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/$defs/FileEdits"
+            },
+            "type": "array"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/$defs/EditSkip"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "change",
+          "files",
+          "skipped"
+        ],
+        "title": "EditsAnswer",
+        "type": "object"
       },
       "writes": false
     },
@@ -28398,6 +29058,194 @@
           "fresh"
         ],
         "title": "OutlineAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "one file's changes of a view's search as a unified diff: lines added and removed, the hunks with their matches' ids and a regexp's groups, the matches skipped with why",
+      "name": "search/preview",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/preview`: one file's changes of VIEW's search as a diff (the Search view's preview tile). The matches as\n`search/edits` takes them (all but `off`; `replace` when the fields have one the run was not told yet), of PATH only.",
+        "properties": {
+          "off": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "path": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "replace": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "path"
+        ],
+        "title": "PreviewParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "EditSkip": {
+            "additionalProperties": false,
+            "description": "An edit (or a whole file: no id) left out, and why.",
+            "properties": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "why"
+            ],
+            "type": "object"
+          },
+          "MatchGroups": {
+            "additionalProperties": false,
+            "description": "A regexp match's groups (`\\1` …, at most 8, each at most 200 characters): `None` for one that matched nothing.",
+            "properties": {
+              "groups": {
+                "items": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": "array"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "groups"
+            ],
+            "type": "object"
+          },
+          "PreviewHunk": {
+            "additionalProperties": false,
+            "description": "One hunk of a preview: its ranges (lines from 1, as the diff's `@@` line), the ids of the matches in it and, for a\nregexp search, their groups.",
+            "properties": {
+              "captures": {
+                "items": {
+                  "$ref": "#/$defs/MatchGroups"
+                },
+                "type": "array"
+              },
+              "ids": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "new_lines": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "new_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "old_lines": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "old_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "old_start",
+              "old_lines",
+              "new_start",
+              "new_lines",
+              "ids"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/preview`'s answer: the file's unified diff (3 lines of context), its lines added and removed, the hunks in\nthe diff's order and the matches skipped, each with why (an empty diff: none of its matches would be written).",
+        "properties": {
+          "diff": {
+            "type": "string"
+          },
+          "hunks": {
+            "items": {
+              "$ref": "#/$defs/PreviewHunk"
+            },
+            "type": "array"
+          },
+          "minus": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "plus": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/$defs/EditSkip"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "path",
+          "diff",
+          "plus",
+          "minus",
+          "hunks"
+        ],
+        "title": "PreviewAnswer",
         "type": "object"
       },
       "writes": false
@@ -30873,6 +31721,46 @@
         "type": "object"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "put back every file a change set wrote (the hub keeps the last 20, open files' inverse edits included), leaving alone a file edited since; ends with search-change",
+      "name": "search/undo",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/undo`: put back every file change set CHANGE wrote, leaving alone a file edited since; a new change set\n(origin `undo`), ended by `search-change`.",
+        "properties": {
+          "change": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "open": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "change"
+        ],
+        "title": "UndoParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
     },
     {
       "classes": [
