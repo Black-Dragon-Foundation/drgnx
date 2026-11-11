@@ -174,7 +174,9 @@ started is stopped and ends as "disk", not as a failure.
 `drgnx-px` (the relay sidecar, the job's way to the proxy). They are built static, so they start on any Linux and in any image.
 `install.sh` builds them for this machine's processor; for a runner of the other kind, run
 `drgnx build runner-bundle --arch aarch64` (or `x86_64`). A Mac runner (Apple silicon) takes `sleipnir` alone,
-built and signed on a Mac: `drgnx build runner-bundle --target aarch64-apple-darwin`.
+built and signed on a Mac: `drgnx build runner-bundle --target aarch64-apple-darwin`. A Mac job that needs a
+Homebrew package the Mac lacks waits, and its row shows the line to run in your own account (for example "on the Mac,
+brew install cmake"); the runner account never installs into Homebrew.
 
 ## Which jobs go where
 
