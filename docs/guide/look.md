@@ -357,8 +357,11 @@ drgnx draws its marks with [Lucide](https://lucide.dev) line icons: tree rows, t
 status bar, the palette's rows, the agent panel's steps and notices (never inside code). About 60 SVG files sit in
 `etc/icons/`, each drawn with `currentColor`, so an icon takes the colour of the text around it: in a
 `drgnx-text-subtle` run it is subtle, in any theme, and no colour is written in the files. They are 16 px (14 px in
-dense rows) with Lucide's stroke of 1.6 in its 24-unit box, as the design draws them: about 1.07 px at 16 px. The sizes are logical pixels: on a display scaled to 2 an icon is
-drawn at twice the device pixels, sharp, whatever the font size (Emacs's own `image-scaling-factor` is not used).
+dense rows) with Lucide's stroke of 1.6 in its 24-unit box, as the design draws them: about 1.07 px at 16 px. The sizes are logical pixels: an icon is drawn at
+a whole number of device pixels, the size times the display scale and the UI scale, rounded half up (16 px is 20 at
+1.25, 21 at 4/3, 24 at 1.5, 32 at 2, 22 at 1.25 with a UI scale of 110 %), sharp, whatever the font size (Emacs's own
+`image-scaling-factor` is not used). An icon drawn after a scale change or on a monitor at another scale gets that
+scale's size.
 
 `drgnx-look-icons` chooses how they are drawn:
 

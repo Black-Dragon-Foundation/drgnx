@@ -11,6 +11,7 @@
 
 ;;; Code:
 (require 'cl-lib)
+(require 'drgnx-pixels)
 
 (defvar vertico-count)
 (defvar vertico-buffer-hide-prompt)
@@ -49,8 +50,15 @@ is the palette's own (`drgnx-palette--group-title'): no rule line.")
   (and (display-graphic-p) (fboundp 'glitnir-active-p) (glitnir-active-p) t))
 
 (defun drgnx-palette-frame--px (frame logical)
-  "LOGICAL pixels in FRAME's own pixels: a frame of Nidhogg's Wayland shell counts device pixels."
-  (if (featurep 'nidhogg-wayland) (round (* logical (frame-scale-factor frame))) logical))
+  "LOGICAL pixels in FRAME's own pixels, by the pixel rule (`drgnx-px': the display scale on a native shell times the
+UI scale, half up)."
+  (drgnx-px logical frame))
+
+(defun drgnx-palette-frame-ring (frame)
+  "The width of the box's ring (the look's `child-frame-border-width', logical) in FRAME's pixels, by the line rule
+\(`drgnx-px-line': a 1 px ring is 1 device pixel at 1.25, 4/3 and 1.5, 2 at 2); 0 without one."
+  (let ((w (or (alist-get 'child-frame-border-width (drgnx-palette-frame--look)) 0)))
+    (if (> w 0) (drgnx-px-line w frame) 0)))
 
 (defun drgnx-palette-frame--params (parent)
   "The frame parameters of the palette's child frame under PARENT."
@@ -58,8 +66,7 @@ is the palette's own (`drgnx-palette--group-title'): no rule line.")
     (undecorated . t) (no-accept-focus . t) (no-focus-on-map . t) (no-other-frame . t)
     (skip-taskbar . t) (unsplittable . t) (no-special-glyphs . t) (desktop-dont-save . t)
     (internal-border-width . ,(drgnx-palette-frame--px parent 8)) (border-width . 0)
-    (child-frame-border-width . ,(drgnx-palette-frame--px
-                                  parent (or (alist-get 'child-frame-border-width (drgnx-palette-frame--look)) 0)))
+    (child-frame-border-width . ,(drgnx-palette-frame-ring parent))
     (menu-bar-lines . 0) (tool-bar-lines . 0) (tab-bar-lines . 0) (tab-bar-lines-keep-state . t)
     (left-fringe . 0) (right-fringe . 0) (vertical-scroll-bars) (horizontal-scroll-bars)
     (visibility . nil)
@@ -77,8 +84,7 @@ new table leaves out is cleared; the border width is in the parent's pixels."
       (dolist (k '(shadow backdrop-blur))
         (unless (assq k look) (set-frame-parameter drgnx-palette-frame--frame k nil)))
       (set-frame-parameter drgnx-palette-frame--frame 'child-frame-border-width
-                           (drgnx-palette-frame--px (or parent drgnx-palette-frame--frame)
-                                                    (or (alist-get 'child-frame-border-width look) 0)))
+                           (drgnx-palette-frame-ring (or parent drgnx-palette-frame--frame)))
       (dolist (p look)
         (unless (eq (car p) 'child-frame-border-width) (set-frame-parameter drgnx-palette-frame--frame (car p) (cdr p)))))))
 
@@ -88,6 +94,11 @@ new table leaves out is cleared; the border width is in the parent's pixels."
     (setq drgnx-palette-frame--frame (make-frame (drgnx-palette-frame--params parent))))
   (unless (eq (frame-parent drgnx-palette-frame--frame) parent)
     (set-frame-parameter drgnx-palette-frame--frame 'parent-frame parent))
+  ;; the frame is reused: its border and ring follow the parent's scale now (a UI scale or a monitor changed since)
+  (dolist (p `((internal-border-width . ,(drgnx-palette-frame--px parent 8))
+               (child-frame-border-width . ,(drgnx-palette-frame-ring parent))))
+    (unless (eql (frame-parameter drgnx-palette-frame--frame (car p)) (cdr p))
+      (set-frame-parameter drgnx-palette-frame--frame (car p) (cdr p))))
   drgnx-palette-frame--frame)
 
 (defun drgnx-palette-frame--place (frame parent lh)
@@ -107,8 +118,7 @@ The window holds the input line and `vertico-count' lines of LH pixels, then the
   "The `line-spacing' that brings a UI row to ROWS logical pixels: the extra half above, half below; nil on a
 terminal or before the dock's measure exists."
   (when (and (display-graphic-p) (fboundp 'drgnx-wb--natural-row-height))
-    (let* ((scale (if (fboundp 'frame-scale-factor) (float (frame-scale-factor)) 1.0))
-           (extra (max 0 (- (round (* rows scale)) (drgnx-wb--natural-row-height)))))
+    (let ((extra (max 0 (- (drgnx-px rows) (drgnx-wb--natural-row-height)))))
       (cons (/ extra 2) (- extra (/ extra 2))))))
 
 (defvar-local drgnx-palette-frame--floats nil
@@ -128,7 +138,6 @@ the palette's frame shows it, whichever of the two ran first)."
 
 (declare-function drgnx-palette-keycap "drgnx-palette")
 (declare-function drgnx-look-icon "drgnx-icons")
-(declare-function drgnx-px "drgnx-pixels")
 (defvar drgnx-palette-row-padding)
 
 (defvar drgnx-palette-frame--dressing nil
