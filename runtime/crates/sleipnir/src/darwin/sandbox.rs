@@ -1,6 +1,7 @@
 //! A Mac job's sandbox: the Gleipnir spec its Seatbelt profile is made from. It reads the job's source, writes its
 //! attempt folder (and the source, for a job that writes its tree), has its home and temporary folder in the attempt
-//! folder, and no network. A job placed with `tool:` features reads the runner's toolchains and has them in its
+//! folder, and no network. It runs Homebrew read-only (no update or cleanup; its cache, logs and temporary files in the
+//! attempt's tmp). A job placed with `tool:` features reads the runner's toolchains and has them in its
 //! environment ([`super::tools`]). Pure: the rows run on Linux.
 
 use gleipnir::spec::{Bind, Layers, Mode, Net, Spec, Target};
@@ -55,6 +56,20 @@ pub fn spec(job: &Job) -> Spec {
         ("PATH".into(), PATH.into()),
         ("LANG".into(), "en_US.UTF-8".into()),
         (MARKER.into(), job.marker.into()),
+        // Homebrew read-only: a configure asks `brew` where a package is, and the profile lets no job write Homebrew
+        ("HOMEBREW_NO_AUTO_UPDATE".into(), "1".into()),
+        ("HOMEBREW_NO_INSTALL_CLEANUP".into(), "1".into()),
+        ("HOMEBREW_NO_ANALYTICS".into(), "1".into()),
+        ("HOMEBREW_NO_ENV_HINTS".into(), "1".into()),
+        (
+            "HOMEBREW_CACHE".into(),
+            format!("{}/brew-cache", tmp.display()),
+        ),
+        (
+            "HOMEBREW_LOGS".into(),
+            format!("{}/brew-logs", tmp.display()),
+        ),
+        ("HOMEBREW_TEMP".into(), tmp.display().to_string()),
     ];
     Spec {
         read,
@@ -158,5 +173,37 @@ mod tests {
             spec(&Job { tools: &[], ..job }).read,
             vec![src.to_path_buf()]
         );
+    }
+
+    /// [D] A job runs Homebrew read-only: no update, cleanup or analytics, and its cache, logs and temporary files in
+    /// the attempt's tmp (a configure that asks `brew` where a package is, under a profile that can't write Homebrew).
+    #[test]
+    fn a_job_runs_homebrew_read_only() {
+        let dir = Path::new("/r/jobs/j1.1");
+        let s = spec(&Job {
+            dir,
+            src: Path::new("/r/slots/s1"),
+            cwd: Path::new("."),
+            writes_tree: false,
+            marker: "h/j1/1",
+            tools_dir: Path::new("/r/tools"),
+            tools: &[],
+        });
+        let tmp = dir.join("tmp").display().to_string();
+        for (k, v) in [
+            ("HOMEBREW_NO_AUTO_UPDATE", "1".to_string()),
+            ("HOMEBREW_NO_INSTALL_CLEANUP", "1".to_string()),
+            ("HOMEBREW_NO_ANALYTICS", "1".to_string()),
+            ("HOMEBREW_NO_ENV_HINTS", "1".to_string()),
+            ("HOMEBREW_CACHE", format!("{tmp}/brew-cache")),
+            ("HOMEBREW_LOGS", format!("{tmp}/brew-logs")),
+            ("HOMEBREW_TEMP", tmp.clone()),
+        ] {
+            assert!(
+                s.env.contains(&(k.to_string(), v.clone())),
+                "{k}={v}: {:?}",
+                s.env
+            );
+        }
     }
 }
