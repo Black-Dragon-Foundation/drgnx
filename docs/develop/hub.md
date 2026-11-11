@@ -2058,7 +2058,11 @@ overlays from it):
   the history applies (an agent's captured write, an editor's batch or resync) updates them in step; a document whose
   version moved another way (a revert, a merge) or that was not kept (after a restart) is made again from its blame
   when read, off the tick. A line is an author's when one of its characters is (its line break only on an empty
-  line); a line with the user's characters is never an agent's, and a deletion marks no line. A batch with an
+  line); a line with the user's characters is never an agent's. A deletion leaves no character: it marks the line the text
+  joined for its author (so an agent's pure deletion shows in the gutter). After a restart the ranges are made again by
+  replaying the document's recorded edits in order (`History::edit_log`: each change with its peer, the seed the base's),
+  which keeps those marks; when the log cannot be replayed to exactly the text (a merge's concurrent edits, a history
+  cut shallow by compaction) they come from the blame, which knows characters only, so the marks go. A batch with an
   `agent:` change (a paired chat's write) makes the file's views due at once; the user's typing waits for the quiet.
 - **Other worktrees, projected** (`editor::project`, pure). A session working in another worktree of the file's
   repository shows on the user's checkout mapped three-way: base (the file at the session's base tree) → agent (its

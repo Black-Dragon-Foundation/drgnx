@@ -6,7 +6,8 @@
 //! history applied, in time with it; [`AgentRanges::rebuild`] makes the same state from the text and its blame, after
 //! a restart or when an operation was missed, off the tick. A line is an author's when one of its characters is
 //! (its line break counts only on an empty line), and a line with the user's characters is never an agent's: the
-//! user's edits are never drawn in an agent's colour. A deletion leaves no character, so it marks no line.
+//! user's edits are never drawn in an agent's colour. A deletion leaves no character: it marks the line the text
+//! joined (its author's, kept in `Line::del`), so a pure deletion shows too; a rebuild from blame cannot know them.
 
 use super::project::LineRange;
 use std::ops::Range;
@@ -35,6 +36,8 @@ struct Run {
 struct Line {
     runs: Vec<Run>,
     newline: bool,
+    /// Authors (indexes) of a deletion that joined this line, a mark and no character.
+    del: Vec<u16>,
 }
 
 impl Line {
@@ -50,6 +53,11 @@ impl Line {
             Some(l) if l.who == r.who => l.len += r.len,
             _ => self.runs.push(r),
         }
+    }
+
+    /// Whether author WHO deleted text here, or wrote a character of this line.
+    fn marks(&self, who: u16) -> bool {
+        self.has(who) || self.del.contains(&who)
     }
 
     /// The runs of characters FROM..TO.
@@ -170,6 +178,15 @@ impl AgentRanges {
         let tail = &self.lines[l1];
         let suffix = tail.cut(c1, tail.len());
         let tail_newline = tail.newline;
+        let mut del: Vec<u16> = Vec::new();
+        for d in self.lines[l0].del.iter().chain(&self.lines[l1].del) {
+            if !del.contains(d) {
+                del.push(*d);
+            }
+        }
+        if op.old_len > 0 && op.inserted.is_empty() && who != 0 && !del.contains(&who) {
+            del.push(who);
+        }
         let mut new: Vec<Line> = Vec::new();
         let mut cur = Line::default();
         for r in prefix {
@@ -191,8 +208,19 @@ impl AgentRanges {
         }
         cur.newline = tail_newline;
         new.push(cur);
+        if let Some(first) = new.first_mut() {
+            first.del = del;
+        }
         self.lines.splice(l0..=l1, new);
         true
+    }
+
+    /// These ranges without the deletion marks: what a rebuild from the blame gives.
+    #[cfg(test)]
+    fn without_marks(&self) -> AgentRanges {
+        let mut r = self.clone();
+        r.lines.iter_mut().for_each(|l| l.del.clear());
+        r
     }
 
     /// The lines AUTHOR wrote (1-based, merged); an agent's leave out every line with the user's characters.
@@ -203,7 +231,7 @@ impl AgentRanges {
         let user = self.authors.iter().position(|a| a == USER);
         let mut out: Vec<LineRange> = Vec::new();
         for (i, l) in self.lines.iter().enumerate() {
-            if w == 0 || !l.has(w as u16) {
+            if w == 0 || !l.marks(w as u16) {
                 continue;
             }
             if author != USER && user.is_some_and(|u| l.has(u as u16)) {
@@ -225,7 +253,7 @@ impl AgentRanges {
             .iter()
             .enumerate()
             .skip(1)
-            .filter(|(i, _)| self.lines.iter().any(|l| l.has(*i as u16)))
+            .filter(|(i, _)| self.lines.iter().any(|l| l.marks(*i as u16)))
             .map(|(_, a)| a.clone())
             .collect();
         v.sort();

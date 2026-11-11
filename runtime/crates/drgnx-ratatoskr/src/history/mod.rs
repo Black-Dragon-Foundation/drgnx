@@ -150,6 +150,50 @@ fn author_key(author: Option<&serde_json::Value>) -> String {
 }
 
 impl Inner {
+    /// DOC on BRANCH's line authors made again from its recorded edits, replayed in order (a seed is the base's, no
+    /// author); none when the log cannot be replayed to exactly TEXT (the caller goes by the blame).
+    fn replayed_ranges(
+        &mut self,
+        doc: DocId,
+        branch: BranchId,
+        text: &str,
+    ) -> verdandi::Result<Option<AgentRanges>> {
+        let Some(log) = self.h.edit_log(doc, branch)? else {
+            return Ok(None);
+        };
+        let mut keys: HashMap<PeerId, String> = self
+            .peers
+            .iter()
+            .filter(|((b, _), _)| *b == branch)
+            .map(|((_, k), p)| (*p, k.clone()))
+            .collect();
+        let mut ranges = AgentRanges::new("");
+        for (peer, ch) in &log {
+            let key = if peer.0 >> 63 == 1 {
+                String::new() // a seed: the base's text
+            } else {
+                match keys.get(peer) {
+                    Some(k) => k.clone(),
+                    None => {
+                        let k = author_key(self.h.author_of(*peer)?.as_ref());
+                        keys.insert(*peer, k.clone());
+                        k
+                    }
+                }
+            };
+            let op = Op {
+                author: &key,
+                start: ch.start,
+                old_len: ch.old_len,
+                inserted: &ch.inserted,
+            };
+            if !ranges.apply_op(op) {
+                return Ok(None);
+            }
+        }
+        Ok((ranges.chars() == text.chars().count()).then_some(ranges))
+    }
+
     /// DOC on BRANCH's line authors, in step with its text: the kept ones, else made again from its blame (after a
     /// restart, or when an operation reached the document by a way that keeps none: a revert, a merge).
     pub(crate) fn kept_ranges(
@@ -164,6 +208,17 @@ impl Inner {
             .is_none_or(|k| k.frontier != now)
         {
             let text = self.h.text(doc, branch)?;
+            // the recorded edits, replayed, give the marks of deletions too (the blame knows characters only)
+            if let Some(ranges) = self.replayed_ranges(doc, branch, &text)? {
+                self.kept.insert(
+                    (doc, branch),
+                    Kept {
+                        frontier: now,
+                        ranges,
+                    },
+                );
+                return Ok(&self.kept[&(doc, branch)].ranges);
+            }
             let n = text.chars().count();
             let mut keys: HashMap<PeerId, String> = self
                 .peers
