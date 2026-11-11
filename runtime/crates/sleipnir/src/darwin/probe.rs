@@ -35,6 +35,9 @@ pub struct Raw {
     pub sandbox_exec: Option<String>,
     /// `xcode-select -p`: the developer dir.
     pub developer_dir: String,
+    /// `getconf DARWIN_USER_DIR`: the account's per-user folder (`/var/folders/xx/yyy/0/`); a job's profile reads and
+    /// writes its parent.
+    pub darwin_user_dir: String,
     /// `/usr/bin/clang --version`, stdout and stderr together: a licence not accepted shows here.
     pub clang: String,
     /// `brew --prefix`, and `brew list --versions` (one call per probe).
@@ -253,6 +256,7 @@ pub fn read(root: &std::path::Path) -> Raw {
         ),
         sandbox_exec: gleipnir::backend::macos::find().err().map(|r| r.message),
         developer_dir: out("/usr/bin/xcode-select", &["-p"]),
+        darwin_user_dir: out("/usr/bin/getconf", &["DARWIN_USER_DIR"]),
         clang: both("/usr/bin/clang", &["--version"]),
         brew_prefix: brew.map(|b| out(b, &["--prefix"])).unwrap_or_default(),
         brew_versions: brew
@@ -284,6 +288,7 @@ mod tests {
             admin: "no drgnx-runner is NOT a member of admin\n".into(),
             sandbox_exec: None,
             developer_dir: "/Library/Developer/CommandLineTools".into(),
+            darwin_user_dir: "/var/folders/6m/g3m822tx5754yy400ffqz8km0000gp/0/".into(),
             clang: "Apple clang version 17.0.0 (clang-1700.0.13.5)\nTarget: arm64-apple-darwin24.6.0\n".into(),
             brew_prefix: "/opt/homebrew".into(),
             brew_versions: "gnutls 3.8.4 3.8.10\nautoconf 2.72\ntexinfo 7.2\nlibgccjit 15.1.0\nweird HEAD-abc\n"

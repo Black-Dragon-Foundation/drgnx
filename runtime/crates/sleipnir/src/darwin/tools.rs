@@ -410,15 +410,14 @@ mod tests {
             .arg("-p")
             .output()
             .unwrap();
-        let dev = String::from_utf8_lossy(&dev.stdout).trim().to_string();
-        let profile = gleipnir::sbpl::profile(
-            &valid,
-            &gleipnir::sbpl::MacContext {
-                developer_dir: std::fs::canonicalize(dev).ok(),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        let dev = String::from_utf8_lossy(&dev.stdout).to_string();
+        let user = std::process::Command::new("/usr/bin/getconf")
+            .arg("DARWIN_USER_DIR")
+            .output()
+            .unwrap();
+        let mac = super::super::sandbox::mac_context(&dev, &String::from_utf8_lossy(&user.stdout))
+            .unwrap();
+        let profile = gleipnir::sbpl::profile(&valid, &mac).unwrap();
         let sb = dir.join("job.sb");
         std::fs::write(&sb, profile).unwrap();
         let run = std::process::Command::new("/usr/bin/sandbox-exec")

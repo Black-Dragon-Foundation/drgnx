@@ -122,7 +122,10 @@ bare command) as `infra: setup`, so a job never runs unconfined. `job.sb` is Gle
 spec (`darwin::sandbox::spec`): it reads the source, writes the attempt folder (and the source when the job writes its
 tree), `HOME` and `TMPDIR` inside the folder, `PATH` Homebrew's and the system's (after its toolchains'), the marker
 `DRGNX_RUNNER_ATTEMPT`, Homebrew read-only (`HOMEBREW_NO_AUTO_UPDATE` and the like, its cache, logs and temporary
-files in the attempt's tmp: a configure asks `brew` where a package is), and no network. The timeout is read on `CLOCK_MONOTONIC`, `caffeinate -i -w` keeps the Mac
+files in the attempt's tmp: a configure asks `brew` where a package is), and no network. Every job a Mac runner takes is a
+build or a test, so its profile has Gleipnir's build addition (`darwin::sandbox::mac_context`: the developer dir and
+the account's per-user folder, `getconf DARWIN_USER_DIR`'s parent, by true name; docs/develop/gleipnir.md, "The build
+addition"); a per-user folder that can't be resolved refuses the launch. The timeout is read on `CLOCK_MONOTONIC`, `caffeinate -i -w` keeps the Mac
 awake while the job runs, and the verdict comes from `forseti::classify` like Linux's. A Mac has no pause, live
 resize, CPU weights or keys: those methods answer none or refuse.
 

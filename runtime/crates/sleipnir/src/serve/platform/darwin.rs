@@ -222,15 +222,13 @@ impl Platform for DarwinPlatform {
         };
         let valid = gleipnir::validate(spec, &ctx, gleipnir::spec::Target::Macos)
             .map_err(|r| format!("the job's sandbox: {}", r.message))?;
-        let developer_dir = fs::canonicalize(probe_developer_dir(&self.raw.borrow())).ok();
-        let profile = gleipnir::sbpl::profile(
-            &valid,
-            &gleipnir::sbpl::MacContext {
-                developer_dir,
-                ..Default::default()
-            },
-        )
-        .map_err(|r| format!("the job's profile: {}", r.message))?;
+        let mac = {
+            let raw = self.raw.borrow();
+            sandbox::mac_context(&raw.developer_dir, &raw.darwin_user_dir)
+                .map_err(|e| format!("the job's profile: {e}"))?
+        };
+        let profile = gleipnir::sbpl::profile(&valid, &mac)
+            .map_err(|r| format!("the job's profile: {}", r.message))?;
         let sb = dir.join("job.sb");
         fs::write(&sb, profile).map_err(|e| format!("job.sb: {e}"))?;
         let mut argv = vec![
@@ -336,9 +334,4 @@ impl Platform for DarwinPlatform {
     fn pressure(&self) -> Option<forseti::safety::Level> {
         Some(pressure::level())
     }
-}
-
-/// The developer dir `xcode-select` names (none: the system roots only).
-fn probe_developer_dir(raw: &probe::Raw) -> PathBuf {
-    PathBuf::from(raw.developer_dir.trim())
 }

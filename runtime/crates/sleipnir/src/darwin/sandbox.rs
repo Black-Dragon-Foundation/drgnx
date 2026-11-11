@@ -29,6 +29,29 @@ pub struct Job<'a> {
     pub tools: &'a [super::tools::Record],
 }
 
+/// The Seatbelt context of a Mac runner's job: the developer dir by true name, and the build addition with the
+/// account's per-user folder (DARWIN_USER_DIR, `/var/folders/xx/yyy/0/`: its parent, by true name). Every job a Mac
+/// runner takes is a build or a test, so every one gets the addition; a per-user folder that can't be resolved refuses
+/// the launch.
+pub fn mac_context(
+    developer_dir: &str,
+    darwin_user_dir: &str,
+) -> Result<gleipnir::sbpl::MacContext, String> {
+    let u = Path::new(darwin_user_dir.trim());
+    let user_dir = u
+        .parent()
+        .filter(|_| u.is_absolute())
+        .and_then(|p| std::fs::canonicalize(p).ok())
+        .ok_or_else(|| {
+            format!("the account's per-user folder {darwin_user_dir:?} can't be resolved")
+        })?;
+    Ok(gleipnir::sbpl::MacContext {
+        developer_dir: std::fs::canonicalize(developer_dir.trim()).ok(),
+        build: Some(gleipnir::sbpl::MacBuild { user_dir }),
+        ..Default::default()
+    })
+}
+
 /// The attempt's home and temporary folder, inside its folder.
 pub fn home_tmp(dir: &Path) -> (PathBuf, PathBuf) {
     (dir.join("home"), dir.join("tmp"))
@@ -173,6 +196,21 @@ mod tests {
             spec(&Job { tools: &[], ..job }).read,
             vec![src.to_path_buf()]
         );
+    }
+
+    /// [D] A job's Seatbelt context: the build addition with the per-user folder (DARWIN_USER_DIR's parent) by true
+    /// name; one that can't be resolved, or isn't absolute, refuses.
+    #[test]
+    fn a_jobs_context_has_the_build_addition() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("0")).unwrap();
+        let darwin = format!("{}/0/", d.path().display());
+        let m = mac_context("/nowhere/Developer", &darwin).unwrap();
+        assert_eq!(m.build.unwrap().user_dir, d.path().canonicalize().unwrap());
+        assert_eq!(m.developer_dir, None);
+        assert!(mac_context("", "").is_err());
+        assert!(mac_context("", "var/folders/x/0/").is_err());
+        assert!(mac_context("", "/nowhere/at/all/0/").is_err());
     }
 
     /// [D] A job runs Homebrew read-only: no update, cleanup or analytics, and its cache, logs and temporary files in
