@@ -26,6 +26,10 @@
   (should (null (drgnx-test-run-isolated "test/unit/isolated/mod-evil-lazy-isolated.el"
                                          "^drgnx-evil-lazy/"))))
 
+(ert-deftest drgnx-search-vim/own-process ()
+  ;; Vim's state keys of the Search view and Edit Results (i, d d, Z Q, :w, C-p / C-n in Find) with the real evil
+  (should (null (drgnx-test-run-isolated "test/unit/isolated/search-vim-isolated.el" "^drgnx-search-vim/"))))
+
 (ert-deftest drgnx-modal-fixture/own-process ()
   (should (null (drgnx-test-run-isolated "test/unit/isolated/modal-fixture-isolated.el"
                                          "^drgnx-modal-fixture/"))))

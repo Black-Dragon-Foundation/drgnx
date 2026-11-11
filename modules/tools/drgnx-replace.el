@@ -37,6 +37,10 @@
 (unless (featurep 'drgnx-search-edit)
   (load (expand-file-name "drgnx-search-edit" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-search-edit-change "drgnx-search-edit")
+(declare-function drgnx-search-edit-evil-aux "drgnx-search-edit")
+(declare-function drgnx-search-edit--refresh-vim-prefixes "drgnx-search-edit")
+(defvar drgnx-search-edit-mode-map)
+(defvar drgnx-search-edit-normal-state-map)
 (unless (featurep 'drgnx-search-handoff)
   (load (expand-file-name "drgnx-search-handoff" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-search-handoff-event "drgnx-search-handoff")
@@ -524,6 +528,12 @@ next match, or replace it in the Replace field.")
 profiles.")
 (defvar drgnx-replace--find-field-map (make-composed-keymap (list drgnx-replace-find-keys-map drgnx-replace--field-map))
   "The Search view's Find field.")
+(defvar drgnx-replace-normal-state-map (make-sparse-keymap)
+  "The Search view's keys in Vim's normal state (`i' Edit Results; the view starts in Emacs state, C-z leaves it),
+from the key profiles.  Evil reads it through the view's normal-state auxiliary map (`drgnx-replace--evil-maps').")
+(defvar drgnx-replace-find-insert-state-map (make-sparse-keymap)
+  "The Search view's Find field's keys in Vim's insert state (C-p / C-n walk the history), from the key profiles.
+Evil reads it through the Find field's insert-state auxiliary map (`drgnx-replace--evil-maps').")
 (defvar drgnx-replace--bar-field-map
   (make-composed-keymap (list drgnx-replace-bar-keys-map drgnx-replace-keys-map widget-field-keymap))
   "The find bar's fields.")
@@ -560,6 +570,19 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
         (evil-set-initial-state mode 'emacs)
         (drgnx-modules-push-undo (format "evil state %s" mode)
                                  (lambda () (when (eq (evil-initial-state mode) 'emacs) (evil-set-initial-state mode old))))))))
+
+(defun drgnx-replace--evil-maps ()
+  "Vim's state keys of the Search view and Edit Results, read by evil through auxiliary maps (the module's setup runs
+this once evil is loaded): the view's normal state (`drgnx-replace-normal-state-map'), the Find field's insert state
+\(`drgnx-replace-find-insert-state-map'), Edit Results' normal state (`drgnx-search-edit-normal-state-map', with evil's
+own keys under its prefixes, made again after each apply of the keys).  The undo takes each out again."
+  (when (fboundp 'evil-set-auxiliary-keymap)
+    (pcase-dolist (`(,mode-map ,state ,keys)
+                   `((,drgnx-replace-mode-map normal ,drgnx-replace-normal-state-map)
+                     (,drgnx-replace--find-field-map insert ,drgnx-replace-find-insert-state-map)
+                     (,drgnx-search-edit-mode-map normal ,drgnx-search-edit-normal-state-map)))
+      (drgnx-modules-push-undo (format "evil %s-state keys" state) (drgnx-search-edit-evil-aux mode-map state keys)))
+    (add-hook 'drgnx-keys-after-apply-functions #'drgnx-search-edit--refresh-vim-prefixes)))
 
 (define-button-type 'drgnx-replace-box 'action #'drgnx-replace--box-pressed 'follow-link t 'face nil
   'help-echo "Tick or untick: Replace All writes the ticked matches")
@@ -3474,7 +3497,8 @@ cancels those."
                               (drgnx-state-define-role 'bar) ; the find bar's window: no editor, no chrome
                               (drgnx-wb-place 'drgnx-replace-sheet-mode 'popup :height 0.8 :modal t) ; the sheet: the popup lane, tall
                               (drgnx-wb-place 'drgnx-search-handoff-mode 'popup :height 0.3 :modal t) ; Ask an Agent's card
-                              (eval-after-load 'evil (drgnx-modules-with-owner (drgnx-replace--evil-states)))
+                              (eval-after-load 'evil (drgnx-modules-with-owner (drgnx-replace--evil-states)
+                                                                               (drgnx-replace--evil-maps)))
                               ;; wb/drgnx-persist.el saves the main area with `window-state-get': the bar's window would be in it.
                               (advice-add 'drgnx-persist-save :before #'drgnx-replace--close-bars)))
 

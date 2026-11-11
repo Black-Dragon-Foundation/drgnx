@@ -62,8 +62,11 @@ empty scope says why ("nothing staged"); a folder outside git says so. Symbol an
 
 Every search that stood for the typing pause is kept, per project, the last 50: its mode, words, toggles,
 replacement, scope and globs. **Previous Search** and **Next Search** (`Up` and `Down` in Find in the VS Code profile;
-`M-p` and `M-n` in the view in the Emacs and Vim profiles) walk them, each restored whole and run; Next Search past the
-newest gives back what you had.
+`M-p` and `M-n` in the view in the Emacs and Vim profiles, and `C-p` and `C-n` in Find in Vim's insert state) walk
+them, each restored whole and run; Next Search past the newest gives back what you had.
+
+With Vim keys the Search view starts in Emacs state, so its fields take typing; press `C-z` in the view to reach
+normal state, where `i` opens Edit Results, and insert state, where Find's `C-p` and `C-n` walk the history.
 
 With Find empty, the view lists the project's **Saved** searches, then its last 8 **Recent** ones; a click runs one.
 **Save This Search** (the ☆ button; `C-k C-b`; `C-c C-w`) keeps the view's search under a name, the words by default.
@@ -182,6 +185,9 @@ Saves** puts the files back, newest save first (a file edited since is left alon
 undoes typing, not files. **Discard Edited Results** drops the unsaved edits and closes it; closing it with unsaved
 edits asks first, and only when you closed it.
 
+With Vim keys Edit Results is in normal state: `d d` is Delete This Line, `Z Q` discards, `:w` saves (every save of
+the buffer does: it never asks for a file). The other keys under `d` and `Z` stay Vim's (`d w`, `Z Z`).
+
 ### Ask an Agent
 
 **Ask an Agent** (`M-a` in the Search view; `C-c C-a` in the Emacs and Vim profiles; the palette) hands the ticked
@@ -262,17 +268,17 @@ index, and waits for it). A new search keeps the grouping and the sort.
 | Next Scope (the Search view) | `M-s` | `C-c C-o` | `C-c C-o` |
 | In Changed Files | `C-k C-g` (anywhere) | `C-c s g` | `SPC s g` |
 | In Files Changed on This Branch | palette | `C-c s b` | `SPC s b` |
-| Previous / Next Search | `<up>` / `<down>` in Find | `M-p` / `M-n` | `M-p` / `M-n` |
+| Previous / Next Search | `<up>` / `<down>` in Find | `M-p` / `M-n` | `M-p` / `M-n`; `C-p` / `C-n` in Find (insert state) |
 | Save This Search | `C-k C-b` | `C-c C-w` | `C-c C-w` |
 | Run Saved Search… | palette | `C-c s S` | `SPC s S` |
 | Preview This File's Changes (the Search view) | `C-k C-v` | `C-c C-v` | `C-c C-v` |
 | Keep / Drop This Hunk (a preview tile) | `a` / `D` | `a` / `D` | `a` / `D` |
 | Replace / Cancel (the Replace All sheet) | `C-<return>` / `<escape>` | `C-c C-c` / `C-c C-k` | `C-c C-c` / `C-c C-k` |
 | Next / Previous File (the sheet) | `<down>` / `<up>` | `n` / `p`, `<down>` / `<up>` | `n` / `p`, `<down>` / `<up>` |
-| Edit Results (the Search view) | `M-e` | `C-c C-e` | `C-c C-e` |
-| Save Edited Results (Edit Results; the profile's save too) | `C-s` | `C-c C-c`, `C-x C-s` | `C-c C-c` |
-| Discard Edited Results (Edit Results) | palette (closing the tab asks) | `C-c C-k` | `C-c C-k` |
-| Delete This Line (on save) (Edit Results) | `C-S-k` | `C-c C-d` | `C-c C-d` |
+| Edit Results (the Search view) | `M-e` | `C-c C-e` | `C-c C-e`, `i` (normal state) |
+| Save Edited Results (Edit Results; the profile's save too) | `C-s` | `C-c C-c`, `C-x C-s` | `C-c C-c`, `:w` |
+| Discard Edited Results (Edit Results) | palette (closing the tab asks) | `C-c C-k` | `C-c C-k`, `Z Q` (normal state) |
+| Delete This Line (on save) (Edit Results) | `C-S-k` | `C-c C-d` | `C-c C-d`, `d d` (normal state) |
 | Take the File's Line (Edit Results) | palette | `C-c C-r` | `C-c C-r` |
 | Undo All Saves of Edited Results | palette | palette | palette |
 | Filter Symbol Results by Kind… | palette (the chips) | palette | palette |
@@ -293,7 +299,9 @@ palette, category Search.
 `test/unit/mod-replace-engine-test.el` (the editor's half of a write: edits into an open buffer, stale ones skipped,
 symbol edits, undo), `test/conformance/search/write.jsonl` (the hub's: the edit set, writes on disk, a file changed
 since, undo), `test/unit/search-edit-test.el` and `test/conformance/search/edit-results.jsonl` (Edit Results: the
-document, read-only headers, saves of changed, split and deleted lines, conflicts, undo),
+document, read-only headers, saves of changed, split and deleted lines, conflicts, undo; `:w` and `save-buffer`),
+`test/unit/isolated/search-vim-isolated.el` (the Vim keys with real evil, in an Emacs of its own: `i`, `C-p` / `C-n`
+in Find, `d d`, `Z Q`, `:w`, and `d w` / `Z Z` still evil's; the module turned off takes its state maps out),
 `test/unit/search-handoff-test.el` and `test/conformance/search/handoff.jsonl` (Ask an Agent: the card, who, Send by
 ids or by the unticked, the chip, a hand-off to a mock session and its state) and
 `test/unit/mod-replace-view-test.el` (the view, the find bar; on the virtual clock, the view's own rows Symbol mode

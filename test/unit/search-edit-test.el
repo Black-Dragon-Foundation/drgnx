@@ -238,4 +238,21 @@ with no mode of its own stays plain."
                     (ensure-list (get-text-property (1+ (drgnx-search-edit--line-start l)) 'face)))))
     (should-not (get-text-property (drgnx-search-edit--line-start (drgnx-search-edit-test--line "l:3")) 'face))))
 
+(ert-deftest drgnx-search-edit/saving-the-buffer-saves-the-lines ()
+  "Pattern D: every save of the buffer (`save-buffer': the profiles' Save, Vim's `:w') saves the edited lines, never
+asking for a file; a line marked for deletion alone is something to save; the global before-save hooks never touch
+the lines."
+  (drgnx-search-edit-test--with '(("search/edits" . (:change 6 :files nil :skipped nil)) ("search/apply" . t))
+    (drgnx-search-edit-test--goto "l:1")
+    (drgnx-search-edit-delete-line)
+    (should (buffer-modified-p))
+    (let ((touched nil))
+      (cl-letf (((symbol-function 'read-file-name) (lambda (&rest _) (error "Asked for a file")))
+                ((default-value 'before-save-hook) (list (lambda () (setq touched t)))))
+        (save-buffer))
+      (should-not touched))
+    (should (equal (append (plist-get (drgnx-search-edit-test--sent "search/edits") :lines) nil)
+                   '((:line_id "l:1" :path "/r/a.el" :line 2 :old ";; between" :eol t))))
+    (should-not buffer-file-name)))
+
 ;;; search-edit-test.el ends here
