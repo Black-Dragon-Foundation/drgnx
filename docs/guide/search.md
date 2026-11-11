@@ -46,6 +46,8 @@ when the built-in model embeds on the CPU because the GPU was lost (and says why
 | Search: Index Project | has the hub index this project now; with `C-u`, from scratch | palette | palette | palette |
 | Search: Index Status | files and chunks, the models that have vectors, the device, tier 2's state, coverage errors, what lags | palette | palette | palette |
 | Search: Set Up Semantic Search | the wizard above | palette | palette | palette |
+| Search: Repo Map | the project's most-referenced definitions, file by file (the best-ranked first), centred on the current file: the map an agent reads to find its way | palette | palette | palette |
+| Search: Find Usages | where a name (default: the symbol at point) is defined, then every line that uses it, under the definition that holds it | palette | `C-c s u` | `SPC s u` |
 
 In the command palette, type `#` and your question — `#where do we parse the config` — to search without choosing a
 command first; a bare `#` asks for the question. Semantic Search offers the symbol at point as the default: `RET` on an
@@ -65,6 +67,11 @@ The same index also answers in the **Search view** (**Replace in Files**; [Searc
 its mode chip's **Meaning** is this search, as rows with a score bar under their files, and **Symbol** lists a name's
 definitions (kind icon and signature) and then its uses, grouped under the definitions that hold them. Both stay in
 the view as you work through them, with recent and saved searches remembering the mode.
+
+**Repo Map** and **Find Usages** list in the Results tab too, one line per definition or use, and their header says how
+many files are still to index. They work by name from the index, in every language it parses, without a language
+server. The same answers back **Find References** and **Go to Definition** (`S-<f12>`, `M-.`) wherever nothing better
+does: a mode's or a language server's own answer comes first, the index's after it.
 
 While you type, the editor tells the hub (at most once every 2 seconds): the hub then holds the vectors back for 3
 seconds, so building them never competes with a keystroke.

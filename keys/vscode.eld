@@ -333,6 +333,8 @@
         (search-index-project :none "in the palette")
         (search-index-status :none "in the palette")
         (search-set-up :none "in the palette")
+        (search-repo-map :none "in the palette")
+        (search-usages :none "in the palette; Shift-F12 finds references through the same index")
         (go-symbol "C-S-o")
         (org-capture "C-c c" :mac "C-c c")
         (org-agenda "C-c a" :mac "C-c a")

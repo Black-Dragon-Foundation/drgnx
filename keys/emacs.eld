@@ -333,6 +333,8 @@
         (search-index-project :none "in the palette")
         (search-index-status :none "in the palette")
         (search-set-up :none "in the palette")
+        (search-repo-map :none "in the palette")
+        (search-usages "C-c s u")
         (go-symbol :none "M-g i (stock)")
         (org-capture "C-c c")
         (org-agenda "C-c a")
