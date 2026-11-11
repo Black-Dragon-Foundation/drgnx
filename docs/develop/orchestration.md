@@ -21,3 +21,19 @@ ERT and domr lines from the whole log, whatever the job's kind, as `{name, verdi
 | `infra` | the machine, not the test | a lost job, an `infra` end |
 
 The job's own row is named `(job)`. A name seen twice keeps its worst verdict.
+
+## Facts and the green cache
+
+At submit the hub records what a job runs on in its folder's `facts.json` (`vordr::facts::Facts`, `exec::facts_of`):
+
+- **tree key:** the commit's tree id from the hardened capture (`sleipnir::sync::capture`: no hook, fsmonitor or outside
+  config runs), plus `+` and the first 16 hex digits of the overlay's input key when anything is uncommitted;
+- **env stamp:** this machine's `emacs`, `rustc` and `cargo` `--version` lines (as `core/drgnx-affected.el`'s stamp),
+  with a container job's image; a job a runner took reads `runner NAME`;
+- **platform:** `OS-ARCH/local`, or `runner/NAME`;
+- **selector:** the folder relative to the tree's top, the command, and `DRGNX_TEST_SELECTOR` / `DRGNX_TEST_ONLY` when
+  the job sets them.
+
+A job outside a git tree, and a user's server, has no facts and is never evidence. `Runner::start_or_reuse` answers the
+newest **green** job with equal facts instead of running again (exit 0, no failed row, not on a `shared` runner); a red
+is never reused, and a selector holding one of the rule pack's `no-cache` words (`Runner::set_no_cache`) always runs.

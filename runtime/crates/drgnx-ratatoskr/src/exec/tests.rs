@@ -1730,3 +1730,101 @@ async fn a_jobs_result_keeps_classified_rows() {
     ended(&r, &id).await;
     assert_eq!(row_of(&result_rows(d.path(), &id), "(job)").1, "error");
 }
+
+/// A git repository at DIR with one commit; answers its tree id.
+fn repo_with_a_commit(dir: &Path) -> String {
+    let git = |args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            o.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    std::fs::create_dir_all(dir).unwrap();
+    git(&["init", "-q"]);
+    std::fs::write(dir.join("a.txt"), "a\n").unwrap();
+    git(&["add", "a.txt"]);
+    git(&["commit", "-q", "-m", "one"]);
+    git(&["rev-parse", "HEAD^{tree}"])
+}
+
+/// Every job records what it ran on (tree key, env stamp, platform, selector); a green job with the same facts is
+/// reused, a red one never is, a change to the tree is a new key, and a selector the pack marks `no-cache` always runs.
+#[tokio::test]
+async fn a_green_job_is_reused_and_a_red_one_never() {
+    let d = tempfile::tempdir().unwrap();
+    let w = d.path().join("w");
+    let tree = repo_with_a_commit(&w);
+    let r = open(d.path());
+    let green = spec(
+        Starter::User,
+        &w,
+        "echo 'test a ... ok'",
+        Duration::from_secs(30),
+    );
+    let (a, reused) = r.start_or_reuse(green.clone()).await.unwrap();
+    assert!(!reused);
+    ended(&r, &a).await;
+    let f = r.facts(&a).expect("the job's facts");
+    assert_eq!(f.tree_key, tree);
+    assert!(
+        f.platform.starts_with(std::env::consts::OS),
+        "{}",
+        f.platform
+    );
+    assert!(
+        f.selector.contains("echo 'test a ... ok'"),
+        "{}",
+        f.selector
+    );
+    assert!(!f.env_stamp.is_empty());
+    assert_eq!(
+        r.start_or_reuse(green.clone()).await.unwrap(),
+        (a.clone(), true)
+    );
+
+    let red = spec(
+        Starter::User,
+        &w,
+        "echo 'test b ... FAILED'; exit 101",
+        Duration::from_secs(30),
+    );
+    let (b, reused) = r.start_or_reuse(red.clone()).await.unwrap();
+    assert!(!reused);
+    ended(&r, &b).await;
+    let (b2, reused) = r.start_or_reuse(red).await.unwrap();
+    assert!(!reused && b2 != b);
+    ended(&r, &b2).await;
+
+    // uncommitted work is another tree key
+    std::fs::write(w.join("a.txt"), "changed\n").unwrap();
+    let (c, reused) = r.start_or_reuse(green.clone()).await.unwrap();
+    assert!(!reused && c != a);
+    ended(&r, &c).await;
+    assert!(
+        r.facts(&c)
+            .unwrap()
+            .tree_key
+            .starts_with(&format!("{tree}+"))
+    );
+
+    // a no-cache selector runs every time
+    r.set_no_cache(vec!["test a".into()]);
+    let (e, reused) = r.start_or_reuse(green).await.unwrap();
+    assert!(!reused && e != c);
+    ended(&r, &e).await;
+}
