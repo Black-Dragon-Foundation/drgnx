@@ -453,7 +453,15 @@ fn a_worktree_root_answers_from_its_view() {
 }
 
 /// The tools a search socket lists, by name.
-const TOOLS: [&str; 5] = ["find_usages", "outline", "repo_map", "search", "symbols"];
+/// A session's search tools; `search_results` answers only the session a Search view hand-off went to.
+const TOOLS: [&str; 6] = [
+    "find_usages",
+    "outline",
+    "repo_map",
+    "search",
+    "search_results",
+    "symbols",
+];
 
 /// Pattern C. A session's search socket serves the three tools; their text answers; refusals are tool errors.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
