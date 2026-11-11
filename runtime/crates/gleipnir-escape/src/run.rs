@@ -469,6 +469,12 @@ pub fn build_spec_for(fx: &Fixture, row: &Row, bin: &Path, linux: bool) -> Resul
         if linux && row.layer == Some(Layer::Browser) {
             browser_layer_spec(m, bin, &mut env);
         }
+        // `"net": "loopback"`: a debug session's network, the default one below with `loopback` on (and, on macOS,
+        // `${FREE_PORT}` its own port).
+        let loopback = m.get("net").and_then(|v| v.as_str()) == Some("loopback");
+        if loopback {
+            m.remove("net");
+        }
         if !m.contains_key("net") {
             // The session's own network: isolated, with the relay to the fixture's proxy (Linux needs one). The
             // full tier uses 3128; the reduced tier's relay shares the host's loopback, so it gets a free port. A
@@ -514,6 +520,20 @@ pub fn build_spec_for(fx: &Fixture, row: &Row, bin: &Path, linux: bool) -> Resul
                     "HTTPS_PROXY",
                     format!("http://127.0.0.1:{port}")
                 ]));
+            }
+        }
+        if loopback {
+            let iso = m
+                .get_mut("net")
+                .and_then(|n| n.get_mut("isolated"))
+                .and_then(|i| i.as_object_mut())
+                .ok_or("a loopback row's net is isolated")?;
+            iso.insert("loopback".into(), true.into());
+            if !linux {
+                iso.insert(
+                    "mac_loopback_ports".into(),
+                    serde_json::json!([fx.addrs.free_port]),
+                );
             }
         }
         m.entry("env").or_insert(env);

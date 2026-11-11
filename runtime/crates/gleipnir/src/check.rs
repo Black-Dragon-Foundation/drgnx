@@ -492,6 +492,8 @@ where
                 vec![]
             },
             mac_tcp_ports: vec![],
+            loopback: false,
+            mac_loopback_ports: vec![],
         },
         tmp: (target != Target::LinuxBwrap).then(|| base.join("t")),
         layers: Layers::for_target(target),

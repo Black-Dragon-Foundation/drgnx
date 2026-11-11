@@ -96,6 +96,12 @@ pub enum Command {
     /// `sandbox run` (test-hooks only): one command under the sandbox, for the escape rows.
     #[cfg(feature = "test-hooks")]
     SandboxRun(SandboxRunArgs),
+    /// `debug-mock SCRIPT.json` (test-hooks only): the mock debug adapter on stdio (`vor::mock`), for the `debug/*`
+    /// conformance rows and ERT.
+    #[cfg(feature = "test-hooks")]
+    DebugMock {
+        script: OsString,
+    },
     /// `mcp-bridge`: an agent's stdio MCP server, copied to the hub (`crate::bridge`).
     McpBridge(BridgeArgs),
     /// `store migrate-check` and `store restore-pre7` (`crate::store_cli`).
@@ -407,6 +413,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         "runner" => crate::runner_cli::parse(p.raw_args().map_err(e)?).map(Command::Runner),
         "plugins" => crate::plugins_cli::parse(p.raw_args().map_err(e)?).map(Command::Plugins),
         "search" => crate::search_cli::parse(p.raw_args().map_err(e)?).map(Command::Search),
+        #[cfg(feature = "test-hooks")]
+        "debug-mock" => match p.next().map_err(e)? {
+            Some(Value(v)) => Ok(Command::DebugMock { script: v }),
+            _ => Err("debug-mock takes SCRIPT.json".into()),
+        },
         "embed-worker" => embed_worker(&mut p).map(Command::EmbedWorker),
         "recording" => {
             crate::recording_cli::parse(p.raw_args().map_err(e)?).map(Command::Recording)

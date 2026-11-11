@@ -342,6 +342,8 @@ mod tests {
                 socket: "/run/drgnx/proxy.sock".into(),
             }],
             mac_tcp_ports: vec![],
+            loopback: false,
+            mac_loopback_ports: vec![],
         }
     }
 

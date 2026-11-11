@@ -82,6 +82,7 @@ pub mod client;
 pub mod clock;
 pub mod conn;
 pub mod coord;
+pub mod debug;
 pub mod dispatch;
 pub mod doctor;
 pub mod editor;

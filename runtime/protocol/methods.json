@@ -1847,6 +1847,165 @@
     },
     {
       "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug-ended`: SESSION ended, with why and its program's exit code.",
+        "properties": {
+          "exit_code": {
+            "default": null,
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "name",
+          "reason"
+        ],
+        "title": "DebugEnded",
+        "type": "object"
+      },
+      "doc": "a debug session ended, with why and its program's exit code",
+      "name": "debug-ended"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug-frame`: a stop's selected frame. OPEN: this editor started the session and opens the file; the others draw\nit only where the file is shown.",
+        "properties": {
+          "col": {
+            "default": null,
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "exception": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "default": null,
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "open": {
+            "type": "boolean"
+          },
+          "path": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "ref": {
+            "default": null,
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "session": {
+            "type": "string"
+          },
+          "thread": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "top": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "session",
+          "epoch",
+          "thread",
+          "top",
+          "reason",
+          "open"
+        ],
+        "title": "DebugFrame",
+        "type": "object"
+      },
+      "doc": "a debug session stopped: its selected frame's file (or source reference), line and column; open is true only for the editor that started the session, which opens the file",
+      "name": "debug-frame"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug-state`: every session (`{id, name, parent, root, state, reason, caps}`), whenever one starts, runs, stops\nor ends.",
+        "properties": {
+          "sessions": {
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "sessions"
+        ],
+        "title": "DebugState",
+        "type": "object"
+      },
+      "doc": "every debug session (id, name, parent, root, state, reason, the adapter's capabilities), to every editor, whenever one starts, runs, stops or ends",
+      "name": "debug-state"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug-terminal`: SESSION's program runs in terminal TERM (`runInTerminal`), to the editor that started it, which\nshows its VIEW.",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "term": {
+            "type": "string"
+          },
+          "view": {
+            "description": "The terminal's view, as `term/open` answers it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "term",
+          "view"
+        ],
+        "title": "DebugTerminal",
+        "type": "object"
+      },
+      "doc": "a debug session's program runs in a drgnx terminal (runInTerminal), to the editor that started it",
+      "name": "debug-terminal"
+    },
+    {
+      "data": {
         "$defs": {
           "EventRow": {
             "additionalProperties": false,
@@ -11076,6 +11235,385 @@
         "type": "boolean"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the launch configurations the Start picker shows for a project: launch.json's (a syntax error with its line and column), the user's own, and the adapters' defaults for the file's language once the project is trusted",
+      "name": "debug/configs",
+      "params": {
+        "$defs": {
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/configs`: the configurations the picker shows for ROOT: launch.json's, the user's own USER configs (the\nsetting `debug.configurations`), and the adapter table's defaults for LANGUAGE. ADAPTERS are the user's own adapter\nentries (the setting `debug.adapters`, in the table's fields), looked at before the built-in ones. ROOT's trust is\nwhat `debug/trust` last said.",
+        "properties": {
+          "adapters": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/JsonObject"
+            },
+            "type": "array"
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "language": {
+            "description": "The file's language (`python`, `go`, `javascript` …), for the defaults.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "root": {
+            "type": "string"
+          },
+          "user": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/JsonObject"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "DebugConfigs",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DebugConfig": {
+            "description": "One configuration of `debug/configs`' list.",
+            "properties": {
+              "id": {
+                "description": "`launch:N`, `user:N` or `default:ADAPTER:N`: what `debug/start` takes.",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "needs_trust": {
+                "description": "ROOT is not trusted: starting it shows the trust card first.",
+                "type": "boolean"
+              },
+              "request": {
+                "type": "string"
+              },
+              "source": {
+                "description": "`launch`, `user` or `default`.",
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "source",
+              "type",
+              "request",
+              "needs_trust"
+            ],
+            "type": "object"
+          },
+          "DebugFileError": {
+            "description": "A launch.json that could not be read, and where.",
+            "properties": {
+              "col": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "line",
+              "col",
+              "message"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/configs`' answer: the list in the picker's order, the configuration last started in ROOT, and launch.json's\nsyntax error.",
+        "properties": {
+          "configs": {
+            "items": {
+              "$ref": "#/$defs/DebugConfig"
+            },
+            "type": "array"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DebugFileError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "configs"
+        ],
+        "title": "DebugConfigList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "continue, pause, step, restart, stop or disconnect a session (stop and disconnect stop its children first and answer once all have ended)",
+      "name": "debug/control",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/control`: OP on SESSION (on THREAD, else the stopped one): `continue`, `pause`, `next`, `step-in`,\n`step-out`, `restart`, `stop`, `stop-and-kill` (an attach session's debuggee too) or `disconnect`.",
+        "properties": {
+          "op": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "thread": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "session",
+          "op"
+        ],
+        "title": "DebugControl",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "show a frame of a session's stop: its scopes and variables are fetched in the same stop, and debug-frame names its line",
+      "name": "debug/select",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/select`: show FRAME of SESSION's stop (the Call Stack's selection): its scopes and variables, and its line.",
+        "properties": {
+          "frame": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "session": {
+            "type": "string"
+          },
+          "thread": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "session",
+          "frame"
+        ],
+        "title": "DebugSelect",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "start a configuration: the session's id, or what must come first (trust, or the inputs and process picker the editor asks for in the palette)",
+      "name": "debug/start",
+      "params": {
+        "$defs": {
+          "DebugAnswer": {
+            "description": "One answer to `debug/start`'s `needs`: the input ID (`pickProcess` for the process picker) and its VALUE.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "value"
+            ],
+            "type": "object"
+          },
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/start`: start CONFIG (an id of `debug/configs`) in ROOT, from FILE at LINE:COL with SELECTION (the editor's\nstate the variables read). INPUTS answer an earlier `needs` (`pickProcess` for the process picker); USER, ADAPTERS\nand LANGUAGE as `debug/configs`' (a `user:N` or `default:N` id reads them again).",
+        "properties": {
+          "adapters": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/JsonObject"
+            },
+            "type": "array"
+          },
+          "col": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "config": {
+            "type": "string"
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "inputs": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/DebugAnswer"
+            },
+            "type": "array"
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "root": {
+            "type": "string"
+          },
+          "selection": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/JsonObject"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "root",
+          "config"
+        ],
+        "title": "DebugStart",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/start`'s answer: the session, or what must come first: `\"trust\"`, or the inputs to ask\n(`[{input: {id, kind, description, default, options, password}} | \"pickProcess\"]`).",
+        "properties": {
+          "needs": true,
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "DebugStarted",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a project's trust changed: a project never told trusted runs no configuration, and revoking trust stops its sessions",
+      "name": "debug/trust",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/trust`: ROOT's trust changed (Trust This Folder, or its revocation, which stops ROOT's sessions).",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "trusted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "root",
+          "trusted"
+        ],
+        "title": "DebugTrust",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
     },
     {
       "classes": [

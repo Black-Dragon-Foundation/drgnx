@@ -71,6 +71,8 @@ pub struct Addrs {
     pub web_upstream: SocketAddr,
     /// A hub TCP endpoint on the loopback (`${GATEWAY_PORT}`): in the web policy's `NeverSet`, and it echoes.
     pub gateway_tcp: SocketAddr,
+    /// A loopback port nothing listens on, found free at the start (`${FREE_PORT}`): a `loopback` row's own port.
+    pub free_port: u16,
 }
 
 /// The web proxy's resolver: only the names the row lists (`dns`) resolve, and nothing asks real DNS.
@@ -224,6 +226,9 @@ impl Fixture {
             }
             serve_unix(abstract_listener(&abstract_name)?, count("abstract"));
             let tcp_lo = serve_tcp(bind_tcp(Ipv4Addr::LOCALHOST.into())?, count("tcp-lo"));
+            let free_port = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?
+                .local_addr()?
+                .port();
             let upstream = serve_tcp(bind_tcp(Ipv4Addr::LOCALHOST.into())?, count("upstream"));
             let udp_lo = serve_udp(bind_udp(Ipv4Addr::LOCALHOST.into())?, count("udp-lo"));
             let nl = non_loopback();
@@ -304,6 +309,7 @@ impl Fixture {
                     web_tcp,
                     web_upstream,
                     gateway_tcp,
+                    free_port,
                 },
                 handle,
                 web_handle,
@@ -531,6 +537,12 @@ impl Fixture {
             "HOST_LAN" => HOST_LAN.to_string(),
             "GATEWAY_PORT" => a.gateway_tcp.port().to_string(),
             "TCP_LO_PORT" => a.tcp_lo.port().to_string(),
+            "FREE_PORT" => a.free_port.to_string(),
+            // The developer dir the hub gives the Seatbelt profile: `${GIT}`'s, three levels up (`<dev>/usr/bin/git`).
+            "DEVELOPER_DIR" => draugr::git::git_program()
+                .ok()
+                .and_then(|g| g.path.ancestors().nth(3).map(|d| s(d.to_path_buf())))
+                .ok_or("${DEVELOPER_DIR}: no developer dir's git here")?,
             "FAKE_BWRAP" => s(self
                 .root_dirs
                 .first()
