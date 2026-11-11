@@ -40,6 +40,10 @@
   (load (expand-file-name "drgnx-search-handoff" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-search-handoff-event "drgnx-search-handoff")
 (declare-function drgnx-search-handoff-chip "drgnx-search-handoff")
+(declare-function svg-create "svg")      ; the sheet's key chip (`drgnx-replace--chip-image'), loaded when drawn
+(declare-function svg-rectangle "svg")
+(declare-function svg-text "svg")
+(declare-function svg-image "svg")
 
 (declare-function eglot-current-server "eglot")
 (declare-function eglot-server-capable "eglot")

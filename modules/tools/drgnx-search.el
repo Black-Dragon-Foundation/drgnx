@@ -102,6 +102,9 @@ line of its text, else its symbol, else its path."
     (xref-make summary (xref-make-file-location (expand-file-name (plist-get hit :path) root)
                                                 (max 1 (plist-get hit :line_start)) 0))))
 
+(defvar-local drgnx-search--question nil
+  "In a Semantic Search list: (ROOT . QUESTION) it shows, for Show in Search View.")
+
 (defun drgnx-search--show (root query answer)
   "Show the hits of ANSWER for QUERY in the project at ROOT as an xref list (the panel's Results tab), under the model
 and lag line.  Non-nil when a list was shown."
@@ -117,9 +120,6 @@ and lag line.  Non-nil when a list was shown."
                   header-line-format (concat " " line "  " (drgnx-search--to-view-button)))))
         (message "%s" line)
         t))))
-
-(defvar-local drgnx-search--question nil
-  "In a Semantic Search list: (ROOT . QUESTION) it shows, for Show in Search View.")
 
 (defun drgnx-search--to-view-button ()
   "The list's header-line button: Show in Search View."
