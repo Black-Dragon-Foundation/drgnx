@@ -84,15 +84,17 @@ through the text around it, on a graphical frame with SVG and `drgnx-look-icons'
 ;;;; File kinds
 
 (defconst drgnx-icons--file-kinds
-  (let ((kinds (make-hash-table :test #'equal))
-        (r (drgnx-file-read (expand-file-name "files.eld" drgnx-icons-dir))))
+  (let ((r (drgnx-file-read (expand-file-name "files.eld" drgnx-icons-dir))))
     (unless (eq (plist-get r :status) 'ok)
       (error "etc/icons/files.eld: %s" (or (plist-get r :problem) (plist-get r :status))))
-    (dolist (line (plist-get r :data))
-      (dolist (ext (cdr line)) (unless (gethash ext kinds) (puthash ext (car line) kinds))))
-    kinds)
-  "Lowercase extension → its file-kind icon name, from etc/icons/files.eld (the first line naming it), read once.
-The hub reads the same table for the Explorer's rows (runtime/crates/drgnx-ratatoskr/src/view/icons.rs).")
+    (cl-flet ((table (lines)
+                (let ((h (make-hash-table :test #'equal)))
+                  (dolist (line lines h)
+                    (dolist (w (cdr line)) (unless (gethash w h) (puthash w (car line) h)))))))
+      (cons (table (plist-get (plist-get r :data) :names)) (table (plist-get (plist-get r :data) :extensions)))))
+  "(NAMES . EXTENSIONS) from etc/icons/files.eld, read once: a lowercase exact file name or extension → its file-kind
+icon name (the first line naming it).  The hub reads the same table for the Explorer's rows
+\(runtime/crates/drgnx-ratatoskr/src/view/icons.rs).")
 
 (defun drgnx-look-file-icon-name (file &optional open)
   "The icon name for FILE: a folder (OPEN: an open one), or the file kind from its name."
@@ -101,12 +103,14 @@ The hub reads the same table for the Explorer's rows (runtime/crates/drgnx-ratat
     (drgnx-look-file-name-icon-name file)))
 
 (defun drgnx-look-file-name-icon-name (name)
-  "The icon name for the file called NAME (a path or a bare name; nothing is read from disk): the kind of the text
-after its last dot in `drgnx-icons--file-kinds' (any case; `.editorconfig' counts), else `file'.  The major mode is
-not asked: the hub names the same icon without one."
-  (let ((base (file-name-nondirectory name)))
-    (or (and (string-match "\\.\\([^.]+\\)\\'" base)
-             (gethash (downcase (match-string 1 base)) drgnx-icons--file-kinds))
+  "The icon name for the file called NAME (a path or a bare name; nothing is read from disk), from
+`drgnx-icons--file-kinds': its exact name's (any case: `Makefile', `LICENSE', `.gitignore'), else the one of the text
+after its last dot (a dotfile's name counts), else `file'.  The major mode is not asked: the hub names the same icon
+without one."
+  (let* ((base (downcase (file-name-nondirectory name))) (dot (cl-position ?. base :from-end t))
+         (ext (and dot (substring base (1+ dot)))))
+    (or (gethash base (car drgnx-icons--file-kinds))
+        (and ext (gethash ext (cdr drgnx-icons--file-kinds)))
         'file)))
 
 (defun drgnx-look-file-icon (file &optional face size open)

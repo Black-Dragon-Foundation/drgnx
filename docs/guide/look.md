@@ -369,9 +369,10 @@ A change applies to the icons drawn from then on.
 
 For code, `(drgnx-look-icon 'folder 'shadow)` is the string for the icon `folder` in the face `shadow` (the optional
 third argument is the size), and `(drgnx-look-file-icon "main.rs")` is the icon of a file's kind: code, text, config,
-image, archive, or a plain file, and a folder (open or closed) for a directory. The kind comes from the file name's
-extension (any case) in `etc/icons/files.eld`, one line per kind; a name without a known extension (`Makefile`,
-`LICENSE`) is a plain file, and there are no per-language logos. The hub's Explorer rows read the same table, so the
+image, archive, or a plain file, and a folder (open or closed) for a directory. The kind comes from the file name in
+`etc/icons/files.eld`: an exact name first (`Makefile`, `Dockerfile`, `LICENSE`, `README`, `.gitignore` and other
+well-known build files, notes and dotfiles), then the extension (any case); any other name is a plain file, and there
+are no per-language logos. The hub's Explorer rows read the same table, so the
 Explorer, Buffers and Quick Open name the same icon for a file.
 
 The icons are from Lucide (ISC licence) and a few from Feather (MIT licence); both notices are in `etc/icons/`

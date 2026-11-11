@@ -895,16 +895,39 @@ read on the same connection (`git/letters'), which a new hub has lost.  At attac
 (defvar-local drgnx-explorer--tails nil
   "On the rows path, the tail overlay of each drawn row by its key (`drgnx-wb-row-tail-overlay'), moved with the row.")
 
+(defvar-local drgnx-explorer--badges nil
+  "On the rows path, the who-is-here badge overlay (empty, at the name's end) of each drawn row that has one, by key.")
+
+(defvar drgnx-explorer-badge-functions nil
+  "Called with (ORDINALS DIRP) for a row the hub says agents are at (`drgnx-agents-here': their ordinals, ascending;
+DIRP for a folder with a file of theirs inside); the first string returned is the row's badge, drawn after the name.
+The marks and colours of an ordinal are the display's: who is here (tools/agents-in-editor) adds its function.")
+
+(defun drgnx-explorer--rows-badge (key eol ords)
+  "Put KEY's badge for the agents ORDS (a list or vector from the hub, or nil) at EOL, moving its overlay; none: gone."
+  (let* ((badges (or drgnx-explorer--badges (setq drgnx-explorer--badges (make-hash-table :test #'equal))))
+         (o (gethash key badges))
+         (s (and ords (> (length ords) 0)
+                 (run-hook-with-args-until-success 'drgnx-explorer-badge-functions (append ords nil)
+                                                   (eql 1 (drgnx-view-nav-field "dir" key))))))
+    (if (not s)
+        (when o (delete-overlay o) (remhash key badges))
+      (if (and o (overlay-buffer o)) (move-overlay o eol eol) (setq o (make-overlay eol eol)) (puthash key o badges))
+      (overlay-put o 'priority 5)
+      (overlay-put o 'before-string s))))
+
 (defun drgnx-explorer--rows-patched (view keys)
   "`drgnx-view-patch-patched-functions' of the Explorer: the drawn rows KEYS get their tail at the right edge (the ⋯
 control and the hover, the git mark of the status the hub put on the name: a file's letter, ● for a folder with
-changes inside), each row's overlay moved rather than made again.  An overlay goes with its row's text
-\(`evaporate'): a removed or redrawn row's is gone, and a redrawn row gets a new one."
+changes inside) and their who-is-here badge after the name (`drgnx-explorer--rows-badge'), each row's overlays moved
+rather than made again.  A tail goes with its row's text (`evaporate'): a removed or redrawn row's is gone, and a
+redrawn row gets a new one; a badge of a row that went is deleted here."
   (let ((tails (or drgnx-explorer--tails (setq drgnx-explorer--tails (make-hash-table :test #'equal)))))
     (dolist (key keys)
       (let ((beg (drgnx-view-row-start view key)) (o (gethash key tails)))
         (if (not beg)
-            (when o (delete-overlay o) (remhash key tails))
+            (progn (when o (delete-overlay o) (remhash key tails))
+                   (drgnx-explorer--rows-badge key nil nil))
           (let* ((eol (save-excursion (goto-char beg) (pos-eol)))
                  (status (and (< beg eol) (intern-soft (get-text-property (1- eol) 'drgnx-git-status))))
                  (status (and (assq status drgnx-git--looks) status))
@@ -913,9 +936,13 @@ changes inside), each row's overlay moved rather than made again.  An overlay go
                                        "●" (car (drgnx-git-look status))))))
             (setq o (drgnx-wb-row-tail-overlay eol mark (and mark (drgnx-wb-git-mark-face status)) nil o))
             (overlay-put o 'evaporate t)
-            (puthash key o tails)))))
+            (puthash key o tails)
+            (drgnx-explorer--rows-badge key eol (and (< beg eol) (get-text-property (1- eol) 'drgnx-agents-here)))))))
     (when (> (hash-table-count tails) (drgnx-view-row-count view))
-      (maphash (lambda (key o) (unless (overlay-buffer o) (remhash key tails))) tails))))
+      (maphash (lambda (key o) (unless (overlay-buffer o) (remhash key tails))) tails))
+    (when drgnx-explorer--badges        ; a few rows at most: the badges of rows that went
+      (maphash (lambda (key o) (unless (drgnx-view-row-start view key) (delete-overlay o) (remhash key drgnx-explorer--badges)))
+               drgnx-explorer--badges))))
 
 (defun drgnx-explorer-rows-attach (view class)
   "Make the Explorer the hub-fed VIEW in display CLASS: the hub lists it, and its keys answer from Sjá."

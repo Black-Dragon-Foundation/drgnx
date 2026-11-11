@@ -142,6 +142,41 @@ the single root's row is invisible."
       (should (cl-every (lambda (o) (memq o before))
                         (seq-filter (lambda (o) (overlay-get o 'drgnx-row-tail)) (overlays-in (point-min) (point-max))))))))
 
+(defun drgnx-explorer-rows-nav-test--badges ()
+  "Each line's badge (an empty overlay's `before-string') as (LINE . STRING), in line order."
+  (let (out)
+    (dolist (o (overlays-in (point-min) (point-max)))
+      (when (and (= (overlay-start o) (overlay-end o)) (overlay-get o 'before-string))
+        (push (cons (1- (line-number-at-pos (overlay-start o))) (overlay-get o 'before-string)) out)))
+    (sort out (lambda (a b) (< (car a) (car b))))))
+
+(ert-deftest drgnx-explorer-rows/who-is-here-badges-from-the-hub ()
+  "Pattern D (plan sja-complete E2): the hub puts the ordinals of the agents at a row on its name
+\(`drgnx-agents-here'); the Explorer draws the badge `drgnx-explorer-badge-functions' makes of them (a folder's told
+it is one) after the name, moves it with its row, and takes it away when the hub's row has none."
+  (let ((drgnx-explorer-badge-functions
+         (list (lambda (ords dirp) (format " [%s%s]" (mapconcat #'number-to-string ords ",") (if dirp "/" ""))))))
+    (drgnx-explorer-rows-nav-test--with
+      (let ((row (lambda (key text ords)
+                   (list :key key :text text
+                         :props (append (list (list 0 (length text) "drgnx-work-id" key))
+                                        (and ords (list (list 2 (length text) "drgnx-agents-here" ords))))))))
+        (drgnx-view-apply-patch (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 0 :model 1
+                                      :ops (list (list :replace (list (funcall row "/r/lib" "▾ lib" [1 2])
+                                                                      (funcall row "/r/lib/m.el" "│   m.el" [2]))))))
+        (drgnx-view-draw-now drgnx-view)
+        (should (equal '((2 . " [1,2/]") (3 . " [2]")) (drgnx-explorer-rows-nav-test--badges)))
+        (save-excursion (goto-char (point-min)) (forward-line 3)
+                        (should (= (pos-eol) (overlay-start (gethash "/r/lib/m.el" drgnx-explorer--badges)))))
+        (drgnx-view-apply-patch (list :view view :class "c" :hub 7 :base 2 :version 3 :env_epoch 0 :model 1
+                                      :ops (list (list :remove (list "/r/a")))))
+        (drgnx-view-draw-now drgnx-view)
+        (should (equal '((1 . " [1,2/]") (2 . " [2]")) (drgnx-explorer-rows-nav-test--badges)))
+        (drgnx-view-apply-patch (list :view view :class "c" :hub 7 :base 3 :version 4 :env_epoch 0 :model 1
+                                      :ops (list (list :replace (list (funcall row "/r/lib/m.el" "│   m.el" nil))))))
+        (drgnx-view-draw-now drgnx-view)
+        (should (equal '((1 . " [1,2/]")) (drgnx-explorer-rows-nav-test--badges)))))))
+
 (ert-deftest drgnx-explorer-rows/a-density-change-asks-again-at-once ()
   "Pattern D: the indent the hub draws is the density's `tree-indent', sent with the subscription; a density change
 asks the hub again with the new indent at once (no restart)."

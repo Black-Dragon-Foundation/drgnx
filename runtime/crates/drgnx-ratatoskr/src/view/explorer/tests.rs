@@ -141,7 +141,7 @@ fn explorer_model_and_rows() {
         gui: None,
         one_root: false,
     };
-    let (rows, images) = explorer_rows(&got, &Marks::new(), &tty);
+    let (rows, images) = explorer_rows(&got, &Decor::default(), &tty);
     assert!(images.is_empty());
     let texts: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
     assert_eq!(texts, vec!["▾ R", "▸ a", "▾ lib", "│   m.el", "  z.txt"]);
@@ -207,7 +207,7 @@ fn gui_env(scale: f32) -> ViewEnv {
 /// Pattern D, the look-fix layout on the hub's rows (plan sja-complete E2): on a graphical display a level's indent is
 /// a space of `tree-indent` device px, a folder's chevron and every icon are images (each sent once), the icon has
 /// 6 px either side, then the name; the git status rides on the name (a folder's is the strongest inside it), an
-/// ignored name is dimmed, and a single root's row is invisible.  Sizes are device px at the env's scale.
+/// ignored name is dimmed, who is here rides on the name as ordinals, and a single root's row is invisible.  Sizes are device px at the env's scale.
 #[test]
 fn explorer_rows_draw_the_look() {
     let entries = vec![
@@ -224,10 +224,17 @@ fn explorer_rows_draw_the_look() {
         ]),
         branch: None,
     };
-    let marks = marks_of(&entries, &[(PathBuf::from("/r/"), Arc::new(status))]);
+    let here: Here = BTreeMap::from([
+        ("/r/src".to_owned(), BTreeSet::from([1, 3])),
+        ("/r/src/a.rs".to_owned(), BTreeSet::from([3])),
+    ]);
+    let decor = Decor {
+        git: marks_of(&entries, &[(PathBuf::from("/r/"), Arc::new(status))]),
+        here: Arc::new(here),
+    };
     let look = RowLook::of(&gui_env(2.0), 12, 1);
     assert_eq!(look.gui, Some((24, 32, 12)));
-    let (rows, images) = explorer_rows(&entries, &marks, &look);
+    let (rows, images) = explorer_rows(&entries, &decor, &look);
     let id = |name: &str| icons::svg(name, 32).unwrap().0;
     let prop = |r: &Row, name: &str| r.props.iter().find(|p| p.2 == name).cloned();
 
@@ -259,6 +266,13 @@ fn explorer_rows_draw_the_look() {
         prop(a, "drgnx-git-status").map(|p| p.3),
         Some(json!("modified"))
     );
+    // who is here: the agents' ordinals over the name, none where nobody is
+    assert_eq!(
+        prop(src, "drgnx-agents-here"),
+        Some((4, 7, "drgnx-agents-here".to_owned(), json!([1, 3])))
+    );
+    assert_eq!(prop(a, "drgnx-agents-here").map(|p| p.3), Some(json!([3])));
+    assert_eq!(prop(&rows[4], "drgnx-agents-here"), None);
     // target: ignored, dimmed, no mark
     let t = &rows[3];
     assert!(t.runs.iter().any(|r| r.2 == "drgnx-git-ignored"));
@@ -275,7 +289,7 @@ fn explorer_rows_draw_the_look() {
     // two roots: both rows show
     let two = RowLook::of(&gui_env(1.0), 14, 2);
     assert_eq!(two.gui, Some((14, 16, 6)));
-    let (rows, _) = explorer_rows(&entries, &marks, &two);
+    let (rows, _) = explorer_rows(&entries, &decor, &two);
     assert_eq!(prop(&rows[0], "invisible"), None);
 }
 

@@ -99,14 +99,21 @@ config, image, archive, folder; anything else is a plain file."
 
 (ert-deftest drgnx-icons/file-kinds-are-the-hub-s ()
   "Pattern D (plan sja-complete E2): Lisp and the hub's Explorer rows name the same icon for a name, from the one
-table (view/icons.rs `file_icons_follow_the_shared_table' asks the same names): any case, the last extension, a
-dotfile's name as its extension, a bare name a plain file; the major mode is not asked."
+table (view/icons.rs `file_icons_follow_the_shared_table' asks the same names): an exact name first (build files,
+notes, dotfiles), then the last extension, any case, a dotfile's name as its extension, else a plain file; the major
+mode is not asked."
   (should (eq 'file-code (drgnx-look-file-name-icon-name "init.el")))
   (should (eq 'file-text (drgnx-look-file-name-icon-name "dir/README.MD")))
   (should (eq 'file-cog (drgnx-look-file-name-icon-name "ci.yaml")))
   (should (eq 'file-archive (drgnx-look-file-name-icon-name "dump.tar.gz")))
   (should (eq 'file-image (drgnx-look-file-name-icon-name "shot.png")))
-  (should (eq 'file (drgnx-look-file-name-icon-name "Makefile")))
+  (should (eq 'file-code (drgnx-look-file-name-icon-name "Makefile")))
+  (should (eq 'file-code (drgnx-look-file-name-icon-name "Dockerfile")))
+  (should (eq 'file-text (drgnx-look-file-name-icon-name "LICENSE")))
+  (should (eq 'file-text (drgnx-look-file-name-icon-name "README")))
+  (should (eq 'file-cog (drgnx-look-file-name-icon-name ".gitignore")))
+  (should (eq 'file-code (drgnx-look-file-name-icon-name "CMakeLists.txt")))
+  (should (eq 'file (drgnx-look-file-name-icon-name "blob.bin")))
   (should (eq 'file (drgnx-look-file-name-icon-name "md")))
   (should (eq 'file-cog (drgnx-look-file-name-icon-name ".editorconfig")))
   (let ((auto-mode-alist (cons '("\\.weird\\'" . emacs-lisp-mode) auto-mode-alist)))

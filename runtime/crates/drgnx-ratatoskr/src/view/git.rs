@@ -416,7 +416,7 @@ pub fn letters(f: &Front, c: &Caller, p: LettersParams) -> Result<bool, Error> {
             if let Some(f) = front.upgrade() {
                 f.core.views.git_publish(&f, conn, &view, read, rows);
                 if f.core.views.letters.keep(conn, root, read, status) {
-                    f.core.views.explorer_marks_changed(&f, conn);
+                    f.core.views.explorer_decor_changed(&f, conn);
                 }
             }
         })

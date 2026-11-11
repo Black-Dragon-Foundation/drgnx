@@ -329,6 +329,17 @@ impl RowLook {
 /// inside it, `Ignored` (or `Untracked`) under an ignored (or untracked) folder.
 pub type Marks = HashMap<String, git::Kind>;
 
+/// Who is here by path (`agents/presence/subscribe`'s model, [`crate::work::presence::here`]): the ordinals of the
+/// agents changing a file, or a file inside a folder.
+pub type Here = BTreeMap<String, BTreeSet<u32>>;
+
+/// What a listing's rows show besides the entries: the git marks, and who is here.
+#[derive(Default)]
+pub struct Decor {
+    pub git: Marks,
+    pub here: Arc<Here>,
+}
+
 /// The marks of ENTRIES from STATUSES, each a repository's root and its last read status.
 pub fn marks_of(entries: &[Entry], statuses: &[(PathBuf, Arc<git::Status>)]) -> Marks {
     let mut marks = Marks::new();
@@ -381,10 +392,12 @@ pub fn marks_of(entries: &[Entry], statuses: &[(PathBuf, Arc<git::Status>)]) -> 
 /// E's row in LOOK: the guides and chevron (on a graphical display the indents as spaces, the chevron and the file
 /// or folder icon as images with the gap either side), then the name; the path over all of it, the git status over
 /// the name (`drgnx-git-status`, which the editor draws as the mark at the right edge), an ignored name dimmed. A
-/// single root's row is invisible. Icons go into IMAGES.
+/// single root's row is invisible. The ordinals of the agents here go over the name too (`drgnx-agents-here`, a list:
+/// the editor draws their badge, whose marks and colours are its own). Icons go into IMAGES.
 fn entry_row(
     e: &Entry,
     mark: Option<git::Kind>,
+    here: Option<&BTreeSet<u32>>,
     look: &RowLook,
     images: &mut BTreeMap<ImageId, String>,
 ) -> Row {
@@ -444,6 +457,9 @@ fn entry_row(
     if let Some(k) = mark.filter(|k| *k != git::Kind::Ignored) {
         b.prop(name, end, "drgnx-git-status", json!(k.name()));
     }
+    if let Some(ords) = here.filter(|o| !o.is_empty()) {
+        b.prop(name, end, "drgnx-agents-here", json!(ords));
+    }
     b.prop(0, end, "drgnx-work-id", json!(e.path));
     if e.depth == 0 && look.one_root {
         b.prop(0, end, "invisible", json!(true));
@@ -451,17 +467,20 @@ fn entry_row(
     b.finish()
 }
 
-/// The rows of ENTRIES in LOOK with their MARKS, one per entry keyed by its path, and the icons they name (each
+/// The rows of ENTRIES in LOOK with their DECOR, one per entry keyed by its path, and the icons they name (each
 /// once).
 pub fn explorer_rows(
     entries: &[Entry],
-    marks: &Marks,
+    decor: &Decor,
     look: &RowLook,
 ) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let mut images = BTreeMap::new();
     let rows = entries
         .iter()
-        .map(|e| entry_row(e, marks.get(&e.path).copied(), look, &mut images))
+        .map(|e| {
+            let mark = decor.git.get(&e.path).copied();
+            entry_row(e, mark, decor.here.get(&e.path), look, &mut images)
+        })
         .collect();
     (rows, images.into_iter().collect())
 }
@@ -628,6 +647,8 @@ impl Run {
 pub(super) struct Explorers {
     runs: Mutex<BTreeMap<(u64, String), Run>>,
     next: AtomicU64,
+    /// Who is here per connection, the last its presence subscription saw.
+    here: Mutex<BTreeMap<u64, Arc<Here>>>,
 }
 
 impl Explorers {
@@ -669,8 +690,24 @@ impl Explorers {
         }
     }
 
+    /// CONN's who is here (empty before its presence came).
+    fn here(&self, conn: u64) -> Arc<Here> {
+        lock(&self.here).get(&conn).cloned().unwrap_or_default()
+    }
+
+    /// Keep HERE as CONN's; whether it changed.
+    fn keep_here(&self, conn: u64, here: Here) -> bool {
+        let mut all = lock(&self.here);
+        if all.get(&conn).is_some_and(|h| **h == here) {
+            return false;
+        }
+        all.insert(conn, Arc::new(here));
+        true
+    }
+
     /// Stop every listing of CONN.
     pub(super) fn gone(&self, conn: u64) {
+        lock(&self.here).remove(&conn);
         lock(&self.runs).retain(|(c, _), r| {
             if *c == conn {
                 r.end();
@@ -724,42 +761,49 @@ impl Views {
         };
         let from = self.window_from(key.0, &key.1, "order");
         self.publish_model(f, key.0, &key.1, explorer_doc(&entries, from));
-        let marks = marks_of(&entries, &self.letters.statuses(key.0));
-        self.explorer_rows_to(f, key, &entries, &marks, indent, roots);
+        let decor = self.explorer_decor(key.0, &entries);
+        self.explorer_rows_to(f, key, &entries, &decor, indent, roots);
         true
     }
 
-    /// ENTRIES' rows with their MARKS for KEY's class (its env's look), and the icons they name.
+    /// The decor of CONN's listing of ENTRIES: the marks from CONN's statuses, and who is here.
+    fn explorer_decor(&self, conn: u64, entries: &[Entry]) -> Decor {
+        Decor {
+            git: marks_of(entries, &self.letters.statuses(conn)),
+            here: self.explorers.here(conn),
+        }
+    }
+
+    /// ENTRIES' rows with their DECOR for KEY's class (its env's look), and the icons they name.
     fn explorer_rows_to(
         &self,
         f: &Front,
         key: &Key,
         entries: &[Entry],
-        marks: &Marks,
+        decor: &Decor,
         indent: u32,
         roots: usize,
     ) {
         self.publish_built(f, key, |env, _| {
-            explorer_rows(entries, marks, &RowLook::of(env, indent, roots))
+            explorer_rows(entries, decor, &RowLook::of(env, indent, roots))
         });
     }
 
-    /// CONN's repository statuses changed (`git/letters` read one): every listing of CONN draws its rows again with
-    /// their marks; only the rows whose mark changed go out.
-    pub(super) fn explorer_marks_changed(&self, f: &Front, conn: u64) {
-        let statuses = self.letters.statuses(conn);
+    /// CONN's decor changed (`git/letters` read a status, who is here moved): every listing of CONN draws its rows
+    /// again; only the rows that changed go out.
+    pub(super) fn explorer_decor_changed(&self, f: &Front, conn: u64) {
         for view in self.explorers.views_of(conn) {
             let Some((entries, indent, roots)) = self.explorers.entries(conn, &view) else {
                 continue;
             };
-            let marks = marks_of(&entries, &statuses);
+            let decor = self.explorer_decor(conn, &entries);
             let classes = lock(&self.store).classes(conn, &view);
             for class in classes {
                 self.explorer_rows_to(
                     f,
                     &(conn, view.clone(), class),
                     &entries,
-                    &marks,
+                    &decor,
                     indent,
                     roots,
                 );
@@ -792,20 +836,28 @@ impl Views {
             .finish(conn, view, id, entries, |entries, indent, roots| {
                 let from = self.window_from(conn, view, "order");
                 self.publish_model(f, conn, view, explorer_doc(entries, from));
-                let marks = marks_of(entries, &self.letters.statuses(conn));
+                let decor = self.explorer_decor(conn, entries);
                 let classes = lock(&self.store).classes(conn, view);
                 for class in classes {
                     self.explorer_rows_to(
                         f,
                         &(conn, view.to_owned(), class),
                         entries,
-                        &marks,
+                        &decor,
                         indent,
                         roots,
                     );
                 }
             })
             .is_some()
+    }
+
+    /// Who is here for CONN's workspace (by path, the ordinals there) after a presence change: kept, and CONN's
+    /// listings drawn again when it differs from the last.
+    pub fn explorer_here(&self, f: &Front, conn: u64, here: Here) {
+        if self.explorers.keep_here(conn, here) {
+            self.explorer_decor_changed(f, conn);
+        }
     }
 }
 

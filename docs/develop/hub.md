@@ -2481,7 +2481,7 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
   the look-fix layout (window-dark.html `.row`), sizes in device px at the env's scale: a space of `indent` (default 12,
   the density's `tree-indent`) per level below the first, the chevron as an image (a space for a file), 6 px, the folder
   (open or closed) or file-kind icon as an image, 6 px. The icons are drgnx's Lucide files, 16 logical px, stroke 1.6, in
-  `currentColor` (each image sent once); a file's kind is the first line of `etc/icons/files.eld` naming its extension,
+  `currentColor` (each image sent once); a file's kind is its exact name's in `etc/icons/files.eld`, else its extension's,
   the table the editor reads too (`drgnx-look-file-name-icon-name`). Then the name in `drgnx-explorer-root`,
   `-directory` or `-file` (`drgnx-git-ignored` when ignored), a control character as `^X`; the path is the
   `drgnx-work-id` over the whole row. A listing with one root makes the root's row `invisible` (the island's header
@@ -2491,6 +2491,11 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
   added), an untracked or ignored folder's on everything under it; ignored ones carry none. A read that changes a status
   draws the connection's listings again (only the changed rows go out). The editor draws the mark at the right edge with
   the ⋯ control (`drgnx-explorer--rows-patched`).
+- **Who is here.** Each time the connection's presence subscription (`agents/presence/subscribe` with a view) draws
+  who is here, the hub keeps its paths' ordinals for the connection and puts `drgnx-agents-here` (the ordinals, a
+  list) on the name of each entry an agent is changing, or holding such a file inside; a change draws the listings
+  again. The editor makes the badge (`drgnx-explorer-badge-functions`: the marks and colours of an ordinal are the
+  display's) and draws it after the name.
 
 ### The agent panel's rows
 
