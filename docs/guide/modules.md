@@ -232,7 +232,7 @@ Every module must turn off cleanly: its setup changes global state only through 
 | `extra/jump` | idle | Jump to Text (needs avy) |
 | `extra/mc` | idle | Add Next Occurrence, Select All Occurrences — a cursor on each match (needs multiple-cursors) |
 | `extra/undo` | idle | Undo Tree (needs vundo) |
-| `extra/wgrep` | idle | Edit Results / Apply Edited Results in search results (needs wgrep) |
+| `extra/wgrep` | idle | Edit Grep Results / Apply Edited Grep Results in `grep-mode` buffers (needs wgrep; the Search view has its own Edit Results, [replace.md](replace.md#edit-results)) |
 | `extra/hunks` | idle | changed lines in the gutter, from the hub: solid bars, green added, blue changed; Show / Revert / Stage Change |
 | `extra/blame` | idle | inline blame: the current line's author, age and commit subject at its end; Blame: Show Commit of Line ([git.md](git.md)) |
 | `extra/keycast` | idle | Show Keys As I Type (needs keycast): the key and command in the status bar's `misc` segment (in the stock mode line elsewhere) |

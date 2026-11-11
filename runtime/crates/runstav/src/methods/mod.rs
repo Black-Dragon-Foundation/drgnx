@@ -314,6 +314,7 @@ params! {
     SearchGrepLook(search::GrepLookParams),
     SearchGrepSkipped(search::GrepSkippedParams),
     SearchEdits(search::EditsParams),
+    SearchEditDoc(search::EditDocParams),
     SearchPreview(search::PreviewParams),
     SearchApply(search::ApplyParams),
     SearchApplied(search::AppliedParams),
