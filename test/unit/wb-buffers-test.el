@@ -122,6 +122,40 @@ past that it holds whole rows and scrolls.  With no rows it is the header and th
       (seq-some (lambda (o) (and (overlay-get o 'drgnx-row-tail) (overlay-get o 'after-string)))
                 (overlays-in row (1+ (save-excursion (goto-char row) (pos-eol))))))))
 
+(ert-deftest drgnx-buffers/a-hovered-modified-row-shows-close ()
+  ;; VS Code's way: the dot of a file with unsaved changes becomes the close button while its row is hovered (Nidhogg's
+  ;; mouse sensors call the row's sensor with entered and left)
+  (drgnx-buffers-test--with dir
+    (let* ((a (drgnx-buffers-test--open dir "a.txt"))
+           (b (drgnx-buffers-test--open dir "b.txt"))
+           (win (get-buffer-window drgnx-buffers-buffer-name))
+           (sensor (lambda (buf)
+                     (with-current-buffer drgnx-buffers-buffer-name
+                       (drgnx-buffers--fontify (point-min) (point-max))
+                       (let ((row (drgnx-buffers--row-pos buf)))
+                         (cons (get-char-property row 'mouse-sensor-functions) row)))))
+           (sense (lambda (buf dir)
+                    (pcase-let ((`(,fns . ,row) (funcall sensor buf)))
+                      (dolist (f fns) (funcall f win row dir))))))
+      (with-current-buffer a (insert "change"))
+      (drgnx-signal--flush)
+      ;; each row has a sensor of its own, on its text and on its tail
+      (should (car (funcall sensor a)))
+      (should-not (eq (car (funcall sensor a)) (car (funcall sensor b))))
+      (should (eq (car (funcall sensor a))
+                  (get-text-property 0 'mouse-sensor-functions (drgnx-buffers-test--tail a))))
+      (funcall sense a 'entered)
+      (let ((tail (drgnx-buffers-test--tail a)))
+        (should (string-search (drgnx-face-glyph 'close) tail))
+        (should-not (string-search (drgnx-face-glyph 'dot) tail)))
+      ;; the sensor stays the same object through the repaint: the pointer is still on the row
+      (should (eq (car (funcall sensor a))
+                  (get-text-property 0 'mouse-sensor-functions (drgnx-buffers-test--tail a))))
+      (funcall sense a 'left)
+      (let ((tail (drgnx-buffers-test--tail a)))
+        (should (string-search (drgnx-face-glyph 'dot) tail))
+        (should-not (string-search (drgnx-face-glyph 'close) tail))))))
+
 (ert-deftest drgnx-buffers/a-row-is-the-icon-and-the-name ()
   ;; window-dark.html's Open rows: the file's icon and name; no folder, no close column at the start; the close
   ;; button is the control at the right edge, hidden until the row is hovered (a terminal always shows it)

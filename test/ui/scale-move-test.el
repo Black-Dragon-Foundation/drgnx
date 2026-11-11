@@ -59,8 +59,14 @@
   "Pattern D: the monitor goes 1.25 → 1 → 2 → 1.25 under the frame; at each step the default font, the code line,
 the status bar, the gap, a card's radius and the focus ring are a fresh session's at that scale, and at the end
 everything is what it was at the start (no drift).  Then the same at a UI scale of 110 %."
-  ;; only mutter takes a `gdctl set'
-  (skip-unless (and (display-graphic-p) (fboundp 'nidhogg-set-frame-text-zoom) (drgnx-scale-move-test--set-scale 1.25)))
+  ;; the session's own scale, put back at the end: the next test starts where the run began
+  (let ((s0 (and (display-graphic-p) (fboundp 'frame-scale-factor) (frame-scale-factor))))
+    ;; only mutter takes a `gdctl set'
+    (skip-unless (and s0 (fboundp 'nidhogg-set-frame-text-zoom) (drgnx-scale-move-test--set-scale 1.25)))
+    (drgnx-scale-move-test--keeps-every-size s0)))
+
+(defun drgnx-scale-move-test--keeps-every-size (s0)
+  "The body of `drgnx-ui-scale/screen-move-keeps-every-size'; S0 the session's scale, put back at the end."
   (let ((f (selected-frame)) (drgnx-look-density 'comfortable) (faces '(drgnx-card-single drgnx-focus-ring)))
     (unwind-protect
         (progn
@@ -94,7 +100,12 @@ everything is what it was at the start (no drift).  Then the same at a UI scale 
       (drgnx-look-scale-off)
       (drgnx-look-density-off)
       (dolist (face faces) (face-spec-set face (get face 'face-defface-spec)))
-      (drgnx-scale-move-test--set-scale (string-to-number (or (getenv "DRGNX_UI_SCALE") "1"))))))
+      ;; the session's scale back (not DRGNX_UI_SCALE: the session's Emacs does not have it), taken and its special
+      ;; event read, so the next test starts at a settled scale
+      (when (drgnx-scale-move-test--set-scale s0)
+        (drgnx-test-wait-presented :value (lambda () (< (abs (- (frame-scale-factor f) s0)) 0.001)))
+        (drgnx-scale-move-test--read-events)
+        (drgnx-test-wait-presented)))))
 
 (provide 'scale-move-test)
 ;;; scale-move-test.el ends here
