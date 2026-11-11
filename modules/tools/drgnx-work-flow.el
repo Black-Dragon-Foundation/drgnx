@@ -26,7 +26,10 @@
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function nidhogg-view-set "nidhogg-views" (h what value))
 (declare-function drgnx-work-lens-string "drgnx-work-map")
+(declare-function drgnx-work-lens-name "drgnx-work-map")
 (defvar drgnx-work-lens--map)
+(defvar drgnx-work-map--strip)
+(defvar drgnx-chrome-own-tab-line)
 (defvar drgnx-work-lens-nav)
 (defvar drgnx-work-lens-map)
 (defvar drgnx-work-map--lens)
@@ -93,8 +96,14 @@ rows or its pass count; a waiver says its reason."
 
 (define-derived-mode drgnx-work-flow-mode special-mode "Work flow"
   "The Work space's Flow lens: a plan run's tasks by gate, its merge batch and its rule pack."
-  (setq-local truncate-lines t cursor-type nil
-              tab-line-format '("" drgnx-work-map--lens)))
+  (setq-local truncate-lines t cursor-type nil drgnx-chrome-own-tab-line t
+              tab-line-format '("" drgnx-work-map--lens)
+              header-line-format '(:eval (drgnx-work-flow--strip))))
+
+(defun drgnx-work-flow--strip ()
+  "The Flow's header: its map's strip (what needs you with its jump keys, the machines' load), as the map last made
+it; redisplay only reads it."
+  (if (buffer-live-p drgnx-work-flow--map) (buffer-local-value 'drgnx-work-map--strip drgnx-work-flow--map) ""))
 
 (defun drgnx-work-flow--twin (class)
   "The Flow's buffer in display CLASS (`drgnx-view-patch-twin-function')."
@@ -226,7 +235,8 @@ map that is not on the rows path it says so instead."
             (insert "The Flow needs Sjá, Nidhogg's view model: it is drawn from the hub's rows, and this Emacs has"
                     " no Sjá (or `drgnx-view-old-path' is set).\n"))))
       (setq drgnx-work-flow--map map-buffer drgnx-work-lens--map map-buffer
-            drgnx-work-map--lens (drgnx-work-lens-string 'flow))
+            drgnx-work-map--lens (drgnx-work-lens-string 'flow (drgnx-work-lens-name map-buffer)
+                                                         '(("evidence" . "e") ("rules" . "R"))))
       (drgnx-work-flow-refresh buffer))
     buffer))
 

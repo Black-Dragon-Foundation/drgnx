@@ -135,6 +135,11 @@ it (a notes repository with the code repositories inside it)."
 (defface drgnx-work-edge '((t :inherit drgnx-text-subtle)) "An edge." :group 'drgnx-work-space)
 (defface drgnx-work-edge-strong '((t :inherit drgnx-text-muted :weight bold)) "An edge that edits." :group 'drgnx-work-space)
 (defface drgnx-work-label '((t :inherit drgnx-text-muted)) "A layer's label." :group 'drgnx-work-space)
+(defface drgnx-work-lens-title '((t :inherit (drgnx-ui-heading tab-line-tab-current)))
+  "The Work space's tab on its lens bar." :group 'drgnx-work-space)
+(defface drgnx-work-lens-current '((t :inherit (bold drgnx-selected-quiet))) "The lens shown, on the lens bar."
+  :group 'drgnx-work-space)
+(defface drgnx-work-lens-key '((t :inherit drgnx-keycap)) "A key's badge on the lens bar." :group 'drgnx-work-space)
 (defface drgnx-work-chip '((t :inherit drgnx-selected-quiet)) "A chip." :group 'drgnx-work-space)
 (defface drgnx-work-new '((t :inherit success)) "The mark of a new conclusion." :group 'drgnx-work-space)
 (defface drgnx-work-agent-1 '((t :inherit drgnx-agent-1)) "The first agent colour." :group 'drgnx-work-space)

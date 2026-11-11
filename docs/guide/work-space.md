@@ -75,7 +75,10 @@ appears in the needs-you strip; its key jumps to the agents in it.
   and `C-k n` / `C-c w n` / `SPC a n` do it from anywhere. **A jump only selects.** Allowing, pushing and answering stay
   on the card's own keys; no key of the map settles anything.
 - The **lens** (the tab line) names the views: Map, Board, Timeline, Flow. `m`, `b`, `t` and `F` switch between them
-  in the same window, and the selection comes along: each view shows the nearest thing it can represent.
+  in the same window, and the selection comes along: each view shows the nearest thing it can represent. It replaces
+  the editor's tabs while a view of the Work space is shown: the Work space's own tab ("Work · drgnx", the
+  workspace's folder), the views with the shown one marked, and the view's own keys as chips (the Flow's `evidence e`
+  and `rules R`). The Flow has the map's strip as its header too.
 - The **Flow** shows a plan run as the hub's gates see it: a row per task and a column per gate (Brief, Red first,
   Build, Author check, Merge batch, Review), each cell a chip (green when it passed, accent while it runs, amber when it
   holds the task with a lock, red when it failed, an empty ring while it waits). Under the tasks is the merge batch.

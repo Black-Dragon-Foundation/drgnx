@@ -13,11 +13,39 @@
 (drgnx-test-modules-preload '(tools/work-space))
 
 (ert-deftest drgnx-work-flow/the-lens-names-the-flow ()
-  "The lens is Map · Board · Timeline · Flow; the current one is bold."
-  (let ((s (drgnx-work-lens-string 'flow)))
-    (should (string-match-p "Map .*Board .*Timeline .*Flow" s))
-    (should (eq (get-text-property (string-match "Flow" s) 'face s) 'bold))
-    (should (eq (get-text-property (string-match "Map" s) 'face s) 'drgnx-work-label))))
+  "The lens bar is the Work space's tab (Work · its name), then Map · Board · Timeline · Flow with the current one
+marked, then the lens's own keys as chips with their key badges."
+  (let ((s (drgnx-work-lens-string 'flow "drgnx" '(("evidence" . "e") ("rules" . "R")))))
+    (should (string-match-p "Work · drgnx.*Map.*Board.*Timeline.*Flow.*evidence.*e.*rules.*R" s))
+    (should (eq (get-text-property (string-match "Work · drgnx" s) 'face s) 'drgnx-work-lens-title))
+    (should (eq (get-text-property (string-match "Flow" s) 'face s) 'drgnx-work-lens-current))
+    (should (eq (get-text-property (string-match "Map" s) 'face s) 'drgnx-work-label))
+    (should (eq (get-text-property (string-match "evidence" s) 'face s) 'drgnx-work-chip))
+    (should (eq (get-text-property (string-search "R" s (string-search "rules" s)) 'face s) 'drgnx-work-lens-key)))
+  ;; no name: the tab says Work alone; no keys: no chips
+  (let ((s (drgnx-work-lens-string 'map)))
+    (should (string-match-p "Work .*Map" s))
+    (should-not (string-match-p "evidence" s))))
+
+(ert-deftest drgnx-work-flow/its-window-shows-the-lens-bar-and-the-map-s-strip ()
+  "The Flow's window shows the lens bar as its tab line (the chrome keeps a buffer's own) and the map's strip (what
+needs you, the machines' load) as its header."
+  (let ((map (generate-new-buffer " map")) (flow (generate-new-buffer " flow")))
+    (unwind-protect
+        (progn
+          (with-current-buffer map (setq-local drgnx-work-map--strip "⚑ T5 held  g1"))
+          (with-current-buffer flow
+            (drgnx-work-flow-mode)
+            (setq drgnx-work-flow--map map)
+            (should (local-variable-p 'drgnx-chrome-own-tab-line))
+            ;; a mode line drops the faces of a variable's string unless the variable is risky
+            (should (get 'drgnx-work-map--lens 'risky-local-variable))
+            (should (get 'drgnx-work-map--strip 'risky-local-variable))
+            (should drgnx-chrome-own-tab-line)
+            ;; the header is an `:eval' form (a batch Emacs formats those as ""): its value is the map's strip
+            (should (eq (car header-line-format) :eval))
+            (should (string-search "T5 held" (eval (cadr header-line-format) t)))))
+      (kill-buffer flow) (kill-buffer map))))
 
 (ert-deftest drgnx-work-flow/it-asks-the-hub-for-the-job-s-flow ()
   "The Flow asks `work/flow/subscribe' with its view, its map's view and the job (none: the hub picks the newest
