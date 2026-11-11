@@ -1,7 +1,9 @@
 ;;; look-density-gui-test.el --- GUI tests: the code line follows the density (run by `drgnx test --ui') -*- lexical-binding: t -*-
 ;; test-class: det
 ;; Pattern D: every measurement is taken after `drgnx-test-wait-presented'.  The code line is 21 logical pixels
-;; (comfortable), 19 compact and 23 roomy, at whatever scale the run has (DRGNX_UI_SCALE: 1, 1.25, 2).
+;; (comfortable), 19 compact and 23 roomy, at whatever scale the run has (DRGNX_UI_SCALE: 1, 1.25, 4/3, 1.5, 2), in
+;; the frame's pixels by the pixel rule (`drgnx-px', half up), and never under the font's own line: at 4/3 the
+;; font's line is 26 pixels, over compact's 25, and the line stays the font's.
 
 (require 'ert)
 (require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
@@ -29,24 +31,23 @@
     (line-pixel-height)))
 
 (drgnx-look-gui-deftest drgnx-ui-look-density/code-line-is-21 ()
-  "Pattern D: `line-pixel-height' in a code buffer is round (21 x scale) when comfortable, and 19 / 23 for compact
-and roomy after a setting change, with no restart."
+  "Pattern D: `line-pixel-height' in a code buffer is 21 logical pixels when comfortable, and 19 / 23 for compact
+and roomy after a setting change, with no restart; never under the font's own line (`frame-char-height')."
   (skip-unless (display-graphic-p))
-  (let ((scale (if (fboundp 'frame-scale-factor) (float (frame-scale-factor)) 1.0))
-        (was (window-buffer)))
+  (let ((was (window-buffer)))
     (unwind-protect
         (progn
           (drgnx-look-density-on)
           (dolist (row '((comfortable . 21) (compact . 19) (roomy . 23) (comfortable . 21)))
             (let ((drgnx-look-density (car row)))
               (drgnx-look-density-apply)
-              (should (= (round (* (cdr row) scale)) (drgnx-look-density-ui-test--line-pixels))))))
+              (should (= (max (drgnx-px (cdr row)) (frame-char-height)) (drgnx-look-density-ui-test--line-pixels))))))
       (drgnx-look-density-off)
       (set-window-buffer (selected-window) was))))
 
 (drgnx-look-gui-deftest drgnx-ui-look-density/a-new-frame-gets-the-code-line ()
   "Pattern D: a frame made after the density is on (as `C-x 5 2', `emacsclient -c' and a daemon's first graphical
-frame make one: the store's `frame-added') has round (21 x scale) lines too, not the font's own."
+frame make one: the store's `frame-added') has 21 logical pixel lines too (`drgnx-px'), not the font's own."
   (skip-unless (display-graphic-p))
   (let ((state-was (bound-and-true-p drgnx-state-mode)) (frame nil) (buf (get-buffer-create " *look-density-new*")))
     (with-current-buffer buf (erase-buffer) (insert "code\ncode\n"))
@@ -61,9 +62,9 @@ frame make one: the store's `frame-added') has round (21 x scale) lines too, not
                          :value (lambda ()
                                   (with-selected-window (frame-selected-window frame)
                                     (goto-char (point-min))
-                                    (list (if (fboundp 'frame-scale-factor) (float (frame-scale-factor frame)) 1.0)
+                                    (list (max (drgnx-px 21 frame) (frame-char-height frame))
                                           (line-pixel-height)))))))
-            (should (= (round (* 21 (nth 0 sample))) (nth 1 sample)))))
+            (should (= (nth 0 sample) (nth 1 sample)))))
       (drgnx-look-density-off)
       (when (frame-live-p frame) (delete-frame frame))
       (drgnx-state-mode (if state-was 1 -1))
