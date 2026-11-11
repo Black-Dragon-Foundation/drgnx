@@ -183,7 +183,7 @@ time and duration.  LIT: the ids of the steps lit (their pills fill and the row 
   (add-hook 'post-command-hook #'drgnx-work-trail--maybe-page nil t))
 
 (defun drgnx-work-trail-buffers ()
-  (seq-filter (lambda (b) (eq (buffer-local-value 'major-mode b) 'drgnx-work-trail-mode)) (buffer-list)))
+  (seq-filter (lambda (b) (and (eq (buffer-local-value 'major-mode b) 'drgnx-work-trail-mode) (not (drgnx-view-patch-twin-p b)))) (buffer-list)))
 
 (defun drgnx-work-trail--step (id) (and drgnx-work-trail--by-id (gethash id drgnx-work-trail--by-id)))
 
@@ -346,9 +346,18 @@ its way."
   (when drgnx-view-patch
     (ignore-errors (drgnx-work-client--call "work/trail/close" (list :view (drgnx-view-patch-view drgnx-view-patch)) #'ignore))))
 
+(declare-function drgnx-view-env-twin "drgnx-view-env" (class prefixes &optional setup))
+
+(defun drgnx-work-trail--twin (class)
+  "The trail's or Timeline's buffer in display CLASS (`drgnx-view-patch-twin-function'): its state and its lens's,
+read again before each command there; a Timeline's lit lanes on its own instance in Sjá."
+  (drgnx-view-env-twin class '("drgnx-work-trail-" "drgnx-work-timeline-" "drgnx-work-lens-")
+                       (lambda () (when (derived-mode-p 'drgnx-work-timeline-mode) (drgnx-work-timeline-rows-attached)))))
+
 (defun drgnx-work-trail--rows-attach (view params)
   "Make the current buffer the hub-fed trail or Timeline VIEW and ask the hub for it with PARAMS."
   (drgnx-view-patch-attach view "unshown")
+  (setq-local drgnx-view-patch-twin-function #'drgnx-work-trail--twin)
   (setq drgnx-work-trail--hub-params params)
   (require 'drgnx-view-env)
   (let ((buffer (current-buffer)))
@@ -696,7 +705,7 @@ list of (SEQ X W KIND), each at least 2 px wide.  A step that is still open runs
   (setq-local truncate-lines t cursor-type nil tab-line-format '("" drgnx-work-map--lens)))
 
 (defun drgnx-work-timeline-buffers ()
-  (seq-filter (lambda (b) (eq (buffer-local-value 'major-mode b) 'drgnx-work-timeline-mode)) (buffer-list)))
+  (seq-filter (lambda (b) (and (eq (buffer-local-value 'major-mode b) 'drgnx-work-timeline-mode) (not (drgnx-view-patch-twin-p b)))) (buffer-list)))
 
 (defun drgnx-work-timeline--range ()
   "The time the lanes cover: (T0 . T1), the earliest start and the latest end of any loaded step."

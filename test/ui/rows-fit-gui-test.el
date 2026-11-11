@@ -216,3 +216,81 @@ holds: the class it was paired with, never stale."
               (should (string-prefix-p "The quick" (drgnx-rows-demo-text b)))))
         (remove-hook 'drgnx-hub-event-functions count)
         (delete-frame frame)))))
+
+(defun drgnx-rows-fit-ui-test--scales ()
+  "The session's monitor scales (one per monitor), from DRGNX_UI_SESSION_SCALES; nil at scale 1."
+  (mapcar #'string-to-number (split-string (or (getenv "DRGNX_UI_SESSION_SCALES") "") " " t)))
+
+(defun drgnx-rows-fit-ui-test--move (frame output)
+  "Put FRAME (titled \"drgnx-rows-twin\") on sway's OUTPUT: non-nil once `swaymsg' finds its window.  A frame
+becomes a compositor window only when it is drawn and presented, so each try waits for FRAME's paint first; a wait
+that only reads process output leaves it unmapped and the move finds no node."
+  (drgnx-test-wait
+   (lambda ()
+     (drgnx-test-wait-presented :frame frame)
+     (zerop (call-process "swaymsg" nil nil nil (format "[title=\"drgnx-rows-twin\"] move to output %s" output))))
+   :secs 10 :what "the second frame on the second monitor"))
+
+(defun drgnx-rows-fit-ui-test--second-frame (px)
+  "A new frame in a display class of its own, as (FRAME HOW . SCALED): on the second monitor when the session has two at two
+scales under sway (`swaymsg' moves its window there; the class then differs by its scale), else with a default font
+twice PX.  SCALED is non-nil on the second monitor: there the class differs by its scale alone, so a label's fit in
+logical pixels, and its text, is the same in both."
+  (let ((scales (drgnx-rows-fit-ui-test--scales)) (root (selected-frame))
+        (frame (make-frame '((width . 60) (height . 10) (title . "drgnx-rows-twin")))))
+    (if (and (= 2 (length scales)) (/= (nth 0 scales) (nth 1 scales))
+             (getenv "SWAYSOCK") (executable-find "swaymsg"))
+        (progn
+          (drgnx-rows-fit-ui-test--move frame "HEADLESS-2")
+          (drgnx-test-wait (lambda () (drgnx-test-wait-presented :frame frame)
+                             (/= (drgnx-pixels-scale frame) (drgnx-pixels-scale root)))
+                           :secs 10 :what "the second monitor's scale on the second frame")
+          (select-frame-set-input-focus root)
+          (cl-list* frame (format "two monitors, scales %S and %S" (drgnx-pixels-scale root) (drgnx-pixels-scale frame)) t))
+      (set-face-attribute 'default frame :font (font-spec :family "Inter" :size (* 2 px)))
+      (cl-list* frame "one monitor: the second frame's font twice the first's" nil))))
+
+(ert-deftest drgnx-ui-rows-fit/a-view-in-two-classes-shows-each-its-own-rows ()
+  "One buffer per class (RRO-BUFFER-PER-CLASS-1): the view's buffer, with a twin function, shown in a second frame of
+another class: the second monitor at another scale when the session has two under sway (`DRGNX_UI_MONITORS=2
+DRGNX_UI_SCALES=\"1 2\"`), else a default font twice the size.  That
+frame's window shows a twin paired with its class, the first keeps the buffer; the hub sends each its own class's
+reset, neither stale; with the doubled font each holds its own fit of the label (the second's cut shorter)."
+  (skip-unless (display-graphic-p))
+  (require 'drgnx-pixels)
+  (drgnx-rows-demo-with
+    (let* ((b (drgnx-rows-demo-open)) (twins nil) (px (aref (font-info (face-font 'default)) 2))
+           (made (drgnx-rows-fit-ui-test--second-frame px)) (frame (car made)) (how (cadr made)) (scaled (cddr made)))
+      (with-current-buffer b
+        (setq-local drgnx-view-patch-twin-function
+                    (lambda (class)
+                      (let ((tw (generate-new-buffer " *rows-demo twin*")))
+                        (push tw drgnx-rows-demo--buffers)
+                        (with-current-buffer tw (drgnx-view-patch-attach drgnx-rows-demo-view class))
+                        (push tw twins)
+                        tw))))
+      (unwind-protect
+          (progn
+            (drgnx-rows-demo-feed nil nil '(("label" "The quick brown fox jumps over the lazy dog" 160)))
+            (drgnx-rows-demo-settle b)
+            (drgnx-test-wait (lambda () (eq t (frame-visible-p frame))) :secs 10 :what "the second frame shown")
+            (set-window-buffer (frame-root-window frame) b)
+            (drgnx-view-env-update drgnx-rows-demo-view)
+            (drgnx-test-wait (lambda () twins) :secs 10 :what "a twin for the second class")
+            (let ((tw (car twins)))
+              (should (eq tw (window-buffer (frame-root-window frame))))
+              (should (eq b (window-buffer (frame-root-window (selected-frame)))))
+              (drgnx-rows-demo-settle tw "the twin's class's reset")
+              (drgnx-rows-demo-settle b)
+              (let ((sb (drgnx-rows-demo-state b)) (st (drgnx-rows-demo-state tw)))
+                (should-not (equal (drgnx-view-patch-class sb) (drgnx-view-patch-class st)))
+                (should (equal (sort (list (drgnx-view-patch-class sb) (drgnx-view-patch-class st)) #'string<)
+                               (sort (copy-sequence (drgnx-view-env-classes drgnx-rows-demo-view)) #'string<)))
+                (should-not (drgnx-view-patch-stale sb))
+                (should-not (drgnx-view-patch-stale st)))
+              (let ((one (drgnx-rows-demo-text b)) (two (drgnx-rows-demo-text tw)))
+                (drgnx-rows-fit-ui-test--report (format "per-class rows (%s): %S | %S" how one two))
+                (should (string-prefix-p "The" one))
+                (should (string-prefix-p "The" two))
+                (unless scaled (should-not (equal one two))))))
+        (delete-frame frame)))))

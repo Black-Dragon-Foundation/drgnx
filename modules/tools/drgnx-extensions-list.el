@@ -674,9 +674,16 @@ the env's resubscribe."
   "`drgnx-view-patch-patched-functions' of the list: the chips of the rows KEYS that were drawn go back on."
   (drgnx-extensions-list--rows-chips (seq-filter (lambda (k) (gethash k drgnx-extensions-list--jobs)) keys)))
 
+(declare-function drgnx-view-env-twin "drgnx-view-env" (class prefixes &optional setup))
+
+(defun drgnx-extensions-list--twin (class)
+  "The list's buffer in display CLASS (`drgnx-view-patch-twin-function'): its state, read again before each command."
+  (drgnx-view-env-twin class '("drgnx-extensions-")))
+
 (defun drgnx-extensions-list--rows-attach ()
   "Make the current buffer the hub-fed view of the list: its env goes when it is shown, and it asks again then."
   (drgnx-view-patch-attach drgnx-extensions-list-view "unshown")
+  (setq-local drgnx-view-patch-twin-function #'drgnx-extensions-list--twin)
   (add-hook 'drgnx-view-patch-patched-functions #'drgnx-extensions-list--rows-patched nil t)
   (require 'drgnx-view-env)
   (drgnx-view-env-register drgnx-extensions-list-view (current-buffer) #'drgnx-extensions-list--ask))

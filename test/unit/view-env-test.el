@@ -9,10 +9,10 @@
 (defvar drgnx-view-env-test--palette '(("edge" "#111111")) "The palette the stubbed reader returns.")
 (defvar drgnx-view-env-test--gui nil "Windows the stubbed facts call GUI; the others are a terminal's.")
 
-(defun drgnx-view-env-test--facts (window)
-  "Stubbed facts: a GUI class for the windows in `drgnx-view-env-test--gui', with a ui font whose size follows the
-buffer's `text-scale'."
-  (let ((factor (drgnx-view-env--scale-factor (window-buffer window))))
+(defun drgnx-view-env-test--facts (window &optional buffer)
+  "Stubbed facts: a GUI class for the windows in `drgnx-view-env-test--gui', with a ui font whose size follows
+BUFFER's `text-scale' (default: WINDOW's buffer)."
+  (let ((factor (drgnx-view-env--scale-factor (or buffer (window-buffer window)))))
     (if (memq window drgnx-view-env-test--gui)
         (list :display "gui" :scale 1.0 :cell '(8 16)
               :fonts (list (list "ui" "/f/Inter.ttf" 0 (* 13.0 factor) 12.0 3.0 7.0 4.0 "Inter-13")))
@@ -80,6 +80,77 @@ the selected window (a GUI class) and torn down after."
         (should (= 2 (length envs)))
         (should (equal '("gui" "tty") (sort (mapcar (lambda (e) (plist-get e :display)) envs) #'string<)))
         (should (= 2 (length (delete-dups (mapcar (lambda (e) (plist-get e :class)) envs)))))))))
+
+(ert-deftest drgnx-view-env/a-view-in-two-classes-gets-a-buffer-per-class ()
+  "A view whose buffer has a twin function, shown in two classes (two monitors at two scales): the windows of the class
+the buffer is paired with show it, the other class's a twin paired with that class (its rows come there); once that
+window's class is the buffer's again, it shows the buffer and the twin goes, and with the view the twins go."
+  (require 'drgnx-view)
+  (drgnx-view-env-test--with
+    (let ((other (split-window)) (made nil))
+      (set-window-buffer other buf)
+      (with-current-buffer buf
+        (drgnx-view-patch-attach "v" "none")
+        (setq-local drgnx-view-patch-twin-function
+                    (lambda (class)
+                      (let ((tw (generate-new-buffer " *view-env-twin*")))
+                        (with-current-buffer tw (drgnx-view-patch-attach "v" class))
+                        (push tw made)
+                        tw))))
+      ;; the selected window is a GUI frame's, OTHER a terminal's
+      (drgnx-view-env-register "v" buf)
+      (let* ((pair (lambda (b) (buffer-local-value 'drgnx-view-patch b)))
+             (class-of (lambda (w) (drgnx-view-env--class (drgnx-view-env-test--facts w buf))))
+             (twin (car made)))
+        (should (= 1 (length made)))
+        (should (eq buf (window-buffer (selected-window))))
+        (should (eq twin (window-buffer other)))
+        (should (equal (funcall class-of (selected-window)) (drgnx-view-patch-class (funcall pair buf))))
+        (should (equal (funcall class-of other) (drgnx-view-patch-class (funcall pair twin))))
+        (should (eq twin (gethash (cons "v" (funcall class-of other)) drgnx-view-patch--buffers)))
+        ;; both classes' envs went out, each a new pair
+        (should (= 2 (length (drgnx-view-env-test--envs))))
+        ;; OTHER moves to the buffer's class: it shows the buffer, the twin goes
+        (push other drgnx-view-env-test--gui)
+        (drgnx-view-env-update "v")
+        (should (eq buf (window-buffer other)))
+        (should-not (buffer-live-p twin))
+        ;; and back: a new twin, which goes with the view
+        (setq drgnx-view-env-test--gui (list (selected-window)))
+        (drgnx-view-env-update "v")
+        (should (= 2 (length made)))
+        (should (eq (car made) (window-buffer other)))
+        (drgnx-view-env-unregister "v")
+        (should-not (buffer-live-p (car made)))))))
+
+(defvar-local drgnx-view-env-test-state nil "A module's state, as a twin copies it.")
+(defvar-local drgnx-view-env-test-mark nil "A module's marker, which a twin never takes.")
+(define-derived-mode drgnx-view-env-test-mode special-mode "Env test")
+
+(ert-deftest drgnx-view-env/a-twin-takes-the-view-buffers-state-before-each-command ()
+  "`drgnx-view-env-twin': a buffer in the view buffer's mode, attached to (view, CLASS), marked a twin of it, with its
+state (the locals of the prefixes, a marker left out) as made and again before each command; SETUP runs in it."
+  (require 'drgnx-view)
+  (let ((buf (generate-new-buffer " *view-env-twin-test*")) tw ran)
+    (unwind-protect
+        (with-current-buffer buf
+          (drgnx-view-env-test-mode)
+          (drgnx-view-patch-attach "tv" "a")
+          (setq-local drgnx-view-env-test-state 1 drgnx-view-env-test-mark (point-marker))
+          (setq tw (drgnx-view-env-twin "b" '("drgnx-view-env-test-") (lambda () (setq ran (current-buffer)))))
+          (should (eq ran tw))
+          (with-current-buffer tw
+            (should (eq major-mode 'drgnx-view-env-test-mode))
+            (should (equal "b" (drgnx-view-patch-class drgnx-view-patch)))
+            (should (eq buf (drgnx-view-patch-twin-p)))
+            (should (= 1 drgnx-view-env-test-state))
+            (should-not drgnx-view-env-test-mark))
+          (should (eq tw (gethash (cons "tv" "b") drgnx-view-patch--buffers)))
+          (should-not (drgnx-view-patch-twin-p buf))
+          (setq drgnx-view-env-test-state 2)
+          (with-current-buffer tw (run-hooks 'pre-command-hook) (should (= 2 drgnx-view-env-test-state))))
+      (when (buffer-live-p tw) (kill-buffer tw))
+      (kill-buffer buf))))
 
 (ert-deftest drgnx-view-env/two-windows-one-class-send-the-narrowest ()
   (drgnx-view-env-test--with

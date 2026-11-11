@@ -74,8 +74,15 @@ spec or an ask; nil for anything else (every task)."
   (setq-local truncate-lines t cursor-type nil
               tab-line-format '("" drgnx-work-map--lens)))
 
+(declare-function drgnx-view-env-twin "drgnx-view-env" (class prefixes &optional setup))
+
+(defun drgnx-work-board--twin (class)
+  "The Board's buffer in display CLASS (`drgnx-view-patch-twin-function'): its state and its lens's, read again
+before each command there."
+  (drgnx-view-env-twin class '("drgnx-work-board-" "drgnx-work-lens-")))
+
 (defun drgnx-work-board-buffers ()
-  (seq-filter (lambda (b) (eq (buffer-local-value 'major-mode b) 'drgnx-work-board-mode)) (buffer-list)))
+  (seq-filter (lambda (b) (and (eq (buffer-local-value 'major-mode b) 'drgnx-work-board-mode) (not (drgnx-view-patch-twin-p b)))) (buffer-list)))
 
 (defun drgnx-work-board-refresh (&optional buffer)
   "Ask the hub for BUFFER's Board (default: the current board) again (`drgnx-work-board--subscribe'); the hub reads
@@ -153,6 +160,7 @@ the board says so instead."
         (setq drgnx-work-lens-nav #'drgnx-work-board--nav)
         (if rows
             (progn (drgnx-view-patch-attach (car rows) (cdr rows))
+                   (setq-local drgnx-view-patch-twin-function #'drgnx-work-board--twin)
                    (require 'drgnx-view-env)
                    (drgnx-view-env-register (car rows) buffer))
           (drgnx-work-board--no-rows)))

@@ -2049,8 +2049,21 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
 - **The agent mirror** (`core/drgnx-agents-mirror.el`) patches its transcript in place: an entry's cell takes the
   patched entry (`--complete-blocks`), a new index extends the list; behind `drgnx-view-old-path` it copies the whole
   transcript per event as before.
-- **One buffer, one fit:** a buffer shown in two classes (two frames) gets an env and a reset per class from the
-  hub, but holds the rows of the class it is paired with; both frames show that fit.
+- **One buffer per class:** a view shown in two classes (two monitors at two scales) gets an env and a reset per class
+  from the hub. When its buffer sets `drgnx-view-patch-twin-function` (the Explorer does), `drgnx-view-env` gives each
+  class but the buffer's own a twin: a buffer the function makes, set up as the view's (mode, keys, the handlers
+  after a draw) and attached to (view, class), so each monitor's windows show their own class's rows. The windows of
+  the buffer's class show the buffer, the others their class's twin (dedication kept); a twin whose class no window
+  shows goes, and so do the twins with the view. When no window shows the buffer's class, the buffer takes the first
+  class shown (its twin goes first). A view without the function keeps one buffer, which holds the rows of the class
+  it is paired with in every class (one fit). `(drgnx-view-env-twin CLASS PREFIXES SETUP)` makes a module's twin: the
+  view buffer's major mode, its nav locals, its locals named with PREFIXES (copied as made and again before each
+  command there, a marker or overlay never), attached to (view, CLASS), the handlers after a draw, then SETUP. A twin
+  is marked (`drgnx-view-patch-twin-p`) and left out of a module's buffer finders: it subscribes nothing. Twins: the
+  Explorer, the Work map, trail, Timeline, detail and Board, the Extensions list, and the Search view, whose twin is a
+  mirror of its results (its query on the header line, no fields or tick boxes; Next/Previous Match and File and a
+  visit run there, the other Search commands are refused). The agent panel has none (its cards and composer are Lisp
+  entries of its buffer); git letters need none (headless).
 - **A class change** (`text-scale`, a font or a scale): `drgnx-view-env` re-pairs a buffer shown in one class with
   its new class (`drgnx-view-patch-reclass`) before that class's env goes out; its rows stay on screen until the
   class's first reset.

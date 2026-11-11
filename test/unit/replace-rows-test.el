@@ -597,4 +597,13 @@ its own, re-run at most every 5 s and only while the Search view shows."
       (drgnx-replace--search-now)
       (should (drgnx-timer-active-p (cons 'replace-pins (current-buffer)))))))
 
+(ert-deftest drgnx-replace-rows/a-twin-moves-and-visits-and-refuses-the-rest ()
+  "The Search view's twin (its results in another display class) runs Next and Previous Match and File; Replace All and
+the other Search commands are refused there (they are the view's: its fields and ticks)."
+  (dolist (c '(drgnx-replace-next drgnx-replace-prev drgnx-replace-next-file drgnx-replace-prev-file))
+    (let ((this-command c)) (drgnx-replace--twin-guard) (should (eq c this-command))))
+  (dolist (c '(drgnx-replace-all drgnx-replace-this drgnx-replace-view-undo))
+    (let ((this-command c)) (drgnx-replace--twin-guard) (should-not (eq c this-command)) (should (commandp this-command))))
+  (let ((this-command 'next-line)) (drgnx-replace--twin-guard) (should (eq 'next-line this-command))))
+
 ;;; replace-rows-test.el ends here
