@@ -36,7 +36,7 @@
 ;; pinned release and by Nidhogg's CI on the tarballs it built (docs/develop/ci.md, "The tiers workflow").
 (ert-deftest drgnx-ci/the-push-workflows-call-the-tiers-workflow ()
   ;; (file, its `tiers:' line): the path filter's tiers, all of the workflow's when it said nothing
-  (dolist (spec '(("ci.yml" "${{ needs.changes.outputs.tiers || 'unit no-lisp-writes hub-chaos' }}")
+  (dolist (spec '(("ci.yml" "${{ needs.changes.outputs.tiers || 'unit no-lisp-writes hub-chaos ssh' }}")
                   ("gui.yml" "${{ needs.changes.outputs.tiers || 'ui scenario perf' }}")
                   ("macos.yml" "macos") ("tty.yml" "tty")))
     (let ((yml (drgnx-ci-test--yml (car spec))))
@@ -60,14 +60,14 @@
   (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
     (skip-unless tiers)
     (drgnx-ci-test--has tiers "workflow_call:" "drgnx_ref:" "nidhogg:" "tiers:" "drgnx_commit:")
-    (dolist (job '("unit" "no-lisp-writes" "hub-chaos" "ui" "scenario" "perf" "tty" "timing" "macos"))
+    (dolist (job '("unit" "no-lisp-writes" "hub-chaos" "ui" "scenario" "perf" "tty" "ssh" "timing" "macos"))
       (should (string-search (format "contains(format(' {0} ', inputs.tiers), ' %s ')" job)
                              (drgnx-ci-test--job tiers job))))
     ;; every job checks drgnx out into drgnx/ (in Nidhogg's run the caller's checkout is Nidhogg), at the asked ref
     (let ((count (lambda (needle) (length (drgnx-ci-test--matches (concat "\\(" (regexp-quote needle) "\\)") tiers)))))
-      (should (= 11 (funcall count "runs-on:")))   ; the ten tiers and nidhogg-line
-      (should (= 11 (funcall count "          path: drgnx\n")))
-      (should (= 11 (funcall count "          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}\n"))))
+      (should (= 12 (funcall count "runs-on:")))   ; the eleven tiers and nidhogg-line
+      (should (= 12 (funcall count "          path: drgnx\n")))
+      (should (= 12 (funcall count "          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}\n"))))
     ;; the Linux jobs that run Ratatoskr fetch the binaries the run built once; macOS builds its own
     (dolist (job '("unit" "no-lisp-writes" "hub-chaos" "ui" "perf"))
       (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "needs: [bins-linux, nidhogg-line]" "uses: ./drgnx/.github/actions/fetch-test-bins"))
@@ -99,7 +99,7 @@
                         "permission-actions: read" "repositories: nidhogg" "bash drgnx/.github/ci/nidhogg-line.sh $NAMES"
                         "run-id: ${{ steps.line.outputs.run }}" "github-token: ${{ steps.token.outputs.token }}"
                         "uses: actions/upload-artifact@" "name: tarball-fedora-45" "name: tarball-macos")
-    (dolist (job '("unit" "no-lisp-writes" "hub-chaos" "ui" "scenario" "perf" "tty" "timing" "macos"))
+    (dolist (job '("unit" "no-lisp-writes" "hub-chaos" "ui" "scenario" "perf" "tty" "ssh" "timing" "macos"))
       (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "nidhogg-line" "needs.nidhogg-line.result != 'failure'"))
     (drgnx-ci-test--has (drgnx-ci-test--job tiers "macos") "if [ \"$MODE\" = artifact ] || [ \"$MODE\" = line ]; then")
     (drgnx-ci-test--has sh "status=completed" "never falls back to the release" "exit 1")
@@ -295,6 +295,9 @@ Returns (EXIT . OUTPUT)."
     ;; nextest runs no doc tests: the Linux job runs them in a step of their own
     (should (string-search "run: cargo test --locked --no-fail-fast --workspace --doc " (drgnx-ci-test--job rt "linux")))
     (should-not (string-search "DRGNX_TEST_ADAPTER:" (drgnx-ci-test--job rt "macos")))
+    ;; drgnx-term's vttest rows need vttest on the Mac too, before the workspace's tests
+    (let* ((mac (drgnx-ci-test--job rt "macos")) (vt (string-search "run: brew install vttest\n" mac)))
+      (should (and vt (< vt (string-search "--no-fail-fast --manifest-path runtime/Cargo.toml --workspace" mac)))))
     (drgnx-ci-test--has packages "vulkan-loader mesa-vulkan-drivers")
     (should (string-search "https://huggingface.co/$repo/resolve/$rev/$name" (drgnx-ci-test--file ".github/ci/models.sh")))))
 
@@ -392,7 +395,7 @@ Returns (EXIT . OUTPUT)."
     ;; the fixture reads the variable the job sets
     (should (string-search "(getenv \"DRGNX_TEST_HUB_CHAOS\")" fixture))
     ;; in CI gate: a push runs it (the gate needs the tiers job, which fails when it does)
-    (drgnx-ci-test--has (drgnx-ci-test--job ci "changes") "PUSH: rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos unit no-lisp-writes hub-chaos\n")))
+    (drgnx-ci-test--has (drgnx-ci-test--job ci "changes") "PUSH: rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos unit no-lisp-writes hub-chaos ssh\n")))
 
 (ert-deftest drgnx-ci/macos-has-no-time-factor ()
   (dolist (f '("macos.yml" "drgnx-tiers.yml"))
@@ -746,7 +749,7 @@ Returns (EXIT . OUTPUT)."
                         "image=\"$(bash .github/ci/ghcr.sh ref \"$NAME\" \"$tag\")\""
                         "podman pull -q \"$image\"" "echo \"$VAR=$base\"")
     (let ((pairs (drgnx-ci-test--matches "containerfile: \\([A-Za-z.]+\n *image: [a-z-]+\n *variable: [A-Z_]+\\)" tiers)))
-      (should (= 9 (length pairs)))
+      (should (= 10 (length pairs)))
       (dolist (p pairs)
         (should (string-match "\\`\\([A-Za-z.]+\\)\n *image: \\([a-z-]+\\)\n *variable: \\([A-Z_]+\\)\\'" p))
         (let ((file (match-string 1 p)) (name (match-string 2 p)) (var (match-string 3 p)))
@@ -754,6 +757,10 @@ Returns (EXIT . OUTPUT)."
                                   images))
           (should (equal var (pcase file ("Containerfile" "DRGNX_TEST_IMAGE") ("Containerfile.tty" "DRGNX_TEST_TTY_IMAGE")
                                     ("Containerfile.rust" "DRGNX_TEST_RUST_IMAGE") (_ "DRGNX_TEST_GUI_IMAGE")))))))
+    ;; the ssh tier builds its row's image on the test image, pulled the same way
+    (drgnx-ci-test--has (drgnx-ci-test--job tiers "ssh") "containerfile: Containerfile\n" "image: drgnx-test\n"
+                        "variable: DRGNX_TEST_IMAGE" "bash test/container/ssh-row.sh"
+                        "-p drgnx-ratatoskr -p drgnx-term --bins --features drgnx-ratatoskr/test-hooks")
     ;; the terminal tier pulls its own through the same action
     (drgnx-ci-test--has (drgnx-ci-test--job tiers "tty") "containerfile: Containerfile.tty" "image: drgnx-test-tty"
                         "variable: DRGNX_TEST_TTY_IMAGE")

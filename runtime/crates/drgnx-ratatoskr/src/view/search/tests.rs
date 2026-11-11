@@ -1,4 +1,4 @@
-use super::rows::grep_doc_in;
+use super::rows::{grep_doc_in, window_of};
 use super::run::{DIGEST_MAX, Mark, Snap, buffer_snap, match_id, snapshot};
 use super::*;
 use runstav::methods::view::{Display, ViewEnv};
@@ -1690,4 +1690,448 @@ fn an_index_modes_rows_show_the_kind_the_signature_and_the_score() {
                 .any(|(_, _, n, _)| n == "drgnx-replace-match")
         );
     }
+}
+
+/// The rows' keys of the model's `order` in DOC.
+fn order_of(d: &crate::view::model::Doc) -> Vec<String> {
+    d.lists["order"].clone()
+}
+
+/// Every row of RUN's search (its whole layout), keys and texts.
+fn all_rows(greps: &Greps, id: u64) -> Vec<(String, String)> {
+    greps
+        .with(CONN, "s", id, |run| {
+            rows_in(run, 0..rows_total(run))
+                .into_iter()
+                .map(|r| (r.key, r.text))
+                .collect()
+        })
+        .unwrap()
+}
+
+/// [D] Folders: a tree of the files by path, folders before files, one-child chains joined (`b/c`), each folder with
+/// its matches' count; a file under a folder shows no folder after its name; its matches one step in. The model's
+/// nodes have the same parents (a match under its file, a file under its folder), so ticks cascade by the tree.
+#[test]
+fn folders_join_chains_and_count_their_matches() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    for (file, n) in [
+        ("/r/top.rs", 1),
+        ("/r/a/b/c/y.rs", 1),
+        ("/r/a/z.rs", 1),
+        ("/r/a/b/c/x.rs", 2),
+    ] {
+        let ms = (0..n).map(|i| m(file, i + 1, "x ", "needle", "")).collect();
+        feed(&greps, &mut s, id, file, ms);
+    }
+    let (model, _) = greps
+        .with(CONN, "s", id, |run| {
+            regroup_patches(&mut s, CONN, "s", run, GrepGroup::Tree, None)
+        })
+        .unwrap();
+    assert!(model.is_some(), "a regroup sends the model");
+    let rows = all_rows(&greps, id);
+    let keys: Vec<&str> = rows.iter().map(|r| r.0.as_str()).collect();
+    assert_eq!(
+        keys,
+        [
+            "d:a",
+            "d:a/b/c",
+            "f:a/b/c/x.rs",
+            "m:1:3",
+            "m:1:4",
+            "f:a/b/c/y.rs",
+            "m:1:1",
+            "f:a/z.rs",
+            "m:1:2",
+            "f:top.rs",
+            "m:1:0"
+        ]
+    );
+    assert_eq!(rows[0].1, "▾ [x] a/  4");
+    assert_eq!(rows[1].1, "  ▾ [x] b/c/  3");
+    assert_eq!(rows[2].1, "    [x] x.rs");
+    assert!(
+        rows[3].1.starts_with("      [x] x needle"),
+        "{:?}",
+        rows[3].1
+    );
+    assert_eq!(rows[9].1, "[x] top.rs");
+    let d = greps.with(CONN, "s", id, |run| run_doc(run, None)).unwrap();
+    assert_eq!(order_of(&d), keys);
+    assert_eq!(d.nodes["d:a/b/c"]["parent"], "d:a");
+    assert_eq!(d.nodes["d:a/b/c"]["kind"], "folder");
+    assert_eq!(d.nodes["f:a/b/c/x.rs"]["parent"], "d:a/b/c");
+    assert_eq!(d.nodes["m:1:3"]["parent"], "f:a/b/c/x.rs");
+    assert!(d.nodes["f:top.rs"].get("parent").is_none());
+    // the rows reach a folder's and a match's key (Next Group, Next Match)
+    greps
+        .with(CONN, "s", id, |run| {
+            assert_eq!(row_index(run, "d:a/b/c"), Some(1));
+            assert_eq!(row_index(run, "m:1:2"), Some(8));
+            assert_eq!(row_index(run, "f:top.rs"), Some(9));
+        })
+        .unwrap();
+}
+
+/// A definition of NAME over bytes START..END.
+fn def(name: &str, start: u32, end: u32) -> Arc<crate::search::context::Def> {
+    Arc::new(crate::search::context::Def {
+        name: name.into(),
+        kind: "function".into(),
+        line_start: 1,
+        line_end: 2,
+        start,
+        end,
+        path: vec![name.into()],
+    })
+}
+
+/// [D] Symbols: a file's matches under the definition each is in (`s:PATH:START:END:NAME`), the definitions in the
+/// file's order, the matches outside any under "(top level)" last; no context labels. A match's node is the
+/// definition's child, and the definition's `path` is its file's (Replace finds a match's file there).
+#[test]
+fn symbols_group_a_files_matches_by_definition() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    let (f, g) = (def("f", 10, 50), def("g", 60, 90));
+    let ms = (1..=4).map(|l| m("/r/x.rs", l, "", "needle", "")).collect();
+    let read = Read {
+        snap: buffer_snap(1, "x"),
+        ctx: vec![None, Some(g.clone()), Some(f.clone()), Some(f)],
+        marks: vec![],
+    };
+    greps
+        .with(CONN, "s", id, |r| {
+            batch_patches(&mut s, CONN, "s", r, "/r/x.rs".into(), ms, Some(read))
+        })
+        .unwrap();
+    greps
+        .with(CONN, "s", id, |run| {
+            regroup_patches(&mut s, CONN, "s", run, GrepGroup::Symbol, None)
+        })
+        .unwrap();
+    let rows = all_rows(&greps, id);
+    let keys: Vec<&str> = rows.iter().map(|r| r.0.as_str()).collect();
+    assert_eq!(
+        keys,
+        [
+            "f:x.rs",
+            "s:x.rs:10:50:f",
+            "m:1:2",
+            "m:1:3",
+            "s:x.rs:60:90:g",
+            "m:1:1",
+            "s:x.rs:top",
+            "m:1:0"
+        ]
+    );
+    assert_eq!(rows[1].1, "  [x] ƒ f  2");
+    assert_eq!(rows[6].1, "  [x] (top level)  1");
+    assert!(rows[2].1.starts_with("    [x] needle"), "{:?}", rows[2].1);
+    let d = greps.with(CONN, "s", id, |run| run_doc(run, None)).unwrap();
+    assert_eq!(d.nodes["s:x.rs:10:50:f"]["parent"], "f:x.rs");
+    assert_eq!(d.nodes["s:x.rs:10:50:f"]["kind"], "symbol");
+    assert_eq!(
+        d.nodes["s:x.rs:10:50:f"]["fields"][1],
+        json!(["path", "/r/x.rs"])
+    );
+    assert_eq!(d.nodes["m:1:2"]["parent"], "s:x.rs:10:50:f");
+    // back to Files: the labels again, the same ids
+    greps
+        .with(CONN, "s", id, |run| {
+            regroup_patches(&mut s, CONN, "s", run, GrepGroup::File, None)
+        })
+        .unwrap();
+    let keys: Vec<String> = all_rows(&greps, id).into_iter().map(|r| r.0).collect();
+    assert_eq!(
+        keys,
+        [
+            "f:x.rs", "m:1:0", "c:1:1", "m:1:1", "c:1:2", "m:1:2", "m:1:3"
+        ]
+    );
+}
+
+/// [D] Sort by count: the files with the most matches first (then by path), in Files and in each folder.
+#[test]
+fn sort_by_count_puts_the_most_matches_first() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    for (file, n) in [("/r/a.rs", 1), ("/r/b.rs", 3), ("/r/c.rs", 3)] {
+        let ms = (0..n).map(|i| m(file, i + 1, "", "needle", "")).collect();
+        feed(&greps, &mut s, id, file, ms);
+    }
+    let files = |greps: &Greps| -> Vec<String> {
+        all_rows(greps, id)
+            .into_iter()
+            .map(|r| r.0)
+            .filter(|k| k.starts_with("f:"))
+            .collect()
+    };
+    greps
+        .with(CONN, "s", id, |run| {
+            regroup_patches(
+                &mut s,
+                CONN,
+                "s",
+                run,
+                GrepGroup::File,
+                Some(GrepSort::Count),
+            )
+        })
+        .unwrap();
+    assert_eq!(files(&greps), ["f:b.rs", "f:c.rs", "f:a.rs"]);
+    greps
+        .with(CONN, "s", id, |run| {
+            regroup_patches(
+                &mut s,
+                CONN,
+                "s",
+                run,
+                GrepGroup::File,
+                Some(GrepSort::Path),
+            )
+        })
+        .unwrap();
+    assert_eq!(files(&greps), ["f:a.rs", "f:b.rs", "f:c.rs"]);
+}
+
+/// [D] A grouped search's files stream as whole diffs at most once per throttle window, and the end sends what
+/// waited; a regroup of the same grouping sends nothing; the run's matches (and so its ticks' ids) are untouched.
+#[test]
+fn grouped_batches_go_whole_once_per_window() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    greps
+        .with(CONN, "s", id, |run| {
+            run.group = GrepGroup::Tree;
+            run.model_every = Duration::from_secs(3600);
+        })
+        .unwrap();
+    let mut sends = 0;
+    for f in ["/r/a/x.rs", "/r/b/y.rs", "/r/a/w.rs"] {
+        let (model, patches) = greps
+            .with(CONN, "s", id, |r| {
+                batch_patches(
+                    &mut s,
+                    CONN,
+                    "s",
+                    r,
+                    f.into(),
+                    vec![m(f, 1, "", "needle", "")],
+                    None,
+                )
+            })
+            .unwrap();
+        sends += usize::from(model.is_some() || !patches.is_empty());
+    }
+    assert_eq!(
+        sends, 1,
+        "the first file goes at once, the others wait for the window"
+    );
+    assert!(greps.with(CONN, "s", id, |r| r.stale).unwrap());
+    let (model, patches) = greps
+        .with(CONN, "s", id, |run| {
+            run.stale = false;
+            whole_patches(&mut s, CONN, "s", run)
+        })
+        .unwrap();
+    assert!(model.is_some() && !patches.is_empty());
+    let keys: Vec<String> = all_rows(&greps, id).into_iter().map(|r| r.0).collect();
+    assert_eq!(
+        keys,
+        [
+            "d:a", "f:a/w.rs", "m:1:2", "f:a/x.rs", "m:1:0", "d:b", "f:b/y.rs", "m:1:1"
+        ]
+    );
+    let again = greps
+        .with(CONN, "s", id, |run| {
+            regroup_patches(&mut s, CONN, "s", run, GrepGroup::Tree, None)
+        })
+        .unwrap();
+    assert!(again.0.is_none() && again.1.is_empty());
+}
+
+/// [D] A grouped model past its window holds the window's first entry's parents (outside `order`), outermost first.
+#[test]
+fn a_grouped_window_holds_its_first_entrys_parents() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    let ms = (1..=5)
+        .map(|l| m("/r/a/b.rs", l, "", "needle", ""))
+        .collect();
+    feed(&greps, &mut s, id, "/r/a/b.rs", ms);
+    greps
+        .with(CONN, "s", id, |run| {
+            run.group = GrepGroup::Tree;
+            run.files_changed();
+            let w = run_window(run, 3, Some(3));
+            assert_eq!(w.held, ["d:a", "f:a/b.rs", "m:1:1", "m:1:2", "m:1:3"]);
+            assert_eq!(w.order, 2..5);
+            assert_eq!(w.total, 7);
+            assert_eq!(w.node(2)["parent"], "f:a/b.rs");
+        })
+        .unwrap();
+}
+
+/// Regrouping 10,000 matches in 100 files: the time to the first window's rows and model (printed; the budget is
+/// 50 ms p95, measured in a release build: `--ignored --nocapture`).
+#[test]
+#[ignore = "timing: the hub's part of a regroup of 10k matches (the workload search-regroup judges the 50 ms)"]
+fn regroup_ten_thousand_time() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    ten_thousand(&greps, &mut s, id);
+    for g in [
+        GrepGroup::Tree,
+        GrepGroup::Symbol,
+        GrepGroup::File,
+        GrepGroup::Tree,
+    ] {
+        let t = std::time::Instant::now();
+        greps
+            .with(CONN, "s", id, |run| {
+                regroup_patches(&mut s, CONN, "s", run, g, None)
+            })
+            .unwrap();
+        println!("regroup to {g:?}: {:?}", t.elapsed());
+    }
+}
+
+/// [D] Folders fold (`search/fold`): a folded folder's rows go (its own row stays, `▸`), the model keeps every node;
+/// going to a match under it (`upto`) opens the folders above it; a regroup opens them all.
+#[test]
+fn a_folded_folder_hides_its_rows_until_a_match_under_it_is_reached() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    for (file, n) in [("/r/a/b/x.rs", 2), ("/r/a/y.rs", 1), ("/r/top.rs", 1)] {
+        let ms = (0..n).map(|i| m(file, i + 1, "", "needle", "")).collect();
+        feed(&greps, &mut s, id, file, ms);
+    }
+    greps
+        .with(CONN, "s", id, |run| {
+            regroup_patches(&mut s, CONN, "s", run, GrepGroup::Tree, None)
+        })
+        .unwrap();
+    let patches = greps
+        .with(CONN, "s", id, |run| {
+            fold_patches(&mut s, CONN, "s", run, "d:a/b", false)
+        })
+        .unwrap();
+    assert_eq!(patches.map(|p| p.len()), Some(1), "the rows go out again");
+    let rows = all_rows(&greps, id);
+    let keys: Vec<&str> = rows.iter().map(|r| r.0.as_str()).collect();
+    assert_eq!(
+        keys,
+        ["d:a", "d:a/b", "f:a/y.rs", "m:1:2", "f:top.rs", "m:1:3"]
+    );
+    assert_eq!(rows[1].1, "  ▸ [x] b/  2");
+    let d = greps.with(CONN, "s", id, |run| run_doc(run, None)).unwrap();
+    assert!(
+        d.nodes.contains_key("m:1:0"),
+        "the model keeps a folded folder's matches"
+    );
+    // not a folder of this run, or not Folders: nothing
+    let none = greps
+        .with(CONN, "s", id, |run| {
+            fold_patches(&mut s, CONN, "s", run, "d:nope", false)
+        })
+        .unwrap();
+    assert!(none.is_none());
+    // Next Match to a match under it: the folder opens
+    greps
+        .with(CONN, "s", id, |run| {
+            look_patches(&mut s, CONN, "s", run, Look::Upto("m:1:1"))
+        })
+        .unwrap();
+    let keys: Vec<String> = all_rows(&greps, id).into_iter().map(|r| r.0).collect();
+    assert!(keys.contains(&"m:1:1".to_owned()), "{keys:?}");
+    greps
+        .with(CONN, "s", id, |run| {
+            fold_patches(&mut s, CONN, "s", run, "d:a", false);
+            regroup_patches(
+                &mut s,
+                CONN,
+                "s",
+                run,
+                GrepGroup::Tree,
+                Some(GrepSort::Count),
+            );
+            assert!(run.folded.is_empty());
+        })
+        .unwrap();
+}
+
+/// [D] Sort by rank: the files with the best rank in Hrafn's map first (a file it does not hold last, then by path),
+/// and in Folders a folder by its files' ranks together.
+#[test]
+fn sort_by_rank_puts_the_central_files_first() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    for file in ["/r/a.rs", "/r/d/b.rs", "/r/d/c.rs", "/r/e.rs"] {
+        feed(&greps, &mut s, id, file, vec![m(file, 1, "", "needle", "")]);
+    }
+    let ranks: HashMap<String, f64> = [
+        ("a.rs", 0.1),
+        ("d/b.rs", 0.15),
+        ("d/c.rs", 0.1),
+        ("e.rs", 0.3),
+    ]
+    .map(|(p, r)| (p.to_owned(), r))
+    .into();
+    let files = |greps: &Greps| -> Vec<String> {
+        all_rows(greps, id)
+            .into_iter()
+            .map(|r| r.0)
+            .filter(|k| !k.starts_with("m:"))
+            .collect()
+    };
+    greps
+        .with(CONN, "s", id, |run| {
+            run.ranks = Some(Arc::new(ranks));
+            regroup_patches(
+                &mut s,
+                CONN,
+                "s",
+                run,
+                GrepGroup::File,
+                Some(GrepSort::Rank),
+            )
+        })
+        .unwrap();
+    assert_eq!(files(&greps), ["f:e.rs", "f:d/b.rs", "f:a.rs", "f:d/c.rs"]);
+    greps
+        .with(CONN, "s", id, |run| {
+            regroup_patches(
+                &mut s,
+                CONN,
+                "s",
+                run,
+                GrepGroup::Tree,
+                Some(GrepSort::Rank),
+            )
+        })
+        .unwrap();
+    // the folder d (0.25 together) before the top-level files' rows, which follow the folders
+    assert_eq!(
+        files(&greps),
+        ["d:d", "f:d/b.rs", "f:d/c.rs", "f:e.rs", "f:a.rs"]
+    );
 }

@@ -248,6 +248,23 @@ previous one, `C-RET` replaces all of them (one undo step; the buffer is left un
 the current one, `ESC` closes the bar. **Show all in sidebar** moves the search, with its toggles, to the Search
 view, scope This file.
 
+## Grouping
+
+Under the status line, **Files · Folders · Symbols** groups the results; changing it regroups at once, without
+searching again, and every tick stays.
+
+- **Files** lists each file with its matches, in the order the search finds them.
+- **Folders** is a tree of the folders holding matches, each with its count; a chain of folders with one child each
+  is one row (`runtime/crates/hrafn/src/`). A click on a folder's `▾` folds it (**Fold or Open This Folder** in the
+  palette); going to a match inside it opens it again.
+- **Symbols** puts each file's matches under the definition they are in (`ƒ name` and its count); the matches outside
+  any are under "(top level)".
+
+A folder's or a definition's box ticks everything under it, like a file's. Next File and Previous File move between
+files, or between definitions in Symbols. **Group Results By…** with `C-u` also sorts the groups: by path, by
+match count (most first), or by rank, the files most central in the project's map first (it needs the project's
+index, and waits for it). A new search keeps the grouping and the sort.
+
 ## Keys
 
 | Command | VS Code | Emacs | Vim |
@@ -260,8 +277,11 @@ view, scope This file.
 | Undo Replace | the Undo button | `C-c C-u` | `C-c C-u` |
 | Next Match | `<f4>` (anywhere) | `C-c C-n` | `C-c C-n` |
 | Previous Match | `S-<f4>`, `S-<return>` | `C-c C-p`, `S-<return>` | `C-c C-p`, `S-<return>` |
-| Next File | `C-M-<down>` (the Search view) | `C-c M-n` | `C-c M-n` |
-| Previous File | `C-M-<up>` (the Search view) | `C-c M-p` | `C-c M-p` |
+| Next File (Next Group: a definition in Symbols) | `C-M-<down>` (the Search view) | `C-c M-n` | `C-c M-n` |
+| Previous File (Previous Group) | `C-M-<up>` (the Search view) | `C-c M-p` | `C-c M-p` |
+| Next Grouping (Files → Folders → Symbols) | `M-g` (the Search view) | `C-c C-g` | `C-c C-g` |
+| Group Results By… (`C-u`: and sort) | palette | palette | palette |
+| Fold or Open This Folder | a click on `▾` | a click on `▾` | a click on `▾` |
 | Close Find Bar | `<escape>` | `<escape>` | `<escape>` |
 | Next Mode (the Search view) | `M-m` | `C-c C-m` | `C-c C-m` |
 | Text / Symbol / Meaning Mode | palette | palette | palette |

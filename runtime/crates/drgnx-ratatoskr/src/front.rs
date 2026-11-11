@@ -742,6 +742,10 @@ impl Front {
             Params::SearchGrepLook(p) => {
                 crate::view::search::look(self, &caller, p).map(|b| json!(b))
             }
+            Params::SearchGroup(p) => crate::view::search::group(self, &caller, p)
+                .await
+                .map(|b| json!(b)),
+            Params::SearchFold(p) => crate::view::search::fold(self, &caller, p).map(|b| json!(b)),
             Params::SearchGrepSkipped(p) => {
                 crate::view::search::skipped(self, &caller, p).map(|b| json!(b))
             }
@@ -896,6 +900,7 @@ impl Front {
             | Params::WorkTrailSubscribe(_)
             | Params::WorkTrailClose(_)
             | Params::WorkBoardSubscribe(_)
+            | Params::WorkFlowSubscribe(_)
             | Params::WorkFiles(_)
             | Params::WorkHunks(_)
             | Params::WorkFileAt(_)) => crate::agent_core::serve(self, &caller, p)

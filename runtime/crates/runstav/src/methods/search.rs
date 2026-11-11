@@ -377,6 +377,57 @@ pub struct RunParams {
     /// the user did not type: a pinned saved search's live count. Default false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub count: Option<bool>,
+    /// How the rows are grouped (`search/group` changes it without searching again). Default `file`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<GrepGroup>,
+    /// The order of the groups. Default: files as the search completes them (Files), by path (Folders, Symbols).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<GrepSort>,
+}
+
+/// How a search's rows are grouped: by file (a header and its matches); in a tree of folders (one-child chains joined,
+/// `d:` nodes, each with its matches' count); or by file, then the definition each match is in (`s:` nodes, the
+/// matches outside any under "(top level)").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum GrepGroup {
+    #[default]
+    File,
+    Tree,
+    Symbol,
+}
+
+/// The order of a search's groups: by path; by match count (most first, then by path); or by the file's rank in
+/// Hrafn's map (most central first, then by path; a folder by its files' ranks together), which only `search/group`
+/// takes (it waits for the project's index; `search/run` refuses it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum GrepSort {
+    Path,
+    Count,
+    Rank,
+}
+
+/// `search/group`: VIEW's search grouped as GROUP (in the order SORT) without searching again: its rows and model
+/// again, the same match ids (ticks stay); folded folders open again.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GroupParams {
+    pub view: String,
+    pub group: GrepGroup,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<GrepSort>,
+}
+
+/// `search/fold`: in VIEW's search grouped by Folders, fold the folder NODE (`d:PATH`: its rows go, its count
+/// stays) or open it (OPEN). Only the rows change: the model keeps every node, so ticks and Next Match still reach a
+/// folded match (going to it opens the folders above it).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FoldParams {
+    pub view: String,
+    pub node: String,
+    pub open: bool,
 }
 
 /// `search/run`'s answer: RUN numbers the search (its match ids are `m:RUN:N`; the event `search-run-done` names it).
@@ -1437,6 +1488,16 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/grep-replace", SearchGrepReplace(GrepReplaceParams) -> bool,
             classes: [User], writes: false,
             doc: "the replacement a view's grep rows preview changed: the rows are patched, nothing is searched again; false when the view has no search",
+        ),
+        method!(
+            "search/group", SearchGroup(GroupParams) -> bool,
+            classes: [User], writes: false,
+            doc: "regroup a view's search (by file, folder tree or definition; by path, count or the files' rank in the map) without searching again: its rows and model again, the match ids and ticks kept; false when the view has no search",
+        ),
+        method!(
+            "search/fold", SearchFold(FoldParams) -> bool,
+            classes: [User], writes: false,
+            doc: "fold or open a folder of a view's search grouped by Folders: only its rows change (the model keeps every node); false when the view has no search or no such folder",
         ),
         method!(
             "search/grep-skipped", SearchGrepSkipped(GrepSkippedParams) -> bool,

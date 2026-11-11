@@ -963,7 +963,8 @@ and the UI says "stops after its current step", never "pauses".
 
 The order logic is pure (`wheel::{take, turn_ended, give}` over the wheel and the session's turn core, under the
 session's lock) and is tested in every order of the take, the give, the tool call's end, the agent's answer and a
-delivery (`agents::wheel::tests`); the rows are `test/conformance/wheel/*` and the restart is `tests/wheel.rs`.
+delivery (`agents::wheel::tests`); the rows are `test/conformance/wheel/*` and the restart is `tests/wheel.rs`
+(`--features test-hooks`: its agent is `ratatoskr-mock`, which only a test-hooks hub launches).
 
 ## The permissions matrix
 

@@ -18,3 +18,5 @@ pub mod policy;
 pub mod push;
 pub mod queue;
 pub mod red_first;
+#[cfg(feature = "test-hooks")]
+pub mod scene;

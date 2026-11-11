@@ -914,6 +914,9 @@ keys); every binding is undone after."
     (work-next-agent "TAB" drgnx-work-lens-map) (work-previous-agent "<backtab>" drgnx-work-lens-map)
     (work-open "RET" drgnx-work-lens-map) (work-open-beside "S-<return>" drgnx-work-lens-map)
     (work-view-map "m" drgnx-work-lens-map) (work-view-board "b" drgnx-work-lens-map)
+    (work-view-flow "F" drgnx-work-lens-map) (work-flow-evidence "e" drgnx-work-flow-mode-map)
+    (work-flow-rules "R" drgnx-work-flow-mode-map) (work-flow-run-red "r" drgnx-work-flow-mode-map)
+    (work-flow-tell-agent "s" drgnx-work-flow-mode-map) (work-flow-waive "w" drgnx-work-flow-mode-map)
     (work-view-timeline "t" drgnx-work-lens-map) (work-trail "r" drgnx-work-lens-map) (work-steer "s" drgnx-work-lens-map)
     (work-pause "p" drgnx-work-lens-map) (work-resume "u" drgnx-work-lens-map) (work-stop "x" drgnx-work-lens-map)
     (work-keys-sheet "?" drgnx-work-lens-map) (work-review "v" drgnx-work-lens-map)
@@ -972,6 +975,7 @@ The commands of modules that need no installed package are in it, the later stag
                               search-edit-results search-edit-save search-edit-delete-line ; Edit Results
                               search-to-agent search-handoff-send search-handoff-cancel ; Ask an Agent
                               search-handoff-next-who search-handoff-hidden
+                              search-group-next ; the grouping control
                               layout-next browser-go keyboard-shortcuts shortcuts-change shortcuts-add shortcuts-filter
                               shortcuts-record-filter shortcuts-conflicts shortcuts-no-key shortcuts-changed
                               shortcuts-undo shortcuts-reset shortcuts-reset-all shortcuts-profile

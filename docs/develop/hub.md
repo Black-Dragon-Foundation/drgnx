@@ -1509,9 +1509,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/edits` | user | `{edits?: [{col: natnum, end_col: natnum, end_line?: natnum, line: natnum, new: string, old: string, path: AbsPath}], ids?: [string], lines?: [{eol?: boolean, line: natnum, line_id: string, new?: [string], old: string, path: AbsPath}], off?: [string], replace?: string, root?: AbsPath, view: string}` | `{change: natnum, files: [FileEdits], skipped: [EditSkip]}` | no |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
 | `search/files` | user | `{ignore?: "index" \| "real", n?: natnum, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
+| `search/fold` | user | `{node: string, open: boolean, view: string}` | `boolean` | no |
 | `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
 | `search/grep-replace` | user | `{replace: string, view: string}` | `boolean` | no |
 | `search/grep-skipped` | user | `{skipped: [{id: string, why: string}], view: string}` | `boolean` | no |
+| `search/group` | user | `{group: "file" \| "tree" \| "symbol", sort?: "path" \| "count" \| "rank", view: string}` | `boolean` | no |
 | `search/handoff` | user | `{hidden?: boolean, ids?: [string], instruction: Prompt, mark?: {face: string, glyph: string}, off?: [string], to: {new: {profile: string}} \| {session: {id: Id}}, view: string}` | `HandoffAnswer` | yes |
 | `search/handoff-state` | user | `{handoff: string}` | `HandoffState` | no |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
@@ -1521,7 +1523,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/preview` | user | `{off?: [string], path: AbsPath, replace?: string, view: string}` | `PreviewAnswer` | no |
 | `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
 | `search/recent` | user | `{root: AbsPath}` | `{recent: [SearchSpec]}` | no |
-| `search/run` | user | `{context?: boolean, count?: boolean, ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, kinds?: [string], mode: "symbol", name: string} \| {mode: "meaning", question: string} \| {lang?: string, mode: "pattern", pattern: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, view: string}` | `{run: natnum}` | no |
+| `search/run` | user | `{context?: boolean, count?: boolean, group?: "file" \| "tree" \| "symbol", ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, kinds?: [string], mode: "symbol", name: string} \| {mode: "meaning", question: string} \| {lang?: string, mode: "pattern", pattern: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, sort?: "path" \| "count" \| "rank", view: string}` | `{run: natnum}` | no |
 | `search/saved/delete` | user | `{name: string, root: AbsPath}` | `boolean` | yes |
 | `search/saved/list` | user | `{root: AbsPath}` | `{problems?: [string], saved: [SavedSearch]}` | no |
 | `search/saved/put` | user | `{name: string, pinned?: boolean, root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, kinds?: [string], mode: "symbol", name: string} \| {mode: "meaning", question: string} \| {lang?: string, mode: "pattern", pattern: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}}` | `boolean` | yes |
@@ -1575,6 +1577,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `work/conclusions` | user | `{session: string}` | `{conclusions?: [Conclusion]}` | no |
 | `work/file-at` | user | `{path: string, seq: natnum, session: Id}` | `{bytes: string, seq: natnum}` | no |
 | `work/files` | user | `{session: Id}` | `{files: [EditedFile]}` | no |
+| `work/flow/subscribe` | user | `{detail?: string, job?: string, map: string, rules?: boolean, view: string}` | `{hub: natnum}` | no |
 | `work/hunks` | user | `{path: string, session: Id}` | `{diff: string}` | no |
 | `work/map/close` | user | `{view: string}` | `boolean` | no |
 | `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
@@ -2438,6 +2441,22 @@ snapshots; the search itself is `hrafn::grep`).
   it is the first of its definition in a row; a top-level match gets none. A label is a row, not a node: no tick, no
   `drgnx-work-id`, not in the model, not a stop for Next Match; the window and `upto` count it among the rows. The
   index's outline is not used yet (a file is always parsed), and the match nodes carry no `ctx` field yet.
+- **Grouping** (`group?`: `file` (default), `tree`, `symbol`; `sort?`: `path`, `count`, and through `search/group`
+  only `rank`; `search/group {view, group, sort?}` regroups without searching, `view/search/group.rs`). `rank` asks
+  the project's index once per run for the files' unpersonalised rank in Hrafn's map (`hrafn::graph::file_ranks`;
+  a folder sorts by its files' ranks together; `search/run` refuses it, since it waits for the index, so the editor
+  sends it as a regroup right after the run). `search/fold {view, node, open}` folds a `d:` folder in Folders: its
+  row stays (`▸`, a `drgnx-replace-fold` property on the chevron), the rows under it go, the model keeps every
+  node; `upto` to a row under it opens the folders above it, and a regroup opens all. Files in the order found need nothing; any other
+  grouping or a sort builds a layout of the run's files (every row in order with its parent node), again only when the
+  files change. Folders: a tree by path, folders before files, one-child chains joined, `d:<path>` nodes (kind
+  `folder`, a `count` field) parenting their folders and files. Symbols: each file's matches under `s:<path>:<start
+  byte>:<end byte>:<name>` nodes (kind `symbol`, `path` the file's, so a match still finds its file on its parent),
+  in the file's order, `s:<path>:top` "(top level)" last; no label rows. Rows step two columns in per level. While
+  grouped, each file found sends the rows and the model whole (diffs) at most once per `model_every`, and the end
+  sends what waited. A regroup sends the model from its start and the first window of rows; the match ids stay, so
+  Sjá's ticks do. The editor ticks a group's every match under it (walking `order` by parents) and Next Group follows
+  `down:file`, or `down:symbol` in Symbols.
 - **Unticks carried across runs:** `off` is the ids of the last run's matches the editor's user unticked. The hub
   turns each into its match's key, a digest of the file, the text before and after the match, the match, its column
   and end; not its line, so a line added above a match keeps it. A key two matches of a run share is dropped, and

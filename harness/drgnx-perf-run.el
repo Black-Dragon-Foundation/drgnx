@@ -1098,6 +1098,94 @@ up, from a search's start to its end (an upper bound of the scope's list: the en
       t))
   "The `search-scopes' workload's session side (with the replace workloads' and the hub's).")
 
+(defconst drgnx-perf-run--search-regroup-form
+  (prin1-to-string
+   '(progn
+      (defvar drgnx-perf--rg-drawn nil "When the hub's last patch of the Search view was drawn.")
+      (defvar drgnx-perf--rg-trace nil "Diagnostics: the view's patches and hub events since the last regroup, newest first.")
+      (defun drgnx-perf--rg-patch (apply patch)
+        (let ((what (funcall apply patch)))
+          (push (list 'patch (plist-get patch :view) (plist-get patch :class) (plist-get patch :base)
+                      (plist-get patch :version) (mapcar (lambda (op) (if (consp op) (car op) op)) (plist-get patch :ops))
+                      what)
+                drgnx-perf--rg-trace)
+          what))
+      (defun drgnx-perf--rg-event (event data)
+        (push (list 'event event (plist-get data :view)) drgnx-perf--rg-trace))
+      (defun drgnx-perf--rg-mark (&rest _)
+        "After a hub patch was drawn (`drgnx-replace--rows-boxes')."
+        (setq drgnx-perf--rg-drawn (float-time)))
+      (defvar drgnx-perf--rg-dir nil "The project of the 10k matches the workload regroups.")
+      (defun drgnx-perf--rg-arm ()
+        "The Search view listing 10k matches of \"needle\" on the hub's rows path, grouped by Files: 100 Rust files in
+10 folders (`dNN/mod/', a one-child chain the Folders tree joins), each 10 functions of 10 lines that call it."
+        (when drgnx-perf--rg-dir (delete-directory drgnx-perf--rg-dir t))
+        (setq drgnx-perf--rg-dir (make-temp-file "drgnx-perf-regroup" t))
+        (let ((text (apply #'concat
+                           (mapcar (lambda (i) (concat (format "fn f%d() {\n" i)
+                                                       (apply #'concat (make-list 10 "    let x = needle(1);\n")) "}\n\n"))
+                                   (number-sequence 0 9)))))
+          (dotimes (i 100)
+            (let ((file (expand-file-name (format "d%02d/mod/f%03d.rs" (% i 10) i) drgnx-perf--rg-dir)))
+              (make-directory (file-name-directory file) t)
+              (with-temp-file file (insert text)))))
+        (drgnx-replace--open :text "zzz-perf-nothing"
+                             :origin (with-current-buffer (find-file-noselect
+                                                           (expand-file-name "d00/mod/f000.rs" drgnx-perf--rg-dir))
+                                       (point-min-marker)))
+        (let ((v (drgnx-perf--replace-view)))
+          ;; the project is the fixture's top folder (as search-scopes sets it), not the origin file's
+          (with-current-buffer v
+            (setq drgnx-replace--root (file-name-as-directory drgnx-perf--rg-dir))
+            (drgnx-replace--fill 'find "needle")
+            (drgnx-replace--search-now))
+          (unless (drgnx-perf--wait 60 (lambda () (with-current-buffer v
+                                                    (and drgnx-view-patch (eql 10000 (cdr drgnx-replace--hub-counts))
+                                                         (not (drgnx-replace--busy-p))))))
+            (error "Premise: \"needle\" did not list 10,000 matches on the rows path (counts %S)"
+                   (buffer-local-value 'drgnx-replace--hub-counts v))))
+        (advice-add 'drgnx-replace--rows-boxes :after #'drgnx-perf--rg-mark)
+        (advice-add 'drgnx-view-apply-patch :around #'drgnx-perf--rg-patch)
+        (advice-add 'drgnx-replace--hub-event :before #'drgnx-perf--rg-event)
+        t)
+      (defun drgnx-perf--rg-disarm ()
+        (advice-remove 'drgnx-view-apply-patch #'drgnx-perf--rg-patch)
+        (advice-remove 'drgnx-replace--hub-event #'drgnx-perf--rg-event)
+        (advice-remove 'drgnx-replace--rows-boxes #'drgnx-perf--rg-mark)
+        (when drgnx-perf--rg-dir (delete-directory drgnx-perf--rg-dir t) (setq drgnx-perf--rg-dir nil)))
+      (defun drgnx-perf--rg-once (group)
+        "One regroup to GROUP: ms from the command to the hub's new rows drawn."
+        (with-current-buffer (drgnx-perf--replace-view)
+          (setq drgnx-perf--rg-drawn nil drgnx-perf--rg-trace nil)
+          (let ((t0 (float-time)))
+            (drgnx-replace-search-group group)
+            (unless (drgnx-perf--wait 10 (lambda () drgnx-perf--rg-drawn))
+              (error "Premise: regrouping to %s drew no rows in 10 s (group %S, rows %S, view %S, trace %S; messages: %s)"
+                     group drgnx-replace--group (drgnx-replace--rows-p) drgnx-replace-view (reverse drgnx-perf--rg-trace)
+                     (with-current-buffer (messages-buffer)
+                       (buffer-substring-no-properties (max (point-min) (- (point-max) 600)) (point-max)))))
+            ;; the model and the rows come as two lines: what follows within a quiet 50 ms belongs to this regroup
+            (let ((last drgnx-perf--rg-drawn))
+              (while (progn (drgnx-perf--wait 0.05 (lambda () (not (eql last drgnx-perf--rg-drawn))))
+                            (not (eql last drgnx-perf--rg-drawn)))
+                (setq last drgnx-perf--rg-drawn)))
+            (* 1000 (- drgnx-perf--rg-drawn t0)))))
+      (defun drgnx-perf--rg-measure ()
+        "(:regroup_ms STATS :tree_ms STATS :symbol_ms STATS :file_ms STATS): 40 rounds of Folders, Symbols, Files after
+one to warm up, each from the command to its rows drawn (spec §8: the first window ≤ 50 ms p95, no search again)."
+        (dolist (g '(tree symbol file)) (drgnx-perf--rg-once g))
+        (let (tree symbol file)
+          (dotimes (_ 40)
+            (push (drgnx-perf--rg-once 'tree) tree)
+            (push (drgnx-perf--rg-once 'symbol) symbol)
+            (push (drgnx-perf--rg-once 'file) file))
+          (drgnx-perf--rg-disarm)
+          (let ((st (lambda (l) (mapcar #'drgnx-perf--round (drgnx-perf-stats l)))))
+            (list :regroup_ms (funcall st (append tree symbol file)) :tree_ms (funcall st tree)
+                  :symbol_ms (funcall st symbol) :file_ms (funcall st file)))))
+      t))
+  "The `search-regroup' workload's session side (with the replace workloads' and the hub's).")
+
 (defconst drgnx-perf-run--search-retype-form
   (prin1-to-string
    '(progn
@@ -1448,6 +1536,14 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                        " " drgnx-perf-run--search-scopes-form " (drgnx-perf--replace-arm) (drgnx-perf--gs-up))")
        :measure "(drgnx-perf--gs-measure)"
        :teardown ,(concat "(progn (drgnx-perf--gs-down) (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
+      ;; regrouping the Search view's 10k matches (100 files) without searching again: Folders, Symbols, Files, 20 rounds
+      ;; (spec §8: the first window ≤ 50 ms p95)
+      (search-regroup
+       :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) " (drgnx-perf-run--replace-setup-form)
+                       " " drgnx-perf-run--search-regroup-form ")")
+       :each "(drgnx-perf--rg-arm)"
+       :measure "(drgnx-perf--rg-measure)"
+       :teardown ,(concat "(progn (drgnx-perf--rg-disarm) (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
       ;; retyping the Search view's query over 10k matches on the hub's rows path, a character at a time: "needle" to
       ;; "needl", "need", "needl", "needle" 25 times (100 keys, each a search of 10k matches); a pause of 0.6 s
       ;; after each key (the 0.25 s typing pause runs out, the next key may land while the rows stream) and 1.5 s after
@@ -2009,6 +2105,7 @@ version and the commit, as JSON in FILE."
     (search-context . "its bar is a ratio of its own runs (labels against none: first rows ≤ 1.10×, end ≤ 1.15×), read from :first_ratio and :done_ratio")
     (search-lists . "its bar is the lists' draw time (:draw_ms :p95 ≤ 5 ms, spec §8); no keys are typed")
     (search-scopes . "its rows are git's and the disk's time (spec §8: reported, never failed); no keys are typed")
+    (search-regroup . "its bar is the regroup's time to its rows (:regroup_ms :p95 ≤ 50 ms, spec §8); no keys are typed")
     (search-retype . "its input rows are judged now; allocation, CPU and rows follow its first runs on the desktop island (the combined pass)")
     (typing-evil . "needs DRGNX_MODAL_ELPA (evil); not run in the container")
     (motions-evil . "needs DRGNX_MODAL_ELPA")

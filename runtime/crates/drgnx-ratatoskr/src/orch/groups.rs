@@ -137,6 +137,7 @@ pub async fn gate(
             g
         }
     };
+    front.queue.at_groups(job, &tree, groups.clone());
     let key = format!("batch:{job}@{tree}");
     let (k, members) = (
         key.clone(),

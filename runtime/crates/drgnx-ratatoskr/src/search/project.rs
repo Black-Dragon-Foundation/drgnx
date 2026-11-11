@@ -613,7 +613,7 @@ impl Project {
         let found = clock::blocking(move || tree_of(&given, &main))
             .await
             .map_err(io::Error::other)??;
-        let Some((troot, git_dir)) = found else {
+        let Some((given_root, given_git)) = found else {
             return Ok(ViewOf {
                 view: hrafn::View::Base,
                 worktree: None,
@@ -622,8 +622,18 @@ impl Project {
                 checking: false,
             });
         };
-        // the key is history's: the watcher tags the tree's events with it, and the feed names it
-        let key = verdandi::WorktreeId::of(&troot, &git_dir).0;
+        // the key is history's, of the paths as given: the watcher tags the tree's events with it, and the feed names
+        // it. The overlay reads and watches the true names: `eitri` refuses a link in a path, and a watcher reports
+        // true names (macOS's temporary folders are under /var, a link to /private/var)
+        let key = verdandi::WorktreeId::of(&given_root, &given_git).0;
+        let (troot, git_dir) = clock::blocking(move || {
+            Ok::<_, io::Error>((
+                std::fs::canonicalize(&given_root)?,
+                std::fs::canonicalize(&given_git)?,
+            ))
+        })
+        .await
+        .map_err(io::Error::other)??;
         let inner = &self.inner;
         let t = inner
             .open_tree(&key, &troot, &git_dir, hrafn::DoorKind::for_tree(touched))
