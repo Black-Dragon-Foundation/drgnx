@@ -186,12 +186,38 @@ rt_build() { # [--install] [--prefix DIR] — cargo build --release --locked of 
   fi
 }
 
-rt_bundle() { # [--arch x86_64|aarch64] — the runner bundle (sleipnir, drgnx-key, drgnx-px), static musl, into runtime/target/bundle/<arch>/
+rt_bundle_mac() { # a Mac runner's bundle: sleipnir alone, ad-hoc signed, into runtime/target/bundle/aarch64-apple-darwin/
+  local triple=aarch64-apple-darwin jobs dir out
+  if [[ "$(uname -s)" != Darwin || "$(uname -m)" != arm64 ]]; then
+    rt_err "the $triple bundle is built on a Mac with Apple silicon (codesign signs it there); macOS CI builds it"
+    return 1
+  fi
+  rt_toolchain || return 1
+  jobs="$(rt_jobs)"
+  printf 'drgnx runtime: building the runner bundle for %s (-j%s)\n' "$triple" "$jobs"
+  (cd "$here" && env "PATH=${RT_CARGO%/*}:$PATH" "CARGO_TARGET_DIR=$here/runtime/target/bundle-build" \
+        ${RT_ENV[@]+"${RT_ENV[@]}"} "$RT_CARGO" build --release --locked -j "$jobs" \
+        --target "$triple" --manifest-path runtime/Cargo.toml -p sleipnir --bin sleipnir) ||
+    { rt_err "the runner bundle failed to build"; return 1; }
+  dir="$here/runtime/target/bundle/$triple"
+  out="$here/runtime/target/bundle-build/$triple/release/sleipnir"
+  mkdir -p "$dir"
+  cp "$out" "$dir/sleipnir.new" && chmod 755 "$dir/sleipnir.new" &&
+    codesign --force --sign - "$dir/sleipnir.new" && codesign -v "$dir/sleipnir.new" &&
+    mv -f "$dir/sleipnir.new" "$dir/sleipnir" ||
+    { rt_err "could not sign or put sleipnir into $dir"; return 1; }
+  printf 'drgnx runtime: the runner bundle for %s is in %s\n' "$triple" "$dir"
+}
+
+rt_bundle() { # [--arch x86_64|aarch64 | --target aarch64-apple-darwin] — the runner bundle (sleipnir, drgnx-key, drgnx-px), static musl, into runtime/target/bundle/<arch>/; a Mac's (sleipnir, signed) on a Mac
   local arch triple jobs b n out dir l
   arch="$(uname -m)"
   while (($#)); do
     case "$1" in
       --arch) [[ -n "${2:-}" ]] || { rt_err "--arch needs x86_64 or aarch64"; return 2; }; arch="$2"; shift ;;
+      --target)
+        [[ "${2:-}" == aarch64-apple-darwin ]] || { rt_err "--target takes aarch64-apple-darwin (Linux bundles take --arch)"; return 2; }
+        rt_bundle_mac; return ;;
       *) rt_err "unknown option: $1"; return 2 ;;
     esac
     shift
@@ -2085,9 +2111,9 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx open --check      start drgnx's daemon if needed, print its Emacs version, stop it if this started it
        drgnx macos-app         macOS: install drgnx.app into ~/Applications (Finder, Spotlight, Dock, Open With)
        drgnx build             byte-compile drgnx (core, wb, modules, harness); native compilation follows on load
-       drgnx build runner-bundle [--arch x86_64|aarch64]
-                               the static runner bundle (sleipnir, drgnx-key, drgnx-px) in runtime/target/bundle/ARCH
-                               (docs/guide/runners.md)
+       drgnx build runner-bundle [--arch x86_64|aarch64 | --target aarch64-apple-darwin]
+                               the static runner bundle (sleipnir, drgnx-key, drgnx-px) in runtime/target/bundle/ARCH;
+                               on a Mac, --target: a Mac runner's (sleipnir, ad-hoc signed) (docs/guide/runners.md)
        drgnx build terminfo    Ghostty's terminfo entry for drgnx's terminal, into <data>/terminfo (drgnx build does it too)
        drgnx runtime build [--install] [--prefix DIR] | install [--prefix DIR]
                                build Ratatoskr (Rust) from source / install the built binary (docs/guide/install.md)

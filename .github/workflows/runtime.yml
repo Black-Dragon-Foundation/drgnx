@@ -705,6 +705,11 @@ jobs:
           sed 's/#.*//' nidhogg-src/nidhogg/deps/macos.build | grep -vx 'rust' | xargs brew install
           rustup toolchain install stable --profile minimal --component clippy,rustfmt,llvm-tools --no-self-update
           rustup default stable
+      - name: the Mac runner bundle (sleipnir, ad-hoc signed, codesign -v)
+        run: |
+          bin/drgnx build runner-bundle --target aarch64-apple-darwin
+          mkdir -p "$MR_OUT/bundle" && cp runtime/target/bundle/aarch64-apple-darwin/sleipnir "$MR_OUT/bundle/"
+          codesign -dv "$MR_OUT/bundle/sleipnir" 2>&1 | tee "$MR_OUT/bundle/codesign.txt"
       - name: Nidhogg 31.1 for the ERT rows (writes DRGNX_EMACS to the environment)
         env:
           NIDHOGG_DOWNLOADS: ${{ runner.temp }}/nidhogg-downloads
