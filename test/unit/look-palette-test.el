@@ -149,18 +149,26 @@ which would put every row in twice, so a candidate row and a group title start w
     (should (= (funcall width other 0) (drgnx-px (+ drgnx-completion-row-inset drgnx-palette-row-padding))))))
 
 (ert-deftest drgnx-look-palette/the-input-row-owns-its-inset ()
-  "palette.html `.in': the search icon sits 14 logical pixels in, as a row's text.  The palette's prompt overlay brings
-its own inset and an empty `line-prefix' over the line's start, so the echo box's prefix on the same minibuffer does
-not put the input row in twice (a prefix in the overlay's string comes too late: the line starts at the buffer text)."
+  "palette.html `.in': the search icon sits 14 logical pixels in, as a row's text.  The palette's input row brings its
+own inset, so the minibuffer it shows has no `line-prefix' (the echo box's dressing gives it the input row's inset as
+one), whichever of the two dresses it first."
   (let ((win (selected-window)) (mode (window-parameter (selected-window) 'mode-line-format)))
     (with-temp-buffer
       (set-window-buffer win (current-buffer))
       (insert "run te")
       (unwind-protect
-          (progn (drgnx-palette-frame--dress win)
-                 (let ((ov (car drgnx-palette-frame--dressing)))
-                   (should (equal "" (overlay-get ov 'line-prefix)))
-                   (should (= (overlay-start ov) (point-min)))))
+          (progn (drgnx-look-echo--dress)                             ; the echo box first
+                 (should line-prefix)
+                 (drgnx-palette-frame--dress win)
+                 (should-not line-prefix)
+                 (drgnx-look-echo--undress)
+                 (drgnx-palette-frame--undress)
+                 (drgnx-palette-frame--dress win)                      ; the palette first
+                 (drgnx-look-echo--dress)
+                 (should-not line-prefix)
+                 (with-temp-buffer (drgnx-look-echo--dress)              ; another buffer keeps its inset
+                                   (should line-prefix)))
+        (drgnx-look-echo--undress)
         (drgnx-palette-frame--undress)
         (set-window-parameter win 'mode-line-format mode)))))
 
