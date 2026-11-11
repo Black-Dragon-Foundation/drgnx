@@ -536,7 +536,8 @@ mod tests {
     }
 
     /// [D] The live read on the macOS CI host: a whole `Raw`. The CI account is an admin and the VM's disk can sit
-    /// under the runner's free-space floor, so only those two items may be missing there.
+    /// under the runner's free-space floor, so only those two items may be missing there, and `mise` where the job
+    /// didn't install it (the read found none).
     #[cfg(all(target_os = "macos", feature = "runner"))]
     #[test]
     fn the_live_read_is_whole() {
@@ -553,8 +554,9 @@ mod tests {
         match contract(&raw, vec![], own) {
             Ok(_) => {}
             Err(m) => assert!(
-                m.iter()
-                    .all(|m| m.what.contains("standard") || m.what.contains("GB free")),
+                m.iter().all(|m| m.what.contains("standard")
+                    || m.what.contains("GB free")
+                    || (raw.mise.is_empty() && m.what.starts_with("mise"))),
                 "{m:?}"
             ),
         }

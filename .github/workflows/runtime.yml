@@ -744,6 +744,22 @@ jobs:
           set -o pipefail
           SLEIPNIR_BIN="$MR_OUT/bundle/sleipnir" cargo test --locked --manifest-path runtime/Cargo.toml -p sleipnir --no-fail-fast --lib darwin::tools -- --ignored 2>&1 | tee "$MR_OUT/tools-row.log"
           bash test/runners/mac/spike.sh tools "$MR_OUT/bundle/sleipnir" rust@1.95
+      # the runner refuses a volume under 40 GB free, and the CI VM has 24-29 GB: it keeps every Xcode and the Android
+      # SDK. The Xcodes this job doesn't use (never the selected one; a link is left alone) and the SDK go, on this
+      # throwaway VM only
+      - name: room for the runner (its 40 GB floor)
+        if: ${{ !cancelled() }}
+        run: |
+          keep=$(xcode-select -p); keep=${keep%/Contents/Developer}
+          before=$(df -g /Users | awk 'NR == 2 { print $4 }')
+          gone() { echo "- removed $1 ($(du -sh "$1" 2>/dev/null | cut -f1))" | tee -a "$MR_OUT/results.md"; sudo rm -rf "$1"; }
+          for x in /Applications/Xcode*.app; do
+            if [ -L "$x" ] || [ "$x" = "$keep" ]; then continue; fi
+            gone "$x"
+          done
+          if [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME" ]; then gone "$ANDROID_HOME"; fi
+          after=$(df -g /Users | awk 'NR == 2 { print $4 }')
+          echo "- room for the runner: ${before} GB free, then ${after} GB (kept $keep)" | tee -a "$MR_OUT/results.md"
       # the hub's own registry and queue against the runner account over localhost (design §10's fake Mac runner): add,
       # a host job, the watchdog, the link stopped and serve killed, remove. The hub reads the user's ssh config, so the
       # account gets an alias there with the spike's throwaway key
