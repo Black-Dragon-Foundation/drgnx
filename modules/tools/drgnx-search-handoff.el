@@ -32,6 +32,11 @@
 (declare-function drgnx-agent-session-name "drgnx-agents")
 (declare-function drgnx-agent-session-status "drgnx-agents")
 (declare-function drgnx-agent-session-cwd "drgnx-agents")
+(declare-function drgnx-agent-session-profile "drgnx-agents")
+(declare-function drgnx-agents-profile "drgnx-agents")
+(declare-function drgnx-ai-agent-gateway-chain "drgnx-ai")
+(declare-function drgnx-ai-remote-p "drgnx-ai")
+(declare-function drgnx-ai-confirm-project-route "drgnx-ai")
 (declare-function drgnx-agent-identity "drgnx-agent-identity")
 (declare-function drgnx-agents-editor-ordinal "drgnx-agents-editor")
 (declare-function drgnx-surfaces-key-label "drgnx-surfaces")
@@ -113,14 +118,41 @@ pair.  Each (LABEL . TO), TO as `search/handoff' takes it."
   "The card's header line: the title, who, hidden files, and the keys.  Reads `drgnx-search-handoff--header-text'."
   drgnx-search-handoff--header-text)
 
+(defun drgnx-search-handoff--profile-of (to)
+  "The agent profile TO (a `search/handoff' target) runs: a new one's, or the live session's."
+  (or (plist-get (or (plist-get to :new) (plist-get to :pair)) :profile)
+      (when-let* ((id (plist-get (plist-get to :session) :id)) ((fboundp 'drgnx-agents-sessions)))
+        (seq-some (lambda (s) (and (equal (drgnx-agent-session-remote s) id) (drgnx-agent-session-profile s)))
+                  (drgnx-agents-sessions)))))
+
+(defun drgnx-search-handoff--route (profile root)
+  "Where PROFILE's agent sends its requests, as the card says it: (TEXT . OK).  A gateway profile's providers come
+from its chain, which keeps only the remote steps of the project's routes (ROOT's .drgnx/ai.eld) you allowed; OK is
+nil when none is left.  Another profile talks to its vendor's own service."
+  (let* ((p (and profile (cdr (ignore-errors (drgnx-agents-profile profile)))))
+         (kind (plist-get p :ai))
+         (chain (and kind (fboundp 'drgnx-ai-agent-gateway-chain)
+                     (let ((default-directory (file-name-as-directory (or root default-directory))))
+                       (ignore-errors (drgnx-ai-agent-gateway-chain kind (plist-get p :model)))))))
+    (cond ((not kind) (cons "its vendor's own service" t))
+          ((null chain) (cons "no provider the project's routes allow" nil))
+          (t (cons (mapconcat (lambda (step)
+                                (format "%s (%s)" (car step)
+                                        (if (and (fboundp 'drgnx-ai-remote-p) (drgnx-ai-remote-p (car step)))
+                                            "remote" "local")))
+                              chain " → ")
+                   t)))))
+
 (defun drgnx-search-handoff--head ()
   "Make the card's header line from `drgnx-search-handoff--ask'."
-  (let* ((a drgnx-search-handoff--ask) (who (car (nth (plist-get a :who) (plist-get a :choices))))
+  (let* ((a drgnx-search-handoff--ask) (choice (nth (plist-get a :who) (plist-get a :choices))) (who (car choice))
+         (route (drgnx-search-handoff--route (drgnx-search-handoff--profile-of (cdr choice)) (plist-get a :root)))
          (keys (lambda (id label) (if-let* ((k (drgnx-search-handoff--key id))) (format "%s %s" k label) label))))
     (setq drgnx-search-handoff--header-text
           (concat " " (propertize (format "Ask an Agent · %d match%s" (plist-get a :n) (if (= 1 (plist-get a :n)) "" "es"))
                                   'face 'drgnx-search-handoff-title)
                   "  Who: " who
+                  (propertize (concat "  via " (car route)) 'face (if (cdr route) 'shadow 'error))
                   (propertize (concat "  · " (funcall keys 'search-handoff-next-who "next")
                                       " · hidden files " (if (plist-get a :hidden) "in" "out") " ("
                                       (funcall keys 'search-handoff-hidden "switch") ") · "
@@ -134,6 +166,9 @@ pair.  Each (LABEL . TO), TO as `search/handoff' takes it."
   (interactive)
   (with-current-buffer (drgnx-replace--live-view)
     (unless (drgnx-replace--rows-p) (user-error "Ask an Agent needs a text search"))
+    ;; a project's remote route is asked about here, in the command, once (as every AI command does)
+    (when (and drgnx-replace--root (require 'drgnx-ai nil t))
+      (let ((default-directory (file-name-as-directory drgnx-replace--root))) (drgnx-ai-confirm-project-route)))
     (pcase-let* ((`(,ids ,off ,n) (drgnx-search-handoff--what))
                  (replace (drgnx-replace--text 'replace)) (find (drgnx-replace--text 'find))
                  (ask (list :view drgnx-replace-view :ids ids :off off :n n :root drgnx-replace--root
@@ -198,6 +233,8 @@ scheme, or nil."
                          (and (plist-get a :hidden) (list :hidden t))
                          (and mark (list :mark mark)))))
     (when (string-empty-p text) (user-error "Say what the agent is to do"))
+    (unless (cdr (drgnx-search-handoff--route (drgnx-search-handoff--profile-of to) (plist-get a :root)))
+      (user-error "The project's routes (.drgnx/ai.eld) allow no provider for this agent: choose another"))
     (quit-window t)
     (with-current-buffer (drgnx-replace--live-view)
       (let ((view (current-buffer)))

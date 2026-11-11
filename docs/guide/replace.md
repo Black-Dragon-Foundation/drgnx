@@ -217,7 +217,11 @@ the middle of the window: its text is what the agent is to do, prefilled with a 
 `queued` in these places, keeping behaviour"); its header line says who it goes to. **Next Agent** (`C-c C-w`) goes
 round a **new worker** of your default agent profile, in a worktree of its own (the default), a **new pair** (a chat
 of that profile in this checkout, in pair mode: it edits your buffers directly, as your rules for a chat's project edits
-allow), and each live session with its state; a session working in this checkout is marked as a pair. **Send** (`C-<return>`; `C-c C-c`)
+allow), and each live session with its state; a session working in this checkout is marked as a pair. The header also says
+where the chosen agent sends its requests: a vendor's agent to its own service, a gateway profile to its providers
+(remote or local), keeping only the remote steps of the project's routes (`.drgnx/ai.eld`) you allowed; opening the
+card asks about those routes once, as every AI command does. An agent the routes leave no provider is said in red, and
+Send refuses it. **Send** (`C-<return>`; `C-c C-c`)
 hands it off, **Cancel** (`<escape>`; `C-c C-k`) does not.
 
 The agent gets a brief: what to do, the search and its replacement, and the places, grouped by file, as

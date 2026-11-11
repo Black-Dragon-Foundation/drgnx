@@ -19,7 +19,7 @@
   "BODY with the Search view a buffer of SPEC (:off UNTICKED-IDS :total N :row ID :replace R :sessions SESSIONS),
 each session (ID NAME CWD); the hub answers `search/handoff' with ANSWER from SPEC, every call recorded."
   (declare (indent 1))
-  `(let* ((spec ,spec) (drgnx-search-handoff-test--calls nil) (searched 0) (statuses 0)
+  `(let* ((spec ,spec) (drgnx-search-handoff-test--calls nil) (searched 0) (statuses 0) (asked 0)
           (view (get-buffer-create drgnx-replace-buffer-name)))
      (with-current-buffer view
        (setq-local drgnx-replace-view "s" drgnx-replace--root "/r/"
@@ -48,6 +48,12 @@ each session (ID NAME CWD); the hub answers `search/handoff' with ANSWER from SP
                ((symbol-function 'drgnx-agent-session-status) (lambda (_) 'idle))
                ((symbol-function 'drgnx-agents-editor-ordinal) (lambda (_) 2))
                ((symbol-function 'drgnx-agent-identity) (lambda (_) '(:face drgnx-agent-two :glyph "■")))
+               ((symbol-function 'drgnx-agents-profile) (lambda (name) (assoc name (plist-get spec :profiles))))
+               ((symbol-function 'drgnx-agent-session-profile) #'cadddr)
+               ((symbol-function 'drgnx-ai-confirm-project-route) (lambda () (cl-incf asked) t))
+               ((symbol-function 'drgnx-ai-agent-gateway-chain)
+                (lambda (kind _model) (alist-get kind (plist-get spec :chains))))
+               ((symbol-function 'drgnx-ai-remote-p) (lambda (id) (eq id 'openrouter)))
                ((symbol-function 'pop-to-buffer) #'set-buffer)
                ((symbol-function 'quit-window) #'ignore))
        (unwind-protect (progn ,@body)
@@ -157,3 +163,26 @@ snapshot brings the ordinal, and the hand-off's rows get its mark (`search/hando
       (drgnx-search-handoff-event "agent" '(:id "w1" :session (:ordinal 3)))
       (should (equal (seq-filter (lambda (c) (equal (car c) "search/handoff-mark")) drgnx-search-handoff-test--calls)
                      '(("search/handoff-mark" (:handoff "h:3" :mark (:face "drgnx-agent-three" :glyph "▲")))))))))
+
+(ert-deftest drgnx-search-handoff/the-card-says-where-the-agent-sends-and-refuses-no-route ()
+  "Pattern D: the card asks about the project's remote routes once as it opens (a command the user ran), and says
+where the chosen agent sends its requests: a vendor's agent its own service, a gateway one its chain's providers,
+remote or local; a chain the project's routes leave empty is said in red and Send refuses it."
+  (drgnx-search-handoff-test--with
+      (list :total 1 :off nil
+            :profiles '(("claude") ("or" :ai claude-openrouter) ("none" :ai claude-anthropic))
+            :chains '((claude-openrouter (openrouter . "m") (ollama)))
+            :sessions '(("a1" "or-1" "/elsewhere/" "or") ("a2" "none-1" "/elsewhere/" "none")))
+    (drgnx-search-to-agent)
+    (should (= asked 1))
+    (with-current-buffer drgnx-search-handoff-buffer-name
+      (should (string-match-p "via its vendor's own service" drgnx-search-handoff--header-text))
+      (drgnx-search-handoff-next-who)
+      (drgnx-search-handoff-next-who)
+      (should (string-match-p "Who: or-1 (idle)  via openrouter (remote) → ollama (local)"
+                              drgnx-search-handoff--header-text))
+      (drgnx-search-handoff-next-who)
+      (should (string-match-p "via no provider the project's routes allow" drgnx-search-handoff--header-text))
+      (insert "Do it.")
+      (should-error (drgnx-search-handoff-send) :type 'user-error)
+      (should-not (assoc "search/handoff" drgnx-search-handoff-test--calls)))))
