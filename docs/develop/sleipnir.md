@@ -123,7 +123,9 @@ their `ri_phys_footprint` (`proc_pid_rusage`; the resident set on Linux, where t
 grant less 192 MiB (the overshoot the spike measured at this tick, rounded up; never under half the grant), it
 SIGKILLs every one: the verdict is `oom` (the kill counts as the job's own OOM, never `red` and never `infra`), and
 `result.json`'s `mem_overshoot_mib` records the peak past the grant for every Mac job (none on Linux, where the kernel
-caps it).
+caps it). A Mac has no job helper (no keys, no network yet), so job-exec also runs the disk watch (`linux::disk`,
+every 10 s, `disk-start` written before the command): below the floor, the running job that grew most is stopped
+`infra: disk`.
 
 **Machine-wide pressure** (`darwin::pressure`): a Mac has no PSI, so `DarwinPlatform::pressure` answers the
 kernel's own event instead (a `DISPATCH_SOURCE_TYPE_MEMORYPRESSURE` source, the level read once at start; no polling),
@@ -298,7 +300,7 @@ with it. Nothing outlives the job, so no daemon is left behind, and `serve` may 
   entry naming `metadata.google.internal`, `169.254.169.254`, `fd00:ec2::254` or any address that isn't public is
   refused, no name is pinned, and the proxy connects only to public addresses, so a listed name that resolves to
   `169.254.x` gets `403` too. (The agent browser's `METADATA_NEVER` replaces this list once both are on one line.)
-- watches the runner folder's disk every 10 s (`helper::disk`). Below the floor (the larger of 20 GB and 10 % of its
+- watches the runner folder's disk every 10 s (`linux::disk`, which a Mac's job-exec runs itself). Below the floor (the larger of 20 GB and 10 % of its
   filesystem, `forseti`'s disk guard) the job that grew most since its start is stopped: its helper writes
   `kill_reason("infra: disk")` and kills its container. A job's growth is its attempt folder's size less its size
   when its helper started (`disk-start`); every helper sums the same running attempts, so only one acts per reading

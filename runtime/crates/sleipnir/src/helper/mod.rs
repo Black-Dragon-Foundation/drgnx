@@ -16,7 +16,7 @@
 //! `READY`), and ends when its stdin does:
 //! job-exec holds that pipe, so the helper goes with job-exec, and with the job's unit.
 
-pub mod disk;
+pub use crate::linux::disk;
 pub mod keys;
 #[cfg(feature = "runner")]
 pub mod net;
@@ -93,7 +93,7 @@ pub fn harden() -> io::Result<()> {
     Ok(())
 }
 
-fn say(dir: &Path, what: &str) {
+pub(crate) fn say(dir: &Path, what: &str) {
     let _ = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

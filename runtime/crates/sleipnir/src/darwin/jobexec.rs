@@ -4,7 +4,8 @@
 //! on `CLOCK_MONOTONIC` (which counts sleep: Rust's `Instant` on macOS doesn't), or when a kill reason appears; and
 //! writes `result.json` judged as on Linux (`forseti::classify`). On a stop the verdict is written first, then the
 //! whole process group goes, job-exec with it. Its memory cap is [`super::memwatch`]'s: past it every process of the
-//! job is killed, the verdict is `oom` and the overshoot is recorded.
+//! job is killed, the verdict is `oom` and the overshoot is recorded. It watches the runner folder's disk too (Linux's
+//! job helper does it there, [`disk`]): below the floor, the running job that grew most is stopped `infra: disk`.
 //!
 //! The job's processes are job-exec's session (it leads one: `attempt::launch`) less job-exec; a job-exec that leads
 //! none (a test, a hand run) starts the command in a session of its own instead, so the watchdog never takes a
@@ -14,8 +15,10 @@
 //! is refused (a Mac runner never gets keys). Plain Unix: the rows run on Linux.
 
 use super::memwatch::{self, MARKER};
+use crate::linux::disk;
 use crate::linux::jobexec::{JobExec, KILL_REASON, read_kill_reason};
 use crate::linux::parse::{self, RowVerdict};
+use crate::linux::probe::Probe;
 use crate::linux::result::{ResultJson, RowResult};
 use forseti::Verdict;
 use forseti::classify::{ExitEvidence, infra};
@@ -161,6 +164,8 @@ fn run_unchecked(dir: &Path, spec: &JobExec, refused: Option<String>) -> (Result
 fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, marker: &str, t0: f64, seen: &mut Seen) {
     // SAFETY: getpid has no failure
     let me = unsafe { libc::getpid() };
+    // what the disk watch counts this job's growth from
+    let _ = fs::write(dir.join(disk::DISK_START), disk::size(dir).to_string());
     let mut child = match cmd.spawn() {
         Err(e) => {
             seen.setup = Some(format!("{}: {e}", spec.argv[0]));
@@ -175,6 +180,12 @@ fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, marker: &str, t0: f64, s
     let born = memwatch::start_of(child.id() as i32);
     let cap = memwatch::cap_bytes(spec.grant.mem_cap_mib);
     let every = (memwatch::TICK.as_millis() / TICK.as_millis()).max(1) as u32;
+    // the runner folder is the attempt folder's grandparent (`<root>/jobs/<id>.<attempt>`)
+    let root = dir.parent().and_then(Path::parent).map(Path::to_path_buf);
+    let probe = root
+        .as_ref()
+        .and_then(|r| Probe::system("", "", "drgnx-runner", r, forseti::Profile::Dedicated).ok());
+    let disk_every = (disk::EVERY.as_millis() / TICK.as_millis()).max(1) as u32;
     // idle sleep held off while job-exec lives (a Mac on battery still sleeps at lid close)
     let awake = cfg!(target_os = "macos")
         .then(|| {
@@ -189,6 +200,13 @@ fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, marker: &str, t0: f64, s
         .flatten();
     let mut tick = 0u32;
     loop {
+        if tick > 0
+            && tick.is_multiple_of(disk_every)
+            && let (Some(p), Some(r)) = (&probe, &root)
+        {
+            // writes the kill reason when it is this job's to stop; the check below stops it
+            disk::check(p, r, dir, None);
+        }
         if tick.is_multiple_of(every) {
             let s = memwatch::scan(me, sid, born, marker);
             seen.peak = seen.peak.max(s.bytes);
@@ -434,6 +452,37 @@ mod tests {
         assert_eq!(r.verdict, Verdict::Oom, "{r:?}");
         assert!(stop);
         assert!(r.mem_overshoot_mib.is_some(), "{r:?}");
+    }
+
+    /// [D] Below the runner folder's disk floor (a test build's facts), the running job that grew most is stopped
+    /// `infra: disk`: a Mac has no job helper, so job-exec watches the disk itself.
+    #[cfg(feature = "test-hooks")]
+    #[test]
+    fn a_job_below_the_disk_floor_is_stopped() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join(crate::linux::probe::TEST_MACHINE),
+            r#"{"psi": {"mem_some10": 0.0, "cpu_some10": 0.0, "io_full10": 0.0, "app_mem_some10": null},
+                "disk_free_gb": 1, "disk_total_gb": 475, "mem_available_mib": 8192}"#,
+        )
+        .unwrap();
+        let dir = root.path().join("jobs").join("m1.1");
+        fs::create_dir_all(&dir).unwrap();
+        let s = spec(
+            &dir,
+            &[
+                "/bin/sh",
+                "-c",
+                "head -c 100000 /dev/zero > grown; sleep 60",
+            ],
+        );
+        let (r, stop) = run_unchecked(&dir, &s, None);
+        assert!(stop);
+        assert!(
+            matches!(&r.verdict, Verdict::Infra(w) if w == infra::DISK),
+            "{:?}",
+            r.verdict
+        );
     }
 
     /// [D] A kill reason written while the command runs stops it: the verdict names the reason, and the group is to
