@@ -353,11 +353,12 @@ change); `C-u' Replace All writes at once, no sheet."
                 (let ((text (buffer-string)))
                   (should (string-match-p "Replace 2 matches in 1 file · 1 skipped" text))
                   (should (string-match-p "a.txt \\+2 −2" text))
-                  ;; the selected file's first hunk, 40 px in (a stretch; one space in batch)
+                  ;; the selected file's first hunk, 44 px in, inside its card (a stretch; one space in batch)
                   (should (string-match-p "^    1 - let needle; $" text))
                   (should (equal (get-text-property (string-match "^    1 - let needle; $" text) 'display text)
-                                 `(space :width (,(drgnx-px 40)))))
-                  ;; its tint stops at the rows' ring (a stretch to the ring's edge), not at the window's
+                                 `(space :width (,(drgnx-px 44)))))
+                  (should (get-text-property (match-beginning 0) 'drgnx-replace-sheet-hunk text))
+                  ;; its tint stops inside the card (a stretch to its edge), not at the window's
                   (let ((end (1- (match-end 0))))
                     (should (eq 'space (car-safe (get-text-property end 'display text))))
                     (should (eq :align-to (nth 1 (get-text-property end 'display text))))
@@ -384,6 +385,64 @@ change); `C-u' Replace All writes at once, no sheet."
               (drgnx-replace--rows-replace-all "pin" nil)
               (should (equal '("search/apply" "search/edits") (mapcar #'car calls))))
           (when-let* ((b (get-buffer drgnx-replace-sheet-buffer-name))) (kill-buffer b)))))))
+
+(ert-deftest drgnx-replace-rows/the-sheet-hunk-card-follows-the-theme ()
+  "Pattern D: the sheet's hunk is a Glitnir block ring (`glitnir-blocks' on the window showing it): around the hunk's
+rows, 40 px in, radius 6, in `drgnx-border-subtle', its corners in the colour under it (the sheet's surface).  The
+window parameter is set once per change, never again for a redraw that changes nothing, and again when the theme
+changes the colour beneath."
+  (drgnx-replace-rows-nav-test--with
+    (let ((answer '(:change 7 :skipped nil
+                            :files ((:path "/r/a.txt" :source "disk"
+                                           :edits ((:id "m:a.txt:1:4" :line 1) (:id "m:a.txt:2:4" :line 2))))))
+          (sets 0) (setp (symbol-function 'set-window-parameter)))
+      (custom-declare-theme 'drgnx-test-sheet-a nil)
+      (custom-declare-theme 'drgnx-test-sheet-b nil)
+      (custom-theme-set-faces 'drgnx-test-sheet-a '(drgnx-surface-overlay ((t :background "#101112"))))
+      (custom-theme-set-faces 'drgnx-test-sheet-b '(drgnx-surface-overlay ((t :background "#f0f1f2"))))
+      (cl-letf (((symbol-function 'drgnx-hub--call-on)
+                 (lambda (_conn method _params cb &rest _)
+                   (pcase method
+                     ("search/edits" (funcall cb answer nil))
+                     ("search/preview" (funcall cb drgnx-replace-rows-nav-test--preview nil))
+                     (_ (funcall cb t nil)))))
+                ((symbol-function 'drgnx-replace--live-view) (lambda () (get-buffer drgnx-replace-buffer-name)))
+                ((symbol-function 'drgnx-replace--text) (lambda (_) "pin"))
+                ((symbol-function 'drgnx-popup-refit) #'ignore)
+                ((symbol-function 'pop-to-buffer) (lambda (b &rest _) (set-window-buffer (selected-window) b) (set-buffer b)))
+                ((symbol-function 'set-window-parameter)
+                 (lambda (w p v) (when (eq p 'glitnir-blocks) (setq sets (1+ sets))) (funcall setp w p v))))
+        (unwind-protect
+            (progn
+              (enable-theme 'drgnx-test-sheet-a)
+              (drgnx-replace--rows-replace-all "pin" t)
+              (with-current-buffer drgnx-replace-sheet-buffer-name
+                (let* ((w (selected-window)) (card (window-parameter w 'glitnir-blocks)) (b (car card))
+                       (hunk (text-property-any (point-min) (point-max) 'drgnx-replace-sheet-hunk t)))
+                  (should (= (length card) 1))
+                  (should (eq (car b) 'ring))
+                  (should (= (marker-position (nth 1 b)) hunk))
+                  (should (= (marker-position (nth 2 b))
+                             (or (next-single-property-change hunk 'drgnx-replace-sheet-hunk) (point-max))))
+                  (should (equal (list (plist-get (nthcdr 3 b) :x0) (plist-get (nthcdr 3 b) :radius)
+                                       (plist-get (nthcdr 3 b) :ring) (plist-get (nthcdr 3 b) :beneath))
+                                 (list (drgnx-px 40) (drgnx-px 6) 'drgnx-border-subtle "#101112")))
+                  (let ((n sets))
+                    ;; a redraw that changes nothing sets nothing
+                    (drgnx-replace--sheet-draw)
+                    (should (= sets n))
+                    (should (eq (window-parameter w 'glitnir-blocks) card))
+                    ;; a theme change: the colour beneath follows, set once
+                    (disable-theme 'drgnx-test-sheet-a)
+                    (setq n sets)
+                    (enable-theme 'drgnx-test-sheet-b)
+                    (should (= sets (1+ n)))
+                    (should (equal (plist-get (nthcdr 3 (car (window-parameter w 'glitnir-blocks))) :beneath)
+                                   "#f0f1f2"))))))
+          (disable-theme 'drgnx-test-sheet-a)
+          (disable-theme 'drgnx-test-sheet-b)
+          (when-let* ((b (get-buffer drgnx-replace-sheet-buffer-name))) (kill-buffer b))
+          (should-not (window-parameter (selected-window) 'glitnir-blocks)))))))
 
 (ert-deftest drgnx-replace-rows/replace-all-leaves-the-skipped-with-their-reasons ()
   "Pattern D: a match Replace All skipped stays listed with its reason (SJA-SEARCH-1 (3)): the hub is told which
