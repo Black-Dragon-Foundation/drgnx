@@ -68,9 +68,11 @@ fn source_name(name: &str) -> &str {
     }
 }
 
-/// The global code symbols FILE defines: each one's source name, whether it is weak, and its `nm` line. ELF's `nm`
-/// says `T` or `W`; Mach-O's prints a weak definition as `T` too, so there it is read from `nm -m`
-/// (`(__TEXT,__text) weak private external ___addtf3`: `private` is hidden visibility, as Zig gives compiler_rt).
+/// The global code symbols FILE defines: each one's source name, whether the linker may keep another definition in its
+/// place, and its `nm` line. ELF's `nm` says `T` or `W`, and only `W` may be replaced. Mach-O's prints every definition
+/// as `T`, so there it is read from `nm -m`: a `weak` one, or a `private external` one (hidden: Zig gives compiler_rt
+/// that on macOS, `(__TEXT,__text) private external ___addtf3`, not weak), which never leaves the image it is linked
+/// into, while ld64 refuses a second definition at link time (and the linked binary is checked for one below).
 fn code_globals(file: &str) -> Vec<(String, bool, String)> {
     if cfg!(target_os = "macos") {
         tool("nm", &["-m", "--defined-only", "-g"], file)
@@ -78,11 +80,9 @@ fn code_globals(file: &str) -> Vec<(String, bool, String)> {
             .filter(|l| l.contains("(__TEXT,"))
             .filter_map(|l| {
                 let name = source_name(l.split_whitespace().last()?).to_string();
-                Some((
-                    name,
-                    l.split_whitespace().any(|w| w == "weak"),
-                    l.to_string(),
-                ))
+                let yields =
+                    l.split_whitespace().any(|w| w == "weak") || l.contains(" private external ");
+                Some((name, yields, l.to_string()))
             })
             .collect()
     } else {
@@ -104,12 +104,13 @@ fn code_globals(file: &str) -> Vec<(String, bool, String)> {
 #[test]
 fn no_duplicate_compiler_rt_symbols() {
     // The archive's compiler_rt must not clash with Rust's compiler_builtins: every global symbol it defines under a
-    // compiler_rt name is weak, so the linker keeps one; and the linked test binary defines no name twice.
+    // compiler_rt name yields (weak; on macOS hidden), so the linker keeps one; and the linked test binary defines no
+    // name twice.
     let archive = env!("GHOSTTY_VT_ARCHIVE");
     let strong: BTreeSet<(String, String)> = code_globals(archive)
         .into_iter()
-        .filter(|(name, weak, _)| {
-            !weak
+        .filter(|(name, yields, _)| {
+            !yields
                 && name.starts_with("__")
                 && !name.starts_with("__cxa")
                 && !name.starts_with("__zig")
