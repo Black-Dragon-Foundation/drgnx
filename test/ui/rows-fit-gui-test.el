@@ -216,3 +216,48 @@ holds: the class it was paired with, never stale."
               (should (string-prefix-p "The quick" (drgnx-rows-demo-text b)))))
         (remove-hook 'drgnx-hub-event-functions count)
         (delete-frame frame)))))
+
+(ert-deftest drgnx-ui-rows-fit/a-view-in-two-classes-shows-each-its-own-rows ()
+  "One buffer per class (RRO-BUFFER-PER-CLASS-1): the view's buffer, with a twin function, shown in a second frame of
+another class (a default font twice the size: a frame this test makes is not a window sway places, so it cannot be
+put on a second monitor of another scale, ledger CLASS-BUFFERS).  That
+frame's window shows a twin paired with its class, the first keeps the buffer; the hub sends each its own class's
+reset, and each holds its own fit of the label (the second's cut shorter), neither stale."
+  (skip-unless (display-graphic-p))
+  (drgnx-rows-demo-with
+    (let* ((b (drgnx-rows-demo-open)) (twins nil) (px (aref (font-info (face-font 'default)) 2))
+           (frame (make-frame '((width . 60) (height . 10)))))
+      (set-face-attribute 'default frame :font (font-spec :family "Inter" :size (* 2 px)))
+      (with-current-buffer b
+        (setq-local drgnx-view-patch-twin-function
+                    (lambda (class)
+                      (let ((tw (generate-new-buffer " *rows-demo twin*")))
+                        (push tw drgnx-rows-demo--buffers)
+                        (with-current-buffer tw (drgnx-view-patch-attach drgnx-rows-demo-view class))
+                        (push tw twins)
+                        tw))))
+      (unwind-protect
+          (progn
+            (drgnx-rows-demo-feed nil nil '(("label" "The quick brown fox jumps over the lazy dog" 160)))
+            (drgnx-rows-demo-settle b)
+            (drgnx-test-wait (lambda () (eq t (frame-visible-p frame))) :secs 10 :what "the second frame shown")
+            (set-window-buffer (frame-root-window frame) b)
+            (drgnx-view-env-update drgnx-rows-demo-view)
+            (drgnx-test-wait (lambda () twins) :secs 10 :what "a twin for the second class")
+            (let ((tw (car twins)))
+              (should (eq tw (window-buffer (frame-root-window frame))))
+              (should (eq b (window-buffer (frame-root-window (selected-frame)))))
+              (drgnx-rows-demo-settle tw "the twin's class's reset")
+              (drgnx-rows-demo-settle b)
+              (let ((sb (drgnx-rows-demo-state b)) (st (drgnx-rows-demo-state tw)))
+                (should-not (equal (drgnx-view-patch-class sb) (drgnx-view-patch-class st)))
+                (should (equal (sort (list (drgnx-view-patch-class sb) (drgnx-view-patch-class st)) #'string<)
+                               (sort (copy-sequence (drgnx-view-env-classes drgnx-rows-demo-view)) #'string<)))
+                (should-not (drgnx-view-patch-stale sb))
+                (should-not (drgnx-view-patch-stale st)))
+              (let ((one (drgnx-rows-demo-text b)) (two (drgnx-rows-demo-text tw)))
+                (drgnx-rows-fit-ui-test--report (format "per-class rows: %S | %S" one two))
+                (should (string-prefix-p "The" one))
+                (should (string-prefix-p "The" two))
+                (should-not (equal one two)))))
+        (delete-frame frame)))))
