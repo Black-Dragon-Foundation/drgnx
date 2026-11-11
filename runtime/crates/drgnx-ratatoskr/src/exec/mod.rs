@@ -398,6 +398,16 @@ impl ExecSpec {
         }
         s.os = self.place.os;
         s.features = self.place.features.clone();
+        // a test job whose parser counts rows passes only if it ran some: a run of 0 tests (a selector that matched
+        // nothing) proves nothing
+        if self
+            .place
+            .suite
+            .as_ref()
+            .is_some_and(|x| matches!(x.parser.as_str(), "ert" | "cargo-test"))
+        {
+            s.expect.min_ran = Some(1);
+        }
         s
     }
 

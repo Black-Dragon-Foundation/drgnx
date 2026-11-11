@@ -23,6 +23,40 @@ fn spec(starter: Starter, cwd: &Path, script: &str, timebox: Duration) -> ExecSp
     }
 }
 
+/// [D] A test job whose parser counts rows (`ert`, `cargo-test`) must run at least one: its spec expects a row, so a
+/// selector that matched nothing reads `suspect`, not `pass`. A job that only exits, or lists plist rows, expects none.
+#[test]
+fn a_test_job_that_ran_no_rows_does_not_pass() {
+    let mut job = spec(
+        Starter::User,
+        Path::new("/p/proj"),
+        "true",
+        Duration::from_secs(5),
+    );
+    assert_eq!(job.forseti_spec("x1", "1G").expect.min_ran, None);
+    for (parser, min) in [("ert", Some(1)), ("cargo-test", Some(1)), ("plist", None)] {
+        job.place.suite = Some(queue::Suite {
+            parser: parser.into(),
+            listed: vec!["a".into()],
+        });
+        let s = job.forseti_spec("x1", "1G");
+        assert_eq!(s.expect.min_ran, min, "{parser}");
+    }
+    job.place.suite = Some(queue::Suite {
+        parser: "ert".into(),
+        listed: vec![],
+    });
+    let s = job.forseti_spec("x1", "1G");
+    let none = forseti::cachekey::Counts {
+        counts_rows: true,
+        ..Default::default()
+    };
+    assert!(matches!(
+        forseti::cachekey::verdict_of(&none, &s.expect),
+        forseti::Verdict::Suspect(_)
+    ));
+}
+
 /// What a runner is told is the job's folder inside its tree ("." for the tree itself): a runner mounts its own
 /// checkout, so the hub's absolute path would name a folder that does not exist there.
 #[test]

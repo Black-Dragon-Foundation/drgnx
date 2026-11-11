@@ -3619,7 +3619,9 @@ Tests: `runners::queue::`, `runners::local::`, `runtime_db::`, `exec::tests::a_q
 
 **Rows** (design §6.9, "Partial results"). A test job whose suite supports row selection carries
 `Placement.suite = Suite {parser, listed}`: the row parser that reads its log (`ert`, `cargo-test`, `plist`), and its
-rows in listing order. Its command holds `{rows}` (`queue::ROWS`) where the selector goes; each attempt's spec
+rows in listing order. A suite whose parser counts rows (`ert`, `cargo-test`) sets the spec's `expect.min_ran` to 1, so a
+run that ran no row (a selector that matched nothing) is `suspect`, never `pass`. Its command holds `{rows}`
+(`queue::ROWS`) where the selector goes; each attempt's spec
 (`attempt_spec`) puts there `forseti::split::selector` of the listed rows that have no result yet
 (`forseti::split::remaining_rows`), all of them on a first attempt, and sets `select` to it. A job with no suite, a
 parser that reads no rows (`exit`), or no `{rows}` in its command (`selects_rows` false) reruns whole, as before. The
