@@ -321,6 +321,7 @@
         (terminal-find-next "<f3>" :map (drgnx-term . drgnx-term-copy-mode-map))
         (terminal-find-previous "S-<f3>" :map (drgnx-term . drgnx-term-copy-mode-map))
         (terminal-copy-mode :none "the palette")
+        (terminal-reattach :none "the palette, or the notice an earlier drgnx's terminals post")
         (shell-reload-environment :none "in the palette")
         (go-quick-open "C-p")
         (search-project :none "C-S-f is View: Search; the palette")
