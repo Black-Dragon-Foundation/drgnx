@@ -120,6 +120,11 @@
  ;; search's end with its rows drawn (the 250 ms typing pause included): 337-356 ms p95 then, x 1.25
  (search-retype (:input :p95) 16) (search-retype (:input :max) 50)
  (search-retype (:search_first_ms :p95) 50) (search-retype (:settle_ms :p95) 450)
+ ;; search-context: the Search view's context label rows cost at most 10 % on the first rows and 15 % to the end, the
+ ;; p50s of 10 searches with labels over 10 without (100 Rust files, 10k matches, 1,000 labels; spec §8)
+ (search-context (:first_ratio) 1.10) (search-context (:done_ratio) 1.15)
+ ;; search-lists: the empty Search view's saved (100, 10 pinned) and recent (50) searches drawn within 5 ms (spec §8)
+ (search-lists (:draw_ms :p95) 5)
  ;; work-board: 40 moves over a Board of 200 cards on the hub's rows path (plan sja-complete B1).  Its allocation is held
  ;; to its old-path pair's, work-board-old (4750-4752 objects a key; the rows path 1932-1944 before and after the bar,
  ;; 2026-11-10, pinned, two runs each); cpu p90 6.8-11.5 ms (the most, 11.48, before the bar), x 1.25

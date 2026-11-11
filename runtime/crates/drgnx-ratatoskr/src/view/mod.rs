@@ -22,6 +22,7 @@ pub mod extensions;
 pub mod files;
 pub mod fonts;
 pub mod git;
+pub mod icons;
 pub mod model;
 pub mod panel;
 pub mod search;

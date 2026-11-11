@@ -802,6 +802,15 @@ impl Live {
                 |file| self.land(file),
                 |s| ids.get(s).map(|i| (i.ordinal, i.handle)),
             );
+            // the Explorer's badges: the ordinals by path
+            f.core.views.explorer_here(
+                f,
+                c,
+                h.paths
+                    .iter()
+                    .map(|(p, (ords, _))| (p.clone(), ords.clone()))
+                    .collect(),
+            );
             let rows = here::rows(&h);
             let doc = here::doc(&h);
             for view in views {

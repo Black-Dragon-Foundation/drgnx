@@ -64,4 +64,18 @@ TODO and DONE as chips no taller than the text; `outline-1' (headings in code) s
     (should (<= (cdr (plist-get (plist-get (cdar (get 'org-todo 'face-defface-spec)) :box) :line-width)) 0))
     (should-not (plist-get (cdar (get 'outline-1 'face-defface-spec)) :height))))
 
+(ert-deftest drgnx-look-bridge/magit-text-sits-in-from-the-card-edge ()
+  "magit.html: Magit's text starts 16 logical px into its card, past the fringe (its section chevrons) and a line
+prefix a column wide, on a graphical frame; a terminal gets no prefix.  Turning ui/look off takes it away."
+  (with-temp-buffer
+    (drgnx-test-with-modules '(ui/look)
+      (should (memq 'drgnx-look-bridge-magit-inset (default-value 'magit-section-mode-hook)))
+      (drgnx-look-bridge-magit-inset)
+      (dolist (prefix (list line-prefix wrap-prefix))
+        (should (equal '(when (display-graphic-p) space :width 1.0) (get-text-property 0 'display prefix)))
+        (should (get-text-property 0 'invisible prefix))))      ; a terminal: nothing
+    (should-not (memq 'drgnx-look-bridge-magit-inset (default-value 'magit-section-mode-hook)))
+    (should-not line-prefix)
+    (should-not wrap-prefix)))
+
 ;;; look-bridge-test.el ends here

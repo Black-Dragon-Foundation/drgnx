@@ -51,6 +51,21 @@
 (defvar-local drgnx-face--numbers-p nil
   "Non-nil in a buffer where this module turned line numbers on (so it can turn them off again).")
 
+(defconst drgnx-face--numbers-gap
+  (propertize " " 'display '(when (display-graphic-p) space :width 0.8) 'invisible t)
+  "The room between the line numbers and the code beyond the numbers' trailing space (`line-prefix').")
+
+(defconst drgnx-face--numbers-gap-current (propertize drgnx-face--numbers-gap 'face 'hl-line)
+  "The gap on the current line: in its colour, so the line's band does not break between the numbers and the code.")
+
+(defun drgnx-face--current-line-gap ()
+  "Give the current line's overlay (`hl-line-overlay', made again when the buffer is selected again) the gap in the
+current line's colour: a line prefix a buffer variable gives takes no overlay's face.  On `post-command-hook' after
+hl-line's own."
+  (when (and (overlayp hl-line-overlay) (not (overlay-get hl-line-overlay 'line-prefix)))
+    (overlay-put hl-line-overlay 'line-prefix drgnx-face--numbers-gap-current)
+    (overlay-put hl-line-overlay 'wrap-prefix drgnx-face--numbers-gap-current)))
+
 ;;;; Settings
 
 (defvar drgnx-face--as-module nil
@@ -354,7 +369,12 @@ On `after-change-major-mode-hook'."
     (setq-local display-line-numbers-width-start t
                 display-line-numbers-grow-only t
                 drgnx-face--numbers-p t)
+    ;; window-dark.html `.ln .n': 18 px from the numbers to the code, the number's own trailing space and 0.8 columns
+    ;; more on a graphical frame; continuation lines line up with it.  A terminal keeps the one space (invisible)
+    (setq-local line-prefix drgnx-face--numbers-gap wrap-prefix drgnx-face--numbers-gap)
+    (add-hook 'post-command-hook #'drgnx-face--current-line-gap 90 t)
     (display-line-numbers-mode 1)))
+
 
 (defun drgnx-face--apply-line-numbers ()
   "The modes setting on every open buffer: numbers on where wanted, off where this module put them and they no longer are."
@@ -363,7 +383,17 @@ On `after-change-major-mode-hook'."
       (cond ((drgnx-face--numbers-wanted-p) (drgnx-face-line-numbers-maybe))
             (drgnx-face--numbers-p
              (setq drgnx-face--numbers-p nil)
+             (drgnx-face--numbers-gap-off)
              (display-line-numbers-mode -1))))))
+
+(defun drgnx-face--numbers-gap-off ()
+  "Take the gap between the numbers and the code out of the current buffer."
+  (kill-local-variable 'line-prefix)
+  (kill-local-variable 'wrap-prefix)
+  (remove-hook 'post-command-hook #'drgnx-face--current-line-gap t)
+  (when (overlayp hl-line-overlay)
+    (overlay-put hl-line-overlay 'line-prefix nil)
+    (overlay-put hl-line-overlay 'wrap-prefix nil)))
 
 ;;;; The editor: cursor, current line, inlay hints
 
@@ -586,7 +616,10 @@ bar and scroll bars, and the status bar's segments and commands.  Idempotent."
     (dolist (f (frame-list)) (unless (eq (drgnx-state-frame-kind f) 'child) (drgnx-face--apply-title f))))
   (dolist (b (buffer-list))
     (when (buffer-local-value 'drgnx-face--numbers-p b)
-      (with-current-buffer b (setq drgnx-face--numbers-p nil) (display-line-numbers-mode -1))))
+      (with-current-buffer b
+        (setq drgnx-face--numbers-p nil)
+        (drgnx-face--numbers-gap-off)
+        (display-line-numbers-mode -1))))
   (let ((drgnx-face-dividers nil) (drgnx-face-line-spacing nil) (drgnx-face-line-wrap nil)
         (drgnx-face-frame-title nil))
     (drgnx-face--apply-dividers)         ; the mode off, if the module turned it on
