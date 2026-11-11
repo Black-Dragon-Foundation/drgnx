@@ -328,6 +328,7 @@ pub(super) fn doc_lines(
                 text: text[s..e].to_owned(),
                 kind,
                 eol: after.is_some(),
+                held: false,
             }
         })
         .collect())

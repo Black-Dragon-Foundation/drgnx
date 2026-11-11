@@ -28881,9 +28881,12 @@
         "$defs": {
           "EditLine": {
             "additionalProperties": false,
-            "description": "One source line of an Edit Results buffer, once however many matches or context windows name it: its id, its file,\nits line (from 1), its text (no newline), what it is, and whether a newline ends it in the file.",
+            "description": "One source line of an Edit Results buffer, once however many matches or context windows name it: its id, its file,\nits line (from 1), its text (no newline), what it is, and whether a newline ends it in the file; HELD when an agent\nediting this checkout (a pair's hand-off of this view, not yet done) holds it: the editor keeps it read-only.",
             "properties": {
               "eol": {
+                "type": "boolean"
+              },
+              "held": {
                 "type": "boolean"
               },
               "kind": {

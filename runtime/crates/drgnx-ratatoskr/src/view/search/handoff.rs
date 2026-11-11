@@ -97,6 +97,30 @@ impl Handoffs {
         Some(f(h))
     }
 
+    /// The (file, line) of every match CONN's view VIEW handed to an agent editing ROOT (a pair, not a worker in its
+    /// own worktree) whose hand-off is not done: OPEN says whether a hand-off's session (given whether it has edited)
+    /// still holds its matches.
+    pub(super) fn held_lines(
+        &self,
+        conn: u64,
+        view: &str,
+        root: &Path,
+        open: impl Fn(&str, bool) -> bool,
+    ) -> std::collections::BTreeSet<(String, u32)> {
+        let now = crate::clock::now();
+        super::lock(&self.map)
+            .values()
+            .filter(|h| {
+                h.conn == conn
+                    && h.view == view
+                    && h.tree == root
+                    && now.saturating_duration_since(h.at) <= TTL
+                    && open(&h.session, h.edited)
+            })
+            .flat_map(|h| h.matches.iter().map(|m| (m.path.clone(), m.line)))
+            .collect()
+    }
+
     /// Forget hand-off ID.
     pub(super) fn forget(&self, id: &str) {
         super::lock(&self.map).remove(id);

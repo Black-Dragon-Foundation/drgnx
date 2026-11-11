@@ -1646,10 +1646,27 @@ pub async fn edit_doc(f: &Front, c: &Caller, p: EditDocParams) -> Result<EditDoc
     let context = p.context.unwrap_or(0).min(3);
     let max = u64::from(p.max.unwrap_or(EDIT_DOC_MAX));
     let bufs = texts_of(views, conn, &p.view);
-    let plans = views
+    let (plans, root) = views
         .greps
-        .current(conn, &p.view, |run| doc_plans(run, &bufs))
+        .current(conn, &p.view, |run| {
+            (doc_plans(run, &bufs), run.query.root.clone())
+        })
         .ok_or_else(|| invalid("view", "the view has no search"))?;
+    // a pair's hand-off holds its lines until it is done (sent, or its agent still at work), as the chip says
+    let held = views
+        .greps
+        .handoffs
+        .held_lines(conn, &p.view, &root, |session, edited| {
+            f.core.agents.find(session).is_ok_and(|s| {
+                !edited
+                    || matches!(
+                        s.status(),
+                        runstav::methods::agents::SessionStatus::Busy
+                            | runstav::methods::agents::SessionStatus::Starting
+                            | runstav::methods::agents::SessionStatus::Waiting
+                    )
+            })
+        });
     let over = |total: u64, skipped| EditDocAnswer {
         lines: Vec::new(),
         total,
@@ -1664,7 +1681,10 @@ pub async fn edit_doc(f: &Front, c: &Caller, p: EditDocParams) -> Result<EditDoc
         let (mut next, mut lines, mut skipped) = (0, Vec::new(), Vec::new());
         for d in plans {
             match edits::doc_lines(d, context, &mut next) {
-                Ok(ls) => lines.extend(ls),
+                Ok(ls) => lines.extend(ls.into_iter().map(|mut l| {
+                    l.held = held.contains(&(l.path.clone(), l.line));
+                    l
+                })),
                 Err(s) => skipped.push(s),
             }
         }

@@ -190,7 +190,8 @@ tab named `Search: <query>`: each line with a match, once however many matches i
 its file's header. The headers and numbers are read-only; the lines are ordinary text: every editing command works,
 multiple cursors, `query-replace`, macros, evil. Each line shows in its file's major mode's colours. The setting
 `drgnx-search-edit-context` (0 to 3, default 0) adds that many lines of context around each match line, dim and
-editable too. A search of more than `drgnx-search-edit-max-lines` lines (default 20,000) opens nothing and says how
+editable too. A line handed to an agent that edits this checkout (a pair, through Ask an Agent) is dim and read-only
+until the agent is done ("An agent holds this line"). A search of more than `drgnx-search-edit-max-lines` lines (default 20,000) opens nothing and says how
 many: narrow it first.
 
 **Save** (the profile's save, or Save Edited Results) writes the lines you changed, and only those, through the same

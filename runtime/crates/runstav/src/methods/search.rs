@@ -571,7 +571,8 @@ pub enum EditLineKind {
 }
 
 /// One source line of an Edit Results buffer, once however many matches or context windows name it: its id, its file,
-/// its line (from 1), its text (no newline), what it is, and whether a newline ends it in the file.
+/// its line (from 1), its text (no newline), what it is, and whether a newline ends it in the file; HELD when an agent
+/// editing this checkout (a pair's hand-off of this view, not yet done) holds it: the editor keeps it read-only.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EditLine {
@@ -581,6 +582,8 @@ pub struct EditLine {
     pub text: String,
     pub kind: EditLineKind,
     pub eol: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub held: bool,
 }
 
 /// `search/edit-doc`'s answer: the lines by file and line, how many there are, OVER when they are more than the max
