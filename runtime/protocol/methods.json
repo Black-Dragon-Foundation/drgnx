@@ -3534,6 +3534,25 @@
     {
       "data": {
         "$defs": {
+          "KindCount": {
+            "additionalProperties": false,
+            "description": "How many of a Symbol search's definitions are of KIND (`fn`, `macro`, `var`, `type`, `other`).",
+            "properties": {
+              "count": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "count"
+            ],
+            "type": "object"
+          },
           "ScopeDone": {
             "additionalProperties": false,
             "description": "What a git scope (Changed, Staged, Branch) searched: FILES files of the repository (before the globs), the\nSUBMODULES and DELETED files it skipped, Branch's BASE, why it is empty (WHY_EMPTY), or why Branch has no base to\ntake (NEEDS_BASE: the view asks, `search/scope-bases`).",
@@ -3582,7 +3601,7 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`search-run-done`: search RUN of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not\nrun; OFF the matches that come back unticked (`search/run`'s `off`); SCOPE what a git scope searched. A search a\nnewer one stopped says nothing. KINDS (a Symbol search): how many of the name's definitions are of each kind (`fn`,\n`type`, `macro`, `var`, `other`), before the query's `kinds` filter: the view's kind chips and their counts.",
+        "description": "`search-run-done`: search RUN of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not\nrun; OFF the matches that come back unticked (`search/run`'s `off`); SCOPE what a git scope searched. A search a\nnewer one stopped says nothing. KINDS (a Symbol search): how many of the name's definitions are of each kind, a list in\nthe chips' order (`fn`, `macro`, `var`, `type`, `other`; a kind with none left out), before the query's `kinds` filter: the view's kind chips and their counts.",
         "properties": {
           "error": {
             "type": [
@@ -3596,13 +3615,11 @@
             "type": "integer"
           },
           "kinds": {
-            "additionalProperties": {
-              "format": "uint64",
-              "minimum": 0,
-              "type": "integer"
+            "items": {
+              "$ref": "#/$defs/KindCount"
             },
             "type": [
-              "object",
+              "array",
               "null"
             ]
           },

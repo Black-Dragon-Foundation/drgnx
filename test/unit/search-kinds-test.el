@@ -26,6 +26,8 @@ counts (a kind with none has no count, in the subtle face); a click toggles its 
 spec sent to the hub carries the kinds on; another mode has no chips."
   (drgnx-search-kinds-test--with 'symbol
     (should (equal (drgnx-replace--kinds-line) ""))          ; no search yet: no counts
+    (should (equal (drgnx-replace--kind-plist [(:kind "fn" :count 2) (:kind "macro" :count 1) (:kind "var" :count 1)])
+                   '(:fn 2 :macro 1 :var 1)))
     (setq drgnx-replace--kind-counts '(:fn 2 :macro 1 :var 1))
     (let ((line (drgnx-replace--kinds-line)))
       (should (string-match-p "^Kinds .*fn 2 .*macro 1 .*var 1 .*type \n$" (substring-no-properties line)))
