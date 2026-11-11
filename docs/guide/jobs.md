@@ -255,7 +255,9 @@ at once, without a card. Every command goes through the hub, starting it when ne
 The work tracker's grammar ([work.md](work.md)): `# Title`, then `### Task N: title` per task, its text below. Under a
 task, `**Depends:** Task 1, Task 2` (it waits for them) and `**Role:** implement|test|review|docs` (default
 `implement`). Plan-wide: `**Repo:** path` and `**Won't build:** text` — each won't-build line becomes your decision
-in the job's decision log, so no agent builds it. A plan with a dependency cycle, an unknown task or a task number
+in the job's decision log, so no agent builds it; `**Pack:** file` names the rule pack its gates read (default: the
+one drgnx ships; [orchestration.md](../develop/orchestration.md), "The rule pack"), which you approve with the plan.
+A plan with a dependency cycle, an unknown task or a task number
 twice is refused. The
 job keeps a snapshot of the plan: editing the file later does not change a running job.
 

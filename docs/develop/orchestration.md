@@ -49,3 +49,25 @@ The hub task `orch::evidence::run` records every job that ends whose session wor
 snapshot names it) as that task's `red` or `green`. A job without facts, or one a `shared` runner ran, is never
 evidence. Any matching job counts: a gate never asks for a second run of a tree it has a record for.
 `orch/evidence {task}` (the user's connections) answers a task's records, oldest first.
+
+## The rule pack
+
+A rule pack (`vordr::pack::Pack`, Emacs Lisp data read by huginn, never evaluated) names the gates a job meets and
+their parameters: `:rules` (each `:id`, one of `red-first`, `author-check`, `trailers`, `rule-tests`,
+`affected-groups`, `merge-notes`, `flake-hold`, `push-gate`, `review`, and `:kind`: `enforced` and `checked` gate the
+merge, `routing` and `advice` don't), `:test-globs` (test files; `*` matches across `/`), `:compile-fail-reds` (the
+languages whose build reds count when they name a symbol the task adds), `:batch-size`, the `:author-check`,
+`:rule-tests` and `:push-tiers` commands (`(:name N :dir D :run (ARG …))`), `:groups` (the command that lists the
+groups a range affects; `%r` is the range), `:no-cache`, `:shared-paths` (clean merges there still need intent
+notes) and `:context-share`.
+
+drgnx ships `etc/orch/drgnx-default.eld`. A plan names another with a `**Pack:** FILE` line (relative to the plan);
+a pack that doesn't read, or names a rule or kind the hub doesn't know, refuses the proposal. The proposal carries
+the pack, so the user approves it with the plan, and the approval records it as the job's `rule_pack` entity
+(`norn::write::evidence::rule_pack`); the gates read that record, never the file again.
+
+## Policy from the base
+
+The gates' policy files, `test/affected.eld`, `test/frozen.eld` and `test/flaky.eld` (`vordr::pack::POLICY_PATHS`),
+are read at the line's base commit (`orch::policy::Policy::at`), never at the tip: a tip can't change the rules it is
+judged by. A tip that edits one is a `code.ci-config` change at its merge (`runner::git`), so the user answers it.
