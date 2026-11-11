@@ -18,7 +18,7 @@ terminal's buffer only shows the screen it sends. So:
 - **In a remote folder** (`/ssh:build-box:/srv/app/`, a multi-hop name, a sudo hop on the host, a docker or podman
   container), New Terminal runs your login shell on that host, in that folder, over its own ssh connection: your ssh
   config applies, and a password or host-key question appears in the terminal. `cd` there keeps the buffer's folder on
-  that host, a link to a file opens the remote file, and the tab names the host. If the connection drops, the buffer
+  that host, a link to a file opens the remote file, and the tab names the host, with a server icon. If the connection drops, the buffer
   stays with **Reconnect**. A program there that sets the clipboard asks first (`drgnx-term-remote-clipboard-write`):
   Allow, Always for that host, or Deny. Folders no terminal reaches (ftp, smb, adb) open eshell, and a notice says so.
 - **The hub can restart under it.** Your shell keeps running; while the hub is away the terminal dims, and what you
