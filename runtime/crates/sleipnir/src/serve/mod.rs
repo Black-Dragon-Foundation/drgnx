@@ -172,6 +172,9 @@ struct Live {
     /// The deploy key or token the hub sent before `start` for its origin fetch; in memory only, gone once the fetch
     /// took it.
     origin_cred: Option<Key>,
+    /// The read lock on the slot its running job reads, from the checkout until the attempt goes from here (its
+    /// job-exec holds its own for the job's life).
+    slot_held: Option<slot::Held>,
 }
 
 impl Live {
@@ -185,6 +188,7 @@ impl Live {
             bundle: None,
             fetching: false,
             origin_cred: None,
+            slot_held: None,
         }
     }
 }
@@ -935,9 +939,11 @@ impl<W: Write> Serve<W> {
         }
         let (dir, mut meta) = (l.dir.clone(), l.meta.clone());
         // synced inputs: the attempt reads its slot (or a private copy of it); none: an empty source
+        let mut slot_held = None;
         let src = match &l.sync {
-            Some(s) => self.checkout(&dir, &meta, s).map(|(src, id)| {
+            Some(s) => self.checkout(&dir, &meta, s).map(|(src, id, held)| {
                 meta.slot = Some(id);
+                slot_held = held;
                 src
             }),
             None => Ok(dir.join("src")),
@@ -969,6 +975,7 @@ impl<W: Write> Serve<W> {
                 if let Some(l) = self.live.get_mut(&(r.job.clone(), r.attempt)) {
                     l.meta = meta;
                     l.pump = Some(0);
+                    l.slot_held = slot_held;
                 }
                 self.send(&Frame::Started {
                     r: r.clone(),
@@ -987,26 +994,33 @@ impl<W: Write> Serve<W> {
         }
     }
 
-    /// Moves the attempt's slot to its synced inputs S (the slot's update lock held meanwhile): the source it runs on,
-    /// the slot itself (read-only) or a private copy of it in DIR for a job that writes the tree, and the slot's id.
-    fn checkout(&self, dir: &Path, meta: &Meta, s: &SyncIn) -> Result<(PathBuf, String), String> {
+    /// Moves the attempt's slot to its synced inputs S unless a job of any `serve` reads it at others (`slot::hold`):
+    /// the source it runs on, the slot itself (read-only) or a private copy of it in DIR for a job that writes the tree,
+    /// the slot's id, and for a job that reads the slot its read lock, which this `serve` keeps until the attempt ends
+    /// (its job-exec takes its own: `slot::hold_for_job`, named in DIR).
+    fn checkout(
+        &self,
+        dir: &Path,
+        meta: &Meta,
+        s: &SyncIn,
+    ) -> Result<(PathBuf, String, Option<slot::Held>), String> {
         let root = &self.cfg.root;
         let key = SlotKey::of(&meta.spec);
         let p = slot::paths(root, &key);
         let sync_err = |e: crate::sync::SyncError| format!("the checkout: {e}");
         let m = Mirror::ensure(root, &s.repo).map_err(sync_err)?;
         let store = Store::open(root).map_err(|e| format!("the blob store: {e}"))?;
-        {
-            let locks = slot::Locks::of(&p);
-            let _held = locks.update().map_err(sync_err)?;
-            let overlay = Overlay {
-                entries: &s.manifest,
-                extras: &[],
-                blobs: &store,
-            };
-            slot::update(&p, &m.git_dir, &s.commit, &overlay).map_err(sync_err)?;
-        }
-        let src = if meta.spec.writes_tree {
+        let overlay = Overlay {
+            entries: &s.manifest,
+            extras: &[],
+            blobs: &store,
+        };
+        let held = slot::hold(&p, &meta.input_key, || {
+            slot::update(&p, &m.git_dir, &s.commit, &overlay)
+        })
+        .map_err(sync_err)?
+        .ok_or("the checkout: its slot is in use by a job at other inputs")?;
+        if meta.spec.writes_tree {
             let copy = dir.join("tree");
             slot::private_copy(&p, &copy).map_err(sync_err)?;
             // what the job's changes are read against at its end: the slot as it is now, which another attempt may
@@ -1014,11 +1028,12 @@ impl<W: Write> Serve<W> {
             if !meta.spec.writes.is_empty() {
                 slot::private_copy(&p, &dir.join(BASE)).map_err(sync_err)?;
             }
-            copy
-        } else {
-            p.slot
-        };
-        Ok((src, key.id()))
+            // it reads its own copies from here on: the slot may move
+            return Ok((copy, key.id(), None));
+        }
+        slot::write_job_hold(dir, &p, &meta.input_key)
+            .map_err(|e| format!("the checkout: {}: {e}", slot::JOB_HOLD))?;
+        Ok((p.slot, key.id(), Some(held)))
     }
 
     /// The attempt's reservation passes to its job-exec (PID), which outlives this `serve`.
@@ -1602,6 +1617,12 @@ impl<W: Write> Serve<W> {
                     });
                 self.write_result(&dir, &meta, Verdict::Infra(infra::KILLED.into()));
             }
+        }
+        // the job read its slot for the last time: the slot may move
+        if dir.join(RESULT).exists()
+            && let Some(l) = self.live.get_mut(key)
+        {
+            l.slot_held = None;
         }
         if self.live.get(key).is_some_and(|l| !l.keys.is_empty()) {
             self.hand_keys(key);
