@@ -264,7 +264,7 @@ height, the text or the marks changed; take the dots of windows that no longer s
                        (drgnx-margins-offset 'debug)
                        (drgnx-debug-gutter--hover-string-now))))
       (if (not string)
-          (drgnx-debug-gutter--pool-clear window)
+          (when (assq window drgnx-debug-gutter--pool) (drgnx-debug-gutter--pool-clear window))
         (let ((cell (assq window drgnx-debug-gutter--pool)))
           (unless (and cell (drgnx-debug-gutter--pool-key-p (cadr cell) window string))
             (let ((overlays (drgnx-debug-gutter--pool-lay window string (cddr cell)))
