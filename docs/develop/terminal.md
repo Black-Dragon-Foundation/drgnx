@@ -271,6 +271,66 @@ offered, a detached one surviving a hub restart, a clean exit that keeps some), 
 (both ways of telling a program runs; the socket's mode and another uid's connection dropped, the latter as root, as in
 the test container) and `tests/worker.rs` (`detached_keep_ends_a_worker_with_no_client`, on the fake clock).
 
+## Remote terminals
+
+New Terminal in a remote folder (a TRAMP name) runs the user's login shell on that host, in that folder: the PTY, the
+worker and the engine stay local, the terminal's program is one command, and nothing is installed on the host
+(`modules/tools/drgnx-term-remote.el`).
+
+- **The command** (`drgnx-term-remote-command`, pure, from `tramp-dissect-file-name` and `tramp-compute-multi-hops`, so
+  `tramp-default-proxies-alist` counts): for the ssh-like methods (`ssh`, `sshx`, `scp`, `scpx`, `rsync`) `ssh -t [-p
+  PORT] [-l USER] [-J HOP,…] HOST 'exec /bin/sh -c SCRIPT'`, earlier ssh hops as `-J`; a last `sudo`/`doas`/`su` hop on
+  the same host runs there (`sudo -u USER -H --`, `doas -u USER`, `su -l USER -s /bin/sh -c`); a container method as
+  the only hop (`docker`, `podman`, `kubernetes`, `toolbox`, `distrobox`, `flatpak`) its own exec. Any other method
+  (`ftp`, `smb`, `adb`, a local `sudo`, …) gets eshell and a notice naming the method (`drgnx-terminal-new`).
+- **Its own connection, never TRAMP's**: TRAMP's ControlMaster is a child of Emacs (`ControlPersist=no`), so a
+  terminal multiplexed through it would end with Emacs and could not be reattached. The terminal's ssh gets no control
+  options: the user's ssh config decides (a persistent master of the user's own is joined), and a password, OTP or
+  host-key question shows in the terminal. Host-key checking is never weakened.
+- **The script** (`drgnx-term-remote-script`) is POSIX sh whatever the login shell (fish, csh) that parses ssh's
+  command line: it holds no quote, `!`, newline or backslash of its own, and the folder goes as `\0NNN` escapes for
+  `printf %b`, so every byte of a folder's name arrives. It goes to the folder (nothing when it is gone) and becomes the
+  passwd entry's shell, else `$SHELL`, else `/bin/sh`, as a login shell.
+- **Environment** (`drgnx-term--remote-env`): the local terminal's, without the local-only `DRGNX_SERVER_NAME`,
+  `EDITOR`, `VISUAL`, `GIT_EDITOR`; `TERM=xterm-256color` and no `TERMINFO` with `drgnx-term-ssh-terminfo` `fallback`.
+  With `install` the command is `/bin/sh etc/shell/drgnx-ssh-terminfo.sh SCRIPT ARGS…`, in the terminal's PTY: the
+  first time for a host it sends Ghostty's entry to the host's `tic -x -` (both ssh's prompts show in the terminal)
+  and records the outcome in `<state>/terminal-ssh-hosts`, the file the shell integration's `ssh` keeps.
+- **The worker** runs locally in the home folder; `term/open`'s `remote` (TRAMP's prefix, `/ssh:host:`) goes into
+  the registry and `term/list`, so a reattach knows its host.
+- **Folders** (`drgnx-term--remote-cwd`): an OSC 7 `file://HOST/PATH` (or `kitty-shell-cwd://`) sets
+  `default-directory` to the prefix plus PATH, unchecked (no wait on the connection). The first host named is learned
+  as the terminal's own; another host's (an ssh typed inside) is not followed. A bare path is never the host's.
+- **Links**: a `file://` link opens the file on the host through TRAMP, never a local one.
+- **Clipboard**: an OSC 52 write from a remote terminal follows `drgnx-term-remote-clipboard-write` (`ask`, the
+  default: a notice "HOST wants to set the clipboard" whose command, Answer Clipboard Request, offers Allow, Always for
+  HOST (written to `drgnx-term-remote-clipboard-hosts` in your settings) and Deny; the text is never shown). Reads stay
+  refused.
+- **Running program**: the local program is ssh, always running, so only OSC 133 marks say a remote shell is at its
+  prompt; without them a remote terminal counts as running.
+- **Lost connection**: ssh's exit 255 keeps the buffer with "Connection lost (exit 255)" and **Reconnect**
+  (`terminal-reconnect`: the same command in a new terminal in that buffer).
+- **Title**: a remote terminal's buffer, and so its tab, is named after its host (`*terminal: HOST*`, then `HOST:
+  TITLE`).
+
+**Tests:** `test/unit/term-remote-test.el` (the command per method, hops, sudo/doas/su, containers, refused methods;
+the folder through sh, bash, zsh and fish; the environment; `install`'s script; folders, links, the clipboard,
+Reconnect, a reattached remote terminal) and the ssh row, `test/ssh/term-ssh-test.el`, which runs only through
+`test/container/ssh-row.sh`:
+
+```
+DRGNX_TEST_IMAGE=<the line's drgnx-test image> DRGNX_RATATOSKR_BIN=runtime/target/debug/ratatoskr test/container/ssh-row.sh
+```
+
+It builds `drgnx-test-ssh:<hash>` on the test image (`Containerfile.ssh`: sshd, ssh, tcsh, sudo, tic; tagged by a hash
+of that file and the base's image id, so a new base rebuilds it) and runs the batch tier on `test/ssh/`. The first
+test starts sshd on 127.0.0.1:2222 inside the container with keys and users (fish, tcsh, a password user, sudo) made
+there; the terminals' ssh reads a config from the run's folder (a wrapper first on PATH adds `-F`). Rows: fish and
+csh users reach a folder with a quote and a space; a sudo hop reaches root; OSC 7 follows the host, not a foreign
+one; an OSC 52 write asks; a dropped connection shows Reconnect and reconnects; `install` sends the terminfo after two
+password prompts in the terminal; a remote terminal kept at quit is reattached by the next Emacs, the same shell. With
+no image to be had the script exits 75, "image refused", never skipping.
+
 ## The editor's side
 
 `modules/tools/drgnx-term.el` (module `tools/term`; New Terminal calls `drgnx-term-start DIR [COMMAND]` when

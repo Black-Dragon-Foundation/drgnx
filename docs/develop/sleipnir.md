@@ -115,6 +115,26 @@ tree), `HOME` and `TMPDIR` inside the folder, `PATH` Homebrew's and the system's
 awake while the job runs, and the verdict comes from `forseti::classify` like Linux's. A Mac has no pause, live
 resize, CPU weights or keys: those methods answer none or refuse.
 
+**The memory cap** (`darwin::memwatch`): no kernel enforces a Mac job's grant, so job-exec's watchdog does. Every
+500 ms it lists the processes and takes the job's: job-exec's session less job-exec (a job-exec that leads no session,
+a test or a hand run, starts the command in a session of its own and takes that), plus processes of the runner's user
+outside it born after the command that carry `DRGNX_RUNNER_ATTEMPT=<hub>/<job>/<attempt>` (`KERN_PROCARGS2`). It sums
+their `ri_phys_footprint` (`proc_pid_rusage`; the resident set on Linux, where the rows run). Past the cap, the
+grant less 192 MiB (the overshoot the spike measured at this tick, rounded up; never under half the grant), it
+SIGKILLs every one: the verdict is `oom` (the kill counts as the job's own OOM, never `red` and never `infra`), and
+`result.json`'s `mem_overshoot_mib` records the peak past the grant for every Mac job (none on Linux, where the kernel
+caps it). A Mac has no job helper (no keys, no network yet), so job-exec also runs the disk watch (`linux::disk`,
+every 10 s, `disk-start` written before the command): below the floor, the running job that grew most is stopped
+`infra: disk`. **The sweep**: setsid loses launchd's group cleanup, so a Mac's `cleanup` (at start and after each job)
+first SIGKILLs the runner user's processes whose marker names this hub and an attempt that no longer runs
+(`memwatch::strays`); another hub's are left alone.
+
+**Machine-wide pressure** (`darwin::pressure`): a Mac has no PSI, so `DarwinPlatform::pressure` answers the
+kernel's own event instead (a `DISPATCH_SOURCE_TYPE_MEMORYPRESSURE` source, the level read once at start; no polling),
+and `serve`'s ladder takes it in place of `forseti::ladder_level`: *warn* is `tight` (no offer admitted), *critical*
+is `danger`, where a kill the ladder calls for becomes an eviction (requeued, no strike: the pressure is the user's
+own load). Linux's platform answers none and keeps PSI (`the_platforms_pressure_event_sets_the_ladder`).
+
 ## The podman argv
 
 `linux::podman::argv(req, caps, runner_args)` is the one builder of a `podman run` line, used by the hub's own container
@@ -282,7 +302,7 @@ with it. Nothing outlives the job, so no daemon is left behind, and `serve` may 
   entry naming `metadata.google.internal`, `169.254.169.254`, `fd00:ec2::254` or any address that isn't public is
   refused, no name is pinned, and the proxy connects only to public addresses, so a listed name that resolves to
   `169.254.x` gets `403` too. (The agent browser's `METADATA_NEVER` replaces this list once both are on one line.)
-- watches the runner folder's disk every 10 s (`helper::disk`). Below the floor (the larger of 20 GB and 10 % of its
+- watches the runner folder's disk every 10 s (`linux::disk`, which a Mac's job-exec runs itself). Below the floor (the larger of 20 GB and 10 % of its
   filesystem, `forseti`'s disk guard) the job that grew most since its start is stopped: its helper writes
   `kill_reason("infra: disk")` and kills its container. A job's growth is its attempt folder's size less its size
   when its helper started (`disk-start`); every helper sums the same running attempts, so only one acts per reading
@@ -440,7 +460,8 @@ belongs, rather than write through it. The git dir's `info/attributes` unsets `t
 `working-tree-encoding` for every path, so the slot holds exactly the bytes captured.
 
 `private_copy(paths, dest)` copies the slot for a job that declares `writes_tree`. It clones each file where the
-filesystem can (`CopyKind::Reflink`) and copies it otherwise (`CopyKind::Plain`). Files keep their mode and mtime,
+filesystem can (`CopyKind::Reflink`: `FICLONE` on Linux, APFS `fclonefileat` on a Mac) and copies it otherwise
+(`CopyKind::Plain`). Files keep their mode and mtime,
 links are copied as links, and `dest` must not exist.
 
 `Locks::of(paths)` takes `flock`s on files in the git dir, so they hold across processes and go with a process that

@@ -7,9 +7,13 @@
 //!   domr output alike.
 //! - [`facts`]: what a job ran on (tree key, env stamp, platform, selector), which evidence must match.
 //! - [`evidence`]: one fact a gate reads, bound to a task.
+//! - [`pack`]: a rule pack (the gates' rules and parameters) and the policy paths a tip can't change alone.
 //!
 //! No clock, no threads, no files: `serde` only.
 
 pub mod evidence;
 pub mod facts;
+pub mod gates;
+pub mod pack;
+pub mod redfirst;
 pub mod rows;

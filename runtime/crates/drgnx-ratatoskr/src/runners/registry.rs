@@ -890,6 +890,8 @@ impl Registry {
             .queue
             .dial(&*self.cfg.transport, &cfg, self.remote(rec, &cfg))
             .await?;
+        // what it offered at its last probe, until its next health check reads them again
+        self.cfg.queue.set_features(&rec.name, rec.features.clone());
         Ok(())
     }
 

@@ -165,6 +165,17 @@ the machine restarts.  The terminal's own worker counts the time, so no drgnx ne
 every terminal at once."
   :type 'natnum :group 'drgnx :scope 'global :agents 'never :schema 'natnum :apply #'drgnx-term--apply-config)
 
+(drgnx-defsetting drgnx-term-remote-clipboard-write 'ask
+  "What a program in a remote terminal may do when it sets the clipboard (OSC 52): `ask', a notice asks (Allow, Always
+for that host, Deny; the text is not shown); `allow'; `deny'.  The hosts in `drgnx-term-remote-clipboard-hosts' are
+allowed without asking.  Reading the clipboard is never allowed."
+  :type '(choice (const ask) (const allow) (const deny)) :group 'drgnx :scope 'global :agents 'never
+  :schema '(enum ask allow deny))
+
+(drgnx-defsetting drgnx-term-remote-clipboard-hosts nil
+  "The hosts whose programs may set the clipboard from a remote terminal without asking (Always for HOST adds one)."
+  :type '(repeat string) :group 'drgnx :scope 'global :agents 'never :schema '(list-of string))
+
 (drgnx-defsetting drgnx-term-progress-style t
   "Whether a program's progress (OSC 9;4) shows on its terminal's tab."
   :type 'boolean :group 'drgnx :scope 'global :agents 'never :schema 'boolean)

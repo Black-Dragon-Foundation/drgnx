@@ -1536,7 +1536,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `term/key` | user | `{action?: "press" \| "repeat" \| "release", id: string, key: string, mods?: [string], text?: string, unshifted?: natnum}` | `boolean` | no |
 | `term/list` | user | `{}` | `[TermStatus]` | no |
 | `term/mouse` | user | `{button?: integer, col: natnum, id: string, kind: string, mods?: [string], row: natnum}` | `boolean` | no |
-| `term/open` | user | `{cell_px?: [natnum, natnum], class: string, cols: natnum, command?: [string], config?: [[string, SettingValue]], dir: string, env?: [[string, string]], memory_max?: string, place?: string, rows: natnum, tasks_max?: string, window?: natnum}` | `{id: string, view: string}` | no |
+| `term/open` | user | `{cell_px?: [natnum, natnum], class: string, cols: natnum, command?: [string], config?: [[string, SettingValue]], dir: string, env?: [[string, string]], memory_max?: string, place?: string, remote?: string, rows: natnum, tasks_max?: string, window?: natnum}` | `{id: string, view: string}` | no |
 | `term/paste` | user | `{id: string, text: string}` | `boolean` | no |
 | `term/resize` | user | `{cell_px: [natnum, natnum], cols: natnum, id: string, rows: natnum}` | `boolean` | no |
 | `term/scroll` | user | `{delta?: integer, from?: string, id: string, prompt_delta?: integer, to?: string}` | `{key?: string}` | no |
@@ -2362,7 +2362,9 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   (`view/measured`); from then on that width is used for that string instead of the sum (least recently used out).
 - **The fit check row** (`test/ui/rows-fit-gui-test.el`, on the fixture view `rows-demo`, whose labels the hub
   fits per class: `__test_view_rows`' `labels`): Latin, ligatures, a ZWJ
-  sequence, combining marks and Arabic in Inter and JetBrains Mono at 11 to 16 px, fitted to 80, 160 and 240 px. No
+  sequence, combining marks and Arabic in Inter and JetBrains Mono at 11 to 16 px, fitted to 80, 160 and 240 px. A
+  label's width is logical, as every view's sizes are: a GUI class fits it, and puts its stop, at the env's scale in
+  device px, rounded half up as `drgnx-px` does (160 is 320 at 2, 200 at 1.25). No
   segment runs past its stop after the guard, and none is cut more than the slack and one glyph short, except joined
   Arabic in a font without it: its letters come per char from the editor's fallback font, whose shaped (joined) forms
   are narrower, so the sum runs wide and the label may be cut up to about 26 px short at 80 px. That is reported, not

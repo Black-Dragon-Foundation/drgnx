@@ -778,6 +778,13 @@ pub(crate) fn card_actions(kind: &str, data: &Value) -> Value {
                 ("stop", "Stop the job"),
             ])
         }
+        // the gates hold the merge (docs/develop/orchestration.md): a waiver is the user's alone
+        "gate" => a(&[
+            ("merge", "Check again"),
+            ("retry", "Tell the agent"),
+            ("waive", "Waive once…"),
+            ("drop", "Drop the task"),
+        ]),
         "merge-failed" => a(&[
             ("merge", "Merge again"),
             ("drop", "Drop the task"),
@@ -1247,6 +1254,17 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
         )));
     }
     plan::check(&tasks).map_err(invalid)?;
+    // the rule pack the gates read: the plan's, or the one drgnx ships; frozen in the proposal the user approves
+    let pack = match &read.pack {
+        Some(f) => {
+            let text = tokio::fs::read_to_string(f)
+                .await
+                .map_err(|e| invalid(format!("{}: {e}", f.display())))?;
+            crate::orch::policy::read_pack(&text)
+                .map_err(|e| invalid(format!("{}: {e}", f.display())))?
+        }
+        None => crate::orch::policy::default_pack(),
+    };
     // a task's profile, which a plan an agent wrote may name, goes through the check `job/reassign` and Say make
     for t in &tasks {
         if let Some(p) = &t.profile
@@ -1325,7 +1343,7 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
             }
             o
         }).collect::<Vec<_>>(),
-        "routes": routes, "budget": budget, "gate": gate,
+        "routes": routes, "budget": budget, "gate": gate, "pack": pack,
     });
     if !profiles.is_empty() {
         data["profiles"] = Value::Object(profiles);
@@ -1540,12 +1558,20 @@ async fn approve_job(
         data.insert("budget".into(), json!(b));
     }
     let budget = data.get("budget").and_then(Value::as_f64);
+    // the rule pack the proposal carried is the job's, recorded with the approval: the gates read that record
+    let pack: Option<vordr::pack::Pack> = data
+        .get("pack")
+        .and_then(|p| serde_json::from_value(p.clone()).ok());
     // only while it is still a proposal, in the write itself: a withdrawal that came first wins
     let jid = id.to_owned();
     let approved = front
         .writer
         .write(caller, "coord/job-set", move |tx| {
-            write_jobs::approve_proposal(tx, &jid, &Value::Object(data.clone()), now())
+            let ok = write_jobs::approve_proposal(tx, &jid, &Value::Object(data.clone()), now())?;
+            if ok && let Some(p) = &pack {
+                norn::write::evidence::rule_pack(tx, &jid, p, None)?;
+            }
+            Ok(ok)
         })
         .await
         .map_err(fail)?;
@@ -1808,6 +1834,22 @@ pub async fn resume(front: &Front, caller: &Caller, p: WithBudget) -> Result<Job
 #[cfg(test)]
 mod price_tests {
     use super::*;
+
+    /// Pure (D).
+    #[test]
+    fn a_held_gates_card_offers_a_waiver_and_telling_the_agent() {
+        let names = |v: Value| -> Vec<String> {
+            v.as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p[0].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(
+            names(card_actions("gate", &json!({"key": "gates", "tip": "T"}))),
+            vec!["merge", "retry", "waive", "drop"]
+        );
+    }
 
     /// Pure (D).
     #[test]
@@ -2128,6 +2170,34 @@ pub(crate) mod graph_plan_tests {
         let s = propose(f, &user(), p).await.unwrap();
         let l = load(f, &s.id, false).await.unwrap().unwrap();
         (s.id, data_of(&l.job))
+    }
+
+    /// Pure (D): a temp store.  A plan that names no pack carries the one drgnx ships in its proposal, and its
+    /// approval records it as the job's `rule_pack`, which the gates read from then on.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_approved_proposals_pack_is_the_jobs() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let (id, data) = proposed(
+            &f,
+            dir.path(),
+            json!([{"number": "1", "title": "a", "body": "x"}]),
+        )
+        .await;
+        assert_eq!(data["pack"]["name"], json!("drgnx-default"));
+        let jid = id.clone();
+        let read = |f: &Front| {
+            let jid = jid.clone();
+            let db = f.writer.db.clone();
+            async move {
+                db.read(move |c| norn::read::evidence::pack_of_job(c, &jid))
+                    .await
+                    .unwrap()
+            }
+        };
+        assert_eq!(read(&f).await, None, "nothing before the approval");
+        approve_job(&f, &user(), &id, None).await.unwrap();
+        assert_eq!(read(&f).await, Some(crate::orch::policy::default_pack()));
     }
 
     /// Pure (D): a temp store.  A task's named profile is the job's reassignment for it, which `profile_of` answers.

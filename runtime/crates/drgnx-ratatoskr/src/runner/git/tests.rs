@@ -170,6 +170,61 @@ async fn ci_workflow_change_is_a_card() {
     assert_eq!(n, 1);
 }
 
+/// A tip that edits the gates' policy (`test/affected.eld`, `test/frozen.eld`, `test/flaky.eld`) can't certify itself:
+/// its merge asks the user (`code.ci-config`), and the policy the gates read is the base's, whatever the tip says.
+#[tokio::test]
+async fn a_tip_editing_the_gates_policy_asks_and_is_read_from_the_base() {
+    let e = env();
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = CoordDb::spawn(dbdir.path().join("work.db"));
+    let (h, p) = shared(
+        &e,
+        TreeMode::Worktree,
+        Policy {
+            ci: Some((db.clone(), MatrixGate::default())),
+            ..Policy::default()
+        },
+        None,
+    );
+    let b = base(&e);
+    for (i, file) in ["test/affected.eld", "test/frozen.eld", "test/flaky.eld"]
+        .iter()
+        .enumerate()
+    {
+        let t = h
+            .task_worktree(&e.repo, "r1", &format!("p{i}"), &b)
+            .await
+            .unwrap();
+        commit(&e, &t, file, "()\n");
+        accept_all(&h, &e, &t, &p.marks).await;
+        let g = h.merge_gate(&e.repo, &t).await.unwrap();
+        assert!(matches!(g, Gate::Ask(_)), "{file}: {g:?}");
+    }
+    // the base's frozen rows, not the tip's
+    let t = h.task_worktree(&e.repo, "r1", "q", &b).await.unwrap();
+    commit(
+        &e,
+        &t,
+        "test/frozen.eld",
+        "((\"test/unit/x-test.el\" :tests (x/one x/two)))\n",
+    );
+    let tip = crate::orch::policy::Policy::at(&e.repo, &t.branch, &vordr::pack::Pack::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        tip.frozen,
+        vec![crate::orch::policy::Frozen {
+            file: "test/unit/x-test.el".into(),
+            tests: vec!["x/one".into(), "x/two".into()],
+        }],
+        "the tip's own row read at the tip"
+    );
+    let base_side = crate::orch::policy::Policy::at(&e.repo, &b, &vordr::pack::Pack::default())
+        .await
+        .unwrap();
+    assert!(base_side.frozen.is_empty(), "{:?}", base_side.frozen);
+}
+
 #[tokio::test]
 async fn protected_config_change_refused() {
     let e = env();

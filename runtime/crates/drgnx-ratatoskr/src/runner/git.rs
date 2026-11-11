@@ -503,7 +503,10 @@ impl HubGit {
         let ci: Vec<String> = ins
             .changed
             .iter()
-            .filter(|c| is_ci_or_build(&c.path))
+            // the gates' policy files too: a tip never changes the rules it is judged by on its own (orch::policy)
+            .filter(|c| {
+                is_ci_or_build(&c.path) || vordr::pack::POLICY_PATHS.contains(&c.path.as_str())
+            })
             .map(|c| format!("{}/{}", repo.display(), c.path))
             .take(64)
             .collect();

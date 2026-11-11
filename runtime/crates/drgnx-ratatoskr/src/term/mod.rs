@@ -56,6 +56,8 @@ pub struct Spawn {
     pub config: Vec<(String, Value)>,
     /// Where the editor shows it (`panel`, `editor`).
     pub place: Option<String>,
+    /// TRAMP's prefix of a remote terminal's folder.
+    pub remote: Option<String>,
 }
 
 /// What `term/list` tells of a terminal.
@@ -76,6 +78,8 @@ pub struct Status {
     pub detached_at: Option<u64>,
     pub command: Vec<String>,
     pub place: Option<String>,
+    /// TRAMP's prefix of a remote terminal's folder.
+    pub remote: Option<String>,
 }
 
 struct Term {
@@ -265,6 +269,7 @@ impl Terms {
             detached_at: None,
             command: command.clone(),
             place: s.place.clone(),
+            remote: s.remote.clone(),
         };
         rec.write(&dir).map_err(|e| e.to_string())?;
         // the worker binds its socket once it runs
@@ -734,6 +739,7 @@ impl Terms {
                     detached_at: r.detached_at,
                     command: r.command.clone(),
                     place: r.place.clone(),
+                    remote: r.remote.clone(),
                 };
                 asks.push((status, sent.then_some(rx)));
             }

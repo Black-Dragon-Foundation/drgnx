@@ -716,6 +716,68 @@
   (let ((invocation-directory "/usr/bin/") (invocation-name "emacs") (drgnx-dir "/src/drgnx/"))
     (should (string-match-p "\nExecStart=/usr/bin/emacs --fg-daemon=drgnx --init-directory=/src/drgnx/init\n" (drgnx-pkg-service-unit)))))
 
+(ert-deftest drgnx-pkg/the-launch-agent-starts-the-daemon-at-login ()
+  ;; macOS: a per-user LaunchAgent, the systemd unit's counterpart
+  (let ((invocation-directory "/Applications/A & B.app/Contents/MacOS/") (invocation-name "Emacs")
+        (drgnx-dir "/src/drgnx/"))
+    (let ((p (drgnx-pkg-launch-agent)))
+      (should (string-search "<key>Label</key><string>org.blackdragonfoundation.drgnx</string>" p))
+      (should (string-search (concat "<key>ProgramArguments</key><array>"
+                                     "<string>/Applications/A &amp; B.app/Contents/MacOS/Emacs</string>"
+                                     "<string>--fg-daemon=drgnx</string><string>--init-directory=/src/drgnx/init</string>"
+                                     "</array>")
+                             p))
+      (should (string-search "<key>RunAtLoad</key><true/>" p))
+      (should (equal (cdr (drgnx-pkg--agent-program p)) '("/Applications/A & B.app/Contents/MacOS/Emacs" t)))))
+  (drgnx-pkg-test--with root
+    (drgnx-pkg-launch-agent (concat root "agents"))
+    (should (file-exists-p (concat root "agents/org.blackdragonfoundation.drgnx.plist")))
+    (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
+      (should (string-suffix-p "/Library/LaunchAgents/org.blackdragonfoundation.drgnx.plist" (drgnx-pkg-service-unit-file))))))
+
+(ert-deftest drgnx-pkg/the-launch-agent-follows-the-emacs-drgnx-uses ()
+  (drgnx-pkg-test--with root
+    (let* ((file (concat root "LaunchAgents/org.blackdragonfoundation.drgnx.plist"))
+           (old (let ((invocation-directory "/old/") (invocation-name "emacs")) (drgnx-pkg-launch-agent))))
+      (make-directory (file-name-directory file) t)
+      ;; a key the user added stays
+      (write-region (string-replace "<key>RunAtLoad</key>" "<key>Nice</key><integer>5</integer><key>RunAtLoad</key>" old)
+                    nil file nil 'silent)
+      (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos))
+                ((symbol-function 'drgnx-pkg--systemctl-reload) (lambda () (error "systemd on macOS"))))
+        (let ((r (drgnx-pkg-service-unit-refresh file))
+              (text (with-temp-buffer (insert-file-contents file) (buffer-string))))
+          (should (eq (plist-get r :status) 'rewritten))
+          (should (equal (plist-get r :old) "/old/emacs"))
+          (should (string-search "<key>Nice</key><integer>5</integer>" text))
+          (should (equal (cadr (drgnx-pkg--agent-program text)) (expand-file-name invocation-name invocation-directory))))
+        (should (eq (plist-get (drgnx-pkg-service-unit-refresh file) :status) 'current))
+        (write-region "<plist><dict><key>ProgramArguments</key><array><string>/bin/sleep</string></array></dict></plist>"
+                      nil file nil 'silent)
+        (should (eq (plist-get (drgnx-pkg-service-unit-refresh file) :status) 'foreign))))))
+
+(ert-deftest drgnx-pkg/service-unit-install-loads-the-launch-agent-on-macos ()
+  (drgnx-pkg-test--with root
+    (let* ((process-environment (cons (concat "HOME=" root "home") process-environment))
+           (file (concat root "home/Library/LaunchAgents/org.blackdragonfoundation.drgnx.plist"))
+           (calls nil))
+      (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos))
+                ((symbol-function 'drgnx-pkg--launchctl) (lambda (&rest args) (push args calls) 0)))
+        (should (eql (drgnx-pkg-cli-run '("service-unit" "--install")) 0))
+        (should (equal (cdr (drgnx-pkg--agent-program (with-temp-buffer (insert-file-contents file) (buffer-string))))
+                       (list (expand-file-name invocation-name invocation-directory) t)))
+        ;; out (if loaded) and in: launchd reads the file and starts the daemon (RunAtLoad)
+        (should (equal (reverse calls)
+                       (list (list "bootout" (format "gui/%d/org.blackdragonfoundation.drgnx" (user-uid)))
+                             (list "bootstrap" (format "gui/%d" (user-uid)) file))))
+        ;; launchctl refusing it is an error
+        (cl-letf (((symbol-function 'drgnx-pkg--launchctl) (lambda (&rest _) 5)))
+          (should (eql (drgnx-pkg-cli-run '("service-unit" "--install")) 1))))
+      ;; Linux: the unit is installed by onboarding; nothing is written here
+      (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux))
+                ((symbol-function 'drgnx-pkg--launchctl) (lambda (&rest _) (error "launchctl on Linux"))))
+        (should (eql (drgnx-pkg-cli-run '("service-unit" "--install")) 2))))))
+
 (defmacro drgnx-pkg-test--with-unit (vars unit-text &rest body)
   "BODY with XDG_CONFIG_HOME a temp dir (VARS: ROOT UNIT RELOADS), UNIT-TEXT written as its drgnx.service
 \(nil: no file), and the systemctl reload replaced by a counter: nothing reaches the real unit or systemd."

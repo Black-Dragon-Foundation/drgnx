@@ -6,7 +6,8 @@
 ;; `drgnx-restart' asks the quit questions first (`drgnx-session-quit-confirm': save, lose changes?), and on a yes starts
 ;; a waiter that outlives this Emacs and opens drgnx again once it has ended, then quits.  A no or C-g leaves drgnx
 ;; running and nothing waiting.  A session that is the daemon of drgnx.service is restarted by the service manager
-;; instead (`systemctl --user restart drgnx'), as `drgnx sync' advises.  The waiter is a transient systemd unit under
+;; instead (`systemctl --user restart drgnx'), as `drgnx sync' advises; on macOS the daemon of drgnx's launch agent by
+;; launchd (`launchctl kickstart -k').  The waiter is a transient systemd unit under
 ;; systemd (a plain detached process would die with the unit's cgroup), a detached process otherwise.
 
 ;;; Code:
@@ -26,6 +27,12 @@
   "Non-nil when this Emacs is the daemon of drgnx.service: it runs under systemd (INVOCATION_ID) in that unit's cgroup."
   (let ((id (getenv "INVOCATION_ID")))
     (and id (not (string-empty-p id)) (string-search "drgnx.service" (or (drgnx-restart--cgroup) "")) t)))
+
+(defconst drgnx-restart--agent-label "org.blackdragonfoundation.drgnx" "The launchd label of drgnx's daemon (core/drgnx-pkg.el).")
+
+(defun drgnx-restart--agent-p ()
+  "Non-nil when this Emacs is the daemon of drgnx's launch agent (macOS): launchd names its job in XPC_SERVICE_NAME."
+  (equal (getenv "XPC_SERVICE_NAME") drgnx-restart--agent-label))
 
 (defun drgnx-restart--under-systemd-p ()
   "Non-nil when this Emacs belongs to a systemd unit and a user manager can start another."
@@ -61,10 +68,14 @@ open.  A no or C-g leaves drgnx running."
   (interactive)
   (unless (fboundp 'drgnx-session-quit-confirm) (require 'drgnx-session))
   (when (drgnx-session-quit-confirm)
-    (if (drgnx-restart--service-p)
-        (drgnx-restart--spawn '("systemctl" "--user" "restart" "drgnx"))
+    (cond
+     ((drgnx-restart--service-p) (drgnx-restart--spawn '("systemctl" "--user" "restart" "drgnx")))
+     ;; kickstart -k kills the job and starts it again: launchd's restart
+     ((drgnx-restart--agent-p)
+      (drgnx-restart--spawn (list "launchctl" "kickstart" "-k" (format "gui/%d/%s" (user-uid) drgnx-restart--agent-label))))
+     (t
       (drgnx-restart--spawn (list "sh" "-c" (drgnx-restart--waiter)) (format "drgnx-restart-%d" (emacs-pid)))
-      (kill-emacs))))
+      (kill-emacs)))))
 
 (provide 'drgnx-restart)
 ;;; drgnx-restart.el ends here

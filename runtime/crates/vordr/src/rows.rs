@@ -65,7 +65,7 @@ impl Row {
         }
     }
 
-    fn pass(name: &str) -> Row {
+    pub(crate) fn pass(name: &str) -> Row {
         Row::new(name, Verdict::Pass, None, Vec::new())
     }
 
@@ -73,7 +73,7 @@ impl Row {
         Row::new(name, Verdict::Skip, None, Vec::new())
     }
 
-    fn fail(name: &str, class: Class, symbols: Vec<String>) -> Row {
+    pub(crate) fn fail(name: &str, class: Class, symbols: Vec<String>) -> Row {
         Row::new(name, Verdict::Fail, Some(class), symbols)
     }
 }

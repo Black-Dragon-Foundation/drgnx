@@ -67,6 +67,9 @@ pub struct TermOpen {
     /// Where the editor shows it (`panel`, `editor`): kept for a reattach.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub place: Option<String>,
+    /// A terminal in a remote folder: TRAMP's prefix of it (`/ssh:host:`), kept for a reattach.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
 }
 
 /// `term/open`'s answer.
@@ -279,6 +282,8 @@ pub struct TermStatus {
     pub command: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub place: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
 }
 
 /// `term/detached`: terminals were left running by a session that is gone; a live editor may offer them.
