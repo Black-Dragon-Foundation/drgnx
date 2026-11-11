@@ -9,6 +9,8 @@ pub mod attempt;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod jobexec;
 pub mod memwatch;
+#[cfg(target_os = "macos")]
+pub mod pressure;
 pub mod probe;
 #[cfg(feature = "runner")]
 pub mod sandbox;

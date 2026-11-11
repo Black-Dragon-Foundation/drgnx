@@ -84,4 +84,10 @@ pub trait Platform {
     fn hand_key(&self, dir: &Path, name: &str, value: &[u8]) -> io::Result<()>;
     /// Removes what this hub's attempts left under ROOT and on the machine (only OWNER's prefixed, labelled items).
     fn cleanup(&self, root: &Path, owner: &cleanup::Owner);
+    /// The ladder's level from the kernel's own memory-pressure event (a Mac's), when the platform has one: it sets
+    /// the ladder in place of PSI, and a kill it calls for is an eviction (the user's own load, not the runner's fault).
+    /// None: the ladder reads the machine (`forseti::ladder_level`).
+    fn pressure(&self) -> Option<forseti::safety::Level> {
+        None
+    }
 }

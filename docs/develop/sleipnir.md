@@ -125,6 +125,12 @@ SIGKILLs every one: the verdict is `oom` (the kill counts as the job's own OOM, 
 `result.json`'s `mem_overshoot_mib` records the peak past the grant for every Mac job (none on Linux, where the kernel
 caps it).
 
+**Machine-wide pressure** (`darwin::pressure`): a Mac has no PSI, so `DarwinPlatform::pressure` answers the
+kernel's own event instead (a `DISPATCH_SOURCE_TYPE_MEMORYPRESSURE` source, the level read once at start; no polling),
+and `serve`'s ladder takes it in place of `forseti::ladder_level`: *warn* is `tight` (no offer admitted), *critical*
+is `danger`, where a kill the ladder calls for becomes an eviction (requeued, no strike: the pressure is the user's
+own load). Linux's platform answers none and keeps PSI (`the_platforms_pressure_event_sets_the_ladder`).
+
 ## The podman argv
 
 `linux::podman::argv(req, caps, runner_args)` is the one builder of a `podman run` line, used by the hub's own container

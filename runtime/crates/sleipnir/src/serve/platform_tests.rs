@@ -6,7 +6,7 @@ use super::*;
 use crate::linux::reserve::Reservations;
 use crate::linux::resize;
 use crate::proto::{Facts, Missing};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// What the fake platform was asked, in order.
@@ -22,6 +22,8 @@ struct Fake {
     calls: Rc<RefCell<Calls>>,
     /// The attempts' units the fake says are up.
     up: Up,
+    /// The kernel's memory-pressure level, as a Mac's event would set it (none: the PSI ladder).
+    pressure: Rc<Cell<Option<Level>>>,
 }
 
 impl Platform for Fake {
@@ -131,6 +133,9 @@ impl Platform for Fake {
     fn cleanup(&self, _root: &Path, _owner: &cleanup::Owner) {
         self.calls.borrow_mut().cleanups += 1;
     }
+    fn pressure(&self) -> Option<Level> {
+        self.pressure.get()
+    }
 }
 
 /// What `serve` wrote, shared with the test.
@@ -164,6 +169,15 @@ impl Out {
 type Up = Rc<RefCell<BTreeSet<String>>>;
 
 fn serve(d: &Path) -> (Serve<Out>, Out, Rc<RefCell<Calls>>, Up) {
+    serve_with(d, Profile::Dedicated, Rc::default())
+}
+
+/// [`serve`] as PROFILE, with the fake's memory-pressure level shared with the test.
+fn serve_with(
+    d: &Path,
+    profile: Profile,
+    pressure: Rc<Cell<Option<Level>>>,
+) -> (Serve<Out>, Out, Rc<RefCell<Calls>>, Up) {
     let calls = Rc::new(RefCell::new(Calls::default()));
     let up = Rc::new(RefCell::new(BTreeSet::new()));
     let runtime = d.join("run");
@@ -172,12 +186,13 @@ fn serve(d: &Path) -> (Serve<Out>, Out, Rc<RefCell<Calls>>, Up) {
         runtime,
         calls: calls.clone(),
         up: up.clone(),
+        pressure,
     };
     let cfg = Config {
         root: d.join("root"),
         prefix: "t".into(),
         hub_id: "hubA".into(),
-        profile: Profile::Dedicated,
+        profile,
         name: "fake".into(),
         watchdog: None,
     };
@@ -288,4 +303,58 @@ fn an_attempt_runs_through_the_platform() {
         "{frames:?}"
     );
     assert!(calls.borrow().cleanups >= 1);
+}
+
+fn offer(s: &mut Serve<Out>) {
+    s.handle(Frame::Offer {
+        r: jr(),
+        spec: Box::new(super::tests_spec()),
+        priority: forseti::Priority::P3,
+        expected: None,
+        input_key: String::new(),
+        grant_hint: None,
+    });
+}
+
+/// [D] A platform with its own memory-pressure event (a Mac's) sets the ladder: at warn no offer is admitted; at
+/// critical a workstation's running attempt is evicted (requeued, no strike), never killed as the runner's fault.
+#[test]
+fn the_platforms_pressure_event_sets_the_ladder() {
+    let d = tempfile::tempdir().unwrap();
+    let pressure = Rc::new(Cell::new(Some(Level::Normal)));
+    let (mut s, out, calls, _) = serve_with(d.path(), Profile::Workstation, pressure.clone());
+    s.handle(Frame::Hello {
+        version: PROTO_VERSION,
+        hub_id: "hubA".into(),
+    });
+    pressure.set(Some(Level::Tight));
+    s.ready();
+    out.take();
+    offer(&mut s);
+    let frames = out.take();
+    assert!(
+        matches!(frames.first(), Some(Frame::Refuse { .. })),
+        "{frames:?}"
+    );
+    pressure.set(Some(Level::Normal));
+    s.ready();
+    out.take();
+    offer(&mut s);
+    assert!(matches!(out.take().first(), Some(Frame::Admit { .. })));
+    s.handle(Frame::Start {
+        r: jr(),
+        image: Some("img".into()),
+        env: vec![],
+        net_hosts: vec![],
+        pins: vec![],
+        parser: String::new(),
+    });
+    pressure.set(Some(Level::Danger));
+    s.ready();
+    assert_eq!(calls.borrow().killed, vec!["j1".to_string()]);
+    let dir = attempts::dir(&d.path().join("root"), "j1", 1);
+    assert_eq!(
+        crate::linux::jobexec::read_kill_reason(&dir).as_deref(),
+        Some(crate::linux::jobexec::EVICTED)
+    );
 }

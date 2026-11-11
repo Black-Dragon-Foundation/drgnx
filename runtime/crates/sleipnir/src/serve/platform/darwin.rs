@@ -6,7 +6,7 @@ use super::super::Config;
 use super::super::attempts::{self, LOG};
 use super::super::cleanup;
 use super::{LaunchReq, Platform};
-use crate::darwin::{attempt, jobexec, probe, sandbox};
+use crate::darwin::{attempt, jobexec, pressure, probe, sandbox};
 use crate::linux::jobexec::JobExec;
 use crate::linux::parse::Parser;
 use crate::linux::reserve::{self, Reservations};
@@ -32,6 +32,7 @@ pub struct DarwinPlatform {
 
 impl DarwinPlatform {
     pub fn new(cfg: &Config, exe: &Path) -> Result<DarwinPlatform, String> {
+        pressure::start();
         Ok(DarwinPlatform {
             root: cfg.root.clone(),
             hub_id: cfg.hub_id.clone(),
@@ -311,6 +312,11 @@ impl Platform for DarwinPlatform {
             bundles: cleanup::bundles(root),
         };
         cleanup::apply(root, &cleanup::plan(owner, &seen));
+    }
+
+    /// The kernel's memory-pressure event (no PSI on a Mac).
+    fn pressure(&self) -> Option<forseti::safety::Level> {
+        Some(pressure::level())
     }
 }
 
