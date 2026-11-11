@@ -3,8 +3,8 @@
 //! schedulers (two hubs, a hub and jobq) never both fit into the same memory. A running job's grow ([`grow`]) is
 //! judged and held the same way.
 
-use crate::linux::probe::Probe;
-use crate::linux::reserve::{self, Reservation};
+use super::platform::Platform;
+use crate::linux::reserve::Reservation;
 use crate::linux::resize::{self, Head, Resize, Sized};
 use forseti::{
     Expected, Grant, Job, JobId, JobSpec, JobState, Limits, MachineState, Priority, RunningJob,
@@ -60,12 +60,12 @@ pub struct Offer<'a> {
     pub expected: Option<Expected>,
 }
 
-/// Admits OFFER on PROBE's machine at NOW under LIMITS for SCHEDULER, whose running jobs are OURS and whose last
-/// start was LAST_START. Under the machine's admission lock it reads the machine (the others' live reservations
+/// Admits OFFER on the machine of PLATFORM at NOW under LIMITS for SCHEDULER, whose running jobs are OURS and whose
+/// last start was LAST_START. Under the machine's admission lock it reads the machine (the others' live reservations
 /// included), asks `forseti::admit`, sizes the grant and writes the reservation, held by this process (PID with its
 /// start time) until the attempt's job-exec takes it over.
 pub fn admit(
-    probe: &Probe,
+    probe: &dyn Platform,
     limits: &Limits,
     scheduler: &str,
     ours: &[RunningJob],
@@ -96,7 +96,8 @@ pub fn admit(
         forseti::admit(&job, offer.priority, &exp, &m, &budget, limits).map_err(Refused::wait)?;
         let grant = forseti::size(&job, &exp, &budget, 1);
         let pid = std::process::id();
-        let start_time = reserve::start_time(pid)
+        let start_time = probe
+            .start_time(pid)
             .map_err(|e| Refused::because(format!("this process's start time: {e}")))?;
         rs.put(&Reservation {
             scheduler: scheduler.to_string(),
@@ -153,7 +154,7 @@ impl HeadHere {
 /// (held by SCHEDULER) then holds the share it added, so no scheduler admits into it. None: no grow; a grow APPLY
 /// couldn't carry out leaves the reservation as it was.
 pub fn grow(
-    probe: &Probe,
+    probe: &dyn Platform,
     limits: &Limits,
     scheduler: &str,
     ours: &[RunningJob],
@@ -187,7 +188,14 @@ pub fn grow(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::linux::reserve::Reservations;
+    use crate::linux::probe::Probe;
+    use crate::linux::reserve::{self, Reservations};
+    use crate::serve::platform::LinuxPlatform;
+
+    /// The Linux platform on the fixture machine P.
+    fn lp(p: &Probe) -> LinuxPlatform {
+        LinuxPlatform::from_probe(p.clone())
+    }
     use forseti::{Expect, JobTrust, Kind, Lane, Profile, PsiLimits, Range, Weight};
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -312,8 +320,16 @@ mod tests {
                     priority: Priority::P3,
                     expected: None,
                 };
-                tx.send(admit(&p2, &limits(), "drgnx-hubA", &[], None, 1000, &offer))
-                    .unwrap();
+                tx.send(admit(
+                    &lp(&p2),
+                    &limits(),
+                    "drgnx-hubA",
+                    &[],
+                    None,
+                    1000,
+                    &offer,
+                ))
+                .unwrap();
             });
             skuld::window(
                 Duration::from_millis(300),
@@ -345,7 +361,16 @@ mod tests {
             priority: Priority::P3,
             expected: None,
         };
-        let refused = admit(&other, &limits(), "drgnx-hubB", &[], None, 1000, &offer).unwrap_err();
+        let refused = admit(
+            &lp(&other),
+            &limits(),
+            "drgnx-hubB",
+            &[],
+            None,
+            1000,
+            &offer,
+        )
+        .unwrap_err();
         assert!(
             matches!(
                 refused.reason,
@@ -359,7 +384,18 @@ mod tests {
             spec: &small,
             ..offer
         };
-        assert!(admit(&other, &limits(), "drgnx-hubB", &[], None, 1000, &offer).is_ok());
+        assert!(
+            admit(
+                &lp(&other),
+                &limits(),
+                "drgnx-hubB",
+                &[],
+                None,
+                1000,
+                &offer
+            )
+            .is_ok()
+        );
     }
 
     /// [D] A grow is judged under the admission lock against the machine as it is, then held: once applied, the job's
@@ -378,7 +414,7 @@ mod tests {
             priority: Priority::P3,
             expected: None,
         };
-        let grant = admit(&p, &limits(), "drgnx-hubA", &[], None, 1000, &offer).unwrap();
+        let grant = admit(&lp(&p), &limits(), "drgnx-hubA", &[], None, 1000, &offer).unwrap();
         assert_eq!((grant.mem_cap_mib, grant.reserve_mib), (4096, 2048));
         // long past its start, it uses 3,600 of its 4,096 cap
         let now = 5000;
@@ -407,11 +443,11 @@ mod tests {
             head: None,
         };
         let held = || rs.read_others("nobody")[0].reserve_mib;
-        let grown = grow(&p, &limits(), "drgnx-hubA", &ours, now, &g, |_| Ok(())).unwrap();
+        let grown = grow(&lp(&p), &limits(), "drgnx-hubA", &ours, now, &g, |_| Ok(())).unwrap();
         assert_eq!(grown.as_ref().map(|r| r.to_mib), Some(5120));
         assert_eq!(held(), 2048 + 1024);
         // an apply that fails holds nothing more
-        let failed = grow(&p, &limits(), "drgnx-hubA", &ours, now, &g, |_| {
+        let failed = grow(&lp(&p), &limits(), "drgnx-hubA", &ours, now, &g, |_| {
             Err("podman update: no".into())
         });
         assert!(failed.unwrap_err().why.contains("podman update"));
@@ -429,7 +465,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            grow(&p, &limits(), "drgnx-hubA", &ours, now, &g, |_| Ok(())),
+            grow(&lp(&p), &limits(), "drgnx-hubA", &ours, now, &g, |_| Ok(())),
             Ok(None)
         );
     }
@@ -449,7 +485,7 @@ mod tests {
             priority: Priority::P3,
             expected: None,
         };
-        admit(&p, &limits(), "drgnx-hubA", &[], None, 1000, &offer).unwrap();
+        admit(&lp(&p), &limits(), "drgnx-hubA", &[], None, 1000, &offer).unwrap();
         // started at 1000, expected to take an hour: it ends at 4600
         let now = 2000;
         let ours = [RunningJob {
@@ -480,7 +516,7 @@ mod tests {
                 reservation: reservation_job("a1", 1),
                 head,
             };
-            grow(&p, &limits(), "drgnx-hubA", &ours, now, &g, |_| Ok(()))
+            grow(&lp(&p), &limits(), "drgnx-hubA", &ours, now, &g, |_| Ok(()))
                 .unwrap()
                 .map(|r| r.to_mib)
         };
@@ -525,21 +561,21 @@ mod tests {
                         "disk_free_gb": 400, "disk_total_gb": 475, "mem_available_mib": 8192}"#;
         facts(quiet);
         assert_eq!(
-            admit(&p, &real, "drgnx-hubA", &[], None, 1000, &offer("q1")).map(|_| ()),
+            admit(&lp(&p), &real, "drgnx-hubA", &[], None, 1000, &offer("q1")).map(|_| ()),
             Ok(()),
             "the host's pressure or disk reached a test build"
         );
         // the facts are the machine: low disk in them is refused under the profile's floor, as on a real runner
         facts(&quiet.replace("400", "44"));
         assert_eq!(
-            admit(&p, &real, "drgnx-hubA", &[], None, 1000, &offer("q2"))
+            admit(&lp(&p), &real, "drgnx-hubA", &[], None, 1000, &offer("q2"))
                 .unwrap_err()
                 .reason,
             Some(WaitReason::DiskLow)
         );
         // a broken facts file is a loud refusal, never the host's figures
         facts("{");
-        let e = admit(&p, &real, "drgnx-hubA", &[], None, 1000, &offer("q3")).unwrap_err();
+        let e = admit(&lp(&p), &real, "drgnx-hubA", &[], None, 1000, &offer("q3")).unwrap_err();
         assert!(e.why.contains("test-machine.json"), "{e:?}");
         // and mains power is in them too (the host's `power_supply` may show a battery): a workstation on battery
         // admits nothing
@@ -558,7 +594,7 @@ mod tests {
             "\"mem_available_mib\": 8192",
             "\"mem_available_mib\": 8192, \"on_ac\": false",
         ));
-        let e = admit(&wp, &ws, "drgnx-hubA", &[], None, 1000, &offer("q4")).unwrap_err();
+        let e = admit(&lp(&wp), &ws, "drgnx-hubA", &[], None, 1000, &offer("q4")).unwrap_err();
         assert_eq!(e.reason, Some(WaitReason::OnBattery), "{e:?}");
     }
 }

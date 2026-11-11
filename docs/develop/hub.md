@@ -3830,7 +3830,13 @@ graph's own door is shut to every other class (`write::runners::an_agent_write_o
 seam: `UrdrStore` in the hub, `MemStore` in tests.
 
 `Registry::add(host, trust, …)`, in order, each step a `sh -c` on the runner over the user's own ssh (the generated
-config, no terminal): `uname -m`, `uname -s` and `$HOME` (not Linux: refused); the bundle for that architecture from
+config, no terminal): `uname -m`, `uname -s`, `$HOME` and, on a Mac, `sysctl.proc_translated` (neither Linux nor
+Darwin, an architecture without a bundle, or an Intel Mac: refused; a Rosetta shell, x86_64 and translated, is Apple
+silicon). A Mac (`host_kind`) takes the `aarch64-apple-darwin` bundle (`sleipnir` alone, built and ad-hoc signed on a
+Mac by `drgnx build runner-bundle --target aarch64-apple-darwin`), checked with `shasum -a 256`, into the root
+`~/.drgnx-runner.noindex` (Spotlight skips `.noindex`), made 0700 and excluded from Time Machine (`tmutil
+addexclusion`). The hub's own boot id is `/proc/sys/kernel/random/boot_id`, or `kern.bootsessionuuid` on a Mac
+(`hub_boot_id`). A Linux host takes the bundle for its architecture from
 `DRGNX_RUNNER_BUNDLES` (default `runtime/target/bundle` beside the hub's build folder, where `drgnx build runner-bundle`
 puts `<arch>/sleipnir`, `drgnx-key`, `drgnx-px-<arch>-linux-musl`) copied to `<root>/bin/<hash>/` (written as `.part`, hash checked, moved
 into place; refused with the build command when there is none); `sleipnir serve` asked for `hello-ok` and `probe` over

@@ -15,6 +15,8 @@
 
 #[cfg(all(feature = "runner", target_os = "linux"))]
 pub mod bench;
+#[cfg(feature = "linux")]
+pub mod darwin;
 #[cfg(all(feature = "linux", target_os = "linux"))]
 pub mod helper;
 #[cfg(feature = "linux")]
