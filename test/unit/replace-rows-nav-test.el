@@ -267,7 +267,8 @@ tile is asked for again."
                   (should (string-match-p "2 of 3 matches ticked · \\+2 −2"   ; the head is the header line
                                           (mapconcat (lambda (x) (if (stringp x) x "")) header-line-format "")))
                   (should (string-match-p "hunk 1" text))
-                  (should (equal "[x]" (get-text-property (text-property-not-all (point-min) (point-max)
+                  ;; line 3's match is unticked (kept) inside the hunk: the hunk is partly ticked
+                  (should (equal "[-]" (get-text-property (text-property-not-all (point-min) (point-max)
                                                                                  'drgnx-replace-tick nil)
                                                           'drgnx-replace-tick)))
                   (should (string-match-p "^   1 - let needle;$" text))   ; the old file's line number
@@ -288,6 +289,13 @@ tile is asked for again."
               (drgnx-replace-preview-keep))
             (should-not (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'ticked)))
         (when-let* ((b (drgnx-replace-rows-nav-test--tile))) (kill-buffer b))))))
+
+(ert-deftest drgnx-replace-rows/a-hunk-shows-no-blank-context-at-its-ends ()
+  "Pattern A: a hunk's empty context lines at its start and end are left out (the mockup's hunks start and end on
+text); the numbers of the lines kept are still the file's."
+  (let ((out (substring-no-properties
+              (drgnx-replace--hunk-lines "" (list :header "@@ -9,4 +9,4 @@" :lines '(" " "-a x" "+a y" " b" " "))))))
+    (should (equal out "  10 - a x\n  10 + a y\n  11   b\n"))))
 
 (ert-deftest drgnx-replace-rows/a-preview-tile-has-its-own-header-line-at-once ()
   "Pattern D: a preview tile has a header line of its own from the start, before the hub's answer: the editor's chrome
@@ -327,7 +335,10 @@ change); `C-u' Replace All writes at once, no sheet."
                 (let ((text (buffer-string)))
                   (should (string-match-p "Replace 2 matches in 1 file · 1 skipped" text))
                   (should (string-match-p "a.txt \\+2 −2" text))
-                  (should (string-match-p "^       1 - let needle;$" text))   ; the selected file's first hunk
+                  ;; the selected file's first hunk, 40 px in (a stretch; one space in batch)
+                  (should (string-match-p "^    1 - let needle;$" text))
+                  (should (equal (get-text-property (string-match "^    1 - let needle;$" text) 'display text)
+                                 `(space :width (,(drgnx-px 40)))))
                   (should (string-match-p "1 skipped: changed on disk since the search" text))
                   ;; the hunk's changed lines only, as the mockup's sheet: no context line
                   (should-not (string-match-p "3   let needle;" text)))

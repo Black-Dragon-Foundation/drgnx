@@ -28,6 +28,7 @@ over the editor, bottom-centre) or `auto': `float' under Glitnir, `window' witho
   :schema '(or (const auto) (const window) (const float)))
 
 (declare-function glitnir-active-p "glitnir")
+(declare-function glitnir-refresh "glitnir")
 
 (defun drgnx-popup--float-p ()
   "Non-nil when the lane floats in a child frame now."
@@ -148,7 +149,8 @@ else plain (no pad, no ring)."
       (unless (equal (frame-parameter child (car p)) (cdr p))
         (set-frame-parameter child (car p) (cdr p))))
     ;; the padding is the box's surface (the buffer's is `drgnx-surface-overlay'), read from the theme at each show
-    (set-face-background 'internal-border (and modal (face-background 'drgnx-surface-overlay nil t)) child)))
+    (set-face-background 'internal-border (and modal (face-background 'drgnx-surface-overlay nil t)) child)
+    (when (fboundp 'glitnir-refresh) (glitnir-refresh))))   ; Glitnir draws a frame's new chrome on a refresh
 
 (defun drgnx-popup--show-float (buffer &optional fraction modal)
   "The lane in the popup child frame: shown with BUFFER, fitted (at most FRACTION of the frame's height, default 0.33)

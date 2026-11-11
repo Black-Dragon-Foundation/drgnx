@@ -136,7 +136,9 @@ saved. Symbol mode's rename sends the language server's edits the same way, as e
 diff in the editor area, "NAME · preview": the file before and after its ticked replacements, the same edit set
 Replace All writes (the hub's `search/preview`), each line with its number and the words that change marked. Its header
 line says how many of the file's matches are ticked and the lines added and removed; **Open File** opens the file and
-**Replace in This File** writes the file's ticked matches only. Each hunk has a band with its tick box, `hunk N` and the
+**Replace in This File** writes the file's ticked matches only. Each hunk is a card: one line of context around its
+changes (blank lines at its ends left out), under a band with its tick box (a minus when only some of its matches are
+ticked), `hunk N` and the
 definition it is in (`defun drgnx-gateway--queue`); `a` keeps the hunk (its matches are ticked in the view), `D` drops it
 (unticked); the view's boxes and the tile follow each other. A line whose match you unticked stays in the hunk as it
 is, marked `← unticked, kept`. With **.\*** on, a groups line under each hunk shows what each group took, `\1 = pending`

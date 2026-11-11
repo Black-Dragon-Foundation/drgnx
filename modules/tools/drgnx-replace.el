@@ -45,6 +45,8 @@
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-wb-place "drgnx-rules")
 (declare-function drgnx-popup-refit "drgnx-popup" (buffer))
+(declare-function drgnx-palette-keycap "drgnx-palette" (name))
+(declare-function drgnx-palette-keycap-names "drgnx-palette" (key))
 (declare-function drgnx-palette-keycaps "drgnx-palette" (key))
 (declare-function drgnx-surfaces-key-label "drgnx-surfaces")
 (declare-function drgnx-hub-call-sync "drgnx-hub-client")
@@ -2527,11 +2529,12 @@ The find bar's button; not a command of its own (it needs the bar)."
 (defface drgnx-replace-preview-number '((t :inherit line-number))
   "A preview's line numbers." :group 'drgnx)
 
-(defface drgnx-replace-preview-word-old '((t :inherit diff-refine-removed))
-  "The part of a removed line that its replacement changes." :group 'drgnx)
+(defface drgnx-replace-preview-word-old '((t :inherit diff-refine-removed :box nil))
+  "The part of a removed line that its replacement changes: a filled tint, no outline (the mockup's `.w-del')."
+  :group 'drgnx)
 
-(defface drgnx-replace-preview-word-new '((t :inherit diff-refine-added))
-  "The part of an added line that is new." :group 'drgnx)
+(defface drgnx-replace-preview-word-new '((t :inherit diff-refine-added :box nil))
+  "The part of an added line that is new: a filled tint, no outline (the mockup's `.w-add')." :group 'drgnx)
 
 (defface drgnx-replace-preview-kept '((t :inherit (drgnx-ui-caption drgnx-text-subtle)))
   "`← unticked, kept' after a line whose match stays." :group 'drgnx)
@@ -2542,14 +2545,22 @@ The find bar's button; not a command of its own (it needs the bar)."
 (defface drgnx-replace-tick-on '((t :inherit drgnx-control-primary :box nil))
   "A ticked box (every match of the hunk or file written): filled with the accent." :group 'drgnx)
 
+(defface drgnx-replace-tick-mark '((t :inherit drgnx-replace-tick-on))
+  "The run of a ticked box drawn as an image: the mark's colour only (the theme leaves the background out), so the
+row's own background fills the line around the image, which carries the fill itself." :group 'drgnx)
+
 (defface drgnx-replace-tick-off '((t :inherit drgnx-text-subtle))
   "An unticked box." :group 'drgnx)
+
+(defface drgnx-replace-sheet-key '((t :inherit drgnx-keycap))
+  "The key chip on the sheet's Replace button (`Ctrl ↵'): ringed in the button's text colour." :group 'drgnx)
 
 (defface drgnx-replace-sheet-code '((t :inherit drgnx-code-small))
   "The code lines of the Replace All sheet (the lane's text is the UI font)." :group 'drgnx)
 
-(defface drgnx-replace-sheet-selected '((t :inherit (drgnx-selected-quiet drgnx-focus) :extend t))
-  "The Replace All sheet's selected file." :group 'drgnx)
+(defface drgnx-replace-sheet-selected '((t :inherit (drgnx-selected-quiet drgnx-focus)))
+  "The Replace All sheet's selected file: the selection in the focus ring, rounded where the theme rounds it."
+  :group 'drgnx)
 
 (defface drgnx-replace-preview-empty '((t :inherit warning))
   "A group that matched nothing (`\\2 = ∅') on a preview's groups line." :group 'drgnx)
@@ -2612,14 +2623,22 @@ file's lines of unticked matches, noted `← unticked, kept'.  CHANGED: the remo
   (let* ((head (plist-get hunk :header))
          (old (if (string-match "-\\([0-9]+\\)" head) (string-to-number (match-string 1 head)) 1))
          (new (if (string-match "\\+\\([0-9]+\\)" head) (string-to-number (match-string 1 head)) 1))
-         (note (propertize "   ← unticked, kept" 'face 'drgnx-replace-preview-kept)))
+         (note (propertize "   ← unticked, kept" 'face 'drgnx-replace-preview-kept))
+         (lines (plist-get hunk :lines)) (blank (lambda (l) (string-blank-p (substring l 1)))))
+    ;; no empty context at the hunk's ends (the mockup's hunks start and end on text)
+    (while (and lines (eq (aref (car lines) 0) ?\s) (funcall blank (car lines)))
+      (setq lines (cdr lines) old (1+ old) new (1+ new)))
+    (setq lines (reverse lines))
+    (while (and lines (eq (aref (car lines) 0) ?\s) (funcall blank (car lines)))
+      (setq lines (cdr lines)))
+    (setq lines (nreverse lines))
     (mapconcat (lambda (l)
                  (pcase (aref l 0)
                    (?- (prog1 (drgnx-replace--diff-line indent l old face) (cl-incf old)))
                    (?+ (prog1 (drgnx-replace--diff-line indent l new face) (cl-incf new)))
                    (_ (prog1 (if changed "" (drgnx-replace--diff-line indent l new face (and (memql old kept) note)))
                         (cl-incf old) (cl-incf new)))))
-               (drgnx-replace--refined (plist-get hunk :lines)) "")))
+               (drgnx-replace--refined lines) "")))
 
 (defun drgnx-replace--key-hint (id label)
   "Registry command ID's key as keycaps, then LABEL dim: `[a] keep'; LABEL alone when ID has no key."
@@ -2627,11 +2646,11 @@ file's lines of unticked matches, noted `← unticked, kept'.  CHANGED: the remo
     (concat (if (and key (fboundp 'drgnx-palette-keycaps)) (concat (drgnx-palette-keycaps key) " ") "")
             (propertize label 'face 'shadow))))
 
-(defun drgnx-replace--right (text)
-  "TEXT at the right edge of the window, a character's room after it (a stretch space before it, its width measured
-in pixels: buttons and keycaps are wider than their characters)."
+(defun drgnx-replace--right (text &optional margin)
+  "TEXT at the right edge of the window, MARGIN pixels (a character's width by default) after it: a stretch space
+before it, its width measured in pixels (buttons and keycaps are wider than their characters)."
   (concat (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width text (current-buffer))
-                                                                   (frame-char-width))))))
+                                                                   (or margin (frame-char-width)))))))
           text))
 
 (defvar-local drgnx-replace--preview nil "This preview tile's file and its last answer: (PATH . ANSWER).")
@@ -2699,16 +2718,23 @@ warning colour: a group that matched nothing), one line per distinct capture, \"
 
 (defun drgnx-replace--tick (state)
   "A tick box in STATE (`on', `mix' or `off'): Lucide's check, minus or square on a graphical frame, else its text."
-  (pcase state
-    ('on (drgnx-look-icon 'check 'drgnx-replace-tick-on 14))
-    ('mix (drgnx-look-icon 'minus 'drgnx-replace-tick-on 14))
-    (_ (drgnx-look-icon 'square 'drgnx-replace-tick-off 14))))
+  (if (eq state 'off)
+      (drgnx-look-icon 'square 'drgnx-replace-tick-off 14)
+    (let* ((s (drgnx-look-icon (if (eq state 'on) 'check 'minus) 'drgnx-replace-tick-on 14))
+           (img (get-text-property 0 'display s)))
+      ;; the image fills itself: the face's background on a taller row (a hunk band's box) would fill all of it
+      (when (eq (car-safe img) 'image)
+        (setq s (propertize s 'face 'drgnx-replace-tick-mark
+                            'display (append img (list :background (face-background 'drgnx-replace-tick-on nil t))))))
+      s)))
 
-(defun drgnx-replace--hunk-box (ids off)
-  "The tick box of a hunk with match IDS, OFF the unticked: ticked when all are, empty when none, a minus for some."
-  (let ((n (cl-count-if (lambda (id) (member id off)) ids)))
-    (propertize (drgnx-replace--tick (cond ((zerop n) 'on) ((= n (length ids)) 'off) (t 'mix)))
-                'drgnx-replace-tick (cond ((zerop n) "[x]") ((= n (length ids)) "[ ]") (t "[-]")))))
+(defun drgnx-replace--hunk-box (ids off &optional kept)
+  "The tick box of a hunk with match IDS, OFF the unticked, KEPT its unticked matches the hub left out of IDS: ticked
+when all are, empty when none, a minus for some."
+  (let* ((n (+ (cl-count-if (lambda (id) (member id off)) ids) kept)) (all (+ (length ids) kept))
+         (state (cond ((zerop n) 'on) ((= n all) 'off) (t 'mix))))
+    (propertize (drgnx-replace--tick state)
+                'drgnx-replace-tick (pcase state ('on "[x]") ('off "[ ]") (_ "[-]")))))
 
 (defun drgnx-replace--preview-render (key)
   "The preview tile's row KEY: the head, a skipped match, the empty note or a hunk (its tick box, header, lines and
@@ -2724,17 +2750,21 @@ groups line; the hunk's match ids on the whole row)."
               (ids (append (plist-get h :ids) nil)))
          (propertize
           (concat (if (> i 0) "\n" "")
-                  (let ((band (concat " " (drgnx-replace--hunk-box ids off) " " (format "hunk %d" (1+ i))
-                                      (if-let* ((label (plist-get h :label)))
-                                          (concat (propertize " · " 'face 'drgnx-text-subtle)
-                                                  (propertize label 'face 'drgnx-replace-preview-def))
-                                        "")
-                                      (drgnx-replace--right
-                                       (concat (drgnx-replace--key-hint 'search-preview-keep "keep") "  "
-                                               (drgnx-replace--key-hint 'search-preview-drop "drop")))
-                                      "\n")))
+                  ;; a card: inset 8 px at either side, the band's face to its right end (no `:extend': a box)
+                  (let* ((inset (drgnx-px 8))
+                         (band (concat " " (drgnx-replace--hunk-box ids off (length (plist-get h :kept)))
+                                       " " (format "hunk %d" (1+ i))
+                                       (if-let* ((label (plist-get h :label)))
+                                           (concat (propertize " · " 'face 'drgnx-text-subtle)
+                                                   (propertize label 'face 'drgnx-replace-preview-def))
+                                         "")
+                                       (drgnx-replace--right
+                                        (concat (drgnx-replace--key-hint 'search-preview-keep "keep") "  "
+                                                (drgnx-replace--key-hint 'search-preview-drop "drop"))
+                                        (+ inset (drgnx-px 12)))
+                                       (propertize " " 'display `(space :align-to (- right (,inset)))))))
                     (add-face-text-property 0 (length band) 'drgnx-replace-preview-head t band)
-                    band)
+                    (concat (propertize " " 'display `(space :width (,inset))) band "\n"))
                   (drgnx-replace--hunk-lines "" p nil (append (plist-get h :kept) nil))
                   (drgnx-replace--groups-line "       " (plist-get h :captures)))
           'drgnx-replace-hunk ids)))
@@ -2864,7 +2894,8 @@ index, :hunk its first hunk's diff text when it came, :captures that hunk's grou
 
 (define-derived-mode drgnx-replace-sheet-mode special-mode "Replace All"
   "The Replace All sheet: every file's changes; Replace writes them, Cancel leaves everything as it is."
-  (setq-local truncate-lines t mode-line-format nil)   ; its foot says what it is and what ends it
+  ;; its foot says what it is and what ends it; the selected file's ring shows where you are (no cursor)
+  (setq-local truncate-lines t mode-line-format nil cursor-type nil)
   (face-remap-add-relative 'default 'drgnx-surface-overlay)   ; a popup's surface, as the palette's
   (buffer-disable-undo))
 
@@ -2902,15 +2933,22 @@ index, :hunk its first hunk's diff text when it came, :captures that hunk's grou
             (if (> skips 0) (propertize (format "  %d skipped" skips) 'face 'warning) "")
             (if (and b (buffer-modified-p b)) (propertize "  open, unsaved: stays unsaved" 'face 'warning) ""))))
 
+(defun drgnx-replace--gap (px)
+  "A stretch PX logical pixels wide."
+  (propertize " " 'display `(space :width (,(drgnx-px px)))))
+
 (defun drgnx-replace--sheet-head (f open)
-  "File F's head on the sheet: its chevron (OPEN: down), its icon and its name."
-  (concat " " (drgnx-look-icon (if open 'chevron-down 'chevron-right) 'drgnx-text-subtle 14) " "
-          (drgnx-look-file-icon (plist-get f :path) 'drgnx-text-muted) " " (drgnx-replace--sheet-name f)))
+  "File F's head on the sheet, from inside its row's ring: 8 px, its chevron (OPEN: down), its icon and its name, 8 px
+between each (the mockup's `.fl')."
+  (concat (drgnx-replace--gap 8) (drgnx-look-icon (if open 'chevron-down 'chevron-right) 'drgnx-text-subtle 14)
+          (drgnx-replace--gap 8) (drgnx-look-file-icon (plist-get f :path) 'drgnx-text-muted)
+          (drgnx-replace--gap 8) (drgnx-replace--sheet-name f)))
 
 (defun drgnx-replace--sheet-edge (files skipped)
   "The sheet's right edge in pixels, in this buffer: the widest head, a gap, the widest tail; the tails end there."
   (let ((px (lambda (str) (string-pixel-width str (current-buffer)))))
-    (+ (apply #'max 0 (mapcar (lambda (f) (funcall px (drgnx-replace--sheet-head f t))) files))
+    (+ (drgnx-px 6)                                     ; the row's inset (outside its ring)
+       (apply #'max 0 (mapcar (lambda (f) (funcall px (drgnx-replace--sheet-head f t))) files))
        (drgnx-px 32)
        (apply #'max (funcall px (drgnx-replace--sheet-buttons))
               (mapcar (lambda (f) (funcall px (drgnx-replace--sheet-tail f skipped))) files)))))
@@ -2921,8 +2959,8 @@ index, :hunk its first hunk's diff text when it came, :captures that hunk's grou
           text))
 
 (defun drgnx-replace--sheet-buttons ()
-  "The sheet's Cancel and Replace, their keys as keycaps."
-  (concat (drgnx-replace--sheet-button "Cancel" 'search-sheet-cancel 'drgnx-ui-button) " "
+  "The sheet's Cancel and Replace: Cancel plain (Esc is every popup's), Replace with its key as one chip."
+  (concat (drgnx-ui-button "Cancel" 'search-sheet-cancel :face 'drgnx-ui-button) (drgnx-replace--gap 8)
           (drgnx-replace--sheet-button "Replace" 'search-sheet-confirm 'drgnx-ui-button-primary)))
 
 (defun drgnx-replace--sheet-render (key)
@@ -2933,23 +2971,27 @@ why, what Undo does, Cancel and Replace)."
     (pcase key
       (`(:title)
        (let ((n (apply #'+ (mapcar (lambda (f) (length (plist-get f :edits))) files))))
-         (concat " " (drgnx-look-icon 'replace-all 'drgnx-text-muted) " "
+         ;; the title row is 44 px high (`line-height' on its newline: the mockup's `.sheet .t')
+         (concat (drgnx-replace--gap 14) (drgnx-look-icon 'replace-all 'drgnx-text-muted) (drgnx-replace--gap 8)
                  (propertize (format "Replace %d match%s in %d file%s" n (if (= n 1) "" "es") (length files)
                                      (if (= (length files) 1) "" "s"))
                              'face 'drgnx-ui-heading)
                  (if skipped (propertize (format " · %d skipped" (length skipped)) 'face 'drgnx-text-subtle) "")
-                 "\n\n")))
+                 (propertize "\n" 'line-height 2.4))))
       (`(:file ,i)
        (let* ((f (nth i files)) (sel (= i (plist-get s :sel))) (h (and sel (plist-get s :hunk)))
+              (edge (drgnx-replace--sheet-edge files skipped))
+              ;; the row's ring: from its 6 px inset to 8 px past the tails' edge
               (row (concat (drgnx-replace--sheet-head f sel)
-                           (drgnx-replace--sheet-at-edge (drgnx-replace--sheet-edge files skipped)
-                                                         (drgnx-replace--sheet-tail f skipped))
-                           " \n")))
+                           (drgnx-replace--sheet-at-edge edge (drgnx-replace--sheet-tail f skipped))
+                           (propertize " " 'display `(space :align-to (,(+ edge (drgnx-px 8))))))))
          (when sel (add-face-text-property 0 (length row) 'drgnx-replace-sheet-selected t row))
          (propertize
-          (concat row
-                  (if h (concat (drgnx-replace--hunk-lines "    " h 'drgnx-replace-sheet-code nil t)
-                                (drgnx-replace--groups-line "          " (plist-get s :captures)))
+          (concat (drgnx-replace--gap 6) row (propertize "\n" 'line-height 1.65)   ; 30 px rows
+                  ;; the hunk under the file's name (the mockup's `.sheet .hunk', 40 px in)
+                  (if h (concat (drgnx-replace--hunk-lines (drgnx-replace--gap 40) h 'drgnx-replace-sheet-code nil t)
+                                (drgnx-replace--groups-line (concat (drgnx-replace--gap 40) "      ")
+                                                            (plist-get s :captures)))
                     ""))
           'drgnx-replace-sheet-file i)))
       (`(:foot)
@@ -2961,10 +3003,12 @@ why, what Undo does, Cancel and Replace)."
                                                   "; "))
                                'face 'warning)
                  "")
-               "\n " (propertize (format "Undo puts all %d file%s back" (length files) (if (= (length files) 1) "" "s"))
-                                 'face 'drgnx-text-subtle)
-               (drgnx-replace--sheet-at-edge (drgnx-replace--sheet-edge files skipped) (drgnx-replace--sheet-buttons))
-               "\n"))
+               "\n" (drgnx-replace--gap 14)
+               (propertize (format "Undo puts all %d file%s back" (length files) (if (= (length files) 1) "" "s"))
+                           'face 'drgnx-text-subtle)
+               (drgnx-replace--sheet-at-edge (+ (drgnx-replace--sheet-edge files skipped) (drgnx-px 8))
+                                             (drgnx-replace--sheet-buttons))
+               "\n\n"))   ; a line of room under the buttons (the mockup's foot padding; a taller line would stretch them)
       (_ "\n"))))
 
 (drgnx-view-define 'replace-sheet :render #'drgnx-replace--sheet-render :slice drgnx-view-slice :delay 0)
@@ -2981,10 +3025,16 @@ why, what Undo does, Cancel and Replace)."
     (goto-char (line-beginning-position 0))))
 
 (defun drgnx-replace--sheet-button (label id face)
-  "LABEL as a button in FACE running registry command ID, its key as keycaps after the label."
-  (let ((key (and (fboundp 'drgnx-surfaces-key-label) (drgnx-surfaces-key-label id :short t))))
-    (drgnx-ui-button (if (and key (fboundp 'drgnx-palette-keycaps)) (concat label "  " (drgnx-palette-keycaps key)) label)
-                     id :face face)))
+  "LABEL as a button in FACE running registry command ID, its key after the label as one chip (`Ctrl ↵')."
+  (let* ((key (and (fboundp 'drgnx-surfaces-key-label) (drgnx-surfaces-key-label id :short t)))
+         (cap (and key (fboundp 'drgnx-palette-keycap)
+                   (drgnx-palette-keycap (string-join (drgnx-palette-keycap-names key) " "))))
+         (button (drgnx-ui-button (if cap (concat label "  " cap) label) id :face face)))
+    ;; the button's face replaces the chip's: ring the chip again, over the button (after its 1-character pad)
+    (when cap
+      (let ((start (+ 1 (length label) 2)))
+        (add-face-text-property start (+ start (length cap)) 'drgnx-replace-sheet-key nil button)))
+    button))
 
 (defun drgnx-replace--sheet-hunk ()
   "Ask the hub for the selected file's first hunk (its preview), drawn under it when it comes."
