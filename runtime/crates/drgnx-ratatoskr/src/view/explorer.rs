@@ -513,7 +513,9 @@ fn entry_row(
 ) -> Row {
     let guide = "drgnx-explorer-guide";
     let mut b = RowBuilder::new(e.path.clone());
-    match look.gui {
+    // a hidden root's row is its name alone: an image is drawn even on invisible text
+    let hidden = e.depth == 0 && look.one_root;
+    match look.gui.filter(|_| !hidden) {
         Some((indent, icon, gap)) => {
             for _ in 1..e.depth.max(1) {
                 b.space(indent, icon, guide);
@@ -545,6 +547,7 @@ fn entry_row(
             let end = b.pos();
             b.face(at, end, guide);
         }
+        None if hidden => {}
         None => {
             let chevron = match (e.dir, e.open) {
                 (false, _) => "  ",
@@ -571,7 +574,7 @@ fn entry_row(
         b.prop(name, end, "drgnx-agents-here", json!(ords));
     }
     b.prop(0, end, "drgnx-work-id", json!(e.path));
-    if e.depth == 0 && look.one_root {
+    if hidden {
         b.prop(0, end, "invisible", json!(true));
     }
     b.finish()

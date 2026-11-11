@@ -167,7 +167,10 @@ no `● eglot': the session runs no language server")
     (magit "the scene's repository is the window mockups' (main, nothing staged, one commit); the Magit mockup's
 branch gateway-queue, staged file and history come with the Magit adapter (look step 7)"
            "the mockup's right-hand org card and floating transient are not opened by the scene")
-    (palette "the mockup's palette rows come from its own commands; the line lists the registry's"))
+    (palette "the mockup's palette rows come from its own commands; the line lists the registry's")
+    (explorer-focused-dark "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
+    (explorer-focused-light "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
+    (explorer-focused-hc "no agent badges (C, R) in the Explorer: agent system part 3 (G9)"))
   "What the line cannot show of each scene's mockup yet, written to the scene's facts (:limits).  A scene is never
 changed to hide a gap: the gap is named here instead.")
 
@@ -199,7 +202,32 @@ message there lasts some seconds, so the previous scene's last one, its palette'
 (defun drgnx-look-scene--theme (theme)
   (drgnx-look-scene--try "theme"
     (mapc #'disable-theme custom-enabled-themes)
-    (load-theme theme t)))
+    (load-theme theme t)
+    (drgnx-look-scene--views-settle)))
+
+(defvar drgnx-view-patch--buffers)
+(declare-function drgnx-view-patch-stale "drgnx-view")
+
+(defun drgnx-look-scene--stale-views ()
+  "The names of the hub-fed views' buffers drawn dimmed (`drgnx-view-stale'): their rows wait for the hub's reset."
+  (let (out)
+    (when (boundp 'drgnx-view-patch--buffers)
+      (maphash (lambda (_ b)
+                 (when (and (buffer-live-p b) (buffer-local-value 'drgnx-view-patch b)
+                            (drgnx-view-patch-stale (buffer-local-value 'drgnx-view-patch b)))
+                   (push (buffer-name b) out)))
+               drgnx-view-patch--buffers))
+    out))
+
+(defun drgnx-look-scene--views-settle ()
+  "After a theme change: the new look is a new env epoch, and a hub-fed view's rows stay dimmed until the hub's reset
+for it comes; wait (5 s at most) for it, as the user does for a moment, so the scene shows the rows as they settle."
+  (let ((end (+ (float-time) 5)))
+    (while (and (drgnx-look-scene--stale-views) (< (float-time) end))
+      (accept-process-output nil 0.02)
+      (redisplay))
+    (when-let* ((stale (drgnx-look-scene--stale-views)))
+      (push (format "theme: views still dimmed after 5 s: %S" stale) drgnx-look-scene--errors))))
 
 (defun drgnx-look-scene--packages (elpa)
   "Activate the packages in ELPA, as the user's install has them (a session has none of its own)."
