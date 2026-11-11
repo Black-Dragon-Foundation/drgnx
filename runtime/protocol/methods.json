@@ -29543,6 +29543,42 @@
       "classes": [
         "user"
       ],
+      "doc": "fold or open a folder of a view's search grouped by Folders: only its rows change (the model keeps every node); false when the view has no search or no such folder",
+      "name": "search/fold",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/fold`: in VIEW's search grouped by Folders, fold the folder NODE (`d:PATH`: its rows go, its count\nstays) or open it (OPEN). Only the rows change: the model keeps every node, so ticks and Next Match still reach a\nfolded match (going to it opens the folders above it).",
+        "properties": {
+          "node": {
+            "type": "string"
+          },
+          "open": {
+            "type": "boolean"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "node",
+          "open"
+        ],
+        "title": "FoldParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a view's grep rows go on: one more window of rows (more), or the rows up to a match beyond them and a margin (upto); false when the view has no search; a search sends only its first 200 rows until asked",
       "name": "search/grep-look",
       "params": {
@@ -29665,6 +29701,68 @@
           "skipped"
         ],
         "title": "GrepSkippedParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "regroup a view's search (by file, folder tree or definition; by path, count or the files' rank in the map) without searching again: its rows and model again, the match ids and ticks kept; false when the view has no search",
+      "name": "search/group",
+      "params": {
+        "$defs": {
+          "GrepGroup": {
+            "description": "How a search's rows are grouped: by file (a header and its matches); in a tree of folders (one-child chains joined,\n`d:` nodes, each with its matches' count); or by file, then the definition each match is in (`s:` nodes, the\nmatches outside any under \"(top level)\").",
+            "enum": [
+              "file",
+              "tree",
+              "symbol"
+            ],
+            "type": "string"
+          },
+          "GrepSort": {
+            "description": "The order of a search's groups: by path; by match count (most first, then by path); or by the file's rank in\nHrafn's map (most central first, then by path; a folder by its files' ranks together), which only `search/group`\ntakes (it waits for the project's index; `search/run` refuses it).",
+            "enum": [
+              "path",
+              "count",
+              "rank"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/group`: VIEW's search grouped as GROUP (in the order SORT) without searching again: its rows and model\nagain, the same match ids (ticks stay); folded folders open again.",
+        "properties": {
+          "group": {
+            "$ref": "#/$defs/GrepGroup"
+          },
+          "sort": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GrepSort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "group"
+        ],
+        "title": "GroupParams",
         "type": "object"
       },
       "result": {
@@ -31310,6 +31408,15 @@
               }
             ]
           },
+          "GrepGroup": {
+            "description": "How a search's rows are grouped: by file (a header and its matches); in a tree of folders (one-child chains joined,\n`d:` nodes, each with its matches' count); or by file, then the definition each match is in (`s:` nodes, the\nmatches outside any under \"(top level)\").",
+            "enum": [
+              "file",
+              "tree",
+              "symbol"
+            ],
+            "type": "string"
+          },
           "GrepIgnore": {
             "description": "Which files a text search and the ranked file query look in (the setting `drgnx-search-ignore-rules`).",
             "oneOf": [
@@ -31324,6 +31431,15 @@
                 "type": "string"
               }
             ]
+          },
+          "GrepSort": {
+            "description": "The order of a search's groups: by path; by match count (most first, then by path); or by the file's rank in\nHrafn's map (most central first, then by path; a folder by its files' ranks together), which only `search/group`\ntakes (it waits for the project's index; `search/run` refuses it).",
+            "enum": [
+              "path",
+              "count",
+              "rank"
+            ],
+            "type": "string"
           },
           "ScopeKind": {
             "description": "Which files a search looks in.",
@@ -31461,6 +31577,17 @@
               "null"
             ]
           },
+          "group": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GrepGroup"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How the rows are grouped (`search/group` changes it without searching again). Default `file`."
+          },
           "ignore": {
             "anyOf": [
               {
@@ -31487,6 +31614,17 @@
           },
           "search": {
             "$ref": "#/$defs/SearchSpec"
+          },
+          "sort": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GrepSort"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The order of the groups. Default: files as the search completes them (Files), by path (Folders, Symbols)."
           },
           "view": {
             "description": "The hub-fed view that shows the rows (`view/env`).",

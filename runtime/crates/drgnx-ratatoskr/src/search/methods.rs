@@ -693,6 +693,21 @@ impl Hub {
         Ok(wire_answer(&a, view))
     }
 
+    /// ROOT's files by their rank in Hrafn's map (the path relative to the project, its unpersonalised rank; a file
+    /// the map does not hold has none): the Search view's sort by rank.
+    pub(crate) async fn file_ranks(
+        &self,
+        front: &Front,
+        root: &Path,
+    ) -> Result<HashMap<String, f64>, Error> {
+        let (p, of) = self.view_of(front, root, false).await?;
+        let ask = hrafn::graph::RankAsk::default();
+        let (ranks, _) = hrafn::graph::file_ranks(p.store(), of.view, &ask)
+            .await
+            .map_err(internal)?;
+        Ok(ranks.into_iter().collect())
+    }
+
     /// ROOT's project, with tier 1 current, and the view its questions answer from: the base when BASE, else the
     /// worktree's own (H16).
     async fn view_of(

@@ -19,7 +19,7 @@
 (declare-function drgnx-replace--live-view "drgnx-replace")
 (declare-function drgnx-replace--rows-p "drgnx-replace")
 (declare-function drgnx-replace--rows-off "drgnx-replace")
-(declare-function drgnx-replace--rows-kind-p "drgnx-replace")
+(declare-function drgnx-replace--rows-group-p "drgnx-replace")
 (declare-function drgnx-replace--rows-file-matches "drgnx-replace")
 (declare-function drgnx-replace--text "drgnx-replace")
 (declare-function drgnx-replace--update-status "drgnx-replace")
@@ -60,7 +60,7 @@ or, when none is ticked, the selected row's (a match, or a file's matches).  N i
         (list nil (hash-table-keys off) (- total (hash-table-count off)))
       (let* ((id (or (get-text-property (point) 'drgnx-work-id) (drgnx-view-nav-selection)
                      (user-error "Tick matches, or select a row, to ask an agent about")))
-             (ids (if (drgnx-replace--rows-kind-p id "file") (drgnx-replace--rows-file-matches id) (list id))))
+             (ids (if (drgnx-replace--rows-group-p id) (drgnx-replace--rows-file-matches id) (list id))))
         (list ids nil (length ids))))))
 
 (defun drgnx-search-handoff--choices (root)

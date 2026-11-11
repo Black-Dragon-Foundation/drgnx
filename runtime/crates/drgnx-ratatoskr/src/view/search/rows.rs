@@ -2,6 +2,7 @@
 //! (`m:RUN:N`), the model's window, and the rows the window of rows holds.
 
 use super::Run;
+use super::group::{Ent, Layout};
 use super::run::{Found, Mark, match_id};
 use crate::search::context::Def;
 use crate::view::model::Doc;
@@ -32,6 +33,11 @@ fn match_json(m: &Match) -> Value {
 /// FILE's header: its tick box, its name, the folder (relative to the root) after it, and when its buffer is too large
 /// to send (LARGE) that its matches are the file's on disk.
 pub(super) fn header(root: &Path, file: &str, large: bool) -> Row {
+    header_at(root, file, large, 0, true)
+}
+
+/// [`header`] DEPTH steps in, with its folder after the name when DIR (not under a folder row).
+fn header_at(root: &Path, file: &str, large: bool, depth: usize, show_dir: bool) -> Row {
     let path = Path::new(file);
     let name = path
         .file_name()
@@ -43,10 +49,12 @@ pub(super) fn header(root: &Path, file: &str, large: bool) -> Row {
         .map(|d| d.to_string_lossy().into_owned())
         .unwrap_or_default();
     let mut b = RowBuilder::new(file_id(root, file));
+    b.push(&"  ".repeat(depth), None);
+    let p = b.pos();
     b.push("[x]", None)
-        .prop(0, 3, "drgnx-replace-box", json!(file));
+        .prop(p, p + 3, "drgnx-replace-box", json!(file));
     b.push(" ", None).push(&name, None);
-    if !dir.is_empty() {
+    if show_dir && !dir.is_empty() {
         b.push(&format!("  {dir}/"), Some("drgnx-replace-dim"));
     }
     if large {
@@ -84,16 +92,41 @@ pub(super) fn entries_of(files: &[Found]) -> usize {
 }
 
 /// FILE's node in the model of a search of ROOT: its id and wire object (the whole path in `path`).
-fn file_node(root: &Path, file: &str) -> (String, Value) {
+fn file_node(root: &Path, file: &str, parent: Option<&str>) -> (String, Value) {
     let fid = file_id(root, file);
     let name = Path::new(file)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let node = json!({"id": fid, "kind": "file", "flags": 1,
-                      "fields": [["label", name], ["path", file]]});
+    let mut node = json!({"id": fid, "kind": "file", "flags": 1,
+                          "fields": [["label", name], ["path", file]]});
+    if let Some(p) = parent {
+        node["parent"] = json!(p);
+    }
     (fid, node)
 }
+
+/// A folder's node (a grouped search's `d:`), under folder PARENT.
+fn dir_node(root: &Path, d: &super::group::Dir, parent: Option<&str>) -> Value {
+    let mut node = json!({"id": d.id, "kind": "folder", "flags": 1,
+                          "fields": [["label", d.label], ["path", root.join(&d.path).to_string_lossy()],
+                                     ["count", d.n]]});
+    if let Some(p) = parent {
+        node["parent"] = json!(p);
+    }
+    node
+}
+
+/// A definition's node (a grouped search's `s:`) in FILE, under the file's node FID: its `path` is the file's, as a
+/// file node's (a match under it finds its file there).
+fn sym_node(s: &super::group::Sym, file: &str, fid: &str) -> Value {
+    json!({"id": s.id, "kind": "symbol", "flags": 1, "parent": fid,
+           "fields": [["label", s.name.as_deref().unwrap_or(TOP_LEVEL)], ["path", file], ["kind", s.kind],
+                      ["count", s.n]]})
+}
+
+/// The label of the matches outside any definition (Symbols grouping).
+const TOP_LEVEL: &str = "(top level)";
 
 /// M's node (id ID) in the model, a child of the file node FID.  Its file is its parent's `path`, not a field of its
 /// own: a window move sends thousands of match nodes, and the path again in each was 15 % of the line.
@@ -106,7 +139,7 @@ fn match_node(fid: &str, id: String, m: &Match) -> (String, Value) {
 
 /// F's batch (of run RUN) as the model's nodes and the ids it adds to `order`.
 pub(super) fn batch_nodes(root: &Path, run: u64, f: &Found) -> (Vec<(String, Value)>, Vec<String>) {
-    let (fid, node) = file_node(root, &f.file);
+    let (fid, node) = file_node(root, &f.file, None);
     let mut nodes = vec![(fid.clone(), node)];
     nodes.extend(
         f.ms.iter()
@@ -133,16 +166,101 @@ pub(super) struct Window<'a> {
     pub held: Vec<String>,
     pub order: std::ops::Range<usize>,
     from_files: Vec<(&'a str, Option<&'a Match>)>,
+    /// A grouped search's: its layout and files, and each held entry's row in it (`from_files` unused).
+    grouped: Option<(&'a Layout, &'a [Found], Vec<u32>)>,
 }
 
 impl Window<'_> {
     /// `held[i]`'s wire object.
     pub(super) fn node(&self, i: usize) -> Value {
+        if let Some((l, files, at)) = &self.grouped {
+            return ent_node(self.root, l, files, at[i] as usize, &self.held[i]);
+        }
         match self.from_files[i] {
-            (file, None) => file_node(self.root, file).1,
+            (file, None) => file_node(self.root, file, None).1,
             (file, Some(m)) => match_node(&file_id(self.root, file), self.held[i].clone(), m).1,
         }
     }
+}
+
+/// The node id of row AT of a grouped search (run RUN of ROOT).
+fn ent_id(root: &Path, run: u64, l: &Layout, files: &[Found], at: usize) -> String {
+    match l.ents[at] {
+        Ent::Dir(k) => l.dirs[k as usize].id.clone(),
+        Ent::File(fi) => file_id(root, &files[fi as usize].file),
+        Ent::Sym(k) => l.syms[k as usize].id.clone(),
+        Ent::Label(fi, j) => format!("c:{run}:{}", files[fi as usize].ns[j as usize]),
+        Ent::Match(fi, j) => match_id(run, files[fi as usize].ns[j as usize]),
+    }
+}
+
+/// The wire object of row AT (node ID) of a grouped search.
+fn ent_node(root: &Path, l: &Layout, files: &[Found], at: usize, id: &str) -> Value {
+    let run = super::run::parse_match_id(id).map_or(0, |(r, _)| r);
+    let parent = l.parents[at].map(|p| ent_id(root, run, l, files, p as usize));
+    match l.ents[at] {
+        Ent::Dir(k) => dir_node(root, &l.dirs[k as usize], parent.as_deref()),
+        Ent::File(fi) => file_node(root, &files[fi as usize].file, parent.as_deref()).1,
+        Ent::Sym(k) => {
+            let s = &l.syms[k as usize];
+            let file = &files[s.file as usize].file;
+            sym_node(s, file, &parent.unwrap_or_else(|| file_id(root, file)))
+        }
+        Ent::Label(..) => Value::Null,
+        Ent::Match(fi, j) => {
+            let m = &files[fi as usize].ms[j as usize];
+            match_node(&parent.unwrap_or_default(), id.to_owned(), m).1
+        }
+    }
+}
+
+/// The entries (nodes) of RUN's model: its files and matches, and a grouped search's folders and definitions.
+pub(super) fn run_entries(run: &Run) -> usize {
+    match run.layout() {
+        Some(l) => l.model.len(),
+        None => entries_of(&run.files),
+    }
+}
+
+/// RUN's model window of at most WINDOW entries from FROM ([`window_of`], grouped or not).
+pub(super) fn run_window(run: &Run, window: usize, from: Option<usize>) -> Window<'_> {
+    let root = run.query.root.as_path();
+    let Some(l) = run.layout() else {
+        return window_of(root, run.id, &run.files, window, from);
+    };
+    let total = l.model.len();
+    let from = from.unwrap_or(0).min(total.saturating_sub(window));
+    let end = (from + window).min(total);
+    let mut at: Vec<u32> = Vec::new();
+    // the nodes above the window's first entry, outermost first, outside `order`
+    if let Some(first) = l.model.get(from) {
+        let mut up = l.parents[*first as usize];
+        while let Some(p) = up {
+            at.push(p);
+            up = l.parents[p as usize];
+        }
+        at.reverse();
+    }
+    let outside = at.len();
+    at.extend_from_slice(&l.model[from..end]);
+    let held = at
+        .iter()
+        .map(|a| ent_id(root, run.id, l, &run.files, *a as usize))
+        .collect::<Vec<_>>();
+    Window {
+        root,
+        total,
+        from,
+        order: outside..held.len(),
+        held,
+        from_files: Vec::new(),
+        grouped: Some((l, &run.files, at)),
+    }
+}
+
+/// RUN's model ([`grep_doc`], grouped or not), its window from FROM.
+pub(super) fn run_doc(run: &Run, from: Option<usize>) -> Doc {
+    doc_of(&run_window(run, MODEL_WINDOW, from))
 }
 
 /// FILES' (run RUN) window of at most WINDOW entries from entry FROM (clamped so the window is full): its ids only, no
@@ -164,6 +282,7 @@ pub(super) fn window_of<'a>(
         held: Vec::new(),
         order: 0..0,
         from_files: Vec::new(),
+        grouped: None,
     };
     let mut parent = false;
     let mut at = 0;
@@ -206,7 +325,11 @@ pub(super) fn grep_doc_in(
     window: usize,
     from: Option<usize>,
 ) -> Doc {
-    let w = window_of(root, run, files, window, from);
+    doc_of(&window_of(root, run, files, window, from))
+}
+
+/// The model of window W.
+fn doc_of(w: &Window) -> Doc {
     let mut d = Doc {
         descriptor: json!({
             "scheme": "tree",
@@ -417,14 +540,125 @@ pub(super) fn label_row(run: u64, n: u32, d: &Def) -> Row {
     b.finish()
 }
 
-/// The rows of all FILES: each file's header, labels and matches.
-pub(super) fn rows_total(files: &[Found]) -> usize {
-    files.iter().map(Found::rows).sum()
+/// The rows of RUN: each file's header, labels and matches (a grouped search's: its layout's).
+pub(super) fn rows_total(run: &Run) -> usize {
+    match run.layout() {
+        Some(l) => l.shown.len(),
+        None => run.files.iter().map(Found::rows).sum(),
+    }
+}
+
+/// Row AT of a grouped search RUN (layout L).
+fn ent_row(run: &Run, l: &Layout, at: usize) -> Row {
+    let root = run.query.root.as_path();
+    let depth = l.depth[at] as usize;
+    match l.ents[at] {
+        Ent::Dir(k) => {
+            let d = &l.dirs[k as usize];
+            let mut b = RowBuilder::new(d.id.clone());
+            b.push(&"  ".repeat(depth), None);
+            // its fold chevron: a click folds or opens it (`search/fold`)
+            let p = b.pos();
+            b.push(if d.folded { "▸" } else { "▾" }, Some("drgnx-replace-dim"))
+                .prop(p, p + 1, "drgnx-replace-fold", json!(d.id));
+            b.push(" ", None);
+            let p = b.pos();
+            b.push("[x]", None)
+                .prop(p, p + 3, "drgnx-replace-box", json!(d.id));
+            b.push(" ", None)
+                .push(&format!("{}/", d.label), Some("drgnx-replace-folder"))
+                .push(&format!("  {}", d.n), Some("drgnx-replace-dim"));
+            let end = b.pos();
+            b.prop(0, end, "drgnx-work-id", json!(d.id));
+            b.finish()
+        }
+        Ent::File(fi) => {
+            let f = &run.files[fi as usize];
+            header_at(
+                root,
+                &f.file,
+                f.large,
+                depth,
+                run.group != super::GrepGroup::Tree,
+            )
+        }
+        Ent::Sym(k) => {
+            let s = &l.syms[k as usize];
+            let mut b = RowBuilder::new(s.id.clone());
+            b.push(&"  ".repeat(depth), None);
+            let p = b.pos();
+            b.push("[x]", None)
+                .prop(p, p + 3, "drgnx-replace-box", json!(s.id));
+            b.push(" ", None);
+            match &s.name {
+                Some(name) => {
+                    let p = b.pos();
+                    b.push(kind_icon(&s.kind), Some("drgnx-replace-kind"));
+                    b.prop(p, b.pos(), "help-echo", json!(s.kind));
+                    b.push(" ", None)
+                        .push(&flat(name), Some("drgnx-replace-symbol"));
+                }
+                None => {
+                    b.push(TOP_LEVEL, Some("drgnx-replace-dim"));
+                }
+            }
+            b.push(&format!("  {}", s.n), Some("drgnx-replace-dim"));
+            let end = b.pos();
+            b.prop(0, end, "drgnx-work-id", json!(s.id));
+            b.finish()
+        }
+        Ent::Label(fi, j) => {
+            let f = &run.files[fi as usize];
+            let d = f.labelled(j as usize).expect("a label row's definition");
+            indented(label_row(run.id, f.ns[j as usize], d), depth - 1)
+        }
+        Ent::Match(fi, j) => {
+            let f = &run.files[fi as usize];
+            let (m, k) = (&f.ms[j as usize], f.ns[j as usize]);
+            indented(
+                row_of(run, m, k, f.marks.get(j as usize).and_then(Option::as_ref)),
+                depth - 1,
+            )
+        }
+    }
+}
+
+/// ROW with N more steps of indent before it (its properties moved along).
+fn indented(mut row: Row, n: usize) -> Row {
+    if n == 0 {
+        return row;
+    }
+    let pad = "  ".repeat(n);
+    let k = pad.chars().count() as u32;
+    row.text.insert_str(0, &pad);
+    for r in &mut row.runs {
+        (r.0, r.1) = (r.0 + k, r.1 + k);
+    }
+    for p in &mut row.props {
+        (p.0, p.1) = (p.0 + k, p.1 + k);
+    }
+    for s in &mut row.stops {
+        s.0 += k;
+    }
+    for i in &mut row.images {
+        i.0 += k;
+    }
+    for s in &mut row.spaces {
+        s.0 += k;
+    }
+    row
 }
 
 /// The search's rows AT (a file's header, then its matches, each first match of a definition after its label; files
 /// in the order they were complete); none is built before it.
 pub(super) fn rows_in(run: &Run, at: std::ops::Range<usize>) -> Vec<Row> {
+    if let Some(l) = run.layout() {
+        let end = at.end.min(l.shown.len());
+        return l.shown[at.start.min(end)..end]
+            .iter()
+            .map(|i| ent_row(run, l, *i as usize))
+            .collect();
+    }
     let mut rows = Vec::new();
     let mut i = 0;
     for f in &run.files {
@@ -474,8 +708,36 @@ pub(super) fn gap_row(n: usize) -> Row {
     b.finish()
 }
 
+/// The row (shown or not) of node KEY in a grouped search RUN (layout L).
+pub(super) fn ent_index(run: &Run, l: &Layout, key: &str) -> Option<usize> {
+    if let Some(at) = l.at_node.get(key) {
+        return Some(*at as usize);
+    }
+    if let Some((r, n)) = super::run::parse_match_id(key) {
+        if r != run.id {
+            return None;
+        }
+        let fi = run.files.iter().position(|f| {
+            f.ns.first()
+                .zip(f.ns.last())
+                .is_some_and(|(a, b)| (*a..=*b).contains(&n))
+        })?;
+        let j = run.files[fi].ns.binary_search(&n).ok()?;
+        return l.match_row(fi, j);
+    }
+    let fi = run
+        .files
+        .iter()
+        .position(|f| key == file_id(&run.query.root, &f.file))?;
+    Some(l.at_file[fi] as usize)
+}
+
 /// The position among the search's rows of the row KEY (a file's header or a match), if it is there yet.
 pub(super) fn row_index(run: &Run, key: &str) -> Option<usize> {
+    if let Some(l) = run.layout() {
+        let at = ent_index(run, l, key)?;
+        return l.shown_at[at].map(|i| i as usize);
+    }
     if let Some((r, n)) = super::run::parse_match_id(key) {
         if r != run.id {
             return None;

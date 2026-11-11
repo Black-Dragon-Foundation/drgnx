@@ -321,6 +321,8 @@ params! {
     SearchGrepReplace(search::GrepReplaceParams),
     SearchGrepLook(search::GrepLookParams),
     SearchGrepSkipped(search::GrepSkippedParams),
+    SearchGroup(search::GroupParams),
+    SearchFold(search::FoldParams),
     SearchEdits(search::EditsParams),
     SearchEditDoc(search::EditDocParams),
     SearchHandoff(search::HandoffParams),

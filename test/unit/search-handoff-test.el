@@ -33,7 +33,7 @@ each session (ID NAME CWD); the hub answers `search/handoff' with ANSWER from SP
                ((symbol-function 'drgnx-replace--rows-off)
                 (lambda () (let ((h (make-hash-table :test #'equal)))
                              (dolist (id (plist-get spec :off) h) (puthash id t h)))))
-               ((symbol-function 'drgnx-replace--rows-kind-p) (lambda (id kind) (string-prefix-p (substring kind 0 1) id)))
+               ((symbol-function 'drgnx-replace--rows-group-p) (lambda (id) (string-prefix-p "f:" id)))
                ((symbol-function 'drgnx-replace--rows-file-matches) (lambda (_) '("m:1:4" "m:1:5")))
                ((symbol-function 'drgnx-view-nav-selection) (lambda () (plist-get spec :row)))
                ((symbol-function 'drgnx-replace--text)

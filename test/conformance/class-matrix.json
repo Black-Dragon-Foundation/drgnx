@@ -197,6 +197,8 @@
   "search/undo": ["user"],
   "search/grep-look": ["user"],
   "search/grep-skipped": ["user"],
+  "search/group": ["user"],
+  "search/fold": ["user"],
   "search/grep-replace": ["user"],
   "search/index": ["user"],
   "search/model-download": ["user"],

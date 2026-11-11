@@ -972,6 +972,7 @@ The commands of modules that need no installed package are in it, the later stag
                               search-edit-results search-edit-save search-edit-delete-line ; Edit Results
                               search-to-agent search-handoff-send search-handoff-cancel ; Ask an Agent
                               search-handoff-next-who search-handoff-hidden
+                              search-group-next ; the grouping control
                               layout-next browser-go keyboard-shortcuts shortcuts-change shortcuts-add shortcuts-filter
                               shortcuts-record-filter shortcuts-conflicts shortcuts-no-key shortcuts-changed
                               shortcuts-undo shortcuts-reset shortcuts-reset-all shortcuts-profile
