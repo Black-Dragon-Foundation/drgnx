@@ -668,11 +668,11 @@ sent the client."
            (disk (with-temp-buffer (insert-file-contents-literally f) (buffer-string)))
            (buf (find-file-noselect f)))         ; automatic, without chunks: raw
       (should (eq (buffer-local-value 'drgnx-large-file buf) 'raw))
-      (pcase-let ((`(,n ,skipped ,undo)
-                   (drgnx-replace--apply-file f (list (list :file f :line 2 :col 0 :text "xxxx")) "yyyy")))
-        (should (= n 0))
-        (should-not undo)
-        (should (equal (mapcar (lambda (m) (plist-get m :reason)) skipped)
+      (let ((r (drgnx-replace-apply-edits
+                (list :change 1 :path f :edits (vector (list :id "m:1:0" :line 2 :col 0 :end_line 2 :end_col 4
+                                                             :old "xxxx" :new "yyyy"))))))
+        (should (equal (plist-get r :applied) []))
+        (should (equal (mapcar (lambda (m) (plist-get m :why)) (plist-get r :skipped))
                        '("open raw: Large File: Open Whole first"))))
       (should-not (buffer-modified-p buf))
       (should (equal (with-temp-buffer (insert-file-contents-literally f) (buffer-string)) disk)))))

@@ -429,6 +429,185 @@ pub struct GrepSkip {
     pub why: String,
 }
 
+/// What made a change set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChangeOrigin {
+    ReplaceAll,
+    EditResults,
+    Undo,
+}
+
+/// One edit the caller names itself (the language server's rename, Replace This of Emacs's own rows): its file, its
+/// first line (from 1), its character columns (from 0) and the text it expects there (`old`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GivenEdit {
+    pub path: AbsPath,
+    pub line: u32,
+    pub col: u32,
+    /// Default: `line`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<u32>,
+    pub end_col: u32,
+    pub old: String,
+    pub new: String,
+}
+
+/// `search/edits`: the edit set of VIEW's search. IDS names the matches to write; without it, every match of the run
+/// but those OFF names (the user's unticks). EDITS are edits the caller names itself, in place of the run's matches.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditsParams {
+    pub view: String,
+    /// The project the given EDITS are in (their files are written only inside it); the run's own root otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<AbsPath>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ids: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub off: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edits: Option<Vec<GivenEdit>>,
+    /// The replacement, when the view's fields have one the search has not been told yet (`search/grep-replace`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace: Option<String>,
+}
+
+/// One edit of a file: its id (a match's `m:RUN:N`, `e:K` for the K-th given edit), its range
+/// as lines (from 1) and character columns (from 0) for the editor and as UTF-8 byte offsets for the hub, the text it
+/// expects there and the text it puts in.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchEdit {
+    pub id: String,
+    pub line: u32,
+    pub col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
+    #[serde(default)]
+    pub byte_start: u64,
+    #[serde(default)]
+    pub byte_end: u64,
+    pub old: String,
+    pub new: String,
+}
+
+/// An edit (or a whole file: no id) left out, and why.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditSkip {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub path: String,
+    pub why: String,
+}
+
+/// Where a file's text came from: its file on disk, or the editor's buffer of it (`search/buffer`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum EditSource {
+    Disk,
+    Buffer,
+}
+
+/// One file of an edit set: its edits in order (none overlap).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileEdits {
+    pub path: String,
+    pub source: EditSource,
+    pub edits: Vec<SearchEdit>,
+}
+
+/// `search/edits`' answer: the change set it made (`search/apply` writes it), its files and what it left out.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditsAnswer {
+    pub change: u64,
+    pub files: Vec<FileEdits>,
+    pub skipped: Vec<EditSkip>,
+}
+
+/// `search/apply`: write change set CHANGE (from `search/edits`). OPEN lists the files the asking editor has open:
+/// those (and the ones any editor told the hub it has, `pair/open`) are written by their editor (`search-apply`), the
+/// rest by the hub on disk. The end is the event `search-change`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApplyParams {
+    pub view: String,
+    pub change: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open: Vec<String>,
+}
+
+/// `search/undo`: put back every file change set CHANGE wrote, leaving alone a file edited since; a new change set
+/// (origin `undo`), ended by `search-change`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UndoParams {
+    pub view: String,
+    pub change: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open: Vec<String>,
+}
+
+/// `search-apply`: the editor that has PATH open writes these edits of change set CHANGE into its buffer, each only
+/// where its `old` text is, one undo group, saving unless the buffer held unsaved edits; it answers `search/applied`
+/// within `ttl_ms` of the event's arrival, else the hub skips the file. TICK (an undo's) is the buffer's
+/// `buffer-chars-modified-tick` after the write it undoes: a buffer edited since is left alone.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchApply {
+    pub view: String,
+    pub change: u64,
+    pub path: String,
+    pub edits: Vec<SearchEdit>,
+    pub ttl_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tick: Option<u64>,
+}
+
+/// `search/applied`: the editor's answer to `search-apply`: the edits it APPLIED and SKIPPED (each with why), the
+/// INVERSE edits that put the buffer back (in the buffer's coordinates after the write), its TICK after it, whether it
+/// SAVED; NOT_OPEN when no buffer visits PATH any more (the hub then writes the file on disk).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AppliedParams {
+    pub change: u64,
+    pub path: String,
+    #[serde(default)]
+    pub applied: Vec<String>,
+    #[serde(default)]
+    pub skipped: Vec<GrepSkip>,
+    #[serde(default)]
+    pub inverse: Vec<SearchEdit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tick: Option<u64>,
+    #[serde(default)]
+    pub saved: bool,
+    #[serde(default)]
+    pub not_open: bool,
+}
+
+/// `search-change`: change set CHANGE (ORIGIN; UNDOES the change set an undo puts back) of VIEW is final: WRITTEN
+/// edits in FILES files, the SKIPPED (each with why), and LEFT the files an undo left alone (edited since).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChangeDone {
+    pub view: String,
+    pub change: u64,
+    pub origin: ChangeOrigin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undoes: Option<u64>,
+    pub written: u64,
+    pub files: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<EditSkip>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub left: Vec<String>,
+}
+
 /// `search/grep-look`: VIEW's rows of its search go on. A search sends a view its first 200 rows (a file's header and
 /// its matches, in order), and the totals in `search-run-done`; the hub keeps every match, and Sjá's model holds them.
 /// The editor asks for more when its window nears the end of the rows (`more`), or when it goes to a match beyond them
@@ -1027,6 +1206,26 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/grep-skipped", SearchGrepSkipped(GrepSkippedParams) -> bool,
             classes: [User], writes: false,
             doc: "a view's grep rows after Replace All: only the matches it skipped, each with why; the search stops; false when the view has no search",
+        ),
+        method!(
+            "search/edits", SearchEdits(EditsParams) -> EditsAnswer,
+            classes: [User], writes: false,
+            doc: "the edit set of a view's search (its ticked matches, the ids named, or edits the caller names): per file the edits with lines, character columns, byte ranges, old and new text; overlapping matches, files changed since the search, large and binary files skipped with why; kept as a change set for search/apply",
+        ),
+        method!(
+            "search/apply", SearchApply(ApplyParams) -> bool,
+            classes: [User], writes: true,
+            doc: "write a change set from search/edits, one file at a time in the hub's write queue (shared with pair writes): a file an editor has open by that editor (search-apply), any other on disk atomically over a check that it is as the edit set read it; ends with search-change",
+        ),
+        method!(
+            "search/applied", SearchApplied(AppliedParams) -> bool,
+            classes: [User], writes: false,
+            doc: "the editor's answer to search-apply: the edits applied and skipped, their inverse, the buffer's tick and whether it saved; true when the hub was waiting for it",
+        ),
+        method!(
+            "search/undo", SearchUndo(UndoParams) -> bool,
+            classes: [User], writes: true,
+            doc: "put back every file a change set wrote (the hub keeps the last 20, open files' inverse edits included), leaving alone a file edited since; ends with search-change",
         ),
         method!(
             "search/grep-look", SearchGrepLook(GrepLookParams) -> bool,

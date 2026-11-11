@@ -418,6 +418,16 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "a Search view's search (search/run) ended: its run number, the files and matches it found, or why it could not run, and the matches that come back unticked; to the searching connection only; a search a newer one stopped says nothing"
         ),
         event!(
+            "search-apply",
+            crate::methods::search::SearchApply,
+            "the Search view's write of a file the editor has open (search/apply, search/undo): it applies the edits in its buffer, each where its old text is, and answers search/applied within ttl_ms; to that editor's connection only"
+        ),
+        event!(
+            "search-change",
+            crate::methods::search::ChangeDone,
+            "a change set of the Search view (search/apply, search/undo) is final: what it wrote, in how many files, what it skipped and why, the files an undo left alone; to the asking connection only"
+        ),
+        event!(
             "agent-follow",
             crate::methods::editor::AgentFollow,
             "where the session a follow view follows is now, to that view's connection only (agents/follow): at most one move per 200 ms, a read's file switch after a 500 ms dwell, a search never switches; the line is the agent's own plan entry or step title"
@@ -509,6 +519,8 @@ mod tests {
                     "view-patch",
                     "view-glyphs",
                     "search-run-done",
+                    "search-apply",
+                    "search-change",
                     "git-letters-error",
                     // the native view model
                     "view-model",
@@ -535,7 +547,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 51);
+        assert_eq!(events().len(), 53);
         // names only: a value-shaped name is no key name, and nothing but `names` is taken
         let need = event("runners/need-keys").unwrap();
         assert_eq!(

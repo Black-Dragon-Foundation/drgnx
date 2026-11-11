@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 245, "{names:?}");
+        assert_eq!(names.len(), 249, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -397,6 +397,8 @@ mod tests {
         // Hrafn's: the index and the consented download change what the hub holds
         want.extend(["search/index", "search/model-download"]);
         // the Search view's saved searches: the hub's state, and the project's file on a click
+        // the Search view's writes: project files, on disk or through the editor
+        want.extend(["search/apply", "search/undo"]);
         want.extend([
             "search/saved/delete",
             "search/saved/put",
@@ -684,7 +686,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 195);
+        assert_eq!(with, 199);
     }
 
     #[test]
