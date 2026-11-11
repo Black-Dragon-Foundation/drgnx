@@ -1782,8 +1782,9 @@ and the last recent ones (`drgnx-replace-recent-shown'), each a button that rest
              (insert "\n"))))))))
 
 (defun drgnx-replace--shown-p ()
-  "Non-nil while the Search view shows in a window."
-  (get-buffer-window (current-buffer) 'visible))
+  "Non-nil while the Search view shows in a window on a visible frame (its results view's `drgnx-view-shown-p': the
+workbench state store's records)."
+  (and drgnx-view (drgnx-view-shown-p drgnx-view)))
 
 (defun drgnx-replace--pins-later ()
   "Count the pinned saved searches soon: at most once every 5 seconds."
