@@ -126,10 +126,9 @@ impl Reservations {
     }
 }
 
-/// Whether process PID is still the one that started at START_TIME (`/proc/<pid>/stat` field 22, clock ticks since
-/// boot): a reused pid is not alive.
+/// Whether process PID is still the one that started at START_TIME ([`start_time`]): a reused pid is not alive.
 pub fn alive(pid: u32, start_time: u64) -> bool {
-    alive_in(Path::new("/proc"), pid, start_time)
+    self::start_time(pid).is_ok_and(|t| t == start_time)
 }
 
 /// [`alive`] under the proc root PROC.
@@ -137,9 +136,31 @@ pub fn alive_in(proc_root: &Path, pid: u32, start_time: u64) -> bool {
     start_time_in(proc_root, pid).is_ok_and(|t| t == start_time)
 }
 
-/// The start time of process PID, as [`alive`] compares it.
+/// The start time of process PID, as [`alive`] compares it: `/proc/<pid>/stat` field 22 (clock ticks since boot).
+#[cfg(target_os = "linux")]
 pub fn start_time(pid: u32) -> io::Result<u64> {
     start_time_in(Path::new("/proc"), pid)
+}
+
+/// The start time of process PID, as [`alive`] compares it: `proc_pidinfo`'s start, in microseconds since the epoch.
+#[cfg(target_os = "macos")]
+pub fn start_time(pid: u32) -> io::Result<u64> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: a buffer of SIZE bytes for one proc_bsdinfo
+    let n = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdinfo).cast(),
+            size,
+        )
+    };
+    if n != size {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
 }
 
 fn start_time_in(proc_root: &Path, pid: u32) -> io::Result<u64> {
@@ -224,6 +245,7 @@ mod tests {
     }
 
     /// [D] The facts name another scheduler only while its reservation is live: this boot, its process alive.
+    #[cfg(target_os = "linux")]
     #[test]
     fn facts_report_another_scheduler() {
         let d = tempfile::tempdir().unwrap();

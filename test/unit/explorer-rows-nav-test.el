@@ -127,10 +127,10 @@ a row's node is its path; a refresh asks again and draws nothing itself."
   "Pattern D (plan sja-complete E2): on the rows path each drawn row gets the old path's tail at the right edge (the
 ⋯ control, the hover's mouse face), with the git mark of the status the hub put on its name: a file's letter in its
 status face, ● for a folder with changes inside.  A patch moves the overlays it keeps instead of making new ones, and
-the single root's row is invisible."
+the single root's row is invisible, with no tail."
   (drgnx-explorer-rows-nav-test--with
     (should (get-text-property (point-min) 'invisible))
-    (should (equal (list (list 0 nil nil) (list 1 nil nil) (list 2 "●" 'drgnx-status-warn) (list 3 nil nil)
+    (should (equal (list (list 1 nil nil) (list 2 "●" 'drgnx-status-warn) (list 3 nil nil)
                          (list 4 "M" 'drgnx-status-warn))
                    (drgnx-explorer-rows-nav-test--tails)))
     (should (get-char-property (save-excursion (goto-char (point-min)) (forward-line 4) (point)) 'mouse-face))
@@ -138,7 +138,7 @@ the single root's row is invisible."
       (drgnx-view-apply-patch (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 0 :model 1
                                     :ops (list (list :remove (list "/r/a")))))
       (drgnx-view-draw-now drgnx-view)
-      (should (equal (list (list 0 nil nil) (list 1 "●" 'drgnx-status-warn) (list 2 nil nil)
+      (should (equal (list (list 1 "●" 'drgnx-status-warn) (list 2 nil nil)
                            (list 3 "M" 'drgnx-status-warn))
                      (drgnx-explorer-rows-nav-test--tails)))
       (should (cl-every (lambda (o) (memq o before))
@@ -267,7 +267,38 @@ is selected when the listing that holds it is drawn."
                                                               :props (list (list 0 9 "drgnx-work-id" "/r/a/new.el")))))))))
       (drgnx-view-draw-now drgnx-view)
       (should-not drgnx-explorer--reveal-pending)
-      (should (equal "/r/a/new.el" (drgnx-view-nav-selection))))))
+      (should (equal "/r/a/new.el" (drgnx-view-nav-selection)))
+      ;; the selected row (the workbench's, with its ring when focused) is the revealed file's
+      (should (equal "/r/a/new.el" (get-text-property (overlay-start drgnx-wb--selected-overlay) 'drgnx-work-id))))))
+
+(ert-deftest drgnx-explorer-rows/the-selection-is-the-workbench-s-row-alone ()
+  "Pattern D: on the rows path the selected row is drawn once, by the workbench's selection (`drgnx-wb-selection-sync':
+the look's fill and ring); Sjá's `selected' class puts no overlay of its own on the node, nor its `dim' on the
+others (the Explorer has no chain, so Sjá dims every row off the selection), a key moves the one row, and a reveal of
+a drawn row moves it too."
+  (drgnx-explorer-rows-nav-test--with
+    (let ((class-ovs (lambda () (seq-filter (lambda (o) (memq (overlay-get o 'face) '(drgnx-view-selected shadow)))
+                                            (overlays-in (point-min) (point-max))))))
+      (goto-char (point-min))
+      (drgnx-explorer--rows-key 'next)
+      (drgnx-wb-selection-sync)                     ; post-command's
+      (should-not (funcall class-ovs))
+      (should (drgnx-explorer-reveal "/r/z.txt"))
+      (should (equal "/r/z.txt" (drgnx-view-nav-selection)))
+      (should-not (funcall class-ovs))
+      (should (equal "/r/z.txt" (get-text-property (overlay-start drgnx-wb--selected-overlay) 'drgnx-work-id))))))
+
+(ert-deftest drgnx-explorer-rows/a-reset-keeps-the-selected-row ()
+  "Pattern D: the hub's reset of the rows (a theme's new env draws every row again) deletes them all; point and the
+workbench's selected row go back to Sjá's selection, not to the first row."
+  (drgnx-explorer-rows-nav-test--with
+    (should (drgnx-explorer-reveal "/r/z.txt"))
+    (drgnx-view-apply-patch (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 0 :model 1
+                                  :ops (list (list :reset (drgnx-explorer-rows-nav-test--rows)))))
+    (drgnx-view-draw-now drgnx-view)
+    (should (equal "/r/z.txt" (drgnx-view-nav-selection)))
+    (should (equal "/r/z.txt" (drgnx-explorer-node-at (point))))
+    (should (equal "/r/z.txt" (get-text-property (overlay-start drgnx-wb--selected-overlay) 'drgnx-work-id)))))
 
 (ert-deftest drgnx-explorer-rows/a-scroll-near-the-window-s-edge-asks-the-next ()
   "Pattern D (E4): the hub holds a window of the listing (60 of 200 entries from 0); a scroll within a page of the
@@ -319,6 +350,80 @@ rows' end asks `view/window' half the window on, once; with the window at 100, a
           (drgnx-explorer--rows-scrolled
            w (save-excursion (goto-char (point-max)) (forward-line (- (window-body-height w))) (point)))
           (should (funcall tailed "/r/f159")))))))
+
+(ert-deftest drgnx-explorer-rows/a-twin-s-scroll-pages-the-view-s-window ()
+  "Pattern D: the Explorer's twin (its buffer in another display class: a dock on a second monitor) pages the hub's
+window when it scrolls, as the Explorer does: a scroll within a page of its rows' end asks `view/window' further on.
+The window is the view's: the Explorer's buffer, whose rows the move took, does not ask it back; its user's next scroll
+does."
+  (drgnx-explorer-rows-nav-test--with
+    (let* ((sent nil) (drgnx-explorer--window-asker nil) (main (current-buffer))
+           (drgnx-view-patch-send-function (lambda (method params) (push (cons method params) sent)))
+           (ids (lambda (from) (cl-loop for i from from below (+ from 60) collect (format "/r/f%03d" i))))
+           (model (lambda (from)
+                    (json-serialize
+                     (list :ops (vector (list :reset
+                                              (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"]
+                                                                      :lists ["order"] :classes ["selected" "match" "dim" "ticked"]
+                                                                      :flags ["expanded"] :forms [] :start "order")
+                                                    :nodes (vconcat (list (list :id "/r" :kind "root" :flags 1
+                                                                                :fields [["label" "R"] ["path" "/r"] ["dir" 1]]))
+                                                                    (mapcar (lambda (id) (list :id id :kind "file" :flags 0 :parent "/r"
+                                                                                               :fields (vector (vector "label" id) (vector "path" id) (vector "dir" 0))))
+                                                                            (funcall ids from)))
+                                                    :edges []
+                                                    :lists (vector (list :name "order" :ids (vconcat (funcall ids from))
+                                                                         :total 200 :from from)))))))))
+           (rows (lambda (from) (mapcar (lambda (id) (list :key id :text id :props (list (list 0 (length id) "drgnx-work-id" id))))
+                                        (funcall ids from))))
+           (tw (drgnx-explorer--rows-twin "c2")))
+      (unwind-protect
+          (let ((w (selected-window)))
+            (drgnx-view-model-event (list :view view :hub 7 :base 1 :version 2 :reset t :model (funcall model 0)))
+            (with-current-buffer tw
+              (drgnx-view-apply-patch (list :view view :class "c2" :hub 7 :base 0 :version 1 :env_epoch 0 :model 2
+                                            :ops (list (list :reset (funcall rows 0)))))
+              (drgnx-view-draw-now drgnx-view)
+              (set-window-buffer w tw)
+              (run-hook-with-args 'window-scroll-functions w
+                                  (save-excursion (goto-char (point-max)) (forward-line (- (window-body-height w))) (point)))
+              (should (equal (list (list "view/window" :view view :list "order" :from 30)) sent)))
+            ;; the hub moves the view's window to 30 and sends both classes their rows: the Explorer's buffer, scrolled
+            ;; to its top (its rows from 30 on, the earlier ones gone), asks nothing back
+            (drgnx-view-model-event (list :view view :hub 7 :base 2 :version 3 :reset t :model (funcall model 30)))
+            (with-current-buffer main
+              (drgnx-view-apply-patch (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 0 :model 3
+                                            :ops (list (list :reset (funcall rows 30)))))
+              (drgnx-view-draw-now drgnx-view)
+              (should (equal 30 (car (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'window "order"))))
+              (let ((asks (lambda () (mapcar (lambda (c) (plist-get (cdr c) :from))
+                                             (seq-filter (lambda (c) (equal "view/window" (car c))) sent)))))
+                (set-window-buffer w main)        ; runs its `window-scroll-functions': the rows moved under it
+                (should (equal '(30) (funcall asks)))            ; the twin's ask alone
+                ;; the user's own scroll after that, at the top of its rows: half a window back
+                (drgnx-explorer--rows-scrolled w (point-min))
+                (should (equal '(0 30) (funcall asks)))))))
+      (kill-buffer tw))))
+
+(ert-deftest drgnx-explorer-rows/a-twin-made-with-the-hub-down-says-it-waits ()
+  "Pattern D: a twin of the Explorer made while the hub is down shows the line saying it waits for the hub, as the
+Explorer does."
+  (drgnx-explorer-rows-nav-test--with
+    (delete-process drgnx-hub--events)
+    (let ((tw (drgnx-explorer--rows-twin "c2")))
+      (unwind-protect
+          (with-current-buffer tw (should (drgnx-explorer-rows-nav-test--waiting)))
+        (kill-buffer tw)))))
+
+(ert-deftest drgnx-explorer-rows/a-hidden-root-takes-no-line ()
+  "Pattern D (E4 side-by-side): the single root's row is invisible (the island's header names it), its newline too, so
+no empty line shows; it gets no tail (a tail's string would show on it)."
+  (drgnx-explorer-rows-nav-test--with
+    (goto-char (point-min))
+    (should (invisible-p (point)))
+    (should (invisible-p (pos-eol)))                  ; the newline: the line takes no room
+    (should-not (invisible-p (save-excursion (forward-line 1) (point))))
+    (should-not (when-let* ((o (gethash "/r" drgnx-explorer--tails))) (overlay-buffer o)))))
 
 (ert-deftest drgnx-explorer-rows/expand-draws-in-the-key-s-own-frame ()
   "Pattern D (E4, the same frame as the old path): expanding a closed folder waits inside the command, bounded, for the

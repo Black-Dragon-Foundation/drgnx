@@ -9,6 +9,7 @@ use proptest::prelude::*;
 
 fn spec(name: &str) -> JobSpec {
     JobSpec {
+        os: Default::default(),
         name: name.into(),
         kind: Kind::Test,
         weight: Weight::Light,
@@ -512,6 +513,7 @@ proptest! {
             local,
             trust,
             keys_allowed: vec![],
+            os: Default::default(),
             features: vec![],
             state: RunnerState::Ready,
             accept: Accept::All,
@@ -731,6 +733,7 @@ fn cand(name: String, local: bool, trust: RunnerTrust) -> Candidate {
         local,
         trust,
         keys_allowed: vec![],
+        os: Default::default(),
         features: vec![],
         state: RunnerState::Ready,
         accept: Accept::All,

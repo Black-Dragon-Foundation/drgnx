@@ -5,7 +5,7 @@
 use crate::engine::{Effect, Engine};
 use crate::frame::{Clock, Ms, Next};
 use crate::keys;
-use crate::proto::{In, Out};
+use crate::proto::{In, KeyAction, Out};
 use crate::rows::{Key, RowId, Tracker};
 use crate::style::{Cell, StyleTable, build};
 use drgnx_rows::{Op, Patch, Row, TermMeta};
@@ -21,6 +21,10 @@ const BACKFILL_MAX_ROWS: usize = 1024;
 pub const ENGINE_LINES_MIN: usize = 10_000;
 /// The most prompt rows remembered for `scroll` by prompts.
 const PROMPTS_MAX: usize = 4096;
+/// The kitty keyboard protocol's "report event types" flag: repeats and releases reach the program.
+const KITTY_REPORT_EVENTS: u8 = 2;
+/// How long a terminal no editor draws keeps its program before it ends it (`detached-keep`, 24 hours).
+const DETACHED_KEEP_DEFAULT: Ms = 24 * 3_600_000;
 
 /// How a terminal starts.
 #[derive(Clone, Debug)]
@@ -87,6 +91,10 @@ pub struct Worker {
     /// the view was attached).
     model_version: u64,
     model: Option<serde_json::Value>,
+    /// Since when no editor draws this terminal (none: one does), and how long it may stay so before it ends its
+    /// program (`detached-keep`; none: forever).
+    alone_since: Option<Ms>,
+    keep: Option<Ms>,
 }
 
 impl Worker {
@@ -122,6 +130,9 @@ impl Worker {
             prompts: std::collections::VecDeque::new(),
             model_version: 0,
             model: None,
+            // a new worker waits for its first attach like a detached one
+            alone_since: Some(0),
+            keep: Some(DETACHED_KEEP_DEFAULT),
         })
     }
 
@@ -214,8 +225,10 @@ impl Worker {
                 // a new editor's replica: its model starts again
                 self.model_version = 0;
                 self.model = None;
+                self.alone_since = None;
                 self.resync();
             }
+            In::Detach => self.detach(now),
             In::Env { env_epoch } => {
                 if let Some(a) = &mut self.attach {
                     a.env_epoch = env_epoch;
@@ -226,7 +239,8 @@ impl Worker {
                 mods,
                 text,
                 unshifted,
-            } => self.key(&key, keys::mods(&mods), &text, unshifted, now),
+                action,
+            } => self.key(&key, keys::mods(&mods), &text, unshifted, action, now),
             In::Text { text } => {
                 self.pty.extend_from_slice(text.as_bytes());
                 self.clock.key(now);
@@ -259,6 +273,7 @@ impl Worker {
                 cols,
                 rows,
                 cell_px,
+                ..
             } => self.resize(cols, rows, cell_px),
             In::Ack { version } => self.ack(version),
             In::Resync { model: false } => self.resync(),
@@ -325,8 +340,28 @@ impl Worker {
         }
     }
 
-    /// A key press: its bytes go to the program, and the echo is drawn at once.
-    pub fn key(&mut self, name: &str, mods: u16, text: &str, unshifted: u32, now: Ms) {
+    /// A key event: its bytes go to the program, and a press's echo is drawn at once.  A release sends nothing unless
+    /// the program asked for key event types (kitty flag 2); a repeat is then a press.
+    pub fn key(
+        &mut self,
+        name: &str,
+        mods: u16,
+        text: &str,
+        unshifted: u32,
+        action: KeyAction,
+        now: Ms,
+    ) {
+        let action = match action {
+            _ if self.engine.kitty_flags() & KITTY_REPORT_EVENTS == 0 => {
+                if action == KeyAction::Release {
+                    return;
+                }
+                GHOSTTY_KEY_ACTION_PRESS
+            }
+            KeyAction::Press => GHOSTTY_KEY_ACTION_PRESS,
+            KeyAction::Repeat => GHOSTTY_KEY_ACTION_REPEAT,
+            KeyAction::Release => GHOSTTY_KEY_ACTION_RELEASE,
+        };
         let (code, base) = keys::code(name);
         let unshifted = if unshifted != 0 { unshifted } else { base };
         // without the kitty flags, ctrl+i, ctrl+m and ctrl+[ are the C0 byte (tab, return, escape) as in xterm; the
@@ -344,9 +379,11 @@ impl Worker {
             return;
         }
         let text = text.to_owned();
-        let b = self.engine.encode_key(code, mods, &text, unshifted);
+        let b = self.engine.encode_key(code, mods, &text, unshifted, action);
         self.pty.extend_from_slice(&b);
-        self.clock.key(now);
+        if action != GHOSTTY_KEY_ACTION_RELEASE {
+            self.clock.key(now);
+        }
     }
 
     /// A mouse event's bytes (none unless the program tracks the mouse).
@@ -364,10 +401,12 @@ impl Worker {
         self.clock.touch();
     }
 
-    /// No hub draws this terminal (it went away, or a new one connected and has not attached yet): nothing is sent
-    /// until the next attach, which starts with a reset.
-    pub fn detach(&mut self) {
+    /// No hub draws this terminal from NOW (it went away, a new one connected and has not attached yet, or the editor
+    /// left it): nothing is sent until the next attach, which starts with a reset; `detached-keep` counts from the
+    /// first such moment.
+    pub fn detach(&mut self, now: Ms) {
         self.attach = None;
+        self.alone_since.get_or_insert(now);
         self.reset_due = true;
         self.clock.acked();
     }
@@ -414,6 +453,12 @@ impl Worker {
             "enquiry-response" => {
                 self.engine.sink().enquiry = value.as_str().unwrap_or_default().to_string()
             }
+            // hours alone before the program ends (0: never)
+            "detached-keep" => {
+                if let Some(h) = value.as_f64().filter(|h| *h >= 0.0) {
+                    self.keep = (h > 0.0).then_some((h * 3_600_000.0) as Ms);
+                }
+            }
             "title-report" => self
                 .engine
                 .set_title_report(value.as_bool().unwrap_or(false)),
@@ -449,9 +494,17 @@ impl Worker {
     /// What to do next at NOW.
     pub fn next(&self, now: Ms) -> Next {
         if self.attach.is_none() {
-            return Next::Idle;
+            return match self.lonely_until() {
+                Some(t) if self.closing.is_none() => Next::At(t),
+                _ => Next::Idle,
+            };
         }
         self.clock.next(now, self.backfill_due)
+    }
+
+    /// When the program ends for want of an editor (none: it does not).
+    fn lonely_until(&self) -> Option<Ms> {
+        Some(self.alone_since? + self.keep?)
     }
 
     /// Draw what changed now, whatever the clock says (the program ended).
@@ -463,6 +516,12 @@ impl Worker {
 
     /// Do what is due at NOW; returns what comes after.
     pub fn step(&mut self, now: Ms) -> Next {
+        if self.attach.is_none() && self.lonely_until().is_some_and(|t| now >= t) {
+            tracing::info!("no editor within detached-keep: ending the program");
+            self.alone_since = None;
+            self.closing = Some(libc::SIGHUP);
+            return Next::Idle;
+        }
         match self.next(now) {
             Next::Frame => self.frame(now),
             Next::Backfill => self.backfill(),
@@ -660,6 +719,7 @@ impl Worker {
             alt_screen: self.alt,
             mouse_tracking: self.engine.mouse_tracking(),
             bracketed_paste: self.engine.mode(2004, false),
+            key_events: self.engine.kitty_flags() & KITTY_REPORT_EVENTS != 0,
             title: self.engine.title(),
         }
     }

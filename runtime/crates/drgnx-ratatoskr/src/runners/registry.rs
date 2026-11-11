@@ -35,6 +35,47 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 pub const DEFAULT_PREFIX: &str = "drgnx";
 /// The runner's one folder, under the user's home there, unless the user says otherwise.
 pub const DEFAULT_ROOT: &str = ".drgnx-runner";
+/// A Mac runner's folder under the runner account's home: `.noindex` keeps Spotlight out of targets and caches.
+pub const MAC_ROOT: &str = ".drgnx-runner.noindex";
+/// The bundle folder (and Rust target) a Mac runner takes: Apple silicon only.
+pub const MAC_BUNDLE: &str = "aarch64-apple-darwin";
+
+/// What kind of host `runner add` was given.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HostOs {
+    Linux,
+    Macos,
+}
+
+/// HOST's kind from its `uname -m`, `uname -s` and (on a Mac) `sysctl.proc_translated`: the OS, the architecture the
+/// record keeps, and the folder under the bundles its bundle is in. A Rosetta shell on Apple silicon says x86_64 and
+/// translated 1; an Intel Mac, any other kernel or architecture is refused.
+fn host_kind(
+    host: &str,
+    machine: &str,
+    kernel: &str,
+    translated: &str,
+) -> Result<(HostOs, String, String), RegError> {
+    match kernel {
+        "Linux" => match machine {
+            "x86_64" | "aarch64" => Ok((HostOs::Linux, machine.into(), machine.into())),
+            other => Err(refused(format!(
+                "no runner bundle for {other} (x86_64 or aarch64)"
+            ))),
+        },
+        "Darwin" => match (machine, translated) {
+            ("arm64", _) | ("x86_64", "1") => {
+                Ok((HostOs::Macos, "aarch64".into(), MAC_BUNDLE.into()))
+            }
+            _ => Err(refused(format!(
+                "{host} is an Intel Mac ({machine}): Mac runners are Apple silicon only"
+            ))),
+        },
+        other => Err(refused(format!(
+            "{host} runs {other}: runners are Linux machines (a systemd user manager and rootless podman) or Macs with Apple silicon (macOS)"
+        ))),
+    }
+}
 
 /// How long a short command on a runner may take.
 const SHORT: Duration = Duration::from_secs(120);
@@ -607,43 +648,62 @@ impl Registry {
     ) -> Result<(Record, Probe), RegError> {
         let cfg = self.base_cfg(name, host);
         cfg.check().map_err(refused)?;
+        // a Rosetta shell reports x86_64 on Apple silicon: `sysctl.proc_translated` says so
         let basics = self
-            .sh_ok(&cfg, "uname -m; uname -s; printf %s \"$HOME\"", &[], SHORT)
+            .sh_ok(
+                &cfg,
+                "uname -m; uname -s; printf '%s\\n' \"$HOME\"; \
+                 if [ \"$(uname -s)\" = Darwin ]; then sysctl -n sysctl.proc_translated 2>/dev/null; fi; true",
+                &[],
+                SHORT,
+            )
             .await?;
         let mut lines = basics.lines();
-        let (arch, kernel, home) = (
+        let (machine, kernel, home, translated) = (
+            lines.next().unwrap_or("").trim().to_string(),
             lines.next().unwrap_or("").trim().to_string(),
             lines.next().unwrap_or("").trim().to_string(),
             lines.next().unwrap_or("").trim().to_string(),
         );
-        if kernel != "Linux" {
-            return Err(refused(format!(
-                "{host} runs {kernel}: runners are Linux machines with a systemd user manager and rootless podman"
-            )));
-        }
-        let arch = match arch.as_str() {
-            "x86_64" | "aarch64" => arch,
-            other => {
-                return Err(refused(format!(
-                    "no runner bundle for {other} (x86_64 or aarch64)"
-                )));
-            }
-        };
+        let (os, arch, bundle_dir) = host_kind(host, &machine, &kernel, &translated)?;
+        let mac = os == HostOs::Macos;
         let root = match root {
             Some(r) => r.to_string(),
+            None if mac => format!("{home}/{MAC_ROOT}"),
             None => format!("{home}/{DEFAULT_ROOT}"),
         };
         check_root(&root, &home)?;
         let prefix = prefix.unwrap_or(DEFAULT_PREFIX).to_string();
-        let dir = self.cfg.bundles.join(&arch);
+        let dir = self.cfg.bundles.join(&bundle_dir);
         let sleipnir = tokio::fs::read(dir.join("sleipnir")).await.map_err(|_| {
-            refused(format!(
-                "no runner bundle for {arch}: build it with `bin/drgnx build runner-bundle --arch {arch}`"
-            ))
+            refused(if mac {
+                format!(
+                    "no runner bundle for {MAC_BUNDLE}: build it on a Mac with `bin/drgnx build runner-bundle --target {MAC_BUNDLE}` (macOS CI builds it)"
+                )
+            } else {
+                format!(
+                    "no runner bundle for {arch}: build it with `bin/drgnx build runner-bundle --arch {arch}`"
+                )
+            })
         })?;
         let bundle = hex(&Sha256::digest(&sleipnir))[..16].to_string();
         let px = format!("drgnx-px-{arch}-linux-musl");
-        for file in ["sleipnir", "drgnx-key", px.as_str()] {
+        // a Mac takes no keyed jobs and no containers: its bundle is `sleipnir` alone; its root is the runner account's
+        // own, 0700, and its checksum tool is `shasum`
+        let files: &[&str] = if mac {
+            &["sleipnir"]
+        } else {
+            &["sleipnir", "drgnx-key", px.as_str()]
+        };
+        let (sum, made) = if mac {
+            (
+                "shasum -a 256 -c -",
+                format!("mkdir -p {r}; chmod 700 {r}; ", r = quote(&root)),
+            )
+        } else {
+            ("sha256sum -c -", String::new())
+        };
+        for &file in files {
             let bytes = if file == "sleipnir" {
                 sleipnir.clone()
             } else {
@@ -654,14 +714,23 @@ impl Registry {
             };
             let sha = hex(&Sha256::digest(&bytes));
             let script = format!(
-                "set -e; d={d}; mkdir -p \"$d\"; head -c {len} > \"$d/{file}.part\"; \
-                 echo '{sha}  '\"$d/{file}.part\" | sha256sum -c - >/dev/null; chmod 755 \"$d/{file}.part\"; \
+                "set -e; {made}d={d}; mkdir -p \"$d\"; head -c {len} > \"$d/{file}.part\"; \
+                 echo '{sha}  '\"$d/{file}.part\" | {sum} >/dev/null; chmod 755 \"$d/{file}.part\"; \
                  mv \"$d/{file}.part\" \"$d/{file}\"",
                 d = quote(&format!("{root}/bin/{bundle}")),
                 len = bytes.len()
             );
             // exactly LEN bytes are read, so the copy never waits for the end of the input
             self.sh_ok(&cfg, &script, &bytes, LONG).await?;
+        }
+        if mac {
+            // targets and caches are not backed up (the user's own setting decides nothing else); a Mac without Time
+            // Machine set up still takes the exclusion
+            let tm = format!(
+                "tmutil addexclusion {} >/dev/null 2>&1 || echo 'tmutil addexclusion failed' >&2",
+                quote(&root)
+            );
+            self.sh_ok(&cfg, &tm, &[], SHORT).await?;
         }
         let mut rec = Record {
             name: name.into(),
@@ -829,6 +898,11 @@ impl Registry {
             name: rec.name.clone(),
             trust: forseti_trust(rec.trust),
             accept: forseti_accept(rec.accept),
+            os: if rec.os.starts_with("macos") {
+                forseti::Os::Macos
+            } else {
+                forseti::Os::Linux
+            },
             grace_s: cfg.grace().as_secs(),
             image: rec.image.clone(),
         }
@@ -938,7 +1012,7 @@ impl Registry {
             .cfg
             .queue
             .runner(name)
-            .is_some_and(|r| r.state != "unreachable");
+            .is_some_and(|r| r.state != "unreachable" && r.state != "sleeping");
         if !linked {
             self.connect(&rec).await?;
         }

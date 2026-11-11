@@ -6,6 +6,7 @@ use crate::model::*;
 
 pub(crate) fn spec(name: &str) -> JobSpec {
     JobSpec {
+        os: Default::default(),
         name: name.into(),
         kind: Kind::Test,
         weight: Weight::Light,

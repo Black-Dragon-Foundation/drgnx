@@ -58,7 +58,7 @@ fn main() -> ExitCode {
     }
 }
 
-#[cfg(all(feature = "runner", target_os = "linux"))]
+#[cfg(all(feature = "runner", any(target_os = "linux", target_os = "macos")))]
 fn serve(args: &[&str]) -> ExitCode {
     match sleipnir::serve::Config::parse(args) {
         Ok(cfg) => ExitCode::from(
@@ -71,10 +71,13 @@ fn serve(args: &[&str]) -> ExitCode {
     }
 }
 
-/// A runner serves only where it can run jobs: Linux with a systemd user manager, built with the `runner` feature.
-#[cfg(not(all(feature = "runner", target_os = "linux")))]
+/// A runner serves only where it can run jobs: Linux with a systemd user manager, or a Mac, built with the `runner`
+/// feature.
+#[cfg(not(all(feature = "runner", any(target_os = "linux", target_os = "macos"))))]
 fn serve(_args: &[&str]) -> ExitCode {
-    eprintln!("sleipnir serve: runners serve only on Linux with a systemd user manager");
+    eprintln!(
+        "sleipnir serve: runners serve only on Linux with a systemd user manager, or on a Mac"
+    );
     ExitCode::from(2)
 }
 
@@ -148,10 +151,26 @@ fn job_exec(dir: &std::path::Path) -> ExitCode {
     }
 }
 
-/// Jobs run under a systemd user manager and cgroup v2: anywhere else every job is refused, never run unconfined.
-#[cfg(not(target_os = "linux"))]
+/// A Mac's job-exec: the command under `sandbox-exec` (`darwin::jobexec`; anything else is refused).
+#[cfg(target_os = "macos")]
+fn job_exec(dir: &std::path::Path) -> ExitCode {
+    match sleipnir::linux::jobexec::JobExec::read(dir) {
+        Ok(spec) => {
+            sleipnir::darwin::jobexec::run(dir, &spec);
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("sleipnir job-exec: {}: {e}", dir.display());
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// Jobs run under a systemd user manager and cgroup v2, or on a Mac under Seatbelt: anywhere else every job is
+/// refused, never run unconfined.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn job_exec(_dir: &std::path::Path) -> ExitCode {
-    eprintln!("sleipnir job-exec: jobs run only on Linux with a systemd user manager");
+    eprintln!("sleipnir job-exec: jobs run only on Linux with a systemd user manager, or on a Mac");
     ExitCode::from(2)
 }
 

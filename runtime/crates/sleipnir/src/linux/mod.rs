@@ -16,17 +16,18 @@ pub mod podman;
 pub mod result;
 pub mod shim;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod jobexec;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod probe;
-#[cfg(target_os = "linux")]
+/// also a Mac runner's (its start times from `proc_pidinfo`)
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod reserve;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod resize;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod run;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod slices;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod unit;

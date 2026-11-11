@@ -378,6 +378,11 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "a terminal's shell reported its working directory (OSC 7), to its editor session's connection"
         ),
         event!(
+            "term/detached",
+            crate::methods::term::TermDetached,
+            "terminals whose editor session went past the grace or quit keeping them run on, detached: to every live editor session's connection, which may offer them (term/attach)"
+        ),
+        event!(
             "term/bell",
             crate::methods::term::TermBell,
             "a terminal's program rang the bell, to its editor session's connection"
@@ -528,6 +533,7 @@ mod tests {
                     "term/exit",
                     "term/title",
                     "term/cwd",
+                    "term/detached",
                     "term/bell",
                     "term/notify",
                     "term/progress",
@@ -547,7 +553,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 53);
+        assert_eq!(events().len(), 54);
         // names only: a value-shaped name is no key name, and nothing but `names` is taken
         let need = event("runners/need-keys").unwrap();
         assert_eq!(

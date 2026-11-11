@@ -261,6 +261,9 @@ struct End {
     exit: Option<i32>,
     ended: f64,
     summary: ExecSummary,
+    /// Every row of the log, with its verdict and a failure's class (`vordr::rows`), plus the job's own row.
+    #[serde(default)]
+    rows: Vec<vordr::rows::Row>,
 }
 
 struct Inner {
@@ -437,6 +440,8 @@ pub struct Runner {
     inner: OnceLock<Arc<Inner>>,
     live: Arc<Live>,
     events: tokio::sync::broadcast::Sender<JobEvent>,
+    /// The rule pack's `no-cache` words ([`Runner::set_no_cache`]).
+    no_cache: Mutex<Vec<String>>,
 }
 
 impl Default for Runner {
@@ -445,8 +450,70 @@ impl Default for Runner {
             inner: OnceLock::new(),
             live: Arc::default(),
             events: tokio::sync::broadcast::channel(256).0,
+            no_cache: Mutex::default(),
         }
     }
+}
+
+/// The job folder's file with the job's facts (`vordr::facts::Facts`), written before it is queued.
+const FACTS: &str = "facts.json";
+
+/// The Emacs build and the Rust toolchain on this machine (`emacs`, `rustc`, `cargo` `--version`'s first lines, `none`
+/// for one that is missing), read once: as `core/drgnx-affected.el`'s stamp.
+fn env_stamp() -> &'static str {
+    static STAMP: OnceLock<String> = OnceLock::new();
+    STAMP.get_or_init(|| {
+        let tool = |p: &str| {
+            std::process::Command::new(p)
+                .arg("--version")
+                .stdin(std::process::Stdio::null())
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .next()
+                        .map(|l| l.trim().to_string())
+                })
+                .unwrap_or_else(|| "none".into())
+        };
+        [tool("emacs"), tool("rustc"), tool("cargo")].join("\n")
+    })
+}
+
+/// SPEC's facts at submit: its tree's key (the hardened capture of `sleipnir::sync::capture`: the commit's tree, plus
+/// the overlay's input key when anything is uncommitted), this machine's env stamp (with a container job's image), the
+/// platform and the selector.  None outside a git tree.
+async fn facts_of(spec: &ExecSpec) -> Option<vordr::facts::Facts> {
+    let cwd = spec.cwd.clone();
+    let argv = spec.argv.clone();
+    let env = spec.user.env.clone();
+    let image = spec.container.as_ref().map(|c| c.image.clone());
+    crate::clock::blocking(move || {
+        let top = cwd
+            .ancestors()
+            .find(|d| d.join(".git").exists())?
+            .to_path_buf();
+        let inputs = sleipnir::sync::capture::capture(&top, &[]).ok()?;
+        let overlay =
+            (!inputs.manifest.is_empty()).then(|| sleipnir::sync::capture::input_key(&inputs));
+        let rel = cwd.strip_prefix(&top).ok()?.to_string_lossy().into_owned();
+        let mut stamp = env_stamp().to_string();
+        if let Some(i) = image {
+            stamp.push_str("\nimage ");
+            stamp.push_str(&i);
+        }
+        Some(vordr::facts::Facts {
+            tree_key: vordr::facts::tree_key(&inputs.tree, overlay.as_deref()),
+            env_stamp: stamp,
+            platform: format!("{}-{}/local", std::env::consts::OS, std::env::consts::ARCH),
+            selector: vordr::facts::selector(&rel, &argv, &env),
+        })
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 fn now() -> f64 {
@@ -535,6 +602,34 @@ impl Runner {
         self.inner()?.clone().start(spec).await
     }
 
+    /// Start SPEC, or answer the green job that already ran it on the same facts (`vordr::facts`: tree key, env stamp,
+    /// platform, selector): `(id, reused)`.  Only a green counts (exit 0, no failed row, not run on a `shared`
+    /// runner); a red is never reused, and a selector holding one of the `no-cache` words ([`Runner::set_no_cache`])
+    /// always runs.
+    pub async fn start_or_reuse(&self, spec: ExecSpec) -> Result<(String, bool), Refusal> {
+        let i = self.inner()?.clone();
+        let facts = facts_of(&spec).await;
+        if let Some(f) = &facts
+            && vordr::facts::cacheable(&f.selector, &self.no_cache.lock().unwrap())
+            && let Some(id) = i.green_with(f)
+        {
+            return Ok((id, true));
+        }
+        i.start_with(spec, facts).await.map(|id| (id, false))
+    }
+
+    /// The words the rule pack marks `no-cache` (clock-, network- or machine-dependent groups): a job whose selector
+    /// holds one is never served from the cache.
+    pub fn set_no_cache(&self, words: Vec<String>) {
+        *self.no_cache.lock().unwrap() = words;
+    }
+
+    /// Job ID's facts as recorded at its submit, with the machine it ran on (a runner's job: `runner/NAME`, its env
+    /// stamp the runner's name); none for a job outside a git tree, a server, or an unknown job.
+    pub fn facts(&self, id: &str) -> Option<vordr::facts::Facts> {
+        self.inner.get()?.facts(id)
+    }
+
     /// Whether job ID is in the queue (here, or on a runner).
     pub fn is_queued(&self, id: &str) -> bool {
         self.inner
@@ -590,6 +685,11 @@ impl Runner {
             exit: end.exit,
             summary: end.summary,
         })
+    }
+
+    /// Job ID's rows (`vordr::rows`) once it ended; none while it runs or when it is unknown.
+    pub fn rows(&self, id: &str) -> Option<Vec<vordr::rows::Row>> {
+        Some(self.inner.get()?.end(id)?.rows)
     }
 
     /// Whether job ID's result may count for a gate or a job's `needs`: the job is known and didn't run on a `shared`
@@ -685,6 +785,40 @@ impl Inner {
     fn end(&self, id: &str) -> Option<End> {
         let text = std::fs::read_to_string(self.dir(id).join("result.json")).ok()?;
         serde_json::from_str(&text).ok()
+    }
+
+    fn facts(&self, id: &str) -> Option<vordr::facts::Facts> {
+        let text = std::fs::read(self.dir(id).join(FACTS)).ok()?;
+        let mut f: vordr::facts::Facts = serde_json::from_slice(&text).ok()?;
+        if let Some(m) = self.meta(id).and_then(|m| m.machine)
+            && m != "local"
+        {
+            f.platform = format!("runner/{m}");
+            f.env_stamp = format!("runner {m}");
+        }
+        Some(f)
+    }
+
+    /// The newest green job whose facts are F: done, exit 0, no failed row, not on a `shared` runner.
+    fn green_with(&self, f: &vordr::facts::Facts) -> Option<String> {
+        let rd = std::fs::read_dir(&self.root).ok()?;
+        let mut found: Vec<(f64, String)> = rd
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter_map(|id| {
+                let end = self.end(&id)?;
+                let green = end.status == ExecStatus::Done
+                    && end.exit == Some(0)
+                    && !end
+                        .rows
+                        .iter()
+                        .any(|r| r.verdict == vordr::rows::Verdict::Fail)
+                    && !self.dir(&id).join(SHARED).exists();
+                (green && self.facts(&id).as_ref() == Some(f)).then_some((end.ended, id))
+            })
+            .collect();
+        found.sort_by(|a, b| b.0.total_cmp(&a.0));
+        found.into_iter().next().map(|(_, id)| id)
     }
 
     fn save_meta(&self, m: &Meta) -> Result<(), Refusal> {
@@ -788,6 +922,20 @@ impl Inner {
     }
 
     async fn start(self: Arc<Self>, spec: ExecSpec) -> Result<String, Refusal> {
+        let facts = if spec.starter == Starter::User && spec.user.no_timebox {
+            None
+        } else {
+            facts_of(&spec).await
+        };
+        self.start_with(spec, facts).await
+    }
+
+    /// Start SPEC, its FACTS (computed at submit) kept in the job's folder.
+    async fn start_with(
+        self: Arc<Self>,
+        spec: ExecSpec,
+        facts: Option<vordr::facts::Facts>,
+    ) -> Result<String, Refusal> {
         if spec.argv.is_empty() || spec.argv[0].is_empty() {
             return Err(refusal("a job needs a command"));
         }
@@ -795,6 +943,9 @@ impl Inner {
         let id = self.new_id();
         let dir = self.dir(&id);
         std::fs::create_dir_all(&dir).map_err(|e| setup(format!("{}: {e}", dir.display())))?;
+        if let Some(f) = &facts {
+            let _ = std::fs::write(dir.join(FACTS), serde_json::to_vec(f).unwrap_or_default());
+        }
         // The user's servers (no time box: the editor's, which run for days) never queue: they start at once and count
         // only in the memory the machine shows.  Every other job enters the queue.
         if spec.starter == Starter::User && spec.user.no_timebox {
@@ -1619,11 +1770,30 @@ impl Inner {
                 .lines
                 .insert(0, crate::runners::returned::shared_label(runner.trim()));
         }
+        let mut rows = rows_of(&dir.join("log"));
+        let word = match status {
+            ExecStatus::Done => "done",
+            ExecStatus::Stopped => "stopped",
+            ExecStatus::TimedOut => "timed-out",
+            ExecStatus::Infra => "infra",
+            _ => "lost",
+        };
+        vordr::rows::close(&mut rows, word, exit);
+        // the summary names the failed rows (a build row too), the job's own row left out
+        let failed: Vec<String> = vordr::rows::failing(&rows)
+            .filter(|n| *n != vordr::rows::JOB_ROW)
+            .take(50)
+            .map(String::from)
+            .collect();
+        if !failed.is_empty() {
+            summary.failing = failed;
+        }
         let end = End {
             status,
             exit,
             ended: now(),
             summary,
+            rows,
         };
         let tmp = dir.join("result.tmp");
         let written = std::fs::write(&tmp, serde_json::to_vec(&end).unwrap_or_default())
@@ -1632,13 +1802,6 @@ impl Inner {
             tracing::warn!("job {id}: result not written: {e}");
         }
         if let (Some(w), Some(entity)) = (self.hooks.writer.as_ref(), meta.entity.clone()) {
-            let word = match status {
-                ExecStatus::Done => "done",
-                ExecStatus::Stopped => "stopped",
-                ExecStatus::TimedOut => "timed-out",
-                ExecStatus::Infra => "infra",
-                _ => "lost",
-            };
             let e = norn::write::exec::ExecEnd {
                 status: word.into(),
                 exit,
@@ -1927,6 +2090,23 @@ fn unsandboxed_for_tests(_hooks: &Hooks) -> bool {
         return true;
     }
     cfg!(any(test, feature = "test-hooks")) && std::env::var_os("DRGNX_TEST_PLAIN_JOBS").is_some()
+}
+
+/// The rows of the whole log at PATH (`vordr::rows`), read a line at a time; none when it cannot be read.
+fn rows_of(path: &Path) -> Vec<vordr::rows::Row> {
+    use std::io::BufRead;
+    let Ok(f) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let mut r = std::io::BufReader::new(f);
+    let mut reader = vordr::rows::Reader::new();
+    let mut buf = Vec::new();
+    while matches!(r.read_until(b'\n', &mut buf), Ok(n) if n > 0) {
+        let line = String::from_utf8_lossy(&buf);
+        reader.line(line.trim_end_matches(['\n', '\r']));
+        buf.clear();
+    }
+    reader.finish()
 }
 
 /// The last megabyte of a log, as text.

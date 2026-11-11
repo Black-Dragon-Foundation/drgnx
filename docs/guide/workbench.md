@@ -71,7 +71,8 @@ clutter is hidden (`drgnx-explorer-exclude-names`: exact names or globs with `*`
 `.svn`, `.DS_Store`, `__pycache__` and `.#*` lock files). Dragging does nothing — the Explorer never moves files by drag.
 The hub (Ratatoskr, which starts with drgnx) lists and watches the folders: a file made, removed or changed by git
 outside Emacs shows within a moment. While the hub is starting, the Explorer says it waits for it and fills when it
-is up.
+is up. An Explorer on a second monitor at another scale draws the same folders at that monitor's size and fills in as
+you scroll it. The selected row stays on its file when the theme changes.
 
 **Compact folders:** an open folder whose only entry is a folder shares its row (`src/app`), as in VS Code; the row
 is the last folder (opening, renaming, deleting act on it) and the chain ends at the first closed folder. Only
@@ -474,7 +475,9 @@ there whether the popup borrows the panel or has a window of its own, borrowing 
 
 **Floating lane.** `drgnx-popup-style` is `auto` (the default), `window` or `float`. Under Glitnir (Nidhogg's
 compositor) `auto` is `float`: the popup shows in one child frame of the window, bottom-centre above the echo area,
-as wide as its text (at most 0.9 of the frame) and at most a third of the frame high. The frame is made once per
+as wide as its text (at most 0.9 of the frame; lines below the visible part count too, so scrolling never scrolls
+sideways) and at most a third of the frame high, or the rule's `:height` (`(drgnx-wb-place 'MODE 'popup :height 0.8)`:
+the Replace All sheet). The frame is made once per
 window and reused; ending the popup (`delete-window`, `quit-window`, `bury-buffer`, killing the buffer) hides it, and
 it is never deleted while the window lives. A popup that came up while you were in the minibuffer (`*Completions*`)
 ends when you leave it, with `RET` or `C-g`, as the window lane's does. It never takes focus: transient and which-key keep their keys in the
@@ -517,7 +520,9 @@ scrolls. Without Glitnir nothing changes.
 
 ### The panel and the right dock
 
-The **panel** (Toggle Panel: ``C-` `` · palette · `SPC j`) sits under the editors; the **right dock** (Toggle
+The **panel** (Toggle Panel: `M-j` · palette · `SPC j`) sits under the editors; Toggle Terminal (``C-` `` in the VS Code
+profile, as in VS Code) shows its Terminal tab, starting a terminal when the tab has none, and hides the panel when that
+tab already shows; the **right dock** (Toggle
 Right Dock: `C-M-b` · palette · `SPC R`) runs the frame's full height, like the left one. Each is one window with a
 **tab row** at the top (click a tab to show it). The right dock shows its tab row only while two of its tabs have
 something to show: with one (an agent panel, say) that pane's own header is the top row, and `q` or `C-w l` then

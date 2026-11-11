@@ -2,7 +2,7 @@
 
 use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
 use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
-use rustix::termios::{Winsize, tcsetwinsize};
+use rustix::termios::{Winsize, tcgetwinsize, tcsetwinsize};
 use std::ffi::OsStr;
 use std::fs::OpenOptions;
 use std::io;
@@ -68,9 +68,12 @@ impl Pty {
         Ok(Pty { master, child })
     }
 
-    pub fn resize(&self, size: Winsize) -> io::Result<()> {
+    /// The program's new SIZE; whether it changed (the kernel sends SIGWINCH only then).
+    pub fn resize(&self, size: Winsize) -> io::Result<bool> {
+        let old = tcgetwinsize(&self.master)?;
         tcsetwinsize(&self.master, size)?;
-        Ok(())
+        Ok((old.ws_col, old.ws_row, old.ws_xpixel, old.ws_ypixel)
+            != (size.ws_col, size.ws_row, size.ws_xpixel, size.ws_ypixel))
     }
 }
 

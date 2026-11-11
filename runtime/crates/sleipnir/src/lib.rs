@@ -15,15 +15,17 @@
 
 #[cfg(all(feature = "runner", target_os = "linux"))]
 pub mod bench;
+#[cfg(feature = "linux")]
+pub mod darwin;
 #[cfg(all(feature = "linux", target_os = "linux"))]
 pub mod helper;
 #[cfg(feature = "linux")]
 pub mod linux;
 #[cfg(feature = "proto")]
 pub mod proto;
-#[cfg(all(feature = "runner", target_os = "linux"))]
+#[cfg(all(feature = "runner", any(target_os = "linux", target_os = "macos")))]
 pub mod serve;
 #[cfg(feature = "sync")]
 pub mod sync;
-#[cfg(all(feature = "runner", target_os = "linux"))]
+#[cfg(all(feature = "runner", any(target_os = "linux", target_os = "macos")))]
 pub mod watchdog;

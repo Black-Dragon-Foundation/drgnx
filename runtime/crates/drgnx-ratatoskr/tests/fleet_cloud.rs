@@ -489,6 +489,7 @@ mod cloud {
         let session = Session::start(m.name(), channels, q.route(), q.link_events());
         q.add_runner(
             RemoteRunner {
+                os: Default::default(),
                 name: m.name().into(),
                 trust: forseti::RunnerTrust::MyCloud,
                 accept: forseti::Accept::All,

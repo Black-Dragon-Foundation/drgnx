@@ -193,6 +193,7 @@ mod tests {
             local: false,
             trust: RunnerTrust::Mine,
             keys_allowed: vec![],
+            os: Default::default(),
             features: vec![],
             state: RunnerState::Ready,
             accept: Accept::All,

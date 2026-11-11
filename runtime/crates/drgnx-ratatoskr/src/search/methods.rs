@@ -342,7 +342,7 @@ impl Hub {
     /// write and its sync took a key's search past the next key).
     pub fn offer_recent(&self, root: &std::path::Path, view: &str, spec: w::SearchSpec) {
         let Some(s) = self.saved.get() else { return };
-        if s.offer(root, view, spec, std::time::Instant::now()) {
+        if s.offer(root, view, spec, crate::clock::now()) {
             let (s, root) = (Arc::clone(s), root.to_path_buf());
             let _ = std::thread::Builder::new()
                 .name("search-recent".into())
@@ -1346,7 +1346,7 @@ pub async fn serve(
         Params::SearchUsages(a) => hub.usages(front, a).await.map(|u| json!(u)),
         Params::SearchRecent(r) => hub.saved().map(|s| {
             json!(w::RecentAnswer {
-                recent: s.recent(Path::new(r.root.as_str()), std::time::Instant::now()),
+                recent: s.recent(Path::new(r.root.as_str()), crate::clock::now()),
             })
         }),
         Params::SearchSavedList(r) => hub.saved().map(|s| {
@@ -1382,7 +1382,7 @@ pub async fn serve(
         }
         Params::SearchScopeBases(r) => {
             let root = PathBuf::from(r.root.as_str());
-            tokio::task::spawn_blocking(move || scope::bases(&root))
+            crate::clock::blocking(move || scope::bases(&root))
                 .await
                 .map_err(internal)
                 .and_then(|b| {
