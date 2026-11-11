@@ -88,15 +88,21 @@ core/workbench's setup has it (`drgnx-view-test-store-on'): the store has seen t
 
 ;;;; Timing
 
-(ert-deftest drgnx-view-live/a-mark-draws-after-the-delay ()
+(ert-deftest drgnx-view-live/a-mark-draws-after-a-frame ()
+  ;; the first mark after a quiet spell: one frame (`drgnx-view-first-delay'), then the throttle for the next
   (drgnx-view-live-test--with (v :render #'drgnx-view-live-test--render)
     (drgnx-view-append v '(a))
     (should (equal "" (drgnx-view-test--text v)))      ; a mark draws nothing
-    (drgnx-test-advance 0.09)
+    (drgnx-test-advance 0.015)
     (should (equal "" (drgnx-view-test--text v)))
-    (drgnx-test-advance 0.01)
+    (drgnx-test-advance 0.001)
     (should (equal "a: \n" (drgnx-view-test--text v)))
-    (should-not (drgnx-view-pending-p v))))
+    (should-not (drgnx-view-pending-p v))
+    (drgnx-view-append v '(b))                          ; right after a draw: one throttle after it
+    (drgnx-test-advance 0.099)
+    (should (equal "a: \n" (drgnx-view-test--text v)))
+    (drgnx-test-advance 0.001)
+    (should (equal "a: \nb: \n" (drgnx-view-test--text v)))))
 
 (ert-deftest drgnx-view-live/the-gap-collection-runs-after-the-draw-not-in-it ()
   ;; pattern B (the virtual clock gates the timers): a pass that leaves no view with work is a quiet gap, and the gap
@@ -124,6 +130,33 @@ core/workbench's setup has it (`drgnx-view-test-store-on'): the store has seen t
     (drgnx-test-advance 1)
     (should (= 1 (length drgnx-view-live-test--slices)))
     (drgnx-view-live-test--ok v)))
+
+(ert-deftest drgnx-view-live/the-first-change-after-quiet-draws-within-a-frame ()
+  ;; a quiet view answers its first mark in one frame (`drgnx-view-first-delay'), not one throttle later
+  (drgnx-view-live-test--with (v :render #'drgnx-view-live-test--render)
+    (drgnx-view-append v '(a))
+    (drgnx-test-advance 0.02)
+    (should (equal "a: \n" (drgnx-view-test--text v)))
+    (drgnx-test-advance 1)
+    (drgnx-view-append v '(b))                    ; quiet again: the next first change too
+    (drgnx-test-advance 0.02)
+    (should (equal "a: \nb: \n" (drgnx-view-test--text v)))))
+
+(ert-deftest drgnx-view-live/a-reset-and-its-rows-in-one-burst-draw-once ()
+  ;; the hub writes a reset and the rows after it apart (a new search: the reset, then the first file's rows 1–3 ms
+  ;; later): the frame's wait takes both, so no empty or partial list is drawn first
+  (drgnx-view-live-test--with (v :render #'drgnx-view-live-test--render :key-test 'eq)
+    (drgnx-view-append v '(old))
+    (drgnx-test-advance 1)
+    (setq drgnx-view-live-test--slices nil)
+    (drgnx-view-reset v nil)
+    (drgnx-test-advance 0.002)
+    (drgnx-view-append v '(x y))
+    (drgnx-test-advance 0.002)
+    (drgnx-view-append v '(z))
+    (drgnx-test-advance 0.02)
+    (should (equal "x: \ny: \nz: \n" (drgnx-view-test--text v)))
+    (should (= 1 (length drgnx-view-live-test--slices)))))
 
 (ert-deftest drgnx-view-live/the-throttle-holds-the-min-interval ()
   (drgnx-view-live-test--with (v :render #'drgnx-view-live-test--render-timed)
@@ -369,12 +402,13 @@ core/workbench's setup has it (`drgnx-view-test-store-on'): the store has seen t
     (should (drgnx-view-pending-p v))))
 
 (ert-deftest drgnx-view-live/two-views-share-one-deadline ()
-  "A view drawn 24 rows into the slice leaves the next view what is left of it: 40 rows, not a slice of its own."
+  "A view drawn 24 rows into the slice leaves the next view what is left of it: 40 rows, not a slice of its own.
+\(a's type draws 10 ms after a mark, b's one frame after: a first, its timer earlier than b's.)"
   (let ((drgnx-view-live-test--model (make-hash-table :test #'equal)) (drgnx-view-live-test--slices nil)
         (drgnx-view--deadline nil) (config (current-window-configuration))
         (a (generate-new-buffer " *drgnx-view-live-a*")) (b (generate-new-buffer " *drgnx-view-live-b*")))
     (drgnx-view-test-with-type ('drgnx-view-live-soon :render #'drgnx-view-live-test--render :slice 0.004
-                                                      :delay 0.05 :key-test 'eq
+                                                      :delay 0.01 :key-test 'eq
                                                       :patched #'drgnx-view-live-test--patched)
       (drgnx-view-test-with-type ('drgnx-view-live-t :render #'drgnx-view-live-test--render :slice 0.004
                                                      :key-test 'eq :patched #'drgnx-view-live-test--patched)

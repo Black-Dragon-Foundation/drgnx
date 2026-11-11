@@ -147,6 +147,21 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "what changed on a history branch since a record: per file, hunks numbered as git diff --unified=0 numbers them; the edits ledger and the review view read this",
         ),
         method!(
+            "git/blame", GitBlame(GitBlameParams) -> GitBlamed,
+            classes: [User], writes: false,
+            doc: "git's blame of a whole file in one answer: per line the commit that last changed it, for the text of the editor's tracked buffer (unsaved typing included) or else the file; lines an agent wrote ride along; cached by path, HEAD and text",
+        ),
+        method!(
+            "history/hunks/head", HistoryHunksHead(HeadHunksParams) -> HeadHunks,
+            classes: [User], writes: false,
+            doc: "what the editor's tracked buffer of a file changed against the last commit (HEAD), as hunks numbered as git diff --unified=0 numbers them; for the change marks in the margin",
+        ),
+        method!(
+            "git/stage-hunk", GitStageHunk(StageHunkParams) -> Staged,
+            classes: [User], writes: true,
+            doc: "stage one hunk of the editor's tracked buffer against HEAD in git's index (git apply --cached); the work tree is untouched",
+        ),
+        method!(
             "history/take", HistoryTake(TakeParams) -> Taken,
             classes: [User], writes: true,
             doc: "whole hunks of a branch taken into a worktree's branch as the user's new text, with where it came from; the files are written",
@@ -409,6 +424,101 @@ pub struct FileHunks {
 #[serde(deny_unknown_fields)]
 pub struct BranchHunks {
     pub files: Vec<FileHunks>,
+}
+
+/// `git/blame`: PATH of the worktree at WORKTREE_ROOT, as the editor's tracked buffer holds it (else the file).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GitBlameParams {
+    /// Relative to the worktree.
+    pub path: String,
+    pub worktree_root: String,
+}
+
+/// One commit of a blame.  The lines not committed yet name the commit `0000000000000000000000000000000000000000`, no
+/// time and the summary `Uncommitted changes`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlameCommit {
+    pub sha: String,
+    pub author: String,
+    /// The author time, seconds since the epoch; none for uncommitted lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<i64>,
+    pub summary: String,
+}
+
+/// Lines FROM..=TO (1-based) an agent wrote, from the edit history, not yet committed or committed unchanged by it.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentLines {
+    pub from: i64,
+    pub to: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
+}
+
+/// `git/blame`'s answer: COMMITS, and for each line of the text (in order) the index of its commit.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GitBlamed {
+    /// The commit HEAD named when the blame was made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+    pub commits: Vec<BlameCommit>,
+    pub lines: Vec<u32>,
+    pub agents: Vec<AgentLines>,
+}
+
+/// `history/hunks/head`: PATH of the worktree at WORKTREE_ROOT, the editor's tracked buffer against HEAD.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HeadHunksParams {
+    /// Relative to the worktree.
+    pub path: String,
+    pub worktree_root: String,
+}
+
+/// A hunk against HEAD: git's numbers and the lines HEAD has there (the text a revert puts back and a stage applies).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HeadHunk {
+    pub old_start: i64,
+    pub old_count: i64,
+    pub new_start: i64,
+    pub new_count: i64,
+    /// HEAD's lines OLD_START..OLD_START+OLD_COUNT, each with its line end.
+    pub old_lines: Vec<String>,
+}
+
+/// `history/hunks/head`'s answer.  `tracked` is false when no buffer of the file is tracked (no hunks were computed);
+/// a file HEAD does not hold is one hunk of all its lines.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HeadHunks {
+    pub tracked: bool,
+    pub hunks: Vec<HeadHunk>,
+}
+
+/// `git/stage-hunk`: stage one hunk of the tracked buffer's change against HEAD (as `history/hunks/head` numbered it)
+/// in the index, as `git apply --cached` does; the work tree is not touched.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StageHunkParams {
+    /// Relative to the worktree.
+    pub path: String,
+    pub worktree_root: String,
+    /// Which of the hunks: the line the hunk starts at in the buffer (`new_start`; for a pure deletion, the line it
+    /// sits before).
+    pub new_start: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Staged {
+    pub staged: bool,
 }
 
 /// A hunk to take: the file and its exact range in the source branch's text (a `ComparedHunk`'s `theirs_*`).

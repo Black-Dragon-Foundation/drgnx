@@ -4,7 +4,9 @@
 //! (indent guides and chevron, the name, the path over the row as `drgnx-work-id`), sent to every class of the view.
 //! A newer listing of a view stops the one before it (a stopped listing sends nothing), and the view's close or its
 //! connection's end stops it too. The editor opens or closes a folder by asking again with the new set; the model and
-//! rows that go out are the difference. The rows do not depend on the display class.
+//! rows that go out are the difference. The rows do not depend on the display class. After its listing the thread
+//! watches the folders it read (`notify`, one folder each, not recursive: a closed folder is never watched) and, once a
+//! burst of changes settles, reads the changed folders again and sends what differs; it ends with its listing.
 
 use super::model::Doc;
 use super::{Key, Views, lock};
@@ -15,10 +17,12 @@ use runstav::methods::search::{ExplorerParams, ExplorerStarted};
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
 use std::cmp::Ordering as Cmp;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// The most roots a listing takes.
 pub const ROOTS_MAX: usize = 16;
@@ -27,6 +31,10 @@ pub const EXPANDED_MAX: usize = 10_000;
 /// The entries the model holds; past them its list `order` is a window of the first ones (Sjá takes no longer list
 /// unwindowed). The rows hold every entry.
 const MODEL_WINDOW: usize = 20_000;
+/// A burst of changes is read again once no change came for this long ...
+const SETTLE: Duration = Duration::from_millis(30);
+/// ... or this long after its first change, whichever comes first.
+const SETTLE_MAX: Duration = Duration::from_millis(100);
 /// Names never shown (the Explorer's `drgnx-explorer-exclude` default), besides `.#…` lock files.
 const EXCLUDED: [&str; 5] = [".git", ".hg", ".svn", ".DS_Store", "__pycache__"];
 
@@ -316,11 +324,158 @@ pub fn explorer_rows(entries: &[Entry]) -> Vec<Row> {
     entries.iter().map(entry_row).collect()
 }
 
-/// One view's listing: its number, its cancel flag, the entries it sent.
+/// What a listing's thread hears after its listing: changed paths, a watch that lost events (read every folder
+/// again), or the end of the listing.
+pub(crate) enum Heard {
+    Changed(Vec<PathBuf>),
+    Rescan,
+    Stop,
+}
+
+/// A watcher sending what it sees in the folders it is given to TX. A change of a file's data or metadata is not
+/// sent (the listing shows names only).
+fn watcher(tx: Sender<Heard>) -> Option<notify::RecommendedWatcher> {
+    use notify::EventKind;
+    use notify::event::ModifyKind;
+    notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        let heard = match res {
+            Ok(ev) if ev.need_rescan() => Heard::Rescan,
+            Ok(ev) => match ev.kind {
+                EventKind::Create(_)
+                | EventKind::Remove(_)
+                | EventKind::Modify(ModifyKind::Name(_)) => Heard::Changed(ev.paths),
+                EventKind::Modify(ModifyKind::Any | ModifyKind::Other) => Heard::Changed(ev.paths),
+                _ => return,
+            },
+            Err(_) => Heard::Rescan,
+        };
+        let _ = tx.send(heard);
+    })
+    .ok()
+}
+
+/// Watch exactly WANT with WATCHER (WATCHING: what it watches now). A folder that cannot be watched (gone, the
+/// inotify limit) is left out and tried again on the next relisting.
+fn rewatch(
+    watcher: &mut Option<notify::RecommendedWatcher>,
+    watching: &mut HashSet<PathBuf>,
+    want: HashSet<PathBuf>,
+) {
+    use notify::{RecursiveMode, Watcher};
+    let Some(w) = watcher.as_mut() else { return };
+    for gone in watching.difference(&want) {
+        let _ = w.unwatch(gone);
+    }
+    watching.retain(|d| want.contains(d));
+    for d in want {
+        if !watching.contains(&d) && w.watch(&d, RecursiveMode::NonRecursive).is_ok() {
+            watching.insert(d);
+        }
+    }
+}
+
+/// List ROOTS (EXPANDED open, COMPACT joining chains) and hand the entries to SEND; then watch every folder that listing
+/// read and, after each burst of changes settles (`SETTLE`, at most `SETTLE_MAX`), read the changed folders again and
+/// hand over the entries when they differ from the last. The watcher sends on TX; RX hears it and `Heard::Stop`. Ends
+/// on `Heard::Stop`, CANCEL, a closed channel, or SEND answering false; the watcher goes with it.
+pub(crate) fn list_and_watch(
+    roots: &[PathBuf],
+    expanded: &HashSet<String>,
+    compact: bool,
+    cancel: &AtomicBool,
+    tx: Sender<Heard>,
+    rx: Receiver<Heard>,
+    send: &mut dyn FnMut(Vec<Entry>) -> bool,
+) {
+    let mut cache: HashMap<PathBuf, Vec<(String, bool)>> = HashMap::new();
+    let list = |cache: &mut HashMap<PathBuf, Vec<(String, bool)>>| {
+        list_tree(roots, expanded, compact, cancel, &mut |d| {
+            cache
+                .entry(d.to_path_buf())
+                .or_insert_with(|| read_folder(d))
+                .clone()
+        })
+    };
+    let Some(mut last) = list(&mut cache) else {
+        return;
+    };
+    // watched before the listing goes out: a change made once it is seen is never missed
+    let mut w = watcher(tx);
+    let mut watching = HashSet::new();
+    rewatch(&mut w, &mut watching, cache.keys().cloned().collect());
+    if !send(last.clone()) {
+        return;
+    }
+    loop {
+        let (mut dirty, mut all) = (HashSet::new(), false);
+        let hear = |h: Heard, dirty: &mut HashSet<PathBuf>, all: &mut bool| match h {
+            Heard::Changed(paths) => {
+                for p in paths {
+                    if let Some(parent) = p.parent() {
+                        dirty.insert(parent.to_path_buf());
+                    }
+                    dirty.insert(p);
+                }
+                true
+            }
+            Heard::Rescan => {
+                *all = true;
+                true
+            }
+            Heard::Stop => false,
+        };
+        let Ok(h) = rx.recv() else { return };
+        if !hear(h, &mut dirty, &mut all) {
+            return;
+        }
+        let end = Instant::now() + SETTLE_MAX;
+        loop {
+            let left = end.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            match rx.recv_timeout(SETTLE.min(left)) {
+                Ok(h) => {
+                    if !hear(h, &mut dirty, &mut all) {
+                        return;
+                    }
+                }
+                Err(RecvTimeoutError::Disconnected) => return,
+                Err(RecvTimeoutError::Timeout) => break,
+            }
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return;
+        }
+        if all {
+            cache.clear();
+        } else {
+            cache.retain(|d, _| !dirty.contains(d));
+        }
+        let Some(now) = list(&mut cache) else { return };
+        rewatch(&mut w, &mut watching, cache.keys().cloned().collect());
+        if now != last {
+            if !send(now.clone()) {
+                return;
+            }
+            last = now;
+        }
+    }
+}
+
+/// One view's listing: its number, its cancel flag and the channel that stops its watch, the entries it sent.
 struct Run {
     id: u64,
     cancel: Arc<AtomicBool>,
+    stop: Sender<Heard>,
     entries: Option<Arc<Vec<Entry>>>,
+}
+
+impl Run {
+    fn end(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+        let _ = self.stop.send(Heard::Stop);
+    }
 }
 
 /// The listings, one per (connection, view).
@@ -331,13 +486,19 @@ pub(super) struct Explorers {
 }
 
 impl Explorers {
-    /// Start VIEW's listing (the one before is stopped): its number and cancel flag. The entries sent so far stay.
-    fn start(&self, conn: u64, view: &str) -> (u64, Arc<AtomicBool>) {
+    /// Start VIEW's listing (the one before is stopped): its number, cancel flag and channel (the watcher's sending
+    /// end, and the end its thread hears on). The entries sent so far stay.
+    fn start(
+        &self,
+        conn: u64,
+        view: &str,
+    ) -> (u64, Arc<AtomicBool>, Sender<Heard>, Receiver<Heard>) {
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         let cancel = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = channel();
         let mut runs = lock(&self.runs);
         let entries = runs.remove(&(conn, view.to_owned())).and_then(|old| {
-            old.cancel.store(true, Ordering::Relaxed);
+            old.end();
             old.entries
         });
         runs.insert(
@@ -345,16 +506,17 @@ impl Explorers {
             Run {
                 id,
                 cancel: cancel.clone(),
+                stop: tx.clone(),
                 entries,
             },
         );
-        (id, cancel)
+        (id, cancel, tx, rx)
     }
 
     /// Stop VIEW's listing.
     pub(super) fn stop(&self, conn: u64, view: &str) {
         if let Some(r) = lock(&self.runs).remove(&(conn, view.to_owned())) {
-            r.cancel.store(true, Ordering::Relaxed);
+            r.end();
         }
     }
 
@@ -362,7 +524,7 @@ impl Explorers {
     pub(super) fn gone(&self, conn: u64) {
         lock(&self.runs).retain(|(c, _), r| {
             if *c == conn {
-                r.cancel.store(true, Ordering::Relaxed);
+                r.end();
             }
             *c != conn
         });
@@ -423,20 +585,29 @@ impl Views {
     }
 
     /// The thread's hand-over of listing ID's entries (dropped when VIEW's listing is not listing ID any more): the
-    /// model, then the rows to every class.
-    fn explorer_listed(&self, f: &Front, conn: u64, view: &str, id: u64, entries: Vec<Entry>) {
-        self.explorers.finish(conn, view, id, entries, |entries| {
-            let from = self.window_from(conn, view, "order");
-            self.publish_model(f, conn, view, explorer_doc(entries, from));
-            let rows = explorer_rows(entries);
-            let mut store = lock(&self.store);
-            for class in store.classes(conn, view) {
-                let key = (conn, view.to_owned(), class);
-                if let Some(p) = store.publish(&key, rows.clone(), &[]) {
-                    f.send_to(conn, "view-patch", json!(p));
+    /// model, then the rows to every class. False when they were dropped.
+    fn explorer_listed(
+        &self,
+        f: &Front,
+        conn: u64,
+        view: &str,
+        id: u64,
+        entries: Vec<Entry>,
+    ) -> bool {
+        self.explorers
+            .finish(conn, view, id, entries, |entries| {
+                let from = self.window_from(conn, view, "order");
+                self.publish_model(f, conn, view, explorer_doc(entries, from));
+                let rows = explorer_rows(entries);
+                let mut store = lock(&self.store);
+                for class in store.classes(conn, view) {
+                    let key = (conn, view.to_owned(), class);
+                    if let Some(p) = store.publish(&key, rows.clone(), &[]) {
+                        f.send_to(conn, "view-patch", json!(p));
+                    }
                 }
-            }
-        });
+            })
+            .is_some()
     }
 }
 
@@ -448,8 +619,8 @@ fn invalid(path: &str, message: &str) -> Error {
     }
 }
 
-/// `explorer/subscribe`: stop VIEW's listing and list its roots and open folders on a thread of its own; the model and
-/// rows go to every class of VIEW.
+/// `explorer/subscribe`: stop VIEW's listing and list its roots and open folders on a thread of its own, which then
+/// watches them (`list_and_watch`); the model and rows go to every class of VIEW.
 pub fn subscribe(f: &Front, c: &Caller, p: ExplorerParams) -> Result<ExplorerStarted, Error> {
     let views = &f.core.views;
     if p.view.is_empty() || p.view.len() > runstav::methods::view::VIEW_MAX {
@@ -472,18 +643,26 @@ pub fn subscribe(f: &Front, c: &Caller, p: ExplorerParams) -> Result<ExplorerSta
         .collect();
     let compact = p.compact.unwrap_or(true);
     let (conn, view) = (c.conn_id, p.view);
-    let (id, cancel) = views.explorers.start(conn, &view);
+    let (id, cancel, tx, rx) = views.explorers.start(conn, &view);
     let Some(front) = views.front.get().cloned() else {
         return Err(invalid("view", "the hub is starting"));
     };
     std::thread::Builder::new()
         .name("explorer".into())
         .spawn(move || {
-            let Some(f) = front.upgrade() else { return };
-            let listed = list_tree(&roots, &expanded, compact, &cancel, &mut |d| read_folder(d));
-            if let Some(entries) = listed {
-                f.core.views.explorer_listed(&f, conn, &view, id, entries);
-            }
+            list_and_watch(
+                &roots,
+                &expanded,
+                compact,
+                &cancel,
+                tx,
+                rx,
+                &mut |entries| {
+                    front
+                        .upgrade()
+                        .is_some_and(|f| f.core.views.explorer_listed(&f, conn, &view, id, entries))
+                },
+            );
         })
         .map_err(|e| invalid("view", &e.to_string()))?;
     Ok(ExplorerStarted { listing: id })

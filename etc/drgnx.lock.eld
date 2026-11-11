@@ -57,13 +57,6 @@
 		 "Debug Adapter Protocol for Emacs" :commit
 		 "dcbdffc68a3c89bbb89956161edde9f0fe062e64" :url
 		 "https://github.com/svaante/dape")
-	   (diff-hl :version "1.11.2" :archive "gnu" :kind tar :file
-		    "diff-hl-1.11.2.tar" :sha256
-		    "87dfec1f904595045d3dd215525f50445264e5d94e6591e2b9cc044ce74a91b1"
-		    :size 215040 :requires ((cl-lib "0.2")) :summary
-		    "Highlight uncommitted changes using VC" :commit
-		    "5e467e66847069d29922efb1a91a25a78dbad3d5" :url
-		    "https://github.com/dgutov/diff-hl")
 	   (eglot-booster :kind git :url
 			  "https://github.com/jdtsmith/eglot-booster"
 			  :rev "main" :commit

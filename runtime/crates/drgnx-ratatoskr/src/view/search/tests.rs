@@ -1,7 +1,30 @@
+use super::rows::grep_doc_in;
+use super::run::{DIGEST_MAX, Snap, buffer_snap, match_id, snapshot};
 use super::*;
 use runstav::methods::view::{Display, ViewEnv};
 
 const CONN: u64 = 1;
+
+/// The run a model is built for in the tests that build one without a search: the first run's number.
+const RUN: u64 = 1;
+
+/// FILES as one run found them: its matches numbered in order from 0.
+fn founds(files: Vec<(String, Vec<Match>)>) -> Vec<Found> {
+    let mut n = 0;
+    files
+        .into_iter()
+        .map(|(file, ms)| {
+            let ns = (n..).take(ms.len()).collect();
+            n += ms.len() as u32;
+            Found::new(file, ms, ns, None)
+        })
+        .collect()
+}
+
+/// A file read as SNAP, with no context.
+fn read_of(snap: Snap) -> Read {
+    Read { snap, ctx: vec![] }
+}
 
 fn env(class: &str, epoch: u64) -> ViewEnv {
     ViewEnv {
@@ -48,7 +71,7 @@ fn store() -> Store {
 }
 
 fn run_of(greps: &Greps, replace: &str) -> u64 {
-    greps.start(CONN, "s", query(), replace.into()).0
+    greps.start(CONN, "s", query(), replace.into(), &[]).0
 }
 
 #[test]
@@ -66,7 +89,7 @@ fn streams_rows_per_file() {
             .collect();
         let (_, p) = greps
             .with(CONN, "s", id, |run| {
-                batch_patches(&mut s, CONN, "s", run, file.into(), ms)
+                batch_patches(&mut s, CONN, "s", run, file.into(), ms, None)
             })
             .unwrap();
         assert_eq!(p.len(), 1);
@@ -79,12 +102,12 @@ fn streams_rows_per_file() {
     assert_eq!(after, &None);
     assert_eq!(
         rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
-        ["f:/r/a.txt", "m:/r/a.txt:1:2", "m:/r/a.txt:2:2"]
+        ["f:a.txt", "m:1:0", "m:1:1"]
     );
     let Op::Insert { after, rows } = &seen[1].ops[0] else {
         panic!("{:?}", seen[1].ops)
     };
-    assert_eq!(after.as_deref(), Some("m:/r/a.txt:2:2"));
+    assert_eq!(after.as_deref(), Some("m:1:1"));
     assert_eq!(rows.len(), 2);
     assert_eq!(
         (seen[0].base, seen[0].version, seen[1].base, seen[1].version),
@@ -115,6 +138,7 @@ fn grep_model_is_a_tree_of_files_and_matches() {
                 run,
                 "/r/a.txt".into(),
                 vec![m("/r/a.txt", 3, "let ", "needle", ";")],
+                None,
             )
         })
         .unwrap();
@@ -127,18 +151,17 @@ fn grep_model_is_a_tree_of_files_and_matches() {
     assert_eq!(reset["descriptor"]["flags"], json!(["expanded"]));
     assert_eq!(
         reset["lists"],
-        json!([{"name": "order", "ids": ["f:/r/a.txt", "m:/r/a.txt:3:4"]}])
+        json!([{"name": "order", "ids": ["f:a.txt", "m:1:0"]}])
     );
     let nodes = reset["nodes"].as_array().unwrap();
-    let file = nodes.iter().find(|n| n["id"] == "f:/r/a.txt").unwrap();
+    let file = nodes.iter().find(|n| n["id"] == "f:a.txt").unwrap();
     assert_eq!((&file["kind"], &file["flags"]), (&json!("file"), &json!(1)));
-    let hit = nodes.iter().find(|n| n["id"] == "m:/r/a.txt:3:4").unwrap();
-    assert_eq!(hit["parent"], "f:/r/a.txt");
+    let hit = nodes.iter().find(|n| n["id"] == "m:1:0").unwrap();
+    assert_eq!(hit["parent"], "f:a.txt");
     assert_eq!(
         hit["fields"],
         json!([
             ["label", "let needle;"],
-            ["file", "/r/a.txt"],
             ["line", 3],
             ["col", 4],
             ["end", 10],
@@ -152,7 +175,7 @@ fn grep_model_is_a_tree_of_files_and_matches() {
         .iter()
         .map(|r| &r.props.iter().find(|p| p.2 == "drgnx-work-id").unwrap().3)
         .collect();
-    assert_eq!(ids, [&json!("f:/r/a.txt"), &json!("m:/r/a.txt:3:4")]);
+    assert_eq!(ids, [&json!("f:a.txt"), &json!("m:1:0")]);
     // the next file: a diff, not a reset
     let (model, _) = greps
         .with(CONN, "s", id, |run| {
@@ -163,6 +186,7 @@ fn grep_model_is_a_tree_of_files_and_matches() {
                 run,
                 "/r/b.txt".into(),
                 vec![m("/r/b.txt", 1, "", "needle", "")],
+                None,
             )
         })
         .unwrap();
@@ -173,7 +197,7 @@ fn grep_model_is_a_tree_of_files_and_matches() {
 /// longer list unwindowed).
 #[test]
 fn grep_model_windows_a_long_search() {
-    let files = vec![
+    let files = founds(vec![
         (
             "/r/a.txt".to_owned(),
             (1..=3)
@@ -184,31 +208,27 @@ fn grep_model_windows_a_long_search() {
             "/r/b.txt".to_owned(),
             vec![m("/r/b.txt", 1, "", "needle", "")],
         ),
-    ];
-    let d = grep_doc_in(&files, 3, None);
-    assert_eq!(
-        d.lists["order"],
-        ["f:/r/a.txt", "m:/r/a.txt:1:0", "m:/r/a.txt:2:0"]
-    );
+    ]);
+    let d = grep_doc_in(Path::new("/r"), RUN, &files, 3, None);
+    assert_eq!(d.lists["order"], ["f:a.txt", "m:1:0", "m:1:1"]);
     assert_eq!(d.nodes.len(), 3);
     assert_eq!(d.windows.get("order"), Some(&(6, 0)));
-    let all = grep_doc_in(&files, 6, None);
+    let all = grep_doc_in(Path::new("/r"), RUN, &files, 6, None);
     assert_eq!(all.lists["order"].len(), 6);
     assert!(all.windows.is_empty(), "no window when everything fits");
     // a window from the third entry: a's last two matches and b; a's node is there (their parent), not in `order`
-    let mid = grep_doc_in(&files, 3, Some(2));
-    assert_eq!(
-        mid.lists["order"],
-        ["m:/r/a.txt:2:0", "m:/r/a.txt:3:0", "f:/r/b.txt"]
-    );
-    assert!(mid.nodes.contains_key("f:/r/a.txt"));
+    let mid = grep_doc_in(Path::new("/r"), RUN, &files, 3, Some(2));
+    assert_eq!(mid.lists["order"], ["m:1:1", "m:1:2", "f:b.txt"]);
+    assert!(mid.nodes.contains_key("f:a.txt"));
     assert_eq!(mid.windows.get("order"), Some(&(6, 2)));
     // past the end: the last window
-    let end = grep_doc_in(&files, 3, Some(99));
+    let end = grep_doc_in(Path::new("/r"), RUN, &files, 3, Some(99));
     assert_eq!(end.windows.get("order"), Some(&(6, 3)));
-    assert_eq!(end.lists["order"][2], "m:/r/b.txt:1:0");
+    assert_eq!(end.lists["order"][2], "m:1:3");
     assert_eq!(
-        grep_doc_in(&files, 6, Some(4)).windows.len(),
+        grep_doc_in(Path::new("/r"), RUN, &files, 6, Some(4))
+            .windows
+            .len(),
         0,
         "all fits: no window, whatever the from"
     );
@@ -229,6 +249,7 @@ fn new_query_starts_with_reset() {
                 run,
                 "/r/a.txt".into(),
                 vec![m("/r/a.txt", 1, "", "needle", "")],
+                None,
             )
         })
         .unwrap();
@@ -266,6 +287,7 @@ fn replace_preview_runs() {
                 run,
                 "/r/a.txt".into(),
                 vec![m("/r/a.txt", 1, "let ", "needle", ";")],
+                None,
             )
         })
         .unwrap();
@@ -303,6 +325,29 @@ fn replace_preview_runs() {
     assert_eq!(rows[0].runs, vec![(10, 16, "drgnx-replace-match".into())]);
 }
 
+/// [D] The old and new tints cover the changed characters only: what the match and its replacement share at the
+/// start and the end shows once, untinted.
+#[test]
+fn a_preview_tints_only_the_changed_characters() {
+    let mt = m("/r/a.txt", 1, "let ", "needle", ";");
+    let row = |new: &str| rows::match_row(&query(), new, "m:1:0".into(), &mt, None);
+    let r = row("needles");
+    assert_eq!(r.text, "  [x] let needles;");
+    assert_eq!(r.runs, vec![(16, 17, "drgnx-replace-new".into())]);
+    let r = row("noodle");
+    assert_eq!(r.text, "  [x] let neeoodle;");
+    assert_eq!(
+        r.runs,
+        vec![
+            (11, 13, "drgnx-replace-old".into()),
+            (13, 15, "drgnx-replace-new".into())
+        ]
+    );
+    let r = row("need");
+    assert_eq!(r.text, "  [x] let needle;");
+    assert_eq!(r.runs, vec![(14, 16, "drgnx-replace-old".into())]);
+}
+
 #[test]
 fn an_env_after_rows_gets_all_of_them_as_a_reset() {
     let mut s = store();
@@ -320,6 +365,7 @@ fn an_env_after_rows_gets_all_of_them_as_a_reset() {
                 run,
                 "/r/a.txt".into(),
                 vec![m("/r/a.txt", 1, "", "needle", "")],
+                None,
             )
         })
         .unwrap();
@@ -340,7 +386,7 @@ fn ten_thousand(greps: &Greps, s: &mut Store, id: u64) -> usize {
             .collect();
         let (_, patches) = greps
             .with(CONN, "s", id, |run| {
-                batch_patches(s, CONN, "s", run, file.clone(), ms)
+                batch_patches(s, CONN, "s", run, file.clone(), ms, None)
             })
             .unwrap();
         for p in patches {
@@ -368,12 +414,9 @@ fn ten_thousand_matches_send_only_the_window_until_asked() {
     greps
         .with(CONN, "s", id, |run| {
             assert_eq!(run.files.len(), 100);
-            assert_eq!(
-                run.files.iter().map(|(_, ms)| ms.len()).sum::<usize>(),
-                10_000
-            );
+            assert_eq!(run.files.iter().map(|f| f.ms.len()).sum::<usize>(), 10_000);
             // the model holds the matches beyond the window
-            let d = grep_doc(&run.files, None);
+            let d = grep_doc(&run.query.root, run.id, &run.files, None);
             assert_eq!(d.lists["order"].len(), 10_100);
         })
         .unwrap();
@@ -418,8 +461,8 @@ fn look_sends_the_next_rows_and_the_row_asked_for() {
     assert_eq!(ins.len(), 1);
     assert_eq!(ins[0].0.as_deref(), Some(last.as_str()));
     assert_eq!(ins[0].1.len(), WINDOW);
-    // a match 5,000 rows down: the window reaches it and a margin, nothing before is sent twice
-    let key = "m:/r/f050.txt:10:2".to_owned();
+    // a match 5,000 rows down (f050.txt's tenth): the window reaches it and a margin, nothing before is sent twice
+    let key = match_id(id, 50 * 100 + 9);
     let upto = greps
         .current(CONN, "s", |run| {
             look_patches(&mut s, CONN, "s", run, Look::Upto(&key))
@@ -482,7 +525,7 @@ fn every_file_sends_a_model_and_all_of_them_cost_about_one_whole_model() {
             .collect();
         let (model, _) = greps
             .with(CONN, "s", id, |run| {
-                batch_patches(&mut s, CONN, "s", run, file.clone(), ms)
+                batch_patches(&mut s, CONN, "s", run, file.clone(), ms, None)
             })
             .unwrap();
         if let Some(model) = model {
@@ -493,7 +536,10 @@ fn every_file_sends_a_model_and_all_of_them_cost_about_one_whole_model() {
     assert_eq!(sends, 100, "{sends} models for 100 files");
     let whole = greps
         .current(CONN, "s", |run| {
-            grep_doc(&run.files, None).reset().to_string().len()
+            grep_doc(&run.query.root, run.id, &run.files, None)
+                .reset()
+                .to_string()
+                .len()
         })
         .unwrap();
     assert!(
@@ -530,11 +576,11 @@ fn the_model_stream_is_the_fixture_sja_loads() {
     for (file, ms) in files {
         held.push((file.to_owned(), ms));
         let out = sent
-            .publish(grep_doc(&held, None))
+            .publish(grep_doc(Path::new("/r"), RUN, &founds(held.clone()), None))
             .expect("a model per batch");
         steps.push(json!({"base": out.base, "version": out.version, "reset": out.reset, "model": out.model}));
     }
-    let ids = grep_doc(&held, None).lists["order"].clone();
+    let ids = grep_doc(Path::new("/r"), RUN, &founds(held), None).lists["order"].clone();
     let now = json!({"list": "order", "ids": ids, "steps": steps});
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -547,8 +593,7 @@ fn the_model_stream_is_the_fixture_sja_loads() {
         )
         .unwrap();
     }
-    let have: Value =
-        serde_json::from_str(include_str!("../../../tests/fixtures/grep-append.json")).unwrap();
+    let have: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     assert_eq!(
         have, now,
         "the fixture is stale: UPDATE_SJA_FIXTURES=1 rewrites it"
@@ -587,23 +632,30 @@ fn every_batch_sends_its_own_nodes_and_a_splice() {
         held.push((file.clone(), ms.clone()));
         let (model, _) = greps
             .with(CONN, "s", id, |run| {
-                batch_patches(&mut s, CONN, "s", run, file.clone(), ms)
+                batch_patches(&mut s, CONN, "s", run, file.clone(), ms, None)
             })
             .unwrap();
         let data = Store::model_data(model.expect("a model per batch"));
+        let rel = format!("f{f:03}.txt");
         if f > 0 {
             let ops = data["model"]["ops"].as_array().unwrap();
             assert_eq!(ops.len(), 2, "{ops:?}");
             assert_eq!(ops[0]["nodes"].as_array().unwrap().len(), 4);
+            let n = 3 * f;
             assert_eq!(
                 ops[1]["splice"],
                 json!({"name": "order", "at": 4 * f, "remove": 0,
-                       "ids": [format!("f:{file}"), format!("m:{file}:4:2"), format!("m:{file}:8:2"), format!("m:{file}:12:2")]})
+                       "ids": [format!("f:{rel}"), match_id(id, n), match_id(id, n + 1), match_id(id, n + 2)]})
             );
         }
     }
     assert!(
-        s.publish_model(CONN, "s", grep_doc(&held, None)).is_none(),
+        s.publish_model(
+            CONN,
+            "s",
+            grep_doc(Path::new("/r"), id, &founds(held), None)
+        )
+        .is_none(),
         "the editor holds the model whole"
     );
 }
@@ -641,7 +693,7 @@ fn appends_within_a_throttle_window_go_in_one_send() {
         held.push((file.clone(), ms.clone()));
         let (model, _) = greps
             .with(CONN, "s", id, |run| {
-                batch_patches(&mut s, CONN, "s", run, file.clone(), ms)
+                batch_patches(&mut s, CONN, "s", run, file.clone(), ms, None)
             })
             .unwrap();
         sends.push(model.is_some());
@@ -670,7 +722,12 @@ fn appends_within_a_throttle_window_go_in_one_send() {
         "nothing waits"
     );
     assert!(
-        s.publish_model(CONN, "s", grep_doc(&held, None)).is_none(),
+        s.publish_model(
+            CONN,
+            "s",
+            grep_doc(Path::new("/r"), id, &founds(held), None)
+        )
+        .is_none(),
         "the editor holds the model whole"
     );
 }
@@ -679,20 +736,22 @@ fn appends_within_a_throttle_window_go_in_one_send() {
 /// begin on a file, inside one, at the end), and builds only the nodes the editor does not hold.
 #[test]
 fn a_window_move_is_the_diff_of_the_whole() {
-    let files: Vec<(String, Vec<Match>)> = (0..4)
-        .map(|f| {
-            let name = format!("/r/f{f}.txt");
-            let ms = (1..=4).map(|l| m(&name, l, "", "needle", "")).collect();
-            (name, ms)
-        })
-        .collect();
+    let files = founds(
+        (0..4)
+            .map(|f| {
+                let name = format!("/r/f{f}.txt");
+                let ms = (1..=4).map(|l| m(&name, l, "", "needle", "")).collect();
+                (name, ms)
+            })
+            .collect(),
+    );
     for a in 0..14 {
         for b in 0..14 {
-            let old = grep_doc_in(&files, 6, Some(a));
+            let old = grep_doc_in(Path::new("/r"), RUN, &files, 6, Some(a));
             let mut sent = crate::view::model::Sent::default();
             sent.publish(old.clone()).unwrap();
-            let new = grep_doc_in(&files, 6, Some(b));
-            let w = window_of(&files, 6, Some(b));
+            let new = grep_doc_in(Path::new("/r"), RUN, &files, 6, Some(b));
+            let w = window_of(Path::new("/r"), RUN, &files, 6, Some(b));
             let mut built = 0;
             let m = crate::view::model::WindowMove {
                 name: "order",
@@ -725,6 +784,43 @@ fn a_window_move_is_the_diff_of_the_whole() {
     }
 }
 
+/// [D] Moves one after another (a page each, the parents the last move left known, not scanned for) are each the ops the
+/// whole model's diff would send from the model before, over every pair of starts in a row.
+#[test]
+fn successive_window_moves_are_the_diff_of_the_whole() {
+    let files = founds(
+        (0..4)
+            .map(|f| {
+                let name = format!("/r/f{f}.txt");
+                let ms = (1..=4).map(|l| m(&name, l, "", "needle", "")).collect();
+                (name, ms)
+            })
+            .collect(),
+    );
+    for a in 0..14 {
+        let mut sent = crate::view::model::Sent::default();
+        let mut prev = grep_doc_in(Path::new("/r"), RUN, &files, 6, Some(a));
+        sent.publish(prev.clone()).unwrap();
+        for b in (0..14).chain((0..14).rev()).chain([a, 13, 0, 7]) {
+            let new = grep_doc_in(Path::new("/r"), RUN, &files, 6, Some(b));
+            let w = window_of(Path::new("/r"), RUN, &files, 6, Some(b));
+            let m = crate::view::model::WindowMove {
+                name: "order",
+                window: (w.total, w.from),
+                held: &w.held,
+                order: w.order.clone(),
+            };
+            let out = sent.move_window(m, |i| w.node(i));
+            let diff = new.diff(&prev);
+            match out {
+                Some(o) => assert_eq!(o.model, json!({ "ops": diff }), "from {a}, to {b}"),
+                None => assert!(diff.is_empty(), "from {a}, to {b}: no move but {diff:?}"),
+            }
+            prev = new;
+        }
+    }
+}
+
 /// [D] Replace All's leftovers (`search/grep-skipped`, SJA-SEARCH-1 (3)): the search lists only the skipped matches,
 /// each with its reason after the text, under their files; the model holds them alone, and the search stops.
 #[test]
@@ -737,14 +833,12 @@ fn skipped_leaves_the_skipped_matches_with_their_reasons() {
         let ms = (1..=2).map(|i| m(file, i, "x ", "needle", " y")).collect();
         greps
             .with(CONN, "s", id, |run| {
-                batch_patches(&mut s, CONN, "s", run, file.into(), ms)
+                batch_patches(&mut s, CONN, "s", run, file.into(), ms, None)
             })
             .unwrap();
     }
-    let why = BTreeMap::from([(
-        "m:/r/b.txt:2:2".to_string(),
-        "changed since the search".to_string(),
-    )]);
+    // b.txt's second match: the run's fourth
+    let why = BTreeMap::from([(match_id(id, 3), "changed since the search".to_string())]);
     let (model, patches) = greps
         .current(CONN, "s", |run| skip_patches(&mut s, CONN, "s", run, why))
         .unwrap();
@@ -755,11 +849,16 @@ fn skipped_leaves_the_skipped_matches_with_their_reasons() {
         let left: Vec<(&str, Vec<String>)> = run
             .files
             .iter()
-            .map(|(f, ms)| (f.as_str(), ms.iter().map(match_id).collect()))
+            .map(|f| {
+                (
+                    f.file.as_str(),
+                    f.ns.iter().map(|n| match_id(run.id, *n)).collect(),
+                )
+            })
             .collect();
-        assert_eq!(left, [("/r/b.txt", vec!["m:/r/b.txt:2:2".to_string()])]);
-        let doc = grep_doc(&run.files, None);
-        assert_eq!(doc.lists["order"], ["f:/r/b.txt", "m:/r/b.txt:2:2"]);
+        assert_eq!(left, [("/r/b.txt", vec![match_id(id, 3)])]);
+        let doc = grep_doc(&run.query.root, run.id, &run.files, None);
+        assert_eq!(doc.lists["order"], ["f:b.txt".to_string(), match_id(id, 3)]);
     });
     let rows = &s.pairs[&(CONN, "s".to_string(), "gui-1".to_string())].rows;
     assert_eq!(
@@ -794,7 +893,7 @@ fn a_far_jump_sends_the_rows_around_it_after_a_gap() {
             .collect();
         greps
             .with(CONN, "s", id, |run| {
-                batch_patches(&mut s, CONN, "s", run, file, ms)
+                batch_patches(&mut s, CONN, "s", run, file, ms, None)
             })
             .unwrap();
     }
@@ -804,8 +903,8 @@ fn a_far_jump_sends_the_rows_around_it_after_a_gap() {
             .unwrap()
     };
     let size = |ps: &[Patch]| serde_json::to_string(ps).unwrap().len();
-    // f287.txt:30 is row 287 * 101 + 30 = 29,017
-    let key = "m:/r/f287.txt:30:2".to_owned();
+    // f287.txt:30 is row 287 * 101 + 30 = 29,017, the run's match 287 * 100 + 29
+    let key = match_id(id, 287 * 100 + 29);
     let jump = look(&mut s, Look::Upto(&key));
     assert!(size(&jump) < 1 << 20, "{} bytes", size(&jump));
     let rows = held(&s);
@@ -853,4 +952,496 @@ fn a_far_jump_sends_the_rows_around_it_after_a_gap() {
         })
         .unwrap();
     assert_eq!(rows, all);
+}
+
+/// [D] A window move of one step (2,000 entries) over the search-window workload's search names each file's path once,
+/// in its file node's `path`: ids are relative to the root and a match node has no `file` (they were 44 % of the line,
+/// 684 kB then). `--nocapture` prints the line's bytes.
+#[test]
+fn a_window_move_names_each_path_once() {
+    let dir = "/tmp/drgnx-perf-needlesAb12Cd";
+    let files = founds(
+        (0..300)
+            .map(|f| {
+                let name = format!("{dir}/f{f:03}.txt");
+                let ms = (1..=100)
+                    .map(|l| {
+                        m(
+                            &name,
+                            l,
+                            "a ",
+                            "needle",
+                            " in the haystack, line after line",
+                        )
+                    })
+                    .collect();
+                (name, ms)
+            })
+            .collect(),
+    );
+    let root = Path::new(dir);
+    let mut sent = crate::view::model::Sent::default();
+    sent.publish(grep_doc(root, RUN, &files, Some(0))).unwrap();
+    let w = window_of(root, RUN, &files, MODEL_WINDOW, Some(2000));
+    let mv = crate::view::model::WindowMove {
+        name: "order",
+        window: (w.total, w.from),
+        held: &w.held,
+        order: w.order.clone(),
+    };
+    let out = sent.move_window(mv, |i| w.node(i)).unwrap();
+    let line = serde_json::to_string(&out.model).unwrap();
+    let ops = out.model["ops"].as_array().unwrap();
+    let added_files = ops
+        .iter()
+        .filter_map(|op| op.get("nodes"))
+        .flat_map(|n| n.as_array().unwrap())
+        .filter(|n| n["kind"] == "file")
+        .count();
+    eprintln!("a window move of 2,000 entries: {} bytes", line.len());
+    assert!(added_files > 0);
+    assert_eq!(
+        line.matches(dir).count(),
+        added_files,
+        "a path only in a file node's `path`"
+    );
+}
+
+/// RUN's batch of FILE's MS (no snapshot), its patches dropped.
+fn feed(greps: &Greps, s: &mut Store, run: u64, file: &str, ms: Vec<Match>) {
+    greps
+        .with(CONN, "s", run, |r| {
+            batch_patches(s, CONN, "s", r, file.into(), ms, None)
+        })
+        .unwrap();
+}
+
+/// What run RUN's end names unticked.
+fn off_at_end(greps: &Greps, run: u64) -> Vec<String> {
+    greps.with(CONN, "s", run, |r| r.off()).unwrap()
+}
+
+/// [D] A match's id is its run's number and its own in the run, in the order found (`m:RUN:N`), never its place in
+/// the file; a new run numbers from 0 again under its own number.
+#[test]
+fn match_ids_are_the_run_and_the_match_numbers() {
+    let mut s = store();
+    let greps = Greps::default();
+    let a = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    feed(
+        &greps,
+        &mut s,
+        a,
+        "/r/x.txt",
+        vec![m("/r/x.txt", 40, "", "needle", "")],
+    );
+    feed(
+        &greps,
+        &mut s,
+        a,
+        "/r/y.txt",
+        vec![m("/r/y.txt", 2, "", "needle", "")],
+    );
+    assert_eq!(held(&s), ["f:x.txt", "m:1:0", "f:y.txt", "m:1:1"]);
+    let b = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    feed(
+        &greps,
+        &mut s,
+        b,
+        "/r/y.txt",
+        vec![m("/r/y.txt", 2, "", "needle", "")],
+    );
+    assert_eq!(held(&s), ["f:y.txt", "m:2:0"]);
+}
+
+/// [D] The user's untick reaches the next run by the match's remap key (its file, columns and the text around it):
+/// the same match found again, two lines lower, comes back unticked under its new id, once; a run that found it
+/// twice (two lines alike) gives neither the tick.
+#[test]
+fn an_untick_is_kept_across_a_run_when_one_match_has_its_key() {
+    let mut s = store();
+    let greps = Greps::default();
+    let a = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    let two = |at: u32| {
+        vec![
+            m("/r/a.txt", at, "x ", "needle", " y"),
+            m("/r/a.txt", at + 1, "z ", "needle", " w"),
+        ]
+    };
+    feed(&greps, &mut s, a, "/r/a.txt", two(1));
+    // the user unticked a's second match; the search runs again after two lines were added above
+    let b = greps
+        .start(CONN, "s", query(), String::new(), &[match_id(a, 1)])
+        .0;
+    feed(&greps, &mut s, b, "/r/a.txt", two(3));
+    assert_eq!(off_at_end(&greps, b), [match_id(b, 1)]);
+    assert!(off_at_end(&greps, b).is_empty(), "the carry is spent");
+    // again with b's match unticked, and the line now there twice: neither comes back unticked
+    let c = greps
+        .start(CONN, "s", query(), String::new(), &[match_id(b, 1)])
+        .0;
+    let mut ms = two(3);
+    ms.push(m("/r/a.txt", 9, "z ", "needle", " w"));
+    feed(&greps, &mut s, c, "/r/a.txt", ms);
+    assert!(off_at_end(&greps, c).is_empty());
+    // another file's match with the same text is another match
+    let d = greps
+        .start(CONN, "s", query(), String::new(), &[match_id(c, 0)])
+        .0;
+    feed(
+        &greps,
+        &mut s,
+        d,
+        "/r/b.txt",
+        vec![m("/r/b.txt", 3, "x ", "needle", " y")],
+    );
+    assert!(off_at_end(&greps, d).is_empty());
+}
+
+/// [D] A run a newer one stops before its end hands its carried unticks on: typing on through two searches keeps them.
+#[test]
+fn a_stopped_run_hands_its_unticks_to_the_next() {
+    let mut s = store();
+    let greps = Greps::default();
+    let a = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    feed(
+        &greps,
+        &mut s,
+        a,
+        "/r/a.txt",
+        vec![m("/r/a.txt", 1, "x ", "needle", " y")],
+    );
+    let b = greps
+        .start(CONN, "s", query(), String::new(), &[match_id(a, 0)])
+        .0;
+    // b is stopped before it found anything; the editor's own unticks are none of b's
+    let c = greps.start(CONN, "s", query(), String::new(), &[]).0;
+    assert!(greps.with(CONN, "s", b, |_| ()).is_none());
+    feed(
+        &greps,
+        &mut s,
+        c,
+        "/r/a.txt",
+        vec![m("/r/a.txt", 1, "x ", "needle", " y")],
+    );
+    assert_eq!(off_at_end(&greps, c), [match_id(c, 0)]);
+}
+
+/// [D] The run records each file as it read it: size, change time, inode and the xxh3 of its bytes (none past
+/// [`DIGEST_MAX`]); the batch keeps it with the file's matches.
+#[test]
+fn the_run_records_each_files_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let small = dir.path().join("a.txt");
+    std::fs::write(&small, "a needle\n").unwrap();
+    let snap = snapshot(&small).expect("a file it can read");
+    let meta = std::fs::metadata(&small).unwrap();
+    assert_eq!(snap.size, 9);
+    assert_eq!(snap.xxh3, Some(xxhash_rust::xxh3::xxh3_64(b"a needle\n")));
+    assert_eq!(snap.mtime, meta.modified().ok());
+    assert_eq!(snap.inode, std::os::unix::fs::MetadataExt::ino(&meta));
+    let big = dir.path().join("big.log");
+    std::fs::File::create(&big)
+        .unwrap()
+        .set_len(DIGEST_MAX + 1)
+        .unwrap();
+    let b = snapshot(&big).unwrap();
+    assert_eq!((b.size, b.xxh3), (DIGEST_MAX + 1, None));
+    assert!(snapshot(&dir.path().join("gone.txt")).is_none());
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    let file = small.to_string_lossy().into_owned();
+    greps
+        .with(CONN, "s", id, |r| {
+            batch_patches(
+                &mut s,
+                CONN,
+                "s",
+                r,
+                file.clone(),
+                vec![m(&file, 1, "a ", "needle", "")],
+                Some(read_of(snap.clone())),
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        greps
+            .with(CONN, "s", id, |r| r.files[0].snap.clone())
+            .unwrap(),
+        Some(snap)
+    );
+}
+
+/// RUN's FILE as PUT gives it, its patches dropped.
+fn put(greps: &Greps, s: &mut Store, run: u64, file: &str, p: Put) {
+    greps
+        .with(CONN, "s", run, |r| {
+            if put_file(r, file, p) {
+                whole_patches(s, CONN, "s", r);
+            }
+        })
+        .unwrap();
+}
+
+/// [D] A buffer's matches take the place of its file's: in the file's place, with new numbers after the run's
+/// others (the ids already sent name no other match), its snapshot the buffer's; a buffer's file the search did
+/// not list comes after the others; a buffer with no match takes its file away. The rows and the model follow, and
+/// Next Match finds the new ids.
+#[test]
+fn a_buffers_matches_take_the_place_of_its_files() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    feed(
+        &greps,
+        &mut s,
+        id,
+        "/r/a.txt",
+        vec![m("/r/a.txt", 1, "", "needle", "")],
+    );
+    feed(
+        &greps,
+        &mut s,
+        id,
+        "/r/b.txt",
+        vec![m("/r/b.txt", 1, "", "needle", "")],
+    );
+    let text = "needle\ntwo needle\n";
+    let snap = buffer_snap(7, text);
+    assert_eq!(
+        (snap.size, snap.xxh3, snap.tick),
+        (
+            18,
+            Some(xxhash_rust::xxh3::xxh3_64(text.as_bytes())),
+            Some(7)
+        )
+    );
+    let two = vec![
+        m("/r/a.txt", 1, "", "needle", ""),
+        m("/r/a.txt", 2, "two ", "needle", ""),
+    ];
+    put(
+        &greps,
+        &mut s,
+        id,
+        "/r/a.txt",
+        Put::Text(two, read_of(snap.clone())),
+    );
+    assert_eq!(held(&s), ["f:a.txt", "m:1:2", "m:1:3", "f:b.txt", "m:1:1"]);
+    greps.current(CONN, "s", |run| {
+        assert_eq!(run.files[0].snap, Some(snap.clone()));
+        assert_eq!(row_index(run, "m:1:3"), Some(2));
+        assert_eq!(row_index(run, "m:1:1"), Some(4));
+        assert_eq!(row_index(run, "m:1:0"), None);
+        let doc = grep_doc(&run.query.root, run.id, &run.files, None);
+        assert_eq!(
+            doc.lists["order"],
+            ["f:a.txt", "m:1:2", "m:1:3", "f:b.txt", "m:1:1"].map(String::from)
+        );
+    });
+    let c = vec![m("/r/c.txt", 3, "", "needle", "")];
+    put(
+        &greps,
+        &mut s,
+        id,
+        "/r/c.txt",
+        Put::Text(c, read_of(buffer_snap(1, "\n\nneedle\n"))),
+    );
+    assert_eq!(held(&s)[5..], ["f:c.txt", "m:1:4"]);
+    put(
+        &greps,
+        &mut s,
+        id,
+        "/r/a.txt",
+        Put::Text(vec![], read_of(buffer_snap(8, ""))),
+    );
+    assert_eq!(held(&s), ["f:b.txt", "m:1:1", "f:c.txt", "m:1:4"]);
+    greps.current(CONN, "s", |run| {
+        assert_eq!(row_index(run, "m:1:4"), Some(3));
+    });
+}
+
+/// [D] A buffer too large to send keeps its file's matches on disk, and its header says the buffer is open in chunks.
+#[test]
+fn a_large_buffer_keeps_the_disk_matches_and_says_so() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    feed(
+        &greps,
+        &mut s,
+        id,
+        "/r/big.log",
+        vec![m("/r/big.log", 9, "", "needle", "")],
+    );
+    put(&greps, &mut s, id, "/r/big.log", Put::Large);
+    let rows = &s.pairs[&(CONN, "s".to_string(), "gui-1".to_string())].rows;
+    assert_eq!(
+        rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(),
+        [
+            "[x] big.log  open in chunks: searched on disk",
+            "  [x] needle"
+        ]
+    );
+}
+
+/// [D] A view's buffers: a text stands for its file (the search drops the file's matches on disk), a large one does
+/// not; none forgets it; another view's or connection's are its own, and the end of the connection forgets them.
+#[test]
+fn a_views_buffers_stand_for_their_files() {
+    let greps = Greps::default();
+    let text = |t: &str| {
+        Some(Buffer {
+            tick: 1,
+            text: Some(t.into()),
+        })
+    };
+    greps.put_buffer(CONN, "s", "/r/a.txt".into(), text("needle"));
+    greps.put_buffer(
+        CONN,
+        "s",
+        "/r/big.log".into(),
+        Some(Buffer {
+            tick: 2,
+            text: None,
+        }),
+    );
+    greps.put_buffer(CONN, "other", "/r/b.txt".into(), text("x"));
+    assert!(!greps.disk_ok(CONN, "s", "/r/a.txt"));
+    assert!(greps.disk_ok(CONN, "s", "/r/big.log"));
+    assert!(greps.disk_ok(CONN, "s", "/r/b.txt"));
+    assert!(greps.disk_ok(CONN + 1, "s", "/r/a.txt"));
+    assert_eq!(
+        greps
+            .buffers_of(CONN, "s")
+            .into_iter()
+            .map(|(f, _)| f)
+            .collect::<Vec<_>>(),
+        ["/r/a.txt", "/r/big.log"]
+    );
+    greps.put_buffer(CONN, "s", "/r/a.txt".into(), None);
+    assert!(greps.disk_ok(CONN, "s", "/r/a.txt"));
+    greps.gone(CONN);
+    assert!(greps.buffers_of(CONN, "other").is_empty());
+}
+
+/// [D] A buffer is searched when the search would search its file: the File scope's one file, else a file under the
+/// root its ignore rules search.
+#[test]
+fn a_buffer_is_searched_where_its_file_would_be() {
+    let mut q = query();
+    assert!(in_scope(&q, "/r/a.txt"));
+    assert!(in_scope(&q, "/r/sub/b.rs"));
+    assert!(!in_scope(&q, "/elsewhere/a.txt"));
+    assert!(!in_scope(&q, "/rr/a.txt"));
+    assert!(!in_scope(&q, "/r/.env"));
+    q.ignore = hrafn::grep::Ignore::Real;
+    assert!(in_scope(&q, "/r/.env"));
+    q.file = Some("/r/a.txt".into());
+    assert!(in_scope(&q, "/r/a.txt"));
+    assert!(!in_scope(&q, "/r/sub/b.rs"));
+}
+
+const CTX_RS: &str =
+    "fn outer() {\n    needle();\n    needle();\n}\nuse needle;\nfn other() {\n    needle\n}\n";
+
+/// CTX_RS's four matches of `needle`, as the searcher gives them in FILE.
+fn ctx_matches(file: &str) -> Vec<Match> {
+    vec![
+        m(file, 2, "    ", "needle", "();"),
+        m(file, 3, "    ", "needle", "();"),
+        m(file, 5, "use ", "needle", ";"),
+        m(file, 7, "    ", "needle", ""),
+    ]
+}
+
+/// [D] Context labels: a dim label row (`ƒ name`, its full path of names on hover) goes above the first match of each
+/// definition; the next matches in it follow without one; a top-level match gets none. A label is a row, not a node:
+/// the model holds the files and matches only, and a match's place among the rows counts the labels before it.
+#[test]
+fn a_label_row_goes_above_each_definitions_first_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.rs");
+    std::fs::write(&path, CTX_RS).unwrap();
+    let file = path.to_string_lossy().into_owned();
+    let ms = ctx_matches(&file);
+    let read = run::read(&path, &ms, true).expect("readable");
+    let mut s = store();
+    let greps = Greps::default();
+    let q = Query {
+        root: dir.path().to_path_buf(),
+        ..query()
+    };
+    let id = greps.start(CONN, "s", q, String::new(), &[]).0;
+    start_patches(&mut s, CONN, "s");
+    greps
+        .with(CONN, "s", id, |r| {
+            batch_patches(&mut s, CONN, "s", r, file.clone(), ms, Some(read))
+        })
+        .unwrap();
+    let rows = s.pairs[&(CONN, "s".to_string(), "gui-1".to_string())]
+        .rows
+        .clone();
+    assert_eq!(
+        rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
+        [
+            "f:a.rs", "c:1:0", "m:1:0", "m:1:1", "m:1:2", "c:1:3", "m:1:3"
+        ]
+    );
+    assert_eq!(rows[1].text, "  ƒ outer");
+    assert_eq!(rows[1].runs, vec![(0, 9, "drgnx-replace-ctx".to_string())]);
+    assert!(
+        rows[1]
+            .props
+            .iter()
+            .any(|(_, _, name, v)| name == "help-echo" && v == "outer")
+    );
+    assert!(
+        rows[1]
+            .props
+            .iter()
+            .all(|(_, _, name, _)| name != "drgnx-work-id")
+    );
+    assert_eq!(rows[5].text, "  ƒ other");
+    greps
+        .with(CONN, "s", id, |r| {
+            assert_eq!(row_index(r, "m:1:3"), Some(6));
+            assert_eq!(row_index(r, "m:1:2"), Some(4));
+            let d = grep_doc(&r.query.root, r.id, &r.files, None);
+            assert_eq!(d.nodes.len(), 5);
+            assert!(d.nodes.keys().all(|k| !k.starts_with("c:")));
+        })
+        .unwrap();
+}
+
+/// [D] No labels with context off (`drgnx-search-context`), for a language with no definitions (text), or for a file
+/// that cannot be read; the snapshot is the file's either way.
+#[test]
+fn context_off_or_a_text_file_gives_no_labels() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = dir.path().join("a.rs");
+    std::fs::write(&rs, CTX_RS).unwrap();
+    let txt = dir.path().join("a.txt");
+    std::fs::write(&txt, CTX_RS).unwrap();
+    let off = run::read(&rs, &ctx_matches(&rs.to_string_lossy()), false).unwrap();
+    assert!(off.ctx.iter().all(Option::is_none));
+    assert_eq!(Some(off.snap), snapshot(&rs));
+    let text = run::read(&txt, &ctx_matches(&txt.to_string_lossy()), true).unwrap();
+    assert!(text.ctx.iter().all(Option::is_none));
+    assert!(run::read(&dir.path().join("gone.rs"), &[], true).is_none());
+    let on = run::read(&rs, &ctx_matches(&rs.to_string_lossy()), true).unwrap();
+    let names: Vec<Option<&str>> = on
+        .ctx
+        .iter()
+        .map(|c| c.as_deref().map(|d| d.name.as_str()))
+        .collect();
+    assert_eq!(names, [Some("outer"), Some("outer"), None, Some("other")]);
 }

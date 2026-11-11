@@ -1314,12 +1314,7 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `jobs-recount`, `tools/ai` the `ai-probe` one-shot; the
   ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, the Search view's typing pause
   and its pause after a listed file changed are debounces `(replace-pause . BUFFER)` and `(replace-refresh . BUFFER)`
-  owned by the view's buffer (its rows are a view: below); a search's output is parsed `drgnx-replace-parse-lines`
-  (64) lines at a time, the rest by `drgnx-timer-soon` `(replace-parse . PROCESS)` at `(drgnx-timer-chain-delay)`
-  (a chain that yields to input: The primitives) owned by the search's stderr
-  buffer (killed when the search ends; `drgnx-replace-cancel` also cancels the key, since that buffer runs no
-  kill hook). A line that does not parse is left out, and the first such error reaches the callback as `(:error
-  REASON)`; a partial line's pieces are joined once, at its newline. And an Ask's search limit
+  owned by the view's buffer (its rows are a view: below; the text search itself is the hub's). And an Ask's search limit
   `(ai-grep . PROCESS)` by the search process (its sentinel cancels it). With no run of the owner nothing starts.
   Core process timeouts are keyed by their process and owned by it, so the layer drops them when it dies: a check's
   limit `(agent-check-limit . PROC)` with its 3 s backstop and tree kill, the hung `systemctl` kill, a `claude` command's
@@ -1438,7 +1433,7 @@ Four calls cover the idioms a hand-written timer used to. Each takes a KEY, an `
   `unread-command-events`), so a chain at 0 starved input queued there (a key read again, the harness's typing)
   until the chain ended: the keys then ran in one burst with no redisplay between them. One link's wait lets the
   wait find no ripe timer and return, and the command loop reads the input first
-  (`drgnx-timer-prim/a-chain-yields-to-pending-input`; the `replace-typing` workload measured it, perf.md).
+  (`drgnx-timer-prim/a-chain-yields-to-pending-input`; the `replace-typing` workload, since removed, measured it).
   The same wait reads sockets and process output only once no timer is ripe, so a chain at 0 also held back an
   emacsclient, a search's output and agent streams until it ended. Links that run back to back for
   `drgnx-timer-chain-span` (100 ms) make the next one wait `drgnx-timer-chain-yield` too, and every chain's link
@@ -1721,7 +1716,7 @@ Undo is off.
 
 `drgnx-view-define` returns NAME and stores a `drgnx-view-type` in `drgnx-view--types` (the fingerprint reads its
 names). SLICE is nil or at most `drgnx-view-slice` (0.004 s); DELAY is the throttle (nil: `drgnx-view-delay`, 0.1 s;
-0: the next timer pass); FOLLOW-TAIL keeps a window at the end; PATCHED (VIEW KEYS) runs after a draw with the keys
+0: the next timer pass; the first mark after a quiet spell draws one frame later, `drgnx-view-first-delay`); FOLLOW-TAIL keeps a window at the end; PATCHED (VIEW KEYS) runs after a draw with the keys
 it drew or grew, to put the view's own overlays back. Two keys are for hub-fed views (`drgnx-view-patch-attach
 ... :type NAME`, rendering with `drgnx-view-patch-render`): ACK non-nil sends `view/ack` after every applied patch,
 and EPOCH-RESET nil (default t) applies a patch of an older env epoch instead of holding it (a terminal's view: its
@@ -1815,9 +1810,13 @@ a `:full-draws`.
 
 ### Drawing live: the timer, the frame budget, visibility
 
-**The timer.** A mark arms `(drgnx-timer-soon (cons 'drgnx-view BUFFER) DELAY #'drgnx-view--draw-buffer :args
-(list BUFFER) :min-interval DELAY :owner BUFFER)`: one draw DELAY after the first mark of a burst, at most one per
-DELAY. A type with DELAY 0 arms `soon` with 0 and no min-interval. `(drgnx-view-hurry VIEW)` arms the draw at the
+**The timer.** A mark arms `(drgnx-timer-soon (cons 'drgnx-view BUFFER) FIRST #'drgnx-view--draw-buffer :args
+(list BUFFER) :min-interval DELAY :owner BUFFER)`, FIRST `drgnx-view-first-delay` (16 ms, one frame; at most DELAY):
+the first mark after a quiet spell draws one frame later, and a stream draws at most once per DELAY. The frame's wait
+is the guard against a half burst: the hub writes a new search's reset and its first rows one after the other (1–3 ms
+apart, separate reads), and a draw at the end of the reset's batch would flash the list empty and then hold the rows
+for a throttle. Before 2026-11-10 the first draw waited the whole DELAY: 100 ms on every change after quiet (a
+search's first rows came 115 ms after it started, 11 ms of them the hub's). A type with DELAY 0 arms `soon` with 0 and no min-interval. `(drgnx-view-hurry VIEW)` arms the draw at the
 next timer pass whatever the DELAY, replacing one armed for later: for a change the user asked for and waits to see
 (the Work map's answer to a layout command; live changes keep the throttle). A slice that leaves work re-arms a second key,
 `(drgnx-timer-start (cons 'drgnx-view-more BUFFER) (drgnx-timer-chain-delay) …)` (0.0, or 16 ms while input is
@@ -1904,12 +1903,11 @@ work. Without VIEW it sums every live view (`:max-slice-rows`: the largest).
 
 ### Consumers
 
-- **The Search view** (`modules/tools/drgnx-replace.el`, type `replace-results`, defined with its sidebar section): DELAY 0,
-  SLICE `drgnx-view-slice`, `eq` keys. A match's key is its plist; a file's header is `(drgnx-replace-file . FILE)`,
-  made once per search. Arrivals append (a new file after its header) or insert after the file's last row; a new
-  replacement text marks every match row dirty (headers stay); a file searched again removes its old rows and inserts
-  the new ones after its header, marked dirty for its box; a new search resets the view. PATCHED updates the status
-  line. Tests: `drgnx-replace/` in `test/unit/mod-replace-view-test.el`, `drgnx-view-ui/` in `test/ui/view-ui-test.el`.
+- **The Search view in Symbol mode** (`modules/tools/drgnx-replace.el`, type `replace-results`, defined with its sidebar
+  section; a text search is the hub's rows): DELAY 0, SLICE `drgnx-view-slice`, `eq` keys. A match's key is its plist;
+  a file's header is `(drgnx-replace-file . FILE)`, made once per search. Arrivals append (a new file after its header)
+  or insert after the file's last row; a new replacement text marks every match row dirty (headers stay); a new search
+  resets the view. PATCHED updates the status line. Tests: `drgnx-replace/` in `test/unit/mod-replace-view-test.el`.
 
 - **The model keeps streamed text as chunks** (`core/drgnx-agents.el`): a running `agent` or `thought` entry has `:chunks`
   (newest first) and `:length`, so appending a chunk costs a cons whatever the answer's size
@@ -2004,7 +2002,7 @@ carry them. `drgnx-view-apply-patch` (on `drgnx-hub-event-functions` while a hub
 and marks the view (`reset`, `insert`, `dirty`, `remove`), so the throttle and the 4 ms slices stay the view core's.
 Hub-fed views do not call `drgnx-view-sync-rows`.
 `(drgnx-view-patch-detach)` makes the buffer no longer hub-fed (its pair forgotten, its Sjá instance closed) and leaves its
-view and rows; the Search view uses it to go back to the Lisp engine's rows for a symbol search.
+view and rows; the Search view uses it to go back to rows of its own for a symbol search (the server's edits).
 `(drgnx-view-patch-pause BUFFER ON)` stops applying patches to a buffer (a terminal's copy mode): they are kept, at
 most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past that the resume sends `view/resync`.
 
@@ -2064,8 +2062,16 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
 **The native view model.** A view whose keys move a selection also gets its model (`view-model`, docs/develop/hub.md
 "The native view model"), which Sjá, in Nidhogg (`nidhogg-views.el`, loaded by `require`), holds and answers keys
 from. drgnx never parses it: the hub client routes a line that starts `{"event":"view-model"` before any parse
-(`drgnx-hub--model-line-p`, a compare in place; framed, Nidhogg's reader passes it raw by `:raw-prefix`) to
-`drgnx-view-model-line`, which hands it whole to Sjá (`nidhogg-view-push`). Without Sjá the line is dropped.
+(`drgnx-hub--model-line-p`, a compare in place). Framed (`nidhogg-workers-framing`), Nidhogg's reader pushes the line
+to Sjá itself (`:raw-prefix` with `:raw-to-sja`), so it never becomes a Lisp string; there is no framed path that
+hands it to Lisp. A Search window move's line was 1.2 MB, 87 % of what a page consed, and the reason the full
+collection came every ~42 pages (with the push and the match nodes' paths cut, 2026-11-11, pinned, release hub, 3
+runs: a page conses 224 kB, was 1540; page p50 24.6 ms, was 36.6; no page with a collection, was 1 in 12). Unframed,
+the filter routes the line to `drgnx-view-model-line`, which hands it whole to Sjá (`nidhogg-view-push`); without
+Sjá it is dropped. Its batch entry carries Sjá's answer, which goes to
+`drgnx-view-model--pushed` (the same decisions as after `nidhogg-view-push`); Sjá's refusal is reported by the
+connection's guard, as a failed push is. The reader ends a batch before such a line, so it reaches Sjá after every
+message before it, as in the filter's order.
 - **Instances:** every hub-fed buffer opens an instance of its view in Sjá at attach (`drgnx-view-patch-handle`),
   closed with the buffer or at teardown; the view (its queue and stream in Sjá, and `drgnx-view-model--views`, the
   editor's side: an outstanding resync) goes with its last buffer.
@@ -2076,8 +2082,8 @@ from. drgnx never parses it: the hub client routes a line that starts `{"event":
   push answers `resync`). A row patch that names `model: N` tells Sjá (`nidhogg-view-named`) and touches its view; the
   draw's first slice (the type's SYNC, `drgnx-view-patch--sync`) drains the queued models up to N
   (`nidhogg-view-drain`), then inserts the rows, so a key answers from the model that is drawn. A model no row patch
-  names applies on the view's own timer (`(drgnx-view-model . VIEW)`, `nidhogg-view-due`) one `drgnx-view-delay`
-  later; one a patch named waits for that patch's draw. A model that does not apply at the drain drops the queue and
+  names applies on the view's own timer (`(drgnx-view-model . VIEW)`, `nidhogg-view-due`) one frame later after
+  a quiet spell (`drgnx-view-first-delay`), else at most once per `drgnx-view-delay`; one a patch named waits for that patch's draw. A model that does not apply at the drain drops the queue and
   asks for a reset.
 - **The hub goes:** `nidhogg-view-hub-lost` drops the queues and streams and marks every view stale (dimmed with the
   rows), and keys keep moving on what is drawn.
@@ -2095,8 +2101,9 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   name (`drgnx-view-nav-faces`, then `drgnx-view-nav-default-faces`: `drgnx-view-selected`, `drgnx-view-match`,
   `drgnx-view-chain`, `drgnx-view-lit`, `shadow` for dim), put as an overlay on the node's span (the text whose
   `drgnx-view-patch-id-prop`, `drgnx-work-id` by default, is its id), never on the whole line. Rendering a row notes
-  which rows hold which node (`drgnx-view-patch-ids`); after a draw, the rows it replaced get their nodes' classes
-  again (PATCHED), so a selection made while a patch waits is still shown once the patch lands. Row patches carry no
+  which rows hold which node (`drgnx-view-patch-ids`) and which nodes each row holds (`drgnx-view-patch-keys`, the
+  index the class step reads, so a draw costs the rows it replaced, never a walk of every node drawn); after a draw,
+  the rows it replaced get their nodes' classes again (PATCHED), so a selection made while a patch waits is still shown once the patch lands. Row patches carry no
   selection: a removed row takes nothing with it. A view's own marks over the hub's rows go back on after the classes
   through `drgnx-view-patch-patched-functions` (VIEW KEYS), added buffer-locally (the Search view's tick boxes).
 - **The trailing notice:** the view's `drgnx-view-nav-notice-method` gets `(:view V :selected ID)`, or
@@ -2125,7 +2132,8 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   a held key's notices on the test clock, the clear notice, the hook on a move only, the broken view; `test/unit/work-trail-nav-test.el`: a 2,000-step trail
   paging at its edge with a held key).
 - **The Explorer on the rows path** (`drgnx-explorer-rows-attach VIEW CLASS`): the hub lists the roots and the open
-  folders (`explorer/subscribe`, hub.md) and its jit-lock painting is off. Next and previous follow `down` and `up`,
+  folders (`explorer/subscribe`, hub.md, asked on the subscribed connection `drgnx-hub--events`, where its env went) and its
+  jit-lock painting is off. Next and previous follow `down` and `up`,
   expand on an open folder follows `right` and collapse on anything but an open folder `left`; opening or closing a
   folder changes `drgnx-explorer--expanded` and asks the hub again without waiting; typing is Sjá's `prefix` over the
   visible siblings; a row's node (`drgnx-explorer-node-at`) is the path over it, so the file commands work as before.
@@ -3012,7 +3020,7 @@ Agents' `fs/read_text_file` serves an open buffer only when it is not a large fi
 
 The producers that check it today: sticky scroll (`drgnx-sticky--maybe`), indent guides (`drgnx-guides--maybe`),
 inline blame (`drgnx-blame--maybe`), lang's language server (`drgnx-lang--maybe-eglot`), the gutter's changes
-(`extra/hunks` advises `diff-hl--global-turn-on`, `:before-while`, so diff-hl's global mode skips the buffer), the
+(`extra/hunks`: `drgnx-hunks--maybe` does not turn its mode on for the buffer), the
 Outline dock (`drgnx-outline--index`: "This file is too large for an outline", also for a small chunk buffer) and
 the status bar (`position` shows `Col N` without the line number, `indent` shows nothing, and the memo's key reads
 `tab-width` instead of scanning the first lines). **A new producer that reads or scans the buffer checks the flag
@@ -3062,7 +3070,7 @@ revisit the file normally, a timer's open included.
 that stays large across a revert gets no parser either. The sweep, in `find-file-hook` at depth -90, turns the mode on
 for a large file, or for a buffer whose text is above `:ask-above` (a compressed file that expands), never for a
 chunk buffer. The mode turns
-off every mode of `so-long-minor-modes` that is on (the module adds indent-bars, blame, sticky and diff-hl's margin
+off every mode of `so-long-minor-modes` that is on (the module adds indent-bars, blame, sticky and the change marks'
 mode to that one list), deletes the buffer's tree-sitter parsers and ends eglot's management (a buffer that turns
 lean on a revert kept them: auto-revert keeps the modes), then undo and auto-save. A raw visit (`find-file-noselect` with RAWFILE) runs no
 `find-file-hook`, so the door runs the sweep itself. A major mode changed by hand (`M-x text-mode`) resets the
@@ -3399,7 +3407,7 @@ timer; when nothing can run and nothing is left to wait for it fails at once, wi
   calls `drgnx-test-wait`, or another such wrapper) that waits for `(not (process-live-p P))`.
 - **A chain of timers runs back to back.** One `accept-process-output` runs one link of a chain of zero-delay
   timers (a view drawing in slices) however long it waits, so while a timer is due the wait polls without a timeout.
-  A 20 ms poll per link starved the Search view's 10,100 rows (`drgnx-view-ui/replace-retype-has-no-jank`).
+  A 20 ms poll per link starved the Search view's 10,100 rows (a GUI test of the Search view's old path, since removed).
 - **A wait for a frame.** A GUI test waits for what the frame shows with
   `(drgnx-test-wait-presented &key frame value (frames 2) (secs 30))`, never a short pause after `redisplay`. Each
   sample redisplays and takes `drgnx-uitest-snapshot`: `glitnir-snapshot` presents what was drawn, forces a paint and

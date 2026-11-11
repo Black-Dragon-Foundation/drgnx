@@ -545,7 +545,13 @@ local roots and the open folders the hub was asked for)."
 
 (defun drgnx-explorer--sync-watches ()
   "Watch exactly the shown folders (a collapsed folder stops being watched; one that could not be
-watched — the inotify limit — is tried again)."
+watched — the inotify limit — is tried again).  On the rows path the hub watches them: no watch here."
+  (if (drgnx-explorer--rows-p)
+      (drgnx-explorer--unwatch-all)
+    (drgnx-explorer--sync-watches-old)))
+
+(defun drgnx-explorer--sync-watches-old ()
+  "`drgnx-explorer--sync-watches' off the rows path."
   (let ((want (make-hash-table :test #'equal)) gone)
     (dolist (d (drgnx-explorer--shown-folders)) (puthash d t want))
     (maphash (lambda (d desc)
@@ -842,7 +848,8 @@ stay.  Every window showing the Explorer then shows DIR's row at its top."
 
 (declare-function nidhogg-view-set "nidhogg-views" (h what value))
 (declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
-(declare-function drgnx-hub-call "drgnx-hub-client")
+(defvar drgnx-hub--events)
+(declare-function drgnx-hub--call-on "drgnx-hub-client")
 
 (defvar drgnx-explorer--hub-view nil "The Explorer's hub-fed view on the rows path, or nil (it draws its own rows).")
 
@@ -852,17 +859,19 @@ stay.  Every window showing the Explorer then shows DIR's row at its top."
     (with-current-buffer b (and drgnx-view-patch (drgnx-view-patch-handle drgnx-view-patch) t))))
 
 (defun drgnx-explorer--subscribe (&optional _view)
-  "Ask the hub for the listing of the roots and the open folders (and watch them); nothing waits for it.  The hub lists
-local folders only: a remote root is left out."
-  (condition-case nil
-      (drgnx-hub-call "explorer/subscribe"
-                      (list :view drgnx-explorer--hub-view
-                            :roots (vconcat (mapcar (lambda (r) (directory-file-name (expand-file-name r)))
-                                                    (seq-remove #'file-remote-p drgnx-explorer--roots)))
-                            :expanded (vconcat (sort (hash-table-keys drgnx-explorer--expanded) #'string<))
-                            :compact (if drgnx-explorer-compact-folders t :false))
-                      #'ignore)
-    (error nil))
+  "Ask the hub for the listing of the roots and the open folders, which it then watches; nothing waits for it.  The hub
+lists local folders only: a remote root is left out.  On the subscribed connection, where the view's env went: the hub
+sends the rows to the connection that asked.  While it is down nothing is asked; the reconnect asks again."
+  (when (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
+    (condition-case nil
+        (drgnx-hub--call-on drgnx-hub--events "explorer/subscribe"
+                            (list :view drgnx-explorer--hub-view
+                                  :roots (vconcat (mapcar (lambda (r) (directory-file-name (expand-file-name r)))
+                                                          (seq-remove #'file-remote-p drgnx-explorer--roots)))
+                                  :expanded (vconcat (sort (hash-table-keys drgnx-explorer--expanded) #'string<))
+                                  :compact (if drgnx-explorer-compact-folders t :false))
+                            #'ignore)
+      (error nil)))
   (drgnx-explorer--sync-watches))
 
 (defun drgnx-explorer-rows-attach (view class)

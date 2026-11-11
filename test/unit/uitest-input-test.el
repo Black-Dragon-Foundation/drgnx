@@ -216,6 +216,11 @@
     (should (null drgnx-uitest--queue))
     (setq unread-command-events nil)))
 
+(ert-deftest drgnx-uitest/a-pause-is-queued-between-events ()
+  (let ((drgnx-uitest--queue (list ?a)) (drgnx-uitest--timer 'dummy))
+    (drgnx-uitest-api-pause 0.5)
+    (should (equal drgnx-uitest--queue '(?a (drgnx-uitest-pause . 0.5))))))
+
 (ert-deftest drgnx-uitest/settled-waits-from-the-start-of-a-measurement ()
   ;; A measurement with no input must still give followers (timers) the quiet period.
   (drgnx-test-with-clock (:auto t)

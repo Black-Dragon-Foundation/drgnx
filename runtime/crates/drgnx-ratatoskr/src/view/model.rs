@@ -192,6 +192,9 @@ pub struct Sent {
     pub version: u64,
     doc: Option<Doc>,
     reset_due: bool,
+    /// The ids of the doc's nodes outside its one list (a window's parents), as the last [`Sent::move_window`] left
+    /// them; None when unknown (another change came since), found by one scan then.
+    outside: Option<Vec<String>>,
 }
 
 /// One `view-model`: base, version and the model, `{"ops": [...]}`.
@@ -216,6 +219,7 @@ impl Sent {
             return None;
         }
         self.doc = Some(doc);
+        self.outside = None;
         Some(self.send(ops))
     }
 
@@ -232,6 +236,9 @@ impl Sent {
         for n in nodes {
             let id = n["id"].as_str().unwrap_or_default().to_owned();
             if doc.nodes.get(&id) != Some(&n) {
+                if !doc.nodes.contains_key(&id) {
+                    self.outside = None;
+                }
                 doc.nodes.insert(id, n.clone());
                 changed.push(n);
             }
@@ -268,21 +275,68 @@ impl Sent {
         {
             return None;
         }
-        let keep: std::collections::HashSet<&str> = held.iter().map(String::as_str).collect();
-        let gone: Vec<String> = doc
-            .nodes
-            .keys()
-            .filter(|id| !keep.contains(id.as_str()))
-            .cloned()
-            .collect();
-        let mut added: Vec<(String, Value)> = held
-            .iter()
-            .enumerate()
-            .filter(|(_, id)| !doc.nodes.contains_key(*id))
-            .map(|(i, id)| (id.clone(), node(i)))
-            .collect();
+        let ids = &held[order.clone()];
+        let old = doc.lists.get(name).map(Vec::as_slice).unwrap_or_default();
+        let old_window = doc.windows.get(name).copied();
+        // the entries both windows hold: none of their nodes is looked at (a page moves by a step of a long window)
+        let both = old_window.and_then(|(_, of)| {
+            let (nf, start) = (window.1, of.max(window.1));
+            let end = (of + old.len()).min(nf + ids.len());
+            (end > start && old[start - of..end - of] == ids[start - nf..end - nf])
+                .then(|| (start - of, start - nf, end - start))
+        });
+        let (gone, mut added): (Vec<String>, Vec<(String, Value)>) = match both {
+            Some((so, sn, k)) => {
+                let outside = self.outside.take().unwrap_or_else(|| {
+                    let listed: std::collections::HashSet<&str> =
+                        old.iter().map(String::as_str).collect();
+                    doc.nodes
+                        .keys()
+                        .filter(|id| !listed.contains(id.as_str()))
+                        .cloned()
+                        .collect()
+                });
+                // the new nodes outside both: the list's new head and tail, and the window's parents
+                let fresh: Vec<usize> = (0..order.start + sn)
+                    .chain(order.start + sn + k..held.len())
+                    .collect();
+                let keep: std::collections::HashSet<&str> =
+                    fresh.iter().map(|&i| held[i].as_str()).collect();
+                let gone = old[..so]
+                    .iter()
+                    .chain(&old[so + k..])
+                    .chain(&outside)
+                    .filter(|id| !keep.contains(id.as_str()))
+                    .cloned()
+                    .collect();
+                let added = fresh
+                    .into_iter()
+                    .filter(|&i| !doc.nodes.contains_key(&held[i]))
+                    .map(|i| (held[i].clone(), node(i)))
+                    .collect();
+                (gone, added)
+            }
+            None => {
+                let keep: std::collections::HashSet<&str> =
+                    held.iter().map(String::as_str).collect();
+                let gone = doc
+                    .nodes
+                    .keys()
+                    .filter(|id| !keep.contains(id.as_str()))
+                    .cloned()
+                    .collect();
+                let added = held
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, id)| !doc.nodes.contains_key(*id))
+                    .map(|(i, id)| (id.clone(), node(i)))
+                    .collect();
+                (gone, added)
+            }
+        };
+        let mut gone = gone;
+        gone.sort();
         added.sort_by(|a, b| a.0.cmp(&b.0));
-        let ids = held[order].to_vec();
         let mut ops = Vec::new();
         if !gone.is_empty() {
             ops.push(json!({ "remove": gone }));
@@ -290,13 +344,11 @@ impl Sent {
         if !added.is_empty() {
             ops.push(json!({ "nodes": added.iter().map(|(_, n)| n).collect::<Vec<_>>() }));
         }
-        let old = doc.lists.get(name).map(Vec::as_slice).unwrap_or_default();
-        let old_window = doc.windows.get(name);
-        if old != ids.as_slice() || old_window != Some(&window) {
+        if old != ids || old_window != Some(window) {
             ops.extend(
-                splice_json(name, old, old_window, &ids, Some(&window)).unwrap_or_else(|| {
-                    vec![json!({ "list": list_json(name, &ids, Some(&window)) })]
-                }),
+                splice_json(name, old, old_window.as_ref(), ids, Some(&window)).unwrap_or_else(
+                    || vec![json!({ "list": list_json(name, ids, Some(&window)) })],
+                ),
             );
         }
         if ops.is_empty() {
@@ -306,8 +358,25 @@ impl Sent {
             doc.nodes.remove(id);
         }
         doc.nodes.extend(added);
-        doc.lists.insert(name.to_owned(), ids);
+        let list = doc.lists.entry(name.to_owned()).or_default();
+        match both {
+            // the entries held stay where they are: the list drops its ends and gains the new ones around them
+            Some((so, sn, k)) => {
+                list.truncate(so + k);
+                list.drain(..so);
+                list.splice(0..0, ids[..sn].iter().cloned());
+                list.extend(ids[sn + k..].iter().cloned());
+            }
+            None => *list = ids.to_vec(),
+        }
         doc.windows.insert(name.to_owned(), window);
+        self.outside = Some(
+            held[..order.start]
+                .iter()
+                .chain(&held[order.end..])
+                .cloned()
+                .collect(),
+        );
         Some(self.send(ops))
     }
 
@@ -343,6 +412,7 @@ impl Sent {
         for (id, n) in nodes {
             doc.nodes.insert(id, n);
         }
+        self.outside = None;
         Some(self.send(ops))
     }
 

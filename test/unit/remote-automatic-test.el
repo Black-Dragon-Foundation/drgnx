@@ -1,7 +1,7 @@
 ;;; remote-automatic-test.el --- batch tests: nothing automatic touches a remote -*- lexical-binding: t -*-
 ;; test-class: cond
 ;; The binding rule (M2-6): TRAMP stays on for what the user starts, but no timer, hook, background check, file
-;; watch, VC / diff-hl, Flymake, the Explorer, link or compile output touches a remote name.  The TRAMP method
+;; watch, VC / the change marks, Flymake, the Explorer, link or compile output touches a remote name.  The TRAMP method
 ;; `drgnx-mock' (test/fixtures/tramp-mock.el) logs in with a local sh and counts what would leave the machine.
 (require 'ert)
 (require 'cl-lib)
@@ -27,7 +27,7 @@
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
 
 (defconst drgnx-remote-auto--elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa"))
-  "The user's ELPA, read-only, where diff-hl is when installed.")
+  "The user's ELPA, read-only.")
 
 (defvar drgnx-remote-auto--clock 0)
 
@@ -139,7 +139,7 @@
       (switch-to-buffer rbuf)
       (with-current-buffer rbuf
         ;; nothing turns these on by itself for a remote file
-        (should-not (or flymake-mode auto-revert-mode (bound-and-true-p diff-hl-mode) drgnx-blame-mode))
+        (should-not (or flymake-mode auto-revert-mode drgnx-hunks-mode drgnx-blame-mode))
         (drgnx-blame--maybe)
         (should-not drgnx-blame-mode)
         (goto-char (point-max)) (insert "# edited\n")
@@ -384,25 +384,20 @@ buffer is not affected."
       (should (member "app.py" (drgnx-remote-auto--row-names)))
       (should (= drgnx-tramp-mock-sends 0)))))
 
-;;;; diff-hl
+;;;; The change marks
 
-(ert-deftest drgnx-remote/diff-hl-off-for-remote ()
-  ;; diff-hl in the user's ELPA (CI's DRGNX_USER_ELPA holds only the pinned evil and kkp)
-  (skip-unless (file-expand-wildcards (expand-file-name "diff-hl-*" drgnx-remote-auto--elpa)))
-  (let ((load-path (append load-path (seq-filter #'file-directory-p (directory-files drgnx-remote-auto--elpa t "\\`[^.]"))))
-        (cfg (make-temp-file "drgnx-cfg" t)))
+(ert-deftest drgnx-remote/hunks-off-for-remote ()
+  ;; the change marks ask the hub about local files only: a remote name sends nothing and turns nothing on
+  (let ((cfg (make-temp-file "drgnx-cfg" t)))
     (unwind-protect
-        (let* ((_ (require 'diff-hl))
-               (process-environment (cons (concat "DRGNX_CONFIG_DIR=" cfg) process-environment))
+        (let* ((process-environment (cons (concat "DRGNX_CONFIG_DIR=" cfg) process-environment))
                (drgnx-modules--table nil) (drgnx-modules--report nil) (drgnx-modules--state nil)
-               (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-               (default (default-value 'diff-hl-disable-on-remote)))
+               (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
           (load (expand-file-name "modules/extra/drgnx-hunks" drgnx-dir) nil t)
           (unwind-protect
               (progn
                 (drgnx-modules-run 'idle)
                 (should (eq (plist-get (alist-get 'extra/hunks (drgnx-modules-report)) :status) 'ok))
-                (should (eq diff-hl-disable-on-remote t))
                 (drgnx-remote-auto--with
                   (let ((b (generate-new-buffer " *drgnx-remote-hl*")))
                     (unwind-protect
@@ -410,12 +405,13 @@ buffer is not affected."
                           (with-current-buffer b                    ; looks like the remote file; nothing is read
                             (setq buffer-file-name (concat root "app.py") default-directory root)
                             (setq drgnx-tramp-mock-sends 0)
-                            (turn-on-diff-hl-mode)
-                            (should-not (bound-and-true-p diff-hl-mode)))
+                            (drgnx-hunks--maybe)
+                            (should-not drgnx-hunks-mode))
                           (should (= drgnx-tramp-mock-sends 0)))
                       (kill-buffer b)))))
-            (when (and (boundp 'global-diff-hl-mode) global-diff-hl-mode) (global-diff-hl-mode -1))
-            (setq-default diff-hl-disable-on-remote default)))
+            (drgnx-hunks--teardown)
+            (remove-hook 'find-file-hook #'drgnx-hunks--maybe)
+            (remove-hook 'drgnx-history-drained-functions #'drgnx-hunks--drained)))
       (delete-directory cfg t))))
 
 ;;;; The link followers (M2-6 c)

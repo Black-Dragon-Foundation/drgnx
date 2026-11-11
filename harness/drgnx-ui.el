@@ -1436,9 +1436,9 @@ never a drag from 0,0."
     (list (car from) (cdr from) (car to) (cdr to) button steps)))
 
 (defun drgnx-ui-act (sess action)
-  "Queue ACTION in SESS: (:keys K), (:type T), (:buffer B :text T), (:x X :y Y) or
+  "Queue ACTION in SESS: (:keys K), (:type T), (:pause SECS), (:buffer B :text T), (:x X :y Y) or
 (:drag (:from (X . Y) :to (X . Y) :steps N :button B)), with optional :button, :count,
-:hold_ms (not for :drag).  Returns the API's reply."
+:hold_ms (not for :drag).  :pause is SECS of no input before the next action.  Returns the API's reply."
   (let ((opts (mapconcat (lambda (k) (drgnx-ui-el (plist-get action k)))
                          '(:button :count :hold_ms) " ")))
     (cond
@@ -1446,6 +1446,10 @@ never a drag from 0,0."
       (drgnx-ui-call sess (format "(drgnx-uitest-api-keys %s)" (drgnx-ui-el (plist-get action :keys)))))
      ((plist-member action :type)
       (drgnx-ui-call sess (format "(drgnx-uitest-api-type %s)" (drgnx-ui-el (plist-get action :type)))))
+     ((plist-member action :pause)
+      (let ((secs (plist-get action :pause)))
+        (unless (and (numberp secs) (>= secs 0)) (drgnx-ui--fail "a pause is seconds, not %S" secs))
+        (drgnx-ui-call sess (format "(drgnx-uitest-api-pause %s)" secs))))
      ((plist-member action :drag)
       (pcase-let ((`(,fx ,fy ,tx ,ty ,button ,steps) (drgnx-ui--drag-spec (plist-get action :drag))))
         (drgnx-ui-call sess (format "(drgnx-uitest-api-drag %d %d %d %d %d %s)" fx fy tx ty button
@@ -1457,7 +1461,7 @@ never a drag from 0,0."
      ((and (plist-member action :x) (plist-member action :y))
       (drgnx-ui-call sess (format "(drgnx-uitest-api-click %d %d %s)"
                                   (truncate (plist-get action :x)) (truncate (plist-get action :y)) opts)))
-     (t (drgnx-ui--fail "unknown action %S: use keys, type, buffer+text, x+y or drag" action)))))
+     (t (drgnx-ui--fail "unknown action %S: use keys, type, pause, buffer+text, x+y or drag" action)))))
 
 (defun drgnx-ui-wait (sess &optional quiet-ms timeout-s)
   "Poll SESS until settled (QUIET-MS without change); t, or nil after TIMEOUT-S."

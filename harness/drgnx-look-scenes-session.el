@@ -13,6 +13,7 @@
 (require 'subr-x)
 (require 'drgnx-palette)                ; the palette scene's commands and history
 (declare-function drgnx-pane-show "drgnx-panes")
+(declare-function drgnx-pkg-jit-guard "drgnx-pkg-activate")
 (declare-function drgnx-panel-replay--wait "panel-replay-fixture")
 (declare-function drgnx-agent-panel-cards--permissions "drgnx-agent-panel-cards")
 
@@ -202,6 +203,8 @@ changed to hide a gap: the gap is named here instead.")
   (when (and elpa (file-directory-p elpa))
     (drgnx-look-scene--try "packages"
       (require 'package)
+      ;; packages another Emacs build compiled (the desktop's pinned ELPA is from 30.2) must not meet this Emacs's JIT
+      (drgnx-pkg-jit-guard elpa)
       (setq package-directory-list (list elpa))
       (package-initialize)
       ;; `package-initialize' leaves vertico and orderless off the path from a read-only directory list

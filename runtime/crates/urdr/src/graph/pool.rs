@@ -42,7 +42,7 @@ impl ReadPool {
     pub async fn with<R, F>(&self, f: F) -> crate::Result<R>
     where
         R: Send + 'static,
-        F: FnOnce(&Connection) -> R + Send + 'static,
+        F: FnOnce(&mut Connection) -> R + Send + 'static,
     {
         #[cfg(feature = "test-hooks")]
         let _waiting = crate::wait::begin();
@@ -54,11 +54,11 @@ impl ReadPool {
         let idle = Arc::clone(&self.idle);
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            let conn = match lock(&idle).pop() {
+            let mut conn = match lock(&idle).pop() {
                 Some(conn) => conn,
                 None => open_readonly(&path)?,
             };
-            let out = f(&conn);
+            let out = f(&mut conn);
             if conn.is_autocommit() {
                 lock(&idle).push(conn);
             }

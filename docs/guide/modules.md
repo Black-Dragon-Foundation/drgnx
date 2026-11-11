@@ -214,7 +214,7 @@ Every module must turn off cleanly: its setup changes global state only through 
 | `lang/markdown` | startup | Markdown (READMEs as GitHub Flavored Markdown): code blocks in their language, math; Markdown: Open Preview (pandoc, cmark or markdown when installed), Mermaid diagrams through mmdc ([editing.md](editing.md)); turned off, its file modes and markdown-mode options go (an option you set in config.el stays) |
 | `tools/vc` | startup | Source Control (the project's changes), Diff with File, Blame — on Emacs' VC |
 | `tools/diff` | idle | the diff view: working tree, staged or branch vs base; split or unified, files folded, open the file at the line; turning it off closes the views ([git.md](git.md)) |
-| `tools/replace` | startup | search and replace ([replace.md](replace.md)): the Search view in the sidebar and the find bar above an editor; text through ripgrep (else git grep or grep) in the background, symbols through the language server's rename; stale matches skipped, one Undo for every file |
+| `tools/replace` | startup | search and replace ([replace.md](replace.md)): the Search view in the sidebar and the find bar above an editor; text through the hub (its `search/run`) in the background, symbols through the language server's rename; stale matches skipped, one Undo for every file |
 | `tools/layouts` | idle | layouts ([layouts.md](layouts.md)): Agent (the Explorer, the editor beside the current agent's chat, the Agents list), Editor, Zen (the text centred), Browser, and your own (Save Layout As…, in layouts.eld); Next Layout cycles them; switching back restores the arrangement you left |
 | `tools/commit-message` | idle | Git: Generate Commit Message — the staged diff through the `chat` role, never a trailer; turning it off cancels a message being written ([git.md](git.md)) |
 | `tools/review` | idle | Review Branch: the `review` route's agent reads this branch's diff; findings in the panel's Review tab; turning it off kills the reviewers still working and closes the tab ([git.md](git.md)) |
@@ -233,7 +233,7 @@ Every module must turn off cleanly: its setup changes global state only through 
 | `extra/mc` | idle | Add Next Occurrence, Select All Occurrences — a cursor on each match (needs multiple-cursors) |
 | `extra/undo` | idle | Undo Tree (needs vundo) |
 | `extra/wgrep` | idle | Edit Results / Apply Edited Results in search results (needs wgrep) |
-| `extra/hunks` | idle | changed lines in the gutter; Show / Revert / Stage Change (needs diff-hl) |
+| `extra/hunks` | idle | changed lines in the gutter, from the hub: solid bars, green added, blue changed; Show / Revert / Stage Change |
 | `extra/blame` | idle | inline blame: the current line's author, age and commit subject at its end; Blame: Show Commit of Line ([git.md](git.md)) |
 | `extra/keycast` | idle | Show Keys As I Type (needs keycast): the key and command in the status bar's `misc` segment (in the stock mode line elsewhere) |
 | `extra/windows` | idle | Pick Window: a letter on every window, type it to go there (needs ace-window) |

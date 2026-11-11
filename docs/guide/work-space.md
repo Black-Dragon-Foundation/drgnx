@@ -85,9 +85,10 @@ appears in the needs-you strip; its key jumps to the agents in it.
 ### The Board
 
 `b` shows the tracker's tasks in six columns (queued, running, waiting, needs you, review, done), one flat card each
-with a thin progress bar (the steps of its plan that are ticked). With a plan, spec or ask selected on the map, the
+with a thin progress bar (the steps of its plan that are ticked; on a terminal a row of `▰` and `▱`). With a plan, spec or ask selected on the map, the
 Board shows that plan's tasks; otherwise every task. The arrow keys move between cards, `Tab` to the next card that has
-an agent, `Enter` opens that agent's transcript.
+an agent, `Enter` opens that agent's transcript. The Board needs drgnx's own Emacs (Nidhogg, with its view model);
+in another Emacs it says so instead of drawing.
 
 What a selection becomes when you switch:
 

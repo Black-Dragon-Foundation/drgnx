@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 
 /// The hunks `git diff --no-index --unified=0` gives for OLD to NEW (git's numbers): (old start, old count, new start,
 /// new count).
-pub(crate) fn diff_hunks(old: &str, new: &str) -> Result<Vec<(usize, usize, usize, usize)>> {
+pub fn diff_hunks(old: &str, new: &str) -> Result<Vec<(usize, usize, usize, usize)>> {
     let dir = tempfile::Builder::new().prefix("verdandi-diff").tempdir()?;
     for (name, text) in [("old", old), ("new", new)] {
         std::fs::write(dir.path().join(name), text)?;

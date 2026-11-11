@@ -9,6 +9,7 @@
 (require 'cl-lib)
 (require 'drgnx-paths)
 (require 'drgnx-view)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-view-model-test--sent nil "What the view sent the hub, newest first: (METHOD . PARAMS).")
 (defvar drgnx-view-model-test--n 0 "Counts the views the tests made: each run gets a view name of its own in Sjá.")
@@ -156,6 +157,20 @@ falls between the model and its rows, which the hub writes back to back: a model
         (when (memq 'draw (memq 'rows order))
           (should (equal "row a again\nrow b\nrow c\n" (buffer-substring-no-properties (point-min) (point-max)))))
         (should-not drgnx-view-model-test--sent)))))
+
+(ert-deftest drgnx-view-nav/an-unnamed-model-applies-within-a-frame ()
+  "Pattern B on the test clock: the first model after a quiet spell that no row patch names applies one frame later
+\(`drgnx-view-first-delay'), not one throttle later."
+  (drgnx-view-model-test--with
+    (drgnx-test-with-clock ()
+      (drgnx-view-model-test--start view)
+      (drgnx-test-advance 1)
+      (drgnx-view-model-event
+       (drgnx-view-model-test--model
+        view (list (list :nodes (vector (plist-put (drgnx-view-model-test--node "a" "b") :fields [["label" "A2"]]))))
+        :base 1 :version 2))
+      (drgnx-test-advance 0.02)
+      (should (equal "A2" (nidhogg-view-get h 'field "label" "a"))))))
 
 (ert-deftest drgnx-view-nav/unnamed-model-applies-on-its-timer ()
   "Pattern A: a model no row patch names (a field the rows don't show) applies on the queue's timer, in either order of

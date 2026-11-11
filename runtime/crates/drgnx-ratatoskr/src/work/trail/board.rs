@@ -3,12 +3,13 @@
 //!
 //! The model is the Board's own (not the map's): a `card` node per task with the `board` form's links (left and right
 //! to the nearest column that has cards, at the same height or its last card; up and down within the column), the
-//! lists `cards` (column by column) and `team` (the cards an agent works on). The rows: a heading per column, then two
-//! rows per card height (the title; the state, the agent and the steps done), each card's text carrying its id.
+//! lists `cards` (column by column) and `team` (the cards an agent works on). The rows: a heading per column, then three
+//! rows per card height (the title; the state, the agent and the steps done; the progress bar), each card's carrying
+//! its id.
 
 use crate::view::model::Doc;
 use drgnx_rows::{Row, RowBuilder};
-use runstav::methods::view::ViewEnv;
+use runstav::methods::view::{Display, ViewEnv};
 use serde_json::{Map, Value, json};
 
 /// The columns, left to right: `norn::tracker::Column`'s.
@@ -41,6 +42,17 @@ pub(crate) struct Card {
     pub progress: Option<(u32, u32)>,
     /// The agent working on it: (its map item id, its label).
     pub agent: Option<(String, String)>,
+}
+
+/// Puts on each card the agent of AGENTS (the task's id, the agent's map item id, its label) that works on its task:
+/// by id, so two tasks of one title never show each other's agent.
+pub(crate) fn put_agents(cards: &mut [Card], agents: &[(String, String, String)]) {
+    for c in cards {
+        c.agent = agents
+            .iter()
+            .find(|(task, ..)| *task == c.id)
+            .map(|(_, id, label)| (id.clone(), label.clone()));
+    }
 }
 
 /// The column of a task with STATUS, as `norn::tracker::board_column` has it (an unknown status is queued).
@@ -190,16 +202,21 @@ pub(crate) fn board_rows(cards: &[Card], env: &ViewEnv) -> Vec<Row> {
         return rows;
     }
     for i in 0..height {
-        for line in 0..2 {
+        for line in 0..3 {
             let mut b = RowBuilder::new(format!("cards:{i}:{line}"));
             for (c, col) in cols.iter().enumerate() {
                 let Some(card) = col.get(i) else { continue };
-                b.stop(c as u32 * w);
+                let left = c as u32 * w;
+                if line == 2 {
+                    bar(&mut b, card, left, w, chars, env);
+                    continue;
+                }
+                b.stop(left);
                 let at = b.pos();
                 let face = if line == 0 {
                     "drgnx-card-top"
                 } else {
-                    "drgnx-card-bottom"
+                    "drgnx-card-mid"
                 };
                 b.push(&fit(&card_line(card, line), chars), Some(face));
                 let end = b.pos();
@@ -209,6 +226,47 @@ pub(crate) fn board_rows(cards: &[Card], env: &ViewEnv) -> Vec<Row> {
         }
     }
     rows
+}
+
+/// CARD's progress bar in its column at LEFT, W px wide: on a GUI two spaces 4 px high from 4 px in, the steps done
+/// and the rest, together W less 16 px (sizes in device px: the env's scale's); on a terminal CHARS of `▰` and `▱`.
+fn bar(b: &mut RowBuilder, card: &Card, left: u32, w: u32, chars: usize, env: &ViewEnv) {
+    let part = |n: u32| match card.progress {
+        Some((done, all)) if all > 0 => {
+            ((n as f32 * done.min(all) as f32 / all as f32).round() as u32).min(n)
+        }
+        _ => 0,
+    };
+    let at;
+    match env.display {
+        Display::Gui => {
+            // half up, as `drgnx-px` rounds
+            let px = |v: f32| (f64::from(v) * f64::from(env.scale) + 0.5 + 1e-9).floor() as u32;
+            let span = w.saturating_sub(px(16.0));
+            let fill = part(span);
+            b.stop(left + px(4.0));
+            at = b.pos();
+            b.space(fill, px(4.0), "drgnx-work-bar").space(
+                span - fill,
+                px(4.0),
+                "drgnx-work-bar-rest",
+            );
+        }
+        Display::Tty => {
+            let n = chars as u32;
+            let fill = part(n);
+            b.stop(left);
+            at = b.pos();
+            b.push(&"▰".repeat(fill as usize), Some("drgnx-work-bar"))
+                .push(
+                    &"▱".repeat((n - fill) as usize),
+                    Some("drgnx-work-bar-rest"),
+                );
+        }
+    }
+    let end = b.pos();
+    b.face(at, end, "drgnx-card-bottom")
+        .prop(at, end, "drgnx-work-id", json!(card.id));
 }
 
 #[cfg(test)]
@@ -268,7 +326,7 @@ mod tests {
             view: "b".into(),
             class: "c".into(),
             epoch: 1,
-            display: runstav::methods::view::Display::Gui,
+            display: Display::Gui,
             scale: 1.0,
             fonts: vec![],
             cell: (8, 16),
@@ -283,7 +341,7 @@ mod tests {
         a.progress = Some((1, 3));
         let rows = board_rows(&[a, card("task:b", "open", None)], &env);
         let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
-        assert_eq!(keys, ["head", "cards:0:0", "cards:0:1"]);
+        assert_eq!(keys, ["head", "cards:0:0", "cards:0:1", "cards:0:2"]);
         assert!(rows[0].text.contains("Needs you · 1"), "{}", rows[0].text);
         assert!(
             rows[2].text.contains("needs-input · S1 · 1/3"),
@@ -298,5 +356,92 @@ mod tests {
             .collect();
         assert_eq!(ids, [&json!("task:b"), &json!("task:a")]);
         assert_eq!(board_rows(&[], &env)[1].key, "none");
+    }
+
+    fn env(display: Display, scale: f32) -> ViewEnv {
+        ViewEnv {
+            view: "b".into(),
+            class: "c".into(),
+            epoch: 1,
+            display,
+            scale,
+            fonts: vec![],
+            cell: (8, 16),
+            width_px: 1212,
+            palette: vec![],
+            tty_widths: vec![],
+            tz: String::new(),
+            reduced_motion: false,
+            attach: false,
+        }
+    }
+
+    /// [D] A card's third row is its progress bar: on a GUI two spaces 4 px high (device px: the scale's), the steps
+    /// done in `drgnx-work-bar` and the rest in `drgnx-work-bar-rest`, together the card's width less its padding,
+    /// starting 4 px in; with no steps all rest.  On a terminal the bar is text, `▰` done and `▱` the rest.
+    #[test]
+    fn board_cards_end_in_a_progress_bar() {
+        let mut a = card("task:a", "running", None);
+        a.progress = Some((1, 4));
+        let cards = [a, card("task:b", "open", None)];
+        for scale in [1.0, 2.0] {
+            let rows = board_rows(&cards, &env(Display::Gui, scale));
+            let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+            assert_eq!(keys, ["head", "cards:0:0", "cards:0:1", "cards:0:2"]);
+            let bar = &rows[3];
+            let px = |v: f32| (v * scale).round() as u32;
+            let span = 200 - px(16.0); // a sixth of 1212 - 12
+            assert_eq!(
+                bar.stops,
+                vec![(0, px(4.0)), (3, 200 + px(4.0))],
+                "scale {scale}"
+            );
+            let fill = (span as f32 / 4.0).round() as u32;
+            assert_eq!(
+                bar.spaces,
+                vec![
+                    (1, 0, px(4.0)),
+                    (2, span, px(4.0)),
+                    (4, fill, px(4.0)),
+                    (5, span - fill, px(4.0))
+                ],
+                "scale {scale}: task:b (queued, no steps) then task:a"
+            );
+            let faces: Vec<&str> = bar.runs.iter().map(|r| r.2.as_str()).collect();
+            assert!(faces.contains(&"drgnx-work-bar") && faces.contains(&"drgnx-work-bar-rest"));
+            assert!(
+                bar.props.iter().any(|p| p.3 == json!("task:a")),
+                "the bar holds its card's id"
+            );
+        }
+        let tty = board_rows(&cards, &env(Display::Tty, 1.0));
+        let bar = &tty[3];
+        assert!(bar.spaces.is_empty());
+        // the card's text width, 22 columns (182 px of 8), a quarter done
+        let want = format!("{}{}", "▰".repeat(6), "▱".repeat(16));
+        assert!(bar.text.contains(&want), "{}", bar.text);
+        assert!(bar.text.contains(&"▱".repeat(22)), "{}", bar.text);
+    }
+
+    /// [D] A card shows the agent whose task id is the card's: of two tasks with one title, only the one the agent works
+    /// on (SJA-BOARD-1 (2): a title match put it on both).
+    #[test]
+    fn an_agent_goes_on_its_task_s_card_only() {
+        let mut cards = vec![
+            Card {
+                title: "Ship it".into(),
+                ..card("task:a", "open", None)
+            },
+            Card {
+                title: "Ship it".into(),
+                ..card("task:b", "open", None)
+            },
+        ];
+        put_agents(
+            &mut cards,
+            &[("task:b".into(), "agent:s1".into(), "S1".into())],
+        );
+        assert_eq!(cards[0].agent, None);
+        assert_eq!(cards[1].agent, Some(("agent:s1".into(), "S1".into())));
     }
 }

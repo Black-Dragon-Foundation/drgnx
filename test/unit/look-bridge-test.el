@@ -36,15 +36,15 @@ the UI heading role, the gutter in the status colours.  Turning ui/look off give
 
 (ert-deftest drgnx-look-bridge/a-loaded-package-takes-the-look-at-once ()
   "A package already loaded when ui/look starts is bridged at once."
-  (let ((feature 'diff-hl) (old '((t :background "green"))))
-    (when (featurep feature) (ert-skip "diff-hl is loaded in this Emacs"))
-    (dolist (f '(diff-hl-insert diff-hl-change diff-hl-delete))
+  (let ((feature 'magit) (old '((t :background "green"))))
+    (when (featurep feature) (ert-skip "magit is loaded in this Emacs"))
+    (dolist (f '(magit-hash magit-dimmed))
       (unless (facep f) (custom-declare-face f old "A stand-in for the package's face.")))
     (provide feature)
     (unwind-protect
         (drgnx-test-with-modules '(ui/look)
-          (should (memq 'drgnx-status-ok (drgnx-look-bridge-test--inherits 'diff-hl-insert)))
-          (should (memq 'drgnx-status-fail (drgnx-look-bridge-test--inherits 'diff-hl-delete))))
+          (should (memq 'drgnx-text-subtle (drgnx-look-bridge-test--inherits 'magit-hash)))
+          (should (memq 'drgnx-text-subtle (drgnx-look-bridge-test--inherits 'magit-dimmed))))
       (setq features (delq feature features)))))
 
 (load (expand-file-name "modules/org/drgnx-org" drgnx-dir) nil t)

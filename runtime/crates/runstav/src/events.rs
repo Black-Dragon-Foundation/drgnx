@@ -413,9 +413,9 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "git/letters could not read a repository's status (git's complaint): the view keeps the rows it has; to the asking connection only"
         ),
         event!(
-            "search-grep-done",
-            crate::methods::search::GrepDone,
-            "a text search (search/grep) ended: its query number, the files and matches it found, or why it could not run; to the searching connection only; a search a newer one stopped says nothing"
+            "search-run-done",
+            crate::methods::search::RunDone,
+            "a Search view's search (search/run) ended: its run number, the files and matches it found, or why it could not run, and the matches that come back unticked; to the searching connection only; a search a newer one stopped says nothing"
         ),
         event!(
             "agent-follow",
@@ -508,7 +508,7 @@ mod tests {
                     // hub-built rows (the render offload)
                     "view-patch",
                     "view-glyphs",
-                    "search-grep-done",
+                    "search-run-done",
                     "git-letters-error",
                     // the native view model
                     "view-model",

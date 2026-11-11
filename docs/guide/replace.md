@@ -9,30 +9,55 @@ buffer.
 **Replace in Files** shows the sidebar's Search view (the sidebar's other view is the Explorer; **View: Explorer**
 brings it back) with the word at point, or the selected text, in **Find**. It has:
 
-- **Find** and **Replace**;
-- toggles: **⟨⟩ Symbol**, **Aa** (match case), **ab** (whole word), **.\*** (regular expression);
+- the **mode chip** at the left of **Find** (what Find means: **Text**, **Symbol** or **Meaning**; below), and
+  **Replace**;
+- toggles: **Aa** (match case), **ab** (whole word), **.\*** (regular expression);
 - the scope: **Project** (the project of the file you were in) or **This file**;
 - **Include** and **Exclude**: globs, comma-separated (`src/**, *.el`); a glob without a slash matches at any depth;
 - **Replace All** and **Undo**, then a status line (how many results, what the last replacement did).
 
-The search runs a quarter of a second after you stop typing (`RET` in a field searches at once): ripgrep when it is
-installed, else `git grep` or grep, in the background. Results stream in, grouped by file. Each match is a row with
-a tick box and shows the change as old → new (the old text struck through). A file's box ticks or unticks all its
+The search runs a quarter of a second after you stop typing (`RET` in a field searches at once), in drgnx's hub, in
+the background. Results stream in, grouped by file. A search typed before the hub is up (the first seconds after
+drgnx starts, or while it restarts) says "Waiting for the hub" and starts when the hub comes; an Emacs without
+Nidhogg's view model (Sjá) says it cannot search (Rename still works). Each match is a row with
+a tick box and shows the change as old → new: only the characters that change are tinted, the old ones struck
+through (`foo` → `foobar` shows `foo` with `bar` added). A file's box ticks or unticks all its
 matches. A click or `RET` on a row opens the file at the match.
 
 The results update in place: typing a replacement redraws each match's row with its new preview (the rows the window
-shows first), a file searched again changes only its own rows, and a new search takes the old rows out a few hundred
-at a time, never in one go; typing is never kept waiting, even over 10,000 matches. The list keeps its place: rows
+shows first), and a new search replaces the rows without keeping typing waiting, even over 10,000 matches. The list keeps its place: rows
 changing above the ones you look at do not scroll them away. While the Search view is hidden (another sidebar view,
 the sidebar closed) it draws nothing; it catches up when it is shown again.
 
-## Symbol or text
+In code files, a dim label row (`ƒ` and a name) goes above the first match inside each function, type or other
+definition, so you see where a match is without opening it; the next matches in the same definition follow without
+one, and a match outside every definition has none. Hover a label for the names around it (`impl P › get`). Labels
+are not matches: no tick box, and Next Match skips them. Turn them off with the setting `drgnx-search-context`.
 
-**Symbol** is on when point is on a name the buffer's language server can rename (Replace in Files turns it on by
-itself there); **Rename Symbol** always asks for it and puts you in Replace. With Symbol on, the list is the
-server's rename edits: only real uses, never comments or look-alikes. Include, Exclude, Aa, ab and .\* do not
-apply and are greyed out. Typing other text in Find turns Symbol off: that is a text search. Without a server that
-can rename, the status line says why and the view searches the text.
+## Modes: Text, Symbol, Meaning
+
+The mode chip says what Find means; clicking it, or **Search: Next Mode** (`M-m` in the view; `C-c C-m` in the Emacs
+and Vim profiles), goes Text → Symbol → Meaning → Text and searches again. The palette has one command per mode
+(**Search: Text Mode**, **Symbol Mode**, **Meaning Mode**). With Find empty, the status line says what to type.
+
+- **Text** (the default): the files' text, with Aa, ab, .\*, the globs and Replace.
+- **Symbol**: a name's definitions first, then the lines that use it, from drgnx's code index (Hrafn): each line's
+  whole-word uses of the name are the matches. It is by name only, so same-named things in other scopes are listed
+  too. **Aa** says whether case counts; Replace, the globs, ab and .\* do not apply and are greyed out.
+- **Meaning**: the code your words describe (the same search as Semantic Search): one row per piece of code found,
+  its symbol, its first line and its score. Nothing but the words applies.
+
+Symbol and Meaning only find: Replace All and Replace This say so. A Text search that finds nothing offers **Try
+Meaning** on the status line; the view never changes mode by itself. Symbol and Meaning need the index: before it is
+built the status line says why.
+
+## Rename
+
+**Rename** is on when point is on a name the buffer's language server can rename (Replace in Files turns it on by
+itself there); **Rename Symbol** always asks for it and puts you in Replace. The chip then says **Rename**, and the
+list is the server's rename edits: only real uses, never comments or look-alikes. Include, Exclude, Aa, ab and .\* do
+not apply and are greyed out. Typing other text in Find, or picking a mode, ends Rename: that is a search. Without a
+server that can rename, the status line says why and the view searches the text.
 
 With **.\*** on, Replace can use the regexp's groups: `\1`, `\2`.
 
@@ -48,12 +73,11 @@ Replace All the list holds what it skipped, each match with why after its text; 
 
 ## The list stays current
 
-When a listed file changes — you edit its buffer (saved or not), or something writes it on disk (an agent, a
-checkout) — its rows are searched again half a second later, from the buffer when it is open, so unsaved edits count.
-A file that no buffer visits is read off the main thread when Nidhogg's workers are on (`nidhogg-workers-framing`); a read
-that lands after the file changed again, after a new search started or after a replace is dropped. Replace itself always
-reads the files at once, and checks them, before it writes. A match that was unticked stays unticked when the text around it is the same. Changes on disk are noticed for the
-first 200 listed files (`drgnx-replace-watch-limit`); with more, the view searches again when it is shown. A symbol
+When a listed file changes on disk (an agent, a checkout, a save) the search runs again half a second later; a
+buffer with unsaved edits is searched from the buffer (its text goes to the hub half a second after an edit), so its
+edits count, and its matches can be ticked and unticked like any other. Replace always reads the files at once, and
+checks them, before it writes. Changes on disk are noticed for the first 200 listed files
+(`drgnx-replace-watch-limit`). A symbol
 list is never re-asked of the server by itself: when the code changes, the status line says so; run Rename Symbol
 again.
 
@@ -80,6 +104,8 @@ view, scope This file.
 | Next File | `C-M-<down>` (the Search view) | `C-c M-n` | `C-c M-n` |
 | Previous File | `C-M-<up>` (the Search view) | `C-c M-p` | `C-c M-p` |
 | Close Find Bar | `<escape>` | `<escape>` | `<escape>` |
+| Next Mode (the Search view) | `M-m` | `C-c C-m` | `C-c C-m` |
+| Text / Symbol / Meaning Mode | palette | palette | palette |
 
 Except where marked, the keys work in the Search view and the find bar, their fields too; `RET` in a find bar field
 is its next match (in Replace: replace it). Next and Previous Match show the match in the editor; Next and Previous
@@ -90,24 +116,27 @@ palette, category Search.
 
 ## Tests
 
-`test/unit/mod-replace-engine-test.el` (the engine: ripgrep, git grep and grep, stale matches, symbol edits, undo) and
-`test/unit/mod-replace-view-test.el` (the view, the find bar; on the virtual clock, 10k matches streaming and a
-replacement patching their rows in slices of at most 576, a rescanned file, a new search, a hidden view, no marker per
-file); `test/ui/view-ui-test.el` (`drgnx test --ui`)
-types a replacement over 10k rows and checks the jank guard saw nothing; `test/ui/editor-m11c1-test.el` walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each. The perf workload
-`replace-typing` types in a file while the Search view lists 10k matches, and `replace-retype` types a replacement
-over them ([perf.md](../develop/perf.md)).
+`test/unit/mod-replace-engine-test.el` (writing: stale matches, symbol edits, undo) and
+`test/unit/mod-replace-view-test.el` (the view, the find bar; on the virtual clock, the view's own rows Symbol mode
+uses: 10k rows streaming and a replacement patching them in slices of at most 576, a new search, a hidden view, no
+marker per file); `test/ui/editor-m11c1-test.el` walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each. The perf workload
+`replace-typing-rows` types in a file while the hub lists 10k matches, `search-retype` changes the view's query a
+character at a time over 10k matches (each key a search, timed to its first rows and to its end), and `search-window`
+walks Next Match across the model's window of a 30k-match search ([perf.md](../develop/perf.md)).
 
-When the hub builds the results (`search/grep`, [hub.md](../develop/hub.md)), they also arrive as a model of files and
+When the hub builds the results (`search/run`, [hub.md](../develop/hub.md)), they also arrive as a model of files and
 their matches, and the keys answer from it in Emacs (`drgnx-replace-rows-attached`): Next Match and Previous Match walk
 the matches over the file rows, wrapping, and Next and Previous File the files (`down:file`, `up:file`); a tick box (a
 button: `RET` or a click) unticks a match (its file's box: all of them) and stays as it is when the hub redraws the
-row; a new search empties Sjá's ticked set. Replace All writes the ticked matches from the model's fields, then tells
+row.  A new search empties Sjá's ticked set but keeps what you unticked: the view sends the unticked matches with it,
+and when it ends the hub names the same matches of the new search (by file, the text around the match and its column,
+not its line, so lines added above a match keep it), which are unticked again; two matches the hub cannot tell apart
+come back ticked.  Replace All writes the ticked matches from the model's fields, then tells
 the hub what it skipped (`search/grep-skipped`): the hub lists those alone, each with why, and stops the search.
 `test/unit/replace-rows-nav-test.el` covers these with no hub.
 
 The hub keeps every match but sends the view a window of the rows, the first 200 (the agent panel's shape), and the
-totals with `search-grep-done`; the view asks for the next window when its window nears the end of the rows
+totals with `search-run-done`; the view asks for the next window when its window nears the end of the rows
 (`search/grep-look` with `more`), and for the rows up to a match when Next Match or Previous Match goes beyond them
 (`upto`; point goes to the row when it arrives).  A match more than 400 rows past the rows sent comes in a block
 of rows around it after a gap row ("⋯ N more"), not with every row before it (one patch of 19,000 rows was over the
@@ -115,15 +144,19 @@ hub's 16 MiB per client, and it dropped the editor); when the gap row is in sigh
 (`fill`), and the gap row goes when they meet the block.  Replace All and the tick boxes read the model, so they act on every
 match, not only the rows sent; the file watches follow the model's files too.
 
-With the hub up, the search itself goes to the hub too: a text search is `search/grep` (the view `search`, the fields' text and
-toggles, the folder or file, the include and exclude globs, the replacement), and the results are the hub's rows, a
+A text search is the hub's `search/run` (the view `search`, the fields' text and
+toggles, the folder, or the file as the File scope, the include and exclude globs, the replacement, and the matches
+unticked before it), and the results are the hub's rows, a
 reset and then each file's header and matches, inserted below the fields by `drgnx-view-apply-patch`.  A new search
 makes the hub send a reset and drop the old search's late rows, and the editor drops one that still arrives by its
-base.  `search-grep-done` ends the search and gives the count the status line shows; the status line shows
+base.  `search-run-done` ends the search and gives the count the status line shows; the status line shows
 "Searching…" until then.  Typing in the Replace field is `search/grep-replace`: the hub patches the previews and
-nothing is searched again.  Symbol mode (the language server's edits), a hub that is down and
-`drgnx-view-old-path` keep the Lisp engine and its rows, and the view changes between the two with each search.  The
-file watches stay Lisp: a listed file that changes on disk is searched again through the hub after half a second.  The hub reads the disk, so a file whose buffer has unsaved edits is rescanned by Emacs from the buffer
-(`drgnx-replace--scan`, after each search and half a second after an edit), also when the hub found nothing in the file:
-those matches take the place of the hub's rows of the file, are counted and are what Replace All and Replace This
-write.  Next Match and Previous Match walk them after the hub's matches; they have no tick boxes (they are not in the hub's model); a new search forgets them.  `test/unit/replace-rows-test.el` covers the stream with no hub.
+nothing is searched again.  Symbol mode (the language server's edits) keeps rows of Emacs's own (the `replace-results`
+view type), and the view changes between the two with each search; `drgnx-view-old-path` has no Search path of its
+own any more (plan sja-complete S2 removed the Lisp text engine).  The file watches stay Lisp: a listed file that changes on disk is searched again through the hub after half a second.  The hub reads the disk, so before each search, and half a second after an edit, the view sends it the text of each
+buffer under the folder that has unsaved edits (`search/buffer`, only what changed since): the hub searches that text
+in place of the file, also when the file on disk has no match, and the search shown takes it at once.  Those matches
+are rows like any other, with tick boxes, in the model Next Match walks and Replace All writes.  A buffer over 4 MiB,
+or open as a large file, is not sent: its file is searched on disk and its header says "open in chunks: searched on
+disk".  A buffer saved or killed since is forgotten, and the hub reads its file again.
+`test/unit/replace-rows-test.el` covers the stream with no hub.

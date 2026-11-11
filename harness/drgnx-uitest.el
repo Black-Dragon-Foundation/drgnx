@@ -1088,6 +1088,10 @@ form in it, so no socket path reaches a session other than the one whose id the 
   "Queue KEYS (`kbd' syntax)."
   (drgnx-uitest--json (list :queued (drgnx-uitest-enqueue (drgnx-uitest-key-events keys)))))
 
+(defun drgnx-uitest-api-pause (secs)
+  "Queue SECS seconds of no input (the next queued event waits them out)."
+  (drgnx-uitest--json (list :queued (drgnx-uitest-enqueue (list (cons 'drgnx-uitest-pause secs))))))
+
 (defun drgnx-uitest-api-type (text)
   "Queue typing TEXT."
   (drgnx-uitest--json (list :queued (drgnx-uitest-enqueue (drgnx-uitest-type-events text)))))

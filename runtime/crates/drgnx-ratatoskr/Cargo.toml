@@ -71,6 +71,7 @@ drgnx-rows = { path = "../drgnx-rows", version = "0.1.0" }
 # the terminals (term): the worker's wire, records and scopes, without the engine
 drgnx-term = { path = "../drgnx-term", version = "0.1.0", default-features = false }
 getrandom.workspace = true   # the hub's instance id on view patches (view)
+notify.workspace = true      # the Explorer's listing watches the folders it read (view::explorer)
 draugr = { path = "../draugr", version = "0.1.0" }
 drgnx-px = { path = "../drgnx-px", version = "0.1.0" }  # the networked container job's relay sidecar
 urdr = { path = "../urdr", version = "0.1.0" }
@@ -93,6 +94,7 @@ verdandi = { path = "../verdandi", version = "0.1.0" }  # the edit history's sto
 # from a whole-file diff, three-way projection and whole-file writes as line hunks (pair::writes); 3.x is not in the
 # lock file yet
 similar = "2.7"
+xxhash-rust = { version = "0.8.19", features = ["xxh3"] }  # a search's file digests and match keys (view::search; already in the tree through loro)
 heimdall = { path = "../heimdall", version = "0.1.0" }  # the CDP broker's routing and codecs (browser::{host,broker})
 fastwebsockets.workspace = true  # the CDP broker's websocket (browser::broker)
 hyper.workspace = true           # the CDP broker's HTTP/1.1 upgrade (already in the tree through bifrost)

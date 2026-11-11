@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 235, "{names:?}");
+        assert_eq!(names.len(), 245, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -396,6 +396,12 @@ mod tests {
         want.extend(CORE_WRITES);
         // Hrafn's: the index and the consented download change what the hub holds
         want.extend(["search/index", "search/model-download"]);
+        // the Search view's saved searches: the hub's state, and the project's file on a click
+        want.extend([
+            "search/saved/delete",
+            "search/saved/put",
+            "search/saved/share",
+        ]);
         // the runners': the registry's changes
         want.extend([
             "runners/add",
@@ -416,6 +422,8 @@ mod tests {
             "history/resync",
             "history/unregister",
         ]);
+        // one hunk staged in git's index
+        want.extend(["git/stage-hunk"]);
         // a revert to here: the files, the steps, the conversation and a commit; and one hunk of a record
         want.extend(["history/revert/apply", "history/revert/hunk"]);
         // a fork from here, its drop, and the text taken across or redone
@@ -676,7 +684,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 185);
+        assert_eq!(with, 195);
     }
 
     #[test]

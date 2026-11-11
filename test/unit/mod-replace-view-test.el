@@ -66,42 +66,6 @@ bar's keymaps), one editor window, no view or bar left over."
 (defun drgnx-replace-view-test--count ()
   (with-current-buffer (drgnx-replace-view-test--view) (length drgnx-replace--matches)))
 
-(defun drgnx-replace-view-test--rows ()
-  "The view's matches as (FILE LINE), FILE as given (no directory only when below the view's root), sorted: a wrong
-count says which rows."
-  (with-current-buffer (drgnx-replace-view-test--view)
-    (sort (mapcar (lambda (m) (list (file-relative-name (plist-get m :file) drgnx-replace--root) (plist-get m :line)))
-                  drgnx-replace--matches)
-          (lambda (a b) (string< (format "%S" a) (format "%S" b))))))
-
-(defun drgnx-replace-view-test--files ()
-  "The files the view lists, by name, sorted (ripgrep sends files in any order)."
-  (with-current-buffer (drgnx-replace-view-test--view)
-    (let ((out nil) (pos (point-min)))
-      (while (setq pos (text-property-not-all pos (point-max) 'drgnx-replace-file nil))
-        (push (file-name-nondirectory (get-text-property pos 'drgnx-replace-file)) out)
-        (setq pos (or (next-single-property-change pos 'drgnx-replace-file) (point-max))))
-      (sort out #'string<))))
-
-(defun drgnx-replace-view-test--press-box (pred)
-  "Press the tick box of the first row (a match plist) or header (a file name) PRED accepts."
-  (with-current-buffer (drgnx-replace-view-test--view)
-    (let ((pos (point-min)) (found nil))
-      (while (and (not found) (setq pos (next-single-property-change pos 'drgnx-replace-box)))
-        (let ((v (get-text-property pos 'drgnx-replace-box)))
-          (when (and v (funcall pred v)) (setq found pos))))
-      (should found)
-      (push-button found))))
-
-(defun drgnx-replace-view-test--box-at (pred)
-  "The tick box text (\"[x]\", \"[-]\" or \"[ ]\") of the first row or header PRED accepts."
-  (with-current-buffer (drgnx-replace-view-test--view)
-    (let ((pos (point-min)) (found nil))
-      (while (and (not found) (setq pos (next-single-property-change pos 'drgnx-replace-box)))
-        (let ((v (get-text-property pos 'drgnx-replace-box)))
-          (when (and v (funcall pred v)) (setq found pos))))
-      (buffer-substring-no-properties found (+ found 3)))))
-
 (defun drgnx-replace-view-test--visit (repo file pos)
   "Show FILE of REPO in the editor window (selected), point at POS."
   (select-window (drgnx-wb-editor-window))
@@ -132,69 +96,6 @@ count says which rows."
             (should-not (drgnx-module-teardown 'tools/replace))
             (should-not (assq 'bar drgnx-state--roles)))
         (delete-directory cfg t)))))
-
-(ert-deftest drgnx-replace/view-fields-drive-a-search ()
-  (drgnx-replace-view-test--with
-    (drgnx-git-test-with-repo
-      (drgnx-git-test-write repo "src/a.el" "needle one\nneedle two\n")
-      (drgnx-git-test-write repo "src/b.md" "needle\n")
-      (drgnx-git-test-write repo "test/c.el" ";; a needle\n")
-      (drgnx-replace-view-test--visit repo "test/c.el" 7)
-      (drgnx-replace-in-files)
-      ;; the Search view in the sidebar, focused on the find field, with the word at point
-      (should (eq (drgnx-wb-sidebar-view) 'search))
-      (should (eq (window-buffer (drgnx-wb-section-window 'search)) (drgnx-replace-view-test--view)))
-      (should (eq (selected-window) (drgnx-wb-section-window 'search)))
-      (with-current-buffer (drgnx-replace-view-test--view)
-        (should (derived-mode-p 'drgnx-replace-mode))
-        (should (equal (widget-value (drgnx-replace--widget 'find)) "needle"))
-        (should (eq (drgnx-replace--opt :scope) 'project))
-        (should (eq (widget-field-at (point)) (drgnx-replace--widget 'find))))
-      (drgnx-replace-view-test--wait)
-      (should (= (drgnx-replace-view-test--count) 4))
-      (should (equal (drgnx-replace-view-test--files) '("a.el" "b.md" "c.el")))
-      ;; typing waits for a pause, then searches
-      (drgnx-replace-view-test--set 'include "src/**")
-      (with-current-buffer (drgnx-replace-view-test--view)
-        (should (drgnx-timer-active-p (cons 'replace-pause (current-buffer))))
-        (should (= (length drgnx-replace--matches) 4)))
-      (drgnx-replace-view-test--wait)
-      (should (equal (drgnx-replace-view-test--files) '("a.el" "b.md")))
-      (drgnx-replace-view-test--set 'exclude "*.md")
-      (drgnx-replace-view-test--wait)
-      (should (= (drgnx-replace-view-test--count) 2))
-      ;; the toggles
-      (with-current-buffer (drgnx-replace-view-test--view) (drgnx-replace--toggle :case))
-      (drgnx-replace-view-test--set 'find "NEEDLE")
-      (drgnx-replace-view-test--wait)
-      (should (= (drgnx-replace-view-test--count) 0))
-      (with-current-buffer (drgnx-replace-view-test--view)
-        (drgnx-replace--toggle :case)
-        (drgnx-replace--toggle :regexp))
-      (drgnx-replace-view-test--set 'find "need(le)? (one|two)")
-      (drgnx-replace-view-test--wait)
-      (should (= (drgnx-replace-view-test--count) 2))
-      (with-current-buffer (drgnx-replace-view-test--view)
-        (drgnx-replace--toggle :regexp)
-        (drgnx-replace--toggle :word))
-      (drgnx-replace-view-test--set 'find "need")
-      (drgnx-replace-view-test--wait)
-      (should (= (drgnx-replace-view-test--count) 0))
-      (drgnx-replace-view-test--set 'find "needle")
-      (drgnx-replace-view-test--wait)
-      (should (= (drgnx-replace-view-test--count) 2))
-      ;; scope This file: the file the view was opened from, globs do not apply
-      (with-current-buffer (drgnx-replace-view-test--view) (drgnx-replace--set-scope 'file))
-      (drgnx-replace-view-test--wait)
-      (should (equal (drgnx-replace-view-test--files) '("c.el")))
-      ;; the replace field: old → new on every row
-      (drgnx-replace-view-test--set 'replace "pin")
-      (drgnx-replace-view-test--wait)
-      (with-current-buffer (drgnx-replace-view-test--view)
-        (goto-char (point-min))
-        (should (search-forward "needlepin" nil t))
-        (should (eq (get-text-property (- (point) 1) 'face) 'drgnx-replace-new))
-        (should (eq (get-text-property (- (point) 4) 'face) 'drgnx-replace-old))))))
 
 (ert-deftest drgnx-replace/view-search-puts-point-in-the-find-field ()
   ;; VS Code's Ctrl+Shift+F: the Search view, focused, the cursor in its query field, wherever it was before.
@@ -229,49 +130,6 @@ count says which rows."
   (should-not (get-buffer drgnx-replace-bar-buffer-name))
   (set-frame-parameter nil 'drgnx-wb-view nil)
   (delete-other-windows))
-
-(ert-deftest drgnx-replace/ticks-choose-what-is-written ()
-  (drgnx-replace-view-test--with
-    (drgnx-git-test-with-repo
-      (drgnx-git-test-write repo "a.txt" "foo 1\nfoo 2\n")
-      (drgnx-git-test-write repo "b.txt" "foo 3\n")
-      (drgnx-git-test-write repo "c.txt" "foo 4\n")
-      (drgnx-replace-view-test--visit repo "a.txt" 1)
-      (drgnx-replace-in-files)
-      (drgnx-replace-view-test--set 'replace "bar")
-      (drgnx-replace-view-test--wait)
-      ;; (macOS CI once listed 7 here; the rows say which)
-      (should (equal (drgnx-replace-view-test--rows) '(("a.txt" 1) ("a.txt" 2) ("b.txt" 1) ("c.txt" 1))))
-      (let ((a (expand-file-name "a.txt" repo)) (b (expand-file-name "b.txt" repo)) (c (expand-file-name "c.txt" repo))
-            (row (lambda (file line) (lambda (v) (and (consp v) (equal (plist-get v :file) file) (= (plist-get v :line) line))))))
-        ;; untick a match, then a whole file
-        (drgnx-replace-view-test--press-box (funcall row a 2))
-        (should (equal (drgnx-replace-view-test--box-at (funcall row a 2)) "[ ]"))
-        (should (equal (drgnx-replace-view-test--box-at (lambda (v) (equal v a))) "[-]"))
-        (drgnx-replace-view-test--press-box (lambda (v) (equal v b)))
-        (should (equal (drgnx-replace-view-test--box-at (funcall row b 1)) "[ ]"))
-        (should (equal (drgnx-replace-view-test--box-at (lambda (v) (equal v b))) "[ ]"))
-        ;; Replace All writes only the ticked ones
-        (with-current-buffer (drgnx-replace-view-test--view) (drgnx-replace-all))
-        (should (equal (drgnx-replace-view-test--read a) "bar 1\nfoo 2\n"))
-        (should (equal (drgnx-replace-view-test--read b) "foo 3\n"))
-        (should (equal (drgnx-replace-view-test--read c) "bar 4\n"))
-        (with-current-buffer (drgnx-replace-view-test--view)
-          (should (string-match-p "Replaced 2 in 2 files" drgnx-replace--status)))
-        ;; one Undo puts both files back
-        (with-current-buffer (drgnx-replace-view-test--view) (drgnx-replace-view-undo))
-        (should (equal (drgnx-replace-view-test--read a) "foo 1\nfoo 2\n"))
-        (should (equal (drgnx-replace-view-test--read c) "foo 4\n"))
-        (drgnx-replace-view-test--wait)
-        ;; a single match from its row, ticked or not
-        (should (= (drgnx-replace-view-test--count) 4))
-        (with-current-buffer (drgnx-replace-view-test--view)
-          (goto-char (text-property-any (point-min) (point-max) 'drgnx-replace-box
-                                        (seq-find (lambda (m) (equal (plist-get m :file) b)) drgnx-replace--matches)))
-          (drgnx-replace-this))
-        (should (equal (drgnx-replace-view-test--read b) "bar 3\n"))
-        (should (equal (drgnx-replace-view-test--read a) "foo 1\nfoo 2\n"))
-        (should (= (drgnx-replace-view-test--count) 3))))))
 
 (ert-deftest drgnx-replace/f2-opens-with-symbol-on ()
   (drgnx-replace-view-test--with
@@ -317,9 +175,10 @@ count says which rows."
             (drgnx-replace-all))
           (should (equal (drgnx-replace-view-test--read a) "(defun bar () (bar))\n;; foo in a comment\n"))
           (should (equal (drgnx-replace-view-test--read b) "(bar)\n"))
-          ;; Symbol off: the toggles come back
+          ;; Text mode ends Rename: the toggles come back
           (with-current-buffer (drgnx-replace-view-test--view)
-            (drgnx-replace--toggle :symbol)
+            (should (equal "Rename" (string-trim (widget-value (drgnx-replace--widget 'mode)))))
+            (drgnx-replace-search-mode-text)
             (should-not (drgnx-replace--opt :symbol))
             (should (widget-apply (drgnx-replace--widget :case) :active)))
           ;; Replace in Files turns Symbol on by itself at a name the server can rename, not without a server
@@ -421,9 +280,9 @@ count says which rows."
         (should (equal (widget-value (drgnx-replace--widget 'replace)) "bar"))
         (should (drgnx-replace--opt :word))
         (should (eq (drgnx-replace--opt :scope) 'file)))
-      (drgnx-replace-view-test--wait)
-      (should (equal (drgnx-replace-view-test--files) '("f.txt")))
-      (should (= (drgnx-replace-view-test--count) 2)))))
+      ;; the view searches (the hub's search/run: replace-rows-test.el); the hub is not up here
+      (with-current-buffer (drgnx-replace-view-test--view)
+        (should (or drgnx-replace--waiting (not (fboundp 'nidhogg-view--call))))))))
 
 ;;;; The rows on a view (wb/drgnx-view.el), on the virtual clock
 
@@ -440,7 +299,8 @@ count says which rows."
 
 (defmacro drgnx-replace-view-test--fed (&rest body)
   "BODY on the virtual clock with the Search view shown in the sidebar and empty: `dir' its root (a temp folder),
-`view' its buffer, `v' its view.  Nothing searches: BODY feeds matches through `drgnx-replace--got'."
+`view' its buffer, `v' its view: the view's own rows, as Symbol mode lists the server's edits.  Nothing searches:
+BODY feeds matches through `drgnx-replace--add'."
   (declare (indent 0))
   `(drgnx-replace-view-test--with
      (let ((dir (file-name-as-directory (make-temp-file "drgnx-replace-view" t))) (drgnx-view--deadline nil))
@@ -463,8 +323,8 @@ file order, as a search sends them."
     (nreverse out)))
 
 (defun drgnx-replace-view-test--feed (view ms)
-  "The engine sends MS to VIEW in one batch."
-  (with-current-buffer view (drgnx-replace--got (copy-sequence ms))))
+  "MS come to VIEW's own rows in one batch."
+  (with-current-buffer view (drgnx-replace--add (copy-sequence ms))))
 
 (defun drgnx-replace-view-test--fresh-p (view)
   "VIEW's rows are what a fresh render of its keys gives, and its starts are right."
@@ -536,38 +396,6 @@ file order, as a search sends them."
         (should (equal (cdr (take 4 keys)) a))
         (should (equal (nthcdr 5 keys) b)))
       (drgnx-replace-view-test--fresh-p view))))
-
-(ert-deftest drgnx-replace/a-rescanned-file-moves-only-its-rows ()
-  (drgnx-replace-view-test--fed
-    (let ((files (mapcar (lambda (n) (expand-file-name n dir)) '("a.txt" "b.txt" "c.txt"))))
-      (pcase-let ((`(,a ,b ,c) files))
-        (write-region "foo 1\nfoo 2\n" nil a nil 'silent)
-        (write-region "foo 3\n" nil b nil 'silent)
-        (write-region "foo 4\n" nil c nil 'silent)
-        (with-current-buffer view
-          (drgnx-replace--fill 'find "foo")
-          (dolist (f files) (puthash f t drgnx-replace--listed) (drgnx-replace--got (drgnx-replace--scan f))))
-        (drgnx-test-advance 0.01)
-        (should (= 7 (drgnx-view-row-count v)))
-        ;; b.txt changes on disk: its row goes, its three rows come after its header, which is drawn again
-        (let ((drawn (drgnx-replace-view-test--stat v :rows-drawn)) (removed (drgnx-replace-view-test--stat v :removed)))
-          (write-region "foo 3\nfoo 5\nfoo 6\n" nil b nil 'silent)
-          (with-current-buffer view (drgnx-replace--file-changed b))
-          (drgnx-test-advance drgnx-replace-refresh-delay)
-          (should (= 9 (drgnx-view-row-count v)))
-          (should (= 4 (- (drgnx-replace-view-test--stat v :rows-drawn) drawn)))
-          (should (= 1 (- (drgnx-replace-view-test--stat v :removed) removed)))
-          (should (= 0 (drgnx-replace-view-test--stat v :full-draws)))
-          (drgnx-replace-view-test--fresh-p view))
-        ;; c.txt has no match left: its header goes too
-        (let ((drawn (drgnx-replace-view-test--stat v :rows-drawn)))
-          (write-region "bar\n" nil c nil 'silent)
-          (with-current-buffer view (drgnx-replace--file-changed c))
-          (drgnx-test-advance drgnx-replace-refresh-delay)
-          (should (= 7 (drgnx-view-row-count v)))
-          (should (= drawn (drgnx-replace-view-test--stat v :rows-drawn)))
-          (should (equal '("a.txt" "b.txt") (drgnx-replace-view-test--files)))
-          (drgnx-replace-view-test--fresh-p view))))))
 
 (ert-deftest drgnx-replace/a-new-search-resets-in-slices ()
   (drgnx-replace-view-test--fed
@@ -702,67 +530,6 @@ file order, as a search sends them."
           (should (equal (with-current-buffer buf (buffer-string)) "(defun bar () (bar))\n;; foo in a comment\n"))
           (should (equal (drgnx-replace-view-test--read b) "(foo)\n")))))))
 
-(ert-deftest drgnx-replace/an-edited-buffer-refreshes-its-rows ()
-  (drgnx-replace-view-test--with
-    (drgnx-git-test-with-repo
-      (drgnx-git-test-write repo "a.txt" "foo 1\nfoo 2\n")
-      (drgnx-git-test-write repo "b.txt" "foo 3\n")
-      (let* ((a (expand-file-name "a.txt" repo)) (buf (drgnx-replace-view-test--visit repo "a.txt" 1))
-             (row (lambda (after) (lambda (v) (and (consp v) (equal (plist-get v :file) a) (equal (plist-get v :after) after)))))
-             (view nil))
-        (drgnx-replace-in-files)
-        (setq view (drgnx-replace-view-test--view))
-        (drgnx-replace-view-test--wait)
-        (should (= (drgnx-replace-view-test--count) 3))
-        (drgnx-replace-view-test--press-box (funcall row " 2"))
-        ;; an unsaved edit above: after a pause the file's rows follow the buffer; the unticked match stays unticked
-        (with-current-buffer buf (goto-char (point-min)) (insert "foo 0\nfoo 0b\n"))
-        (should (drgnx-timer-active-p (cons 'replace-refresh view)))
-        (drgnx-replace-view-test--wait)
-        (should (= (drgnx-replace-view-test--count) 5))
-        (should (equal (drgnx-replace-view-test--box-at (funcall row " 2")) "[ ]"))
-        (should (equal (drgnx-replace-view-test--box-at (funcall row " 1")) "[x]"))
-        (should (= 4 (plist-get (with-current-buffer view (seq-find (funcall row " 2") drgnx-replace--matches)) :line)))
-        ;; Replace All writes the buffer as it is now (left unsaved: it held the user's edits)
-        (drgnx-replace-view-test--set 'replace "bar")
-        (drgnx-replace-view-test--wait)
-        (with-current-buffer view (drgnx-replace-all))
-        (should (equal (with-current-buffer buf (buffer-string)) "bar 0\nbar 0b\nbar 1\nfoo 2\n"))
-        (should (equal (drgnx-replace-view-test--read (expand-file-name "b.txt" repo)) "bar 3\n"))))))
-
-(ert-deftest drgnx-replace/a-file-changed-on-disk-refreshes-its-rows ()
-  (let ((watches nil) (removed nil) (n 0))
-    ;; file-notify events do not reach a batch Emacs: the watches are recorded, their callbacks called by hand
-    (cl-letf (((symbol-function 'file-notify-add-watch) (lambda (dir _flags cb) (push (list (cl-incf n) dir cb) watches) n))
-              ((symbol-function 'file-notify-rm-watch) (lambda (d) (push d removed))))
-      (drgnx-replace-view-test--with
-        (drgnx-git-test-with-repo
-          (drgnx-git-test-write repo "a.txt" "foo 1\n")
-          (drgnx-git-test-write repo "sub/b.txt" "foo 2\n")
-          (drgnx-replace-view-test--visit repo "a.txt" 1)
-          (drgnx-replace-in-files)
-          (drgnx-replace-view-test--wait)
-          (should (= (drgnx-replace-view-test--count) 2))
-          ;; the listed files' folders are watched
-          (should (equal (sort (mapcar (lambda (w) (file-relative-name (nth 1 w) repo)) watches) #'string<) '("./" "sub/")))
-          ;; an agent writes sub/b.txt
-          (let ((b (expand-file-name "sub/b.txt" repo)))
-            (write-region "foo 2\nfoo 3 foo\n" nil b nil 'silent)
-            (dolist (w watches) (funcall (nth 2 w) (list (car w) 'changed b))))
-          (drgnx-replace-view-test--wait)
-          (should (= (drgnx-replace-view-test--count) 4))
-          ;; a new search drops the watches (and watches again)
-          (let ((ids (mapcar #'car watches)))
-            (drgnx-replace-view-test--set 'find "fo")
-            (drgnx-replace-view-test--wait)
-            (should (cl-subsetp ids removed)))
-          ;; so does killing the view, with the edit hook
-          (let* ((view (drgnx-replace-view-test--view)) (ids (with-current-buffer view drgnx-replace--watches)))
-            (should ids)
-            (kill-buffer view)
-            (should (cl-subsetp ids removed))
-            (should-not (memq #'drgnx-replace--buffer-changed (default-value 'after-change-functions)))))))))
-
 (ert-deftest drgnx-replace/symbol-falls-back-to-text ()
   (drgnx-replace-view-test--with
     (drgnx-git-test-with-repo
@@ -773,19 +540,20 @@ file order, as a search sends them."
              (abuf (find-file-noselect a)))
         (find-file-noselect b)
         (drgnx-replace-view-test--with-server server requests reply
-          ;; no server: pressing Symbol says why, and the text is searched
+          ;; no server: Rename Symbol says why, and the text is searched (through the hub, which is not up here)
           (drgnx-replace-view-test--visit repo "a.el" 9)
           (drgnx-replace-in-files)
           (drgnx-replace-view-test--wait)
+          (with-current-buffer (drgnx-replace-view-test--view) (should-not (drgnx-replace--opt :symbol)))
+          (drgnx-replace-view-test--visit repo "a.el" 9)
+          (drgnx-replace-rename-symbol)
           (with-current-buffer (drgnx-replace-view-test--view)
-            (should-not (drgnx-replace--opt :symbol))
-            (drgnx-replace--toggle :symbol)
             (should-not (drgnx-replace--opt :symbol))
             (should (string-match-p "No language server" drgnx-replace--status)))
           (drgnx-replace-view-test--wait)
-          (should (= (drgnx-replace-view-test--count) 4))
           (with-current-buffer (drgnx-replace-view-test--view)
-            (should (string-match-p "No language server" drgnx-replace--status)))
+            (should (string-match-p "No language server" drgnx-replace--status))
+            (should (or drgnx-replace--waiting (not (fboundp 'nidhogg-view--call)))))
           ;; a server: Rename Symbol lists its edits
           (setq server 'fake)
           (drgnx-replace-view-test--visit repo "a.el" 9)
@@ -806,7 +574,9 @@ file order, as a search sends them."
             (should-not (drgnx-replace--opt :symbol))
             (should (widget-apply (drgnx-replace--widget :case) :active)))
           (drgnx-replace-view-test--wait)
-          (should (= (drgnx-replace-view-test--count) 1))
+          (should (= (drgnx-replace-view-test--count) 0))         ; the server's edits are gone; the hub has the text
+          (with-current-buffer (drgnx-replace-view-test--view)
+            (should (or drgnx-replace--waiting (not (fboundp 'nidhogg-view--call)))))
           (should (= requests 1)))))))
 
 (ert-deftest drgnx-replace/the-find-bar-is-never-saved-with-the-workbench ()

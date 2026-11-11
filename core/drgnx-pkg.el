@@ -814,25 +814,8 @@ in the packages directory itself: an .eln's name hashes its source's path."
                                     pkg (file-name-nondirectory f) (error-message-string err)))))))))
 
 ;;;; The Emacs build that compiled the packages
-
-(defconst drgnx-pkg-build-file "drgnx-built-by.eld"
-  "The file in the packages directory that names the Emacs build that byte-compiled its packages.")
-
-(defun drgnx-pkg-emacs-build ()
-  "This Emacs build as a string: version, configuration, native-code ABI and build time.  An .elc holds the macro
-expansions of the Emacs that compiled it, so packages another build compiled are compiled again (`drgnx-pkg-sync')."
-  (string-join (delq nil (list emacs-version system-configuration
-                               (and (boundp 'comp-native-version-dir) comp-native-version-dir)
-                               (and emacs-build-time (format-time-string "%FT%T" emacs-build-time t))))
-               " "))
-
-(defun drgnx-pkg-elpa-build (&optional dir)
-  "The build that compiled the packages of DIR (default the packages directory), from its `drgnx-pkg-build-file';
-nil when nothing says (a directory from before the record)."
-  (let ((f (expand-file-name drgnx-pkg-build-file (or dir (drgnx-elpa-dir)))))
-    (when (file-exists-p f)
-      (let ((v (ignore-errors (car (read-from-string (drgnx-pkg--file-string f))))))
-        (and (stringp v) v)))))
+;; (`drgnx-pkg-emacs-build', `drgnx-pkg-elpa-build' and `drgnx-pkg-jit-guard' are in drgnx-pkg-activate.el: a session
+;; needs them at start.)
 
 (defun drgnx-pkg--recompile (dir)
   "Byte-compile every package of DIR again for this Emacs, dependencies first, after deleting every .elc there (a
