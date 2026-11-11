@@ -137,30 +137,110 @@ to the last whole band of its first cell row, blue below."
 (defun drgnx-term-gui--near (px rgb)
   (cl-every (lambda (a b) (<= (abs (- a b)) 40)) px rgb))
 
+(defun drgnx-term-gui--cat (buffer bytes)
+  "Clear BUFFER's screen and have its shell print BYTES (a unibyte string, escapes and all) from a file."
+  (let ((f (make-temp-file "drgnx-term-gui")))
+    (let ((coding-system-for-write 'no-conversion)) (write-region (concat "\e[H\e[2J" bytes) nil f nil 'silent))
+    (drgnx-term-gui--run buffer (concat "cat " f "; rm " f))))
+
+(defun drgnx-term-gui--png ()
+  "The fixture PNG, 4 px by 2: a red row over a blue one, base64."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (let ((coding-system-for-read 'no-conversion))
+      (insert-file-contents-literally (expand-file-name "test/fixtures/term-red-over-blue.png" drgnx-term-gui--repo)))
+    (base64-encode-string (buffer-string) t)))
+
+(defun drgnx-term-gui--two-by-two (b what)
+  "Wait for BUFFER B's image (WHAT) and the line `after' below it; the image, 2 cells by 2 at the screen's top left,
+is red in its first cell row, blue in its second, and the cell after it is neither."
+  (let ((win (get-buffer-window b)) (cw (frame-char-width)) (ch (frame-char-height)))
+    (drgnx-test-wait (lambda () (and (drgnx-term-gui--image-pos b) (member "after" (drgnx-term-gui--lines b))))
+                     :secs 30 :what (concat what " and the text after it"))
+    (let* ((pos (drgnx-term-gui--image-pos b)) (snap (drgnx-uitest-snapshot))
+           (top (drgnx-term-gui--px snap win pos (/ cw 2) (/ ch 4)))
+           (below (with-current-buffer b (save-excursion (goto-char pos) (forward-line 1) (point))))
+           (bottom (drgnx-term-gui--px snap win below (/ cw 2) (/ ch 2)))
+           (right (drgnx-term-gui--px snap win pos (+ (* 2 cw) (/ cw 2)) (/ ch 2))))
+      (message "drgnx-term-gui: %s top %S, bottom %S, right of it %S" what top bottom right)
+      (should (drgnx-term-gui--near top '(255 0 0)))
+      (should (drgnx-term-gui--near bottom '(0 0 255)))
+      (should-not (drgnx-term-gui--near right '(255 0 0)))
+      (should-not (drgnx-term-gui--near right '(0 0 255)))
+      (should (equal (nth 2 (drgnx-term-gui--lines b)) "after")))))
+
 (ert-deftest drgnx-term-gui/a-sixel-is-drawn-at-its-cells ()
   "A sixel 2 cells by 2 is drawn where the program put it: red in its first cell row, blue in its second, the cell
 after it the window's background; the text after it starts on the row below the image."
   (skip-unless (display-graphic-p))
   (skip-unless (image-type-available-p 'png))
   (drgnx-term-gui--with
-    (let* ((b (drgnx-term-gui--start)) (win (get-buffer-window b)) (cw (frame-char-width)) (ch (frame-char-height)))
-      (drgnx-term-gui--run b (drgnx-term-gui--sixel cw ch))
+    (let ((b (drgnx-term-gui--start)))
+      (drgnx-term-gui--run b (drgnx-term-gui--sixel (frame-char-width) (frame-char-height)))
+      (drgnx-term-gui--two-by-two b "the sixel"))))
+
+(ert-deftest drgnx-term-gui/a-kitty-png-is-scaled-to-its-cells ()
+  "A kitty PNG (4 × 2 px) placed on 2 cells by 2 (`c', `r') is scaled to them: red over blue."
+  (skip-unless (display-graphic-p))
+  (skip-unless (image-type-available-p 'png))
+  (drgnx-term-gui--with
+    (let ((b (drgnx-term-gui--start)))
+      (drgnx-term-gui--cat b (concat "\e_Ga=T,f=100,c=2,r=2,q=2;" (drgnx-term-gui--png) "\e\\\r\nafter\n"))
+      (drgnx-term-gui--two-by-two b "the kitty PNG"))))
+
+(ert-deftest drgnx-term-gui/an-iterm2-image-is-sized-in-cells ()
+  "An iTerm2 inline PNG asked 2 cells wide and 2 tall, its aspect not kept, fills them: red over blue."
+  (skip-unless (display-graphic-p))
+  (skip-unless (image-type-available-p 'png))
+  (drgnx-term-gui--with
+    (let ((b (drgnx-term-gui--start)))
+      (drgnx-term-gui--cat b (concat "\e]1337;File=inline=1;width=2;height=2;preserveAspectRatio=0:"
+                                     (drgnx-term-gui--png) "\a\r\nafter\n"))
+      (drgnx-term-gui--two-by-two b "the iTerm2 image"))))
+
+(defun drgnx-term-gui--rgba (r g b)
+  "4 × 4 px of R G B, opaque, as kitty's base64 RGBA."
+  (let ((px (unibyte-string r g b 255)) (out ""))
+    (dotimes (_ 16) (setq out (concat out px)))
+    (base64-encode-string out t)))
+
+(ert-deftest drgnx-term-gui/a-kitty-animation-plays-on-the-frame ()
+  "A kitty animation of two frames (red, then blue; 100 ms each, looping) placed on 2 cells by 2: the frame shows
+both colours in turn at the image's cell."
+  (skip-unless (display-graphic-p))
+  (skip-unless (image-type-available-p 'png))
+  (drgnx-term-gui--with
+    (let ((b (drgnx-term-gui--start)) (seen nil))
+      (drgnx-term-gui--cat b (concat "\e_Ga=T,i=7,f=32,s=4,v=4,c=2,r=2,q=2;" (drgnx-term-gui--rgba 255 0 0) "\e\\"
+                                     "\e_Ga=f,i=7,f=32,s=4,v=4,z=100,q=2;" (drgnx-term-gui--rgba 0 0 255) "\e\\"
+                                     "\e_Ga=a,i=7,r=1,z=100,q=2\e\\\e_Ga=a,i=7,s=3,v=1,q=2\e\\\r\nafter\n"))
+      (let ((win (get-buffer-window b)) (cw (frame-char-width)) (ch (frame-char-height)))
+        (drgnx-test-wait
+         (lambda ()
+           (let ((pos (drgnx-term-gui--image-pos b)))
+             (when pos
+               (let ((px (drgnx-term-gui--px (drgnx-uitest-snapshot) win pos (/ cw 2) (/ ch 2))))
+                 (cond ((drgnx-term-gui--near px '(255 0 0)) (cl-pushnew 'red seen))
+                       ((drgnx-term-gui--near px '(0 0 255)) (cl-pushnew 'blue seen))))))
+           (and (memq 'red seen) (memq 'blue seen)))
+         :secs 30 :what "both frames on the screen")
+        (message "drgnx-term-gui: animation showed %S" seen)))))
+
+(ert-deftest drgnx-term-gui/an-image-under-the-text-is-drawn-over-it ()
+  "A kitty image placed under the text (`z=-1', the cursor left where it was) with text printed over its cells: the
+cells show the image, not the text (Emacs displays a slice instead of the cells' text: the documented limit)."
+  (skip-unless (display-graphic-p))
+  (skip-unless (image-type-available-p 'png))
+  (drgnx-term-gui--with
+    (let ((b (drgnx-term-gui--start)))
+      (drgnx-term-gui--cat b (concat "\e_Ga=T,f=100,c=2,r=2,z=-1,C=1,q=2;" (drgnx-term-gui--png) "\e\\XX\r\n\r\nafter\n"))
       (drgnx-test-wait (lambda () (and (drgnx-term-gui--image-pos b) (member "after" (drgnx-term-gui--lines b))))
-                       :secs 30 :what "the image and the text after it")
-      (let* ((pos (drgnx-term-gui--image-pos b)) (snap (drgnx-uitest-snapshot))
-             (top (drgnx-term-gui--px snap win pos (/ cw 2) (/ ch 4)))
-             (below (with-current-buffer b (save-excursion (goto-char pos) (forward-line 1) (point))))
-             (bg (drgnx-term-gui--px snap win (with-current-buffer b (save-excursion (goto-char below) (forward-line 1)
-                                                                                     (point)))
-                                     (* 20 cw) (/ ch 2)))
-             (bottom (drgnx-term-gui--px snap win below (/ cw 2) (/ ch 2)))
-             (right (drgnx-term-gui--px snap win pos (+ (* 2 cw) (/ cw 2)) (/ ch 2))))
-        (message "drgnx-term-gui: image top %S, bottom %S, right of it %S, background %S" top bottom right bg)
-        (should (drgnx-term-gui--near top '(255 0 0)))
-        (should (drgnx-term-gui--near bottom '(0 0 255)))
-        (should-not (drgnx-term-gui--near right '(255 0 0)))
-        (should-not (drgnx-term-gui--near right '(0 0 255)))
-        (should (equal (nth 2 (drgnx-term-gui--lines b)) "after"))))))
+                       :secs 30 :what "the image under the text")
+      (let* ((win (get-buffer-window b)) (pos (drgnx-term-gui--image-pos b)) (snap (drgnx-uitest-snapshot))
+             (cw (frame-char-width)) (ch (frame-char-height)))
+        (should (equal (with-current-buffer b (buffer-substring-no-properties pos (+ pos 2))) "XX"))
+        (dolist (dx (list 1 (/ cw 2) (+ cw (/ cw 2))))
+          (should (drgnx-term-gui--near (drgnx-term-gui--px snap win pos dx (/ ch 4)) '(255 0 0))))))))
 
 (defun drgnx-term-gui--ask (method params)
   "The hub's answer to METHOD with PARAMS."
