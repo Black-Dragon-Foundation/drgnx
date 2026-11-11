@@ -34481,6 +34481,37 @@
       "classes": [
         "user"
       ],
+      "doc": "whether a window shows the terminal: its image animations advance only while one does",
+      "name": "term/visible",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/visible`: whether a window shows the terminal; image animations advance only while one does.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "visible": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "visible"
+        ],
+        "title": "TermVisible",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the steps of a session, task, plan or project (500 a page), or their rollup: time by class, cost by unit, tokens",
       "name": "timeline/get",
       "params": {

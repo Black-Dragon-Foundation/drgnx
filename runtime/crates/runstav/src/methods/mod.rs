@@ -284,6 +284,7 @@ params! {
     TermText(term::TermText),
     TermPaste(term::TermText),
     TermFocus(term::TermFocus),
+    TermVisible(term::TermVisible),
     TermMouse(term::TermMouse),
     TermResize(term::TermResize),
     TermScroll(term::TermScroll),
