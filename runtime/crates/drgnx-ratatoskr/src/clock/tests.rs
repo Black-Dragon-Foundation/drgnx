@@ -410,3 +410,50 @@ fn an_advance_waits_for_a_real_wait_inside_a_clock_timeout() {
         );
     });
 }
+
+#[test]
+fn a_barrier_waits_for_a_store_answer_that_takes_longer_than_busy_after() {
+    // Pattern C: the store thread answers after more than BUSY_AFTER of real time (a commit on a loaded disk; batch
+    // 34's red: a graph write at the barrier "for 5010 ms"); a store wait ends by itself, so the barrier waits for
+    // it, and for what the task does with the answer, and names nothing
+    on_virtual(async {
+        let dir = tempfile::tempdir().unwrap();
+        let (_store, db) = urdr::Store::spawn(urdr::StoreSpec {
+            path: dir.path().join("a.db"),
+            mode: urdr::Mode::ReadWrite {
+                file_mode: 0o600,
+                synchronous_full: false,
+            },
+            migrations: &[(1, "create table t(x);")],
+        })
+        .unwrap();
+        let l = log();
+        let mine = l.clone();
+        spawn("session:steps", async move {
+            let _ = db
+                .read(|_| {
+                    std::thread::sleep(BUSY_AFTER + Duration::from_secs(1));
+                    Ok(())
+                })
+                .await;
+            mine.lock().unwrap().push("written");
+        });
+        advance(Duration::ZERO).await;
+        assert_eq!(barrier().await, Vec::<String>::new());
+        assert_eq!(seen(&l), ["written"]);
+    });
+}
+
+#[test]
+fn a_real_wait_that_never_ends_holds_the_barrier_until_the_callers_deadline() {
+    // the barrier has no limit of its own on a real wait: one that never ends (a hang) is a red through the deadline
+    // of whoever asked for the barrier (a test's gate), never a barrier that answers as if the hub had settled
+    on_virtual(async {
+        spawn("hung", async move {
+            real(std::future::pending::<()>()).await;
+        });
+        advance(Duration::ZERO).await;
+        let r = tokio::time::timeout(BUSY_AFTER + Duration::from_secs(2), barrier()).await;
+        assert!(r.is_err(), "the barrier answered {r:?}");
+    });
+}
