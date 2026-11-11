@@ -435,6 +435,18 @@ On the rows path the model in Sjá selects (`drgnx-work-map--nav')."
 (defun drgnx-work-map-why () "Select what the selection came from." (interactive) (drgnx-work-map--move 'up))
 (defun drgnx-work-map-touches () "Select what the selection touches." (interactive) (drgnx-work-map--move 'down))
 
+(defun drgnx-work-map--history (link)
+  "Follow Sjá's reserved LINK (\"back\" or \"forward\") in this Work view: the map through `drgnx-work-map--nav', a
+view of it straight through `drgnx-view-nav'.  Off the rows path there is no history."
+  (cond
+   ((not (drgnx-work-map--sja)) (message "Work: this view keeps no history"))
+   (drgnx-work-lens-nav (drgnx-view-nav 'follow link))
+   (t (drgnx-work-map--nav 'follow link))))
+
+(defun drgnx-work-map-back () "Select what was selected before the last move." (interactive)
+       (drgnx-work-map--history "back"))
+(defun drgnx-work-map-forward () "Redo the move that back undid." (interactive) (drgnx-work-map--history "forward"))
+
 (defun drgnx-work-map-next-agent ()
   "Select the next agent, in team order."
   (interactive)

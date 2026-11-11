@@ -46,6 +46,7 @@ Everything here is computed in your Emacs from what the hub already sent, so a k
 | `Tab` / `Shift-Tab` | the next or previous agent, plans in their order, a subagent right after its parent |
 | `Enter` | open: an agent's transcript (today's Agents view), a branch's repository (Magit when it is there), a file, a spec or plan document |
 | `Shift-Enter` | the same, beside the map, without moving focus |
+| `Alt-←` / `Alt-→` (macOS `Ctrl--` / `Ctrl-Shift--`; Vim `Ctrl-o` / `Alt-→`) | back to the selection before the last move, or forward again; a run of arrows or agent keys is one move, a jump (search, `g N`, a click) is one |
 
 The **selected** card is raised; its **chain** (everything it came from, up, and everything it touches, down) keeps
 its normal look; everything else is dimmed. From any item, `↑` reaches the ask it came from in a handful of keys. If

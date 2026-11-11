@@ -344,12 +344,15 @@ lowest pending line:
      `budget`) event is on the channel, so a client that read its whole answer sees the event before the marker.
 3. The tasks spawned since then are run once (an advance of 0 ms), and the held writes are released.
 4. `{"event": "__test_marker", "data": {"marker": M}}` is written on every live connection. M counts from 1 per hub.
-5. The answer: `{"marker": M, "unnamed": n, "busy": [origins], "waiting": [origins]}`. `n` counts the writes from
+5. The answer: `{"marker": M, "unnamed": n, "busy": [origins], "waiting": [origins], "sites": [sites]}`. `n` counts the writes from
    tasks without an origin since the last barrier. The gate fails a test when n > 0, since such writes are released
    here and not by the test's own advance. `busy` names tasks still running after 5 s. `waiting` names the tasks
    still inside a real wait (and `gateway:requests` while requests are in flight): the allowed ones, and those still
    inside after the 5 s. The gate fails a test on any its `drgnx-test-gate-waiting-ok` does not list, since what they
-   write later is not ordered by the test.
+   write later is not ordered by the test. `sites` says where each of those waits began and for how long, as
+   `"ORIGIN at FILE:LINE for N ms"`: the line of the `clock::blocking`, `clock::real` or `clock::real_long` call (they
+   are `#[track_caller]`), or for a store thread's answer the urdr line that waits. The gate's failure prints them, so
+   a rare red names its line.
 
 An advance waits for a woken task's `clock::real` waits too (it is not parked inside one, whatever clock timer it also
 holds), but not for a `clock::real_long` one: the advance may be what ends it (a job's time box). A job's kill after

@@ -3,10 +3,12 @@
 //! waits for the answer and what the task does with it (docs/develop/hub.md, "The sequencer and the barrier").
 
 use std::any::Any;
+use std::panic::Location;
 use std::sync::OnceLock;
 
-/// Called as a wait for a store thread's answer begins; what it returns is dropped as the wait ends.
-pub type Hook = fn() -> Box<dyn Any + Send>;
+/// Called as a wait for a store thread's answer begins, with the urdr line that waits (a barrier's report names it);
+/// what it returns is dropped as the wait ends.
+pub type Hook = fn(&'static Location<'static>) -> Box<dyn Any + Send>;
 
 static HOOK: OnceLock<Hook> = OnceLock::new();
 
@@ -15,7 +17,9 @@ pub fn set(hook: Hook) {
     let _ = HOOK.set(hook);
 }
 
-/// The hook's guard for one wait (none without a hook).
+/// The hook's guard for one wait (none without a hook), at the caller's line.
+#[track_caller]
 pub(crate) fn begin() -> Option<Box<dyn Any + Send>> {
-    HOOK.get().map(|h| h())
+    let at = Location::caller();
+    HOOK.get().map(|h| h(at))
 }

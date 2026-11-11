@@ -142,6 +142,8 @@
         (work-right "<right>")
         (work-why "<up>")
         (work-touches "<down>")
+        (work-back "M-<left>" :mac "C--")
+        (work-forward "M-<right>" :mac "C-_")
         (work-next-agent "TAB")
         (work-previous-agent "<backtab>")
         (work-open "RET")

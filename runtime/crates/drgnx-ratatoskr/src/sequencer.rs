@@ -473,7 +473,8 @@ impl Sequencer {
 
     /// `__test_barrier` on CONN: every socket read and what it held served; the tasks inside a real wait waited for
     /// (those its `waiting_ok` origins name excepted); the woken and spawned tasks settled and the held writes
-    /// released; a numbered marker on every connection; then the answer `{marker, unnamed, busy, waiting}`.
+    /// released; a numbered marker on every connection; then the answer `{marker, unnamed, busy, waiting, sites}`
+    /// (sites: each real wait left, "ORIGIN at FILE:LINE for N ms").
     async fn barrier(&self, conn: u64, line: Line) {
         let mut barriers = vec![(conn, line)];
         loop {
@@ -497,7 +498,11 @@ impl Sequencer {
             .iter()
             .flat_map(|(_, l)| waiting_ok(&l.text))
             .collect();
-        let clock::Settled { waiting, busy } = clock::settle_real(clock::BUSY_AFTER, &ok).await;
+        let clock::Settled {
+            waiting,
+            busy,
+            sites,
+        } = clock::settle_real(clock::BUSY_AFTER, &ok).await;
         let settled = clock::advance(Duration::ZERO).await;
         self.release();
         let unnamed = self.order().take_unnamed() + settled.unnamed;
@@ -531,7 +536,8 @@ impl Sequencer {
                     "marker": marker,
                     "unnamed": unnamed,
                     "busy": busy,
-                    "waiting": waiting
+                    "waiting": waiting,
+                    "sites": sites
                 }),
                 ignored: vec![],
             })
