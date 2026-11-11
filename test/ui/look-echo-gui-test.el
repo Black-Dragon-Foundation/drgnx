@@ -63,28 +63,30 @@ undone after."
       (ignore box)))
 
 (defvar drgnx-look-echo-ui-test--note nil
-  "While a row waits at a prompt: called by the special event `drgnx-look-echo-ui-test-note' (`special-event-map'),
-which the prompt's own read runs without returning it.")
+  "While a row waits at a prompt: the timer that watches for the box.")
 
-(defun drgnx-look-echo-ui-test--note ()
-  "The special event's command: call the waiting row's note."
-  (interactive)
-  (when drgnx-look-echo-ui-test--note (funcall drgnx-look-echo-ui-test--note)))
-
-(define-key special-event-map [drgnx-look-echo-ui-test-note] #'drgnx-look-echo-ui-test--note)
+(defun drgnx-look-echo-ui-test--stop-note ()
+  "Stop the timer that watches for the box, if it still runs."
+  (when (timerp drgnx-look-echo-ui-test--note) (cancel-timer drgnx-look-echo-ui-test--note))
+  (setq drgnx-look-echo-ui-test--note nil))
 
 (defun drgnx-look-echo-ui-test--at-prompt (box fn keys)
-  "Run FN once the read now starting waits with BOX shown (else after 40 notes: a prompt that never shows it), then
-answer with KEYS.  The harness's queue delivers each note to the read itself, so a note runs only while it waits."
+  "Run FN once the read now starting waits with BOX shown (else after 40 ticks: a prompt that never shows it), then
+answer with KEYS.  A timer at the harness's pace watches: timers run only while Emacs waits, and the box shows only
+while a read waits, so FN sees the prompt.  Nothing but KEYS goes into the input: an event left in
+`unread-command-events' when a read from C starts is returned to that read as input, special or not (`interactive'
+\"c\" then signals \"Non-character input-event\").  A pause of no length waits in the harness's queue instead,
+which no read sees and which tells the session's guard on idle prompts that an answer is coming."
+  (drgnx-uitest-enqueue (list (cons 'drgnx-uitest-pause 0)))
   (let ((tries 40))
     (setq drgnx-look-echo-ui-test--note
-          (lambda ()
-            (if (and (not (frame-visible-p box)) (> (setq tries (1- tries)) 0))
-                (drgnx-uitest-enqueue (list 'drgnx-look-echo-ui-test-note))
-              (setq drgnx-look-echo-ui-test--note nil)
-              (funcall fn)
-              (drgnx-uitest-enqueue (append (listify-key-sequence keys) nil)))))
-    (drgnx-uitest-enqueue (list 'drgnx-look-echo-ui-test-note))))
+          (run-with-timer
+           drgnx-uitest-tick drgnx-uitest-tick
+           (lambda ()
+             (when (or (frame-visible-p box) (<= (setq tries (1- tries)) 0))
+               (drgnx-look-echo-ui-test--stop-note)
+               (funcall fn)
+               (drgnx-uitest-enqueue (append (listify-key-sequence keys) nil))))))))
 
 (defun drgnx-look-echo-ui-test--ask (form keys &optional command)
   "Run FORM; while it waits, note (VISIBLE TEXT PLACE) of the box, then answer with KEYS.  Return
@@ -99,7 +101,7 @@ PLACE is (LEFT TOP WIDTH PARENT-WIDTH PARENT-HEIGHT): the box in its parent's pi
                                   (frame-pixel-width box) (frame-pixel-width (frame-parent box))
                                   (frame-pixel-height (frame-parent box))))))
      keys)
-    (unwind-protect (eval form t) (setq drgnx-look-echo-ui-test--note nil))
+    (unwind-protect (eval form t) (drgnx-look-echo-ui-test--stop-note))
     (when command (run-hooks 'post-command-hook))
     (drgnx-test-wait-presented)
     (cons seen (frame-visible-p box))))
@@ -227,7 +229,7 @@ palette's: the echo area draws `default' as the gap surface, as the palette's mi
             (let ((box (drgnx-look-echo-box f)))
               (drgnx-look-echo-ui-test--at-prompt
                box (lambda () (drgnx-uitest-capture (drgnx-look-echo-ui-test--out (format "echo-box-%s" theme)))) "c")
-              (unwind-protect (read-char "Pick a register: ") (setq drgnx-look-echo-ui-test--note nil))
+              (unwind-protect (read-char "Pick a register: ") (drgnx-look-echo-ui-test--stop-note))
               (with-current-buffer (get-buffer-create " *Echo Area 0*")
                 (should (memq 'drgnx-surface-gap (cdr (assq 'default face-remapping-alist))))))))
       (drgnx-look-echo-area-off)
