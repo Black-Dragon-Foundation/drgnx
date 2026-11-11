@@ -7,6 +7,7 @@
 #   spike.sh s3                  the watchdog: a 512 MiB grant with an escaped child; its CPU idle and in a 16-way build
 #   spike.sh s2-build NIDHOGG    a Nidhogg build with Naglfar under the draft build profile, as the runner account
 #   spike.sh s2-ert DRGNX EMACS SELECTOR FILES   drgnx ERT selectors (a Lisp string) in FILES under the same profile
+#   spike.sh tools SLEIPNIR PIN  the runner's toolchain step (`sleipnir tools`, the real bundle) as the runner account
 #   spike.sh denials             what Seatbelt denied, from the unified log
 # Results: $MR_OUT/results.md (the summary) and its logs. Keys stay in $MR_KEYS (never uploaded).
 # bash 3.2 (macOS).
@@ -276,12 +277,30 @@ remote_s2_build() { # the runner side: the profile, then the build under it, und
   # configure's own record of the make check (config.log, wherever build.sh's build dir put it)
   find "$a/nbuild" -maxdepth 3 -name config.log 2>/dev/null | while read -r l; do
     echo "--- $l"; grep -n -A 12 'checking for GNU Make' "$l" | cut -c1-300
+    # round 9: past the vendored crates, configure's Rust step (the native libraries Glitnir links)
+    echo "--- $l: the Rust step"; grep -n -A 20 'checking the native libraries' "$l" | cut -c1-300
+  done
+  # cargo's own logs (configure's probe, then make's builds of the glue and Glitnir)
+  find "$a/nbuild" -maxdepth 4 -name '*cargo*.log' 2>/dev/null | while read -r l; do
+    echo "--- $l (last 40 lines)"; tail -n 40 "$l" | cut -c1-300
   done
 }
 
 s2_build() { # NIDHOGG_CHECKOUT
   say "## S2: a Nidhogg build with Naglfar under the draft build profile"
   r=$(root_of)
+  # round 8: a Mac job has no network, so the crates are vendored here, outside the sandbox, as Nidhogg's release
+  # tarball lays them out (nidhogg/ci/vendor.sh: shell/vendor, glitnir/vendor, and each crate's .cargo/config.toml)
+  local c d
+  for c in shell glitnir; do
+    ( cd "$1/nidhogg/$c" && cargo vendor --locked vendor > /dev/null ) || { say "- **S2 build: FAIL** (cargo vendor $c)"; return 1; }
+  done
+  for c in shell glitnir glue; do
+    d=vendor; [ "$c" != glue ] || d=../shell/vendor
+    mkdir -p "$1/nidhogg/$c/.cargo"
+    printf '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "%s"\n' "$d" \
+      > "$1/nidhogg/$c/.cargo/config.toml"
+  done
   sudo ditto "$1" "$r/slot-nidhogg"
   # the toolchain: the CI image's active one (its sysroot holds cargo and rustc), copied into the runner root (the
   # design's `sleipnir tools` step installs it there). Round 7: the image's rustup is Homebrew's, with no ~/.cargo/bin
@@ -372,6 +391,19 @@ s2_ert() { # DRGNX_CHECKOUT DRGNX_EMACS SELECTOR FILES (DRGNX_EMACS inside an .a
   else say "- **S2 ERT: FAIL**"; fi
 }
 
+tools() { # SLEIPNIR PIN: the bundle copied into the runner root, then its toolchain step as the runner account, as
+  # the hub runs it at `runner add` (outside any job; mise is the CI image's Homebrew one)
+  say "## Toolchains: \`sleipnir tools\` as the runner account"
+  mr "mkdir -p ~/$ROOT_REL/bin && cat > ~/$ROOT_REL/bin/sleipnir && chmod 755 ~/$ROOT_REL/bin/sleipnir" < "$1"
+  out=$(mr "~/$ROOT_REL/bin/sleipnir tools --root \$HOME/$ROOT_REL $2; echo tools-rc=\$?" 2>&1)
+  printf '%s\n' "$out" > "$OUT/tools.log"
+  json=$(printf '%s\n' "$out" | grep '^{' | tail -n 1)
+  say "- $(printf '%s' "$json" | cut -c1-400) $(printf '%s\n' "$out" | grep '^tools-rc=')"
+  if printf '%s' "$json" | grep -q "\"tool:$2\"" && ! printf '%s' "$json" | grep -q '"failed":"'; then
+    say "- **tools: PASS**"
+  else say "- **tools: FAIL** (tools.log)"; return 1; fi
+}
+
 denials() {
   say "## Seatbelt denials (unified log, last 4 h)"
   sudo log show --last 4h --style compact --predicate 'eventMessage CONTAINS "deny("' 2>/dev/null | cut -c1-1000 > "$OUT/denials.log"
@@ -389,7 +421,8 @@ case "$cmd" in
   s3) s3 ;;
   s2-build) s2_build "$@" ;;
   s2-ert) s2_ert "$@" ;;
+  tools) tools "$@" ;;
   denials) denials ;;
   remote) remote "$@" ;;
-  *) echo "usage: spike.sh up|s1|s3|s2-build DIR|s2-ert DRGNX NIDHOGG SELECTOR FILES|denials" >&2; exit 2 ;;
+  *) echo "usage: spike.sh up|s1|s3|s2-build DIR|s2-ert DRGNX NIDHOGG SELECTOR FILES|tools SLEIPNIR PIN|denials" >&2; exit 2 ;;
 esac

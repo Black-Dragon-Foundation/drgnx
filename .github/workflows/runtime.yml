@@ -701,6 +701,7 @@ jobs:
       - name: Build dependencies (Homebrew; Rust by rustup), as Naglfar's job
         run: |
           sed 's/#.*//' nidhogg-src/nidhogg/deps/macos.build | grep -vx 'rust' | xargs brew install
+          brew install mise
           rustup toolchain install stable --profile minimal --component clippy,rustfmt,llvm-tools --no-self-update
           rustup default stable
       - name: the Mac runner bundle (sleipnir, ad-hoc signed, codesign -v)
@@ -725,6 +726,13 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 20
         run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p sleipnir --lib darwin 2>&1 | tee "$MR_OUT/darwin-rows.log"
+      - name: a pinned Rust through mise, found by a sandboxed job (CI account); `sleipnir tools` as the runner account
+        if: ${{ !cancelled() }}
+        timeout-minutes: 20
+        run: |
+          set -o pipefail
+          cargo test --locked --manifest-path runtime/Cargo.toml -p sleipnir --lib darwin::tools -- --ignored 2>&1 | tee "$MR_OUT/tools-row.log"
+          bash test/runners/mac/spike.sh tools "$MR_OUT/bundle/sleipnir" rust@1.95
       - name: S2 drgnx ERT selectors under the build profile
         if: ${{ !cancelled() }}
         timeout-minutes: 20
