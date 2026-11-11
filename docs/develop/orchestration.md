@@ -242,7 +242,7 @@ open `gate` cards, and builds the model and the rows (`work::trail::flow`, pure)
 - the model: a `task` node per task with the `flow` form's links up and down and the gates' states as fields, the
   lists `tasks` and `held` (the needs-you chips; `Tab` walks them).
 
-A held task is also a needs-you chip on the row under the run's line ("⚑ T5 held: …", carrying the task's id), and
+A held task is also a needs-you chip on the strip, the first row, above the run's line ("⚑ T5 held: …", carrying the task's id), and
 its row carries its `gate` card's id (`drgnx-work-card`).
 
 `e` asks `orch/evidence` for the selected task and lists each record (kind, job, tree, command, its failing rows or

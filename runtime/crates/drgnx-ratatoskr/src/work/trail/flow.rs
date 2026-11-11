@@ -638,8 +638,8 @@ fn draw_cell(b: &mut RowBuilder, pics: &mut Pics, gate: &str, c: &Cell) {
     }
 }
 
-/// The lens's rows for ENV and the icons they draw: the run's line, the needs-you chips (one per held task, carrying
-/// its id), the column headings with their icons, a row per task (its id, title, agent and a chip per gate, carrying
+/// The lens's rows for ENV and the icons they draw: the strip ([`strip_row`]: the needs-you chips, one per held task
+/// carrying its id, the push, the cost and the machines), the run's line, the column headings with their icons, a row per task (its id, title, agent and a chip per gate, carrying
 /// the task's id and its gate card), then the merge batch ([`batch_rows`]) and the line gate ([`line_rows`]).  FONTS
 /// measure the columns ([`columns`]).  The rule pack is its own tile ([`rules_rows`]).
 pub(crate) fn flow_rows(
@@ -675,10 +675,11 @@ pub(crate) fn flow_rows(
         &format!("{done} / {} done", ts.len()),
         Chip::Wait.face(),
     );
-    let mut rows = vec![head.finish()];
-    if let Some(strip) = strip_row(flow, &ts, env, fonts, &mut pics) {
-        rows.push(strip);
-    }
+    // the strip first, under the lens bar, then the run's line (the mockup)
+    let mut rows: Vec<Row> = strip_row(flow, &ts, env, fonts, &mut pics)
+        .into_iter()
+        .collect();
+    rows.push(head.finish());
     let mut cols = RowBuilder::new("cols");
     for (i, name) in ["Task", "Agent"].iter().chain(GATES.iter()).enumerate() {
         cols.stop(at[i]);
@@ -1790,8 +1791,8 @@ mod tests {
             assert_eq!(
                 keys,
                 [
-                    "head",
                     "needs",
+                    "head",
                     "cols",
                     "task:task:J#1",
                     "task:task:J#5",
@@ -1802,7 +1803,7 @@ mod tests {
                 ]
             );
             assert!(
-                rows[0].text.contains("Search view") && rows[0].text.contains("rules drgnx-org v4")
+                rows[1].text.contains("Search view") && rows[1].text.contains("rules drgnx-org v4")
             );
             let px = |v: f32| (v * scale).round() as u32;
             // every image a row names is in the build's images, once, at 14 logical px
@@ -1822,7 +1823,7 @@ mod tests {
             // six column icons on the headings
             assert_eq!(rows[2].images.len(), 6);
             // the needs-you chips: one per held task, in the held face, carrying the task's id
-            let needs = &rows[1];
+            let needs = &rows[0];
             assert!(needs.text.contains("T5 held: no red"), "{}", needs.text);
             assert!(needs.runs.iter().any(|r| r.2 == Chip::Held.face()));
             assert!(
@@ -1882,7 +1883,7 @@ mod tests {
             };
             let e = env(scale);
             let (rows, _) = flow_rows(&f, &e, &fonts());
-            let strip = &rows[1];
+            let strip = &rows[0];
             assert_eq!(strip.key, "needs");
             assert!(strip.text.contains("T5 held: no red"), "{}", strip.text);
             assert!(
@@ -1928,7 +1929,7 @@ mod tests {
         e.width_px = 900;
         let fs = fonts();
         let (rows, _) = flow_rows(&f, &e, &fs);
-        let strip = &rows[1];
+        let strip = &rows[0];
         assert!(
             strip.text.contains("push job/J? gate green"),
             "{}",
@@ -1943,7 +1944,7 @@ mod tests {
         // narrower still: the cost and the machines give way to what needs you
         e.width_px = 400;
         let (rows, _) = flow_rows(&f, &e, &fs);
-        let strip = &rows[1];
+        let strip = &rows[0];
         assert!(
             strip.stops.is_empty() && !strip.text.contains("desk 4/6"),
             "{}",
@@ -1959,7 +1960,7 @@ mod tests {
             cost: Some((1.5, None)),
             ..flow()
         };
-        let strip = &flow_rows(&f, &env(1.0), &fonts()).0[1];
+        let strip = &flow_rows(&f, &env(1.0), &fonts()).0[0];
         assert!(!strip.text.contains("push job/"));
         assert!(strip.text.contains("$1.50") && !strip.text.contains(" / $"));
     }

@@ -555,7 +555,8 @@ agent line 30).  Adding FN again moves it to its new depth."
 
 (defvar-local drgnx-chrome-own-tab-line nil
   "Non-nil: an editor window showing this buffer shows its own `tab-line-format' in place of the editor's tabs (the
-Work space's lenses: its tab and the lens bar).  The row stays, so the window's text does not move.")
+Work space's lenses: its tab and the lens bar).  The row stays, so the window's text does not move; the lens bar is
+the window's heading, so it has no breadcrumb row.")
 
 (defconst drgnx-chrome--own-tab-line '(:eval tab-line-format)
   "The tab line of a buffer that has its own (`drgnx-chrome-own-tab-line').")
@@ -580,6 +581,8 @@ it, so without this the next redisplay may keep the old line (the window's text 
                         (with-current-buffer (window-buffer w)
                           (cond ((and (local-variable-p 'header-line-format) header-line-format)
                                  drgnx-chrome--own-header)
+                                ;; its own tab line (the Work space's lens bar) is its heading: no breadcrumb
+                                (drgnx-chrome-own-tab-line 'none)
                                 ;; a short terminal frame has no row to spare (ui/terminal-layout sets this)
                                 ((eq (frame-parameter (window-frame w) 'drgnx-chrome-breadcrumb) 'off) 'none)
                                 (t (let ((tail (buffer-local-value 'drgnx-chrome-header-tail (window-buffer w)))

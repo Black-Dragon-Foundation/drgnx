@@ -273,7 +273,8 @@ needs at least 30 frame lines for the breadcrumb row, which is 31 terminal rows 
 is not a frame line); with fewer, the frame parameter `drgnx-chrome-breadcrumb` is `off` (set by the terminal layout)
 and the row is gone, sticky scroll's scopes with it. It comes back with room, and a buffer's own header line (column
 headings) stays. A buffer that sets `drgnx-chrome-own-tab-line` (the Work space's views) shows its own tab line in
-place of the editor's tabs; the row stays, so the text does not move.
+place of the editor's tabs; the row stays, so the text does not move. That tab line is the window's heading, so it
+has no breadcrumb row under it.
 
 Hovering a file tab lights that one only, the whole tab. Tabs are dimmed; the shown tab joins the editor (its colour,
 in the body text's colour in the active editor group and muted in another group). The breadcrumb row is the header

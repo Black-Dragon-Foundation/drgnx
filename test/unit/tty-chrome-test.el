@@ -65,6 +65,8 @@ window in place of the editor's tabs; the row stays, so the window's text does n
     (should (equal (window-parameter (selected-window) 'tab-line-format) drgnx-chrome--own-tab-line))
     ;; an `:eval' form (a batch Emacs formats those as ""): its value is the buffer's own tab line
     (should (equal (eval (cadr (window-parameter (selected-window) 'tab-line-format)) t) '("" "Work · Flow")))
+    ;; its lens bar is its heading: no breadcrumb row under it (the mockup's Work space)
+    (should (eq (window-parameter (selected-window) 'header-line-format) 'none))
     (kill-local-variable 'drgnx-chrome-own-tab-line)
     (kill-local-variable 'tab-line-format)
     (drgnx-chrome-apply nil t)
