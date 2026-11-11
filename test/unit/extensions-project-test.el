@@ -184,6 +184,21 @@ the per-project parts set back after."
     (should (eq (drgnx-ext-project-test--mode (drgnx-ext-project-test--open drgnx-ext-project-test--p "d.fxrs"))
                 'drgnx-ext-fx-rust-mode))))
 
+(ert-deftest drgnx-extensions-project/a-toggle-sets-up-only-the-buffers-of-its-package ()
+  "M6: turning a package off runs `normal-mode' in its own file buffers (its major mode, a minor mode, a name it would
+pick a mode for) and in no other: an unrelated buffer keeps its local state."
+  (drgnx-ext-project-test--with
+    (drgnx-extensions-project-setup)
+    (let* ((root drgnx-ext-project-test--p)
+           (mine (drgnx-ext-project-test--open root "d.fxrs"))
+           (other (drgnx-ext-project-test--open root "plain.dat"))
+           (ran nil))
+      (with-current-buffer other (setq-local fill-column 33))
+      (cl-letf (((symbol-function 'normal-mode) (lambda (&rest _) (push (buffer-name) ran))))
+        (drgnx-extensions-project-set 'fx-rust root t))
+      (should (equal ran (list (buffer-name mine))))   ; notes in text-mode would carry fx-lint (its hook): it belongs too
+      (should (= 33 (buffer-local-value 'fill-column other))))))
+
 (ert-deftest drgnx-extensions-project/the-module-off-removes-both ()
   (drgnx-ext-project-test--with
     (let ((file (expand-file-name "drgnx-fake-ext-project.el" drgnx-test-config-root)))
