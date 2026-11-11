@@ -82,7 +82,23 @@ start time, job, reserve, current, expiry), written by rename, mode 0600 in a 07
   write the own reservation, let go. Two admissions in one second can't both fit.
 - **Counting** is `forseti::count_others`: another scheduler's job counts as `max(reserve, current)`, once.
 - **Liveness**: a file counts only while its process is the one that wrote it (`alive(pid, start_time)`, by
-  `/proc/<pid>/stat` field 22, so a reused pid doesn't count) and on the boot it was written in.
+  `/proc/<pid>/stat` field 22, so a reused pid doesn't count) and on the boot it was written in. On a Mac the start
+  time is `proc_pidinfo`'s (microseconds since the epoch), and the directory is under the runner root.
+
+## A Mac runner (`darwin`)
+
+A Mac with Apple silicon, in a standard account of its own (`drgnx-runner`), runs host jobs under Seatbelt; no
+containers, no keys. Its probe (`darwin::probe`) reads the machine once into a `Raw` (`read`, macOS only: `sw_vers`,
+`sysctl`, `pmset -g batt`, `dseditgroup`, `xcode-select -p`, `/usr/bin/clang --version`, one `brew list --versions`,
+`statvfs` of the runner root, and Gleipnir's check of `/usr/bin/sandbox-exec`); the rest is pure and tested on
+fixtures on Linux.
+
+**The Mac contract** (`contract`), refused with the whole list: macOS 15 or newer; Apple silicon
+(`hw.optional.arm64`, so a Rosetta shell passes); a root-owned `sandbox-exec`; a standard (non-admin) account; the
+Command Line Tools answering, with a full Xcode's licence accepted (`clang`'s refusal names it, its own item); 40 GB
+free on the runner root's volume. **Facts**: `os` `macos 15.6`, `arch` `aarch64`, cores (`hw.ncpu`), memory, disk,
+battery; the Linux-only fields false. **Features**: `arch:aarch64`, `host-jobs`, `xcode-clt`, and `brew:<name>@<major>.<minor>`
+for each Homebrew package at its newest installed version. The boot id is `kern.bootsessionuuid`.
 
 ## The podman argv
 
