@@ -127,10 +127,10 @@ a row's node is its path; a refresh asks again and draws nothing itself."
   "Pattern D (plan sja-complete E2): on the rows path each drawn row gets the old path's tail at the right edge (the
 ⋯ control, the hover's mouse face), with the git mark of the status the hub put on its name: a file's letter in its
 status face, ● for a folder with changes inside.  A patch moves the overlays it keeps instead of making new ones, and
-the single root's row is invisible."
+the single root's row is invisible, with no tail."
   (drgnx-explorer-rows-nav-test--with
     (should (get-text-property (point-min) 'invisible))
-    (should (equal (list (list 0 nil nil) (list 1 nil nil) (list 2 "●" 'drgnx-status-warn) (list 3 nil nil)
+    (should (equal (list (list 1 nil nil) (list 2 "●" 'drgnx-status-warn) (list 3 nil nil)
                          (list 4 "M" 'drgnx-status-warn))
                    (drgnx-explorer-rows-nav-test--tails)))
     (should (get-char-property (save-excursion (goto-char (point-min)) (forward-line 4) (point)) 'mouse-face))
@@ -138,7 +138,7 @@ the single root's row is invisible."
       (drgnx-view-apply-patch (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 0 :model 1
                                     :ops (list (list :remove (list "/r/a")))))
       (drgnx-view-draw-now drgnx-view)
-      (should (equal (list (list 0 nil nil) (list 1 "●" 'drgnx-status-warn) (list 2 nil nil)
+      (should (equal (list (list 1 "●" 'drgnx-status-warn) (list 2 nil nil)
                            (list 3 "M" 'drgnx-status-warn))
                      (drgnx-explorer-rows-nav-test--tails)))
       (should (cl-every (lambda (o) (memq o before))
@@ -319,6 +319,16 @@ rows' end asks `view/window' half the window on, once; with the window at 100, a
           (drgnx-explorer--rows-scrolled
            w (save-excursion (goto-char (point-max)) (forward-line (- (window-body-height w))) (point)))
           (should (funcall tailed "/r/f159")))))))
+
+(ert-deftest drgnx-explorer-rows/a-hidden-root-takes-no-line ()
+  "Pattern D (E4 side-by-side): the single root's row is invisible (the island's header names it), its newline too, so
+no empty line shows; it gets no tail (a tail's string would show on it)."
+  (drgnx-explorer-rows-nav-test--with
+    (goto-char (point-min))
+    (should (invisible-p (point)))
+    (should (invisible-p (pos-eol)))                  ; the newline: the line takes no room
+    (should-not (invisible-p (save-excursion (forward-line 1) (point))))
+    (should-not (when-let* ((o (gethash "/r" drgnx-explorer--tails))) (overlay-buffer o)))))
 
 (ert-deftest drgnx-explorer-rows/expand-draws-in-the-key-s-own-frame ()
   "Pattern D (E4, the same frame as the old path): expanding a closed folder waits inside the command, bounded, for the

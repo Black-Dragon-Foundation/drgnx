@@ -979,6 +979,18 @@ changes inside)."
     (overlay-put o 'evaporate t)
     (puthash key o drgnx-explorer--tails)))
 
+(defvar-local drgnx-explorer--hidden-line nil
+  "On the rows path, the overlay that hides the single root's line, its newline included (`drgnx-explorer--hide-line').")
+
+(defun drgnx-explorer--hide-line (beg eol)
+  "Hide the line of the invisible row from BEG to EOL, its newline too, with one overlay moved to it."
+  (let ((end (min (1+ eol) (point-max))))
+    (if (overlayp drgnx-explorer--hidden-line)
+        (move-overlay drgnx-explorer--hidden-line beg end)
+      (setq drgnx-explorer--hidden-line (make-overlay beg end nil t nil))
+      (overlay-put drgnx-explorer--hidden-line 'invisible t)
+      (overlay-put drgnx-explorer--hidden-line 'evaporate t))))
+
 (defun drgnx-explorer--shown-spans ()
   "Where this buffer's rows get tails: for each window showing it, (FROM . TO) from a page above its start to two pages
 below it; t when no window shows it (every row)."
@@ -1020,10 +1032,14 @@ redrawn row gets a new one; a badge of a row that went is deleted here."
             (progn (when o (delete-overlay o) (remhash key tails))
                    (drgnx-explorer--rows-badge key nil nil))
           (let ((eol (save-excursion (goto-char beg) (pos-eol))))
-            ;; a tail only near what a window shows (as the Lisp listing's fontify made them); the others when scrolled to
-            (if (or (eq spans t) (seq-some (lambda (s) (<= (car s) beg (cdr s))) spans))
-                (drgnx-explorer--rows-tail key beg eol)
-              (when o (delete-overlay o) (remhash key tails)))
+            ;; a tail only near what a window shows (as the Lisp listing's fontify made them); the others when scrolled to.
+            ;; The hidden root's row (invisible text) takes no line: its newline is hidden too, and it has no tail.
+            (if (get-text-property beg 'invisible)
+                (progn (when o (delete-overlay o) (remhash key tails))
+                       (drgnx-explorer--hide-line beg eol))
+              (if (or (eq spans t) (seq-some (lambda (s) (<= (car s) beg (cdr s))) spans))
+                  (drgnx-explorer--rows-tail key beg eol)
+                (when o (delete-overlay o) (remhash key tails))))
             (drgnx-explorer--rows-badge key eol (and (< beg eol) (get-text-property (1- eol) 'drgnx-agents-here)))))))
     (when (> (hash-table-count tails) (drgnx-view-row-count view))
       (maphash (lambda (key o) (unless (overlay-buffer o) (remhash key tails))) tails))

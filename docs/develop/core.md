@@ -2148,7 +2148,9 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   `with-local-quit`), and draws it before returning, so the rows show in the key's own frame as the Lisp listing's
   did; past the limit, and in every timer, hook or follower path, the answer is drawn when it comes. The tail overlays
   (the ⋯ control, the git mark) are made only for rows within a page of what a window shows, the rest when scrolled to
-  (`drgnx-explorer--rows-tails-in`); typing is Sjá's `prefix` over the
+  (`drgnx-explorer--rows-tails-in`). A single root's row takes no line: the hub sends it as bare invisible text (no
+  icon or chevron image, which a `display` property would show even on invisible text), and the Explorer hides its
+  newline with one overlay and gives it no tail (`drgnx-explorer--hide-line`); typing is Sjá's `prefix` over the
   visible siblings; a row's node (`drgnx-explorer-node-at`) is the path over it, so the file commands work as before.
   A key first selects the row at point (a click moved it). Marks are Sjá's ticked set (class `ticked`), Find asks for
   the found files only (`only`), Refresh and a reveal ask again. **A remote root** keeps the Lisp listing
