@@ -374,7 +374,10 @@ pub async fn compare(f: &Front, c: &Caller, p: w::CompareParams) -> Result<w::Co
 fn mode_of(dir: std::os::fd::BorrowedFd<'_>, rel: &str) -> Option<u32> {
     let o = eitri::open_beneath(dir, Path::new(rel), eitri::Kind::File).ok()?;
     let st = rustix::fs::fstat(&o.fd).ok()?;
-    Some(st.st_mode & 0o777)
+    // st_mode is a u16 on macOS
+    #[allow(clippy::useless_conversion)]
+    let mode = u32::from(st.st_mode) & 0o777;
+    Some(mode)
 }
 
 /// `history/take`.
