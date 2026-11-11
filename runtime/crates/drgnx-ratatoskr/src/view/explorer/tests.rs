@@ -123,7 +123,7 @@ fn explorer_tree_joins_open_chains() {
 fn explorer_model_and_rows() {
     let mut reads = Vec::new();
     let got = list(&["/r/lib"], true, &mut reads).unwrap();
-    let doc = explorer_doc(&got, None);
+    let doc = explorer_doc_in(&got, MODEL_WINDOW, None);
     assert_eq!(doc.descriptor["scheme"], "tree");
     assert_eq!(
         doc.lists["order"],
@@ -342,17 +342,20 @@ fn explorer_watch_relists_open_folders_only() {
     let (out, got) = std::sync::mpsc::channel();
     let roots = vec![root.clone()];
     let stop = tx.clone();
+    let listing = |id: u64, expanded: HashSet<String>| Listing {
+        id,
+        roots: roots.clone(),
+        expanded,
+        compact: false,
+        exclude: Exclude::default(),
+    };
+    let first = listing(1, expanded.clone());
+    let (id_out, ids) = std::sync::mpsc::channel();
     let thread = std::thread::spawn(move || {
         let cancel = AtomicBool::new(false);
-        list_and_watch(
-            &roots,
-            &expanded,
-            false,
-            &Exclude::default(),
-            &cancel,
-            (tx, rx),
-            &mut |es, _| out.send(es).is_ok(),
-        );
+        list_and_watch(first, &cancel, (tx, rx), &mut |l, es, _| {
+            id_out.send(l.id).is_ok() && out.send(es).is_ok()
+        });
     });
     let first = next_listing(&got, 10.0).expect("the first listing");
     assert_eq!(
@@ -375,6 +378,21 @@ fn explorer_watch_relists_open_folders_only() {
         None,
         "a closed folder's change sends nothing"
     );
+
+    // a new subscribe of the same view: the same thread lists again with shut/ open (no watch gap), then watches it
+    let both: HashSet<String> = [id(&root.join("open")), id(&root.join("shut"))].into();
+    stop.send(Heard::Relist(Box::new(listing(2, both))))
+        .unwrap();
+    let relisted = next_listing(&got, 5.0).expect("the relisting");
+    assert!(
+        relisted.contains(&id(&root.join("shut").join("hidden.txt"))),
+        "{relisted:?}"
+    );
+    assert_eq!(ids.try_iter().last(), Some(2), "sent as listing 2");
+    let more = root.join("shut").join("more.txt");
+    std::fs::write(&more, "x").unwrap();
+    let seen = next_listing(&got, 5.0).expect("a change in the folder the relisting opened");
+    assert!(seen.contains(&id(&more)), "{seen:?}");
 
     stop.send(Heard::Stop).unwrap();
     let t0 = std::time::Instant::now();

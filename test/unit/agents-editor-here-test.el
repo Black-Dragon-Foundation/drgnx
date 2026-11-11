@@ -10,8 +10,6 @@
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (drgnx-test-modules-preload '(tools/agents-in-editor))
 
-(declare-function drgnx-explorer-add-decorator "drgnx-explorer")
-(declare-function drgnx-explorer-remove-decorator "drgnx-explorer")
 (declare-function drgnx-agents-editor-here--event "drgnx-agents-editor-here")
 (declare-function drgnx-agents-editor-here--user-path "drgnx-agents-editor-here")
 (declare-function drgnx-agents-editor-here-show "drgnx-agents-editor-here")
@@ -26,7 +24,6 @@
 (defvar drgnx-agents-editor-here--status)
 (defvar drgnx-agents-editor-here--tops)
 (defvar drgnx-agents-editor-followed)
-(defvar drgnx-explorer-decorators)
 (defvar drgnx-statusbar-left)
 (defvar drgnx-view-old-path)
 
@@ -76,15 +73,6 @@ yet gets the next ordinal first, as its `agent' snapshot would give it."
         (when (and has (not in)) (cl-incf n))
         (setq in has)))
     n))
-
-(ert-deftest drgnx-explorer/decorators-add-and-remove-cleanly ()
-  (require 'drgnx-explorer)
-  (let ((before drgnx-explorer-decorators))
-    (drgnx-explorer-add-decorator #'ignore)
-    (drgnx-explorer-add-decorator #'ignore)
-    (should (equal (append before '(ignore)) drgnx-explorer-decorators))
-    (drgnx-explorer-remove-decorator #'ignore)
-    (should (equal before drgnx-explorer-decorators))))
 
 (ert-deftest drgnx-agents-editor/agents-here-segment-sits-after-jobs ()
   (let ((before (copy-sequence drgnx-statusbar-left)))

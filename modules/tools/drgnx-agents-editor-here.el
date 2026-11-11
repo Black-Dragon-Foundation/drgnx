@@ -25,8 +25,6 @@
 (require 'drgnx-agent-identity)
 (require 'drgnx-hub-client)
 
-(declare-function drgnx-explorer-add-decorator "drgnx-explorer")
-(declare-function drgnx-explorer-remove-decorator "drgnx-explorer")
 (declare-function drgnx-statusbar-define-segment "drgnx-statusbar")
 (declare-function drgnx-work-space-workspace "drgnx-work-space")
 (declare-function drgnx-work-code--session "drgnx-work-code")
@@ -186,9 +184,7 @@ root is itself; a file in a linked worktree lands at its relative path in the ma
     (setq drgnx-agents-editor-here--rows (sort rows (lambda (a b) (< (nth 1 a) (nth 1 b)))))
     (setq drgnx-agents-editor-here--status
           (drgnx-agents-editor-here--status-of (mapcar (lambda (s) (cons s (drgnx-agents-editor-here--ordinal s))) sessions)))
-    (force-mode-line-update t)
-    (when (fboundp 'drgnx-explorer-add-decorator)
-      (drgnx-explorer-add-decorator #'drgnx-agents-editor-here--decorate))))
+    (force-mode-line-update t)))
 
 (defun drgnx-agents-editor-here--status-of (agents)
   "The status segment's string for AGENTS ((SESSION . ORDINAL)...): their marks by ordinal, eight then \"+N\"; nil for
@@ -199,20 +195,12 @@ none."
       (concat (mapconcat (lambda (a) (drgnx-agents-editor-here--mark (cdr a) (car a))) shown " ")
               (if (> more 0) (format " +%d" more) "")))))
 
-;;;; The Explorer decorator and the status segment
+;;;; The Explorer badge and the status segment
 
 (defun drgnx-agents-editor-here--explorer-badge (ordinals dirp)
   "`drgnx-explorer-badge-functions': the badge of the agents ORDINALS on an Explorer row of the hub's (DIRP: a
 folder, six marks; a file: three, each with its agent's initial)."
   (drgnx-agents-editor-here--badge ordinals (if dirp 6 3) (not dirp)))
-
-(defun drgnx-agents-editor-here--decorate (_bol eol path _dirp _name-start)
-  "The Explorer decorator: the row's badge, from the cache, in an overlay the row's next paint removes."
-  (when-let* ((s (gethash (directory-file-name path) drgnx-agents-editor-here--badges)))
-    (let ((o (make-overlay eol eol)))
-      (overlay-put o 'drgnx-git t)
-      (overlay-put o 'priority 5)
-      (overlay-put o 'before-string s))))
 
 (defun drgnx-agents-editor-here--segment ()
   "The `agents-here' segment: the marks of the agents in this project."
@@ -480,9 +468,7 @@ agent's row is among them, the agents and the status segment; a reset makes ever
           (drgnx-agents-editor-here--agents-from h)))
       (dolist (k keys)
         (when (string-prefix-p "p:" k) (drgnx-agents-editor-here--path-badge h k)))
-      (force-mode-line-update t)
-      (when (fboundp 'drgnx-explorer-add-decorator)
-        (drgnx-explorer-add-decorator #'drgnx-agents-editor-here--decorate)))))
+      (force-mode-line-update t))))
 
 ;;;; Setup
 
@@ -515,7 +501,6 @@ agent's row is among them, the agents and the status segment; a reset makes ever
                    (agents-here-quit "Close Who Is Here" drgnx-agents-here-quit "Close the list of the agents here")))
     (drgnx-command-define id :category "Agents" :title title :command fn :doc doc
                           :map 'drgnx-agents-here-mode-map :when (lambda () (derived-mode-p 'drgnx-agents-here-mode))))
-  (eval-after-load 'drgnx-explorer (drgnx-modules-with-owner (drgnx-explorer-add-decorator #'drgnx-agents-editor-here--decorate)))
   (add-hook 'drgnx-explorer-badge-functions #'drgnx-agents-editor-here--explorer-badge)
   (eval-after-load 'drgnx-statusbar
     (drgnx-modules-with-owner
@@ -527,8 +512,6 @@ agent's row is among them, the agents and the status segment; a reset makes ever
 
 (defun drgnx-agents-editor-here-teardown ()
   "Take the badges out of the Explorer and forget the cached presence."
-  (when (fboundp 'drgnx-explorer-remove-decorator)
-    (drgnx-explorer-remove-decorator #'drgnx-agents-editor-here--decorate))
   (remove-hook 'drgnx-explorer-badge-functions #'drgnx-agents-editor-here--explorer-badge)
   (clrhash drgnx-agents-editor-here--files)
   (clrhash drgnx-agents-editor-here--badges)

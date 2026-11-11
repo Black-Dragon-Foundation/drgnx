@@ -2130,7 +2130,8 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   `(:view V :clear t)` for none, once the selection has been still for `drgnx-view-delay`, and at most once per
   `drgnx-view-delay` while a key is held (`drgnx-timer-soon`, owned by the buffer).
 - **Windows:** a list longer than the hub sends whole is a window of it (`{name, ids, total, from}`): a trail past
-  500 steps (`steps`, its last ones), a search or an Explorer past 20,000 entries (`order`, its first ones). A key
+  500 steps (`steps`, its last ones), a search past 20,000 entries or an Explorer past `drgnx-explorer-rows-window`
+  (150; its rows too, and a scroll near their ends moves it) (`order`, its first ones). A key
   that stops at the window's edge gets `(ID . more)` from Sjá (`walk`, `walk-to`, and a `follow` whose link names a
   direction). The view then asks the hub for the window a step past that edge (half the window, at most
   `drgnx-view-nav-window-step`, 2,000: a page costs what it adds), or for a `walk-to` the window centred on its
@@ -2151,15 +2152,27 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
 - Tests: `test/unit/view-nav-test.el` (the class on the card, a replaced row in every order of patch, draw and key,
   a held key's notices on the test clock, the clear notice, the hook on a move only, the broken view; `test/unit/work-trail-nav-test.el`: a 2,000-step trail
   paging at its edge with a held key).
-- **The Explorer on the rows path** (`drgnx-explorer-rows-attach VIEW CLASS`): the hub lists the roots and the open
-  folders (`explorer/subscribe`, hub.md, asked on the subscribed connection `drgnx-hub--events`, where its env went) and its
-  jit-lock painting is off. Next and previous follow `down` and `up`,
-  expand on an open folder follows `right` and collapse on anything but an open folder `left`; opening or closing a
-  folder changes `drgnx-explorer--expanded` and asks the hub again without waiting; typing is Sjá's `prefix` over the
+- **The Explorer is the hub's view** (`drgnx-explorer-rows-attach VIEW CLASS`, made by `drgnx-explorer--use-path` when
+  the buffer opens or the roots change; the view is `drgnx-explorer-hub-view-name`): the hub lists the roots and the
+  open folders (`explorer/subscribe`, hub.md, asked on the subscribed connection `drgnx-hub--events`, where its env
+  went), watches them, and draws the rows with their icons, git marks and who-is-here ordinals; the jit-lock painting is
+  off. With the hub not up yet the buffer shows a line saying it waits (`drgnx-explorer--waiting`) and fills when the
+  hub connects (the env's reconnect subscribes again); nothing is listed in Lisp. Next and previous follow `down` and
+  `up`, expand on an open folder follows `right` and collapse on anything but an open folder `left`; opening or closing
+  a folder changes `drgnx-explorer--expanded` and asks the hub again. In the user's commands that open, close or
+  reveal (`drgnx-explorer--await` bound: expand, collapse, toggle, open, a click, the Buffers view's reveal) the command
+  then reads the subscribed connection alone for the answer, at most `drgnx-explorer-await-limit` (12 ms,
+  `with-local-quit`), and draws it before returning, so the rows show in the key's own frame as the Lisp listing's
+  did; past the limit, and in every timer, hook or follower path, the answer is drawn when it comes. The tail overlays
+  (the ⋯ control, the git mark) are made only for rows within a page of what a window shows, the rest when scrolled to
+  (`drgnx-explorer--rows-tails-in`); typing is Sjá's `prefix` over the
   visible siblings; a row's node (`drgnx-explorer-node-at`) is the path over it, so the file commands work as before.
-  A key first selects the row at point (a click moved it). The folder watches stay the Explorer's: an event asks the
-  hub again, as do Refresh and a reveal (which opens the file's folders). Find, icons, git letters and multi-select are
-  drawn only off this path, so the Explorer does not attach itself yet. Tests: `test/unit/explorer-rows-nav-test.el`.
+  A key first selects the row at point (a click moved it). Marks are Sjá's ticked set (class `ticked`), Find asks for
+  the found files only (`only`), Refresh and a reveal ask again. **A remote root** keeps the Lisp listing
+  (`drgnx-explorer--render-old` and its painting, frozen; the hub lists local folders only): with one among the roots
+  the Explorer detaches (`drgnx-explorer--rows-detach`) and lists in Lisp until the roots are local again. The Lisp
+  listing's tests set `drgnx-explorer--lisp-listing` to run it on local folders. Tests:
+  `test/unit/explorer-rows-nav-test.el`.
 
 ## Modal core (`drgnx-modal.el`)
 

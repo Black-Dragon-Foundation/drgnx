@@ -7,6 +7,7 @@
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 (require 'drgnx-explorer)
+(setq drgnx-explorer--lisp-listing t)       ; the Lisp listing (a remote root's, plan sja-complete Q3): on local folders here
 (require 'drgnx-timer)
 
 (defun drgnx-explorer-test--tree (root paths)
