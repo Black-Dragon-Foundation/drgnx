@@ -57,6 +57,16 @@ In the VS Code key profile: F5, F9, F10, F11 (Step Into while a session runs —
 Emacs and Vim profiles reach them in the palette. dape's windows (scopes, stack, breakpoints, the REPL) open on the
 right, so the panel stays the workbench's. Module `extra/debug`, package `dape`.
 
+Breakpoints live in a column left of the line numbers, kept per project (they survive restarts and reach a running
+session at once). Click the column to add or remove one, shift-click for a logpoint (a message printed instead of
+a stop; `{expression}` is replaced by its value), right-click for the line's menu: a condition, a hit count, a log
+message, enable or disable, and Run to Cursor while a session runs. The dot is red when an adapter bound it, grey
+before, hollow when disabled; a dot with two bars has a condition, a diamond is a logpoint. A line you move by
+editing keeps its breakpoint, which takes the new line when you save. `drgnx-debug-gutter-show` chooses when the
+column shows (`auto`: while the file has breakpoints or a session runs). Keys: VS Code F9 and C-F10 (Run to Cursor);
+Emacs `C-x C-a` and `C-b` (toggle), `C-c` (condition), `C-l` (logpoint), `C-e` (enable), `C-u` (Run to Cursor), as
+GUD has them; Vim `SPC d` and `b`, `B`, `l`, `e`, `c`.
+
 ## Indent guides
 
 Thin vertical guides at each indentation level of code and YAML, on graphical frames, drawn by indent-bars (stipples,

@@ -32,6 +32,7 @@
 (require 'drgnx-large-file)             ; a large file: Replace needs it whole (lean), never asks; skips chunks and raw
 (require 'drgnx-no-prompt)              ; the saves of the hub's writes ask nothing
 (require 'drgnx-ui-kit)                 ; the sheet's buttons
+(require 'drgnx-color)                  ; the sheet's hunk card: the colour beneath it
 ;; Edit Results: the results as an editable buffer, on the same write path
 (unless (featurep 'drgnx-search-edit)
   (load (expand-file-name "drgnx-search-edit" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -465,6 +466,10 @@ matches of the new run in `search-run-done', which are unticked again.")
 (defvar-local drgnx-replace--kinds-on nil "The kind chips on (KIND symbols): the Symbol search's `kinds'.")
 (defvar-local drgnx-replace--kind-counts nil
   "The last Symbol search's definitions per kind, a plist (:fn 2 :macro 1…), before the chips' filter.")
+(defun drgnx-replace--kind-plist (kinds)
+  "KINDS, `search-run-done''s list of (:kind K :count N), as a plist (:fn 2 :macro 1…); nil for none."
+  (mapcan (lambda (k) (list (intern (concat ":" (plist-get k :kind))) (plist-get k :count))) (append kinds nil)))
+
 (defvar-local drgnx-replace--status-end nil "Marker: the status line's end.")
 (defvar-local drgnx-replace--lists-beg nil "Marker: the lists' start (pinned counts; saved and recent searches).")
 (defvar-local drgnx-replace--lists-end nil "Marker: the lists' end.")
@@ -2078,7 +2083,7 @@ the matches the user had unticked before it (`:off'); `search-apply' and `search
                 drgnx-replace--hub-counts (cons (or (plist-get data :files) 0) (or (plist-get data :matches) 0)))
           (when-let* ((err (plist-get data :error))) (setq drgnx-replace--status (format "%s" err)))
           (setq drgnx-replace--scope-done (plist-get data :scope)
-                drgnx-replace--kind-counts (plist-get data :kinds))
+                drgnx-replace--kind-counts (drgnx-replace--kind-plist (plist-get data :kinds)))
           (drgnx-replace--apply-scope)
           (drgnx-replace--hub-listed)
           (drgnx-replace--watch)
@@ -3027,6 +3032,9 @@ index, :hunk its first hunk's diff text when it came, :captures that hunk's grou
   ;; its foot says what it is and what ends it; the selected file's ring shows where you are (no cursor)
   (setq-local truncate-lines t mode-line-format nil cursor-type nil)
   (face-remap-add-relative 'default 'drgnx-surface-overlay)   ; a popup's surface, as the palette's
+  (add-hook 'kill-buffer-hook #'drgnx-replace--sheet-unblock nil t)
+  (add-hook 'enable-theme-functions #'drgnx-replace--sheet-theme-changed)
+  (add-hook 'disable-theme-functions #'drgnx-replace--sheet-theme-changed)
   (buffer-disable-undo))
 
 (defconst drgnx-replace-sheet-buffer-name "*drgnx replace all*")
@@ -3048,7 +3056,8 @@ index, :hunk its first hunk's diff text when it came, :captures that hunk's grou
                                        :skipped (append (plist-get answer :skipped) nil) :sel 0))
       (drgnx-replace--sheet-draw)
       (drgnx-replace--sheet-hunk))
-    (pop-to-buffer buf)))
+    (pop-to-buffer buf)
+    (with-current-buffer buf (drgnx-replace--sheet-blocks))))
 
 (defun drgnx-replace--sheet-name (f)
   "The sheet's name of file F: relative to the Search view's folder."
@@ -3085,7 +3094,9 @@ Further when the selected file's hunk (shown under it) has a wider line: the cod
             (drgnx-px 32)
             (apply #'max (funcall px (drgnx-replace--sheet-buttons))
                    (mapcar (lambda (f) (funcall px (drgnx-replace--sheet-tail f skipped))) files)))
-         (if h (funcall px (drgnx-replace--hunk-lines (drgnx-replace--gap 40) h 'drgnx-replace-sheet-code nil t)) 0))))
+         (if h (+ (funcall px (drgnx-replace--hunk-lines (drgnx-replace--gap 44) h 'drgnx-replace-sheet-code nil t))
+                  (drgnx-px 4))
+           0))))
 
 (defun drgnx-replace--sheet-at-edge (edge text)
   "TEXT ending at EDGE pixels (`drgnx-replace--sheet-edge'): a stretch space before it."
@@ -3131,12 +3142,14 @@ why, what Undo does, Cancel and Replace)."
           (concat (drgnx-replace--gap 6)
                   (propertize " " 'display `(space :width (0) :height (,(drgnx-px 30)) :ascent 63))
                   row "\n"
-                  ;; the hunk under the file's name (the mockup's `.sheet .hunk', 40 px in)
-                  (if h (concat (drgnx-replace--hunk-lines (drgnx-replace--gap 40) h 'drgnx-replace-sheet-code nil t
-                                                           ;; the tints end with the rows' ring
-                                                           (list (+ edge (drgnx-px 8))))
-                                (drgnx-replace--groups-line (concat (drgnx-replace--gap 40) "      ")
-                                                            (plist-get s :captures)))
+                  ;; the hunk under the file's name in its card (the mockup's `.sheet .hunk1': 40 px in, ringed by
+                  ;; Glitnir, `drgnx-replace--sheet-block'), its lines' tints 4 px inside the card
+                  (if h (propertize
+                         (concat (drgnx-replace--hunk-lines (drgnx-replace--gap 44) h 'drgnx-replace-sheet-code nil t
+                                                            (list (- edge (drgnx-px 4))))
+                                 (drgnx-replace--groups-line (concat (drgnx-replace--gap 44) "      ")
+                                                             (plist-get s :captures)))
+                         'drgnx-replace-sheet-hunk t)
                     ""))
           'drgnx-replace-sheet-file i)))
       (`(:foot)
@@ -3169,9 +3182,63 @@ why, what Undo does, Cancel and Replace)."
                                                 collect (list :file i))
                                        '((:foot))))
   (drgnx-view-draw-now drgnx-view)
+  (drgnx-replace--sheet-blocks)
   (goto-char (point-min))
   (when (text-property-search-forward 'drgnx-replace-sheet-file (plist-get drgnx-replace--sheet :sel) #'eql)
     (goto-char (line-beginning-position 0))))
+
+;; The hunk's card: a Glitnir block ring (`glitnir-blocks', Nidhogg's `glitnir.el') around the hunk's rows, 40 px in
+;; to the files' edge, radius 6, in `drgnx-border-subtle', its corners outside the rounded path in the sheet's surface.
+;; A box could not draw it: a box is one row high, and the lines' tints have boxes of their own.  The window parameter
+;; is set only when the card changed (a hunk, a width, the theme), never per redisplay.
+
+(defvar-local drgnx-replace--sheet-block nil "The sheet's hunk card as it was last set (`glitnir-blocks'), or nil.")
+(defvar-local drgnx-replace--sheet-block-key nil
+  "`drgnx-replace--sheet-block' with positions for its markers, as last computed: what a redraw compares.")
+
+(defun drgnx-replace--sheet-block-spec ()
+  "The sheet's hunk card as a `glitnir-blocks' value with positions (no markers yet), or nil without a hunk."
+  (save-excursion
+    (goto-char (point-min))
+    (when-let* ((m (text-property-search-forward 'drgnx-replace-sheet-hunk t t))
+                (bg (drgnx-color-rgb (face-background 'drgnx-surface-overlay nil t))))
+      (let ((s drgnx-replace--sheet))
+        `((ring ,(prop-match-beginning m) ,(prop-match-end m)
+                :x0 ,(drgnx-px 40) :x1 ,(drgnx-replace--sheet-edge (plist-get s :files) (plist-get s :skipped))
+                :radius ,(drgnx-px 6) :ring drgnx-border-subtle
+                ;; the colour under the card: the sheet's surface (its `default' is remapped to it)
+                :beneath ,(drgnx-color-hex bg)))))))
+
+(defun drgnx-replace--sheet-blocks ()
+  "Give the windows showing the sheet its hunk card, when it changed.  A redraw that gives the same card (it inserts
+the text again, so the markers collapsed) only puts its markers back: the window parameter stays the same object."
+  (let ((key (drgnx-replace--sheet-block-spec)))
+    (if (equal key drgnx-replace--sheet-block-key)
+        (cl-loop for b in drgnx-replace--sheet-block for k in key
+                 do (set-marker (nth 1 b) (nth 1 k)) (set-marker (nth 2 b) (nth 2 k)))
+      (dolist (b drgnx-replace--sheet-block) (set-marker (nth 1 b) nil) (set-marker (nth 2 b) nil))
+      (setq drgnx-replace--sheet-block-key key
+            drgnx-replace--sheet-block
+            (mapcar (lambda (k) (append (list (car k) (copy-marker (nth 1 k)) (copy-marker (nth 2 k))) (nthcdr 3 k)))
+                    key)))
+    (dolist (w (get-buffer-window-list (current-buffer) nil t))
+      (unless (eq (window-parameter w 'glitnir-blocks) drgnx-replace--sheet-block)
+        (set-window-parameter w 'glitnir-blocks drgnx-replace--sheet-block)))))
+
+(defun drgnx-replace--sheet-theme-changed (&optional _theme)
+  "A theme changed: the sheet's card takes its colours again."
+  (when-let* ((b (get-buffer drgnx-replace-sheet-buffer-name)))
+    (with-current-buffer b
+      (when (derived-mode-p 'drgnx-replace-sheet-mode)
+        (drgnx-replace--sheet-blocks)))))
+
+(defun drgnx-replace--sheet-unblock ()
+  "The sheet goes (`kill-buffer-hook'): no window keeps its card."
+  (let ((card drgnx-replace--sheet-block))
+    (when card
+      (walk-windows (lambda (w) (when (eq (window-parameter w 'glitnir-blocks) card)
+                                  (set-window-parameter w 'glitnir-blocks nil)))
+                    nil t))))
 
 (defun drgnx-replace--sheet-button (label id face)
   "LABEL as a button in FACE running registry command ID, its key after the label as one chip (`Ctrl ↵')."

@@ -35,6 +35,22 @@ pub(super) type Batch = (String, Vec<Match>, Vec<Option<Mark>>);
 /// A Symbol search's definitions' counts per kind ([`kind_class`]).
 pub(super) type KindCounts = BTreeMap<String, u64>;
 
+/// The kind chips in the order the view draws them, then `other`.
+const KIND_ORDER: [&str; 5] = ["fn", "macro", "var", "type", "other"];
+
+/// COUNTS as `search-run-done`'s `kinds`: a list in the chips' order (the wire takes no map keyed by data).
+pub(super) fn kind_list(counts: &KindCounts) -> Vec<runstav::methods::search::KindCount> {
+    KIND_ORDER
+        .iter()
+        .filter_map(|k| {
+            counts.get(*k).map(|n| runstav::methods::search::KindCount {
+                kind: (*k).to_owned(),
+                count: *n,
+            })
+        })
+        .collect()
+}
+
 /// The kind chip a definition of Hrafn's KIND falls under: `fn`, `type`, `macro`, `var`, else `other` (the groups of
 /// the rows' kind icons).
 pub(super) fn kind_class(kind: &str) -> &'static str {
@@ -350,6 +366,19 @@ mod tests {
         assert_eq!(
             counts,
             KindCounts::from([("fn".into(), 1), ("macro".into(), 1)])
+        );
+        let wire: Vec<(String, u64)> = kind_list(&KindCounts::from([
+            ("type".into(), 2),
+            ("fn".into(), 1),
+            ("macro".into(), 3),
+        ]))
+        .into_iter()
+        .map(|k| (k.kind, k.count))
+        .collect();
+        assert_eq!(
+            wire,
+            [("fn".into(), 1), ("macro".into(), 3), ("type".into(), 2)],
+            "in the chips' order"
         );
         let line_of = |_: &str, _: u32| Some("parse".to_string());
         let files = |kinds: &[String]| -> Vec<String> {

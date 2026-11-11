@@ -153,7 +153,8 @@ anything is written.
 
 **Replace All** first shows the **Replace All sheet**, a box in the middle of the window (the popup lane, modal): every
 file with its lines added and removed
-and how many of its matches are skipped, the selected file (in a thin ring) and its first hunk, its changed lines, which
+and how many of its matches are skipped, the selected file (in a thin ring) and its first hunk's changed lines in a
+rounded card of their own (Nidhogg draws the card around the hunk's rows; elsewhere the lines show without it), which
 the ring is as wide as (`n`/`p` or the arrows move), what is skipped
 and why, and how many files with unsaved edits stay unsaved. **Replace** writes exactly the changes the sheet shows (the
 hub's change set); **Cancel** writes nothing. The setting `drgnx-search-preview-threshold` (default 1) is how many
