@@ -30,7 +30,8 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | explorer | focus the Explorer, 10 rows down (each one moves), back. On the hub's rows a key costs 3286 objects (p50; the Lisp listing's 2509): Sjá's navigation hands back fresh Lisp values each key (the selection's id, the class changes) and the selected row's tail is drawn again in the selection's face | input latency |
 | agent-typing | typing while an agent streams a reply (the Agents list is shown): a `ratatoskr-mock acp` in a Ratatoskr hub, the editor's session a mirror of the hub's (see "The agent workloads" below); the turn takes three seconds (checked: its `stop` entry is not in the mirror yet at the end) | input latency |
 | code-scrolling | `<next>`×30 then `<prior>`×30 through the 12k-line fixture with sticky scroll and indent guides (when installed) on — smooth scrolling is on but pixel scrolling is a wheel's, not `<next>`'s | input latency |
-| debug-gutter-scroll | as code-scrolling, with the breakpoint column on and 300 breakpoints of every kind and the hover pool laid out (the hub answered by a store in the session) | input latency |
+| debug-gutter-scroll | as code-scrolling (without sticky scroll and guides), hunks' margin claimed (a file that shows hunks), with the breakpoint column on and 300 breakpoints of every kind and the hover pool laid out (the hub answered by a store in the session) | input latency; p50 at most 5 % over debug-gutter-baseline in the same run (`drgnx-perf-run--relative-fails`, judged when both ran) |
+| debug-gutter-baseline | the same file and keys with hunks' margin and the breakpoint column claimed and empty, the column off: what a user sees when a session starts in a file that shows hunks (see "The breakpoint column's margin" below) | — (the 5 % rule's base) |
 | debug-breakpoint-click | F9 then `<down>`, 20 times: each a `debug/breakpoints` add answered at once and the column redrawn | input latency |
 | diff-scrolling | `<next>`×30 then `<prior>`×30 through a 10k-line diff in the split layout | input latency |
 | typing-with-ghost | the typing workload with ghost text on: a mock model answers every pause at once, the pause shortened to 10 ms so each key asks and the next cancels (checked: it asked) | input latency |
@@ -181,6 +182,29 @@ Only the budgets of the workloads that ran are judged, and such a run is not wri
 filter every budget is judged: a budget whose workload did not run is reported as "not measured" (the one exception:
 the three `-evil` rows when `DRGNX_MODAL_ELPA` is unset). Naming `typing-evil` without `typing` skips the 1 ms rule
 and the run says so; a filter that is not a valid regexp, or matches no workload, stops the run with a message.
+
+## The breakpoint column's margin
+
+The breakpoint column is a margin column of its own (`drgnx-margins-claim 'debug`, order 0), beside hunks' (order 2),
+not a share of it. So `debug-gutter-scroll` is judged against `debug-gutter-baseline`, a scroll with hunks' column and
+an empty breakpoint column claimed: the cost of the column's contents, not of a wider margin. Measured facts
+(2026-11-12, pinned runs on the desktop's perf island, p50 of 60 keys, three runs):
+
+| row | input p50 | alloc p50 |
+|---|---|---|
+| code-scrolling (no margin) | 4.1–4.2 ms | 3608 |
+| debug-gutter-baseline (margin claimed, empty) | 4.1–4.2 ms | 3608 |
+| debug-gutter-scroll (300 marks, hover pool) | 4.4 ms | 3708 |
+
+- Claiming the margin costs nothing measurable on this machine. On the laptop's island (a scroll frame of ~9 ms) an
+  earlier measurement put it at 0.4–0.5 ms; profiles showed no Lisp frames, only more time in `redisplay_internal`
+  (the margin's glyph rows). It is inside the frame budget; nobody owns a margin fix.
+- The hover pool (a dot string on each shown line without a mark, so a hover can show it) cost ~1 ms a frame on the
+  laptop when it moved with each scroll: ~50 margin strings drawn again, and inheriting `drgnx-ui-text` (the UI font)
+  in the dot allocated ~4.9k objects a frame. A scrolled window now drops its dots and lays them again once it has
+  rested 0.1 s (`drgnx-debug-gutter--settle`): unseen at rest anyway.
+- What is left, 0.2 ms (5–7 %), is the marks themselves on the shown lines. The relative rule judges p50s, which
+  this table's 0.1 ms resolution puts at the rule's edge.
 
 ## Budgets
 

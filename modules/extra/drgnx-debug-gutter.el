@@ -216,6 +216,7 @@ remaps and the pad by `eq', so a redisplay that changes none of them reads no fa
   "Take WINDOW's hover dots out (all windows' when nil)."
   (dolist (cell drgnx-debug-gutter--pool)
     (when (or (null window) (eq (car cell) window))
+      (drgnx-timer-cancel (cons 'debug-hover (car cell)))
       (mapc #'delete-overlay (cddr cell))))
   (setq drgnx-debug-gutter--pool
         (and window (seq-remove (lambda (cell) (eq (car cell) window)) drgnx-debug-gutter--pool))))
@@ -253,9 +254,28 @@ reuse the overlays OLD, make more as needed, delete those left.  The new overlay
     (mapc #'delete-overlay old)
     (nreverse new)))
 
-(defun drgnx-debug-gutter--pool-update (window)
+(defconst drgnx-debug-gutter--settle 0.1
+  "Seconds a scrolled window rests before its hover dots come back on the lines it shows.  The scroll's own frames
+draw none: fifty margin strings cost a full redraw about a millisecond (perf rows `debug-gutter-scroll' and
+`debug-gutter-baseline'), and at rest the dots are unseen anyway.")
+
+(defun drgnx-debug-gutter--pool-moved-p (key window string)
+  "Whether KEY differs from WINDOW and STRING only in WINDOW's start or height (it scrolled or was resized)."
+  (and key
+       (eql (aref key 2) (buffer-chars-modified-tick)) (eql (aref key 3) drgnx-debug-gutter--version)
+       (eql (aref key 4) (length drgnx-debug-gutter--overlays)) (eq (aref key 5) string)
+       (not (and (eql (aref key 0) (window-start window)) (eql (aref key 1) (window-body-height window))))))
+
+(defun drgnx-debug-gutter--pool-settle (window buffer)
+  "The settle timer: lay WINDOW's dots in BUFFER now."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (drgnx-debug-gutter--pool-update window t))))
+
+(defun drgnx-debug-gutter--pool-update (window &optional now)
   "`pre-redisplay-functions' and `window-scroll-functions': lay WINDOW's hover dots over its shown lines when its start,
-height, the text or the marks changed; take the dots of windows that no longer show the buffer out."
+height, the text or the marks changed; take the dots of windows that no longer show the buffer out.  A window that
+only scrolled gets them once it has rested `drgnx-debug-gutter--settle' seconds, unless NOW."
   (dolist (cell drgnx-debug-gutter--pool)
     (unless (and (window-live-p (car cell)) (eq (window-buffer (car cell)) (current-buffer)))
       (drgnx-debug-gutter--pool-clear (car cell))))
@@ -266,13 +286,25 @@ height, the text or the marks changed; take the dots of windows that no longer s
       (if (not string)
           (when (assq window drgnx-debug-gutter--pool) (drgnx-debug-gutter--pool-clear window))
         (let ((cell (assq window drgnx-debug-gutter--pool)))
-          (unless (and cell (drgnx-debug-gutter--pool-key-p (cadr cell) window string))
+          (cond
+           ((and cell (drgnx-debug-gutter--pool-key-p (cadr cell) window string)))
+           ((and cell (not now) (drgnx-debug-gutter--pool-moved-p (cadr cell) window string))
+            ;; the dots it showed go (they would sit on the wrong lines and cost each frame), and the key no
+            ;; longer matches any start, so a window scrolled back still waits to settle
+            (when (cddr cell)
+              (mapc #'delete-overlay (cddr cell))
+              (setcdr (cdr cell) nil)
+              (aset (cadr cell) 0 nil))
+            (drgnx-timer-debounce (cons 'debug-hover window) drgnx-debug-gutter--settle
+                                  #'drgnx-debug-gutter--pool-settle :args (list window (current-buffer))
+                                  :owner (current-buffer)))
+           (t
             (let ((overlays (drgnx-debug-gutter--pool-lay window string (cddr cell)))
                   (key (vector (window-start window) (window-body-height window) (buffer-chars-modified-tick)
                                drgnx-debug-gutter--version (length drgnx-debug-gutter--overlays) string)))
               (if cell
                   (setcdr cell (cons key overlays))
-                (push (cons window (cons key overlays)) drgnx-debug-gutter--pool)))))))))
+                (push (cons window (cons key overlays)) drgnx-debug-gutter--pool))))))))))
 
 (defun drgnx-debug-gutter--pool-scrolled (window _start)
   "`window-scroll-functions': WINDOW scrolled; its dots follow."

@@ -254,7 +254,9 @@ only).
   character in the UI font (its `●` is the mockup's 10 px; the code font's is 8), in the margin's own background (`default` as the buffer remaps it) with a `mouse-face` of
   `drgnx-debug-hover` at 38 % over it, both through `drgnx-color`. The strings sit on a pool of overlays per window (the
   overlay's `window`), laid out from `pre-redisplay-functions` and `window-scroll-functions` when the window's start or
-  height, the text or the marks changed; folded lines and lines with a mark are skipped. Only on a graphical frame of a
+  height, the text or the marks changed; folded lines and lines with a mark are skipped. A window that only scrolled
+  or was resized drops its dots and lays them again once it has rested 0.1 s (`drgnx-debug-gutter--settle`): drawn on
+  every scroll frame they cost ~10 % of it (docs/develop/perf.md, "The breakpoint column's margin"). Only on a graphical frame of a
   Nidhogg that lights a margin's `mouse-face` (feature `glitnir-margin-mouse-face`); elsewhere there is no pool.
 
 The module's global `drgnx-debug-mode` (turned on by `extra/debug`'s setup, off by its teardown) turns the column on

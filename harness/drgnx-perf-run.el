@@ -1285,10 +1285,21 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                       "   (mapcar (lambda (i) (list :id i :line (* 40 i) :enabled (/= 0 (% i 5)) :verified (/= 0 (% i 7))"
                       "                             :condition (and (= 0 (% i 3)) \"x > 1\") :log (and (= 0 (% i 11)) \"{x}\")))"
                       "           (number-sequence 1 300))))"
-                      " (drgnx-debug-gutter-mode 1) t)")
+                      " (drgnx-margins-claim 'hunks 1 :order 2) (drgnx-debug-gutter-mode 1) t)")   ; a file showing hunks
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
-       :check "(with-current-buffer (window-buffer) (and (= 300 (length drgnx-debug-gutter--overlays)) (seq-some (lambda (o) (overlay-get o 'drgnx-debug-hover)) (overlays-in (window-start) (window-end))) t))"   ; the marks and the hover pool were drawn
+       :check "(with-current-buffer (window-buffer) (and (= 300 (length drgnx-debug-gutter--overlays)) (assq (selected-window) drgnx-debug-gutter--pool) t))"   ; the marks were placed and the hover pool was laid
        :teardown ,(concat "(progn (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
+      ;; debug-gutter-scroll's baseline: the same file and keys with hunks' margin (its one column) and the breakpoint
+      ;; column claimed and empty, the column's mode off.  What the column adds is judged against this (at most 5 %,
+      ;; `drgnx-perf-run--relative-fails'): a session starting in a file that already shows hunks
+      (debug-gutter-baseline
+       :setup ,(drgnx-perf-run--debug-setup-form)
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
+                      " (drgnx-margins-claim 'hunks 1 :order 2)"
+                      " (drgnx-margins-claim 'debug (drgnx-debug-gutter--columns) :order 0) t)")
+       :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
+       :check "(with-current-buffer (window-buffer) (and (drgnx-margins-offset 'debug) (drgnx-margins-offset 'hunks) (not drgnx-debug-gutter-mode) t))"   ; both claimed, nothing drawn
+       :teardown ,(concat "(progn " kill-fixture " (drgnx-perf--debug-stop) t)"))
       ;; F9 on 20 lines in a row: each key a `debug/breakpoints' add, its answer and the column redrawn
       (debug-breakpoint-click
        :setup ,(drgnx-perf-run--debug-setup-form)
@@ -1651,15 +1662,24 @@ under :compose (the compose probe)."
                        :teardown ,(drgnx-perf-run--modal-teardown-form "(drgnx-perf--hub-stop)"))))))
 
 (defun drgnx-perf-run--relative-fails (results)
-  "Lines: `typing-evil' input p95 more than 1 ms over `typing' in the same RESULTS (both measured)."
+  "Lines: `typing-evil' input p95 more than 1 ms over `typing' in the same RESULTS (both measured), and the other
+pairs below, each judged only when both sides were measured."
   (let ((plain (drgnx-perf--get results 'typing '(:input :p95)))
         (evil (drgnx-perf--get results 'typing-evil '(:input :p95)))
         (hidden (drgnx-perf--get results 'work-typing-hidden '(:input :p95)))
         (shown (drgnx-perf--get results 'work-typing-shown '(:input :p95)))
         (agents (drgnx-perf--get results 'agents-typing '(:input :p95)))
         (agents-none (drgnx-perf--get results 'agents-typing-none '(:input :p95)))
-        (ratio (drgnx-perf--get results 'pair-typing '(:pair_applied_ratio))))
+        (ratio (drgnx-perf--get results 'pair-typing '(:pair_applied_ratio)))
+        (gutter (drgnx-perf--get results 'debug-gutter-scroll '(:input :p50)))
+        (gutter-base (drgnx-perf--get results 'debug-gutter-baseline '(:input :p50))))
     (append
+     ;; the breakpoint column: at most 5 % over the same scroll with its margin (and hunks') claimed and empty (p50s:
+     ;; 60 keys are too few for a steady p95)
+     (when (and (numberp gutter) (numberp gutter-base) (> gutter (* 1.05 gutter-base)))
+       (list (format "debug-gutter-scroll input p50 %s ms is %s%% over debug-gutter-baseline's %s ms (the column may add at most 5 %%)"
+                     (drgnx-perf--round gutter) (round (* 100 (- (/ gutter gutter-base) 1)))
+                     (drgnx-perf--round gutter-base))))
      ;; the agents in the editor: at most 1 ms over the same five agents with the module off; of the paired chat's writes at
      ;; least 80 % were applied by the editor
      (when (and (numberp agents) (numberp agents-none) (> (- agents agents-none) 1.0))
@@ -1926,7 +1946,7 @@ version and the commit, as JSON in FILE."
                                 terminal-backfill terminal-flood))
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "graphical debugging: its allocation, CPU and rows are set from three pinned runs on the desktop island (the plan's perf step)"))
-              '(debug-gutter-scroll debug-breakpoint-click))
+              '(debug-gutter-scroll debug-gutter-baseline debug-breakpoint-click))
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))
     ,@(mapcar (lambda (w) (cons w "the Work space's rows are time budgets on the desktop island (typing p95 and the relative +1 ms rules); allocation, CPU and rows follow once the first runs set them"))
