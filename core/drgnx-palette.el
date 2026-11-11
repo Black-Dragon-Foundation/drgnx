@@ -47,12 +47,15 @@ the ring's colour), radius 4 where the compositor rounds."
 
 (defun drgnx-palette-keycap-names (key)
   "The caps of the key description KEY (\"C-S-p\", \"SPC f f\", \"<f1>\") as a list of names: modifiers first
-\(Ctrl, Alt, Shift), then the key, for each key of a chord."
+\(Ctrl, Alt, Shift), then the key, for each key of a chord.  A capital letter is that letter with Shift (M-F is
+Alt Shift F, not M-f's Alt F)."
   (mapcan (lambda (chord)
             (let (mods)
               (while (string-match "\\`\\([CMASsH]\\)-\\(.+\\)\\'" chord)
                 (push (cdr (assq (aref (match-string 1 chord) 0) drgnx-palette--modifier-names)) mods)
                 (setq chord (match-string 2 chord)))
+              (when (and (= (length chord) 1) (not (equal chord (downcase chord))) (not (member "Shift" mods)))
+                (push "Shift" mods))
               (nconc (nreverse mods)
                      (list (cond ((cdr (assoc chord drgnx-palette--key-names)))
                                  ((string-match "\\`<\\(.+\\)>\\'" chord) (capitalize (match-string 1 chord)))
