@@ -134,7 +134,9 @@ saved. Symbol mode's rename sends the language server's edits the same way, as e
 
 **Preview** (the view's Preview button, or Preview This File's Changes on a row) opens the row's file as a read-only
 diff in the editor area, "NAME · preview": the file before and after its ticked replacements, the same edit set
-Replace All writes (the hub's `search/preview`), each line with its number and the words that change marked. Its header
+Replace All writes (the hub's `search/preview`), each line with its number and the words that change marked; a removed
+or added line's tint is rounded and holds its number, inset from the card's edges (faces `drgnx-replace-preview-del`
+and `drgnx-replace-preview-add`). Its header
 line says how many of the file's matches are ticked and the lines added and removed; **Open File** opens the file and
 **Replace in This File** writes the file's ticked matches only. Each hunk is a card: one line of context around its
 changes (blank lines at its ends left out), under a band with its tick box (a minus when only some of its matches are

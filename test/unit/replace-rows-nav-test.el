@@ -272,9 +272,9 @@ tile is asked for again."
                                                                                  'drgnx-replace-tick nil)
                                                           'drgnx-replace-tick)))
                   ;; each line ends in the stretch that stops its tint at the card
-                  (should (string-match-p "^   1 - let needle; $" text))   ; the old file's line number
-                  (should (string-match-p "^   2 \\+ let pin; $" text))     ; the new file's
-                  (should (string-match-p "^   3   let needle;   ← unticked, kept $" text))
+                  (should (string-match-p "^    1 - let needle; $" text))   ; the old file's line number (after the 8 px inset)
+                  (should (string-match-p "^    2 \\+ let pin; $" text))     ; the new file's
+                  (should (string-match-p "^    3   let needle;   ← unticked, kept $" text))
                   (should (string-match-p "groups   \\\\1 = need   \\\\2 = ∅" text)))
                 (goto-char (point-min))
                 (search-forward "hunk 1")
@@ -306,8 +306,11 @@ tint, so nothing extends to the window's edge (the mockup's `.dl' margin)."
          (nl (string-search "\n" out)))
     (should (equal (substring-no-properties out) "   9 - a x \n   9 + a y \n"))
     (should (equal `(space :align-to ,stop) (get-text-property (1- nl) 'display out)))
-    (should (memq 'diff-removed (ensure-list (get-text-property (1- nl) 'face out))))
-    (should-not (memq 'diff-removed (ensure-list (get-text-property nl 'face out))))))
+    (should (memq 'drgnx-replace-preview-del (ensure-list (get-text-property (1- nl) 'face out))))
+    (should-not (memq 'drgnx-replace-preview-del (ensure-list (get-text-property nl 'face out))))
+    ;; the line number is inside the tint (the mockup's `.dl .n'), in its own colour
+    (should (memq 'drgnx-replace-preview-del (ensure-list (get-text-property 1 'face out))))
+    (should (eq 'drgnx-replace-preview-number (car (ensure-list (get-text-property 1 'face out)))))))
 
 (ert-deftest drgnx-replace-rows/a-preview-tile-has-its-own-header-line-at-once ()
   "Pattern D: a preview tile has a header line of its own from the start, before the hub's answer: the editor's chrome
@@ -316,7 +319,10 @@ shows a buffer's own header line (Open File, Replace in This File) only when it 
     (unwind-protect
         (with-current-buffer buf
           (should (local-variable-p 'header-line-format))
-          (should header-line-format))
+          (should header-line-format)
+          ;; no hollow box where the hunk's tick is when the tile is not the selected window
+          (should (local-variable-p 'cursor-in-non-selected-windows))
+          (should-not cursor-in-non-selected-windows))
       (kill-buffer buf))))
 
 (ert-deftest drgnx-replace-rows/replace-all-shows-the-sheet-first ()
@@ -355,13 +361,15 @@ change); `C-u' Replace All writes at once, no sheet."
                   (let ((end (1- (match-end 0))))
                     (should (eq 'space (car-safe (get-text-property end 'display text))))
                     (should (eq :align-to (nth 1 (get-text-property end 'display text))))
-                    (should-not (memq 'diff-removed (ensure-list (get-text-property (1+ end) 'face text)))))
+                    (should-not (memq 'drgnx-replace-preview-del (ensure-list (get-text-property (1+ end) 'face text)))))
                   ;; the counts are coloured text, no diff tint
                   (let ((faces (ensure-list (get-text-property (string-match "\\+2" text) 'face text))))
                     (should (memq 'drgnx-replace-plus faces))
-                    (should-not (memq 'diff-added faces)))
-                  ;; the hairline above the foot
+                    (should-not (memq 'drgnx-replace-preview-add faces)))
+                  ;; the hairline above the foot, and the one under the title
                   (should (text-property-any 0 (length text) 'face 'drgnx-replace-sheet-rule text))
+                  (should (eq 'drgnx-replace-sheet-rule
+                              (get-text-property (1+ (string-search "\n" text)) 'face text)))
                   (should (string-match-p "1 skipped: changed on disk since the search" text))
                   ;; the hunk's changed lines only, as the mockup's sheet: no context line
                   (should-not (string-match-p "3   let needle;" text)))

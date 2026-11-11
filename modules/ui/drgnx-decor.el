@@ -80,7 +80,10 @@ buttons are not here: their ring and radius are `drgnx-control''s, from the them
 (defconst drgnx-decor--scaled-faces
   '(drgnx-chip drgnx-badge drgnx-focus-ring drgnx-card-top drgnx-card-mid drgnx-card-bottom drgnx-card-single
                drgnx-hover drgnx-focus drgnx-control drgnx-control-primary drgnx-pill drgnx-pill-on region isearch lazy-highlight
-               diff-refine-added diff-refine-removed diff-refine-changed)
+               diff-refine-added diff-refine-removed diff-refine-changed
+               ;; the Search view's preview and sheet: a diff line's rounded tint and its words'
+               drgnx-replace-preview-del drgnx-replace-preview-add drgnx-replace-preview-word-old
+               drgnx-replace-preview-word-new)
   "The faces whose `:box' is in logical pixels: on each frame its line width goes through `drgnx-px-line' and its
 corner radius through `drgnx-px'.")
 

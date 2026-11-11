@@ -2567,11 +2567,19 @@ The find bar's button; not a command of its own (it needs the bar)."
 (defface drgnx-replace-preview-number '((t :inherit line-number))
   "A preview's line numbers." :group 'drgnx)
 
-(defface drgnx-replace-preview-word-old '((t :inherit diff-refine-removed :box nil))
+(defface drgnx-replace-preview-del '((t :inherit diff-removed :extend nil :box (:line-width (-1 . -1) :style flat-button)))
+  "A removed line of a preview or the sheet: its tint, a box in its own colour inside the glyphs (rounded under
+Glitnir by the theme, the mockup's `.dl'), so the text never moves." :group 'drgnx)
+
+(defface drgnx-replace-preview-add '((t :inherit diff-added :extend nil :box (:line-width (-1 . -1) :style flat-button)))
+  "An added line of a preview or the sheet: its tint, as `drgnx-replace-preview-del'." :group 'drgnx)
+
+;; the word tints keep a box like the line's: a run with no box would end the line's rounded run in its middle
+(defface drgnx-replace-preview-word-old '((t :inherit diff-refine-removed :box (:line-width (-1 . -1) :style flat-button)))
   "The part of a removed line that its replacement changes: a filled tint, no outline (the mockup's `.w-del')."
   :group 'drgnx)
 
-(defface drgnx-replace-preview-word-new '((t :inherit diff-refine-added :box nil))
+(defface drgnx-replace-preview-word-new '((t :inherit diff-refine-added :box (:line-width (-1 . -1) :style flat-button)))
   "The part of an added line that is new: a filled tint, no outline (the mockup's `.w-add')." :group 'drgnx)
 
 (defface drgnx-replace-preview-kept '((t :inherit (drgnx-ui-caption drgnx-text-subtle)))
@@ -2628,10 +2636,12 @@ tint ends, a `:align-to' position (the card's inset edge); without it the tint r
   (let* ((mark (aref line 0))
          (text (concat (if (memq mark '(?+ ?-)) (string mark) " ") " " (substring line 1) (or note "")
                        (if stop (propertize " " 'display `(space :align-to ,stop)) "\n")))
-         (nl (if stop (propertize "\n" 'face face) "")))
+         (nl (if stop (propertize "\n" 'face face) ""))
+         ;; the number is inside the line's tint (the mockup's `.dl .n'), in its own colour
+         (text (concat (propertize (if number (format "%4d " number) "") 'face 'drgnx-replace-preview-number) text)))
     (when face (add-face-text-property 0 (length text) face t text))
-    (add-face-text-property 0 (length text) (pcase mark (?+ 'diff-added) (?- 'diff-removed) (_ 'default)) t text)
-    (concat indent (propertize (if number (format "%4d " number) "") 'face 'drgnx-replace-preview-number) text nl)))
+    (add-face-text-property 0 (length text) (pcase mark (?+ 'drgnx-replace-preview-add) (?- 'drgnx-replace-preview-del) (_ 'default)) t text)
+    (concat indent text nl)))
 
 (defun drgnx-replace--refine (old new)
   "OLD and NEW (a removed line and the line that replaced it, their marks first) with the part that differs in the
@@ -2720,6 +2730,8 @@ before it, its width measured in pixels (buttons and keycaps are wider than thei
   "One file's changes of the Search view's search, read-only: `a' keeps a hunk's matches, `D' drops them."
   ;; its own header line from the start: the editor's chrome shows it only when the buffer has one as it shows
   (setq-local truncate-lines t header-line-format (list " " (propertize "Preview" 'face 'drgnx-ui-heading)))
+  ;; the hunk band's tick shows where you are: no hollow cursor box on it when another window is selected
+  (setq-local cursor-in-non-selected-windows nil)
   (buffer-disable-undo))
 
 (defun drgnx-replace--preview-buffer (path)
@@ -2817,8 +2829,8 @@ groups line; the hunk's match ids on the whole row)."
                                        (propertize " " 'display `(space :align-to (- right (,inset)))))))
                     (add-face-text-property 0 (length band) 'drgnx-replace-preview-head t band)
                     (concat (propertize " " 'display `(space :width (,inset))) band "\n"))
-                  ;; the lines' tints stop at the card's inset, as the band (the mockup's `.dl' margin)
-                  (drgnx-replace--hunk-lines "" p nil (append (plist-get h :kept) nil) nil
+                  ;; the lines' tints start and stop at the card's inset, as the band (the mockup's `.dl' margin)
+                  (drgnx-replace--hunk-lines (propertize " " 'display `(space :width (,(drgnx-px 8)))) p nil (append (plist-get h :kept) nil) nil
                                              `(- right (,(drgnx-px 8))))
                   (drgnx-replace--groups-line "       " (plist-get h :captures)))
           'drgnx-replace-hunk ids)))
@@ -3035,7 +3047,12 @@ why, what Undo does, Cancel and Replace)."
                                      (if (= (length files) 1) "" "s"))
                              'face 'drgnx-ui-heading)
                  (if skipped (propertize (format " · %d skipped" (length skipped)) 'face 'drgnx-text-subtle) "")
-                 (propertize "\n" 'line-height 2.4))))
+                 (propertize "\n" 'line-height 2.4)
+                 ;; its rule (the mockup's `.sheet .t' bottom line): an overline on a 6 px row (the room above the
+                 ;; files), as wide as the foot's
+                 (propertize " " 'display `(space :align-to (,(+ (drgnx-replace--sheet-edge files skipped) (drgnx-px 14))))
+                             'face 'drgnx-replace-sheet-rule)
+                 (propertize " " 'display `(space :width (0) :height (,(drgnx-px 6)))) "\n")))
       (`(:file ,i)
        (let* ((f (nth i files)) (sel (= i (plist-get s :sel))) (h (and sel (plist-get s :hunk)))
               (edge (drgnx-replace--sheet-edge files skipped))
