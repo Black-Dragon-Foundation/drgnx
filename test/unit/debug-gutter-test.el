@@ -168,6 +168,21 @@
         (should (string-suffix-p (drgnx-debug-gutter--char 'bp (drgnx-ui-ascii-frame-p))
                                  (substring-no-properties (cadr spec))))))))
 
+(ert-deftest drgnx-debug-gutter/a-graphical-mark-is-an-image-in-the-margin ()
+  ;; a margin string's own display property is not drawn: the image is the margin spec itself, the claim's pad drawn
+  ;; into it
+  (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+            ((symbol-function 'image-type-available-p) (lambda (_) t))
+            ((symbol-function 'drgnx-margins-offset) (lambda (&rest _) 2)))
+    (let* ((s (drgnx-debug-gutter--margin-string 'bp "Breakpoint"))
+           (spec (get-text-property 0 'display s)))
+      (should (equal (car spec) '(margin left-margin)))
+      (should (eq (car-safe (cadr spec)) 'image))
+      (let ((svg (plist-get (cdr (cadr spec)) :data)))
+        (should (string-match "width='\\([0-9]+\\)'" svg))
+        (should (= (string-to-number (match-string 1 svg))
+                   (* (frame-char-width) (+ 2 (drgnx-debug-gutter--columns)))))))))
+
 ;; the menu's items: (LABEL . COMMAND-SYMBOL) of `drgnx-debug-gutter--menu-items' as labels only
 (defun debug-gutter-test--labels (line)
   (mapcar #'car (drgnx-debug-gutter--menu-items line)))

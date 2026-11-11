@@ -81,10 +81,11 @@
   (let ((c (alist-get kind drgnx-debug-gutter--chars)))
     (if ascii (cdr c) (car c))))
 
-(defun drgnx-debug-gutter--svg (kind h w bp unv stop frame editor)
+(defun drgnx-debug-gutter--svg (kind h w bp unv stop frame editor &optional pad)
   "KIND's glyph as SVG text, H by W pixels, its 16-unit drawing centred; colours BP (the breakpoint), UNV (not bound),
-STOP (the top frame), FRAME (a caller frame) and EDITOR (the bars and marks cut into a glyph)."
-  (let* ((vw (/ (* 16.0 w) h)) (x0 (/ (- 16 vw) 2))
+STOP (the top frame), FRAME (a caller frame) and EDITOR (the bars and marks cut into a glyph).  PAD pixels of nothing
+come first (the margin's columns outside the claim: a margin string's image cannot follow other text)."
+  (let* ((pad (or pad 0)) (vw (/ (* 16.0 (+ w pad)) h)) (x0 (- (/ (- 16 (/ (* 16.0 w) h)) 2) (/ (* 16.0 pad) h)))
          (arrow "M1.5 3.2h7.6L14.6 8l-5.5 4.8H1.5Z")
          (body
           (pcase kind
@@ -99,7 +100,7 @@ STOP (the top frame), FRAME (a caller frame) and EDITOR (the bars and marks cut 
             ('frame (format "<path d='M2.2 3.9h6.6L13.6 8l-4.8 4.1H2.2Z' fill='none' stroke='%s' stroke-width='1.4' stroke-linejoin='round'/>" frame))
             ('exception (format "<path d='%s' fill='%s'/><path d='M6.8 5.4v3.2M6.8 10.6v.1' stroke='%s' stroke-width='1.5' stroke-linecap='round'/>" arrow bp editor)))))
     (format "<svg xmlns='http://www.w3.org/2000/svg' width='%d' height='%d' viewBox='%.3f 0 %.3f 16'>%s</svg>"
-            w h x0 vw body)))
+            (+ w pad) h x0 vw body)))
 
 (defvar drgnx-debug-gutter--images (make-hash-table :test 'equal)
   "(KIND W H COLOURS) → image.  Ten kinds at a few sizes per theme; emptied past 64 entries (a theme change makes new
@@ -108,8 +109,8 @@ keys).")
 (defun drgnx-debug-gutter--colour (face &optional background)
   "FACE's foreground (BACKGROUND: background) as #rrggbb, or `currentColor' (the text's colour) when the theme leaves it
 unspecified."
-  (or (drgnx-color-hex (drgnx-color-rgb (if background (face-background face nil t) (face-foreground face nil t))))
-      "currentColor"))
+  (let ((rgb (drgnx-color-rgb (if background (face-background face nil t) (face-foreground face nil t)))))
+    (if rgb (drgnx-color-hex rgb) "currentColor")))
 
 (defun drgnx-debug-gutter--columns ()
   "The column's width in the frame's columns: 18 px rounded up to whole characters (one in a terminal)."
@@ -117,32 +118,34 @@ unspecified."
       (max 1 (ceiling (drgnx-px drgnx-debug-gutter--width) (frame-char-width)))
     1))
 
-(defun drgnx-debug-gutter--image (kind)
-  "KIND's glyph image at this frame's size and the theme's colours."
+(defun drgnx-debug-gutter--image (kind &optional pad)
+  "KIND's glyph image at this frame's size and the theme's colours, after PAD columns of nothing."
   (let* ((w (* (drgnx-debug-gutter--columns) (frame-char-width)))
+         (pad (* (or pad 0) (frame-char-width)))
          (h (min (drgnx-px 16) (frame-char-height)))
          (colours (list (drgnx-debug-gutter--colour 'drgnx-debug-breakpoint)
                         (drgnx-debug-gutter--colour 'drgnx-debug-unverified)
                         (drgnx-debug-gutter--colour 'drgnx-debug-stopped)
                         (drgnx-debug-gutter--colour 'drgnx-debug-frame)
                         (drgnx-debug-gutter--colour 'default t)))
-         (key (list kind w h colours)))
+         (key (list kind w h pad colours)))
     (or (gethash key drgnx-debug-gutter--images)
         (progn
           (when (> (hash-table-count drgnx-debug-gutter--images) 64) (clrhash drgnx-debug-gutter--images))
-          (puthash key (create-image (apply #'drgnx-debug-gutter--svg kind h w colours) 'svg t
+          (puthash key (create-image (apply #'drgnx-debug-gutter--svg kind h w (append colours (list pad))) 'svg t
                                      :ascent 'center :scale 1)
                    drgnx-debug-gutter--images)))))
 
-(defun drgnx-debug-gutter--glyph (kind)
-  "What the column shows for KIND: an image on a graphical frame with SVG, else a character in KIND's face."
-  (if (and (display-graphic-p) (image-type-available-p 'svg))
-      (propertize " " 'display (drgnx-debug-gutter--image kind))
-    (propertize (drgnx-debug-gutter--char kind (drgnx-ui-ascii-frame-p)) 'face (drgnx-debug-gutter--face kind))))
-
 (defun drgnx-debug-gutter--margin-string (kind help)
-  "The `before-string' of a mark of KIND: its glyph after the pad of the column's claim; HELP its tooltip."
-  (propertize " " 'display (list '(margin left-margin) (concat (drgnx-margins-pad 'debug) (drgnx-debug-gutter--glyph kind)))
+  "The `before-string' of a mark of KIND, HELP its tooltip: on a graphical frame with SVG an image (the pad of the
+column's claim drawn into it), else the pad and a character in KIND's face."
+  (propertize " " 'display
+              (list '(margin left-margin)
+                    (if (and (display-graphic-p) (image-type-available-p 'svg))
+                        (drgnx-debug-gutter--image kind (drgnx-margins-offset 'debug))
+                      (concat (drgnx-margins-pad 'debug)
+                              (propertize (drgnx-debug-gutter--char kind (drgnx-ui-ascii-frame-p))
+                                          'face (drgnx-debug-gutter--face kind)))))
               'help-echo help))
 
 ;;;; The column's claim
