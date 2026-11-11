@@ -197,6 +197,16 @@ Any hub job counts (the evidence records, "Evidence"). A task whose body, as the
 `**Red:** none (reason)` passes on it; the reason is required. A job approved without a rule pack, or one whose pack
 doesn't name `red-first`, passes.
 
+## Advice before the gate
+
+An agent whose provider has a `before-tool` hook (our ACP forks' `_drgnx/before_tool`; Codex's managed hook, offered
+when the session's hooks subscribe, which fails open on a timeout) gets a soft deny when it commits in its task's tree
+while the task has no red evidence and the commit changes code: tracked changes against `HEAD` outside the pack's
+test globs, under a pack that gates on `red-first` (`orch::advice`). The deny's words say the merge will hold it and to
+commit and run the failing tests first; a commit of tests alone, a task with a red, or a pack without the rule pass.
+It runs before the hooks, and anything it can't read lets the step through. It is advice that saves wasted work: the
+gate at the merge is the same for every provider, and a provider without hooks meets it there.
+
 ## Policy from the base
 
 The gates' policy files, `test/affected.eld`, `test/frozen.eld` and `test/flaky.eld` (`vordr::pack::POLICY_PATHS`),
