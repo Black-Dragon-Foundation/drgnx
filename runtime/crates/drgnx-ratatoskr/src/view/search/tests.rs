@@ -1496,7 +1496,7 @@ fn git_scope(kind: ScopeKind, changed_lines: bool) -> scoped::GitScope {
 /// time is git's and the disk's. Ignored in normal runs; run optimized and alone on the perf island:
 /// `cargo test --release -p drgnx-ratatoskr --lib -- git_scope_lists_at_a_checkouts_size --ignored --nocapture`.
 #[test]
-#[ignore]
+#[ignore = "timing: the git scopes' p50/p95 at a checkout's size, against the spec's budgets"]
 fn git_scope_lists_at_a_checkouts_size() {
     let d = tempfile::tempdir().unwrap();
     let root = d.path();

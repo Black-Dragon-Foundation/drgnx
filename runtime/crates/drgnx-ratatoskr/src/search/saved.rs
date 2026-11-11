@@ -12,7 +12,8 @@ use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant; // the hub clock's (`crate::clock::now`)
 
 /// How many recent searches a project keeps.
 pub const RECENT_MAX: usize = 50;
