@@ -373,6 +373,10 @@ pub struct RunParams {
     /// `drgnx-search-context`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<bool>,
+    /// Only the totals (`search-run-done`): no rows, no model, and the search is not recorded as recent. For a search
+    /// the user did not type: a pinned saved search's live count. Default false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<bool>,
 }
 
 /// `search/run`'s answer: RUN numbers the search (its match ids are `m:RUN:N`; the event `search-run-done` names it).
@@ -447,7 +451,8 @@ pub struct GrepLookParams {
 }
 
 /// `search-run-done`: search RUN of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not
-/// run; OFF the matches that come back unticked (`search/run`'s `off`). A search a newer one stopped says nothing.
+/// run; OFF the matches that come back unticked (`search/run`'s `off`); SCOPE what a git scope searched. A search a
+/// newer one stopped says nothing.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RunDone {
@@ -459,6 +464,27 @@ pub struct RunDone {
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub off: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ScopeDone>,
+}
+
+/// What a git scope (Changed, Staged, Branch) searched: FILES files of the repository (before the globs), the
+/// SUBMODULES and DELETED files it skipped, Branch's BASE, why it is empty (WHY_EMPTY), or why Branch has no base to
+/// take (NEEDS_BASE: the view asks, `search/scope-bases`).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScopeDone {
+    pub files: u64,
+    #[serde(default)]
+    pub submodules: u64,
+    #[serde(default)]
+    pub deleted: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why_empty: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs_base: Option<String>,
 }
 
 /// `search/files`: rank ROOT's file names for QUERY and send VIEW the N best as rows (the event `view-patch`), one row

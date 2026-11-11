@@ -551,6 +551,12 @@ one project, and only with a project.  BUF is the page."
           (preview preview)
           (t (drgnx-extensions-details--make drgnx-extensions-details-preview-name)))))
 
+(defun drgnx-extensions-details--fetched (dir)
+  "How current the clone DIR is, for the Changes tab (M3: the refresh job fetches no Git package, only a sync does):
+\" (as of the last fetch, DATE)\", or that it was never fetched."
+  (let ((mtime (file-attribute-modification-time (file-attributes (expand-file-name ".git/FETCH_HEAD" dir)))))
+    (if mtime (format-time-string " (as of the last fetch, %F)" mtime) " (this clone was never fetched since it was made)")))
+
 (defun drgnx-extensions-details--git-log (buffer name commit)
   "For a Git package, run `git log COMMIT..FETCH_HEAD' in its cached clone; its text goes to BUFFER's page."
   (when-let* ((dir (ignore-errors (drgnx-pkg--git-cache name))) ((file-directory-p dir)) (commit commit))
@@ -565,7 +571,9 @@ one project, and only with a project.  BUF is the page."
                                      (when (buffer-live-p buffer)
                                        (with-current-buffer buffer
                                          (setq drgnx-extensions-details--log
-                                               (and (not (string-empty-p text)) (concat "Since this version:\n" text)))
+                                               (and (not (string-empty-p text))
+                                                    (concat "Since this version" (drgnx-extensions-details--fetched dir)
+                                                            ":\n" text)))
                                          (drgnx-extensions-details--refresh))))))
                                "the git log of an extension")))))
 

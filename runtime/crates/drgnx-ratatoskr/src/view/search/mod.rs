@@ -14,6 +14,9 @@
 mod modes;
 mod rows;
 mod run;
+mod scoped;
+
+use scoped::{GitScope, Keep};
 
 use super::{Key, Store, Views, lock};
 use crate::dispatch::Caller;
@@ -28,7 +31,7 @@ use rows::{
 use run::{Buffer, Found, Read};
 use runstav::methods::search::{
     BufferParams, FindQuery, GrepLookParams, GrepReplaceParams, GrepSkippedParams, RunDone,
-    RunParams, RunStarted, ScopeKind,
+    RunParams, RunStarted, ScopeDone, ScopeKind,
 };
 use runstav::methods::view::ViewModel;
 use runstav::wire::{Error, ErrorCode};
@@ -74,6 +77,12 @@ pub(super) struct Run {
     done: bool,
     /// The matches get their definitions' label rows (`context`).
     context: bool,
+    /// A git scope with `±`: each file's lines that keep a match (`scoped.rs`).
+    keep: Option<Arc<Keep>>,
+    /// What a git scope searched, for the end (`search-run-done`).
+    scope: Option<ScopeDone>,
+    /// Only the totals go out (`count`): no model, no rows.
+    count: bool,
     /// The entries (files and matches) the model last sent held. Up to [`MODEL_WINDOW`] the batches' nodes and ids
     /// are appended, at most one send per `model_every`; past it the model grows when the search has doubled it, when
     /// rows go out, and at the end.
@@ -90,6 +99,9 @@ pub(super) struct Run {
 /// A search sends its model at most this often: the editor applies a model no row names one throttle
 /// (`drgnx-view-delay`, 0.1 s) after it comes, and every line it reads costs it a redisplay pass.
 const MODEL_EVERY: Duration = Duration::from_millis(100);
+
+/// With context labels on, at most this many threads read and parse a search's files (each file one parse).
+const CONTEXT_READERS: usize = 4;
 
 /// The searches, one per (connection, view), and the editor's buffers each view searches in place of their files.
 #[derive(Default)]
@@ -135,6 +147,9 @@ impl Greps {
             carry,
             done: false,
             context: true,
+            keep: None,
+            scope: None,
+            count: false,
             model_sent: 0,
             model_every: MODEL_EVERY,
             model_at: None,
@@ -220,12 +235,17 @@ impl Greps {
     }
 }
 
-/// Whether Q searches FILE (absolute): its one file, else a file under its root that its ignore rules search. A
-/// buffer's file outside it is not searched (the include and exclude globs are the searcher's: a buffer is searched
-/// whatever they say).
+/// Whether Q searches FILE (absolute): its one file, else one of its list, else a file under its root that its ignore
+/// rules search. A buffer's file outside it is not searched (the include and exclude globs are the searcher's: a
+/// buffer is searched whatever they say).
 fn in_scope(q: &Query, file: &str) -> bool {
     if let Some(one) = &q.file {
         return Path::new(file) == one.as_path();
+    }
+    if let Some(list) = &q.files
+        && !list.iter().any(|f| f.as_path() == Path::new(file))
+    {
+        return false;
     }
     Path::new(file)
         .strip_prefix(&q.root)
@@ -234,15 +254,16 @@ fn in_scope(q: &Query, file: &str) -> bool {
         .is_some_and(|rel| !rel.is_empty() && grep::searched(q.ignore, rel))
 }
 
-/// FILE's buffer BUF as a run takes it: its text's matches for Q and its snapshot, or `Large`; none when its file is
-/// not one Q searches. Searched here, outside every lock.
-fn put_of(q: &Query, file: &str, buf: &Buffer, context: bool) -> Option<Put> {
+/// FILE's buffer BUF as a run takes it: its text's matches for Q (those KEEP keeps) and its snapshot, or `Large`;
+/// none when its file is not one Q searches. Searched here, outside every lock.
+fn put_of(q: &Query, file: &str, buf: &Buffer, context: bool, keep: Option<&Keep>) -> Option<Put> {
     if !in_scope(q, file) {
         return None;
     }
     Some(match &buf.text {
         Some(text) => {
-            let ms = grep::search_text(q, file, text).unwrap_or_default();
+            let mut ms = grep::search_text(q, file, text).unwrap_or_default();
+            scoped::kept(keep, file, &mut ms);
             let ctx = if context {
                 run::ctx_of(file, text, &ms)
             } else {
@@ -251,6 +272,7 @@ fn put_of(q: &Query, file: &str, buf: &Buffer, context: bool) -> Option<Put> {
             let read = Read {
                 snap: run::buffer_snap(buf.tick, text),
                 ctx,
+                marks: Vec::new(),
             };
             Put::Text(ms, read)
         }
@@ -584,7 +606,12 @@ fn skip_patches(
             } else {
                 pick(f.ctx, &keep)
             };
-            let read = f.snap.map(|snap| Read { snap, ctx });
+            // a replacement runs in Text mode only: no marks
+            let read = f.snap.map(|snap| Read {
+                snap,
+                ctx,
+                marks: Vec::new(),
+            });
             Some(Found {
                 large: f.large,
                 ..Found::new(f.file, ms, ns, read)
@@ -690,6 +717,9 @@ impl Views {
             .with(conn, view, id, |run| {
                 let (model, patches) =
                     batch_patches(&mut lock(&self.store), conn, view, run, file, ms, read);
+                if run.count {
+                    return;
+                }
                 if let Some(m) = model {
                     f.send_to(conn, "view-model", super::Store::model_data(m));
                 }
@@ -720,10 +750,10 @@ impl Views {
                     return;
                 }
                 let (model, patches) = whole_patches(&mut lock(&self.store), conn, view, run);
-                if let Some(m) = model {
+                if let (Some(m), false) = (model, run.count) {
                     f.send_to(conn, "view-model", super::Store::model_data(m));
                 }
-                for p in patches {
+                for p in patches.into_iter().filter(|_| !run.count) {
                     f.send_to(conn, "view-patch", json!(p));
                 }
                 if run.done {
@@ -741,7 +771,10 @@ impl Views {
     fn grep_done(&self, f: &Front, conn: u64, view: &str, id: u64, error: Option<String>) {
         self.greps.with(conn, view, id, |run| {
             // the model is whole before the search is done: what waits goes now
-            if let Some(m) = flush_model(&mut lock(&self.store), conn, view, run) {
+            if let (Some(m), false) = (
+                flush_model(&mut lock(&self.store), conn, view, run),
+                run.count,
+            ) {
                 f.send_to(conn, "view-model", super::Store::model_data(m));
             }
             let off = run.off();
@@ -764,6 +797,7 @@ fn done_of(view: &str, run: &Run, error: Option<String>, off: Vec<String>) -> Ru
         matches: run.files.iter().map(|f| f.ms.len() as u64).sum(),
         error,
         off,
+        scope: run.scope.clone(),
     }
 }
 
@@ -775,9 +809,10 @@ fn invalid(path: &str, message: &str) -> Error {
     }
 }
 
-/// P's search as hrafn's query and its mode, or why it is refused. Symbol and Meaning are read-only (no replacement);
-/// their query holds the root and what was typed (the rows read it).
-fn query_of(f: &Front, p: &RunParams) -> Result<(Query, Mode), Error> {
+/// P's search as hrafn's query, its mode and its git scope, or why it is refused. Symbol and Meaning are read-only (no
+/// replacement) and search the project; their query holds the root and what was typed (the rows read it). A git
+/// scope's query lists no file until the search's thread has found them.
+fn query_of(f: &Front, p: &RunParams) -> Result<(Query, Mode, Option<GitScope>), Error> {
     let root = std::path::PathBuf::from(p.root.as_str());
     if !root.is_dir() {
         return Err(invalid("root", "an existing folder"));
@@ -810,15 +845,15 @@ fn query_of(f: &Front, p: &RunParams) -> Result<(Query, Mode), Error> {
                 text: other.typed().to_owned(),
                 ..Query::default()
             };
-            return Ok((q, mode));
+            return Ok((q, mode, None));
         }
     };
-    let file = match p.search.scope.as_ref() {
-        None => None,
-        Some(s) => match s.kind {
-            ScopeKind::Project => None,
+    let (mut file, mut files, mut git) = (None, None, None);
+    if let Some(s) = p.search.scope.as_ref() {
+        match s.kind {
+            ScopeKind::Project => {}
             ScopeKind::File => match s.files.as_deref() {
-                Some([one]) => Some(one.as_str().into()),
+                Some([one]) => file = Some(one.as_str().into()),
                 _ => {
                     return Err(invalid(
                         "search.scope.files",
@@ -826,17 +861,29 @@ fn query_of(f: &Front, p: &RunParams) -> Result<(Query, Mode), Error> {
                     ));
                 }
             },
-            _ => {
-                return Err(invalid(
-                    "search.scope.kind",
-                    "this hub searches the project or one file",
-                ));
+            ScopeKind::Open => {
+                let Some(list) = s.files.as_ref() else {
+                    return Err(invalid(
+                        "search.scope.files",
+                        "the Open scope names its files",
+                    ));
+                };
+                files = Some(list.iter().map(|f| f.as_str().into()).collect());
             }
-        },
-    };
+            ScopeKind::Changed | ScopeKind::Staged | ScopeKind::Branch => {
+                files = Some(Vec::new());
+                git = Some(GitScope {
+                    kind: s.kind,
+                    base: s.base.clone(),
+                    changed_lines: s.changed_lines.unwrap_or(false),
+                });
+            }
+        }
+    }
     let q = Query {
         root,
         file,
+        files,
         text: text.clone(),
         case: case.unwrap_or(false),
         word: word.unwrap_or(false),
@@ -845,7 +892,7 @@ fn query_of(f: &Front, p: &RunParams) -> Result<(Query, Mode), Error> {
         exclude: p.search.exclude.clone().unwrap_or_default(),
         ignore: super::files::ignore_for(f, p.ignore),
     };
-    Ok((q, Mode::Text))
+    Ok((q, Mode::Text, git))
 }
 
 /// `search/run`: stop VIEW's search, send its classes a reset, and search on a thread of its own (Text), or ask the
@@ -856,20 +903,29 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
     if p.view.is_empty() || p.view.len() > runstav::methods::view::VIEW_MAX {
         return Err(invalid("view", "a view id of 1 to 64 bytes"));
     }
-    let (query, mode) = query_of(f, &p)?;
-    f.search
-        .offer_recent(&query.root, &p.view, p.search.clone());
+    let (query, mode, git) = query_of(f, &p)?;
+    // a count is not a search the user typed: it is not recent, and it sends only its totals (no labels to read)
+    let count = p.count.unwrap_or(false);
+    if !count {
+        f.search
+            .offer_recent(&query.root, &p.view, p.search.clone());
+    }
     let (conn, view) = (c.conn_id, p.view);
     let replace = p.search.replace.unwrap_or_default();
     let off = p.off.unwrap_or_default();
     let (id, cancel) = views.greps.start(conn, &view, query.clone(), replace, &off);
-    let context = p.context.unwrap_or(true);
-    views.greps.with(conn, &view, id, |r| r.context = context);
-    // a new search's model: no files yet, and its window from the start
-    lock(&views.store).forget_windows(conn, &view);
-    views.publish_model(f, conn, &view, grep_doc(Path::new("/"), id, &[], None));
-    for patch in start_patches(&mut lock(&views.store), conn, &view) {
-        f.send_to(conn, "view-patch", json!(patch));
+    let context = p.context.unwrap_or(true) && !count;
+    views.greps.with(conn, &view, id, |r| {
+        r.context = context;
+        r.count = count;
+    });
+    if !count {
+        // a new search's model: no files yet, and its window from the start
+        lock(&views.store).forget_windows(conn, &view);
+        views.publish_model(f, conn, &view, grep_doc(Path::new("/"), id, &[], None));
+        for patch in start_patches(&mut lock(&views.store), conn, &view) {
+            f.send_to(conn, "view-patch", json!(patch));
+        }
     }
     let Some(front) = views.front.get().cloned() else {
         return Err(invalid("view", "the hub is starting"));
@@ -878,11 +934,11 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
         let root = p.root.clone();
         tokio::spawn(async move {
             let Some(f) = front.upgrade() else { return };
-            let found = modes::batches(&f, &root, &mode).await;
+            let found = modes::found(&f, &root, &mode, context).await;
             let error = match found {
                 Ok(files) => {
-                    for (file, ms) in files {
-                        if !f.core.views.grep_batch(&f, conn, &view, id, file, ms, None) {
+                    for (file, ms, read) in files {
+                        if !f.core.views.grep_batch(&f, conn, &view, id, file, ms, read) {
                             return;
                         }
                     }
@@ -897,23 +953,109 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
     std::thread::Builder::new()
         .name("grep".into())
         .spawn(move || {
-            let on_file = |ms: Vec<Match>| {
+            // a git scope's files (and with `±` their added lines), found here, off the request's path
+            let (mut query, mut keep) = (query, None::<Arc<Keep>>);
+            if let Some(g) = &git {
+                let (done, why) = match scoped::find(&query.root, g) {
+                    Ok(s) => {
+                        query.files = Some(s.files);
+                        keep = s.keep.map(Arc::new);
+                        (s.done, None)
+                    }
+                    Err((done, why)) => (done, Some(why)),
+                };
+                let Some(f) = front.upgrade() else { return };
+                let (files, k) = (query.files.clone(), keep.clone());
+                f.core.views.greps.with(conn, &view, id, |r| {
+                    r.query.files = files;
+                    r.keep = k;
+                    r.scope = Some(done);
+                });
+                if why.is_some() {
+                    f.core.views.grep_done(&f, conn, &view, id, why);
+                    return;
+                }
+            }
+            // a file's matches as the run lists them, and the file as the search read it (and its definitions), read
+            // outside every lock; none when the run is over or a buffer's text stands for the file (its matches come
+            // at the end)
+            let read_file = |mut ms: Vec<Match>| -> Option<(String, Vec<Match>, Option<Read>)> {
+                if cancel.load(Ordering::Relaxed) {
+                    return None;
+                }
                 let file = ms[0].file.clone();
+                scoped::kept(keep.as_deref(), &file, &mut ms);
+                if ms.is_empty() {
+                    return None;
+                }
+                let Some(f) = front.upgrade() else {
+                    cancel.store(true, Ordering::Relaxed);
+                    return None;
+                };
+                if !f.core.views.greps.disk_ok(conn, &view, &file) {
+                    return None;
+                }
+                let read = run::read(Path::new(&file), &ms, context);
+                Some((file, ms, read))
+            };
+            // the batches go from one thread, as they come: one holder of the run's locks at a time, so the next
+            // search's request never waits behind several
+            let send = |(file, ms, read): (String, Vec<Match>, Option<Read>)| {
+                if cancel.load(Ordering::Relaxed) {
+                    return;
+                }
                 let Some(f) = front.upgrade() else {
                     cancel.store(true, Ordering::Relaxed);
                     return;
                 };
-                // a buffer's text stands for the file: its matches come at the end
-                if !f.core.views.greps.disk_ok(conn, &view, &file) {
-                    return;
-                }
-                // the file as the search read it (and its definitions), read here, outside every lock
-                let read = run::read(Path::new(&file), &ms, context);
                 if !f.core.views.grep_batch(&f, conn, &view, id, file, ms, read) {
                     cancel.store(true, Ordering::Relaxed);
                 }
             };
-            let result = grep::run(&query, &cancel, on_file);
+            // with context, a file's read parses it: a few readers take the files as grep finds them (its order is
+            // already unordered) and hand them to this thread
+            let result = if context {
+                let (to_read, files) = std::sync::mpsc::channel::<Vec<Match>>();
+                let (to_send, reads) = std::sync::mpsc::channel();
+                let files = std::sync::Mutex::new(files);
+                let readers = std::thread::available_parallelism()
+                    .map_or(1, |n| n.get().min(CONTEXT_READERS));
+                std::thread::scope(|s| {
+                    for _ in 0..readers {
+                        let to_send = to_send.clone();
+                        let (files, read_file) = (&files, &read_file);
+                        s.spawn(move || {
+                            // the receiver's lock is let go before the file is read
+                            loop {
+                                let next = lock(files).recv();
+                                let Ok(ms) = next else { break };
+                                if let Some(r) = read_file(ms) {
+                                    let _ = to_send.send(r);
+                                }
+                            }
+                        });
+                    }
+                    drop(to_send);
+                    let (q, c) = (&query, &cancel);
+                    let grep = s.spawn(move || {
+                        // its end drops the readers' sender: they stop once they have taken every file
+                        grep::run(q, c, |ms| {
+                            let _ = to_read.send(ms);
+                        })
+                    });
+                    for r in reads {
+                        send(r);
+                    }
+                    grep.join()
+                        .unwrap_or_else(|_| Err("the search's grep thread failed".into()))
+                })
+            } else {
+                grep::run(&query, &cancel, |ms| {
+                    if let Some(r) = read_file(ms) {
+                        send(r);
+                    }
+                })
+            };
             if let Some(f) = front.upgrade() {
                 // the editor's buffers with unsaved edits, searched here, outside every lock
                 let puts = f
@@ -923,7 +1065,10 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
                     .buffers_of(conn, &view)
                     .into_iter()
                     .filter_map(|(file, b)| {
-                        Some((file.clone(), put_of(&query, &file, &b, context)?))
+                        Some((
+                            file.clone(),
+                            put_of(&query, &file, &b, context, keep.as_deref())?,
+                        ))
                     })
                     .collect::<Vec<_>>();
                 if !cancel.load(Ordering::Relaxed) && !puts.is_empty() {
@@ -960,12 +1105,12 @@ pub fn buffer(f: &Front, c: &Caller, p: BufferParams) -> Result<bool, Error> {
         .put_buffer(conn, &p.view, file.clone(), buf.clone());
     // the current search's query, then its matches in the text, searched outside every lock
     let Some(buf) = buf else { return Ok(true) };
-    let Some((id, query, context)) = views.greps.current(conn, &p.view, |run| {
-        (run.id, run.query.clone(), run.context)
+    let Some((id, query, context, keep)) = views.greps.current(conn, &p.view, |run| {
+        (run.id, run.query.clone(), run.context, run.keep.clone())
     }) else {
         return Ok(true);
     };
-    if let Some(put) = put_of(&query, &file, &buf, context) {
+    if let Some(put) = put_of(&query, &file, &buf, context, keep.as_deref()) {
         views.grep_puts(f, conn, &p.view, id, vec![(file, put)]);
     }
     Ok(true)

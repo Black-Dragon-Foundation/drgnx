@@ -109,6 +109,7 @@ to its top.  The hub gives at most 50."
 (defvar-local drgnx-agent-panel--open nil "A hash: row key → non-nil when its row is open (thinking and detail shown).")
 
 (defvar drgnx-agent-panel--disclosure)
+(defvar drgnx-agent-panel--strip-width)   ; drgnx-agent-panel-steps.el
 (defvar drgnx-agent-panel--stats-render 0 "Rows rendered since Emacs started (a test reads the difference).")
 
 (declare-function drgnx-agent-panel--header-row "drgnx-agent-panel-steps")
@@ -235,7 +236,9 @@ folds under it."
 (defun drgnx-agent-panel--render (key)
   "The row of KEY (the view type's RENDER): a hub row (a string key) as the hub built it, else the panel's own."
   (cl-incf drgnx-agent-panel--stats-render)
-  (if (stringp key) (drgnx-view-patch-render key) (drgnx-agent-panel--own-row key)))
+  (cond ((stringp key) (drgnx-view-patch-render key))
+        ((drgnx-agent-panel--twin-from) (drgnx-agent-panel--twin-take) (drgnx-agent-panel--own-row key))
+        (t (drgnx-agent-panel--own-row key))))
 
 (defun drgnx-agent-panel--own-row (key)
   "The panel's own row of KEY."
@@ -324,10 +327,58 @@ its own there, an insert after no row goes there too."
   "Make this panel the hub-fed view of SESSION's rows: its env goes out while a window shows it."
   (let ((view (concat "agent-panel/" session)))
     (drgnx-view-patch-attach view "unshown" :keep t)
-    (setq-local drgnx-view-patch-apply-function #'drgnx-agent-panel--apply-rows)
+    (setq-local drgnx-view-patch-apply-function #'drgnx-agent-panel--apply-rows
+                drgnx-view-patch-twin-function #'drgnx-agent-panel--twin)
     (require 'drgnx-view-env)
     (drgnx-view-env-register view (current-buffer) #'drgnx-agent-panel--look-again)
     (drgnx-agent-panel--send-look)))
+
+(declare-function drgnx-view-env--twin-copy "drgnx-view-env" (from prefixes))
+
+(defun drgnx-agent-panel--own-key-p (key)
+  "Whether KEY is one of the panel's own rows (not one the hub built, which each class has of its own)."
+  (not (stringp key)))
+
+(defun drgnx-agent-panel--twin-from ()
+  "In a panel's twin: the panel's buffer, whose state it shows; else nil."
+  (and drgnx-view-patch-twin-of (buffer-live-p drgnx-view-patch-twin-of) drgnx-view-patch-twin-of))
+
+(defun drgnx-agent-panel--twin-copy (from)
+  "The panel's state (its `drgnx-agent-panel-' locals; the tables shared) from FROM into the current buffer, but the
+width its window lays the strip out for, which is each buffer's own."
+  (let ((width drgnx-agent-panel--strip-width))
+    (drgnx-view-env--twin-copy from '("drgnx-agent-panel-"))
+    (setq drgnx-agent-panel--strip-width width)))
+
+(defun drgnx-agent-panel--twin-take ()
+  "In a twin: the panel's state as it is now (before a row of its own is drawn, before a command)."
+  (when-let* ((from (drgnx-agent-panel--twin-from))) (drgnx-agent-panel--twin-copy from)))
+
+(defun drgnx-agent-panel--twin-give ()
+  "`post-command-hook' of a twin: what the command changed of the state goes back to the panel."
+  (when-let* ((from (drgnx-agent-panel--twin-from)))
+    (let ((twin (current-buffer))) (with-current-buffer from (drgnx-agent-panel--twin-copy twin)))))
+
+(defun drgnx-agent-panel--twin (class)
+  "The panel's buffer in display CLASS (`drgnx-view-patch-twin-function'): the hub's rows of CLASS between the
+panel's own rows, which it draws from the panel's state and keeps in step with the panel's through
+`drgnx-view-mirror'.  Its commands work on that state, given back after each.  It subscribes nothing, and killing it
+leaves the session's entries coming to the panel."
+  (let ((from (current-buffer)) (view (drgnx-view-patch-view drgnx-view-patch))
+        (own (seq-filter #'drgnx-agent-panel--own-key-p (drgnx-agent-panel--wanted-keys))))
+    (with-current-buffer (generate-new-buffer (format "%s <%s>" (buffer-name from) class))
+      (drgnx-agent-panel-mode)
+      (remove-hook 'kill-buffer-hook #'drgnx-agent-panel--killed t)
+      (setq-local drgnx-view-patch-twin-of from)
+      (drgnx-agent-panel--twin-copy from)
+      (drgnx-view-attach 'agent-panel)
+      (drgnx-view-insert drgnx-view own)
+      (drgnx-view-mirror (buffer-local-value 'drgnx-view from) drgnx-view #'drgnx-agent-panel--own-key-p)
+      (drgnx-view-patch-attach view class :keep t)
+      (setq-local drgnx-view-patch-apply-function #'drgnx-agent-panel--apply-rows)
+      (add-hook 'pre-command-hook #'drgnx-agent-panel--twin-take nil t)
+      (add-hook 'post-command-hook #'drgnx-agent-panel--twin-give nil t)
+      (current-buffer))))
 
 (defun drgnx-agent-panel--key-at ()
   "The key of the row at point, a hub row read as the `(:e INDEX)' of the entry it draws."
@@ -516,7 +567,8 @@ further back too."
     (let ((rows (drgnx-agent-panel--rows-p)))
       (when (and (or rows drgnx-agent-panel--more) (not drgnx-agent-panel--loading) (drgnx-view-p drgnx-view))
         (let ((more (drgnx-view-row-start drgnx-view (if rows "more" (list :more)))))
-          (when (and more (<= start (1+ more))) (drgnx-agent-panel-older)))))))
+          (when (and more (<= start (1+ more)))
+            (with-current-buffer (or (drgnx-agent-panel--twin-from) (current-buffer)) (drgnx-agent-panel-older))))))))
 
 (defun drgnx-agent-panel--subscribe ()
   "This panel is shown: the hub sends the session's entries here; the last page comes when it has answered."
@@ -555,7 +607,9 @@ signal when no hub serves)."
 (defun drgnx-agent-panel--killed () (drgnx-agent-panel--unsubscribe))
 
 (defun drgnx-agent-panel-buffers ()
-  (seq-filter (lambda (b) (eq (buffer-local-value 'major-mode b) 'drgnx-agent-panel-mode)) (buffer-list)))
+  "The panels: one per session (a panel's buffer in another display class is not one, `drgnx-agent-panel--twin')."
+  (seq-filter (lambda (b) (and (eq (buffer-local-value 'major-mode b) 'drgnx-agent-panel-mode) (not (drgnx-view-patch-twin-p b))))
+              (buffer-list)))
 
 (defun drgnx-agent-panel-buffer (session)
   "The panel of hub SESSION, made when there is none.  It shows nothing until a window does."

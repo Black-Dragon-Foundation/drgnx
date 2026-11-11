@@ -118,9 +118,10 @@ key profiles bind them (`drgnx-command-define' with this map); each view's own k
 
 (defconst drgnx-work-map--margin 84 "The width, in logical pixels, of the layer labels' margin.")
 
+(declare-function drgnx-view-env-twin "drgnx-view-env" (class prefixes &optional setup))
 (defun drgnx-work-map-buffers ()
   "The live map buffers."
-  (seq-filter (lambda (b) (eq (buffer-local-value 'major-mode b) 'drgnx-work-map-mode)) (buffer-list)))
+  (seq-filter (lambda (b) (and (eq (buffer-local-value 'major-mode b) 'drgnx-work-map-mode) (not (drgnx-view-patch-twin-p b)))) (buffer-list)))
 
 (defun drgnx-work-map-buffer (view-id)
   "The map buffer showing view VIEW-ID, or nil."
@@ -341,8 +342,14 @@ from its model).  Off it, the map keeps its frames and draws its rows itself, as
   "Make the current map buffer the hub-fed view VIEW (the map view's id): its rows come as patches for the classes
 whose env this Emacs sends while a window shows it; the selection goes to the hub by the trailing notice."
   (drgnx-view-patch-attach view "unshown")
+  (setq-local drgnx-view-patch-twin-function #'drgnx-work-map--twin)
   (require 'drgnx-view-env)
   (drgnx-view-env-register view (current-buffer)))
+
+(defun drgnx-work-map--twin (class)
+  "The map's buffer in display CLASS (`drgnx-view-patch-twin-function'): its state and its lens's, read again before
+each command there."
+  (drgnx-view-env-twin class '("drgnx-work-map-" "drgnx-work-lens-")))
 
 (defun drgnx-work-map--sja ()
   "This map's instance in Sjá when its keys answer from the model (hub-built rows, not `drgnx-view-old-path'), or nil."
@@ -887,7 +894,7 @@ and its latest conclusion.  The form of terminals, of a map that does not fit an
 (defun drgnx-work-map--huddles-changed ()
   "A huddle opened or ended: every map draws its strip again."
   (dolist (b (buffer-list))
-    (when (eq (buffer-local-value 'major-mode b) 'drgnx-work-map-mode)
+    (when (and (eq (buffer-local-value 'major-mode b) 'drgnx-work-map-mode) (not (drgnx-view-patch-twin-p b)))
       (with-current-buffer b (drgnx-work-map--refresh-strip)))))
 
 (defun drgnx-work-map--strip-string (state)

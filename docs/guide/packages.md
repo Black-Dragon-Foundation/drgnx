@@ -18,7 +18,7 @@ drgnx sync --pending        run the queue of the Extensions view's clicks as one
 drgnx upgrade               the newest versions; if they break, the previous generation comes back
 drgnx upgrade --only NAME…  update those packages (and a dependency too old for them); the rest stays as locked
 drgnx upgrade --stage       fetch and check the update into the cache for review, changing nothing (with --only too)
-drgnx upgrade --staged      install exactly the files --stage fetched
+drgnx upgrade --staged [--expect NAME=SHA256…]  install exactly the files --stage fetched (--expect: only if they are these)
 drgnx rollback [N]          the packages of generation N (default: the one before the current one)
 drgnx generations           the generations kept (five)
 drgnx lock                  what the lock pins (version, and the archive or, for Git, the commit)
@@ -305,6 +305,8 @@ its locked version, except a dependency the new magit needs a newer version of, 
 `~/.local/state/drgnx/extensions/staged.eld` (name, version, file, sha256, whether its signature was checked), and
 changes nothing else: no swap, no lock, no generation — the files can be reviewed. `drgnx upgrade --staged` then
 installs exactly those files: a cached file whose hash is no longer the staged one is refused and nothing changes.
+`--staged --expect NAME=SHA256…` (what the Extensions view passes: the hashes its review showed) also refuses a staged
+list that is not exactly those packages at those hashes, as when a second review replaced the file in between.
 
 After a sync, upgrade or rollback that worked, the settings index of the installed packages is written again
 ([below](#settings-of-installed-packages)), then `drgnx-pkg-after-change-functions` run.

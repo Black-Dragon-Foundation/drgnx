@@ -51,7 +51,8 @@ its own back. A package that loads later gets them when it loads.
 
 - **Magit.** Section headings in the UI heading role (not gold), the current section in the hover colour, hunk
   headers muted on the quiet selection, diff lines on the diff tints, hashes and dates subtle. Branches and tags are
-  chips as tall as the text: a local branch in the accent, a remote one in ok, a tag in warn.
+  chips as tall as the text: a local branch in the accent, a remote one in ok, a tag in warn. Its text starts 16 px
+  into the card, past the section chevrons in the fringe (a column of `line-prefix` on a graphical frame).
 - **The change gutter** (`extra/hunks`, not a package): a solid 3 px bar beside each added line (ok) and changed line (info), and a short mark where lines were deleted (error), in the status colours.
 - **Org** (module `org/org`). Headings in the UI font, 17 px at level 1 and 14.5 px at level 2 (over the editor's
   13.5), weight 600, on Org's own `org-level-*` faces, so the headings of `outline-minor-mode` in code keep the text's
@@ -320,7 +321,7 @@ rounded and shadowed, with values per variant:
 | | Dark | Light | High Contrast |
 |---|---|---|---|
 | Popups | radius 8, shadow blur 16 down 6, opacity 0.35 | the same at 0.14 | no shadow, a 1 px `drgnx-border-strong` ring |
-| Palette | radius 12, shadow blur 48 down 16 at 0.50, 90 % opaque over a 16 px blur of what lies behind | shadow 0.22 | opaque, no shadow, no blur, a 2 px ring |
+| Palette | radius 12, shadow blur 48 down 16 at 0.50, a 1 px edge outside in the shadow's colour at 0.45, 90 % opaque over a 16 px blur of what lies behind | shadow 0.22, edge 0.08 | opaque, no shadow, no blur, a 2 px ring |
 
 The values follow the theme when it changes. `drgnx-look-chrome` and `drgnx-look-palette` hold them as frame
 parameter lists; a value you set (Customize or `settings.el`) stands in every variant. In the popup lane, descriptions

@@ -1050,6 +1050,21 @@ redrawn row gets a new one; a badge of a row that went is deleted here."
       (maphash (lambda (key o) (unless (drgnx-view-row-start view key) (delete-overlay o) (remhash key drgnx-explorer--badges)))
                drgnx-explorer--badges))))
 
+(defun drgnx-explorer--rows-twin (class)
+  "The Explorer's buffer in display CLASS (a dock on a monitor at another scale; `drgnx-view-patch-twin-function'), made
+from the Explorer's buffer: its mode and keys, the hub's rows of CLASS and the same handlers after a draw.  The
+folders' watches and the find stay the Explorer buffer's: the twin's kill leaves them."
+  (let ((patched (buffer-local-value 'drgnx-view-patch-patched-functions (current-buffer))))
+    (with-current-buffer (generate-new-buffer (format " *drgnx-explorer %s*" class))
+      (drgnx-explorer-mode)
+      (remove-hook 'kill-buffer-hook #'drgnx-explorer--unwatch-all t)
+      (remove-hook 'kill-buffer-hook #'drgnx-explorer--forget-find t)
+      (jit-lock-unregister #'drgnx-explorer--fontify)
+      (drgnx-view-patch-attach drgnx-explorer--hub-view class)
+      (dolist (f patched) (unless (eq f t) (add-hook 'drgnx-view-patch-patched-functions f nil t)))
+      (setq-local drgnx-view-nav-faces '(("ticked" . drgnx-explorer-selected)))   ; the marks, as in the Explorer
+      (current-buffer))))
+
 (defun drgnx-explorer-rows-attach (view class)
   "Make the Explorer the hub-fed VIEW in display CLASS: the hub lists it, and its keys answer from Sjá."
   (with-current-buffer (drgnx-explorer--buffer)
@@ -1060,6 +1075,7 @@ redrawn row gets a new one; a badge of a row that went is deleted here."
     (setq-local drgnx-view-nav-faces '(("ticked" . drgnx-explorer-selected)))   ; multi-select (Sjá's ticked set)
     (add-hook 'drgnx-look-density-changed-hook #'drgnx-explorer--density-changed)
     (add-hook 'kill-buffer-hook #'drgnx-explorer--rows-unhook nil t)
+    (setq-local drgnx-view-patch-twin-function #'drgnx-explorer--rows-twin)
     (add-hook 'window-scroll-functions #'drgnx-explorer--rows-scrolled nil t)
     (unless (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))   ; Q2: the frame, filled when it comes
       (setq drgnx-explorer--waiting (make-overlay (point-min) (point-min)))

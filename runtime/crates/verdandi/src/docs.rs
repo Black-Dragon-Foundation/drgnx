@@ -342,6 +342,80 @@ impl History {
     }
 }
 
+impl History {
+    /// DOC on BRANCH as its edits, in the order they were made: each change by its peer (a seed's peer has the top bit
+    /// set), enough to replay the text from nothing.  None when the log cannot be replayed to exactly the document's
+    /// text (a merge's concurrent edits, a history cut shallow by compaction, an operation this does not read): the
+    /// caller then goes without.
+    pub fn edit_log(
+        &mut self,
+        doc: DocId,
+        branch: BranchId,
+    ) -> Result<Option<Vec<(PeerId, Change)>>> {
+        let d = self.live(doc, branch)?;
+        let Ok(json) = d.export_json_updates(&Default::default(), &d.oplog_vv()) else {
+            return Ok(None);
+        };
+        let Ok(v) = serde_json::to_value(&json) else {
+            return Ok(None);
+        };
+        let peers: Vec<u64> = v["peers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|p| p.as_str().and_then(|s| s.parse().ok()))
+            .collect();
+        let mut changes: Vec<(u64, u64, &serde_json::Value)> = Vec::new();
+        for c in v["changes"].as_array().into_iter().flatten() {
+            let (Some(lamport), Some(id)) = (c["lamport"].as_u64(), c["id"].as_str()) else {
+                return Ok(None);
+            };
+            let Some(peer) = id
+                .split_once('@')
+                .and_then(|(_, i)| i.parse::<usize>().ok())
+                .and_then(|i| peers.get(i).copied())
+            else {
+                return Ok(None);
+            };
+            changes.push((lamport, peer, c));
+        }
+        changes.sort_by_key(|(l, p, _)| (*l, *p));
+        let mut text: Vec<char> = Vec::new();
+        let mut out = Vec::new();
+        for (_, peer, c) in changes {
+            for op in c["ops"].as_array().into_iter().flatten() {
+                let content = &op["content"];
+                let pos = content["pos"].as_u64().map(|n| n as usize);
+                let ch = match (content["type"].as_str(), pos) {
+                    (Some("insert"), Some(start)) => Change {
+                        start,
+                        old_len: 0,
+                        inserted: content["text"].as_str().unwrap_or("").to_owned(),
+                    },
+                    (Some("delete"), Some(start)) => {
+                        let Some(old_len) = content["len"].as_u64().map(|n| n as usize) else {
+                            return Ok(None);
+                        };
+                        Change {
+                            start,
+                            old_len,
+                            inserted: String::new(),
+                        }
+                    }
+                    _ => return Ok(None),
+                };
+                if ch.start > text.len() || ch.old_len > text.len() - ch.start {
+                    return Ok(None);
+                }
+                text.splice(ch.start..ch.start + ch.old_len, ch.inserted.chars());
+                out.push((PeerId(peer), ch));
+            }
+        }
+        let now = self.text(doc, branch)?;
+        Ok((text.iter().collect::<String>() == now).then_some(out))
+    }
+}
+
 impl ActiveDoc<'_> {
     fn live(&self) -> &Live {
         &self.h.active.docs[&self.key]
@@ -397,5 +471,60 @@ impl ActiveDoc<'_> {
     /// The document and branch.
     pub fn key(&self) -> (DocId, BranchId) {
         self.key
+    }
+}
+
+#[cfg(test)]
+mod edit_log_tests {
+    use super::*;
+
+    #[test]
+    fn the_edit_log_replays_to_the_text_and_names_each_peer() {
+        let mut h = History::open(tempfile::tempdir().unwrap().path()).unwrap();
+        let branch = h
+            .branch("main", crate::store::BranchKind::Worktree, None)
+            .unwrap();
+        let doc = h.doc_for("a.txt").unwrap();
+        let p = h
+            .peer(&serde_json::json!({"kind": "user"}), Some(branch))
+            .unwrap();
+        let q = h
+            .peer(
+                &serde_json::json!({"kind": "agent", "session": "s"}),
+                Some(branch),
+            )
+            .unwrap();
+        h.activate(doc, branch, || Ok("abc\ndef\n".to_owned()))
+            .unwrap();
+        let mut d = h.activate(doc, branch, || unreachable!()).unwrap();
+        d.apply(
+            q,
+            &Change {
+                start: 1,
+                old_len: 2,
+                inserted: String::new(),
+            },
+        )
+        .unwrap();
+        d.apply(
+            p,
+            &Change {
+                start: 1,
+                old_len: 0,
+                inserted: "XY".into(),
+            },
+        )
+        .unwrap();
+        let log = h
+            .edit_log(doc, branch)
+            .unwrap()
+            .expect("a linear log replays");
+        let who: Vec<(bool, usize, usize)> = log
+            .iter()
+            .map(|(peer, c)| (peer.0 >> 63 == 1, c.start, c.old_len))
+            .collect();
+        assert_eq!(who, vec![(true, 0, 0), (false, 1, 2), (false, 1, 0)]);
+        assert_eq!(log[1].0, q);
+        assert_eq!(log[2].0, p);
     }
 }

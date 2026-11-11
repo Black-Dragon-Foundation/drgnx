@@ -890,7 +890,7 @@ with context labels and 10 without, alternating, after one of each to warm up."
             (push (drgnx-perf--cx-once nil) off))
           (let* ((st (lambda (xs i) (drgnx-perf-stats (mapcar (lambda (x) (nth i x)) xs))))
                  (p50 (lambda (s) (plist-get s :p50)))
-                 (of (st on 0)) (od (st on 1)) (ff (st off 0)) (fd (st off 1)))
+                 (of (funcall st on 0)) (od (funcall st on 1)) (ff (funcall st off 0)) (fd (funcall st off 1)))
             (list :on_first_ms (mapcar #'drgnx-perf--round of) :on_done_ms (mapcar #'drgnx-perf--round od)
                   :off_first_ms (mapcar #'drgnx-perf--round ff) :off_done_ms (mapcar #'drgnx-perf--round fd)
                   :first_ratio (drgnx-perf--round2 (/ (funcall p50 of) (funcall p50 ff)))
@@ -905,6 +905,103 @@ with context labels and 10 without, alternating, after one of each to warm up."
         (when drgnx-perf--cx-dir (delete-directory drgnx-perf--cx-dir t)))
       t))
   "The `search-context' workload's session side (with the replace workloads' and the hub's).")
+
+(defconst drgnx-perf-run--search-lists-form
+  (prin1-to-string
+   '(progn
+      (defun drgnx-perf--sl-measure ()
+        "(:draw_ms STATS): the empty view's lists drawn 100 times, 100 saved searches (10 of them pinned, with their
+counts) and 50 recent ones (the last 8 shown), as the hub gives them."
+        (with-current-buffer (drgnx-perf--replace-view)
+          (drgnx-replace--fill 'find "")
+          (setq drgnx-replace--saved
+                (mapcar (lambda (i) (list :name (format "saved search %d" i) :pinned (if (zerop (% i 10)) t :false)
+                                          :project :false
+                                          :search (list :query (list :mode "text" :text (format "needle-%d" i))
+                                                        :scope (list :kind (if (cl-oddp i) "changed" "project")))))
+                        (number-sequence 0 99))
+                drgnx-replace--pin-counts (mapcar (lambda (i) (cons (* 10 i) (* 3 i))) (number-sequence 0 9))
+                drgnx-replace--recent
+                (mapcar (lambda (i) (list :query (list :mode (if (cl-oddp i) "meaning" "text") :text (format "recent %d" i)
+                                                       :question (format "recent %d" i))))
+                        (number-sequence 0 49)))
+          (drgnx-replace--lists-draw)        ; warm-up
+          (let (ms)
+            (dotimes (_ 100)
+              (let ((t0 (float-time)))
+                (drgnx-replace--lists-draw)
+                (push (* 1000 (- (float-time) t0)) ms)))
+            (list :draw_ms (mapcar #'drgnx-perf--round (drgnx-perf-stats ms))))))
+      t))
+  "The `search-lists' workload's session side (with the replace workloads' and the hub's).")
+
+(defconst drgnx-perf-run--search-scopes-form
+  (prin1-to-string
+   '(progn
+      (defvar drgnx-perf--gs-dir nil "The repository of 5,000 files the git scopes list.")
+      (defvar drgnx-perf--gs-done nil "When the running search's end came, and its scope's file count.")
+      (defun drgnx-perf--gs-git (&rest args)
+        "git ARGS in the repository, with no user or system configuration; an error unless it succeeds."
+        (let ((process-environment (append '("GIT_CONFIG_GLOBAL=/dev/null" "GIT_CONFIG_NOSYSTEM=1") process-environment))
+              (default-directory drgnx-perf--gs-dir))
+          (unless (eq 0 (apply #'call-process "git" nil nil nil "-c" "user.name=t" "-c" "user.email=t@t"
+                               "-c" "commit.gpgsign=false" args))
+            (error "git %S failed" args))))
+      (defun drgnx-perf--gs-up ()
+        "A repository of 5,000 files in 50 folders on `main'; a branch `work' that changed 50 of them, 50 more staged
+and 50 more changed in the tree (the hub's `git_scope_lists_at_a_checkouts_size' fixture)."
+        (setq drgnx-perf--gs-dir (make-temp-file "drgnx-perf-scopes" t))
+        (let ((body (mapconcat (lambda (i) (format "line %d of the file\n" i)) (number-sequence 0 19) ""))
+              (file (lambda (i) (expand-file-name (format "d%02d/f%04d.rs" (% i 50) i) drgnx-perf--gs-dir))))
+          (drgnx-perf--gs-git "init" "-q" "-b" "main")
+          (dotimes (i 5000)
+            (make-directory (file-name-directory (funcall file i)) t)
+            (with-temp-file (funcall file i) (insert body)))
+          (drgnx-perf--gs-git "add" "-A")
+          (drgnx-perf--gs-git "commit" "-q" "-m" "base")
+          (drgnx-perf--gs-git "switch" "-q" "-c" "work")
+          (let ((touch (lambda (from) (dolist (k (number-sequence from (+ from 49)))
+                                        (with-temp-file (funcall file (% (* k 7) 5000)) (insert body "changed\n"))))))
+            (funcall touch 0)
+            (drgnx-perf--gs-git "commit" "-q" "-am" "work")
+            (funcall touch 50)
+            (drgnx-perf--gs-git "add" "-A")
+            (funcall touch 100)))
+        (advice-add 'drgnx-replace--hub-event :after #'drgnx-perf--gs-event)
+        t)
+      (defun drgnx-perf--gs-event (event data)
+        (when (and (equal event "search-run-done") (equal (plist-get data :view) drgnx-replace-view))
+          (setq drgnx-perf--gs-done (list (float-time) (plist-get (plist-get data :scope) :files)))))
+      (defun drgnx-perf--gs-once (scope)
+        "One search of nothing in SCOPE (`changed', `staged' or `branch' against `main'): ms from its start to its end,
+which lists SCOPE's files first (and then searches them)."
+        (with-current-buffer (drgnx-perf--replace-view)
+          (setq drgnx-replace--opts (plist-put (plist-put drgnx-replace--opts :scope scope) :base "main")
+                drgnx-perf--gs-done nil)
+          (let ((t0 (float-time)))
+            (drgnx-replace--search-now)
+            (unless (drgnx-perf--wait 30 (lambda () drgnx-perf--gs-done))
+              (error "Premise: the %s search did not end in 30 s" scope))
+            (list (* 1000 (- (car drgnx-perf--gs-done) t0)) (cadr drgnx-perf--gs-done)))))
+      (defun drgnx-perf--gs-measure ()
+        "(:changed_ms :staged_ms :branch_ms STATS, and each scope's file count): 20 searches of each after one to warm
+up, from a search's start to its end (an upper bound of the scope's list: the end also searches its files)."
+        (with-current-buffer (drgnx-perf--replace-view)
+          (setq drgnx-replace--root (file-name-as-directory drgnx-perf--gs-dir))
+          (drgnx-replace--fill 'find "zzz-perf-nothing-here"))
+        (let (out)
+          (dolist (s '(changed staged branch))
+            (drgnx-perf--gs-once s)
+            (let ((runs (mapcar (lambda (_) (drgnx-perf--gs-once s)) (number-sequence 1 20))))
+              (setq out (append out (list (intern (format ":%s_ms" s))
+                                          (mapcar #'drgnx-perf--round (drgnx-perf-stats (mapcar #'car runs)))
+                                          (intern (format ":%s_files" s)) (cadr (car runs)))))))
+          out))
+      (defun drgnx-perf--gs-down ()
+        (advice-remove 'drgnx-replace--hub-event #'drgnx-perf--gs-event)
+        (when drgnx-perf--gs-dir (delete-directory drgnx-perf--gs-dir t)))
+      t))
+  "The `search-scopes' workload's session side (with the replace workloads' and the hub's).")
 
 (defconst drgnx-perf-run--search-retype-form
   (prin1-to-string
@@ -1215,6 +1312,19 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                        " " drgnx-perf-run--search-context-form " (drgnx-perf--cx-up))")
        :measure "(drgnx-perf--cx-measure)"
        :teardown ,(concat "(progn (drgnx-perf--cx-down) (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
+      ;; the empty Search view's saved and recent searches: 100 saved (10 pinned) and 50 recent, drawn 100 times
+      (search-lists
+       :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) " (drgnx-perf-run--replace-setup-form)
+                       " " drgnx-perf-run--search-lists-form " (drgnx-perf--replace-arm) t)")
+       :measure "(drgnx-perf--sl-measure)"
+       :teardown ,(concat "(progn (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
+      ;; the git scopes' file lists through the hub (Changed, Staged, Branch over a repository of 5,000 files with 50
+      ;; changes each): from a search's start to its end, 20 of each (spec §8's rows, reported)
+      (search-scopes
+       :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) " (drgnx-perf-run--replace-setup-form)
+                       " " drgnx-perf-run--search-scopes-form " (drgnx-perf--replace-arm) (drgnx-perf--gs-up))")
+       :measure "(drgnx-perf--gs-measure)"
+       :teardown ,(concat "(progn (drgnx-perf--gs-down) (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
       ;; retyping the Search view's query over 10k matches on the hub's rows path, a character at a time: "needle" to
       ;; "needl", "need", "needl", "needle" 25 times (100 keys, each a search of 10k matches); a pause of 0.6 s
       ;; after each key (the 0.25 s typing pause runs out, the next key may land while the rows stream) and 1.5 s after
@@ -1772,6 +1882,8 @@ version and the commit, as JSON in FILE."
     (view-patch . "report-only until the render offload's combined pass (its numbers on the island)")
     (work-nav-rows . "report-only until the combined pass (gates after core, editor and agents); needs Sjá's Nidhogg")
     (search-context . "its bar is a ratio of its own runs (labels against none: first rows ≤ 1.10×, end ≤ 1.15×), read from :first_ratio and :done_ratio")
+    (search-lists . "its bar is the lists' draw time (:draw_ms :p95 ≤ 5 ms, spec §8); no keys are typed")
+    (search-scopes . "its rows are git's and the disk's time (spec §8: reported, never failed); no keys are typed")
     (search-retype . "its input rows are judged now; allocation, CPU and rows follow its first runs on the desktop island (the combined pass)")
     (typing-evil . "needs DRGNX_MODAL_ELPA (evil); not run in the container")
     (motions-evil . "needs DRGNX_MODAL_ELPA")

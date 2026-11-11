@@ -49,7 +49,8 @@ struct Project {
 }
 
 impl Project {
-    /// Record every waiting search that stood for [`PAUSE`] by NOW; whether any was.
+    /// Record every waiting search that stood for [`PAUSE`] by NOW; whether the recent list changed (a search recorded
+    /// again while it is the newest does not change it).
     fn commit_due(&mut self, now: Instant) -> bool {
         let due: Vec<String> = self
             .pending
@@ -61,13 +62,17 @@ impl Project {
             .iter()
             .filter_map(|view| self.pending.remove(view))
             .collect();
+        if due.is_empty() {
+            return false;
+        }
         due.sort_by_key(|(_, at)| *at);
+        let before = self.stored.recent.clone();
         for (spec, _) in &due {
             self.stored.recent.retain(|s| s != spec);
             self.stored.recent.insert(0, spec.clone());
         }
         self.stored.recent.truncate(RECENT_MAX);
-        !due.is_empty()
+        self.stored.recent != before
     }
 }
 
@@ -95,6 +100,8 @@ impl std::fmt::Display for ShareError {
 pub struct Saved {
     dir: PathBuf,
     projects: Mutex<HashMap<PathBuf, Project>>,
+    /// Held by a flush while it writes.
+    flushing: Mutex<()>,
 }
 
 impl Saved {
@@ -103,6 +110,7 @@ impl Saved {
         Saved {
             dir,
             projects: Mutex::default(),
+            flushing: Mutex::default(),
         }
     }
 
@@ -119,6 +127,26 @@ impl Saved {
         root: &Path,
         f: impl FnOnce(&mut Project) -> (R, bool),
     ) -> std::io::Result<R> {
+        let (r, body) = self.with_body(root, f)?;
+        if let Some(body) = body {
+            self.write(root, &body)?;
+        }
+        Ok(r)
+    }
+
+    /// ROOT's stored searches written as BODY.
+    fn write(&self, root: &Path, body: &[u8]) -> std::io::Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        write_atomic(&self.file(root), body, 0o600)
+    }
+
+    /// F on ROOT's project, read from disk the first time, and what it stored as the file's body when F says it changed
+    /// (not written).
+    fn with_body<R>(
+        &self,
+        root: &Path,
+        f: impl FnOnce(&mut Project) -> (R, bool),
+    ) -> std::io::Result<(R, Option<Vec<u8>>)> {
         let mut map = self.projects.lock().unwrap_or_else(|e| e.into_inner());
         if !map.contains_key(root) {
             if map.len() >= PROJECTS_MAX {
@@ -138,28 +166,40 @@ impl Saved {
         }
         let p = map.get_mut(root).expect("inserted above");
         let (r, changed) = f(p);
-        if changed {
-            let body = serde_json::to_vec(&p.stored).map_err(std::io::Error::other)?;
-            std::fs::create_dir_all(&self.dir)?;
-            write_atomic(&self.file(root), &body, 0o600)?;
-        }
-        Ok(r)
+        let body = if changed {
+            Some(serde_json::to_vec(&p.stored).map_err(std::io::Error::other)?)
+        } else {
+            None
+        };
+        Ok((r, body))
     }
 
     /// VIEW searched ROOT for SPEC at AT. The view's previous search is recorded if it stood for [`PAUSE`] or more;
-    /// SPEC waits until it has (an empty search is never recorded). The files of File and Open are not kept.
-    pub fn offer(&self, root: &Path, view: &str, mut spec: SearchSpec, at: Instant) {
+    /// SPEC waits until it has (an empty search is never recorded). The files of File and Open are not kept. Nothing
+    /// is written here (a search's path): true when the recent list changed and [`Saved::flush`] is due.
+    pub fn offer(&self, root: &Path, view: &str, mut spec: SearchSpec, at: Instant) -> bool {
         if let Some(scope) = spec.scope.as_mut() {
             scope.files = None;
         }
-        let _ = self.with(root, |p| {
+        self.with_body(root, |p| {
             let changed = p.commit_due(at);
             p.pending.remove(view);
             if !spec.query.typed().trim().is_empty() {
                 p.pending.insert(view.to_owned(), (spec, at));
             }
             ((), changed)
-        });
+        })
+        .is_ok_and(|(_, body)| body.is_some())
+    }
+
+    /// Write ROOT's searches as they are now. One flush at a time: a later one writes what is newer.
+    pub fn flush(&self, root: &Path) -> std::io::Result<()> {
+        let _one = self.flushing.lock().unwrap_or_else(|e| e.into_inner());
+        let ((), body) = self.with_body(root, |_| ((), true))?;
+        match body {
+            Some(body) => self.write(root, &body),
+            None => Ok(()),
+        }
     }
 
     /// ROOT's recent searches at NOW, newest first.

@@ -123,7 +123,7 @@ Click **Install**, or move to it and press `RET`.
 
 **Install** queues the install and remembers, on this machine, that you saw the card for that package and the ones it
 brings (`~/.local/state/drgnx/extensions/trusted.eld`): the card does not come back for them here, and does on a new
-machine. **Cancel** queues nothing. A package from GNU ELPA or NonGNU ELPA (signed, or from a signed archive)
+machine, unless the package now needs an unsigned package you never saw a card for: then its card opens again. **Cancel** queues nothing. A package from GNU ELPA or NonGNU ELPA (signed, or from a signed archive)
 installs with no card. The card is only ever opened by your own
 Install: nothing that runs by itself (a timer, a hook, an agent) can open it, answer it or install anything. An agent
 can only suggest a package, and its suggestion has no Install button.
@@ -235,6 +235,8 @@ not known: read the whole reach below* instead, in the attention colour. Under t
 
 - **Approve** (the page's button, or the command *Approve Plugin*): sends the hash the page showed you. If the files
   changed since, the hub refuses and the page shows the new state.
+  If the page was drawn again with another hash while you had it open (the plugin changed), the first Approve only
+  says so: read the page again, then Approve.
 - **Turn on / Turn off:** adds the plugin to the end of your plugins setting or takes it out, so the order of the hooks
   stays yours. **Move up / Move down** change that order (the plugin has to be on).
 - **In this project:** as on the plugins page: the project's own plugin list, written to your private workspace file.

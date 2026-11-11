@@ -150,4 +150,17 @@
             (should (string-search "copies the packages twice" (drgnx-extensions-details-copies-note)))))
       (dolist (n '(1 2)) (delete-directory (expand-file-name (number-to-string n) gens) t)))))
 
+(ert-deftest drgnx-extensions-details/the-changes-tab-says-how-current-a-git-clone-is ()
+  "M3: the refresh job fetches no Git package, so the log is as of the last sync's fetch: the page says when, or that
+the clone was never fetched."
+  (let ((dir (make-temp-file "ext-clone" t)))
+    (unwind-protect
+        (progn
+          (should (string-search "never fetched" (drgnx-extensions-details--fetched dir)))
+          (make-directory (expand-file-name ".git" dir))
+          (write-region "" nil (expand-file-name ".git/FETCH_HEAD" dir))
+          (set-file-times (expand-file-name ".git/FETCH_HEAD" dir) (encode-time '(0 0 0 2 1 2026 nil nil t)))
+          (should (equal (drgnx-extensions-details--fetched dir) " (as of the last fetch, 2026-01-02)")))
+      (delete-directory dir t))))
+
 ;;; extensions-details-test.el ends here

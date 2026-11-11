@@ -113,9 +113,11 @@ pub fn reach_of(m: &Manifest) -> Reach {
                     tool_kinds: f.tool_kinds,
                     tools: f.tools,
                     paths: f.paths.iter().map(|g| g.as_str().to_owned()).collect(),
+                    advisory: h.advisory,
                 }
             })
             .collect(),
+        kv_bytes: Some(m.kv_bytes.unwrap_or(brokkr::manifest::MAX_KV_BYTES)),
     }
 }
 

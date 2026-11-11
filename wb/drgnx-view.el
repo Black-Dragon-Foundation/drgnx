@@ -168,6 +168,7 @@ a row still to delete (`work' `gone', not in the index) or a deleted one (empty,
   error                                 ; the error message already recorded for this view
   sigs                                  ; KEY → its signature at the last `drgnx-view-sync-rows'
   (empty 0)                             ; how many entries are empty (to insert, or deleted)
+  mirrors                               ; ((VIEW . PRED) ...): views given its changes to the keys PRED accepts
   cut)                                  ; non-nil: the last draw stopped with work left in `work'
 
 (cl-defun drgnx-view-attach (name &key buffer start)
@@ -302,6 +303,26 @@ takes them), for a view no longer attached, or for a stale view that is still hi
           (drgnx-timer-soon (cons 'drgnx-view buffer) 0 #'drgnx-view--draw-buffer
                             :args (list buffer) :owner buffer))))))
 
+(defvar drgnx-view--mirroring nil "Non-nil while a change goes to a view's mirrors: they pass it on no further.")
+
+(defun drgnx-view-mirror (view other pred)
+  "Give VIEW's changes to OTHER from now on, and OTHER's to VIEW: an insert, remove, dirty, grow or touch of keys PRED
+accepts (a key PRED refuses, such as a row only one of them draws, stays where it was made).  For a view's buffer in
+another display class whose own rows follow the first's state (`drgnx-view-patch-twin-function'); a mirror whose
+buffer is gone is dropped."
+  (push (cons other pred) (drgnx-view--mirrors view))
+  (push (cons view pred) (drgnx-view--mirrors other)))
+
+(defun drgnx-view--mirror (view fn keys &rest args)
+  "Call FN on each live mirror of VIEW with the KEYS its PRED accepts (KEYS t: t), then ARGS; drop the dead ones."
+  (when (and (drgnx-view--mirrors view) (not drgnx-view--mirroring))
+    (setf (drgnx-view--mirrors view)
+          (seq-filter (lambda (m) (buffer-live-p (drgnx-view--buffer (car m)))) (drgnx-view--mirrors view)))
+    (let ((drgnx-view--mirroring t))
+      (dolist (m (drgnx-view--mirrors view))
+        (let ((ks (if (eq keys t) t (seq-filter (cdr m) keys))))
+          (when ks (apply fn (car m) ks args)))))))
+
 (defun drgnx-view--queue (view op keys after)
   (push (list op keys after) (drgnx-view--pending view))
   (drgnx-view--arm view))
@@ -313,19 +334,23 @@ takes them), for a view no longer attached, or for a stale view that is still hi
 
 (defun drgnx-view-append (view keys)
   "Mark KEYS as new rows at the end of VIEW.  A key already shown or pending is left where it is."
+  (drgnx-view--mirror view #'drgnx-view-append keys)
   (drgnx-view--queue view 'append keys nil))
 
 (cl-defun drgnx-view-insert (view keys &key after)
   "Mark KEYS as new rows right after the row AFTER (a drawn or pending key; nil: the first rows).
 An AFTER that is neither appends KEYS.  A key already shown or pending is left where it is."
+  (drgnx-view--mirror view (lambda (v ks) (drgnx-view-insert v ks :after after)) keys)
   (drgnx-view--queue view 'insert keys after))
 
 (defun drgnx-view-remove (view keys)
   "Mark the rows of KEYS (drawn or pending) as gone from VIEW."
+  (drgnx-view--mirror view #'drgnx-view-remove keys)
   (drgnx-view--queue view 'remove keys nil))
 
 (defun drgnx-view-dirty (view keys)
   "Mark the rows of KEYS to be rendered again; KEYS t: every row.  They are patched in place, never erased."
+  (drgnx-view--mirror view #'drgnx-view-dirty keys)
   (let ((dirty (drgnx-view--dirty view)))
     (if (eq keys t)
         (puthash drgnx-view--all 'patch dirty)
@@ -334,12 +359,14 @@ An AFTER that is neither appends KEYS.  A key already shown or pending is left w
 
 (defun drgnx-view-grow (view key)
   "Mark that KEY's row only grew at the end of its BODY: the draw inserts GROW's text."
+  (drgnx-view--mirror view (lambda (v ks) (drgnx-view-grow v (car ks))) (list key))
   (let ((dirty (drgnx-view--dirty view)))
     (unless (eq (gethash key dirty) 'patch) (puthash key 'grow dirty)))
   (drgnx-view--arm view))
 
 (defun drgnx-view-touch (view)
   "Mark that VIEW's model changed: its type's SYNC runs at the next draw."
+  (drgnx-view--mirror view (lambda (v _) (drgnx-view-touch v)) t)
   (setf (drgnx-view--touched view) t)
   (drgnx-view--arm view))
 
@@ -1419,6 +1446,20 @@ older epoch, held.  RESYNC: non-nil while a `view/resync' is outstanding.  STALE
   (classed 0))                                  ; the class step's overlays made and deleted (the perf lab's)
 
 (defvar-local drgnx-view-patch nil "This buffer's hub-fed (view, class), or nil.")
+
+(defvar-local drgnx-view-patch-twin-function nil
+  "In a hub-fed view's buffer: called with (CLASS) to make the buffer that shows the view's rows in display CLASS, set
+up as this one is (its mode and keys) and attached to (view, CLASS) with `drgnx-view-patch-attach', not subscribed (the
+hub sends every class the env named).  Returns that buffer.  Nil: the view has one buffer, which holds the rows of the
+class it is paired with in every class it shows in (`drgnx-view-env', \"one buffer per class\").")
+
+(defvar-local drgnx-view-patch-twin-of nil
+  "In a twin (`drgnx-view-patch-twin-function'): the buffer of the view it shows in another display class.")
+
+(defun drgnx-view-patch-twin-p (&optional buffer)
+  "Non-nil when BUFFER (default: the current one) is a twin: a view's buffer in another display class, which finders
+of a module's buffers leave out (it subscribes nothing and holds no state of its own)."
+  (buffer-local-value 'drgnx-view-patch-twin-of (or buffer (current-buffer))))
 
 (defvar-local drgnx-view-patch-id-prop 'drgnx-work-id
   "The text property whose value is a node's id over that node's span in this view's rows (the class step's).")

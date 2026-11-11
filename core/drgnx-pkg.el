@@ -1487,18 +1487,26 @@ else its output."
                               "--batch" "-Q" "--eval" "(require 'package)" "--eval" (prin1-to-string form))))
         (unless (eql rc 0) (string-trim (buffer-string)))))))
 
-(cl-defun drgnx-pkg-upgrade (&key (archives nil archives-given) smoke modules-dir only stage staged)
+(cl-defun drgnx-pkg-upgrade (&key (archives nil archives-given) smoke modules-dir only stage staged expect)
   "Snapshot, upgrade every package to the archives' newest, then run SMOKE (default `drgnx-pkg-smoke';
 called with the manifest, nil means it works).  If the upgrade or the smoke test fails, the snapshot
 comes back.  One lock held throughout.  ARCHIVES as `drgnx-pkg-sync''s (not given: packages.eld's).
 ONLY: upgrade those names (and a dependency too old for them), the rest stays as locked.  STAGE: fetch and check the
 update into the cache and list it (`drgnx-pkg-staged-file'), changing nothing else.  STAGED: install exactly what
-was staged (then the list goes).
+was staged (then the list goes).  EXPECT: with STAGED, ((NAME . SHA256)…) the review showed: the staged list must be
+exactly those packages at those hashes, else the run stops before it changes anything (a second review may have
+replaced the file between the Apply and this run).
 Returns (:ok :generation :restored :smoke :missing :error), with STAGE (:ok :staged :missing)."
   (let* ((sync-args (append (list :modules-dir modules-dir) (and archives-given (list :archives archives))))
          (entries (and staged (or (plist-get (drgnx-file-read (drgnx-pkg-staged-file)) :data)
                                   (drgnx-pkg--error "nothing is staged (drgnx upgrade --stage first)"))))
          (names (or only (mapcar #'car entries))))
+    (when (and staged expect
+               (not (equal (sort (mapcar (lambda (e) (cons (symbol-name (car e)) (plist-get (cdr e) :sha256))) entries)
+                                 (lambda (a b) (string< (car a) (car b))))
+                           (sort (mapcar (lambda (e) (cons (format "%s" (car e)) (cdr e))) (copy-sequence expect))
+                                 (lambda (a b) (string< (car a) (car b)))))))
+      (drgnx-pkg--error "the staged update changed since it was reviewed (run the review again)"))
     (if stage
         (apply #'drgnx-pkg-sync :stage t :upgrade (null only) :only only sync-args)
       (setq sync-args (append (if (or only staged) (list :only only :staged entries) (list :upgrade t))
@@ -1853,16 +1861,21 @@ FILE (`drgnx-pkg-progress'), from start to done."
              (let ((drgnx-pkg--sync-wait wait))
                (drgnx-pkg--cli-sync opts add remove pending)))))
         (`("upgrade" . ,flags)
-         (let (only stage staged)
+         (let (only stage staged expect)
            (while flags
              (pcase (pop flags)
                ("--only" (while (and flags (not (string-prefix-p "--" (car flags)))) (push (intern (pop flags)) only))
                 (unless only (drgnx-pkg--error "--only needs a package name")))
                ("--stage" (setq stage t))
                ("--staged" (setq staged t))
-               (f (drgnx-pkg--error "unknown upgrade option %s (--only NAME…, --stage, --staged)" f))))
+               ("--expect" (while (and flags (not (string-prefix-p "--" (car flags))))
+                             (let ((pair (split-string (pop flags) "=")))
+                               (unless (= (length pair) 2) (drgnx-pkg--error "--expect takes NAME=SHA256"))
+                               (push (cons (car pair) (cadr pair)) expect))))
+               (f (drgnx-pkg--error "unknown upgrade option %s (--only NAME…, --stage, --staged [--expect NAME=SHA256…])" f))))
            (when (and staged (or only stage)) (drgnx-pkg--error "--staged goes alone: it installs what --stage fetched"))
-           (let ((r (let ((drgnx-pkg-verbose t)) (drgnx-pkg-upgrade :only (nreverse only) :stage stage :staged staged))))
+           (when (and expect (not staged)) (drgnx-pkg--error "--expect goes with --staged"))
+           (let ((r (let ((drgnx-pkg-verbose t)) (drgnx-pkg-upgrade :only (nreverse only) :stage stage :staged staged :expect expect))))
              (drgnx-pkg--report r)
              (when (plist-get r :smoke) (drgnx-pkg--print "the smoke test failed:\n%s" (plist-get r :smoke)))
              (when (plist-get r :restored) (drgnx-pkg--print "restored generation %d" (plist-get r :restored)))

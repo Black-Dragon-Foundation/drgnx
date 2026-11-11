@@ -235,4 +235,11 @@
     (should-not (drgnx-timer-active-p 'extensions-daily-check))
     (should-not (drgnx-timer-active-p 'extensions-list-tick))))
 
+(ert-deftest drgnx-extensions-list/the-search-follows-the-key-with-the-views-own-delay ()
+  "M5: typing in the search arms a zero-second debounce (the view's delay is 0), not a 0.15 s one."
+  (let (armed)
+    (cl-letf (((symbol-function 'drgnx-timer-debounce) (lambda (key secs &rest _) (setq armed (cons key secs)) key)))
+      (with-temp-buffer (drgnx-extensions-list--typing)))
+    (should (equal armed '(extensions-list-search . 0)))))
+
 ;;; extensions-list-test.el ends here
