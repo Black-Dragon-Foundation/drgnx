@@ -16,8 +16,8 @@ bad() { echo "launch-agent: FAIL $*"; fail=1; }
 pid_of() { launchctl print "$domain/$label" 2>/dev/null | awk '$1 == "pid" { print $3; exit }'; }
 # the daemon's pid once launchd runs it, waiting at most 60 s; empty when it never ran
 running() {
-  local i p
-  for i in $(seq 1 60); do
+  local _ p
+  for _ in $(seq 1 60); do
     p=$(pid_of)
     if [[ -n "$p" && "$p" != "${1:-}" ]]; then echo "$p"; return 0; fi
     sleep 1
