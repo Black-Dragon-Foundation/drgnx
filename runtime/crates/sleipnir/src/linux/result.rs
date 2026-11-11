@@ -30,6 +30,9 @@ pub struct ResultJson {
     pub wall_s: f64,
     pub cpu_s: f64,
     pub mem_peak_mib: u64,
+    /// A watched job's (a Mac's: no kernel cap) peak past its grant, MiB; none where the kernel enforces the cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mem_overshoot_mib: Option<u64>,
     /// Something outside the job slowed it (paused, throttled); its time is not a fair sample.
     pub disturbed: bool,
     /// The attempt's log.
@@ -89,6 +92,7 @@ mod tests {
             wall_s: 1.5,
             cpu_s: 0.25,
             mem_peak_mib: 300,
+            mem_overshoot_mib: None,
             disturbed: false,
             log: "/r/jobs/a.1/a.1.log".into(),
         };

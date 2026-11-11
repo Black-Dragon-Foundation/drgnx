@@ -1595,6 +1595,7 @@ cmd_open() { # [--check] [--wait] [-t | --gui] [PATH…] — open PATHs (none: t
 # (Linux | Darwin, instead of uname -s).
 UPD_UNIT=drgnx-update
 UPD_LABEL=org.blackdragonfoundation.drgnx-update
+DAEMON_LABEL=org.blackdragonfoundation.drgnx  # drgnx-pkg-launch-agent-label
 
 update_state_dir() { printf '%s/update' "$(drgnx_dir state)"; }
 update_platform() { printf '%s' "${DRGNX_UPDATE_PLATFORM:-$(uname -s)}"; }
@@ -2007,7 +2008,22 @@ cmd_secrets() { # export|import|ls — provider keys through age (docs/guide/sec
 
 update_restart() { # after a successful update or --back: restart drgnx's own daemon service, nothing else
   if [[ "$(update_platform)" == Darwin ]]; then
-    echo "drgnx update: no drgnx service is installed here (on macOS drgnx runs from its app or drgnx open), so nothing was restarted; quit and reopen drgnx."
+    # drgnx's launch agent (core/drgnx-pkg.el): out and in again, so launchd reads the plist the update refreshed and
+    # starts it (RunAtLoad); kickstart would run the definition loaded before
+    local agent="$HOME/Library/LaunchAgents/$DAEMON_LABEL.plist" uid
+    if [[ ! -f "$agent" ]]; then
+      echo "drgnx update: drgnx's launch agent is not installed ($agent), so nothing was restarted; quit and reopen drgnx."
+      return 0
+    fi
+    command -v launchctl >/dev/null 2>&1 || { update_err "launchctl not found; restart drgnx yourself."; return 1; }
+    uid="$(id -u)"
+    launchctl bootout "gui/$uid/$DAEMON_LABEL" >/dev/null 2>&1 || true
+    if launchctl bootstrap "gui/$uid" "$agent"; then
+      echo "drgnx update: restarted the drgnx service (its launch agent, $DAEMON_LABEL). Its windows closed and emacsclient sessions lost their server; run drgnx to open a window again."
+    else
+      update_err "launchctl could not load $agent; restart drgnx yourself."
+      return 1
+    fi
     return 0
   fi
   if command -v systemctl >/dev/null 2>&1 && systemctl --user is-enabled --quiet drgnx 2>/dev/null; then
@@ -2022,8 +2038,7 @@ update_restart() { # after a successful update or --back: restart drgnx's own da
   fi
 }
 
-update_refresh_unit() { # an installed drgnx.service starts the Emacs drgnx uses now (core/drgnx-pkg.el); never restarts it
-  if [[ "$(update_platform)" == Darwin ]]; then return 0; fi
+update_refresh_unit() { # drgnx.service (macOS: the launch agent) starts the Emacs drgnx uses now (core/drgnx-pkg.el); never restarts it
   if ! update_step service-unit "${DRGNX_UPDATE_UNIT_CMD:-}" --refresh; then
     update_err "could not check drgnx.service (log: $(update_state_dir)/last.log)"
   fi
@@ -2239,10 +2254,11 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                keys, desktop and shell (--yes: never the rc line or the desktop entry)
        drgnx safe              Emacs with drgnx's core only: no modules, no packages
        drgnx bisect [-- CMD…]  find the module or Lisp file that breaks (CMD fails, or you say so)
-       drgnx service-unit [DIR | --refresh]
-                               the systemd user unit (printed, or written to DIR; never installed);
-                               --refresh points an installed unit at the Emacs drgnx uses, and an installed desktop
-                               entry at drgnx's icon and Nidhogg's windows
+       drgnx service-unit [DIR | --refresh | --install]
+                               the systemd user unit, on macOS the launch agent (printed, or written to DIR);
+                               --refresh points an installed one at the Emacs drgnx uses, and an installed desktop
+                               entry at drgnx's icon and Nidhogg's windows; --install (macOS) installs and loads the
+                               launch agent: the daemon runs now and at login
        drgnx shell install [--shell zsh|bash|fish] [--yes]
                                add one line to your shell's rc file, after you say yes (--yes: print it,
                                write nothing); drgnx shell line prints the line (docs/guide/shell.md)

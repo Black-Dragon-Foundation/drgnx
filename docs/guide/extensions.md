@@ -186,7 +186,8 @@ packages twice. **Roll Back Packages** (the palette, or on a generation) runs a 
 
 A session keeps the packages it loaded, so an update or a rollback is used after a restart. **Restart drgnx** (the
 header button when updates wait, and the palette) asks about unsaved work first, then starts drgnx again with your
-windows. When this drgnx is the `drgnx.service` daemon it restarts the unit instead (`systemctl --user restart drgnx`).
+windows. When this drgnx is the `drgnx.service` daemon it restarts the unit instead (`systemctl --user restart drgnx`);
+on macOS, when it is the daemon of drgnx's launch agent, launchd restarts it (`launchctl kickstart -k`).
 
 ## Updates
 

@@ -407,6 +407,8 @@ struct Remote {
     ready: Option<ReadyNow>,
     /// The input keys its attempts synced, newest last (at most [`SYNCED_KEPT`]): their bytes are there.
     synced: Vec<String>,
+    /// The features its last probe offered (`probe-result`): what a Mac candidate has.
+    features: Vec<String>,
 }
 
 impl Remote {
@@ -864,7 +866,23 @@ pub fn wait_text(r: &WaitReason) -> String {
         WaitReason::Mode => "the project's send mode keeps it on this machine".into(),
         WaitReason::Os(Os::Macos) => "needs a Mac runner".into(),
         WaitReason::Os(Os::Linux) => "needs a Linux machine".into(),
-        WaitReason::Features(f) => format!("no machine has {}", f.join(", ")),
+        WaitReason::Features(f) => {
+            // a Mac's Homebrew packages are the user's to install (the runner user never writes into Homebrew)
+            let brew: Vec<&str> = f
+                .iter()
+                .filter_map(|x| x.strip_prefix("brew:"))
+                .map(|x| x.split('@').next().unwrap_or(x))
+                .collect();
+            if brew.is_empty() {
+                format!("no machine has {}", f.join(", "))
+            } else {
+                format!(
+                    "no machine has {}: on the Mac, brew install {}",
+                    f.join(", "),
+                    brew.join(" ")
+                )
+            }
+        }
         WaitReason::Matrix => "the matrix keeps it on this machine".into(),
         WaitReason::AwaitingConfirm => "its runner waits for your confirm".into(),
         WaitReason::NoRunner => "no machine may take it".into(),
@@ -1182,8 +1200,17 @@ impl Queue {
                 linger: true,
                 ready: None,
                 synced: vec![],
+                features: vec![],
             },
         );
+    }
+
+    /// Runner NAME's features as its probe offered them (the registry's record at a link; each health check's probe
+    /// after).
+    pub fn set_features(&self, name: &str, features: Vec<String>) {
+        if let Some(r) = self.lock().runners.get_mut(name) {
+            r.features = features;
+        }
     }
 
     /// Runner CFG linked over T: its sessions opened, `serve` started on them, the link the queue's (REMOTE is the
@@ -1956,7 +1983,13 @@ impl Queue {
                 trust: r.r.trust,
                 keys_allowed: vec![],
                 os: r.r.os,
-                features: job.spec.features.clone(),
+                // a Mac's packages and tools are its probe's (a missing one waits with its install line); Linux
+                // runners don't report theirs to placement yet
+                features: if r.r.os == Os::Macos {
+                    r.features.clone()
+                } else {
+                    job.spec.features.clone()
+                },
                 state: r.state.clone(),
                 accept: r.r.accept,
                 link_bps: None,
@@ -2473,8 +2506,11 @@ impl Queue {
                 facts,
                 missing,
                 limits,
-                ..
+                features,
             } => {
+                if let Some(r) = st.runners.get_mut(runner) {
+                    r.features = features;
+                }
                 if let Some(c) = st.runners.get_mut(runner).and_then(|r| r.check.as_mut()) {
                     c.facts.probed = true;
                     c.facts.missing = missing.iter().map(|m| m.what.clone()).collect();
@@ -3894,6 +3930,34 @@ mod tests {
         started(&q, "m1", &r, 101);
         lost(&q, "m1", 110);
         (dir, q)
+    }
+
+    // [D] pure: a Mac job needing a Homebrew package no Mac runner has waits, and its reason is the user's line to
+    // fix it (the runner user never installs into Homebrew)
+    #[tokio::test]
+    async fn a_job_needing_a_missing_package_waits_with_the_install_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        q.add_runner(
+            RemoteRunner {
+                os: Os::Macos,
+                image: None,
+                ..remote("m1", 600)
+            },
+            Session::start("m1", idle(), q.route(), q.link_events()),
+        );
+        hello(&q, "m1", true, 100);
+        ready(&q, "m1", 8192, &[], &[], 100);
+        let mut s = job("x1", Priority::P3, 64);
+        s.spec.os = Os::Macos;
+        s.spec.features = vec!["brew:cmake@3.31".into()];
+        s.place.image = None;
+        q.submit(s, 100);
+        q.tick(100);
+        let row = q.row("x1").unwrap();
+        assert_eq!(row.machine, None, "{row:?}");
+        let why = row.waiting.unwrap_or_default();
+        assert!(why.contains("brew install cmake"), "{why}");
     }
 
     // [D] pure: a Mac whose last `ready` said it ran on battery is `sleeping` when it goes quiet (a lid closed), not

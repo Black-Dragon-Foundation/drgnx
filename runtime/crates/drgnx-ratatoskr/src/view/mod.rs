@@ -431,21 +431,26 @@ pub type Label = (String, String, u32);
 /// A fixture view's rows, the images they may name, and its labels.
 pub type Fixture = (Vec<Row>, Vec<(ImageId, String)>, Vec<Label>);
 
-/// The rows of LABELS in ENV's class: each text fitted to its PX (a GUI class by FONTS' advances, a terminal by
-/// columns of the env's cell), then a stop at PX and a `|` after it.
+/// The rows of LABELS in ENV's class: each text fitted to its PX (logical, as every view's sizes: a GUI class fits
+/// to PX at the env's scale in device px, rounded half up as `drgnx-px` does, by FONTS' advances; a terminal by
+/// columns of the env's cell), then a stop there and a `|` after it.
 pub fn label_rows(labels: &[Label], env: &ViewEnv, fonts: &FontSet) -> Vec<Row> {
     labels
         .iter()
         .map(|(key, text, px)| {
-            let fitted = match env.display {
-                Display::Gui => fit::fit(fonts, "ui", text, *px as f32),
+            let (fitted, stop) = match env.display {
+                Display::Gui => {
+                    let s = if env.scale > 0.0 { env.scale } else { 1.0 };
+                    let dev = (f64::from(*px) * f64::from(s) + 0.5 + 1e-9).floor() as u32;
+                    (fit::fit(fonts, "ui", text, dev as f32), dev)
+                }
                 Display::Tty => {
                     let cols = (*px / env.cell.0.max(1)) as usize;
-                    fit_tty::fit(text, cols, &env.tty_widths)
+                    (fit_tty::fit(text, cols, &env.tty_widths), *px)
                 }
             };
             let mut b = RowBuilder::new(key.clone());
-            b.push(&fitted, None).stop(*px).push("|", None);
+            b.push(&fitted, None).stop(stop).push("|", None);
             b.finish()
         })
         .collect()
