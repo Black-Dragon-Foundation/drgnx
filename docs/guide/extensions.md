@@ -123,7 +123,7 @@ Click **Install**, or move to it and press `RET`.
 
 **Install** queues the install and remembers, on this machine, that you saw the card for that package and the ones it
 brings (`~/.local/state/drgnx/extensions/trusted.eld`): the card does not come back for them here, and does on a new
-machine. **Cancel** queues nothing. A package from GNU ELPA or NonGNU ELPA (signed, or from a signed archive)
+machine, unless the package now needs an unsigned package you never saw a card for: then its card opens again. **Cancel** queues nothing. A package from GNU ELPA or NonGNU ELPA (signed, or from a signed archive)
 installs with no card. The card is only ever opened by your own
 Install: nothing that runs by itself (a timer, a hook, an agent) can open it, answer it or install anything. An agent
 can only suggest a package, and its suggestion has no Install button.

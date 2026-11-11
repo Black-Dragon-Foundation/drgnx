@@ -293,6 +293,22 @@ has no card."
       (should (= ran 2))
       (should-not (drgnx-extensions-trust-test--card "magit")))))
 
+(ert-deftest drgnx-extensions-trust/a-seen-package-that-now-brings-an-unseen-unsigned-one-shows-its-card ()
+  "M10: trust is recorded per name, but a package seen before that now needs unsigned packages never seen (magit
+recorded alone, as a dependency of something once) shows its card again, with no install yet; once those are seen too
+the install goes on with no card."
+  (drgnx-extensions-trust-test--with
+    (let ((this-command 'extensions-install) (ran 0))
+      (drgnx-extensions-trust--record '(magit))
+      (drgnx-extensions-trust-before-install "pkg:magit" (lambda () (cl-incf ran)))
+      (should (= ran 0))
+      (should (string-search "magit-section, transient, with-editor" (drgnx-extensions-trust-test--card "magit")))
+      (drgnx-extensions-trust-test--click "magit" #'drgnx-extensions-trust-install)
+      (should (= ran 1))
+      (drgnx-extensions-trust-before-install "pkg:magit" (lambda () (cl-incf ran)))
+      (should (= ran 2))
+      (should-not (drgnx-extensions-trust-test--card "magit")))))
+
 (ert-deftest drgnx-extensions-trust/cancel-queues-nothing ()
   "D: the list's Install of a MELPA package, then Cancel on its card: no ticket, nothing recorded."
   (drgnx-extensions-trust-test--with
