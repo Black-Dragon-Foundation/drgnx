@@ -92,7 +92,7 @@ _drgnx() {
           'runner remove') words='--yes' ;;
           'search index') words='--rebuild --now' ;;
           'search query') words='-k --scope' ;;
-          'build runner-bundle') words='--arch' ;;
+          'build runner-bundle') words='--arch --target' ;;
           'keys diff') words='--against' ;;
           'ui start') words='--config --size --daemon' ;;
           'ui click') words='--buffer --text --button --count --hold-ms' ;;

@@ -23,6 +23,8 @@ drgnx-ratatoskr timing agent_tools_at_50k_chunks release
 drgnx-ratatoskr timing tier1_of_a_checkout_and_one_saved_file release
 drgnx-ratatoskr timing worktree_search_p95 release
 drgnx-ratatoskr lib write_tree_before_cost
+drgnx-ratatoskr lib git_scope_lists_at_a_checkouts_size release
+drgnx-ratatoskr lib large_file_blame_times
 norn plugin_hooks timing_before_tool_cost_per_call release
 urdr lib a_lone_write_waits_max_wait_for_company
 verdandi timing undone_by_scan_cost_by_later_deletes

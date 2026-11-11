@@ -3485,17 +3485,26 @@
         "$defs": {
           "SupervisorRule": {
             "description": "The supervisor's rules (thresholds are settings, per kind of work).",
-            "enum": [
-              "silent",
-              "repeat",
-              "no-progress",
-              "dead-wait",
-              "lease",
-              "refusals",
-              "unrecorded",
-              "manager-context"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "silent",
+                  "repeat",
+                  "no-progress",
+                  "dead-wait",
+                  "lease",
+                  "refusals",
+                  "unrecorded",
+                  "manager-context"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "context",
+                "description": "A workflow task's agent past its rule pack's context share: rotated like a manager.",
+                "type": "string"
+              }
+            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",

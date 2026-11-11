@@ -149,12 +149,14 @@ pub fn trust_ok(
 }
 
 /// The stages of [`filter`], in order: a refusal from a later stage came closer to running.
+/// A runner of the right OS that lacks a feature came closer than one of the wrong OS.
 const STAGE_TRUST: u8 = 0;
-const STAGE_FEATURES: u8 = 1;
-const STAGE_STATE: u8 = 2;
-const STAGE_MODE: u8 = 3;
-const STAGE_CELL: u8 = 4;
-const STAGE_CLOUD: u8 = 5;
+const STAGE_OS: u8 = 1;
+const STAGE_FEATURES: u8 = 2;
+const STAGE_STATE: u8 = 3;
+const STAGE_MODE: u8 = 4;
+const STAGE_CELL: u8 = 5;
+const STAGE_CLOUD: u8 = 6;
 
 /// Why trust keeps `job` off `c`, in words.
 fn trust_text(job: &Job, c: &Candidate) -> String {
@@ -192,7 +194,7 @@ fn check(
         return Err((STAGE_TRUST, WaitReason::Pinned));
     }
     if spec.os != c.os {
-        return Err((STAGE_FEATURES, WaitReason::Os(spec.os)));
+        return Err((STAGE_OS, WaitReason::Os(spec.os)));
     }
     if c.os == Os::Macos && !spec.keys.is_empty() {
         return Err((
@@ -585,6 +587,11 @@ mod tests {
         assert_eq!(
             filter(&j, &local(), Send::All, true),
             Err(WaitReason::Os(Os::Macos))
+        );
+        // a Mac lacking the feature came closer than the hub's Linux machine: the job waits on the feature
+        assert_eq!(
+            pick(&j, &[local(), mac.clone()], &ctx()),
+            Pick::Wait(WaitReason::Features(vec!["gpu".into()]))
         );
         j.spec.features = vec![];
         assert_eq!(filter(&j, &mac, Send::All, true), Ok(()));

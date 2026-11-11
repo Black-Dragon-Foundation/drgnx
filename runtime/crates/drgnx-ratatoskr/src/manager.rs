@@ -360,19 +360,20 @@ pub async fn run(f: Arc<Front>) {
     loop {
         every.tick().await;
         for s in f.core.agents.live_sessions() {
-            if s.role() != Role::Manager {
-                continue;
-            }
             if !matches!(s.status(), SessionStatus::Idle | SessionStatus::Waiting) {
                 continue;
             }
-            // its turn ended: the rotation the supervisor asked for happens now, and its card says so
+            // its turn ended: the rotation the supervisor asked for (a manager's, or a workflow task's agent's)
+            // happens now, and its card says so
             let waiting = f.core.manager.st().deferred.remove(&s.id);
             if let Some(card) = waiting {
                 let ok = rotate_now(&f, &s.id).await == Rotation::Done;
                 if let Some(card) = card {
-                    say_rotated(&f, card, ok).await;
+                    say_rotated(&f, s.role(), card, ok).await;
                 }
+                continue;
+            }
+            if s.role() != Role::Manager {
                 continue;
             }
             let due = {
@@ -417,6 +418,19 @@ pub async fn restart_prompt(f: &Front, sid: &str) -> String {
         out.push_str(&text);
     }
     out
+}
+
+/// What a workflow task's agent rotated past its rule pack's context share is told: its task's brief, and that its
+/// earlier work is in the worktree.
+async fn task_restart_prompt(f: &Front, sid: &str, task: &str) -> String {
+    let brief = crate::brief::for_dispatch(f, task, Some(sid))
+        .await
+        .unwrap_or_default();
+    format!(
+        "[drgnx task {task}] You were rotated past your rule pack's context share: you are a fresh session in the \
+         same worktree, and your earlier work is in its commits and files. Read git log and git status before you go \
+         on.\n\n{brief}\n\nWork only in this directory. Commit your work. Then call complete_task."
+    )
 }
 
 /// A manager's workers (from the sessions the hub recorded) and its decisions (from the graph).
@@ -479,8 +493,9 @@ pub enum Rotation {
 /// The context share at which a running turn is cut: the window is truly full.
 const FULL: f64 = 0.95;
 
-/// The supervisor's `manager-context` rule fired for manager SID.  Past the threshold the manager is rotated when its
-/// turn ends (a running turn is never cut) unless the window is full; then now.  The same path as the restart.
+/// The supervisor's `manager-context` rule fired for manager SID, or its `context` rule for a workflow task's agent.
+/// Past the threshold the session is rotated when its turn ends (a running turn is never cut) unless the window is
+/// full; then now.  The same path as the restart.
 pub async fn rotate_for_context(f: &Front, sid: &str) -> Rotation {
     let Ok(s) = f.core.agents.find(sid) else {
         return Rotation::Failed;
@@ -495,7 +510,14 @@ pub async fn rotate_for_context(f: &Front, sid: &str) -> Rotation {
 }
 
 async fn rotate_now(f: &Front, sid: &str) -> Rotation {
-    let first = restart_prompt(f, sid).await;
+    let Ok(s) = f.core.agents.find(sid) else {
+        return Rotation::Failed;
+    };
+    let first = match (s.role(), s.observe().task) {
+        (Role::Manager, _) => restart_prompt(f, sid).await,
+        (_, Some(task)) => task_restart_prompt(f, sid, &task).await,
+        (_, None) => return Rotation::Failed,
+    };
     if session::rotate(&f.core.agents, f, sid, first).await {
         Rotation::Done
     } else {
@@ -516,15 +538,21 @@ pub async fn note_card(f: &Front, sid: &str, card: i64) {
         }
     };
     if !waiting {
-        say_rotated(f, card, true).await;
+        let role = f.core.agents.find(sid).map_or(Role::Manager, |s| s.role());
+        say_rotated(f, role, card, true).await;
     }
 }
 
-async fn say_rotated(f: &Front, card: i64, ok: bool) {
-    let title = if ok {
-        "manager-context: rotated when its turn ended; a fresh session has its digest and open decisions"
-    } else {
-        "manager-context: could not be rotated when its turn ended"
+async fn say_rotated(f: &Front, role: Role, card: i64, ok: bool) {
+    let title = match (role, ok) {
+        (Role::Manager, true) => {
+            "manager-context: rotated when its turn ended; a fresh session has its digest and open decisions"
+        }
+        (Role::Manager, false) => "manager-context: could not be rotated when its turn ended",
+        (_, true) => {
+            "context: rotated when its turn ended; a fresh session has its task's brief in the same worktree"
+        }
+        (_, false) => "context: could not be rotated when its turn ended",
     };
     let set = norn::write::cards::CardSet {
         title: Some(title.to_owned()),

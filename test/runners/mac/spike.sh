@@ -212,7 +212,11 @@ profile() { # SLOT ATTEMPT CACHE TOOLS DEVDIR USERDIR
   for p in /usr /bin /sbin /System /Library /opt/homebrew /private/etc /dev/fd /private/var/select /private/var/db/timezone /private/var/db/xcode_select_link \
            "$dev" "$slot" "$att" "$cache" "$tools" "$udir"; do printf ' (subpath "%s")' "$p"; done
   echo ')'
-  echo '(allow file-read* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/random") (literal "/dev/urandom") (literal "/dev/tty") (literal "/dev/dtracehelper"))'
+  echo '(allow file-read* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/random") (literal "/dev/urandom") (literal "/dev/tty") (literal "/dev/dtracehelper") (literal "/dev/autofs_nowait"))'
+  echo '(allow file-write-data (literal "/dev/dtracehelper") (literal "/dev/tty"))'
+  # round 3: the xcrun shims (make, cc) read the developer dir's bundle plist and ask opendirectoryd for groups
+  printf '(allow file-read* (literal "%s/Info.plist") (literal "%s/version.plist"))\n' "$(dirname "$dev")" "$(dirname "$dev")"
+  echo '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.membership"))'
   echo '(deny file-read* (subpath "/opt/homebrew/var") (subpath "/usr/local/var"))'
   printf '(allow file-write*'
   for p in "$slot" "$att" "$cache" "$udir"; do printf ' (subpath "%s")' "$p"; done
@@ -221,6 +225,12 @@ profile() { # SLOT ATTEMPT CACHE TOOLS DEVDIR USERDIR
   echo '(deny network*)'
   echo '(deny network-outbound (remote unix-socket))'
 }
+
+cf_enc() { # what CoreFoundation would read from ~/.CFUserTextEncoding (uid, then encoding and region 0)
+  printf '0x%X:0x0:0x0' "$(id -u)"
+}
+
+stamp() { echo "$(date -u +%H:%M:%S) $*"; }
 
 remote_s2_build() { # the runner side: the profile, then the build under it, under the watchdog (observing only)
   r=~/$ROOT_REL; a=$r/att-s2; mkdir -p "$a/home" "$a/tmp" "$r/cache"
@@ -232,7 +242,7 @@ remote_s2_build() { # the runner side: the profile, then the build under it, und
   start=$(date +%s)
   "$r/mrspike" watch --grant-mib 100000 --report "$a/watch.txt" -- /usr/bin/sandbox-exec -f "$a/build.sb" /usr/bin/env -i \
     HOME="$a/home" TMPDIR="$a/tmp/" PATH="$r/tools/cargo/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
-    RUSTUP_HOME="$r/tools/rustup" CARGO_HOME="$r/cache/cargo" LANG=en_US.UTF-8 \
+    RUSTUP_HOME="$r/tools/rustup" CARGO_HOME="$r/cache/cargo" LANG=en_US.UTF-8 __CF_USER_TEXT_ENCODING="$(cf_enc)" \
     /bin/bash nidhogg/build.sh --host --naglfar --dev --stage build --jobs 3 --build-dir "$a/nbuild" > "$a/build.log" 2>&1
   rc=$?
   echo "build-rc=$rc seconds=$(( $(date +%s) - start ))"
@@ -259,20 +269,21 @@ s2_build() { # NIDHOGG_CHECKOUT
   if printf '%s' "$out" | grep -qE '^verdict=exited exit=Some\(0\)'; then say "- **S2 build: PASS**"; else say "- **S2 build: FAIL** (tail in s2-build.log; denials below)"; fi
 }
 
-remote_s2_ert() { # SELECTOR EMACS (relative to the Nidhogg prefix)
+remote_s2_ert() { # SELECTOR EMACS (relative to tools/nidhogg)
   r=~/$ROOT_REL; a=$r/att-ert; mkdir -p "$a/home" "$a/tmp"
   udir=$(cd -P "$(getconf DARWIN_USER_DIR)/.." && pwd -P)
   dev=$(cd -P "$(xcode-select -p)" && pwd -P)
   profile "$(cd -P "$r/slot-drgnx" && pwd -P)" "$(cd -P "$a" && pwd -P)" "$(cd -P "$r/cache" && pwd -P)" "$(cd -P "$r/tools" && pwd -P)" "$dev" "$udir" > "$a/ert.sb"
   cd "$r/slot-drgnx" || return 1
   emacs=$r/tools/nidhogg/$2
-  echo "emacs=$emacs"
+  stamp "emacs=$emacs ($([ -x "$emacs" ] && echo there || echo MISSING))"
   # in its own session (the watchdog's way), so a hang can be seen and stopped whole: 10 minutes (inside the step's
   # 20), then the process list and SIGKILL to the session
   "$r/mrspike" detach "$a/ert.log" -- /usr/bin/sandbox-exec -f "$a/ert.sb" /usr/bin/env -i HOME="$a/home" TMPDIR="$a/tmp/" \
-    PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" LANG=en_US.UTF-8 DRGNX_EMACS="$emacs" DRGNX_TEST_SELECTOR="$1" \
+    PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" LANG=en_US.UTF-8 __CF_USER_TEXT_ENCODING="$(cf_enc)" \
+    DRGNX_EMACS="$emacs" DRGNX_TEST_SELECTOR="$1" \
     /bin/bash -c 'bin/drgnx test; echo "ert-rc=$?"' > "$a/pid" 2>&1
-  pid=$(tail -n 1 "$a/pid"); echo "session leader: $pid"
+  pid=$(tail -n 1 "$a/pid"); stamp "session leader: $pid"
   waited=0
   while kill -0 "$pid" 2>/dev/null && [ $waited -lt 600 ]; do sleep 5; waited=$((waited + 5)); done
   if kill -0 "$pid" 2>/dev/null; then
@@ -288,19 +299,40 @@ remote_s2_ert() { # SELECTOR EMACS (relative to the Nidhogg prefix)
   echo "--- log tail"; tail -n 40 "$a/ert.log"
 }
 
-s2_ert() { # DRGNX_CHECKOUT DRGNX_EMACS SELECTOR (the Nidhogg prefix is DRGNX_EMACS's ../..)
+s2_ert() { # DRGNX_CHECKOUT DRGNX_EMACS SELECTOR (DRGNX_EMACS inside an .app: the whole bundle is copied)
   say "## S2: drgnx ERT selectors under the draft build profile"
   r=$(root_of)
   # the committed tree only: the checkout's runtime/target holds GBs from the earlier steps (rounds 1-2 spent the
   # step copying it)
+  stamp "slot"
   sudo mkdir -p "$r/slot-drgnx"
   git -C "$1" archive HEAD | sudo tar -x -C "$r/slot-drgnx"
+  app=${2%%.app/*}.app; rel=$(basename "$app")/${2#"$app"/}
+  stamp "the Nidhogg bundle $app ($(du -sh "$app" 2>/dev/null | cut -f1)) -> tools/nidhogg/$rel"
   sudo mkdir -p "$r/tools/nidhogg"
-  prefix=$(cd -P "$(dirname "$2")/.." && pwd -P); rel=bin/$(basename "$2")
-  sudo ditto "$prefix" "$r/tools/nidhogg"
+  sudo ditto "$app" "$r/tools/nidhogg/$(basename "$app")"
   sudo chown -R "$U:staff" "$r/slot-drgnx" "$r/tools/nidhogg"
-  out=$(mr "bash ~/$ROOT_REL/spike.sh remote s2_ert '$3' '$rel'" 2>&1)
-  printf '%s\n' "$out" > "$OUT/s2-ert.log"
+  stamp "the remote run"
+  # watched from here, outside the ssh call (rounds 1-3 hung somewhere inside it with nothing back): its output goes
+  # to a file; after 12 minutes the runner account's processes and their stacks go to the step log, then it is stopped
+  mr "bash ~/$ROOT_REL/spike.sh remote s2_ert '$3' '$rel'" > "$OUT/s2-ert.log" 2>&1 &
+  bg=$!
+  waited=0
+  while kill -0 "$bg" 2>/dev/null && [ $waited -lt 720 ]; do sleep 10; waited=$((waited + 10)); done
+  if kill -0 "$bg" 2>/dev/null; then
+    stamp "the remote run is stuck after ${waited}s; its output so far:"
+    cut -c1-300 "$OUT/s2-ert.log"
+    stamp "the runner account's processes:"
+    sudo ps -U "$U" -o pid,ppid,pgid,stat,etime,time,command | cut -c1-300 | tee "$OUT/s2-ert-stuck.txt"
+    for p in $(sudo ps -U "$U" -o pid=,stat= | awk '$2 !~ /Z/ { print $1 }'); do
+      echo "--- sample $p"; sudo /usr/bin/sample "$p" 1 2>/dev/null | grep -E '^ +[0-9]+ ' | head -n 25
+    done | tee -a "$OUT/s2-ert-stuck.txt"
+    kill "$bg" 2>/dev/null
+    sudo pkill -KILL -u "$U" 2>/dev/null || true
+  fi
+  wait "$bg" 2>/dev/null
+  out=$(cat "$OUT/s2-ert.log")
+  stamp "done"
   sudo cp "$r/att-ert/ert.log" "$OUT/s2-ert-full.log" 2>/dev/null; sudo chmod 644 "$OUT/s2-ert-full.log" 2>/dev/null
   say "- $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-600)"
   if printf '%s' "$out" | grep -q 'ert-rc=0'; then say "- **S2 ERT: PASS**"; else say "- **S2 ERT: FAIL**"; fi
