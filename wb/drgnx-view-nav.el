@@ -130,9 +130,9 @@ model (`drgnx-view-patch-class-faces')."
   "The class step of VIEW, in its buffer: the nodes whose class changed in Sjá get it on their spans; with KEYS (rows a
 draw replaced), every node drawn in them gets its current class again and the overlays left empty go."
   (when-let* ((h (drgnx-view-patch-handle drgnx-view-patch)))
-    (let ((changes (nidhogg-view-get h 'classes)) (done (make-hash-table :test #'equal)) (i 0))
+    (let ((changes (nidhogg-view-get h 'classes)) (done (and keys (make-hash-table :test #'equal))) (i 0))
       (while (< i (length changes))
-        (puthash (aref changes i) t done)
+        (when done (puthash (aref changes i) t done))     ; a key's step makes no table: only a draw's reads it
         (drgnx-view-nav--put-class view (aref changes i) (aref changes (1+ i)))
         (setq i (+ i 2)))
       (when keys

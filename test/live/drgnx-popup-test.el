@@ -52,7 +52,7 @@ BORROWED: while open, no window moved either (the popup is in the panel's window
 (ert-deftest drgnx-live/transient-leaves-no-trace-with-and-without-the-panel ()
   (drgnx-live-popup--with sess
     (drgnx-live-popup--no-trace sess "<f19>" "C-g")
-    (drgnx-live-popup--measure sess(list (list :keys "C-`")))           ; the panel open: borrowed and given back
+    (drgnx-live-popup--measure sess(list (list :keys "M-j")))           ; the panel open: borrowed and given back
     (drgnx-live-popup--no-trace sess "<f19>" "C-g" t)))
 
 (ert-deftest drgnx-live/completions-leave-no-trace ()
@@ -74,7 +74,7 @@ BORROWED: while open, no window moved either (the popup is in the panel's window
   ;; The panel open: *Completions* borrows it (under Glitnir: shows in the lane's child frame), has candidates (its
   ;; body-function ran), and leaving the minibuffer ends it and gives the panel back with its tab row.
   (drgnx-live-popup--with sess
-    (drgnx-live-popup--measure sess(list (list :keys "C-`")))
+    (drgnx-live-popup--measure sess(list (list :keys "M-j")))
     (let ((before (plist-get (drgnx-ui-call sess drgnx-live-popup--edges) :edges))
           (q "(drgnx-uitest--json (list :size (if (get-buffer \"*Completions*\") (buffer-size (get-buffer \"*Completions*\")) 0)
                                          :active (if (drgnx-popup-active-p) t :false)

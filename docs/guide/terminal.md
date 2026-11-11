@@ -267,7 +267,7 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `C-S-s` | Save As… | `Alt+Shift+S` | `F6 s` |
 | `C-S-t` | Reopen Closed Tab | `Alt+Shift+T` | `F6 t` |
 | `C-S-n` | New Window | `Alt+Shift+N` | `F6 n` |
-| `` C-` `` | Toggle Panel | — | `` F6 ` `` |
+| `` C-` `` | Toggle Terminal | — | `` F6 ` `` |
 | `C-1` | Focus First Editor Group | — | `F6 1` |
 | `C-2` | Focus Second Editor Group | — | `F6 2` |
 | `C-3` | Focus Third Editor Group | `Alt+Shift+3` | `F6 3` |

@@ -116,7 +116,9 @@ such a line, which "legacy" avoids. The cursor's column in `term` is an index in
 **Input:** a key name maps to libghostty's key (letters, digits and US-layout symbols by character, named keys, else
 unidentified with its text; `src/keys.rs`) and is encoded from the terminal's modes (kitty keyboard flags,
 modifyOtherKeys, DECCKM). Without the kitty flags, Ctrl+I, Ctrl+M and Ctrl+[ send tab, return and escape as
-xterm does (the encoder would send them as CSI u, which shells do not read). Paste is bracketed when the program asked (mode 2004); mouse events are encoded only while the
+xterm does (the encoder would send them as CSI u, which shells do not read). A repeat or a release (`action`) is
+encoded as itself only while the program set the kitty flag "report event types" (2; `term` then says `key_events`);
+otherwise a repeat is a press and a release sends nothing. Paste is bracketed when the program asked (mode 2004); mouse events are encoded only while the
 program tracks the mouse; focus reports only when it asked (mode 1004).
 
 **Effects:** the engine's replies to the program (device and mode reports) go back to the PTY; bell, title, working
@@ -175,7 +177,7 @@ The editor talks to its terminals through the hub (`runstav/src/methods/term.rs`
 |---|---|---|
 | `term/open` | `dir`, `command?`, `env` (the program's whole environment, `[[name, value]…]`), `cols`, `rows`, `cell_px?`, `class`, `window?`, `config?`, `memory_max?`, `tasks_max?` (the scope's limits) | `{id, view}`; the view is `term:<id>` and its first patch a reset |
 | `term/config` | `id`, `config: [[name, value]…]` (`scrollback-lines`, `scrollback-bytes`, `clipboard-write`, `cursor-style`, `enquiry-response`, `title-report`, `grapheme-width-method`, `colours`) | `true` |
-| `term/key` | `id`, `key`, `mods`, `text?`, `unshifted?` | `true` |
+| `term/key` | `id`, `key`, `mods`, `text?`, `unshifted?`, `action?` (`press`, the default, `repeat` or `release`) | `true` |
 | `term/text`, `term/paste` | `id`, `text` | `true` |
 | `term/focus` | `id`, `in` | `true` |
 | `term/mouse` | `id`, `kind`, `button`, `col`, `row`, `mods` | `true` |
@@ -285,6 +287,13 @@ program runs).
   raw key (control, meta, the named keys) to `drgnx-term-send-event`; `drgnx-term-apply-keys` takes out the keys the
   active profile keeps for drgnx (`drgnx-terminal-key-split`, with `drgnx-term-reserved-keys`), on every key-stack
   change. `term/paste` sends the kill ring's newest entry (bracketed by the engine when the program asked).
+- **Key repeats and releases** (Nidhogg only): a key read with `nidhogg-last-key-repeat` set goes as `action`
+  `repeat`. While the selected window shows a terminal whose `term` says `key_events`, or a key pressed in one is
+  held, `drgnx-term--key-gate` sets `nidhogg-key-events`, so releases arrive as `key-release` special events
+  (`special-event-map`, bound by the module's setup and taken out by its teardown). A press sent to such a terminal is
+  remembered in `drgnx-term--held` (by `event-basic-type`, 32 at most), and `drgnx-term-key-release` sends its release
+  to that terminal, with the modifiers held at the release, wherever the keyboard is now. A terminal that loses the
+  selection (`drgnx-term--selected`), or Emacs losing the focus (`after-focus-change-function`), releases what it holds.
 - **Mouse:** the mouse bindings are menu-item filters that answer only while the patch's `term` says
   `mouse_tracking`; then `term/mouse` carries the cell (`drgnx-term--mouse-cell`: the screen row counts from the
   buffer's last `rows` lines). Focus changes (`window-selection-change-functions`, buffer-local) send `term/focus`.

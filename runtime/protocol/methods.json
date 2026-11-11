@@ -4222,6 +4222,11 @@
                 ],
                 "type": "array"
               },
+              "key_events": {
+                "default": false,
+                "description": "The program asked for key event types (the kitty keyboard protocol's flag 2): the editor sends repeats and\nreleases.",
+                "type": "boolean"
+              },
               "mouse_tracking": {
                 "default": false,
                 "type": "boolean"
@@ -23288,6 +23293,53 @@
       "classes": [
         "user"
       ],
+      "doc": "a task's evidence (its jobs' rows on their facts, the gates' findings), oldest first",
+      "name": "orch/evidence",
+      "params": {
+        "$defs": {
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A task.",
+        "properties": {
+          "task": {
+            "$ref": "#/$defs/TaskRef"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "title": "ByTask",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A task's evidence, oldest first: each record as `vordr::evidence::Evidence` (`kind`, `task`, `job`, `facts`,\n`rows`, `truncated`, `at`, `note`).",
+        "properties": {
+          "evidence": {
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "evidence"
+        ],
+        "title": "EvidenceList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the subscriptions' meters: share used, rate per hour and when it runs out at that rate (estimates)",
       "name": "pace/get",
       "params": {
@@ -33606,12 +33658,26 @@
       "classes": [
         "user"
       ],
-      "doc": "a key press, encoded by the worker from the terminal's modes (kitty keyboard, modifyOtherKeys, DECCKM); its echo is drawn at once",
+      "doc": "a key press, repeat or release, encoded by the worker from the terminal's modes (kitty keyboard, modifyOtherKeys, DECCKM); its echo is drawn at once",
       "name": "term/key",
       "params": {
+        "$defs": {
+          "TermKeyAction": {
+            "description": "`term/key`'s ACTION.",
+            "enum": [
+              "press",
+              "repeat",
+              "release"
+            ],
+            "type": "string"
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`term/key`: a key press, encoded by the worker from the terminal's modes. KEY is its name (`a`, `return`, `f5`),\nMODS its modifiers (`ctrl`, `shift`, `alt`, `super`), TEXT what it types, UNSHIFTED the codepoint without shift.",
+        "description": "`term/key`: a key event, encoded by the worker from the terminal's modes. KEY is its name (`a`, `return`, `f5`),\nMODS its modifiers (`ctrl`, `shift`, `alt`, `super`), TEXT what it types, UNSHIFTED the codepoint without shift,\nACTION `press` (the default), `repeat` or `release`: a repeat or a release reaches the program as itself only while\nit asked for key event types (the view's `term.key_events`).",
         "properties": {
+          "action": {
+            "$ref": "#/$defs/TermKeyAction"
+          },
           "id": {
             "type": "string"
           },

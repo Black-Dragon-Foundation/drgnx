@@ -5,7 +5,7 @@
 use crate::engine::{Effect, Engine};
 use crate::frame::{Clock, Ms, Next};
 use crate::keys;
-use crate::proto::{In, Out};
+use crate::proto::{In, KeyAction, Out};
 use crate::rows::{Key, RowId, Tracker};
 use crate::style::{Cell, StyleTable, build};
 use drgnx_rows::{Op, Patch, Row, TermMeta};
@@ -21,6 +21,8 @@ const BACKFILL_MAX_ROWS: usize = 1024;
 pub const ENGINE_LINES_MIN: usize = 10_000;
 /// The most prompt rows remembered for `scroll` by prompts.
 const PROMPTS_MAX: usize = 4096;
+/// The kitty keyboard protocol's "report event types" flag: repeats and releases reach the program.
+const KITTY_REPORT_EVENTS: u8 = 2;
 
 /// How a terminal starts.
 #[derive(Clone, Debug)]
@@ -226,7 +228,8 @@ impl Worker {
                 mods,
                 text,
                 unshifted,
-            } => self.key(&key, keys::mods(&mods), &text, unshifted, now),
+                action,
+            } => self.key(&key, keys::mods(&mods), &text, unshifted, action, now),
             In::Text { text } => {
                 self.pty.extend_from_slice(text.as_bytes());
                 self.clock.key(now);
@@ -325,8 +328,28 @@ impl Worker {
         }
     }
 
-    /// A key press: its bytes go to the program, and the echo is drawn at once.
-    pub fn key(&mut self, name: &str, mods: u16, text: &str, unshifted: u32, now: Ms) {
+    /// A key event: its bytes go to the program, and a press's echo is drawn at once.  A release sends nothing unless
+    /// the program asked for key event types (kitty flag 2); a repeat is then a press.
+    pub fn key(
+        &mut self,
+        name: &str,
+        mods: u16,
+        text: &str,
+        unshifted: u32,
+        action: KeyAction,
+        now: Ms,
+    ) {
+        let action = match action {
+            _ if self.engine.kitty_flags() & KITTY_REPORT_EVENTS == 0 => {
+                if action == KeyAction::Release {
+                    return;
+                }
+                GHOSTTY_KEY_ACTION_PRESS
+            }
+            KeyAction::Press => GHOSTTY_KEY_ACTION_PRESS,
+            KeyAction::Repeat => GHOSTTY_KEY_ACTION_REPEAT,
+            KeyAction::Release => GHOSTTY_KEY_ACTION_RELEASE,
+        };
         let (code, base) = keys::code(name);
         let unshifted = if unshifted != 0 { unshifted } else { base };
         // without the kitty flags, ctrl+i, ctrl+m and ctrl+[ are the C0 byte (tab, return, escape) as in xterm; the
@@ -344,9 +367,11 @@ impl Worker {
             return;
         }
         let text = text.to_owned();
-        let b = self.engine.encode_key(code, mods, &text, unshifted);
+        let b = self.engine.encode_key(code, mods, &text, unshifted, action);
         self.pty.extend_from_slice(&b);
-        self.clock.key(now);
+        if action != GHOSTTY_KEY_ACTION_RELEASE {
+            self.clock.key(now);
+        }
     }
 
     /// A mouse event's bytes (none unless the program tracks the mouse).
@@ -660,6 +685,7 @@ impl Worker {
             alt_screen: self.alt,
             mouse_tracking: self.engine.mouse_tracking(),
             bracketed_paste: self.engine.mode(2004, false),
+            key_events: self.engine.kitty_flags() & KITTY_REPORT_EVENTS != 0,
             title: self.engine.title(),
         }
     }

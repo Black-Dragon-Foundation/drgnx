@@ -2,10 +2,10 @@
 //! `view/*` messages of a terminal's view (`term:<id>`), which go to its worker rather than the hub's own views.
 
 use super::{Spawn, Terms};
-use drgnx_term::proto::{In, Out};
+use drgnx_term::proto::{In, KeyAction, Out};
 use drgnx_term::scope::Limits;
 use runstav::methods::Params;
-use runstav::methods::term::{TermOpened, TermStatus};
+use runstav::methods::term::{TermKeyAction, TermOpened, TermStatus};
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -102,6 +102,11 @@ pub async fn serve(t: &Terms, conn: u64, p: Params) -> Result<Value, Error> {
                 mods: p.mods,
                 text: p.text.unwrap_or_default(),
                 unshifted: p.unshifted.unwrap_or(0),
+                action: match p.action {
+                    TermKeyAction::Press => KeyAction::Press,
+                    TermKeyAction::Repeat => KeyAction::Repeat,
+                    TermKeyAction::Release => KeyAction::Release,
+                },
             },
         ),
         Params::TermText(p) => tell(t, &p.id, In::Text { text: p.text }),

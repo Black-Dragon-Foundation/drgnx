@@ -73,19 +73,20 @@ Built when the popup shows, set as a window parameter."
   (drgnx-wb-header-with-close (concat " " (string-trim (buffer-name buffer) "[ *]+" "[ *]+"))
                               #'drgnx-popup--close-click "Close (Esc, q)"))
 
-(defun drgnx-popup--float-fit (window)
-  "Fit the floating lane's frame to its buffer (at most 0.9 of the root's width and 0.33 of its height) and put it
-bottom-centre, above the echo area."
+(defun drgnx-popup--float-fit (window &optional fraction)
+  "Fit the floating lane's frame to its buffer (at most 0.9 of the root's width and FRACTION, default 0.33, of its
+height) and put it bottom-centre, above the echo area.  The width counts the lines below the height too (up to three
+heights), so scrolling to them never scrolls sideways."
   ;; The size is computed from the text and set, then the position from that size: a frame's size is answered by the
   ;; compositor later, so `frame-outer-width' right after a resize still says the old one.
   (let* ((child (window-frame window)) (root (frame-parent child))
-         (max-w (floor (* 0.9 (frame-pixel-width root)))) (max-h (floor (* 0.33 (frame-pixel-height root))))
+         (max-w (floor (* 0.9 (frame-pixel-width root)))) (max-h (floor (* (or fraction 0.33) (frame-pixel-height root))))
          (frame-resize-pixelwise t)
          ;; measured in a window as large as the lane may be, or a long line would wrap at a small one's width
          (_ (set-frame-size child max-w max-h t))
          (extra-w (- (window-pixel-width window) (window-body-width window t)))
          (extra-h (- (window-pixel-height window) (window-body-height window t)))
-         (text (window-text-pixel-size window nil nil (- max-w extra-w) (- max-h extra-h)))
+         (text (window-text-pixel-size window nil nil (- max-w extra-w) (* 3 (- max-h extra-h))))
          (w (min max-w (+ (car text) extra-w))) (h (min max-h (+ (cdr text) extra-h)))
          (border-w (- (frame-outer-width child) (frame-text-width child)))
          (border-h (- (frame-outer-height child) (frame-text-height child))))
@@ -113,8 +114,9 @@ reused (`display-buffer-in-child-frame' makes it the first time)."
         (set-frame-parameter root 'drgnx-popup-frame child)))
     (frame-root-window child)))
 
-(defun drgnx-popup--show-float (buffer)
-  "The lane in the popup child frame: shown with BUFFER, fitted and placed; return its window."
+(defun drgnx-popup--show-float (buffer &optional fraction)
+  "The lane in the popup child frame: shown with BUFFER, fitted (at most FRACTION of the frame's height, default 0.33)
+and placed; return its window."
   (let ((lane (drgnx-popup--float-window buffer)))
     (set-window-parameter lane 'header-line-format (drgnx-popup--header buffer))
     (set-window-parameter lane 'drgnx-popup (list :float t :popup buffer))
@@ -126,9 +128,9 @@ reused (`display-buffer-in-child-frame' makes it the first time)."
       (set-window-dedicated-p lane nil)
       (set-window-prev-buffers lane (list (list idle (copy-marker 1) (copy-marker 1))))
       (set-window-parameter lane 'quit-restore (list 'window (list idle 1 1 nil) (selected-window) buffer)))
-    (drgnx-popup--float-fit lane)
+    (drgnx-popup--float-fit lane fraction)
     (make-frame-visible (window-frame lane))
-    (drgnx-popup--float-fit lane)       ; a frame that has just been mapped can take its first size from the toolkit
+    (drgnx-popup--float-fit lane fraction)       ; a frame that has just been mapped can take its first size from the toolkit
     lane))
 
 (defun drgnx-popup--fonts (buffer)
@@ -150,7 +152,7 @@ one; mark it as the lane.  Under `drgnx-popup-style' `float', one child frame in
   (let ((lane (drgnx-popup--window)) (panel (drgnx-wb-area-window 'panel)))
     (cond
      ((and (drgnx-popup--float-p) (or (not lane) (plist-get (window-parameter lane 'drgnx-popup) :float)))
-      (setq lane (drgnx-popup--show-float buffer)))
+      (setq lane (drgnx-popup--show-float buffer (plist-get props :height))))
      (lane (drgnx-wb-set-area-buffer lane buffer)                   ; a popup replaces a popup
            (set-window-parameter lane 'header-line-format (drgnx-popup--header buffer))
            (set-window-parameter lane 'drgnx-popup

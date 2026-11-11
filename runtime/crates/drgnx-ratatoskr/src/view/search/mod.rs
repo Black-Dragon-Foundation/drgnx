@@ -43,7 +43,8 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 /// The rows a search sends a view: the first this many, and as many again each time the editor asks (the panel's shape,
 /// `agents/panel/look`); the model holds every match.
@@ -328,7 +329,7 @@ fn whole_patches(
 ) -> (Option<ViewModel>, Vec<Patch>) {
     run.waiting = (Vec::new(), Vec::new());
     run.model_sent = entries_of(&run.files);
-    run.model_at = Some(Instant::now());
+    run.model_at = Some(crate::clock::now());
     let from = store.window_from(conn, view, "order");
     let model = store.publish_model(
         conn,
@@ -431,7 +432,7 @@ fn flush_model(store: &mut Store, conn: u64, view: &str, run: &mut Run) -> Optio
     let appends =
         run.model_sent > 0 && run.model_sent + ids.len() == entries && entries <= MODEL_WINDOW;
     run.model_sent = entries;
-    run.model_at = Some(Instant::now());
+    run.model_at = Some(crate::clock::now());
     appends
         .then(|| store.append_model(conn, view, nodes, "order", ids))
         .flatten()
@@ -477,7 +478,10 @@ fn batch_patches(
         // throttle window has passed since the last send, with the others waiting (SJA-MODEL-CADENCE-1)
         run.waiting.0.extend(nodes);
         run.waiting.1.extend(ids);
-        let due = !rows.is_empty() || run.model_at.is_none_or(|t| t.elapsed() >= run.model_every);
+        let due = !rows.is_empty()
+            || run
+                .model_at
+                .is_none_or(|t| crate::clock::now().duration_since(t) >= run.model_every);
         if due {
             flush_model(store, conn, view, run)
         } else {
@@ -937,7 +941,7 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
     };
     if !matches!(mode, Mode::Text) {
         let root = p.root.clone();
-        tokio::spawn(async move {
+        crate::clock::spawn("search:modes", async move {
             let Some(f) = front.upgrade() else { return };
             let found = modes::found(&f, &root, &mode, context).await;
             let error = match found {

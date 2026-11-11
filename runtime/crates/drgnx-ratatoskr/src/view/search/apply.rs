@@ -233,16 +233,17 @@ async fn ask_editor(
 }
 
 /// FILE (inside ROOT) on disk, written with EDITS when its bytes are still those of digest EXPECT: the digest of the
-/// bytes written and the inverse edits, or why not. Blocking.
+/// bytes written, the inverse edits and the attributes the new file did not keep (`disk::replace`), or why not.
+/// Blocking.
 pub(super) fn write_disk(
     root: &Path,
     file: &Path,
     expect: u64,
     edits: &[SearchEdit],
-) -> Result<(u64, Vec<SearchEdit>), String> {
+) -> Result<(u64, Vec<SearchEdit>, Vec<String>), String> {
     let real = file.canonicalize().map_err(|_| GONE.to_owned())?;
     let mut out = None;
-    crate::pair::disk::replace(
+    let lost = crate::pair::disk::replace(
         root,
         &real,
         |raw| {
@@ -263,7 +264,8 @@ pub(super) fn write_disk(
         CHANGED_SINCE_PREVIEW,
     )
     .map_err(|r| r.0)?;
-    out.ok_or_else(|| GONE.to_owned())
+    out.map(|(after, inverse)| (after, inverse, lost))
+        .ok_or_else(|| GONE.to_owned())
 }
 
 /// What one change set's run wrote, for its `search-change`.
@@ -273,6 +275,8 @@ struct Tally {
     files: u64,
     skipped: Vec<EditSkip>,
     left: Vec<String>,
+    /// Attribute name → how many files written on disk did not keep it.
+    lost: std::collections::BTreeMap<String, u64>,
 }
 
 impl Tally {
@@ -282,6 +286,13 @@ impl Tally {
             path: path.to_owned(),
             why: why.to_owned(),
         }));
+    }
+
+    /// One log line for the run's attributes not kept (`N files: security.selinux not kept`), none when all were.
+    fn log_lost(&self) {
+        for (name, n) in &self.lost {
+            tracing::info!("{n} file(s): {name} not kept");
+        }
     }
 
     fn done(self, set: &ChangeSet) -> ChangeDone {
@@ -376,7 +387,10 @@ async fn write_file(
         .await
         .unwrap_or_else(|e| Err(e.to_string()));
     match res {
-        Ok((after, inverse)) => {
+        Ok((after, inverse, lost)) => {
+            for name in lost {
+                *tally.lost.entry(name).or_default() += 1;
+            }
             tally.written += edits.len() as u64;
             tally.files += 1;
             changes.written(
@@ -420,6 +434,7 @@ pub(super) fn apply(f: &Arc<Front>, conn: u64, change: u64, open: Vec<String>) -
             )
             .await;
         }
+        tally.log_lost();
         f.send_to(set.conn, "search-change", json!(tally.done(&set)));
     });
     true
@@ -489,6 +504,7 @@ pub(super) fn undo(f: &Arc<Front>, conn: u64, change: u64, open: Vec<String>) ->
             )
             .await;
         }
+        tally.log_lost();
         f.send_to(set.conn, "search-change", json!(tally.done(&set)));
     });
     true
@@ -529,7 +545,7 @@ mod tests {
             CHANGED_SINCE_PREVIEW
         );
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "x pending y\r\n");
-        let (after, inverse) = write_disk(&root, &f, read, &es).unwrap();
+        let (after, inverse, _) = write_disk(&root, &f, read, &es).unwrap();
         assert_eq!(
             std::fs::read_to_string(&f).unwrap(),
             "x queued y\r\n",

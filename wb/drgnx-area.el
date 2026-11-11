@@ -293,6 +293,16 @@ area, so its size and tabs are kept."
   "Show AREA and move focus to it."
   (select-window (drgnx-wb-area-show area)))
 
+(defun drgnx-wb-area-toggle-tab (area tab &optional start)
+  "Hide AREA when it shows TAB; else show TAB and select it.  When TAB has no buffer of its own, call START (if
+given) instead of selecting the placeholder: it makes one, which the rules show in TAB."
+  (if (and (drgnx-wb-area-window area) (eq (drgnx-wb-area-tab area) tab))
+      (drgnx-wb-area-hide area)
+    (let ((w (drgnx-wb-area-show area tab)))
+      (if (and start (not (drgnx-area--content-p (window-buffer w))))
+          (funcall start)
+        (select-window w)))))
+
 (defun drgnx-wb-toggle-panel () "Show or hide the bottom panel." (interactive) (drgnx-wb-area-toggle 'panel))
 (defun drgnx-wb-focus-panel () "Show the bottom panel and move focus to it." (interactive) (drgnx-wb-area-focus 'panel))
 (defun drgnx-wb-toggle-right-dock () "Show or hide the right dock." (interactive) (drgnx-wb-area-toggle 'right))

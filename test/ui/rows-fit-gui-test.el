@@ -358,3 +358,60 @@ panel's, neither stale; the twin is no panel of its own."
       (drgnx-panel-replay-down)
       (drgnx-view-env-teardown)
       (drgnx-view-patch-teardown))))
+
+(defvar drgnx-explorer--roots)
+(defvar drgnx-explorer--hub-view)
+(defvar drgnx-explorer--expanded)
+(defvar drgnx-explorer-git)
+(defvar drgnx-explorer--window-asker)
+(defvar drgnx-explorer-buffer-name)
+(defvar drgnx-explorer-hub-view-name)
+(declare-function drgnx-explorer--buffer "drgnx-explorer" ())
+
+(ert-deftest drgnx-ui-rows-fit/the-explorer-s-twin-pages-when-it-scrolls ()
+  "Pattern C (a handshake on the hub's rows): the Explorer over a folder of 400 files (more than the hub's window of
+rows), shown in a second frame of another class (the second monitor at another scale under sway, else a doubled
+font): that frame shows the Explorer's twin with its class's rows; scrolled to the end of its rows, the twin asks the
+hub for the window further on, and its rows then hold entries past the first window."
+  (skip-unless (display-graphic-p))
+  (skip-unless (fboundp 'nidhogg-view--call))
+  (require 'drgnx-pixels)
+  (require 'drgnx-explorer)
+  (drgnx-rows-demo-with
+    (let* ((dir (file-name-as-directory (make-temp-file "explorer-twin" t)))
+           (drgnx-explorer--roots (list dir)) (drgnx-explorer--hub-view nil) (drgnx-explorer-git nil)
+           (drgnx-explorer--expanded (make-hash-table :test #'equal)) (drgnx-explorer--window-asker nil)
+           (px (aref (font-info (face-font 'default)) 2)) (frame nil))
+      (dotimes (i 400) (write-region "" nil (expand-file-name (format "f%03d.txt" i) dir) nil 'silent))
+      (unwind-protect
+          (let* ((b (drgnx-explorer--buffer))
+                 (rows-p (lambda (buf) (with-current-buffer buf
+                                         (and drgnx-view-patch (> (drgnx-view-row-count drgnx-view) 1)))))
+                 (made (drgnx-rows-fit-ui-test--second-frame px)))
+            (setq frame (car made))
+            (set-window-buffer (selected-window) b)
+            (drgnx-view-env-update drgnx-explorer-hub-view-name)
+            (drgnx-test-wait (lambda () (funcall rows-p b)) :secs 20 :what "the Explorer's rows")
+            (drgnx-test-wait (lambda () (eq t (frame-visible-p frame))) :secs 10 :what "the second frame shown")
+            (set-window-buffer (frame-root-window frame) b)
+            (drgnx-view-env-update drgnx-explorer-hub-view-name)
+            (let* ((w (frame-root-window frame))
+                   (tw (drgnx-test-wait (lambda () (let ((x (window-buffer w))) (and (eq b (drgnx-view-patch-twin-p x)) x)))
+                                        :secs 10 :what "the Explorer's twin in the second frame")))
+              (drgnx-test-wait (lambda () (funcall rows-p tw)) :secs 20 :what "the twin's rows")
+              (should-not (string-match-p "f300" (with-current-buffer tw (buffer-string))))
+              (with-selected-window w (goto-char (point-max)) (recenter -1))
+              (drgnx-test-wait (lambda ()
+                                 (drgnx-test-wait-presented :frame frame)   ; the scroll runs in its redisplay
+                                 (with-current-buffer tw
+                                   (> (car (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'window "order")) 0)))
+                               :secs 20 :what "the hub's window moved by the twin's scroll")
+              (should (eq tw (cdr drgnx-explorer--window-asker)))          ; the twin asked, not the Explorer's buffer
+              (drgnx-test-wait (lambda () (with-current-buffer tw (string-match-p "f2[0-9][0-9]" (buffer-string))))
+                               :secs 20 :what "the twin's rows past the first window")
+              (drgnx-rows-fit-ui-test--report
+               (format "the Explorer's twin (%s): window from %S" (cadr made)
+                       (with-current-buffer tw (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'window "order"))))))
+        (when (frame-live-p frame) (delete-frame frame))
+        (when-let* ((b (get-buffer drgnx-explorer-buffer-name))) (kill-buffer b))
+        (delete-directory dir t)))))

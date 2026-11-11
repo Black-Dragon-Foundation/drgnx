@@ -3,7 +3,7 @@
 
 use drgnx_rows::{Colour, Op, Patch, Row, Style};
 use drgnx_term::frame::Next;
-use drgnx_term::proto::{In, Out};
+use drgnx_term::proto::{In, KeyAction, Out};
 use drgnx_term::worker::{BACKFILL_MAX_BYTES, Opts, Worker};
 
 fn worker(cols: u16, rows: u16, window: usize) -> Worker {
@@ -129,7 +129,7 @@ fn echo_frame_is_immediate_after_key() {
         116,
     );
     // a key, then its echo 3 ms later: drawn at once
-    w.key("c", 0, "c", 0, 120);
+    w.key("c", 0, "c", 0, KeyAction::Press, 120);
     assert_eq!(w.take_pty(), b"c");
     w.output(b"c", 123);
     assert_eq!(w.next(123), Next::Frame);
@@ -374,16 +374,63 @@ fn eviction_never_renumbers() {
 }
 
 fn typed(w: &mut Worker, key: &str, mods: &[&str], text: &str) -> Vec<u8> {
+    acted(w, key, mods, text, KeyAction::Press)
+}
+
+fn acted(w: &mut Worker, key: &str, mods: &[&str], text: &str, action: KeyAction) -> Vec<u8> {
     w.handle(
         In::Key {
             key: key.into(),
             mods: mods.iter().map(|s| s.to_string()).collect(),
             text: text.into(),
             unshifted: 0,
+            action,
         },
         0,
     );
     w.take_pty()
+}
+
+#[test]
+fn kitty_event_types_send_repeats_and_releases() {
+    let (mut w, mut m) = (worker(20, 4, 10), Model::default());
+    // without the report-event-types flag a repeat is a press and a release sends nothing
+    assert_eq!(acted(&mut w, "a", &[], "a", KeyAction::Repeat), b"a");
+    assert_eq!(acted(&mut w, "a", &[], "a", KeyAction::Release), b"");
+    assert_eq!(acted(&mut w, "i", &["ctrl"], "", KeyAction::Release), b"");
+    let ps = draw(&mut w, &mut m, 0);
+    assert!(
+        ps.iter()
+            .rev()
+            .find_map(|p| p.term.as_ref())
+            .is_some_and(|t| !t.key_events)
+    );
+    // CSI > 3 u: disambiguate, and report event types; the editor learns it should send releases
+    w.output(b"\x1b[>3u", 1000);
+    let ps = draw(&mut w, &mut m, 1000);
+    assert!(
+        ps.iter()
+            .rev()
+            .find_map(|p| p.term.as_ref())
+            .is_some_and(|t| t.key_events)
+    );
+    // with event types on, the encoder names the press's type too
+    assert_eq!(
+        acted(&mut w, "up", &[], "", KeyAction::Press),
+        b"\x1b[1;1:1A"
+    );
+    assert_eq!(
+        acted(&mut w, "up", &[], "", KeyAction::Repeat),
+        b"\x1b[1;1:2A"
+    );
+    assert_eq!(
+        acted(&mut w, "up", &[], "", KeyAction::Release),
+        b"\x1b[1;1:3A"
+    );
+    assert_eq!(
+        acted(&mut w, "i", &["ctrl"], "", KeyAction::Release),
+        b"\x1b[105;5:3u"
+    );
 }
 
 #[test]

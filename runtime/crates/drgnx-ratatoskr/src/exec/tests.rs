@@ -1627,3 +1627,274 @@ async fn a_projects_own_runner_settings_reach_its_jobs_only() {
     assert!(overlay("alpha").await);
     assert!(!overlay("beta").await);
 }
+
+/// The rows a job's `result.json` keeps, as JSON (`[{name, verdict, class?, symbols?}]`).
+fn result_rows(root: &Path, id: &str) -> Vec<serde_json::Value> {
+    let text = std::fs::read_to_string(root.join("exec").join(id).join("result.json")).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    v["rows"].as_array().cloned().unwrap_or_default()
+}
+
+/// The row named NAME among ROWS as `(verdict, class, symbols)`.
+fn row_of(rows: &[serde_json::Value], name: &str) -> (String, String, Vec<String>) {
+    let r = rows
+        .iter()
+        .find(|r| r["name"] == name)
+        .unwrap_or_else(|| panic!("no row {name} in {rows:?}"));
+    let syms = r["symbols"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    (
+        r["verdict"].as_str().unwrap_or("").into(),
+        r["class"].as_str().unwrap_or("").into(),
+        syms,
+    )
+}
+
+/// Every local job's result keeps its rows with a verdict and, for a failure, its class: a cargo test's panic is
+/// `assert`, a compile error names the missing symbols as a `build` row; an ERT `should` is `assert`, a void function
+/// a `build` row naming it; a job that ran out of time gets a `timeout` row, a script that failed without rows an
+/// `error` row.
+#[tokio::test]
+async fn a_jobs_result_keeps_classified_rows() {
+    let d = tempfile::tempdir().unwrap();
+    let r = open(d.path());
+    let cargo = "printf '%s\\n' 'running 3 tests' 'test a::ok ... ok' 'test a::bad ... FAILED' 'test a::later ... ignored' \
+                 'error[E0425]: cannot find function `added_fn` in this scope' \
+                 'error: could not compile `demo` (lib test) due to 1 previous error'; exit 101";
+    let mut s = spec(Starter::User, d.path(), cargo, Duration::from_secs(30));
+    s.kind = CheckKind::Cargo;
+    let id = r.start(s).await.unwrap();
+    ended(&r, &id).await;
+    let rows = result_rows(d.path(), &id);
+    assert_eq!(row_of(&rows, "a::ok").0, "pass");
+    assert_eq!(
+        row_of(&rows, "a::bad"),
+        ("fail".into(), "assert".into(), vec![])
+    );
+    assert_eq!(row_of(&rows, "a::later").0, "skip");
+    assert_eq!(
+        row_of(&rows, "build:demo (lib test)"),
+        ("fail".into(), "build".into(), vec!["added_fn".into()])
+    );
+
+    let ert = "printf '%s\\n' 'Test t-two condition:' '    (ert-test-failed' '     ((should (= 1 2))))' \
+               '   passed  1/3  t-one (0.001 sec)' '   FAILED  2/3  t-two (0.001 sec) at x-test.el:3' \
+               'Test t-three condition:' '    (void-function drgnx-new-thing)' \
+               '   FAILED  3/3  t-three (0.001 sec) at x-test.el:9'; exit 1";
+    let mut s = spec(Starter::User, d.path(), ert, Duration::from_secs(30));
+    s.kind = CheckKind::Ert;
+    let id = r.start(s).await.unwrap();
+    ended(&r, &id).await;
+    let rows = result_rows(d.path(), &id);
+    assert_eq!(row_of(&rows, "t-one").0, "pass");
+    assert_eq!(
+        row_of(&rows, "t-two"),
+        ("fail".into(), "assert".into(), vec![])
+    );
+    assert_eq!(
+        row_of(&rows, "t-three"),
+        (
+            "fail".into(),
+            "build".into(),
+            vec!["drgnx-new-thing".into()]
+        )
+    );
+
+    let id = r
+        .start(spec(
+            Starter::User,
+            d.path(),
+            "sleep 60",
+            Duration::from_millis(400),
+        ))
+        .await
+        .unwrap();
+    ended(&r, &id).await;
+    assert_eq!(row_of(&result_rows(d.path(), &id), "(job)").1, "timeout");
+
+    let id = r
+        .start(spec(
+            Starter::User,
+            d.path(),
+            "echo nothing to read; exit 2",
+            Duration::from_secs(30),
+        ))
+        .await
+        .unwrap();
+    ended(&r, &id).await;
+    assert_eq!(row_of(&result_rows(d.path(), &id), "(job)").1, "error");
+}
+
+/// A git repository at DIR with one commit; answers its tree id.
+fn repo_with_a_commit(dir: &Path) -> String {
+    let git = |args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            o.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    std::fs::create_dir_all(dir).unwrap();
+    git(&["init", "-q"]);
+    std::fs::write(dir.join("a.txt"), "a\n").unwrap();
+    git(&["add", "a.txt"]);
+    git(&["commit", "-q", "-m", "one"]);
+    git(&["rev-parse", "HEAD^{tree}"])
+}
+
+/// Every job records what it ran on (tree key, env stamp, platform, selector); a green job with the same facts is
+/// reused, a red one never is, a change to the tree is a new key, and a selector the pack marks `no-cache` always runs.
+#[tokio::test]
+async fn a_green_job_is_reused_and_a_red_one_never() {
+    let d = tempfile::tempdir().unwrap();
+    let w = d.path().join("w");
+    let tree = repo_with_a_commit(&w);
+    let r = open(d.path());
+    let green = spec(
+        Starter::User,
+        &w,
+        "echo 'test a ... ok'",
+        Duration::from_secs(30),
+    );
+    let (a, reused) = r.start_or_reuse(green.clone()).await.unwrap();
+    assert!(!reused);
+    ended(&r, &a).await;
+    let f = r.facts(&a).expect("the job's facts");
+    assert_eq!(f.tree_key, tree);
+    assert!(
+        f.platform.starts_with(std::env::consts::OS),
+        "{}",
+        f.platform
+    );
+    assert!(
+        f.selector.contains("echo 'test a ... ok'"),
+        "{}",
+        f.selector
+    );
+    assert!(!f.env_stamp.is_empty());
+    assert_eq!(
+        r.start_or_reuse(green.clone()).await.unwrap(),
+        (a.clone(), true)
+    );
+
+    let red = spec(
+        Starter::User,
+        &w,
+        "echo 'test b ... FAILED'; exit 101",
+        Duration::from_secs(30),
+    );
+    let (b, reused) = r.start_or_reuse(red.clone()).await.unwrap();
+    assert!(!reused);
+    ended(&r, &b).await;
+    let (b2, reused) = r.start_or_reuse(red).await.unwrap();
+    assert!(!reused && b2 != b);
+    ended(&r, &b2).await;
+
+    // uncommitted work is another tree key
+    std::fs::write(w.join("a.txt"), "changed\n").unwrap();
+    let (c, reused) = r.start_or_reuse(green.clone()).await.unwrap();
+    assert!(!reused && c != a);
+    ended(&r, &c).await;
+    assert!(
+        r.facts(&c)
+            .unwrap()
+            .tree_key
+            .starts_with(&format!("{tree}+"))
+    );
+
+    // a no-cache selector runs every time
+    r.set_no_cache(vec!["test a".into()]);
+    let (e, reused) = r.start_or_reuse(green).await.unwrap();
+    assert!(!reused && e != c);
+    ended(&r, &e).await;
+}
+
+/// A task's job that ended is evidence for the task: `red` with its failing rows and their classes, or `green`, on the
+/// job's facts; written to the graph and read back by task.  A job outside a git tree is no evidence.
+#[tokio::test]
+async fn a_tasks_jobs_are_its_evidence() {
+    let d = tempfile::tempdir().unwrap();
+    let w = d.path().join("w");
+    let tree = repo_with_a_commit(&w);
+    let r = open(d.path());
+    let red = spec(
+        Starter::User,
+        &w,
+        "printf '%s\\n' 'test a ... ok' 'test b ... FAILED'; exit 101",
+        Duration::from_secs(30),
+    );
+    let id = r.start(red).await.unwrap();
+    ended(&r, &id).await;
+    let ev = crate::orch::evidence::of_job(&r, &id, "task:J#1").expect("evidence");
+    assert_eq!(
+        (ev.kind.as_str(), ev.task.as_str(), ev.job.as_str()),
+        ("red", "task:J#1", id.as_str())
+    );
+    assert_eq!(ev.facts.tree_key, tree);
+    let failed: Vec<_> = ev
+        .rows
+        .iter()
+        .filter(|r| r.verdict == vordr::rows::Verdict::Fail)
+        .map(|r| r.name.as_str())
+        .collect();
+    assert_eq!(failed, vec!["b"]);
+
+    let green = spec(
+        Starter::User,
+        &w,
+        "echo 'test a ... ok'",
+        Duration::from_secs(30),
+    );
+    let gid = r.start(green).await.unwrap();
+    ended(&r, &gid).await;
+    let gev = crate::orch::evidence::of_job(&r, &gid, "task:J#1").unwrap();
+    assert_eq!(gev.kind, "green");
+
+    // written and read back by task
+    let db = norn::store::CoordDb::spawn(d.path().join("work.db"));
+    for e in [ev.clone(), gev] {
+        let tx = urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "evidence");
+        db.write(tx, move |tx| norn::write::evidence::record(tx, &e, None))
+            .await
+            .unwrap();
+    }
+    let back = db
+        .read(|c| norn::read::evidence::of_task(c, "task:J#1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        back.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(),
+        vec!["red", "green"]
+    );
+    assert_eq!(back[0], ev);
+    let none = db
+        .read(|c| norn::read::evidence::of_task(c, "task:J#2"))
+        .await
+        .unwrap();
+    assert!(none.is_empty());
+
+    let off = spec(Starter::User, d.path(), "true", Duration::from_secs(30));
+    let oid = r.start(off).await.unwrap();
+    ended(&r, &oid).await;
+    assert!(crate::orch::evidence::of_job(&r, &oid, "task:J#1").is_none());
+}

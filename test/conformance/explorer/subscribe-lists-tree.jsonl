@@ -9,7 +9,7 @@
 {"do": "send", "conn": "e", "json": {"id": 3, "method": "explorer/subscribe", "params": {"view": "x", "roots": ["$ROOT/ex"]}}}
 {"do": "expect", "conn": "e", "json": {"id": 3, "result": {"listing": "$number"}}}
 {"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "x", "hub": "$capture:hub", "base": 0, "version": 1, "reset": true, "model": {"ops": "$any"}}}, "within_ms": 10000}
-{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "x", "class": "gui-1", "hub": "$hub", "base": 0, "version": 1, "env_epoch": 1, "model": 1, "ops": [{"reset": [{"key": "$ROOT/ex", "text": "    EX"}, {"key": "$ROOT/ex/lib", "text": "    lib"}, {"key": "$ROOT/ex/src", "text": "    src"}, {"key": "$ROOT/ex/file2", "text": "    file2"}, {"key": "$ROOT/ex/file10", "text": "    file10"}]}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "x", "class": "gui-1", "hub": "$hub", "base": 0, "version": 1, "env_epoch": 1, "model": 1, "ops": [{"reset": [{"key": "$ROOT/ex", "text": "EX"}, {"key": "$ROOT/ex/lib", "text": "    lib"}, {"key": "$ROOT/ex/src", "text": "    src"}, {"key": "$ROOT/ex/file2", "text": "    file2"}, {"key": "$ROOT/ex/file10", "text": "    file10"}]}]}}, "within_ms": 10000}
 {"do": "send", "conn": "e", "json": {"id": 4, "method": "explorer/subscribe", "params": {"view": "x", "roots": ["$ROOT/ex"], "expanded": ["$ROOT/ex/src"]}}}
 {"do": "expect", "conn": "e", "json": {"id": 4, "result": {"listing": "$number"}}}
 {"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "x", "hub": "$hub", "base": 1, "version": 2, "model": {"ops": "$any"}}}, "within_ms": 10000}

@@ -82,8 +82,10 @@ pub struct TermConfig {
     pub config: Vec<(String, SettingValue)>,
 }
 
-/// `term/key`: a key press, encoded by the worker from the terminal's modes. KEY is its name (`a`, `return`, `f5`),
-/// MODS its modifiers (`ctrl`, `shift`, `alt`, `super`), TEXT what it types, UNSHIFTED the codepoint without shift.
+/// `term/key`: a key event, encoded by the worker from the terminal's modes. KEY is its name (`a`, `return`, `f5`),
+/// MODS its modifiers (`ctrl`, `shift`, `alt`, `super`), TEXT what it types, UNSHIFTED the codepoint without shift,
+/// ACTION `press` (the default), `repeat` or `release`: a repeat or a release reaches the program as itself only while
+/// it asked for key event types (the view's `term.key_events`).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct TermKey {
     pub id: String,
@@ -94,6 +96,24 @@ pub struct TermKey {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unshifted: Option<u32>,
+    #[serde(default, skip_serializing_if = "TermKeyAction::is_press")]
+    pub action: TermKeyAction,
+}
+
+/// `term/key`'s ACTION.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TermKeyAction {
+    #[default]
+    Press,
+    Repeat,
+    Release,
+}
+
+impl TermKeyAction {
+    fn is_press(&self) -> bool {
+        *self == TermKeyAction::Press
+    }
 }
 
 /// `term/text` (input method text, sent as is) and `term/paste` (bracketed when the program asked).
@@ -398,7 +418,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "term/key", TermKey(TermKey) -> bool,
             classes: [User], writes: false,
-            doc: "a key press, encoded by the worker from the terminal's modes (kitty keyboard, modifyOtherKeys, DECCKM); its echo is drawn at once",
+            doc: "a key press, repeat or release, encoded by the worker from the terminal's modes (kitty keyboard, modifyOtherKeys, DECCKM); its echo is drawn at once",
             check: check_id,
         ),
         method!(
