@@ -356,7 +356,8 @@ mod tests {
 
     /// [C] macOS CI (`--ignored`, after `brew install mise`): a pinned Rust (`SLEIPNIR_TOOLS_PIN`, default
     /// `rust@1.95`) installed by the user's mise into a root, then a job's Seatbelt profile with that pin finds
-    /// `cargo --version` from the root, at the pinned version.
+    /// `cargo --version` from the root, at the pinned version; and `brew --prefix` answers in the same job (Homebrew
+    /// read-only, as a configure asks it).
     #[cfg(all(target_os = "macos", feature = "runner"))]
     #[test]
     #[ignore = "macos-tools"]
@@ -436,6 +437,24 @@ mod tests {
         );
         assert!(run.status.success(), "{said}");
         assert!(said.starts_with(&format!("cargo {ver}")), "{said}");
+
+        // a configure asks brew where a package is: brew runs in the job, read-only (mise is installed, from Homebrew)
+        let brew = std::process::Command::new("/usr/bin/sandbox-exec")
+            .arg("-f")
+            .arg(&sb)
+            .args(["brew", "--prefix", "--installed", "mise"])
+            .env_clear()
+            .envs(valid.spec().env.iter().map(|(k, v)| (k, v)))
+            .current_dir(&valid.spec().chdir)
+            .output()
+            .unwrap();
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&brew.stdout),
+            String::from_utf8_lossy(&brew.stderr)
+        );
+        assert!(brew.status.success(), "{said}");
+        assert!(said.trim().ends_with("/opt/mise"), "{said}");
     }
 
     /// [D] The install: mise runs in the root with its folders and Rust's homes there, and each pin is recorded; a

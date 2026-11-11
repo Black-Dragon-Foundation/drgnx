@@ -218,7 +218,8 @@ profile() { # SLOT ATTEMPT CACHE TOOLS DEVDIR USERDIR
   echo '(deny file-read* (subpath "/Users"))'
   echo '(allow file-read* (literal "/"))'
   printf '(allow file-read-metadata'
-  for p in /tmp /var /etc /private/tmp /private/var/tmp $(ancestors "$slot" "$att" "$cache" "$tools" "$dev" "$udir"); do printf ' (literal "%s")' "$p"; done
+  # round 10: brew's ruby realpaths itself through /opt; as Gleipnir's profile, the system roots' parents too
+  for p in /tmp /var /etc /private/tmp /private/var/tmp $(ancestors /opt/homebrew "$slot" "$att" "$cache" "$tools" "$dev" "$udir"); do printf ' (literal "%s")' "$p"; done
   echo ')'
   printf '(allow file-read*'
   for p in /usr /bin /sbin /System /Library /opt/homebrew /private/etc /dev/fd /private/var/select /private/var/db/timezone /private/var/db/xcode_select_link \
