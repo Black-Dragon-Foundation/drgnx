@@ -7,9 +7,11 @@
 //! - [`gates`]: the gates before a task's merge, the runs they start, waivers.
 //! - [`notes`]: the merge notes a task's merges need.
 //! - [`queue`]: the merge queue's batches.
+//! - [`groups`]: the affected groups a batch runs before it merges.
 
 pub mod evidence;
 pub mod gates;
+pub mod groups;
 pub mod notes;
 pub mod policy;
 pub mod queue;

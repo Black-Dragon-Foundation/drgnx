@@ -136,6 +136,23 @@ one at a time in readiness order, each `--no-ff`. A member whose merge onto the 
 both sides changed since they parted goes back to its agent, told to merge the line in with a note per file. A job
 with no rule pack merges as before, each task as it passes.
 
+## Affected groups
+
+With `affected-groups` on and a `:groups` command in the pack (`drgnx-org`: `bin/drgnx test --affected %r --json`;
+`drgnx-default` names none, so it runs no groups), the batch's first member merges only when the batch's groups are
+green (`orch::groups`, `vordr::groups`):
+
+- **The combined commit:** the line's HEAD with each member's tip merged in order (`git merge-tree`, `git
+  commit-tree`: no worktree, no ref moves). Its tree key is the batch's: the same members in any order give the same
+  tree, and so do the later members once the first merged, so their turn reuses the runs.
+- **The groups** come from the base's own tool: the command runs in a detached worktree of the line's HEAD with `%r`
+  = `HEAD..COMBINED` (its `test/affected.eld`, never the batch's); listed once per tree.
+- **Each group** runs at the combined commit through the queue as the user's job (a detached worktree that goes when
+  the job ends); its end is evidence of `batch:JOB@TREE`.
+- **Green:** every group's newest run at the tree passed, or failed only rows the base's `test/frozen.eld` lists.
+  Any other red holds the batch: a `gate` card on its first member (key `groups`, `tip` the combined tree), whose
+  `Waive once…` the gate honours for that tree.
+
 ## Red first
 
 `vordr::redfirst::decide` over the task's commits base..tip (`orch::red_first::inputs`):

@@ -1258,7 +1258,7 @@ impl PlanHooks {
             .map_err(git_error)?
             .trim()
             .to_owned();
-        let (f, dir, job, tid) = (
+        let (f, dir, j, t) = (
             front.clone(),
             job_tree.to_path_buf(),
             job.to_owned(),
@@ -1266,13 +1266,13 @@ impl PlanHooks {
         );
         let shared = pack.on("merge-notes").then(|| pack.shared_paths.clone());
         let size = pack.batch();
-        crate::clock::blocking(move || {
+        let turn = crate::clock::blocking(move || {
             turn(
                 &f.queue,
                 &dir,
                 Entry {
-                    job: &job,
-                    task: &tid,
+                    job: &j,
+                    task: &t,
                     tip: &tip,
                     at: now(),
                     live: &live,
@@ -1283,7 +1283,33 @@ impl PlanHooks {
         })
         .await
         .map_err(|e| internal(e.to_string()))?
-        .map_err(internal)
+        .map_err(internal)?;
+        if turn != Turn::Merge {
+            return Ok(turn);
+        }
+        // the batch's affected groups at its combined tree, before its first member merges
+        use crate::orch::groups::{Gate, gate};
+        let batch = front.queue.batch(job);
+        match gate(front, job, job_tree, &pack, &batch)
+            .await
+            .map_err(internal)?
+        {
+            Gate::Pass => Ok(Turn::Merge),
+            Gate::Wait(why) => Ok(Turn::Wait(why)),
+            Gate::Hold(why, tree) => {
+                raise_card(
+                    front,
+                    &service(),
+                    job,
+                    Some(tid),
+                    "gate",
+                    &format!("the gates hold the merge: {why}"),
+                    json!({"key": "groups", "tip": tree}),
+                )
+                .await?;
+                Ok(Turn::Wait(why))
+            }
+        }
     }
 
     /// The reviewer's pass accepts every file of T at the diff it has now (the gate checks the marks against it).
