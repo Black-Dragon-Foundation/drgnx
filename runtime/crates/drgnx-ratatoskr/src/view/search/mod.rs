@@ -100,6 +100,9 @@ pub(super) struct Run {
 /// (`drgnx-view-delay`, 0.1 s) after it comes, and every line it reads costs it a redisplay pass.
 const MODEL_EVERY: Duration = Duration::from_millis(100);
 
+/// With context labels on, at most this many threads read and parse a search's files (each file one parse).
+const CONTEXT_READERS: usize = 4;
+
 /// The searches, one per (connection, view), and the editor's buffers each view searches in place of their files.
 #[derive(Default)]
 pub(super) struct Greps {
@@ -968,6 +971,9 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
                 }
             }
             let on_file = |mut ms: Vec<Match>| {
+                if cancel.load(Ordering::Relaxed) {
+                    return;
+                }
                 let file = ms[0].file.clone();
                 scoped::kept(keep.as_deref(), &file, &mut ms);
                 if ms.is_empty() {
@@ -987,7 +993,33 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
                     cancel.store(true, Ordering::Relaxed);
                 }
             };
-            let result = grep::run(&query, &cancel, on_file);
+            // with context, a file's read parses it: a few readers take the files as grep finds them (its order is
+            // already unordered)
+            let result = if context {
+                let (tx, rx) = std::sync::mpsc::channel::<Vec<Match>>();
+                let rx = std::sync::Mutex::new(rx);
+                let readers = std::thread::available_parallelism()
+                    .map_or(1, |n| n.get().min(CONTEXT_READERS));
+                std::thread::scope(|s| {
+                    for _ in 0..readers {
+                        s.spawn(|| {
+                            // the receiver's lock is let go before the file is read
+                            loop {
+                                let next = lock(&rx).recv();
+                                let Ok(ms) = next else { break };
+                                on_file(ms);
+                            }
+                        });
+                    }
+                    let result = grep::run(&query, &cancel, |ms| {
+                        let _ = tx.send(ms);
+                    });
+                    drop(tx);
+                    result
+                })
+            } else {
+                grep::run(&query, &cancel, on_file)
+            };
             if let Some(f) = front.upgrade() {
                 // the editor's buffers with unsaved edits, searched here, outside every lock
                 let puts = f

@@ -2390,7 +2390,8 @@ snapshots; the search itself is `hrafn::grep`).
   open buffers do not apply.
 - **Context labels** (`context?`, default true; the editor sends false when `drgnx-search-context` is off): the thread
   that reads each file for its snapshot also parses it once (`search/context.rs`, Hrafn's definitions; code languages
-  only, none past 2 MB; an open buffer's text the same way) and gives each match its innermost definition. A label row
+  only, none past 2 MB; an open buffer's text the same way; with labels on, up to 4 reader threads take the files as
+  grep finds them, so the parses overlap) and gives each match its innermost definition. A label row
   `c:<run>:<n>` (`  ƒ name`, face `drgnx-replace-ctx`, the names around it in `help-echo`) goes above match `n` when
   it is the first of its definition in a row; a top-level match gets none. A label is a row, not a node: no tick, no
   `drgnx-work-id`, not in the model, not a stop for Next Match; the window and `upto` count it among the rows. The
