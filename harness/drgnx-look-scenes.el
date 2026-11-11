@@ -39,11 +39,20 @@
     (highlights-hc)
     (explorer-focused-dark)
     (explorer-focused-light)
-    (explorer-focused-hc))
+    (explorer-focused-hc)
+    (search-preview :mockup search-view)
+    (search-sheet :mockup search-view :then "C-g"))
   "The scenes in the order they are drawn: (NAME . PLIST).  NAME is the mockup's (docs/specs, the-look/NAME.png; the
 start page, the highlights and the focused Explorer have none: they are judged against the components' spec and
 the tokens) and the session's `drgnx-look-scene-NAME' sets it up.  :agent t starts the mock agent first; :keys and
 :type are typed after the setup and before the shot, :then after it.")
+
+(defun drgnx-look-scenes--only ()
+  "The scenes to draw: those whose name matches $DRGNX_LOOK_ONLY (a regexp), or all of them."
+  (let ((re (getenv "DRGNX_LOOK_ONLY")))
+    (if (and re (not (string-empty-p re)))
+        (seq-filter (lambda (s) (string-match-p re (symbol-name (car s)))) drgnx-look-scenes)
+      drgnx-look-scenes)))
 
 (defun drgnx-look-scenes--size (scale)
   "The session's size in device pixels: the mockups' window, 1440x900 logical pixels, at SCALE."
@@ -71,10 +80,12 @@ of the scene, not of the run: the other scenes are still drawn."
           (setq sess (drgnx-ui-start "drgnx" (drgnx-look-scenes--size scale) 180))   ; a first boot compiles
           (drgnx-ui-call sess (format "(progn (load %s nil t) (drgnx-uitest--json (list :ok t)))"
                                       (drgnx-ui-el (expand-file-name "drgnx-look-scenes-session" drgnx-ui-harness-dir))))
+          (when bin                       ; the session's own hub for the scenes that need one (the Search view's)
+            (drgnx-look-scenes--call sess (format "(setenv \"DRGNX_RATATOSKR_BIN\" %s)" (drgnx-ui-el bin))))
           (let ((errs (drgnx-look-scenes--call sess (format "(drgnx-look-scene-setup %s)" (drgnx-ui-el elpa)) 120)))
             (when errs (drgnx-ui-screenshot sess (expand-file-name (format "setup-%s.png" tag) out)))   ; what stopped it
             (push (cons 'setup errs) errors))
-          (pcase-dolist (`(,name . ,plist) drgnx-look-scenes)
+          (pcase-dolist (`(,name . ,plist) (drgnx-look-scenes--only))
             (let ((errs nil) (png (expand-file-name (format "%s-%s.png" name tag) out)))
               (when (plist-get plist :agent)
                 (setq errs (drgnx-look-scenes--call sess (format "(drgnx-look-scene-agent %s)" (drgnx-ui-el bin)) 150)))

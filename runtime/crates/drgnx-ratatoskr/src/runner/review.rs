@@ -1122,26 +1122,46 @@ impl PlanHooks {
             .await
             .map(|_| ()),
             Gate::Allow => {
-                // the gates on the hub's own records (docs/develop/orchestration.md): red first
+                // the gates on the hub's own records (docs/develop/orchestration.md): trailers, red first, the
+                // author check; a run they wait for ends as the task's evidence and the next tick looks again
                 use vordr::redfirst::Decision;
-                match crate::orch::red_first::check(front, job, tid, t.row.n, &repo, &tree, &data)
+                match crate::orch::gates::before_merge(front, job, tid, t.row.n, &tree, &data)
                     .await
                     .map_err(internal)?
                 {
                     Decision::Pass(_) => {}
-                    Decision::Wait(why) | Decision::Hold(why) => {
+                    Decision::Wait(_) => return Ok(()),
+                    Decision::Hold(why) => {
+                        // the tip's tree key: a waiver given on this card holds for this tip only
+                        let tip = tick::git(
+                            &tree.path,
+                            &["rev-parse", &format!("{}^{{tree}}", tree.branch)],
+                        )
+                        .await
+                        .map(|s| s.trim().to_owned())
+                        .ok();
                         return raise_card(
                             front,
                             &service(),
                             job,
                             Some(tid),
                             "gate",
-                            &format!("red first: {why}"),
-                            json!({"key": "red-first"}),
+                            &format!("the gates hold the merge: {why}"),
+                            json!({"key": "gates", "tip": tip}),
                         )
                         .await
                         .map(|_| ());
                     }
+                }
+                // the merge queue: batches of the pack's size, members one at a time in readiness order
+                use crate::orch::queue::Turn;
+                match self
+                    .queue_turn(front, job, tid, &l, &data, &tree, &job_tree)
+                    .await?
+                {
+                    Turn::Merge => {}
+                    Turn::Wait(_) => return Ok(()),
+                    Turn::Back(note) => return retry(front, job, tid, Some(note)).await,
                 }
                 let Some(message) = self
                     .commit_hooks(front, job, t, &tree, &job_tree, &data)
@@ -1200,6 +1220,98 @@ impl PlanHooks {
         }
     }
 
+    /// Task TID's turn in its job's merge queue, once its gates passed (`orch::queue`).  A job with no rule pack
+    /// merges as before: one task at a time, as each passes.
+    #[allow(clippy::too_many_arguments)]
+    async fn queue_turn(
+        &self,
+        front: &Arc<Front>,
+        job: &str,
+        tid: &str,
+        l: &Loaded,
+        data: &Map<String, Value>,
+        tree: &TaskTree,
+        job_tree: &Path,
+    ) -> Result<crate::orch::queue::Turn, Error> {
+        use crate::orch::queue::{Entry, Turn, turn};
+        let j = job.to_owned();
+        let pack = front
+            .writer
+            .db
+            .read(move |c| norn::read::evidence::pack_of_job(c, &j))
+            .await
+            .map_err(fail)?;
+        let Some(pack) = pack else {
+            return Ok(Turn::Merge);
+        };
+        let live: Vec<String> = l
+            .tasks
+            .iter()
+            .filter(|x| {
+                x.row.status.as_deref() == Some("in-review")
+                    && data_for(data, "passed", &x.row.id).is_some()
+            })
+            .map(|x| x.row.id.clone())
+            .collect();
+        let tip = tick::git(&tree.path, &["rev-parse", &tree.branch])
+            .await
+            .map_err(git_error)?
+            .trim()
+            .to_owned();
+        let (f, dir, j, t) = (
+            front.clone(),
+            job_tree.to_path_buf(),
+            job.to_owned(),
+            tid.to_owned(),
+        );
+        let shared = pack.on("merge-notes").then(|| pack.shared_paths.clone());
+        let size = pack.batch();
+        let turn = crate::clock::blocking(move || {
+            turn(
+                &f.queue,
+                &dir,
+                Entry {
+                    job: &j,
+                    task: &t,
+                    tip: &tip,
+                    at: now(),
+                    live: &live,
+                    size,
+                    shared: shared.as_deref(),
+                },
+            )
+        })
+        .await
+        .map_err(|e| internal(e.to_string()))?
+        .map_err(internal)?;
+        if turn != Turn::Merge {
+            return Ok(turn);
+        }
+        // the batch's affected groups at its combined tree, before its first member merges
+        use crate::orch::groups::{Gate, gate};
+        let batch = front.queue.batch(job);
+        match gate(front, job, job_tree, &pack, &batch)
+            .await
+            .map_err(internal)?
+        {
+            Gate::Pass => Ok(Turn::Merge),
+            Gate::Wait(why) => Ok(Turn::Wait(why)),
+            Gate::Hold(why, tree) => {
+                raise_card(
+                    front,
+                    &service(),
+                    job,
+                    Some(tid),
+                    "gate",
+                    &format!("the gates hold the merge: {why}"),
+                    json!({"key": "groups", "tip": tree}),
+                )
+                .await?;
+                Ok(Turn::Wait(why))
+            }
+        }
+    }
+
     /// The reviewer's pass accepts every file of T at the diff it has now (the gate checks the marks against it).
     async fn accept_all(
         &self,
@@ -1236,6 +1348,7 @@ impl PlanHooks {
     /// T's branch is in the job's: done, and its dependents may start.
     async fn merged(&self, front: &Arc<Front>, job: &str, t: &Task) -> Result<(), Error> {
         let tid = t.row.id.as_str();
+        front.queue.forget(job, tid);
         set_status(front, tid, "done", t.row.agent.clone()).await?;
         let t2 = tid.to_owned();
         update_data(front, &service(), job, move |d| {
@@ -1763,14 +1876,57 @@ async fn act(
             super::stop(front, caller, p).await.map(|_| ())
         }
         "retry" => {
-            let note = (kind == "merge-conflict").then(|| {
-                format!(
-                    "Merging your branch into job/{job} conflicted ({}). Merge job/{job} into your branch, resolve \
-                     the conflicts, commit, then call complete_task.",
-                    card.title.as_deref().unwrap_or("")
-                )
-            });
+            let title = card.title.as_deref().unwrap_or("");
+            let note = match kind {
+                "merge-conflict" => Some(format!(
+                    "Merging your branch into job/{job} conflicted ({title}). Merge job/{job} into your branch, resolve \
+                     the conflicts, commit, then call complete_task."
+                )),
+                "gate" => Some(format!(
+                    "The hub's gates hold your merge ({title}). Fix what they name, commit, then call complete_task."
+                )),
+                _ => None,
+            };
             retry(front, job, need_task()?, note).await
+        }
+        // the user's waiver of the held gates at the tip the card names: recorded as the user's own evidence (the
+        // store refuses a waiver from any other connection), then the tick merges
+        "waive" => {
+            let tid = need_task()?;
+            let reason = arg_text(arg);
+            if reason.trim().is_empty() {
+                return Err(invalid("A waiver needs its reason"));
+            }
+            let tip = card
+                .data
+                .as_ref()
+                .and_then(|d| d.get("tip"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid("This card names no tip to waive"))?
+                .to_owned();
+            let e = vordr::evidence::Evidence {
+                kind: "waiver".into(),
+                task: tid.to_owned(),
+                job: String::new(),
+                facts: vordr::facts::Facts {
+                    tree_key: tip,
+                    env_stamp: String::new(),
+                    platform: String::new(),
+                    selector: String::new(),
+                },
+                rows: Vec::new(),
+                truncated: false,
+                at: now(),
+                note: Some(reason),
+            };
+            front
+                .writer
+                .write(caller, "job/card", move |tx| {
+                    norn::write::evidence::record(tx, &e, None).map(|_| ())
+                })
+                .await
+                .map_err(fail)?;
+            set_status(front, tid, "in-review", agent_of(tid)).await
         }
         // merge as it is: the tick merges it (the reviewer's pass counts)
         "merge" | "accept" if kind != "clash" => {

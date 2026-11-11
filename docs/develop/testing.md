@@ -9,6 +9,7 @@ them, skipping a group whose inputs have not changed since its last green run. T
 bin/drgnx test --affected A..B                  # print the groups, why, and each group's command
 bin/drgnx test --affected A..B --run            # run them; skip those already green on the same inputs
 bin/drgnx test --affected A..B --run --no-cache # run them all
+bin/drgnx test --affected A..B --json           # the groups as JSON (range, groups: id, dir, run; why): the hub's merge queue reads it
 ```
 
 The range is any `git diff` range (`A..B`, `A...B`). `--run` exits 0 only when every group is green or skipped; every

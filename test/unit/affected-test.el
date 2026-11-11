@@ -44,6 +44,22 @@
     (should (equal (sort (drgnx-affected-test--ids root '("docs/guide/modules.md" "README.md")) #'string<)
                    '("docs:test/unit/config-doc-test.el" "docs:test/unit/settings-doc-test.el")))))
 
+(ert-deftest drgnx-affected/the-json-names-each-groups-id-folder-and-command ()
+  (drgnx-affected-test--with-tree root
+    (let* ((plan (drgnx-affected-test--plan root '("runtime/crates/a/src/lib.rs" "core/drgnx-foo.el")))
+           (j (json-parse-string (drgnx-affected-json "x..y" plan) :object-type 'plist :null-object nil))
+           (groups (append (plist-get j :groups) nil)))
+      (should (equal (plist-get j :range) "x..y"))
+      (should (equal (mapcar (lambda (g) (plist-get g :id)) groups)
+                     (mapcar (lambda (g) (plist-get g :id)) (plist-get plan :groups))))
+      (let ((rust (seq-find (lambda (g) (equal (plist-get g :id) "rust:a")) groups))
+            (lisp (seq-find (lambda (g) (equal (plist-get g :id) "lisp:test/unit/foo-test.el")) groups)))
+        (should (equal (plist-get rust :dir) "runtime"))
+        (should (equal (append (plist-get rust :run) nil) '("cargo" "test" "-p" "a")))
+        (should (null (plist-get lisp :dir)))))
+    ;; --json and --run are one or the other
+    (should (eq 2 (drgnx-affected-cli-run '("a..b" "--json" "--run"))))))
+
 (ert-deftest drgnx-affected/a-note-nothing-reads-runs-nothing ()
   (drgnx-affected-test--with-tree root
     (should-not (drgnx-affected-test--ids root '("SECURITY.md" "LICENSES/GPL-3.0.txt")))))

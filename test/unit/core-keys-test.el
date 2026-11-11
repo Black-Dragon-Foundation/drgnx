@@ -231,7 +231,7 @@ keys); every binding is undone after."
                                             "View: Command Palette"))
                   "")))
        (drgnx-palette))
-     (should (string-search "Ctrl C P" (string-join (split-string annotation) " "))))))   ; the key as keycaps
+     (should (string-search "Ctrl C p" (string-join (split-string annotation) " "))))))   ; the key as keycaps
 
 (ert-deftest drgnx-keys/a-broken-settings-el-is-not-an-error ()
   ;; the default stack applies; the applier (not the keys) says what is wrong with the file
@@ -910,6 +910,7 @@ keys); every binding is undone after."
     (work-diff-accept-hunk "a" drgnx-work-diff-mode-map) (work-diff-reject-hunk "D" drgnx-work-diff-mode-map)
     (work-job-log "l" drgnx-work-detail-mode-map) (work-who-is-here "C-k h" nil) (work-left "<left>" drgnx-work-lens-map) (work-right "<right>" drgnx-work-lens-map)
     (work-why "<up>" drgnx-work-lens-map) (work-touches "<down>" drgnx-work-lens-map)
+    (work-back "M-<left>" drgnx-work-lens-map) (work-forward "M-<right>" drgnx-work-lens-map)
     (work-next-agent "TAB" drgnx-work-lens-map) (work-previous-agent "<backtab>" drgnx-work-lens-map)
     (work-open "RET" drgnx-work-lens-map) (work-open-beside "S-<return>" drgnx-work-lens-map)
     (work-view-map "m" drgnx-work-lens-map) (work-view-board "b" drgnx-work-lens-map)
@@ -968,6 +969,7 @@ The commands of modules that need no installed package are in it, the later stag
                               search-history-prev search-history-next search-save search-run-saved ; its history
                               search-preview-file search-preview-keep search-preview-drop ; its preview tile
                               search-sheet-confirm search-sheet-cancel search-sheet-next search-sheet-previous ; the sheet
+                              search-edit-results search-edit-save search-edit-delete-line ; Edit Results
                               layout-next browser-go keyboard-shortcuts shortcuts-change shortcuts-add shortcuts-filter
                               shortcuts-record-filter shortcuts-conflicts shortcuts-no-key shortcuts-changed
                               shortcuts-undo shortcuts-reset shortcuts-reset-all shortcuts-profile

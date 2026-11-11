@@ -1,0 +1,20 @@
+{"scenario": "search/edit-results", "requires": ["v1"], "doc": "Edit Results: search/edit-doc gives a search's source lines once each (match lines and context, with ids, files, numbers, text and whether a newline ends them), none past the max; search/edits with an Edit Results buffer's changed lines makes an edit-results change set (a line typed into several, a deleted line, a line changed underneath skipped with why), and search/apply writes it."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "write_file", "path": "$ROOT/proj/a.txt", "text": "one needle\nctx\ntwo needle\n"}
+{"do": "write_file", "path": "$ROOT/proj/b.txt", "text": "needle"}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "text", "text": "needle"}}, "context": false}}}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": "$any", "files": 2, "matches": 3}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "search/edit-doc", "params": {"view": "s", "max": 2}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"lines": [], "total": 3, "over": true}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "search/edit-doc", "params": {"view": "s", "context": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": {"lines": [{"line_id": "l:0", "path": "$ROOT/proj/a.txt", "line": 1, "text": "one needle", "kind": "match", "eol": true}, {"line_id": "l:1", "path": "$ROOT/proj/a.txt", "line": 2, "text": "ctx", "kind": "context", "eol": true}, {"line_id": "l:2", "path": "$ROOT/proj/a.txt", "line": 3, "text": "two needle", "kind": "match", "eol": true}, {"line_id": "l:3", "path": "$ROOT/proj/b.txt", "line": 1, "text": "needle", "kind": "match", "eol": false}], "total": 4}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "search/edits", "params": {"view": "s", "lines": [{"line_id": "l:0", "path": "$ROOT/proj/a.txt", "line": 1, "old": "one needle", "new": ["one pin", "and a half"]}, {"line_id": "l:1", "path": "$ROOT/proj/a.txt", "line": 2, "old": "ctx"}, {"line_id": "l:2", "path": "$ROOT/proj/a.txt", "line": 3, "old": "two needles", "new": ["two pins"]}, {"line_id": "l:3", "path": "$ROOT/proj/b.txt", "line": 1, "old": "needle", "new": ["pin"], "eol": false}]}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": {"change": "$capture:ch", "files": "$any", "skipped": [{"id": "l:2", "path": "$ROOT/proj/a.txt", "why": "its text changed"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "search/apply", "params": {"view": "s", "change": "$ch"}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "search-change", "data": {"view": "s", "change": "$ch", "origin": "edit-results", "written": 3, "files": 2}}, "within_ms": 10000}
+{"do": "file", "path": "$ROOT/proj/a.txt", "contains": "one pin\nand a half\ntwo needle\n"}
+{"do": "file", "path": "$ROOT/proj/b.txt", "contains": "pin"}

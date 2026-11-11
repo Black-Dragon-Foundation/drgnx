@@ -668,7 +668,7 @@ inside a real wait (`waiting') that `drgnx-test-gate-waiting-ok' does not list."
     (when waiting
       (drgnx-test-gate--fail
        "drgnx-test-gated: hub tasks were still inside a real wait at the barrier (what they write later is not ordered)"
-       :method method :waiting waiting))
+       :method method :waiting waiting :sites (append (plist-get result :sites) nil)))
     result))
 
 (defun drgnx-test-gate--barrier ()

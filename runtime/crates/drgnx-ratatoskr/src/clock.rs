@@ -244,7 +244,9 @@ pub async fn advance(d: Duration) -> Advanced {
 /// the real clock (test-hooks).
 #[cfg(feature = "test-hooks")]
 pub async fn barrier() -> Vec<String> {
-    let Settled { mut waiting, busy } = settle_real(BUSY_AFTER, &[]).await;
+    let Settled {
+        mut waiting, busy, ..
+    } = settle_real(BUSY_AFTER, &[]).await;
     waiting.extend(busy);
     waiting.extend(advance(Duration::ZERO).await.busy);
     waiting.sort();
@@ -264,25 +266,28 @@ pub(crate) fn origin() -> Option<(String, u64)> {
 /// parked: an advance that woke it waits for it, and so does a barrier, which names it `waiting` when it stays inside
 /// ([`settle_real`]).  A store thread's answer is one too, marked by urdr itself (`urdr::wait`).
 #[inline]
-pub(crate) async fn real<F: Future>(f: F) -> F::Output {
+#[track_caller]
+pub(crate) fn real<F: Future>(f: F) -> impl Future<Output = F::Output> {
     #[cfg(feature = "test-hooks")]
-    let f = virt::real(f, false);
-    f.await
+    let f = virt::real(f, false, std::panic::Location::caller());
+    f
 }
 
 /// F, a wait outside the hub's clock that may last until the clock ends it (a job's child, under its time box): a
 /// barrier waits for it as for a [`real`] wait, but an advance counts the task parked on it, since the advance may be
 /// what ends it (test-hooks).
 #[inline]
-pub(crate) async fn real_long<F: Future>(f: F) -> F::Output {
+#[track_caller]
+pub(crate) fn real_long<F: Future>(f: F) -> impl Future<Output = F::Output> {
     #[cfg(feature = "test-hooks")]
-    let f = virt::real(f, true);
-    f.await
+    let f = virt::real(f, true, std::panic::Location::caller());
+    f
 }
 
 /// `tokio::task::spawn_blocking` of F, the task that awaits it inside a [`real`] wait from now until it has the
 /// result (test-hooks).  Every blocking call of the hub's tasks goes through here (`tests/hub_reads_its_clock.rs`).
 #[inline]
+#[track_caller]
 pub(crate) fn blocking<F, R>(f: F) -> Blocking<R>
 where
     F: FnOnce() -> R + Send + 'static,
@@ -307,8 +312,9 @@ type Inside = virt::InReal;
 type Inside = ();
 
 #[cfg(feature = "test-hooks")]
+#[track_caller]
 fn inside() -> Option<Inside> {
-    virt::enter(false)
+    virt::enter(false, std::panic::Location::caller())
 }
 
 #[cfg(not(feature = "test-hooks"))]
@@ -347,6 +353,8 @@ pub(crate) fn outside(name: &'static str, pending: impl Fn() -> usize + Send + S
 pub(crate) struct Settled {
     pub waiting: Vec<String>,
     pub busy: Vec<String>,
+    /// Each real wait still open, by task: "ORIGIN at FILE:LINE for N ms" (the line that began it), in `waiting`'s order.
+    pub sites: Vec<String>,
 }
 
 /// Wait, at most WITHIN of real time, until every [`spawn`]ed task whose origin OK does not list is parked and outside
@@ -410,6 +418,7 @@ mod virt {
     use std::cell::Cell;
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
     use std::future::Future;
+    use std::panic::Location;
     use std::pin::Pin;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -437,9 +446,10 @@ mod virt {
         urdr::wait::set(store_wait);
     }
 
-    /// urdr's hook: the task that waits for a store thread's answer is inside a real wait until it has it.
-    pub(super) fn store_wait() -> Box<dyn std::any::Any + Send> {
-        match enter(false) {
+    /// urdr's hook: the task that waits for a store thread's answer is inside a real wait until it has it (AT: the urdr
+    /// line that waits).
+    pub(super) fn store_wait(at: &'static Location<'static>) -> Box<dyn std::any::Any + Send> {
+        match enter(false, at) {
             Some(inside) => Box::new(inside),
             None => Box::new(()),
         }
@@ -488,6 +498,9 @@ mod virt {
         real: u32,
         /// The [`super::real_long`] waits it is inside (a job's child).
         long: u32,
+        /// Each wait of `real` and `long`: its number, the line that began it and when (real time), for a barrier's
+        /// report of what it waited on.
+        sites: Vec<(u64, &'static Location<'static>, std::time::Instant)>,
     }
 
     impl Flags {
@@ -890,7 +903,12 @@ mod virt {
         clock: Arc<Virtual>,
         task: Arc<Task>,
         long: bool,
+        /// Its entry in the task's `sites`.
+        site: u64,
     }
+
+    /// The numbers of the real waits' sites (one count for the process).
+    static SITES: AtomicU64 = AtomicU64::new(0);
 
     impl Drop for InReal {
         fn drop(&mut self) {
@@ -901,6 +919,7 @@ mod virt {
                 } else {
                     f.real -= 1;
                 }
+                f.sites.retain(|(n, ..)| *n != self.site);
             }
             self.clock.changed.notify_waiters();
         }
@@ -908,10 +927,12 @@ mod virt {
 
     /// The task running now inside a real wait (LONG: a [`super::real_long`] one) until what this returns is dropped;
     /// none outside a [`super::spawn`]ed task or on the real clock.
-    pub(super) fn enter(long: bool) -> Option<InReal> {
+    /// AT: the line that begins the wait.
+    pub(super) fn enter(long: bool, at: &'static Location<'static>) -> Option<InReal> {
         let (Some(clock), Ok(task)) = (current(), TASK.try_with(Arc::clone)) else {
             return None;
         };
+        let site = SITES.fetch_add(1, Ordering::Relaxed);
         {
             let mut f = task.flags();
             if long {
@@ -919,12 +940,22 @@ mod virt {
             } else {
                 f.real += 1;
             }
+            f.sites.push((site, at, std::time::Instant::now()));
         }
-        Some(InReal { clock, task, long })
+        Some(InReal {
+            clock,
+            task,
+            long,
+            site,
+        })
     }
 
-    pub(super) async fn real<F: Future>(f: F, long: bool) -> F::Output {
-        let _inside = enter(long);
+    pub(super) async fn real<F: Future>(
+        f: F,
+        long: bool,
+        at: &'static Location<'static>,
+    ) -> F::Output {
+        let _inside = enter(long, at);
         f.await
     }
 
@@ -998,6 +1029,14 @@ mod virt {
                 }
                 let origin = t.origin.as_str().to_string();
                 if f.real > 0 || f.long > 0 {
+                    for (_, at, since) in &f.sites {
+                        out.sites.push(format!(
+                            "{origin} at {}:{} for {} ms",
+                            at.file(),
+                            at.line(),
+                            since.elapsed().as_millis()
+                        ));
+                    }
                     out.waiting.push(origin);
                 } else if late.is_some_and(|l| l.contains(&origin)) && !ok.contains(&origin) {
                     out.busy.push(origin);
@@ -1007,6 +1046,7 @@ mod virt {
                 v.sort();
                 v.dedup();
             }
+            out.sites.sort();
             out
         }
     }

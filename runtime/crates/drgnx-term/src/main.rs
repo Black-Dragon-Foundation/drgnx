@@ -76,6 +76,8 @@ fn serve() -> Result<drgnx_term::run::Exit, String> {
     let size = pty::winsize(opts.cols, opts.rows, opts.cell_px);
     let pty =
         pty::Pty::spawn(program, rest, &dir, &env, size).map_err(|e| format!("{program}: {e}"))?;
+    // the canvases beside the socket, in the user's own term directory: `<id>.img/`
+    opts.img_dir = Some(std::path::Path::new(&socket).with_extension("img"));
     let worker = worker::Worker::new(&opts)?;
     let exit = drgnx_term::run::run(worker, pty, None, Some(listener)).map_err(|e| e.to_string());
     let _ = std::fs::remove_file(&socket);

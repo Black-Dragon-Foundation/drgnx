@@ -4,6 +4,7 @@
 
 pub mod child;
 pub mod frame;
+pub mod image;
 pub mod keys;
 pub mod proto;
 pub mod pty;
@@ -14,6 +15,8 @@ pub mod style;
 
 #[cfg(feature = "ghostty")]
 pub mod engine;
+#[cfg(feature = "ghostty")]
+pub mod gallery;
 #[cfg(feature = "ghostty")]
 pub mod run;
 #[cfg(feature = "ghostty")]

@@ -65,6 +65,11 @@
   "The terminal's cursor colour, as programs that ask for it are told."
   :group 'drgnx)
 
+(defface drgnx-term-image-alt '((t :inherit shadow))
+  "An image's place where it cannot be drawn (a text terminal, no PNG support, a refused or evicted image):
+`[image 640×480]'."
+  :group 'drgnx)
+
 ;;;; State
 
 (defconst drgnx-term-queue-max 4096
@@ -542,8 +547,15 @@ read again only after a theme change.  Shared: never changed in place."
                          (unless (member "" ansi) ansi)))))
 
 (defun drgnx-term--worker-config ()
-  "Every live setting the worker reads, as `term/config' entries `[NAME VALUE]'."
+  "Every live setting the worker reads, as `term/config' entries `[NAME VALUE]', for the current terminal (a remote
+one's images come only as direct data)."
   (vector (drgnx-term--clipboard-config)
+          (vector "remote" (if drgnx-term--remote t :false))
+          (vector "image-storage-limit" drgnx-term-image-storage-limit)
+          (vector "image-file-medium" (if drgnx-term-image-file-medium t :false))
+          (vector "image-max-bytes" drgnx-term-image-max-bytes)
+          (vector "image-disk-max" drgnx-term-image-disk-max)
+          (vector "image-fps" drgnx-term-image-fps)
           (vector "scrollback-bytes" drgnx-term-scrollback-bytes)
           (vector "cursor-style" drgnx-term-cursor-style)
           (vector "enquiry-response" drgnx-term-enquiry-response)
@@ -554,11 +566,10 @@ read again only after a theme change.  Shared: never changed in place."
 
 (defun drgnx-term--apply-config ()
   "`:apply' of the worker's live settings: every live terminal's worker takes them all at once."
-  (let ((config (drgnx-term--worker-config)))
-    (maphash (lambda (_ b)
-               (when (buffer-live-p b)
-                 (with-current-buffer b (drgnx-term--send "term/config" (list :config config)))))
-             drgnx-term--buffers)))
+  (maphash (lambda (_ b)
+             (when (buffer-live-p b)
+               (with-current-buffer b (drgnx-term--send "term/config" (list :config (drgnx-term--worker-config))))))
+           drgnx-term--buffers))
 
 (defun drgnx-term--word-syntax (chars)
   "A syntax table where CHARS end a word and every other printable ASCII character is part of one."
@@ -641,11 +652,55 @@ window scrolled away from the cursor stays where it is unless ALL or `drgnx-term
                                                     'help-echo (get-text-property pos 'drgnx-term-link)))))
             (setq pos next)))))))
 
+(defconst drgnx-term--images-max 64 "The most images a terminal's buffer keeps made (an LRU).")
+
+(defvar-local drgnx-term--images nil
+  "The images this terminal's rows show: (FILE . IMAGE), most recent first, at most `drgnx-term--images-max'; the
+evicted one is `image-flush'ed.")
+
+(defun drgnx-term--image (file)
+  "The image of canvas FILE, from this buffer's LRU."
+  (if-let* ((hit (assoc file drgnx-term--images)))
+      (progn (unless (eq hit (car drgnx-term--images))
+               (setq drgnx-term--images (cons hit (delq hit drgnx-term--images))))
+             (cdr hit))
+    (let ((image (create-image file 'png nil :scale 1 :ascent 100)))
+      (push (cons file image) drgnx-term--images)
+      (when (> (length drgnx-term--images) drgnx-term--images-max)
+        (let ((tail (nthcdr (1- drgnx-term--images-max) drgnx-term--images)))
+          (dolist (old (cdr tail)) (image-flush (cdr old)))
+          (setcdr tail nil)))
+      image)))
+
+(defun drgnx-term--draw-images (view keys)
+  "The image slices of VIEW's rows KEYS (their `drgnx-term-image' text, `[FILE X Y W H ALT]') shown: the cells display
+their row's slice of the canvas FILE, exactly one line tall; where PNGs cannot be drawn, or FILE is \"\", the
+placement's first row shows ALT."
+  (let ((graphic (and (display-images-p) (image-type-available-p 'png))))
+    (dolist (key keys)
+      (when-let* ((beg (drgnx-view-row-start view key)))
+        (let ((end (save-excursion (goto-char beg) (line-end-position))) (pos beg))
+          (while (< pos end)
+            (let ((next (next-single-property-change pos 'drgnx-term-image nil end))
+                  (v (get-text-property pos 'drgnx-term-image)))
+              (when v
+                (let ((file (elt v 0)) (y (elt v 2)))
+                  (with-silent-modifications
+                    (cond ((and graphic (not (equal file "")))
+                           (put-text-property pos next 'display
+                                              (list (list 'slice (elt v 1) y (elt v 3) (elt v 4))
+                                                    (drgnx-term--image file))))
+                          ((eql y 0)
+                           (put-text-property pos next 'display
+                                              (propertize (elt v 5) 'face 'drgnx-term-image-alt)))))))
+              (setq pos next))))))))
+
 (defun drgnx-term--patched (view keys)
-  "PATCHED of `drgnx-term-view': the inserter's overlays back, the links made buttons, then the cursor; the key
-release gate follows the program's key event types."
+  "PATCHED of `drgnx-term-view': the inserter's overlays back, the images drawn, the links made buttons, then the
+cursor; the key release gate follows the program's key event types."
   (drgnx-view-patch--patched view keys)
   (with-current-buffer (drgnx-view--buffer view)
+    (drgnx-term--draw-images view keys)
     (unless drgnx-term-copy-mode
       (drgnx-term--buttons view keys)
       (drgnx-term--place-cursor))
@@ -976,13 +1031,21 @@ an earlier drgnx left running are offered (`drgnx-term-reattach')."
             (cl-incf drgnx-term--resizes)
             (drgnx-term--send "term/resize" (list :cols (nth 0 size) :rows (nth 1 size) :cell_px (nth 2 size)))))))))
 
+(defvar-local drgnx-term--visible t "Whether the worker was last told a window shows this terminal (`term/visible').")
+
 (defun drgnx-term--windows-changed (&rest _)
-  "The windows changed: each terminal whose window's size changed resizes once the sizes settle (50 ms)."
+  "The windows changed: each terminal whose window's size changed resizes once the sizes settle (50 ms); one a window
+shows now, or no longer, tells its worker (image animations play only while one does)."
   (dolist (b (drgnx-term-buffers))
-    (when-let* ((w (get-buffer-window b)))
-      (let ((size (drgnx-term--window-size w)))
-        (unless (equal (list (nth 0 size) (nth 1 size)) (buffer-local-value 'drgnx-term--size b))
-          (drgnx-timer-debounce (cons 'drgnx-term-resize b) 0.05 #'drgnx-term--resize :args (list b) :owner b))))))
+    (let ((w (get-buffer-window b)))
+      (unless (eq (and w t) (buffer-local-value 'drgnx-term--visible b))
+        (with-current-buffer b
+          (setq drgnx-term--visible (and w t))
+          (drgnx-term--send "term/visible" (list :visible (if w t :false)))))
+      (when w
+        (let ((size (drgnx-term--window-size w)))
+          (unless (equal (list (nth 0 size) (nth 1 size)) (buffer-local-value 'drgnx-term--size b))
+            (drgnx-timer-debounce (cons 'drgnx-term-resize b) 0.05 #'drgnx-term--resize :args (list b) :owner b)))))))
 
 ;;;; Events
 

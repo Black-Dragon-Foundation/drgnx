@@ -18,6 +18,7 @@
 
 (require 'drgnx-setting)
 (require 'drgnx-hooks)
+(require 'drgnx-pixels)
 
 (drgnx-defsetting drgnx-popup-style 'auto
   "How the popup lane shows: `window' (the panel's window, or one under the editors), `float' (one child frame
@@ -27,6 +28,7 @@ over the editor, bottom-centre) or `auto': `float' under Glitnir, `window' witho
   :schema '(or (const auto) (const window) (const float)))
 
 (declare-function glitnir-active-p "glitnir")
+(declare-function glitnir-refresh "glitnir")
 
 (defun drgnx-popup--float-p ()
   "Non-nil when the lane floats in a child frame now."
@@ -87,14 +89,22 @@ heights), so scrolling to them never scrolls sideways."
          (extra-w (- (window-pixel-width window) (window-body-width window t)))
          (extra-h (- (window-pixel-height window) (window-body-height window t)))
          (text (window-text-pixel-size window nil nil (- max-w extra-w) (* 3 (- max-h extra-h))))
-         (w (min max-w (+ (car text) extra-w))) (h (min max-h (+ (cdr text) extra-h)))
+         ;; with no right fringe the window's last column holds the truncation glyph (`$', in the buffer's font): a line
+         ;; as wide as the text area would be cut, so room for the glyph too
+         (w (min max-w (+ (car text) extra-w
+                          (if (zerop (or (cadr (window-fringes window)) 0))
+                              (max (frame-char-width child) (string-pixel-width "$" (window-buffer window)))
+                            0))))
+         (h (min max-h (+ (cdr text) extra-h)))
          (border-w (- (frame-outer-width child) (frame-text-width child)))
          (border-h (- (frame-outer-height child) (frame-text-height child))))
     (set-frame-size child w h t)
     (set-frame-position child
                         (max 0 (/ (- (frame-pixel-width root) w border-w) 2))
-                        (max 0 (- (frame-pixel-height root) (window-pixel-height (minibuffer-window root))
-                                  h border-h)))))
+                        (if (plist-get (window-parameter window 'drgnx-popup) :modal)
+                            (max 0 (/ (- (frame-pixel-height root) h border-h) 2))   ; a modal: in the middle
+                          (max 0 (- (frame-pixel-height root) (window-pixel-height (minibuffer-window root))
+                                    h border-h))))))
 
 (defun drgnx-popup--float-window (buffer)
   "The root window of the selected root frame's popup child frame, showing BUFFER; the frame is made once and
@@ -109,17 +119,47 @@ reused (`display-buffer-in-child-frame' makes it the first time)."
                      (display-buffer-in-child-frame
                       buffer `((child-frame-parameters . ((undecorated . t) (no-accept-focus . t) (no-other-frame . t)
                                                           (minibuffer . nil) (drgnx-popup . t) (skip-taskbar . t)
-                                                          (no-focus-on-map . t) (internal-border-width . 0)))
+                                                          (no-focus-on-map . t) (internal-border-width . 0)
+                                                          ;; no title row: the tab bar is the frame's, not a popup's
+                                                          (menu-bar-lines . 0) (tool-bar-lines . 0) (tab-bar-lines . 0)))
                                (inhibit-switch-frame . t)))))
         (set-frame-parameter root 'drgnx-popup-frame child)))
     (frame-root-window child)))
 
-(defun drgnx-popup--show-float (buffer &optional fraction)
+(declare-function drgnx-palette-frame-ring "drgnx-palette-frame" (frame))
+(declare-function drgnx-palette-frame--look "drgnx-palette-frame" ())
+
+(defconst drgnx-popup--modal-keys '(shadow backdrop-blur corner-radius alpha-background ring)
+  "The look's child-frame parameters a modal lane takes (the palette's, `drgnx-palette-frame--look') and a plain one
+clears.")
+
+(defun drgnx-popup--float-dress (child modal)
+  "Dress the lane's frame CHILD: MODAL, as the palette's box (its 12 px pad, the look's ring, shadow and corners);
+else plain (no pad, no ring)."
+  (let* ((root (or (frame-parent child) child))
+         (look (and modal (fboundp 'drgnx-palette-frame--look) (drgnx-palette-frame--look)))
+         (want `((internal-border-width . ,(if modal (drgnx-px 12 root) 0))
+                 ;; the box's text starts at its padding, as the palette's
+                 (left-fringe . ,(and modal 0)) (right-fringe . ,(and modal 0))
+                 (child-frame-border-width . ,(if (and modal (fboundp 'drgnx-palette-frame-ring))
+                                                  (drgnx-palette-frame-ring root)
+                                                0))
+                 ,@(mapcar (lambda (k) (cons k (alist-get k look))) drgnx-popup--modal-keys))))
+    (dolist (p want)
+      (unless (equal (frame-parameter child (car p)) (cdr p))
+        (set-frame-parameter child (car p) (cdr p))))
+    ;; the padding is the box's surface (the buffer's is `drgnx-surface-overlay'), read from the theme at each show
+    (set-face-background 'internal-border (and modal (face-background 'drgnx-surface-overlay nil t)) child)
+    (when (fboundp 'glitnir-refresh) (glitnir-refresh))))   ; Glitnir draws a frame's new chrome on a refresh
+
+(defun drgnx-popup--show-float (buffer &optional fraction modal)
   "The lane in the popup child frame: shown with BUFFER, fitted (at most FRACTION of the frame's height, default 0.33)
-and placed; return its window."
+and placed; return its window.  MODAL: a box in the middle of the window, as the palette's, with no lane header (the
+buffer says what it is; `Esc' ends it)."
   (let ((lane (drgnx-popup--float-window buffer)))
-    (set-window-parameter lane 'header-line-format (drgnx-popup--header buffer))
-    (set-window-parameter lane 'drgnx-popup (list :float t :popup buffer))
+    (set-window-parameter lane 'header-line-format (unless modal (drgnx-popup--header buffer)))
+    (set-window-parameter lane 'drgnx-popup (list :float t :popup buffer :modal modal :fraction fraction))
+    (drgnx-popup--float-dress (window-frame lane) modal)
     ;; `delete-window' ends the lane through its `delete-window' parameter (set by `drgnx-popup--show').  `quit-window'
     ;; and `bury-buffer' would delete a dedicated window — here its frame's only one, so the frame — so the lane is not
     ;; dedicated, and they take the idle buffer from `quit-restore' / the previous buffers instead; the buffer change
@@ -132,6 +172,13 @@ and placed; return its window."
     (make-frame-visible (window-frame lane))
     (drgnx-popup--float-fit lane fraction)       ; a frame that has just been mapped can take its first size from the toolkit
     lane))
+
+(defun drgnx-popup-refit (buffer)
+  "Fit the floating lane to BUFFER again when it shows BUFFER: for text that comes after the popup showed (a hub's
+answer)."
+  (when-let* ((lane (drgnx-popup--window)) ((eq (window-buffer lane) buffer))
+              (p (window-parameter lane 'drgnx-popup)) ((plist-get p :float)))
+    (drgnx-popup--float-fit lane (plist-get p :fraction))))
 
 (defun drgnx-popup--fonts (buffer)
   "In BUFFER, the lane's descriptions take the UI face and the keys of transient and which-key the code face.
@@ -152,7 +199,7 @@ one; mark it as the lane.  Under `drgnx-popup-style' `float', one child frame in
   (let ((lane (drgnx-popup--window)) (panel (drgnx-wb-area-window 'panel)))
     (cond
      ((and (drgnx-popup--float-p) (or (not lane) (plist-get (window-parameter lane 'drgnx-popup) :float)))
-      (setq lane (drgnx-popup--show-float buffer (plist-get props :height))))
+      (setq lane (drgnx-popup--show-float buffer (plist-get props :height) (plist-get props :modal))))
      (lane (drgnx-wb-set-area-buffer lane buffer)                   ; a popup replaces a popup
            (set-window-parameter lane 'header-line-format (drgnx-popup--header buffer))
            (set-window-parameter lane 'drgnx-popup

@@ -181,30 +181,45 @@ temp dir; print where."
                     (with-current-buffer tile
                       (goto-char (point-min))
                       (should (search-forward "\\2 = ∅" nil t))
-                      (should (eq 'drgnx-replace-preview-empty (get-text-property (1- (point)) 'face))))
+                      (should (memq 'drgnx-replace-preview-empty (ensure-list (get-text-property (1- (point)) 'face)))))
                     (drgnx-search-ui-test--shot shots "search-view-preview.png")
                     ;; 7. The Replace All sheet: every file's +/−, the selected file's first hunk, the skipped, the
                     ;; buttons
-                    (cl-letf (((symbol-function 'drgnx-hub--call-on)
-                               (lambda (_conn method _params &optional cb &rest _)
-                                 (when (and cb (equal method "search/preview")) (funcall cb answer nil))))
-                              ;; the module's rule sends the sheet to the popup lane (`drgnx-wb-place'); this test
-                              ;; runs without the rules
-                              ((symbol-function 'pop-to-buffer)
-                               (lambda (b &rest _) (select-window (drgnx-popup--show b nil '(:height 0.8))))))
-                      (drgnx-replace--sheet-show
-                       (list :change 3
-                             :files (vector (list :path file :source "disk"
-                                                  :edits (vector (list :id "m:4:0" :line 1) (list :id "m:4:1" :line 2)))
-                                            (list :path (expand-file-name "src/lib.rs" dir) :source "disk"
-                                                  :edits (vector (list :id "m:4:2" :line 9))))
-                             :skipped (vector (list :id "m:4:3" :path (expand-file-name "src/old.rs" dir)
-                                                    :why "changed on disk since the search")))))
+                    ;; the hunk comes after the sheet shows, as the hub's does, with a line wider than the rest: the
+                    ;; lane, already shown, fits it again
+                    (let ((later nil)
+                          (long (list :path file :plus 1 :minus 1
+                                      :diff (concat "--- " file "\n+++ " file "\n@@ -1 +1 @@\n"
+                                                    "-fn parse(s: &str) -> Tree { parse_all(s).expect(\"a tree from the whole of the input text\") }\n"
+                                                    "+fn read(s: &str) -> Tree { read_all(s).expect(\"a tree from the whole of the input text\") }\n")
+                                      :hunks (vector (list :old_start 1 :old_lines 1 :new_start 1 :new_lines 1
+                                                           :ids ["m:4:0"])))))
+                      (cl-letf (((symbol-function 'drgnx-hub--call-on)
+                                 (lambda (_conn method _params &optional cb &rest _)
+                                   (when (and cb (equal method "search/preview")) (setq later cb))))
+                                ;; the module's rule sends the sheet to the popup lane (`drgnx-wb-place'); this test
+                                ;; runs without the rules
+                                ((symbol-function 'pop-to-buffer)
+                                 (lambda (b &rest _) (select-window (drgnx-popup--show b nil '(:height 0.8 :modal t))))))
+                        (drgnx-replace--sheet-show
+                         (list :change 3
+                               :files (vector (list :path file :source "disk"
+                                                    :edits (vector (list :id "m:4:0" :line 1) (list :id "m:4:1" :line 2)))
+                                              (list :path (expand-file-name "src/lib.rs" dir) :source "disk"
+                                                    :edits (vector (list :id "m:4:2" :line 9))))
+                               :skipped (vector (list :id "m:4:3" :path (expand-file-name "src/old.rs" dir)
+                                                      :why "changed on disk since the search"))))
+                        (redisplay t)
+                        (funcall later long nil)))
                     (with-current-buffer drgnx-replace-sheet-buffer-name
                       (save-excursion
                         (goto-char (point-min))
                         (should (search-forward "Replace 3 matches in 2 files" nil t))
                         (should (search-forward "1 - fn parse" nil t))
+                        (redisplay t)
+                        ;; the long line whole: its end in the window, nothing scrolled sideways
+                        (should (pos-visible-in-window-p (line-end-position)
+                                                         (get-buffer-window (current-buffer) t)))
                         (should (search-forward "1 skipped: changed on disk since the search" nil t))
                         ;; the whole sheet shows, its buttons too, at every scale: no line cut, none scrolled away
                         (redisplay t)

@@ -1,6 +1,8 @@
 //! The supervisor (Task 23; `docs/guide/agents.md`): rules per session and job with thresholds per kind of work —
-//! `silent`, `repeat`, `no-progress`, `dead-wait`, `lease`, `refusals`, `unrecorded`, `manager-context` — each
-//! pausing the agent after its tool call and making a `supervisor` card with fixes (and the `supervisor` event).
+//! `silent`, `repeat`, `no-progress`, `dead-wait`, `lease`, `refusals`, `unrecorded`, `manager-context`, `context` —
+//! each pausing the agent after its tool call and making a `supervisor` card with fixes (and the `supervisor` event);
+//! the two context rules rotate instead.  A task in `gate-wait` (the hub runs its gates) is not `silent` and keeps
+//! its lease.
 //! No model call.  Not the hub's own `ensure`/`stop` ([`crate::supervise`]).
 //!
 //! [`judge`] is the rules as a pure function of what was observed, the thresholds and a clock; [`run`] ticks once a
@@ -40,6 +42,8 @@ pub struct Obs {
     pub refusals: u32,
     /// Share of the context window used.
     pub context: Option<f64>,
+    /// Tokens of the context window used.
+    pub context_tokens: Option<f64>,
     /// The jobs this session started that run.
     pub jobs: Vec<String>,
     /// The user holds its wheel (or is taking it): it is stopped on purpose, so no rule holds for it.
@@ -57,6 +61,11 @@ pub struct Facts {
     pub unrecorded: bool,
     /// Jobs the session waits for that are gone.
     pub dead_jobs: Vec<String>,
+    /// The task waits on its gates (`gate-wait`: a gate's run in flight): its silence and its lease are the hub's,
+    /// not the agent's.
+    pub gate_wait: bool,
+    /// The task's rule pack rotates its agent past this many context tokens (`:context-share`).
+    pub rotate_at: Option<u64>,
 }
 
 /// The thresholds (settings of Task 13).
@@ -130,8 +139,10 @@ pub fn judge(o: &Obs, f: &Facts, t: &Thresholds, now: f64) -> Vec<(Rule, String)
     } else {
         t.silent_task
     };
+    // gate-wait mutes `silent` and `lease`: the hub runs the task's gates
     if o.status == SessionStatus::Busy
         && !o.busy_elsewhere
+        && !f.gate_wait
         && after > 0
         && now - o.last_update >= after as f64
     {
@@ -165,6 +176,7 @@ pub fn judge(o: &Obs, f: &Facts, t: &Thresholds, now: f64) -> Vec<(Rule, String)
         ));
     }
     if let Some(until) = f.lease_until
+        && !f.gate_wait
         && now >= until + t.lease_secs
     {
         out.push((
@@ -192,6 +204,17 @@ pub fn judge(o: &Obs, f: &Facts, t: &Thresholds, now: f64) -> Vec<(Rule, String)
             Rule::ManagerContext,
             format!("{:.0} % of its context window is used", c * 100.0),
         ));
+    } else if o.role != Role::Manager
+        && let (Some(at), Some(used)) = (f.rotate_at, o.context_tokens)
+        && used >= at as f64
+    {
+        out.push((
+            Rule::Context,
+            format!(
+                "{} tokens of context, past its rule pack's {at}",
+                used as u64
+            ),
+        ));
     }
     out
 }
@@ -203,7 +226,7 @@ pub fn fixes(rule: Rule) -> Vec<&'static str> {
         Rule::Repeat | Rule::Refusals => vec!["restart", "move-model"],
         Rule::DeadWait | Rule::Lease => vec!["restart", "kill-process"],
         Rule::Unrecorded => vec!["restart"],
-        Rule::ManagerContext => vec!["rotate"],
+        Rule::ManagerContext | Rule::Context => vec!["rotate"],
     }
 }
 
@@ -275,6 +298,7 @@ async fn facts_of(f: &Front, o: &Obs, t: &Thresholds) -> Facts {
         facts.lines = changed_lines(&o.cwd).await;
     }
     if let Some(task) = o.task.clone() {
+        facts.gate_wait = f.orch.waiting(&task, |id| f.core.exec.done(id).is_some());
         let (sid, task_id) = (o.sid.clone(), task.clone());
         let read = f
             .writer
@@ -293,12 +317,20 @@ async fn facts_of(f: &Front, o: &Obs, t: &Thresholds) -> Facts {
                     let d: Value = serde_json::from_str(&data).unwrap_or(Value::Null);
                     unrecorded |= d["unrecorded"].as_array().is_some_and(|a| !a.is_empty());
                 }
-                Ok((lease, unrecorded))
+                // a workflow task (its job has a rule pack) rotates past the pack's share
+                let share = match norn::read::tasks::task_job(c, &task_id)? {
+                    Some(job) => norn::read::evidence::pack_of_job(c, &job)?
+                        .and_then(|p| u64::try_from(p.context_share).ok())
+                        .filter(|n| *n > 0),
+                    None => None,
+                };
+                Ok((lease, unrecorded, share))
             })
             .await;
-        if let Ok((lease, unrecorded)) = read {
+        if let Ok((lease, unrecorded, share)) = read {
             facts.lease_until = lease;
             facts.unrecorded = unrecorded;
+            facts.rotate_at = share;
         }
     }
     facts
@@ -329,14 +361,17 @@ async fn changed_lines(cwd: &std::path::Path) -> Option<u64> {
     .flatten()
 }
 
-/// Pause the agent (not for `manager-context`: that one is rotated first, one path, and the card says it was), make
+/// Pause the agent (not for `manager-context` or `context`: those are rotated first, one path, and the card says it was), make
 /// the card, announce it.
 async fn act(f: &Front, o: &Obs, rule: Rule, text: &str) {
     let mut text = text.to_string();
     let mut deferred = false;
-    if rule == Rule::ManagerContext {
+    if matches!(rule, Rule::ManagerContext | Rule::Context) {
         use crate::manager::Rotation;
         let said = match crate::manager::rotate_for_context(f, &o.sid).await {
+            Rotation::Done if rule == Rule::Context => {
+                "rotated: a fresh session was started with its task's brief in the same worktree"
+            }
             Rotation::Done => {
                 "rotated: a fresh session was started with its digest and open decisions"
             }
@@ -418,6 +453,7 @@ mod tests {
             tokens: 0,
             refusals: 0,
             context: None,
+            context_tokens: None,
             jobs: vec![],
             held: false,
         }
@@ -534,6 +570,51 @@ mod tests {
             ..Facts::default()
         };
         assert_eq!(rules(&obs(), &un, 1000.0), vec![Rule::Unrecorded]);
+    }
+
+    #[test]
+    fn a_task_waiting_on_its_gates_is_not_silent_and_keeps_its_lease() {
+        let gated = Facts {
+            lease_until: Some(2000.0),
+            gate_wait: true,
+            ..Facts::default()
+        };
+        // silent for an hour and its lease long gone: the hub runs its gates, not the agent
+        assert!(rules(&obs(), &gated, 5000.0).is_empty());
+        // the other rules still hold
+        let looping = Obs {
+            max_repeat: 3,
+            ..obs()
+        };
+        assert_eq!(rules(&looping, &gated, 5000.0), vec![Rule::Repeat]);
+        let not = Facts {
+            gate_wait: false,
+            ..gated
+        };
+        assert_eq!(rules(&obs(), &not, 5000.0), vec![Rule::Silent, Rule::Lease]);
+    }
+
+    #[test]
+    fn a_workflow_tasks_agent_rotates_past_its_packs_share() {
+        let f = Facts {
+            rotate_at: Some(120_000),
+            ..Facts::default()
+        };
+        let w = |used: f64| Obs {
+            context_tokens: Some(used),
+            ..obs()
+        };
+        assert!(rules(&w(119_999.0), &f, 1000.0).is_empty());
+        assert_eq!(rules(&w(120_000.0), &f, 1000.0), vec![Rule::Context]);
+        // no pack share (a session outside a workflow): not rotated
+        assert!(rules(&w(500_000.0), &Facts::default(), 1000.0).is_empty());
+        // a manager keeps its own rule
+        let m = Obs {
+            role: Role::Manager,
+            context: Some(0.71),
+            ..w(130_000.0)
+        };
+        assert_eq!(rules(&m, &f, 1000.0), vec![Rule::ManagerContext]);
     }
 
     #[test]

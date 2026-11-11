@@ -3,7 +3,7 @@
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' > note.txt && git add note.txt && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
 {"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w.txt\" \"--log\" \"$ROOT/w.log\")) (\"mock-gemini\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--script\" \"$ROOT/g.txt\" \"--log\" \"$ROOT/g.log\")) (\"mock-reviewer\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--script\" \"$ROOT/r.txt\" \"--log\" \"$ROOT/r.log\")))) (drgnx-agents-routes ((implement . \"mock-claude\") (docs . \"mock-gemini\") (review . \"mock-reviewer\"))))\n"}
-{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Mixed\n\n**Repo:** $ROOT/repo\n\n### Task 1: Claude edits the note\n\n**Role:** implement\n\nEdit note.txt.\n\n### Task 2: Gemini edits the note\n\n**Role:** docs\n\nEdit note.txt.\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Mixed\n\n**Repo:** $ROOT/repo\n\n### Task 1: Claude edits the note\n\n**Role:** implement\n**Red:** none (a note file, no code to test)\n\nEdit note.txt.\n\n### Task 2: Gemini edits the note\n\n**Role:** docs\n**Red:** none (a note file, no code to test)\n\nEdit note.txt.\n"}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "connect", "conn": "e", "hub": "h"}

@@ -550,8 +550,12 @@ How it works:
   show-paren, eglot's symbol highlight, Flymake's marks, a rectangle and a region. A second group beside it holds a
   diff, so the focused card's ring shows. A row in each sidebar section is hovered. Highlights that a command makes are
   drawn as overlays in their faces, the way those commands draw them.
-  The last three, `explorer-focused-dark`, `explorer-focused-light` and `explorer-focused-hc`, are the window scene
-  with the Explorer focused, so its selected row shows the focus ring and the other sections the inactive selection.
+  Then `explorer-focused-dark`, `explorer-focused-light` and `explorer-focused-hc`, the window scene with the Explorer
+  focused, so its selected row shows the focus ring and the other sections the inactive selection. The last two,
+  `search-preview` and `search-sheet` (mockup `search-view`), search the project for `(gateway)--pending` replaced by
+  `\1--queued` (regexp) with the third match unticked, in the dark theme, then show the first file's preview tile and
+  the Replace All sheet. They need the hub: the scene starts `DRGNX_RATATOSKR_BIN` in the foreground (a session starts
+  none).
 - It writes `NAME-sN-facts.eld` beside each shot: the themes, the fonts the chrome faces got, the windows, the
   modules, the visible child frames, `:palette` while a minibuffer is open (whether the palette floats and why: its
   category's multiform entry, the display action, the frame), and `:limits`, what the line cannot show of that mockup yet (`drgnx-look-scene-limits`). A limit is
@@ -561,8 +565,9 @@ How it works:
 What it reads from the environment:
 - `DRGNX_LOOK_ELPA`: a package directory to activate (Magit, Vertico, …). A session has no packages of its
   own, and the user's install does.
-- `DRGNX_RATATOSKR_BIN`: a `test-hooks` ratatoskr with `ratatoskr-mock` beside it, for the agent panel. Without it, the
-  agent scenes record what is missing.
+- `DRGNX_RATATOSKR_BIN`: a `test-hooks` ratatoskr with `ratatoskr-mock` beside it, for the agent panel and the Search
+  scenes. Without it, those scenes record what is missing.
+- `DRGNX_LOOK_ONLY`: a regexp; only the scenes whose names match it run (`^search-`).
 
 Nothing in the command asserts a pixel. **A look change is done only when its scene sits beside its mockup at scales 1
 and 2, someone has looked at both, and the remaining differences are written down.** `test/unit/look-scenes-test.el`
