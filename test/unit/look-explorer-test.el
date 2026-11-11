@@ -250,10 +250,17 @@ selection's tail and past its end, and below the hover); their fringes are the p
         (should-not (bound-and-true-p hl-line-mode))
         (should (member '(fringe drgnx-surface-panel fringe) face-remapping-alist))))))
 
-(ert-deftest drgnx-look-explorer/the-outline-current-is-the-inactive-selection ()
-  "Pattern D: the Outline's current definition is drawn as a selection in a list without the focus (bold), not the
-hover's colour (which ranked it with a hovered row)."
-  (should (eq 'drgnx-selected-inactive (face-attribute 'drgnx-outline-current :inherit))))
+(ert-deftest drgnx-look-explorer/the-outline-current-is-a-marker ()
+  "Pattern D: the Outline's current definition is where you are, not a selection: its text in the accent, no fill, not
+bold, so the sidebar shows one selection (window-dark.html) and the mark never reads as a second one."
+  (should (eq 'drgnx-accent (face-attribute 'drgnx-outline-current :inherit)))
+  (should (eq 'unspecified (face-attribute 'drgnx-outline-current :weight)))
+  (should (eq 'unspecified (face-attribute 'drgnx-outline-current :background))))
+
+(ert-deftest drgnx-look-explorer/no-bold-in-the-ladder ()
+  "Pattern D: the state ladder is fills and the focus ring only (window-dark.html `.row', `.row.sel', `.row.sel.focus'):
+the Buffers panel's active row is not bold, as the mockup's Open list."
+  (should-not (memq (face-attribute 'drgnx-buffers-active :weight nil t) '(bold semibold extra-bold ultra-bold))))
 
 (ert-deftest drgnx-look-explorer/a-row-has-one-end ()
   "A row that ends its own way (the Outline's current definition: `drgnx-row-end') and is selected draws one stretch

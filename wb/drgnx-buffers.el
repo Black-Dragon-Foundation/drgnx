@@ -23,7 +23,9 @@
 
 (defface drgnx-buffers-close '((t :inherit shadow)) "The × of each row." :group 'drgnx)
 (defface drgnx-buffers-modified '((t :inherit warning)) "The ● of a modified buffer." :group 'drgnx)
-(defface drgnx-buffers-active '((t :inherit bold)) "The row of the buffer shown in the active editor." :group 'drgnx)
+(defface drgnx-buffers-active '((t))
+  "The row of the buffer shown in the active editor: no mark of its own (window-dark.html's Open list has none; the
+Explorer's selected row is the current file), for a theme or you to give one." :group 'drgnx)
 
 (defconst drgnx-buffers-buffer-name " *drgnx buffers*" "Internal (a leading space): not in C-x b or ibuffer.")
 

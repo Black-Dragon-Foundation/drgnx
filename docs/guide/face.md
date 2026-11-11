@@ -344,7 +344,8 @@ branch the status bar shows, so a new file git does not track yet has it too; wi
 no git it leaves the branch out). The branch is a chip of its own on a graphical frame. The search box before the keys
 opens Quick Open: files by name, and `>` typed first turns it into the command palette, as in VS Code. At the right end, before the window controls, two chips show while they have something to
 say: `1 needs you` (the count of everything that waits on you; a click opens it) and the agents at work (`N agents`;
-the agents module tells the row how many through `drgnx-topline-agents-function`).
+the module `tools/agents` counts the sessions this Emacs mirrors that run a turn or wait on you, and tells the row
+through `drgnx-topline-agents-function`).
 
 A double click on the row's empty part maximises the window or restores it (**Maximize or Restore Window**,
 `title-row-maximize`, in the palette too).
