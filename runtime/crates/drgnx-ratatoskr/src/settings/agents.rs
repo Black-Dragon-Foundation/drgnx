@@ -59,6 +59,14 @@ impl Editors {
         lock(&self.subscribers).retain(|_, out| out.push(line.clone()));
     }
 
+    /// [`Editors::broadcast`] to every subscriber but EXCEPT.
+    pub fn broadcast_except(&self, event: &str, data: Value, except: Option<u64>) {
+        let Some(line) = crate::front::event_line(event, data) else {
+            return;
+        };
+        lock(&self.subscribers).retain(|c, out| Some(*c) == except || out.push(line.clone()));
+    }
+
     /// EVENT with DATA to connection CONN only; false when it is not subscribed or its connection is closed.
     pub fn send_to(&self, conn: u64, event: &str, data: Value) -> bool {
         let Some(line) = crate::front::event_line(event, data) else {

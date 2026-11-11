@@ -8,15 +8,22 @@ use crate::front::Front;
 use hrafn::grep::{CONTEXT_CHARS, Match};
 use runstav::methods::search::{QueryAnswer, UsagesAnswer, UsagesParams};
 use runstav::types::AbsPath;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 /// What a run searches: text through the searcher (`hrafn::grep`), the others through Hrafn's index.
 #[derive(Clone, Debug)]
 pub(super) enum Mode {
     Text,
-    Symbol { name: String, case: bool },
-    Meaning { question: String },
+    Symbol {
+        name: String,
+        case: bool,
+        /// Only definitions of these kinds ([`kind_class`]) and the uses in their files; empty is every kind.
+        kinds: Vec<String>,
+    },
+    Meaning {
+        question: String,
+    },
 }
 
 /// How many uses and hits an index mode lists.
@@ -25,25 +32,43 @@ const INDEX_K: u32 = 100;
 /// One file's matches from an index mode, each with its mark (a definition's, a hit's score).
 pub(super) type Batch = (String, Vec<Match>, Vec<Option<Mark>>);
 
+/// A Symbol search's definitions' counts per kind ([`kind_class`]).
+pub(super) type KindCounts = BTreeMap<String, u64>;
+
+/// The kind chip a definition of Hrafn's KIND falls under: `fn`, `type`, `macro`, `var`, else `other` (the groups of
+/// the rows' kind icons).
+pub(super) fn kind_class(kind: &str) -> &'static str {
+    match kind {
+        "function" | "method" | "constructor" => "fn",
+        "struct" | "enum" | "union" | "class" | "interface" | "trait" | "type" | "record"
+        | "impl" | "module" => "type",
+        "macro" => "macro",
+        "variable" | "constant" | "static" | "custom" | "face" => "var",
+        _ => "other",
+    }
+}
+
 /// The files MODE (Symbol or Meaning) finds in ROOT's view of the index, each read for its snapshot and marks; with
 /// CONTEXT, a Symbol search's uses are grouped under the definitions that hold them (label rows, as Text's), its
-/// definitions' own rows standing for theirs. `Err` is why it could not run.
+/// definitions' own rows standing for theirs; and a Symbol search's definitions' counts per kind. `Err` is why it
+/// could not run.
 pub(super) async fn found(
     f: &Front,
     root: &AbsPath,
     mode: &Mode,
     context: bool,
-) -> Result<Vec<(String, Vec<Match>, Option<Read>)>, String> {
+) -> Result<(Vec<(String, Vec<Match>, Option<Read>)>, Option<KindCounts>), String> {
     let symbol = matches!(mode, Mode::Symbol { .. });
-    Ok(batches(f, root, mode)
-        .await?
+    let (batches, kinds) = batches(f, root, mode).await?;
+    let files = batches
         .into_iter()
         .map(|(file, ms, marks)| {
             let read =
                 run::read(Path::new(&file), &ms, context && symbol).map(|r| marked(r, marks));
             (file, ms, read)
         })
-        .collect())
+        .collect();
+    Ok((files, kinds))
 }
 
 /// R with MARKS: a definition's row stands for its own label (its context is dropped), so the uses in it get one
@@ -58,12 +83,17 @@ fn marked(mut r: Read, marks: Vec<Option<Mark>>) -> Read {
     r
 }
 
-/// The batches MODE (Symbol or Meaning) finds in ROOT's view of the index; `Err` is why it could not run.
-async fn batches(f: &Front, root: &AbsPath, mode: &Mode) -> Result<Vec<Batch>, String> {
+/// The batches MODE (Symbol or Meaning) finds in ROOT's view of the index, and a Symbol search's definitions' counts
+/// per kind; `Err` is why it could not run.
+async fn batches(
+    f: &Front,
+    root: &AbsPath,
+    mode: &Mode,
+) -> Result<(Vec<Batch>, Option<KindCounts>), String> {
     let dir = Path::new(root.as_str());
     match mode {
-        Mode::Text => Ok(Vec::new()),
-        Mode::Symbol { name, case } => {
+        Mode::Text => Ok((Vec::new(), None)),
+        Mode::Symbol { name, case, kinds } => {
             let ans = f
                 .search
                 .usages(
@@ -80,7 +110,8 @@ async fn batches(f: &Front, root: &AbsPath, mode: &Mode) -> Result<Vec<Batch>, S
                 .map_err(|e| e.message)?;
             // each file read once, outside every lock
             let mut lines: HashMap<String, Option<Vec<String>>> = HashMap::new();
-            Ok(symbol_batches(dir, &ans, name, *case, |file, n| {
+            let counts = kind_counts(&ans);
+            let b = symbol_batches(dir, &ans, name, *case, kinds, |file, n| {
                 lines
                     .entry(file.to_owned())
                     .or_insert_with(|| {
@@ -91,7 +122,8 @@ async fn batches(f: &Front, root: &AbsPath, mode: &Mode) -> Result<Vec<Batch>, S
                     .as_ref()?
                     .get(n.checked_sub(1)? as usize)
                     .cloned()
-            }))
+            });
+            Ok((b, Some(counts)))
         }
         Mode::Meaning { question } => {
             let ans = f
@@ -99,7 +131,7 @@ async fn batches(f: &Front, root: &AbsPath, mode: &Mode) -> Result<Vec<Batch>, S
                 .query(f, dir, question, hrafn::Scope::Code, INDEX_K, false)
                 .await
                 .map_err(|e| e.message)?;
-            Ok(meaning_batches(dir, &ans))
+            Ok((meaning_batches(dir, &ans), None))
         }
     }
 }
@@ -108,12 +140,14 @@ async fn batches(f: &Front, root: &AbsPath, mode: &Mode) -> Result<Vec<Batch>, S
 /// definition's line and then the file's uses in line order, then the other files that use it in the index's rank.
 /// Each line gives a match per whole-word occurrence of NAME in it, read by LINE_OF (a file's line, from 1); a
 /// definition whose line does not hold NAME (a macro's) is a match of nothing at the line's start. A definition's
-/// first match is marked with its kind and signature.
+/// first match is marked with its kind and signature. KINDS (not empty): only the definitions of those kinds, and no
+/// uses in a file whose definitions are all of other kinds (they are most likely theirs: uses carry no kind).
 pub(super) fn symbol_batches(
     root: &Path,
     ans: &UsagesAnswer,
     name: &str,
     case: bool,
+    kinds: &[String],
     mut line_of: impl FnMut(&str, u32) -> Option<String>,
 ) -> Vec<Batch> {
     let q = hrafn::grep::Query {
@@ -143,12 +177,29 @@ pub(super) fn symbol_batches(
             files[at].1.push((line, def));
         }
     };
-    for d in &ans.defined {
+    let on = |d: &&runstav::methods::search::SymbolHit| {
+        kinds.is_empty() || kinds.iter().any(|k| k == kind_class(&d.kind))
+    };
+    // the files whose definitions are all filtered out: their uses go with them
+    let kept: HashSet<&str> = ans
+        .defined
+        .iter()
+        .filter(on)
+        .map(|d| d.path.as_str())
+        .collect();
+    let gone: HashSet<&str> = ans
+        .defined
+        .iter()
+        .map(|d| d.path.as_str())
+        .filter(|p| !kept.contains(p))
+        .collect();
+    for d in ans.defined.iter().filter(on) {
         add(&d.path, d.line_start, Some(def_mark(d)));
     }
     let mut uses: Vec<(&str, u32)> = ans
         .usages
         .iter()
+        .filter(|u| !gone.contains(u.path.as_str()))
         .flat_map(|u| u.lines.iter().map(|l| (u.path.as_str(), *l)))
         .collect();
     // a file's uses in line order, the files in the index's rank (a stable sort by each file's first place)
@@ -183,6 +234,15 @@ pub(super) fn symbol_batches(
             (!ms.is_empty()).then_some((file, ms, marks))
         })
         .collect()
+}
+
+/// ANS's definitions' counts per kind ([`kind_class`]).
+fn kind_counts(ans: &UsagesAnswer) -> KindCounts {
+    let mut out = KindCounts::new();
+    for d in &ans.defined {
+        *out.entry(kind_class(&d.kind).to_owned()).or_default() += 1;
+    }
+    out
 }
 
 /// Definition D's mark: its kind and signature.
@@ -272,6 +332,42 @@ mod tests {
         }
     }
 
+    /// [D] The kind chips: the counts are per kind of every definition; with `fn` on, a macro's definition is left
+    /// out and so are the uses in its file (it defines nothing else), while a file with no definition keeps its uses.
+    #[test]
+    fn kind_chips_filter_the_definitions_and_their_files_uses() {
+        let mut mac = def("src/m.el", 2);
+        mac.kind = "macro".into();
+        let ans = UsagesAnswer {
+            defined: vec![def("src/p.rs", 1), mac],
+            usages: vec![usage("src/m.el", &[4]), usage("src/main.rs", &[1])],
+            fresh: Fresh {
+                files_pending: 0,
+                view: view(),
+            },
+        };
+        let counts = kind_counts(&ans);
+        assert_eq!(
+            counts,
+            KindCounts::from([("fn".into(), 1), ("macro".into(), 1)])
+        );
+        let line_of = |_: &str, _: u32| Some("parse".to_string());
+        let files = |kinds: &[String]| -> Vec<String> {
+            symbol_batches(Path::new("/r"), &ans, "parse", true, kinds, line_of)
+                .into_iter()
+                .map(|(f, _, _)| f)
+                .collect()
+        };
+        assert_eq!(files(&[]), ["/r/src/p.rs", "/r/src/m.el", "/r/src/main.rs"]);
+        assert_eq!(files(&["fn".into()]), ["/r/src/p.rs", "/r/src/main.rs"]);
+        assert_eq!(
+            files(&["macro".into(), "var".into()]),
+            ["/r/src/m.el", "/r/src/main.rs"]
+        );
+        assert_eq!(kind_class("trait"), "type");
+        assert_eq!(kind_class("label"), "other");
+    }
+
     /// [D] Definitions first, then the uses: a file that defines the name lists its definition and then its uses;
     /// every whole-word occurrence on a line is a match (not `parser`), case as asked; a line the file no longer has
     /// is left out.
@@ -314,7 +410,7 @@ mod tests {
             };
             lines.get(n as usize - 1).map(|s| s.to_string())
         };
-        let b = symbol_batches(Path::new("/r"), &ans, "parse", true, line_of);
+        let b = symbol_batches(Path::new("/r"), &ans, "parse", true, &[], line_of);
         let got: Files<(u32, u32, &str)> = b
             .iter()
             .map(|(f, ms, _)| {
@@ -347,7 +443,7 @@ mod tests {
         );
         assert_eq!(b[1].2, [None, None]);
         // case ignored: `Parse` too
-        let b = symbol_batches(Path::new("/r"), &ans, "parse", false, line_of);
+        let b = symbol_batches(Path::new("/r"), &ans, "parse", false, &[], line_of);
         assert_eq!(b[0].1.len(), 3);
     }
 
@@ -401,7 +497,7 @@ mod tests {
                 view: view(),
             },
         };
-        let b = symbol_batches(Path::new("/r"), &ans, "parse", true, |_, _| {
+        let b = symbol_batches(Path::new("/r"), &ans, "parse", true, &[], |_, _| {
             Some("parse".into())
         });
         let got: Files<u32> = b

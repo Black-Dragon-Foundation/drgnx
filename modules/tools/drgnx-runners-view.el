@@ -36,18 +36,21 @@
 (defface drgnx-runners-attention '((t :inherit drgnx-status-attention))
   "The dot of a runner that needs a login, your keys or your confirm." :group 'drgnx)
 (defface drgnx-runners-error '((t :inherit error)) "The dot of a runner that cannot be reached." :group 'drgnx)
-(defface drgnx-runners-subtle '((t :inherit shadow)) "The dot of a runner that is draining or being preempted." :group 'drgnx)
+(defface drgnx-runners-subtle '((t :inherit shadow))
+  "The dot of a runner that is draining, being preempted, or a Mac asleep on battery." :group 'drgnx)
+(defface drgnx-runners-os '((t :inherit drgnx-runners-number)) "The macOS chip after a Mac runner's name." :group 'drgnx)
 
 (defconst drgnx-runners-view-buffer-name "*drgnx Runners*" "The runner list's buffer.")
 
 (defun drgnx-runners-view-dot-face (state jobs)
   "The face of a runner's dot for its STATE text (as the list says it) and JOBS running there: in rotation and idle,
-running, out of rotation, needing you, unreachable, or going away."
+running, out of rotation, needing you, unreachable, going away, or a Mac asleep."
   (cond ((equal state "ready") (if (and (numberp jobs) (> jobs 0)) 'drgnx-runners-running 'drgnx-runners-ready))
         ((string-prefix-p "benched" state) 'drgnx-runners-out)
         ((or (string-prefix-p "needs" state) (string-prefix-p "waits for your" state)) 'drgnx-runners-attention)
         ((string-prefix-p "unreachable" state) 'drgnx-runners-error)
-        ((or (string-prefix-p "draining" state) (string-prefix-p "preempting" state)) 'drgnx-runners-subtle)
+        ((or (string-prefix-p "draining" state) (string-prefix-p "preempting" state) (string-prefix-p "sleeping" state))
+         'drgnx-runners-subtle)
         (t 'drgnx-runners-out)))
 
 (defconst drgnx-runners-view-titles '("Runner" "Trust" "Profile" "Accepts")
@@ -91,13 +94,33 @@ running, out of rotation, needing you, unreachable, or going away."
                           (drgnx-runners-view--num (format "$%.2f mo" (or mo 0))))
                 (propertize "—" 'face 'drgnx-runners-dim))))))
 
+(defun drgnx-runners-view-mac-p (runner)
+  "Whether RUNNER is a Mac (its `:os' is `macos …')."
+  (string-prefix-p "macos" (or (plist-get runner :os) "")))
+
+(defun drgnx-runners-view-mac-line (runner)
+  "A Mac RUNNER's own line: its memory watched by the runner (no cgroups there), the account it runs as and whether
+the Command Line Tools answer; nil for any other runner."
+  (when (drgnx-runners-view-mac-p runner)
+    (let* ((host (or (plist-get runner :host) ""))
+           (user (and (string-search "@" host) (car (split-string host "@"))))
+           (sep (propertize " · " 'face 'drgnx-runners-dim)))
+      (concat "  memory: watched"
+              (if user (concat sep "as " user) "")
+              sep (if (member "xcode-clt" (append (plist-get runner :features) nil))
+                      "Command Line Tools"
+                    (propertize "no Command Line Tools" 'face 'drgnx-runners-reason))))))
+
 (defun drgnx-runners-view-row (runner)
   "The text of RUNNER's row (a runner as `runners/list' gives it): two lines, and lines of the reason when it is out of
 rotation.  The last line ends in a newline."
   (let* ((ready (drgnx-runners-view-ready-p runner))
          (dot (propertize (drgnx-face-glyph (if ready 'dot 'circle)) 'face (if ready 'drgnx-runners-ready 'drgnx-runners-out)))
-         (name (truncate-string-to-width (or (plist-get runner :name) "") 14 nil ?\s))
-         (head (concat dot " " (propertize name 'face 'drgnx-runners-name) " "
+         (mac (drgnx-runners-view-mac-p runner))
+         (name (truncate-string-to-width (or (plist-get runner :name) "") (if mac 8 14)))
+         (head (concat dot " " (propertize name 'face 'drgnx-runners-name)
+                       (if mac (propertize " macOS" 'face 'drgnx-runners-os) "")
+                       (make-string (max 0 (- (if mac 8 14) (string-width name))) ?\s) " "
                        (propertize (truncate-string-to-width (or (plist-get runner :trust) "") 9 nil ?\s) 'face 'drgnx-runners-dim)
                        " " (propertize (format "%s · %s" (plist-get runner :profile) (plist-get runner :accept))
                                        'face 'drgnx-runners-dim)
@@ -114,6 +137,7 @@ rotation.  The last line ends in a newline."
     (concat (truncate-string-to-width head drgnx-runners-view-width) "\n"
             (truncate-string-to-width size drgnx-runners-view-width) "\n"
             (if-let* ((cost (drgnx-runners-view-cost runner))) (concat cost "\n") "")
+            (if-let* ((m (drgnx-runners-view-mac-line runner))) (concat (truncate-string-to-width m drgnx-runners-view-width) "\n") "")
             (if ready ""
               (mapconcat (lambda (l) (concat (propertize l 'face 'drgnx-runners-reason) "\n"))
                          (drgnx-runners-view--wrap (or (plist-get runner :state) "") 2) "")))))

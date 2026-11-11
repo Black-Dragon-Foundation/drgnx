@@ -1374,6 +1374,13 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `coord/notify` | user, agent, service | `{}` | `boolean` | no |
 | `coord/prune` | user | `{}` | `{pruned: boolean}` | yes |
 | `coord/task-status` | user | `{agent?: AgentName, status: Status, task: TaskRef}` | `boolean` | yes |
+| `debug/breakpoints` | user | `{op?: {condition?: string, enabled?: boolean, hit?: string, id?: natnum, line?: natnum, log?: string, name?: string, op: string, path?: string}, path?: string, root: string}` | `DebugBreakpointsView` | no |
+| `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
+| `debug/control` | user | `{op: string, session: string, thread?: integer}` | `boolean` | no |
+| `debug/run-to-cursor` | user | `{line: natnum, path: string, session: string}` | `boolean` | no |
+| `debug/select` | user | `{frame: integer, session: string, thread?: integer}` | `boolean` | no |
+| `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, root: string, selection?: string, user?: [JsonObject]}` | `{needs?: any, session?: string}` | no |
+| `debug/trust` | user | `{root: string, trusted: boolean}` | `boolean` | no |
 | `decisions/effects` | user | `{decision: string}` | `{commits?: [string], decision: string, label: string, later_hunks?: [Hunk]}` | no |
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no |
 | `events/add` | user | `{agent?: AgentName, best_effort?: boolean, data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text, task?: TaskRef}` | `{id?: natnum}` | yes |
@@ -1382,7 +1389,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/get` | user | `{id: Id}` | `ExecRow` | no |
 | `exec/list` | user | `{running?: boolean, session?: Id}` | `{jobs?: [ExecRow]}` | no |
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
-| `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, rows?: {listed: [string], parser: string}, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
+| `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, os?: "linux" \| "macos", priority?: natnum, rows?: {listed: [string], parser: string}, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `explorer/subscribe` | user | `{around?: AbsPath, compact?: boolean, exclude?: [string], expanded?: [AbsPath], indent?: natnum, only?: [AbsPath], roots: [AbsPath], view: string, window?: natnum}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
@@ -1505,6 +1512,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
 | `search/grep-replace` | user | `{replace: string, view: string}` | `boolean` | no |
 | `search/grep-skipped` | user | `{skipped: [{id: string, why: string}], view: string}` | `boolean` | no |
+| `search/handoff` | user | `{hidden?: boolean, ids?: [string], instruction: Prompt, mark?: {face: string, glyph: string}, off?: [string], to: {new: {profile: string}} \| {session: {id: Id}}, view: string}` | `HandoffAnswer` | yes |
+| `search/handoff-state` | user | `{handoff: string}` | `HandoffState` | no |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
 | `search/map` | user | `{base?: boolean, budget?: natnum, focus?: [string], names?: [string], root: AbsPath, scope?: "code" \| "all"}` | `{files: [MapFile], files_total: natnum, fresh: Fresh, text: string, tokens: natnum}` | no |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
@@ -1512,10 +1521,10 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/preview` | user | `{off?: [string], path: AbsPath, replace?: string, view: string}` | `PreviewAnswer` | no |
 | `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
 | `search/recent` | user | `{root: AbsPath}` | `{recent: [SearchSpec]}` | no |
-| `search/run` | user | `{context?: boolean, count?: boolean, ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, view: string}` | `{run: natnum}` | no |
+| `search/run` | user | `{context?: boolean, count?: boolean, ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, kinds?: [string], mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, view: string}` | `{run: natnum}` | no |
 | `search/saved/delete` | user | `{name: string, root: AbsPath}` | `boolean` | yes |
 | `search/saved/list` | user | `{root: AbsPath}` | `{problems?: [string], saved: [SavedSearch]}` | no |
-| `search/saved/put` | user | `{name: string, pinned?: boolean, root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}}` | `boolean` | yes |
+| `search/saved/put` | user | `{name: string, pinned?: boolean, root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, kinds?: [string], mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}}` | `boolean` | yes |
 | `search/saved/share` | user | `{name: string, root: AbsPath}` | `{path: AbsPath}` | yes |
 | `search/scope-bases` | user | `{root: AbsPath}` | `{current?: string, default?: string, detached: boolean, recent: [string], upstream?: string}` | no |
 | `search/server-plan` | user | `{kind: "tei" \| "ollama"}` | `ServerPlan` | no |
@@ -2527,6 +2536,20 @@ Replace This, Undo Replace and Symbol mode's rename go through it, so a write ne
   by file and line; past `max` lines (default 20,000; counted from the match lines first, so a huge search reads no
   file) it gives no lines and `over`, with `total`. A file that could not be written is left out with why, as
   `search/edits` would skip it.
+- `search/handoff {view, ids?, off?, instruction, to: {new: {profile}} | {session: {id}}, hidden?}` (Ask an Agent,
+  `view/search/handoff.rs`) hands the run's matches (`ids`, else all but `off`) to an agent: a new worker of `profile`
+  in a worktree of its own from the project's HEAD (registered as a worker, so the Work space's review lists it), or a
+  live session, which edits where it is. The brief is the instruction, the search and the replacement, then the
+  matches by file as `path:line:col  in <definition>  <line>`, at most 300 lines or 32,000 characters (~8k tokens),
+  then "N more: call the `search_results` tool with handoff id h:N", the files changed since the search, and the rule
+  to edit only those places and say which were skipped. Paths the index never reads (dot paths, secret-looking names)
+  are left out unless `hidden` and named in the answer, `{handoff, session, worktree?, ids, sent, more, hidden?}`.
+  `search_results {handoff, page?}` is the drgnx-search MCP server's tool: 100 rows a page, to the session the
+  hand-off went to only (the server's own session, never the agent's word), for 24 hours, 2 MB in all; each page
+  names the files changed since. `search/handoff-state {handoff}` and the event `search-handoff-state` (after the
+  agent's steps settle, until its session ends) say where it is: `phase` sent, editing or done, and the matches
+  `done` (a hunk of the session's edit records near the match's line took out its line or its old text), `left`
+  (its line is still there near its place) and `unknown` (neither: never counted done).
 - `search/preview {view, path, off?, replace?}` is one file's part of the same edit set as a diff (the preview tile):
   the unified diff (1 line of context, so nearby changes in different definitions are hunks of their own; `similar`),
   its lines added and removed, the hunks (`old_start`, `old_lines`,
@@ -3570,8 +3593,16 @@ job's log cut mid-stream and reattached equals the runner's file byte for byte.
 One queue holds every job but the user's servers (`runners/queue.rs`), for this machine and the runners alike. The
 job layer (`exec/`) records a job's folder and meta as before, then `Queue::submit`s it: its forseti `JobSpec`, its
 `Placement {machine (auto | local | runner), heavy, keys, local_only, background, writes, priority, send, machines_cell,
-image, weight, visibility, shared_overlay, origin_key, suite, net_hosts}`, its frozen inputs (below) and what to start it
-from (`Pending`). `net_hosts` is what a container job's network grant reaches (its cell over the caps' hosts, as its
+image, weight, visibility, shared_overlay, origin_key, suite, net_hosts, os, features}`, its frozen inputs (below) and what to start it
+from (`Pending`). `os` is the start's `os` (`macos`: a Mac runner's host job, counted heavy, refused for a container
+or `local_only` job); a Mac job's `features` are `xcode-clt` and a `brew:NAME` for each of the project's
+`drgnx-runners-mac-tools`, which the Mac's probe offers by name and at major.minor (`brew:cmake`, `brew:cmake@3.31`),
+and a `tool:PIN` for each of its `drgnx-runners-mac-toolchains` (`tool:rust@1.95`). The registry installs every
+project's pins on a Mac (`Settings::values_everywhere`) with `sleipnir tools` over the runner's ssh, as the runner
+account and outside any job, at `runner add` (before the probe) and at `runner check` (its session closed first, then
+dialled again); a pin that fails is logged, and its jobs wait with "`drgnx runner check` on the Mac installs the
+toolchains".
+`net_hosts` is what a container job's network grant reaches (its cell over the caps' hosts, as its
 proxy here allows them): a runner's `start` frame carries it, and the runner's proxy allows those hosts (it pins no
 name, so `pins` stay empty). `exec/start` lost `check_machine` and the agents' semaphore:
 `machine` names `auto` (the default), `local` or a runner the queue knows (else `invalid-params`); `priority` (1–5) is
@@ -3633,7 +3664,9 @@ Tests: `runners::queue::`, `runners::local::`, `runtime_db::`, `exec::tests::a_q
 
 **Rows** (design §6.9, "Partial results"). A test job whose suite supports row selection carries
 `Placement.suite = Suite {parser, listed}`: the row parser that reads its log (`ert`, `cargo-test`, `plist`), and its
-rows in listing order. Its command holds `{rows}` (`queue::ROWS`) where the selector goes; each attempt's spec
+rows in listing order. A suite whose parser counts rows (`ert`, `cargo-test`) sets the spec's `expect.min_ran` to 1, so a
+run that ran no row (a selector that matched nothing) is `suspect`, never `pass`. Its command holds `{rows}`
+(`queue::ROWS`) where the selector goes; each attempt's spec
 (`attempt_spec`) puts there `forseti::split::selector` of the listed rows that have no result yet
 (`forseti::split::remaining_rows`), all of them on a first attempt, and sets `select` to it. A job with no suite, a
 parser that reads no rows (`exit`), or no `{rows}` in its command (`selects_rows` false) reruns whole, as before. The

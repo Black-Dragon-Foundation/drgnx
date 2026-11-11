@@ -1296,6 +1296,18 @@ impl PlanHooks {
         {
             Gate::Pass => Ok(Turn::Merge),
             Gate::Wait(why) => Ok(Turn::Wait(why)),
+            // a red batch's reruns named these tips: back to their agents, the rest form the next batch
+            Gate::Back(back) => {
+                let names: Vec<String> = back.iter().map(|(t, _)| t.clone()).collect();
+                for (t, note) in back {
+                    front.queue.forget(job, &t);
+                    retry(front, job, &t, Some(note)).await?;
+                }
+                Ok(Turn::Wait(format!(
+                    "back to their agents: {}",
+                    names.join(", ")
+                )))
+            }
             Gate::Hold(why, tree) => {
                 raise_card(
                     front,

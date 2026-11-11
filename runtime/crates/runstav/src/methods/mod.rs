@@ -8,6 +8,7 @@
 pub mod agents;
 pub mod config;
 pub mod coord;
+pub mod debug;
 pub mod editor;
 pub mod exec;
 pub mod extensions;
@@ -295,6 +296,13 @@ params! {
     TermList(Empty),
     TermSessionEnd(term::TermSessionEnd),
     TermAttach(term::TermAttach),
+    DebugConfigs(debug::DebugConfigs),
+    DebugStart(debug::DebugStart),
+    DebugControl(debug::DebugControl),
+    DebugSelect(debug::DebugSelect),
+    DebugTrust(debug::DebugTrust),
+    DebugBreakpoints(debug::DebugBreakpoints),
+    DebugRunToCursor(debug::DebugRunToCursor),
     SearchQuery(search::QueryParams),
     SearchStatus(search::RootParams),
     SearchIndex(search::IndexParams),
@@ -315,6 +323,8 @@ params! {
     SearchGrepSkipped(search::GrepSkippedParams),
     SearchEdits(search::EditsParams),
     SearchEditDoc(search::EditDocParams),
+    SearchHandoff(search::HandoffParams),
+    SearchHandoffState(search::HandoffStateParams),
     SearchPreview(search::PreviewParams),
     SearchApply(search::ApplyParams),
     SearchApplied(search::AppliedParams),
@@ -407,6 +417,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(plugins::methods());
     v.extend(history::methods());
     v.extend(pair::methods());
+    v.extend(debug::methods());
     v
 }
 

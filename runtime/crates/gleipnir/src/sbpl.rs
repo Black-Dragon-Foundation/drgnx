@@ -78,6 +78,34 @@ pub const NET_SERVICES: &[&str] = &[
     "com.apple.SystemConfiguration.configd",
 ];
 
+/// The build addition's devices beyond [`DEVICES`]: read by name (the automounter's no-wait node, which `realpath`
+/// of `/net` paths opens).
+pub const BUILD_DEVICES: &[&str] = &["/dev/autofs_nowait"];
+
+/// The devices a build writes data to (never creates or unlinks): DTrace's helper, which every binary linked with
+/// probes opens at start, and the controlling terminal.
+pub const BUILD_DEVICE_WRITES: &[&str] = &["/dev/dtracehelper", "/dev/tty"];
+
+/// The metadata a build's tools stat beyond [`LINKS`]: the true names of the temporary folders.
+pub const BUILD_METADATA: &[&str] = &["/private/tmp", "/private/var/tmp"];
+
+/// The mach services a build asks: the group membership the xcrun shims check, and the per-user folder's helper.
+pub const BUILD_SERVICES: &[&str] = &[
+    "com.apple.system.opendirectoryd.membership",
+    "com.apple.bsd.dirhelper",
+];
+
+/// What a Mac runner's build job may use beyond a session's profile (spike S2; docs/develop/gleipnir.md, "The build
+/// addition"): every sysctl read, the whole Xcode app read-only when the developer dir is in one (xcodebuild, which
+/// make's shim runs, loads its SharedFrameworks), the account's per-user folder read and written (clang's module
+/// cache, the compilers' temporary files), [`BUILD_DEVICES`], [`BUILD_DEVICE_WRITES`], [`BUILD_METADATA`] and
+/// [`BUILD_SERVICES`]. Never part of a session's profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MacBuild {
+    /// The account's per-user folder by true name (`getconf DARWIN_USER_DIR`'s parent, under `/private/var/folders`).
+    pub user_dir: PathBuf,
+}
+
 /// The caller's macOS facts. Gleipnir reads neither itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MacContext {
@@ -87,6 +115,8 @@ pub struct MacContext {
     pub developer_dir: Option<PathBuf>,
     /// Where the users' homes are ([`USERS_DIR`]): denied before every allow.
     pub users_dir: PathBuf,
+    /// A Mac runner's build job: the build addition ([`MacBuild`]); none for a session.
+    pub build: Option<MacBuild>,
 }
 
 impl Default for MacContext {
@@ -94,6 +124,7 @@ impl Default for MacContext {
         MacContext {
             developer_dir: None,
             users_dir: PathBuf::from(USERS_DIR),
+            build: None,
         }
     }
 }
@@ -104,8 +135,11 @@ impl Default for MacContext {
 /// 2. AF_UNIX sockets may be made (pipes to children); connecting to one is decided at step 13;
 /// 3. `(deny file-read* (subpath "/Users") …)`, before every allow;
 /// 4. `/` itself, and the metadata of [`LINKS`] and of every directory above an allowed path (stat, never list);
-/// 5. reads: [`SYSTEM_READ`], the developer dir, (shared) [`DNS_FILES`], `read`, `write`, `home`, `run`, `tmp`;
-/// 6. [`DEVICES`], each by name;
+/// 5. reads: [`SYSTEM_READ`], the developer dir (with `loopback`, an Xcode one's `../SharedFrameworks` too),
+///    (shared) [`DNS_FILES`], `read`, `write`, `home`, `run`, `tmp`;
+/// 6. [`DEVICES`], each by name; for a build ([`MacBuild`]), its addition: every sysctl, [`BUILD_DEVICES`],
+///    [`BUILD_DEVICE_WRITES`] and [`BUILD_SERVICES`] (its per-user folder and Xcode app are in steps 5 and 8, its
+///    [`BUILD_METADATA`] in step 4);
 /// 7. [`SYSTEM_HIDDEN`] denied;
 /// 8. writes: `write`, `home` when `rw`, `tmp`;
 /// 9. `binds`, in order: readable, and writable for `rw` or denied writes for `ro` (the pins);
@@ -114,7 +148,8 @@ impl Default for MacContext {
 ///     clone of a directory above a hidden path (`hide`, [`SYSTEM_HIDDEN`]): `clonefile` copies a whole tree, hidden
 ///     files too, and Seatbelt checks only the directory named;
 /// 12. the network: shared allows outbound IP anywhere, AF_SYSTEM and [`NET_SERVICES`]; isolated is
-///     `(deny network*)` and outbound to `localhost` on `mac_tcp_ports` only;
+///     `(deny network*)` and outbound to `localhost` on `mac_tcp_ports` only; with `loopback`, `localhost` on
+///     `mac_loopback_ports` bound, accepted and connected to, and Unix sockets under `tmp` bound and accepted;
 /// 13. every Unix socket denied, then each of `sockets` (and, shared, [`DNS_SOCKET`]) allowed by `path-literal`.
 ///
 /// Every deny also holds for every case of its path (a `regex` of character classes: APFS ignores case, and whether
@@ -148,6 +183,22 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
             Some(d)
         }
     };
+    let build = match &mac.build {
+        None => None,
+        Some(b) => {
+            let u = context_path("build.user_dir", &b.user_dir)?;
+            if u == "/" || within(u, users) || within(users, u) {
+                let msg = format!("sbpl: build.user_dir {u} is / or meets {users}");
+                return Err(malformed(msg, Some(&b.user_dir)));
+            }
+            Some(u)
+        }
+    };
+    // the Xcode app around an Xcode developer dir (`…/Xcode.app/Contents/Developer`), for a build
+    let xcode = build.and(dev).and_then(|d| {
+        let app = d.strip_suffix("/Contents/Developer")?;
+        app.ends_with(".app").then_some(app)
+    });
     let shared = s.net == Net::Shared;
     let home = s.home.as_ref();
     let run = s.run.as_ref().map(|b| text(&b.source)).transpose()?;
@@ -163,8 +214,16 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
         .map(|b| Ok((b.mode, text(&b.source)?)))
         .collect::<Result<Vec<_>, Refusal>>()?;
 
+    let loopback = matches!(s.net, Net::Isolated { loopback: true, .. });
+    // A debug session's LLDB.framework: Xcode keeps it beside its developer dir, not in it.
+    let frameworks = dev
+        .filter(|_| loopback)
+        .and_then(|d| d.strip_suffix("/Contents/Developer"))
+        .map(|app| format!("{app}/Contents/SharedFrameworks"));
     let mut reads: Vec<&str> = SYSTEM_READ.to_vec();
     reads.extend(dev);
+    reads.extend(frameworks.as_deref());
+    reads.extend(xcode.into_iter().chain(build));
     if shared {
         reads.extend(DNS_FILES);
     }
@@ -176,6 +235,7 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
         .copied()
         .chain(home.filter(|h| h.mode == Mode::Rw).and(home_src))
         .chain(tmp)
+        .chain(build)
         .collect();
     let rw_binds = binds.iter().filter(|b| b.0 == Mode::Rw).map(|b| b.1);
     let ro_binds = binds.iter().filter(|b| b.0 == Mode::Ro).map(|b| b.1);
@@ -191,7 +251,15 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
         .chain(binds.iter().map(|b| b.1))
         .chain(sockets.iter().copied())
         .collect();
-    let meta = dedup(LINKS.iter().copied().chain(ancestors(&meta_of)).collect());
+    let build_meta: &[&str] = if build.is_some() { BUILD_METADATA } else { &[] };
+    let meta = dedup(
+        LINKS
+            .iter()
+            .chain(build_meta)
+            .copied()
+            .chain(ancestors(&meta_of))
+            .collect(),
+    );
     let mut unix: Vec<&str> = sockets.clone();
     if shared {
         unix.push(DNS_SOCKET);
@@ -207,6 +275,9 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
     push(rule("allow", "file-read-metadata", "literal", &meta)?);
     push(rule("allow", "file-read*", "subpath", &reads)?);
     push(rule("allow", "file-read*", "literal", DEVICES)?);
+    if build.is_some() {
+        out_build(&mut push)?;
+    }
     push(deny_any_case("file-read*", "subpath", SYSTEM_HIDDEN)?);
     push(rule("allow", "file-write*", "subpath", &writes)?);
     for (mode, p) in &binds {
@@ -228,16 +299,47 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
             ));
             push(rule("allow", "mach-lookup", "global-name", NET_SERVICES)?);
         }
-        Net::Isolated { mac_tcp_ports, .. } => {
+        Net::Isolated {
+            mac_tcp_ports,
+            loopback,
+            mac_loopback_ports,
+            ..
+        } => {
             push(Some("(deny network*)".into()));
             for port in mac_tcp_ports {
                 push(Some(format!(
                     "(allow network-outbound (remote ip \"localhost:{port}\"))"
                 )));
             }
+            if *loopback {
+                for port in mac_loopback_ports {
+                    let ip = format!("\"localhost:{port}\"");
+                    push(Some(format!("(allow network-bind (local ip {ip}))")));
+                    push(Some(format!("(allow network-inbound (local ip {ip}))")));
+                    push(Some(format!("(allow network-outbound (remote ip {ip}))")));
+                }
+                if let Some(t) = tmp {
+                    let t = quote(t)?;
+                    push(Some(format!(
+                        "(allow network-bind (local unix-socket (subpath {t})))"
+                    )));
+                    push(Some(format!(
+                        "(allow network-inbound (local unix-socket (subpath {t})))"
+                    )));
+                }
+            }
         }
     }
     push(Some("(deny network-outbound (remote unix-socket))".into()));
+    // the loopback flag: connect to the session's own sockets under tmp (after the deny, which would undo it)
+    if let Net::Isolated { loopback: true, .. } = &s.net
+        && let Some(t) = tmp
+    {
+        push(Some(format!(
+            "(allow network-outbound (remote unix-socket (subpath {})))",
+            quote(t)?
+        )));
+    }
     for sock in unix {
         push(Some(format!(
             "(allow network-outbound (remote unix-socket (path-literal {})))",
@@ -245,6 +347,21 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
         )));
     }
     Ok(format!("{BASE}\n{}\n", out.join("\n")))
+}
+
+/// The build addition's own rules (the paths are in the reads, writes and metadata): every sysctl, the build's devices
+/// and services.
+fn out_build(push: &mut impl FnMut(Option<String>)) -> Result<(), Refusal> {
+    push(Some("(allow sysctl-read)".into()));
+    push(rule("allow", "file-read*", "literal", BUILD_DEVICES)?);
+    push(rule(
+        "allow",
+        "file-write-data",
+        "literal",
+        BUILD_DEVICE_WRITES,
+    )?);
+    push(rule("allow", "mach-lookup", "global-name", BUILD_SERVICES)?);
+    Ok(())
 }
 
 /// `s` as an SBPL string: in double quotes, with `"` and `\` escaped by a backslash. Refused: a control character
@@ -587,6 +704,8 @@ mod tests {
         Net::Isolated {
             relay: vec![],
             mac_tcp_ports: vec![3128, 3129],
+            loopback: false,
+            mac_loopback_ports: vec![],
         }
     }
 
@@ -616,6 +735,18 @@ mod tests {
         MacContext {
             developer_dir: Some(DEV.into()),
             users_dir: USERS_DIR.into(),
+            build: None,
+        }
+    }
+
+    const USER_DIR: &str = "/private/var/folders/zz/abc123";
+
+    fn build() -> MacContext {
+        MacContext {
+            build: Some(MacBuild {
+                user_dir: USER_DIR.into(),
+            }),
+            ..mac()
         }
     }
 
@@ -746,6 +877,88 @@ mod tests {
     fn golden_shared() {
         let p = prof(spec(Net::Shared));
         insta::assert_snapshot!("golden_shared", &p[BASE.len()..]);
+    }
+
+    #[test]
+    fn golden_build() {
+        let p = try_prof(spec(isolated()), &build()).unwrap();
+        insta::assert_snapshot!("golden_build", &p[BASE.len()..]);
+    }
+
+    /// [D] The build addition: every sysctl read, the whole Xcode app and the per-user folder read, the per-user folder
+    /// written, the build's devices, metadata and services; the reads before Homebrew's data is denied, everything
+    /// before the network is (the last matching rule decides). A session's profile has none of it.
+    #[test]
+    fn the_build_addition_only_for_a_build() {
+        let p = try_prof(spec(isolated()), &build()).unwrap();
+        let forms = own(&p);
+        let rs = rules(&forms);
+        let sysctl = one(&rs, "every sysctl", |r| {
+            is(r, "allow", &["sysctl-read"]) && r.filters.is_empty()
+        });
+        let read = one(&rs, "the reads", |r| {
+            is(r, "allow", &["file-read*"]) && args(r, "subpath").contains(&"/usr")
+        });
+        for want in ["/Applications/Xcode.app", USER_DIR] {
+            assert!(args(&rs[read], "subpath").contains(&want), "{want}");
+        }
+        let write = one(&rs, "the writes", |r| {
+            is(r, "allow", &["file-write*"]) && args(r, "subpath").contains(&"/w/task")
+        });
+        assert!(args(&rs[write], "subpath").contains(&USER_DIR));
+        let dev = one(&rs, "the build's devices", |r| {
+            is(r, "allow", &["file-read*"]) && args(r, "literal") == BUILD_DEVICES
+        });
+        let dw = one(&rs, "device writes", |r| {
+            is(r, "allow", &["file-write-data"])
+        });
+        assert_eq!(args(&rs[dw], "literal"), BUILD_DEVICE_WRITES);
+        let svc = one(&rs, "the build's services", |r| {
+            is(r, "allow", &["mach-lookup"])
+        });
+        assert_eq!(args(&rs[svc], "global-name"), BUILD_SERVICES);
+        let meta = one(&rs, "metadata", |r| is(r, "allow", &["file-read-metadata"]));
+        for m in BUILD_METADATA {
+            assert!(args(&rs[meta], "literal").contains(m), "{m}");
+        }
+        let hidden = one(&rs, "Homebrew's data denied", |r| {
+            is(r, "deny", &["file-read*"]) && args(r, "subpath") == SYSTEM_HIDDEN
+        });
+        let net = one(&rs, "no network", |r| is(r, "deny", &["network*"]));
+        // the reads before Homebrew's data is denied; the writes (step 8) after it, which denies only reads
+        for i in [sysctl, read, dev, dw, svc] {
+            assert!(i < hidden && i < net, "{i} before {hidden} and {net}");
+        }
+        assert!(hidden < write && write < net, "{hidden} < {write} < {net}");
+
+        let session = prof(spec(isolated()));
+        let srs_forms = own(&session);
+        let srs = rules(&srs_forms);
+        assert!(!srs.iter().any(|r| is(r, "allow", &["sysctl-read"])));
+        assert!(
+            !srs.iter()
+                .any(|r| is(r, "allow", &["file-write-data"]) || is(r, "allow", &["mach-lookup"]))
+        );
+        // the app's metadata is read (an ancestor of the developer dir), never the app itself
+        assert!(
+            !session.contains("(subpath \"/Applications/Xcode.app\")")
+                && !session.contains(USER_DIR)
+        );
+    }
+
+    /// [D] A build's per-user folder must be absolute, canonical and outside the users' homes.
+    #[test]
+    fn a_build_user_dir_is_checked() {
+        let in_homes = format!("{USERS_DIR}/u/tmp");
+        for bad in ["var/folders/x", "/private/var/folders/../x", &in_homes, "/"] {
+            let m = MacContext {
+                build: Some(MacBuild {
+                    user_dir: bad.into(),
+                }),
+                ..mac()
+            };
+            assert!(try_prof(spec(isolated()), &m).is_err(), "{bad}");
+        }
     }
 
     #[test]
@@ -993,10 +1206,110 @@ mod tests {
         let mut none = spec(Net::Isolated {
             relay: vec![],
             mac_tcp_ports: vec![],
+            loopback: false,
+            mac_loopback_ports: vec![],
         });
         none.sockets = vec![];
         let p = prof(none);
         assert!(!p.contains("remote ip"));
+    }
+
+    /// A debug session (`loopback`): its own localhost ports bound, accepted and connected to, nothing wider (no
+    /// `localhost:*`: the Mac's loopback is the host's); Unix sockets bound and accepted under its tmp only; Xcode's
+    /// SharedFrameworks read, never written. Without the flag none of it.
+    #[test]
+    fn loopback_only_its_own_ports_tmp_sockets_and_frameworks() {
+        let net = |loopback, ports: Vec<u16>| Net::Isolated {
+            relay: vec![],
+            mac_tcp_ports: vec![3128],
+            loopback,
+            mac_loopback_ports: ports,
+        };
+        let p = prof(spec(net(true, vec![47001, 47002])));
+        let forms = own(&p);
+        let rs = rules(&forms);
+        let deny = one(&rs, "(deny network*)", |r| is(r, "deny", &["network*"]));
+        let mut seen = Vec::new();
+        for (i, r) in rs.iter().enumerate() {
+            if r.action == "allow" && r.ops.iter().any(|o| o.starts_with("network")) {
+                assert!(i > deny);
+                let f = items(r.filters[0]);
+                let kind = atom(&f[1]).unwrap();
+                let what = match kind {
+                    "ip" => string(&f[2]).unwrap().to_string(),
+                    "unix-socket" => {
+                        let sub = items(&f[2]);
+                        format!("{} {}", atom(&sub[0]).unwrap(), string(&sub[1]).unwrap())
+                    }
+                    other => panic!("{other}"),
+                };
+                seen.push(format!("{} {} {what}", r.ops[0], atom(&f[0]).unwrap()));
+            }
+        }
+        let tmp = |op: &str, dir: &str| format!("{op} {dir} subpath {TMP}");
+        let mut want = vec!["network-outbound remote localhost:3128".to_string()];
+        for port in [47001, 47002] {
+            want.push(format!("network-bind local localhost:{port}"));
+            want.push(format!("network-inbound local localhost:{port}"));
+            want.push(format!("network-outbound remote localhost:{port}"));
+        }
+        want.push(tmp("network-bind", "local"));
+        want.push(tmp("network-inbound", "local"));
+        // connect under tmp (node's inspector, js-debug's watchdog): after the unix deny, so it is not undone
+        want.push(tmp("network-outbound", "remote"));
+        // the session dir's one socket (step 13), as without the flag
+        want.push("network-outbound remote path-literal /w/run/s/S1/gw.sock".into());
+        assert_eq!(seen, want);
+        let unix_deny = one(&rs, "the unix deny", |r| {
+            is(r, "deny", &["network-outbound"])
+                && r.filters
+                    .iter()
+                    .any(|f| items(f).iter().any(|x| atom(x) == Some("unix-socket")))
+        });
+        let tmp_connect = rs
+            .iter()
+            .position(|r| {
+                is(r, "allow", &["network-outbound"])
+                    && r.filters.iter().any(|f| {
+                        items(f)
+                            .iter()
+                            .filter(|x| matches!(x, Sexp::List(_)))
+                            .any(|x| items(x).iter().any(|y| atom(y) == Some("subpath")))
+                    })
+            })
+            .expect("connect under tmp");
+        assert!(tmp_connect > unix_deny);
+        assert!(!p.contains("localhost:*") && !p.contains("\"*:*\""));
+        let fw = "/Applications/Xcode.app/Contents/SharedFrameworks";
+        let names = |r: &R<'_>| -> Vec<String> {
+            r.filters
+                .iter()
+                .flat_map(|f| items(f).iter().filter_map(string).map(str::to_string))
+                .collect()
+        };
+        assert!(
+            rs.iter()
+                .any(|r| is(r, "allow", &["file-read*"]) && names(r).iter().any(|n| n == fw))
+        );
+        for r in rs
+            .iter()
+            .filter(|r| r.action == "allow" && r.ops.iter().any(|o| o.starts_with("file-write")))
+        {
+            assert!(!names(r).iter().any(|n| n.starts_with("/Applications")));
+        }
+        // Without the flag: no loopback port, no socket bind, no frameworks.
+        let off = prof(spec(net(false, vec![])));
+        for word in ["network-bind", "network-inbound", "SharedFrameworks"] {
+            assert!(!off.contains(word), "{word}");
+        }
+        // The Command Line Tools' developer dir has no SharedFrameworks beside it: nothing added.
+        let clt = MacContext {
+            developer_dir: Some("/Library/Developer/CommandLineTools".into()),
+            users_dir: USERS_DIR.into(),
+            build: None,
+        };
+        let p = try_prof(spec(net(true, vec![47001])), &clt).unwrap();
+        assert!(!p.contains("SharedFrameworks"));
     }
 
     #[test]

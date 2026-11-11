@@ -135,6 +135,16 @@
                           (drgnx-work-map--chip-line (list :id "machine:desktop" :kind "machine" :label "desktop"
                                                            :fields '(:slots (3 16))))))))
 
+(ert-deftest drgnx-work-rows/a-mac-runner-has-the-macos-chip ()
+  ;; pattern D: a Mac runner's chip says macOS in the code face after its name; other machines say nothing of their OS
+  (let ((line (drgnx-work-map--chip-line
+               (drgnx-work-rows-test--runner :trust "mine" :state "ready" :jobs 1 :icon "monitor" :mac t))))
+    (should (string-search "desktop macOS · 3/16" (substring-no-properties line)))
+    (should (eq 'drgnx-runners-os (get-text-property (string-search "macOS" line) 'face line))))
+  (should-not (string-search "macOS" (drgnx-work-map--chip-line
+                                      (drgnx-work-rows-test--runner :trust "mine" :state "ready" :jobs 1
+                                                                    :icon "server")))))
+
 (ert-deftest drgnx-work-rows/state-dot-per-runner-state ()
   ;; pattern D: the dot's face follows the runner's state (the look's states, through the `drgnx-runners-*' faces)
   (dolist (case '(((:state "ready" :jobs 0) . drgnx-runners-ready)
@@ -145,7 +155,8 @@
                   ((:state "waits for your confirm" :jobs 0) . drgnx-runners-attention)
                   ((:state "unreachable" :jobs 0) . drgnx-runners-error)
                   ((:state "draining" :jobs 0) . drgnx-runners-subtle)
-                  ((:state "preempting" :jobs 1) . drgnx-runners-subtle)))
+                  ((:state "preempting" :jobs 1) . drgnx-runners-subtle)
+                  ((:state "sleeping" :jobs 0) . drgnx-runners-subtle)))
     (let* ((item (apply #'drgnx-work-rows-test--runner :trust "mine" :icon "server" (car case)))
            (dot (drgnx-work-map--dot item)))
       (should (equal (cdr case) (get-text-property 0 'face dot)))

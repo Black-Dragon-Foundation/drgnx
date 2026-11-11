@@ -1,0 +1,36 @@
+# The debug adapters' image, drgnx-debug-adapters:f45 (docs/develop/testing.md, "Live debug adapters"): the live
+# debugger tests run real adapters in it (they are local programs, not outside services), and nothing downloads at test
+# time: every adapter is pinned here by version and SHA-256.
+#   podman build --memory 4g --memory-swap 4g --build-arg BASE=IMAGE -t drgnx-debug-adapters:f45 \
+#     -f test/container/Containerfile.debug test/container
+# BASE is an image with Nidhogg as emacs, gcc and bubblewrap (the dev image of Nidhogg's integration line).
+# Runs need ptrace for delve and lldb-dap: `--cap-add=SYS_PTRACE` (podman's default seccomp profile then allows
+# ptrace); lldb-dap's launch turns off address randomisation, which that profile refuses, so its scenarios set
+# `disableASLR: false`.
+# Nidhogg is BASE's (Containerfile ran nidhogg.sh); the ENV below names the same pinned build, so a pin bump changes
+# this file too.
+# on: drgnx-test
+ARG BASE=localhost/drgnx-test:f45
+FROM ${BASE}
+ENV DRGNX_EMACS=/opt/nidhogg/31.1-nidhogg.5/bin/nidhogg
+RUN dnf -y install python3 python3-pip golang nodejs lldb clang curl unzip strace \
+    && dnf clean all
+
+# debugpy (stdio adapter: python3 -m debugpy.adapter), from its wheel with the hash checked by pip.
+RUN printf 'debugpy==1.8.22 --hash=sha256:a9e9d3550e15ca479c59333e90845029190531f0cacfedab3b815a57bd913947\n' > /tmp/req.txt \
+    && python3 -m pip install --no-cache-dir --require-hashes -r /tmp/req.txt && rm /tmp/req.txt
+
+# delve (TCP adapter: dlv dap --listen=127.0.0.1:PORT): the module and every dependency are checked against the Go
+# checksum database (its h1: hashes are SHA-256 of the module trees); delve v1.27.2 is
+# h1:dhcjFjiVoQI53uwsG7EqYiMhdvFuywsBZx4KDOK+sYE=.
+RUN GOTOOLCHAIN=local GOFLAGS=-mod=mod GOPATH=/tmp/go GOBIN=/usr/local/bin \
+    go install github.com/go-delve/delve/cmd/dlv@v1.27.2 \
+    && rm -rf /tmp/go /root/.cache/go-build && dlv version
+
+# js-debug (TCP adapter: node /opt/js-debug/src/dapDebugServer.js PORT 127.0.0.1), the js-debug-dap release tarball.
+RUN curl -sSfL -o /tmp/js-debug.tar.gz https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.1/js-debug-dap-v1.140.1.tar.gz \
+    && echo "c72fab31bcbfdce6ad1f42adfd28eff8d4681dd3b03b5e2e6f9e72e6f9927faf  /tmp/js-debug.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/js-debug.tar.gz -C /opt && rm /tmp/js-debug.tar.gz && test -f /opt/js-debug/src/dapDebugServer.js
+
+# lldb-dap (stdio adapter) comes with Fedora's lldb package; check it is there.
+RUN command -v lldb-dap && lldb-dap --help > /dev/null

@@ -10,3 +10,6 @@ publish = false
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+skuld = { path = "../skuld", version = "0.1.0" }  # every order of the reruns' results

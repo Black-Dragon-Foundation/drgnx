@@ -987,6 +987,7 @@ impl Sessions {
         let ctx = Arc::new(crate::search::mcp::SearchCtx {
             root: PathBuf::from(cwd),
             backend: Arc::new(crate::search::mcp::HubBackend(front)),
+            session: Some(row.sid.clone()),
         });
         let list = self
             .search_tools

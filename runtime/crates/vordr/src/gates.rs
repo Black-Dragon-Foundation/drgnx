@@ -101,6 +101,36 @@ pub fn waived(evidence: &[Evidence], key: &str) -> Option<String> {
         .map(|e| e.note.clone().unwrap_or_default())
 }
 
+/// The flaky rows in EVIDENCE (oldest first): a row that failed in one run and passed in a later run of the same
+/// selector on the same tree, env stamp and platform.  Each holds the merge (flakes are fixed at the cause, never
+/// listed).
+pub fn flaky(evidence: &[Evidence]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (i, a) in evidence.iter().enumerate() {
+        for row in failing(&a.rows) {
+            let passed_later = evidence[i + 1..].iter().any(|b| {
+                b.facts == a.facts
+                    && b.rows
+                        .iter()
+                        .any(|r| r.name == row && r.verdict == crate::rows::Verdict::Pass)
+            });
+            if passed_later && !out.iter().any(|o| o == row) {
+                out.push(row.to_owned());
+            }
+        }
+    }
+    out
+}
+
+/// The flaky rows that hold a merge under PACK: [`flaky`]'s, when its `flake-hold` is on.
+pub fn flake_holds(pack: &Pack, evidence: &[Evidence]) -> Vec<String> {
+    if pack.on("flake-hold") {
+        flaky(evidence)
+    } else {
+        Vec::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,6 +237,34 @@ mod tests {
             "the newest run counts"
         );
         assert_eq!(state(&[red, green], "P", &sel), State::Green);
+    }
+
+    #[test]
+    fn a_row_that_fails_then_passes_on_the_same_tree_is_flaky() {
+        let fail = |key: &str| {
+            ev(
+                key,
+                "s",
+                vec![Row::fail("a::t", Class::Assert, vec![]), Row::pass("b::u")],
+            )
+        };
+        let pass = |key: &str| ev(key, "s", vec![Row::pass("a::t"), Row::pass("b::u")]);
+        assert_eq!(flaky(&[fail("P"), pass("P")]), vec!["a::t"]);
+        // fixed by a new tree: not a flake
+        assert!(flaky(&[fail("P"), pass("Q")]).is_empty());
+        // passed first, then failed: a red, not a flake
+        assert!(flaky(&[pass("P"), fail("P")]).is_empty());
+        // another selector's pass doesn't count
+        let mut other = pass("P");
+        other.facts.selector = "t".into();
+        assert!(flaky(&[fail("P"), other]).is_empty());
+        // only under a pack whose flake-hold is on
+        let on = Pack {
+            rules: vec![rule("flake-hold")],
+            ..Pack::default()
+        };
+        assert_eq!(flake_holds(&on, &[fail("P"), pass("P")]), vec!["a::t"]);
+        assert!(flake_holds(&Pack::default(), &[fail("P"), pass("P")]).is_empty());
     }
 
     #[test]

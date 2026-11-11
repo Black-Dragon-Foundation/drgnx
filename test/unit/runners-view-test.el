@@ -57,5 +57,26 @@ a machine of yours has no cost line; no line is over 60 columns."
     (should (= 2 (length (split-string mine "\n" t))))
     (dolist (l (split-string priced "\n" t)) (should (<= (string-width l) 60)))))
 
+;; pattern D: a Mac runner's row has the macOS chip after its name and a line of its own: the memory watched by the
+;; runner, the account it runs as, and whether the Command Line Tools answer; a sleeping Mac's dot is the subtle one
+(ert-deftest drgnx-runners-view/a-mac-row ()
+  (let* ((mac (runners-view-test--runner "mini" "ready" :host "drgnx-runner@mini.local" :os "macos 15.6"
+                                         :features ["arch:aarch64" "host-jobs" "xcode-clt" "brew:cmake"]))
+         (text (drgnx-runners-view-row mac))
+         (lines (split-string text "\n" t)))
+    (should (string-search "mini macOS" (substring-no-properties (nth 0 lines))))
+    (should (eq 'drgnx-runners-os (get-text-property (string-search "macOS" text) 'face text)))
+    (should (equal (substring-no-properties (nth 2 lines))
+                   "  memory: watched · as drgnx-runner · Command Line Tools"))
+    (dolist (l lines) (should (<= (string-width l) 60))))
+  (let ((no-clt (drgnx-runners-view-row (runners-view-test--runner "mini" "ready" :host "mini" :os "macos 15.6"
+                                                                   :features ["host-jobs"]))))
+    (should (string-search "no Command Line Tools" no-clt)))
+  ;; a Linux runner has neither
+  (let ((linux (drgnx-runners-view-row (runners-view-test--runner "desktop" "ready" :os "fedora 45"))))
+    (should-not (string-search "macOS" linux))
+    (should-not (string-search "memory: watched" linux)))
+  (should (eq 'drgnx-runners-subtle (drgnx-runners-view-dot-face "sleeping" 0))))
+
 (provide 'runners-view-test)
 ;;; runners-view-test.el ends here

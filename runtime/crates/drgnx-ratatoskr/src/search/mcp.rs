@@ -62,6 +62,12 @@ impl HubBackend {
                 let p = serde_json::from_value(params).map_err(|e| e.to_string())?;
                 s.usages(&front, p).await.map(|a| json!(a))
             }
+            // a Search view's hand-off, to the session it went to only (not a wire method)
+            "search/results" => {
+                let a: ResultsArgs = serde_json::from_value(params).map_err(|e| e.to_string())?;
+                return crate::view::search::handoff_page(&front, &a.handoff, &a.session, a.page)
+                    .map(|t| json!(t));
+            }
             other => return Err(format!("no tool method {other}")),
         };
         answer.map_err(|e| match e.path {
@@ -108,6 +114,9 @@ impl Backend for HubBackend {
 pub struct SearchCtx {
     pub root: PathBuf,
     pub backend: Arc<dyn Backend>,
+    /// The agent session this server answers (none: `ratatoskr search mcp`, no session): `search_results` serves a
+    /// Search view's hand-off to that session only.
+    pub session: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -175,6 +184,73 @@ pub fn render(a: &w::QueryAnswer) -> String {
     out.push_str(&a.lag_line);
     out.push('\n');
     out
+}
+
+/// `search_results`: the rest of a Search view's hand-off (its brief holds the first 300 places), a page at a time.
+struct Results;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResultsArgs {
+    handoff: String,
+    #[serde(default)]
+    session: String,
+    #[serde(default)]
+    page: usize,
+}
+
+impl Tool<SearchCtx> for Results {
+    fn name(&self) -> &'static str {
+        "search_results"
+    }
+
+    fn description(&self) -> &'static str {
+        "The places of a search the user handed to you (Ask an Agent) past the ones your brief lists: 100 a page, \
+         path:line:col, the definition, the line; each page names the files changed since the search. Only for the \
+         hand-off id your brief gives, for 24 hours."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "handoff": {"type": "string", "description": "the hand-off id from your brief (h:N)"},
+                "page": {"type": "integer", "minimum": 0, "description": "which page, from 0; the brief's places are page 0 to 2"}
+            },
+            "required": ["handoff"],
+            "additionalProperties": false
+        })
+    }
+
+    fn check(&self, args: &Value) -> Result<(), ArgsError> {
+        decode_as::<ResultsArgs>(args).map(drop)
+    }
+
+    fn call<'a>(&'a self, ctx: &'a SearchCtx, args: Value) -> BoxFuture<'a, ToolResult> {
+        Box::pin(async move {
+            let Some(session) = &ctx.session else {
+                return ToolResult::Err(
+                    "search_results answers an agent session's own hand-offs only".into(),
+                );
+            };
+            // the session is this server's, never the agent's word
+            let mut a = args;
+            if let Some(o) = a.as_object_mut() {
+                o.insert("session".into(), json!(session));
+            }
+            match ctx.backend.call("search/results", a).await {
+                Ok(Value::String(text)) => ToolResult::Ok {
+                    text,
+                    structured: None,
+                },
+                Ok(other) => ToolResult::Ok {
+                    text: other.to_string(),
+                    structured: None,
+                },
+                Err(e) => ToolResult::Err(e),
+            }
+        })
+    }
 }
 
 struct Search;
@@ -721,6 +797,7 @@ pub fn tools() -> Arc<[Box<dyn Tool<SearchCtx>>]> {
         Box::new(OutlineTool),
         Box::new(RepoMap),
         Box::new(FindUsages),
+        Box::new(Results),
     ];
     list.into()
 }

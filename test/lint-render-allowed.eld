@@ -35,4 +35,5 @@
  (:file "modules/ui/drgnx-tty-frames.el" :in drgnx-tty-frames-terminal-check :what erase-buffer :kind document :why "the terminal check report is drawn on the user's action")
  (:file "wb/drgnx-rules.el" :in drgnx-wb-show-unrouted :what erase-buffer :kind document :why "the unrouted list is shown on the user's action")
  (:file "modules/tools/drgnx-search-edit.el" :in drgnx-search-edit--open :what erase-buffer :kind document :why "Edit Results is built when the user opens it; afterwards the user edits it")
+ (:file "modules/tools/drgnx-search-handoff.el" :in drgnx-search-to-agent :what erase-buffer :kind document :why "the Ask an Agent card is built when the user opens it; afterwards the user types the instruction")
  (:file "modules/tools/drgnx-search-edit.el" :in drgnx-search-edit--faces :what erase-buffer :kind document :why "a hidden buffer holding one line to fontify, never shown"))

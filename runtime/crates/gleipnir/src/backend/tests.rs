@@ -77,6 +77,8 @@ impl Fx {
                     socket: run_dest.join("proxy.sock"),
                 }],
                 mac_tcp_ports: vec![],
+                loopback: false,
+                mac_loopback_ports: vec![],
             },
             tmp: (!full).then(|| self.p("t")),
             layers: Layers::for_target(target),

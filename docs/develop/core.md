@@ -1501,6 +1501,20 @@ Never multiply by `frame-scale-factor` yourself, and never test `(featurep 'nidh
 frame counts device pixels too. Tests pass SCALE to check the four scales (1, 1.25, 4/3, 2) without a display
 (`test/unit/look-pixels-test.el`).
 
+## The window margins (`drgnx-margins.el`)
+
+Nothing sets a window's margins directly. Owners make **claims** on a buffer:
+`(drgnx-margins-claim OWNER COLUMNS :side 'left :order N)`, where nil or 0 takes the claim back. Zen sets a
+**centring** per window: `(drgnx-margins-centre WINDOW COLUMNS)`. A window's margin on a side is its centring plus
+the sum of its buffer's claims there. It is set again on every claim or centring, when a window shows another
+buffer, and when a window's size changes. The window hooks are on only while some claim or centring exists. Claims
+sit side by side, lowest order outermost. On the left in terminals that is the debug column (0), the agents' strip
+(1), then the change marks (2).
+
+An owner starts each margin string with `(drgnx-margins-pad OWNER)`: blanks up to its claim, computed for the
+buffer's first window. `drgnx-margins-changed-functions` runs with the buffer when places may have moved. Tests:
+`test/unit/margins-test.el`.
+
 ## Epochs, memos and caches (`drgnx-memo.el`)
 
 Code that runs on redisplay or per keystroke only reads what is cached. Three tools keep the cache honest and

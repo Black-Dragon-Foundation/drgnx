@@ -145,6 +145,12 @@ pub const RUNTIME: &[RuntimeSetting] = &[
     ),
     setting("drgnx-runners-shared-overlay", "bool", OnError::Strict),
     setting("drgnx-runners-job-keys", "Vec<String>", OnError::Strict),
+    setting("drgnx-runners-mac-tools", "Vec<String>", OnError::Strict),
+    setting(
+        "drgnx-runners-mac-toolchains",
+        "Vec<String>",
+        OnError::Strict,
+    ),
     setting(
         "drgnx-runners-origin-key",
         "Option<String>",
@@ -250,6 +256,11 @@ pub struct RuntimeValues {
     pub runners_shared_overlay: bool,
     /// The keys a project's jobs may name, by name (per project): any other is refused at submit.
     pub runners_job_keys: Vec<String>,
+    /// The Homebrew packages a project's Mac jobs need, by name (per project): each becomes a `brew:NAME` feature.
+    pub runners_mac_tools: Vec<String>,
+    /// The toolchains a project's Mac jobs need, as mise pins (per project): each becomes a `tool:NAME@VER` feature,
+    /// and a Mac runner installs them all at `add` and `check`.
+    pub runners_mac_toolchains: Vec<String>,
     /// The name of a project's read-only deploy key or token for its private origin (per project).
     pub runners_origin_key: Option<String>,
     pub sandbox_proxy_pins: ProxyPins,
@@ -528,6 +539,8 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         }
         "drgnx-runners-shared-overlay" => values.runners_shared_overlay = de(node)?,
         "drgnx-runners-job-keys" => values.runners_job_keys = de(node)?,
+        "drgnx-runners-mac-tools" => values.runners_mac_tools = de(node)?,
+        "drgnx-runners-mac-toolchains" => values.runners_mac_toolchains = de(node)?,
         "drgnx-runners-origin-key" => values.runners_origin_key = de(node)?,
         "drgnx-sandbox-proxy-pinned-addresses" => {
             let profiles::Alist(pairs) = de::<profiles::Alist<std::net::IpAddr>>(node)?;
@@ -833,6 +846,20 @@ impl Settings {
             .rev()
             .find(|o| o.name == name)
             .map(|o| o.value.clone())
+    }
+
+    /// NAME's global value in effect and every project's own value for it (a project that never sent one adds
+    /// nothing): what a runner set up for all projects at once needs (a Mac's toolchains).
+    pub fn values_everywhere(&self, name: &str) -> Vec<Value> {
+        let projects: Vec<String> = {
+            let overrides = self.overrides.lock().expect("settings");
+            overrides.projects().map(String::from).collect()
+        };
+        self.effective(name, None)
+            .map(|(v, _)| v)
+            .into_iter()
+            .chain(projects.iter().filter_map(|p| self.project_value(name, p)))
+            .collect()
     }
 
     /// `config/settings`: LIST is the whole set of PROJECT (none: global), kept as the last good one.  A name that

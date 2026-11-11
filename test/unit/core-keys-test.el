@@ -970,6 +970,8 @@ The commands of modules that need no installed package are in it, the later stag
                               search-preview-file search-preview-keep search-preview-drop ; its preview tile
                               search-sheet-confirm search-sheet-cancel search-sheet-next search-sheet-previous ; the sheet
                               search-edit-results search-edit-save search-edit-delete-line ; Edit Results
+                              search-to-agent search-handoff-send search-handoff-cancel ; Ask an Agent
+                              search-handoff-next-who search-handoff-hidden
                               layout-next browser-go keyboard-shortcuts shortcuts-change shortcuts-add shortcuts-filter
                               shortcuts-record-filter shortcuts-conflicts shortcuts-no-key shortcuts-changed
                               shortcuts-undo shortcuts-reset shortcuts-reset-all shortcuts-profile

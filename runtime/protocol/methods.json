@@ -1847,6 +1847,213 @@
     },
     {
       "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A file's breakpoints (`debug/breakpoints`' answer, and the event `debug-breakpoints`): PATH's VERSION and its\nBREAKPOINTS (`{id, line, enabled, condition?, hit?, log?, verified, message?, bound_line?, unsupported}`), with the\nproject's ROOT; the answer also has the function breakpoints and the id ADDED.",
+        "properties": {
+          "added": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "breakpoints": {
+            "items": true,
+            "type": "array"
+          },
+          "functions": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "root",
+          "path",
+          "version",
+          "breakpoints"
+        ],
+        "title": "DebugBreakpointsView",
+        "type": "object"
+      },
+      "doc": "a file's breakpoints changed, or what an adapter made of them (verified, message, its line): to every editor",
+      "name": "debug-breakpoints"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug-ended`: SESSION ended, with why and its program's exit code.",
+        "properties": {
+          "exit_code": {
+            "default": null,
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "name",
+          "reason"
+        ],
+        "title": "DebugEnded",
+        "type": "object"
+      },
+      "doc": "a debug session ended, with why and its program's exit code",
+      "name": "debug-ended"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug-frame`: a stop's selected frame. OPEN: this editor started the session and opens the file; the others draw\nit only where the file is shown.",
+        "properties": {
+          "col": {
+            "default": null,
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "exception": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "default": null,
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "open": {
+            "type": "boolean"
+          },
+          "path": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "ref": {
+            "default": null,
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "session": {
+            "type": "string"
+          },
+          "thread": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "top": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "session",
+          "epoch",
+          "thread",
+          "top",
+          "reason",
+          "open"
+        ],
+        "title": "DebugFrame",
+        "type": "object"
+      },
+      "doc": "a debug session stopped: its selected frame's file (or source reference), line and column; open is true only for the editor that started the session, which opens the file",
+      "name": "debug-frame"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug-state`: every session (`{id, name, parent, root, state, reason, caps}`), whenever one starts, runs, stops\nor ends.",
+        "properties": {
+          "sessions": {
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "sessions"
+        ],
+        "title": "DebugState",
+        "type": "object"
+      },
+      "doc": "every debug session (id, name, parent, root, state, reason, the adapter's capabilities), to every editor, whenever one starts, runs, stops or ends",
+      "name": "debug-state"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug-terminal`: SESSION's program runs in terminal TERM (`runInTerminal`), to the editor that started it, which\nshows its VIEW.",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "term": {
+            "type": "string"
+          },
+          "view": {
+            "description": "The terminal's view, as `term/open` answers it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "term",
+          "view"
+        ],
+        "title": "DebugTerminal",
+        "type": "object"
+      },
+      "doc": "a debug session's program runs in a drgnx terminal (runInTerminal), to the editor that started it",
+      "name": "debug-terminal"
+    },
+    {
+      "data": {
         "$defs": {
           "EventRow": {
             "additionalProperties": false,
@@ -3265,6 +3472,68 @@
     {
       "data": {
         "$defs": {
+          "HandoffPhase": {
+            "description": "Where a hand-off is: sent (no edit yet), editing (the agent edits), done (the agent stopped after editing).",
+            "enum": [
+              "sent",
+              "editing",
+              "done"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search-handoff-state` (and `search/handoff-state`'s answer): hand-off HANDOFF of VIEW, to SESSION, at PHASE: the\nhanded-off matches its agent's edits took out (DONE), those still there (LEFT: skipped once it is done), and those\nwhose line moved where it cannot be found again (UNKNOWN, never counted done).",
+        "properties": {
+          "done": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "handoff": {
+            "type": "string"
+          },
+          "left": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "phase": {
+            "$ref": "#/$defs/HandoffPhase"
+          },
+          "session": {
+            "type": "string"
+          },
+          "unknown": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handoff",
+          "view",
+          "session",
+          "phase",
+          "done",
+          "left"
+        ],
+        "title": "HandoffState",
+        "type": "object"
+      },
+      "doc": "where a Search view's hand-off (search/handoff) is, after its agent's edits and when its agent stops: which handed-off matches are done, still there or not found again; to the handing-off connection only",
+      "name": "search-handoff-state"
+    },
+    {
+      "data": {
+        "$defs": {
           "ScopeDone": {
             "additionalProperties": false,
             "description": "What a git scope (Changed, Staged, Branch) searched: FILES files of the repository (before the globs), the\nSUBMODULES and DELETED files it skipped, Branch's BASE, why it is empty (WHY_EMPTY), or why Branch has no base to\ntake (NEEDS_BASE: the view asks, `search/scope-bases`).",
@@ -3313,7 +3582,7 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`search-run-done`: search RUN of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not\nrun; OFF the matches that come back unticked (`search/run`'s `off`); SCOPE what a git scope searched. A search a\nnewer one stopped says nothing.",
+        "description": "`search-run-done`: search RUN of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not\nrun; OFF the matches that come back unticked (`search/run`'s `off`); SCOPE what a git scope searched. A search a\nnewer one stopped says nothing. KINDS (a Symbol search): how many of the name's definitions are of each kind (`fn`,\n`type`, `macro`, `var`, `other`), before the query's `kinds` filter: the view's kind chips and their counts.",
         "properties": {
           "error": {
             "type": [
@@ -3325,6 +3594,17 @@
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
+          },
+          "kinds": {
+            "additionalProperties": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "matches": {
             "format": "uint64",
@@ -11081,6 +11361,570 @@
       "classes": [
         "user"
       ],
+      "doc": "a project's breakpoints: a change by id (add, remove, edit, move, function breakpoints) that reaches its sessions at once, and the file's breakpoints with what the adapters made of them",
+      "name": "debug/breakpoints",
+      "params": {
+        "$defs": {
+          "DebugBreakpointOp": {
+            "description": "One change to the breakpoint store, by id: `add` (PATH, LINE; the breakpoint already on that line if any),\n`remove` (ID), `edit` (ID and the fields given; an empty text clears one), `move` (ID, LINE: the saved line),\n`add-function` (NAME, CONDITION) and `remove-function` (NAME).",
+            "properties": {
+              "condition": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "enabled": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "hit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "log": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "op": {
+                "type": "string"
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/breakpoints`: ROOT's breakpoints. OP changes them (it reaches ROOT's sessions at once); the answer is the\nview of the file OP changed, else of PATH.",
+        "properties": {
+          "op": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DebugBreakpointOp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "DebugBreakpoints",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A file's breakpoints (`debug/breakpoints`' answer, and the event `debug-breakpoints`): PATH's VERSION and its\nBREAKPOINTS (`{id, line, enabled, condition?, hit?, log?, verified, message?, bound_line?, unsupported}`), with the\nproject's ROOT; the answer also has the function breakpoints and the id ADDED.",
+        "properties": {
+          "added": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "breakpoints": {
+            "items": true,
+            "type": "array"
+          },
+          "functions": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "root",
+          "path",
+          "version",
+          "breakpoints"
+        ],
+        "title": "DebugBreakpointsView",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the launch configurations the Start picker shows for a project: launch.json's (a syntax error with its line and column), the user's own, and the adapters' defaults for the file's language once the project is trusted",
+      "name": "debug/configs",
+      "params": {
+        "$defs": {
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/configs`: the configurations the picker shows for ROOT: launch.json's, the user's own USER configs (the\nsetting `debug.configurations`), and the adapter table's defaults for LANGUAGE. ADAPTERS are the user's own adapter\nentries (the setting `debug.adapters`, in the table's fields), looked at before the built-in ones. ROOT's trust is\nwhat `debug/trust` last said.",
+        "properties": {
+          "adapters": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/JsonObject"
+            },
+            "type": "array"
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "language": {
+            "description": "The file's language (`python`, `go`, `javascript` …), for the defaults.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "root": {
+            "type": "string"
+          },
+          "user": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/JsonObject"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "DebugConfigs",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DebugConfig": {
+            "description": "One configuration of `debug/configs`' list.",
+            "properties": {
+              "id": {
+                "description": "`launch:N`, `user:N` or `default:ADAPTER:N`: what `debug/start` takes.",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "needs_trust": {
+                "description": "ROOT is not trusted: starting it shows the trust card first.",
+                "type": "boolean"
+              },
+              "request": {
+                "type": "string"
+              },
+              "source": {
+                "description": "`launch`, `user` or `default`.",
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "source",
+              "type",
+              "request",
+              "needs_trust"
+            ],
+            "type": "object"
+          },
+          "DebugFileError": {
+            "description": "A launch.json that could not be read, and where.",
+            "properties": {
+              "col": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "line",
+              "col",
+              "message"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/configs`' answer: the list in the picker's order, the configuration last started in ROOT, and launch.json's\nsyntax error.",
+        "properties": {
+          "configs": {
+            "items": {
+              "$ref": "#/$defs/DebugConfig"
+            },
+            "type": "array"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DebugFileError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "configs"
+        ],
+        "title": "DebugConfigList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "continue, pause, step, restart, stop or disconnect a session (stop and disconnect stop its children first and answer once all have ended)",
+      "name": "debug/control",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/control`: OP on SESSION (on THREAD, else the stopped one): `continue`, `pause`, `next`, `step-in`,\n`step-out`, `restart`, `stop`, `stop-and-kill` (an attach session's debuggee too) or `disconnect`.",
+        "properties": {
+          "op": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "thread": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "session",
+          "op"
+        ],
+        "title": "DebugControl",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "Run to Cursor: a session stops once at a line (a breakpoint for it alone, gone at its next stop), continuing if it is stopped",
+      "name": "debug/run-to-cursor",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/run-to-cursor`: SESSION stops once at PATH's LINE (a breakpoint for it alone), continuing if it is stopped.",
+        "properties": {
+          "line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "path",
+          "line"
+        ],
+        "title": "DebugRunToCursor",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "show a frame of a session's stop: its scopes and variables are fetched in the same stop, and debug-frame names its line",
+      "name": "debug/select",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/select`: show FRAME of SESSION's stop (the Call Stack's selection): its scopes and variables, and its line.",
+        "properties": {
+          "frame": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "session": {
+            "type": "string"
+          },
+          "thread": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "session",
+          "frame"
+        ],
+        "title": "DebugSelect",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "start a configuration: the session's id, or what must come first (trust, or the inputs and process picker the editor asks for in the palette)",
+      "name": "debug/start",
+      "params": {
+        "$defs": {
+          "DebugAnswer": {
+            "description": "One answer to `debug/start`'s `needs`: the input ID (`pickProcess` for the process picker) and its VALUE.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "value"
+            ],
+            "type": "object"
+          },
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/start`: start CONFIG (an id of `debug/configs`) in ROOT, from FILE at LINE:COL with SELECTION (the editor's\nstate the variables read). INPUTS answer an earlier `needs` (`pickProcess` for the process picker); USER, ADAPTERS\nand LANGUAGE as `debug/configs`' (a `user:N` or `default:N` id reads them again).",
+        "properties": {
+          "adapters": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/JsonObject"
+            },
+            "type": "array"
+          },
+          "col": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "config": {
+            "type": "string"
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "inputs": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/DebugAnswer"
+            },
+            "type": "array"
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "root": {
+            "type": "string"
+          },
+          "selection": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/JsonObject"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "root",
+          "config"
+        ],
+        "title": "DebugStart",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/start`'s answer: the session, or what must come first: `\"trust\"`, or the inputs to ask\n(`[{input: {id, kind, description, default, options, password}} | \"pickProcess\"]`).",
+        "properties": {
+          "needs": true,
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "DebugStarted",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a project's trust changed: a project never told trusted runs no configuration, and revoking trust stops its sessions",
+      "name": "debug/trust",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/trust`: ROOT's trust changed (Trust This Folder, or its revocation, which stops ROOT's sessions).",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "trusted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "root",
+          "trusted"
+        ],
+        "title": "DebugTrust",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a decision's commits and the later hunks that overlap its lines (computed from git)",
       "name": "decisions/effects",
       "params": {
@@ -12446,6 +13290,14 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
             "type": "string"
           },
+          "JobOs": {
+            "description": "The OS a job needs: `linux` (the default; this machine and Linux runners) or `macos` (a Mac runner's host job: it\nwaits for one and never runs on this machine).",
+            "enum": [
+              "linux",
+              "macos"
+            ],
+            "type": "string"
+          },
           "RowsParam": {
             "additionalProperties": false,
             "description": "`exec/start`'s `rows`: the parser that reads the rows from the job's log, and the rows in listing order.",
@@ -12607,6 +13459,17 @@
               "boolean",
               "null"
             ]
+          },
+          "os": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JobOs"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The OS it needs (default `linux`); a `macos` job needs a Mac runner with its project's Homebrew packages."
           },
           "priority": {
             "description": "The job's priority, 1 (highest) to 5: the user's connections only (a session's request is refused).",
@@ -28798,6 +29661,276 @@
       "classes": [
         "user"
       ],
+      "doc": "hand a view's ticked matches to an agent: a brief (the instruction, the query, the matches grouped by file, at most 300 lines, the rest through the drgnx-search tool search_results) to a new worker in its own worktree or to a live session; hidden paths left out unless asked; its progress is search-handoff-state",
+      "name": "search/handoff",
+      "params": {
+        "$defs": {
+          "HandoffMark": {
+            "additionalProperties": false,
+            "description": "The mark the handed-off rows show: the agent's colour (a face name) and its glyph (one column), as the editor gives\nthem (the agents' identity scheme).",
+            "properties": {
+              "face": {
+                "type": "string"
+              },
+              "glyph": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "face",
+              "glyph"
+            ],
+            "type": "object"
+          },
+          "HandoffTo": {
+            "description": "Who a Search view's hand-off goes to: a new worker of PROFILE in a worktree of its own, or the live session ID\n(a chat, a worker, a paired chat in this checkout).",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "new": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "profile": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "profile"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "new"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "session": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "$ref": "#/$defs/Id"
+                      }
+                    },
+                    "required": [
+                      "id"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "session"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Prompt": {
+            "description": "a prompt or a message: at most 1 MiB (1048576 characters)",
+            "maxLength": 1048576,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/handoff`: hand VIEW's matches to an agent with INSTRUCTION: the matches IDS names (else all but OFF), to TO.\nPaths the index never reads (dot paths, secret-looking names) are left out unless HIDDEN. The handed-off rows show\nMARK.",
+        "properties": {
+          "hidden": {
+            "type": "boolean"
+          },
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "instruction": {
+            "$ref": "#/$defs/Prompt"
+          },
+          "mark": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/HandoffMark"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "off": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "to": {
+            "$ref": "#/$defs/HandoffTo"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "instruction",
+          "to"
+        ],
+        "title": "HandoffParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/handoff`'s answer: the hand-off's id, the session it went to (and the worktree of a new worker), the match\nids handed off, how many lines the brief holds and how many more `search_results` serves, and the hidden paths\nleft out.",
+        "properties": {
+          "handoff": {
+            "type": "string"
+          },
+          "hidden": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "more": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sent": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session": {
+            "type": "string"
+          },
+          "worktree": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "handoff",
+          "session",
+          "ids",
+          "sent",
+          "more"
+        ],
+        "title": "HandoffAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "where a hand-off is: sent, editing or done, and which of its matches the agent's edits took out, which are still there and which cannot be found again",
+      "name": "search/handoff-state",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/handoff-state`: where hand-off HANDOFF is.",
+        "properties": {
+          "handoff": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handoff"
+        ],
+        "title": "HandoffStateParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "HandoffPhase": {
+            "description": "Where a hand-off is: sent (no edit yet), editing (the agent edits), done (the agent stopped after editing).",
+            "enum": [
+              "sent",
+              "editing",
+              "done"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search-handoff-state` (and `search/handoff-state`'s answer): hand-off HANDOFF of VIEW, to SESSION, at PHASE: the\nhanded-off matches its agent's edits took out (DONE), those still there (LEFT: skipped once it is done), and those\nwhose line moved where it cannot be found again (UNKNOWN, never counted done).",
+        "properties": {
+          "done": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "handoff": {
+            "type": "string"
+          },
+          "left": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "phase": {
+            "$ref": "#/$defs/HandoffPhase"
+          },
+          "session": {
+            "type": "string"
+          },
+          "unknown": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handoff",
+          "view",
+          "session",
+          "phase",
+          "done",
+          "left"
+        ],
+        "title": "HandoffState",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "start or rebuild a project's index; now overrides the battery gate",
       "name": "search/index",
       "params": {
@@ -29872,6 +31005,16 @@
                       "null"
                     ]
                   },
+                  "kinds": {
+                    "description": "Only the definitions of these kinds (`fn`, `type`, `macro`, `var`) and the uses in their files; none or\nempty is every kind (the view's kind chips).",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
                   "mode": {
                     "const": "symbol",
                     "type": "string"
@@ -30103,6 +31246,16 @@
                   "case": {
                     "type": [
                       "boolean",
+                      "null"
+                    ]
+                  },
+                  "kinds": {
+                    "description": "Only the definitions of these kinds (`fn`, `type`, `macro`, `var`) and the uses in their files; none or\nempty is every kind (the view's kind chips).",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
                       "null"
                     ]
                   },
@@ -30474,6 +31627,16 @@
                       "null"
                     ]
                   },
+                  "kinds": {
+                    "description": "Only the definitions of these kinds (`fn`, `type`, `macro`, `var`) and the uses in their files; none or\nempty is every kind (the view's kind chips).",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
                   "mode": {
                     "const": "symbol",
                     "type": "string"
@@ -30740,6 +31903,16 @@
                   "case": {
                     "type": [
                       "boolean",
+                      "null"
+                    ]
+                  },
+                  "kinds": {
+                    "description": "Only the definitions of these kinds (`fn`, `type`, `macro`, `var`) and the uses in their files; none or\nempty is every kind (the view's kind chips).",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
                       "null"
                     ]
                   },

@@ -48,6 +48,7 @@ when the built-in model embeds on the CPU because the GPU was lost (and says why
 | Search: Set Up Semantic Search | the wizard above | palette | palette | palette |
 | Search: Repo Map | the project's most-referenced definitions, file by file (the best-ranked first), centred on the current file: the map an agent reads to find its way | palette | palette | palette |
 | Search: Find Usages | where a name (default: the symbol at point) is defined, then every line that uses it, under the definition that holds it | palette | `C-c s u` | `SPC s u` |
+| Search: Show in Search View | the last Semantic Search's question in the Search view, Meaning mode, in its project (also the **Show in Search view** button on the list's header line) | palette | palette | palette |
 
 In the command palette, type `#` and your question — `#where do we parse the config` — to search without choosing a
 command first; a bare `#` asks for the question. Semantic Search offers the symbol at point as the default: `RET` on an

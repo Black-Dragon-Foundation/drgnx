@@ -738,6 +738,43 @@ the provider's own.  A role you do not name has the shipped default chain.
 | `:agents` | `never` |
 | `:schema` | `(alist symbol (alist symbol (or string null)))` |
 
+## drgnx-debug-adapters
+
+Your own debug adapters, looked at before drgnx's (etc/debug-adapters.eld): a plist each in that table's fields
+(`:id', `:name', `:types', `:languages', `:find', `:start' …).  An adapter is a program run with your rights, so a
+project's settings never set this.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat (plist :key-type symbol :value-type sexp))` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | - |
+
+## drgnx-debug-configurations
+
+Your own launch configurations, offered in every project after launch.json's: VS Code's launch.json fields as a
+plist each (`:type', `:request', `:name', `:program' …), `${…}' variables as in launch.json.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat (plist :key-type symbol :value-type sexp))` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | - |
+
 ## drgnx-extensions-check-updates
 
 How the Extensions view learns of updates: `daily' reads the archives in the background once a day, `manual' only
@@ -1443,6 +1480,44 @@ host and that user.  Read only by the commands you run (Runners: Load Keys), nev
 | `:agents` | `never` |
 | `:schema` | - |
 
+## drgnx-runners-mac-toolchains
+
+The language toolchains the project's Mac jobs need, as mise pins ("rust@1.95", "node@22").
+A Mac runner installs each one into its own folder through your Homebrew `mise' when it is added and at each
+`drgnx runner check', and a Mac job waits for a runner that has them all.  Never set by a repository's own files.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat string)` |
+| `:scope` | `project` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of (string :match "\\`[a-z0-9][-a-z0-9_.]*@[0-9A-Za-z][-0-9A-Za-z_.+]*\\'"))` |
+
+## drgnx-runners-mac-tools
+
+The Homebrew packages the project's Mac jobs need, by name ("cmake", "gnutls").
+A Mac job waits for a Mac runner that has each one, and its row names the `brew install' line to run in your own
+account: the runner never installs into Homebrew.  Never set by a repository's own files.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat string)` |
+| `:scope` | `project` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of (string :match "\\`[a-z0-9][-a-z0-9+_.@/]*\\'"))` |
+
 ## drgnx-runners-origin-key
 
 The name of the project's read-only deploy key or token for its private origin, or nil.
@@ -1642,6 +1717,40 @@ Non-nil: the Search view shows a dim label row (the definition's name) above the
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | - |
+
+## drgnx-search-edit-context
+
+Lines of context Edit Results shows around each match line (0 to 3), editable too, dim.
+
+| Key | Value |
+| --- | --- |
+| Default | `0` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
+## drgnx-search-edit-max-lines
+
+The most lines Edit Results opens; a search with more asks to be narrowed.
+
+| Key | Value |
+| --- | --- |
+| Default | `20000` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
 
 ## drgnx-search-exclude
 
