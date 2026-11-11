@@ -61,15 +61,35 @@ languages whose build reds count when they name a symbol the task adds), `:batch
 groups a range affects; `%r` is the range), `:no-cache`, `:shared-paths` (clean merges there still need intent
 notes) and `:context-share`.
 
-drgnx ships `etc/orch/drgnx-default.eld`. A plan names another with a `**Pack:** FILE` line (relative to the plan);
+drgnx ships `etc/orch/drgnx-default.eld`: red first, the author check, affected groups and the push gate, with no
+project's commands (any project's: its author check is the task's own tests at the tip). A plan names another with a `**Pack:** FILE` line (relative to the plan);
 a pack that doesn't read, or names a rule or kind the hub doesn't know, refuses the proposal. The proposal carries
 the pack, so the user approves it with the plan, and the approval records it as the job's `rule_pack` entity
 (`norn::write::evidence::rule_pack`); the gates read that record, never the file again.
 
+## The gates before a merge
+
+Once the merge gate allows a task, before the `BeforeCommit` hooks, `orch::gates::before_merge` reads the job's rule
+pack and the task's evidence and runs, in order:
+
+- **Trailers** (`trailers` on): no commit in base..tip has a `Co-authored-by` line, a "Generated with …" line, or a
+  `…-by:` trailer naming a model or its maker (`vordr::gates::trailers`).
+- **Red first** (below).
+- **The author check** (`author-check` on): each of the pack's `:author-check` commands and `:rule-tests` (the rule
+  tests alone when only `rule-tests` is on) passed at the tip's tree; its run is the newest job at the tip's tree key
+  with the command's selector (`vordr::gates::state`).
+
+A run a gate needs that the hub can make, it starts through the queue as the user's job and waits for
+(`orch::gates::Runs`): an author check at the tip; for red first, the task's own test command (the newest job the
+task ran inside its tree: its folder, command and image) at the test commit, or the red's command at the tip. Each
+runs in a detached worktree of its commit beside the task's tree (uncommitted files in the task's tree are never part
+of it), which goes when the job ends. The job's end is the task's
+evidence like any other; the next tick looks again. A hold is a `gate` card on the task (key `gates`) saying what is
+wrong; a red-first wait with no run of the task's tests to repeat is a hold too.
+
 ## Red first
 
-Before a task's merge (after the merge gate allows it, before the `BeforeCommit` hooks), `orch::red_first::check`
-reads the task's commits base..tip and decides with `vordr::redfirst::decide`:
+`vordr::redfirst::decide` over the task's commits base..tip (`orch::red_first::inputs`):
 
 1. The **test commit** is the first commit. It may touch any file: an inline `#[cfg(test)] mod tests` is fine.
 2. A hub job at the test commit's tree (its tree key) failed rows of class `assert`. A `build` row counts only when
@@ -82,9 +102,8 @@ reads the task's commits base..tip and decides with `vordr::redfirst::decide`:
    tip: a deleted one that isn't added back holds the task.
 
 Any hub job counts (the evidence records, "Evidence"). A task whose body, as the user approved it, has a line
-`**Red:** none (reason)` passes on it; the reason is required. A missing run, or a hold, is a `gate` card on the task
-(key `red-first`) saying what is missing or wrong. A job approved without a rule pack, or one whose pack doesn't name
-`red-first`, passes.
+`**Red:** none (reason)` passes on it; the reason is required. A job approved without a rule pack, or one whose pack
+doesn't name `red-first`, passes.
 
 ## Policy from the base
 

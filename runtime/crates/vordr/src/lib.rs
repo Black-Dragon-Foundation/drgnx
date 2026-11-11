@@ -13,6 +13,7 @@
 
 pub mod evidence;
 pub mod facts;
+pub mod gates;
 pub mod pack;
 pub mod redfirst;
 pub mod rows;

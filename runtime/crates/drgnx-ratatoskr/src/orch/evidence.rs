@@ -59,8 +59,8 @@ fn task_of(front: &Front, session: &str) -> Option<String> {
         .and_then(|s| s.task)
 }
 
-/// Every job that ends whose session works on a task is that task's evidence (a hub task of its own; it ends with
-/// the runner's events).
+/// Every job that ends whose session works on a task, or that a gate started for one, is that task's evidence (a hub
+/// task of its own; it ends with the runner's events).
 pub async fn run(front: Arc<Front>, mut rx: tokio::sync::broadcast::Receiver<JobEvent>) {
     loop {
         let done = match rx.recv().await {
@@ -68,6 +68,11 @@ pub async fn run(front: Arc<Front>, mut rx: tokio::sync::broadcast::Receiver<Job
             Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
             Err(_) => return,
         };
+        // a run a gate started is its task's
+        if let Some(run) = front.orch.take(&done.id) {
+            settle(&front, &done.id, run).await;
+            continue;
+        }
         let Some(task) = done.session.as_deref().and_then(|s| task_of(&front, s)) else {
             continue;
         };
@@ -77,6 +82,16 @@ pub async fn run(front: Arc<Front>, mut rx: tokio::sync::broadcast::Receiver<Job
             tracing::warn!("job {}: evidence not recorded: {}", done.id, err.message);
         }
     }
+}
+
+/// Gate run RUN (job ID) ended: its evidence for its task, then its detached worktree goes.
+pub async fn settle(front: &Front, id: &str, run: crate::orch::gates::Run) {
+    if let Some(e) = of_job(&front.core.exec, id, &run.task)
+        && let Err(err) = record(front, e).await
+    {
+        tracing::warn!("job {id}: evidence not recorded: {}", err.message);
+    }
+    let _ = crate::clock::blocking(move || crate::orch::gates::cleanup(&run)).await;
 }
 
 /// `orch/evidence`: a task's evidence, oldest first.

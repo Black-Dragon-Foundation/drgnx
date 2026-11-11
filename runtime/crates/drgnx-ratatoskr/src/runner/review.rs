@@ -1122,22 +1122,24 @@ impl PlanHooks {
             .await
             .map(|_| ()),
             Gate::Allow => {
-                // the gates on the hub's own records (docs/develop/orchestration.md): red first
+                // the gates on the hub's own records (docs/develop/orchestration.md): trailers, red first, the
+                // author check; a run they wait for ends as the task's evidence and the next tick looks again
                 use vordr::redfirst::Decision;
-                match crate::orch::red_first::check(front, job, tid, t.row.n, &repo, &tree, &data)
+                match crate::orch::gates::before_merge(front, job, tid, t.row.n, &tree, &data)
                     .await
                     .map_err(internal)?
                 {
                     Decision::Pass(_) => {}
-                    Decision::Wait(why) | Decision::Hold(why) => {
+                    Decision::Wait(_) => return Ok(()),
+                    Decision::Hold(why) => {
                         return raise_card(
                             front,
                             &service(),
                             job,
                             Some(tid),
                             "gate",
-                            &format!("red first: {why}"),
-                            json!({"key": "red-first"}),
+                            &format!("the gates hold the merge: {why}"),
+                            json!({"key": "gates"}),
                         )
                         .await
                         .map(|_| ());

@@ -168,8 +168,9 @@ mod tests {
         assert!(p.build_reds("rust") && p.build_reds("elisp"));
         assert_eq!(p.batch(), 3);
         assert!(p.is_test_path("runtime/crates/x/src/a/tests.rs"));
-        assert!(p.is_shared("core/drgnx-registry.el"));
-        assert_eq!(p.groups.last().map(String::as_str), Some("--json"));
+        // any project's: no project's commands (the author check is the task's own tests)
+        assert!(p.author_check.is_empty() && p.rule_tests.is_empty() && p.push_tiers.is_empty());
+        assert!(p.groups.is_empty() && p.shared_paths.is_empty());
         assert!(read_pack("(:name \"x\" :rules ((:id \"nope\" :kind \"enforced\")))").is_err());
     }
 

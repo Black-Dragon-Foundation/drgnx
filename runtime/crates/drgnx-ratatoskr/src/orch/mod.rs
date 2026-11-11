@@ -6,5 +6,6 @@
 //! - [`red_first`]: the red-first gate before a task's merge.
 
 pub mod evidence;
+pub mod gates;
 pub mod policy;
 pub mod red_first;

@@ -630,6 +630,11 @@ impl Runner {
         self.inner.get()?.facts(id)
     }
 
+    /// What job ID is (its command, folder, kind and image), as saved when it started; none when it is unknown.
+    pub fn meta(&self, id: &str) -> Option<unit::Meta> {
+        self.inner.get()?.meta(id)
+    }
+
     /// Whether job ID is in the queue (here, or on a runner).
     pub fn is_queued(&self, id: &str) -> bool {
         self.inner
