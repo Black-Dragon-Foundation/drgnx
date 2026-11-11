@@ -1517,10 +1517,35 @@ then what it skipped, each with why (`search/grep-skipped'), as the old path lea
   (and (fboundp 'nidhogg-view--call)
        (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events)))
 
+(declare-function drgnx-view-env-twin "drgnx-view-env" (class prefixes &optional setup))
+
+(defconst drgnx-replace--twin-keys
+  '(drgnx-replace-next drgnx-replace-prev drgnx-replace-next-file drgnx-replace-prev-file)
+  "The Search view's commands a twin runs: it moves and visits; the rest (ticks, replace, the fields) are the view's.")
+
+(defun drgnx-replace--twin-guard ()
+  "`pre-command-hook' of a Search twin: a Search command other than `drgnx-replace--twin-keys' is refused."
+  (when (and (symbolp this-command) (string-prefix-p "drgnx-replace-" (symbol-name this-command))
+             (not (memq this-command drgnx-replace--twin-keys)))
+    (setq this-command (lambda () (interactive) (message "Search: edit, tick and replace in the Search view")))))
+
+(defun drgnx-replace--twin (class)
+  "The Search view's results in display CLASS (`drgnx-view-patch-twin-function'): a mirror with no fields, its
+query on the header line; its keys move and visit (`drgnx-replace--twin-keys'), and it draws no tick boxes."
+  (let ((query (drgnx-replace--text 'find)))
+    (drgnx-view-env-twin class '("drgnx-replace-")
+                         (lambda ()
+                           (remove-hook 'kill-buffer-hook #'drgnx-replace--view-killed t)
+                           (remove-hook 'drgnx-view-patch-patched-functions #'drgnx-replace--rows-boxes t)
+                           (add-hook 'window-scroll-functions #'drgnx-replace--scrolled nil t)
+                           (add-hook 'pre-command-hook #'drgnx-replace--twin-guard nil t)
+                           (setq-local header-line-format (format "Search: %s" query))))))
+
 (defun drgnx-replace--hub-attach ()
   "Make the view hub-fed (the hub's rows below the fields), when it is not; its env goes while a window shows it."
   (unless drgnx-view-patch
     (drgnx-view-patch-attach drgnx-replace-view "unshown" :start drgnx-replace--results)
+    (setq-local drgnx-view-patch-twin-function #'drgnx-replace--twin)
     (drgnx-replace-rows-attached)
     (add-hook 'drgnx-hub-event-functions #'drgnx-replace--hub-event)
     (require 'drgnx-view-env)

@@ -345,6 +345,7 @@ VIEW/detail beside the map's VIEW), following the map's selection there; else dr
         (drgnx-work-detail-mode)
         (if rows
             (progn (drgnx-view-patch-attach (car rows) (cdr rows))
+                   (setq-local drgnx-view-patch-twin-function #'drgnx-work-detail--twin)
                    (require 'drgnx-view-env)
                    (drgnx-view-env-register (car rows) buffer))
           (drgnx-view-attach 'work-detail)))
@@ -377,8 +378,14 @@ Press it again for what came since."
                           (display-buffer (current-buffer)))))
                     :deadline 10)))
 
+(declare-function drgnx-view-env-twin "drgnx-view-env" (class prefixes &optional setup))
+
+(defun drgnx-work-detail--twin (class)
+  "The detail's buffer in display CLASS (`drgnx-view-patch-twin-function')."
+  (drgnx-view-env-twin class '("drgnx-work-detail-")))
+
 (defun drgnx-work-detail-buffers ()
-  (seq-filter (lambda (b) (eq (buffer-local-value 'major-mode b) 'drgnx-work-detail-mode)) (buffer-list)))
+  (seq-filter (lambda (b) (and (eq (buffer-local-value 'major-mode b) 'drgnx-work-detail-mode) (not (drgnx-view-patch-twin-p b)))) (buffer-list)))
 
 (defun drgnx-work-detail-update (map-buffer)
   "The selection of MAP-BUFFER changed: its panel (when it has one) is drawn again.  A panel on the rows path is
