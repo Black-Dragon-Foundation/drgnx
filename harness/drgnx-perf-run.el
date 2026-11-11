@@ -61,7 +61,8 @@ font-lock (`lisp--el-funcall-position-p', through `forward-sexp') scanned the re
 (defun drgnx-perf-run--debug-setup-form ()
   "The debug workloads' setup: the breakpoint column's files, `drgnx-hub-call' answered by a store in the session (its
 `debug/breakpoints' adds and removes by line, as the hub's), F9 toggling, and the hover pool laid out as on a Nidhogg
-that lights a margin's mouse face (its cost is the Lisp's: the C lights nothing until the pointer comes);
+that lights a margin's mouse face (the feature provided where the Emacs lacks it: an advice on the gutter's own call
+would be bypassed by native code; the cost timed is the Lisp's, the C lights nothing until the pointer comes);
 `drgnx-perf--debug-stop' undoes it."
   (format "(progn (dolist (m '(\"drgnx-debug-launch\" \"drgnx-debug-gutter\")) (load (expand-file-name (concat \"modules/extra/\" m) %S) nil t))
      (defvar drgnx-perf--debug-store nil) (defvar drgnx-perf--debug-version 0)
@@ -74,10 +75,12 @@ that lights a margin's mouse face (its cost is the Lisp's: the C lights nothing 
          (funcall cb (list :version (cl-incf drgnx-perf--debug-version) :breakpoints (reverse drgnx-perf--debug-store)) nil))
        1)
      (defun drgnx-perf--debug-stop ()
-       (advice-remove 'drgnx-hub-call #'drgnx-perf--debug-hub) (advice-remove 'drgnx-debug-gutter--hover-p #'always)
+       (advice-remove 'drgnx-hub-call #'drgnx-perf--debug-hub)
+       (when drgnx-perf--debug-feature (setq features (delq 'glitnir-margin-mouse-face features)))
        (global-unset-key (kbd \"<f9>\")) t)
      (advice-add 'drgnx-hub-call :override #'drgnx-perf--debug-hub)
-     (advice-add 'drgnx-debug-gutter--hover-p :override #'always)
+     (defvar drgnx-perf--debug-feature (not (featurep 'glitnir-margin-mouse-face)))
+     (provide 'glitnir-margin-mouse-face)
      (global-set-key (kbd \"<f9>\") #'drgnx-debug-gutter-toggle) t)"
           drgnx-ui-repo-dir))
 
