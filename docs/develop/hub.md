@@ -3569,7 +3569,10 @@ frames to `<id>/log` for the current attempt and `<id>/log.<n>` for a late one; 
 **Dialing** (`Queue::dial`, which the registry's `connect` calls): the transport opens the runner, its session starts
 and the queue takes it (adding a runner it doesn't know yet). A dial refused for a login the user must do, or for a
 changed host key, puts the runner in `needs login` with the command its card shows (`ssh HOST true`); a lost link
-leaves that state as it is, and nothing is placed there until the runner's next `hello`.
+leaves that state as it is, and nothing is placed there until the runner's next `hello`. A Mac runner whose last
+`ready` said `on_battery` and whose link is then lost is `sleeping` (its lid closed), not `unreachable`: no strike,
+its attempts detached for the grace, redialed like an unreachable one (`a_mac_on_battery_that_goes_quiet_is_sleeping`,
+`a_mac_on_mains_that_goes_quiet_is_unreachable`).
 
 **The local runner** (`runners/local.rs`, Calls 6 and 7): `Admission::Live` on Linux, `forseti::admit` over
 `sleipnir::linux::probe` under the `workstation` profile, with a reservation per admitted job in the reservation

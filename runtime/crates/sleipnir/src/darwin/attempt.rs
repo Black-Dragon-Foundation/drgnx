@@ -18,9 +18,10 @@ pub const PID: &str = "job-exec.pid";
 /// What job-exec itself prints before its log is open (its own errors).
 pub const EXEC_LOG: &str = "job-exec.log";
 
-/// Starts PROGRAM ARGS in a new session, with DIR's [`EXEC_LOG`] as its output, and records it in DIR's [`PID`]: its
-/// pid. While this process lives it reaps the child (a thread waits on it); after, launchd does.
-pub fn launch(dir: &Path, program: &Path, args: &[&OsStr]) -> io::Result<u32> {
+/// Starts PROGRAM ARGS in a new session at NICE (a workstation's jobs yield to its user: every process of the job
+/// inherits it), with DIR's [`EXEC_LOG`] as its output, and records it in DIR's [`PID`]: its pid. While this process
+/// lives it reaps the child (a thread waits on it); after, launchd does.
+pub fn launch(dir: &Path, program: &Path, args: &[&OsStr], nice: i32) -> io::Result<u32> {
     let log = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -30,12 +31,14 @@ pub fn launch(dir: &Path, program: &Path, args: &[&OsStr]) -> io::Result<u32> {
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
-    // SAFETY: setsid is async-signal-safe and touches nothing of the parent's
+    // SAFETY: setsid and setpriority are async-signal-safe and touch nothing of the parent's
     unsafe {
-        c.pre_exec(|| {
-            rustix::process::setsid()
-                .map(|_| ())
-                .map_err(io::Error::from)
+        c.pre_exec(move || {
+            rustix::process::setsid().map_err(io::Error::from)?;
+            if nice != 0 && libc::setpriority(libc::PRIO_PROCESS, 0, nice) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
         });
     }
     let mut child = c.spawn()?;
@@ -94,6 +97,7 @@ mod tests {
             dir,
             Path::new("/bin/sh"),
             &[OsStr::new("-c"), OsStr::new(script)],
+            0,
         )
         .unwrap()
     }
@@ -159,6 +163,26 @@ mod tests {
             (!active(d.path()) && gone(child)).then_some(())
         });
         kill(d.path()).unwrap();
+    }
+
+    /// [D] A workstation's attempt runs niced: job-exec and what it starts yield to the user's own work.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_workstation_attempt_runs_niced() {
+        let d = tempfile::tempdir().unwrap();
+        let done = d.path().join("done");
+        let script = format!("while [ ! -e '{}' ]; do sleep 0.05; done", done.display());
+        let pid = launch(
+            d.path(),
+            Path::new("/bin/sh"),
+            &[OsStr::new("-c"), OsStr::new(&script)],
+            10,
+        )
+        .unwrap();
+        let prio = rustix::process::getpriority_process(rustix::process::Pid::from_raw(pid as i32));
+        fs::write(&done, "").unwrap();
+        assert_eq!(prio.unwrap(), 10);
+        skuld::wait_until("the attempt ends", 30, || (!active(d.path())).then_some(()));
     }
 
     /// [D] A pid file whose process is gone, or another process under that pid (another start time), is not active,

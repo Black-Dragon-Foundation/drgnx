@@ -424,6 +424,7 @@ struct ReadyNow {
     budget: forseti::Budget,
     slots: Vec<String>,
     images: Vec<String>,
+    on_battery: bool,
 }
 
 /// A job offered to, or running on, a runner, as backfill counts it: since when (its offer, then its start), how long
@@ -1097,6 +1098,7 @@ impl Queue {
             RunnerState::NeedsKeys => "needs keys".into(),
             RunnerState::AwaitingConfirm => "waits for your confirm".into(),
             RunnerState::Unreachable { .. } => "unreachable".into(),
+            RunnerState::Sleeping { .. } => "sleeping".into(),
             RunnerState::Draining => "draining".into(),
             RunnerState::Preempting => "preempting".into(),
         };
@@ -1120,7 +1122,10 @@ impl Queue {
         self.lock().runners.get(name).is_some_and(|r| {
             matches!(
                 r.state,
-                RunnerState::Unreachable { .. } | RunnerState::Benched(_) | RunnerState::Ready
+                RunnerState::Unreachable { .. }
+                    | RunnerState::Sleeping { .. }
+                    | RunnerState::Benched(_)
+                    | RunnerState::Ready
             ) && r.session.ended()
         })
     }
@@ -2335,7 +2340,9 @@ impl Queue {
             .attempts()
             .any(|(_, a)| a.runner == runner && a.state.open());
         if let Some(r) = st.runners.get_mut(runner) {
-            if ran {
+            // a Mac on battery that goes quiet is asleep (its lid closed): no strike, its attempts keep their grace
+            let asleep = r.r.os == Os::Macos && r.ready.as_ref().is_some_and(|n| n.on_battery);
+            if ran && !asleep {
                 let ctx = StrikeCtx {
                     link_lost_today: r.strikes.lost_link(now),
                     link_stayed_up: false,
@@ -2349,6 +2356,7 @@ impl Queue {
                 (Some(why), _) => RunnerState::Benched(why.to_string()),
                 // a login the user must do stays the reason until the runner's next hello
                 (None, RunnerState::NeedsLogin(cmd)) => RunnerState::NeedsLogin(cmd.clone()),
+                (None, _) if asleep => RunnerState::Sleeping { since: now },
                 (None, _) => RunnerState::Unreachable { since: now },
             };
         }
@@ -2511,6 +2519,7 @@ impl Queue {
                 free_cpu,
                 slots,
                 images,
+                on_battery,
                 ..
             } => {
                 if let Some(r) = st.runners.get_mut(runner) {
@@ -2521,6 +2530,7 @@ impl Queue {
                         },
                         slots,
                         images,
+                        on_battery,
                     });
                 }
                 return;
@@ -3705,6 +3715,7 @@ mod tests {
             running: vec![],
             slots: slots.to_vec(),
             images: images.iter().map(|i| i.to_string()).collect(),
+            on_battery: false,
         };
         frame(q, runner, f, now);
     }
@@ -3849,6 +3860,67 @@ mod tests {
             matches!(a.state, attempts::AttemptState::Detached { .. }),
             "{a:?}"
         );
+    }
+
+    /// A Mac runner `m1` running a job, whose last `ready` said ON_BATTERY; then its link is lost.
+    fn mac_goes_quiet(on_battery: bool) -> (tempfile::TempDir, Arc<Queue>) {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        q.add_runner(
+            RemoteRunner {
+                os: Os::Macos,
+                image: None,
+                ..remote("m1", 600)
+            },
+            Session::start("m1", idle(), q.route(), q.link_events()),
+        );
+        hello(&q, "m1", true, 100);
+        let f = Frame::Ready {
+            free_mib: 8192,
+            free_cpu: 8.0,
+            psi: Default::default(),
+            running: vec![],
+            slots: vec![],
+            images: vec![],
+            on_battery,
+        };
+        frame(&q, "m1", f, 100);
+        let mut s = job("x1", Priority::P3, 64);
+        s.spec.os = Os::Macos;
+        s.place.image = None;
+        q.submit(s, 100);
+        q.tick(100);
+        let r = current(&q, "x1");
+        started(&q, "m1", &r, 101);
+        lost(&q, "m1", 110);
+        (dir, q)
+    }
+
+    // [D] pure: a Mac whose last `ready` said it ran on battery is `sleeping` when it goes quiet (a lid closed), not
+    // `unreachable`: its attempt stays detached for the grace, and the lost link is no strike
+    #[tokio::test]
+    async fn a_mac_on_battery_that_goes_quiet_is_sleeping() {
+        let (_dir, q) = mac_goes_quiet(true);
+        let row = q.runner("m1").unwrap();
+        assert_eq!(
+            (row.state.as_str(), row.strikes),
+            ("sleeping", 0),
+            "{row:?}"
+        );
+        let st = q.lock();
+        let a = st.attempts.attempt("x1", 1).unwrap();
+        assert!(
+            matches!(a.state, attempts::AttemptState::Detached { .. }),
+            "{a:?}"
+        );
+    }
+
+    // [D] pure: on mains power the same silence is a lost link, as on Linux
+    #[tokio::test]
+    async fn a_mac_on_mains_that_goes_quiet_is_unreachable() {
+        let (_dir, q) = mac_goes_quiet(false);
+        let row = q.runner("m1").unwrap();
+        assert_eq!(row.state, "unreachable", "{row:?}");
     }
 
     // [D] pure: a runner's job gets the hosts its network grant reaches in its `start`, for its proxy there

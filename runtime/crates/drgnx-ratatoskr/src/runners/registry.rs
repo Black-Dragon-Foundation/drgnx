@@ -1012,7 +1012,7 @@ impl Registry {
             .cfg
             .queue
             .runner(name)
-            .is_some_and(|r| r.state != "unreachable");
+            .is_some_and(|r| r.state != "unreachable" && r.state != "sleeping");
         if !linked {
             self.connect(&rec).await?;
         }

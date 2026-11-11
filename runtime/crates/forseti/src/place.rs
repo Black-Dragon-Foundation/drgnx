@@ -22,6 +22,10 @@ pub enum RunnerState {
     Unreachable {
         since: u64,
     },
+    /// A Mac on battery that went quiet (its lid closed): no strike, its attempts keep their grace.
+    Sleeping {
+        since: u64,
+    },
     Draining,
     Preempting,
 }
@@ -214,7 +218,7 @@ fn check(
         RunnerState::NeedsLogin(_) => Some(WaitReason::NeedsLogin),
         RunnerState::NeedsKeys => Some(WaitReason::NeedsKeys),
         RunnerState::AwaitingConfirm => Some(WaitReason::AwaitingConfirm),
-        RunnerState::Unreachable { since } => {
+        RunnerState::Unreachable { since } | RunnerState::Sleeping { since } => {
             Some(WaitReason::DesktopUnreachable { since: *since })
         }
         RunnerState::Draining | RunnerState::Preempting => Some(WaitReason::DrainWaits),
@@ -638,6 +642,10 @@ mod tests {
             (
                 RunnerState::Unreachable { since: 5 },
                 WaitReason::DesktopUnreachable { since: 5 },
+            ),
+            (
+                RunnerState::Sleeping { since: 6 },
+                WaitReason::DesktopUnreachable { since: 6 },
             ),
             (RunnerState::Draining, WaitReason::DrainWaits),
             (RunnerState::Preempting, WaitReason::DrainWaits),

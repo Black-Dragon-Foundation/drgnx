@@ -249,6 +249,12 @@ impl Platform for DarwinPlatform {
             dir,
             &self.exe,
             &[std::ffi::OsStr::new("job-exec"), dir.as_os_str()],
+            // a workstation's jobs yield to its user, as Linux's CPU and IO weights of 20 do
+            if self.profile == Profile::Workstation {
+                10
+            } else {
+                0
+            },
         )
         .map_err(|e| format!("job-exec: {e}"))?;
         Ok((dir.display().to_string(), pid))

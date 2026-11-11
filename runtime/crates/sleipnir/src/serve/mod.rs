@@ -599,6 +599,7 @@ impl<W: Write> Serve<W> {
                     running: vec![],
                     slots: vec![],
                     images: vec![],
+                    on_battery: false,
                 });
             }
         };
@@ -622,6 +623,7 @@ impl<W: Write> Serve<W> {
             running,
             slots: slot::present(&self.cfg.root),
             images,
+            on_battery: !m.on_ac,
         })
     }
 

@@ -102,7 +102,8 @@ for each Homebrew package at its newest installed version. The boot id is `kern.
 
 **Attempts** (`darwin::attempt`, `darwin::jobexec`, `darwin::sandbox`; `serve::platform::DarwinPlatform`). launchd
 takes no job from an ssh login (its Background session refuses `launchctl bootstrap user/<uid>`), so `launch` starts
-`sleipnir job-exec <dir>` with `setsid`, in a session of its own that outlives the link, and writes
+`sleipnir job-exec <dir>` with `setsid`, in a session of its own that outlives the link (on a workstation at nice 10,
+which every process of the job inherits: Linux's CPU and IO weights of 20), and writes
 `job-exec.pid` (`<pid> <start time>`, atomically); its own early errors go to `job-exec.log`. The attempt is active
 while that pid has that start time (a reused pid is not), and `kill` is SIGKILL to its process group (job-exec and
 whatever stayed in it); a process that left the group is the watchdog's to find, by session and marker. job-exec
@@ -598,7 +599,7 @@ does not parse.
 |---|---|---|
 | `hello` / `hello-ok` | hub → runner / back | the version, the hub id; the bundle version, the runner id, the boot id, linger, the attempts in the runner's folder (`{r, state, log_offset}`, state `running`, `finished` or `lost`), what the contract finds missing (re-probed at every hello) |
 | `probe` / `probe-result` | hub → runner / back | the facts (`linux::probe::Facts`), what is missing, why container caps don't hold (`check_limits`), the features |
-| `ready` | runner → hub | free memory and CPU, PSI, running attempts, slots and images present |
+| `ready` | runner → hub | free memory and CPU, PSI, running attempts, slots and images present, `on_battery` |
 | `offer` / `admit` / `refuse` | hub → runner / back | the job spec, its priority, the frozen input key, the grant hint and expected time; the grant; why not (text, and `forseti`'s `WaitReason`) |
 | `head` | hub → runner | the queue's head is reserved here: its start (`at`, 0 when no longer) and its memory and CPU need, which a grow here leaves |
 | `sync-have` / `sync-need` / `blob` / `bundle` / `origin-fetch` | both | the repository's mirror id, the commit, tree and overlay manifest (paths as raw bytes); the missing blobs and commit, and the mirror's ref tips; a blob's chunk at its offset of its total; a bundle chunk at its offset, each with the bundle's hash; a fetch from the project's origin (with `cred`: through the key of that name, sent before it) |
