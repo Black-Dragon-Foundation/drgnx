@@ -172,6 +172,27 @@ An adapter that goes on its own ends its session with the end of its stderr in t
 shell's environment and the adapter's `env` over it; `debug-terminal {session, term, view}` tells the starting editor,
 which shows the view. At the hub's end every session stops, children first, before the store closes.
 
+## The editor's half: `drgnx-debug-launch.el`
+
+`modules/extra/drgnx-debug-launch.el` holds what a start needs in the editor, all from commands you invoke:
+
+- `drgnx-debug-launch-configs` / `-read-config`: `debug/configs` for the project root (`project-current`, else the
+  folder) with the buffer's language (its major mode's stem: `python-ts-mode` → `python`), your configurations
+  (`drgnx-debug-configurations`, plists of launch.json's fields) and adapters (`drgnx-debug-adapters`, plists of the
+  table's fields; `-` in a key becomes `_`, lists become arrays). The picker offers the root's last start first and
+  marks untrusted rows; a launch.json that does not read opens at its line and column.
+- `drgnx-debug-launch-start`: `debug/start` until it answers a session. `needs: "trust"` asks once (Trust This
+  Folder, then `debug/trust`); inputs are asked in the minibuffer (`pickString` from its options, `promptString` with
+  its default, a password unechoed, `pickProcess` from this user's processes) and sent back as `inputs`.
+- Trust: before each call a trusted root is told to the hub (`debug/trust`, which keeps it in memory only);
+  `drgnx-trust-changed-functions` (run by Trust This Folder and Untrust This Folder) gives the hub every change, and
+  taking trust back stops the folder's sessions.
+- `drgnx-debug-convert-dape-configs`: once, with dape installed, each of `dape-configs` is evaluated here (a function
+  value is called once), dape's own keys (`command`, `port`, `modes`, `fn` …) are dropped, and the plain result is
+  added to `drgnx-debug-configurations` in settings.el; one without `:type` is named and left out.
+
+Its tests (`test/unit/debug-launch-test.el`) script the hub's answers.
+
 ## Live adapters: the image
 
 The tests that run real adapters (debugpy, js-debug, delve, lldb-dap) use `drgnx-debug-adapters:f45`, built from

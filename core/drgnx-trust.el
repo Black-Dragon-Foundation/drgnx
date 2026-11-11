@@ -91,6 +91,10 @@ newer drgnx wrote it (:version above `drgnx-trust-folders-version'), or `bad' fo
 (defvar drgnx-trust--told nil
   "(STAMP WHY) of the unusable trusted-folders.eld the user was told about, so that each change is told once.")
 
+(defvar drgnx-trust-changed-functions nil
+  "Called with (FOLDER TRUSTED) after Trust This Folder (TRUSTED t) or Untrust This Folder (nil): FOLDER as
+`trusted-content' holds it.  Debugging tells the hub (`drgnx-debug-launch-trust-changed').")
+
 (defvar drgnx-trust--added nil
   "The user's folders drgnx put into `trusted-content' this session (from trusted-folders.eld or Trust This
 Folder): Untrust This Folder can take them back even when the file has since become unusable.")
@@ -380,6 +384,7 @@ read back (`drgnx-trust--read-entry-p')."
     (drgnx-trust--add (list e))
     (unless (member e drgnx-trust--added) (push e drgnx-trust--added))
     (drgnx-trust--refresh)
+    (run-hook-with-args 'drgnx-trust-changed-functions e t)
     (message "Trusted %s" e)
     e))
 
@@ -399,6 +404,7 @@ is untrusted for this session only, and why."
                            ((member e (cdr r))
                             (condition-case err (ignore (drgnx-trust--write (lambda (folders) (remove e folders))))
                               ((user-error file-error) (error-message-string err)))))))
+      (run-hook-with-args 'drgnx-trust-changed-functions e nil)
       (if not-saved (message "No longer trusted, for this session only: %s (not saved: %s)" e not-saved)
         (message "No longer trusted: %s" e)))
     e))
