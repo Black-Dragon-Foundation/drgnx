@@ -218,9 +218,10 @@ open `gate` cards, and builds the model and the rows (`work::trail::flow`, pure)
   without one), Build the newest run, the author check its checks green at their newest runs (a check when all are),
   the merge column the queue's place or the open `gate` card's words. Text is in `drgnx-work-flow-text`, ids and
   agents in `-label`, headings in `-heading`;
-- the columns fit the window: each gate column is as wide as its widest cell or heading in the UI font (the hub
-  measures with the env's fonts), the agent's as its widest agent, and the task column takes the rest (at least 96
-  px), so cells are never cut and long titles give way;
+- the columns fit the window, titles before chips: each gate column wants its widest cell or heading in the UI font
+  (the hub measures with the env's fonts), the agent's is its widest agent, and the task column wants its widest
+  title, up to a third of the window. When both don't fit, the widest gate columns give way first (their cells and
+  headings cut with an ellipsis, down to 44 px a column), and only then the titles (down to 96 px);
 - under them the batch being checked: its heading with an "affected groups g/n" chip (the groups the groups gate
   listed at the combined tree, green of them, red in the error face), a row per member (its title, its tip, what the
   queue said to it last: "trial merge clean", or why it waits, the job's tasks named by their labels; then what the

@@ -376,10 +376,15 @@ fn cell_px(m: &dyn Measure, icon: u32, gate: &str, c: &Cell) -> u32 {
 /// The least the task column keeps, in logical px.
 const TASK_MIN: f32 = 96.0;
 
-/// The columns' left edges for TS in ENV (device px, M measuring): the task, the agent, then the six gates.  Each gate
-/// column is as wide as its widest cell or heading, the agent's as its widest agent, each with a gap after; the task
-/// column takes the rest of the window (at least [`TASK_MIN`]), so the cells are never cut and the titles give way.
-fn columns(ts: &[Task], env: &ViewEnv, m: &dyn Measure) -> Vec<u32> {
+/// The least a gate column keeps when it gives way, in logical px.
+const GATE_MIN: f32 = 44.0;
+
+/// The columns' left edges for TS in ENV (device px, M measuring): the task, the agent, then the six gates; and the
+/// gates' widths.  Each gate column wants its widest cell or heading, the agent's is its widest agent, each with a gap
+/// after.  The task column wants its widest title, up to a third of the window; when the gates' wants don't leave it
+/// that, the widest gate columns give way first (their cells are cut, [`fit_cell`]), down to [`GATE_MIN`] each, and
+/// only then the titles, down to [`TASK_MIN`].
+fn columns(ts: &[Task], env: &ViewEnv, m: &dyn Measure) -> (Vec<u32>, Vec<u32>) {
     let (icon, gap) = (dpx(env, 14.0), dpx(env, 10.0));
     let mut gates: Vec<u32> = GATES
         .iter()
@@ -396,7 +401,31 @@ fn columns(ts: &[Task], env: &ViewEnv, m: &dyn Measure) -> Vec<u32> {
         .chain([text_px(m, "Agent")])
         .max()
         .unwrap_or(0);
-    let right = agent + gap + gates.iter().map(|g| g + gap).sum::<u32>();
+    let fixed = agent + gap + gap * gates.len() as u32;
+    let title = ts
+        .iter()
+        .map(|t| text_px(m, &format!("{}  ", t.label)) + text_px(m, &t.title) + gap)
+        .max()
+        .unwrap_or(0)
+        .min(env.width_px / 3)
+        .max(dpx(env, TASK_MIN));
+    let room = env.width_px.saturating_sub(fixed + title);
+    if gates.iter().sum::<u32>() > room {
+        // the highest level L with every gate cut to L (but not below its least) fitting ROOM, or the leasts
+        let least = dpx(env, GATE_MIN);
+        let at_level = |l: u32| -> u32 { gates.iter().map(|&g| g.min(l.max(least))).sum() };
+        let (mut lo, mut hi) = (0, gates.iter().copied().max().unwrap_or(0));
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            if at_level(mid) <= room {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        gates = gates.iter().map(|&g| g.min(lo.max(least))).collect();
+    }
+    let right = fixed + gates.iter().sum::<u32>();
     let task = env.width_px.saturating_sub(right).max(dpx(env, TASK_MIN));
     let mut at = vec![0, task];
     let mut x = task + agent + gap;
@@ -404,7 +433,21 @@ fn columns(ts: &[Task], env: &ViewEnv, m: &dyn Measure) -> Vec<u32> {
         at.push(x);
         x += g + gap;
     }
-    at
+    (at, gates)
+}
+
+/// C, a cell of GATE, with its text cut so the cell is at most W device px wide as [`draw_cell`] draws it (M
+/// measuring, ICON the icons' size).
+fn fit_cell(m: &dyn Measure, icon: u32, gate: &str, c: &Cell, w: u32) -> Cell {
+    let px = cell_px(m, icon, gate, c);
+    if px <= w || (c.chip == Chip::Wait && c.text == "—") {
+        return c.clone();
+    }
+    let room = w.saturating_sub(px - text_px(m, &c.text));
+    Cell {
+        text: drgnx_rows::fit::fit(m, ROLE, &c.text, room as f32),
+        ..c.clone()
+    }
 }
 
 /// V logical px in ENV's device px.
@@ -606,8 +649,8 @@ pub(crate) fn flow_rows(
 ) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let mut pics = Pics::new(env);
     let ts = tasks(flow);
-    let at = columns(&ts, env, fonts);
-    let gap = dpx(env, 10.0);
+    let (at, widths) = columns(&ts, env, fonts);
+    let (gap, icon) = (dpx(env, 10.0), dpx(env, 14.0));
     let done = ts.iter().filter(|t| t.cells[4].chip == Chip::Ok).count();
     let mut head = RowBuilder::new("head");
     pics.put(&mut head, "list-checks", "≡");
@@ -645,8 +688,18 @@ pub(crate) fn flow_rows(
             cols.push(" ", None);
             let end = cols.pos();
             cols.face(start, end, LABEL);
+            let room = widths[i - 2].saturating_sub(icon + text_px(fonts, " "));
+            if text_px(fonts, name) <= room {
+                cols.push(name, Some(LABEL));
+            } else {
+                cols.push(
+                    &drgnx_rows::fit::fit(fonts, ROLE, name, room as f32),
+                    Some(LABEL),
+                );
+            }
+        } else {
+            cols.push(name, Some(LABEL));
         }
-        cols.push(name, Some(LABEL));
     }
     rule(&mut cols, "cols", env);
     rows.push(cols.finish());
@@ -668,7 +721,12 @@ pub(crate) fn flow_rows(
             .push(t.agent.as_deref().unwrap_or("—"), Some(LABEL));
         for (i, c) in t.cells.iter().enumerate() {
             b.stop(at[i + 2]);
-            draw_cell(&mut b, &mut pics, GATES[i], c);
+            draw_cell(
+                &mut b,
+                &mut pics,
+                GATES[i],
+                &fit_cell(fonts, icon, GATES[i], c, widths[i]),
+            );
         }
         let end = b.pos();
         b.prop(start, end, "drgnx-work-id", json!(t.id));
@@ -1398,8 +1456,9 @@ mod tests {
         e
     }
 
-    /// [D] The columns fit the window: each gate column is as wide as its widest cell (never cut), the agent's as its
-    /// widest agent, and the task column takes the rest, its titles cut to it.
+    /// [D] The columns fit the window: in a window that holds the cells and a third for the titles, each gate column is
+    /// as wide as its widest cell (whole), the agent's as its widest agent, and the task column takes the rest, a title
+    /// longer than that cut to it.
     #[test]
     fn the_columns_fit_the_window_and_the_task_column_gives_way() {
         let mut f = flow();
@@ -1408,10 +1467,13 @@ mod tests {
         f.tasks[0].evidence = vec![ev("red", "s", parse("test a::x ... FAILED\n"))];
         for scale in [1.0, 2.0] {
             let mut e = env(scale);
-            e.width_px = (760.0 * scale) as u32;
             // the env's fonts are its scale's (device px)
             let mut m = drgnx_rows::fit::FontSet::new();
             m.set_role(ROLE, None, 7.0 * scale);
+            let mut wide = e.clone();
+            wide.width_px = 100_000;
+            let natural = 100_000 - columns(&tasks(&f), &wide, &m).0[1];
+            e.width_px = natural * 3 / 2 + 3;
             let (rows, _) = flow_rows(&f, &e, &m);
             let t1 = &rows[3];
             let stops: Vec<u32> = t1.stops.iter().map(|s| s.1).collect();
@@ -1431,6 +1493,79 @@ mod tests {
                 t1.text
             );
             assert!(!rows[4].text.contains("no red · h…"), "{}", rows[4].text);
+        }
+    }
+
+    /// [D] The gate columns give way to the titles before the titles give way (as in the mockup): in a window too
+    /// narrow for both, a title of a usual length stays whole and the widest cells are cut instead, each within its
+    /// column; a title longer than its column's share is still cut, and in a very narrow window the title gives way
+    /// too, down to the least the task column keeps.
+    #[test]
+    fn the_columns_give_way_to_the_titles_before_the_titles_do() {
+        let mut f = flow();
+        f.tasks[0].title = "Open buffers in the model".into();
+        f.tasks[0].evidence = vec![ev("red", "s", parse("test a::x ... FAILED\n"))];
+        f.tasks[1].title =
+            "A task with a title far too long for any task column's share of a window".into();
+        for scale in [1.0, 2.0] {
+            let mut e = env(scale);
+            let mut m = drgnx_rows::fit::FontSet::new();
+            m.set_role(ROLE, None, 7.0 * scale);
+            // the natural cells and the whole title don't both fit here
+            let title = drgnx_rows::fit::width(&m, ROLE, "T1  Open buffers in the model") as u32;
+            let natural = {
+                let mut wide = e.clone();
+                wide.width_px = 100_000;
+                let (at, _) = columns(&tasks(&f), &wide, &m);
+                100_000 - at[1]
+            };
+            e.width_px = natural + title / 2;
+            let (rows, _) = flow_rows(&f, &e, &m);
+            let (t1, t5) = (&rows[3], &rows[4]);
+            assert!(
+                t1.text.contains("Open buffers in the model"),
+                "scale {scale}: {}",
+                t1.text
+            );
+            assert!(
+                t5.text.contains("A task") && t5.text.contains('…'),
+                "scale {scale}: {}",
+                t5.text
+            );
+            let stops: Vec<u32> = t1.stops.iter().map(|s| s.1).collect();
+            assert!(stops.windows(2).all(|w| w[0] < w[1]), "{stops:?}");
+            // each cell ends before the next column starts, the last inside the window
+            for row in [t1, t5] {
+                let mut ends = row.stops.iter().map(|s| s.1).skip(1).chain([e.width_px]);
+                for (i, s) in row.stops.iter().enumerate() {
+                    let next = ends.next().unwrap();
+                    let from = s.0 as usize + 1;
+                    let upto = row
+                        .stops
+                        .get(i + 1)
+                        .map_or(row.text.chars().count(), |n| n.0 as usize);
+                    let cell: String = row
+                        .text
+                        .chars()
+                        .skip(from)
+                        .take(upto.saturating_sub(from))
+                        .collect();
+                    let w = drgnx_rows::fit::width(&m, ROLE, cell.trim_end()) as u32;
+                    assert!(
+                        s.1 + w <= next,
+                        "scale {scale}: {cell:?} at {} + {w} > {next}",
+                        s.1
+                    );
+                }
+            }
+            // very narrow: the title gives way too, the task column keeps its least
+            e.width_px = natural / 2;
+            let (rows, _) = flow_rows(&f, &e, &m);
+            assert!(
+                rows[3].stops[0].1 >= dpx(&e, TASK_MIN),
+                "{:?}",
+                rows[3].stops
+            );
         }
     }
 
