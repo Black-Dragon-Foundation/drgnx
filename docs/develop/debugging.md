@@ -1,0 +1,49 @@
+# Graphical debugging: the internals
+
+drgnx's debugger is a client of the Debug Adapter Protocol (DAP): the hub owns each session through the `vor` crate,
+and Emacs draws the gutter, the toolbar and the views. This page is for contributors; it grows with the feature.
+
+## vor: the DAP client
+
+`runtime/crates/vor/` (Vör) speaks DAP to one adapter over stdio or TCP, on tokio. It knows nothing of drgnx.
+
+- **Framing** (`vor::codec::DapCodec`): `Content-Length: N` headers, then N bytes of JSON. Other headers are skipped
+  and the header name is matched in any case. A header block over 8 KiB, a missing or malformed length, or a body
+  over 256 MiB breaks the stream (the connection ends); a body that is not a DAP message (bad JSON, not UTF-8) is
+  reported as `Incoming::Bad` and the stream goes on.
+- **Correlation** (`vor::Client`): `request(command, arguments)` returns a `Pending` future answered by the
+  response with the same `request_seq`, in any order. A `success: false` answer is `Error::Failed` with the
+  adapter's message. Dropping a `Pending` forgets the request, so a late answer is ignored; `cancel(seq)` asks the
+  adapter to stop it (only when it has `supportsCancelRequest`). Callers put their own deadline around the future.
+- **What the adapter sends on its own** arrives in order on the stream `Client::new` returns: events and reverse
+  requests (`runInTerminal`, `startDebugging`). A `ReverseRequest` is answered with `ok(body)` or `err(message)`;
+  dropped unanswered, it is refused (`not handled`), so an adapter never waits forever.
+- **The end:** when the adapter exits or the stream breaks, every waiting request gets `Error::Closed` once, with
+  the same reason, the stream ends, and later requests fail at once with that reason.
+- **Transports:** `Client::stdio(&mut child)`, `Client::tcp(stream)`, and `Client::connect_tcp(addr, within)`, which
+  tries a port the hub picked every 50 ms until the adapter opens it (adapters such as delve and js-debug listen a
+  moment after they start).
+- **Types** (`vor::types`): generated from the protocol's JSON schema, vendored at `schema/debugAdapterProtocol.json`
+  (`schema/README.md` gives its revision and terms). Each request has a marker type in `types::requests` (`Request`:
+  `COMMAND`, `Arguments`, `Body`) used with `Client::send`, and each event one in `types::events` (`Event`), read with
+  `vor::event_body`. Every struct keeps the fields it does not know in `extra`, so an adapter's own fields pass
+  through. String enums are `String` with the known values as constants (`…Values`), since adapters send others.
+  To refresh: replace the schema, then from `runtime/` run
+  `cargo run -p vor --example gen_types -- crates/vor/schema/debugAdapterProtocol.json > crates/vor/src/types.rs`
+  and `cargo fmt -p vor` (in a container, like every build).
+
+Its tests (`crates/vor/tests/client.rs`) drive the client against a hand-written adapter on an in-memory pipe and one
+TCP socket; the waits use tokio's paused clock.
+
+## Live adapters: the image
+
+The tests that run real adapters (debugpy, js-debug, delve, lldb-dap) use `drgnx-debug-adapters:f45`, built from
+`test/container/Containerfile.debug` on top of the line's dev image. Every download is pinned: the debugpy wheel by
+pip's `--require-hashes`, delve by Go's checksum database, the js-debug tarball by SHA-256; lldb-dap is Fedora's.
+
+Native debuggers trace their debuggee, so their container needs `CAP_SYS_PTRACE`: the container script's `--ptrace`
+adds it (podman's default seccomp profile then allows `ptrace`). lldb-dap launches set `disableASLR: false`, since a
+container may not turn address randomisation off.
+
+Inside the sandbox (Gleipnir) `ptrace` stays refused in both tiers, so delve and lldb-dap run outside it; Python and
+JavaScript adapters run in the full tier.
