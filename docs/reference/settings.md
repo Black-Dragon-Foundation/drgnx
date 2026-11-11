@@ -738,6 +738,43 @@ the provider's own.  A role you do not name has the shipped default chain.
 | `:agents` | `never` |
 | `:schema` | `(alist symbol (alist symbol (or string null)))` |
 
+## drgnx-debug-adapters
+
+Your own debug adapters, looked at before drgnx's (etc/debug-adapters.eld): a plist each in that table's fields
+(`:id', `:name', `:types', `:languages', `:find', `:start' …).  An adapter is a program run with your rights, so a
+project's settings never set this.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat (plist :key-type symbol :value-type sexp))` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | - |
+
+## drgnx-debug-configurations
+
+Your own launch configurations, offered in every project after launch.json's: VS Code's launch.json fields as a
+plist each (`:type', `:request', `:name', `:program' …), `${…}' variables as in launch.json.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat (plist :key-type symbol :value-type sexp))` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | - |
+
 ## drgnx-extensions-check-updates
 
 How the Extensions view learns of updates: `daily' reads the archives in the background once a day, `manual' only
@@ -1642,6 +1679,40 @@ Non-nil: the Search view shows a dim label row (the definition's name) above the
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | - |
+
+## drgnx-search-edit-context
+
+Lines of context Edit Results shows around each match line (0 to 3), editable too, dim.
+
+| Key | Value |
+| --- | --- |
+| Default | `0` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
+## drgnx-search-edit-max-lines
+
+The most lines Edit Results opens; a search with more asks to be narrowed.
+
+| Key | Value |
+| --- | --- |
+| Default | `20000` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
 
 ## drgnx-search-exclude
 
