@@ -56,8 +56,30 @@ the text and never grows the line (look.css `.mg .ref').")
     (when (facep face)
       (drgnx-module-face-spec face `((t :inherit ,inherits ,@more))))))
 
+(defconst drgnx-look-bridge--magit-inset
+  (propertize " " 'display '(when (display-graphic-p) space :width 1.0) 'invisible t)
+  "Magit's `line-prefix' on a graphical frame: a column, so with the fringe its text starts 16 px into the card
+\(magit.html); invisible on a terminal.")
+
+(defvar-local drgnx-look-bridge--magit-inset-p nil "Non-nil in a Magit buffer this module gave its inset.")
+
+(defun drgnx-look-bridge-magit-inset ()
+  "On `magit-section-mode-hook': Magit's text sits in from the card's edge, past its section chevrons in the fringe."
+  (setq-local line-prefix drgnx-look-bridge--magit-inset wrap-prefix drgnx-look-bridge--magit-inset
+              drgnx-look-bridge--magit-inset-p t))
+
+(defun drgnx-look-bridge--magit-inset-off ()
+  "Take the inset out of the Magit buffers that have it."
+  (dolist (b (buffer-list))
+    (when (buffer-local-value 'drgnx-look-bridge--magit-inset-p b)
+      (with-current-buffer b
+        (mapc #'kill-local-variable '(line-prefix wrap-prefix drgnx-look-bridge--magit-inset-p))))))
+
 (defun drgnx-look-bridge-on ()
-  "In ui/look's setup: bridge every package of `drgnx-look-bridge-faces', now when it is loaded, else when it loads."
+  "In ui/look's setup: bridge every package of `drgnx-look-bridge-faces', now when it is loaded, else when it loads;
+Magit's buffers get their inset (`drgnx-look-bridge-magit-inset')."
+  (drgnx-modules-push-undo "Magit's inset" #'drgnx-look-bridge--magit-inset-off)
+  (add-hook 'magit-section-mode-hook #'drgnx-look-bridge-magit-inset)
   (dolist (entry drgnx-look-bridge-faces)
     (let ((feature (car entry)))
       (if (featurep feature) (drgnx-look-bridge--apply feature)
