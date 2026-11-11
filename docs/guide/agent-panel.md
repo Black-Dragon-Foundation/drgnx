@@ -1,6 +1,6 @@
 # The agent panel
 
-The agent panel shows one agent session in the right dock: who it is and what it is doing, a row of chips, and the
+The agent panel shows one agent session in the right dock, beside the editor and never as one of its tabs: who it is and what it is doing, a row of chips, and the
 conversation as rows. Open it with **Agents: Open the Agent Panel** (`C-k p` in the VS Code profile, `SPC a p` in Vim).
 There is one tab for each open agent.
 
@@ -8,14 +8,19 @@ Turn it off with the module `tools/agent-panel` (see [modules](modules.md)); eve
 
 ## What you see
 
-- **Header:** the agent's name, then what it is doing: "Claude · running 6 min", "held by you" (you paused it) or
-  "Pair · editing your checkout".
+- **Header:** the agent's icon and name, then what it is doing: "Claude · running 6 min", "held by you" (you paused
+  it) or "Pair · editing your checkout"; on the right the **watch · review · debug** lens, the preset in force raised, then a pin button (pins the card at
+  point; a click leaves point where it is) and **⋯**, a menu of Fork the Chat, Compact the Context, Switch the Model,
+  Switch the Mode, List the Edits and Stop the Agent.
 - **Chips:** model, context ring, cost, mode, sandbox, MCP servers, files edited, checkpoints. A chip appears only when
   the hub reports it; none is made up.
-- **Steps:** a tool call is one line: a dot for its state, its title, its result after `·`, and its time and cost on the
+- **Steps:** a tool call is one line: a dot for its state, its title (a shell step: "Shell" and its command in the
+  code font), its result after `·`, and its time and cost on the
   right in the code font. A slow step (over `drgnx-agent-panel-slow-seconds`) or an expensive one (over
   `drgnx-agent-panel-expensive-cost`) shows that figure in the warning colour. The agent's thinking is folded under the
   step it belongs to; `TAB` opens or folds it, with the step's detail.
+- **Fonts:** the panel's text is in the UI font; a tool's output, the diffs (in the steps and on the cards) and code in
+  a message are in the code font.
 - **Checkpoints:** `R` on a step opens the revert card for it (the edit history's revert: nothing changes until you
   apply it) and `F` forks a second agent from it; the prompt of a fork says what one more run like it costs when the
   forecast is there. A step with no checkpoint to go back to refuses `R`. A step a revert undid is marked `↶ undone`; the rows reload by themselves when a revert, redo or take is applied.
@@ -73,9 +78,11 @@ already on screen is never drawn again, and rows are drawn in slices of 4 ms or 
 
 ## What opens
 
-The strip under the chips has a toggle for each step type (thinking, read, search, edit, execute, fetch, other). A type
-that is on shows the detail of its steps; `T` flips one, `TAB` opens or folds the step at point whatever the toggles say.
-A step that failed opens by itself. `1`, `2` and `3` are presets: **watch** (titles only), **review** (edits and
+The strip under the chips reads **Open:** and has a pill for each step type (thinking, read, search, edit, execute,
+fetch, other), a ring, filled when it is on; **make default** is at its right end. In a narrow panel the pills go on as
+many lines as they need, and they follow the panel's width when you resize it. A type that is on shows the detail of its
+steps; a click on its pill or `T` flips one, `TAB` opens or folds the step at point whatever the toggles say.
+A step that failed opens by itself. `1`, `2` and `3` (or a click on the header's lens) are presets: **watch** (titles only), **review** (edits and
 commands open) and **debug** (everything, thinking included). What is open belongs to the chat. `M` makes the current
 choice the default for new panels and saves it in your settings (`drgnx-agent-panel-disclosure`).
 
@@ -86,7 +93,10 @@ answer at once, without asking the hub. With nothing at point, `TAB` opens or fo
 
 ## Steering
 
-Under the transcript are the notes waiting for the agent's turn to end, one row each, and the composer.
+Under the transcript are the notes waiting for the agent's turn to end, one row each, and the composer: a field ("Steer
+the agent…"; a click writes to the agent, as `s` does) and under it a bar with the model and mode chips and three
+buttons: **Fork** (**Fork the Chat**: a second agent from the chat's last step), the pause icon (stop after this step,
+as `p`) and Send, an arrow (as `s`).
 
 - `s` writes to the agent. While it works, the message is queued and goes in when the turn ends; **sending never cancels
   the turn**. In the message, `@` completes a file of the agent's folder and `/` at the start completes one of its
@@ -95,18 +105,24 @@ Under the transcript are the notes waiting for the agent's turn to end, one row 
 - `p` stops the agent after its current step and holds its queue, `u` resumes it with a plain "continue". `x` stops
   the turn, after a confirmation line; it also ends after the current step.
 - `C` and the Pair chip next to the composer start pair mode. They are there only when pair mode is.
-- The model and mode chips are read-only here.
+- A click on the model or mode chip switches it, as **Switch the Model** and **Switch the Mode** do.
 
 ## Cards
 
 What the agent changed and what it asks sit under the transcript as cards.
 
-- **Diff cards:** one for each hunk of each file the agent edited (flat, with a border). `a` accepts the hunk: it writes
+- **Diff cards:** one for each hunk of each file the agent edited (flat, with a border). A header over it names the
+  file, the lines and which hunk it is ("215–217 · hunk 1 of 1"), with **Reject** and **Accept** at the right; each line
+  shows its number (the new file's; a removed line, the old file's). `a` accepts the hunk: it writes
   the review mark the merge gate compares, and nothing is merged. `D` rejects it: the file goes back to pending and the
   agent is told, in a queued message, to take it back. The panel never writes to an agent's worktree and keeps no queue
   of its own; both keys are the review view's own functions (module `tools/work-space`).
-- **Permission cards:** a request the agent waits on, ringed in the attention colour. `RET` allows it once, `A` always,
-  `D` denies it. The card goes when the hub's next snapshot no longer holds the request.
+- **Permission cards:** a request the agent waits on: what it asks, on the attention tint and ringed in the attention
+  colour, and under it the buttons **Allow ↵**, **Always A** and **Deny D**. `RET` allows it once, `A` always, `D`
+  denies it. The card goes when the hub's next snapshot no longer holds the request. A chat (an agent that is not a
+  worker or a manager) never edits or runs commands in its project outside Pair: the permission matrix answers such a
+  request itself (`code.edit` is Never for chat in every preset), so no card shows and the agent hears "rejected".
+- The cards and the Edits line reach the panel's right edge, 12 px in.
 
 ## Large outputs
 

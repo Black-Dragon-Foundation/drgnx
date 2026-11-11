@@ -105,11 +105,17 @@ once: each graphical frame is swapped for a new one with the same windows, buffe
 
 (defvar-local drgnx-look-echo--cookie nil "The remap that gives this buffer the UI font while the box is on.")
 
+(defun drgnx-look-echo--palette-dressed-p ()
+  "Non-nil when the floating palette dresses the current buffer (its minibuffer) as its input row."
+  (when-let* ((d (bound-and-true-p drgnx-palette-frame--dressing)))
+    (eq (current-buffer) (overlay-buffer (car d)))))
+
 (defun drgnx-look-echo--dress ()
   "The current buffer in the palette's input row: the UI font, rows of its height, its inset before the text."
   (unless drgnx-look-echo--cookie
     (setq drgnx-look-echo--cookie (face-remap-add-relative 'default 'drgnx-ui-text))
-    (setq-local line-prefix (drgnx-palette-frame--lead))
+    (unless (drgnx-look-echo--palette-dressed-p)                ; the palette's input row has its own inset
+      (setq-local line-prefix (drgnx-palette-frame--lead)))
     (drgnx-palette-frame--rows drgnx-palette-frame-row-px)))
 
 (defun drgnx-look-echo--undress ()

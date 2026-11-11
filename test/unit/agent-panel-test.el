@@ -14,6 +14,9 @@
 (drgnx-test-modules-preload '(tools/agent-panel))
 
 (defvar drgnx-agent-panel--stats-render)
+(defvar drgnx-agent-panel--diffs)
+(declare-function drgnx-agent-panel-cards--diff-row "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-composer--row "drgnx-agent-panel-composer")
 (defvar drgnx-agent-panel--subscribed)
 (defvar drgnx-hub--events)
 (declare-function drgnx-agent-panel-buffer "drgnx-agent-panel")
@@ -319,9 +322,26 @@ unanswered, and panel \"s1\" as `buf'."
                                       :options (list (list :optionId "allow" :kind "allow_once")
                                                      (list :optionId "always" :kind "allow_always")
                                                      (list :optionId "reject" :kind "reject_once"))))))
-      (should (string-match-p "↵ Allow · A Always · D Deny" (drgnx-agent-panel-test--text buf)))
+      ;; window-dark.html `.acard.perm': a card ringed in the attention colour, its head on the attention tint
+      ;; asking (one line), then Allow (the primary), Always and Deny as buttons with their keys, under the card (a button's own
+      ;; box inside the card would cut its ring); every card line is one face
+      (let* ((card (drgnx-agent-panel-cards--perm-row 7))
+             (lines (split-string card "\n" t))
+             (head (car lines)))
+        (should (string-search "Run rm -rf build?" head))
+        (should (equal (list (get-text-property 2 'face head))
+                       (seq-uniq (mapcar (lambda (i) (get-text-property i 'face head)) (number-sequence 0 (1- (length head)))))))
+        (should (memq 'drgnx-card-single (ensure-list (get-text-property 2 'face head))))
+        (should (memq 'drgnx-agent-panel-perm-head (ensure-list (get-text-property 2 'face head))))
+        (should (eq 'drgnx-agent-panel-allow
+                    (lookup-key (get-text-property (string-search "Allow ↵" card) 'keymap card) [mouse-1])))
+        (should (eq 'drgnx-ui-button-primary (get-text-property (string-search "Allow ↵" card) 'face card)))
+        (should (eq 'drgnx-agent-panel-always
+                    (lookup-key (get-text-property (string-search "Always A" card) 'keymap card) [mouse-1])))
+        (should (eq 'drgnx-agent-panel-reject
+                    (lookup-key (get-text-property (string-search "Deny D" card) 'keymap card) [mouse-1]))))
+      (should (string-search "Allow ↵" (drgnx-agent-panel-test--text buf)))
       (goto-char (drgnx-view-row-start drgnx-view '(:perm 7)))
-      (should (eq 'drgnx-agent-panel-ring (get-text-property (point) 'face)))
       (drgnx-agent-panel-allow)
       (should (equal '("agents/permission" :id "s1" :request 7 :option "allow") (car drgnx-agent-panel-test--calls)))
       (drgnx-agent-panel-always)
@@ -841,3 +861,192 @@ nothing: the subscription went with the connection, and a kill hook never signal
           (with-current-buffer buf (setq drgnx-agent-panel--subscribed t))
           (kill-buffer buf))
         (should (zerop calls))))))
+
+;; The audit's G1: the panel opened as a tab of the editor, because nothing loaded the pane kinds' library and the
+;; setup's `fboundp' guard skipped the kind
+(ert-deftest drgnx-agent-panel/opens-in-the-right-island ()
+  "The module's setup defines the pane kind `agent-panel' with its home on the right, so opening a session shows the
+panel in the right island (agent-panel.html), not as a tab of the editor."
+  (drgnx-test-with-modules '(tools/agent-panel)
+    (should (fboundp 'drgnx-pane-show))
+    (should (eq 'right (plist-get (drgnx-pane-kind 'agent-panel) :home)))))
+
+(ert-deftest drgnx-agent-panel/prose-in-the-ui-font-output-in-code ()
+  "agent-panel.html: the panel's text (header, chips, steps, messages) is in the UI font, a tool's output, the diffs
+and code in the code font."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (should (memq 'drgnx-ui-text (ensure-list (alist-get 'default face-remapping-alist)))))
+    (dolist (f '(drgnx-agent-panel-output drgnx-agent-panel-context drgnx-agent-panel-added drgnx-agent-panel-removed
+                                          drgnx-agent-panel-code drgnx-agent-panel-md-code))
+      (should (facep f))
+      (should (drgnx-agent-panel-test--inherits-p f 'drgnx-code-small)))
+    ;; a diff card's lines too
+    (load (expand-file-name "modules/tools/drgnx-work-review" drgnx-dir) nil t)
+    (with-current-buffer buf
+      (setq drgnx-agent-panel--diffs (list (cons "a.txt" "@@ -1,2 +1,2 @@\n ctx\n-a\n+b\n")))
+      (let ((card (drgnx-agent-panel-cards--diff-row "a.txt" 0)))
+        (dolist (line '("+b" "-a" " ctx"))
+          (let ((face (get-text-property (1+ (string-search line card)) 'face card)))
+            (should (seq-some (lambda (f) (drgnx-agent-panel-test--inherits-p f 'drgnx-code-small))
+                              (ensure-list face)))))))))
+
+(defun drgnx-agent-panel-test--inherits-p (face target)
+  "Whether FACE is TARGET or inherits it, through any depth."
+  (or (eq face target)
+      (and (facep face)
+           (seq-some (lambda (p) (drgnx-agent-panel-test--inherits-p p target))
+                     (ensure-list (face-attribute face :inherit nil))))))
+
+(defun drgnx-agent-panel-test--face-at (s text)
+  "The face list of the first character of TEXT in string S."
+  (ensure-list (get-text-property (string-search text s) 'face s)))
+
+(ert-deftest drgnx-agent-panel/header-pin-and-more ()
+  "agent-panel.html `.agent .ph': after the lens, a pin button and ⋯; a press on either leaves point where it is (the
+pin takes the card at point), ⋯ opens the panel's actions.  A lens segment's name has room either side in its face."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (let* ((head (drgnx-agent-panel--header-row))
+             (maps (cl-loop for i below (length head) for m = (get-text-property i 'keymap head)
+                            when (and m (lookup-key m [down-mouse-1])) collect m)))
+        (should (member "Pin the card at point" (cl-loop for i below (length head) collect (get-text-property i 'help-echo head))))
+        (should (member "More actions" (cl-loop for i below (length head) collect (get-text-property i 'help-echo head))))
+        (should (cl-every (lambda (m) (eq (lookup-key m [down-mouse-1]) #'ignore)) maps))
+        (should (cl-some (lambda (m) (eq (lookup-key m [mouse-1]) #'drgnx-agent-panel-header-menu)) maps))
+        (dolist (c (mapcar #'cdr drgnx-agent-panel-header-menu)) (should (drgnx-commands-get c)))
+        ;; the room before \"watch\" is in the segment's face
+        (let ((i (string-search "watch" head)))
+          (should (equal (get-text-property (1- i) 'face head) (get-text-property i 'face head))))))))
+
+(ert-deftest drgnx-agent-panel/header-lens-and-open-strip ()
+  "agent-panel.html: the header ends with the watch / review / debug lens, the preset in force raised; the strip
+under the chips reads \"Open:\" and its step types are pills, the open ones raised, no arrows."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel-preset 2)
+      (let ((head (drgnx-agent-panel--header-row)) (strip (drgnx-agent-panel--strip-row)))
+        (should (memq 'drgnx-agent-panel-lens-on (drgnx-agent-panel-test--face-at head "review")))
+        (dolist (off '("watch" "debug"))
+          (should (memq 'drgnx-agent-panel-lens (drgnx-agent-panel-test--face-at head off))))
+        ;; segments of one face are never adjacent (they would be one box): before debug's room, review's is apart
+        (drgnx-agent-panel-preset 1)
+        (let ((head (drgnx-agent-panel--header-row)))
+          (should-not (equal (get-text-property (- (string-search "debug" head) 2) 'face head)
+                             (get-text-property (string-search "debug" head) 'face head))))
+        (should (string-match-p "\\`[[:space:]]*Open:" strip))
+        (should-not (string-match-p "[▸▾]" strip))
+        (should (memq 'drgnx-agent-panel-tag-on (drgnx-agent-panel-test--face-at strip "edit")))
+        (should (memq 'drgnx-agent-panel-tag (drgnx-agent-panel-test--face-at strip "read")))
+        ;; every pill is ringed (`.disc .t'), the open ones on the quiet selection
+        (should (drgnx-agent-panel-test--inherits-p 'drgnx-agent-panel-tag 'drgnx-pill))
+        (should (drgnx-agent-panel-test--inherits-p 'drgnx-agent-panel-tag-on 'drgnx-pill-on))))))
+
+(ert-deftest drgnx-agent-panel/composer-is-a-field-card ()
+  "agent-panel.html `.composer': the field's card (\"Steer the agent…\", a click writes to the agent) and the bar:
+the model and the mode as chips that switch them, Fork, the pause icon and Send (an arrow) as buttons."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (setq drgnx-agent-panel--snap (list :model "opus" :mode "accept edits"))
+      (let ((row (drgnx-agent-panel-composer--row)))
+        (should (string-search "Steer the agent" row))
+        (should (eq 'drgnx-agent-panel-send
+                    (lookup-key (get-text-property (string-search "Steer" row) 'keymap row) [mouse-1])))
+        (should (memq 'drgnx-card-single (drgnx-agent-panel-test--face-at row "Steer")))
+        ;; the field's card is one run of one face to its end (a box is drawn per run)
+        (let ((eol (string-search "\n" row)))
+          (should (equal (get-text-property 1 'face row) (get-text-property (1- eol) 'face row))))
+        (should (memq 'drgnx-agent-panel-chip (drgnx-agent-panel-test--face-at row "opus")))
+        (should (eq 'drgnx-agent-panel-switch-model
+                    (lookup-key (get-text-property (string-search "opus" row) 'keymap row) [mouse-1])))
+        (should (eq 'drgnx-agent-panel-switch-mode
+                    (lookup-key (get-text-property (string-search "accept edits" row) 'keymap row) [mouse-1])))
+        ;; the bar's buttons: Fork, the pause icon (stop after this step), Send as the primary arrow
+        (let ((send (string-search (drgnx-face-glyph 'arrow-up) row))
+              (pause (string-search (drgnx-face-glyph 'pause) row)))
+          (should (memq 'drgnx-ui-button-primary (ensure-list (get-text-property send 'face row))))
+          (should (eq 'drgnx-agent-panel-send (lookup-key (get-text-property send 'keymap row) [mouse-1])))
+          (should (eq 'drgnx-agent-panel-pause (lookup-key (get-text-property pause 'keymap row) [mouse-1]))))
+        (should (eq 'drgnx-agent-panel-fork
+                    (lookup-key (get-text-property (string-search "Fork" row) 'keymap row) [mouse-1])))))))
+
+(ert-deftest drgnx-agent-panel/diff-card-as-the-mockup ()
+  "agent-panel.html `.acard': a header with the file's name, its lines and \"hunk 1 of 1\", and Reject and Accept that
+answer it; the body's lines numbered (the new file's numbers, a removed line the old's), in the code font."
+  (drgnx-agent-panel-test--with
+    (load (expand-file-name "modules/tools/drgnx-work-review" drgnx-dir) nil t)
+    (with-current-buffer buf
+      (setq drgnx-agent-panel--diffs (list (cons "a.el" "@@ -215,2 +215,3 @@\n-  (when p\n+  (if p\n     (send p)\n+    (queue p)\n")))
+      (let ((card (drgnx-agent-panel-cards--diff-row "a.el" 0)))
+        (should (string-match-p "a\\.el +215–217 · hunk 1 of 1" card))
+        (should (eq 'drgnx-agent-panel-accept
+                    (lookup-key (get-text-property (string-search "Accept" card) 'keymap card) [mouse-1])))
+        (should (eq 'drgnx-agent-panel-reject
+                    (lookup-key (get-text-property (string-search "Reject" card) 'keymap card) [mouse-1])))
+        (should (string-match-p " 215 -  (when p" card))
+        (should (string-match-p " 215 \\+  (if p" card))
+        (should (string-match-p " 216      (send p)" card))
+        (should (string-match-p " 217 \\+    (queue p)" card))
+        (should (seq-some (lambda (f) (drgnx-agent-panel-test--inherits-p f 'drgnx-code-small))
+                          (drgnx-agent-panel-test--face-at card "216")))))))
+
+(ert-deftest drgnx-agent-panel/a-card-closes-before-the-window-edge ()
+  "A card's rows (the Edits ledger, the plan) end in a space to the panel's right edge, 12 px in; their newlines are
+outside the card faces, which extend: in them the ring ran on to the window's edge, open there (the Edits banner)."
+  (let ((card (drgnx-agent-panel-cards--box '("Edits · 1 file" ("a.el" . bold)) nil)))
+    (dotimes (i (length card))
+      (when (eq (aref card i) ?\n)
+        (should-not (get-text-property i 'face card))))
+    (should (equal '(space :align-to (- right (12)))
+                   (cl-letf (((symbol-function 'drgnx-px) #'identity))
+                     (let ((c (drgnx-agent-panel-cards--box '("x") nil)))
+                       (get-text-property (1- (string-search "\n" c)) 'display c)))))))
+
+(ert-deftest drgnx-agent-panel/strip-wraps-to-the-panel-width ()
+  "The strip fits the panel's width: in a narrow panel its pills go on as many lines as they need, \"make default\"
+on the last, nothing past the edge; in a wide one it is one line.  A change of the panel's width draws it again."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (let* ((wide (cl-letf (((symbol-function 'drgnx-agent-panel--width) (lambda () 4000)))
+                     (drgnx-agent-panel--strip-row)))
+             (narrow-px (/ (string-pixel-width wide) 2))
+             (narrow (cl-letf (((symbol-function 'drgnx-agent-panel--width) (lambda () narrow-px)))
+                       (drgnx-agent-panel--strip-row))))
+        (should (= 1 (cl-count ?\n wide)))
+        (should (< 1 (cl-count ?\n narrow)))
+        (dolist (line (split-string narrow "\n" t))
+          ;; measured without the stretch that puts "make default" at the right end (it ends where the window does)
+          (let (parts)
+            (dotimes (i (length line))
+              (let* ((c (substring line i (1+ i))) (d (get-text-property 0 'display c)))
+                (unless (and (eq (car-safe d) 'space) (plist-get (cdr d) :align-to)) (push c parts))))
+            (should (<= (string-pixel-width (apply #'concat (nreverse parts))) narrow-px))))
+        (should (string-search "make default" (car (last (split-string narrow "\n" t))))))
+      ;; the store's event about the panel's window lays the strip out for its width
+      (set-window-buffer (selected-window) buf)
+      (drgnx-view-draw-now drgnx-view)
+      (setq drgnx-agent-panel--strip-width nil)
+      (drgnx-agent-panel--resized (list :window (selected-window)))
+      (should (eql drgnx-agent-panel--strip-width (window-body-width (selected-window) t)))
+      (should (gethash (list :strip) (drgnx-view--dirty drgnx-view))))))
+
+(ert-deftest drgnx-agent-panel/a-preset-redraws-the-header-lens ()
+  "Picking a preset draws the header again, so its lens shows the preset in force."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-view-draw-now drgnx-view)
+      (drgnx-agent-panel-preset 3)
+      (should (gethash (list :header) (drgnx-view--dirty drgnx-view))))))
+
+(ert-deftest drgnx-agent-panel/header-status-gives-way-to-the-lens ()
+  "In a narrow panel the header's status is cut (…) so it ends before the lens; nothing overlaps."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (setq drgnx-agent-panel--snap (list :name "replay-46dd" :agent "replay" :status "running"))
+      (let* ((wide (cl-letf (((symbol-function 'drgnx-agent-panel--width) (lambda () 4000))) (drgnx-agent-panel--header-row)))
+             (lens (drgnx-agent-panel--lens))
+             (px (+ (string-pixel-width (car (split-string wide "·"))) (string-pixel-width lens) (drgnx-px 24) (string-pixel-width " · Ag")))
+             (narrow (cl-letf (((symbol-function 'drgnx-agent-panel--width) (lambda () px))) (drgnx-agent-panel--header-row))))
+        (should-not (string-search "…" wide))
+        (should (string-search "…" narrow))
+        (should (string-search "watch" narrow))))))

@@ -12716,12 +12716,41 @@
               "null"
             ]
           },
+          "exclude": {
+            "description": "Names never listed, at most 256: exact names or globs (`*` any run, `?` one character); default `.git`,\n`.hg`, `.svn`, `.DS_Store`, `__pycache__` and `.#*`.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "expanded": {
             "description": "The open folders under the roots (no trailing slash), at most 10000.",
             "items": {
               "$ref": "#/$defs/AbsPath"
             },
             "type": "array"
+          },
+          "indent": {
+            "description": "A level's indent on a graphical display, in logical px (the density's `tree-indent`); default 12.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "only": {
+            "description": "Find: list only these files (at most 5000) under the roots, each with the folders above it open; nothing is\nread from disk and nothing watched.",
+            "items": {
+              "$ref": "#/$defs/AbsPath"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "roots": {
             "description": "The roots, 1 to 16 existing folders.",
@@ -15564,6 +15593,137 @@
       "classes": [
         "user"
       ],
+      "doc": "git's blame of a whole file in one answer: per line the commit that last changed it, for the text of the editor's tracked buffer (unsaved typing included) or else the file; lines an agent wrote ride along; cached by path, HEAD and text",
+      "name": "git/blame",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/blame`: PATH of the worktree at WORKTREE_ROOT, as the editor's tracked buffer holds it (else the file).",
+        "properties": {
+          "path": {
+            "description": "Relative to the worktree.",
+            "type": "string"
+          },
+          "worktree_root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "worktree_root"
+        ],
+        "title": "GitBlameParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "AgentLines": {
+            "additionalProperties": false,
+            "description": "Lines FROM..=TO (1-based) an agent wrote, from the edit history, not yet committed or committed unchanged by it.",
+            "properties": {
+              "from": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "session": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "step": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "to": {
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "type": "object"
+          },
+          "BlameCommit": {
+            "additionalProperties": false,
+            "description": "One commit of a blame.  The lines not committed yet name the commit `0000000000000000000000000000000000000000`, no\ntime and the summary `Uncommitted changes`.",
+            "properties": {
+              "author": {
+                "type": "string"
+              },
+              "sha": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "time": {
+                "description": "The author time, seconds since the epoch; none for uncommitted lines.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "sha",
+              "author",
+              "summary"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/blame`'s answer: COMMITS, and for each line of the text (in order) the index of its commit.",
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/$defs/AgentLines"
+            },
+            "type": "array"
+          },
+          "commits": {
+            "items": {
+              "$ref": "#/$defs/BlameCommit"
+            },
+            "type": "array"
+          },
+          "head": {
+            "description": "The commit HEAD named when the blame was made.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lines": {
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "commits",
+          "lines",
+          "agents"
+        ],
+        "title": "GitBlamed",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "read a repository's git status on a thread and give a hub-fed view its rows (a letter per changed path, a mark per shown folder with a change, the branch): the view-patch follows, only what changed after the first",
       "name": "git/letters",
       "params": {
@@ -15610,6 +15770,54 @@
         "type": "boolean"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "stage one hunk of the editor's tracked buffer against HEAD in git's index (git apply --cached); the work tree is untouched",
+      "name": "git/stage-hunk",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/stage-hunk`: stage one hunk of the tracked buffer's change against HEAD (as `history/hunks/head` numbered it)\nin the index, as `git apply --cached` does; the work tree is not touched.",
+        "properties": {
+          "new_start": {
+            "description": "Which of the hunks: the line the hunk starts at in the buffer (`new_start`; for a pure deletion, the line it\nsits before).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "path": {
+            "description": "Relative to the worktree.",
+            "type": "string"
+          },
+          "worktree_root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "worktree_root",
+          "new_start"
+        ],
+        "title": "StageHunkParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "staged": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "staged"
+        ],
+        "title": "Staged",
+        "type": "object"
+      },
+      "writes": true
     },
     {
       "classes": [
@@ -18484,6 +18692,95 @@
           "files"
         ],
         "title": "BranchHunks",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "what the editor's tracked buffer of a file changed against the last commit (HEAD), as hunks numbered as git diff --unified=0 numbers them; for the change marks in the margin",
+      "name": "history/hunks/head",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/hunks/head`: PATH of the worktree at WORKTREE_ROOT, the editor's tracked buffer against HEAD.",
+        "properties": {
+          "path": {
+            "description": "Relative to the worktree.",
+            "type": "string"
+          },
+          "worktree_root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "worktree_root"
+        ],
+        "title": "HeadHunksParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "HeadHunk": {
+            "additionalProperties": false,
+            "description": "A hunk against HEAD: git's numbers and the lines HEAD has there (the text a revert puts back and a stage applies).",
+            "properties": {
+              "new_count": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "new_start": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "old_count": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "old_lines": {
+                "description": "HEAD's lines OLD_START..OLD_START+OLD_COUNT, each with its line end.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "old_start": {
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "old_start",
+              "old_count",
+              "new_start",
+              "new_count",
+              "old_lines"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/hunks/head`'s answer.  `tracked` is false when no buffer of the file is tracked (no hunks were computed);\na file HEAD does not hold is one hunk of all its lines.",
+        "properties": {
+          "hunks": {
+            "items": {
+              "$ref": "#/$defs/HeadHunk"
+            },
+            "type": "array"
+          },
+          "tracked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tracked",
+          "hunks"
+        ],
+        "title": "HeadHunks",
         "type": "object"
       },
       "writes": false

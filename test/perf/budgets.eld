@@ -191,6 +191,9 @@
  ;; the cost is the key and its redisplay.
  (explorer-git (:complete-kb) 1940 :report-only ot5) (explorer-git (:complete-cpu_ms) 59 :report-only ot5)
  (explorer-git-rows (:complete-kb) 2050 :report-only ot5) (explorer-git-rows (:complete-cpu_ms) 68 :report-only ot5)
+ ;; explorer-watch: 50 files made in a folder the Explorer shows, on the hub's rows path (plan sja-complete E1): every row
+ ;; drawn within 300 ms of the last write (the hub settles 30-100 ms, then relists the one folder)
+ (explorer-watch (:settle_ms) 300)
  (quick-open-typing (:alloc :p50) 4905 :report-only ot5) (quick-open-typing (:cpu_ms :p90) 1.4 :report-only ot5)
  (quick-open-typing (:rows) 0 :report-only ot5)
  (quick-open-typing-old (:alloc :p50) 8003808 :report-only ot5)

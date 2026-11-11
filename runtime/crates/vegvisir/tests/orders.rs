@@ -681,4 +681,27 @@ mod model {
         };
         assert_eq!(delta.changed, vec![id("agent:A")]);
     }
+
+    /// [D] An agent card carries its task's id beside the title: two tasks of one title are told apart by it (the Board
+    /// puts an agent on the card of its task only).
+    #[test]
+    fn agent_carries_its_task_id() {
+        let same = |id: &str| {
+            g(GraphFact::Task {
+                id: id.into(),
+                plan: "p".into(),
+                title: "Ship it".into(),
+                done: false,
+            })
+        };
+        let c = run(vec![
+            plan("p", 1),
+            same("t1"),
+            same("t2"),
+            Event::Session(session("A", Some("t2"), None, None)),
+        ]);
+        let a = c.model().item(&id("agent:A")).unwrap();
+        assert_eq!(a.fields.task.as_deref(), Some("Ship it"));
+        assert_eq!(a.fields.task_id.as_deref(), Some("task:t2"));
+    }
 }

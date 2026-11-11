@@ -31,13 +31,26 @@ view starts unified (`drgnx-diff-default-layout`).
 
 In a file git tracks, the end of the line you are on says who last changed it, how long ago, and the commit's
 subject: `Ada, 3 days ago · Fix the parser` (module `extra/blame`). A line you changed and have not committed says
-`You · Uncommitted changes`. Unsaved edits line up: git reads the buffer, not the file. It appears after a short
-pause (0.6 s, `drgnx-blame-delay`) and goes when you move off the line or select text. git is asked about that one
-line, in the background. It is cut with an ellipsis to the columns the window has left after the line's end (at most
+`You · Uncommitted changes`, a line an agent wrote `agent s1 · …`. Unsaved edits line up: the hub blames the buffer's
+text, not the file, and your later edits are mapped onto its answer. It appears after a short pause (0.6 s,
+`drgnx-blame-delay`) and goes when you move off the line or select text. The hub blames the whole file once, in the
+background (the answer is kept per file, HEAD and text), so moving between lines and typing ask for nothing; saving
+or reverting asks again. Files the edit history does not track (no hub connected, or not in a git project) show no
+blame. It is cut with an ellipsis to the columns the window has left after the line's end (at most
 80), never wraps, shows nothing when under 20 columns are left, and fits itself again when you resize the window.
 Remote files are never asked about, and neither is a file git refuses (untracked).
 **Toggle Inline Blame** turns it off or on for the buffer. **Blame: Show Commit of Line** opens that commit in the
 diff view.
+
+## Changes in the gutter
+
+In a file the edit history tracks, the gutter shows what changed against the last commit (module `extra/hunks`): a solid
+3 px bar beside each added line (green) and each changed line (blue), and a short red mark where lines were deleted. The hub
+does the diffing: a moment after your changes reach it the marks are asked for again, so they follow your typing, and saving,
+reverting or a Magit refresh asks too. A line an agent is writing keeps the agent's bar. **Show Change** shows the hunk at
+point against the last commit, **Revert Change** puts the last commit's lines back (it asks first) and **Stage Change**
+stages the hunk in git's index (the file is not touched). The bar is drawn in the window's left fringe, against the text (an 8 px bitmap holding the 3 px bar at its right, so the bar sits just left of the line numbers): where it starts from the window's left edge is the fringe's width, which the look sets (`set-window-fringes`). Remote files, large files and files the history does not track have
+no marks; there is no package to install.
 
 ## Generate a commit message
 

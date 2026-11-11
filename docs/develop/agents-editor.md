@@ -1,6 +1,6 @@
 # Agents in the editor: drawing developer notes
 
-## Measurements: how agent ranges are drawn beside diff-hl
+## Measurements: how agent ranges are drawn beside the change marks
 
 Measured in the GUI harness (`test/ui/agents-editor-gui-test.el`, mutter, Glitnir, dark and light themes, scale 1 and 2,
 120-row window, 5 agents, 20 ranges of 40 lines).
@@ -9,10 +9,10 @@ Measured in the GUI harness (`test/ui/agents-editor-gui-test.el`, mutter, Glitni
   scale 1, 0.56 ms at scale 2 (bar 2 ms).
 - **Redisplay cost the overlays add** (60 scrolls, p95): bare 3.5 ms; gutter overlays alone 3.8 ms; ring as a card
   `:box` alone 8.9 ms; ring as a background tint alone 3.6 ms. The boxed ring is the costly part, not the gutter.
-- **Fringe owner beside diff-hl:** an agent's `before-string` fringe overlay on a line diff-hl also marks shows the agent's
-  bar when it is created after diff-hl's overlay, or has a higher `priority`; created before it at equal priority diff-hl
-  wins. With `diff-hl-highlight-function` wrapped to skip agent lines, the agent always owns the line, through
-  diff-hl's sync update, `diff-hl-update-async` and `diff-hl-flydiff`; the user's own changed lines keep diff-hl's mark.
+- **Fringe owner beside a change mark** (measured with diff-hl, which the change marks replaced): an agent's `before-string`
+  fringe overlay on a line another mark also draws shows the agent's bar when it is created after that overlay, or has a
+  higher `priority`; created before it at equal priority the other wins. With the other mark skipping agent lines the
+  agent always owns the line.
 - **Margin form** (terminal): a one-column left margin with a `(margin left-margin)` before-string draws on the marked row
   and not on its neighbour.
 
@@ -21,9 +21,9 @@ Measured in the GUI harness (`test/ui/agents-editor-gui-test.el`, mutter, Glitni
 - **Ring rows use the background-tint form, with no `:box`.** The rebuild passes its 2 ms bar in both forms (0.36 ms at
   scale 1, 0.56 ms at scale 2), but the card `:box` form adds about 5 ms per redisplay over bare (8.9-9.4 ms against
   3.5-3.7 ms p95), which alone breaks the +1 ms budget against no agents. The tint form costs +0.1-0.9 ms.
-- **Fringe owner beside diff-hl:** wrap `diff-hl-highlight-function` so it skips agent lines, and give the agent's
-  `before-string` overlay priority 100. The wrapper alone won in every mode measured; the priority covers creation
-  order. The user's own changed lines keep diff-hl's mark.
+- **Fringe owner beside the change marks:** they skip agent lines (`drgnx-hunks-skip-line-function`), and the agent's
+  `before-string` overlay gets priority 100. The skip alone won in every mode measured; the priority covers creation
+  order. The user's own changed lines keep the change marks.
 - **Terminal:** a one-column left margin with a `(margin left-margin)` before-string.
 
 ## The client
@@ -70,11 +70,10 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   also gets `left-margin-width` 1 for as long as the table is not empty). The first row of a changed range uses the
   identity's gutter shape; pending and conflict rows keep the hollow and hatched shapes, so the kind stays readable.
   Hover text is the frame's `help` as the string's `help-echo`.
-- **diff-hl:** `drgnx-agents-editor--diff-hl-highlight` is set as the default `diff-hl-highlight-function` through
-  `drgnx-module-set` once diff-hl is loaded (undone with the module). It skips the lines in the table and gives the
-  rest to the function that was set before; it reads the cached table, nothing else. When the table goes empty the
-  buffer's diff-hl is redrawn so its marks come back, and on teardown every diff-hl buffer is redrawn. A range that
-  changes shape while diff-hl is on leaves diff-hl's marks on lines the agent stopped owning until diff-hl's next update.
+- **The change marks** (`modules/extra/drgnx-hunks.el`): `drgnx-agents-editor-draw--owns-line-p` is set as
+  `drgnx-hunks-skip-line-function` through `drgnx-module-set` (undone with the module). It reads the cached table,
+  nothing else. When the table comes or goes the buffer's change marks are drawn again (`drgnx-hunks-redraw`), and on
+  teardown every buffer's are.
 - **The agent line (`drgnx-agents-editor-line.el`):** `drgnx-chrome-add-tail-provider` (depth 30) registers
   `drgnx-agents-editor-line--provider`; the chrome's provider list (`drgnx-chrome-tail-providers`, depth order) is a
   `(:eval ...)` after the breadcrumb that joins the providers' strings, each a function of the window, run in
@@ -96,7 +95,9 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   string (eight marks, `+N`). A file in a linked worktree lands on the user's tree through the main checkout its
   `.git` file names plus the entry's `rel`; it is shown only when that checkout is a workspace root. The Explorer
   paints a badge through `drgnx-explorer-add-decorator` (an overlay at the row's end with `drgnx-git` set, so the next
-  paint of the row removes it); the status bar through `drgnx-statusbar-define-segment` and `agents-here` set after
+  paint of the row removes it); on the hub's rows the hub puts the ordinals on the row (`drgnx-agents-here`, hub.md
+  "The Explorer's listing as a tree") and `drgnx-agents-editor-here--explorer-badge`, on
+  `drgnx-explorer-badge-functions`, makes the badge; the status bar through `drgnx-statusbar-define-segment` and `agents-here` set after
   `agents` in `drgnx-statusbar-left`. Ordinals are the hub's: the client keeps each session's `(ordinal .
   last_active)` from its `agent` snapshots (and `agents/list` at setup and on each new connection), forgets a session
   whose snapshot has no ordinal (it ended), and sets both `drgnx-agents-editor-here-ordinal-function` and

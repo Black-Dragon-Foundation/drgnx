@@ -16,6 +16,7 @@
 (load (expand-file-name "modules/tools/drgnx-work-board" drgnx-dir) nil t)
 (drgnx-test-modules-preload '(tools/work-space))
 
+(defvar drgnx-hub--events)
 (defvar drgnx-work-board-rows-test--n 0 "Each run's views get names of their own in Sjá.")
 
 (defun drgnx-work-board-rows-test--map-model ()
@@ -66,7 +67,9 @@
 
 (defmacro drgnx-work-board-rows-test--with (&rest body)
   "BODY with MAP a hub-fed map buffer (agent s1 selected) and BOARD its Board opened on the rows path, the Board's
-model and rows applied; CALLS holds what was asked of the hub.  Nothing is sent."
+model and rows applied; CALLS holds what was asked of the hub: (METHOD . PARAMS) on the subscribed connection
+(`drgnx-hub--events', where the hub sends the view), tagged :call-connection or :other-connection elsewhere.  Nothing is
+sent."
   (declare (indent 0))
   `(progn
      (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
@@ -75,14 +78,18 @@ model and rows applied; CALLS holds what was asked of the hub.  Nothing is sent.
             (drgnx-view-patch--hooked nil)
             (drgnx-view-old-path nil)
             (drgnx-view-patch-send-function #'ignore)
+            (drgnx-hub--events (make-pipe-process :name "drgnx-test-events" :noquery t))   ; the subscribed connection
             (mview (format "wbr-test-%d" (cl-incf drgnx-work-board-rows-test--n)))
             (bview (concat mview "/board"))
             (calls nil)
             (map (generate-new-buffer "*drgnx work: wbr-test*"))
             (board nil))
        (unwind-protect
-           (cl-letf (((symbol-function 'drgnx-hub-call)
-                      (lambda (method params _cb &rest _) (push (cons method params) calls)))
+           (cl-letf (((symbol-function 'drgnx-hub-call)   ; the call connection: the hub would send the view nowhere
+                      (lambda (method params _cb &rest _) (push (list :call-connection method params) calls)))
+                     ((symbol-function 'drgnx-hub--call-on)
+                      (lambda (conn method params _cb &rest _)
+                        (push (if (eq conn drgnx-hub--events) (cons method params) (list :other-connection method params)) calls)))
                      ((symbol-function 'drgnx-view-env-register) #'ignore))
              (with-current-buffer map
                (drgnx-view-patch-attach mview "c" :epoch 1)
@@ -98,6 +105,7 @@ model and rows applied; CALLS holds what was asked of the hub.  Nothing is sent.
                                              :ops (list (list :reset (drgnx-work-board-rows-test--rows)))))
                (drgnx-view-draw-now drgnx-view))
              ,@body)
+         (delete-process drgnx-hub--events)
          (drgnx-view-patch-teardown)
          (dolist (b (list board map))
            (when (buffer-live-p b)

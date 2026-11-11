@@ -193,6 +193,15 @@ impl Inner {
         Ok(p)
     }
 
+    /// Whether REL's document on TREE's branch holds any text.
+    fn document_holds_text(&mut self, tree: &Tree, rel: &str) -> Result<bool> {
+        let branch = self.branch(tree)?;
+        match self.h.find_doc(rel)? {
+            Some(doc) => Ok(!self.h.text(doc, branch)?.is_empty()),
+            None => Ok(false),
+        }
+    }
+
     /// REL's new content SEEN, told to the origin core as SRC: the version it is, applied onto its document as the
     /// author's operations.  None when it is no new version.
     pub(crate) fn stage(
@@ -210,7 +219,12 @@ impl Inner {
         let (blob, plan, hash) = match seen {
             Seen::Skip => return Ok(None),
             Seen::Gone => {
-                if self.origin.last(&tree.id.0, rel).is_none() && base_text(tree, rel).is_none() {
+                // a file the history knows: its origin core's last version, the base's text, or (after a hub restart
+                // the core forgets, for a file the agent made) the text its document holds
+                if self.origin.last(&tree.id.0, rel).is_none()
+                    && base_text(tree, rel).is_none()
+                    && !self.document_holds_text(tree, rel)?
+                {
                     return Ok(None);
                 }
                 (None, Plan::Text(String::new()), "gone".to_owned())

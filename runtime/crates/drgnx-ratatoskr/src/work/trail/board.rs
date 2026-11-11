@@ -44,6 +44,17 @@ pub(crate) struct Card {
     pub agent: Option<(String, String)>,
 }
 
+/// Puts on each card the agent of AGENTS (the task's id, the agent's map item id, its label) that works on its task:
+/// by id, so two tasks of one title never show each other's agent.
+pub(crate) fn put_agents(cards: &mut [Card], agents: &[(String, String, String)]) {
+    for c in cards {
+        c.agent = agents
+            .iter()
+            .find(|(task, ..)| *task == c.id)
+            .map(|(_, id, label)| (id.clone(), label.clone()));
+    }
+}
+
 /// The column of a task with STATUS, as `norn::tracker::board_column` has it (an unknown status is queued).
 pub(crate) fn column(status: &str) -> usize {
     match status {
@@ -410,5 +421,27 @@ mod tests {
         let want = format!("{}{}", "▰".repeat(6), "▱".repeat(16));
         assert!(bar.text.contains(&want), "{}", bar.text);
         assert!(bar.text.contains(&"▱".repeat(22)), "{}", bar.text);
+    }
+
+    /// [D] A card shows the agent whose task id is the card's: of two tasks with one title, only the one the agent works
+    /// on (SJA-BOARD-1 (2): a title match put it on both).
+    #[test]
+    fn an_agent_goes_on_its_task_s_card_only() {
+        let mut cards = vec![
+            Card {
+                title: "Ship it".into(),
+                ..card("task:a", "open", None)
+            },
+            Card {
+                title: "Ship it".into(),
+                ..card("task:b", "open", None)
+            },
+        ];
+        put_agents(
+            &mut cards,
+            &[("task:b".into(), "agent:s1".into(), "S1".into())],
+        );
+        assert_eq!(cards[0].agent, None);
+        assert_eq!(cards[1].agent, Some(("agent:s1".into(), "S1".into())));
     }
 }

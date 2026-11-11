@@ -31,14 +31,13 @@
 (require 'drgnx-modules)
 (require 'drgnx-view)
 (require 'drgnx-hub-client)
+(require 'drgnx-panes)                   ; the right island the panel opens in
 (require 'drgnx-view-nav)                ; the moves between steps of a kind, through the replica
 (require 'text-property-search)          ; the moves look through the drawn rows
 
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-view-env-register "drgnx-view-env")
 (declare-function drgnx-view-env-update "drgnx-view-env")
-(declare-function drgnx-pane-define-kind "drgnx-panes")
-(declare-function drgnx-pane-show "drgnx-panes")
 (defvar drgnx-hub--events)
 
 (defgroup drgnx-agent-panel nil "The agent panel." :group 'drgnx)
@@ -81,8 +80,13 @@ to its top.  The hub gives at most 50."
   :group 'drgnx-agent-panel)
 (defface drgnx-agent-panel-md-rule '((t :inherit drgnx-border)) "A horizontal rule in an agent message."
   :group 'drgnx-agent-panel)
-(defface drgnx-agent-panel-added '((t :inherit diff-added)) "An added line of a step's diff." :group 'drgnx-agent-panel)
-(defface drgnx-agent-panel-removed '((t :inherit diff-removed)) "A removed line of a step's diff."
+(defface drgnx-agent-panel-added '((t :inherit (diff-added drgnx-code-small))) "An added line of a step's diff."
+  :group 'drgnx-agent-panel)
+(defface drgnx-agent-panel-removed '((t :inherit (diff-removed drgnx-code-small))) "A removed line of a step's diff."
+  :group 'drgnx-agent-panel)
+(defface drgnx-agent-panel-context '((t :inherit drgnx-code-small)) "An unchanged line of a step's diff."
+  :group 'drgnx-agent-panel)
+(defface drgnx-agent-panel-output '((t :inherit drgnx-code-small)) "A line of a tool's output."
   :group 'drgnx-agent-panel)
 
 ;;;; The panel's state, per buffer
@@ -114,6 +118,7 @@ to its top.  The hub gives at most 50."
 (declare-function drgnx-agent-panel--row-toggle "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel--redraw-steps "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel--strip-row "drgnx-agent-panel-steps")
+(declare-function drgnx-agent-panel--resized "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-steps-init "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-steps-teardown "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-steps-setup "drgnx-agent-panel-steps")
@@ -542,6 +547,8 @@ signal when no hub serves)."
 (define-derived-mode drgnx-agent-panel-mode special-mode "Agent"
   "One agent session's steps, live."
   (setq-local truncate-lines t cursor-type nil)
+  ;; the panel's text in the UI font (agent-panel.html); output, diffs and code name the code font's faces
+  (face-remap-add-relative 'default 'drgnx-ui-text)
   (add-hook 'window-scroll-functions #'drgnx-agent-panel--scrolled nil t)
   (add-hook 'kill-buffer-hook #'drgnx-agent-panel--killed nil t))
 
@@ -587,9 +594,7 @@ signal when no hub serves)."
   "Show SESSION's panel in the right dock, one tab for each open agent."
   (interactive (list (drgnx-agent-panel--read-session)))
   (let ((buf (drgnx-agent-panel-buffer session)))
-    (if (fboundp 'drgnx-pane-show)
-        (drgnx-pane-show 'agent-panel :buffer buf :select t)
-      (pop-to-buffer buf))
+    (drgnx-pane-show 'agent-panel :buffer buf :select t)
     (with-current-buffer buf
       (drgnx-agent-panel-sync-windows)
       (drgnx-agent-panel-explain-load-grants))
@@ -667,6 +672,9 @@ stays in it.  Every fifth update opens a new block, the others grow the last one
 ;;;; The module
 
 (defun drgnx-agent-panel--setup ()
+  ;; the strip follows the panel's width through the state store
+  (drgnx-state-subscribe 'windows-changed #'drgnx-agent-panel--resized)
+  (drgnx-state-subscribe 'pane-resized #'drgnx-agent-panel--resized)
   (drgnx-command-define 'agents-panel :category "Agents" :title "Open the Agent Panel"
                         :command #'drgnx-agent-panel-open
                         :doc "One agent session's steps, live, in the right dock")
@@ -690,8 +698,7 @@ stays in it.  Every fifth update opens a new block, the others grow the last one
                                              "Go to your previous message in the panel, wrapping")))
     (drgnx-command-define (nth 0 c) :category "Agents" :title (nth 1 c) :command (nth 2 c)
                           :map 'drgnx-agent-panel-mode-map :doc (nth 3 c)))
-  (when (fboundp 'drgnx-pane-define-kind)
-    (drgnx-pane-define-kind 'agent-panel :title " AGENT" :home 'right :buffer #'drgnx-agent-panel--current-buffer))
+  (drgnx-pane-define-kind 'agent-panel :title " AGENT" :home 'right :buffer #'drgnx-agent-panel--current-buffer)
   (drgnx-module-hook 'drgnx-hub-event-functions panel-event (event data) (drgnx-agent-panel--event event data))
   (drgnx-module-hook 'drgnx-hub-connected-functions panel-resubscribe () (drgnx-agent-panel--resubscribe))
   (drgnx-module-hook 'window-buffer-change-functions panel-windows (frame) (drgnx-agent-panel-sync-windows frame))

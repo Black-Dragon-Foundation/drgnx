@@ -22,7 +22,6 @@
 (unless (featurep 'drgnx-work-detail)
   (load (expand-file-name "drgnx-work-detail" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
-(declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function drgnx-view-env-register "drgnx-view-env")
 (declare-function nidhogg-view-set "nidhogg-views" (h what value))
 (declare-function drgnx-work-timeline-open "drgnx-work-trail")
@@ -101,14 +100,15 @@ the tasks and sends the Board's model and rows.  Off the rows path nothing is as
       (cons (concat (drgnx-view-patch-view state) "/board") (drgnx-view-patch-class state)))))
 
 (defun drgnx-work-board--subscribe ()
-  "Ask the hub for this board's view: the tasks of its plans (else every task), with its map's agents on them."
+  "Ask the hub for this board's view: the tasks of its plans (else every task), with its map's agents on them.  On the
+subscribed connection, as its map: the hub sends a view's rows to the connection that asked, and finds the map there."
   (when (buffer-live-p drgnx-work-board--map)
     (condition-case nil
-        (drgnx-hub-call "work/board/subscribe"
-                        (list :view (drgnx-view-patch-view drgnx-view-patch)
-                              :map (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch drgnx-work-board--map))
-                              :plans (vconcat drgnx-work-board--plans))
-                        #'ignore)
+        (drgnx-work-client--call "work/board/subscribe"
+                                 (list :view (drgnx-view-patch-view drgnx-view-patch)
+                                       :map (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch drgnx-work-board--map))
+                                       :plans (vconcat drgnx-work-board--plans))
+                                 #'ignore)
       (error nil))))
 
 (defun drgnx-work-board-rows-attached ()

@@ -23,7 +23,9 @@ where a file with unsaved changes shows `●` there instead, always. The `⋯` a
 are drawn in the row's own colour, so it is invisible, until the pointer is on the row, the row at point's too;
 every row on a terminal shows it. The row at point is the selection: in the selection colour while the panel
 has the focus, inside a 1-pixel ring of the focus colour where Glitnir draws (Nidhogg), and the inactive selection (`drgnx-selected-inactive`, a clearly visible grey) while another window
-has it, as VS Code does. The Outline's current definition is drawn the same way, in bold. A row's selection and
+has it, as VS Code does. Without the focus only the Explorer keeps its selected row, the current buffer's file: the
+sidebar shows one selection (window-dark.html), and the Buffers panel shows its row again when you focus it. The Outline's current definition is a marker, not a selection: its text in the accent colour, with no fill.
+No selected or current row is bold. A row's selection and
 its hover are one fill from the row's start to its right edge, the git mark and the control included, 6 pixels in
 from the island's sides (the sections' fringes, in the island's colour), with rounded corners where Glitnir draws
 them. Neither changes a row's width or moves its text. The current line's highlight (`hl-line`) is not used in
@@ -65,7 +67,8 @@ focused (so you can keep browsing; a row cut off at the bottom of the list is br
 Emacs profile, `j`/`k` in Vim), right expands or enters a folder, left collapses or goes to the parent, `RET`
 opens (and focuses), `SPC` opens and stays (`g o` in Vim), `TAB` toggles a folder (Emacs), `g` / `R` refreshes.
 Folders come first, names sort naturally (`file2` before `file10`) and case-insensitively; `.git` and other
-clutter is hidden (`drgnx-explorer-exclude`). Dragging does nothing — the Explorer never moves files by drag.
+clutter is hidden (`drgnx-explorer-exclude-names`: exact names or globs with `*` and `?`, by default `.git`, `.hg`,
+`.svn`, `.DS_Store`, `__pycache__` and `.#*` lock files). Dragging does nothing — the Explorer never moves files by drag.
 
 **Compact folders:** an open folder whose only entry is a folder shares its row (`src/app`), as in VS Code; the row
 is the last folder (opening, renaming, deleting act on it) and the chain ends at the first closed folder. Only
@@ -81,7 +84,8 @@ file you are editing.
 
 The **Buffers** panel lists open files in the order you opened them — switching never re-sorts it, so a row never
 moves under the pointer. Each row: `×` closes, `●` marks unsaved changes, then the name and its folder; the file
-in the active editor is in bold. When rows come or go, every window on the panel (and the Explorer likewise) keeps
+in the active editor has no mark of its own (the Explorer's selected row is the current file; `drgnx-buffers-active`
+can give it one). When rows come or go, every window on the panel (and the Explorer likewise) keeps
 its first row and its cursor on the same buffer (file), at the same place in the row; a window whose row closed
 stays at the same height, on the row that took its place, instead of jumping to the top. Click a row to show it; `RET` too; `Delete` (`d`/`k` in Emacs, `x` in Vim) closes.
 
@@ -494,7 +498,7 @@ frame's edge gets the same gap (`internal-border-width`), so the outer cards hav
 against a margin and not the frame's edge or the top line. So the ring and shadow have room and never cover text.
 Dragging the gap between two cards resizes them, and so does dragging either card's side edge beside it (the fringe
 there; `drgnx-look-edge-drag`), as VS Code's sash takes a few pixels on each side. The inner half of a fringe whose
-click a mode uses (diff-hl's hunk, a breakpoint) keeps that click. A drag released over a fringe ends there: Nidhogg's
+click a mode uses (a breakpoint) keeps that click. A drag released over a fringe ends there: Nidhogg's
 `mouse-drag-line` takes the fringes' releases (stock Emacs 31 does not, and such a drag stays on there).
 A window made while the module runs is born with the edge (`default-frame-alist`), so it never grows by it once it is
 shown: a shown window that asked the window manager for a bigger size could get the size it was made with back a
@@ -512,7 +516,9 @@ scrolls. Without Glitnir nothing changes.
 
 The **panel** (Toggle Panel: ``C-` `` · palette · `SPC j`) sits under the editors; the **right dock** (Toggle
 Right Dock: `C-M-b` · palette · `SPC R`) runs the frame's full height, like the left one. Each is one window with a
-**tab row** at the top (click a tab to show it). Showing a buffer there never takes focus (Focus Panel does), and
+**tab row** at the top (click a tab to show it). The right dock shows its tab row only while two of its tabs have
+something to show: with one (an agent panel, say) that pane's own header is the top row, and `q` or `C-w l` then
+`C-x 0` hides the dock. Showing a buffer there never takes focus (Focus Panel does), and
 switching tabs swaps the buffer *in place*: the window stays, nothing around it moves, and each tab comes back
 scrolled where you left it. Both keep their pixel size across hiding and showing. **The size you chose stays:**
 a size you set for the left dock, the panel or the right dock is the one it comes back at the next time it shows.

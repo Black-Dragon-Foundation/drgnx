@@ -1375,7 +1375,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
 | `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, rows?: {listed: [string], parser: string}, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
-| `explorer/subscribe` | user | `{compact?: boolean, expanded?: [AbsPath], roots: [AbsPath], view: string}` | `{listing: natnum}` | no |
+| `explorer/subscribe` | user | `{compact?: boolean, exclude?: [string], expanded?: [AbsPath], indent?: natnum, only?: [AbsPath], roots: [AbsPath], view: string}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
 | `extensions/list` | user | `{dense?: boolean, glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
 | `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
@@ -1390,7 +1390,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, sid?: SessionId, task?: TaskRef}` | `{openrouter?: any, socket?: string, token: string, url?: string}` | no |
 | `gateway/set-budget` | user | `{budget: Usd, job: Id}` | `boolean` | no |
 | `gateway/unregister` | user | `{token: string}` | `boolean` | no |
+| `git/blame` | user | `{path: string, worktree_root: string}` | `{agents: [AgentLines], commits: [BlameCommit], head?: string, lines: [natnum]}` | no |
 | `git/letters` | user | `{root: AbsPath, shown?: [string], view: string}` | `boolean` | no |
+| `git/stage-hunk` | user | `{new_start: integer, path: string, worktree_root: string}` | `{staged: boolean}` | yes |
 | `graph/backup` | user | `{}` | `BackupAnswer` | no |
 | `graph/compact` | user | `{dry_run?: boolean}` | `{dry_run: boolean, link_stats: natnum, versions: natnum}` | yes |
 | `graph/entity` | user | `{as_of?: natnum, id: string, include?: ["links" \| "notes" \| "history"]}` | `EntityAnswer` | no |
@@ -1416,6 +1418,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
 | `history/fork/drop` | user | `{id: string}` | `{ok: boolean}` | yes |
 | `history/hunks` | user | `{branch: string, since: integer}` | `{files: [FileHunks]}` | no |
+| `history/hunks/head` | user | `{path: string, worktree_root: string}` | `{hunks: [HeadHunk], tracked: boolean}` | no |
 | `history/op/hunks` | user | `{op?: integer, session?: string, worktree: string}` | `{hunks: [OpHunk]}` | no |
 | `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
@@ -2151,8 +2154,8 @@ rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display 
   query url` and, in a Timeline, `session`. The rows' node spans are their `drgnx-work-id` props.
 - **The Board** (`work::trail::board`). `work/board/subscribe {view, map, plans?}` opens a Board view the same way:
   the tasks of `plans` (`plans/get` each, their steps the progress), else every task (`tasks/find`, up to four pages),
-  each card naming the agent of the connection's map view `map` that works on it (the agent whose task title is the
-  card's). It is read again after each write like a trail; `work/trail/close` ends it. Rows: `head` (each column's
+  each card naming the agent of the connection's map view `map` that works on it (the agent whose task id is the
+  card's: two tasks of one title never show each other's agent). It is read again after each write like a trail; `work/trail/close` ends it. Rows: `head` (each column's
   heading and count at a sixth of the width, at least 120 px), then `cards:I:0` (the titles at height I) and
   `cards:I:1` (state · agent · steps done) and `cards:I:2` (the progress bar: on a GUI two `spaces` 4 px high from
   4 px in, the steps done in `drgnx-work-bar` and the rest in `drgnx-work-bar-rest`, together the column less 16 px,
@@ -2539,7 +2542,15 @@ letter in its git face; ignored paths too, unless more than 20,000), `d:<folder>
 for `.` that holds a change) and `branch`; a later call sends only what changed.  When git cannot read the status (no
 repository, git's ownership check, a missing git) the hub sends the event `git-letters-error {view, root, error}` to the
 asking connection with git's first complaint, and the view keeps its rows; the editor shows it as a warning notice and in
-` *drgnx git errors*`.  A root that is no folder is an `invalid-params` error of the call.
+` *drgnx git errors*`.  A root that is no folder is an `invalid-params` error of the call. The status read is also kept per (connection,
+repository) for the Explorer's marks (`explorer/subscribe`, "Git marks").
+
+Once read for a connection, a repository is **watched** until the connection goes or its view closes
+(`view/close`): its gitdir (the index, `HEAD`, `packed-refs`; a linked worktree's own and the common dir) and the
+common dir's `refs`, not recursive except `refs`. A commit, checkout, `git add` or branch move from a terminal reads
+the status again once its burst is quiet for 50 ms (at most 250 ms after its first change) and sends what changed; a
+lock file's events and reads (the hub's own `git status` runs with `GIT_OPTIONAL_LOCKS=0`) are not changes. An
+Explorer listing that its watch relisted (a name made or removed outside Emacs) also reads its repositories again.
 
 ### Ranked file names as rows (`search/files`)
 
@@ -2570,13 +2581,25 @@ and the ranking are `hrafn::rank`).
 
 The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/drgnx-ratatoskr/src/view/explorer.rs`).
 
-- `explorer/subscribe {view, roots, expanded?, compact?}` stops the view's earlier listing and answers `{listing}`. A
+- `explorer/subscribe {view, roots, expanded?, compact?, indent?, exclude?, only?}` stops the view's earlier listing and answers `{listing}`. A
   thread then reads each root (1 to 16 existing folders) and, inside it, each folder of `expanded` (at most 10000, no
   trailing slash) that is shown, and sends the view its model (`view-model`), then its rows to every class: the first
   listing a reset, a later one the difference. The editor opens or closes a folder by asking again with the new set,
   without waiting; a listing a newer one stopped sends nothing. A folder that cannot be read has no entries.
+- **Watching.** After its listing the thread watches every folder it read (the roots, the open folders and the
+  middle folders of a joined row; `notify`, one folder each, not recursive, so a closed folder's changes send nothing)
+  until a newer listing, `view/close` or the connection's end, which stop it through its channel (the watcher goes
+  with the thread; nothing polls). A burst of changes (a name made, removed or renamed; a file's data or metadata does
+  not count) is read again once it is quiet for 30 ms, or 100 ms after its first change: only the changed folders are
+  read, the others come from the listing's own copy, and the model and rows go out as for a listing when the entries
+  differ. A watch that lost events reads every folder again; a folder that cannot be watched (the inotify limit) is
+  tried again at the next relisting. The editor adds no watch of its own on this path (`drgnx-explorer--sync-watches`).
 - **The entries.** Folders first, then names in natural, case-insensitive order (`file2` before `file10`); a link to a
-  folder is a folder. `.git`, `.hg`, `.svn`, `.DS_Store`, `__pycache__` and `.#…` lock files never show. With
+  folder is a folder. The names of `exclude` (at most 256, exact or globs with `*` and `?`; the editor sends
+  `drgnx-explorer-exclude-names`) never show; without it `.git`, `.hg`, `.svn`, `.DS_Store`, `__pycache__` and `.#*`.
+- **Find** sends `only`, the files it found (at most 5000): the listing is those files under the roots with every
+  folder above them open, made from the names alone (nothing read from disk) and not watched. The model's descriptor
+  names the class `ticked`: the editor's marks are Sjá's ticked set. With
   `compact` (default on), an open folder whose only entry is a folder shares its row with it (`src/app`, the node being
   the last folder); the chain ends at the first closed folder, which is not read.
 - **The model** is a `tree`: one node per row, its id the path (a root's without the trailing slash), kind `root`, `dir`
@@ -2584,10 +2607,26 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
   fields `label` (as shown; a root's name in capitals), `path` and `dir` (1 or 0). The list `order` holds the rows in
   pre-order; past 20,000 it is a window of the first ones, or from where `view/window` asked (with the folders above
   its first entry as nodes outside `order`); the rows hold every entry.
-- **Row:** the key is the path; the indent guides (`│ ` per level below the first) and the chevron (`▾ `, `▸ `, or two
-  spaces for a file) in `drgnx-explorer-guide`, then the name in `drgnx-explorer-root`, `-directory` or `-file`, a
-  control character as `^X`; the path is the `drgnx-work-id` over the whole row.
-- The hub does not watch the folders: the editor's own watches ask again when a shown folder changes.
+- **Row,** per display class (`view/env`): the key is the path. On a terminal, the indent guides (`│ ` per level below
+  the first) and the chevron (`▾ `, `▸ `, or two spaces for a file) in `drgnx-explorer-guide`. On a graphical display
+  the look-fix layout (window-dark.html `.row`), sizes in device px at the env's scale: a space of `indent` (default 12,
+  the density's `tree-indent`) per level below the first, the chevron as an image (a space for a file), 6 px, the folder
+  (open or closed) or file-kind icon as an image, 6 px. The icons are drgnx's Lucide files, 16 logical px, stroke 1.6, in
+  `currentColor` (each image sent once); a file's kind is its exact name's in `etc/icons/files.eld`, else its extension's,
+  the table the editor reads too (`drgnx-look-file-name-icon-name`). Then the name in `drgnx-explorer-root`,
+  `-directory` or `-file` (`drgnx-git-ignored` when ignored), a control character as `^X`; the path is the
+  `drgnx-work-id` over the whole row. A listing with one root makes the root's row `invisible` (the island's header
+  names it).
+- **Git marks.** The hub keeps each repository's last status read on the connection (`git/letters`) and puts the
+  `drgnx-git-status` of each entry on its name: a file's own, a folder's strongest change inside it (untracked as
+  added), an untracked or ignored folder's on everything under it; ignored ones carry none. A read that changes a status
+  draws the connection's listings again (only the changed rows go out). The editor draws the mark at the right edge with
+  the ⋯ control (`drgnx-explorer--rows-patched`).
+- **Who is here.** Each time the connection's presence subscription (`agents/presence/subscribe` with a view) draws
+  who is here, the hub keeps its paths' ordinals for the connection and puts `drgnx-agents-here` (the ordinals, a
+  list) on the name of each entry an agent is changing, or holding such a file inside; a change draws the listings
+  again. The editor makes the badge (`drgnx-explorer-badge-functions`: the marks and colours of an ordinal are the
+  display's) and draws it after the name.
 
 ### The agent panel's rows
 
@@ -2601,12 +2640,15 @@ the rows themselves are `agents/session/rows.rs`, pure).
   A change of the transcript (each `emit`, the same moment `agent-entries` is sent) builds again only the groups that
   hold a changed entry; per (connection, view, class) a cache keeps the others' rows, so the store's diff sends only
   the changed rows. A new env (its epoch or width), a new look or new step facts build every group again.
-- **Rows.** `e:I` is entry I's row (a step on one line: its state, title, the first line of its result, `↶ undone`,
+- **Rows.** `e:I` is entry I's row (a step on one line: its state, title (an `execute` call: `Shell` and the title, its backticks dropped, in
+  `drgnx-agent-panel-code`), the first line of its result, `↶ undone`,
   and its time and cost right-aligned, in `drgnx-agent-panel-warn` past 10 s or $0.50); `e:I/p:N` the lines under a
   step (each hook's verdict that refused, changed, failed or was busy, `hooked at the hub's server`, and `allowed by
   your Always`); `e:I/t`, `e:I/t:N` its thinking, folded to a line count or open (40 lines); `e:I/d:N` its output
-  when open (12 lines, or a large one's first and last 10 around a count of the hidden lines); `e:I/h:N` its diff
-  hunks when open (ACP `diff` items, or a paired chat's `edit_file` old and new text), at most 30 lines a row;
+  when open (12 lines, or a large one's first and last 10 around a count of the hidden lines), in
+  `drgnx-agent-panel-output`; `e:I/h:N` its diff hunks when open (ACP `diff` items, or a paired chat's `edit_file` old
+  and new text), at most 30 lines a row, unchanged lines in `drgnx-agent-panel-context` (the panel's own text is in the
+  UI font, so every code line names a code face);
   `b:I:N` block N of an agent message, its Markdown spans as runs; `more` above the first row when earlier entries
   are not shown. A subagent's step is indented and drawn in one of the six agent faces, by its `Task` call.
 - **Props.** Every row carries `drgnx-agent-panel-entry` (the entry's index); a step that can be reverted to
@@ -2626,7 +2668,9 @@ the rows themselves are `agents/session/rows.rs`, pure).
   reset at base 0). The panel's next/previous keys look through the drawn rows from point for the next step whose
   kind (or `diff`) in Sjá matches, wrapping, and select it there; a fold stays the panel's own state, told to the hub
   after with `agents/panel/look`.
-- **The facts** of a step (time, cost, checkpoint, undone, subagent, hooks) are keyed by the entry's `step`: they
+- **The facts** of a step (time, cost, checkpoint, undone, subagent, hooks) are keyed by the entry's `step`, the
+  `step` table's seq a tool entry is given when its step begins (a resumed session counts on from its last step in
+  the table): they
   come from the step bus as steps close, from the `step` table when a panel first shows the session, and again after
   every `history/applied`. Grants changing (an Always given or revoked) build the session's panels again.
 - `agents/panel/look {view, open?, rows?, older?}` answers whether VIEW is a panel: the step types open

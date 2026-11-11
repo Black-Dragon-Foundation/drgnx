@@ -174,17 +174,27 @@ patch, the draw and the key, once all have run, a's span has the selected face a
       (should (string-match-p "broke" (car messages))))))
 
 (ert-deftest drgnx-view-nav/class-step-makes-nothing-per-node-drawn-elsewhere ()
-  "Pattern D: a draw that replaced one row gives that row's nodes their classes again; the nodes drawn in other rows
-cost it no object (a panel draws a node per step: a closure each was 100 kB a draw)."
+  "Pattern D: a draw that replaced one row gives that row's nodes their classes again, found by the row → ids index;
+the nodes drawn in other rows are never visited and cost it no object (a panel draws a node per step: a closure each
+was 100 kB a draw, and a walk of them all 8.7 % of work-live's samples)."
   (drgnx-view-nav-test--with
-    (let ((ids (drgnx-view-patch-ids drgnx-view-patch)))
+    (let ((ids (drgnx-view-patch-ids drgnx-view-patch)) (keys (drgnx-view-patch-keys drgnx-view-patch)) visited)
+      (puthash "r" '("in-r") keys)
+      (puthash "in-r" '("r") ids)
       (cl-flet ((cells (n)
-                  (dotimes (i n) (puthash (format "x%d" i) (list (format "k%d" i)) ids))
+                  (dotimes (i n)
+                    (puthash (format "x%d" i) (list (format "k%d" i)) ids)
+                    (puthash (format "k%d" i) (list (format "x%d" i)) keys))
+                  (setq visited nil)
                   (let ((v0 (nth 2 (memory-use-counts))))
-                    (drgnx-view-nav-class-step view '("r"))
+                    (cl-letf (((symbol-function 'drgnx-view-nav--put-class) (lambda (_v id _c) (push id visited))))
+                      (drgnx-view-nav-class-step view '("r")))
                     (- (nth 2 (memory-use-counts)) v0))))
-        (let* ((few (cells 10)) (many (cells 1000)))
-          (should (< (- many few) 100)))))))
+        (let* ((few (cells 10)) (few-visited visited) (many (cells 1000)))
+          (should (< (- many few) 100))
+          (should (member "in-r" few-visited))
+          (should (member "in-r" visited))
+          (should-not (cl-some (lambda (id) (string-prefix-p "x" id)) visited)))))))
 
 ;; Windows
 

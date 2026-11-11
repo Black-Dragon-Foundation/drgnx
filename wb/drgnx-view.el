@@ -1362,7 +1362,7 @@ own (Ghostty's `bold-color')."
   "Faces a hub row may name besides the `drgnx-' ones.  A name not interned, not a face, or neither of these is
 dropped.")
 
-(defconst drgnx-view-patch-props '(help-echo mouse-face)
+(defconst drgnx-view-patch-props '(help-echo mouse-face invisible)
   "Text properties a hub row may set besides the `drgnx-' ones; any other name is dropped (never interned).")
 
 (defconst drgnx-view-patch-image-max 256
@@ -1412,6 +1412,7 @@ older epoch, held.  RESYNC: non-nil while a `view/resync' is outstanding.  STALE
   handle                                        ; this buffer's instance of the view in Sjá (nil without Sjá)
   model                                         ; the highest model version its row patches named, not applied yet
   (ids (make-hash-table :test #'equal))         ; node id → the keys of the rendered rows that hold its span
+  (keys (make-hash-table :test #'equal))        ; row key → the node ids drawn in it (the class step's index)
   (spans (make-hash-table :test #'equal))       ; node id → the overlays of its class (drgnx-view-nav.el)
   class-faces                                   ; the faces by class index, made by the class step; nil: again
   (resyncs 0) (refits 0) (measures 0)           ; counters, for tests and the perf lab
@@ -1550,6 +1551,7 @@ applied patch sets the version.  Returns the decision.  No buffer is touched."
         (let ((rows (plist-get op :reset)))
           (clrhash table)
           (clrhash (drgnx-view-patch-ids state))
+          (clrhash (drgnx-view-patch-keys state))
           (dolist (r rows) (puthash (plist-get r :key) r table))
           (drgnx-view-reset view (drgnx-view-patch--keys rows))))
        ((plist-member op :insert)
@@ -1974,8 +1976,9 @@ place, and the measure reported (`view/measured').  Returns the new text, or nil
       (when-let* ((name (drgnx-view-patch--prop (nth 2 p))))
         (put-text-property (nth 0 p) (nth 1 p) name (nth 3 p) text)
         (when (eq name drgnx-view-patch-id-prop)        ; the rows that hold a node, for the class step
-          (let ((ids (drgnx-view-patch-ids state)))
-            (unless (member key (gethash (nth 3 p) ids)) (push key (gethash (nth 3 p) ids)))))))
+          (let ((ids (drgnx-view-patch-ids state)) (keys (drgnx-view-patch-keys state)))
+            (unless (member key (gethash (nth 3 p) ids)) (push key (gethash (nth 3 p) ids)))
+            (unless (member (nth 3 p) (gethash key keys)) (push (nth 3 p) (gethash key keys)))))))
     (dolist (stop stops)
       (put-text-property (car stop) (1+ (car stop)) 'display (drgnx-view-patch--stop state (cadr stop)) text))
     (dolist (sp (plist-get row :spaces))              ; a space of a size in device px (a card's progress bar)

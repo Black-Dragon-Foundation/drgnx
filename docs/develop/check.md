@@ -101,6 +101,14 @@ call, whose callback is not `(drgnx-guard-wrap …)`, `nil`, `#'ignore` or `#'in
   row, fails.
 - `drgnx-lint/the-guard-lint-sees-each-form`: the scanner on a scratch checkout, one string per form.
 
+**Views subscribe on the events connection** (`drgnx-lint/views-subscribe-on-the-events-connection`,
+`test/unit/lint-view-connection-test.el`). The hub sends a view's env, model and rows to the connection that asked, and
+the editor's env goes out on its subscribed connection (`drgnx-hub--events`), not the call connection
+(`drgnx-hub-call`). The lint fails on a `drgnx-hub-call` whose method is a literal `.../subscribe` or `view/...` in
+`core/`, `wb/` or `modules/` (one allowed row: who is here's old path); use `drgnx-work-client--call` or
+`drgnx-hub--call-on drgnx-hub--events`. The view tests' mock hub records the connection a call took, so a subscription
+on the wrong one fails there too.
+
 **Automatic-path messages are notices** (`drgnx-lint/echo-messages-only-fall`, `test/unit/lint-echo-test.el`). For
 every `.el` under `core/` and `wb/` it counts the text `(message "drgnx` against `drgnx-lint-echo--counts`, one count
 per file, each with its reason (a command's reply, a process with no notice model, the recorder's last resort). A file

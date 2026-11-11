@@ -13,6 +13,7 @@
 (require 'drgnx-view-nav)
 (require 'drgnx-explorer)
 
+(defvar drgnx-hub--events)
 (defvar drgnx-explorer-rows-nav-test--n 0 "Each run's view gets a name of its own in Sjá.")
 
 (defun drgnx-explorer-rows-nav-test--model ()
@@ -26,7 +27,7 @@
            (vector
             (list :reset
                   (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"] :lists ["order"]
-                                          :classes ["selected" "match" "dim"] :flags ["expanded"] :forms []
+                                          :classes ["selected" "match" "dim" "ticked"] :flags ["expanded"] :forms []
                                           :start "order")
                         :nodes (vector (funcall node "/r" "root" 1 nil "R" 1)
                                        (funcall node "/r/a" "dir" 0 "/r" "a" 1)
@@ -38,14 +39,21 @@
                                              :ids ["/r" "/r/a" "/r/lib" "/r/lib/m.el" "/r/z.txt"])))))))))
 
 (defun drgnx-explorer-rows-nav-test--rows ()
-  "The hub's rows of that listing, each row's path over all of it."
-  (mapcar (lambda (r) (list :key (car r) :text (cdr r)
-                            :props (list (list 0 (length (cdr r)) "drgnx-work-id" (car r)))))
-          '(("/r" . "▾ R") ("/r/a" . "▸ a") ("/r/lib" . "▾ lib") ("/r/lib/m.el" . "│   m.el") ("/r/z.txt" . "  z.txt"))))
+  "The hub's rows of that listing, each row's path over all of it; the single root's row invisible, lib/ and z.txt
+with a git status on the name (lib/ has the change inside it)."
+  (mapcar (lambda (r)
+            (let ((len (length (cadr r))))
+              (list :key (car r) :text (cadr r)
+                    :props (append (list (list 0 len "drgnx-work-id" (car r)))
+                                   (and (nth 2 r) (list (list (- len (nth 3 r)) len "drgnx-git-status" (nth 2 r))))
+                                   (and (equal (car r) "/r") (list (list 0 len "invisible" t)))))))
+          '(("/r" "▾ R") ("/r/a" "▸ a") ("/r/lib" "▾ lib" "modified" 3) ("/r/lib/m.el" "│   m.el")
+            ("/r/z.txt" "  z.txt" "modified" 5))))
 
 (defmacro drgnx-explorer-rows-nav-test--with (&rest body)
   "BODY in the Explorer's buffer attached as hub-fed VIEW (roots /r, lib open), the model and rows applied; CALLS holds
-what was asked of the hub (newest first).  Nothing is sent, nothing on disk is read."
+what was asked of the hub (newest first): (METHOD . PARAMS) on the subscribed connection (`drgnx-hub--events', where the
+hub sends the view), tagged :call-connection or :other-connection elsewhere.  Nothing is sent, nothing on disk is read."
   (declare (indent 0))
   `(progn
      (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
@@ -55,6 +63,7 @@ what was asked of the hub (newest first).  Nothing is sent, nothing on disk is r
             (drgnx-view-patch--hooked nil)
             (drgnx-view-old-path nil)
             (drgnx-view-patch-send-function #'ignore)
+            (drgnx-hub--events (make-pipe-process :name "drgnx-test-events" :noquery t))   ; the subscribed connection
             (drgnx-explorer--hub-view nil)
             (drgnx-explorer--roots '("/r/"))
             (drgnx-explorer--expanded (make-hash-table :test #'equal))
@@ -64,8 +73,11 @@ what was asked of the hub (newest first).  Nothing is sent, nothing on disk is r
             (calls nil))
        (puthash "/r/lib" t drgnx-explorer--expanded)
        (unwind-protect
-           (cl-letf (((symbol-function 'drgnx-hub-call)
-                      (lambda (method params _cb &rest _) (push (cons method params) calls)))
+           (cl-letf (((symbol-function 'drgnx-hub-call)   ; the call connection: the hub would send the view nowhere
+                      (lambda (method params _cb &rest _) (push (list :call-connection method params) calls)))
+                     ((symbol-function 'drgnx-hub--call-on)
+                      (lambda (conn method params _cb &rest _)
+                        (push (if (eq conn drgnx-hub--events) (cons method params) (list :other-connection method params)) calls)))
                      ((symbol-function 'drgnx-view-env-register) #'ignore))
              (with-current-buffer (get-buffer-create drgnx-explorer-buffer-name)
                (drgnx-explorer-mode)
@@ -76,6 +88,7 @@ what was asked of the hub (newest first).  Nothing is sent, nothing on disk is r
                                              :ops (list (list :reset (drgnx-explorer-rows-nav-test--rows)))))
                (drgnx-view-draw-now drgnx-view)
                ,@body))
+         (delete-process drgnx-hub--events)
          (drgnx-view-patch-teardown)
          (when-let* ((b (get-buffer drgnx-explorer-buffer-name)))
            (drgnx-timer-cancel (cons 'drgnx-view b))
@@ -87,7 +100,9 @@ what was asked of the hub (newest first).  Nothing is sent, nothing on disk is r
   "Pattern D: attached, the Explorer asks `explorer/subscribe' for its roots and open folders and shows the hub's rows;
 a row's node is its path; a refresh asks again and draws nothing itself."
   (drgnx-explorer-rows-nav-test--with
-    (should (equal (list (cons "explorer/subscribe" (list :view view :roots ["/r"] :expanded ["/r/lib"] :compact t)))
+    (should (equal (list (cons "explorer/subscribe" (list :view view :roots ["/r"] :expanded ["/r/lib"] :compact t
+                                                          :indent (drgnx-explorer--tree-indent)
+                                                          :exclude (vconcat drgnx-explorer-exclude-names))))
                    calls))
     (should (equal "▾ R\n▸ a\n▾ lib\n│   m.el\n  z.txt\n" (buffer-substring-no-properties (point-min) (point-max))))
     (goto-char (point-min))
@@ -98,6 +113,176 @@ a row's node is its path; a refresh asks again and draws nothing itself."
     (drgnx-explorer-refresh)
     (should (= 2 (length calls)))
     (should (equal "▾ R\n▸ a\n▾ lib\n│   m.el\n  z.txt\n" (buffer-substring-no-properties (point-min) (point-max))))))
+
+(defun drgnx-explorer-rows-nav-test--tails ()
+  "Each line's tail overlay as (LINE MARK FACE), in line order."
+  (let (out)
+    (dolist (o (overlays-in (point-min) (point-max)))
+      (when-let* ((tail (overlay-get o 'drgnx-row-tail)))
+        (push (list (1- (line-number-at-pos (overlay-start o))) (nth 0 tail) (nth 1 tail)) out)))
+    (sort out (lambda (a b) (< (car a) (car b))))))
+
+(ert-deftest drgnx-explorer-rows/marks-and-the-control-at-the-right-edge ()
+  "Pattern D (plan sja-complete E2): on the rows path each drawn row gets the old path's tail at the right edge (the
+⋯ control, the hover's mouse face), with the git mark of the status the hub put on its name: a file's letter in its
+status face, ● for a folder with changes inside.  A patch moves the overlays it keeps instead of making new ones, and
+the single root's row is invisible."
+  (drgnx-explorer-rows-nav-test--with
+    (should (get-text-property (point-min) 'invisible))
+    (should (equal (list (list 0 nil nil) (list 1 nil nil) (list 2 "●" 'drgnx-status-warn) (list 3 nil nil)
+                         (list 4 "M" 'drgnx-status-warn))
+                   (drgnx-explorer-rows-nav-test--tails)))
+    (should (get-char-property (save-excursion (goto-char (point-min)) (forward-line 4) (point)) 'mouse-face))
+    (let ((before (seq-filter (lambda (o) (overlay-get o 'drgnx-row-tail)) (overlays-in (point-min) (point-max)))))
+      (drgnx-view-apply-patch (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 0 :model 1
+                                    :ops (list (list :remove (list "/r/a")))))
+      (drgnx-view-draw-now drgnx-view)
+      (should (equal (list (list 0 nil nil) (list 1 "●" 'drgnx-status-warn) (list 2 nil nil)
+                           (list 3 "M" 'drgnx-status-warn))
+                     (drgnx-explorer-rows-nav-test--tails)))
+      (should (cl-every (lambda (o) (memq o before))
+                        (seq-filter (lambda (o) (overlay-get o 'drgnx-row-tail)) (overlays-in (point-min) (point-max))))))))
+
+(defun drgnx-explorer-rows-nav-test--badges ()
+  "Each line's badge (an empty overlay's `before-string') as (LINE . STRING), in line order."
+  (let (out)
+    (dolist (o (overlays-in (point-min) (point-max)))
+      (when (and (= (overlay-start o) (overlay-end o)) (overlay-get o 'before-string))
+        (push (cons (1- (line-number-at-pos (overlay-start o))) (overlay-get o 'before-string)) out)))
+    (sort out (lambda (a b) (< (car a) (car b))))))
+
+(ert-deftest drgnx-explorer-rows/who-is-here-badges-from-the-hub ()
+  "Pattern D (plan sja-complete E2): the hub puts the ordinals of the agents at a row on its name
+\(`drgnx-agents-here'); the Explorer draws the badge `drgnx-explorer-badge-functions' makes of them (a folder's told
+it is one) after the name, moves it with its row, and takes it away when the hub's row has none."
+  (let ((drgnx-explorer-badge-functions
+         (list (lambda (ords dirp) (format " [%s%s]" (mapconcat #'number-to-string ords ",") (if dirp "/" ""))))))
+    (drgnx-explorer-rows-nav-test--with
+      (let ((row (lambda (key text ords)
+                   (list :key key :text text
+                         :props (append (list (list 0 (length text) "drgnx-work-id" key))
+                                        (and ords (list (list 2 (length text) "drgnx-agents-here" ords))))))))
+        (drgnx-view-apply-patch (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 0 :model 1
+                                      :ops (list (list :replace (list (funcall row "/r/lib" "▾ lib" [1 2])
+                                                                      (funcall row "/r/lib/m.el" "│   m.el" [2]))))))
+        (drgnx-view-draw-now drgnx-view)
+        (should (equal '((2 . " [1,2/]") (3 . " [2]")) (drgnx-explorer-rows-nav-test--badges)))
+        (save-excursion (goto-char (point-min)) (forward-line 3)
+                        (should (= (pos-eol) (overlay-start (gethash "/r/lib/m.el" drgnx-explorer--badges)))))
+        (drgnx-view-apply-patch (list :view view :class "c" :hub 7 :base 2 :version 3 :env_epoch 0 :model 1
+                                      :ops (list (list :remove (list "/r/a")))))
+        (drgnx-view-draw-now drgnx-view)
+        (should (equal '((1 . " [1,2/]") (2 . " [2]")) (drgnx-explorer-rows-nav-test--badges)))
+        (drgnx-view-apply-patch (list :view view :class "c" :hub 7 :base 3 :version 4 :env_epoch 0 :model 1
+                                      :ops (list (list :replace (list (funcall row "/r/lib/m.el" "│   m.el" nil))))))
+        (drgnx-view-draw-now drgnx-view)
+        (should (equal '((1 . " [1,2/]")) (drgnx-explorer-rows-nav-test--badges)))))))
+
+;;;; E3: Find, marks, ranges, exclusions, reveal (plan sja-complete)
+
+(ert-deftest drgnx-explorer-rows/find-lists-only-what-it-found ()
+  "Pattern D: Find on the rows path asks the hub for the tree of the files it found (`only'), with no row vector of
+its own; leaving Find asks for the tree as it was."
+  (drgnx-explorer-rows-nav-test--with
+    (cl-letf (((symbol-function 'drgnx-explorer--find-load) (lambda () (list "/r/lib/m.el" "/r/z.txt" "/r/a/mm.c")))
+              ((symbol-function 'drgnx-explorer--find-ask) #'ignore)
+              ((symbol-function 'drgnx-explorer--find-stop) #'ignore))
+      (let ((rows-before drgnx-explorer--rows))
+        (drgnx-explorer--find-apply "m")
+        (should (equal ["/r/lib/m.el" "/r/a/mm.c"] (plist-get (cdar calls) :only)))
+        (should (eq rows-before drgnx-explorer--rows)))
+      (drgnx-explorer-find-clear)
+      (should (equal "explorer/subscribe" (caar calls)))
+      (should-not (plist-member (cdar calls) :only))
+      (should (equal ["/r/lib"] (plist-get (cdar calls) :expanded))))))
+
+(ert-deftest drgnx-explorer-rows/marks-are-sja-s-ticked-set ()
+  "Pattern D: a mark (Ctrl-click, `drgnx-explorer-mark') puts the row in Sjá's ticked set, drawn in the class
+`ticked'; unmarking takes it out; file operations act on the marks."
+  (drgnx-explorer-rows-nav-test--with
+    (let ((h (drgnx-view-patch-handle drgnx-view-patch))
+          (ticked (lambda (h) (sort (append (nidhogg-view-get h 'ticked) nil) #'string<))))
+      (drgnx-explorer--set-selection (list "/r/a" "/r/z.txt"))
+      (should (equal '("/r/a" "/r/z.txt") (funcall ticked h)))
+      (should (equal 3 (nidhogg-view-get h 'class "/r/a")))     ; the descriptor's `ticked'
+      (should (eq 'drgnx-explorer-selected (drgnx-view-nav--face-of 3)))
+      (drgnx-explorer--set-selection (list "/r/z.txt"))
+      (should (equal '("/r/z.txt") (funcall ticked h)))
+      (goto-char (point-min)) (forward-line 4)                   ; on z.txt, which is marked
+      (cl-letf (((symbol-function 'file-exists-p) (lambda (_) t)))
+        (should (equal '("/r/z.txt") (drgnx-explorer--targets))))
+      (drgnx-explorer--clear-selection)
+      (should-not (funcall ticked h)))))
+
+(ert-deftest drgnx-explorer-rows/a-shift-click-marks-the-visible-range ()
+  "Pattern D: a range marks the drawn rows between the anchor and the row, in order: the tree's visible rows."
+  (drgnx-explorer-rows-nav-test--with
+    (setq drgnx-explorer--anchor "/r/a")
+    (drgnx-explorer--select-range-to (save-excursion (goto-char (point-min)) (forward-line 3) (point)))
+    (should (equal '("/r/a" "/r/lib" "/r/lib/m.el") drgnx-explorer--selection))
+    (should (equal '("/r/a" "/r/lib" "/r/lib/m.el")
+                   (sort (append (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'ticked) nil) #'string<)))))
+
+(ert-deftest drgnx-explorer-rows/the-exclusions-reach-the-hub ()
+  "Pattern D (Q4): `drgnx-explorer-exclude-names' (names and globs) goes with the subscription; the old path's names
+match the same way."
+  (drgnx-explorer-rows-nav-test--with
+    (let ((drgnx-explorer-exclude-names '("*.o" "node_modules")))
+      (drgnx-explorer-refresh)
+      (should (equal ["*.o" "node_modules"] (plist-get (cdar calls) :exclude)))
+      (should (drgnx-explorer--excluded-name-p "main.o"))
+      (should-not (drgnx-explorer--excluded-name-p ".git")))
+    (should (drgnx-explorer--excluded-name-p ".#init.el"))
+    (should-not (drgnx-explorer--excluded-name-p ".gitignore"))))
+
+(ert-deftest drgnx-explorer-rows/a-reveal-waits-for-its-listing ()
+  "Pattern D (SJA-EXPLORER-1 (6)): revealing a file in a closed folder opens its folders and asks the hub; the file
+is selected when the listing that holds it is drawn."
+  (drgnx-explorer-rows-nav-test--with
+    (should (drgnx-explorer-reveal "/r/a/new.el"))
+    (should (equal ["/r/a" "/r/lib"] (plist-get (cdar calls) :expanded)))
+    (should (equal "/r/a/new.el" drgnx-explorer--reveal-pending))
+    (should-not (equal "/r/a/new.el" (drgnx-view-nav-selection)))
+    (let ((node (lambda (id kind flags parent label dir)
+                  (append (list :id id :kind kind :flags flags) (and parent (list :parent parent))
+                          (list :fields (vector (vector "label" label) (vector "path" id) (vector "dir" dir)))))))
+      (drgnx-view-model-event
+       (list :view view :hub 7 :base 1 :version 2 :reset t
+             :model (json-serialize
+                     (list :ops (vector (list :reset
+                                              (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"]
+                                                                      :lists ["order"] :classes ["selected" "match" "dim" "ticked"]
+                                                                      :flags ["expanded"] :forms [] :start "order")
+                                                    :nodes (vector (funcall node "/r" "root" 1 nil "R" 1)
+                                                                   (funcall node "/r/a" "dir" 1 "/r" "a" 1)
+                                                                   (funcall node "/r/a/new.el" "file" 0 "/r/a" "new.el" 0))
+                                                    :edges []
+                                                    :lists (vector (list :name "order" :ids ["/r" "/r/a" "/r/a/new.el"])))))))))
+      (drgnx-view-apply-patch
+       (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 0 :model 2
+             :ops (list (list :insert (list :after "/r/a"
+                                            :rows (list (list :key "/r/a/new.el" :text "│   new.el"
+                                                              :props (list (list 0 9 "drgnx-work-id" "/r/a/new.el")))))))))
+      (drgnx-view-draw-now drgnx-view)
+      (should-not drgnx-explorer--reveal-pending)
+      (should (equal "/r/a/new.el" (drgnx-view-nav-selection))))))
+
+(ert-deftest drgnx-explorer-rows/a-density-change-asks-again-at-once ()
+  "Pattern D: the indent the hub draws is the density's `tree-indent', sent with the subscription; a density change
+asks the hub again with the new indent at once (no restart)."
+  (drgnx-explorer-rows-nav-test--with
+    (cl-letf (((symbol-function 'drgnx-explorer--tree-indent) (lambda () 14)))
+      (setq calls nil)
+      (run-hooks 'drgnx-look-density-changed-hook)
+      (should (equal 14 (plist-get (cdr (car calls)) :indent))))))
+
+(ert-deftest drgnx-explorer-rows/no-lisp-watches-on-the-rows-path ()
+  "Pattern D: on the rows path the hub watches the listed folders (plan sja-complete E1): the Explorer adds no Lisp
+`file-notify' watch, at attach or on a refresh."
+  (drgnx-explorer-rows-nav-test--with
+    (should (= 0 (hash-table-count drgnx-explorer--watches)))
+    (drgnx-explorer-refresh)
+    (should (= 0 (hash-table-count drgnx-explorer--watches)))))
 
 (ert-deftest drgnx-explorer-rows/keys-walk-the-tree ()
   "Pattern D: next and previous walk the visible rows; expand on a closed folder asks the hub with it open (the
@@ -112,7 +297,10 @@ asks the hub with it closed.  Point follows the selection."
     (should (equal "/r/a" (drgnx-explorer-node-at (point))))
     (drgnx-explorer-expand)
     (should (equal "/r/a" (drgnx-view-nav-selection)))
-    (should (equal (list :view view :roots ["/r"] :expanded ["/r/a" "/r/lib"] :compact t) (cdar calls)))
+    (should (equal (list :view view :roots ["/r"] :expanded ["/r/a" "/r/lib"] :compact t
+                         :indent (drgnx-explorer--tree-indent)
+                         :exclude (vconcat drgnx-explorer-exclude-names))
+                   (cdar calls)))
     (drgnx-explorer-next)
     (drgnx-explorer-next)
     (should (equal "/r/lib/m.el" (drgnx-view-nav-selection)))
@@ -124,7 +312,10 @@ asks the hub with it closed.  Point follows the selection."
     (should (equal "/r/lib" (drgnx-view-nav-selection)))
     (drgnx-explorer-collapse)
     (should (equal "/r/lib" (drgnx-view-nav-selection)))
-    (should (equal (list :view view :roots ["/r"] :expanded ["/r/a"] :compact t) (cdar calls)))))
+    (should (equal (list :view view :roots ["/r"] :expanded ["/r/a"] :compact t
+                         :indent (drgnx-explorer--tree-indent)
+                         :exclude (vconcat drgnx-explorer-exclude-names))
+                   (cdar calls)))))
 
 (ert-deftest drgnx-explorer-rows/typing-and-open ()
   "Pattern D: typing selects the next visible sibling whose name starts with what was typed; a click on another row

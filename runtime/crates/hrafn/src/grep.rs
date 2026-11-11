@@ -152,7 +152,11 @@ fn glob_names(glob: &str, rel: &str) -> bool {
         return false;
     };
     let parts: Vec<&str> = rel.split('/').collect();
-    let upto = if folders { parts.len() - 1 } else { parts.len() };
+    let upto = if folders {
+        parts.len() - 1
+    } else {
+        parts.len()
+    };
     if anchored {
         (1..=upto).any(|k| re.is_match(&parts[..k].join("/")))
     } else {
@@ -697,7 +701,11 @@ mod tests {
                     .map(|f| root.join(f))
                     .collect(),
             );
-            assert_eq!(found(b, &query), ["a.rs", "b.txt", "sub/c.rs", "sub/e.txt"], "{b:?}");
+            assert_eq!(
+                found(b, &query),
+                ["a.rs", "b.txt", "sub/c.rs", "sub/e.txt"],
+                "{b:?}"
+            );
             query.include = vec!["*.rs".into()];
             assert_eq!(found(b, &query), ["a.rs", "sub/c.rs"], "{b:?}");
             query.exclude = vec!["sub".into()];
@@ -706,7 +714,10 @@ mod tests {
             query.exclude = vec!["sub/*.txt, b.*".into()];
             assert_eq!(found(b, &query), ["a.rs", "sub/c.rs"], "{b:?}");
             query.files = Some(Vec::new());
-            assert!(found(b, &query).is_empty(), "{b:?}: an empty list is no file, not the root");
+            assert!(
+                found(b, &query).is_empty(),
+                "{b:?}: an empty list is no file, not the root"
+            );
         }
     }
 
@@ -797,9 +808,11 @@ mod tests {
             ms.iter().map(|m| (m.line, m.col)).collect::<Vec<_>>(),
             [(1, 4), (2, 9)]
         );
-        assert!(search_text(&q(Path::new("/r"), ""), "/r/a.txt", text)
-            .unwrap()
-            .is_empty());
+        assert!(
+            search_text(&q(Path::new("/r"), ""), "/r/a.txt", text)
+                .unwrap()
+                .is_empty()
+        );
         let mut bad = q(Path::new("/r"), "(");
         bad.regexp = true;
         assert!(search_text(&bad, "/r/a.txt", text).is_err());

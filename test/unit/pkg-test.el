@@ -1255,6 +1255,39 @@ fy with a newer fa 2.0.  Returns (FX FY FA-1.0-ENTRY)."
   (load elc nil t t)
   (fa-hello))
 
+;; The look scenes failed after a minute with `corfu-mode--set-explicitly' void: the JIT native-compiled corfu's .el
+;; (this build's macros) and swapped the functions in while the .elc (Emacs 30.2's) never defined the variable.
+(ert-deftest drgnx-pkg/the-jit-leaves-packages-another-build-compiled-alone ()
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-jit" t)))
+         (own (concat root "own/")) (other (concat root "other/")) (unknown (concat root "unknown/")) (bare (concat root "bare/"))
+         (file (lambda (dir) (concat dir "corfu-1/corfu.el"))))
+    (unwind-protect
+        (progn
+          (dolist (d (list own other unknown bare)) (make-directory (concat d "corfu-1") t))
+          (dolist (d (list own other unknown)) (with-temp-file (concat d "corfu-1/corfu.elc") (insert ";ELC")))
+          (with-temp-file (concat own drgnx-pkg-build-file) (insert (prin1-to-string (drgnx-pkg-emacs-build))))
+          (with-temp-file (concat other drgnx-pkg-build-file) (insert (prin1-to-string "30.2 x86_64-pc-linux-gnu")))
+          (let ((native-comp-jit-compilation-deny-list nil))
+            (should-not (drgnx-pkg-jit-guard own))                 ; built by this Emacs: the JIT may compile it
+            (should-not (drgnx-pkg-jit-guard bare))                ; nothing compiled, nothing says: no .elc to skew
+            (should-not (drgnx-pkg-jit-guard (concat root "nowhere/")))
+            (should-not native-comp-jit-compilation-deny-list)
+            (should (drgnx-pkg-jit-guard other))                   ; another build's .elc
+            (should (drgnx-pkg-jit-guard unknown))                 ; .elc files and no record of who made them
+            (should (cl-some (lambda (re) (string-match-p re (funcall file other))) native-comp-jit-compilation-deny-list))
+            (should (cl-some (lambda (re) (string-match-p re (funcall file unknown))) native-comp-jit-compilation-deny-list))
+            (should-not (cl-some (lambda (re) (string-match-p re (funcall file own))) native-comp-jit-compilation-deny-list))))
+      (delete-directory root t))))
+
+(ert-deftest drgnx-pkg/activating-guards-the-jit ()
+  (drgnx-pkg-test--with root
+    (let ((guarded nil) (package-quickstart-file (concat root "q.el")))
+      (cl-letf (((symbol-function 'drgnx-pkg-jit-guard) (lambda (dir) (push dir guarded)))
+                ((symbol-function 'package-activate-all) #'ignore))
+        (make-directory (drgnx-elpa-dir) t)
+        (drgnx-pkg-activate)
+        (should (equal guarded (list (drgnx-elpa-dir))))))))
+
 (ert-deftest drgnx-pkg/a-new-emacs-build-recompiles-every-package ()
   ;; A package compiled by another Emacs build (an older Nidhogg, a stock Emacs) loads its old macro expansions:
   ;; diff-hl's from Emacs 30 next to the JIT's newer functions gave `diff-hl-mode--set-explicitly' void in every hook.

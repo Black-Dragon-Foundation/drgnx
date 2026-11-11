@@ -766,6 +766,17 @@ pub struct ExplorerParams {
     /// Join single-folder chains on one row; default on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compact: Option<bool>,
+    /// A level's indent on a graphical display, in logical px (the density's `tree-indent`); default 12.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indent: Option<u32>,
+    /// Names never listed, at most 256: exact names or globs (`*` any run, `?` one character); default `.git`,
+    /// `.hg`, `.svn`, `.DS_Store`, `__pycache__` and `.#*`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
+    /// Find: list only these files (at most 5000) under the roots, each with the folders above it open; nothing is
+    /// read from disk and nothing watched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only: Option<Vec<AbsPath>>,
 }
 
 /// `explorer/subscribe`'s answer: LISTING numbers the listing.

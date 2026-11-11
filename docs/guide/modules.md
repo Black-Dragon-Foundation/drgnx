@@ -233,7 +233,7 @@ Every module must turn off cleanly: its setup changes global state only through 
 | `extra/mc` | idle | Add Next Occurrence, Select All Occurrences — a cursor on each match (needs multiple-cursors) |
 | `extra/undo` | idle | Undo Tree (needs vundo) |
 | `extra/wgrep` | idle | Edit Results / Apply Edited Results in search results (needs wgrep) |
-| `extra/hunks` | idle | changed lines in the gutter; Show / Revert / Stage Change (needs diff-hl) |
+| `extra/hunks` | idle | changed lines in the gutter, from the hub: solid bars, green added, blue changed; Show / Revert / Stage Change |
 | `extra/blame` | idle | inline blame: the current line's author, age and commit subject at its end; Blame: Show Commit of Line ([git.md](git.md)) |
 | `extra/keycast` | idle | Show Keys As I Type (needs keycast): the key and command in the status bar's `misc` segment (in the stock mode line elsewhere) |
 | `extra/windows` | idle | Pick Window: a letter on every window, type it to go there (needs ace-window) |

@@ -19,20 +19,7 @@
 (defvar drgnx-agents-editor-draw--tag-overlays)
 
 (defvar drgnx-agents-editor-draw-test--version 0)
-(defvar diff-hl-highlight-function)
-(defvar-local diff-hl-mode nil)
-(defvar drgnx-agents-editor-draw-test--hl-calls nil "The overlays' lines the stand-in diff-hl function was given.")
-
-(defmacro drgnx-agents-editor-draw-test--with-diff-hl (&rest body)
-  "BODY with a stand-in for diff-hl loaded: its highlight function records the lines it is called for."
-  (declare (indent 0))
-  `(let ((drgnx-agents-editor-draw-test--hl-calls nil))
-     (setq-default diff-hl-highlight-function
-                   (lambda (ovl &rest _) (push (line-number-at-pos (overlay-start ovl)) drgnx-agents-editor-draw-test--hl-calls)))
-     (provide 'diff-hl)
-     (unwind-protect (cl-letf (((symbol-function 'diff-hl-update) #'ignore)) ,@body)
-       (setq features (delq 'diff-hl features))
-       (makunbound 'diff-hl-highlight-function))))
+(defvar drgnx-hunks-skip-line-function)
 
 (defconst drgnx-agents-editor-draw-test--gutter
   '((:session "s1" :kind "changed" :start 5 :end 7 :help "Agent1 · changed in step 3")))
@@ -175,38 +162,31 @@
               ('always (should (eq 'always state)))
               ('nil (should-not state)))))))))
 
-(ert-deftest drgnx-agents-editor/agent-line-wins-the-fringe-over-diff-hl ()
-  (drgnx-agents-editor-draw-test--with-diff-hl
-    (drgnx-agents-editor-draw-test--with 30
-      (drgnx-agents-editor-draw-test--frame buf (list (drgnx-agents-editor-draw-test--agent 1 "editing" 6))
-                                            drgnx-agents-editor-draw-test--gutter)
-      (with-current-buffer buf
-        (dolist (line '(5 6 7 10))
-          (save-excursion
-            (goto-char (point-min)) (forward-line (1- line))
-            (let ((ovl (make-overlay (point) (point))))
-              (funcall (default-value 'diff-hl-highlight-function) ovl 'change 'single)
-              (delete-overlay ovl))))
-        ;; the agent's lines 5-7 never reach diff-hl's function; the user's line 10 does
-        (should (equal '(10) drgnx-agents-editor-draw-test--hl-calls))
-        ;; and the strip overlays hold a higher priority than diff-hl's own
-        (should (cl-every (lambda (o) (>= (overlay-get o 'priority) 100)) (drgnx-agents-editor-draw-test--strip-overlays buf)))))))
-
-(ert-deftest drgnx-agents-editor/diff-hl-wrapper-restored-on-teardown ()
-  (drgnx-agents-editor-draw-test--with-diff-hl
-    (let ((mine (default-value 'diff-hl-highlight-function)) (redraws 0) wrapped (other (generate-new-buffer " diff-hl-other")))
-      (cl-letf (((symbol-function 'diff-hl-update) (lambda () (cl-incf redraws))))
-        (drgnx-agents-editor-draw-test--with 30
-          (setq wrapped (default-value 'diff-hl-highlight-function))
-          (should-not (eq mine wrapped))
-          (with-current-buffer other (setq diff-hl-mode t))))
-      (kill-buffer other)
-      (should (eq mine (default-value 'diff-hl-highlight-function)))
-      (should (>= redraws 1)))))
-
-(ert-deftest drgnx-agents-editor/strip-draws-with-diff-hl-off ()
+(ert-deftest drgnx-agents-editor/the-change-marks-leave-an-agents-lines-out ()
   (drgnx-agents-editor-draw-test--with 30
-    (should-not (featurep 'diff-hl))
+    (drgnx-agents-editor-draw-test--frame buf (list (drgnx-agents-editor-draw-test--agent 1 "editing" 6))
+                                          drgnx-agents-editor-draw-test--gutter)
+    (with-current-buffer buf
+      ;; the agent's lines 5-7 are its strip's; the user's line 10 is the change marks'
+      (should (functionp drgnx-hunks-skip-line-function))
+      (should (cl-every (lambda (l) (funcall drgnx-hunks-skip-line-function l)) '(5 6 7)))
+      (should-not (funcall drgnx-hunks-skip-line-function 10))
+      ;; and the strip overlays hold a higher priority than any other mark
+      (should (cl-every (lambda (o) (>= (overlay-get o 'priority) 100)) (drgnx-agents-editor-draw-test--strip-overlays buf))))))
+
+(ert-deftest drgnx-agents-editor/the-change-marks-are-drawn-again-when-the-strip-comes-and-goes ()
+  (let ((redraws nil))
+    (cl-letf (((symbol-function 'drgnx-hunks-redraw) (lambda (&optional b) (push b redraws))))
+      (drgnx-agents-editor-draw-test--with 30
+        (drgnx-agents-editor-draw-test--frame buf (list (drgnx-agents-editor-draw-test--agent 1 "editing" 6))
+                                              drgnx-agents-editor-draw-test--gutter)
+        (should (memq buf redraws))                         ; the strip came
+        (setq redraws nil)
+        (drgnx-agents-editor-draw-test--frame buf (list (drgnx-agents-editor-draw-test--agent 1 "editing" 6)) nil)
+        (should (memq buf redraws))))))                     ; the strip went
+
+(ert-deftest drgnx-agents-editor/strip-draws-in-the-fringe ()
+  (drgnx-agents-editor-draw-test--with 30
     (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
       (drgnx-agents-editor-draw-test--frame buf (list (drgnx-agents-editor-draw-test--agent 1 "editing" 6))
                                             drgnx-agents-editor-draw-test--gutter))

@@ -12,6 +12,10 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-palette)                ; the palette scene's commands and history
+(declare-function drgnx-pane-show "drgnx-panes")
+(declare-function drgnx-pkg-jit-guard "drgnx-pkg-activate")
+(declare-function drgnx-panel-replay--wait "panel-replay-fixture")
+(declare-function drgnx-agent-panel-cards--permissions "drgnx-agent-panel-cards")
 
 (declare-function drgnx-uitest--json "drgnx-uitest")
 (declare-function drgnx-trust-folder "drgnx-trust")
@@ -151,9 +155,10 @@ untracked, drgnx.lock.eld ignored."
 
 (defvar drgnx-look-scene-limits
   '((window-dark "the agent panel opens as a tab of the editor group, not the right island (look step 8)"
-                 "no `1 needs you' or `2 agents' chips: the mock agent's turn does not run yet (look step 8)"
+                 "the title row counts 1 agent, not 2: the scene starts one mock agent"
                  "no agent badges (C, R) in the Explorer: agent system part 3 (G9)"
-                 "the status bar has no `1 job', `● Claude editing' or `● 1 needs you': no job or agent turn runs yet (look step 8)"
+                 "the status bar has no `1 job' or `● Claude editing': no job or agent edit runs yet; its `1 waiting on you' is
+the mockup's `● 1 needs you'"
                  "the status bar's problems are Flymake's real ones for the file (the mockup's `✕ 1' is made up), and
 no `● eglot': the session runs no language server")
     (agent-panel "the mockup is the Work space (mission strip, Board, Timeline: G9, other plans); compare its right-hand panel"
@@ -184,10 +189,12 @@ changed to hide a gap: the gap is named here instead.")
      (error (push (format "%s: %s" ,what (error-message-string err)) drgnx-look-scene--errors) nil)))
 
 (defun drgnx-look-scene--answer (&rest more)
-  "The step's JSON answer: its errors and MORE, then the echo area cleared."
+  "The step's JSON answer: its errors and MORE, then the echo area cleared, and the status bar's message with it (a
+message there lasts some seconds, so the previous scene's last one, its palette's \"Quit\", would show in this one's)."
   (prog1 (drgnx-uitest--json (append (list :errors (vconcat (nreverse drgnx-look-scene--errors))) more))
     (setq drgnx-look-scene--errors nil)
-    (message nil)))
+    (message nil)
+    (when (fboundp 'drgnx-look-echo--status-clear) (drgnx-look-echo--status-clear))))
 
 (defun drgnx-look-scene--theme (theme)
   (drgnx-look-scene--try "theme"
@@ -199,6 +206,8 @@ changed to hide a gap: the gap is named here instead.")
   (when (and elpa (file-directory-p elpa))
     (drgnx-look-scene--try "packages"
       (require 'package)
+      ;; packages another Emacs build compiled (the desktop's pinned ELPA is from 30.2) must not meet this Emacs's JIT
+      (drgnx-pkg-jit-guard elpa)
       (setq package-directory-list (list elpa))
       (package-initialize)
       ;; `package-initialize' leaves vertico and orderless off the path from a read-only directory list
@@ -221,7 +230,10 @@ window starting at line START."
   (drgnx-look-scene--open file)
   (goto-char (point-min)) (forward-line (1- start))
   (set-window-start (selected-window) (point))
-  (forward-line (- line start)) (move-to-column column))
+  (forward-line (- line start)) (move-to-column column)
+  ;; as after a command: what follows point (the current line's overlay, the breadcrumb) moves to it, else the first
+  ;; scene shows them where the file opened
+  (run-hooks 'post-command-hook))
 
 (defun drgnx-look-scene-setup (elpa)
   "The mockups' state: the project at ~/code/drgnx, trusted; ELPA's packages active; tabs drgnx-gateway.el,
@@ -263,12 +275,19 @@ from 201."
       (setq drgnx-panel-replay-prefix 3)
       (defalias 'drgnx-panel-replay-program
         (lambda ()
+          ;; the mockup's figures: a slow run (past `drgnx-agent-panel-slow-seconds'), a quick one, then a read
+          ;; that asks and stays open, so the permission card shows.  The replay session is a chat: the matrix
+          ;; answers a chat's edit or run Never (no card), and asks for its reads
           (concat "tool:read src/main.el\\nsay Reading the gateway: replies to a closed client are lost.\\n"
-                  "tool:exec echo 1 of 14 failed\\nsay 1 of 14 failed: gateway/reply-after-close.\\n"
+                  "tool:run sleep 11; echo 1 of 14 failed\\nsay 1 of 14 failed: gateway/reply-after-close.\\n"
                   "tool:edit src/main.el\\nsay Queue the reply when the client went away.\\n"
-                  "tool:exec echo 9 of 14 passed\\n"
-                  "ask:permission execute\nsay done")))
-      (setq drgnx-look-scene--panel (drgnx-panel-replay-up bin))))
+                  "tool:run sleep 2; echo 9 of 14 passed\\n"
+                  "ask:tool {\"kind\": \"read\", \"title\": \"Read the gateway's log\"}\nsay done")))
+      (setq drgnx-look-scene--panel (drgnx-panel-replay-up bin))
+      ;; the turn runs on past the prefix to its ask: the scene shows every step's time and the open card
+      (unless (drgnx-panel-replay--wait 30 (lambda () (with-current-buffer drgnx-look-scene--panel
+                                                        (drgnx-agent-panel-cards--permissions))))
+        (push "agent: no permission card within 30 s" drgnx-look-scene--errors))))
   (drgnx-look-scene--answer :panel (if (buffer-live-p drgnx-look-scene--panel) (buffer-name drgnx-look-scene--panel) :null)))
 
 (defun drgnx-look-scene--editor ()
@@ -287,9 +306,8 @@ from 201."
     (unless (buffer-live-p drgnx-look-scene--panel) (error "No agent panel (the mock agent did not run)"))
     (if-let* ((w (get-buffer-window drgnx-look-scene--panel)))
         (select-window w)
-      ;; where the line puts it today: a tab of the editor (the limit says so)
-      (drgnx-wb-focus-editor)
-      (drgnx-look-scene--show drgnx-look-scene--panel)))
+      ;; an earlier scene put the editor back: the panel opens again where opening it puts it, the right island
+      (drgnx-pane-show 'agent-panel :buffer drgnx-look-scene--panel :select t)))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene--palette-commands ()
@@ -349,7 +367,15 @@ look-scenes' types them)."
 
 (defun drgnx-look-scene-work-space-dark ()
   (drgnx-look-scene--theme 'drgnx-dark)
-  (drgnx-look-scene--try "work space" (drgnx-work-space-open))
+  (drgnx-look-scene--try "work space"
+    (let ((map (drgnx-work-space-open)))
+      ;; the hub sends the map's rows after it opens and the view draws them on a timer once its window shows: the
+      ;; shot waits for the first of them (redisplay and timers run in `sit-for'), not an empty window
+      (let ((end (+ (float-time) 15)))
+        (while (and (zerop (buffer-size map)) (< (float-time) end))
+          (sit-for 0.05)))
+      (when (zerop (buffer-size map))
+        (push "work space: no map rows within 15 s" drgnx-look-scene--errors))))
   (drgnx-look-scene--answer))
 
 ;; The highlights (look step 5b's audit): no mockup of their own; each is judged against the mockups' tokens
@@ -480,6 +506,48 @@ chrome faces, frame metrics, windows, modules."
       (with-temp-file file
         (pp (list :limits (cdr (assq scene drgnx-look-scene-limits))
                   :themes custom-enabled-themes
+                  ;; the Emacs the scene ran on, and a box the compositor's keys shape (`:fit', `:corner-radius')
+                  :emacs (list emacs-version (bound-and-true-p nidhogg-version) :glitnir (featurep 'glitnir))
+                  :keycap-box (face-attribute 'drgnx-keycap :box f)
+                  ;; the floating palette's frame and window, where it is shown: its insets come from these
+                  ;; the Work map, where one is open: what it holds and what feeds it
+                  :work-map (when-let* ((b (seq-find (lambda (b) (eq (buffer-local-value 'major-mode b)
+                                                                     'drgnx-work-map-mode))
+                                                     (buffer-list))))
+                              (with-current-buffer b
+                                (list :text (buffer-substring-no-properties (point-min) (min (point-max) 600))
+                                      :rows (and (fboundp 'drgnx-work-map-rows-p) (drgnx-work-map-rows-p))
+                                      :hub (and (fboundp 'drgnx-hub-running-p) (drgnx-hub-running-p))
+                                      :view (bound-and-true-p drgnx-work-space--view)
+                                      :message (bound-and-true-p drgnx-work-space--message))))
+                  :palette (let ((pf (bound-and-true-p drgnx-palette-frame--frame)))
+                             (when (and (frame-live-p pf) (frame-visible-p pf))
+                               (let ((w (frame-root-window pf)))
+                                 (list :px (list (frame-pixel-width pf) (frame-pixel-height pf))
+                                       :inner (list (frame-inner-width pf) (frame-text-width pf))
+                                       :params (mapcar (lambda (p) (cons p (frame-parameter pf p)))
+                                                       '(internal-border-width child-frame-border-width
+                                                                               left-fringe right-fringe))
+                                       :window (list :edges (window-pixel-edges w) :body (window-body-pixel-edges w)
+                                                     :margins (window-margins w) :fringes (window-fringes w))
+                                       ;; what starts the input row: the buffer's prefix and the overlays there
+                                       :start (with-current-buffer (window-buffer w)
+                                                (list :line-prefix line-prefix
+                                                      :prompt-end (minibuffer-prompt-end)
+                                                      :first-row (window-text-pixel-size w (point-min)
+                                                                                         (line-end-position))
+                                                      ;; the room before the typed text, with and without the prefix
+                                                      :lead (list (car (window-text-pixel-size
+                                                                        w (point-min) (minibuffer-prompt-end)))
+                                                                  (let ((p line-prefix))
+                                                                    (setq-local line-prefix nil)
+                                                                    (prog1 (car (window-text-pixel-size
+                                                                                 w (point-min) (minibuffer-prompt-end)))
+                                                                      (setq-local line-prefix p))))
+                                                      :overlays
+                                                      (mapcar (lambda (o) (list (overlay-start o) (overlay-end o)
+                                                                                (overlay-properties o)))
+                                                              (overlays-in (point-min) (1+ (point-min))))))))))
                   :fonts (mapcar (lambda (fc) (list fc (ignore-errors (face-font fc f))))
                                  '(default drgnx-ui-text drgnx-ui-heading drgnx-ui-caption tab-bar tab-line
                                            mode-line header-line))
@@ -495,6 +563,12 @@ chrome faces, frame metrics, windows, modules."
                                                      :header (window-header-line-height w)
                                                      :line (window-default-line-height w)
                                                      :end (cdr (posn-x-y (posn-at-point (window-end w t) w)))
+                                                     ;; the gutter: fringes, margins and where the text area starts
+                                                     :fringes (window-fringes w) :margins (window-margins w)
+                                                     :text-left (car (window-body-pixel-edges w))
+                                                     :numbers (with-selected-window w
+                                                                (and (bound-and-true-p display-line-numbers-mode)
+                                                                     (line-number-display-width t)))
                                                      :mode (buffer-local-value 'major-mode (window-buffer w))))
                                    (window-list f 'no-mini))
                   :children (cl-count-if (lambda (c) (and (frame-visible-p c) (frame-parent c))) (frame-list))
