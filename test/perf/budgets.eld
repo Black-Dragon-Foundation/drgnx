@@ -165,14 +165,13 @@
  (image-open (:image :screenshot_ms) 16 :report-only ot6)      ; first draw within one frame
  (image-open (:image :preview_drawn_ms) 500 :report-only ot6)  ; every picture drawn within 500 ms
  (explorer-expand (:expand_ms) 80 :report-only ot8) (explorer-expand (:stalls-ge16) 0 :report-only ot8)
- (explorer-git (:input :p95) 16 :report-only ot5) (explorer-git (:stalls-ge16) 0 :report-only ot5)
+ (explorer-git-rows (:input :p95) 16 :report-only ot5) (explorer-git-rows (:stalls-ge16) 0 :report-only ot5)
  ;; The render offload's rows (measured x 1.25, rounded up; :rows exact): one source run, GUI container on the desktop,
- ;; 2026-11-07, with Nidhogg's framing and the worktree's test-hooks hub.  explorer-git: alloc 6844, cpu p90 4.06, rows 1
- ;; (git status now framed in every locale; 10281 before).  quick-open-typing (the hub's ranked rows) alloc 3924, cpu
- ;; 1.1; -old (the stream and completion over 200k names) alloc 6403046, cpu 218.63, a key 212 ms at p50.
- ;; agents-line-motion (the outline's name) alloc 5495, cpu 3.53; -old (`add-log-current-defun' per frame) 5838, 4.15.
- (explorer-git (:alloc :p50) 8555 :report-only ot5) (explorer-git (:cpu_ms :p90) 5.1 :report-only ot5)
- (explorer-git (:rows) 1 :report-only ot5)
+ ;; 2026-11-07, with Nidhogg's framing and the worktree's test-hooks hub.  explorer-git (the Lisp listing's, gone with
+ ;; the Explorer's switch to the hub's rows, plan sja-complete E4): alloc 6844, cpu p90 4.06, rows 1.  quick-open-typing
+ ;; (the hub's ranked rows) alloc 3924, cpu 1.1; -old (the stream and completion over 200k names) alloc 6403046, cpu
+ ;; 218.63, a key 212 ms at p50.  agents-line-motion (the outline's name) alloc 5495, cpu 3.53; -old
+ ;; (`add-log-current-defun' per frame) 5838, 4.15.
  ;; explorer-git-rows (the hub reads the status; the letters are its rows): alloc 856 is a tenth of explorer-git's 8555, the render
  ;; offload's target; measured once (2026-11-08, Nidhogg's line image, 4 CPUs, same session): 6542 objects per command against 6589
  ;; on the old path (the keys are what allocates), cpu p90 3.1, rows 1.  Report-only until the combined pass.
@@ -184,7 +183,6 @@
  ;; explorer-git, the whole operation (first key to the letters applied), same session: old path 1549 kB, 47 ms; hub path
  ;; 1640 kB, 54 ms (x 1.25 below).  The hub path is no cheaper here: the rows are few (52 for the 25k-file repository) and
  ;; the cost is the key and its redisplay.
- (explorer-git (:complete-kb) 1940 :report-only ot5) (explorer-git (:complete-cpu_ms) 59 :report-only ot5)
  (explorer-git-rows (:complete-kb) 2050 :report-only ot5) (explorer-git-rows (:complete-cpu_ms) 68 :report-only ot5)
  ;; explorer-watch: 50 files made in a folder the Explorer shows, on the hub's rows path (plan sja-complete E1): every row
  ;; drawn within 300 ms of the last write (the hub settles 30-100 ms, then relists the one folder)

@@ -986,6 +986,23 @@ to its first rows.  An error when a key's search drew no rows before the next ke
       t))
   "The `search-retype' workload's session side (with the replace workloads' and the hub's).")
 
+(defun drgnx-perf-run--explorer-rows-form (dir)
+  "An Explorer workload's setup, as a form string: the hub up (`drgnx-perf-run--hub-form'), the Explorer on DIR in the
+sidebar, its rows the hub's and drawn (the rows path, plan sja-complete E4)."
+  ;; the env of the sidebar's class goes now: a window change sends it on an idle debounce, and the wait is not idle
+  (format (concat "(progn %s (drgnx-perf--hub-start nil) (drgnx-explorer-set-roots (list %S)) (drgnx-wb-show-sidebar)"
+                  " (drgnx-view-env-update drgnx-explorer-hub-view-name)"
+                  " (unless (drgnx-perf--wait 10 (lambda () (with-current-buffer drgnx-explorer-buffer-name"
+                  " (and (drgnx-explorer--rows-p) (> (drgnx-view-row-count drgnx-view) 1)))))"
+                  " (with-current-buffer drgnx-explorer-buffer-name"
+                  " (error \"Premise: the hub's Explorer rows were not drawn in 10 s (rows path %%s, view %%S, env"
+                  " classes %%S, hub %%s, rows %%s, windows %%d, roots %%S): %%S\" (drgnx-explorer--rows-p)"
+                  " drgnx-explorer--hub-view (drgnx-view-env-classes drgnx-explorer-hub-view-name)"
+                  " (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))"
+                  " (and drgnx-view (drgnx-view-row-count drgnx-view)) (length (get-buffer-window-list nil nil t))"
+                  " drgnx-explorer--roots (buffer-substring-no-properties (point-min) (min (point-max) 200))))) t)")
+          (drgnx-perf-run--hub-form) dir))
+
 (defun drgnx-perf-run--hub-form ()
   "The agent workloads' setup, as a form string: the session functions that start Ratatoskr (a test-hooks build,
 $DRGNX_RATATOSKR_BIN, with `ratatoskr-mock' beside it) for the workload, give it the profile \"mock\"
@@ -1107,7 +1124,8 @@ error if it does not hold).  With :actions, :measure runs after the input and it
             :actions ,(funcall keys "C-<next>" 20)
             :teardown ,(format "(progn (dolist (b (buffer-list)) (when (and (buffer-file-name b) (string-prefix-p %S (buffer-file-name b))) (kill-buffer b))) t)"
                                (expand-file-name "wb" drgnx-ui-repo-dir)))
-      (explorer :setup ,(format "(progn (drgnx-explorer-set-roots (list %S)) (drgnx-wb-show-sidebar) t)" drgnx-ui-repo-dir)
+      (explorer :setup ,(drgnx-perf-run--explorer-rows-form drgnx-ui-repo-dir)
+                :teardown "(progn (drgnx-perf--hub-stop) t)"
                 :each "(progn (drgnx-explorer-focus) (goto-char (point-min)) (drgnx-wb-focus-editor) t)"
                 ;; the root shows ~12 rows: 10 downs, each one moves
                 :actions ,(append (list (list :keys "C-S-e")) (funcall keys "<down>" 10) (list (list :keys "<escape>"))))
@@ -1466,11 +1484,11 @@ under :compose (the compose probe)."
                                         (funcall keys "C-d" 5) (funcall keys "C-u" 5))
                       :check "(with-current-buffer (window-buffer (selected-window)) (and (eq evil-state 'normal) (/= (point) drgnx-perf--motions-start)))" ; moved
                       :teardown ,(drgnx-perf-run--modal-teardown-form kill-motions))
-        (explorer-evil :setup ,(format "(progn %s (drgnx-explorer-set-roots (list %S)) (drgnx-wb-show-sidebar) t)" setup drgnx-ui-repo-dir)
+        (explorer-evil :setup ,(format "(progn %s %s)" setup (drgnx-perf-run--explorer-rows-form drgnx-ui-repo-dir))
                        :each "(progn (drgnx-explorer-focus) (goto-char (point-min)) (drgnx-wb-focus-editor) t)"
                        :actions ,(append (list (list :keys "SPC E")) (funcall keys "j" 10) (list (list :keys "<escape>")))
                        :check "(with-current-buffer \" *drgnx explorer*\" (= (line-number-at-pos) 11))" ; ten rows down, in the Explorer
-                       :teardown ,(drgnx-perf-run--modal-teardown-form))))))
+                       :teardown ,(drgnx-perf-run--modal-teardown-form "(drgnx-perf--hub-stop)"))))))
 
 (defun drgnx-perf-run--relative-fails (results)
   "Lines: `typing-evil' input p95 more than 1 ms over `typing' in the same RESULTS (both measured)."
@@ -1734,8 +1752,8 @@ version and the commit, as JSON in FILE."
     (write-region (concat (json-serialize doc) "\n") nil file nil 'silent)))
 
 (defconst drgnx-perf-run-workers-seeded
-  '(explorer-git explorer-git-rows quick-open-typing quick-open-typing-old agents-line-motion agents-line-motion-old
-                 presence-burst presence-burst-old)
+  '(explorer-git-rows quick-open-typing quick-open-typing-old agents-line-motion agents-line-motion-old
+                      presence-burst presence-burst-old)
   "The off-the-main-thread workloads with allocation, CPU and rows budgets (the render offload measured them).")
 
 (defconst drgnx-perf-run-unseeded

@@ -194,7 +194,7 @@ Emacs (each form is read and evaluated here), `nidhogg-workers-apply' records."
 form and a digest, and a setup form that reads."
   (let ((ws (drgnx-perf-run--workloads)) (budgets (drgnx-perf-run--budgets)))
     (dolist (n '(lsp-burst lsp-typing ts-open ts-paste ts-typing ts-typing-unclosed compile-flood image-open
-                           explorer-expand explorer-git quick-open-large quick-open-typing quick-open-typing-old
+                           explorer-expand explorer-git-rows quick-open-large quick-open-typing quick-open-typing-old
                            agents-line-motion agents-line-motion-old autosave-typing))
       (let ((spec (cdr (assq n ws))) (rows (seq-filter (lambda (b) (eq (car b) n)) budgets)))
         (should spec)

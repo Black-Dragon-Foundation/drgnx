@@ -20,7 +20,7 @@
 
 (defconst drgnx-perf-workers-names
   '(lsp-burst lsp-typing ts-open ts-paste ts-typing ts-typing-unclosed compile-flood image-open
-              explorer-expand explorer-git explorer-git-rows explorer-watch quick-open-large quick-open-typing quick-open-typing-old
+              explorer-expand explorer-git-rows explorer-watch quick-open-large quick-open-typing quick-open-typing-old
               agents-line-motion agents-line-motion-old presence-burst presence-burst-old autosave-typing)
   "The new workloads, in the order they run.")
 
@@ -150,25 +150,18 @@ whatever they found)."
         :measure "(drgnx-perf-w-image-measure)"
         :check "(drgnx-perf-w-image-done)"
         :teardown ,(concat "(progn (drgnx-perf-w-image-teardown) " kill-fixture " t)"))
-       ;; the existing bench's operations as perf rows: a 5,000-file folder expanded; the status of a 25k-file repository
+       ;; a 5000-file folder opened on the rows path: the hub lists it (plan sja-complete E4)
        (explorer-expand
-        :setup ,(drgnx-perf-workers--form "(drgnx-perf-w-explorer-expand-setup)")
+        :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) "
+                        (drgnx-perf-workers--form "(drgnx-perf-w-explorer-expand-setup)") ")")
         :each ,(concat "(progn " visit " (drgnx-perf-w-explorer-expand-each))")
         :actions ,code
         :complete-when "(drgnx-perf-w-explorer-expand-done)"
         :digest "(drgnx-perf-w-explorer-expand-digest)"
         :measure "(drgnx-perf-w-explorer-expand-measure)"
         :check "(drgnx-perf-w-explorer-expand-done)"
-        :teardown ,(concat "(progn (drgnx-perf-w-explorer-expand-teardown) " kill-fixture " t)"))
-       (explorer-git
-        :setup ,(drgnx-perf-workers--form "(drgnx-perf-w-explorer-git-setup)")
-        :each ,(concat "(progn " visit " (drgnx-perf-w-explorer-git-each))")
-        :actions ,code
-        :complete-when "(drgnx-perf-w-explorer-git-done)"
-        :digest "(drgnx-perf-w-explorer-git-digest)"
-        :check "(drgnx-perf-w-explorer-git-done)"
-        :teardown ,(concat "(progn (drgnx-perf-w-explorer-git-teardown) " kill-fixture " t)"))
-       ;; the same on the rows path: the hub reads the status and sends the letters (a hub of the workload)
+        :teardown ,(concat "(progn (drgnx-perf-w-explorer-expand-teardown) " kill-fixture " (drgnx-perf--hub-stop) t)"))
+       ;; the status of a 25k-file repository: the hub reads it and sends the letters (a hub of the workload)
        (explorer-git-rows
         :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) "
                         (drgnx-perf-workers--form "(drgnx-perf-w-explorer-git-setup)") ")")

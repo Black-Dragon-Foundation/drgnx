@@ -303,25 +303,6 @@ buffer, and they keep both in step.")
 (defcustom drgnx-explorer-git t "Show git status in the Explorer (letters, colours, dimmed ignored files)."
   :type 'boolean)
 
-(defvar drgnx-explorer-decorators nil
-  "Functions that decorate a row after the git decorator, in the order added: each gets (BOL EOL PATH DIRP NAME-START)
-as `drgnx-explorer--git-decorate' does.  An overlay a decorator makes carries the property `drgnx-git' so the next paint
-of the row removes it.  Add and remove with `drgnx-explorer-add-decorator' and `drgnx-explorer-remove-decorator'.")
-
-(defun drgnx-explorer--repaint ()
-  (when-let* ((b (get-buffer drgnx-explorer-buffer-name))) (with-current-buffer b (jit-lock-refontify))))
-
-(defun drgnx-explorer-add-decorator (fn)
-  "Call FN on every row the Explorer paints, after the git status (see `drgnx-explorer-decorators')."
-  (unless (memq fn drgnx-explorer-decorators)
-    (setq drgnx-explorer-decorators (append drgnx-explorer-decorators (list fn))))
-  (drgnx-explorer--repaint))
-
-(defun drgnx-explorer-remove-decorator (fn)
-  "Stop calling FN on the rows, and paint them again without it."
-  (setq drgnx-explorer-decorators (delq fn (copy-sequence drgnx-explorer-decorators)))
-  (drgnx-explorer--repaint))
-
 (defun drgnx-explorer--git-decorate (_bol eol path dirp name-start)
   "Dim an ignored file's name, and put at the right edge the status letter (● for a folder with changes) and the ⋯ control
 \(`drgnx-wb-row-tail-overlay'): the control is hidden until the row is hovered; the selected row's is drawn in the
@@ -373,10 +354,7 @@ name's face, the hover highlight, the icons, the git status and the ⋯ control.
               (put-text-property (point) (pos-eol) 'mouse-face 'drgnx-hover-row)
               ;; not on the hidden root row: Emacs draws a `display' image even on invisible text
               (unless (invisible-p (point)) (drgnx-explorer--icons (point) depth name-start (aref v 2) (aref v 0)))
-              (drgnx-explorer--git-decorate (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start)
-              (dolist (d drgnx-explorer-decorators)
-                (condition-case nil (funcall d (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start)
-                  (error nil))))
+              (drgnx-explorer--git-decorate (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start))
             (when (and drgnx-explorer--selection (member (drgnx-explorer--path v) drgnx-explorer--selection))
               (add-face-text-property name-start (pos-eol) 'drgnx-explorer-selected)))
           (forward-line 1)
@@ -451,10 +429,11 @@ faces come later, from jit-lock, for the rows on screen."
                                                 default-directory)))))
 
 (defun drgnx-explorer--render ()
-  "Render every root from scratch, keeping the row at point by its path; on the rows path, ask the hub again."
-  (if (drgnx-explorer--rows-p)
-      (drgnx-explorer--subscribe)
-    (drgnx-explorer--render-old)))
+  "Render every root from scratch, keeping the row at point by its path; on the rows path, ask the hub again.  The
+roots decide the path (`drgnx-explorer--use-path')."
+  (cond ((when-let* ((b (get-buffer drgnx-explorer-buffer-name))) (with-current-buffer b (drgnx-explorer--use-path))))
+        ((drgnx-explorer--rows-p) (drgnx-explorer--subscribe))
+        (t (drgnx-explorer--render-old))))
 
 (defun drgnx-explorer--insert-root (path)
   "Insert the row of the root PATH: its name as it is.  With one root the row is not shown (window-dark.html: the
@@ -872,10 +851,42 @@ stay.  Every window showing the Explorer then shows DIR's row at its top."
 
 (defvar drgnx-explorer--hub-view nil "The Explorer's hub-fed view on the rows path, or nil (it draws its own rows).")
 
+(defvar drgnx-explorer-hub-view-name "explorer" "The name of the Explorer's view in the hub and in Sjá.")
+
 (defun drgnx-explorer--rows-p ()
   "Whether the Explorer is a hub-fed view with its model in Sjá (the rows path)."
-  (when-let* ((drgnx-explorer--hub-view) ((not drgnx-view-old-path)) (b (get-buffer drgnx-explorer-buffer-name)))
+  (when-let* ((drgnx-explorer--hub-view) (b (get-buffer drgnx-explorer-buffer-name)))
     (with-current-buffer b (and drgnx-view-patch (drgnx-view-patch-handle drgnx-view-patch) t))))
+
+(defvar drgnx-explorer--lisp-listing nil
+  "Non-nil: list in Lisp even when the hub could.  Set by the tests of the Lisp listing, which a remote root still uses.")
+
+(defun drgnx-explorer--hub-lists-p ()
+  "Whether the hub lists the roots: this Emacs has Sjá and no root is remote.  The hub lists local folders only; a
+remote root keeps the Lisp listing, frozen until the hub lists remote folders (plan sja-complete Q3 (b))."
+  (and (not drgnx-explorer--lisp-listing) (fboundp 'nidhogg-view--call)
+       (not (seq-some #'file-remote-p drgnx-explorer--roots))))
+
+(defun drgnx-explorer--use-path ()
+  "In the Explorer's buffer: be the hub's view when the hub lists the roots, else list in Lisp, switching when the
+roots changed which.  Non-nil when it attached now (the attach asked the hub already)."
+  (let ((want (drgnx-explorer--hub-lists-p)) (have (and drgnx-explorer--hub-view drgnx-view-patch t)))
+    (cond ((and want (not have)) (drgnx-explorer-rows-attach drgnx-explorer-hub-view-name "unshown") t)
+          ((and have (not want)) (drgnx-explorer--rows-detach) nil))))
+
+(defun drgnx-explorer--rows-detach ()
+  "In the Explorer's buffer: no longer the hub's view; the buffer is a new Explorer, for the Lisp listing to draw
+\(it replaces the text)."
+  (require 'drgnx-view-env)
+  (drgnx-view-env-unregister drgnx-explorer--hub-view)
+  (drgnx-view-patch-detach)
+  (drgnx-explorer--rows-unhook)
+  (setq drgnx-explorer--hub-view nil)
+  (drgnx-explorer-mode)                 ; the rows path's buffer-local state goes, the Lisp painting comes back
+  (delete-all-overlays))
+
+(defvar-local drgnx-explorer--waiting nil
+  "On the rows path, the overlay of the line saying the Explorer waits for the hub, until its first rows are drawn.")
 
 (defun drgnx-explorer--subscribe (&optional _view)
   "Ask the hub for the listing of the roots and the open folders, which it then watches; nothing waits for it.  The hub
@@ -946,6 +957,7 @@ control and the hover, the git mark of the status the hub put on the name: a fil
 changes inside) and their who-is-here badge after the name (`drgnx-explorer--rows-badge'), each row's overlays moved
 rather than made again.  A tail goes with its row's text (`evaporate'): a removed or redrawn row's is gone, and a
 redrawn row gets a new one; a badge of a row that went is deleted here."
+  (when drgnx-explorer--waiting (delete-overlay drgnx-explorer--waiting) (setq drgnx-explorer--waiting nil))
   (let ((tails (or drgnx-explorer--tails (setq drgnx-explorer--tails (make-hash-table :test #'equal)))))
     (dolist (key keys)
       (let ((beg (drgnx-view-row-start view key)) (o (gethash key tails)))
@@ -981,6 +993,10 @@ redrawn row gets a new one; a badge of a row that went is deleted here."
     (setq-local drgnx-view-nav-faces '(("ticked" . drgnx-explorer-selected)))   ; multi-select (Sjá's ticked set)
     (add-hook 'drgnx-look-density-changed-hook #'drgnx-explorer--density-changed)
     (add-hook 'kill-buffer-hook #'drgnx-explorer--rows-unhook nil t)
+    (unless (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))   ; Q2: the frame, filled when it comes
+      (setq drgnx-explorer--waiting (make-overlay (point-min) (point-min)))
+      (overlay-put drgnx-explorer--waiting 'before-string
+                   (propertize "  Waiting for the hub to list the folders…\n" 'face 'shadow)))
     (require 'drgnx-view-env)
     (drgnx-view-env-register view (current-buffer) #'drgnx-explorer--rows-subscribe)
     (drgnx-explorer--rows-subscribe)))

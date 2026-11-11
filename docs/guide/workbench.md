@@ -69,6 +69,9 @@ opens (and focuses), `SPC` opens and stays (`g o` in Vim), `TAB` toggles a folde
 Folders come first, names sort naturally (`file2` before `file10`) and case-insensitively; `.git` and other
 clutter is hidden (`drgnx-explorer-exclude-names`: exact names or globs with `*` and `?`, by default `.git`, `.hg`,
 `.svn`, `.DS_Store`, `__pycache__` and `.#*` lock files). Dragging does nothing — the Explorer never moves files by drag.
+The hub (Ratatoskr, which starts with drgnx) lists and watches the folders: a file made, removed or changed by git
+outside Emacs shows within a moment. While the hub is starting, the Explorer says it waits for it and fills when it
+is up.
 
 **Compact folders:** an open folder whose only entry is a folder shares its row (`src/app`), as in VS Code; the row
 is the last folder (opening, renaming, deleting act on it) and the chain ends at the first closed folder. Only
@@ -688,7 +691,9 @@ tree, is the real one).
 
 ## Remote folders in the Explorer
 
-A remote folder (a TRAMP name) is listed only by a command of yours: opening it (Open Remote…), Refresh, expanding or
+The hub lists local folders only: while a remote folder is among the Explorer's folders, the Explorer lists every
+folder itself, as it did before the hub listed them, without who-is-here badges; it goes back to the hub's listing
+when the remote folder is removed. A remote folder (a TRAMP name) is listed only by a command of yours: opening it (Open Remote…), Refresh, expanding or
 opening a folder row, New File, Rename, Delete and Paste, and leaving Find. A redraw that nothing of yours started, such as the one after a git status or a window change,
 shows the listing it already has and asks the host nothing; a remote folder that was never listed shows one row,
 `(not listed — Refresh)`, and Enter or a click on that row refreshes. A checkout in a local folder forgets only the

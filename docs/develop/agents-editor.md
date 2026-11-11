@@ -93,11 +93,10 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   (files: agents with a `pending`, `write` or `edit` entry, three marks with their initials then `+N`; folders: every
   ancestor up to the root, one mark per agent), the who-is-here rows (each session's newest entry) and the status
   string (eight marks, `+N`). A file in a linked worktree lands on the user's tree through the main checkout its
-  `.git` file names plus the entry's `rel`; it is shown only when that checkout is a workspace root. The Explorer
-  paints a badge through `drgnx-explorer-add-decorator` (an overlay at the row's end with `drgnx-git` set, so the next
-  paint of the row removes it); on the hub's rows the hub puts the ordinals on the row (`drgnx-agents-here`, hub.md
-  "The Explorer's listing as a tree") and `drgnx-agents-editor-here--explorer-badge`, on
-  `drgnx-explorer-badge-functions`, makes the badge; the status bar through `drgnx-statusbar-define-segment` and `agents-here` set after
+  `.git` file names plus the entry's `rel`; it is shown only when that checkout is a workspace root. In the Explorer
+  the hub puts the ordinals on the row (`drgnx-agents-here`, hub.md "The Explorer's listing as a tree") and
+  `drgnx-agents-editor-here--explorer-badge`, on `drgnx-explorer-badge-functions`, makes the badge (the Explorer of a
+  remote root, listed in Lisp, shows none); the status bar through `drgnx-statusbar-define-segment` and `agents-here` set after
   `agents` in `drgnx-statusbar-left`. Ordinals are the hub's: the client keeps each session's `(ordinal .
   last_active)` from its `agent` snapshots (and `agents/list` at setup and on each new connection), forgets a session
   whose snapshot has no ordinal (it ended), and sets both `drgnx-agents-editor-here-ordinal-function` and

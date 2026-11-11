@@ -534,43 +534,59 @@ compared, and a round's own list starts wherever the flood is)."
 (defun drgnx-perf-w--explorer-open (root)
   (setq drgnx-perf-w--roots (drgnx-explorer-roots))
   (drgnx-explorer-set-roots (list root))
-  (drgnx-wb-show-sidebar))
+  (drgnx-wb-show-sidebar)
+  ;; the env of the sidebar's class goes now: a window change sends it on an idle debounce, and a workload's wait is
+  ;; not idle (with the sidebar shown first the hub would wait for it)
+  (when (drgnx-explorer--rows-p) (drgnx-view-env-update drgnx-explorer-hub-view-name)))
 
 (defun drgnx-perf-w--explorer-close ()
   (ignore-errors (drgnx-explorer-set-roots drgnx-perf-w--roots))
   (ignore-errors (drgnx-wb-hide-sidebar)))
 
 (defun drgnx-perf-w-explorer-expand-setup ()
-  "A project with big/ of 5000 files, the Explorer on it."
+  "A project with big/ of 5000 files, the Explorer on it (the hub's rows, drawn: plan sja-complete E4)."
   (let ((root (expand-file-name "proj" (drgnx-perf-w--tmpdir))))
     (drgnx-perf-w-gen-big-dir (expand-file-name "big" root) 5000)
     (setq drgnx-perf-w--stats nil)
     (drgnx-perf-w--explorer-open root)
-    (redisplay t)
+    (unless (drgnx-perf--wait 10 (lambda () (drgnx-perf-w--drawn-p (drgnx-perf-w--big))))
+      (error "Premise: the hub's Explorer rows were not drawn in 10 s (rows path %s)" (drgnx-explorer--rows-p)))
     t))
 
 (defun drgnx-perf-w--big () (expand-file-name "proj/big" drgnx-perf-w--tmp))
+(defun drgnx-perf-w--big-first () (expand-file-name "b0000.txt" (drgnx-perf-w--big)))
+
+(defun drgnx-perf-w--drawn-p (path)
+  "Whether the Explorer's hub rows draw PATH's row."
+  (with-current-buffer drgnx-explorer-buffer-name (and (drgnx-explorer--rows-p) (drgnx-explorer--row-start path) t)))
 
 (defun drgnx-perf-w--expand-fire ()
-  (let ((big (drgnx-perf-w--big)) (t0 (float-time)))
-    (drgnx-cache--clear 'explorer-listing)              ; read the disk, as the bench does
-    (drgnx-explorer-toggle-at (with-current-buffer drgnx-explorer-buffer-name (drgnx-explorer--row-pos big)))
-    (redisplay t)
-    (drgnx-perf-w--stat :expand_ms (drgnx-perf-w--ms t0))))
+  "Open big/: the hub lists it; `drgnx-perf-w-explorer-expand-done' times it to its first file's row drawn."
+  (drgnx-perf-w--stat :expand_t0 (float-time))
+  (with-current-buffer drgnx-explorer-buffer-name
+    (drgnx-explorer-toggle-at (drgnx-explorer--row-start (drgnx-perf-w--big)))))
 
 (defun drgnx-perf-w-explorer-expand-each ()
+  "Close big/ (its rows gone), then open it after the first key."
   (let ((big (drgnx-perf-w--big)))
     (when (drgnx-explorer--expanded-p big)
-      (drgnx-explorer-toggle-at (with-current-buffer drgnx-explorer-buffer-name (drgnx-explorer--row-pos big))))
+      (with-current-buffer drgnx-explorer-buffer-name (drgnx-explorer-toggle-at (drgnx-explorer--row-start big)))
+      (unless (drgnx-perf--wait 10 (lambda () (not (drgnx-perf-w--drawn-p (drgnx-perf-w--big-first)))))
+        (error "Premise: big/ did not close in 10 s")))
     (drgnx-perf-w--arm #'drgnx-perf-w--expand-fire)
     t))
 
 (defun drgnx-perf-w-explorer-expand-done ()
-  (and (plist-get drgnx-perf-w--stats :expand_ms) (drgnx-explorer--expanded-p (drgnx-perf-w--big))))
+  "Whether big/'s first file is drawn after the fire; the first time, :expand_ms from the fire."
+  (or (plist-get drgnx-perf-w--stats :expand_ms)
+      (when-let* ((t0 (plist-get drgnx-perf-w--stats :expand_t0)) ((drgnx-perf-w--drawn-p (drgnx-perf-w--big-first))))
+        (drgnx-perf-w--stat :expand_ms (drgnx-perf-w--ms t0))
+        t)))
 
 (defun drgnx-perf-w-explorer-expand-digest ()
   (with-current-buffer drgnx-explorer-buffer-name
-    (format "%d %s" (length drgnx-explorer--rows) (secure-hash 'md5 (buffer-substring-no-properties (point-min) (point-max))))))
+    (format "%d %s" (drgnx-view-row-count drgnx-view)
+            (secure-hash 'md5 (buffer-substring-no-properties (point-min) (point-max))))))
 
 (defun drgnx-perf-w-explorer-expand-measure () (list :expand_ms (plist-get drgnx-perf-w--stats :expand_ms)))
 
@@ -624,18 +640,17 @@ compared, and a round's own list starts wherever the flood is)."
 (defun drgnx-perf-w--watch-name (round i) (format "w%03d-%02d.txt" round i))
 
 (defun drgnx-perf-w-explorer-watch-setup ()
-  "A project of 20 files, the Explorer on it as the hub-fed view (attached here until the switch, plan sja-complete
-E4), its listing drawn.  An error when it is not on the rows path."
+  "A project of 20 files, the Explorer on it (the hub-fed view it opens as), its listing drawn.  An error when it is
+not on the rows path."
   (let ((root (drgnx-perf-w--watch-root)))
     (make-directory root t)
     (dotimes (i 20) (write-region "" nil (expand-file-name (format "f%02d.txt" i) root) nil 'silent))
     (setq drgnx-perf-w--stats nil drgnx-perf-w--watch-round 0)
     (drgnx-perf-w--explorer-open root)
-    (drgnx-explorer-rows-attach "perf-explorer-watch" "unshown")
     (with-timeout (10 (with-current-buffer drgnx-explorer-buffer-name
                         (error "Premise: the hub's listing was not drawn in 10 s (rows path %s, env classes %S, windows %d, \
 patch %S, hub %s): %S"
-                               (drgnx-explorer--rows-p) (drgnx-view-env-classes "perf-explorer-watch")
+                               (drgnx-explorer--rows-p) (drgnx-view-env-classes drgnx-explorer-hub-view-name)
                                (length (get-buffer-window-list nil nil t))
                                (and drgnx-view-patch (list (drgnx-view-patch-class drgnx-view-patch) (drgnx-view-patch-version drgnx-view-patch)
                                                            (drgnx-view-patch-epoch drgnx-view-patch) (length (drgnx-view-patch-held drgnx-view-patch))
