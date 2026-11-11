@@ -41,6 +41,8 @@
 (defvar drgnx-work-diff-mode-map)
 (unless (featurep 'drgnx-work-board)
   (load (expand-file-name "drgnx-work-board" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-work-flow)
+  (load (expand-file-name "drgnx-work-flow" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-work-trail)
   (load (expand-file-name "drgnx-work-trail" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-work-review)
@@ -66,6 +68,10 @@
 (declare-function drgnx-work-board--changed "drgnx-work-board")
 (declare-function drgnx-work-lens-show-map "drgnx-work-board")
 (declare-function drgnx-work-lens-show-board "drgnx-work-board")
+(declare-function drgnx-work-lens-show-flow "drgnx-work-flow")
+(declare-function drgnx-work-flow-evidence "drgnx-work-flow")
+(declare-function drgnx-work-flow-rules "drgnx-work-flow")
+(declare-function drgnx-work-flow-buffers "drgnx-work-flow")
 (declare-function drgnx-work-detail-buffer "drgnx-work-detail")
 (declare-function drgnx-work-detail-update "drgnx-work-detail")
 (declare-function drgnx-work-detail-buffers "drgnx-work-detail")
@@ -136,7 +142,8 @@ it (a notes repository with the code repositories inside it)."
   '(work-view work-outline work-left work-right work-why work-touches work-next-agent work-previous-agent work-open
               work-open-beside work-needs-you-next work-needs-you-here-next work-needs-you-here-previous
               work-needs-you-1 work-needs-you-2 work-needs-you-3 work-needs-you-4 work-needs-you-5 work-needs-you-6
-              work-needs-you-7 work-needs-you-8 work-needs-you-9 work-view-map work-view-board work-view-timeline work-trail
+              work-needs-you-7 work-needs-you-8 work-needs-you-9 work-view-map work-view-board work-view-timeline work-view-flow
+              work-flow-evidence work-flow-rules work-trail
               work-steer work-pause work-resume work-stop work-keys-sheet work-conclusion-steps work-step-conclusions
               work-review work-second-reviewer work-review-accept work-review-reject
               work-focus work-overlaps
@@ -448,6 +455,14 @@ follows the windows; the commands."
                         :map 'drgnx-work-lens-map :doc "The map, keeping the selection")
   (drgnx-command-define 'work-view-board :category "Work" :title "Show the Board" :command #'drgnx-work-lens-show-board
                         :map 'drgnx-work-lens-map :doc "The tracker's tasks by column, keeping the selection")
+  (drgnx-command-define 'work-view-flow :category "Work" :title "Show the Flow" :command #'drgnx-work-lens-show-flow
+                        :map 'drgnx-work-lens-map :doc "A plan run's tasks by gate, its merge batch and its rule pack")
+  (drgnx-command-define 'work-flow-evidence :category "Work" :title "Show the Task's Evidence"
+                        :command #'drgnx-work-flow-evidence :map 'drgnx-work-flow-mode-map
+                        :doc "The hub's records of the selected task's runs, gate findings and waivers")
+  (drgnx-command-define 'work-flow-rules :category "Work" :title "Show the Rule Pack"
+                        :command #'drgnx-work-flow-rules :map 'drgnx-work-flow-mode-map
+                        :doc "Scroll the Flow to its rule pack's rows")
   (pcase-dolist (`(,id ,title ,fn ,doc)
                  '((work-view-timeline "Show the Timeline" drgnx-work-lens-show-timeline "A lane for each agent over time, keeping the selection")
                    (work-trail "Open the Research Trail" drgnx-work-trail-show "The selected agent's steps in order, with its conclusions")
@@ -521,7 +536,8 @@ windows lose the layout motion's parameters and the map buffers go."
   (dolist (b (buffer-list))
     (when (buffer-local-value 'drgnx-work-live-file-mode b)
       (with-current-buffer b (drgnx-work-live-file-mode -1))))
-  (dolist (b (append (drgnx-work-board-buffers) (drgnx-work-timeline-buffers) (drgnx-work-trail-buffers)
+  (dolist (b (append (drgnx-work-board-buffers) (drgnx-work-flow-buffers) (drgnx-work-timeline-buffers)
+                     (drgnx-work-trail-buffers)
                      (drgnx-work-review-buffers)))
     (kill-buffer b))
   (dolist (b (drgnx-work-detail-buffers)) (kill-buffer b))

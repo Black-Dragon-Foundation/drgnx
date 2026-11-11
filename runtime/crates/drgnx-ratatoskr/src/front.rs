@@ -889,6 +889,7 @@ impl Front {
             | Params::WorkTrailSubscribe(_)
             | Params::WorkTrailClose(_)
             | Params::WorkBoardSubscribe(_)
+            | Params::WorkFlowSubscribe(_)
             | Params::WorkFiles(_)
             | Params::WorkHunks(_)
             | Params::WorkFileAt(_)) => crate::agent_core::serve(self, &caller, p)

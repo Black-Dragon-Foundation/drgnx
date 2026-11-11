@@ -924,12 +924,12 @@ mission chips (the machines' load) at the right."
                        (drgnx-work-client-chips state) " "))))
 
 (defun drgnx-work-lens-string (&optional current)
-  "The lens: Map · Board · Timeline, CURRENT (`map', `board' or `timeline'; default `map') in bold, the others in the
-label face (`m' `b' `t' switch)."
+  "The lens: Map · Board · Timeline · Flow, CURRENT (`map', `board', `timeline' or `flow'; default `map') in bold, the
+others in the label face (`m' `b' `t' `F' switch)."
   (let ((current (or current 'map)))
     (mapconcat (lambda (v)
                  (propertize (format " %s " (cdr v)) 'face (if (eq (car v) current) 'bold 'drgnx-work-label)))
-               '((map . "Map") (board . "Board") (timeline . "Timeline")) "·")))
+               '((map . "Map") (board . "Board") (timeline . "Timeline") (flow . "Flow")) "·")))
 
 (defun drgnx-work-map--lens-string ()
   "The lens of the map: Map · Board · Timeline, the map in bold."

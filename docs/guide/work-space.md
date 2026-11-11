@@ -47,6 +47,9 @@ Everything here is computed in your Emacs from what the hub already sent, so a k
 | `Enter` | open: an agent's transcript (today's Agents view), a branch's repository (Magit when it is there), a file, a spec or plan document |
 | `Shift-Enter` | the same, beside the map, without moving focus |
 | `Alt-←` / `Alt-→` (macOS `Ctrl--` / `Ctrl-Shift--`; Vim `Ctrl-o` / `Alt-→`) | back to the selection before the last move, or forward again; a run of arrows or agent keys is one move, a jump (search, `g N`, a click) is one |
+| `m` `b` `t` `F` (every profile) | the Map, the Board, the Timeline or the Flow, in the same window |
+| `e` (in the Flow) | the selected task's evidence: the hub's records of its runs and any waiver |
+| `R` (in the Flow) | scroll to the run's rule pack |
 
 The **selected** card is raised; its **chain** (everything it came from, up, and everything it touches, down) keeps
 its normal look; everything else is dimmed. From any item, `↑` reaches the ask it came from in a handful of keys. If
@@ -68,8 +71,14 @@ appears in the needs-you strip; its key jumps to the agents in it.
   and every agent that waits on you. On the right, the machines' load ("desktop 3/16"). `n` and `N` cycle the chips,
   and `C-k n` / `C-c w n` / `SPC a n` do it from anywhere. **A jump only selects.** Allowing, pushing and answering stay
   on the card's own keys; no key of the map settles anything.
-- The **lens** (the tab line) names the views: Map, Board, Timeline. `m`, `b` and `t` switch between them in the same
-  window, and the selection comes along: each view shows the nearest thing it can represent.
+- The **lens** (the tab line) names the views: Map, Board, Timeline, Flow. `m`, `b`, `t` and `F` switch between them
+  in the same window, and the selection comes along: each view shows the nearest thing it can represent.
+- The **Flow** shows a plan run as the hub's gates see it: a row per task and a column per gate (Brief, Red first,
+  Build, Author check, Merge batch, Review), each cell a chip (green when it passed, accent while it runs, amber when it
+  holds the task, red when it failed, outlined while it waits). Under the tasks are the merge batch and the run's rule
+  pack. `↑` `↓` move between tasks, `Tab` walks the held ones, `e` shows the selected task's evidence (every run the
+  hub recorded for it, with its failing rows, and any waiver you gave) and `R` scrolls to the rules. The Flow shows the
+  newest running job.
 - `f` hides everything not on the selection's chain; while it is on, the arrow keys move inside the chain and ask the
   hub for nothing. `o` shows only the agents and branches that overlap. `1` to `6` collapse a layer to one thin row
   with its name and a count, `0` opens them all, `.` brings finished items back. Each of these is a layout you asked

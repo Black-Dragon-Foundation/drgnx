@@ -202,3 +202,22 @@ doesn't name `red-first`, passes.
 The gates' policy files, `test/affected.eld`, `test/frozen.eld` and `test/flaky.eld` (`vordr::pack::POLICY_PATHS`),
 are read at the line's base commit (`orch::policy::Policy::at`), never at the tip: a tip can't change the rules it is
 judged by. A tip that edits one is a `code.ci-config` change at its merge (`runner::git`), so the user answers it.
+
+## The Flow lens
+
+`work/flow/subscribe {view, map, job?}` opens the Work space's fourth lens view (`modules/tools/drgnx-work-flow.el`;
+`F` from any lens view). It is a hub-fed view like the Board (`work::trail`): the hub reads the job (the named one,
+else the newest running job), its tasks and their evidence, its rule pack, its merge queue (ready and batch) and its
+open `gate` cards, and builds the model and the rows (`work::trail::flow`, pure):
+
+- a row per task, a column per gate: Brief, Red first, Build, Author check, Merge batch, Review. Each cell is a chip
+  in its state's face: `drgnx-chip-ok` passed, `drgnx-chip-accent` running, `drgnx-chip-attention` held,
+  `drgnx-chip-error` failed, `drgnx-chip-quiet` waiting, the label face where the pack has no such gate. Red first is
+  the oldest red run's failing rows (held at review without one), Build the newest run, the author check its checks
+  green at their newest runs, the merge column the queue's place or the open `gate` card's words;
+- under them the batch being checked (its tips) and the rule pack (each rule's kind and words);
+- the model: a `task` node per task with the `flow` form's links up and down and the gates' states as fields, the
+  lists `tasks` and `held` (the needs-you chips; `Tab` walks them).
+
+`e` asks `orch/evidence` for the selected task and lists each record (kind, job, tree, command, its failing rows or
+its pass count, a waiver's reason); `R` scrolls to the rules. The view is read again after every write.

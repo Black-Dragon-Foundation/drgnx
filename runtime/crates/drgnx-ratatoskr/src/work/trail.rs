@@ -10,6 +10,7 @@
 //! write like a trail.
 
 mod board;
+mod flow;
 mod model;
 
 use crate::dispatch::Caller;
@@ -20,8 +21,8 @@ use runstav::methods::tasks::{FindParams, TaskList};
 use runstav::methods::timeline::{Step as WireStep, TimelineParams};
 use runstav::methods::view::ViewEnv;
 use runstav::methods::work::{
-    BoardSubscribe, Conclusion as WireConclusion, ConclusionsParams, TrailClose, TrailLane,
-    TrailSubscribe, TrailSubscribed,
+    BoardSubscribe, Conclusion as WireConclusion, ConclusionsParams, FlowSubscribe, TrailClose,
+    TrailLane, TrailSubscribe, TrailSubscribed,
 };
 use runstav::registry::Class;
 use runstav::wire::Error;
@@ -40,6 +41,8 @@ enum Sub {
     Timeline(Vec<TrailLane>),
     /// A Board: map view, plans.
     Board(String, Vec<String>),
+    /// A Flow lens: map view, job (none: the newest running job).
+    Flow(String, Option<String>),
 }
 
 /// What a view's rows are built from, read once per refresh for every class.
@@ -48,6 +51,7 @@ enum Data {
     Trail(Vec<trail::Step>, Vec<trail::Conclusion>, usize),
     Timeline(Vec<trail::Lane>),
     Board(Vec<board::Card>),
+    Flow(Box<flow::Flow>),
 }
 
 /// The trail and Timeline views of every connection, keyed (connection, view).
@@ -144,12 +148,13 @@ impl Trails {
                 Data::Timeline(out)
             }
             Sub::Board(map, plans) => Data::Board(board_cards(f, key.0, &map, &plans).await),
+            Sub::Flow(map, job) => Data::Flow(Box::new(flow_facts(f, key.0, &map, job).await)),
         };
         let data = Arc::new(data);
         lock(&self.data).insert(key.clone(), data.clone());
         let near = match *data {
             Data::Timeline(_) => f.core.map.near(key.0),
-            Data::Trail(..) | Data::Board(_) => Vec::new(),
+            Data::Trail(..) | Data::Board(_) | Data::Flow(_) => Vec::new(),
         };
         f.core
             .views
@@ -169,6 +174,7 @@ fn doc_of(data: &Data, near: &[String]) -> crate::view::model::Doc {
         Data::Trail(steps, concs, total) => model::trail_doc(steps, concs, *total),
         Data::Timeline(lanes) => model::timeline_doc(lanes, near),
         Data::Board(cards) => board::board_doc(cards),
+        Data::Flow(flow) => flow::flow_doc(flow),
     }
 }
 
@@ -181,6 +187,7 @@ fn rows(data: &Data, env: &ViewEnv, fonts: &dyn drgnx_rows::fit::Measure) -> Vec
         Data::Trail(steps, concs, _) => trail::trail_rows(steps, concs, &renv, zone),
         Data::Timeline(lanes) => trail::timeline_rows(lanes, &renv, fonts, zone),
         Data::Board(cards) => board::board_rows(cards, env),
+        Data::Flow(flow) => flow::flow_rows(flow, env),
     }
 }
 
@@ -251,6 +258,92 @@ async fn board_cards(f: &Front, conn: u64, map: &str, plans: &[String]) -> Vec<b
     }
     board::put_agents(&mut cards, &f.core.map.agents_of(conn, map));
     cards
+}
+
+/// The Flow lens's facts: JOB (else the newest running job, else the newest), its tasks with their evidence, the
+/// agents of connection CONN's map view MAP on them, its rule pack, its merge queue and its open `gate` cards.  A read
+/// that fails shows an empty lens.
+async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flow::Flow {
+    let read = f
+        .writer
+        .db
+        .read(move |c| {
+            let job = match job {
+                Some(j) => Some(j),
+                None => norn::read::jobs::jobs(c, Some("running"))?
+                    .into_iter()
+                    .next()
+                    .or(norn::read::jobs::jobs(c, None)?.into_iter().next()),
+            };
+            let Some(job) = job else {
+                return Ok(None);
+            };
+            let title = norn::read::jobs::job(c, &job)?
+                .and_then(|j| j.title.or(j.plan))
+                .unwrap_or_else(|| job.clone());
+            let pack = norn::read::evidence::pack_of_job(c, &job)?;
+            let cards = norn::read::cards::cards(c, &job, Some("open"))?;
+            let mut tasks = Vec::new();
+            for t in norn::read::tasks::tasks(c, &job)? {
+                let row = t.row;
+                let held = cards
+                    .iter()
+                    .find(|k| {
+                        k.task.as_deref() == Some(row.id.as_str())
+                            && k.kind.as_deref() == Some("gate")
+                    })
+                    .map(|k| k.title.clone().unwrap_or_default());
+                tasks.push(flow::TaskFacts {
+                    evidence: norn::read::evidence::of_task(c, &row.id)?,
+                    id: row.id,
+                    n: row.n,
+                    title: row.title.unwrap_or_default(),
+                    status: row.status.unwrap_or_default(),
+                    agent: row.agent,
+                    queue: flow::Queue::None,
+                    held,
+                });
+            }
+            Ok(Some((job, title, pack, tasks)))
+        })
+        .await;
+    let Ok(Some((job, title, pack, mut tasks))) = read else {
+        return flow::Flow::default();
+    };
+    let (ready, batch) = (f.queue.ready(&job), f.queue.batch(&job));
+    let agents = f.core.map.agents_of(conn, map);
+    for t in &mut tasks {
+        if batch.iter().any(|b| b.task == t.id) {
+            t.queue = flow::Queue::Batch;
+        } else if ready.iter().any(|b| b.task == t.id) {
+            t.queue = flow::Queue::Ready;
+        }
+        if let Some((_, _, label)) = agents.iter().find(|(task, ..)| *task == t.id) {
+            t.agent = Some(label.clone());
+        }
+    }
+    let label = |id: &str| {
+        tasks
+            .iter()
+            .find(|t| t.id == id)
+            .map_or_else(|| id.to_owned(), |t| format!("T{}", t.n))
+    };
+    let batch = batch
+        .iter()
+        .map(|b| {
+            (
+                label(&b.task),
+                format!("tip {}", &b.tip[..b.tip.len().min(9)]),
+            )
+        })
+        .collect();
+    flow::Flow {
+        job,
+        title,
+        pack,
+        tasks,
+        batch,
+    }
 }
 
 /// The caller the trail reads the store as.
@@ -378,6 +471,22 @@ pub async fn board_subscribe(
 ) -> Result<TrailSubscribed, Error> {
     let key = (c.conn_id, p.view);
     lock(&f.core.trails.views).insert(key.clone(), Sub::Board(p.map, p.plans));
+    f.core.views.model_restart(key.0, &key.1);
+    f.core.trails.refresh(f, &key).await;
+    Ok(TrailSubscribed {
+        hub: f.core.views.hub(),
+    })
+}
+
+/// `work/flow/subscribe`: VIEW of CALLER's connection shows the Flow lens of `job` (else the newest running job), with
+/// the agents of map view `map`; its model and rows go out as a Board's do, before the answer.
+pub async fn flow_subscribe(
+    f: &Front,
+    c: &Caller,
+    p: FlowSubscribe,
+) -> Result<TrailSubscribed, Error> {
+    let key = (c.conn_id, p.view);
+    lock(&f.core.trails.views).insert(key.clone(), Sub::Flow(p.map, p.job));
     f.core.views.model_restart(key.0, &key.1);
     f.core.trails.refresh(f, &key).await;
     Ok(TrailSubscribed {

@@ -76,6 +76,16 @@ impl Queue {
         }
     }
 
+    /// JOB's ready tasks, in readiness order.
+    pub fn ready(&self, job: &str) -> Vec<Ready> {
+        self.jobs
+            .lock()
+            .unwrap()
+            .get(job)
+            .map(|l| l.ready.clone())
+            .unwrap_or_default()
+    }
+
     /// JOB's current batch.
     pub fn batch(&self, job: &str) -> Vec<Ready> {
         self.jobs
