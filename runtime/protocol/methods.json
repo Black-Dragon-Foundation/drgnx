@@ -29965,6 +29965,57 @@
       "classes": [
         "user"
       ],
+      "doc": "a hand-off's rows show the agent's mark from now on: a new worker's, known once its first snapshot comes (after search/handoff answered); the asking window's own hand-offs only",
+      "name": "search/handoff-mark",
+      "params": {
+        "$defs": {
+          "HandoffMark": {
+            "additionalProperties": false,
+            "description": "The mark the handed-off rows show: the agent's colour (a face name) and its glyph (one column), as the editor gives\nthem (the agents' identity scheme).",
+            "properties": {
+              "face": {
+                "type": "string"
+              },
+              "glyph": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "face",
+              "glyph"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/handoff-mark`: hand-off HANDOFF's rows show MARK (a new worker's mark, known from its first snapshot,\nafter `search/handoff` answered).",
+        "properties": {
+          "handoff": {
+            "type": "string"
+          },
+          "mark": {
+            "$ref": "#/$defs/HandoffMark"
+          }
+        },
+        "required": [
+          "handoff",
+          "mark"
+        ],
+        "title": "HandoffMarkParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "where a hand-off is: sent, editing or done, and which of its matches the agent's edits took out, which are still there and which cannot be found again",
       "name": "search/handoff-state",
       "params": {

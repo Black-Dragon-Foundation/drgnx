@@ -225,7 +225,8 @@ places and to say which it skipped and why, and which files changed since the se
 secret-looking files (`.env`, keys) stay out of the brief unless you switch **hidden files** in on the card
 (`C-c C-h`); the echo area names the ones left out.
 
-The handed-off rows show the agent's mark (its colour and shape), and the view's status line a chip: `sent`, then
+The handed-off rows show the agent's mark (its colour and shape; a new worker's as soon as it has started), and the
+view's status line a chip: `sent`, then
 `editing, 12 done`, then `done 47 / 2 skipped` (a match whose line moved where it cannot be found again counts as
 unknown, never as done). A worker's edits wait for your review in the Work space; a pair's are in your buffers.
 **Re-run in Worktree** (the palette) runs the same search in the worker's worktree to show what is left.

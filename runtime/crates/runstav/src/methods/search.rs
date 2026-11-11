@@ -650,6 +650,15 @@ pub struct HandoffAnswer {
     pub hidden: Vec<String>,
 }
 
+/// `search/handoff-mark`: hand-off HANDOFF's rows show MARK (a new worker's mark, known from its first snapshot,
+/// after `search/handoff` answered).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffMarkParams {
+    pub handoff: String,
+    pub mark: HandoffMark,
+}
+
 /// `search/handoff-state`: where hand-off HANDOFF is.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1518,6 +1527,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/handoff", SearchHandoff(HandoffParams) -> HandoffAnswer,
             classes: [User], writes: true,
             doc: "hand a view's ticked matches to an agent: a brief (the instruction, the query, the matches grouped by file, at most 300 lines, the rest through the drgnx-search tool search_results) to a new worker in its own worktree or to a live session; hidden paths left out unless asked; its progress is search-handoff-state",
+        ),
+        method!(
+            "search/handoff-mark", SearchHandoffMark(HandoffMarkParams) -> bool,
+            classes: [User], writes: false,
+            doc: "a hand-off's rows show the agent's mark from now on: a new worker's, known once its first snapshot comes (after search/handoff answered); the asking window's own hand-offs only",
         ),
         method!(
             "search/handoff-state", SearchHandoffState(HandoffStateParams) -> HandoffState,

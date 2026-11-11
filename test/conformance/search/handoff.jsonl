@@ -1,4 +1,4 @@
-{"scenario": "search/handoff", "requires": ["v1", "test-hooks"], "doc": "Ask an Agent: search/handoff hands a search's matches (all but the unticked) to a live session with a brief; the answer names the hand-off, the session, the ids handed off and how many lines the brief holds; search/handoff-state says it was sent and every match is still there; a hand-off to a session the hub does not hold is refused."}
+{"scenario": "search/handoff", "requires": ["v1", "test-hooks"], "doc": "Ask an Agent: search/handoff hands a search's matches (all but the unticked) to a live session with a brief; the answer names the hand-off, the session, the ids handed off and how many lines the brief holds; search/handoff-state says it was sent and every match is still there; a hand-off to a session the hub does not hold is refused; a hand-off sent without a mark (a new worker's comes from its first snapshot) is marked later with search/handoff-mark, another window's or an unknown one refused."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "write_file", "path": "$ROOT/proj/a.txt", "text": "one needle\nctx\ntwo needle\n"}
@@ -20,3 +20,10 @@
 {"do": "expect", "conn": "e", "json": {"id": 6, "result": {"handoff": "$h", "view": "s", "session": "$sid", "phase": "sent", "done": [], "left": "$any"}}, "within_ms": 10000}
 {"do": "send", "conn": "e", "json": {"id": 7, "method": "search/handoff-state", "params": {"handoff": "h:999"}}}
 {"do": "expect", "conn": "e", "json": {"id": 7, "error": "$any"}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 8, "method": "search/handoff", "params": {"view": "s", "instruction": "Rename needle to pin.", "to": {"session": {"id": "$sid"}}}}}
+{"do": "expect", "conn": "e", "json": {"id": 8, "result": {"handoff": "$capture:h2", "session": "$sid", "ids": "$any", "sent": 3, "more": 0}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 9, "method": "search/handoff-mark", "params": {"handoff": "$h2", "mark": {"face": "drgnx-agent-2", "glyph": "\u25b2"}}}}
+{"do": "expect", "conn": "e", "json": {"id": 9, "result": true}, "within_ms": 10000}
+{"do": "connect", "conn": "o", "hub": "h"}
+{"do": "send", "conn": "o", "json": {"id": 1, "method": "search/handoff-mark", "params": {"handoff": "$h2", "mark": {"face": "drgnx-agent-2", "glyph": "\u25b2"}}}}
+{"do": "expect", "conn": "o", "json": {"id": 1, "error": "$any"}, "within_ms": 10000}

@@ -129,3 +129,26 @@ Worktree searches the worker's worktree."
       (should (equal drgnx-replace--root "/wt/")))
     (should (= searched 1))
     (should-not (drgnx-search-handoff-event "search-change" nil))))
+
+(ert-deftest drgnx-search-handoff/a-new-workers-rows-are-marked-from-its-first-snapshot ()
+  "Pattern D: a new worker has no ordinal when `search/handoff' answers, so its rows go unmarked; its first `agent'
+snapshot brings the ordinal, and the hand-off's rows get its mark (`search/handoff-mark') once."
+  (drgnx-search-handoff-test--with (list :total 2 :off '("m:1:4" "m:1:5") :row "f:a.el"
+                                         :answer '(:handoff "h:3" :session "w1" :worktree "/wt/" :ids ["m:1:4" "m:1:5"]
+                                                            :sent 2 :more 0))
+    (cl-letf (((symbol-function 'drgnx-agents-editor-ordinal) #'ignore)
+              ((symbol-function 'drgnx-agent-identity)
+               (lambda (n) (and (eql n 3) '(:face drgnx-agent-three :glyph "▲")))))
+      (drgnx-search-to-agent)
+      (with-current-buffer drgnx-search-handoff-buffer-name
+        (insert "Look at these.")
+        (drgnx-search-handoff-send))
+      (should-not (plist-get (drgnx-search-handoff-test--sent) :mark))
+      (should-not (assoc "search/handoff-mark" drgnx-search-handoff-test--calls))
+      ;; another session's snapshot marks nothing; the worker's does, once
+      (drgnx-search-handoff-event "agent" '(:id "a1" :session (:ordinal 3)))
+      (should-not (assoc "search/handoff-mark" drgnx-search-handoff-test--calls))
+      (drgnx-search-handoff-event "agent" '(:id "w1" :session (:ordinal 3)))
+      (drgnx-search-handoff-event "agent" '(:id "w1" :session (:ordinal 3)))
+      (should (equal (seq-filter (lambda (c) (equal (car c) "search/handoff-mark")) drgnx-search-handoff-test--calls)
+                     '(("search/handoff-mark" (:handoff "h:3" :mark (:face "drgnx-agent-three" :glyph "▲")))))))))

@@ -760,6 +760,9 @@ impl Front {
             Params::SearchHandoff(p) => crate::view::search::handoff(self, &caller, p)
                 .await
                 .map(|r| json!(r)),
+            Params::SearchHandoffMark(p) => {
+                crate::view::search::handoff_mark(self, &caller, p).map(|b| json!(b))
+            }
             Params::SearchHandoffState(p) => crate::view::search::handoff_state(self, &caller, p)
                 .await
                 .map(|r| json!(r)),

@@ -37,9 +37,9 @@ use run::{Buffer, Found, Read};
 use runstav::methods::search::{
     AppliedParams, ApplyParams, BufferParams, ChangeOrigin, EditDocAnswer, EditDocParams,
     EditsAnswer, EditsParams, FileEdits, FindQuery, FoldParams, GrepGroup, GrepLookParams,
-    GrepReplaceParams, GrepSkippedParams, GrepSort, GroupParams, HandoffAnswer, HandoffParams,
-    HandoffState, HandoffStateParams, HandoffTo, PreviewAnswer, PreviewParams, RunDone, RunParams,
-    RunStarted, ScopeDone, ScopeKind, UndoParams,
+    GrepReplaceParams, GrepSkippedParams, GrepSort, GroupParams, HandoffAnswer, HandoffMark,
+    HandoffMarkParams, HandoffParams, HandoffState, HandoffStateParams, HandoffTo, PreviewAnswer,
+    PreviewParams, RunDone, RunParams, RunStarted, ScopeDone, ScopeKind, UndoParams,
 };
 use runstav::methods::view::ViewModel;
 use runstav::wire::{Error, ErrorCode};
@@ -1996,20 +1996,9 @@ pub async fn handoff(f: &Front, c: &Caller, p: HandoffParams) -> Result<HandoffA
         views.greps.handoffs.forget(&id);
         return Err(e);
     }
-    // the handed-off rows show the agent's mark
+    // the handed-off rows show the agent's mark (a new worker's comes later: `search/handoff-mark`)
     if let Some(mark) = &p.mark {
-        let mark = AgentMark {
-            face: mark.face.clone(),
-            glyph: mark.glyph.clone(),
-        };
-        views.greps.current(c.conn_id, &p.view, |run| {
-            for i in &ids {
-                run.handed.insert(i.clone(), mark.clone());
-            }
-            for patch in rebuild_patches(&mut lock(&views.store), c.conn_id, &p.view, run) {
-                f.send_to(c.conn_id, "view-patch", json!(patch));
-            }
-        });
+        mark_handed(f, c, &p.view, &ids, mark);
     }
     if let Some(front) = views.front.get().and_then(std::sync::Weak::upgrade) {
         handoff::watch(front, c.clone(), id.clone(), session.clone());
@@ -2023,6 +2012,43 @@ pub async fn handoff(f: &Front, c: &Caller, p: HandoffParams) -> Result<HandoffA
         more,
         hidden,
     })
+}
+
+/// VIEW's rows of match IDS show MARK, redrawn.
+fn mark_handed(f: &Front, c: &Caller, view: &str, ids: &[String], mark: &HandoffMark) {
+    let views = &f.core.views;
+    let mark = AgentMark {
+        face: mark.face.clone(),
+        glyph: mark.glyph.clone(),
+    };
+    views.greps.current(c.conn_id, view, |run| {
+        for i in ids {
+            run.handed.insert(i.clone(), mark.clone());
+        }
+        for patch in rebuild_patches(&mut lock(&views.store), c.conn_id, view, run) {
+            f.send_to(c.conn_id, "view-patch", json!(patch));
+        }
+    });
+}
+
+/// `search/handoff-mark`: hand-off P.handoff's rows show P.mark; the asking connection's own hand-offs only.
+pub fn handoff_mark(f: &Front, c: &Caller, p: HandoffMarkParams) -> Result<bool, Error> {
+    let found = f.core.views.greps.handoffs.with(&p.handoff, |h| {
+        (h.conn == c.conn_id).then(|| {
+            (
+                h.view.clone(),
+                h.matches.iter().map(|m| m.id.clone()).collect::<Vec<_>>(),
+            )
+        })
+    });
+    let Some(Some((view, ids))) = found else {
+        return Err(invalid(
+            "handoff",
+            "no such hand-off (ended, older than 24 h, or another window's)",
+        ));
+    };
+    mark_handed(f, c, &view, &ids, &p.mark);
+    Ok(true)
 }
 
 /// `search/handoff-state`: where hand-off P.handoff is (`handoff.rs`); the asking connection's own only.
