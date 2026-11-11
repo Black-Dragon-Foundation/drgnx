@@ -66,6 +66,26 @@ a pack that doesn't read, or names a rule or kind the hub doesn't know, refuses 
 the pack, so the user approves it with the plan, and the approval records it as the job's `rule_pack` entity
 (`norn::write::evidence::rule_pack`); the gates read that record, never the file again.
 
+## Red first
+
+Before a task's merge (after the merge gate allows it, before the `BeforeCommit` hooks), `orch::red_first::check`
+reads the task's commits base..tip and decides with `vordr::redfirst::decide`:
+
+1. The **test commit** is the first commit. It may touch any file: an inline `#[cfg(test)] mod tests` is fine.
+2. A hub job at the test commit's tree (its tree key) failed rows of class `assert`. A `build` row counts only when
+   the pack's `:compile-fail-reds` has its language (cargo's `build` rows are Rust, an ERT row Emacs Lisp) and it
+   names a symbol the task's non-test change adds (an item or field of a Rust file above its `#[cfg(test)]`, an Emacs
+   Lisp definition). A `timeout`, `error` or `infra` row is not a red. A test commit whose tests pass at it (the
+   implementation came with them) is held.
+3. A job with the same selector and env stamp at the tip passed the same rows (for a build red: failed none).
+4. The test commit's test lines (a test path's added lines, a Rust file's below its `#[cfg(test)]`) are still at the
+   tip: a deleted one that isn't added back holds the task.
+
+Any hub job counts (the evidence records, "Evidence"). A task whose body, as the user approved it, has a line
+`**Red:** none (reason)` passes on it; the reason is required. A missing run, or a hold, is a `gate` card on the task
+(key `red-first`) saying what is missing or wrong. A job approved without a rule pack, or one whose pack doesn't name
+`red-first`, passes.
+
 ## Policy from the base
 
 The gates' policy files, `test/affected.eld`, `test/frozen.eld` and `test/flaky.eld` (`vordr::pack::POLICY_PATHS`),

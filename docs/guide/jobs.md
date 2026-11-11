@@ -257,6 +257,9 @@ task, `**Depends:** Task 1, Task 2` (it waits for them) and `**Role:** implement
 `implement`). Plan-wide: `**Repo:** path` and `**Won't build:** text` — each won't-build line becomes your decision
 in the job's decision log, so no agent builds it; `**Pack:** file` names the rule pack its gates read (default: the
 one drgnx ships; [orchestration.md](../develop/orchestration.md), "The rule pack"), which you approve with the plan.
+Under the pack's red-first rule a task merges only when its first commit is its tests, failing, and the tip passes
+them; a task with nothing to test says `**Red:** none (reason)` in its body, and only the line in the plan you
+approved counts. A task held by a gate waits on a card that says what is missing.
 A plan with a dependency cycle, an unknown task or a task number
 twice is refused. The
 job keeps a snapshot of the plan: editing the file later does not change a running job.
