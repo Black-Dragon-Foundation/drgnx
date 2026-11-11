@@ -560,6 +560,12 @@ chrome faces, frame metrics, windows, modules."
                                                      :header (window-header-line-height w)
                                                      :line (window-default-line-height w)
                                                      :end (cdr (posn-x-y (posn-at-point (window-end w t) w)))
+                                                     ;; the gutter: fringes, margins and where the text area starts
+                                                     :fringes (window-fringes w) :margins (window-margins w)
+                                                     :text-left (car (window-body-pixel-edges w))
+                                                     :numbers (with-selected-window w
+                                                                (and (bound-and-true-p display-line-numbers-mode)
+                                                                     (line-number-display-width t)))
                                                      :mode (buffer-local-value 'major-mode (window-buffer w))))
                                    (window-list f 'no-mini))
                   :children (cl-count-if (lambda (c) (and (frame-visible-p c) (frame-parent c))) (frame-list))
