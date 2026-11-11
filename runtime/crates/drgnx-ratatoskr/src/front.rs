@@ -752,6 +752,13 @@ impl Front {
             Params::SearchEditDoc(p) => crate::view::search::edit_doc(self, &caller, p)
                 .await
                 .map(|r| json!(r)),
+            // Ask an Agent: the brief, the session it goes to, and how far it is
+            Params::SearchHandoff(p) => crate::view::search::handoff(self, &caller, p)
+                .await
+                .map(|r| json!(r)),
+            Params::SearchHandoffState(p) => crate::view::search::handoff_state(self, &caller, p)
+                .await
+                .map(|r| json!(r)),
             Params::SearchPreview(p) => crate::view::search::preview(self, &caller, p)
                 .await
                 .map(|r| json!(r)),

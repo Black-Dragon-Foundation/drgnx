@@ -147,7 +147,8 @@ anything is written.
 
 **Replace All** first shows the **Replace All sheet**, a box in the middle of the window (the popup lane, modal): every
 file with its lines added and removed
-and how many of its matches are skipped, the selected file's first hunk, its changed lines (`n`/`p` or the arrows move), what is skipped
+and how many of its matches are skipped, the selected file (in a thin ring) and its first hunk, its changed lines, which
+the ring is as wide as (`n`/`p` or the arrows move), what is skipped
 and why, and how many files with unsaved edits stay unsaved. **Replace** writes exactly the changes the sheet shows (the
 hub's change set); **Cancel** writes nothing. The setting `drgnx-search-preview-threshold` (default 1) is how many
 matches it takes to show the sheet; 0 never shows it, and `C-u` Replace All skips it once.
@@ -173,6 +174,28 @@ header line says what was saved, and the lines after a split or deleted one keep
 Saves** puts the files back, newest save first (a file edited since is left alone and named); the buffer's own `undo`
 undoes typing, not files. **Discard Edited Results** drops the unsaved edits and closes it; closing it with unsaved
 edits asks first, and only when you closed it.
+
+### Ask an Agent
+
+**Ask an Agent** (`M-a` in the Search view; `C-c C-a` in the Emacs and Vim profiles; the palette) hands the ticked
+matches to an agent, or the selected row's (a match, or a file's matches) when none is ticked. A small card opens in
+the middle of the window: its text is what the agent is to do, prefilled with a replacement ("Replace `pending` with
+`queued` in these places, keeping behaviour"); its header line says who it goes to. **Next Agent** (`C-c C-w`) goes
+round a **new worker** of your default agent profile, in a worktree of its own (the default), and each live session;
+a session working in this checkout is a **pair**, which edits your buffers directly. **Send** (`C-<return>`; `C-c C-c`)
+hands it off, **Cancel** (`<escape>`; `C-c C-k`) does not.
+
+The agent gets a brief: what to do, the search and its replacement, and the places, grouped by file, as
+`path:line:col  in <definition>  <line>`; at most 300 places, or about 8,000 tokens' worth, go in the brief, and the
+agent reads the rest with its `search_results` tool (that hand-off only, for 24 hours). It is told to edit only those
+places and to say which it skipped and why, and which files changed since the search. Matches in dot paths and
+secret-looking files (`.env`, keys) stay out of the brief unless you switch **hidden files** in on the card
+(`C-c C-h`); the echo area names the ones left out.
+
+The handed-off rows show the agent's mark (its colour and shape), and the view's status line a chip: `sent`, then
+`editing, 12 done`, then `done 47 / 2 skipped` (a match whose line moved where it cannot be found again counts as
+unknown, never as done). A worker's edits wait for your review in the Work space; a pair's are in your buffers.
+**Re-run in Worktree** (the palette) runs the same search in the worker's worktree to show what is left.
 
 ## The list stays current
 
@@ -225,6 +248,10 @@ view, scope This file.
 | Delete This Line (on save) (Edit Results) | `C-S-k` | `C-c C-d` | `C-c C-d` |
 | Take the File's Line (Edit Results) | palette | `C-c C-r` | `C-c C-r` |
 | Undo All Saves of Edited Results | palette | palette | palette |
+| Ask an Agent (the Search view) | `M-a` | `C-c C-a` | `C-c C-a` |
+| Send / Cancel (the Ask an Agent card) | `C-<return>` / `<escape>` | `C-c C-c` / `C-c C-k` | `C-c C-c` / `C-c C-k` |
+| Next Agent / Hidden Files In or Out (the card) | `C-c C-w` / `C-c C-h` | `C-c C-w` / `C-c C-h` | `C-c C-w` / `C-c C-h` |
+| Re-run in Worktree | palette | palette | palette |
 
 Except where marked, the keys work in the Search view and the find bar, their fields too; `RET` in a find bar field
 is its next match (in Replace: replace it). Next and Previous Match show the match in the editor; Next and Previous
@@ -238,7 +265,9 @@ palette, category Search.
 `test/unit/mod-replace-engine-test.el` (the editor's half of a write: edits into an open buffer, stale ones skipped,
 symbol edits, undo), `test/conformance/search/write.jsonl` (the hub's: the edit set, writes on disk, a file changed
 since, undo), `test/unit/search-edit-test.el` and `test/conformance/search/edit-results.jsonl` (Edit Results: the
-document, read-only headers, saves of changed, split and deleted lines, conflicts, undo) and
+document, read-only headers, saves of changed, split and deleted lines, conflicts, undo),
+`test/unit/search-handoff-test.el` and `test/conformance/search/handoff.jsonl` (Ask an Agent: the card, who, Send by
+ids or by the unticked, the chip, a hand-off to a mock session and its state) and
 `test/unit/mod-replace-view-test.el` (the view, the find bar; on the virtual clock, the view's own rows Symbol mode
 uses: 10k rows streaming and a replacement patching them in slices of at most 576, a new search, a hidden view, no
 marker per file); `test/ui/editor-m11c1-test.el` walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each; `test/ui/search-view-gui-test.el` walks the hub-fed view (Sjá) through Text with a context label, Symbol, Meaning, a git scope and the empty view's saved and recent searches, the hub's rows handed in as it sends them, a screenshot of each in the evidence folder. The perf workload

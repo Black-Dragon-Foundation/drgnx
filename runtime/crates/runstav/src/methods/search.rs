@@ -545,6 +545,92 @@ pub struct EditDocAnswer {
     pub skipped: Vec<EditSkip>,
 }
 
+/// Who a Search view's hand-off goes to: a new worker of PROFILE in a worktree of its own, or the live session ID
+/// (a chat, a worker, a paired chat in this checkout).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase", deny_unknown_fields)]
+pub enum HandoffTo {
+    New { profile: String },
+    Session { id: Id },
+}
+
+/// `search/handoff`: hand VIEW's matches to an agent with INSTRUCTION: the matches IDS names (else all but OFF), to TO.
+/// Paths the index never reads (dot paths, secret-looking names) are left out unless HIDDEN. The handed-off rows show
+/// MARK.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffParams {
+    pub view: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ids: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub off: Option<Vec<String>>,
+    pub instruction: Prompt,
+    pub to: HandoffTo,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark: Option<HandoffMark>,
+}
+
+/// The mark the handed-off rows show: the agent's colour (a face name) and its glyph (one column), as the editor gives
+/// them (the agents' identity scheme).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffMark {
+    pub face: String,
+    pub glyph: String,
+}
+
+/// `search/handoff`'s answer: the hand-off's id, the session it went to (and the worktree of a new worker), the match
+/// ids handed off, how many lines the brief holds and how many more `search_results` serves, and the hidden paths
+/// left out.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffAnswer {
+    pub handoff: String,
+    pub session: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
+    pub ids: Vec<String>,
+    pub sent: u32,
+    pub more: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden: Vec<String>,
+}
+
+/// `search/handoff-state`: where hand-off HANDOFF is.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffStateParams {
+    pub handoff: String,
+}
+
+/// Where a hand-off is: sent (no edit yet), editing (the agent edits), done (the agent stopped after editing).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum HandoffPhase {
+    Sent,
+    Editing,
+    Done,
+}
+
+/// `search-handoff-state` (and `search/handoff-state`'s answer): hand-off HANDOFF of VIEW, to SESSION, at PHASE: the
+/// handed-off matches its agent's edits took out (DONE), those still there (LEFT: skipped once it is done), and those
+/// whose line moved where it cannot be found again (UNKNOWN, never counted done).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffState {
+    pub handoff: String,
+    pub view: String,
+    pub session: String,
+    pub phase: HandoffPhase,
+    pub done: Vec<String>,
+    pub left: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unknown: Vec<String>,
+}
+
 /// One edit of a file: its id (a match's `m:RUN:N`, `e:K` for the K-th given edit), its range
 /// as lines (from 1) and character columns (from 0) for the editor and as UTF-8 byte offsets for the hub, the text it
 /// expects there and the text it puts in.
@@ -1342,6 +1428,16 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/edits", SearchEdits(EditsParams) -> EditsAnswer,
             classes: [User], writes: false,
             doc: "the edit set of a view's search (its ticked matches, the ids named, edits the caller names, or the changed lines of an Edit Results buffer): per file the edits with lines, character columns, byte ranges, old and new text; overlapping matches, files changed since the search, large and binary files skipped with why; kept as a change set for search/apply",
+        ),
+        method!(
+            "search/handoff", SearchHandoff(HandoffParams) -> HandoffAnswer,
+            classes: [User], writes: true,
+            doc: "hand a view's ticked matches to an agent: a brief (the instruction, the query, the matches grouped by file, at most 300 lines, the rest through the drgnx-search tool search_results) to a new worker in its own worktree or to a live session; hidden paths left out unless asked; its progress is search-handoff-state",
+        ),
+        method!(
+            "search/handoff-state", SearchHandoffState(HandoffStateParams) -> HandoffState,
+            classes: [User], writes: false,
+            doc: "where a hand-off is: sent, editing or done, and which of its matches the agent's edits took out, which are still there and which cannot be found again",
         ),
         method!(
             "search/preview", SearchPreview(PreviewParams) -> PreviewAnswer,

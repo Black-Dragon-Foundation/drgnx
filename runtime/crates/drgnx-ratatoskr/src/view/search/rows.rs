@@ -233,7 +233,14 @@ pub(super) fn grep_doc_in(
 
 /// M's row (key ID): a tick box, the text around the match (the match struck out and the replacement beside it when
 /// REPLACE is not empty and still fits the match), and WHY Replace All skipped it, if it did.
-pub(super) fn match_row(q: &Query, replace: &str, id: String, m: &Match, why: Option<&str>) -> Row {
+pub(super) fn match_row(
+    q: &Query,
+    replace: &str,
+    id: String,
+    m: &Match,
+    why: Option<&str>,
+    agent: Option<&super::AgentMark>,
+) -> Row {
     let before = m.before.trim_start();
     let kept: Vec<char> = before.chars().collect();
     let before = if kept.len() > BEFORE_KEPT {
@@ -252,7 +259,11 @@ pub(super) fn match_row(q: &Query, replace: &str, id: String, m: &Match, why: Op
         grep::new_text(q, &m.text, replace)
     };
     let mut b = RowBuilder::new(id.clone());
-    b.push("  ", None);
+    // a match handed to an agent (Ask an Agent) shows the agent's mark in its indent
+    match agent {
+        Some(a) => b.push(&a.glyph, Some(&a.face)).push(" ", None),
+        None => b.push("  ", None),
+    };
     let at = b.pos();
     b.push("[x]", None)
         .prop(at, at + 3, "drgnx-replace-box", match_json(m));
@@ -305,7 +316,8 @@ fn row_of(run: &Run, m: &Match, n: u32, mark: Option<&Mark>) -> Row {
         Some(mark) => marked_row(id, m, mark),
         None => {
             let why = run.reasons.get(&id).map(String::as_str);
-            match_row(&run.query, &run.replace, id, m, why)
+            let agent = run.handed.get(&id);
+            match_row(&run.query, &run.replace, id, m, why, agent)
         }
     }
 }

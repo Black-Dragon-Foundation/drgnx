@@ -191,6 +191,8 @@
   "search/buffer": ["user"],
   "search/edits": ["user"],
   "search/edit-doc": ["user"],
+  "search/handoff": ["user"],
+  "search/handoff-state": ["user"],
   "search/preview": ["user"],
   "search/undo": ["user"],
   "search/grep-look": ["user"],

@@ -244,8 +244,13 @@ taller (Nidhogg's compositor).  Asked once: a face that sets it is refused where
                                   :box (:line-width (1 . 1) :color ,(c 'on-accent)
                                                     ,@(and (featurep 'glitnir) '(:corner-radius 4))
                                                     ,@(and (drgnx-theme--box-fit-p) '(:fit text))))
+         ;; the +/− counts in their colours, untinted; the foot's hairline
+         (drgnx-replace-plus :inherit success :foreground ,(c 'add-fg))
+         (drgnx-replace-minus :inherit error :foreground ,(c 'del-fg))
+         (drgnx-replace-sheet-rule :inherit shadow :foreground ,(c 'border) :overline t)
+         ;; a 1 px ring all round: the row's height is its newline's `line-height'
          (drgnx-replace-sheet-selected :background ,(c 'sel)
-                                       :box (:line-width (1 . 6) :color ,(c 'focus)
+                                       :box (:line-width (1 . 1) :color ,(c 'focus)
                                                          ,@(and (featurep 'glitnir) '(:corner-radius 6))))
          (diff-changed :background ,(c 'warn-tint))
          ;; refined words: rounded in-text runs, as the region (boxes inside the glyphs)

@@ -1506,6 +1506,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
 | `search/grep-replace` | user | `{replace: string, view: string}` | `boolean` | no |
 | `search/grep-skipped` | user | `{skipped: [{id: string, why: string}], view: string}` | `boolean` | no |
+| `search/handoff` | user | `{hidden?: boolean, ids?: [string], instruction: Prompt, mark?: {face: string, glyph: string}, off?: [string], to: {new: {profile: string}} \| {session: {id: Id}}, view: string}` | `HandoffAnswer` | yes |
+| `search/handoff-state` | user | `{handoff: string}` | `HandoffState` | no |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
 | `search/map` | user | `{base?: boolean, budget?: natnum, focus?: [string], names?: [string], root: AbsPath, scope?: "code" \| "all"}` | `{files: [MapFile], files_total: natnum, fresh: Fresh, text: string, tokens: natnum}` | no |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
@@ -2528,6 +2530,20 @@ Replace This, Undo Replace and Symbol mode's rename go through it, so a write ne
   by file and line; past `max` lines (default 20,000; counted from the match lines first, so a huge search reads no
   file) it gives no lines and `over`, with `total`. A file that could not be written is left out with why, as
   `search/edits` would skip it.
+- `search/handoff {view, ids?, off?, instruction, to: {new: {profile}} | {session: {id}}, hidden?}` (Ask an Agent,
+  `view/search/handoff.rs`) hands the run's matches (`ids`, else all but `off`) to an agent: a new worker of `profile`
+  in a worktree of its own from the project's HEAD (registered as a worker, so the Work space's review lists it), or a
+  live session, which edits where it is. The brief is the instruction, the search and the replacement, then the
+  matches by file as `path:line:col  in <definition>  <line>`, at most 300 lines or 32,000 characters (~8k tokens),
+  then "N more: call the `search_results` tool with handoff id h:N", the files changed since the search, and the rule
+  to edit only those places and say which were skipped. Paths the index never reads (dot paths, secret-looking names)
+  are left out unless `hidden` and named in the answer, `{handoff, session, worktree?, ids, sent, more, hidden?}`.
+  `search_results {handoff, page?}` is the drgnx-search MCP server's tool: 100 rows a page, to the session the
+  hand-off went to only (the server's own session, never the agent's word), for 24 hours, 2 MB in all; each page
+  names the files changed since. `search/handoff-state {handoff}` and the event `search-handoff-state` (after the
+  agent's steps settle, until its session ends) say where it is: `phase` sent, editing or done, and the matches
+  `done` (a hunk of the session's edit records near the match's line took out its line or its old text), `left`
+  (its line is still there near its place) and `unknown` (neither: never counted done).
 - `search/preview {view, path, off?, replace?}` is one file's part of the same edit set as a diff (the preview tile):
   the unified diff (1 line of context, so nearby changes in different definitions are hunks of their own; `similar`),
   its lines added and removed, the hunks (`old_start`, `old_lines`,
