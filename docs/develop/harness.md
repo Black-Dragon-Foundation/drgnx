@@ -556,6 +556,8 @@ How it works:
   `\1--queued` (regexp) with the third match unticked, in the dark theme, then show the first file's preview tile and
   the Replace All sheet. They need the hub: the scene starts `DRGNX_RATATOSKR_BIN` in the foreground (a session starts
   none).
+  `work-flow` (mockup `hub-orchestration`) opens the Work space's Flow lens beside its map, in the dark theme. The
+  scene's hub runs no plan, so it shows the lens, the column headings and the empty state.
 - It writes `NAME-sN-facts.eld` beside each shot: the themes, the fonts the chrome faces got, the windows, the
   modules, the visible child frames, `:palette` while a minibuffer is open (whether the palette floats and why: its
   category's multiform entry, the display action, the frame), and `:limits`, what the line cannot show of that mockup yet (`drgnx-look-scene-limits`). A limit is

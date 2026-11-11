@@ -407,6 +407,25 @@ look-scenes' types them)."
         (push "work space: no map rows within 15 s" drgnx-look-scene--errors))))
   (drgnx-look-scene--answer))
 
+(declare-function drgnx-work-flow-open "drgnx-work-flow")
+
+(defun drgnx-look-scene-work-flow ()
+  "The Flow lens beside the scene's map (the mockup hub-orchestration).  The scene's hub runs no plan, so the Flow shows
+its lens, its headings and its empty state; the rows a run fills are judged in the run's own shots."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--try "work flow"
+    (let* ((map (drgnx-work-space-open))
+           (flow (progn (let ((end (+ (float-time) 15)))
+                          (while (and (zerop (buffer-size map)) (< (float-time) end)) (sit-for 0.05)))
+                        (drgnx-work-flow-open map))))
+      (pop-to-buffer-same-window flow)
+      (let ((end (+ (float-time) 15)))
+        (while (and (zerop (buffer-size flow)) (< (float-time) end))
+          (sit-for 0.05)))
+      (when (zerop (buffer-size flow))
+        (push "work flow: no rows within 15 s" drgnx-look-scene--errors))))
+  (drgnx-look-scene--answer))
+
 ;; The highlights (look step 5b's audit): no mockup of their own; each is judged against the mockups' tokens
 ;; (look.css) in strips cut from these shots.  Highlights a command makes (isearch's, show-paren's, eglot's, Flymake's,
 ;; a rectangle's) are drawn with their faces as overlays, the way those commands draw them, so one shot holds all.

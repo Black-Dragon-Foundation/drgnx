@@ -33,6 +33,7 @@
     (magit)
     (shell-heredoc)
     (work-space-dark)
+    (work-flow :mockup hub-orchestration)
     (start-page)
     (highlights-dark)
     (highlights-light)
