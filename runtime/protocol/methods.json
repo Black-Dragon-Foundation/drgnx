@@ -12652,6 +12652,17 @@
         "additionalProperties": false,
         "description": "`explorer/subscribe`: list ROOTS, and inside them the folders of EXPANDED, for the Explorer's hub-fed VIEW: its\nmodel (a `tree` of path nodes, a folder open when it is a root or in EXPANDED) and its rows (one per entry, guides\nand chevron, the path over the row) go to every class of VIEW. Folders come first, then names in natural,\ncase-insensitive order; the names a version-control folder, `.DS_Store`, `__pycache__` and `.#…` locks never show.\nAn open folder whose only entry is a folder shares its row with it (`src/app`) unless COMPACT is false. A newer\nsubscription of the same view stops this one; ask again with the new EXPANDED to open or close a folder.",
         "properties": {
+          "around": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "An entry the window must hold once listed (a reveal): when it falls outside, the window moves to hold it a\nquarter of the way down."
+          },
           "compact": {
             "description": "Join single-folder chains on one row; default on.",
             "type": [
@@ -12705,6 +12716,15 @@
           "view": {
             "description": "The hub-fed view that shows the rows (`view/env`).",
             "type": "string"
+          },
+          "window": {
+            "description": "How many entries the model and the rows hold, 50 to 20000 (what the editor shows and a margin; `view/window`\nmoves it); default 20000.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [

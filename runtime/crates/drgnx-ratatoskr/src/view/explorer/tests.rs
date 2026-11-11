@@ -123,7 +123,7 @@ fn explorer_tree_joins_open_chains() {
 fn explorer_model_and_rows() {
     let mut reads = Vec::new();
     let got = list(&["/r/lib"], true, &mut reads).unwrap();
-    let doc = explorer_doc(&got, None);
+    let doc = explorer_doc_in(&got, MODEL_WINDOW, None);
     assert_eq!(doc.descriptor["scheme"], "tree");
     assert_eq!(
         doc.lists["order"],

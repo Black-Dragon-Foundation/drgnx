@@ -1375,7 +1375,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
 | `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, rows?: {listed: [string], parser: string}, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
-| `explorer/subscribe` | user | `{compact?: boolean, exclude?: [string], expanded?: [AbsPath], indent?: natnum, only?: [AbsPath], roots: [AbsPath], view: string}` | `{listing: natnum}` | no |
+| `explorer/subscribe` | user | `{around?: AbsPath, compact?: boolean, exclude?: [string], expanded?: [AbsPath], indent?: natnum, only?: [AbsPath], roots: [AbsPath], view: string, window?: natnum}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
 | `extensions/list` | user | `{dense?: boolean, glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
 | `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
@@ -2559,7 +2559,7 @@ and the ranking are `hrafn::rank`).
 
 The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/drgnx-ratatoskr/src/view/explorer.rs`).
 
-- `explorer/subscribe {view, roots, expanded?, compact?, indent?, exclude?, only?}` stops the view's earlier listing and answers `{listing}`. A
+- `explorer/subscribe {view, roots, expanded?, compact?, indent?, exclude?, only?, window?, around?}` stops the view's earlier listing and answers `{listing}`. A
   thread then reads each root (1 to 16 existing folders) and, inside it, each folder of `expanded` (at most 10000, no
   trailing slash) that is shown, and sends the view its model (`view-model`), then its rows to every class: the first
   listing a reset, a later one the difference. The editor opens or closes a folder by asking again with the new set,
@@ -2583,8 +2583,13 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
 - **The model** is a `tree`: one node per row, its id the path (a root's without the trailing slash), kind `root`, `dir`
   or `file`, its parent the row above it in the tree, the flag `expanded` on a root and on each open folder, and the
   fields `label` (as shown; a root's name in capitals), `path` and `dir` (1 or 0). The list `order` holds the rows in
-  pre-order; past 20,000 it is a window of the first ones, or from where `view/window` asked (with the folders above
-  its first entry as nodes outside `order`); the rows hold every entry.
+  pre-order; past `window` entries (50 to 20,000, default 20,000; the editor sends `drgnx-explorer-rows-window`, 150)
+  it is a window of the first ones, or from where `view/window` asked (with the folders above its first entry as nodes
+  outside `order`). The rows hold the window's entries only, so opening a folder of thousands costs a window: a
+  `view/window` sends the model and the rows again, the rows it dropped removed and the ones it added inserted. The
+  editor moves the window on a key at its edge (`drgnx-view-nav`) and on a scroll within a page of the rows' ends
+  (`drgnx-explorer--rows-scrolled`, half the window). `around` (a reveal) names an entry the next listing's window
+  must hold: when it falls outside, the window moves to hold it a quarter of the way down.
 - **Row,** per display class (`view/env`): the key is the path. On a terminal, the indent guides (`│ ` per level below
   the first) and the chevron (`▾ `, `▸ `, or two spaces for a file) in `drgnx-explorer-guide`. On a graphical display
   the look-fix layout (window-dark.html `.row`), sizes in device px at the env's scale: a space of `indent` (default 12,

@@ -1,0 +1,20 @@
+{"scenario": "explorer/window-holds-what-is-shown", "requires": ["v1"], "doc": "A listing with a window (plan sja-complete E4): the model and the rows hold only the window's entries (50 of 61); view/window moves it and the rows follow (the ones it dropped removed, the ones it added inserted); a subscribe with around moves it to hold that entry."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "x", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/w && for i in $(seq -w 0 59); do : > $ROOT/w/f$i; done"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "explorer/subscribe", "params": {"view": "x", "roots": ["$ROOT/w"], "window": 50}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"listing": "$number"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "x", "hub": "$capture:hub", "base": 0, "version": 1, "reset": true}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "x", "class": "gui-1", "base": 0, "version": 1, "ops": [{"reset": [{"key": "$ROOT/w"}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {"key": "$ROOT/w/f48"}]}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "view/window", "params": {"view": "x", "list": "order", "from": 11}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "x", "hub": "$hub", "base": 1, "version": 2}}, "within_ms": 5000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "x", "class": "gui-1", "base": 1, "version": 2, "ops": {"$contains": [{"remove": {"$contains": ["$ROOT/w", "$ROOT/w/f00", "$ROOT/w/f09"]}}, {"insert": {"rows": {"$contains": [{"key": "$ROOT/w/f49"}, {"key": "$ROOT/w/f59"}]}}}]}}}, "within_ms": 5000}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "explorer/subscribe", "params": {"view": "x", "roots": ["$ROOT/w"], "window": 50, "around": "$ROOT/w/f02"}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": {"listing": "$number"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "x", "hub": "$hub", "base": 2, "version": 3}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "x", "class": "gui-1", "base": 2, "version": 3, "ops": {"$contains": [{"remove": {"$contains": ["$ROOT/w/f59"]}}]}}}, "within_ms": 10000}

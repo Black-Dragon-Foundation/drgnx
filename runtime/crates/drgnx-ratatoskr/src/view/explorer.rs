@@ -29,9 +29,11 @@ use std::time::{Duration, Instant};
 pub const ROOTS_MAX: usize = 16;
 /// The most open folders a listing takes.
 pub const EXPANDED_MAX: usize = 10_000;
-/// The entries the model holds; past them its list `order` is a window of the first ones (Sjá takes no longer list
-/// unwindowed). The rows hold every entry.
+/// The most entries the model and the rows hold (the editor names fewer, `explorer/subscribe`'s `window`); past them
+/// its list `order` is a window of the listing (Sjá takes no longer list unwindowed).
 const MODEL_WINDOW: usize = 20_000;
+/// The fewest entries a window the editor names holds.
+const WINDOW_MIN: usize = 50;
 /// A burst of changes is read again once no change came for this long ...
 const SETTLE: Duration = Duration::from_millis(30);
 /// ... or this long after its first change, whichever comes first.
@@ -94,38 +96,69 @@ pub struct Entry {
     pub open: bool,
 }
 
-/// A digit run's value as a comparable (length, digits) pair without leading zeros.
-fn digits(s: &[char], mut i: usize) -> (usize, String) {
-    let mut run = String::new();
-    while i < s.len() && s[i].is_ascii_digit() {
-        run.push(s[i]);
-        i += 1;
+/// One piece of a name's [`NameKey`]: a character, or a run of digits (its first character, and its value as the
+/// digits without leading zeros).
+#[derive(Clone, Debug)]
+enum Tok {
+    Ch(char),
+    Num(char, String),
+}
+
+impl Ord for Tok {
+    /// Two digit runs by value (fewer digits first, then the digits); a digit run against a character by its first.
+    fn cmp(&self, other: &Self) -> Cmp {
+        match (self, other) {
+            (Tok::Num(_, x), Tok::Num(_, y)) => x.len().cmp(&y.len()).then_with(|| x.cmp(y)),
+            (Tok::Num(c, _), Tok::Ch(d))
+            | (Tok::Ch(c), Tok::Num(d, _))
+            | (Tok::Ch(c), Tok::Ch(d)) => c.cmp(d),
+        }
     }
-    (i, run.trim_start_matches('0').to_owned())
+}
+
+impl PartialOrd for Tok {
+    fn partial_cmp(&self, other: &Self) -> Option<Cmp> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Tok {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Cmp::Equal
+    }
+}
+
+impl Eq for Tok {}
+
+/// What [`natural`] compares of a name, made once per name (a sort compares each name many times): the downcased name
+/// as characters and digit runs, compared piece by piece, a name that runs out first coming first.
+type NameKey = Vec<Tok>;
+
+fn name_key(name: &str) -> NameKey {
+    let mut key = Vec::with_capacity(name.len());
+    let mut chars = name
+        .to_lowercase()
+        .chars()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .peekable();
+    while let Some(c) = chars.next() {
+        if c.is_ascii_digit() {
+            let mut run = String::from(c);
+            while let Some(d) = chars.next_if(char::is_ascii_digit) {
+                run.push(d);
+            }
+            key.push(Tok::Num(c, run.trim_start_matches('0').to_owned()));
+        } else {
+            key.push(Tok::Ch(c));
+        }
+    }
+    key
 }
 
 /// Natural, case-insensitive order (`file2` before `file10`), as Lisp's `string-version-lessp` of downcased names.
 pub fn natural(a: &str, b: &str) -> Cmp {
-    let a: Vec<char> = a.to_lowercase().chars().collect();
-    let b: Vec<char> = b.to_lowercase().chars().collect();
-    let (mut i, mut j) = (0, 0);
-    while i < a.len() && j < b.len() {
-        if a[i].is_ascii_digit() && b[j].is_ascii_digit() {
-            let (ni, x) = digits(&a, i);
-            let (nj, y) = digits(&b, j);
-            let c = x.len().cmp(&y.len()).then_with(|| x.cmp(&y));
-            if c != Cmp::Equal {
-                return c;
-            }
-            (i, j) = (ni, nj);
-        } else {
-            match a[i].cmp(&b[j]) {
-                Cmp::Equal => (i, j) = (i + 1, j + 1),
-                c => return c,
-            }
-        }
-    }
-    (a.len() - i).cmp(&(b.len() - j))
+    name_key(a).cmp(&name_key(b))
 }
 
 /// DIR's entries as (NAME, FOLDER), folders first, then in natural order; EXCLUDE's names left out. A link to a
@@ -154,7 +187,7 @@ pub fn read_folder(dir: &Path, exclude: &Exclude) -> Vec<(String, bool)> {
 
 /// Folders first, then natural order.
 fn sort_folder(out: &mut [(String, bool)]) {
-    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| natural(&a.0, &b.0)));
+    out.sort_by_cached_key(|(name, folder)| (std::cmp::Reverse(*folder), name_key(name)));
 }
 
 /// Each folder read: its entries, (name, folder?) pairs.
@@ -312,12 +345,6 @@ fn display(name: &str) -> String {
     s
 }
 
-/// The model of ENTRIES: a `tree` of path nodes in pre-order, a folder open (flag 1) when its entries are listed; past
-/// [`MODEL_WINDOW`] entries `order` is a window of them, from FROM (`view/window`; none: the first).
-pub fn explorer_doc(entries: &[Entry], from: Option<usize>) -> Doc {
-    explorer_doc_in(entries, MODEL_WINDOW, from)
-}
-
 fn entry_node(e: &Entry) -> Value {
     let kind = match (e.depth, e.dir) {
         (0, _) => "root",
@@ -332,9 +359,17 @@ fn entry_node(e: &Entry) -> Value {
     node
 }
 
-/// [`explorer_doc`] holding at most WINDOW entries, from entry FROM (clamped so the window is full). The folders above
+/// The entries a window of WINDOW entries from FROM holds in a listing of LEN: FROM clamped so the window is full.
+pub fn window_range(len: usize, window: usize, from: Option<usize>) -> std::ops::Range<usize> {
+    let from = from.unwrap_or(0).min(len.saturating_sub(window));
+    from..len.min(from + window)
+}
+
+/// The model of ENTRIES: a `tree` of path nodes in pre-order, a folder open (flag 1) when its entries are listed. It
+/// holds at most WINDOW entries, from entry FROM (`view/window`; none: the first; clamped so the window is full): past
+/// them `order` is a window of the listing. The folders above
 /// a window's first entry are nodes too, outside `order`: Sjá shows an entry only under its open folders.
-fn explorer_doc_in(entries: &[Entry], window: usize, from: Option<usize>) -> Doc {
+pub(crate) fn explorer_doc_in(entries: &[Entry], window: usize, from: Option<usize>) -> Doc {
     let mut d = Doc {
         descriptor: json!({
             "scheme": "tree",
@@ -700,15 +735,24 @@ pub(crate) fn list_and_watch(
     }
 }
 
-/// One view's listing: its number, its cancel flag and the channel that stops its watch, the entries it sent.
+/// What a listing's model and rows are made with: a level's indent in logical px and how many roots the listing has
+/// (the rows' look), and how many entries a window holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Shape {
+    pub indent: u32,
+    pub roots: usize,
+    pub window: usize,
+}
+
+/// One view's listing: its number, its cancel flag and the channel that stops its watch, the entries it sent, its
+/// shape, and the entry its window must hold once listed (a reveal).
 struct Run {
     id: u64,
     cancel: Arc<AtomicBool>,
     stop: Sender<Heard>,
     entries: Option<Arc<Vec<Entry>>>,
-    /// A level's indent in logical px, and how many roots the listing has (what the rows' look needs).
-    indent: u32,
-    roots: usize,
+    shape: Shape,
+    around: Option<String>,
 }
 
 impl Run {
@@ -734,8 +778,8 @@ impl Explorers {
         &self,
         conn: u64,
         view: &str,
-        indent: u32,
-        roots: usize,
+        shape: Shape,
+        around: Option<String>,
     ) -> (u64, Arc<AtomicBool>, Sender<Heard>, Receiver<Heard>) {
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         let cancel = Arc::new(AtomicBool::new(false));
@@ -752,8 +796,8 @@ impl Explorers {
                 cancel: cancel.clone(),
                 stop: tx.clone(),
                 entries,
-                indent,
-                roots,
+                shape,
+                around,
             },
         );
         (id, cancel, tx, rx)
@@ -792,31 +836,32 @@ impl Explorers {
         });
     }
 
-    /// Keep ENTRIES as VIEW's when its listing is still listing ID, and run THEN with them (the lock held, so a newer
-    /// listing's entries go out after these); none when a newer listing or a close came first.
+    /// Keep ENTRIES as VIEW's when its listing is still listing ID, and run THEN with them, its shape and the entry its
+    /// window must hold (taken: once per listing) — the lock held, so a newer listing's entries go out after these; none
+    /// when a newer listing or a close came first.
     fn finish<R>(
         &self,
         conn: u64,
         view: &str,
         id: u64,
         entries: Vec<Entry>,
-        then: impl FnOnce(&[Entry], u32, usize) -> R,
+        then: impl FnOnce(&[Entry], Shape, Option<String>) -> R,
     ) -> Option<R> {
         let mut runs = lock(&self.runs);
         let run = runs.get_mut(&(conn, view.to_owned()))?;
         if run.id != id {
             return None;
         }
-        let r = then(&entries, run.indent, run.roots);
+        let r = then(&entries, run.shape, run.around.take());
         run.entries = Some(Arc::new(entries));
         Some(r)
     }
 
-    /// VIEW's entries, when a listing sent some, with its indent and its number of roots.
-    fn entries(&self, conn: u64, view: &str) -> Option<(Arc<Vec<Entry>>, u32, usize)> {
+    /// VIEW's entries, when a listing sent some, with its shape.
+    fn entries(&self, conn: u64, view: &str) -> Option<(Arc<Vec<Entry>>, Shape)> {
         let runs = lock(&self.runs);
         let run = runs.get(&(conn, view.to_owned()))?;
-        Some((run.entries.clone()?, run.indent, run.roots))
+        Some((run.entries.clone()?, run.shape))
     }
 
     /// The views of CONN with a listing.
@@ -832,13 +877,18 @@ impl Explorers {
 impl Views {
     /// The model and rows of VIEW's listing for a class that just got its env; false when VIEW has no listing.
     pub(super) fn explorer_build(&self, f: &Front, key: &Key) -> bool {
-        let Some((entries, indent, roots)) = self.explorers.entries(key.0, &key.1) else {
+        let Some((entries, shape)) = self.explorers.entries(key.0, &key.1) else {
             return false;
         };
         let from = self.window_from(key.0, &key.1, "order");
-        self.publish_model(f, key.0, &key.1, explorer_doc(&entries, from));
+        self.publish_model(
+            f,
+            key.0,
+            &key.1,
+            explorer_doc_in(&entries, shape.window, from),
+        );
         let decor = self.explorer_decor(key.0, &entries);
-        self.explorer_rows_to(f, key, &entries, &decor, indent, roots);
+        self.explorer_rows_to(f, key, &entries, &decor, shape, from);
         true
     }
 
@@ -850,56 +900,74 @@ impl Views {
         }
     }
 
-    /// ENTRIES' rows with their DECOR for KEY's class (its env's look), and the icons they name.
+    /// The rows of ENTRIES' window from FROM (as the model's `order` holds it) with their DECOR for KEY's class (its
+    /// env's look), and the icons they name.
     fn explorer_rows_to(
         &self,
         f: &Front,
         key: &Key,
         entries: &[Entry],
         decor: &Decor,
-        indent: u32,
-        roots: usize,
+        shape: Shape,
+        from: Option<usize>,
     ) {
+        let shown = &entries[window_range(entries.len(), shape.window, from)];
         self.publish_built(f, key, |env, _| {
-            explorer_rows(entries, decor, &RowLook::of(env, indent, roots))
+            explorer_rows(shown, decor, &RowLook::of(env, shape.indent, shape.roots))
         });
+    }
+
+    /// Every class of CONN's VIEW gets the rows of ENTRIES' window from FROM.
+    fn explorer_rows_all(
+        &self,
+        f: &Front,
+        conn: u64,
+        view: &str,
+        entries: &[Entry],
+        shape: Shape,
+        from: Option<usize>,
+    ) {
+        let decor = self.explorer_decor(conn, entries);
+        let classes = lock(&self.store).classes(conn, view);
+        for class in classes {
+            self.explorer_rows_to(
+                f,
+                &(conn, view.to_owned(), class),
+                entries,
+                &decor,
+                shape,
+                from,
+            );
+        }
     }
 
     /// CONN's decor changed (`git/letters` read a status, who is here moved): every listing of CONN draws its rows
     /// again; only the rows that changed go out.
     pub(super) fn explorer_decor_changed(&self, f: &Front, conn: u64) {
         for view in self.explorers.views_of(conn) {
-            let Some((entries, indent, roots)) = self.explorers.entries(conn, &view) else {
+            let Some((entries, shape)) = self.explorers.entries(conn, &view) else {
                 continue;
             };
-            let decor = self.explorer_decor(conn, &entries);
-            let classes = lock(&self.store).classes(conn, &view);
-            for class in classes {
-                self.explorer_rows_to(
-                    f,
-                    &(conn, view.clone(), class),
-                    &entries,
-                    &decor,
-                    indent,
-                    roots,
-                );
-            }
+            let from = self.window_from(conn, &view, "order");
+            self.explorer_rows_all(f, conn, &view, &entries, shape, from);
         }
     }
 
-    /// `view/window` of CONN's VIEW: its listing's model again, with `order`'s window where the editor asked; false
-    /// when VIEW has no listing.
+    /// `view/window` of CONN's VIEW: its listing's model and rows again, with `order`'s window where the editor asked
+    /// (the rows the window dropped go, the ones it added come); false when VIEW has no listing.
     pub(super) fn explorer_window(&self, f: &Front, conn: u64, view: &str) -> bool {
-        let Some((entries, ..)) = self.explorers.entries(conn, view) else {
+        let Some((entries, shape)) = self.explorers.entries(conn, view) else {
             return false;
         };
         let from = self.window_from(conn, view, "order");
-        self.publish_model(f, conn, view, explorer_doc(&entries, from));
+        self.publish_model(f, conn, view, explorer_doc_in(&entries, shape.window, from));
+        self.explorer_rows_all(f, conn, view, &entries, shape, from);
         true
     }
 
     /// The thread's hand-over of listing ID's entries (dropped when VIEW's listing is not listing ID any more): the
-    /// model, then the rows to every class. False when they were dropped.
+    /// model, then the rows to every class, of the window (moved to hold the listing's `around` when it falls
+    /// outside). False when they were dropped.
     fn explorer_listed(
         &self,
         f: &Front,
@@ -909,21 +977,18 @@ impl Views {
         entries: Vec<Entry>,
     ) -> bool {
         self.explorers
-            .finish(conn, view, id, entries, |entries, indent, roots| {
-                let from = self.window_from(conn, view, "order");
-                self.publish_model(f, conn, view, explorer_doc(entries, from));
-                let decor = self.explorer_decor(conn, entries);
-                let classes = lock(&self.store).classes(conn, view);
-                for class in classes {
-                    self.explorer_rows_to(
-                        f,
-                        &(conn, view.to_owned(), class),
-                        entries,
-                        &decor,
-                        indent,
-                        roots,
-                    );
+            .finish(conn, view, id, entries, |entries, shape, around| {
+                let mut from = self.window_from(conn, view, "order");
+                let at = around.and_then(|a| entries.iter().position(|e| e.path == a));
+                if let Some(i) =
+                    at.filter(|i| !window_range(entries.len(), shape.window, from).contains(i))
+                {
+                    let want = i.saturating_sub(shape.window / 4);
+                    lock(&self.store).set_window(conn, view, "order", want);
+                    from = Some(want);
                 }
+                self.publish_model(f, conn, view, explorer_doc_in(entries, shape.window, from));
+                self.explorer_rows_all(f, conn, view, entries, shape, from);
             })
             .is_some()
     }
@@ -980,11 +1045,21 @@ pub fn subscribe(f: &Front, c: &Caller, p: ExplorerParams) -> Result<ExplorerSta
         Some(files) => Some(files.iter().map(|f| PathBuf::from(f.as_str())).collect()),
         None => None,
     };
+    let window = match p.window {
+        Some(w) if !(WINDOW_MIN..=MODEL_WINDOW).contains(&(w as usize)) => {
+            return Err(invalid("window", "50 to 20000 entries"));
+        }
+        Some(w) => w as usize,
+        None => MODEL_WINDOW,
+    };
+    let shape = Shape {
+        indent: p.indent.unwrap_or(INDENT),
+        roots: roots.len(),
+        window,
+    };
+    let around = p.around.map(|a| root_id(Path::new(a.as_str())));
     let (conn, view) = (c.conn_id, p.view);
-    let (id, cancel, tx, rx) =
-        views
-            .explorers
-            .start(conn, &view, p.indent.unwrap_or(INDENT), roots.len());
+    let (id, cancel, tx, rx) = views.explorers.start(conn, &view, shape, around);
     let Some(front) = views.front.get().cloned() else {
         return Err(invalid("view", "the hub is starting"));
     };

@@ -2113,7 +2113,8 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   `(:view V :clear t)` for none, once the selection has been still for `drgnx-view-delay`, and at most once per
   `drgnx-view-delay` while a key is held (`drgnx-timer-soon`, owned by the buffer).
 - **Windows:** a list longer than the hub sends whole is a window of it (`{name, ids, total, from}`): a trail past
-  500 steps (`steps`, its last ones), a search or an Explorer past 20,000 entries (`order`, its first ones). A key
+  500 steps (`steps`, its last ones), a search past 20,000 entries or an Explorer past `drgnx-explorer-rows-window`
+  (150; its rows too, and a scroll near their ends moves it) (`order`, its first ones). A key
   that stops at the window's edge gets `(ID . more)` from Sjá (`walk`, `walk-to`, and a `follow` whose link names a
   direction). The view then asks the hub for the window a step past that edge (half the window, at most
   `drgnx-view-nav-window-step`, 2,000: a page costs what it adds), or for a `walk-to` the window centred on its

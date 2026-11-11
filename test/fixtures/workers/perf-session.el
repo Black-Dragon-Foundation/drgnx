@@ -551,7 +551,17 @@ compared, and a round's own list starts wherever the flood is)."
     (drgnx-perf-w--explorer-open root)
     (unless (drgnx-perf--wait 10 (lambda () (drgnx-perf-w--drawn-p (drgnx-perf-w--big))))
       (error "Premise: the hub's Explorer rows were not drawn in 10 s (rows path %s)" (drgnx-explorer--rows-p)))
+    ;; timed when the row is drawn, not when the 10 ms completion poll sees it
+    (with-current-buffer drgnx-explorer-buffer-name
+      (add-hook 'drgnx-view-patch-patched-functions #'drgnx-perf-w--expand-patched nil t))
     t))
+
+(defun drgnx-perf-w--expand-patched (_view _keys)
+  "`drgnx-view-patch-patched-functions' of the Explorer: once big/'s first file is drawn after the fire, :expand_ms."
+  (when-let* ((t0 (plist-get drgnx-perf-w--stats :expand_t0))
+              ((not (plist-get drgnx-perf-w--stats :expand_ms)))
+              ((drgnx-perf-w--drawn-p (drgnx-perf-w--big-first))))
+    (drgnx-perf-w--stat :expand_ms (drgnx-perf-w--ms t0))))
 
 (defun drgnx-perf-w--big () (expand-file-name "proj/big" drgnx-perf-w--tmp))
 (defun drgnx-perf-w--big-first () (expand-file-name "b0000.txt" (drgnx-perf-w--big)))
@@ -592,6 +602,8 @@ compared, and a round's own list starts wherever the flood is)."
 
 (defun drgnx-perf-w-explorer-expand-teardown ()
   (drgnx-perf-w--disarm)
+  (when-let* ((b (get-buffer drgnx-explorer-buffer-name)))
+    (with-current-buffer b (remove-hook 'drgnx-view-patch-patched-functions #'drgnx-perf-w--expand-patched t)))
   (drgnx-perf-w--explorer-close)
   (drgnx-perf-w--clean)
   t)

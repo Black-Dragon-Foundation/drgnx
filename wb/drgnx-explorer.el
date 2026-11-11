@@ -746,10 +746,12 @@ when its row is drawn, else when the listing that holds it arrives."
           (dolist (part (butlast (split-string (file-relative-name file root) "/" t)))
             (setq dir (expand-file-name part dir))
             (unless (gethash dir drgnx-explorer--expanded) (puthash dir t drgnx-explorer--expanded) (setq asked t)))
-          (when asked (drgnx-explorer--subscribe))
-          (if (drgnx-view-row-start drgnx-view file)
-              (progn (setq drgnx-explorer--reveal-pending nil) (drgnx-view-nav 'select file))
-            (setq drgnx-explorer--reveal-pending file))
+          (let ((drawn (drgnx-view-row-start drgnx-view file)))
+            ;; a row outside the hub's window is asked for with the window moved to it
+            (when (or asked (not drawn)) (drgnx-explorer--subscribe nil file))
+            (if drawn
+                (progn (setq drgnx-explorer--reveal-pending nil) (drgnx-view-nav 'select file))
+              (setq drgnx-explorer--reveal-pending file)))
           t)))))
 
 (defun drgnx-explorer--reveal-old (file &optional window)
@@ -888,12 +890,19 @@ roots changed which.  Non-nil when it attached now (the attach asked the hub alr
 (defvar-local drgnx-explorer--waiting nil
   "On the rows path, the overlay of the line saying the Explorer waits for the hub, until its first rows are drawn.")
 
-(defun drgnx-explorer--subscribe (&optional _view)
+(defvar drgnx-explorer-rows-window 150
+  "How many entries the hub's model and rows hold on the rows path (`explorer/subscribe' `window', 50 to 20000): a tall
+Explorer's rows and a page either side.  Past them the window moves on scroll (`drgnx-explorer--rows-scrolled') and on
+a key at its edge, so opening a folder of thousands costs a window, not every entry.")
+
+(defun drgnx-explorer--subscribe (&optional _view around)
   "Ask the hub for the listing of the roots and the open folders, which it then watches; nothing waits for it.  The hub
 leaves out `drgnx-explorer-exclude-names', and while Find runs lists only the files it found.  The hub
-lists local folders only: a remote root is left out.  On the subscribed connection, where the view's env went: the hub
+lists local folders only: a remote root is left out.  It holds `drgnx-explorer-rows-window' entries, moved to hold
+AROUND (a path) when that falls outside.  On the subscribed connection, where the view's env went: the hub
 sends the rows to the connection that asked.  While it is down nothing is asked; the reconnect asks again."
   (when (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
+    (setq drgnx-view-patch-hurry t)       ; the user waits for this listing: drawn at the next pass, not a frame on
     (condition-case nil
         (drgnx-hub--call-on drgnx-hub--events "explorer/subscribe"
                             (append
@@ -903,7 +912,9 @@ sends the rows to the connection that asked.  While it is down nothing is asked;
                                    :expanded (vconcat (sort (hash-table-keys drgnx-explorer--expanded) #'string<))
                                    :compact (if drgnx-explorer-compact-folders t :false)
                                    :indent (drgnx-explorer--tree-indent)
-                                   :exclude (vconcat drgnx-explorer-exclude-names))
+                                   :exclude (vconcat drgnx-explorer-exclude-names)
+                                   :window drgnx-explorer-rows-window)
+                             (when around (list :around around))
                              ;; Find: only the files it found (`drgnx-explorer--find-apply')
                              (when-let* ((only (plist-get drgnx-explorer--find :only))) (list :only only)))
                             #'ignore)
@@ -993,6 +1004,7 @@ redrawn row gets a new one; a badge of a row that went is deleted here."
     (setq-local drgnx-view-nav-faces '(("ticked" . drgnx-explorer-selected)))   ; multi-select (Sjá's ticked set)
     (add-hook 'drgnx-look-density-changed-hook #'drgnx-explorer--density-changed)
     (add-hook 'kill-buffer-hook #'drgnx-explorer--rows-unhook nil t)
+    (add-hook 'window-scroll-functions #'drgnx-explorer--rows-scrolled nil t)
     (unless (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))   ; Q2: the frame, filled when it comes
       (setq drgnx-explorer--waiting (make-overlay (point-min) (point-min)))
       (overlay-put drgnx-explorer--waiting 'before-string
@@ -1002,8 +1014,33 @@ redrawn row gets a new one; a badge of a row that went is deleted here."
     (drgnx-explorer--rows-subscribe)))
 
 (defun drgnx-explorer--rows-unhook ()
-  "The rows path's Explorer goes: the density no longer asks the hub for it."
-  (remove-hook 'drgnx-look-density-changed-hook #'drgnx-explorer--density-changed))
+  "The rows path's Explorer goes: the density no longer asks the hub for it, nor a scroll for another window."
+  (remove-hook 'drgnx-look-density-changed-hook #'drgnx-explorer--density-changed)
+  (remove-hook 'window-scroll-functions #'drgnx-explorer--rows-scrolled t))
+
+(defvar-local drgnx-explorer--asked-from nil "The `from' the last `view/window' the scroll asked for named.")
+
+(defun drgnx-explorer--rows-scrolled (window start)
+  "`window-scroll-functions' on the rows path: WINDOW scrolled to START.  Within a page of the end of the rows held
+(past which the listing has more) the hub is asked for the window half of it further on; within a page of their start
+(with entries before them), half of it back.  Each `from' is asked once; the rows that go and come keep the shown ones
+in place (window starts are markers)."
+  (with-current-buffer (window-buffer window)
+    (when-let* ((drgnx-view-patch) (h (drgnx-view-patch-handle drgnx-view-patch))
+                (w (nidhogg-view-get h 'window "order")))
+      (let* ((from (nth 0 w)) (len (nth 1 w)) (total (nth 2 w))
+             (page (window-body-height window)) (step (max 1 (/ len 2)))
+             (want (cond ((and (< (+ from len) total)
+                               (save-excursion (goto-char start) (/= 0 (forward-line (* 2 page)))))
+                          (min (- total len) (+ from step)))
+                         ((and (> from 0)
+                               (save-excursion (goto-char start) (/= 0 (forward-line (- page)))))
+                          (max 0 (- from step))))))
+        (when (and want (/= want from) (not (eql want drgnx-explorer--asked-from)))
+          (setq drgnx-explorer--asked-from want
+                drgnx-view-patch-hurry t)
+          (funcall drgnx-view-patch-send-function "view/window"
+                   (list :view (drgnx-view-patch-view drgnx-view-patch) :list "order" :from want)))))))
 
 (defun drgnx-explorer--rows-here ()
   "The node of the row at point, made the selection when it is not (a click moved point), or nil."

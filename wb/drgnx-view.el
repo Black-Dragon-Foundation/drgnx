@@ -1587,6 +1587,11 @@ asks for a reset when more than `drgnx-view-patch-paused-max' came."
                              :version (or (drgnx-view-patch-version state) 0)))
             (dolist (p (reverse (cdr kept))) (drgnx-view-apply-patch p))))))))
 
+(defvar-local drgnx-view-patch-hurry nil
+  "Non-nil in a hub-fed view's buffer: the next patch applied there is drawn at the next timer pass, not a frame later
+(`drgnx-view-hurry'), and this is cleared.  A view sets it when it asks the hub for a change the user waits to see (the
+Explorer opening a folder).")
+
 (defun drgnx-view-apply-patch (patch)
   "Apply PATCH (a `view-patch' event's data) to its (view, class)'s buffer, by the rules (`drgnx-view-patch--decide').
 Returns what was done: `drop', `hold', `resync', `apply', `paused' (kept until the view resumes:
@@ -1613,6 +1618,9 @@ Returns what was done: `drop', `hold', `resync', `apply', `paused' (kept until t
                (when-let* ((n (plist-get patch :model)))
                  (drgnx-view-model--named state n (drgnx-view-patch--reset-p patch))
                  (drgnx-view-touch drgnx-view))
+               (when drgnx-view-patch-hurry
+                 (setq drgnx-view-patch-hurry nil)
+                 (drgnx-view-hurry drgnx-view))
                ;; a terminal's cursor: its row is drawn again, so the view type's PATCHED places it after the draw
                (when-let* ((term (plist-get patch :term)))
                  (setf (drgnx-view-patch-term state) term)

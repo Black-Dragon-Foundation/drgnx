@@ -102,7 +102,8 @@ a row's node is its path; a refresh asks again and draws nothing itself."
   (drgnx-explorer-rows-nav-test--with
     (should (equal (list (cons "explorer/subscribe" (list :view view :roots ["/r"] :expanded ["/r/lib"] :compact t
                                                           :indent (drgnx-explorer--tree-indent)
-                                                          :exclude (vconcat drgnx-explorer-exclude-names))))
+                                                          :exclude (vconcat drgnx-explorer-exclude-names)
+                                                          :window drgnx-explorer-rows-window)))
                    calls))
     (should (equal "▾ R\n▸ a\n▾ lib\n│   m.el\n  z.txt\n" (buffer-substring-no-properties (point-min) (point-max))))
     (goto-char (point-min))
@@ -241,6 +242,7 @@ is selected when the listing that holds it is drawn."
   (drgnx-explorer-rows-nav-test--with
     (should (drgnx-explorer-reveal "/r/a/new.el"))
     (should (equal ["/r/a" "/r/lib"] (plist-get (cdar calls) :expanded)))
+    (should (equal "/r/a/new.el" (plist-get (cdar calls) :around)))   ; the hub's window moves to hold it
     (should (equal "/r/a/new.el" drgnx-explorer--reveal-pending))
     (should-not (equal "/r/a/new.el" (drgnx-view-nav-selection)))
     (let ((node (lambda (id kind flags parent label dir)
@@ -266,6 +268,49 @@ is selected when the listing that holds it is drawn."
       (drgnx-view-draw-now drgnx-view)
       (should-not drgnx-explorer--reveal-pending)
       (should (equal "/r/a/new.el" (drgnx-view-nav-selection))))))
+
+(ert-deftest drgnx-explorer-rows/a-scroll-near-the-window-s-edge-asks-the-next ()
+  "Pattern D (E4): the hub holds a window of the listing (60 of 200 entries from 0); a scroll within a page of the
+rows' end asks `view/window' half the window on, once; with the window at 100, a scroll near the top asks half back."
+  (drgnx-explorer-rows-nav-test--with
+    (let* ((sent nil)
+           (drgnx-view-patch-send-function (lambda (method params) (push (cons method params) sent)))
+           (ids (lambda (from) (cl-loop for i from from below (+ from 60) collect (format "/r/f%03d" i))))
+           (model (lambda (from)
+                    (json-serialize
+                     (list :ops (vector (list :reset
+                                              (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"]
+                                                                      :lists ["order"] :classes ["selected" "match" "dim" "ticked"]
+                                                                      :flags ["expanded"] :forms [] :start "order")
+                                                    :nodes (vconcat (list (list :id "/r" :kind "root" :flags 1
+                                                                                :fields [["label" "R"] ["path" "/r"] ["dir" 1]]))
+                                                                    (mapcar (lambda (id) (list :id id :kind "file" :flags 0 :parent "/r"
+                                                                                               :fields (vector (vector "label" id) (vector "path" id) (vector "dir" 0))))
+                                                                            (funcall ids from)))
+                                                    :edges []
+                                                    :lists (vector (list :name "order" :ids (vconcat (funcall ids from))
+                                                                         :total 200 :from from)))))))))
+           (rows (lambda (from) (mapcar (lambda (id) (list :key id :text id :props (list (list 0 (length id) "drgnx-work-id" id))))
+                                        (funcall ids from)))))
+      (drgnx-view-model-event (list :view view :hub 7 :base 1 :version 2 :reset t :model (funcall model 0)))
+      (drgnx-view-apply-patch (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 0 :model 2
+                                    :ops (list (list :reset (funcall rows 0)))))
+      (drgnx-view-draw-now drgnx-view)
+      (let ((w (selected-window)))
+        (set-window-buffer w (current-buffer))
+        (drgnx-explorer--rows-scrolled w (point-min))          ; at the top of the first window: nothing to ask
+        (should-not sent)
+        (let ((near-end (save-excursion (goto-char (point-max)) (forward-line (- (window-body-height w))) (point))))
+          (drgnx-explorer--rows-scrolled w near-end)
+          (drgnx-explorer--rows-scrolled w near-end)        ; asked once
+          (should (equal (list (list "view/window" :view view :list "order" :from 30)) sent)))
+        (setq sent nil)
+        (drgnx-view-model-event (list :view view :hub 7 :base 2 :version 3 :reset t :model (funcall model 100)))
+        (drgnx-view-apply-patch (list :view view :class "c" :hub 7 :base 2 :version 3 :env_epoch 0 :model 3
+                                      :ops (list (list :reset (funcall rows 100)))))
+        (drgnx-view-draw-now drgnx-view)
+        (drgnx-explorer--rows-scrolled w (point-min))
+        (should (equal 70 (plist-get (cdar sent) :from)))))))
 
 (ert-deftest drgnx-explorer-rows/a-density-change-asks-again-at-once ()
   "Pattern D: the indent the hub draws is the density's `tree-indent', sent with the subscription; a density change
@@ -299,7 +344,7 @@ asks the hub with it closed.  Point follows the selection."
     (should (equal "/r/a" (drgnx-view-nav-selection)))
     (should (equal (list :view view :roots ["/r"] :expanded ["/r/a" "/r/lib"] :compact t
                          :indent (drgnx-explorer--tree-indent)
-                         :exclude (vconcat drgnx-explorer-exclude-names))
+                         :exclude (vconcat drgnx-explorer-exclude-names) :window drgnx-explorer-rows-window)
                    (cdar calls)))
     (drgnx-explorer-next)
     (drgnx-explorer-next)
@@ -314,7 +359,7 @@ asks the hub with it closed.  Point follows the selection."
     (should (equal "/r/lib" (drgnx-view-nav-selection)))
     (should (equal (list :view view :roots ["/r"] :expanded ["/r/a"] :compact t
                          :indent (drgnx-explorer--tree-indent)
-                         :exclude (vconcat drgnx-explorer-exclude-names))
+                         :exclude (vconcat drgnx-explorer-exclude-names) :window drgnx-explorer-rows-window)
                    (cdar calls)))))
 
 (ert-deftest drgnx-explorer-rows/typing-and-open ()

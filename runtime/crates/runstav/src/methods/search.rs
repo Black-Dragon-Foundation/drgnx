@@ -751,6 +751,14 @@ pub struct ExplorerParams {
     /// read from disk and nothing watched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub only: Option<Vec<AbsPath>>,
+    /// How many entries the model and the rows hold, 50 to 20000 (what the editor shows and a margin; `view/window`
+    /// moves it); default 20000.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<u32>,
+    /// An entry the window must hold once listed (a reveal): when it falls outside, the window moves to hold it a
+    /// quarter of the way down.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub around: Option<AbsPath>,
 }
 
 /// `explorer/subscribe`'s answer: LISTING numbers the listing.
