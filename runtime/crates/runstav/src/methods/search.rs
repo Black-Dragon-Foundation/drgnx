@@ -843,7 +843,8 @@ pub struct GrepLookParams {
 
 /// `search-run-done`: search RUN of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not
 /// run; OFF the matches that come back unticked (`search/run`'s `off`); SCOPE what a git scope searched. A search a
-/// newer one stopped says nothing.
+/// newer one stopped says nothing. KINDS (a Symbol search): how many of the name's definitions are of each kind (`fn`,
+/// `type`, `macro`, `var`, `other`), before the query's `kinds` filter: the view's kind chips and their counts.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RunDone {
@@ -857,6 +858,8 @@ pub struct RunDone {
     pub off: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<ScopeDone>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kinds: Option<std::collections::BTreeMap<String, u64>>,
 }
 
 /// What a git scope (Changed, Staged, Branch) searched: FILES files of the repository (before the globs), the
@@ -1204,6 +1207,10 @@ pub enum FindQuery {
         name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         case: Option<bool>,
+        /// Only the definitions of these kinds (`fn`, `type`, `macro`, `var`) and the uses in their files; none or
+        /// empty is every kind (the view's kind chips).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kinds: Option<Vec<String>>,
     },
     /// A question about what the code does (Hrafn's hybrid query).
     Meaning { question: String },

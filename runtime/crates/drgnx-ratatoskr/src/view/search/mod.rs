@@ -96,6 +96,8 @@ pub(super) struct Run {
     keep: Option<Arc<Keep>>,
     /// What a git scope searched, for the end (`search-run-done`).
     scope: Option<ScopeDone>,
+    /// A Symbol search: its definitions' counts per kind, for the end (`search-run-done`).
+    kinds: Option<BTreeMap<String, u64>>,
     /// Only the totals go out (`count`): no model, no rows.
     count: bool,
     /// The entries (files and matches) the model last sent held. Up to [`MODEL_WINDOW`] the batches' nodes and ids
@@ -169,6 +171,7 @@ impl Greps {
             context: true,
             keep: None,
             scope: None,
+            kinds: None,
             count: false,
             model_sent: 0,
             model_every: MODEL_EVERY,
@@ -821,6 +824,7 @@ fn done_of(view: &str, run: &Run, error: Option<String>, off: Vec<String>) -> Ru
         error,
         off,
         scope: run.scope.clone(),
+        kinds: run.kinds.clone(),
     }
 }
 
@@ -855,9 +859,10 @@ fn query_of(f: &Front, p: &RunParams) -> Result<(Query, Mode, Option<GitScope>),
                 ));
             }
             let mode = match other {
-                FindQuery::Symbol { name, case } => Mode::Symbol {
+                FindQuery::Symbol { name, case, kinds } => Mode::Symbol {
                     name: name.clone(),
                     case: case.unwrap_or(true),
+                    kinds: kinds.clone().unwrap_or_default(),
                 },
                 _ => Mode::Meaning {
                     question: other.typed().to_owned(),
@@ -959,7 +964,13 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
             let Some(f) = front.upgrade() else { return };
             let found = modes::found(&f, &root, &mode, context).await;
             let error = match found {
-                Ok(files) => {
+                Ok((files, kinds)) => {
+                    if kinds.is_some() {
+                        f.core
+                            .views
+                            .greps
+                            .with(conn, &view, id, |r| r.kinds = kinds);
+                    }
                     for (file, ms, read) in files {
                         if !f.core.views.grep_batch(&f, conn, &view, id, file, ms, read) {
                             return;

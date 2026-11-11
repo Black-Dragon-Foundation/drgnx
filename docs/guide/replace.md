@@ -85,7 +85,11 @@ and Vim profiles), goes Text → Symbol → Meaning → Text and searches again.
   type, `#` a macro, `≡` a variable or constant; hover for the kind) and its signature; the uses inside one
   definition follow a label row naming it (with `drgnx-search-context` on). It is by name only, so same-named things
   in other scopes are listed too, and the status line says so. **Aa** says whether case counts; Replace, the globs,
-  ab and .\* do not apply and are greyed out.
+  ab and .\* do not apply and are greyed out. Over the status line, the **kind chips** count the name's definitions
+  by kind: `fn`, `macro`, `var`, `type` (a kind with none is dim). A chip on shows only that kind's definitions, and
+  drops the uses in a file whose definitions are all of other kinds (uses carry no kind, so they follow their file);
+  several can be on, none on is every kind. Click a chip, or **Filter Symbol Results by Kind…** (the palette). The
+  chips belong to one Symbol search: changing the mode clears them.
 - **Meaning**: the code your words describe (the same search as Semantic Search): one row per piece of code found,
   with a score bar (how close it is, against the best one; hover for the score), its symbol and its first line; a
   piece that moved since it was indexed is found where it is now and says `(moved)`. Nothing but the words applies.
@@ -250,6 +254,7 @@ view, scope This file.
 | Delete This Line (on save) (Edit Results) | `C-S-k` | `C-c C-d` | `C-c C-d` |
 | Take the File's Line (Edit Results) | palette | `C-c C-r` | `C-c C-r` |
 | Undo All Saves of Edited Results | palette | palette | palette |
+| Filter Symbol Results by Kind… | palette (the chips) | palette | palette |
 | Ask an Agent (the Search view) | `M-a` | `C-c C-a` | `C-c C-a` |
 | Send / Cancel (the Ask an Agent card) | `C-<return>` / `<escape>` | `C-c C-c` / `C-c C-k` | `C-c C-c` / `C-c C-k` |
 | Next Agent / Hidden Files In or Out (the card) | `C-c C-w` / `C-c C-h` | `C-c C-w` / `C-c C-h` | `C-c C-w` / `C-c C-h` |

@@ -450,6 +450,17 @@ matches of the new run in `search-run-done', which are unticked again.")
 (defvar-local drgnx-replace--off nil "Hash MATCH → t: the unticked matches.")
 (defvar-local drgnx-replace--results nil "Marker: where the result tree starts (the view's rows).")
 (defvar-local drgnx-replace--status-beg nil "Marker: the status line's start.")
+
+;; Symbol's kind chips (docs/guide/replace.md, "Modes"): a line over the status line, one chip per kind with the
+;; name's definitions of it (the hub's `search-run-done' `kinds'); a chip on shows only that kind's definitions and the
+;; uses in their files; none on is every kind.
+(defconst drgnx-replace--kinds
+  '((fn square-function "Functions") (macro wand "Macros") (var variable "Variables and constants") (type type "Types"))
+  "The kind chips, in order: (KIND ICON HELP); KIND as the hub names it.")
+
+(defvar-local drgnx-replace--kinds-on nil "The kind chips on (KIND symbols): the Symbol search's `kinds'.")
+(defvar-local drgnx-replace--kind-counts nil
+  "The last Symbol search's definitions per kind, a plist (:fn 2 :macro 1…), before the chips' filter.")
 (defvar-local drgnx-replace--status-end nil "Marker: the status line's end.")
 (defvar-local drgnx-replace--lists-beg nil "Marker: the lists' start (pinned counts; saved and recent searches).")
 (defvar-local drgnx-replace--lists-end nil "Marker: the lists' end.")
@@ -620,9 +631,46 @@ no globs; Symbol keeps Aa); Rename (the language server's edits) keeps the repla
 (defun drgnx-replace--set-mode (mode)
   "Search in MODE (`text', `symbol' or `meaning'), out of Rename, and search again."
   (when (drgnx-replace--opt :symbol) (setq drgnx-replace--opts (plist-put drgnx-replace--opts :symbol nil)))
-  (setq drgnx-replace--opts (plist-put drgnx-replace--opts :mode mode))
+  (setq drgnx-replace--opts (plist-put drgnx-replace--opts :mode mode)
+        drgnx-replace--kinds-on nil drgnx-replace--kind-counts nil)   ; the chips are Symbol's, of one search
   (drgnx-replace--apply-mode)
   (drgnx-replace--search-now))
+
+(defun drgnx-replace--kinds-line ()
+  "Symbol's kind chips and a newline, or \"\" (another mode, no counts yet)."
+  (if (not (and (eq (drgnx-replace--opt :mode) 'symbol) drgnx-replace--kind-counts)) ""
+    ;; the view's own values: the chips are made in a temporary buffer
+    (let ((counts drgnx-replace--kind-counts) (kinds-on drgnx-replace--kinds-on))
+      (with-temp-buffer
+        (insert (propertize "Kinds " 'face 'drgnx-text-subtle))
+        (pcase-dolist (`(,kind ,icon ,help) drgnx-replace--kinds)
+          (let* ((n (or (plist-get counts (intern (format ":%s" kind))) 0))
+                 (on (memq kind kinds-on))
+                 (face (cond (on 'drgnx-replace-on) ((zerop n) 'drgnx-text-subtle) (t 'drgnx-replace-dim))))
+            (insert-text-button (concat (drgnx-look-icon icon nil 14) " " (symbol-name kind)
+                                        (if (> n 0) (format " %d" n) ""))
+                                'face face 'follow-link t 'help-echo (format "%s (%s)" help (if on "on" "off"))
+                                'action (lambda (_) (drgnx-replace-kind-toggle kind)))
+            (insert " ")))
+        (insert "\n")
+        (buffer-string)))))
+
+(defun drgnx-replace-kind-toggle (kind)
+  "In Symbol mode: show only definitions of KIND (`fn', `macro', `var', `type'), with the others on; again: not."
+  (with-current-buffer (drgnx-replace--live-view)
+    (setq drgnx-replace--kinds-on (if (memq kind drgnx-replace--kinds-on) (delq kind drgnx-replace--kinds-on)
+                                    (append drgnx-replace--kinds-on (list kind))))
+    (drgnx-replace--search-now)))
+
+(defun drgnx-replace-search-kinds (kinds)
+  "In Symbol mode: show only the definitions of KINDS (asked; none is every kind) and the uses in their files."
+  (interactive (list (mapcar #'intern (completing-read-multiple
+                                       "Kinds (none: all): " (mapcar (lambda (k) (symbol-name (car k))) drgnx-replace--kinds)
+                                       nil t))))
+  (with-current-buffer (drgnx-replace--live-view)
+    (unless (eq (drgnx-replace--opt :mode) 'symbol) (user-error "Kind chips are Symbol mode's"))
+    (setq drgnx-replace--kinds-on kinds)
+    (drgnx-replace--search-now)))
 
 (defun drgnx-replace--check-writable ()
   "A user error in a mode that finds without replacing (Symbol, Meaning)."
@@ -899,6 +947,7 @@ Branch's base and `±'."
     (drgnx-replace--drawing
      (delete-region drgnx-replace--status-beg drgnx-replace--status-end)
      (goto-char drgnx-replace--status-beg)
+     (insert (drgnx-replace--kinds-line))
      (insert (propertize line 'face 'drgnx-replace-dim))
      ;; the newest hand-off to an agent: its state chip
      (insert (drgnx-search-handoff-chip))
@@ -1194,20 +1243,25 @@ Nil when it sent edits; else the reason as a string (`nothing' when it sent none
       (buffer-substring-no-properties (region-beginning) (region-end))
     (thing-at-point 'symbol t)))
 
-(cl-defun drgnx-replace--open (&key symbol text replace opts (scope 'project) origin)
+(cl-defun drgnx-replace--open (&key symbol text replace opts (scope 'project) origin mode root)
   "Show the Search view searching TEXT (default: the word at point) in SCOPE, REPLACE in the replace field.
 SYMBOL: t (on), `auto' (on at a name the language server can rename) or nil.  OPTS: (:case :word :regexp) to set.
-ORIGIN: the marker the view works for (default: point in the editor)."
+ORIGIN: the marker the view works for (default: point in the editor).  MODE: `text', `symbol' or `meaning' (default:
+the view's own).  ROOT: the folder to search (default: ORIGIN's project)."
   (let* ((origin (or origin
                      (if (drgnx-signal-editor-window-p (selected-window)) (point-marker)
                        (let ((w (drgnx-wb-editor-window))) (with-current-buffer (window-buffer w) (copy-marker (window-point w)))))))
          (text (or text (with-current-buffer (marker-buffer origin) (save-excursion (goto-char origin) (drgnx-replace--word-here)))))
          (view (drgnx-replace--view-buffer)))
     (with-current-buffer view
-      (setq drgnx-replace--origin origin drgnx-replace--root (drgnx-replace--root-of origin))
+      (setq drgnx-replace--origin origin drgnx-replace--root (or root (drgnx-replace--root-of origin)))
       (when text (drgnx-replace--fill 'find text))
       (when replace (drgnx-replace--fill 'replace replace))
       (when (drgnx-replace--opt :symbol) (drgnx-replace--set-symbol nil))
+      (when (and mode (not (eq mode (drgnx-replace--opt :mode))))
+        (setq drgnx-replace--opts (plist-put drgnx-replace--opts :mode mode)
+              drgnx-replace--kinds-on nil drgnx-replace--kind-counts nil)
+        (drgnx-replace--apply-mode))
       (dolist (k '(:case :word :regexp))
         (when (plist-member opts k)
           (setq drgnx-replace--opts (plist-put drgnx-replace--opts k (plist-get opts k)))
@@ -1740,7 +1794,9 @@ mode's query, and in Text mode the replacement and the globs; the scope."
          (mode (drgnx-replace--opt :mode))
          (text-p (not (memq mode '(symbol meaning)))))   ; Symbol and Meaning: no replacement, no globs
     (append (list :query (pcase mode
-                           ('symbol (list :mode "symbol" :name text :case (funcall on :case)))
+                           ('symbol (append (list :mode "symbol" :name text :case (funcall on :case))
+                                            (and drgnx-replace--kinds-on
+                                                 (list :kinds (vconcat (mapcar #'symbol-name drgnx-replace--kinds-on))))))
                            ('meaning (list :mode "meaning" :question text))
                            (_ (list :mode "text" :text text :case (funcall on :case)
                                     :word (funcall on :word) :regexp (funcall on :regexp)))))
@@ -1783,7 +1839,8 @@ it would draw stays as it was)."
   (let* ((q (plist-get spec :query)) (scope (plist-get spec :scope))
          (globs (lambda (k) (string-join (append (plist-get spec k) nil) ", "))))
     (when (drgnx-replace--opt :symbol) (drgnx-replace--set-symbol nil))
-    (setq drgnx-replace--opts (plist-put drgnx-replace--opts :mode (intern (or (plist-get q :mode) "text"))))
+    (setq drgnx-replace--opts (plist-put drgnx-replace--opts :mode (intern (or (plist-get q :mode) "text")))
+          drgnx-replace--kinds-on (mapcar #'intern (append (plist-get q :kinds) nil)))
     (dolist (k '(:case :word :regexp))
       (setq drgnx-replace--opts (plist-put drgnx-replace--opts k (drgnx-replace--true (plist-get q k))))
       (drgnx-replace--restyle k))
@@ -2016,7 +2073,8 @@ the matches the user had unticked before it (`:off'); `search-apply' and `search
           (setq drgnx-replace--searching nil
                 drgnx-replace--hub-counts (cons (or (plist-get data :files) 0) (or (plist-get data :matches) 0)))
           (when-let* ((err (plist-get data :error))) (setq drgnx-replace--status (format "%s" err)))
-          (setq drgnx-replace--scope-done (plist-get data :scope))
+          (setq drgnx-replace--scope-done (plist-get data :scope)
+                drgnx-replace--kind-counts (plist-get data :kinds))
           (drgnx-replace--apply-scope)
           (drgnx-replace--hub-listed)
           (drgnx-replace--watch)
@@ -2533,6 +2591,8 @@ The find bar's button; not a command of its own (it needs the bar)."
                                              "In Edit Results: show the file's current text for the line at point")
                    (search-edit-undo-saves "Undo All Saves of Edited Results" drgnx-search-edit-undo-saves
                                            "In Edit Results: put back every save of it, newest first")
+                   (search-kinds "Filter Symbol Results by Kind…" drgnx-replace-search-kinds
+                                 "In Symbol mode: only the definitions of some kinds (fn, macro, var, type) and their files' uses")
                    (search-to-agent "Ask an Agent" drgnx-search-to-agent
                                     "Hand the Search view's ticked matches (or this row's) to an agent with what to do")
                    (search-handoff-send "Send to the Agent" drgnx-search-handoff-send

@@ -3582,7 +3582,7 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`search-run-done`: search RUN of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not\nrun; OFF the matches that come back unticked (`search/run`'s `off`); SCOPE what a git scope searched. A search a\nnewer one stopped says nothing.",
+        "description": "`search-run-done`: search RUN of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not\nrun; OFF the matches that come back unticked (`search/run`'s `off`); SCOPE what a git scope searched. A search a\nnewer one stopped says nothing. KINDS (a Symbol search): how many of the name's definitions are of each kind (`fn`,\n`type`, `macro`, `var`, `other`), before the query's `kinds` filter: the view's kind chips and their counts.",
         "properties": {
           "error": {
             "type": [
@@ -3594,6 +3594,17 @@
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
+          },
+          "kinds": {
+            "additionalProperties": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "matches": {
             "format": "uint64",
@@ -30975,6 +30986,16 @@
                       "null"
                     ]
                   },
+                  "kinds": {
+                    "description": "Only the definitions of these kinds (`fn`, `type`, `macro`, `var`) and the uses in their files; none or\nempty is every kind (the view's kind chips).",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
                   "mode": {
                     "const": "symbol",
                     "type": "string"
@@ -31206,6 +31227,16 @@
                   "case": {
                     "type": [
                       "boolean",
+                      "null"
+                    ]
+                  },
+                  "kinds": {
+                    "description": "Only the definitions of these kinds (`fn`, `type`, `macro`, `var`) and the uses in their files; none or\nempty is every kind (the view's kind chips).",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
                       "null"
                     ]
                   },
@@ -31577,6 +31608,16 @@
                       "null"
                     ]
                   },
+                  "kinds": {
+                    "description": "Only the definitions of these kinds (`fn`, `type`, `macro`, `var`) and the uses in their files; none or\nempty is every kind (the view's kind chips).",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
                   "mode": {
                     "const": "symbol",
                     "type": "string"
@@ -31843,6 +31884,16 @@
                   "case": {
                     "type": [
                       "boolean",
+                      "null"
+                    ]
+                  },
+                  "kinds": {
+                    "description": "Only the definitions of these kinds (`fn`, `type`, `macro`, `var`) and the uses in their files; none or\nempty is every kind (the view's kind chips).",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
                       "null"
                     ]
                   },
