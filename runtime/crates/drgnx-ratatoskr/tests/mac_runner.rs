@@ -47,6 +47,66 @@ fn sh(script: &str) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
+/// SCRIPT's output as the runner account, whatever its exit (for a report written while a row fails).
+fn sh_lossy(script: &str) -> String {
+    match Command::new("ssh")
+        .args(["-o", "BatchMode=yes", &host(), script])
+        .output()
+    {
+        Ok(out) => format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+        Err(e) => format!("ssh: {e}"),
+    }
+}
+
+/// What a failing wait prints: the queue's rows and runner, what the links and the queue said, the hub's logs of the
+/// jobs, and on the runner its attempt folders (their logs, results and job files), its other logs and its processes.
+struct Report {
+    q: Arc<Queue>,
+    dir: PathBuf,
+    ids: Vec<String>,
+    root: Option<String>,
+    said: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl Drop for Report {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            return;
+        }
+        eprintln!("==== the report of a failed wait");
+        eprintln!("-- the runner: {:?}", self.q.runner("mac"));
+        for id in &self.ids {
+            eprintln!("-- {id}: {:?}", self.q.row(id));
+            eprintln!("-- {id}'s hub log: {}", log(&self.dir, id));
+        }
+        if let Ok(said) = self.said.lock() {
+            eprintln!("-- the last of what the links and the queue said:");
+            for s in said.iter().rev().take(60).rev() {
+                eprintln!("   {s}");
+            }
+        }
+        if let Some(root) = &self.root {
+            eprintln!(
+                "{}",
+                sh_lossy(&format!(
+                    "cd '{root}' || exit 0; echo '-- the root'; ls -la . run jobs 2>&1; \
+                     for d in jobs/*/; do echo \"== $d\"; ls -la \"$d\"; \
+                       for f in job-exec.log log result.json meta.json job.json job.sb; do \
+                         if [ -f \"$d$f\" ]; then echo \"-- $f\"; tail -c 4000 \"$d$f\"; echo; fi; done; done; \
+                     echo '-- other logs'; find . -maxdepth 3 -name '*.log' ! -path './jobs/*' \
+                       -exec sh -c 'echo \"== $1\"; tail -c 4000 \"$1\"' _ {{}} \\; ; \
+                     echo '-- processes'; ps -axo pid,ppid,pgid,etime,command | grep -E 'sleipnir|sandbox-exec' | grep -v grep"
+                ))
+            );
+        }
+        eprintln!("==== end of the report");
+    }
+}
+
 fn now() -> u64 {
     skuld::host_now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -60,6 +120,10 @@ struct Hub {
     q: Arc<Queue>,
     events: UnboundedReceiver<LinkEvent>,
     outcomes: Vec<Outcome>,
+    dir: PathBuf,
+    ids: Vec<String>,
+    root: Option<String>,
+    said: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl Hub {
@@ -94,11 +158,33 @@ impl Hub {
             q,
             events,
             outcomes: vec![],
+            dir: dir.to_path_buf(),
+            ids: vec![],
+            root: None,
+            said: Arc::default(),
         }
+    }
+
+    /// A guard that prints the [`Report`] if the row panics while it is held.
+    fn report(&self) -> Report {
+        Report {
+            q: self.q.clone(),
+            dir: self.dir.clone(),
+            ids: self.ids.clone(),
+            root: self.root.clone(),
+            said: self.said.clone(),
+        }
+    }
+
+    /// Submits S (its id named in a failing wait's report).
+    fn submit(&mut self, s: Submit) {
+        self.ids.push(s.id.clone());
+        self.q.submit(s, now());
     }
 
     /// The runner added as NAME with its root at ROOT (under the account's home), in rotation.
     async fn add(&mut self, name: &str, root: &str) -> serde_json::Value {
+        self.root = Some(root.to_string());
         let p: AddParams = serde_json::from_value(json!({
             "host": host(), "trust": "mine", "name": name, "profile": "workstation", "root": root,
         }))
@@ -129,15 +215,31 @@ impl Hub {
         lost_ok: bool,
         mut check: impl FnMut(&Queue, &[Outcome]) -> Option<T>,
     ) -> T {
-        let (q, events, outcomes) = (&self.q, &mut self.events, &mut self.outcomes);
+        let _report = self.report();
+        let (q, events, outcomes, said) = (
+            &self.q,
+            &mut self.events,
+            &mut self.outcomes,
+            self.said.clone(),
+        );
+        let note = |s: String| {
+            if let Ok(mut v) = said.lock() {
+                v.push(s.chars().take(600).collect());
+            }
+        };
         skuld::wait_until_async(what, WAIT, || {
             while let Ok(ev) = events.try_recv() {
+                note(format!("link: {ev:?}"));
                 if let LinkEvent::Lost { why, .. } = &ev {
                     assert!(lost_ok, "the link was lost waiting for {what}: {why}");
                 }
-                outcomes.extend(q.on_link(ev, now()));
+                let got = q.on_link(ev, now());
+                got.iter().for_each(|o| note(format!("queue: {o:?}")));
+                outcomes.extend(got);
             }
-            outcomes.extend(q.tick(now()).outcomes);
+            let got = q.tick(now()).outcomes;
+            got.iter().for_each(|o| note(format!("queue: {o:?}")));
+            outcomes.extend(got);
             std::future::ready(check(q, outcomes))
         })
         .await
@@ -289,15 +391,12 @@ mod mac_runner {
         assert!(view.to_string().contains("macos"), "{view}");
         assert!(!sh(&format!("ls '{root}/bin'")).is_empty());
         let (work, blobs) = project(dir.path());
-        hub.q.submit(
-            job(
-                "xhello",
-                "uname -s; cat hello.txt; brew --prefix --installed mise",
-                freeze(&work, &blobs),
-                512,
-            ),
-            now(),
-        );
+        hub.submit(job(
+            "xhello",
+            "uname -s; cat hello.txt; brew --prefix --installed mise",
+            freeze(&work, &blobs),
+            512,
+        ));
         let r = hub.result("xhello").await;
         let log = log(dir.path(), "xhello");
         assert_eq!(r["verdict"], "Pass", "{r} {log}");
@@ -332,8 +431,7 @@ mod mac_runner {
             format!("/usr/bin/perl -MPOSIX -e '{pre}$x = q(a) x (400*1024*1024); sleep 300'")
         };
         let script = format!("( {} & ) ; {}", hog("POSIX::setsid(); "), hog(""));
-        hub.q
-            .submit(job("xhog", &script, freeze(&work, &blobs), 512), now());
+        hub.submit(job("xhog", &script, freeze(&work, &blobs), 512));
         let r = hub.result("xhog").await;
         assert_eq!(r["verdict"], "Oom", "{r} {}", log(dir.path(), "xhog"));
         assert_eq!(sh("pgrep -fl 'q\\(a\\) x' || true"), "");
@@ -352,19 +450,21 @@ mod mac_runner {
         let (work, blobs) = project(dir.path());
         // the job runs until the row writes `go` into its TMPDIR (a job writes nothing else of its attempt folder)
         let script = "touch \"$TMPDIR/started\"; while [ ! -e \"$TMPDIR/go\" ]; do /bin/sleep 0.2; done; echo survived";
-        hub.q
-            .submit(job("xlink", script, freeze(&work, &blobs), 512), now());
+        hub.submit(job("xlink", script, freeze(&work, &blobs), 512));
         hub.running("xlink", "mac").await;
         let started = |root: &str| {
             sh(&format!(
                 "ls -d '{root}'/jobs/*/tmp/started 2>/dev/null | head -n 1"
             ))
         };
-        skuld::wait_until_async("the job started", WAIT, || {
-            let s = started(&root);
-            std::future::ready((!s.is_empty()).then_some(()))
-        })
-        .await;
+        {
+            let _report = hub.report();
+            skuld::wait_until_async("the job started", WAIT, || {
+                let s = started(&root);
+                std::future::ready((!s.is_empty()).then_some(()))
+            })
+            .await;
+        }
 
         // the ssh master stopped: the link is lost, the job runs on
         OpensshTransport::new(dir.path().join("run"))
@@ -419,7 +519,7 @@ print $d ? "direct: open\n" : "direct: refused\n";
 EOF"#;
         let mut s = job("xnet", script, freeze(&work, &blobs), 512);
         s.place.net_hosts = vec!["github.com:443".into()];
-        hub.q.submit(s, now());
+        hub.submit(s);
         let r = hub.result("xnet").await;
         let log = log(dir.path(), "xnet");
         assert_eq!(r["verdict"], "Pass", "{r} {log}");
