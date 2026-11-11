@@ -148,7 +148,7 @@ gh workflow run ci.yml --ref ci/my-lane -f jobs='rt-linux' -f fuzz_minutes=1
 ```
 
 `jobs` takes the table's ids (`rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos unit
-no-lisp-writes hub-chaos ui scenario perf macos tty timing`; the GUI tiers and `macos` run in `CI`'s own `tiers` job then),
+no-lisp-writes hub-chaos ui scenario perf macos tty ssh timing`; the GUI tiers and `macos` run in `CI`'s own `tiers` job then),
 `selector` is `DRGNX_TEST_SELECTOR` (an ERT selector, read as Lisp: a string is a regexp, `\|` not `|`; `hub-chaos`
 keeps its own). When the run
 leaves out a job the change needs, or narrows the tests, its gate is `CI gate (partial)`: green when what it ran
@@ -218,7 +218,7 @@ included) and the steps live in one place. Inputs:
 |---|---|---|
 | `drgnx_ref` | commit, branch or tag; empty | the drgnx commit to test; empty: the caller's own commit |
 | `nidhogg` | `release`, `artifact`, `line` | `release`: the images as built (the pinned release, `test/container/nidhogg.sh`); `artifact`: the run's `tarball-fedora-45` and `tarball-macos`; `line`: those of Nidhogg's green build of its integration branch's head ([below](#nidhoggs-integration-line)); on `artifact` and `line` the test jobs also run with `DRGNX_NIDHOGG_STRICT=1`, so a test whose Nidhogg primitive is missing fails instead of skipping |
-| `tiers` | any of `unit no-lisp-writes hub-chaos ui scenario perf tty macos` | the jobs that run; the others are skipped |
+| `tiers` | any of `unit no-lisp-writes hub-chaos ui scenario perf tty ssh timing macos` | the jobs that run; the others are skipped. `ssh` (on every push, in `CI`'s gate) builds the hub and the terminal worker (Zig and libghostty-vt's tarballs) and runs `test/container/ssh-row.sh`, the remote-terminal rows, on the run's test image; an image it cannot have exits 75 and fails the job |
 | `selector` | an ERT selector; empty | `DRGNX_TEST_SELECTOR` of the test jobs (not `hub-chaos`, `perf` or `timing`): a narrowed run |
 
 Every job checks drgnx out into `drgnx/` (in Nidhogg's run the workspace is Nidhogg's checkout) and takes the local
