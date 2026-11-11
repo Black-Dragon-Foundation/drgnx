@@ -19,6 +19,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-ui-kit)
 (require 'drgnx-file)                   ; the file-kind table
+(require 'drgnx-pixels)
 
 (drgnx-defsetting drgnx-look-icons 'svg
   "How the look draws its icons: `svg' (Lucide line icons in the text colour, on graphical frames) or `glyphs' (the
@@ -42,28 +43,26 @@ pixels at 16 px, 0.93 at 14.")
   "Forget the images: the next icon is read and sized again."
   (clrhash drgnx-icons--cache))
 
-(defun drgnx-icons--scale ()
-  "The selected frame's scale (1.0 without one)."
-  (if (fboundp 'frame-scale-factor) (float (frame-scale-factor)) 1.0))
-
 (defun drgnx-icons--make (name size scale)
-  "The image of icon NAME at SIZE logical pixels, or nil when there is no such file.  The file's 24-unit box is
-sized to SIZE and its stroke to `drgnx-icons-stroke' of the box's units."
-  (let ((file (expand-file-name (format "%s.svg" name) drgnx-icons-dir)))
+  "The image of icon NAME at SIZE logical pixels at SCALE frame pixels per logical one, or nil when there is no such
+file.  The file's 24-unit box is sized to SIZE by the pixel rule (`drgnx-px': a whole number of the frame's pixels,
+half up: 16 px is 20 at 1.25, 21 at 4/3) and its stroke to `drgnx-icons-stroke' of the box's units, so the stroke is
+drawn at the device size."
+  (let ((file (expand-file-name (format "%s.svg" name) drgnx-icons-dir)) (px (drgnx-px size nil scale)))
     (when (file-readable-p file)
       (let ((text (with-temp-buffer (insert-file-contents file) (buffer-string))))
         (setq text (replace-regexp-in-string "width=\"24\" height=\"24\""
-                                             (format "width=\"%d\" height=\"%d\"" size size) text t t))
+                                             (format "width=\"%d\" height=\"%d\"" px px) text t t))
         (setq text (replace-regexp-in-string "stroke-width=\"2\""
                                              (format "stroke-width=\"%s\"" drgnx-icons-stroke)
                                              text t t))
-        ;; the frame's scale, in the spec (Emacs's image cache draws it again when the scale changes); without
-        ;; it Emacs takes `image-scaling-factor', a guess from the font (1.6 at scale 2)
-        (create-image text 'svg t :ascent 'center :scale scale)))))
+        ;; sized already: `:scale' 1, or Emacs takes `image-scaling-factor', a guess from the font (1.6 at scale 2)
+        (create-image text 'svg t :ascent 'center :scale 1)))))
 
 (defun drgnx-icons--image (name size)
-  "The cached image of NAME at SIZE on the selected frame's scale, or nil."
-  (let* ((scale (drgnx-icons--scale)) (key (list name size scale))
+  "The cached image of NAME at SIZE on the selected frame's scale (`drgnx-pixels-scale': the display scale times the
+UI scale), or nil."
+  (let* ((scale (drgnx-pixels-scale)) (key (list name size scale))
          (hit (gethash key drgnx-icons--cache 'miss)))
     (when (eq hit 'miss)
       (setq hit (or (drgnx-icons--make name size scale) 'none))

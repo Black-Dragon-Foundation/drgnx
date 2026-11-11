@@ -39,6 +39,24 @@ names no other colour: the text's face colours it."
       (should (string-match-p "stroke-width=\"1.6\"" data))
       (should-not (string-match-p "stroke-width=\"2\"" data)))))
 
+(ert-deftest drgnx-icons/size-goes-through-the-pixel-rule ()
+  "An icon's SVG is sized in the frame's own pixels by the pixel rule (`drgnx-pixels-scale': the display scale on a
+native shell times the UI scale), half up, with no image scale left to Emacs: 16 px is 20 at 1.25, 21 at 4/3, 24 at
+1.5, 32 at 2 and 22 at 1.25 × 110 %; each scale has its own image."
+  (drgnx-icons-clear)
+  (let (seen)
+    (dolist (case '((1.0 16 14) (1.25 20 18) (1.3333333333333333 21 19) (1.5 24 21) (2.0 32 28) (1.375 22 19)))
+      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                ((symbol-function 'image-type-available-p) (lambda (_) t))
+                ((symbol-function 'drgnx-pixels-scale) (lambda (&optional _f) (car case))))
+        (dolist (pair (list (cons nil (nth 1 case)) (cons 14 (nth 2 case))))
+          (let* ((img (get-text-property 0 'display (drgnx-look-icon 'folder nil (car pair))))
+                 (data (plist-get (cdr img) :data)))
+            (should (string-match-p (format "width=\"%d\" height=\"%d\"" (cdr pair) (cdr pair)) data))
+            (should (eql 1 (plist-get (cdr img) :scale)))
+            (should-not (memq img seen))
+            (push img seen)))))))
+
 (ert-deftest drgnx-icons/every-icon-has-a-glyph ()
   "Pattern D: every icon file has a glyph of the same name in the table, for a terminal and for the setting
 `glyphs'."
