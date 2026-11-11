@@ -91,12 +91,14 @@ High contrast has no shadow and a 1 px ring (the `child-frame-border' face, `drg
 (defun drgnx-look-palette-for (variant)
   "The floating command palette's child frame parameters in VARIANT, in logical pixels.
 High contrast is opaque, with no shadow and no blur, and a 2 px ring.  The others are frosted as the design is: 90 %
-opaque over a 16 px blur of what lies behind (`palette-float-hides-what-lies-behind')."
+opaque over a 16 px blur of what lies behind (`palette-float-hides-what-lies-behind'), with a 1 px edge just outside
+the card in the shadow's colour (the `child-frame-shadow' face; look.css `--sh-modal': 0.45 dark, 0.08 light)."
   (drgnx-look--float-motion
    (pcase variant
      ('hc '((corner-radius . 12) (alpha-background . 1.0) (child-frame-border-width . 2) (transition . pop)))
      (_ `((corner-radius . 12)
           (shadow . (:blur 48 :offset (0 . 16) :spread 0 :opacity ,(if (eq variant 'light) 0.22 0.50)))
+          (ring . (child-frame-shadow . ,(if (eq variant 'light) 0.08 0.45)))
           (alpha-background . 0.90) (backdrop-blur . 16) (transition . pop))))))
 
 (defcustom drgnx-look-chrome (drgnx-look-chrome-for 'dark)

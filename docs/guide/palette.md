@@ -43,6 +43,7 @@ open: when you have answered, the palette is there as you left it.
 |---|---|---|
 | `corner-radius` | 12 | logical pixels |
 | `shadow` | `(:blur 48 :offset (0 . 16) :spread 0 :opacity 0.5)` | 0.22 in the light theme, none in High Contrast; colour comes from the `child-frame-shadow` face |
+| `ring` | `(child-frame-shadow . 0.45)` | a 1 px edge just outside the box, in the shadow's colour; 0.08 in the light theme, none in High Contrast (its 2 px border instead) |
 | `alpha-background` | 0.90 | 1.0 in High Contrast |
 | `backdrop-blur` | 16 | logical pixels of blur radius behind the box; none in High Contrast |
 | `transition` | `pop` | fade and pop in and out |
@@ -74,7 +75,8 @@ state folder (200 commands at most).
 In the floating palette the prompt is a search icon, a hint at the right of what you type says what it searches
 (`Commands · # code · @ agents`, the last with `tools/agents` on), and a footer 30 logical pixels high, 6 below the
 last row, shows the keys in its middle: `↑` `↓` move, `↵` run, `Tab` preview, `Esc` close. A 1 pixel hairline in the border
-colour runs along the footer's top. The minibuffer in the echo area is not changed by any of this.
+colour runs along the footer's top, and another under the input row (over the group title that follows it; not over
+the selected row, whose rounded fill it would cross). The minibuffer in the echo area is not changed by any of this.
 
 ## The echo area
 
