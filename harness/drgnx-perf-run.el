@@ -1224,7 +1224,7 @@ error if it does not hold).  With :actions, :measure runs after the input and it
       ;; the empty Search view's saved and recent searches: 100 saved (10 pinned) and 50 recent, drawn 100 times
       (search-lists
        :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) " (drgnx-perf-run--replace-setup-form)
-                       " " drgnx-perf-run--search-lists-form " (drgnx-perf--replace-arm))")
+                       " " drgnx-perf-run--search-lists-form " (drgnx-perf--replace-arm) t)")
        :measure "(drgnx-perf--sl-measure)"
        :teardown ,(concat "(progn (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
       ;; retyping the Search view's query over 10k matches on the hub's rows path, a character at a time: "needle" to
