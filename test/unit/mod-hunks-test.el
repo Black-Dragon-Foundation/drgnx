@@ -82,6 +82,12 @@
     (should (= drgnx-hunks--bitmap-width 6))
     (should (equal (get 'drgnx-hunk-bar 'fringe) (get 'drgnx-hunk-bar 'fringe)))))
 
+(ert-deftest drgnx-hunks/the-bar-sits-against-the-line-numbers ()
+  "window-dark.html `.ln .g': the bar is just left of the number column, so its bits are the bitmap's right ones
+(the fringe's inner side, where the numbers start)."
+  (should (= (drgnx-hunks--bar-row 3) #b00000111))
+  (should (= (drgnx-hunks--bar-row 6) #b00111111)))
+
 (ert-deftest drgnx-hunks/a-line-an-agent-draws-is-left-out ()
   (mod-hunks-test--with-buffer "a\nb\nc\nd\n"
     (let ((drgnx-hunks-skip-line-function (lambda (line) (= line 2))))
