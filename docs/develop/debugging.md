@@ -103,6 +103,26 @@ or on a port, or a `debugServer` connected to) and route its updates:
 The tests (`debug/tests.rs`, `debug/tests_registry.rs`) run each of these against the mock adapter on tokio's paused clock; the stop sequence's
 waits are checked to the second.
 
+## launch.json
+
+`debug/launch.rs` reads `.vscode/launch.json` as JSONC (comments and trailing commas only; a syntax error gives its
+line and column). The picker lists configurations by `presentation.group`, then `order`, then the file's order, and
+leaves `hidden` ones out. The `linux` / `osx` / `windows` section for this system is merged over the base (objects such
+as `env` key by key) and removed.
+
+Variables come in two passes. The first (`needs`) finds what must be asked: each `${input:id}` (its `promptString` or
+`pickString` declaration; a `pickString` answer must be one of its options) and `${command:pickProcess}`. The second
+(`substitute`) replaces every variable in every string in one scan, so an answer or an environment value is never
+read for variables again and an `args` item stays one argument. It knows all of VS Code's predefined variables
+(`workspaceFolder`, `file` and its parts, `relativeFile`, `lineNumber`, `selectedText`, `execPath`, `userHome`,
+`defaultBuildTask`, `workspaceFolder:NAME` …), `${env:…}` and `${config:…}`; the latter reads drgnx settings by name or
+through a short table of VS Code names (`python.defaultInterpreterPath` → `debug-python-interpreter`). Paths are true
+names (symlinks resolved). An unknown variable, setting or folder is an error that names it.
+
+`debugServer` connects to this machine only (a port, or `localhost:N`). The fields drgnx reads itself
+(`presentation`, `preLaunchTask`, `postDebugTask`, `debugServer`, `internalConsoleOptions`, `serverReadyAction`) are
+not passed to the adapter; every other field is.
+
 ## Live adapters: the image
 
 The tests that run real adapters (debugpy, js-debug, delve, lldb-dap) use `drgnx-debug-adapters:f45`, built from

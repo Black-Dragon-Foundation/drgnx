@@ -1,14 +1,18 @@
 //! Debugging (docs/develop/debugging.md): the hub owns each debug session, speaking the Debug Adapter Protocol to the
 //! adapter through `vor`.
 //!
+//! - [`launch`]: launch.json (JSONC), the picker's order, platform sections, `${…}` variables, inputs.
 //! - [`session`]: one session's life: the launch sequence, stops and their epochs, controls, the stop sequence.
 //! - [`Debug`] (here): the hub's sessions: starting them through a [`Launcher`], children from `startDebugging`,
 //!   restarts, `runInTerminal` in a drgnx terminal, the `debug-state` / `debug-frame` / `debug-terminal` events, and
 //!   stopping (children before their parent; every session at the hub's end).
 
+pub mod launch;
 pub mod session;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_launch;
 #[cfg(test)]
 mod tests_registry;
 
