@@ -10,7 +10,7 @@
 //! write like a trail.
 
 mod board;
-mod flow;
+pub(crate) mod flow;
 mod model;
 
 use crate::dispatch::Caller;

@@ -394,36 +394,43 @@ look-scenes' types them)."
     (goto-char (point-max)))
   (drgnx-look-scene--answer))
 
+(declare-function drgnx-work-map-rows-p "drgnx-work-map")
+
+(defun drgnx-look-scene--work-map ()
+  "The Work map on the scenes' hub (its seeded plan run), drawn from the hub's rows; nil, with an error, when it is not:
+a map off the rows path or without a hub draws a placeholder, and a shot of that judges nothing."
+  (drgnx-look-scene--hub)
+  (let ((map (drgnx-work-space-open)))
+    (unless (drgnx-work-map-rows-p)
+      (error "The Work map is off the rows path (this Emacs has no Sjá: run the scenes on Nidhogg's line, --line)"))
+    ;; the hub sends the map's rows after it opens and the view draws them on a timer once its window shows: the
+    ;; shot waits for the first of them (redisplay and timers run in `sit-for'), not an empty window
+    (and (drgnx-look-scene--until 15 "work map rows"
+                                  (lambda () (with-current-buffer map (drgnx-look-scene--row-ids ""))))
+         map)))
+
 (defun drgnx-look-scene-work-space-dark ()
   (drgnx-look-scene--theme 'drgnx-dark)
-  (drgnx-look-scene--try "work space"
-    (let ((map (drgnx-work-space-open)))
-      ;; the hub sends the map's rows after it opens and the view draws them on a timer once its window shows: the
-      ;; shot waits for the first of them (redisplay and timers run in `sit-for'), not an empty window
-      (let ((end (+ (float-time) 15)))
-        (while (and (zerop (buffer-size map)) (< (float-time) end))
-          (sit-for 0.05)))
-      (when (zerop (buffer-size map))
-        (push "work space: no map rows within 15 s" drgnx-look-scene--errors))))
+  (drgnx-look-scene--try "work space" (drgnx-look-scene--work-map))
   (drgnx-look-scene--answer))
 
 (declare-function drgnx-work-flow-open "drgnx-work-flow")
 
 (defun drgnx-look-scene-work-flow ()
-  "The Flow lens beside the scene's map (the mockup hub-orchestration).  The scene's hub runs no plan, so the Flow shows
-its lens, its headings and its empty state; the rows a run fills are judged in the run's own shots."
+  "The Flow lens beside the scene's map (the mockup hub-orchestration), on the hub's seeded plan run: its tasks in each
+gate state, the held one, the batch.  A Flow without the run's task rows (its waiting or off-path text) is an error."
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--try "work flow"
-    (let* ((map (drgnx-work-space-open))
-           (flow (progn (let ((end (+ (float-time) 15)))
-                          (while (and (zerop (buffer-size map)) (< (float-time) end)) (sit-for 0.05)))
-                        (drgnx-work-flow-open map))))
+    (when-let* ((map (drgnx-look-scene--work-map))
+                (flow (drgnx-work-flow-open map)))
       (pop-to-buffer-same-window flow)
-      (let ((end (+ (float-time) 15)))
-        (while (and (zerop (buffer-size flow)) (< (float-time) end))
-          (sit-for 0.05)))
-      (when (zerop (buffer-size flow))
-        (push "work flow: no rows within 15 s" drgnx-look-scene--errors))))
+      ;; the held task's row (its `drgnx-work-id' is the task's id) and the batch's heading
+      (drgnx-look-scene--until 15 "the seeded run's Flow rows (scene-run#5, the batch)"
+                               (lambda ()
+                                 (with-current-buffer flow
+                                   (and (member "scene-run#5" (drgnx-look-scene--row-ids "scene-run#"))
+                                        (save-excursion (goto-char (point-min))
+                                                        (search-forward "Merge batch" nil t))))))))
   (drgnx-look-scene--answer))
 
 ;; The highlights (look step 5b's audit): no mockup of their own; each is judged against the mockups' tokens
@@ -566,24 +573,29 @@ sections' with the inactive selection."
       (redisplay))
     (or (funcall pred) (progn (push (format "%s: not within %d s" what secs) drgnx-look-scene--errors) nil))))
 
+(defun drgnx-look-scene--hub ()
+  "The scenes' hub, started once and connected.  A session starts no hub (DRGNX_NO_HUB_START): the scenes run the
+worktree's own ($DRGNX_RATATOSKR_BIN, a test-hooks build) in the foreground, as the perf workloads do, ended with the
+session, with one plan run seeded into its fresh store (RATATOSKR_SEED_SCENE, the hub's `orch::scene') for the Work
+space's scenes."
+  (unless (drgnx-hub-running-p)
+    (let ((bin (getenv "DRGNX_RATATOSKR_BIN"))
+          (process-environment (append '("RATATOSKR_SUPERVISOR=none" "RATATOSKR_SEED_SCENE=1") process-environment)))
+      (unless (and bin (file-executable-p bin)) (error "No ratatoskr binary (DRGNX_RATATOSKR_BIN)"))
+      (make-process :name "ratatoskr" :noquery t :connection-type 'pipe
+                    :buffer (generate-new-buffer " *ratatoskr*")
+                    :command (list bin "serve" "--foreground" "--parent-pid" (number-to-string (emacs-pid))))
+      (drgnx-look-scene--until 30 "hub start" #'drgnx-hub-running-p)))
+  (drgnx-hub-connect))
+
 (defun drgnx-look-scene--search ()
   "The mockup's search in the Search view: regexp `(gateway)--pending' replaced by `\\1--queued' in the project, the
 match on line 209 (the `puthash' line) unticked; the view's buffer, or nil."
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--editor)
   (drgnx-look-scene--try "hub"                 ; the Search view's rows come from the hub
-    ;; a session starts no hub (DRGNX_NO_HUB_START): the scene runs the worktree's own ($DRGNX_RATATOSKR_BIN) in the
-    ;; foreground, as the perf workloads do, ended with the session
     (unless (drgnx-replace--hub-ready-p)
-      (unless (drgnx-hub-running-p)
-        (let ((bin (getenv "DRGNX_RATATOSKR_BIN"))
-              (process-environment (cons "RATATOSKR_SUPERVISOR=none" process-environment)))
-          (unless (and bin (file-executable-p bin)) (error "No ratatoskr binary (DRGNX_RATATOSKR_BIN)"))
-          (make-process :name "ratatoskr" :noquery t :connection-type 'pipe
-                        :buffer (generate-new-buffer " *ratatoskr*")
-                        :command (list bin "serve" "--foreground" "--parent-pid" (number-to-string (emacs-pid))))
-          (drgnx-look-scene--until 30 "hub start" #'drgnx-hub-running-p)))
-      (drgnx-hub-connect)
+      (drgnx-look-scene--hub)
       (drgnx-look-scene--until 20 "hub" #'drgnx-replace--hub-ready-p)))
   (drgnx-look-scene--try "search"
     (drgnx-replace-in-files)

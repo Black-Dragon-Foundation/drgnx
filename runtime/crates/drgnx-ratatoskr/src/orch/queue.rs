@@ -40,7 +40,7 @@ impl Queue {
     /// TASK of JOB is ready at TIP (now AT; a task ready at another tip before is ready anew), with LIVE the job's
     /// tasks that may merge (the rest leave the queue).  The batch it is in, formed now when none is open (CLASH
     /// says two tips conflict).
-    fn place(
+    pub(crate) fn place(
         &self,
         job: &str,
         r: Ready,
