@@ -9,8 +9,36 @@ use std::sync::OnceLock;
 /// The file-kind table: a plist of `:names` and `:extensions`, each a list of `(ICON "word" ...)`.
 const FILES: &str = include_str!("../../../../../etc/icons/files.eld");
 
-/// The icons a row can show, by name.
-const SVGS: [(&str, &str); 10] = [
+/// The icons a row can show, by name: the Explorer's, then the Work space's Flow (its columns and chips).
+const SVGS: [(&str, &str); 20] = [
+    (
+        "list-checks",
+        include_str!("../../../../../etc/icons/list-checks.svg"),
+    ),
+    (
+        "flask-conical",
+        include_str!("../../../../../etc/icons/flask-conical.svg"),
+    ),
+    (
+        "pencil",
+        include_str!("../../../../../etc/icons/pencil.svg"),
+    ),
+    (
+        "shield",
+        include_str!("../../../../../etc/icons/shield.svg"),
+    ),
+    (
+        "git-merge",
+        include_str!("../../../../../etc/icons/git-merge.svg"),
+    ),
+    ("eye", include_str!("../../../../../etc/icons/eye.svg")),
+    ("lock", include_str!("../../../../../etc/icons/lock.svg")),
+    ("check", include_str!("../../../../../etc/icons/check.svg")),
+    (
+        "circle",
+        include_str!("../../../../../etc/icons/circle.svg"),
+    ),
+    ("flag", include_str!("../../../../../etc/icons/flag.svg")),
     (
         "chevron-down",
         include_str!("../../../../../etc/icons/chevron-down.svg"),

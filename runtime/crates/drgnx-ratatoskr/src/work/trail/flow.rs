@@ -7,7 +7,7 @@
 //! and `held` (the tasks a gate holds: the needs-you chips).
 
 use crate::view::model::Doc;
-use drgnx_rows::{Row, RowBuilder};
+use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::view::ViewEnv;
 use serde_json::{Map, Value, json};
 use vordr::evidence::Evidence;
@@ -40,16 +40,21 @@ pub(crate) enum Chip {
     Na,
 }
 
+/// The Flow's text faces (drgnx-work-flow.el: the UI font, the theme's tokens).
+const TEXT: &str = "drgnx-work-flow-text";
+const LABEL: &str = "drgnx-work-flow-label";
+const HEAD: &str = "drgnx-work-flow-heading";
+
 impl Chip {
     /// The chip's face.
     pub(crate) fn face(self) -> &'static str {
         match self {
-            Chip::Ok => "drgnx-chip-ok",
-            Chip::Run => "drgnx-chip-accent",
-            Chip::Held => "drgnx-chip-attention",
-            Chip::Err => "drgnx-chip-error",
-            Chip::Wait => "drgnx-chip-quiet",
-            Chip::Na => "drgnx-work-label",
+            Chip::Ok => "drgnx-work-flow-chip-ok",
+            Chip::Run => "drgnx-work-flow-chip-run",
+            Chip::Held => "drgnx-work-flow-chip-held",
+            Chip::Err => "drgnx-work-flow-chip-err",
+            Chip::Wait => "drgnx-work-flow-chip-wait",
+            Chip::Na => LABEL,
         }
     }
 
@@ -131,6 +136,14 @@ pub(crate) struct Flow {
     pub batch: Vec<(String, String)>,
 }
 
+/// What one Flow view shows: the lens, one task's detail tile, or the Rules tile.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Part {
+    Lens,
+    Detail(String),
+    Rules,
+}
+
 /// TASK's cells under PACK (none: the job runs no gates).
 pub(crate) fn cells(t: &TaskFacts, pack: Option<&Pack>) -> [Cell; 6] {
     let on = |id: &str| pack.is_some_and(|p| p.on(id));
@@ -149,9 +162,12 @@ pub(crate) fn cells(t: &TaskFacts, pack: Option<&Pack>) -> [Cell; 6] {
     let red_first = if !on("red-first") {
         cell(Chip::Na, "—")
     } else if let Some(r) = red {
-        cell(Chip::Ok, format!("{} failed", failing(&r.rows).count()))
+        cell(
+            Chip::Ok,
+            format!("{} failed · base", failing(&r.rows).count()),
+        )
     } else if t.status == "in-review" || t.held.is_some() {
-        cell(Chip::Held, "no red")
+        cell(Chip::Held, "no red · held")
     } else if queued {
         cell(Chip::Wait, "—")
     } else {
@@ -194,6 +210,9 @@ pub(crate) fn cells(t: &TaskFacts, pack: Option<&Pack>) -> [Cell; 6] {
                 cell(Chip::Err, text)
             } else if green == cs.len() {
                 cell(Chip::Ok, text)
+            } else if red_first.chip == Chip::Held {
+                // the author check runs at the tip once red first has its red
+                cell(Chip::Na, "waits red")
             } else if queued {
                 cell(Chip::Wait, "—")
             } else {
@@ -307,23 +326,121 @@ fn stops(env: &ViewEnv) -> (Vec<u32>, u32) {
     (out, gate)
 }
 
-/// The lens's rows for ENV: the run's line, the column headings, a row per task (its id, title, agent and a chip per
-/// gate, each carrying the task's id), then the merge batch's lines and the rule pack's.
-pub(crate) fn flow_rows(flow: &Flow, env: &ViewEnv) -> Vec<Row> {
+/// V logical px in ENV's device px.
+fn dpx(env: &ViewEnv, v: f32) -> u32 {
+    (f64::from(v) * f64::from(env.scale) + 0.5 + 1e-9).floor() as u32
+}
+
+/// The icons one build of rows draws (each image once, for the patch), 14 logical px square.
+struct Pics {
+    px: u32,
+    out: Vec<(ImageId, String)>,
+}
+
+impl Pics {
+    fn new(env: &ViewEnv) -> Self {
+        Pics {
+            px: dpx(env, 14.0),
+            out: Vec::new(),
+        }
+    }
+
+    /// Icon NAME here (ALT on a terminal, or where the icon has no file).
+    fn put(&mut self, b: &mut RowBuilder, name: &str, alt: &str) {
+        match crate::view::icons::svg(name, self.px) {
+            Some((id, svg)) => {
+                if !self.out.iter().any(|(i, _)| *i == id) {
+                    self.out.push((id, svg));
+                }
+                b.image(id, alt);
+            }
+            None => {
+                b.push(alt, None);
+            }
+        }
+    }
+}
+
+/// A chip here: ICON (none: text alone) and TEXT on FACE's tint, the icon in the chip's colour.
+fn chip(b: &mut RowBuilder, pics: &mut Pics, icon: Option<(&str, &str)>, text: &str, face: &str) {
+    let start = b.pos();
+    b.push(" ", None);
+    if let Some((name, alt)) = icon {
+        pics.put(b, name, alt);
+        b.push(" ", None);
+    }
+    b.push(text, None).push(" ", None);
+    let end = b.pos();
+    b.face(start, end, face);
+}
+
+/// A gate column's icon (Lucide, as the mockup's headings).
+fn gate_icon(gate: &str) -> &'static str {
+    match gate {
+        "Brief" => "file-text",
+        "Red first" => "flask-conical",
+        "Build" => "pencil",
+        "Author check" => "shield",
+        "Merge batch" => "git-merge",
+        _ => "eye",
+    }
+}
+
+/// CELL drawn at the cursor of B, its text cut to CHARS: a waiting cell with nothing to say is an empty ring; a
+/// passed author check carries a check, a held cell a lock; a gate the pack lacks (or one that waits on another) is
+/// its words in the label face.
+fn draw_cell(b: &mut RowBuilder, pics: &mut Pics, gate: &str, c: &Cell, chars: usize) {
+    let text = fit(&c.text, chars);
+    match c.chip {
+        Chip::Wait if c.text == "—" => {
+            let start = b.pos();
+            pics.put(b, "circle", "○");
+            let end = b.pos();
+            b.face(start, end, LABEL);
+        }
+        Chip::Na => {
+            b.push(&text, Some(LABEL));
+        }
+        Chip::Ok if gate == "Author check" => {
+            chip(b, pics, Some(("check", "✓")), &text, c.chip.face())
+        }
+        Chip::Held => chip(b, pics, Some(("lock", "!")), &text, c.chip.face()),
+        _ => chip(b, pics, None, &text, c.chip.face()),
+    }
+}
+
+/// The lens's rows for ENV and the icons they draw: the run's line, the needs-you chips (one per held task, carrying
+/// its id), the column headings with their icons, a row per task (its id, title, agent and a chip per gate, carrying
+/// the task's id and its gate card), then the merge batch's lines.  The rule pack is its own tile ([`rules_rows`]).
+pub(crate) fn flow_rows(flow: &Flow, env: &ViewEnv) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let cell_w = env.cell.0.max(1);
     let (at, gate) = stops(env);
     let chars = |w: u32| (w.saturating_sub(8) / cell_w) as usize;
+    let mut pics = Pics::new(env);
     let ts = tasks(flow);
     let done = ts.iter().filter(|t| t.cells[4].chip == Chip::Ok).count();
     let mut head = RowBuilder::new("head");
-    head.push(&flow.title, Some("bold")).push(
-        &format!(
-            " · job/{} · rules {} · {done} / {} done",
-            flow.job,
-            flow.pack.as_ref().map_or("none", |p| p.name.as_str()),
-            ts.len()
-        ),
-        Some("drgnx-work-label"),
+    pics.put(&mut head, "list-checks", "≡");
+    head.push(" ", None)
+        .push(&flow.title, Some(HEAD))
+        .push(
+            &format!(
+                "  plan run · job/{} · rules {}",
+                flow.job,
+                flow.pack.as_ref().map_or_else(
+                    || "none".to_owned(),
+                    |p| format!("{} v{}", p.name, p.version)
+                )
+            ),
+            Some(LABEL),
+        )
+        .push("  ", None);
+    chip(
+        &mut head,
+        &mut pics,
+        None,
+        &format!("{done} / {} done", ts.len()),
+        Chip::Wait.face(),
     );
     let mut rows = vec![head.finish()];
     // the needs-you chips: a task a gate holds, with why (its card's words)
@@ -336,9 +453,12 @@ pub(crate) fn flow_rows(flow: &Flow, env: &ViewEnv) -> Vec<Row> {
             }
             let start = b.pos();
             let why = t.held.as_deref().unwrap_or_default();
-            b.push(
-                &format!(" ⚑ {} held: {} ", t.label, fit(why, 48)),
-                Some(Chip::Held.face()),
+            chip(
+                &mut b,
+                &mut pics,
+                Some(("flag", "⚑")),
+                &format!("{} held: {}", t.label, fit(why, 48)),
+                Chip::Held.face(),
             );
             let end = b.pos();
             b.prop(start, end, "drgnx-work-id", json!(t.id));
@@ -347,27 +467,40 @@ pub(crate) fn flow_rows(flow: &Flow, env: &ViewEnv) -> Vec<Row> {
     }
     let mut cols = RowBuilder::new("cols");
     for (i, name) in ["Task", "Agent"].iter().chain(GATES.iter()).enumerate() {
-        cols.stop(at[i]).push(name, Some("drgnx-work-label"));
+        cols.stop(at[i]);
+        if i >= 2 {
+            let start = cols.pos();
+            pics.put(&mut cols, gate_icon(name), " ");
+            cols.push(" ", None);
+            let end = cols.pos();
+            cols.face(start, end, LABEL);
+        }
+        cols.push(name, Some(LABEL));
     }
     rows.push(cols.finish());
     if ts.is_empty() {
         let mut b = RowBuilder::new("none");
-        b.push("No tasks yet.", Some("drgnx-work-label"));
+        b.push("No tasks yet.", Some(LABEL));
         rows.push(b.finish());
     }
     for t in &ts {
         let mut b = RowBuilder::new(format!("task:{}", t.id));
         let start = b.pos();
-        b.push(&format!("{:<4}", t.label), Some("drgnx-work-label"))
-            .push(&fit(&t.title, chars(at[1]).saturating_sub(4)), None);
+        b.push(&format!("{:<4}", t.label), Some(LABEL))
+            .push(&fit(&t.title, chars(at[1]).saturating_sub(4)), Some(TEXT));
         b.stop(at[1]).push(
             &fit(t.agent.as_deref().unwrap_or("—"), chars(at[2] - at[1])),
-            Some("drgnx-work-label"),
+            Some(LABEL),
         );
         for (i, c) in t.cells.iter().enumerate() {
             b.stop(at[i + 2]);
-            let text = fit(&c.text, chars(gate).saturating_sub(2));
-            b.push(&format!(" {text} "), Some(c.chip.face()));
+            draw_cell(
+                &mut b,
+                &mut pics,
+                GATES[i],
+                c,
+                chars(gate).saturating_sub(4),
+            );
         }
         let end = b.pos();
         b.prop(start, end, "drgnx-work-id", json!(t.id));
@@ -380,36 +513,84 @@ pub(crate) fn flow_rows(flow: &Flow, env: &ViewEnv) -> Vec<Row> {
     blank.push("", None);
     rows.push(blank.finish());
     let mut bh = RowBuilder::new("batch");
-    bh.push(&format!("Merge batch → job/{}", flow.job), Some("bold"));
+    pics.put(&mut bh, "git-merge", " ");
+    bh.push(" ", None)
+        .push(&format!("Merge batch → job/{}", flow.job), Some(HEAD));
     if flow.batch.is_empty() {
-        bh.push(" · empty", Some("drgnx-work-label"));
+        bh.push("  empty", Some(LABEL));
     }
     rows.push(bh.finish());
     for (i, (who, what)) in flow.batch.iter().enumerate() {
         let mut b = RowBuilder::new(format!("batch:{i}"));
-        b.push(&format!("  {who}"), None)
+        b.push(&format!("  {who}"), Some(TEXT))
             .stop(at[2])
-            .push(what, Some("drgnx-work-label"));
+            .push(what, Some(LABEL));
         rows.push(b.finish());
     }
-    if let Some(p) = &flow.pack {
-        let mut rh = RowBuilder::new("rules");
-        rh.push(&format!("Rules · {} v{}", p.name, p.version), Some("bold"));
-        rows.push(rh.finish());
-        for r in &p.rules {
-            let mut b = RowBuilder::new(format!("rule:{}", r.id));
-            b.push(&format!("  {}", r.id), None)
-                .stop(at[2])
-                .push(&r.kind, Some("drgnx-work-label"))
-                .stop(at[3])
-                .push(
-                    &fit(&r.doc, chars(env.width_px.saturating_sub(at[3]))),
-                    Some("drgnx-work-label"),
-                );
-            rows.push(b.finish());
-        }
+    (rows, pics.out)
+}
+
+/// How the hub holds rule ID (the Rules tile's third column).
+fn how(id: &str) -> &'static str {
+    match id {
+        "red-first" => "checked at the merge over every commit in base..tip",
+        "author-check" => "the task can't reach \"ready to merge\" without it",
+        "affected-groups" => "groups from the base's affected.eld; per-tip reruns on red",
+        "push-gate" => "push gate; results reused by tree key",
+        "merge-notes" => "a notes record per hunk is required; its content is the agent's",
+        "flake-hold" => "a test that failed then passed on the same facts holds the merge",
+        "trailers" => "checked over base..tip; no waiver passes it",
+        _ => "",
     }
-    rows
+}
+
+/// The Rules tile's rows for ENV and their icons: its heading, the columns (Rule, Kind, How the hub holds it), a row
+/// per rule with its kind as a chip (enforced with a lock, checked and routing in the accent).
+pub(crate) fn rules_rows(flow: &Flow, env: &ViewEnv) -> (Vec<Row>, Vec<(ImageId, String)>) {
+    let cell_w = env.cell.0.max(1);
+    let mut pics = Pics::new(env);
+    let (kind_at, how_at) = (env.width_px * 2 / 5, env.width_px * 2 / 5 + dpx(env, 100.0));
+    let mut head = RowBuilder::new("rules-head");
+    pics.put(&mut head, "shield", " ");
+    head.push(" ", None);
+    let Some(p) = &flow.pack else {
+        head.push("Rules", Some(HEAD))
+            .push("  this run has no rule pack", Some(LABEL));
+        return (vec![head.finish()], pics.out);
+    };
+    head.push(&format!("Rules · {} v{}", p.name, p.version), Some(HEAD));
+    let mut rows = vec![head.finish()];
+    let mut cols = RowBuilder::new("rules-cols");
+    cols.push("Rule", Some(LABEL))
+        .stop(kind_at)
+        .push("Kind", Some(LABEL))
+        .stop(how_at)
+        .push("How the hub holds it", Some(LABEL));
+    rows.push(cols.finish());
+    for r in &p.rules {
+        let mut b = RowBuilder::new(format!("rule:{}", r.id));
+        b.push(
+            &fit(&r.doc, (kind_at.saturating_sub(8) / cell_w) as usize),
+            Some(TEXT),
+        )
+        .stop(kind_at);
+        let lock = (r.kind == "enforced").then_some(("lock", "!"));
+        let face = if r.kind == "enforced" {
+            Chip::Ok.face()
+        } else {
+            Chip::Run.face()
+        };
+        chip(&mut b, &mut pics, lock, &r.kind, face);
+        b.stop(how_at).push(
+            &fit(
+                how(&r.id),
+                (env.width_px.saturating_sub(how_at) / cell_w) as usize,
+            ),
+            Some(LABEL),
+        );
+        rows.push(b.finish());
+    }
+    (rows, pics.out)
 }
 
 /// TEXT in lines of at most CHARS characters, broken at spaces (a word longer than a line is cut).
@@ -477,7 +658,7 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
         .find(|(f, _)| f.id == task)
     else {
         let mut b = RowBuilder::new("d:none");
-        b.push("Select a task in the Flow.", Some("drgnx-work-label"));
+        b.push("Select a task in the Flow.", Some(LABEL));
         return vec![b.finish()];
     };
     let mut rows = Vec::new();
@@ -497,7 +678,7 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
     let start = head.pos();
     head.push(
         &fit(&format!("{} · {}", t.label, t.title), chars),
-        Some("bold"),
+        Some(HEAD),
     );
     let end = head.pos();
     head.prop(start, end, "drgnx-work-id", json!(t.id));
@@ -515,7 +696,7 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
             ),
             chars.saturating_sub(7),
         ),
-        Some("drgnx-work-label"),
+        Some(LABEL),
     );
     if t.held.is_some() {
         sub.push(" ", None).push(" held ", Some(Chip::Held.face()));
@@ -529,13 +710,17 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
         .collect();
     if let Some(why) = &t.held {
         line("d:gap1".into(), " ", None);
-        line("d:why-h".into(), "Why it is held", Some("bold"));
-        line("d:why".into(), why, None);
+        line("d:why-h".into(), "Why it is held", Some(HEAD));
+        line("d:why".into(), why, Some(TEXT));
         for (g, c) in &held_gates {
-            line(format!("d:why:{g}"), &format!("{g}: {}", c.text), None);
+            line(
+                format!("d:why:{g}"),
+                &format!("{g}: {}", c.text),
+                Some(TEXT),
+            );
         }
         line("d:gap2".into(), " ", None);
-        line("d:clear-h".into(), "What clears it", Some("bold"));
+        line("d:clear-h".into(), "What clears it", Some(HEAD));
         let gates: Vec<&str> = match held_gates
             .iter()
             .map(|(g, _)| *g)
@@ -545,17 +730,17 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
             None => vec!["Merge batch"],
         };
         for g in gates {
-            line(format!("d:clear:{g}"), clears(g), None);
+            line(format!("d:clear:{g}"), clears(g), Some(TEXT));
         }
     }
     line("d:gap3".into(), " ", None);
-    line("d:ev-h".into(), "Evidence so far", Some("bold"));
+    line("d:ev-h".into(), "Evidence so far", Some(HEAD));
     if facts.evidence.is_empty() {
-        line("d:ev".into(), "none recorded", Some("drgnx-work-label"));
+        line("d:ev".into(), "none recorded", Some(LABEL));
     }
     for (i, e) in facts.evidence.iter().enumerate() {
         let face = if e.kind == "red" || failing(&e.rows).next().is_none() {
-            "drgnx-work-label"
+            LABEL
         } else {
             Chip::Err.face()
         };
@@ -592,7 +777,7 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
         .enumerate()
         {
             let mut b = RowBuilder::new(format!("d:waive:{i}"));
-            b.push(l, Some("drgnx-work-label"));
+            b.push(l, Some(LABEL));
             out.push(b.finish());
         }
     }
@@ -696,7 +881,7 @@ mod tests {
             chips(&cells(&t, Some(&p))),
             [
                 (Chip::Ok, "sent"),
-                (Chip::Ok, "2 failed"),
+                (Chip::Ok, "2 failed · base"),
                 (Chip::Ok, "3 pass"),
                 (Chip::Ok, "1/1"),
                 (Chip::Run, "checking"),
@@ -707,7 +892,12 @@ mod tests {
         let mut h = task(5, "in-review");
         h.held = Some("no red for its test commit".into());
         let c = cells(&h, Some(&p));
-        assert_eq!((c[1].chip, c[1].text.as_str()), (Chip::Held, "no red"));
+        assert_eq!(
+            (c[1].chip, c[1].text.as_str()),
+            (Chip::Held, "no red · held")
+        );
+        // the author check waits for the red
+        assert_eq!((c[3].chip, c[3].text.as_str()), (Chip::Na, "waits red"));
         assert_eq!(c[4].chip, Chip::Held);
         assert!(c[4].text.ends_with('…'), "{}", c[4].text);
         // no pack: no gates
@@ -781,12 +971,13 @@ mod tests {
         }
     }
 
-    /// [D] The rows: the run's line, the headings, a row per task with a chip per gate in its state's face at the
-    /// column's stop (device px: the scale's), the task's id on the row; then the batch and the rules.
+    /// [D] The rows: the run's line, the headings (an icon each), a row per task with a chip per gate in its state's
+    /// face at the column's stop (device px: the scale's), the task's id on the row; then the batch.  Icons are drawn
+    /// at 14 logical px, each image once; an empty cell is a ring, a held one carries a lock.
     #[test]
     fn the_flow_rows_put_a_chip_per_gate_at_its_column() {
         for scale in [1.0, 2.0] {
-            let rows = flow_rows(&flow(), &env(scale));
+            let (rows, images) = flow_rows(&flow(), &env(scale));
             let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
             assert_eq!(
                 keys,
@@ -800,20 +991,32 @@ mod tests {
                     "gap",
                     "batch",
                     "batch:0",
-                    "rules",
-                    "rule:red-first",
-                    "rule:author-check",
-                    "rule:review"
                 ]
             );
             assert!(
-                rows[0].text.contains("Search view") && rows[0].text.contains("rules drgnx-org")
+                rows[0].text.contains("Search view") && rows[0].text.contains("rules drgnx-org v4")
             );
             let px = |v: f32| (v * scale).round() as u32;
-            // the needs-you chips: one per held task, in the attention face, carrying the task's id
+            // every image a row names is in the build's images, once, at 14 logical px
+            let named: Vec<ImageId> = rows
+                .iter()
+                .flat_map(|r| r.images.iter().map(|i| i.1))
+                .collect();
+            assert!(named.iter().all(|id| images.iter().any(|(i, _)| i == id)));
+            let mut ids: Vec<ImageId> = images.iter().map(|(i, _)| *i).collect();
+            ids.dedup();
+            assert_eq!(ids.len(), images.len());
+            assert!(
+                images[0].1.contains(&format!("width=\"{}\"", px(14.0))),
+                "{}",
+                images[0].1
+            );
+            // six column icons on the headings
+            assert_eq!(rows[2].images.len(), 6);
+            // the needs-you chips: one per held task, in the held face, carrying the task's id
             let needs = &rows[1];
             assert!(needs.text.contains("T5 held: no red"), "{}", needs.text);
-            assert!(needs.runs.iter().any(|r| r.2 == "drgnx-chip-attention"));
+            assert!(needs.runs.iter().any(|r| r.2 == Chip::Held.face()));
             assert!(
                 needs
                     .props
@@ -832,7 +1035,11 @@ mod tests {
             assert_eq!(stops[1], px(318.0), "scale {scale}");
             assert_eq!(stops.len(), 7);
             let faces: Vec<&str> = held.runs.iter().map(|r| r.2.as_str()).collect();
-            assert!(faces.contains(&"drgnx-chip-attention"), "{faces:?}");
+            assert!(faces.contains(&Chip::Held.face()), "{faces:?}");
+            assert!(faces.contains(&TEXT) && faces.contains(&LABEL), "{faces:?}");
+            // the held red-first cell carries a lock; the queued task's empty cells are rings
+            assert!(!held.images.is_empty());
+            assert!(rows[5].images.len() >= 4, "{:?}", rows[5].images);
             assert!(
                 held.props
                     .iter()
@@ -845,7 +1052,44 @@ mod tests {
             ..flow()
         };
         // no held task: no needs-you row
-        assert_eq!(flow_rows(&empty, &env(1.0))[2].key, "none");
+        assert_eq!(flow_rows(&empty, &env(1.0)).0[2].key, "none");
+    }
+
+    /// [D] The Rules tile: its heading, the columns, a row per rule (its words, its kind as a chip, how the hub holds
+    /// it); an enforced rule's chip carries a lock in the ok face, the others are in the accent; no pack says so.
+    #[test]
+    fn the_rules_tile_lists_the_pack() {
+        let mut f = flow();
+        f.pack.as_mut().unwrap().rules[2].kind = "routing".into();
+        let (rows, images) = rules_rows(&f, &env(1.0));
+        let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "rules-head",
+                "rules-cols",
+                "rule:red-first",
+                "rule:author-check",
+                "rule:review"
+            ]
+        );
+        assert!(rows[0].text.contains("Rules · drgnx-org v4"));
+        assert!(rows[1].text.contains("How the hub holds it"));
+        let red = &rows[2];
+        assert!(red.text.contains("red-first doc") && red.text.contains("enforced"));
+        assert!(red.text.contains("checked at the merge"));
+        assert!(red.runs.iter().any(|r| r.2 == Chip::Ok.face()));
+        assert_eq!(red.images.len(), 1);
+        assert!(rows[4].runs.iter().any(|r| r.2 == Chip::Run.face()));
+        assert!(rows[4].images.is_empty());
+        assert!(!images.is_empty());
+        let none = Flow {
+            pack: None,
+            ..flow()
+        };
+        let (rows, _) = rules_rows(&none, &env(1.0));
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].text.contains("no rule pack"));
     }
 
     /// [D] The detail tile of a held task: its head (id and card on it), why it is held (the card's words and the

@@ -210,12 +210,15 @@ judged by. A tip that edits one is a `code.ci-config` change at its merge (`runn
 else the newest running job), its tasks and their evidence, its rule pack, its merge queue (ready and batch) and its
 open `gate` cards, and builds the model and the rows (`work::trail::flow`, pure):
 
-- a row per task, a column per gate: Brief, Red first, Build, Author check, Merge batch, Review. Each cell is a chip
-  in its state's face: `drgnx-chip-ok` passed, `drgnx-chip-accent` running, `drgnx-chip-attention` held,
-  `drgnx-chip-error` failed, `drgnx-chip-quiet` waiting, the label face where the pack has no such gate. Red first is
-  the oldest red run's failing rows (held at review without one), Build the newest run, the author check its checks
-  green at their newest runs, the merge column the queue's place or the open `gate` card's words;
-- under them the batch being checked (its tips) and the rule pack (each rule's kind and words);
+- a row per task, a column per gate: Brief, Red first, Build, Author check, Merge batch, Review, each heading with its
+  Lucide icon. Each cell is a chip in its state's face (`drgnx-work-flow-chip-ok` passed, `-run` running, `-held`
+  held, with a lock, `-err` failed, `-wait` waiting; drgnx-work-flow.el, the UI font over the theme's chips), an empty
+  ring where a gate has nothing yet, and the label face where the pack has no such gate or a gate waits on another
+  ("waits red"). Red first is the oldest red run's failing rows ("N failed · base"; "no red · held" at review
+  without one), Build the newest run, the author check its checks green at their newest runs (a check when all are),
+  the merge column the queue's place or the open `gate` card's words. Text is in `drgnx-work-flow-text`, ids and
+  agents in `-label`, headings in `-heading`;
+- under them the batch being checked (its tips);
 - the model: a `task` node per task with the `flow` form's links up and down and the gates' states as fields, the
   lists `tasks` and `held` (the needs-you chips; `Tab` walks them).
 
@@ -223,7 +226,11 @@ A held task is also a needs-you chip on the row under the run's line ("⚑ T5 he
 its row carries its `gate` card's id (`drgnx-work-card`).
 
 `e` asks `orch/evidence` for the selected task and lists each record (kind, job, tree, command, its failing rows or
-its pass count, a waiver's reason); `R` scrolls to the rules. The view is read again after every write.
+its pass count, a waiver's reason). The view is read again after every write.
+
+**The Rules tile.** `R` opens the run's rule pack in the bottom panel (pane kind `work-rules`): the Flow's `VIEW/rules`
+subscribed with `rules: true`, rows alone. A row per rule: its words, its kind as a chip (enforced in the ok face with
+a lock, checked and routing in the accent) and how the hub holds it.
 
 **The detail tile.** `work/flow/subscribe` with `detail: TASK` makes its view (the Flow's `VIEW/detail`) that task's
 detail tile: rows alone, no model, read again after every write like the Flow. The Flow subscribes it again each

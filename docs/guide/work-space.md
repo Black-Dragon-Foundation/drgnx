@@ -49,7 +49,7 @@ Everything here is computed in your Emacs from what the hub already sent, so a k
 | `Alt-←` / `Alt-→` (macOS `Ctrl--` / `Ctrl-Shift--`; Vim `Ctrl-o` / `Alt-→`) | back to the selection before the last move, or forward again; a run of arrows or agent keys is one move, a jump (search, `g N`, a click) is one |
 | `m` `b` `t` `F` (every profile) | the Map, the Board, the Timeline or the Flow, in the same window |
 | `e` (in the Flow) | the selected task's evidence: the hub's records of its runs and any waiver |
-| `R` (in the Flow) | scroll to the run's rule pack |
+| `R` (in the Flow) | the run's rule pack in the bottom panel |
 | `r` (in the Flow) | a held task: run its gates again (the red, the author check); it merges when they pass |
 | `s` (in the Flow) | a held task: send it back to its agent with what its gates hold it for |
 | `w` (in the Flow) | a held task: waive its gates once, for its tip, with a reason (yours only) |
@@ -78,9 +78,10 @@ appears in the needs-you strip; its key jumps to the agents in it.
   in the same window, and the selection comes along: each view shows the nearest thing it can represent.
 - The **Flow** shows a plan run as the hub's gates see it: a row per task and a column per gate (Brief, Red first,
   Build, Author check, Merge batch, Review), each cell a chip (green when it passed, accent while it runs, amber when it
-  holds the task, red when it failed, outlined while it waits). Under the tasks are the merge batch and the run's rule
-  pack. `↑` `↓` move between tasks, `Tab` walks the held ones, `e` shows the selected task's evidence (every run the
-  hub recorded for it, with its failing rows, and any waiver you gave) and `R` scrolls to the rules. The Flow shows the
+  holds the task with a lock, red when it failed, an empty ring while it waits). Under the tasks is the merge batch.
+  `↑` `↓` move between tasks, `Tab` walks the held ones, `e` shows the selected task's evidence (every run the hub
+  recorded for it, with its failing rows, and any waiver you gave) and `R` opens the run's rule pack in the bottom
+  panel: each rule, whether the hub enforces it, checks it or only routes by it, and how. The Flow shows the
   newest running job. A task the gates hold is a chip at the top ("T5 held: …"). The right dock shows the selected
   task's detail: why it is held, what clears it, its evidence so far, and its actions. `r` runs its gates again, `s`
   sends it back to its agent with what the gates found, and `w` waives the gates once for that commit, with a reason

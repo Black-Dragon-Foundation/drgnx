@@ -72,6 +72,24 @@ says its reason."
   (should (equal (drgnx-work-flow--detail-params "flow-1/detail" "map-1" "J" "J#5")
                  '(:view "flow-1/detail" :map "map-1" :detail "J#5" :job "J"))))
 
+(ert-deftest drgnx-work-flow/the-rules-tile-asks-for-the-pack ()
+  "The Rules tile is the Flow's subscription with `rules': its own view, the map's view and the job."
+  (should (equal (drgnx-work-flow--rules-params "flow-1/rules" "map-1" nil)
+                 '(:view "flow-1/rules" :map "map-1" :rules t)))
+  (should (equal (drgnx-work-flow--rules-params "flow-1/rules" "map-1" "J")
+                 '(:view "flow-1/rules" :map "map-1" :rules t :job "J"))))
+
+(ert-deftest drgnx-work-flow/its-faces-are-the-ui-font-s-and-the-theme-s ()
+  "The faces the hub's Flow rows name: the UI font (proportional), colours from the theme's chips and text, no
+literal colour."
+  (dolist (f '(drgnx-work-flow-text drgnx-work-flow-label drgnx-work-flow-heading drgnx-work-flow-chip-ok
+                                    drgnx-work-flow-chip-run drgnx-work-flow-chip-held drgnx-work-flow-chip-err
+                                    drgnx-work-flow-chip-wait))
+    (should (facep f))
+    (let ((spec (face-default-spec f)))
+      (should-not (string-match-p "#[0-9a-fA-F]\\{3\\}" (format "%S" spec)))
+      (should (string-match-p "drgnx-ui-" (format "%S" spec))))))
+
 (ert-deftest drgnx-work-flow/the-actions-answer-the-gate-card ()
   "Run the red, Tell the agent and Waive once answer the held task's `gate' card (`job/card': merge, retry, waive with
 the reason); a waiver without a reason, or a task no gate holds, sends nothing."

@@ -30,6 +30,25 @@
 (defvar drgnx-work-lens-map)
 (defvar drgnx-work-map--lens)
 
+;;;; The faces the hub's Flow rows name: the UI font, the theme's chips and text
+
+(defface drgnx-work-flow-text '((t :inherit drgnx-ui-text)) "The Flow's text: a task's title, the tiles' lines."
+  :group 'drgnx-work-space)
+(defface drgnx-work-flow-label '((t :inherit (drgnx-ui-caption drgnx-text-muted)))
+  "The Flow's labels: task ids, agents, column headings." :group 'drgnx-work-space)
+(defface drgnx-work-flow-heading '((t :inherit drgnx-ui-heading)) "The Flow's headings: the run, the batch, a tile's."
+  :group 'drgnx-work-space)
+(defface drgnx-work-flow-chip-ok '((t :inherit (drgnx-ui-caption drgnx-chip-ok))) "A gate that passed."
+  :group 'drgnx-work-space)
+(defface drgnx-work-flow-chip-run '((t :inherit (drgnx-ui-caption drgnx-chip-accent))) "A gate that runs."
+  :group 'drgnx-work-space)
+(defface drgnx-work-flow-chip-held '((t :inherit (drgnx-ui-caption drgnx-chip-attention)))
+  "A gate that holds the task: it needs you." :group 'drgnx-work-space)
+(defface drgnx-work-flow-chip-err '((t :inherit (drgnx-ui-caption drgnx-chip-error))) "A gate that failed."
+  :group 'drgnx-work-space)
+(defface drgnx-work-flow-chip-wait '((t :inherit (drgnx-ui-caption drgnx-chip-quiet))) "A gate not reached yet."
+  :group 'drgnx-work-space)
+
 ;;;; What the Flow asks and shows: pure
 
 (defun drgnx-work-flow--ask (view map job)
@@ -161,12 +180,63 @@ map that is not on the rows path it says so instead."
                           (goto-char (point-min))
                           (display-buffer (current-buffer))))))))
 
+;;;; The Rules tile: the run's rule pack in the bottom panel
+
+(defvar-local drgnx-work-flow--rules nil "In a Flow: its Rules tile.  In a tile: the Flow it belongs to.")
+
+(defun drgnx-work-flow--rules-params (view map job)
+  "The params that make VIEW the Rules tile beside map view MAP, of job JOB (nil: the hub's newest)."
+  (append (list :view view :map map :rules t) (and job (list :job job))))
+
+(define-derived-mode drgnx-work-flow-rules-mode special-mode "Work rules"
+  "The Flow's Rules tile: the hub's rows of the run's rule pack, each rule's kind and how the hub holds it."
+  (setq-local truncate-lines t cursor-type nil))
+
+(defun drgnx-work-flow--rules-twin (class)
+  "The tile's buffer in display CLASS (`drgnx-view-patch-twin-function')."
+  (drgnx-view-env-twin class '("drgnx-work-flow-")))
+
+(defun drgnx-work-flow-rules-buffers ()
+  "The live Rules tiles."
+  (seq-filter (lambda (b) (and (eq (buffer-local-value 'major-mode b) 'drgnx-work-flow-rules-mode)
+                               (not (drgnx-view-patch-twin-p b))))
+              (buffer-list)))
+
+(defun drgnx-work-flow-rules-buffer (flow)
+  "FLOW's Rules tile, made and asked for when there is none: the hub's rows of the view VIEW/rules.  Nil off the rows
+path."
+  (with-current-buffer flow
+    (when (and (drgnx-work-flow--rows-p) (buffer-live-p drgnx-work-flow--map))
+      (unless (buffer-live-p drgnx-work-flow--rules)
+        (let ((view (concat (drgnx-view-patch-view drgnx-view-patch) "/rules"))
+              (class (drgnx-view-patch-class drgnx-view-patch))
+              (map-view (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch drgnx-work-flow--map)))
+              (buffer (get-buffer-create (format "*drgnx work rules: %s*"
+                                                 (string-trim (buffer-name flow) "\\*drgnx work flow: " "\\*")))))
+          (with-current-buffer buffer
+            (drgnx-work-flow-rules-mode)
+            (drgnx-view-patch-attach view class)
+            (setq-local drgnx-view-patch-twin-function #'drgnx-work-flow--rules-twin)
+            (require 'drgnx-view-env)
+            (drgnx-view-env-register view buffer)
+            (setq drgnx-work-flow--rules flow))
+          (setq drgnx-work-flow--rules buffer)
+          (drgnx-work-client--call "work/flow/subscribe"
+                                   (drgnx-work-flow--rules-params view map-view drgnx-work-flow--job) #'ignore)))
+      drgnx-work-flow--rules)))
+
+(declare-function drgnx-pane-show "drgnx-panes")
+(defvar drgnx-work-flow--detail)
+
 (defun drgnx-work-flow-rules ()
-  "Show the rule pack's rows: the window scrolls to them."
+  "Show the run's rule pack in the bottom panel: each rule, its kind and how the hub holds it."
   (interactive)
-  (let ((at (save-excursion (goto-char (point-min)) (search-forward "Rules · " nil t))))
-    (unless at (user-error "Work: this run has no rule pack"))
-    (set-window-start (selected-window) (save-excursion (goto-char at) (line-beginning-position)))))
+  (let* ((flow (if (derived-mode-p 'drgnx-work-flow-detail-mode) drgnx-work-flow--detail (current-buffer)))
+         (tile (and (buffer-live-p flow) (drgnx-work-flow-rules-buffer flow)))
+         (win (selected-window)))
+    (unless tile (user-error "Work: the Rules tile needs the Flow on the hub's rows"))
+    (drgnx-pane-show 'work-rules)
+    (when (window-live-p win) (select-window win))))
 
 ;;;; The detail tile: the selected task's why, what clears it, its evidence and its actions
 
