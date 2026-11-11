@@ -202,3 +202,50 @@ doesn't name `red-first`, passes.
 The gates' policy files, `test/affected.eld`, `test/frozen.eld` and `test/flaky.eld` (`vordr::pack::POLICY_PATHS`),
 are read at the line's base commit (`orch::policy::Policy::at`), never at the tip: a tip can't change the rules it is
 judged by. A tip that edits one is a `code.ci-config` change at its merge (`runner::git`), so the user answers it.
+
+## The Flow lens
+
+`work/flow/subscribe {view, map, job?}` opens the Work space's fourth lens view (`modules/tools/drgnx-work-flow.el`;
+`F` from any lens view). It is a hub-fed view like the Board (`work::trail`): the hub reads the job (the named one,
+else the newest running job), its tasks and their evidence, its rule pack, its merge queue (ready and batch) and its
+open `gate` cards, and builds the model and the rows (`work::trail::flow`, pure):
+
+- a row per task, a column per gate: Brief, Red first, Build, Author check, Merge batch, Review, each heading with its
+  Lucide icon. Each cell is a chip in its state's face (`drgnx-work-flow-chip-ok` passed, `-run` running, `-held`
+  held, with a lock, `-err` failed, `-wait` waiting; drgnx-work-flow.el, the UI font over the theme's chips), an empty
+  ring where a gate has nothing yet, and the label face where the pack has no such gate or a gate waits on another
+  ("waits red"). Red first is the oldest red run's failing rows ("N failed · base"; "no red · held" at review
+  without one), Build the newest run, the author check its checks green at their newest runs (a check when all are),
+  the merge column the queue's place or the open `gate` card's words. Text is in `drgnx-work-flow-text`, ids and
+  agents in `-label`, headings in `-heading`;
+- the columns fit the window: each gate column is as wide as its widest cell or heading in the UI font (the hub
+  measures with the env's fonts), the agent's as its widest agent, and the task column takes the rest (at least 96
+  px), so cells are never cut and long titles give way;
+- under them the batch being checked: its heading with an "affected groups g/n" chip (the groups the groups gate
+  listed at the combined tree, green of them, red in the error face), a row per member (its title, its tip, what the
+  queue said to it last: "trial merge clean", or why it waits) and a row per machine with each group's tick or cross;
+- the line gate, when the pack runs the push gate: its heading with the tiers' chip at the tree the push gate judged
+  last ("green on …", "g/n at …", "N red at …"; "no push asked yet" before one), a row per machine, and the note that
+  the push stays the user's. The queue keeps what it said and the trees its gates judged in memory (`orch::queue`,
+  `Seen`), so after a restart they show again once the gates run again;
+- the model: a `task` node per task with the `flow` form's links up and down and the gates' states as fields, the
+  lists `tasks` and `held` (the needs-you chips; `Tab` walks them).
+
+A held task is also a needs-you chip on the row under the run's line ("⚑ T5 held: …", carrying the task's id), and
+its row carries its `gate` card's id (`drgnx-work-card`).
+
+`e` asks `orch/evidence` for the selected task and lists each record (kind, job, tree, command, its failing rows or
+its pass count, a waiver's reason). The view is read again after every write.
+
+**The Rules tile.** `R` opens the run's rule pack in the bottom panel (pane kind `work-rules`): the Flow's `VIEW/rules`
+subscribed with `rules: true`, rows alone. A row per rule: its words, its kind as a chip (enforced in the ok face with
+a lock, checked and routing in the accent) and how the hub holds it.
+
+**The detail tile.** `work/flow/subscribe` with `detail: TASK` makes its view (the Flow's `VIEW/detail`) that task's
+detail tile: rows alone, no model, read again after every write like the Flow. The Flow subscribes it again each
+time its selection moves (`drgnx-view-selected-functions`, the Flow's own). It says what the task is and who works on
+it; for a held task why it is held (the card's words and each held gate) and what clears it; the evidence so far, one
+line per record; and the actions with their keys. `r` (**Run the red** for a red-first hold, else **Check again**:
+the card's `merge`), `s` (**Tell the agent**: `retry`) and `w` (**Waive once**: `waive`, asking for the reason) answer
+the card with `job/card` as the user; the hub takes the waiver only from the user's connection. The tile shows in the
+right dock where the map's side panel was, and the panel comes back when the lens leaves the Flow.

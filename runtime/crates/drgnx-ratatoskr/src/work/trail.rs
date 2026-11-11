@@ -10,6 +10,7 @@
 //! write like a trail.
 
 mod board;
+pub(crate) mod flow;
 mod model;
 
 use crate::dispatch::Caller;
@@ -20,8 +21,8 @@ use runstav::methods::tasks::{FindParams, TaskList};
 use runstav::methods::timeline::{Step as WireStep, TimelineParams};
 use runstav::methods::view::ViewEnv;
 use runstav::methods::work::{
-    BoardSubscribe, Conclusion as WireConclusion, ConclusionsParams, TrailClose, TrailLane,
-    TrailSubscribe, TrailSubscribed,
+    BoardSubscribe, Conclusion as WireConclusion, ConclusionsParams, FlowSubscribe, TrailClose,
+    TrailLane, TrailSubscribe, TrailSubscribed,
 };
 use runstav::registry::Class;
 use runstav::wire::Error;
@@ -40,6 +41,8 @@ enum Sub {
     Timeline(Vec<TrailLane>),
     /// A Board: map view, plans.
     Board(String, Vec<String>),
+    /// A Flow view: map view, job (none: the newest running job), and which part of the Flow it is.
+    Flow(String, Option<String>, flow::Part),
 }
 
 /// What a view's rows are built from, read once per refresh for every class.
@@ -48,6 +51,8 @@ enum Data {
     Trail(Vec<trail::Step>, Vec<trail::Conclusion>, usize),
     Timeline(Vec<trail::Lane>),
     Board(Vec<board::Card>),
+    /// The lens's facts, and the part of the Flow the view is.
+    Flow(Box<flow::Flow>, flow::Part),
 }
 
 /// The trail and Timeline views of every connection, keyed (connection, view).
@@ -144,21 +149,30 @@ impl Trails {
                 Data::Timeline(out)
             }
             Sub::Board(map, plans) => Data::Board(board_cards(f, key.0, &map, &plans).await),
+            Sub::Flow(map, job, part) => {
+                Data::Flow(Box::new(flow_facts(f, key.0, &map, job).await), part)
+            }
         };
         let data = Arc::new(data);
         lock(&self.data).insert(key.clone(), data.clone());
         let near = match *data {
             Data::Timeline(_) => f.core.map.near(key.0),
-            Data::Trail(..) | Data::Board(_) => Vec::new(),
+            Data::Trail(..) | Data::Board(_) | Data::Flow(..) => Vec::new(),
         };
-        f.core
-            .views
-            .publish_model(f, key.0, &key.1, doc_of(&data, &near));
+        // a tile of the Flow is rows alone, as the map's detail is
+        if !matches!(
+            *data,
+            Data::Flow(_, flow::Part::Detail(_) | flow::Part::Rules)
+        ) {
+            f.core
+                .views
+                .publish_model(f, key.0, &key.1, doc_of(&data, &near));
+        }
         for class in f.core.views.classes(key.0, &key.1) {
             let k3 = (key.0, key.1.clone(), class);
             f.core
                 .views
-                .publish_built(f, &k3, |env, fonts| (rows(&data, env, fonts), Vec::new()));
+                .publish_built(f, &k3, |env, fonts| rows(&data, env, fonts));
         }
     }
 }
@@ -169,18 +183,27 @@ fn doc_of(data: &Data, near: &[String]) -> crate::view::model::Doc {
         Data::Trail(steps, concs, total) => model::trail_doc(steps, concs, *total),
         Data::Timeline(lanes) => model::timeline_doc(lanes, near),
         Data::Board(cards) => board::board_doc(cards),
+        Data::Flow(flow, _) => flow::flow_doc(flow),
     }
 }
 
-/// DATA's rows for ENV, measured with FONTS.
-fn rows(data: &Data, env: &ViewEnv, fonts: &dyn drgnx_rows::fit::Measure) -> Vec<drgnx_rows::Row> {
+/// DATA's rows for ENV, measured with FONTS, and the images they draw.
+fn rows(
+    data: &Data,
+    env: &ViewEnv,
+    fonts: &dyn drgnx_rows::fit::Measure,
+) -> (Vec<drgnx_rows::Row>, Vec<(drgnx_rows::ImageId, String)>) {
     let palette = drgnx_rows::svg::Palette(env.palette.clone());
     let renv = crate::work::map::render_env(env, &palette);
     let zone = Zone::parse(&env.tz);
+    let only = |rows| (rows, Vec::new());
     match data {
-        Data::Trail(steps, concs, _) => trail::trail_rows(steps, concs, &renv, zone),
-        Data::Timeline(lanes) => trail::timeline_rows(lanes, &renv, fonts, zone),
-        Data::Board(cards) => board::board_rows(cards, env),
+        Data::Trail(steps, concs, _) => only(trail::trail_rows(steps, concs, &renv, zone)),
+        Data::Timeline(lanes) => only(trail::timeline_rows(lanes, &renv, fonts, zone)),
+        Data::Board(cards) => only(board::board_rows(cards, env)),
+        Data::Flow(flow, flow::Part::Lens) => flow::flow_rows(flow, env, fonts),
+        Data::Flow(flow, flow::Part::Detail(task)) => only(flow::detail_rows(flow, task, env)),
+        Data::Flow(flow, flow::Part::Rules) => flow::rules_rows(flow, env),
     }
 }
 
@@ -251,6 +274,120 @@ async fn board_cards(f: &Front, conn: u64, map: &str, plans: &[String]) -> Vec<b
     }
     board::put_agents(&mut cards, &f.core.map.agents_of(conn, map));
     cards
+}
+
+/// The Flow lens's facts: JOB (else the newest running job, else the newest), its tasks with their evidence, the
+/// agents of connection CONN's map view MAP on them, its rule pack, its merge queue and its open `gate` cards.  A read
+/// that fails shows an empty lens.
+async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flow::Flow {
+    let read = f
+        .writer
+        .db
+        .read(move |c| {
+            let job = match job {
+                Some(j) => Some(j),
+                None => norn::read::jobs::jobs(c, Some("running"))?
+                    .into_iter()
+                    .next()
+                    .or(norn::read::jobs::jobs(c, None)?.into_iter().next()),
+            };
+            let Some(job) = job else {
+                return Ok(None);
+            };
+            let title = norn::read::jobs::job(c, &job)?
+                .and_then(|j| j.title.or(j.plan))
+                .unwrap_or_else(|| job.clone());
+            let pack = norn::read::evidence::pack_of_job(c, &job)?;
+            let cards = norn::read::cards::cards(c, &job, Some("open"))?;
+            let mut tasks = Vec::new();
+            for t in norn::read::tasks::tasks(c, &job)? {
+                let row = t.row;
+                let card = cards.iter().find(|k| {
+                    k.task.as_deref() == Some(row.id.as_str()) && k.kind.as_deref() == Some("gate")
+                });
+                tasks.push(flow::TaskFacts {
+                    held: card.map(|k| k.title.clone().unwrap_or_default()),
+                    card: card.map(|k| k.id),
+                    evidence: norn::read::evidence::of_task(c, &row.id)?,
+                    id: row.id,
+                    n: row.n,
+                    title: row.title.unwrap_or_default(),
+                    status: row.status.unwrap_or_default(),
+                    agent: row.agent,
+                    queue: flow::Queue::None,
+                });
+            }
+            Ok(Some((job, title, pack, tasks)))
+        })
+        .await;
+    let Ok(Some((job, title, pack, mut tasks))) = read else {
+        return flow::Flow::default();
+    };
+    let (ready, batch) = (f.queue.ready(&job), f.queue.batch(&job));
+    let agents = f.core.map.agents_of(conn, map);
+    for t in &mut tasks {
+        if batch.iter().any(|b| b.task == t.id) {
+            t.queue = flow::Queue::Batch;
+        } else if ready.iter().any(|b| b.task == t.id) {
+            t.queue = flow::Queue::Ready;
+        }
+        if let Some((_, _, label)) = agents.iter().find(|(task, ..)| *task == t.id) {
+            t.agent = Some(label.clone());
+        }
+    }
+    let seen = f.queue.seen(&job);
+    let batch = batch
+        .iter()
+        .map(|b| {
+            let t = tasks.iter().find(|t| t.id == b.task);
+            flow::Member {
+                label: t.map_or_else(|| b.task.clone(), |t| format!("T{}", t.n)),
+                title: t.map(|t| t.title.clone()).unwrap_or_default(),
+                tip: b.tip[..b.tip.len().min(7)].to_owned(),
+                said: seen.said.get(&b.task).cloned(),
+            }
+        })
+        .collect();
+    // the gates' runs at the trees they judged last: the batch's groups (`batch:JOB@TREE`), the push tiers
+    // (`push:JOB@TREE`, the pack's tiers)
+    let tiers = pack
+        .as_ref()
+        .map(|p| p.push_tiers.clone())
+        .unwrap_or_default();
+    let (j, g, p) = (job.clone(), seen.groups.clone(), seen.push.clone());
+    let runs = f
+        .writer
+        .db
+        .read(move |c| {
+            let groups = match g {
+                Some((tree, checks)) => Some(flow::Runs {
+                    evidence: norn::read::evidence::of_task(c, &format!("batch:{j}@{tree}"))?,
+                    at: tree,
+                    checks,
+                }),
+                None => None,
+            };
+            let push = match p {
+                Some((_head, tree)) => Some(flow::Runs {
+                    evidence: norn::read::evidence::of_task(c, &format!("push:{j}@{tree}"))?,
+                    at: tree,
+                    checks: tiers,
+                }),
+                None => None,
+            };
+            Ok((groups, push))
+        })
+        .await;
+    let (groups, push) = runs.unwrap_or_default();
+    flow::Flow {
+        job,
+        title,
+        pack,
+        tasks,
+        batch,
+        groups,
+        push,
+    }
 }
 
 /// The caller the trail reads the store as.
@@ -379,6 +516,31 @@ pub async fn board_subscribe(
     let key = (c.conn_id, p.view);
     lock(&f.core.trails.views).insert(key.clone(), Sub::Board(p.map, p.plans));
     f.core.views.model_restart(key.0, &key.1);
+    f.core.trails.refresh(f, &key).await;
+    Ok(TrailSubscribed {
+        hub: f.core.views.hub(),
+    })
+}
+
+/// `work/flow/subscribe`: VIEW of CALLER's connection shows the Flow lens of `job` (else the newest running job), with
+/// the agents of map view `map`; its model and rows go out as a Board's do, before the answer.  With `detail`, the
+/// view is that task's detail tile instead, with `rules` the Rules tile: rows alone, no model.
+pub async fn flow_subscribe(
+    f: &Front,
+    c: &Caller,
+    p: FlowSubscribe,
+) -> Result<TrailSubscribed, Error> {
+    let key = (c.conn_id, p.view);
+    let part = match (p.detail, p.rules) {
+        (Some(task), _) => flow::Part::Detail(task),
+        (None, true) => flow::Part::Rules,
+        (None, false) => flow::Part::Lens,
+    };
+    let lens = part == flow::Part::Lens;
+    lock(&f.core.trails.views).insert(key.clone(), Sub::Flow(p.map, p.job, part));
+    if lens {
+        f.core.views.model_restart(key.0, &key.1);
+    }
     f.core.trails.refresh(f, &key).await;
     Ok(TrailSubscribed {
         hub: f.core.views.hub(),
