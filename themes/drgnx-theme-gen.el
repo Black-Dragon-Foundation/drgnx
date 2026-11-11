@@ -248,6 +248,13 @@ taller (Nidhogg's compositor).  Asked once: a face that sets it is refused where
          (drgnx-replace-plus :inherit success :foreground ,(c 'add-fg))
          (drgnx-replace-minus :inherit error :foreground ,(c 'del-fg))
          (drgnx-replace-sheet-rule :inherit shadow :foreground ,(c 'border) :overline t)
+         ;; a diff line's tint, rounded (the mockup's `.dl', radius 3) as the region: a box drawn inside the glyphs
+         (drgnx-replace-preview-del :inherit diff-removed :extend nil
+                                    :box (:line-width (-1 . -1) :style flat-button
+                                                      ,@(and (featurep 'glitnir) '(:corner-radius 3))))
+         (drgnx-replace-preview-add :inherit diff-added :extend nil
+                                    :box (:line-width (-1 . -1) :style flat-button
+                                                      ,@(and (featurep 'glitnir) '(:corner-radius 3))))
          ;; a 1 px ring all round: the row's height is its newline's `line-height'
          (drgnx-replace-sheet-selected :background ,(c 'sel)
                                        :box (:line-width (1 . 1) :color ,(c 'focus)

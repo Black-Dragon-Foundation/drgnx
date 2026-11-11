@@ -101,12 +101,12 @@ in the checkout ROOT marked as a pair.  Each (LABEL . TO), TO as `search/handoff
   "Registry command ID's key, short, or nil."
   (and (fboundp 'drgnx-surfaces-key-label) (drgnx-surfaces-key-label id :short t)))
 
+(defvar-local drgnx-search-handoff--header-text ""
+  "The card's header line, made when what it shows changes (`drgnx-search-handoff--head').")
+
 (defun drgnx-search-handoff--header ()
   "The card's header line: the title, who, hidden files, and the keys.  Reads `drgnx-search-handoff--header-text'."
   drgnx-search-handoff--header-text)
-
-(defvar-local drgnx-search-handoff--header-text ""
-  "The card's header line, made when what it shows changes (`drgnx-search-handoff--head').")
 
 (defun drgnx-search-handoff--head ()
   "Make the card's header line from `drgnx-search-handoff--ask'."

@@ -265,6 +265,21 @@ ROOT a git project with one file.  Skipped without the binary (test/no-skip.eld 
           (push (- (float-time) start) samples)))
       (should (<= (nth 10 (sort samples #'<)) 0.016)))))
 
+;;;; Show in Search View
+
+(ert-deftest drgnx-search/the-list-shows-in-the-search-view ()
+  "Pattern D: the Semantic Search list's header line has Show in Search view; the command asks the same question in
+the Search view, Meaning mode, in the list's project."
+  (drgnx-search-test--with-xref
+    (let ((answer (drgnx-search-test--answer :hits (list (drgnx-search-test--hit :line_start 1)))) (opened nil))
+      (drgnx-search--show "/p/" "where is alpha" answer)
+      (with-current-buffer "*xref*"
+        (should (string-match-p "Show in Search view" (format "%s" header-line-format)))
+        (should (equal drgnx-search--question '("/p/" . "where is alpha"))))
+      (cl-letf (((symbol-function 'drgnx-replace--open) (lambda (&rest args) (setq opened args))))
+        (drgnx-search-show-in-view))
+      (should (equal opened '(:text "where is alpha" :mode meaning :root "/p/"))))))
+
 ;;;; Repo Map and Find Usages (search/map, search/usages)
 
 (defconst drgnx-search-test--map

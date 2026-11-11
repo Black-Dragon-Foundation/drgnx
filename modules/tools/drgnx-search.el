@@ -23,6 +23,7 @@
 (require 'subr-x)
 (require 'cl-lib)
 (declare-function project-find-regexp "project")
+(declare-function drgnx-replace--open "drgnx-replace")
 (declare-function project-current "project")
 (declare-function project-root "project")
 (declare-function xref-make "xref")
@@ -101,6 +102,9 @@ line of its text, else its symbol, else its path."
     (xref-make summary (xref-make-file-location (expand-file-name (plist-get hit :path) root)
                                                 (max 1 (plist-get hit :line_start)) 0))))
 
+(defvar-local drgnx-search--question nil
+  "In a Semantic Search list: (ROOT . QUESTION) it shows, for Show in Search View.")
+
 (defun drgnx-search--show (root query answer)
   "Show the hits of ANSWER for QUERY in the project at ROOT as an xref list (the panel's Results tab), under the model
 and lag line.  Non-nil when a list was shown."
@@ -111,9 +115,27 @@ and lag line.  Non-nil when a list was shown."
       (let ((items (mapcar (lambda (h) (drgnx-search--xref root h)) hits)))
         (xref-show-xrefs (lambda () items) nil)
         (when-let* ((buf (get-buffer "*xref*")))
-          (with-current-buffer buf (setq header-line-format (concat " " line))))
+          (with-current-buffer buf
+            (setq drgnx-search--question (cons root query)
+                  header-line-format (concat " " line "  " (drgnx-search--to-view-button)))))
         (message "%s" line)
         t))))
+
+(defun drgnx-search--to-view-button ()
+  "The list's header-line button: Show in Search View."
+  (propertize " Show in Search view " 'face 'drgnx-control 'mouse-face 'highlight
+              'help-echo "The same question in the Search view, Meaning mode"
+              'keymap (let ((m (make-sparse-keymap)))
+                        (define-key m [header-line mouse-1] #'drgnx-search-show-in-view)
+                        m)))
+
+(defun drgnx-search-show-in-view (&optional _event)
+  "Ask the Semantic Search list's question again in the Search view, in Meaning mode, in its project."
+  (interactive)
+  (let ((q (or (buffer-local-value 'drgnx-search--question (or (get-buffer "*xref*") (current-buffer)))
+               (user-error "No Semantic Search list to show"))))
+    (unless (fboundp 'drgnx-replace--open) (user-error "The Search view (tools/replace) is off"))
+    (drgnx-replace--open :text (cdr q) :mode 'meaning :root (file-name-as-directory (car q)))))
 
 (defun drgnx-search--show-safely (buffer window root query answer why)
   "`drgnx-search--show' as the command had it: BUFFER current and WINDOW selected (when still live, else
@@ -398,7 +420,8 @@ Find References and Go to Definition answer from Hrafn's index where nothing bet
                                         (search-index-status "Index Status" drgnx-search-index-status "Chunks, files, models, device and lag of this project's index")
                                         (search-set-up "Set Up Semantic Search" drgnx-search-set-up "Offer the built-in model and a server, then index this project in the background")
                                         (search-repo-map "Repo Map" drgnx-search-repo-map "The project's most-referenced definitions, file by file, centred on this file (in the panel)")
-                                        (search-usages "Find Usages" drgnx-search-usages "Where a name is defined and used in the project, by name, in every indexed language (in the panel)")))
+                                        (search-usages "Find Usages" drgnx-search-usages "Where a name is defined and used in the project, by name, in every indexed language (in the panel)")
+                                        (search-show-in-view "Show in Search View" drgnx-search-show-in-view "The last Semantic Search's question in the Search view, Meaning mode")))
                          (drgnx-command-define id :category "Search" :title title :command fn :doc doc))
                        ;; after the modes' and language servers' backends (depth 90): the answer where none is better
                        (add-hook 'xref-backend-functions #'drgnx-search-xref-backend 90)
