@@ -17,6 +17,9 @@
  (code-scrolling (:input :p95) 16) (code-scrolling (:input :max) 50)
  (typing-with-ghost (:input :p95) 16) (typing-with-ghost (:input :max) 50)
  (diff-scrolling (:input :p95) 16) (diff-scrolling (:input :max) 50)
+ ;; graphical debugging's breakpoint column (300 marks while scrolling; F9 on 20 lines): input within a frame
+ (debug-gutter-scroll (:input :p95) 16) (debug-gutter-scroll (:input :max) 50)
+ (debug-breakpoint-click (:input :p95) 16) (debug-breakpoint-click (:input :max) 50)
  (live-view (:input :p95) 16) (live-view (:input :max) 50)
  (agent-settings-open (:draw_ms) 150) (agent-settings-open (:processes) 0)
  ;; the unified settings layer (design 16): read+apply of a 200-entry settings.el 2 ms; the page open 100 ms and a search
