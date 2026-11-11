@@ -134,11 +134,11 @@ the rows; with none ticked, the selected row's matches (a file's, by `ids').  An
       (drgnx-search-handoff-send))
     (should (equal (drgnx-search-handoff-test--sent)
                    '(:view "s" :instruction "Rename it." :to (:session (:id "a1")) :off ["m:1:2"]
-                           :mark (:face "drgnx-agent-two" :glyph "■"))))
+                           :mark (:face "drgnx-agent-two" :glyph "■" :name "codex-1"))))
     (with-current-buffer view
       (should (equal (plist-get (car drgnx-search-handoff--live) :ids) '("m:1:1" "m:1:3")))
       (should (equal (drgnx-search-handoff-chip)
-                     (concat " · " (propertize " Pair · codex-1: sent " 'face 'drgnx-search-handoff-chip))))))
+                     (concat " · " (propertize " codex-1: sent " 'face 'drgnx-search-handoff-chip))))))
   ;; nothing ticked: the selected file row's matches, to a new worker (no mark yet: it has no ordinal)
   (drgnx-search-handoff-test--with (list :total 2 :off '("m:1:4" "m:1:5") :row "f:a.el"
                                          :answer '(:handoff "h:2" :session "a9" :worktree "/wt/" :ids ["m:1:4" "m:1:5"]
@@ -193,7 +193,20 @@ snapshot brings the ordinal, and the hand-off's rows get its mark (`search/hando
       (drgnx-search-handoff-event "agent" '(:id "w1" :session (:ordinal 3)))
       (drgnx-search-handoff-event "agent" '(:id "w1" :session (:ordinal 3)))
       (should (equal (seq-filter (lambda (c) (equal (car c) "search/handoff-mark")) drgnx-search-handoff-test--calls)
-                     '(("search/handoff-mark" (:handoff "h:3" :mark (:face "drgnx-agent-three" :glyph "▲")))))))))
+                     '(("search/handoff-mark" (:handoff "h:3" :mark (:face "drgnx-agent-three" :glyph "▲" :name "Worker")))))))))
+
+(ert-deftest drgnx-search-handoff/a-groups-agent-chip-takes-the-agents-colour ()
+  "Pattern D: the hub's chip on a group row names the agent's face (`drgnx-search-agent'); after a draw the chip has
+that face over its pill, so the pill's ring and text take the agent's colour; a face that does not exist is left out."
+  (with-temp-buffer
+    (insert "[x] a.rs  " (propertize " ◆ Ada · sent 0/2 " 'face 'drgnx-pill-agent 'drgnx-search-agent "bold")
+            "  " (propertize " ■ B · sent 0/1 " 'face 'drgnx-pill-agent 'drgnx-search-agent "drgnx-no-such-face")
+            "\nnext")
+    (cl-letf (((symbol-function 'drgnx-view-row-start) (lambda (_view key) (and (equal key "f:a.rs") 1))))
+      (drgnx-search-handoff-agent-chips "s" '("f:a.rs" "f:gone")))
+    (should (equal (get-text-property 12 'face) '(bold drgnx-pill-agent)))
+    (should (eq (get-text-property 31 'face) 'drgnx-pill-agent))
+    (should-not (get-text-property 1 'face))))
 
 (ert-deftest drgnx-search-handoff/the-card-says-where-the-agent-sends-and-refuses-no-route ()
   "Pattern D: the card asks about the project's remote routes once as it opens (a command the user ran), and says

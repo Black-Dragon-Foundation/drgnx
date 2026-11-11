@@ -678,6 +678,32 @@ match on line 209 (the `puthash' line) unticked; the view's buffer, or nil."
 (defvar drgnx-search-handoff-buffer-name)
 (defvar drgnx-search-handoff--ask)
 
+(defun drgnx-look-scene-search-handed ()
+  "The Search view with four matches handed to an agent (search-view.html's results, `Ada 9/14'): a pair of a
+mock profile (the scenes' ratatoskr-mock, written into the settings before the hub starts) in the project; its rows'
+colour bar and the file's chip."
+  (unless (drgnx-hub-running-p)
+    (drgnx-look-scene--try "profile"
+      (drgnx-settings-file-put (expand-file-name "settings.el" (drgnx-user-dir)) 'drgnx-settings nil
+                               'drgnx-agents-profiles
+                               `(("mock-claude" :provider claude
+                                  :command (,(expand-file-name "ratatoskr-mock"
+                                                               (file-name-directory (getenv "DRGNX_RATATOSKR_BIN")))
+                                            "acp" "--as" "claude"))))))
+  (when-let* ((view (drgnx-look-scene--search)))
+    (drgnx-look-scene--try "hand off"
+      (with-current-buffer view
+        (let ((ids (seq-take (drgnx-look-scene--row-ids "m:") 4)))
+          (drgnx-hub--call-on drgnx-hub--events "search/handoff"
+                              (list :view drgnx-replace-view :instruction "Rename it." :ids (vconcat ids)
+                                    :to '(:pair (:profile "mock-claude"))
+                                    :mark '(:face "drgnx-agent-2" :glyph "◆" :name "Ada"))
+                              (lambda (_ err) (when err (push (format "hand off: %S" err) drgnx-look-scene--errors))))))
+      (drgnx-look-scene--until 20 "chip" (lambda () (with-current-buffer view
+                                                      (text-property-not-all (point-min) (point-max)
+                                                                             'drgnx-search-agent nil)))))
+    (drgnx-look-scene--answer)))
+
 (defun drgnx-look-scene-search-ask ()
   "Ask an Agent's card over the editor (search-view.html's \"Ask an Agent (light, modal)\"), its context read."
   (when-let* ((view (drgnx-look-scene--search)))

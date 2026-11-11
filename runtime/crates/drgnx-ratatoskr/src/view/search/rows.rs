@@ -73,6 +73,14 @@ fn header_at(root: &Path, file: &str, large: bool, depth: usize, show_dir: bool)
     b.finish()
 }
 
+/// Where the name ends in FILE's header row DEPTH steps in (`[x] NAME`).
+fn name_end(file: &str, depth: usize) -> u32 {
+    let name = Path::new(file)
+        .file_name()
+        .map_or(0, |n| n.to_string_lossy().chars().count());
+    (2 * depth + 4 + name) as u32
+}
+
 /// FILE as the ids name it: relative to the search's ROOT when under it, else whole, as the editor's
 /// `drgnx-replace--key-path` makes it.  A window move sends thousands of ids (removed, added, spliced, parents):
 /// with the whole path in each, the paths were 44 % of the line.
@@ -365,14 +373,7 @@ fn doc_of(w: &Window) -> Doc {
 
 /// M's row (key ID): a tick box, the text around the match (the match struck out and the replacement beside it when
 /// REPLACE is not empty and still fits the match), and WHY Replace All skipped it, if it did.
-pub(super) fn match_row(
-    q: &Query,
-    replace: &str,
-    id: String,
-    m: &Match,
-    why: Option<&str>,
-    agent: Option<&super::AgentMark>,
-) -> Row {
+pub(super) fn match_row(q: &Query, replace: &str, id: String, m: &Match, why: Option<&str>) -> Row {
     let before = m.before.trim_start();
     let kept: Vec<char> = before.chars().collect();
     let before = if kept.len() > BEFORE_KEPT {
@@ -391,11 +392,7 @@ pub(super) fn match_row(
         grep::new_text(q, &m.text, replace)
     };
     let mut b = RowBuilder::new(id.clone());
-    // a match handed to an agent (Ask an Agent) shows the agent's mark in its indent
-    match agent {
-        Some(a) => b.push(&a.glyph, Some(&a.face)).push(" ", None),
-        None => b.push("  ", None),
-    };
+    b.push("  ", None);
     let at = b.pos();
     b.push("[x]", None)
         .prop(at, at + 3, "drgnx-replace-box", match_json(m));
@@ -449,10 +446,96 @@ fn row_of(run: &Run, m: &Match, n: u32, mark: Option<&Mark>) -> Row {
         Some(mark) => marked_row(id, m, mark),
         None => {
             let why = run.reasons.get(&id).map(String::as_str);
-            let agent = run.handed.get(&id);
-            match_row(&run.query, &run.replace, id, m, why, agent)
+            match_row(&run.query, &run.replace, id, m, why)
         }
     }
+}
+
+/// The bar a match handed to an agent (Ask an Agent) shows at its row's start, in the agent's colour.
+const AGENT_BAR: &str = "▎";
+
+/// Match row ROW (its key the match's id) of RUN with the colour bar of the agent it was handed to, if it was, over
+/// its first column (a space: the indent or the slot before the tick box), the agent's name on hover.
+fn with_bar(run: &Run, mut row: Row) -> Row {
+    if let Some(a) = run.handed.get(&row.key)
+        && row.text.starts_with(' ')
+    {
+        row.text.replace_range(0..1, AGENT_BAR);
+        row.runs.insert(0, (0, 1, a.face.clone()));
+        row.props.push((0, 1, "help-echo".into(), json!(a.name)));
+    }
+    row
+}
+
+/// Group row ROW of RUN with a chip for each hand-off its matches IDS went to after its name (at AT, before its folder
+/// or count, which a narrow panel cuts first), in that agent's colour (the editor's): `◆ Ada · editing 9/14`, its
+/// phase and how many of the group's handed-off matches its edits took out.
+fn with_chips(run: &Run, mut row: Row, at: u32, ids: impl Iterator<Item = String>) -> Row {
+    if run.handed.is_empty() {
+        return row;
+    }
+    let mut chips: std::collections::BTreeMap<&str, (&super::AgentMark, usize, usize)> =
+        std::collections::BTreeMap::new();
+    for id in ids {
+        if let Some(a) = run.handed.get(&id) {
+            let done = run
+                .progress
+                .get(&a.handoff)
+                .is_some_and(|p| p.done.contains(&id));
+            let e = chips.entry(a.handoff.as_str()).or_insert((a, 0, 0));
+            e.1 += 1;
+            e.2 += usize::from(done);
+        }
+    }
+    let (mut text, mut runs, mut props) = (String::new(), Vec::new(), Vec::new());
+    for (h, (a, n, d)) in chips {
+        let phase = match run.progress.get(h).map(|p| p.phase) {
+            Some(super::HandoffPhase::Editing) => "editing",
+            Some(super::HandoffPhase::Done) => "done",
+            _ => "sent",
+        };
+        let chip = format!(" {} {} · {phase} {d}/{n} ", a.glyph, a.name);
+        let from = at + text.chars().count() as u32 + 2;
+        let end = from + chip.chars().count() as u32;
+        text.push_str("  ");
+        text.push_str(&chip);
+        runs.push((from, end, "drgnx-pill-agent".to_owned()));
+        props.push((from, end, "drgnx-search-agent".to_owned(), json!(a.face)));
+    }
+    if text.is_empty() {
+        return row;
+    }
+    // what lies after AT moves along; what spans it (the row's own properties) takes the chips in
+    let k = text.chars().count() as u32;
+    let byte = row
+        .text
+        .char_indices()
+        .nth(at as usize)
+        .map_or(row.text.len(), |(i, _)| i);
+    row.text.insert_str(byte, &text);
+    let shift = |p: &mut u32| {
+        if *p >= at {
+            *p += k;
+        }
+    };
+    for r in &mut row.runs {
+        if r.0 >= at {
+            r.0 += k;
+        }
+        shift(&mut r.1);
+    }
+    for p in &mut row.props {
+        if p.0 >= at {
+            p.0 += k;
+        }
+        shift(&mut p.1);
+    }
+    row.stops.iter_mut().for_each(|s| shift(&mut s.0));
+    row.images.iter_mut().for_each(|i| shift(&mut i.0));
+    row.spaces.iter_mut().for_each(|s| shift(&mut s.0));
+    row.runs.extend(runs);
+    row.props.extend(props);
+    row
 }
 
 /// The glyph for a definition of KIND (Hrafn's kinds): a function's `ƒ`, a type's `◇`, a macro's `#`, a variable's
@@ -617,13 +700,15 @@ fn ent_row(run: &Run, l: &Layout, at: usize) -> Row {
         }
         Ent::File(fi) => {
             let f = &run.files[fi as usize];
-            header_at(
+            let row = header_at(
                 root,
                 &f.file,
                 f.large,
                 depth,
                 run.group != super::GrepGroup::Tree,
-            )
+            );
+            let ids = f.ns.iter().map(|n| match_id(run.id, *n));
+            with_chips(run, row, name_end(&f.file, depth), ids)
         }
         Ent::Sym(k) => {
             let s = &l.syms[k as usize];
@@ -645,10 +730,21 @@ fn ent_row(run: &Run, l: &Layout, at: usize) -> Row {
                     b.push(TOP_LEVEL, Some("drgnx-replace-dim"));
                 }
             }
+            let name_end = b.pos();
             b.push(&format!("  {}", s.n), Some("drgnx-replace-dim"));
             let end = b.pos();
             b.prop(0, end, "drgnx-work-id", json!(s.id));
-            b.finish()
+            let (fi, f) = (s.file as usize, &run.files[s.file as usize]);
+            let ids =
+                f.ns.iter()
+                    .enumerate()
+                    .filter(|(j, _)| {
+                        l.at_match[fi]
+                            .get(*j)
+                            .is_some_and(|r| l.parents[*r as usize] == Some(at as u32))
+                    })
+                    .map(|(_, n)| match_id(run.id, *n));
+            with_chips(run, b.finish(), name_end, ids)
         }
         Ent::Label(fi, j) => {
             let f = &run.files[fi as usize];
@@ -658,10 +754,8 @@ fn ent_row(run: &Run, l: &Layout, at: usize) -> Row {
         Ent::Match(fi, j) => {
             let f = &run.files[fi as usize];
             let (m, k) = (&f.ms[j as usize], f.ns[j as usize]);
-            indented(
-                row_of(run, m, k, f.marks.get(j as usize).and_then(Option::as_ref)),
-                depth - 1,
-            )
+            let row = row_of(run, m, k, f.marks.get(j as usize).and_then(Option::as_ref));
+            with_bar(run, indented(row, depth - 1))
         }
     }
 }
@@ -714,7 +808,9 @@ pub(super) fn rows_in(run: &Run, at: std::ops::Range<usize>) -> Vec<Row> {
             continue;
         }
         if at.contains(&i) {
-            rows.push(header(&run.query.root, &f.file, f.large));
+            let ids = f.ns.iter().map(|n| match_id(run.id, *n));
+            let row = header(&run.query.root, &f.file, f.large);
+            rows.push(with_chips(run, row, name_end(&f.file, 0), ids));
         }
         i += 1;
         for (j, (m, k)) in f.ms.iter().zip(&f.ns).enumerate() {
@@ -731,7 +827,8 @@ pub(super) fn rows_in(run: &Run, at: std::ops::Range<usize>) -> Vec<Row> {
                 }
             }
             if at.contains(&i) {
-                rows.push(row_of(run, m, *k, f.marks.get(j).and_then(Option::as_ref)));
+                let row = row_of(run, m, *k, f.marks.get(j).and_then(Option::as_ref));
+                rows.push(with_bar(run, row));
             }
             i += 1;
         }

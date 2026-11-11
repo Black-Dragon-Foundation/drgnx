@@ -16,7 +16,7 @@
 {"do": "expect", "conn": "e", "json": {"id": 20, "result": {"rows": [{"path": "a.txt", "line": 1, "text": "one needle"}, {"path": "a.txt", "line": 3, "text": "two needle"}], "total": 3, "tokens": "$number"}}, "within_ms": 10000}
 {"do": "send", "conn": "e", "json": {"id": 4, "method": "search/handoff", "params": {"view": "s", "instruction": "Rename needle to pin.", "to": {"session": {"id": "nosuch"}}}}}
 {"do": "expect", "conn": "e", "json": {"id": 4, "error": "$any"}, "within_ms": 10000}
-{"do": "send", "conn": "e", "json": {"id": 5, "method": "search/handoff", "params": {"view": "s", "instruction": "Rename needle to pin.", "to": {"session": {"id": "$sid"}}, "mark": {"face": "drgnx-agent-1", "glyph": "●"}}}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "search/handoff", "params": {"view": "s", "instruction": "Rename needle to pin.", "to": {"session": {"id": "$sid"}}, "mark": {"face": "drgnx-agent-1", "glyph": "●", "name": "a1"}}}}
 {"do": "expect", "conn": "e", "json": {"id": 5, "result": {"handoff": "$capture:h", "session": "$sid", "ids": "$any", "sent": 3, "more": 0}}, "within_ms": 10000}
 {"do": "send", "conn": "e", "json": {"id": 6, "method": "search/handoff-state", "params": {"handoff": "$h"}}}
 {"do": "expect", "conn": "e", "json": {"id": 6, "result": {"handoff": "$h", "view": "s", "session": "$sid", "phase": "sent", "done": [], "left": "$any"}}, "within_ms": 10000}
@@ -24,10 +24,10 @@
 {"do": "expect", "conn": "e", "json": {"id": 7, "error": "$any"}, "within_ms": 10000}
 {"do": "send", "conn": "e", "json": {"id": 8, "method": "search/handoff", "params": {"view": "s", "instruction": "Rename needle to pin.", "to": {"session": {"id": "$sid"}}}}}
 {"do": "expect", "conn": "e", "json": {"id": 8, "result": {"handoff": "$capture:h2", "session": "$sid", "ids": "$any", "sent": 3, "more": 0}}, "within_ms": 10000}
-{"do": "send", "conn": "e", "json": {"id": 9, "method": "search/handoff-mark", "params": {"handoff": "$h2", "mark": {"face": "drgnx-agent-2", "glyph": "\u25b2"}}}}
+{"do": "send", "conn": "e", "json": {"id": 9, "method": "search/handoff-mark", "params": {"handoff": "$h2", "mark": {"face": "drgnx-agent-2", "glyph": "\u25b2", "name": "Worker"}}}}
 {"do": "expect", "conn": "e", "json": {"id": 9, "result": true}, "within_ms": 10000}
 {"do": "connect", "conn": "o", "hub": "h"}
-{"do": "send", "conn": "o", "json": {"id": 1, "method": "search/handoff-mark", "params": {"handoff": "$h2", "mark": {"face": "drgnx-agent-2", "glyph": "\u25b2"}}}}
+{"do": "send", "conn": "o", "json": {"id": 1, "method": "search/handoff-mark", "params": {"handoff": "$h2", "mark": {"face": "drgnx-agent-2", "glyph": "\u25b2", "name": "Worker"}}}}
 {"do": "expect", "conn": "o", "json": {"id": 1, "error": "$any"}, "within_ms": 10000}
 {"do": "send", "conn": "e", "json": {"id": 10, "method": "search/handoff", "params": {"view": "s", "instruction": "Rename needle to pin.", "to": {"pair": {"profile": "mock-claude"}}}}}
 {"do": "expect", "conn": "e", "json": {"id": 10, "result": {"handoff": "$string", "session": "$capture:pid", "ids": "$any", "sent": 3, "more": 0}}, "within_ms": 10000}

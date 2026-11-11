@@ -133,6 +133,8 @@ taller (Nidhogg's compositor).  Asked once: a face that sets it is refused where
                         :box (:line-width (1 . 1) :color ,(c 'border) ,@(and (featurep 'glitnir) '(:corner-radius 6))))
          (drgnx-pill-accent :inherit drgnx-ui-caption :foreground ,(c 'accent) :background ,(c 'accent-tint)
                             :box (:line-width (1 . 1) :color ,(c 'accent) ,@(and (featurep 'glitnir) '(:corner-radius 6))))
+         (drgnx-pill-agent :inherit drgnx-ui-caption
+                           :box (:line-width (1 . 1) ,@(and (featurep 'glitnir) '(:corner-radius 9))))
          ;; a keycap is as tall as its text, also on a list row made taller by `line-spacing' (the palette's)
          (drgnx-keycap :inherit drgnx-ui-caption :foreground ,(c 'subtle)
                        :box (:line-width (1 . 1) :color ,(c 'border-strong) ,@(and (featurep 'glitnir) '(:corner-radius 4))

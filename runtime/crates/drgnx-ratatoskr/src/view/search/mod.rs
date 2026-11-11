@@ -39,24 +39,34 @@ use runstav::methods::search::{
     EditsAnswer, EditsParams, FileEdits, FindQuery, FoldParams, GrepGroup, GrepLookParams,
     GrepReplaceParams, GrepSkippedParams, GrepSort, GroupParams, HandoffAnswer, HandoffContext,
     HandoffContextParams, HandoffContextRow, HandoffMark, HandoffMarkParams, HandoffParams,
-    HandoffState, HandoffStateParams, HandoffTo, PreviewAnswer, PreviewParams, RunDone, RunParams,
-    RunStarted, ScopeDone, ScopeKind, UndoParams,
+    HandoffPhase, HandoffState, HandoffStateParams, HandoffTo, PreviewAnswer, PreviewParams,
+    RunDone, RunParams, RunStarted, ScopeDone, ScopeKind, UndoParams,
 };
 use runstav::methods::view::ViewModel;
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::Instant;
 
-/// The mark of the agent a match was handed to, as the editor gives it: the face of its colour and its glyph.
+/// The mark of the agent a match was handed to, as the editor gives it: the face of its colour, its glyph and its
+/// name; and the hand-off (`h:N`) it came with.
 #[derive(Clone, Debug)]
 pub(super) struct AgentMark {
     pub face: String,
     pub glyph: String,
+    pub name: String,
+    pub handoff: String,
+}
+
+/// Where a hand-off is, as its group chips show it: its phase and the handed-off matches its agent's edits took out.
+#[derive(Clone, Debug)]
+pub(super) struct Progress {
+    pub phase: HandoffPhase,
+    pub done: BTreeSet<String>,
 }
 
 /// The rows a search sends a view: the first this many, and as many again each time the editor asks (the panel's shape,
@@ -89,6 +99,8 @@ pub(super) struct Run {
     reasons: BTreeMap<String, String>,
     /// Match id → the mark of the agent it was handed to (`search/handoff`): its row shows it.
     handed: BTreeMap<String, AgentMark>,
+    /// Hand-off id → where it is (`search-handoff-state`); none yet: sent, nothing done.
+    progress: BTreeMap<String, Progress>,
     /// The remap keys of the matches the user unticked in the runs before (`run.rs`): resolved at the run's end, or
     /// handed to the next run when a newer one stops this one first.
     carry: HashSet<u64>,
@@ -182,6 +194,7 @@ impl Greps {
             block: None,
             reasons: BTreeMap::new(),
             handed: BTreeMap::new(),
+            progress: BTreeMap::new(),
             carry,
             done: false,
             context: true,
@@ -2059,7 +2072,7 @@ pub async fn handoff(f: &Front, c: &Caller, p: HandoffParams) -> Result<HandoffA
     }
     // the handed-off rows show the agent's mark (a new worker's comes later: `search/handoff-mark`)
     if let Some(mark) = &p.mark {
-        mark_handed(f, c, &p.view, &ids, mark);
+        mark_handed(f, c, &p.view, &id, &ids, mark);
     }
     if let Some(front) = views.front.get().and_then(std::sync::Weak::upgrade) {
         handoff::watch(front, c.clone(), id.clone(), session.clone());
@@ -2118,11 +2131,20 @@ pub fn handoff_context(
 }
 
 /// VIEW's rows of match IDS show MARK, redrawn.
-fn mark_handed(f: &Front, c: &Caller, view: &str, ids: &[String], mark: &HandoffMark) {
+fn mark_handed(
+    f: &Front,
+    c: &Caller,
+    view: &str,
+    handoff: &str,
+    ids: &[String],
+    mark: &HandoffMark,
+) {
     let views = &f.core.views;
     let mark = AgentMark {
         face: mark.face.clone(),
         glyph: mark.glyph.clone(),
+        name: mark.name.clone(),
+        handoff: handoff.to_owned(),
     };
     views.greps.current(c.conn_id, view, |run| {
         for i in ids {
@@ -2130,6 +2152,23 @@ fn mark_handed(f: &Front, c: &Caller, view: &str, ids: &[String], mark: &Handoff
         }
         for patch in rebuild_patches(&mut lock(&views.store), c.conn_id, view, run) {
             f.send_to(c.conn_id, "view-patch", json!(patch));
+        }
+    });
+}
+
+/// Hand-off STATE (of connection CONN) moved: its groups' chips in its view show it, redrawn.
+pub(super) fn handoff_progress(f: &Front, conn: u64, state: &HandoffState) {
+    let views = &f.core.views;
+    views.greps.current(conn, &state.view, |run| {
+        run.progress.insert(
+            state.handoff.clone(),
+            Progress {
+                phase: state.phase,
+                done: state.done.iter().cloned().collect(),
+            },
+        );
+        for patch in rebuild_patches(&mut lock(&views.store), conn, &state.view, run) {
+            f.send_to(conn, "view-patch", json!(patch));
         }
     });
 }
@@ -2150,7 +2189,7 @@ pub fn handoff_mark(f: &Front, c: &Caller, p: HandoffMarkParams) -> Result<bool,
             "no such hand-off (ended, older than 24 h, or another window's)",
         ));
     };
-    mark_handed(f, c, &view, &ids, &p.mark);
+    mark_handed(f, c, &view, &p.handoff, &ids, &p.mark);
     Ok(true)
 }
 

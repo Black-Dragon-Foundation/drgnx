@@ -45,6 +45,7 @@
   (load (expand-file-name "drgnx-search-handoff" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-search-handoff-event "drgnx-search-handoff")
 (declare-function drgnx-search-handoff-chip "drgnx-search-handoff")
+(declare-function drgnx-search-handoff-agent-chips "drgnx-search-handoff")
 (declare-function svg-create "svg")      ; the sheet's key chip (`drgnx-replace--chip-image'), loaded when drawn
 (declare-function svg-rectangle "svg")
 (declare-function svg-text "svg")
@@ -1697,6 +1698,7 @@ each replaced by NEW."
   "The Search view is now hub-fed (the rows path): its tick boxes follow the ticks after every draw."
   (add-hook 'drgnx-view-patch-patched-functions #'drgnx-replace--rows-boxes nil t)
   (add-hook 'drgnx-view-patch-patched-functions #'drgnx-replace--reached nil t)
+  (add-hook 'drgnx-view-patch-patched-functions #'drgnx-search-handoff-agent-chips nil t)
   (add-hook 'drgnx-view-nav-paged-functions #'drgnx-replace--paged nil t)
   (add-hook 'window-scroll-functions #'drgnx-replace--scrolled nil t))
 
@@ -1976,6 +1978,7 @@ query on the header line; its keys move and visit (`drgnx-replace--twin-keys'), 
     (drgnx-view-patch-detach)
     (remove-hook 'drgnx-view-patch-patched-functions #'drgnx-replace--rows-boxes t)
     (remove-hook 'drgnx-view-patch-patched-functions #'drgnx-replace--reached t)
+    (remove-hook 'drgnx-view-patch-patched-functions #'drgnx-search-handoff-agent-chips t)
     (remove-hook 'drgnx-view-nav-paged-functions #'drgnx-replace--paged t)
     (remove-hook 'window-scroll-functions #'drgnx-replace--scrolled t)
     (when drgnx-replace--box-overlays (maphash (lambda (_ ov) (delete-overlay ov)) drgnx-replace--box-overlays)

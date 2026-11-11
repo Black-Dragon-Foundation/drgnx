@@ -430,24 +430,31 @@ nil when none is left.  Another profile talks to its vendor's own service."
   "In the Search view: the view's hand-offs, newest first, each (:handoff H :session S :name NAME :worktree W :ids
 IDS :state STATE), STATE the last `search-handoff-state'.")
 
-(defun drgnx-search-handoff--mark-of (ordinal)
-  "The mark of the session with ORDINAL for the handed-off rows: (:face NAME :glyph G) from the agents' identity
-scheme, or nil."
+(defun drgnx-search-handoff--mark-of (ordinal name)
+  "The mark of the session with ORDINAL for the handed-off rows and their groups' chips: (:face FACE :glyph G :name
+NAME), FACE and G from the agents' identity scheme; or nil."
   (when-let* (((fboundp 'drgnx-agent-identity)) (ordinal) (id (drgnx-agent-identity ordinal)))
-    (list :face (symbol-name (plist-get id :face)) :glyph (plist-get id :glyph))))
+    (list :face (symbol-name (plist-get id :face)) :glyph (plist-get id :glyph) :name name)))
 
-(defun drgnx-search-handoff--mark (session)
-  "SESSION's mark for the handed-off rows, or nil before the session has its ordinal (its first snapshot)."
+(defun drgnx-search-handoff--mark (session name)
+  "SESSION's mark (NAME on the chips) for the handed-off rows, or nil before the session has its ordinal (its first
+snapshot)."
   (and (fboundp 'drgnx-agents-editor-ordinal)
-       (drgnx-search-handoff--mark-of (drgnx-agents-editor-ordinal session))))
+       (drgnx-search-handoff--mark-of (drgnx-agents-editor-ordinal session) name)))
+
+(defun drgnx-search-handoff--name (choice)
+  "The name a hand-off to CHOICE (LABEL . TO) shows: a new agent's kind, else the session's name."
+  (let ((to (cdr choice)))
+    (cond ((plist-get to :new) "Worker") ((plist-get to :pair) "Pair")
+          (t (replace-regexp-in-string "\\`Pair · \\| ([^)]*)\\'" "" (car choice))))))
 
 (defun drgnx-search-handoff-send ()
   "Send the Ask an Agent card: the hub builds the brief and starts or messages the agent."
   (interactive)
   (let* ((a drgnx-search-handoff--ask) (choice (nth (plist-get a :who) (plist-get a :choices)))
          (to (cdr choice)) (text (drgnx-search-handoff--instruction))
-         (session (plist-get (plist-get to :session) :id))
-         (mark (and session (drgnx-search-handoff--mark session)))
+         (session (plist-get (plist-get to :session) :id)) (name (drgnx-search-handoff--name choice))
+         (mark (and session (drgnx-search-handoff--mark session name)))
          (params (append (list :view (plist-get a :view) :instruction text :to to)
                          (if (plist-get a :ids) (list :ids (vconcat (plist-get a :ids)))
                            (list :off (vconcat (plist-get a :off))))
@@ -467,8 +474,7 @@ scheme, or nil."
              (when (buffer-live-p view)
                (with-current-buffer view
                  (push (list :handoff (plist-get r :handoff) :session (plist-get r :session)
-                             :name (cond ((plist-get to :new) "Worker") ((plist-get to :pair) "Pair")
-                                         (t (replace-regexp-in-string " ([^)]*)\\'" "" (car choice))))
+                             :name name
                              :worktree (plist-get r :worktree) :ids (append (plist-get r :ids) nil)
                              :state (list :phase "sent") :unmarked (not mark))
                        drgnx-search-handoff--live)
@@ -485,22 +491,23 @@ scheme, or nil."
                           (format "; left out (hidden): %s" (string-join (append (plist-get r :hidden) nil) ", "))
                         "")))))))))
 
-(defun drgnx-search-handoff--mark-later (session ordinal)
-  "In the Search view: SESSION has ORDINAL (its snapshot came): its hand-offs sent without a mark (a new worker has
-none before its first snapshot) get it now (`search/handoff-mark')."
-  (when-let* ((mark (drgnx-search-handoff--mark-of ordinal)))
-    (dolist (h drgnx-search-handoff--live)
-      (when (and (plist-get h :unmarked) (equal (plist-get h :session) session))
-        (setf (plist-get h :unmarked) nil)
-        (drgnx-hub--call-on drgnx-hub--events "search/handoff-mark" (list :handoff (plist-get h :handoff) :mark mark)
-                            #'ignore)))))
+(defun drgnx-search-handoff--mark-later (session ordinal &optional name)
+  "In the Search view: SESSION has ORDINAL (its snapshot came, naming it NAME): its hand-offs sent without a mark (a
+new worker has none before its first snapshot) get it now (`search/handoff-mark')."
+  (dolist (h drgnx-search-handoff--live)
+    (when-let* (((plist-get h :unmarked)) ((equal (plist-get h :session) session))
+                (mark (drgnx-search-handoff--mark-of ordinal (or name (plist-get h :name)))))
+      (setf (plist-get h :unmarked) nil)
+      (drgnx-hub--call-on drgnx-hub--events "search/handoff-mark" (list :handoff (plist-get h :handoff) :mark mark)
+                          #'ignore))))
 
 (defun drgnx-search-handoff-event (event data)
   "`search-handoff-state' (DATA) of EVENT: the Search view's chip follows it; an `agent' snapshot brings a new
 worker's mark to its hand-off's rows.  Non-nil when it was a hand-off's state."
   (when-let* (((equal event "agent")) (ordinal (plist-get (plist-get data :session) :ordinal))
               (buf (get-buffer drgnx-replace-buffer-name)))
-    (with-current-buffer buf (drgnx-search-handoff--mark-later (plist-get data :id) ordinal)))
+    (with-current-buffer buf
+      (drgnx-search-handoff--mark-later (plist-get data :id) ordinal (plist-get (plist-get data :session) :name))))
   (when (equal event "search-handoff-state")
     (when-let* ((buf (get-buffer drgnx-replace-buffer-name)))
       (with-current-buffer buf
@@ -524,6 +531,19 @@ worker's mark to its hand-off's rows.  Non-nil when it was a hand-off's state."
                                             (_ "sent")))
                                   'face 'drgnx-search-handoff-chip)))
     ""))
+
+(defun drgnx-search-handoff-agent-chips (view keys)
+  "`drgnx-view-patch-patched-functions' in the Search view: the agent chips on VIEW's group rows KEYS (the hub's
+`drgnx-search-agent', the agent's face name) take that agent's colour; their pill (`drgnx-pill-agent') rings in it."
+  (with-silent-modifications
+    (dolist (key keys)
+      (when-let* ((beg (drgnx-view-row-start view key)))
+        (let ((end (save-excursion (goto-char beg) (line-end-position))) (pos beg))
+          (while (setq pos (text-property-not-all pos end 'drgnx-search-agent nil))
+            (let* ((next (next-single-property-change pos 'drgnx-search-agent nil end))
+                   (face (intern-soft (get-text-property pos 'drgnx-search-agent))))
+              (when (facep face) (add-face-text-property pos next face))
+              (setq pos next))))))))
 
 (defun drgnx-search-handoff-rerun ()
   "Run the Search view's search again in the worktree of its newest hand-off's worker, to show what is left."

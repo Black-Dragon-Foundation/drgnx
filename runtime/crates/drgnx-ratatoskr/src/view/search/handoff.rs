@@ -409,6 +409,7 @@ pub(super) fn watch(
             }
             let conn = f.core.views.greps.handoffs.with(&id, |h| h.conn);
             if let Some(conn) = conn {
+                super::handoff_progress(&f, conn, &state);
                 f.send_to(conn, "search-handoff-state", serde_json::json!(state));
             }
             if f.core.agents.find(&session).is_err() {

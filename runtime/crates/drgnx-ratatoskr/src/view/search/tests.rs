@@ -334,7 +334,7 @@ fn replace_preview_runs() {
 #[test]
 fn a_preview_tints_only_the_changed_characters() {
     let mt = m("/r/a.txt", 1, "let ", "needle", ";");
-    let row = |new: &str| rows::match_row(&query(), new, "m:1:0".into(), &mt, None, None);
+    let row = |new: &str| rows::match_row(&query(), new, "m:1:0".into(), &mt, None);
     let r = row("needles");
     assert_eq!(r.text, "  [x] let needles;");
     assert_eq!(r.runs, vec![(16, 17, "drgnx-replace-new".into())]);
@@ -2180,4 +2180,89 @@ fn sort_by_rank_puts_the_central_files_first() {
         files(&greps),
         ["d:d", "f:d/b.rs", "f:d/c.rs", "f:e.rs", "f:a.rs"]
     );
+}
+
+/// [D] Ask an Agent: a handed-off match's row starts with the agent's colour bar (its name on hover) in place of its
+/// first space; its file's row (and in Folders its file's row one step in) carries a chip per hand-off, in the agent's
+/// colour: its mark, name, phase and how many of the group's handed-off matches are done, following the state.
+#[test]
+fn handed_rows_get_the_agents_bar_and_their_groups_a_chip() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    let file = "/r/a.rs";
+    feed(
+        &greps,
+        &mut s,
+        id,
+        file,
+        (0..3).map(|i| m(file, i + 1, "x ", "needle", "")).collect(),
+    );
+    greps
+        .with(CONN, "s", id, |run| {
+            for n in [0, 1] {
+                run.handed.insert(
+                    match_id(run.id, n),
+                    AgentMark {
+                        face: "drgnx-agent-2".into(),
+                        glyph: "◆".into(),
+                        name: "Ada".into(),
+                        handoff: "h:1".into(),
+                    },
+                );
+            }
+        })
+        .unwrap();
+    let row = |greps: &Greps, key: &str| {
+        greps
+            .with(CONN, "s", id, |run| {
+                rows_in(run, 0..rows_total(run))
+                    .into_iter()
+                    .find(|r| r.key == key)
+                    .unwrap()
+            })
+            .unwrap()
+    };
+    let m0 = row(&greps, "m:1:0");
+    assert!(m0.text.starts_with("▎ [x] x needle"), "{:?}", m0.text);
+    assert_eq!(m0.runs[0], (0, 1, "drgnx-agent-2".to_owned()));
+    assert!(m0.props.contains(&(0, 1, "help-echo".into(), json!("Ada"))));
+    assert!(row(&greps, "m:1:2").text.starts_with("  [x]"));
+    let head = row(&greps, "f:a.rs");
+    assert_eq!(head.text, "[x] a.rs   ◆ Ada · sent 0/2 ");
+    let (at, end) = (10, head.text.chars().count() as u32);
+    // the row's own properties take the chip in
+    assert!(
+        head.props
+            .iter()
+            .any(|(s, e, n, _)| (*s, *e) == (0, end) && n == "drgnx-work-id")
+    );
+    assert!(head.runs.contains(&(at, end, "drgnx-pill-agent".into())));
+    assert!(
+        head.props
+            .contains(&(at, end, "drgnx-search-agent".into(), json!("drgnx-agent-2")))
+    );
+    // the state moves: editing, one done
+    greps
+        .with(CONN, "s", id, |run| {
+            run.progress.insert(
+                "h:1".into(),
+                Progress {
+                    phase: HandoffPhase::Editing,
+                    done: [match_id(run.id, 1)].into_iter().collect(),
+                },
+            );
+        })
+        .unwrap();
+    assert!(row(&greps, "f:a.rs").text.ends_with("◆ Ada · editing 1/2 "));
+    // Folders: the bar goes to the row's first column, past its indent
+    greps
+        .with(CONN, "s", id, |run| {
+            regroup_patches(&mut s, CONN, "s", run, GrepGroup::Tree, None)
+        })
+        .unwrap();
+    let m0 = row(&greps, "m:1:0");
+    assert!(m0.text.starts_with("▎ "), "{:?}", m0.text);
+    assert!(row(&greps, "f:a.rs").text.ends_with("◆ Ada · editing 1/2 "));
 }

@@ -29785,18 +29785,22 @@
         "$defs": {
           "HandoffMark": {
             "additionalProperties": false,
-            "description": "The mark the handed-off rows show: the agent's colour (a face name) and its glyph (one column), as the editor gives\nthem (the agents' identity scheme).",
+            "description": "The mark the handed-off rows show: the agent's colour (a face name) and its glyph (one column), as the editor gives\nthem (the agents' identity scheme), and the name their groups' chip shows (`Ada · editing 9/14`).",
             "properties": {
               "face": {
                 "type": "string"
               },
               "glyph": {
                 "type": "string"
+              },
+              "name": {
+                "type": "string"
               }
             },
             "required": [
               "face",
-              "glyph"
+              "glyph",
+              "name"
             ],
             "type": "object"
           },
@@ -30107,18 +30111,22 @@
         "$defs": {
           "HandoffMark": {
             "additionalProperties": false,
-            "description": "The mark the handed-off rows show: the agent's colour (a face name) and its glyph (one column), as the editor gives\nthem (the agents' identity scheme).",
+            "description": "The mark the handed-off rows show: the agent's colour (a face name) and its glyph (one column), as the editor gives\nthem (the agents' identity scheme), and the name their groups' chip shows (`Ada · editing 9/14`).",
             "properties": {
               "face": {
                 "type": "string"
               },
               "glyph": {
                 "type": "string"
+              },
+              "name": {
+                "type": "string"
               }
             },
             "required": [
               "face",
-              "glyph"
+              "glyph",
+              "name"
             ],
             "type": "object"
           }

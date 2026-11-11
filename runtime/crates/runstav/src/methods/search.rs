@@ -636,12 +636,13 @@ pub struct HandoffParams {
 }
 
 /// The mark the handed-off rows show: the agent's colour (a face name) and its glyph (one column), as the editor gives
-/// them (the agents' identity scheme).
+/// them (the agents' identity scheme), and the name their groups' chip shows (`Ada · editing 9/14`).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HandoffMark {
     pub face: String,
     pub glyph: String,
+    pub name: String,
 }
 
 /// `search/handoff`'s answer: the hand-off's id, the session it went to (and the worktree of a new worker), the match

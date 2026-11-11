@@ -96,6 +96,9 @@ mockups' `inset 0 0 0 1px var(--focus)'." :group 'drgnx-look)
 (defface drgnx-pill-accent '((t :inherit drgnx-ui-caption :box (:line-width (1 . 1))))
   "A choice pill that is chosen (search-view.html `.sc.on'): the accent on its tint, in a ring of the accent."
   :group 'drgnx-look)
+(defface drgnx-pill-agent '((t :inherit drgnx-ui-caption :box (:line-width (1 . 1))))
+  "An agent's chip (search-view.html `.agc'): a ring of no colour of its own, so it takes the text's, an agent's face
+added over it." :group 'drgnx-look)
 
 ;;;; Agents
 
