@@ -1480,7 +1480,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `reports/get` | user | `{id?: string, task?: string}` | `{reports?: [Report]}` | no |
 | `restart` | user | `{}` | `boolean` | no |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes |
-| `runners/add` | user | `{accept?: "all" \| "heavy", host: string, name?: Id, prefix?: string, profile?: "dedicated" \| "workstation", root?: AbsPath, trust: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
+| `runners/add` | user | `{accept?: "all" \| "heavy", allow_admin?: boolean, allow_own_account?: boolean, host: string, name?: Id, prefix?: string, profile?: "dedicated" \| "workstation", root?: AbsPath, trust: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
 | `runners/audit` | user | `{job?: Id, key?: KeyName}` | `{rows?: [AuditRow]}` | no |
 | `runners/bench` | user | `{name: Id}` | `Runner` | yes |
 | `runners/check` | user | `{name: Id}` | `Runner` | yes |
@@ -3297,7 +3297,10 @@ container.
 Transport`):
 
 - `open(r) -> Channels`: R's master (the one it has if its socket answers, else one a previous hub left in the runner's
-  folder, resumed with `Session::resume_mux`, else a new one through `connect_mux`), then `true` on it, so a dead link
+  folder, resumed with `Session::resume_mux`, else a new one through `connect_mux`; the master's socket is in the
+  runner's folder unless its path would pass a Unix socket's limit, 104 bytes on macOS, whose per-user temporary
+  folder is long: then it is in a short folder of its own, `/tmp/drgnx-ssh-<uid>/<hash of the runner's folder>`, both
+  0700 and refused when a link or another user's, `ssh_config::control_dir`), then `true` on it, so a dead link
   or a login banner shows before any session of ours starts, then three sessions: control, bulk in, bulk out. Each
   `Channel` has `tx`, `rx` and `err`; `Channel::new(tx, rx)` makes one over any pipe, for a link's tests. At most
   `SESSIONS` (3) per runner, kept by a semaphore: a second `open` while they are open is refused.

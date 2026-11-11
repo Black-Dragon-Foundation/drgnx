@@ -292,8 +292,10 @@ mod openssh_impl {
     const MASTER_DIR_PREFIX: &str = ".ssh-connection";
 
     /// [`Transport`] over the user's OpenSSH: a master per runner with its control socket in the runner's folder
-    /// under `$XDG_RUNTIME_DIR/drgnx-runners/`, which a later hub resumes ([`openssh::Session::resume_mux`]). Dropping
-    /// it leaves the masters running (`ControlPersist 10m`) for the next hub.
+    /// under `$XDG_RUNTIME_DIR/drgnx-runners/` (or, where that path would be too long for a socket, a short folder
+    /// of its own under `/tmp/drgnx-ssh-<uid>`: [`ssh_config::control_dir`]), which a later hub resumes
+    /// ([`openssh::Session::resume_mux`]). Dropping it leaves the masters running (`ControlPersist 10m`) for the next
+    /// hub.
     pub struct OpensshTransport {
         runtime_dir: PathBuf,
         links: std::sync::Mutex<HashMap<String, Arc<Mutex<Link>>>>,
@@ -424,7 +426,9 @@ mod openssh_impl {
                     m.stop_listening().await;
                 }
             }
-            let dir = ssh_config::dir(&self.runtime_dir, &l.cfg.name);
+            let dir = ssh_config::control_dir(&self.runtime_dir, &l.cfg.name).map_err(|e| {
+                LinkError::Refused(format!("{}'s master socket folder: {e}", l.cfg.name))
+            })?;
             let m = match resume(&dir).await {
                 Some(m) => m,
                 None => {
@@ -625,7 +629,8 @@ mod openssh_impl {
                 if let Some(m) = l.master.take() {
                     m.stop_listening().await;
                 }
-                let dir = ssh_config::dir(&self.runtime_dir, r);
+                let dir = ssh_config::control_dir(&self.runtime_dir, r)
+                    .map_err(|e| LinkError::Refused(format!("{r}'s master socket folder: {e}")))?;
                 let config = ssh_config::path(&self.runtime_dir, r);
                 let owner = builder(&config, &dir)
                     .connect_mux(&l.cfg.host)
