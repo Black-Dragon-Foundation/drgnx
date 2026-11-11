@@ -250,7 +250,7 @@ only).
   `""`), and on a line without a breakpoint a non-empty answer adds one with that field.
 - The hover dot: with the pointer over the column, a line without a mark shows a faint dot ("Click to add a
   breakpoint"), with no Lisp on mouse motion. Each shown line carries a margin string, `●` in the column's middle
-  character, in the margin's own background (`default` as the buffer remaps it) with a `mouse-face` of
+  character in the UI font (its `●` is the mockup's 10 px; the code font's is 8), in the margin's own background (`default` as the buffer remaps it) with a `mouse-face` of
   `drgnx-debug-hover` at 38 % over it, both through `drgnx-color`. The strings sit on a pool of overlays per window (the
   overlay's `window`), laid out from `pre-redisplay-functions` and `window-scroll-functions` when the window's start or
   height, the text or the marks changed; folded lines and lines with a mark are skipped. Only on a graphical frame of a

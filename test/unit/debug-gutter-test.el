@@ -260,9 +260,11 @@
            (dot (cadr spec)) (i (1- (length dot))))
       (should (equal (car spec) '(margin left-margin)))
       (should (equal (substring-no-properties dot) " ●"))
-      (should (equal (get-text-property i 'face dot) (list :foreground debug-gutter-test--bg)))
+      ;; in the UI font: its dot is the mockup's 10 px at 13 px (the code font's is 8) and its line is no taller
+      (should (equal (get-text-property i 'face dot) (list :inherit 'drgnx-ui-text :foreground debug-gutter-test--bg)))
       (should (equal (get-text-property i 'mouse-face dot)
-                     (list :foreground (drgnx-color-over debug-gutter-test--bp debug-gutter-test--bg 0.38))))
+                     (list :inherit 'drgnx-ui-text
+                           :foreground (drgnx-color-over debug-gutter-test--bp debug-gutter-test--bg 0.38))))
       (should (equal (get-text-property i 'help-echo dot) "Click to add a breakpoint"))
       ;; the pad lights nothing
       (should-not (get-text-property 0 'mouse-face dot)))))

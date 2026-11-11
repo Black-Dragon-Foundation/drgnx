@@ -185,13 +185,16 @@ frame's."
 (defun drgnx-debug-gutter--hover-string (bg fg)
   "The hover dot's margin string: after the claim's pad, a dot in BG (the margin's background: unseen) whose
 `mouse-face' is FG at 38 % over BG.  The dot sits in the column's middle character (a margin string draws no pixel
-space: the glyphs' images are centred in the whole column, so an odd column count lines them up)."
+space: the glyphs' images are centred in the whole column, so an odd column count lines them up).  The dot is in the
+UI font (`drgnx-ui-text'): its ● is the mockup's 10 px at 13 px where the code font's is 8, and its line is no
+taller."
   (propertize " " 'display
               (list '(margin left-margin)
                     (concat (drgnx-margins-pad 'debug)
                             (make-string (/ (1- (drgnx-debug-gutter--columns)) 2) ?\s)
-                            (propertize "●" 'face (list :foreground bg)
-                                        'mouse-face (list :foreground (drgnx-color-over fg bg 0.38))
+                            (propertize "●" 'face (list :inherit 'drgnx-ui-text :foreground bg)
+                                        'mouse-face (list :inherit 'drgnx-ui-text
+                                                          :foreground (drgnx-color-over fg bg 0.38))
                                         'help-echo "Click to add a breakpoint")))))
 
 (defun drgnx-debug-gutter--hover-string-now ()
