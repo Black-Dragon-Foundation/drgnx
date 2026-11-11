@@ -13,6 +13,7 @@
 (require 'subr-x)
 (require 'drgnx-palette)                ; the palette scene's commands and history
 (declare-function drgnx-pane-show "drgnx-panes")
+(declare-function drgnx-pkg-jit-guard "drgnx-pkg-activate")
 (declare-function drgnx-panel-replay--wait "panel-replay-fixture")
 (declare-function drgnx-agent-panel-cards--permissions "drgnx-agent-panel-cards")
 

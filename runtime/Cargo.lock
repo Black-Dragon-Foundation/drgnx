@@ -1381,6 +1381,7 @@ dependencies = [
  "libc",
  "mimir",
  "norn",
+ "notify",
  "openssh",
  "proptest",
  "pulldown-cmark",
@@ -1412,6 +1413,7 @@ dependencies = [
  "urdr",
  "vegvisir",
  "verdandi",
+ "xxhash-rust",
  "zeroize",
  "zip",
 ]

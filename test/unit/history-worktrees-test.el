@@ -122,8 +122,11 @@ Their directories: (MAIN WT1 WT2)."
       (drgnx-history-worktrees-test--git main "worktree" "remove" "--force" (directory-file-name wt1))
       (drgnx-history-worktrees-test--git main "worktree" "remove" "--force" (directory-file-name wt2))
       (let (frozen)
-        ;; past the sweep's first look (a minute after the history opens) and its hourly one
-        (drgnx-test-hub-advance (* 3601 1000))
+        ;; past the sweep's first look (a minute after the history opens): both folders are gone already, so it freezes
+        ;; their branches.  The advance steps the hub through every timer that falls due, one at a time and each in real
+        ;; time, so 3601 s (the hourly look too, which this does not need) cost 12 s idle and 36 s under load, over
+        ;; the gate's wait: 61 s fire a dozen timers
+        (drgnx-test-hub-advance (* 61 1000))
         (drgnx-agents-mirror-test--settle
          (lambda ()
            (let ((file (car (directory-files-recursively root "size-report\\.json\\'"))))

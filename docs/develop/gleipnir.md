@@ -1361,7 +1361,7 @@ too when its kernel has it. Two places run them:
 - the container (`ctr.sh`, as its root): `--rows rows --rows rows/container`. The reduced rows, the bwrap floor and
   PATH rows, `fail-closed-no-bwrap`, `helper-cannot-be-shadowed` and `check-in-a-container` run; the full-tier rows
   skip with "inside a container";
-- the Fedora VM (`gleipnir-vm.sh run`): `--rows rows/linux --rows rows/any --require-all`. Every row runs; none may
+- the Fedora VM (`gleipnir-vm.sh run`): `--rows rows/linux --rows rows/any --require-all`. The container rows pull `busybox:1.36` (one `python:3.13-alpine`) with `podman pull --policy=missing`; the VM run pulls them once into a shared image store the rows see as an additional store (`CONTAINERS_STORAGE_CONF`), so a slow registry fails the run once, not one row per pull. Every row runs; none may
   skip;
 - GitHub CI (`runtime.yml`, [ci.md](ci.md)): the container run above in the Fedora job, the macOS rows plus
   `rows/any` with `--require-all` on the macOS runner (the job's last step), and `rows/linux` + `rows/any` on the Ubuntu 24.04 runners

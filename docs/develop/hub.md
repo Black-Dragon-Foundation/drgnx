@@ -1485,9 +1485,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `say/end` | user | `{id: Id}` | `boolean` | yes |
 | `say/revise` | user | `{id: Id, text: Text}` | `boolean` | yes |
 | `say/start` | user | `{profile?: string, project?: Id, repo: AbsPath, text: Text}` | `{id: string}` | yes |
+| `search/buffer` | user | `{large?: boolean, path: AbsPath, text?: string, tick?: natnum, view: string}` | `boolean` | no |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
 | `search/files` | user | `{ignore?: "index" \| "real", n?: natnum, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
-| `search/grep` | user | `{case?: boolean, exclude?: [string], file?: AbsPath, ignore?: "index" \| "real", include?: [string], regexp?: boolean, replace?: string, root: AbsPath, text: string, view: string, word?: boolean}` | `{query: natnum}` | no |
 | `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
 | `search/grep-replace` | user | `{replace: string, view: string}` | `boolean` | no |
 | `search/grep-skipped` | user | `{skipped: [{id: string, why: string}], view: string}` | `boolean` | no |
@@ -1496,6 +1496,13 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
 | `search/outline` | user | `{base?: boolean, docs?: boolean, path: string, root: AbsPath}` | `{entries: [OutlineEntry], fresh: Fresh, lang: string, path: string}` | no |
 | `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
+| `search/recent` | user | `{root: AbsPath}` | `{recent: [SearchSpec]}` | no |
+| `search/run` | user | `{context?: boolean, ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, view: string}` | `{run: natnum}` | no |
+| `search/saved/delete` | user | `{name: string, root: AbsPath}` | `boolean` | yes |
+| `search/saved/list` | user | `{root: AbsPath}` | `{problems?: [string], saved: [SavedSearch]}` | no |
+| `search/saved/put` | user | `{name: string, pinned?: boolean, root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}}` | `boolean` | yes |
+| `search/saved/share` | user | `{name: string, root: AbsPath}` | `{path: AbsPath}` | yes |
+| `search/scope-bases` | user | `{root: AbsPath}` | `{current?: string, default?: string, detached: boolean, recent: [string], upstream?: string}` | no |
 | `search/server-plan` | user | `{kind: "tei" \| "ollama"}` | `ServerPlan` | no |
 | `search/server-start` | user | `{confirm: boolean, kind: "tei" \| "ollama"}` | `{provider: ProviderEntry, started: boolean, unit: string}` | no |
 | `search/server-stop` | user | `{kind: "tei" \| "ollama"}` | `{stopped: boolean}` | no |
@@ -2147,8 +2154,8 @@ rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display 
   query url` and, in a Timeline, `session`. The rows' node spans are their `drgnx-work-id` props.
 - **The Board** (`work::trail::board`). `work/board/subscribe {view, map, plans?}` opens a Board view the same way:
   the tasks of `plans` (`plans/get` each, their steps the progress), else every task (`tasks/find`, up to four pages),
-  each card naming the agent of the connection's map view `map` that works on it (the agent whose task title is the
-  card's). It is read again after each write like a trail; `work/trail/close` ends it. Rows: `head` (each column's
+  each card naming the agent of the connection's map view `map` that works on it (the agent whose task id is the
+  card's: two tasks of one title never show each other's agent). It is read again after each write like a trail; `work/trail/close` ends it. Rows: `head` (each column's
   heading and count at a sixth of the width, at least 120 px), then `cards:I:0` (the titles at height I) and
   `cards:I:1` (state · agent · steps done) and `cards:I:2` (the progress bar: on a GUI two `spaces` 4 px high from
   4 px in, the steps done in `drgnx-work-bar` and the rest in `drgnx-work-bar-rest`, together the column less 16 px,
@@ -2255,7 +2262,7 @@ All of it is in memory only.
   a reset drops every held patch. A patch whose `base` is older than the editor's version is dropped silently. Only a
   `base` newer than the version, an unknown `base` or an image the editor lacks sends `view/resync`, at most one
   outstanding per (view, class).
-- **A stream is a row stream.** A stream method (`search/grep`, `search/files`, `explorer/subscribe`) is a (view,
+- **A stream is a row stream.** A stream method (`search/run`, `search/files`, `explorer/subscribe`) is a (view,
   class) row stream like any other: a reset per new query, then inserts. A cancelled query's late patches carry an old `version` and are dropped.
 - **Images:** a reset carries every image its rows name; any other patch only those the editor was not sent.
 - **View options** (`view::ViewOpts`, set by the view's builder; the test hook `__test_view_rows` takes `ack` and
@@ -2351,30 +2358,71 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
 - **The terminal** counts columns with Unicode's widths, overridden by the editor's `char-width-table` ranges
   (`tty_widths`).
 
-### Text search as rows (`search/grep`)
+### Text search as rows (`search/run`)
 
-The Search view's results are a row stream under the rules above (`runtime/crates/drgnx-ratatoskr/src/view/grep.rs`;
-the search itself is `hrafn::grep`).
+The Search view's results are a row stream under the rules above (`runtime/crates/drgnx-ratatoskr/src/view/search/`:
+`mod.rs` the runs, `rows.rs` the rows and the model, `run.rs` the match ids, the carried unticks and the files'
+snapshots; the search itself is `hrafn::grep`).
 
-- `search/grep {view, root, text, file?, case?, word?, regexp?, include?, exclude?, ignore?, replace?}` stops the
-  view's earlier search, sends every class of `view` a `reset` of no rows at once, and answers `{query}`. A thread then
-  runs ripgrep (else `git grep` in a repository, else `grep`) and sends, as each file's lines are complete, one `insert`
-  after the last row: the file's header row `f:<file>` and one row `m:<file>:<line>:<col>` per match, `<file>` the
-  path relative to `root` when it is under it, else whole (`key_path`; the editor's `drgnx-replace--key-path` names
-  it the same way): a window move sends thousands of ids, and whole paths in them were most of its bytes. A class whose
-  env changed meanwhile gets a `reset` of every row so far instead. The event `search-grep-done {view, query, files,
-  matches, error?}` ends the search; a search a newer one stopped sends neither rows nor the event, so a late row of
-  an old query never reaches the view (and the editor drops one by `base` as well).
+- `search/run {view, root, search, ignore?, off?}` takes a `SearchSpec` (as the saved searches below): a Text query
+  (`{mode: "text", text, case?, word?, regexp?}`; Symbol and Meaning below), `replace?`,
+  `scope?` (none or `project`, or `file` with one file in `files`; another kind is refused, at `search.scope.kind`),
+  `include?`, `exclude?`; `root` must be a folder. It stops the view's earlier search, records the search as recent,
+  sends every class of `view` a `reset` of no rows at once, and answers `{run}`, the run's number. A thread then runs
+  ripgrep (else `git grep` in a repository, else `grep`) and sends, as each file's lines are complete, one `insert`
+  after the last row: the file's header row `f:<file>` and one row `m:<run>:<n>` per match (`n` from 0 in the run's
+  order; the id is opaque, the row's props name the match). `<file>` is the path relative to `root` when it is under
+  it, else whole (`key_path`; the editor's `drgnx-replace--key-path` names it the same way): a window move sends
+  thousands of ids, and whole paths in them were most of its bytes. A class whose env changed meanwhile gets a
+  `reset` of every row so far instead. The event `search-run-done {view, run, files, matches, error?, off?}` ends the
+  search; a search a newer one stopped sends neither rows nor the event, so a late row of an old query never reaches
+  the view (and the editor drops one by `base` as well).
+- **Symbol and Meaning** (`view/search/modes.rs`) ask the index on a task of their own and send all their files when
+  it answers, then `search-run-done` (its `error` is the index's refusal, e.g. no index yet). Symbol (`{mode:
+  "symbol", name, case?}`, case on by default) is `search/usages`' answer: the files that define the name first, each
+  definition's line and then the file's uses, then the files that use it in the index's rank (at most 100), each
+  line's whole-word occurrences of the name a match (the line read from disk; a definition whose line lacks the name
+  is a match of nothing at its start). Meaning (`{mode: "meaning", question}`) is `search/query`'s hits (code scope, at
+  most 100): one match per hit under its file, the hit's symbol as the match (else its first line), its first line
+  and score after it. Both are read-only: a non-empty `replace` is refused at `search.replace`; scopes, globs and the
+  open buffers do not apply.
+- **Context labels** (`context?`, default true; the editor sends false when `drgnx-search-context` is off): the thread
+  that reads each file for its snapshot also parses it once (`search/context.rs`, Hrafn's definitions; code languages
+  only, none past 2 MB; an open buffer's text the same way) and gives each match its innermost definition. A label row
+  `c:<run>:<n>` (`  ƒ name`, face `drgnx-replace-ctx`, the names around it in `help-echo`) goes above match `n` when
+  it is the first of its definition in a row; a top-level match gets none. A label is a row, not a node: no tick, no
+  `drgnx-work-id`, not in the model, not a stop for Next Match; the window and `upto` count it among the rows. The
+  index's outline is not used yet (a file is always parsed), and the match nodes carry no `ctx` field yet.
+- **Unticks carried across runs:** `off` is the ids of the last run's matches the editor's user unticked. The hub
+  turns each into its match's key, a digest of the file, the text before and after the match, the match, its column
+  and end; not its line, so a line added above a match keeps it. A key two matches of a run share is dropped, and
+  both come back ticked. At the end `search-run-done`'s `off` is the new run's ids with those keys (absent when
+  none), and the editor unticks them. A run stopped before its end hands what it carried to the next run; the
+  skipped list of Replace All (`search/grep-skipped`) ends the carry.
+- **Snapshots:** the run records each file's size, modified time, inode and, up to 16 MiB, an xxh3 of its bytes, read
+  in the search's thread outside every lock; for a buffer's text (below), its size, xxh3 and the buffer's tick.
+- **Open buffers:** `search/buffer {view, path, tick?, text?, large?}` → `true`. With `text`, the view's searches
+  search it in place of the file at `path` (absolute) from now on: a run drops the file's matches on disk and, at its
+  end, searches each such text (`hrafn::grep::search_text`, line by line with the fallbacks' regex) where the run
+  would search its file (the File scope's one file, else under the root and searched by the ignore rules; the globs
+  do not apply), outside every lock. The current run takes a text sent while it runs or after it ended at once: the
+  file's matches are replaced in place with new numbers after the run's others (so no id sent names another match),
+  a file the run did not list comes last, and one left with no match goes; the model and the rows go out whole as
+  diffs, and a run that had ended sends `search-run-done` again with the new totals (no `off`). `large` (a buffer
+  over the editor's threshold, or open as a large file) keeps the file's matches on disk and adds "open in chunks:
+  searched on disk" to its header. Neither forgets the buffer (saved or killed): the next run reads the file. A
+  view's buffers go when the view closes or its connection ends.
 - **Row text:** a header is `[x] name` and, below the root, the folder in `drgnx-replace-dim`; a match is `  [x] ` and
-  the text around it, with the match in `drgnx-replace-match`, or, when `replace` is not empty, struck out
-  (`drgnx-replace-old`) with the replacement after it (`drgnx-replace-new`); after a regexp search `\1`, `\&` and
+  the text around it, with the match in `drgnx-replace-match`, or, when `replace` is not empty, the changed characters
+  only: what the match and the replacement share at the start and the end shows once, untinted, and between them the
+  match's part struck out (`drgnx-replace-old`) then the replacement's (`drgnx-replace-new`); after a regexp search `\1`, `\&` and
   `\\` in `replace` are the groups. Props: `drgnx-replace-box` on the box (the file, or the match as an object),
   `drgnx-replace-file` on a header, `drgnx-replace-match` (the match: `file`, `line`, `col`, `end`, `text`,
   `before`, `after`; positions in characters, `line` from 1) on a match row, and `drgnx-work-id` (the row's node id)
   over each row. The tick state is the editor's.
 - **The model** (`view-model`, before the rows that name it; "The native view model"): a `tree` whose list `order`
   holds each file node `f:<file>` (kind `file`, open: flag `expanded`; fields `label`, the name, and `path`) followed
-  by its match nodes `m:<file>:<line>:<col>` (kind `match`, `parent` the file; fields `label`, the text around it,
+  by its match nodes `m:<run>:<n>` (kind `match`, `parent` the file; fields `label`, the text around it,
   and `line`, `col`, `end`, `text`; its file is the parent's `path`, sent once per file, not again per match). A
   search starts with a model of no nodes; each file's batch is a diff; a class's first env sends the model before its
   rows. Replace reads the matches it writes from these fields and the parent's `path`. Past
@@ -2384,7 +2432,7 @@ the search itself is `hrafn::grep`).
 - **The window** (the agent panel's shape, `agents/panel/look`): the hub keeps every match and Sjá's model holds them
   (so Next Match, Previous Match and Replace All, which read the model, act on all of them), but the rows sent are
   the first 200 (a file's header and its matches, in the order the files were complete) and no more until the editor
-  asks; the totals (files, matches) come with `search-grep-done`. `search/grep-look {view, more?, fill?, upto?}` goes
+  asks; the totals (files, matches) come with `search-run-done`. `search/grep-look {view, more?, fill?, upto?}` goes
   on: `more` is one window more (the editor's window neared the end of the rows), `upto` a row's key (Next or Previous
   Match went to a match beyond them): the rows up to it and 100 after it. A row more than 400 rows (`FAR`) past the
   rows sent comes in a block, the 100 rows before it, it and the 100 after, after a gap row (key `gap`, "⋯ N more"),
@@ -2398,7 +2446,7 @@ the search itself is `hrafn::grep`).
   while rows go out (the rows name the model they were built from), else at most once per 100 ms (`MODEL_EVERY`, the
   editor's throttle `drgnx-view-delay`: it applies a model no row names one frame after it comes when it was quiet,
   else one throttle after the last, and every line it
-  reads costs it a redisplay pass), and before `search-grep-done` when anything waits. A send is what waited appended to
+  reads costs it a redisplay pass), and before `search-run-done` when anything waits. A send is what waited appended to
   what the editor holds (`Sent::append`: the nodes by id and one `splice` at the end of `order`, the ops `Doc::diff`
   would send, made from the batches alone, so the hub never rebuilds and diffs the whole model per send). The whole is
   sent, and diffed, for a run's first batch and when the editor's model is not this run's up to what waits (a reset
@@ -2420,6 +2468,50 @@ the search itself is `hrafn::grep`).
 - `ignore` is `index` (no dot paths, no secret-looking names, the filters of the index) or `real` (only what
   `.gitignore` files and the globs name). Without it the setting `drgnx-search-ignore-rules` decides (`index` by
   default); it is a runtime setting, so the hub reads the user's value.
+
+### Recent and saved searches (`search/recent`, `search/saved/*`)
+
+The Search view's history, per project root (`runtime/crates/drgnx-ratatoskr/src/search/saved.rs`). A search is a
+`SearchSpec`: `query` (`{mode: "text", text, case?, word?, regexp?}`, `{mode: "symbol", name, case?}` or `{mode:
+"meaning", question}`), `replace?`, `scope?` (`{kind, base?, changed_lines?}`; the open files of File and Open are
+never kept), `include?`, `exclude?`.
+
+- **Recent:** a view's search is recorded once it has stood for the typing pause (250 ms): the next search of the
+  view, or a `search/recent` after the pause, records it; one replaced sooner is not, and an empty one never is. Newest
+  first, each once (a search run again moves to the front), the last 50. `search/recent {root}` → `{recent}`.
+- **Saved:** `search/saved/put {root, name, search, pinned?}` (a name of 1 to 200 characters, one line; the same name
+  replaces), `search/saved/delete {root, name}` → whether there was one, `search/saved/list {root}` → `{saved,
+  problems?}`: the hub's, then the project's, each `{name, search, pinned, project, shared}`.
+- **Where:** the hub's state, `<state>/hub/search/<key>.json` (a digest of the root's path names the file; written
+  whole through a temporary file and a rename, mode 0600). At most 64 projects stay in memory.
+- **The project's searches** are `.drgnx/searches.eld`, one plist per search: `(:name "TODOs" :mode text :query
+  "todo!(" :case t :scope changed :changed-lines t :include ("*.rs"))`; keys `:name`, `:mode` (`text`, `symbol`,
+  `meaning`), `:query`, `:case`, `:word`, `:regexp` (`t` or `nil`), `:replace`, `:scope`, `:base`, `:changed-lines`,
+  `:include`, `:exclude` (a string or a list of strings). The file is read as data only (huginn's reader: no reader
+  macro, nothing evaluated); a form that is not such a plist, or has an unknown or doubled key, is left out and named
+  in `problems`. They are listed after the hub's, `project: true`, read-only in the view; one with the name of a
+  hub's saved search is not listed again (the hub's is, `shared: true`).
+- `search/saved/share {root, name}` → `{path}` writes the hub's saved search into that file on the user's click: the
+  form of that name is replaced where it stands, else appended, every other byte kept (comments too); the new file is a
+  temporary file beside it, synced, then renamed over it, with the old file's mode. A file the reader refuses is not
+  touched (`invalid-params`).
+
+### Git scopes (`search/scope-bases`)
+
+Which files the Search view's git scopes search (`search/scope.rs`), read with the trusted git (`draugr::git`, a
+read-only call): Changed is the working tree's modified, added and untracked files (`status --porcelain=v2 -z
+--untracked-files=all`, ignored left out); Staged the files whose index entry differs from HEAD (their working-tree
+text is what is searched); Branch the files changed between the merge base of HEAD and a base (`merge-base`, `diff
+--raw -z -M BASE`) and the untracked ones. A rename is searched at its new path; deleted files and submodules are
+counted, not searched; a linked worktree is its own top level; an empty list says why ("nothing staged"). Branch's
+base when none is chosen is the upstream, else `main`, else `master`; a detached HEAD or an unborn branch has none, so
+the view asks. Changed lines only (`±`) keeps a match whose lines meet an added-side hunk (`diff -U0`, against HEAD,
+the index, or the merge base); a deleted-only hunk keeps nothing; a new file counts whole; Staged takes the
+working-tree hunks of a file that also has unstaged changes. A git child, not gix: the workspace's gix has no
+`status` feature, and Branch needs a merge base and a diff anyway.
+
+- `search/scope-bases {root}` → `{current?, upstream?, default?, recent, detached}`: the Branch menu (the 20 branches
+  most recently committed to, local and remote, without the current one).
 
 ### Git letters as rows (`git/letters`)
 
@@ -2444,7 +2536,7 @@ and the ranking are `hrafn::rank`).
   applies every `.gitignore` it meets (a deeper file decides first, the last matching line of a file wins, `!` keeps,
   a trailing `/` names folders, a leading or inner `/` anchors to the file's folder). No file is read: binary, large
   and linked files are names like any other. The exclude globs of `.drgnx/search.eld` and `drgnx-search-exclude`
-  apply, and `ignore` as for `search/grep` (dot paths and secret-looking names out under `index`, listed under `real`).
+  apply, and `ignore` as for `search/run` (dot paths and secret-looking names out under `index`, listed under `real`).
 - **The ranking.** Every word of `query` (case-insensitive) is in the path; a basename that starts with the first
   word and holds them all first, then a basename that holds them all, then a path that does; shorter, then by path,
   among equals. A query checks its cancel flag every 4096 names.
@@ -2464,6 +2556,14 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
   trailing slash) that is shown, and sends the view its model (`view-model`), then its rows to every class: the first
   listing a reset, a later one the difference. The editor opens or closes a folder by asking again with the new set,
   without waiting; a listing a newer one stopped sends nothing. A folder that cannot be read has no entries.
+- **Watching.** After its listing the thread watches every folder it read (the roots, the open folders and the
+  middle folders of a joined row; `notify`, one folder each, not recursive, so a closed folder's changes send nothing)
+  until a newer listing, `view/close` or the connection's end, which stop it through its channel (the watcher goes
+  with the thread; nothing polls). A burst of changes (a name made, removed or renamed; a file's data or metadata does
+  not count) is read again once it is quiet for 30 ms, or 100 ms after its first change: only the changed folders are
+  read, the others come from the listing's own copy, and the model and rows go out as for a listing when the entries
+  differ. A watch that lost events reads every folder again; a folder that cannot be watched (the inotify limit) is
+  tried again at the next relisting. The editor adds no watch of its own on this path (`drgnx-explorer--sync-watches`).
 - **The entries.** Folders first, then names in natural, case-insensitive order (`file2` before `file10`); a link to a
   folder is a folder. `.git`, `.hg`, `.svn`, `.DS_Store`, `__pycache__` and `.#…` lock files never show. With
   `compact` (default on), an open folder whose only entry is a folder shares its row with it (`src/app`, the node being

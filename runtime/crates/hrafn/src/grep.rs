@@ -440,6 +440,32 @@ pub fn run_with(
     }
 }
 
+/// Q's matches in TEXT, the contents of FILE held elsewhere (an editor's buffer with unsaved edits): line by line, as
+/// the fallbacks match a printed line. An empty text finds nothing.
+pub fn search_text(q: &Query, file: &str, text: &str) -> Result<Vec<Match>, String> {
+    if q.text.is_empty() {
+        return Ok(Vec::new());
+    }
+    let re = line_regex(q)?;
+    Ok(text
+        .split('\n')
+        .zip(1..)
+        .flat_map(|(line, n)| line_matches(&re, file, n, line.strip_suffix('\r').unwrap_or(line)))
+        .collect())
+}
+
+/// RE's matches in TEXT, line N of FILE (without its newline).
+pub fn line_matches(re: &regex::Regex, file: &str, n: u32, text: &str) -> Vec<Match> {
+    re.find_iter(text)
+        .map(|m| make(file, n, text, m.start(), m.end()))
+        .collect()
+}
+
+/// The match at bytes `[from, to)` of TEXT, line N of FILE, with its context.
+pub fn match_at(file: &str, n: u32, text: &str, from: usize, to: usize) -> Match {
+    make(file, n, text, from, to)
+}
+
 /// Search Q with the backend its root has.
 pub fn run(q: &Query, cancel: &AtomicBool, on_file: impl FnMut(Vec<Match>)) -> Result<(), String> {
     run_with(backend(&q.root), q, cancel, on_file)
@@ -554,6 +580,41 @@ mod tests {
             Some(r"12-ab ab-12 \".into())
         );
         assert_eq!(new_text(&query, "nope", "x"), None);
+    }
+
+    #[test]
+    fn a_text_held_elsewhere_is_searched_line_by_line() {
+        let mut query = q(Path::new("/r"), "needle");
+        let text = "one needle\r\nNEEDLE é needle\nnone\nneedles";
+        let ms = search_text(&query, "/r/a.txt", text).unwrap();
+        assert_eq!(
+            ms.iter()
+                .map(|m| (m.file.as_str(), m.line, m.col, m.end))
+                .collect::<Vec<_>>(),
+            [
+                ("/r/a.txt", 1, 4, 10),
+                ("/r/a.txt", 2, 0, 6),
+                ("/r/a.txt", 2, 9, 15),
+                ("/r/a.txt", 4, 0, 6)
+            ]
+        );
+        assert_eq!((ms[0].before.as_str(), ms[0].after.as_str()), ("one ", ""));
+        assert_eq!(ms[2].before, "NEEDLE é ");
+        query.case = true;
+        query.word = true;
+        let ms = search_text(&query, "/r/a.txt", text).unwrap();
+        assert_eq!(
+            ms.iter().map(|m| (m.line, m.col)).collect::<Vec<_>>(),
+            [(1, 4), (2, 9)]
+        );
+        assert!(
+            search_text(&q(Path::new("/r"), ""), "/r/a.txt", text)
+                .unwrap()
+                .is_empty()
+        );
+        let mut bad = q(Path::new("/r"), "(");
+        bad.regexp = true;
+        assert!(search_text(&bad, "/r/a.txt", text).is_err());
     }
 
     #[test]

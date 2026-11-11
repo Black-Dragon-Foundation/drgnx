@@ -10,9 +10,8 @@
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defun drgnx-replace-test--run (query)
-  "QUERY's matches in the files under its root, made as the rescan of a modified buffer makes them (each matching line
-through `drgnx-replace--grep-line'): (MATCHES . (:done)).  The hub searches the text (search/grep); here only the
-writing is tested."
+  "QUERY's matches in the files under its root, each of the pattern in each line (`drgnx-replace--match'): (MATCHES .
+\(:done)).  The hub searches the text (search/run); here only the writing is tested."
   (let* ((root (plist-get query :root)) (case (plist-get query :case)) (regexp (plist-get query :regexp))
          (text (plist-get query :text))
          (re (drgnx-replace--line-regexp query))
@@ -25,8 +24,12 @@ writing is tested."
         (let ((case-fold-search (not case)) (n 0))
           (dolist (line (split-string (buffer-string) "\n"))
             (setq n (1+ n))
-            (when (with-syntax-table drgnx-replace--syntax (string-match-p re line))
-              (setq matches (append matches (drgnx-replace--grep-line (format "%s\0%d:%s" file n line) root re case extra))))))))
+            (let ((line (string-trim-right line "\r")) (start 0))
+              (with-syntax-table drgnx-replace--syntax
+                (while (and (<= start (length line)) (string-match re line start))
+                  (setq matches (append matches (list (drgnx-replace--match file n line (match-beginning 0)
+                                                                            (match-end 0) extra)))
+                        start (max (match-end 0) (1+ (match-beginning 0)))))))))))
     (cons matches (list :done))))
 
 (defun drgnx-replace-test--read (file)
