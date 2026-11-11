@@ -1281,7 +1281,7 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                       "                             :condition (and (= 0 (% i 3)) \"x > 1\") :log (and (= 0 (% i 11)) \"{x}\")))"
                       "           (number-sequence 1 300)))) t)")
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
-       :check "(seq-some (lambda (o) (overlay-get o 'drgnx-debug-hover)) (overlays-in (window-start) (window-end)))"   ; the hover pool was laid out
+       :check "(with-current-buffer (window-buffer) (and (seq-some (lambda (o) (overlay-get o 'drgnx-debug-hover)) (overlays-in (window-start) (window-end))) t))"   ; the hover pool was laid out
        :teardown ,(concat "(progn (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
       ;; F9 on 20 lines in a row: each key a `debug/breakpoints' add, its answer and the column redrawn
       (debug-breakpoint-click
