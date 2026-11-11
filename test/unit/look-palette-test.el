@@ -149,12 +149,21 @@ which would put every row in twice, so a candidate row and a group title start w
     (should (= (funcall width other 0) (drgnx-px (+ drgnx-completion-row-inset drgnx-palette-row-padding))))))
 
 (ert-deftest drgnx-look-palette/the-input-row-owns-its-inset ()
-  "palette.html `.in': the search icon sits 14 logical pixels in, as a row's text.  The palette's input row starts with
-its own inset (`drgnx-palette-frame--lead') and an empty `line-prefix', so the echo box's prefix on the same minibuffer
-does not put it in twice."
-  (let ((lead (drgnx-palette-frame--lead)))
-    (should (equal "" (get-text-property 0 'line-prefix lead)))
-    (should (equal `(space :width (,(drgnx-px (+ 6 drgnx-palette-row-padding)))) (get-text-property 0 'display lead)))))
+  "palette.html `.in': the search icon sits 14 logical pixels in, as a row's text.  The palette's prompt overlay brings
+its own inset and an empty `line-prefix' over the line's start, so the echo box's prefix on the same minibuffer does
+not put the input row in twice (a prefix in the overlay's string comes too late: the line starts at the buffer text)."
+  (let ((win (selected-window)) (mode (window-parameter (selected-window) 'mode-line-format)))
+    (with-temp-buffer
+      (set-window-buffer win (current-buffer))
+      (insert "run te")
+      (unwind-protect
+          (progn (drgnx-palette-frame--dress win)
+                 (let ((ov (car drgnx-palette-frame--dressing)))
+                   (should (equal "" (overlay-get ov 'line-prefix)))
+                   (should (= (overlay-start ov) (point-min)))
+                   (should (equal "" (get-char-property (point-min) 'line-prefix)))))
+        (drgnx-palette-frame--undress)
+        (set-window-parameter win 'mode-line-format mode)))))
 
 (ert-deftest drgnx-look-palette/secondary-text-on-the-current-row-is-muted ()
   "Pattern D, the look's contrast rule: on the current candidate, text in the subtle colour (a keycap, an

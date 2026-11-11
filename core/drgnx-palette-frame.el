@@ -135,9 +135,8 @@ the palette's frame shows it, whichever of the two ran first)."
   "(PROMPT-OVERLAY HINT . FACE-REMAP-COOKIES) of the minibuffer the palette's frame shows, while it shows it.")
 
 (defun drgnx-palette-frame--lead ()
-  "The room before the input row's icon and the footer: a row's inset and padding.  With an empty `line-prefix': the
-echo box gives the same minibuffer its input row's inset as a prefix, which would put the input row in twice."
-  (propertize " " 'display `(space :width (,(drgnx-px (+ 6 drgnx-palette-row-padding)))) 'line-prefix ""))
+  "The room before the input row's icon and the footer: a row's inset and padding."
+  (propertize " " 'display `(space :width (,(drgnx-px (+ 6 drgnx-palette-row-padding))))))
 
 (defun drgnx-palette-frame--hint ()
   "The input row's hint at the right edge: what the palette searches, `#' for a code question and, when an agent can
@@ -169,6 +168,8 @@ echo area keeps the minibuffer as it is."
     ;; an image inside an overlay's `display' string is not drawn: the prompt is hidden and the icon is a before-string
     (overlay-put prompt 'window win)
     (overlay-put prompt 'invisible t)
+    ;; the echo box gives this minibuffer the input row's inset as its `line-prefix': the lead below is that inset
+    (overlay-put prompt 'line-prefix "")
     (overlay-put prompt 'before-string
                  (concat (drgnx-palette-frame--lead) (drgnx-look-icon 'search 'drgnx-text-subtle) " "))
     (set-window-parameter win 'mode-line-format (drgnx-palette-frame--footer))
