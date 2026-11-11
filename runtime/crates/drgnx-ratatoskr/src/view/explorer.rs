@@ -596,12 +596,27 @@ pub fn explorer_rows(
 }
 
 /// What a listing's thread hears after its listing: changed paths, a watch that lost events (read every folder
-/// again), or the end of the listing.
+/// again), a new subscribe of its view (list again as that says), or the end of the listing.
 pub(crate) enum Heard {
     Changed(Vec<PathBuf>),
     Rescan,
+    Relist(Box<Listing>),
     Stop,
 }
+
+/// What one listing of a view lists: its number, the roots, the open folders, whether chains join, the names left out.
+#[derive(Clone, Debug)]
+pub(crate) struct Listing {
+    pub id: u64,
+    pub roots: Vec<PathBuf>,
+    pub expanded: HashSet<String>,
+    pub compact: bool,
+    pub exclude: Exclude,
+}
+
+/// Folders a listing's thread keeps read (and watched) beyond the ones its listing shows: closed ones, so opening one
+/// again reads nothing.
+const KEPT_CLOSED: usize = 64;
 
 /// A watcher sending what it sees in the folders it is given to TX. A change of a file's data or metadata is not
 /// sent (the listing shows names only).
@@ -645,75 +660,90 @@ fn rewatch(
     }
 }
 
-/// List ROOTS (EXPANDED open, COMPACT joining chains, EXCLUDE's names left out) and hand the entries to SEND; then watch every folder that listing
-/// read and, after each burst of changes settles (`SETTLE`, at most `SETTLE_MAX`), read the changed folders again and
-/// hand over the entries when they differ from the last (SEND's second argument says the watch found them). The
-/// watcher sends on CHAN's sender; its receiver hears it and `Heard::Stop`. Ends
+/// List AT (its roots, its open folders, chains joined when it says, its names left out) and hand the entries to SEND;
+/// then watch every folder read and, after each burst of changes settles (`SETTLE`, at most `SETTLE_MAX`), read the
+/// changed folders again and hand over the entries when they differ from the last (SEND's third argument says the watch
+/// found them). A `Heard::Relist` (a new subscribe of the view) lists again at once as it says, from the folders read
+/// so far, and is always handed over: the thread, its watcher and what it has read last the view's whole life, so
+/// opening a folder again reads nothing and no change falls between two watchers (the closed folders kept are at most
+/// [`KEPT_CLOSED`]). The watcher sends on CHAN's sender; its receiver hears it, the relistings and `Heard::Stop`. Ends
 /// on `Heard::Stop`, CANCEL, a closed channel, or SEND answering false; the watcher goes with it.
 pub(crate) fn list_and_watch(
-    roots: &[PathBuf],
-    expanded: &HashSet<String>,
-    compact: bool,
-    exclude: &Exclude,
+    first: Listing,
     cancel: &AtomicBool,
     (tx, rx): (Sender<Heard>, Receiver<Heard>),
-    send: &mut dyn FnMut(Vec<Entry>, bool) -> bool,
+    send: &mut dyn FnMut(&Listing, Vec<Entry>, bool) -> bool,
 ) {
+    let mut at = first;
     let mut cache: Folders = HashMap::new();
-    let list = |cache: &mut Folders| {
-        list_tree(roots, expanded, compact, cancel, &mut |d| {
+    // the listing's entries, and the folders it read (from the cache or the disk)
+    let list = |at: &Listing, cache: &mut Folders| {
+        let mut used = HashSet::new();
+        let entries = list_tree(&at.roots, &at.expanded, at.compact, cancel, &mut |d| {
+            used.insert(d.to_path_buf());
             cache
                 .entry(d.to_path_buf())
-                .or_insert_with(|| read_folder(d, exclude))
+                .or_insert_with(|| read_folder(d, &at.exclude))
                 .clone()
-        })
+        });
+        entries.map(|e| (e, used))
     };
-    let Some(mut last) = list(&mut cache) else {
+    let Some((mut last, _)) = list(&at, &mut cache) else {
         return;
     };
     // watched before the listing goes out: a change made once it is seen is never missed
     let mut w = watcher(tx);
     let mut watching = HashSet::new();
     rewatch(&mut w, &mut watching, cache.keys().cloned().collect());
-    if !send(last.clone(), false) {
+    if !send(&at, last.clone(), false) {
         return;
     }
     loop {
-        let (mut dirty, mut all) = (HashSet::new(), false);
-        let hear = |h: Heard, dirty: &mut HashSet<PathBuf>, all: &mut bool| match h {
-            Heard::Changed(paths) => {
-                for p in paths {
-                    if let Some(parent) = p.parent() {
-                        dirty.insert(parent.to_path_buf());
+        let (mut dirty, mut all, mut next) = (HashSet::new(), false, None);
+        let hear = |h: Heard,
+                    dirty: &mut HashSet<PathBuf>,
+                    all: &mut bool,
+                    next: &mut Option<Box<Listing>>| {
+            match h {
+                Heard::Changed(paths) => {
+                    for p in paths {
+                        if let Some(parent) = p.parent() {
+                            dirty.insert(parent.to_path_buf());
+                        }
+                        dirty.insert(p);
                     }
-                    dirty.insert(p);
                 }
-                true
+                Heard::Rescan => *all = true,
+                Heard::Relist(l) => *next = Some(l),
+                Heard::Stop => return false,
             }
-            Heard::Rescan => {
-                *all = true;
-                true
-            }
-            Heard::Stop => false,
+            true
         };
         let Ok(h) = rx.recv() else { return };
-        if !hear(h, &mut dirty, &mut all) {
+        if !hear(h, &mut dirty, &mut all, &mut next) {
             return;
         }
+        // a burst settles; a relisting does not wait (the editor waits for it), but takes what is already heard
         let end = Instant::now() + SETTLE_MAX;
         loop {
             let left = end.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                break;
-            }
-            match rx.recv_timeout(SETTLE.min(left)) {
-                Ok(h) => {
-                    if !hear(h, &mut dirty, &mut all) {
-                        return;
-                    }
+            let h = if next.is_some() {
+                match rx.try_recv() {
+                    Ok(h) => h,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
                 }
-                Err(RecvTimeoutError::Disconnected) => return,
-                Err(RecvTimeoutError::Timeout) => break,
+            } else if left.is_zero() {
+                break;
+            } else {
+                match rx.recv_timeout(SETTLE.min(left)) {
+                    Ok(h) => h,
+                    Err(RecvTimeoutError::Disconnected) => return,
+                    Err(RecvTimeoutError::Timeout) => break,
+                }
+            };
+            if !hear(h, &mut dirty, &mut all, &mut next) {
+                return;
             }
         }
         if cancel.load(Ordering::Relaxed) {
@@ -724,10 +754,22 @@ pub(crate) fn list_and_watch(
         } else {
             cache.retain(|d, _| !dirty.contains(d));
         }
-        let Some(now) = list(&mut cache) else { return };
+        let relisted = next.is_some();
+        if let Some(l) = next {
+            if l.exclude != at.exclude {
+                cache.clear();
+            }
+            at = *l;
+        }
+        let Some((now, used)) = list(&at, &mut cache) else {
+            return;
+        };
+        if cache.len() > used.len() + KEPT_CLOSED {
+            cache.retain(|d, _| used.contains(d));
+        }
         rewatch(&mut w, &mut watching, cache.keys().cloned().collect());
-        if now != last {
-            if !send(now.clone(), true) {
+        if relisted || now != last {
+            if !send(&at, now.clone(), !relisted) {
                 return;
             }
             last = now;
@@ -753,6 +795,8 @@ struct Run {
     entries: Option<Arc<Vec<Entry>>>,
     shape: Shape,
     around: Option<String>,
+    /// Its thread watches (`list_and_watch`) and takes a new subscribe as a `Heard::Relist`; a Find's does not.
+    watch: bool,
 }
 
 impl Run {
@@ -774,12 +818,32 @@ pub(super) struct Explorers {
 impl Explorers {
     /// Start VIEW's listing (the one before is stopped): its number, cancel flag and channel (the watcher's sending
     /// end, and the end its thread hears on). The entries sent so far stay.
+    /// Hand VIEW's watching thread a new subscribe (LISTING as made by MAKE from its new number) with its SHAPE and
+    /// AROUND: its number, or none when VIEW has no such thread (none yet, a Find's, or it ended).
+    fn relist(
+        &self,
+        conn: u64,
+        view: &str,
+        shape: Shape,
+        around: Option<String>,
+        make: impl FnOnce(u64) -> Listing,
+    ) -> Option<u64> {
+        let mut runs = lock(&self.runs);
+        let run = runs.get_mut(&(conn, view.to_owned())).filter(|r| r.watch)?;
+        let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
+        // sent under the lock: two subscribes reach the thread in the order their numbers were given
+        run.stop.send(Heard::Relist(Box::new(make(id)))).ok()?;
+        (run.id, run.shape, run.around) = (id, shape, around);
+        Some(id)
+    }
+
     fn start(
         &self,
         conn: u64,
         view: &str,
         shape: Shape,
         around: Option<String>,
+        watch: bool,
     ) -> (u64, Arc<AtomicBool>, Sender<Heard>, Receiver<Heard>) {
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         let cancel = Arc::new(AtomicBool::new(false));
@@ -798,6 +862,7 @@ impl Explorers {
                 entries,
                 shape,
                 around,
+                watch,
             },
         );
         (id, cancel, tx, rx)
@@ -1059,7 +1124,25 @@ pub fn subscribe(f: &Front, c: &Caller, p: ExplorerParams) -> Result<ExplorerSta
     };
     let around = p.around.map(|a| root_id(Path::new(a.as_str())));
     let (conn, view) = (c.conn_id, p.view);
-    let (id, cancel, tx, rx) = views.explorers.start(conn, &view, shape, around);
+    let listing = |id| Listing {
+        id,
+        roots: roots.clone(),
+        expanded: expanded.clone(),
+        compact,
+        exclude: exclude.clone(),
+    };
+    // the view's watching thread lists again (what it has read and watches stays); else a thread of its own
+    if only.is_none()
+        && let Some(id) = views
+            .explorers
+            .relist(conn, &view, shape, around.clone(), listing)
+    {
+        return Ok(ExplorerStarted { listing: id });
+    }
+    let (id, cancel, tx, rx) = views
+        .explorers
+        .start(conn, &view, shape, around, only.is_none());
+    let first = listing(id);
     let Some(front) = views.front.get().cloned() else {
         return Err(invalid("view", "the hub is starting"));
     };
@@ -1077,23 +1160,19 @@ pub fn subscribe(f: &Front, c: &Caller, p: ExplorerParams) -> Result<ExplorerSta
                 }
                 return;
             }
-            list_and_watch(
-                &roots,
-                &expanded,
-                compact,
-                &exclude,
-                &cancel,
-                (tx, rx),
-                &mut |entries, watched| {
-                    front.upgrade().is_some_and(|f| {
-                        // a name made or removed outside Emacs may change git's status too
-                        if watched {
-                            f.core.views.letters.poke(conn, &roots);
-                        }
-                        f.core.views.explorer_listed(&f, conn, &view, id, entries)
-                    })
-                },
-            );
+            list_and_watch(first, &cancel, (tx, rx), &mut |at, entries, watched| {
+                front.upgrade().is_some_and(|f| {
+                    // a name made or removed outside Emacs may change git's status too
+                    if watched {
+                        f.core.views.letters.poke(conn, &at.roots);
+                    }
+                    // a listing a newer subscribe overtook is dropped; the thread goes on (the newer one is queued)
+                    f.core
+                        .views
+                        .explorer_listed(&f, conn, &view, at.id, entries);
+                    true
+                })
+            });
         })
         .map_err(|e| invalid("view", &e.to_string()))?;
     Ok(ExplorerStarted { listing: id })

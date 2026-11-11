@@ -2142,7 +2142,13 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   off. With the hub not up yet the buffer shows a line saying it waits (`drgnx-explorer--waiting`) and fills when the
   hub connects (the env's reconnect subscribes again); nothing is listed in Lisp. Next and previous follow `down` and
   `up`, expand on an open folder follows `right` and collapse on anything but an open folder `left`; opening or closing
-  a folder changes `drgnx-explorer--expanded` and asks the hub again without waiting; typing is Sjá's `prefix` over the
+  a folder changes `drgnx-explorer--expanded` and asks the hub again. In the user's commands that open, close or
+  reveal (`drgnx-explorer--await` bound: expand, collapse, toggle, open, a click, the Buffers view's reveal) the command
+  then reads the subscribed connection alone for the answer, at most `drgnx-explorer-await-limit` (12 ms,
+  `with-local-quit`), and draws it before returning, so the rows show in the key's own frame as the Lisp listing's
+  did; past the limit, and in every timer, hook or follower path, the answer is drawn when it comes. The tail overlays
+  (the ⋯ control, the git mark) are made only for rows within a page of what a window shows, the rest when scrolled to
+  (`drgnx-explorer--rows-tails-in`); typing is Sjá's `prefix` over the
   visible siblings; a row's node (`drgnx-explorer-node-at`) is the path over it, so the file commands work as before.
   A key first selects the row at point (a click moved it). Marks are Sjá's ticked set (class `ticked`), Find asks for
   the found files only (`only`), Refresh and a reveal ask again. **A remote root** keeps the Lisp listing

@@ -4,6 +4,7 @@
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-actions)
+(setq drgnx-explorer--lisp-listing t)       ; the Lisp listing (a remote root's, plan sja-complete Q3): on local folders here
 
 (defmacro drgnx-actions-test--with (root &rest body)
   "BODY with an Explorer rooted at ROOT (a.txt, sub/b.txt), the Buffers panel, rules on."

@@ -748,7 +748,10 @@ when its row is drawn, else when the listing that holds it arrives."
             (unless (gethash dir drgnx-explorer--expanded) (puthash dir t drgnx-explorer--expanded) (setq asked t)))
           (let ((drawn (drgnx-view-row-start drgnx-view file)))
             ;; a row outside the hub's window is asked for with the window moved to it
-            (when (or asked (not drawn)) (drgnx-explorer--subscribe nil file))
+            (when (or asked (not drawn))
+              (drgnx-explorer--subscribe nil file)
+              (drgnx-explorer--await-answer)          ; a user's reveal: drawn (and selected) in its own frame
+              (setq drawn (drgnx-view-row-start drgnx-view file)))
             (if drawn
                 (progn (setq drgnx-explorer--reveal-pending nil) (drgnx-view-nav 'select file))
               (setq drgnx-explorer--reveal-pending file)))
@@ -962,6 +965,46 @@ The marks and colours of an ordinal are the display's: who is here (tools/agents
       (overlay-put o 'priority 5)
       (overlay-put o 'before-string s))))
 
+(defun drgnx-explorer--rows-tail (key beg eol)
+  "Give KEY's drawn row (BEG to EOL) its tail at the right edge, its overlay moved rather than made again: the ⋯
+control and the hover, and the git mark of the status the hub put on the name (a file's letter, ● for a folder with
+changes inside)."
+  (let* ((status (and (< beg eol) (intern-soft (get-text-property (1- eol) 'drgnx-git-status))))
+         (status (and (assq status drgnx-git--looks) status))
+         (mark (and status (if (and (not (memq status '(ignored untracked)))
+                                    (eql 1 (drgnx-view-nav-field "dir" key)))
+                               "●" (car (drgnx-git-look status)))))
+         (o (drgnx-wb-row-tail-overlay eol mark (and mark (drgnx-wb-git-mark-face status)) nil
+                                       (gethash key drgnx-explorer--tails))))
+    (overlay-put o 'evaporate t)
+    (puthash key o drgnx-explorer--tails)))
+
+(defun drgnx-explorer--shown-spans ()
+  "Where this buffer's rows get tails: for each window showing it, (FROM . TO) from a page above its start to two pages
+below it; t when no window shows it (every row)."
+  (or (mapcar (lambda (w) (drgnx-explorer--span (window-start w) (window-body-height w)))
+              (get-buffer-window-list nil nil t))
+      t))
+
+(defun drgnx-explorer--span (start page)
+  "(FROM . TO): a PAGE of lines above START to two below it."
+  (save-excursion
+    (goto-char start)
+    (cons (progn (forward-line (- page)) (point))
+          (progn (goto-char start) (forward-line (* 2 page)) (point)))))
+
+(defun drgnx-explorer--rows-tails-in (window start)
+  "The rows near what WINDOW shows from START (`drgnx-explorer--span') that have no tail get one (after a scroll)."
+  (when drgnx-explorer--tails
+    (let ((span (drgnx-explorer--span start (window-body-height window))))
+      (save-excursion
+        (goto-char (car span))
+        (while (< (point) (cdr span))
+          (when-let* ((key (get-text-property (point) drgnx-view-patch-id-prop))
+                      ((not (when-let* ((o (gethash key drgnx-explorer--tails))) (overlay-buffer o)))))
+            (drgnx-explorer--rows-tail key (point) (pos-eol)))
+          (forward-line 1))))))
+
 (defun drgnx-explorer--rows-patched (view keys)
   "`drgnx-view-patch-patched-functions' of the Explorer: the drawn rows KEYS get their tail at the right edge (the ⋯
 control and the hover, the git mark of the status the hub put on the name: a file's letter, ● for a folder with
@@ -969,21 +1012,18 @@ changes inside) and their who-is-here badge after the name (`drgnx-explorer--row
 rather than made again.  A tail goes with its row's text (`evaporate'): a removed or redrawn row's is gone, and a
 redrawn row gets a new one; a badge of a row that went is deleted here."
   (when drgnx-explorer--waiting (delete-overlay drgnx-explorer--waiting) (setq drgnx-explorer--waiting nil))
-  (let ((tails (or drgnx-explorer--tails (setq drgnx-explorer--tails (make-hash-table :test #'equal)))))
+  (let ((tails (or drgnx-explorer--tails (setq drgnx-explorer--tails (make-hash-table :test #'equal))))
+        (spans (drgnx-explorer--shown-spans)))
     (dolist (key keys)
       (let ((beg (drgnx-view-row-start view key)) (o (gethash key tails)))
         (if (not beg)
             (progn (when o (delete-overlay o) (remhash key tails))
                    (drgnx-explorer--rows-badge key nil nil))
-          (let* ((eol (save-excursion (goto-char beg) (pos-eol)))
-                 (status (and (< beg eol) (intern-soft (get-text-property (1- eol) 'drgnx-git-status))))
-                 (status (and (assq status drgnx-git--looks) status))
-                 (mark (and status (if (and (not (memq status '(ignored untracked)))
-                                            (eql 1 (drgnx-view-nav-field "dir" key)))
-                                       "●" (car (drgnx-git-look status))))))
-            (setq o (drgnx-wb-row-tail-overlay eol mark (and mark (drgnx-wb-git-mark-face status)) nil o))
-            (overlay-put o 'evaporate t)
-            (puthash key o tails)
+          (let ((eol (save-excursion (goto-char beg) (pos-eol))))
+            ;; a tail only near what a window shows (as the Lisp listing's fontify made them); the others when scrolled to
+            (if (or (eq spans t) (seq-some (lambda (s) (<= (car s) beg (cdr s))) spans))
+                (drgnx-explorer--rows-tail key beg eol)
+              (when o (delete-overlay o) (remhash key tails)))
             (drgnx-explorer--rows-badge key eol (and (< beg eol) (get-text-property (1- eol) 'drgnx-agents-here)))))))
     (when (> (hash-table-count tails) (drgnx-view-row-count view))
       (maphash (lambda (key o) (unless (overlay-buffer o) (remhash key tails))) tails))
@@ -1021,11 +1061,13 @@ redrawn row gets a new one; a badge of a row that went is deleted here."
 (defvar-local drgnx-explorer--asked-from nil "The `from' the last `view/window' the scroll asked for named.")
 
 (defun drgnx-explorer--rows-scrolled (window start)
-  "`window-scroll-functions' on the rows path: WINDOW scrolled to START.  Within a page of the end of the rows held
+  "`window-scroll-functions' on the rows path: WINDOW scrolled to START.  The rows near it without a tail get one
+\(`drgnx-explorer--rows-tails-in').  Within a page of the end of the rows held
 (past which the listing has more) the hub is asked for the window half of it further on; within a page of their start
 (with entries before them), half of it back.  Each `from' is asked once; the rows that go and come keep the shown ones
 in place (window starts are markers)."
   (with-current-buffer (window-buffer window)
+    (drgnx-explorer--rows-tails-in window start)
     (when-let* ((drgnx-view-patch) (h (drgnx-view-patch-handle drgnx-view-patch))
                 (w (nidhogg-view-get h 'window "order")))
       (let* ((from (nth 0 w)) (len (nth 1 w)) (total (nth 2 w))
@@ -1053,14 +1095,38 @@ in place (window starts are markers)."
   (when-let* ((id) (h (drgnx-view-patch-handle drgnx-view-patch))) (eql 1 (nidhogg-view-get h 'open id))))
 
 (defun drgnx-explorer--rows-toggle (id)
-  "Open or close the folder ID (a root stays open): the set changes now, the hub is asked again."
+  "Open or close the folder ID (a root stays open): the set changes now, the hub is asked again (in a user's command,
+its answer is waited for: `drgnx-explorer--await')."
   (when (and id (eql 1 (drgnx-view-nav-field "dir" id))
              (not (equal "root" (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'kind id))))
     (if (gethash id drgnx-explorer--expanded)
         (remhash id drgnx-explorer--expanded)
       (puthash id t drgnx-explorer--expanded))
     (drgnx-explorer--subscribe)
+    (drgnx-explorer--await-answer)
     t))
+
+(defvar drgnx-explorer--await nil
+  "Non-nil (bound by the commands that open, close or reveal a folder): the hub's answer is waited for inside the
+command, at most `drgnx-explorer-await-limit', and drawn before its redisplay.  Never bound in a timer, hook or other
+automatic path (the follower's reveal does not wait).")
+
+(defvar drgnx-explorer-await-limit 0.012
+  "Seconds a user's command waits for the hub's listing (`drgnx-explorer--await-answer'): within it the rows show in the
+key's own frame, as the Lisp listing's did; past it they come when the hub answers.")
+
+(defun drgnx-explorer--await-answer ()
+  "In a user's command (`drgnx-explorer--await'), after asking the hub: read the subscribed connection alone until a
+row patch for this buffer comes, at most `drgnx-explorer-await-limit' (\\[keyboard-quit] stops it), and draw it now, in
+the command, so the key's redisplay shows it.  Past the limit nothing more is done: the answer is drawn when it comes."
+  (when-let* ((drgnx-explorer--await) (state drgnx-view-patch)
+              ((boundp 'drgnx-hub--events)) (proc drgnx-hub--events) ((process-live-p proc)))
+    (let ((before (drgnx-view-patch-version state)) (end (+ (float-time) drgnx-explorer-await-limit)))
+      (with-local-quit
+        (while (and (eql before (drgnx-view-patch-version state)) (< (float-time) end))
+          (accept-process-output proc (max 0.001 (- end (float-time))) nil t)))
+      (unless (eql before (drgnx-view-patch-version state))
+        (drgnx-view-draw-now drgnx-view)))))
 
 (defun drgnx-explorer--rows-key (key)
   "KEY (`next' `previous' `expand' `collapse') on the rows path, answered from the model."
@@ -1198,7 +1264,7 @@ tree's visible rows in order."
   "Expand the folder at point; on an expanded folder, go to its first child."
   (interactive)
   (if (drgnx-explorer--rows-p)
-      (drgnx-explorer--rows-key 'expand)
+      (let ((drgnx-explorer--await t)) (drgnx-explorer--rows-key 'expand))
     (drgnx-explorer--expand-old)))
 
 (defun drgnx-explorer--expand-old ()
@@ -1212,7 +1278,7 @@ tree's visible rows in order."
   "Collapse the folder at point; otherwise go to the parent folder."
   (interactive)
   (if (drgnx-explorer--rows-p)
-      (drgnx-explorer--rows-key 'collapse)
+      (let ((drgnx-explorer--await t)) (drgnx-explorer--rows-key 'collapse))
     (drgnx-explorer--collapse-old)))
 
 (defun drgnx-explorer--collapse-old ()
@@ -1226,11 +1292,11 @@ tree's visible rows in order."
         (forward-line (- j i))))))
 
 (defun drgnx-explorer-open () "Open the file (focus the editor) or toggle the folder at point."
-       (interactive) (drgnx-explorer-activate (point)))
+       (interactive) (let ((drgnx-explorer--await t)) (drgnx-explorer-activate (point))))
 (defun drgnx-explorer-preview () "Open the file at point, keeping the Explorer focused."
-       (interactive) (drgnx-explorer-activate (point) t))
+       (interactive) (let ((drgnx-explorer--await t)) (drgnx-explorer-activate (point) t)))
 (defun drgnx-explorer-toggle () "Expand or collapse the folder at point."
-       (interactive) (let ((drgnx-explorer--remote-reads t)) (drgnx-explorer-toggle-at (point))))
+       (interactive) (let ((drgnx-explorer--remote-reads t) (drgnx-explorer--await t)) (drgnx-explorer-toggle-at (point))))
 
 (defun drgnx-explorer-focus () "Show the sidebar and focus the Explorer."
        (interactive) (drgnx-wb-focus-section 'explorer))
@@ -1812,7 +1878,9 @@ is read.  File events and timers read none."
   (setq drgnx-explorer--pressed nil)
   (drgnx-explorer--clear-selection)
   (let ((pos (posn-point (event-end event))))
-    (when (integer-or-marker-p pos) (drgnx-explorer--goto-in-place pos) (drgnx-explorer-activate pos t))))
+    (when (integer-or-marker-p pos)
+      (drgnx-explorer--goto-in-place pos)
+      (let ((drgnx-explorer--await t)) (drgnx-explorer-activate pos t)))))
 
 (defun drgnx-explorer-mouse-double (event)
   "Double click: on a file, focus the editor (the first click opened it); on a folder, nothing

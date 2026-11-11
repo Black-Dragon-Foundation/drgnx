@@ -309,8 +309,69 @@ rows' end asks `view/window' half the window on, once; with the window at 100, a
         (drgnx-view-apply-patch (list :view view :class "c" :hub 7 :base 2 :version 3 :env_epoch 0 :model 3
                                       :ops (list (list :reset (funcall rows 100)))))
         (drgnx-view-draw-now drgnx-view)
-        (drgnx-explorer--rows-scrolled w (point-min))
-        (should (equal 70 (plist-get (cdar sent) :from)))))))
+        ;; shown: tails only near what the window shows; a scroll gives the rows it reaches theirs
+        (let ((tailed (lambda (id) (when-let* ((o (gethash id drgnx-explorer--tails))) (overlay-buffer o)))))
+          (should (funcall tailed "/r/f100"))
+          (when (< (* 2 (window-body-height w)) 50)
+            (should-not (funcall tailed "/r/f159")))
+          (drgnx-explorer--rows-scrolled w (point-min))
+          (should (equal 70 (plist-get (cdar sent) :from)))
+          (drgnx-explorer--rows-scrolled
+           w (save-excursion (goto-char (point-max)) (forward-line (- (window-body-height w))) (point)))
+          (should (funcall tailed "/r/f159")))))))
+
+(ert-deftest drgnx-explorer-rows/expand-draws-in-the-key-s-own-frame ()
+  "Pattern D (E4, the same frame as the old path): expanding a closed folder waits inside the command, bounded, for the
+hub's answer on the subscribed connection and draws it before the command returns: no redisplay and no timer run
+between the key and the new rows.  When nothing comes within the bound the command returns and the rows come later."
+  (drgnx-explorer-rows-nav-test--with
+    (let* ((redisplays 0) (waited nil) (deliver t)
+           (count (lambda () (cl-incf redisplays)))
+           (node (lambda (id kind flags parent label dir)
+                   (append (list :id id :kind kind :flags flags) (and parent (list :parent parent))
+                           (list :fields (vector (vector "label" label) (vector "path" id) (vector "dir" dir))))))
+           (answer
+            (lambda ()
+              (drgnx-view-model-event
+               (list :view view :hub 7 :base 1 :version 2 :reset t
+                     :model (json-serialize
+                             (list :ops (vector (list :reset
+                                                      (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"]
+                                                                              :lists ["order"] :classes ["selected" "match" "dim" "ticked"]
+                                                                              :flags ["expanded"] :forms [] :start "order")
+                                                            :nodes (vector (funcall node "/r" "root" 1 nil "R" 1)
+                                                                           (funcall node "/r/a" "dir" 1 "/r" "a" 1)
+                                                                           (funcall node "/r/a/x.el" "file" 0 "/r/a" "x.el" 0)
+                                                                           (funcall node "/r/lib" "dir" 1 "/r" "lib" 1)
+                                                                           (funcall node "/r/lib/m.el" "file" 0 "/r/lib" "m.el" 0)
+                                                                           (funcall node "/r/z.txt" "file" 0 "/r" "z.txt" 0))
+                                                            :edges []
+                                                            :lists (vector (list :name "order" :ids ["/r" "/r/a" "/r/a/x.el" "/r/lib" "/r/lib/m.el" "/r/z.txt"])))))))))
+              (drgnx-view-apply-patch
+               (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 0 :model 2
+                     :ops (list (list :insert (list :after "/r/a"
+                                                    :rows (list (list :key "/r/a/x.el" :text "│   x.el"
+                                                                      :props (list (list 0 8 "drgnx-work-id" "/r/a/x.el"))))))))))))
+      (add-hook 'pre-redisplay-functions count)
+      (unwind-protect
+          (cl-letf (((symbol-function 'accept-process-output)
+                     (lambda (proc &rest _)
+                       (should (eq proc drgnx-hub--events))   ; only the subscribed connection, nothing else runs
+                       (setq waited t)
+                       (when deliver (setq deliver nil) (funcall answer))
+                       t)))
+            (drgnx-view-nav 'select "/r/a")
+            (call-interactively #'drgnx-explorer-expand)
+            (should waited)
+            (should (drgnx-view-row-start drgnx-view "/r/a/x.el"))   ; drawn before the command returned
+            (should (= 0 redisplays))
+            ;; nothing comes: the wait ends at its bound and the command returns, the rows not drawn yet
+            (setq waited nil)
+            (drgnx-view-nav 'select "/r/lib")
+            (call-interactively #'drgnx-explorer-collapse)
+            (should waited)
+            (should (drgnx-view-row-start drgnx-view "/r/lib/m.el")))
+        (remove-hook 'pre-redisplay-functions count)))))
 
 (ert-deftest drgnx-explorer-rows/a-density-change-asks-again-at-once ()
   "Pattern D: the indent the hub draws is the density's `tree-indent', sent with the subscription; a density change

@@ -574,7 +574,9 @@ compared, and a round's own list starts wherever the flood is)."
   "Open big/: the hub lists it; `drgnx-perf-w-explorer-expand-done' times it to its first file's row drawn."
   (drgnx-perf-w--stat :expand_t0 (float-time))
   (with-current-buffer drgnx-explorer-buffer-name
-    (drgnx-explorer-toggle-at (drgnx-explorer--row-start (drgnx-perf-w--big)))))
+    ;; as `drgnx-explorer-toggle' does: the user's command waits for the hub's answer (this fire stands in for the key)
+    (let ((drgnx-explorer--await t))
+      (drgnx-explorer-toggle-at (drgnx-explorer--row-start (drgnx-perf-w--big))))))
 
 (defun drgnx-perf-w-explorer-expand-each ()
   "Close big/ (its rows gone), then open it after the first key."

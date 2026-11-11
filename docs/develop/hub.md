@@ -2566,8 +2566,10 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
   without waiting; a listing a newer one stopped sends nothing. A folder that cannot be read has no entries.
 - **Watching.** After its listing the thread watches every folder it read (the roots, the open folders and the
   middle folders of a joined row; `notify`, one folder each, not recursive, so a closed folder's changes send nothing)
-  until a newer listing, `view/close` or the connection's end, which stop it through its channel (the watcher goes
-  with the thread; nothing polls). A burst of changes (a name made, removed or renamed; a file's data or metadata does
+  until `view/close`, a Find's listing or the connection's end, which stop it through its channel (the watcher goes
+  with the thread; nothing polls). A newer subscribe of the view goes to the same thread, which lists again at once
+  from the folders it has read (only a newly opened one is read from disk; up to 64 closed ones stay read and watched,
+  so opening one again reads nothing) and always sends the result: no change falls between two watchers. A burst of changes (a name made, removed or renamed; a file's data or metadata does
   not count) is read again once it is quiet for 30 ms, or 100 ms after its first change: only the changed folders are
   read, the others come from the listing's own copy, and the model and rows go out as for a listing when the entries
   differ. A watch that lost events reads every folder again; a folder that cannot be watched (the inotify limit) is
