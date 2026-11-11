@@ -1132,6 +1132,14 @@ impl PlanHooks {
                     Decision::Pass(_) => {}
                     Decision::Wait(_) => return Ok(()),
                     Decision::Hold(why) => {
+                        // the tip's tree key: a waiver given on this card holds for this tip only
+                        let tip = tick::git(
+                            &tree.path,
+                            &["rev-parse", &format!("{}^{{tree}}", tree.branch)],
+                        )
+                        .await
+                        .map(|s| s.trim().to_owned())
+                        .ok();
                         return raise_card(
                             front,
                             &service(),
@@ -1139,7 +1147,7 @@ impl PlanHooks {
                             Some(tid),
                             "gate",
                             &format!("the gates hold the merge: {why}"),
-                            json!({"key": "gates"}),
+                            json!({"key": "gates", "tip": tip}),
                         )
                         .await
                         .map(|_| ());
@@ -1765,14 +1773,57 @@ async fn act(
             super::stop(front, caller, p).await.map(|_| ())
         }
         "retry" => {
-            let note = (kind == "merge-conflict").then(|| {
-                format!(
-                    "Merging your branch into job/{job} conflicted ({}). Merge job/{job} into your branch, resolve \
-                     the conflicts, commit, then call complete_task.",
-                    card.title.as_deref().unwrap_or("")
-                )
-            });
+            let title = card.title.as_deref().unwrap_or("");
+            let note = match kind {
+                "merge-conflict" => Some(format!(
+                    "Merging your branch into job/{job} conflicted ({title}). Merge job/{job} into your branch, resolve \
+                     the conflicts, commit, then call complete_task."
+                )),
+                "gate" => Some(format!(
+                    "The hub's gates hold your merge ({title}). Fix what they name, commit, then call complete_task."
+                )),
+                _ => None,
+            };
             retry(front, job, need_task()?, note).await
+        }
+        // the user's waiver of the held gates at the tip the card names: recorded as the user's own evidence (the
+        // store refuses a waiver from any other connection), then the tick merges
+        "waive" => {
+            let tid = need_task()?;
+            let reason = arg_text(arg);
+            if reason.trim().is_empty() {
+                return Err(invalid("A waiver needs its reason"));
+            }
+            let tip = card
+                .data
+                .as_ref()
+                .and_then(|d| d.get("tip"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid("This card names no tip to waive"))?
+                .to_owned();
+            let e = vordr::evidence::Evidence {
+                kind: "waiver".into(),
+                task: tid.to_owned(),
+                job: String::new(),
+                facts: vordr::facts::Facts {
+                    tree_key: tip,
+                    env_stamp: String::new(),
+                    platform: String::new(),
+                    selector: String::new(),
+                },
+                rows: Vec::new(),
+                truncated: false,
+                at: now(),
+                note: Some(reason),
+            };
+            front
+                .writer
+                .write(caller, "job/card", move |tx| {
+                    norn::write::evidence::record(tx, &e, None).map(|_| ())
+                })
+                .await
+                .map_err(fail)?;
+            set_status(front, tid, "in-review", agent_of(tid)).await
         }
         // merge as it is: the tick merges it (the reviewer's pass counts)
         "merge" | "accept" if kind != "clash" => {

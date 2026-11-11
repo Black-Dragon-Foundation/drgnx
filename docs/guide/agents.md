@@ -949,6 +949,9 @@ condition clears. A silent session also gets a `stalled` step on the timeline.
 | `refusals` | waits refused in one turn reach the limit | `drgnx-agents-wait-refusals` (3) |
 | `unrecorded` | its report names work it did not record | |
 | `manager-context` | a manager uses this share of its window; the manager is rotated and the card says it was | `drgnx-agents-manager-context` (0.7) |
+| `context` | an agent on a task of a job with a rule pack uses more context tokens than the pack's `:context-share`; it is rotated like a manager, told its task's brief | the pack (`docs/develop/orchestration.md`) |
+
+A task waiting on its gates (the hub runs its red or author check) is not `silent` and keeps its lease.
 
 ## Tests
 

@@ -5097,6 +5097,7 @@ impl Session {
                 .usage
                 .as_ref()
                 .and_then(|u| Some(u.used? / u.size.filter(|s| *s > 0.0)?)),
+            context_tokens: st.usage.as_ref().and_then(|u| u.used),
             jobs: self.live.ids(&self.id),
             held: st.wheel != Wheel::Free,
         }

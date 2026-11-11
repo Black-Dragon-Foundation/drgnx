@@ -11,7 +11,7 @@ use std::sync::Mutex;
 
 use serde_json::{Map, Value, json};
 use vordr::evidence::Evidence;
-use vordr::gates::{State, checks, selector_of, state, trailers};
+use vordr::gates::{State, checks, selector_of, state, trailers, waived};
 use vordr::redfirst::{self, Decision};
 
 use crate::exec::unit::Meta;
@@ -42,6 +42,15 @@ impl Runs {
             .unwrap()
             .iter()
             .any(|(id, r)| r.task == task && r.key.0 == key && r.key.1 == selector && !ended(id))
+    }
+
+    /// Whether TASK waits on a gate's run (`gate-wait`): one is in flight (one whose job ENDED isn't).
+    pub fn waiting(&self, task: &str, ended: impl Fn(&str) -> bool) -> bool {
+        self.jobs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(id, r)| r.task == task && !ended(id))
     }
 
     fn add(&self, id: String, run: Run) {
@@ -268,6 +277,12 @@ pub async fn before_merge(
             "attribution trailers: {}",
             found.join("; ")
         )));
+    }
+    // the user's waiver at this tip passes red first and the author check (never the trailers: those are reworded)
+    let (waivers, evidence): (Vec<Evidence>, Vec<Evidence>) =
+        evidence.into_iter().partition(|e| e.kind == "waiver");
+    if let Some(why) = waived(&waivers, &inputs.tip_key) {
+        return Ok(Decision::Pass(format!("waived by the user: {why}")));
     }
     let top = tree.path.as_path();
     let meta = |id: &str| front.core.exec.meta(id);

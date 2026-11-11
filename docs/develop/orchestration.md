@@ -84,8 +84,25 @@ A run a gate needs that the hub can make, it starts through the queue as the use
 task ran inside its tree: its folder, command and image) at the test commit, or the red's command at the tip. Each
 runs in a detached worktree of its commit beside the task's tree (uncommitted files in the task's tree are never part
 of it), which goes when the job ends. The job's end is the task's
-evidence like any other; the next tick looks again. A hold is a `gate` card on the task (key `gates`) saying what is
-wrong; a red-first wait with no run of the task's tests to repeat is a hold too.
+evidence like any other; the next tick looks again. A hold is a `gate` card on the task (key `gates`, `tip` its tree
+key) saying what is wrong; a red-first wait with no run of the task's tests to repeat is a hold too. Its actions:
+**Check again**, **Tell the agent** (the task goes back to its agent with the card's words), **Waive once…** (with a
+reason) and **Drop the task**.
+
+**Waivers are the user's alone.** A waiver is `waiver` evidence (id `waiver:…`) at the tip's tree key, with its
+reason; it passes red first and the author check for that tip only (a new tip needs a new waiver), never the
+trailers. Like the matrix's `always_never`, this is a hard rule below every grant: the store's guard for kind
+`evidence` (`norn::write::evidence::register`) takes a `waiver:` record only from the user's connection and every
+other record only from the hub, so no cell, preset, manager grant or agent tool can write one.
+
+**`gate-wait`.** While a task has a gate's run in flight (`Runs::waiting`) the supervisor's `silent` and `lease`
+rules don't hold for its session: the hub is working, not the agent. (The gates run while the task is `in-review`,
+which the lease reaper leaves alone, so nothing needs renewing.)
+
+**Context rotation for workflow tasks.** A task whose job has a rule pack rotates its agent past the pack's
+`:context-share` tokens (the supervisor's `context` rule; 120 000 in `drgnx-default`, 0 turns it off): the same
+path as a manager's rotation (when its turn ends, a fresh session in the same worktree), told its task's brief and to
+read the tree's log and status first.
 
 ## Red first
 

@@ -4,6 +4,7 @@
 //!   trailer naming a model or its maker ([`trailers`]).
 //! - **The author check:** the pack's `:author-check` commands and its `:rule-tests` pass on the tip's tree, each
 //!   through the queue; a check's run is the newest job at the tip's tree key with the check's selector ([`state`]).
+//! - **Waivers:** the user's `Waive once` passes the gates for the tip's tree it was given at ([`waived`]).
 
 use crate::evidence::Evidence;
 use crate::facts::selector;
@@ -89,6 +90,15 @@ pub fn state(evidence: &[Evidence], key: &str, selector: &str) -> State {
     } else {
         State::Red(red)
     }
+}
+
+/// The reason of the newest waiver given at the tree KEY (the user's `Waive once`; a new tip needs a new one).
+pub fn waived(evidence: &[Evidence], key: &str) -> Option<String> {
+    evidence
+        .iter()
+        .rev()
+        .find(|e| e.kind == "waiver" && e.facts.tree_key == key)
+        .map(|e| e.note.clone().unwrap_or_default())
 }
 
 #[cfg(test)]
@@ -197,5 +207,20 @@ mod tests {
             "the newest run counts"
         );
         assert_eq!(state(&[red, green], "P", &sel), State::Green);
+    }
+
+    #[test]
+    fn a_waiver_holds_for_the_tree_it_was_given_at() {
+        let mut w = ev("P", "", vec![]);
+        w.kind = "waiver".into();
+        w.note = Some("a docs change".into());
+        let green = ev("P", "x", vec![Row::pass("(job)")]);
+        assert_eq!(waived(std::slice::from_ref(&green), "P"), None);
+        assert_eq!(
+            waived(&[green.clone(), w.clone()], "P").as_deref(),
+            Some("a docs change")
+        );
+        // once: a new tip needs a new waiver
+        assert_eq!(waived(&[w], "Q"), None);
     }
 }

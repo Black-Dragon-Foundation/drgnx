@@ -533,6 +533,7 @@ mod tests {
             tokens: 0,
             refusals: 0,
             context: Some(0.99),
+            context_tokens: None,
             jobs: Vec::new(),
             held: true,
         };
