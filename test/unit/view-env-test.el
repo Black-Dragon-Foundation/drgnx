@@ -123,6 +123,35 @@ window's class is the buffer's again, it shows the buffer and the twin goes, and
         (drgnx-view-env-unregister "v")
         (should-not (buffer-live-p (car made)))))))
 
+(defvar-local drgnx-view-env-test-state nil "A module's state, as a twin copies it.")
+(defvar-local drgnx-view-env-test-mark nil "A module's marker, which a twin never takes.")
+(define-derived-mode drgnx-view-env-test-mode special-mode "Env test")
+
+(ert-deftest drgnx-view-env/a-twin-takes-the-view-buffers-state-before-each-command ()
+  "`drgnx-view-env-twin': a buffer in the view buffer's mode, attached to (view, CLASS), marked a twin of it, with its
+state (the locals of the prefixes, a marker left out) as made and again before each command; SETUP runs in it."
+  (require 'drgnx-view)
+  (let ((buf (generate-new-buffer " *view-env-twin-test*")) tw ran)
+    (unwind-protect
+        (with-current-buffer buf
+          (drgnx-view-env-test-mode)
+          (drgnx-view-patch-attach "tv" "a")
+          (setq-local drgnx-view-env-test-state 1 drgnx-view-env-test-mark (point-marker))
+          (setq tw (drgnx-view-env-twin "b" '("drgnx-view-env-test-") (lambda () (setq ran (current-buffer)))))
+          (should (eq ran tw))
+          (with-current-buffer tw
+            (should (eq major-mode 'drgnx-view-env-test-mode))
+            (should (equal "b" (drgnx-view-patch-class drgnx-view-patch)))
+            (should (eq buf (drgnx-view-patch-twin-p)))
+            (should (= 1 drgnx-view-env-test-state))
+            (should-not drgnx-view-env-test-mark))
+          (should (eq tw (gethash (cons "tv" "b") drgnx-view-patch--buffers)))
+          (should-not (drgnx-view-patch-twin-p buf))
+          (setq drgnx-view-env-test-state 2)
+          (with-current-buffer tw (run-hooks 'pre-command-hook) (should (= 2 drgnx-view-env-test-state))))
+      (when (buffer-live-p tw) (kill-buffer tw))
+      (kill-buffer buf))))
+
 (ert-deftest drgnx-view-env/two-windows-one-class-send-the-narrowest ()
   (drgnx-view-env-test--with
     (let ((other (split-window nil nil t)))

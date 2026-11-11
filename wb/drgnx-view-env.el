@@ -77,8 +77,18 @@ Pruned with its view.")
 
 (defvar drgnx-view-env--hooked nil "Non-nil while the global hooks are on (the first view added them).")
 
-(defvar-local drgnx-view-env--twin-of nil
-  "In a twin (the buffer of a view in another display class, `drgnx-view-patch-twin-function'): the view's id.")
+(defvar drgnx-view-patch-twin-of)
+(declare-function drgnx-view-patch-attach "drgnx-view")
+(declare-function drgnx-view-patch-view "drgnx-view")
+(defvar drgnx-view-patch-patched-functions)
+(defvar drgnx-view-patch-id-prop)
+(defvar drgnx-view-nav-faces)
+(defvar drgnx-view-nav-notice-method)
+(defvar drgnx-view-nav-list)
+(defvar drgnx-view-nav-paged-functions)
+
+(defvar-local drgnx-view-env--twin-prefix nil
+  "In a twin made by `drgnx-view-env-twin': the prefixes of the view buffer's locals it copies before each command.")
 
 ;;;; The facts
 
@@ -154,7 +164,7 @@ buffer): a plist :display :scale :fonts :cell.  FONTS is a list of (ROLE FILE IN
     (when (boundp 'drgnx-view-patch--buffers)
       (maphash (lambda (pair b)
                  (when (and (equal (car pair) view) (buffer-live-p b)
-                            (equal (buffer-local-value 'drgnx-view-env--twin-of b) view))
+                            (buffer-local-value 'drgnx-view-patch-twin-of b))
                    (push (cons (cdr pair) b) out)))
                drgnx-view-patch--buffers))
     out))
@@ -195,7 +205,7 @@ class no window shows goes.  When no window shows the buffer's class, the buffer
       (unless (or (equal class own) (assoc class twins))
         (let ((tw (with-current-buffer buffer (funcall drgnx-view-patch-twin-function class))))
           (when (buffer-live-p tw)
-            (with-current-buffer tw (setq-local drgnx-view-env--twin-of view))
+            (with-current-buffer tw (setq-local drgnx-view-patch-twin-of buffer))
             (push (cons class tw) twins)))))
     (dolist (w wins)
       (let ((class (drgnx-view-env--class (cdr w))))
@@ -223,6 +233,50 @@ their facts (`drgnx-view-env--window-classes'), read again when not given."
                                   :reduced_motion (if (eq (bound-and-true-p drgnx-look-motion) 'reduced) t :false)))
                 classes))))
     (nreverse classes)))
+
+;;;; Twins: one buffer per display class
+
+(defconst drgnx-view-env--twin-locals
+  '(drgnx-view-patch-id-prop drgnx-view-nav-faces drgnx-view-nav-notice-method drgnx-view-nav-list
+                             drgnx-view-nav-paged-functions)
+  "The view buffer's locals a twin takes as they are when it is made: how its keys and classes read the model.")
+
+(defun drgnx-view-env--twin-copy (from prefixes)
+  "Copy FROM's buffer-local variables whose names start with one of PREFIXES into the current buffer, but for those holding
+a marker or an overlay (FROM's own text; tables and lists are shared, read) and those the current buffer has as its own
+\(`drgnx-view-patch...')."
+  (dolist (b (buffer-local-variables from))
+    (let ((sym (car-safe b)) (v (cdr-safe b)))
+      (when (and sym (symbolp sym) (cl-some (lambda (p) (string-prefix-p p (symbol-name sym))) prefixes)
+                 (not (or (markerp v) (overlayp v)
+                          (and (consp v) (or (markerp (car v)) (overlayp (car v)))))))
+        (set (make-local-variable sym) v)))))
+
+(defun drgnx-view-env--twin-sync ()
+  "`pre-command-hook' of a twin: the view buffer's state its commands read, as it is now."
+  (when (and drgnx-view-env--twin-prefix (buffer-live-p drgnx-view-patch-twin-of))
+    (drgnx-view-env--twin-copy drgnx-view-patch-twin-of drgnx-view-env--twin-prefix)))
+
+(defun drgnx-view-env-twin (class prefixes &optional setup)
+  "A twin of the current buffer, a hub-fed view's, for display CLASS (what a `drgnx-view-patch-twin-function' returns):
+a new buffer in the same major mode, the view's nav locals (`drgnx-view-env--twin-locals') and its locals whose names
+start with one of PREFIXES (a module's state, read again before each command in the twin), attached to (view, CLASS), with the view
+buffer's handlers after a draw; SETUP then runs in it (a module removes what its mode added that only the view's
+buffer may do: a kill hook that ends the hub's view).  Nothing is subscribed: the hub sends every class its env named."
+  (let* ((from (current-buffer)) (mode major-mode) (view (drgnx-view-patch-view drgnx-view-patch))
+         (patched (and (local-variable-p 'drgnx-view-patch-patched-functions)
+                       drgnx-view-patch-patched-functions))
+         (locals (mapcar (lambda (v) (cons v (and (boundp v) (symbol-value v)))) drgnx-view-env--twin-locals)))
+    (with-current-buffer (generate-new-buffer (format "%s <%s>" (buffer-name from) class))
+      (funcall mode)
+      (setq-local drgnx-view-patch-twin-of from drgnx-view-env--twin-prefix prefixes)
+      (dolist (l locals) (set (make-local-variable (car l)) (cdr l)))
+      (drgnx-view-env--twin-copy from prefixes)
+      (drgnx-view-patch-attach view class)
+      (dolist (f patched) (unless (eq f t) (add-hook 'drgnx-view-patch-patched-functions f nil t)))
+      (add-hook 'pre-command-hook #'drgnx-view-env--twin-sync nil t)
+      (when setup (funcall setup))
+      (current-buffer))))
 
 ;;;; Sending
 
