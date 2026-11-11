@@ -74,18 +74,50 @@ which the prompt's own read runs without returning it.")
 (define-key special-event-map [drgnx-look-echo-ui-test-note] #'drgnx-look-echo-ui-test--note)
 
 (defun drgnx-look-echo-ui-test--at-prompt (box fn keys)
-  "Run FN once the read now starting waits with BOX shown, then answer with KEYS.  The harness's queue delivers one
-note to the read itself, so it runs only while the read waits; there it waits for BOX (FN then sees it hidden: a
-prompt that never shows it).  One note only: one sent again lands in `unread-command-events' as the read loops, and
-a read from C takes it from there as input, not as a special event (`interactive' \"c\": \"Non-character
-input-event\"), which the slower box at 4/3 and 2 made likely."
-  (setq drgnx-look-echo-ui-test--note
+  "Run FN once the read now starting waits with BOX shown (else after 40 notes: a prompt that never shows it), then
+answer with KEYS.  The harness's queue delivers each note to the read itself, so a note runs only while it waits."
+  (let ((tries 40))
+    (setq drgnx-look-echo-ui-test--note
+          (lambda ()
+            (if (and (not (frame-visible-p box)) (> (setq tries (1- tries)) 0))
+                (drgnx-uitest-enqueue (list 'drgnx-look-echo-ui-test-note))
+              (setq drgnx-look-echo-ui-test--note nil)
+              (funcall fn)
+              (drgnx-uitest-enqueue (append (listify-key-sequence keys) nil)))))
+    (drgnx-uitest-enqueue (list 'drgnx-look-echo-ui-test-note))))
+
+(defvar drgnx-look-echo-ui-test--shown nil
+  "While a row waits at a prompt: its check, called from `pre-redisplay-functions' until it returns non-nil.")
+
+(defun drgnx-look-echo-ui-test--redisplay (&rest _)
+  "One of `pre-redisplay-functions' while a row waits: call its check; done once it says so."
+  (when (and drgnx-look-echo-ui-test--shown (funcall drgnx-look-echo-ui-test--shown))
+    (drgnx-look-echo-ui-test--unshown)))
+
+(defun drgnx-look-echo-ui-test--unshown ()
+  "Stop watching redisplay for the box, and take the marker pause out of the harness's queue."
+  (remove-hook 'pre-redisplay-functions #'drgnx-look-echo-ui-test--redisplay)
+  (setq drgnx-look-echo-ui-test--shown nil
+        drgnx-uitest--queue (seq-remove (lambda (e) (memq (car-safe e) '(drgnx-uitest-pause drgnx-uitest-until)))
+                                        drgnx-uitest--queue)))
+
+(defun drgnx-look-echo-ui-test--at-shown (box fn keys)
+  "Run FN at the redisplay that shows BOX, which the read now starting does as it waits, then answer with KEYS.
+FN only reads the frames' state, which redisplay may.  No note (`drgnx-look-echo-ui-test--at-prompt'): where the box
+is slow to show (at 2) a note is sent again, and one that arrives as a read loops is taken from
+`unread-command-events' as input, not as a special event: `query-replace' ends on it and puts it back, and the next
+read from C (`interactive' \"c\") signals \"Non-character input-event\".  A long pause waits in the
+harness's queue until then (the check takes it out), so the session's guard on idle prompts sees an answer
+coming through the waits a prompt makes before it shows (`query-replace''s highlighting)."
+  (setq drgnx-look-echo-ui-test--shown
         (lambda ()
-          (setq drgnx-look-echo-ui-test--note nil)
-          (ignore-errors (drgnx-test-wait (lambda () (frame-visible-p box)) :secs 10 :what "the box"))
-          (funcall fn)
-          (drgnx-uitest-enqueue (append (listify-key-sequence keys) nil))))
-  (drgnx-uitest-enqueue (list 'drgnx-look-echo-ui-test-note)))
+          (when (frame-visible-p box)
+            (funcall fn)
+            (drgnx-look-echo-ui-test--unshown)
+            (drgnx-uitest-enqueue (append (listify-key-sequence keys) nil))
+            t)))
+  (add-hook 'pre-redisplay-functions #'drgnx-look-echo-ui-test--redisplay)
+  (drgnx-uitest-enqueue (list (cons 'drgnx-uitest-pause 3600))))
 
 (defun drgnx-look-echo-ui-test--ask (form keys &optional command)
   "Run FORM; while it waits, note (VISIBLE TEXT PLACE) of the box, then answer with KEYS.  Return
@@ -93,14 +125,14 @@ input-event\"), which the slower box at 4/3 and 2 made likely."
 (`post-command-hook', as the command loop runs it).
 PLACE is (LEFT TOP WIDTH PARENT-WIDTH PARENT-HEIGHT): the box in its parent's pixels."
   (let* ((box (drgnx-look-echo-box)) seen)
-    (drgnx-look-echo-ui-test--at-prompt
+    (drgnx-look-echo-ui-test--at-shown
      box (lambda ()
            (setq seen (list (frame-visible-p box) (drgnx-look-echo-ui-test--box-text box)
                             (list (car (frame-position box)) (cdr (frame-position box))
                                   (frame-pixel-width box) (frame-pixel-width (frame-parent box))
                                   (frame-pixel-height (frame-parent box))))))
      keys)
-    (unwind-protect (eval form t) (setq drgnx-look-echo-ui-test--note nil))
+    (unwind-protect (eval form t) (drgnx-look-echo-ui-test--unshown))
     (when command (run-hooks 'post-command-hook))
     (drgnx-test-wait-presented)
     (cons seen (frame-visible-p box))))
