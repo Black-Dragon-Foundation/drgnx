@@ -250,6 +250,18 @@ logical pixels, and its text, is the same in both."
       (set-face-attribute 'default frame :font (font-spec :family "Inter" :size (* 2 px)))
       (cl-list* frame "one monitor: the second frame's font twice the first's" nil))))
 
+(defun drgnx-rows-fit-ui-test--panel-keys (buffer)
+  "BUFFER's view drawn: the key of each line, top to bottom, a key once."
+  (with-current-buffer buffer
+    (drgnx-view-draw-now drgnx-view)
+    (save-excursion
+      (goto-char (point-min))
+      (let (keys)
+        (while (not (eobp))
+          (let ((k (drgnx-view-key-at))) (unless (equal k (car keys)) (push k keys)))
+          (forward-line 1))
+        (nreverse keys)))))
+
 (ert-deftest drgnx-ui-rows-fit/a-view-in-two-classes-shows-each-its-own-rows ()
   "One buffer per class (RRO-BUFFER-PER-CLASS-1): the view's buffer, with a twin function, shown in a second frame of
 another class: the second monitor at another scale when the session has two under sway (`DRGNX_UI_MONITORS=2
@@ -294,3 +306,55 @@ reset, neither stale; with the doubled font each holds its own fit of the label 
                 (should (string-prefix-p "The" two))
                 (unless scaled (should-not (equal one two))))))
         (delete-frame frame)))))
+
+(defvar drgnx-panel-replay-prefix)
+(declare-function drgnx-panel-replay-up "panel-replay-fixture" (bin &optional old))
+(declare-function drgnx-panel-replay-down "panel-replay-fixture" ())
+
+(ert-deftest drgnx-ui-rows-fit/the-agent-panel-in-two-classes-keeps-its-cards-and-composer ()
+  "The agent panel shown in a second class (RRO-PANEL-TWIN-1), as the user's external monitor does: a real hub and a
+mock agent (test/fixtures/panel-replay-fixture.el, a short turn); the second frame's window shows the panel's twin,
+paired with its class, its hub rows that class's, its own rows (the header, the chips, the cards, the composer) the
+panel's, neither stale; the twin is no panel of its own."
+  (skip-unless (display-graphic-p))
+  (require 'drgnx-pixels)
+  (load (expand-file-name "test/fixtures/panel-replay-fixture" drgnx-rows-fit-ui-test--repo) nil t)
+  (let* ((load-path (cons (expand-file-name "modules/tools" drgnx-rows-fit-ui-test--repo) load-path))
+         (drgnx-view-patch--buffers (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
+         (drgnx-view-env--views (make-hash-table :test #'equal)) (drgnx-view-env--sent (make-hash-table :test #'equal))
+         (drgnx-view-env--glyphs (make-hash-table :test #'equal)) (drgnx-view-env--hooked nil)
+         (drgnx-panel-replay-prefix 3) (frame nil) (panel nil))
+    (unwind-protect
+        (save-window-excursion
+          (setq panel (drgnx-panel-replay-up (drgnx-rows-demo--bin)))
+          (let* ((px (aref (font-info (face-font 'default)) 2)) (made (drgnx-rows-fit-ui-test--second-frame px))
+                 (view (with-current-buffer panel (drgnx-view-patch-view drgnx-view-patch))) (tw nil))
+            (setq frame (car made))
+            (drgnx-test-wait (lambda () (eq t (frame-visible-p frame))) :secs 10 :what "the second frame shown")
+            (set-window-buffer (frame-root-window frame) panel)
+            (drgnx-view-env-update view)
+            (setq tw (drgnx-test-wait (lambda () (let ((b (window-buffer (frame-root-window frame))))
+                                                   (and (eq panel (drgnx-view-patch-twin-p b)) b)))
+                                      :secs 10 :what "the panel's twin in the second frame"))
+            (should (eq panel (window-buffer (get-buffer-window panel (selected-frame)))))
+            (should-not (memq tw (drgnx-agent-panel-buffers)))
+            (dolist (b (list panel tw))
+              (drgnx-test-wait (lambda () (with-current-buffer b
+                                            (and (> (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)) 0)
+                                                 (not (drgnx-view-patch-stale drgnx-view-patch)))))
+                               :secs 20 :what (list "the hub's rows of the class" b)))
+            (let ((sp (buffer-local-value 'drgnx-view-patch panel)) (st (buffer-local-value 'drgnx-view-patch tw)))
+              (should-not (equal (drgnx-view-patch-class sp) (drgnx-view-patch-class st)))
+              (should (equal (sort (list (drgnx-view-patch-class sp) (drgnx-view-patch-class st)) #'string<)
+                             (sort (copy-sequence (drgnx-view-env-classes view)) #'string<))))
+            (let ((kp (drgnx-rows-fit-ui-test--panel-keys panel)) (kt (drgnx-rows-fit-ui-test--panel-keys tw)))
+              (drgnx-rows-fit-ui-test--report (format "agent panel in two classes (%s): own rows %S, hub rows %d | %d"
+                                                      (cadr made) (seq-remove #'stringp kp)
+                                                      (length (seq-filter #'stringp kp)) (length (seq-filter #'stringp kt))))
+              (should (equal (seq-remove #'stringp kp) (seq-remove #'stringp kt)))
+              (should (member '(:composer) kt))
+              (should (equal (seq-filter #'stringp kp) (seq-filter #'stringp kt))))))
+      (when (frame-live-p frame) (delete-frame frame))
+      (drgnx-panel-replay-down)
+      (drgnx-view-env-teardown)
+      (drgnx-view-patch-teardown))))
