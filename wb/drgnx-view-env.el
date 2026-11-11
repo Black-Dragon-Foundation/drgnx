@@ -261,8 +261,9 @@ buffer has as its own \(`drgnx-view-patch...')."
   "A twin of the current buffer, a hub-fed view's, for display CLASS (what a `drgnx-view-patch-twin-function' returns):
 a new buffer in the same major mode, the view's nav locals (`drgnx-view-env--twin-locals') and its locals whose names
 start with one of PREFIXES (a module's state, read again before each command in the twin), attached to (view, CLASS),
-with the view buffer's handlers after a draw; SETUP then runs in it (a module removes what its mode added that only the view's
-buffer may do: a kill hook that ends the hub's view).  Nothing is subscribed: the hub sends every class its env named."
+with the view buffer's handlers after a draw; SETUP then runs in it (a module removes what its mode added that only
+the view's buffer may do: a kill hook that ends the hub's view).  Nothing is subscribed: the hub sends every class its
+env named."
   (let* ((from (current-buffer)) (mode major-mode) (view (drgnx-view-patch-view drgnx-view-patch))
          (patched (and (local-variable-p 'drgnx-view-patch-patched-functions)
                        drgnx-view-patch-patched-functions))
