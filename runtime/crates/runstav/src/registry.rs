@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 253, "{names:?}");
+        assert_eq!(names.len(), 255, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -399,6 +399,8 @@ mod tests {
         // the Search view's saved searches: the hub's state, and the project's file on a click
         // the Search view's writes: project files, on disk or through the editor
         want.extend(["search/apply", "search/undo"]);
+        // Ask an Agent: a worktree, a session and its brief
+        want.extend(["search/handoff"]);
         want.extend([
             "search/saved/delete",
             "search/saved/put",
@@ -686,7 +688,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 203);
+        assert_eq!(with, 205);
     }
 
     #[test]

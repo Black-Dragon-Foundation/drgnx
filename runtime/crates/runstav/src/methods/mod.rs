@@ -314,6 +314,8 @@ params! {
     SearchGrepSkipped(search::GrepSkippedParams),
     SearchEdits(search::EditsParams),
     SearchEditDoc(search::EditDocParams),
+    SearchHandoff(search::HandoffParams),
+    SearchHandoffState(search::HandoffStateParams),
     SearchPreview(search::PreviewParams),
     SearchApply(search::ApplyParams),
     SearchApplied(search::AppliedParams),
