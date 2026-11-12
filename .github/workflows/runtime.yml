@@ -1047,8 +1047,12 @@ jobs:
           path: runtime/fuzz/corpus
           key: ${{ steps.corpus.outputs.cache-primary-key }}
 
+  # macOS 27 runs as four jobs at once (of the five macOS slots), each well inside its 45 minutes: one job ran all
+  # of it in about 105 (tests 19 min, conformance 21, the release build and perf 20, the builds between). Each job
+  # sets itself up through .github/actions/macos-runtime and builds what it runs; sccache shares the compiled crates
+  # between them. docs/develop/ci.md
   macos:
-    name: tests, conformance, perf (macOS 27)
+    name: tests (macOS 27)
     if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
     runs-on: xcode-27
     timeout-minutes: 45
@@ -1059,67 +1063,12 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
-      # the image's rustup (as the Linux runner jobs), not Homebrew's rust: no formula download and install per run
-      - uses: ./.github/actions/sccache
-      - run: rustup toolchain install stable --profile minimal --component clippy
-      - id: rv
-        run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
-      - id: registry
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-          key: cargo-registry-${{ runner.os }}-${{ hashFiles('runtime/Cargo.lock') }}
-          restore-keys: cargo-registry-${{ runner.os }}-
-      - id: cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: runtime/target
-          key: cargo-${{ runner.os }}-rustup-mt1-${{ steps.rv.outputs.v }}-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
-          restore-keys: cargo-${{ runner.os }}-rustup-mt1-${{ steps.rv.outputs.v }}-
-      - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
-        run: bash .github/ci/commit-times.sh runtime/target/.drgnx-built-from
-      # draugr runs only the git of the developer dir xcode-select's link names, and refuses Xcode under the
-      # admin-writable /Applications (on the runner even its git is the runner user's); the Command Line Tools, which
-      # the image installs, pass. Before the tests: draugr's git tests and the escape rows run that git.
-      - name: xcode-select points at the Command Line Tools (the git draugr trusts)
-        run: |
-          xcode-select -p
-          sudo xcode-select -s /Library/Developer/CommandLineTools
-          xcode-select -p
-      # the model files, as the Fedora 45 job (one cache for both)
-      - id: models
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ../test-models
-          key: models-${{ hashFiles('.github/ci/models.txt') }}
-          enableCrossOsArchive: true
-      - name: the model files (DRGNX_TEST_MODELS)
-        id: models-fetch
-        run: |
-          /bin/bash .github/ci/models.sh ../test-models
-          echo "DRGNX_TEST_MODELS=$(cd ../test-models && pwd)" >> "$GITHUB_ENV"
-      - if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.models.outputs.cache-hit != 'true' && steps.models-fetch.outcome == 'success' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ../test-models
-          key: ${{ steps.models.outputs.cache-primary-key }}
-          enableCrossOsArchive: true
-      # the plugin tests load WASM components built for wasm32-wasip2: the target, then the fixtures, before the tests
-      - name: wasm32-wasip2 and the plugin fixtures
-        run: bash .github/ci/wasm-target.sh
+      - id: setup
+        uses: ./.github/actions/macos-runtime
       # --no-fail-fast: every crate's failures in one run (no Mac to try them on before CI). No GPU adapter is named: the
       # GPU tests are ignored on macOS (the runner has no GPU; Metal parity is a real Mac's)
-      # the terminal engine is built from source with a pinned Zig (test/container/zig.sh)
-      - name: Zig
-        run: /bin/bash test/container/zig.sh macos
-      - name: libghostty-vt's pinned tarballs (build.rs never downloads)
-        run: /bin/bash runtime/crates/ghostty-vt-sys/fetch.sh
-      # drgnx-term's vttest rows drive the real vttest (the Linux test images carry it; a missing one fails the rows)
-      - name: vttest (the terminal's conformance rows)
-        run: brew install vttest
-      - run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
+      - id: test
+        run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
       # The terminal worker's peer check on a Mac (getpeereid): the workspace run above checks that this user's
       # connection is served; another uid's needs root, so the same test runs again under sudo (the runner's user has
       # passwordless sudo), and a run that did not check (no root) fails. The worker's log goes to the job's log.
@@ -1146,11 +1095,6 @@ jobs:
           # the timing rows are #[ignore] too: a debug build on a shared runner would judge a release budget
           skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == "drgnx-ratatoskr" { printf " --skip %s", $3 }')
           cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --test macos -- --ignored $skips
-      # (+ gleipnir-probe and gleipnir-escape for the Seatbelt rows below). The workspace tests above already run
-      # `eitri` and `draugr` on macOS (their O_NOFOLLOW_ANY, xcode-select-link and CLOEXEC-loop paths).
-      - id: build
-        if: ${{ !cancelled() }}
-        run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
       # the relay sidecar of a networked container job is a Linux binary: build-only here (no podman machine to run it in).
       # Apple Silicon builds aarch64 musl with Rust's self-contained musl and rust-lld, as `drgnx runtime build` does
       - name: the relay sidecar cross-builds (Linux musl, no C toolchain)
@@ -1161,53 +1105,67 @@ jobs:
           l=$(printf '%s' "$arch-unknown-linux-musl" | tr 'a-z-' 'A-Z_')
           env "CARGO_TARGET_${l}_LINKER=rust-lld" "CARGO_TARGET_${l}_RUSTFLAGS=-C link-self-contained=yes" \
             cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-px --bin drgnx-px --target "$arch-unknown-linux-musl"
-      # the pinned release tarball, kept by the hash of nidhogg.sh (which holds the version and the checksums; the
-      # tarball is checked against them on every use); main saves it once per pin, every run restores it
-      - id: nidhogg-tarball
+      # The pure-Rust crates' tests through clippy on darwin: only clippy's test build shows code that is dead on macOS
+      # (gate review M21). Whatever the tests said, so neither hides the other.
+      - name: clippy on darwin (the pure-Rust crates)
         if: ${{ !cancelled() }}
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/nidhogg-downloads
-          key: nidhogg-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('test/container/nidhogg.sh') }}
-      - name: Nidhogg 31.1 (writes DRGNX_EMACS to the environment)
-        id: nidhogg
-        if: ${{ !cancelled() }}
-        env:
-          NIDHOGG_DOWNLOADS: ${{ runner.temp }}/nidhogg-downloads
-        run: /bin/bash test/container/nidhogg.sh macos
-      - if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.nidhogg.outcome == 'success' && steps.nidhogg-tarball.outputs.cache-hit != 'true' }}
+        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -p heimdall -- -D warnings
+      - id: prune
+        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.setup.outputs.target-hit != 'true' && steps.test.outcome == 'success' }}
+        run: |
+          bash .github/ci/cargo-prune.sh runtime/Cargo.toml runtime/target
+          # the commit it was built from, only when every step before passed: after a step that failed some outputs
+          # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
+          if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from; fi
+      # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
+      # main's) is not saved again
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.setup.outputs.registry-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/nidhogg-downloads
-          key: ${{ steps.nidhogg-tarball.outputs.cache-primary-key }}
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: ${{ steps.setup.outputs.registry-key }}
+
+  # The conformance suite in two halves (domr --shard K/2: every other row, so both take about as long), each against
+  # its own debug build; the Seatbelt escape rows with the first half.
+  macos-conformance:
+    name: conformance ${{ matrix.shard }}/2 (macOS 27)
+    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
+    runs-on: xcode-27
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - uses: ./.github/actions/macos-runtime
+        with:
+          nidhogg: "true"
+      # (+ gleipnir-probe and gleipnir-escape for the Seatbelt rows below). The tests job runs `eitri` and `draugr` on
+      # macOS (their O_NOFOLLOW_ANY, xcode-select-link and CLOEXEC-loop paths).
+      - id: build
+        run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
       # as the runner user; the `sudo` rows reach the socket as nobody through passwordless `sudo -n -u nobody`, so
       # security/another-uid-is-refused covers tokio's getpeereid path. --require-all fails it if it is skipped
       - name: conformance
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.nidhogg.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           sudo -n true
           runtime/target/debug/domr --hub-bin runtime/target/debug/ratatoskr \
-            --scenarios test/conformance --require-all
-      - name: perf baseline (release build)
-        id: perf
-        if: ${{ !cancelled() }}
-        run: |
-          cargo build --locked --release --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr
-          runtime/target/release/domr --hub-bin runtime/target/release/ratatoskr \
-            --scenarios test/conformance --only 'perf/*' --perf perf-macos.json
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ !cancelled() && steps.perf.outcome == 'success' }}
-        with:
-          name: ratatoskr-perf-macos
-          path: perf-macos.json
-          if-no-files-found: error
+            --scenarios test/conformance --require-all --shard ${{ matrix.shard }}/2
       # The Seatbelt rows run for real, with the real /usr/bin/sandbox-exec. --require-all: a skip fails the job. It
-      # runs whatever the conformance and perf steps said, and they whatever it says. mac-works-git needs the git
-      # draugr trusts: xcode-select points at the Command Line Tools since the step before the tests.
-      # mac-net-* need a non-loopback address (the fixture takes the one the default route uses); the step prints
-      # what the runner has.
+      # runs whatever the conformance step said, and it whatever this says. mac-works-git needs the git draugr trusts:
+      # xcode-select points at the Command Line Tools since the setup. mac-net-* need a non-loopback address (the
+      # fixture takes the one the default route uses); the step prints what the runner has.
       - name: escape suite (Seatbelt, required)
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.shard == 1 }}
         run: |
           xcode-select -p
           route -n get default | grep -E 'interface|gateway' || true
@@ -1218,29 +1176,37 @@ jobs:
             --rows runtime/crates/gleipnir-escape/rows/macos --rows runtime/crates/gleipnir-escape/rows/any \
             --require-all --report "$RUNNER_TEMP/escape/escape-macos.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+        if: ${{ always() && matrix.shard == 1 }}
         with:
           name: escape-report-macos
           path: ${{ runner.temp }}/escape/escape-macos.json
           if-no-files-found: warn
-      # The pure-Rust crates' tests through clippy on darwin: only clippy's test build shows code that is dead on macOS
-      # (gate review M21). After the escape rows, whatever they say, so neither hides the other.
-      - name: clippy on darwin (the pure-Rust crates)
-        if: ${{ !cancelled() }}
-        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -p heimdall -- -D warnings
-      - id: prune
-        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
-        run: |
-          bash .github/ci/cargo-prune.sh runtime/Cargo.toml runtime/target
-          # the commit it was built from, only when every step before passed: after a step that failed some outputs
-          # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
-          if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from; fi
-      # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
-      # main's) is not saved again
-      - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.registry.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+
+  # The perf baseline on a release build (a recorded baseline, no budgets, as on Linux)
+  macos-perf:
+    name: perf (macOS 27)
+    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
+    runs-on: xcode-27
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-          key: ${{ steps.registry.outputs.cache-primary-key }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - uses: ./.github/actions/macos-runtime
+        with:
+          nidhogg: "true"
+      - name: perf baseline (release build)
+        id: perf
+        run: |
+          cargo build --locked --release --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr
+          runtime/target/release/domr --hub-bin runtime/target/release/ratatoskr \
+            --scenarios test/conformance --only 'perf/*' --perf perf-macos.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() && steps.perf.outcome == 'success' }}
+        with:
+          name: ratatoskr-perf-macos
+          path: perf-macos.json
+          if-no-files-found: error
