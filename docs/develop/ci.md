@@ -178,7 +178,7 @@ proven on CI:
 |---|---|---|
 | `linux` (Runtime) | the workspace tests with `drgnx-ratatoskr/test-hooks`: forseti, sleipnir's pure rows, the hub's lib and `runners_orders`, the repo-wide rules (`real_time_in_tests`, `hub_reads_its_clock`), and the rows of `tests/macos.rs` that need no sshd | yes |
 | `android` | `forseti` and the hub (with the cloud code) type-check for `aarch64-linux-android` with the other pure-Rust crates; `forseti` and `sleipnir --no-default-features --features proto,sync` (the shape jobq and the Android door take) also pass clippy `-D warnings` on their test builds | yes |
-| `macos` (Runtime) | the same workspace tests as `linux` on macOS 27, so `tests/macos.rs` runs there, then its sshd row (below). **The hub's lib does not run on macOS yet**: its test binary ends in a SIGABRT a few seconds in (below, "macOS") | yes |
+| `macos` (Runtime) | the same workspace tests as `linux` on macOS 27, the hub's lib included, so `tests/macos.rs` runs there, then its sshd row (below) | yes |
 | `fleet` | the fake runners (`test/runners/`): the spike's checks and linger over ssh | no: on demand only (`only=rt-fleet`) |
 
 `fleet` stays on demand because its checks have never run on CI: the fake runner (systemd as PID 1 and rootless podman
@@ -214,31 +214,29 @@ key that may log in as the runner user, adds a `Host drgnx-sshd-test` entry to `
 Mac the same way. The key handover (Lisp, `test/unit/runners-client-test.el`) runs in the `macos` tier of
 `drgnx-tiers.yml`, which runs the whole unit suite.
 
-The hub's lib tests end in a SIGABRT on macOS with no message, so most of them have never run there: in every run so
-far about a hundred tests finished, the last of them just before or among `agents::rewind::live`'s (the first module
-whose tests run live mock sessions, with snapshots and forks). Until they pass,
-a failed workspace step is followed by a diagnostic one: the hub's lib again with `--test-threads 1 --nocapture` (the
-binary the workspace build made, run from the crate's folder as cargo runs it), whose
-last `test … ...` line (libtest prints a test's name before it runs it on one thread) names the test running when the
-process died, written to the job's summary (`--nocapture`: a thread a library started inside a test prints into that
-test's captured output otherwise, so its last words were lost). An abort libsystem raises says why only in its crash
-report, so the step then prints the `.ips` under `~/Library/Logs/DiagnosticReports` named for the binary that died and
-written after the step started (round 2 printed the newest one, which was the workspace run's), and runs the named test
-alone with `--nocapture`. Rounds 1 and 2 named
-`exec::container::name_and_pull_tests::a_fake_podman_runs_while_another_thread_forks`; round 2's report showed
-wasmtime's Mach port thread calling `abort()`, which the plugin host now leaves out (docs/develop/plugins.md, "Failures").
-The step goes once the lib passes on macOS.
+The hub's lib tests ended in a SIGABRT on macOS with no message, so until round 4 most of them had never run there.
+Rounds 1 and 2 named `exec::container::name_and_pull_tests::a_fake_podman_runs_while_another_thread_forks`; round 2's
+crash report showed wasmtime's Mach port thread calling `abort()`, which the plugin host now leaves out
+(docs/develop/plugins.md, "Failures"), and round 4 ran the whole lib (1668 passed). A failed workspace step is followed
+by a diagnostic one, which reads the lib's part of the run (the step keeps its output) and runs each failed test of the
+lib again alone (`--exact --nocapture`, the binary the workspace build made, from the crate's folder as cargo runs it):
+which tests fail only beside the others, and each one's whole message, in the job's summary. When the lib's binary died
+instead (its part has no `test result` line), the lib runs one test at a time, whose last `test … ...` line names the
+test running when the process died, and the step prints the `.ips` under `~/Library/Logs/DiagnosticReports` named for
+that binary and written after the step started: an abort libsystem raises says why only in its crash report.
 
-The macOS tests job has 45 minutes, and a cold build takes 26 of them (a scratch branch restores no cache), so it
+The macOS tests job has 45 minutes, and a cold build takes 22 to 26 of them (a scratch branch restores no cache), so it
 builds once: a `--no-run` step first (`--message-format=json-render-diagnostics`, the list of test binaries in
-`test-bins.json`), then the workspace's tests, and every later step reuses that build. The serial lib run and the
+`test-bins.json`), then the workspace's tests, and every later step reuses that build. The failed lib tests and the
 terminal worker's root run start the listed binaries; the sshd step runs `--test macos` with `--workspace` and the
 workspace's features. A `-p` alone resolves other features, so it rebuilt the hub (about four minutes a step). Also
 out of the job: the plugin fixtures, built by the setup action where the tests look for them
-([plugins.md](plugins.md)), and hrafn-embed's `parity_cpu`, which `macos-perf` runs in release. A report-only step
-prints each test's time in the slowest binaries (hrafn's `overlay`, verdandi's and the hub's libs; `--report-time`,
-with `RUSTC_BOOTSTRAP` given to the binaries alone, since cargo rebuilds everything when it changes), for choosing
-what moves next; it goes once those times are read.
+([plugins.md](plugins.md)), hrafn-embed's `parity_cpu`, which `macos-perf` runs in release, and clippy on darwin
+(conformance 1/2). Round 4 took 45 minutes: setup 2, build 22, tests 9, a report-only `--report-time` pass over the
+slowest binaries 5, and the whole lib again one test at a time 6; both are gone (the failed tests alone take seconds),
+which leaves about 35. The report showed two property tests holding most of their binaries' time:
+hrafn's `overlay_matches_blob_diff_in_every_order` (70 s of `overlay`'s 87) and verdandi's
+`revert_props::keep_mine_equals_threeway_outside_hunks` (55 s); the hub's lib takes about 3 minutes.
 
 ## The tiers workflow
 
