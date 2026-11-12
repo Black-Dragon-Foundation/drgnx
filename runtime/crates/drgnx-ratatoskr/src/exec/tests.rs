@@ -1651,6 +1651,7 @@ async fn a_projects_own_runner_settings_reach_its_jobs_only() {
         let p = params(json!({"cwd": cwd.to_str().unwrap()}));
         placement(&f, &c, &p, Machine::Auto, false)
             .await
+            .unwrap()
             .shared_overlay
     };
     assert!(overlay("alpha").await);
@@ -1709,7 +1710,8 @@ async fn a_mac_job_needs_its_projects_homebrew_packages() {
         Machine::Auto,
         true,
     )
-    .await;
+    .await
+    .unwrap();
     assert_eq!(mac.os, forseti::Os::Macos);
     assert_eq!(
         mac.features,
@@ -1732,7 +1734,8 @@ async fn a_mac_job_needs_its_projects_homebrew_packages() {
         Machine::Auto,
         true,
     )
-    .await;
+    .await
+    .unwrap();
     assert_eq!(linux.os, forseti::Os::Linux);
     assert!(linux.features.is_empty());
     assert!(!linux.heavy);

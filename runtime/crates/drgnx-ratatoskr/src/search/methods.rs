@@ -381,22 +381,25 @@ impl Hub {
     }
 
     /// The names the editor's per-project settings of ROOT's project are under (its id and slug).
-    async fn project_names(root: &Path) -> Vec<String> {
-        // git runs (up to 3 s): not on a runtime worker
-        let at = root.to_path_buf();
-        let project = crate::clock::blocking(move || norn::project::resolve(&at))
-            .await
-            .ok()
-            .flatten();
-        project
+    async fn project_names(root: &Path) -> Result<Vec<String>, String> {
+        // git runs (up to 3 s): not on a runtime worker; a git that cannot answer is an error, never the global
+        // settings in the project's place
+        let project = crate::graph::project_of(root).await?;
+        Ok(project
             .iter()
             .flat_map(|p| [p.id.clone(), p.slug.clone()])
-            .collect()
+            .collect())
     }
 
     /// The checkout `drgnx-search-base` names for ROOT's project, when it does.
     async fn base_for(front: &Front, root: &Path) -> Option<PathBuf> {
-        let names = Self::project_names(root).await;
+        let names = match Self::project_names(root).await {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!("search: no base checkout for {}: {e}", root.display());
+                return None;
+            }
+        };
         names
             .iter()
             .find_map(|p| {
@@ -424,7 +427,19 @@ impl Hub {
                 };
             }
         };
-        let names = Self::project_names(root).await;
+        let names = match Self::project_names(root).await {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(
+                    "search: {}: {e}: the project's search is off",
+                    root.display()
+                );
+                return Config {
+                    off: true,
+                    ..Config::default()
+                };
+            }
+        };
         let get = |name: &str| -> Option<Value> {
             names.iter().find_map(|p| {
                 front

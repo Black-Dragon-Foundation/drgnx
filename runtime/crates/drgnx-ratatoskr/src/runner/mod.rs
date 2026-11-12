@@ -1457,13 +1457,10 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
     }
     // the forecast: from the history of similar tasks, before the write; a forecast that fails never blocks a
     // proposal (the estimate then has the prior's tokens and no range)
-    let project = {
-        let dir = PathBuf::from(&repo);
-        crate::clock::blocking(move || norn::project::resolve(&dir).map(|p| p.id))
-            .await
-            .ok()
-            .flatten()
-    };
+    let project = crate::graph::project_of(Path::new(&repo))
+        .await
+        .map_err(internal)?
+        .map(|p| p.id);
     if let Some(p) = &project {
         data["project"] = json!(p);
     }

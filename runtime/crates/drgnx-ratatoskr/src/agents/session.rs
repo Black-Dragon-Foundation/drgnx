@@ -1694,7 +1694,7 @@ pub(super) async fn prepare(
     }
     // the kinds the before-tool hooks and rules of its plugin set at launch subscribe to: the lock makes the agent
     // ask about them, so they reach the seam; a fork's lock `_meta` is its parent's
-    let project = session_project(front, sid, cwd).await;
+    let project = session_project(front, sid, cwd).await?;
     let kinds = crate::hook_points::subscribed_kinds(&front.core.plugins, project.as_deref());
     let env = runstav::paths::Env::process();
     let run = runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), sid)
@@ -1773,15 +1773,15 @@ pub(super) async fn prepare(
 
 /// Session SID's Urdr project: its plan's when a plan runs it, else the repository of CWD (`None` outside one). Runs
 /// git, off the hub's workers.
-async fn session_project(front: &Front, sid: &str, cwd: &Path) -> Option<String> {
+async fn session_project(front: &Front, sid: &str, cwd: &Path) -> Result<Option<String>, Error> {
     if let Some(p) = ActionCtx::of_session(&front.core.runs.scopes(), sid).project {
-        return Some(p);
+        return Ok(Some(p));
     }
-    let cwd = cwd.to_path_buf();
-    crate::clock::blocking(move || norn::project::resolve(&cwd).map(|r| r.id))
+    // a git that cannot answer refuses the launch: its project's hooks are never left out unseen
+    crate::graph::project_of(cwd)
         .await
-        .ok()
-        .flatten()
+        .map(|p| p.map(|r| r.id))
+        .map_err(internal)
 }
 
 /// The chain of a gateway profile kind (`drgnx-ai-agent-gateway-chain`): its provider, with the profile's model;
@@ -2116,7 +2116,7 @@ async fn launch(
     // a Codex session whose hooks subscribe to a kind: its socket serves `before_tool`, which its lock's managed hook
     // calls
     if opened && profile.provider() == Some(crate::settings::profiles::Provider::Codex) {
-        let project = session_project(front, sid, cwd).await;
+        let project = session_project(front, sid, cwd).await?;
         if crate::hook_points::subscribed_kinds(&front.core.plugins, project.as_deref())
             .iter()
             .any(|k| k != "drgnx")
@@ -5190,18 +5190,24 @@ impl Session {
         let project = match self.project.get() {
             Some(p) => p.clone(),
             None => {
-                let p = match ActionCtx::of_session(&self.scopes, &self.id).project {
-                    Some(p) => Some(p),
-                    None => {
-                        let cwd = self.cwd.clone();
-                        crate::clock::blocking(move || norn::project::resolve(&cwd).map(|r| r.id))
-                            .await
-                            .ok()
-                            .flatten()
-                    }
+                let found = match ActionCtx::of_session(&self.scopes, &self.id).project {
+                    Some(p) => Ok(Some(p)),
+                    None => crate::graph::project_of(&self.cwd)
+                        .await
+                        .map(|p| p.map(|r| r.id)),
                 };
-                let _ = self.project.set(p.clone());
-                p
+                match found {
+                    Ok(p) => {
+                        let _ = self.project.set(p.clone());
+                        p
+                    }
+                    // this point runs without the project's hooks, the log says why, and nothing is kept: the next
+                    // point asks git again
+                    Err(e) => {
+                        tracing::warn!(sid = %self.id, "a hook point's project: {e}");
+                        None
+                    }
+                }
             }
         };
         crate::hook_points::Site {
