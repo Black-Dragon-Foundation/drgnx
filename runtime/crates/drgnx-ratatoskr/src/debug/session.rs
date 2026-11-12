@@ -228,6 +228,11 @@ pub enum Update {
     },
     /// The end, once; nothing follows.
     Ended(End),
+    /// `initialized` again (an adapter that restarts in place, as delve): answer the start with the project's
+    /// breakpoints, functions and exception filters as they are now, to configure again.
+    Configure {
+        reply: oneshot::Sender<Start>,
+    },
 }
 
 enum Cmd {
@@ -496,6 +501,18 @@ impl Session {
                             }
                             if launch.is_none() {
                                 self.send(Update::Running { thread: None, all: true });
+                            }
+                        } else if event == "initialized" {
+                            // a restart in place: the configuration of now again, then it runs
+                            let (tx, rx) = oneshot::channel();
+                            self.send(Update::Configure { reply: tx });
+                            if let Ok(s) = rx.await {
+                                self.start.breakpoints = s.breakpoints;
+                                self.start.functions = s.functions;
+                                self.start.exception_filters = s.exception_filters;
+                            }
+                            if let Err(e) = self.configure().await {
+                                return self.fail(e);
                             }
                         } else if let Some(end) = self.event(&event, body).await {
                             return end;

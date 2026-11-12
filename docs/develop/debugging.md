@@ -381,6 +381,35 @@ container may not turn address randomisation off.
 Inside the sandbox (Gleipnir) `ptrace` stays refused in both tiers, so delve and lldb-dap run outside it; Python and
 JavaScript adapters run in the full tier.
 
+### Live adapters: the runs (spec §13)
+
+`debug::tests_live_adapters` (ignored in normal runs) starts each adapter for real through the hub's own launcher
+(`adapters::command`, `wire::Spawned`) and drives the hub's API, wire level: no editor is needed, since the events the
+editor gets are what it checks. Each adapter runs the same scenario over a small program: a breakpoint hit, a
+condition (`i == 3`) and a hit count (`2`), a logpoint's output, step in, out and over, Variables with a structure
+expanded, `setVariable` (the program then uses the value set), a watch (`evaluate`), an exception filter's stop, a
+restart and Stop (the hub empty, the debuggee gone). debugpy adds a `subprocess` child, js-debug a `fork` child (both
+through `startDebugging`), and lldb-dap starts its program through `runInTerminal`. debugpy and lldb-dap also attach
+to a running process by PID, where Stop leaves the process running. Each test prints a `T10-REPORT` line: the
+capabilities, the exception filters and what each step saw. The `*_probe_cost` tests run a 500-pass loop with a probe's
+logpoint and without, and print a `T10-PROBES` line: the cost of a hit and its value's text, per adapter (debugpy
+0.6 ms, js-debug 2.5 ms, delve 8.7 ms, lldb-dap 1 ms on the desktop; lldb-dap shows a struct as its type name only).
+
+The hub's library test binary, run with `--ignored --test-threads=1 --nocapture debug::tests_live_adapters` inside
+`drgnx-debug-adapters:f45` with `ctr.sh --ptrace` (about 3 GB of memory), runs them all in about 2 minutes. What the
+runs showed, and the hub keeps to:
+
+- debugpy's children are attaches whose `connect` names the parent adapter's own client listener (it serves one even
+  over stdio): a child session connects there (`launch::child_server`), as VS Code's Python extension does.
+- delve restarts in place: `restart` is answered, then `initialized` comes again and the adapter waits for its
+  configuration. The session configures again with the project's breakpoints, functions and filters of now
+  (`Update::Configure`). debugpy, js-debug and lldb-dap restart as a new session.
+- Adapters differ in where a step lands: delve's step in stops on the function's `func` line (its prologue) before the
+  body, and js-debug's step out lands on the line after the call when the call's value is assigned there. The
+  scenario accepts both and reports which.
+- After a `setVariable` the same stop is published again, in the same epoch; a new stop has the next epoch, which is
+  how the scenario tells them apart.
+
 ## Sessions inside a port block (spec §21)
 
 Under macOS's Seatbelt a session's adapter and program may use only the loopback ports its profile names

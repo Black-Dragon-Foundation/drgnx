@@ -665,11 +665,11 @@ pub(super) fn over_tcp(s: tokio::net::TcpStream, proc: Box<dyn super::session::P
 }
 
 /// An adapter the hub starts: on stdio, or listening on PORT.
-struct Spawned {
-    argv: Vec<String>,
-    env: Vec<(OsString, OsString)>,
-    cwd: PathBuf,
-    port: Option<u16>,
+pub(super) struct Spawned {
+    pub(super) argv: Vec<String>,
+    pub(super) env: Vec<(OsString, OsString)>,
+    pub(super) cwd: PathBuf,
+    pub(super) port: Option<u16>,
 }
 
 impl Launcher for Spawned {
@@ -725,8 +725,8 @@ impl Launcher for Spawned {
 }
 
 /// `debugServer`: an adapter the user runs, on a port of this machine.
-struct Server {
-    addr: SocketAddr,
+pub(super) struct Server {
+    pub(super) addr: SocketAddr,
 }
 
 impl Launcher for Server {

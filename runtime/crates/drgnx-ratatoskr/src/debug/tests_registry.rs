@@ -798,3 +798,88 @@ async fn a_source_reference_is_fetched_from_the_adapter() {
     .unwrap();
     assert!(m.finish().await.into_iter().all(|r| r.is_ok()));
 }
+
+/// debugpy's child (`startDebugging`: an attach whose `connect` names the parent adapter's own client listener)
+/// connects there, as VS Code's Python extension does; no new adapter is started for it.
+#[tokio::test]
+async fn a_debugpy_child_connects_to_its_parent_adapters_listener() {
+    use tokio::io::AsyncReadExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut parent = launch(vec![json!({"reverse": "startDebugging",
+        "arguments": {"request": "attach", "configuration": {"name": "Subprocess 9", "request": "attach",
+                      "subProcessId": 9, "connect": {"host": "127.0.0.1", "port": port}}}})]);
+    parent.extend(end());
+    // one script: a new adapter for the child would find none
+    let (d, _, m, _) = setup(vec![parent]);
+    let mut s = start();
+    s.adapter_id = "debugpy".into();
+    let id = d.start(7, "/p", s, m.clone()).await.unwrap();
+    let (mut conn, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
+        .await
+        .expect("the child connected to the parent adapter's listener")
+        .unwrap();
+    let mut buf = vec![0u8; 4096];
+    let n = tokio::time::timeout(Duration::from_secs(10), conn.read(&mut buf))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&buf[..n]).contains("\"initialize\""));
+    drop(conn);
+    d.control(
+        &id,
+        Op::Stop {
+            kill_debuggee: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(m.finish().await.into_iter().all(|r| r.is_ok()));
+}
+
+/// An adapter that restarts in place (delve: `restart` answered, then `initialized` again) is configured again, with
+/// the project's breakpoints as they are now, and runs on; without it the restarted program waits for ever.
+#[tokio::test(start_paused = true)]
+async fn an_initialized_after_a_restart_configures_again_with_the_breakpoints_of_now() {
+    let both = json!({"source": {"path": "/p/a.js"}, "breakpoints": [{"line": 3}, {"line": 5}]});
+    let mut s = vec![
+        json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true, "supportsRestartRequest": true}}),
+        json!({"expect": "launch", "ok": {}}),
+        json!({"event": "initialized"}),
+        json!({"expect": "setBreakpoints", "args": {"source": {"path": "/p/a.js"}, "breakpoints": [{"line": 3}]},
+               "ok": {"breakpoints": [{"id": 1, "verified": true}]}}),
+        json!({"expect": "configurationDone"}),
+        // added while it runs
+        json!({"expect": "setBreakpoints", "args": both,
+               "ok": {"breakpoints": [{"id": 1, "verified": true}, {"id": 2, "verified": true}]}}),
+        json!({"expect": "restart", "ok": {}}),
+        json!({"event": "initialized"}),
+        json!({"expect": "setBreakpoints", "args": both,
+               "ok": {"breakpoints": [{"id": 3, "verified": true}, {"id": 4, "verified": true}]}}),
+        json!({"expect": "configurationDone"}),
+    ];
+    s.extend(end());
+    let (d, ev, m, _) = setup(vec![s]);
+    d.breakpoints("/p", Some(add_bp("/p/a.js", 3, None)), None)
+        .await;
+    let id = d.start(1, "/p", start(), m.clone()).await.unwrap();
+    until(|| last_bps(&ev, "/p/a.js").is_some_and(|v| v["breakpoints"][0]["verified"] == true))
+        .await;
+    d.breakpoints("/p", Some(add_bp("/p/a.js", 5, None)), None)
+        .await;
+    until(|| last_bps(&ev, "/p/a.js").is_some_and(|v| v["breakpoints"][1]["verified"] == true))
+        .await;
+    d.control(&id, Op::Restart).await.unwrap();
+    // the script checks the rest: both breakpoints sent again, then configurationDone, before the Stop's disconnect
+    crate::clock::sleep(Duration::from_millis(500)).await;
+    d.control(
+        &id,
+        Op::Stop {
+            kill_debuggee: None,
+        },
+    )
+    .await
+    .unwrap();
+    let logs = m.finish().await;
+    assert!(logs.iter().all(|r| r.is_ok()), "{logs:?}");
+}

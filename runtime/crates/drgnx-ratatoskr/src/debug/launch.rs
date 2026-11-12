@@ -514,3 +514,24 @@ pub fn adapter_arguments(config: &Value) -> Value {
         v => v.clone(),
     }
 }
+
+/// Where a child session of an ADAPTER_TYPE session connects, from `startDebugging`'s ARGUMENTS (`request` and
+/// `configuration`), when not to its launcher's adapter: debugpy's children are attaches whose configuration's
+/// `connect` names the parent adapter's own client listener (it serves one even on stdio; the configuration is a copy
+/// of the launch's and may still say `launch`), which VS Code's Python extension connects to; this machine only.
+/// None: the launcher's child.
+pub fn child_server(adapter_type: &str, arguments: &Value) -> Option<SocketAddr> {
+    if !matches!(adapter_type, "debugpy" | "python")
+        || arguments.get("request").and_then(Value::as_str) != Some("attach")
+    {
+        return None;
+    }
+    let connect = arguments.get("configuration")?.get("connect")?;
+    let port = u16::try_from(connect.get("port")?.as_u64()?).ok()?;
+    match connect.get("host").and_then(Value::as_str) {
+        None | Some("localhost" | "127.0.0.1") => {
+            Some(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
+        }
+        Some(_) => None,
+    }
+}
