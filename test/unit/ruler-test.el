@@ -32,7 +32,7 @@
             (let* ((s (cadr (get-text-property 0 'display (overlay-get o 'before-string))))
                    (face (get-text-property (1- (length s)) 'face s)))
               (list (line-number-at-pos (overlay-start o)) (get-text-property 0 'drgnx-ruler-line s) face)))
-          (cdr (assq (selected-window) drgnx-ruler--windows))))
+          (cddr (assq (selected-window) drgnx-ruler--windows))))
 
 (ert-deftest drgnx-ruler/marks-scaled-to-the-window ()
   "Each row of the window stands for N/H lines and shows its best mark; the rows of the lines shown are the band;
@@ -104,7 +104,7 @@ the ruler claims the right margin while there are marks."
     (goto-char (point-max)) (insert "more\n")
     (should (drgnx-timer-active-p (cons 'ruler (current-buffer))))
     (drgnx-ruler-refresh)
-    (should (= drgnx-ruler--lines 102))
+    (should (= drgnx-ruler--lines 101))
     (drgnx-ruler-source 'test nil)
     (should-not (drgnx-timer-active-p (cons 'ruler (current-buffer))))))
 
@@ -114,7 +114,7 @@ the ruler claims the right margin while there are marks."
     (drgnx-ruler-source 'test #'ruler-test--source)
     (let* ((row (seq-find (lambda (r) (eq (nth 2 r) 'error)) (ruler-test--rows)))
            (o (seq-find (lambda (o) (= (line-number-at-pos (overlay-start o)) (car row)))
-                        (cdr (assq (selected-window) drgnx-ruler--windows))))
+                        (cddr (assq (selected-window) drgnx-ruler--windows))))
            (s (cadr (get-text-property 0 'display (overlay-get o 'before-string)))))
       (drgnx-ruler-click (list 'mouse-1 (list (selected-window) 'right-margin '(0 . 0) 0 (cons s 0) (overlay-start o))))
       (should (= (line-number-at-pos) (nth 1 row))))))

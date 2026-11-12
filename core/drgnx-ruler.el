@@ -34,7 +34,8 @@
 (defvar-local drgnx-ruler--marks [] "The marks, sorted by line: a vector of (LINE LANE FACE PRIORITY).")
 (defvar-local drgnx-ruler--tick 0 "Counts the times the marks were asked again (a cache key).")
 (defvar-local drgnx-ruler--lines 1 "The buffer's lines when the marks were last asked.")
-(defvar-local drgnx-ruler--windows nil "Alist WINDOW → overlays, one per row, in row order.")
+(defvar-local drgnx-ruler--windows nil
+  "Alist WINDOW → (KEY . OVERLAYS): the overlays, one per row in row order, laid for KEY (start, height, marks).")
 (defvar-local drgnx-ruler--rows nil "(KEY . VECTOR): each row's lanes (a vector of three faces or nil) for KEY.")
 (defvar-local drgnx-ruler--strings nil
   "Rows' `before-string's by (LANES BAND LINE): a hash, emptied with the rows' cache and when the margin moves (a
@@ -69,7 +70,9 @@ row's lanes and line depend only on (lines, rows, marks), so it holds at most tw
   (with-current-buffer (or buffer (current-buffer))
     (when drgnx-ruler-mode
       (setq drgnx-ruler--marks (drgnx-ruler--ask)
-            drgnx-ruler--lines (max 1 (line-number-at-pos (point-max) t))
+            drgnx-ruler--lines (max 1 (- (line-number-at-pos (point-max) t)  ; a final newline ends a line
+                                         (if (and (> (point-max) (point-min)) (eq (char-before (point-max)) ?\n))
+                                             1 0)))
             drgnx-ruler--tick (1+ drgnx-ruler--tick))
       (drgnx-margins-claim 'ruler (and (> (length drgnx-ruler--marks) 0) (drgnx-ruler--columns))
                            :side 'right :order 100)
@@ -79,7 +82,7 @@ row's lanes and line depend only on (lines, rows, marks), so it holds at most tw
   "Draw the ruler in each window showing this buffer; drop the rows of windows that no longer do."
   (dolist (cell drgnx-ruler--windows)
     (unless (and (window-live-p (car cell)) (eq (window-buffer (car cell)) (current-buffer)))
-      (mapc #'delete-overlay (cdr cell))
+      (mapc #'delete-overlay (cddr cell))
       (setq drgnx-ruler--windows (delq cell drgnx-ruler--windows))))
   (dolist (w (get-buffer-window-list nil nil t)) (drgnx-ruler--draw w)))
 
@@ -144,12 +147,17 @@ LANES (three faces or nil), BAND non-nil for a shown row; a click goes to LINE."
                       'drgnx-ruler-line line)))
                  drgnx-ruler--strings))))
 
-(defun drgnx-ruler--draw (window)
-  "Lay WINDOW's rows on the lines it shows, from the cached marks."
-  (when (and (window-live-p window) (eq (window-buffer window) (current-buffer)))
+(defun drgnx-ruler--key (window)
+  "What WINDOW's rows were laid for: its start, its height and the marks."
+  (list (window-start window) (window-body-height window) drgnx-ruler--tick))
+
+(defun drgnx-ruler--draw (window &optional unless-laid)
+  "Lay WINDOW's rows on the lines it shows, from the cached marks; with UNLESS-LAID, not when they already are."
+  (when (and (window-live-p window) (eq (window-buffer window) (current-buffer))
+             (not (and unless-laid (equal (cadr (assq window drgnx-ruler--windows)) (drgnx-ruler--key window)))))
     (let* ((cell (or (assq window drgnx-ruler--windows)
-                     (car (push (list window) drgnx-ruler--windows))))
-           (old (cdr cell)) (new nil))
+                     (car (push (list window nil) drgnx-ruler--windows))))
+           (old (cddr cell)) (new nil))
       (when (and (drgnx-margins-offset 'ruler) (> (length drgnx-ruler--marks) 0))
         (save-excursion
           (goto-char (window-start window))
@@ -163,7 +171,7 @@ LANES (three faces or nil), BAND non-nil for a shown row; a click goes to LINE."
                        (band (and (<= (car lines) shown-to) (>= (cdr lines) first)))
                        (str (drgnx-ruler--string (aref lanes r) band (car lines)))
                        (o (pop old)))
-                  (if o (move-overlay o (point) (point))
+                  (if o (unless (eql (overlay-start o) (point)) (move-overlay o (point) (point)))
                     (setq o (make-overlay (point) (point) nil t nil))
                     (overlay-put o 'window window)
                     (overlay-put o 'drgnx-ruler t))
@@ -172,11 +180,17 @@ LANES (three faces or nil), BAND non-nil for a shown row; a click goes to LINE."
                   (push o new)
                   (forward-line 1)))))))
       (mapc #'delete-overlay old)
-      (setcdr cell (nreverse new)))))
+      (setcdr cell (cons (drgnx-ruler--key window) (nreverse new))))))
+
+(defun drgnx-ruler--before-redisplay (window)
+  "`pre-redisplay-functions': a command moved WINDOW's start (a scroll key): its rows move before it is drawn, from
+the cached rows, so the window is drawn once.  Nothing when they are laid for its start already."
+  (drgnx-ruler--draw window t))
 
 (defun drgnx-ruler--scrolled (window _start)
-  "`window-scroll-functions': WINDOW's rows move to the lines it shows now."
-  (drgnx-ruler--draw window))
+  "`window-scroll-functions': redisplay chose another start than the command left (point moved past the edge); the
+rows move to the lines it shows now (that window is drawn again)."
+  (drgnx-ruler--draw window t))
 
 (defun drgnx-ruler--resized (window)
   "`window-size-change-functions' and `window-buffer-change-functions' (local): WINDOW draws again."
@@ -193,7 +207,9 @@ LANES (three faces or nil), BAND non-nil for a shown row; a click goes to LINE."
     (with-current-buffer buffer
       (when drgnx-ruler-mode
         (clrhash drgnx-ruler--strings)
-        (dolist (cell drgnx-ruler--windows) (mapc (lambda (o) (overlay-put o 'before-string nil)) (cdr cell)))
+        (dolist (cell drgnx-ruler--windows)
+          (setcar (cdr cell) nil)
+          (mapc (lambda (o) (overlay-put o 'before-string nil)) (cddr cell)))
         (drgnx-ruler--draw-all)))))
 
 (defun drgnx-ruler--off ()
@@ -222,6 +238,7 @@ LANES (three faces or nil), BAND non-nil for a shown row; a click goes to LINE."
   (if drgnx-ruler-mode
       (progn
         (setq drgnx-ruler--strings (make-hash-table :test #'equal))
+        (add-hook 'pre-redisplay-functions #'drgnx-ruler--before-redisplay nil t)
         (add-hook 'window-scroll-functions #'drgnx-ruler--scrolled nil t)
         (add-hook 'window-size-change-functions #'drgnx-ruler--resized nil t)
         (add-hook 'window-buffer-change-functions #'drgnx-ruler--resized nil t)
@@ -230,6 +247,7 @@ LANES (three faces or nil), BAND non-nil for a shown row; a click goes to LINE."
         (add-hook 'kill-buffer-hook #'drgnx-ruler--off nil t)
         (add-hook 'drgnx-margins-changed-functions #'drgnx-ruler--restring)
         (drgnx-ruler-refresh))
+    (remove-hook 'pre-redisplay-functions #'drgnx-ruler--before-redisplay t)
     (remove-hook 'window-scroll-functions #'drgnx-ruler--scrolled t)
     (remove-hook 'window-size-change-functions #'drgnx-ruler--resized t)
     (remove-hook 'window-buffer-change-functions #'drgnx-ruler--resized t)
@@ -237,7 +255,7 @@ LANES (three faces or nil), BAND non-nil for a shown row; a click goes to LINE."
     (remove-hook 'change-major-mode-hook #'drgnx-ruler--off t)
     (remove-hook 'kill-buffer-hook #'drgnx-ruler--off t)
     (drgnx-timer-cancel (cons 'ruler (current-buffer)))
-    (dolist (cell drgnx-ruler--windows) (mapc #'delete-overlay (cdr cell)))
+    (dolist (cell drgnx-ruler--windows) (mapc #'delete-overlay (cddr cell)))
     (setq drgnx-ruler--windows nil drgnx-ruler--rows nil drgnx-ruler--marks [] drgnx-ruler--sources nil)
     (drgnx-margins-claim 'ruler nil)
     (unless (seq-some (lambda (b) (buffer-local-value 'drgnx-ruler-mode b)) (buffer-list))

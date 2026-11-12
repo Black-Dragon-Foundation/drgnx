@@ -1531,8 +1531,12 @@ Each window's shown lines are its rows: row R stands for lines R·N/H to (R+1)·
 when the file is shorter). A row is an overlay with a margin `before-string` on its line, one per row and window:
 three lanes of 3, 6 and 3 logical pixels (stretch glyphs, the faces' backgrounds), each its best mark (highest
 PRIORITY), else `drgnx-ruler-view` for the rows of the lines shown. A terminal row is one character. The rows' lanes
-are cached on (lines, rows, marks), and the strings by (lanes, band, line), so a scroll (`window-scroll-functions`)
-moves the overlays and re-puts only the rows whose string changed; nothing is computed in redisplay. A click on a
+are cached on (lines, rows, marks), and the strings by (lanes, band, line), so a scroll moves the overlays and re-puts
+only the rows whose string changed. The rows are laid from `pre-redisplay-functions` when the window's start,
+height or marks differ from what they were laid for (a scroll key sets the start before redisplay), and from
+`window-scroll-functions` only when redisplay picks another start than the command left.
+Cost, measured against `debug-gutter-baseline` (4.1–4.3 ms a page): the right margin claimed and empty adds 0.4 ms,
+one-character rows 0.7 ms, the three-lane rows 0.7–1.1 ms, so `debug-ruler-scroll` does not meet its 0.3 ms rule yet. A click on a
 row (`drgnx-ruler-click`) centres the row's first line. Rows are lines, not screen lines: wrapped lines make fewer
 rows. The ruler turns off before a new major mode or a kill drops its locals. Producers today: the debug column
 (breakpoints, the stopped line). Perf: `debug-ruler-scroll` (10,000 lines, 200 marks) against
