@@ -1063,6 +1063,7 @@ cmd_test() {
 ## drgnx record / replay — live recordings (docs/develop/recordings.md)
 
 RECORD_SELECTOR='"^drgnx-agents-smoke/"'   # an ERT selector, read as a Lisp string (the smoke script's tests)
+RECORD_FILE=test/ui/drgnx-agents-smoke-test.el   # the smoke script's file
 
 record_lisp() { # SUBCOMMAND ARGS… — stop, lint, export and path are core/drgnx-record.el's, in a batch Emacs
   "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
@@ -1110,10 +1111,12 @@ cmd_record() { # start NAME [--cap-usd N] [--cap-weekly P] [--max-minutes M] -- 
   [ -z "$weekly" ] || caps="${caps:+$caps,}\"weekly_pct\":$weekly"
   [ -z "$minutes" ] || caps="${caps:+$caps,}\"minutes\":$minutes"
   echo "drgnx record: recording into $dir ($provenance)" >&2
-  # a narrowed run: the smoke script, unless the caller picked tests
-  local run=("$here/bin/drgnx")
+  # a narrowed run: the smoke script (its file, in test/ui, which the batch suite doesn't read; its tests), unless the
+  # caller picked tests
+  local run=("$here/bin/drgnx") only="${DRGNX_TEST_ONLY:-}"
+  [ -n "${DRGNX_TEST_SELECTOR:-}" ] || only="${only:-$here/$RECORD_FILE}"
   [ -z "$minutes" ] || run=(timeout --foreground "${minutes}m" "$here/bin/drgnx")
-  DRGNX_RECORD="$dir" DRGNX_RECORD_PROVENANCE="$provenance" DRGNX_RECORD_CAPS="{$caps}" \
+  DRGNX_RECORD="$dir" DRGNX_RECORD_PROVENANCE="$provenance" DRGNX_RECORD_CAPS="{$caps}" DRGNX_TEST_ONLY="$only" \
     DRGNX_TEST_SELECTOR="${DRGNX_TEST_SELECTOR:-$RECORD_SELECTOR}" "${run[@]}" "$@" || rc=$?
   ended="$(date -u +%FT%TZ)"
   printf '{"exit":%s,"ended":"%s","provenance":"%s"}\n' "$rc" "$ended" "$provenance" > "$dir/bundle/run.json"

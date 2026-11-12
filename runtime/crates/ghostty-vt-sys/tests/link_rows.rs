@@ -58,33 +58,81 @@ fn the_library_is_the_version_this_crate_was_written_for() {
     );
 }
 
+/// A symbol as the C and Rust sources name it: Mach-O puts a `_` before every name (`___addtf3` is `__addtf3`, `__ZN3hwy…`
+/// is the C++ name `_ZN3hwy…`), ELF does not.
+fn source_name(name: &str) -> &str {
+    if cfg!(target_os = "macos") {
+        name.strip_prefix('_').unwrap_or(name)
+    } else {
+        name
+    }
+}
+
+/// The global code symbols FILE defines: each one's source name, whether the linker may keep another definition in its
+/// place, and its `nm` line. ELF's `nm` says `T` or `W`, and only `W` may be replaced. Mach-O's prints every definition
+/// as `T`, so there it is read from `nm -m`: a `weak` one, or a `private external` one (hidden: Zig gives compiler_rt
+/// that on macOS, `(__TEXT,__text) private external ___addtf3`, not weak), which never leaves the image it is linked
+/// into, while ld64 refuses a second definition at link time (and the linked binary is checked for one below).
+fn code_globals(file: &str) -> Vec<(String, bool, String)> {
+    if cfg!(target_os = "macos") {
+        tool("nm", &["-m", "--defined-only", "-g"], file)
+            .lines()
+            .filter(|l| l.contains("(__TEXT,"))
+            .filter_map(|l| {
+                let name = source_name(l.split_whitespace().last()?).to_string();
+                let yields =
+                    l.split_whitespace().any(|w| w == "weak") || l.contains(" private external ");
+                Some((name, yields, l.to_string()))
+            })
+            .collect()
+    } else {
+        tool("nm", &["--defined-only", "-g"], file)
+            .lines()
+            .filter_map(|l| {
+                let mut w = l.split_whitespace().rev();
+                let name = w.next()?.to_string();
+                match w.next()? {
+                    "T" => Some((name, false, l.to_string())),
+                    "W" => Some((name, true, l.to_string())),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+}
+
 #[test]
 fn no_duplicate_compiler_rt_symbols() {
     // The archive's compiler_rt must not clash with Rust's compiler_builtins: every global symbol it defines under a
-    // compiler_rt name is weak (W), so the linker keeps one; and the linked test binary defines no name twice.
+    // compiler_rt name yields (weak; on macOS hidden), so the linker keeps one; and the linked test binary defines no
+    // name twice.
     let archive = env!("GHOSTTY_VT_ARCHIVE");
-    let strong: BTreeSet<String> = tool("nm", &["--defined-only", "-g"], archive)
-        .lines()
-        .filter_map(|l| {
-            let mut w = l.split_whitespace().rev();
-            let name = w.next()?;
-            let ty = w.next()?;
-            (ty == "T"
+    let strong: BTreeSet<(String, String)> = code_globals(archive)
+        .into_iter()
+        .filter(|(name, yields, _)| {
+            !yields
                 && name.starts_with("__")
                 && !name.starts_with("__cxa")
-                && !name.starts_with("__zig"))
-            .then(|| name.to_string())
+                && !name.starts_with("__zig")
         })
+        .map(|(name, _, line)| (name, line))
         .collect();
     assert!(
         strong.is_empty(),
-        "the archive defines strong compiler_rt-style symbols: {strong:?}"
+        "the archive defines {} strong compiler_rt-style symbols: {:?}; their nm lines begin: {:?}",
+        strong.len(),
+        strong.iter().map(|(n, _)| n).collect::<Vec<_>>(),
+        strong.iter().take(5).map(|(_, l)| l).collect::<Vec<_>>()
     );
     let exe = std::env::current_exe().unwrap();
     let mut seen = BTreeSet::new();
     let dup: Vec<String> = tool("nm", &["--defined-only", "-g"], exe.to_str().unwrap())
         .lines()
-        .filter_map(|l| l.split_whitespace().last().map(String::from))
+        .filter_map(|l| {
+            l.split_whitespace()
+                .last()
+                .map(|n| source_name(n).to_string())
+        })
         .filter(|n| n.starts_with("__") && !seen.insert(n.clone()))
         .collect();
     assert!(
@@ -119,6 +167,9 @@ fn no_libstdcxx_reference() {
     );
 }
 
+/// Linux only: macOS has no network namespace to build in (`unshare` is util-linux). The build reads the same pinned
+/// tarballs there, so this row on Linux covers both.
+#[cfg(target_os = "linux")]
 #[test]
 fn builds_offline() {
     // The same crate, built in a network namespace of its own (no interface at all) from the pinned tarballs.
@@ -142,6 +193,9 @@ fn builds_offline() {
         .arg(dir.join("Cargo.toml"))
         .env("CARGO_TARGET_DIR", &target)
         .env("GHOSTTY_VT_TARBALLS", &tarballs)
+        // a compiler cache (sccache) is a client of a server it cannot reach from an empty namespace
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
         .status()
         .expect("unshare (util-linux)");
     let _ = std::fs::remove_dir_all(&target);

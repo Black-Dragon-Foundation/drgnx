@@ -1,6 +1,6 @@
 //! job-exec on a Mac: the process [`super::attempt::launch`] starts in a session of its own. It runs the job's
-//! command, always under `sandbox-exec` (never unconfined: a command that isn't is refused), with its output in the
-//! attempt's log; keeps the Mac from idle sleep while it runs (`caffeinate -i -w`); stops it at its timeout, counted
+//! command, always under `sandbox-exec` (never unconfined: a command that isn't is refused), with its output on a pipe
+//! job-exec copies into the attempt's log (the job can't touch its attempt folder's files); keeps the Mac from idle sleep while it runs (`caffeinate -i -w`); stops it at its timeout, counted
 //! on `CLOCK_MONOTONIC` (which counts sleep: Rust's `Instant` on macOS doesn't), or when a kill reason appears; and
 //! writes `result.json` judged as on Linux (`forseti::classify`). On a stop the verdict is written first, then the
 //! whole process group goes, job-exec with it. Its memory cap is [`super::memwatch`]'s: past it every process of the
@@ -16,7 +16,7 @@
 
 use super::memwatch::{self, MARKER};
 use crate::linux::disk;
-use crate::linux::jobexec::{JobExec, KILL_REASON, read_kill_reason};
+use crate::linux::jobexec::{HelperSpec, JobExec, KILL_REASON, read_kill_reason};
 use crate::linux::parse::{self, RowVerdict};
 use crate::linux::probe::Probe;
 use crate::linux::result::{ResultJson, RowResult};
@@ -45,10 +45,26 @@ fn mono_s() -> f64 {
     ts.tv_sec as f64 + ts.tv_nsec as f64 / 1e9
 }
 
-/// Why SPEC can't run on a Mac: no command, a command not under `sandbox-exec -f <profile>`, keys or a helper.
+/// Why SPEC can't run on a Mac: no command, a command not under `sandbox-exec -f <profile>`, keys, or a helper that
+/// is anything but the job's proxy (its allow-list, socket and port: `darwin::proxy`).
 pub fn refusal(spec: &JobExec) -> Option<String> {
-    if spec.keyed || spec.helper.is_some() {
-        return Some("a Mac runner takes no keyed job and runs no job helper".into());
+    if spec.keyed {
+        return Some("a Mac runner takes no keyed job".into());
+    }
+    if let Some(h) = &spec.helper {
+        let proxy_only = HelperSpec {
+            hub_allow: h.hub_allow.clone(),
+            proxy_fd: h.proxy_fd,
+            proxy_port: h.proxy_port,
+            ..HelperSpec::default()
+        };
+        if *h != proxy_only
+            || h.hub_allow.is_none()
+            || h.proxy_fd.is_none()
+            || h.proxy_port.is_none()
+        {
+            return Some("a Mac job's only helper is its proxy".into());
+        }
     }
     match spec.argv.as_slice() {
         [] => Some("the job has no command".into()),
@@ -83,11 +99,16 @@ fn leads_session() -> bool {
     unsafe { libc::getsid(0) == libc::getpid() }
 }
 
-/// Runs SPEC from the attempt's folder DIR and writes `result.json` there; the result. A stop (timeout, kill
-/// reason) ends this process's group after the result is written.
+/// Runs SPEC from the attempt's folder DIR and writes `result.json` there; the result. However the job ended (by
+/// itself, a timeout, a kill reason), this process's group goes after the result is written: nothing of it lives on.
 pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
-    let (result, stop) = run_unchecked(dir, spec, refusal(spec));
-    if stop && leads_session() {
+    run_with(dir, spec, None)
+}
+
+/// [`run`], with SETUP as a failure found before it (the job's proxy couldn't start): the job then runs nothing.
+pub fn run_with(dir: &Path, spec: &JobExec, setup: Option<String>) -> ResultJson {
+    let (result, _stop) = run_unchecked(dir, spec, refusal(spec).or(setup));
+    if leads_session() {
         // SAFETY: SIGKILL to our own process group (job-exec and every process of the job that stayed in it)
         unsafe { libc::killpg(0, libc::SIGKILL) };
     }
@@ -114,11 +135,15 @@ fn run_unchecked(dir: &Path, spec: &JobExec, refused: Option<String>) -> (Result
                     .env_clear()
                     .envs(spec.env.iter().map(|(k, v)| (k, v)))
                     .stdin(Stdio::null());
-                match log.try_clone() {
-                    Ok(out) => {
-                        cmd.stdout(out).stderr(log);
+                // a pipe, copied into the log: under Seatbelt the job can't stat or write its attempt folder's
+                // files, and a pipe has no path
+                let mut copier = None;
+                match std::io::pipe().and_then(|(r, w)| Ok((r, w.try_clone()?, w))) {
+                    Ok((r, out, err)) => {
+                        cmd.stdout(out).stderr(err);
+                        copier = Some(copy_into(r, log));
                     }
-                    Err(e) => seen.setup = Some(format!("the log: {e}")),
+                    Err(e) => seen.setup = Some(format!("the log's pipe: {e}")),
                 }
                 if let Some(c) = &spec.cwd {
                     cmd.current_dir(c);
@@ -152,6 +177,11 @@ fn run_unchecked(dir: &Path, spec: &JobExec, refused: Option<String>) -> (Result
                         &mut seen,
                     );
                 }
+                // our ends of the pipe closed: the copy ends once the job's processes (killed by `watch`) are gone
+                drop(cmd);
+                if let Some(done) = copier {
+                    let _ = done.recv_timeout(DRAIN);
+                }
             }
         }
     }
@@ -159,6 +189,20 @@ fn run_unchecked(dir: &Path, spec: &JobExec, refused: Option<String>) -> (Result
     let result = judge(dir, spec, &seen, mono_s() - t0);
     let _ = result.write(dir);
     (result, stop)
+}
+
+/// How long the log's copy may take to drain once the job is over: a process that slipped past the kill and still
+/// holds the pipe can't hold the result back (it dies with the group after the result is written).
+const DRAIN: Duration = Duration::from_secs(2);
+
+/// What reaches R copied into LOG on a thread of its own; the receiver hears when R reached its end.
+fn copy_into(mut r: std::io::PipeReader, mut log: fs::File) -> std::sync::mpsc::Receiver<()> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut r, &mut log);
+        let _ = tx.send(());
+    });
+    rx
 }
 
 fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, marker: &str, t0: f64, seen: &mut Seen) {
@@ -241,22 +285,21 @@ fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, marker: &str, t0: f64, s
         std::thread::sleep(TICK);
     }
     if seen.timed_out || seen.stopped {
-        // the command now; what else stayed in job-exec's group goes once the result is written (`run`), or, in a
-        // session of its own, its group now
         let _ = child.kill();
-        if !leader {
-            // SAFETY: SIGKILL to the command's own process group (it leads its session)
-            unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
-        }
         if let Ok(st) = child.wait() {
             seen.exit_code = st.code();
             seen.signal = st.signal();
         }
-        if seen.oom {
-            // what the job started between the scan and the kill
-            memwatch::kill_all(&memwatch::scan(me, sid, born, marker).pids);
-        }
     }
+    // however it ended, nothing of the job outlives it: what stayed in job-exec's group goes once the result is
+    // written (`run`), or, in a session of its own, the command's group now; then the session and the marked
+    // escapees the scan finds (and what the job started between a watchdog scan and its kill)
+    if !leader {
+        // SAFETY: SIGKILL to the command's own process group (it led its session; the group id isn't reused while
+        // a member lives)
+        unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
+    }
+    memwatch::kill_all(&memwatch::scan(me, sid, born, marker).pids);
     if let Some(mut c) = awake {
         let _ = c.kill();
         let _ = c.wait();
@@ -394,6 +437,48 @@ mod tests {
         assert!(refusal(&keyed).unwrap().contains("keyed"));
     }
 
+    /// [D] A Mac job's only helper is its proxy (its allow-list, its socket and port, all three); anything of
+    /// Linux's helper (keys, a relay, a container) or a part of the proxy alone is refused.
+    #[test]
+    fn a_mac_jobs_only_helper_is_its_proxy() {
+        let d = PathBuf::from("/x");
+        let proxy = HelperSpec {
+            hub_allow: Some("/x/net.allow".into()),
+            proxy_fd: Some(5),
+            proxy_port: Some(41234),
+            ..Default::default()
+        };
+        let mut s = spec(&d, &[SANDBOX_EXEC, "-f", "/x/job.sb", "/bin/true"]);
+        s.helper = Some(proxy.clone());
+        assert_eq!(refusal(&s), None);
+        for bad in [
+            HelperSpec {
+                keys: vec!["K".into()],
+                ..proxy.clone()
+            },
+            HelperSpec {
+                container: Some("c".into()),
+                ..proxy.clone()
+            },
+            HelperSpec {
+                sidecar_argv: vec!["run".into()],
+                ..proxy.clone()
+            },
+            HelperSpec {
+                proxy_fd: None,
+                ..proxy.clone()
+            },
+            HelperSpec {
+                hub_allow: None,
+                ..proxy.clone()
+            },
+            HelperSpec::default(),
+        ] {
+            s.helper = Some(bad.clone());
+            assert!(refusal(&s).is_some(), "{bad:?}");
+        }
+    }
+
     /// [D] A refused job writes an infra result (setup) and runs nothing.
     #[test]
     fn a_refused_job_is_infra_and_runs_nothing() {
@@ -432,6 +517,52 @@ mod tests {
         );
         let red = spec(d.path(), &["/bin/sh", "-c", "exit 3"]);
         assert_eq!(run_unchecked(d.path(), &red, None).0.verdict, Verdict::Red);
+    }
+
+    /// [D] The job writes its output to a pipe that job-exec copies into the log, never to the log file itself: under
+    /// Seatbelt a job can't stat or write a file of its attempt folder (`cat` failed with "stdout: Operation not
+    /// permitted" on macOS CI), and a pipe has no path. What a job prints last is in the log when it is judged.
+    #[test]
+    fn the_job_writes_a_pipe_that_job_exec_copies_into_the_log() {
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join("in.txt"), "from a file\n").unwrap();
+        let s = spec(
+            d.path(),
+            &[
+                "/bin/sh",
+                "-c",
+                "if [ -p /dev/stdout ]; then echo piped; else echo not-piped; fi; cat in.txt; echo last >&2",
+            ],
+        );
+        let (r, _) = run_unchecked(d.path(), &s, None);
+        let log = fs::read_to_string(d.path().join("log")).unwrap();
+        assert_eq!(r.verdict, Verdict::Pass, "{log}");
+        assert_eq!(log, "piped\nfrom a file\nlast\n");
+    }
+
+    /// [D] A job that ends by itself leaves nothing running: what it left in the background is killed with it.
+    #[test]
+    fn a_job_that_exits_leaves_nothing_behind() {
+        let d = tempfile::tempdir().unwrap();
+        let s = spec(
+            d.path(),
+            &["/bin/sh", "-c", "sleep 300 & echo $! > left; exit 0"],
+        );
+        let (r, stop) = run_unchecked(d.path(), &s, None);
+        assert_eq!(r.verdict, Verdict::Pass, "{r:?}");
+        assert!(!stop);
+        let pid = fs::read_to_string(d.path().join("left")).unwrap();
+        // gone, or a zombie its new parent hasn't reaped yet: either way not running
+        let ps = Command::new("ps")
+            .args(["-o", "stat=", "-p", pid.trim()])
+            .output()
+            .unwrap();
+        let stat = String::from_utf8_lossy(&ps.stdout);
+        assert!(
+            stat.trim().is_empty() || stat.trim().starts_with('Z'),
+            "the background sleep {} still runs: {stat}",
+            pid.trim()
+        );
     }
 
     /// [D] A job past its grant is killed by the watchdog: verdict `oom` (never `red`), its overshoot recorded, nothing

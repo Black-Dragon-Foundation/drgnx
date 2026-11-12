@@ -217,13 +217,7 @@ mod os {
         {
             return vec![];
         }
-        let argc = i32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]).max(0) as usize;
-        let mut fields = buf[4..len].split(|b| *b == 0).filter(|s| !s.is_empty());
-        fields.next(); // the exec path
-        fields
-            .skip(argc)
-            .map(|s| String::from_utf8_lossy(s).into_owned())
-            .collect()
+        super::procargs_env(&buf[..len])
     }
 }
 
@@ -274,6 +268,27 @@ mod os {
             })
             .unwrap_or_default()
     }
+}
+
+/// The environment in BUF, a `KERN_PROCARGS2` record: argc, the exec path, argv, then the environment.
+pub fn procargs_env(buf: &[u8]) -> Vec<String> {
+    let Some(head) = buf.get(..4) else {
+        return vec![];
+    };
+    let argc = i32::from_ne_bytes([head[0], head[1], head[2], head[3]]).max(0) as usize;
+    let rest = &buf[4..];
+    // the exec path, then its NUL padding: the arguments start at the first byte after it that isn't NUL
+    let path_end = rest.iter().position(|b| *b == 0).unwrap_or(rest.len());
+    let Some(args) = rest[path_end..].iter().position(|b| *b != 0) else {
+        return vec![];
+    };
+    // exactly argc strings, an empty one among them; the environment's entries are never empty
+    rest[path_end + args..]
+        .split(|b| *b == 0)
+        .skip(argc)
+        .filter(|s| !s.is_empty())
+        .map(|s| String::from_utf8_lossy(s).into_owned())
+        .collect()
 }
 
 #[cfg(test)]
@@ -342,11 +357,52 @@ mod tests {
     /// no stranger.
     #[test]
     fn a_scan_reads_the_live_process_table() {
+        use std::os::unix::process::CommandExt;
         let me = std::process::id() as i32;
         // SAFETY: getsid(0) of this process
         let sid = unsafe { libc::getsid(0) };
-        let s = scan(me, sid, start_of(me), "DRGNX_RUNNER_ATTEMPT=nobody");
+        let marker = format!("{MARKER}=t-{me}");
+        // one child in this session, one that left it carrying the marker, one that left it without
+        let mut stay = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let away = |marked: bool| {
+            let mut c = std::process::Command::new("sleep");
+            c.arg("30");
+            if marked {
+                c.env(MARKER, format!("t-{me}"));
+            }
+            // SAFETY: setsid is async-signal-safe
+            unsafe {
+                c.pre_exec(|| {
+                    rustix::process::setsid()
+                        .map(|_| ())
+                        .map_err(std::io::Error::from)
+                })
+            };
+            c.spawn().unwrap()
+        };
+        let (mut marked, mut other) = (away(true), away(false));
+        let s = scan(me, sid, start_of(me), &marker);
+        for c in [&mut stay, &mut marked, &mut other] {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
         assert!(!s.pids.contains(&me));
-        assert!(s.pids.iter().all(|p| *p > 1));
+        assert!(s.pids.contains(&(stay.id() as i32)), "{:?}", s.pids);
+        assert!(s.pids.contains(&(marked.id() as i32)), "{:?}", s.pids);
+        assert!(!s.pids.contains(&(other.id() as i32)), "{:?}", s.pids);
+        assert!(s.bytes > 0);
+    }
+
+    /// [D] `KERN_PROCARGS2`'s environment follows exactly argc argument strings, an empty one among them, after the
+    /// exec path and its NUL padding.
+    #[test]
+    fn the_environment_follows_exactly_argc_arguments() {
+        let mut b = 3i32.to_ne_bytes().to_vec();
+        b.extend_from_slice(b"/bin/sh\0\0\0\0sh\0\0-c\0A=1\0B=\0\0\0");
+        assert_eq!(procargs_env(&b), vec!["A=1".to_string(), "B=".to_string()]);
+        assert!(procargs_env(&[1, 0]).is_empty());
     }
 }

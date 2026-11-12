@@ -136,7 +136,8 @@ impl Platform for LinuxPlatform {
     }
 
     /// podman's caps check (a container's memory, CPU and pid limits take), and `podman` as the feature once they do;
-    /// then `gpu` and `kvm` where this user can open them ([`Probe::devices`]).
+    /// then `gpu` and `kvm` where this user can open them ([`Probe::devices`]), and `account:admin` for an
+    /// administrator's login.
     fn job_runner(&self) -> (Option<String>, Vec<String>) {
         let env: Vec<(std::ffi::OsString, std::ffi::OsString)> = [
             "PATH",
@@ -154,6 +155,10 @@ impl Platform for LinuxPlatform {
             vec![]
         };
         features.extend(self.probe.devices(Path::new("/dev")));
+        // an administrator's login is taken as any other; the runner list shows what that exposes
+        if probe::is_admin(&probe::own_groups()) {
+            features.push("account:admin".into());
+        }
         (limits, features)
     }
 
@@ -210,7 +215,7 @@ impl Platform for LinuxPlatform {
             None
         } else {
             let text = req.net_hosts.join("\n") + "\n";
-            crate::helper::net::allow_list(&text)?;
+            crate::net::allow_list(&text)?;
             let f = dir.join(NET_ALLOW);
             fs::write(&f, text).map_err(|e| format!("{NET_ALLOW}: {e}"))?;
             Some(f)
@@ -288,6 +293,7 @@ impl Platform for LinuxPlatform {
                 net: relay.as_ref().map(|r| r.0.clone()),
                 sidecar_argv: relay.map(|r| r.1).unwrap_or_default(),
                 container: Some(container),
+                ..HelperSpec::default()
             }),
         }
         .write(dir)

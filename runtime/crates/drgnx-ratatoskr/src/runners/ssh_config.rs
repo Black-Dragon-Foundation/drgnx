@@ -70,6 +70,45 @@ pub fn dir(runtime_dir: &Path, name: &str) -> PathBuf {
     runtime_dir.join("drgnx-runners").join(name)
 }
 
+/// The longest path a Unix socket may have: `sun_path` (104 bytes on macOS, 108 on Linux) less its NUL.
+const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 107 };
+/// What goes after the master's folder in its socket's path: the `openssh` crate's `/.ssh-connectionXXXXXX/master`,
+/// and the temporary suffix ssh binds it under first (`.XXXXXXXXXXXXXXXX`).
+const SOCKET_TAIL: usize = "/.ssh-connectionXXXXXX/master".len() + ".XXXXXXXXXXXXXXXX".len();
+
+/// The folder for the runner NAME's master socket, made private: the runner's own folder ([`dir`]) when the socket's
+/// path fits there, else a short folder of its own under ROOT, named by a hash of the runner's folder (so the same
+/// runner gets the same one, which a later hub resumes). That is the case on macOS, whose per-user temporary folder is
+/// long, with a long name. ROOT is made private too then; a link or another user's folder is refused.
+pub fn control_dir_at(runtime_dir: &Path, name: &str, root: &Path) -> io::Result<PathBuf> {
+    let d = dir(runtime_dir, name);
+    if d.as_os_str().len() + SOCKET_TAIL <= SOCKET_PATH_MAX {
+        private_dir(&d)?;
+        return Ok(d);
+    }
+    use sha2::Digest;
+    use std::os::unix::ffi::OsStrExt;
+    let hash = sha2::Sha256::digest(d.as_os_str().as_bytes());
+    let short = root.join(
+        hash[..8]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>(),
+    );
+    private_dir(root)?;
+    private_dir(&short)?;
+    Ok(short)
+}
+
+/// [`control_dir_at`] under `/tmp/drgnx-ssh-<uid>`.
+pub fn control_dir(runtime_dir: &Path, name: &str) -> io::Result<PathBuf> {
+    let root = PathBuf::from(format!(
+        "/tmp/drgnx-ssh-{}",
+        rustix::process::getuid().as_raw()
+    ));
+    control_dir_at(runtime_dir, name, &root)
+}
+
 /// The runner's ssh config: `RUNTIME_DIR/drgnx-runners/NAME/ssh_config`.
 pub fn path(runtime_dir: &Path, name: &str) -> PathBuf {
     dir(runtime_dir, name).join("ssh_config")
@@ -145,6 +184,49 @@ mod tests {
     use crate::runners::CloudSsh;
     use crate::runners::tests::ssh_runner;
     use std::os::unix::fs::PermissionsExt;
+
+    /// [D] A master's socket path fits a Unix socket's `sun_path` (104 bytes on macOS) whatever the run dir and the
+    /// runner's name: under a long run dir (macOS's per-user temporary folder) and a long name the socket's folder is
+    /// a short one of its own under the root, private, the same for the same runner and another for another; under a
+    /// short run dir it stays the runner's folder. A root that is a link is refused.
+    #[test]
+    fn a_long_runner_name_gets_a_short_control_folder() {
+        let t = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let root = t.path().join("s");
+        let long_run = Path::new("/var/folders/6m/g3m822tx5754yy400ffqz8km0000gp/T/.tmpAbCdEf/run");
+        // the long run dir has to exist for the runner's own folder to be made; the short folder doesn't need it
+        let name = "a-runner-with-a-name-as-long-as-a-host-label-may-be-0123456789ab";
+        let socket_len =
+            |d: &Path| d.as_os_str().len() + "/.ssh-connectionXXXXXX/master.XXXXXXXXXXXXXXXX".len();
+        let d = control_dir_at(long_run, name, &root).unwrap();
+        assert!(
+            socket_len(&d) <= 103,
+            "{} ({} bytes)",
+            d.display(),
+            socket_len(&d)
+        );
+        assert!(d.starts_with(&root), "{}", d.display());
+        for p in [&root, &d] {
+            assert_eq!(
+                std::fs::metadata(p).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        assert_eq!(control_dir_at(long_run, name, &root).unwrap(), d);
+        assert_ne!(control_dir_at(long_run, "other", &root).unwrap(), d);
+        // a short run dir keeps the runner's own folder
+        let short_run = t.path().join("r");
+        std::fs::create_dir(&short_run).unwrap();
+        write(&short_run, "mini", "x").unwrap();
+        assert_eq!(
+            control_dir_at(&short_run, "mini", &root).unwrap(),
+            dir(&short_run, "mini")
+        );
+        // a root that is a link is never followed
+        let linked = t.path().join("l");
+        std::os::unix::fs::symlink(t.path().join("elsewhere"), &linked).unwrap();
+        assert!(control_dir_at(long_run, name, &linked).is_err());
+    }
 
     // [D] pure
     #[test]

@@ -76,6 +76,11 @@ pub struct Config {
     /// A cloud machine's watchdog folder (`--watchdog DIR`): `serve` writes the hub's heartbeat for it and sends what
     /// it notices (`preempting`, `idle`).
     pub watchdog: Option<PathBuf>,
+    /// What `runner add` allowed beyond a Mac's dedicated standard account (`--allow-own-account`, `--allow-admin`);
+    /// Linux takes an administrator's account without it, and neither ever takes root.
+    pub allow: crate::darwin::probe::Allow,
+    /// A workstation's reserve for its user, MiB (`--reserve-mib`); none: the profile's.
+    pub reserve_mib: Option<u64>,
 }
 
 /// Letters, digits and `-`, not at either end: a prefix and a hub id are parts of unit, slice, container and file
@@ -88,10 +93,12 @@ fn plain(s: &str) -> bool {
 }
 
 impl Config {
-    /// `--root DIR --prefix P --hub-id H --profile dedicated|workstation [--watchdog DIR]`.
+    /// `--root DIR --prefix P --hub-id H --profile dedicated|workstation [--watchdog DIR] [--allow-own-account]
+    /// [--allow-admin] [--reserve-mib N]` (a workstation's, at least [`forseti::MIN_RESERVE_MIB`]).
     pub fn parse(args: &[&str]) -> Result<Config, String> {
         let (mut root, mut prefix, mut hub_id, mut profile) = (None, None, None, None);
-        let mut watchdog = None;
+        let (mut watchdog, mut reserve_mib) = (None, None);
+        let mut allow = crate::darwin::probe::Allow::default();
         let mut it = args.iter();
         while let Some(a) = it.next() {
             let mut val = || {
@@ -117,6 +124,15 @@ impl Config {
                     }
                     watchdog = Some(d);
                 }
+                "--allow-own-account" => allow.own_account = true,
+                "--allow-admin" => allow.admin = true,
+                "--reserve-mib" => {
+                    let v = val()?;
+                    reserve_mib = Some(
+                        v.parse::<u64>()
+                            .map_err(|_| format!("--reserve-mib is a number of MiB, not {v}"))?,
+                    );
+                }
                 other => return Err(format!("unknown option {other}")),
             }
         }
@@ -132,13 +148,17 @@ impl Config {
         let name = fs::read_to_string("/proc/sys/kernel/hostname")
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|_| "runner".into());
+        let profile = profile.ok_or("--profile is needed")?;
+        Limits::for_profile(profile, 0, 1).with_reserve(profile, reserve_mib)?;
         Ok(Config {
             root,
             prefix,
             hub_id,
-            profile: profile.ok_or("--profile is needed")?,
+            profile,
             name,
             watchdog,
+            allow,
+            reserve_mib,
         })
     }
 
@@ -367,7 +387,9 @@ impl<W: Write> Serve<W> {
         fs::create_dir_all(attempts::jobs(&cfg.root))
             .map_err(|e| format!("{}: {e}", cfg.root.display()))?;
         let scheduler = cfg.scheduler();
-        let limits = platform.limits(cfg.profile);
+        let limits = platform
+            .limits(cfg.profile)
+            .with_reserve(cfg.profile, cfg.reserve_mib)?;
         let exe = std::env::current_exe().map_err(|e| format!("this binary's path: {e}"))?;
         let bin = cfg.root.join("bin");
         let bundle = exe
@@ -556,11 +578,16 @@ impl<W: Write> Serve<W> {
             Err(m) => (None, m),
         };
         let (limits, features) = self.platform.job_runner();
+        let mem_available_mib = self
+            .platform
+            .machine(now_s(), &self.limits)
+            .map_or(0, |m| m.mem_available_mib);
         self.send(&Frame::ProbeResult {
             facts,
             missing,
             limits,
             features,
+            mem_available_mib,
         })
     }
 
@@ -598,6 +625,7 @@ impl<W: Write> Serve<W> {
                 eprintln!("sleipnir serve: the machine can't be read: {e}");
                 return self.send(&Frame::Ready {
                     free_mib: 0,
+                    mem_available_mib: 0,
                     free_cpu: 0.0,
                     psi: Default::default(),
                     running: vec![],
@@ -622,6 +650,7 @@ impl<W: Write> Serve<W> {
         let images = self.images.iter().cloned().collect();
         self.send(&Frame::Ready {
             free_mib: b.mem_mib,
+            mem_available_mib: m.mem_available_mib,
             free_cpu: b.cpu,
             psi: m.psi,
             running,
@@ -1928,5 +1957,66 @@ mod net_tests {
         // a helper spec from before the relay still reads, with none
         let old: HelperSpec = serde_json::from_str(r#"{"root":"/r","keys":[]}"#).unwrap();
         assert_eq!((old.net, old.sidecar_argv.len()), (None, 0));
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    /// [D] `--allow-own-account` and `--allow-admin` reach the config (none given: neither allowed).
+    #[test]
+    fn the_allowances_are_parsed() {
+        let base = [
+            "--root",
+            "/r",
+            "--prefix",
+            "p",
+            "--hub-id",
+            "h",
+            "--profile",
+            "dedicated",
+        ];
+        assert_eq!(Config::parse(&base).unwrap().allow, Default::default());
+        let mut args = base.to_vec();
+        args.extend(["--allow-own-account", "--allow-admin"]);
+        let a = Config::parse(&args).unwrap().allow;
+        assert!(a.own_account && a.admin);
+    }
+
+    /// [D] `--reserve-mib N` sets a workstation's reserve for its user (none given: the profile's 4096); below 1024,
+    /// or on a dedicated runner, `serve` refuses to start.
+    #[test]
+    fn the_reserve_is_parsed_and_checked() {
+        let with = |profile: &str, extra: &[&str]| {
+            let mut a = vec![
+                "--root",
+                "/r",
+                "--prefix",
+                "p",
+                "--hub-id",
+                "h",
+                "--profile",
+                profile,
+            ];
+            a.extend(extra);
+            a.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+        };
+        let parse =
+            |a: Vec<String>| Config::parse(&a.iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(parse(with("workstation", &[])).unwrap().reserve_mib, None);
+        assert_eq!(
+            parse(with("workstation", &["--reserve-mib", "1024"]))
+                .unwrap()
+                .reserve_mib,
+            Some(1024)
+        );
+        for bad in [
+            with("workstation", &["--reserve-mib", "1023"]),
+            with("workstation", &["--reserve-mib", "lots"]),
+            with("dedicated", &["--reserve-mib", "2048"]),
+        ] {
+            assert!(parse(bad.clone()).is_err(), "{bad:?}");
+        }
     }
 }

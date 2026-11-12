@@ -111,6 +111,16 @@ the Command Line Tools answer; nil for any other runner."
                       "Command Line Tools"
                     (propertize "no Command Line Tools" 'face 'drgnx-runners-reason))))))
 
+(defun drgnx-runners-view-account-lines (runner)
+  "What RUNNER's account exposes, when the user allowed one at `runner add' (its `account:' features): an
+administrator's that sudo can reach root, another Mac account that its home, keychain and TCC grants are reachable by
+file permissions.  Jobs are sandboxed either way.  A list of lines, none for the dedicated account."
+  (let ((features (append (plist-get runner :features) nil)))
+    (delq nil (list (and (member "account:admin" features)
+                         "  admin account: sudo can reach root · jobs sandboxed")
+                    (and (member "account:own" features)
+                         "  own account: home, keychain, TCC open · jobs sandboxed")))))
+
 (defun drgnx-runners-view-row (runner)
   "The text of RUNNER's row (a runner as `runners/list' gives it): two lines, and lines of the reason when it is out of
 rotation.  The last line ends in a newline."
@@ -138,6 +148,8 @@ rotation.  The last line ends in a newline."
             (truncate-string-to-width size drgnx-runners-view-width) "\n"
             (if-let* ((cost (drgnx-runners-view-cost runner))) (concat cost "\n") "")
             (if-let* ((m (drgnx-runners-view-mac-line runner))) (concat (truncate-string-to-width m drgnx-runners-view-width) "\n") "")
+            (mapconcat (lambda (l) (concat (propertize l 'face 'drgnx-runners-reason) "\n"))
+                       (drgnx-runners-view-account-lines runner) "")
             (if ready ""
               (mapconcat (lambda (l) (concat (propertize l 'face 'drgnx-runners-reason) "\n"))
                          (drgnx-runners-view--wrap (or (plist-get runner :state) "") 2) "")))))

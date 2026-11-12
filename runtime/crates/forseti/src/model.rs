@@ -427,6 +427,9 @@ pub struct PsiLimits {
     pub app_mem_some10: Option<f64>,
 }
 
+/// The smallest reserve a workstation keeps for its user ([`Limits::with_reserve`]).
+pub const MIN_RESERVE_MIB: u64 = 1024;
+
 /// A machine's thresholds. [`Limits::for_profile`] gives the design's; jobq fills its own from its configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Limits {
@@ -496,6 +499,33 @@ impl Limits {
         }
     }
 
+    /// These limits with a workstation's reserve for its user set to RESERVE_MIB (`runner add --reserve-mib`); none
+    /// keeps the profile's. Refused below [`MIN_RESERVE_MIB`], and on any profile but a workstation (a dedicated
+    /// machine keeps no reserve).
+    pub fn with_reserve(
+        self,
+        profile: Profile,
+        reserve_mib: Option<u64>,
+    ) -> Result<Limits, String> {
+        let Some(n) = reserve_mib else {
+            return Ok(self);
+        };
+        if profile != Profile::Workstation {
+            return Err(
+                "a reserve for the user is a workstation's; a dedicated runner keeps none".into(),
+            );
+        }
+        if n < MIN_RESERVE_MIB {
+            return Err(format!(
+                "a workstation's reserve is at least {MIN_RESERVE_MIB} MiB, not {n}"
+            ));
+        }
+        Ok(Limits {
+            reserve_user_mib: n,
+            ..self
+        })
+    }
+
     /// Admission by count: at most `n` jobs at once, with no memory, PSI or disk reading (a macOS hub's own machine).
     pub fn fixed_slots(n: u32) -> Limits {
         Limits {
@@ -545,6 +575,32 @@ mod tests {
 
         let f = Limits::fixed_slots(4);
         assert_eq!(f.fixed_slots, Some(4));
+    }
+
+    /// [D] A workstation's reserve for its user can be set, to no less than 1024 MiB, and the budget takes it; a
+    /// dedicated runner keeps none, so a reserve there is refused, as is one below the minimum.
+    #[test]
+    fn a_workstation_reserve_is_set_and_the_budget_takes_it() {
+        let w = Limits::for_profile(Profile::Workstation, 7168, 4);
+        let small = w.with_reserve(Profile::Workstation, Some(1024)).unwrap();
+        assert_eq!(small.reserve_user_mib, 1024);
+        assert_eq!(small.floor_mib, w.floor_mib);
+        assert_eq!(w.with_reserve(Profile::Workstation, None).unwrap(), w);
+        let e = w
+            .with_reserve(Profile::Workstation, Some(MIN_RESERVE_MIB - 1))
+            .unwrap_err();
+        assert!(e.contains("1024"), "{e}");
+        let d = Limits::for_profile(Profile::Dedicated, 7168, 4);
+        let e = d.with_reserve(Profile::Dedicated, Some(2048)).unwrap_err();
+        assert!(e.contains("workstation"), "{e}");
+
+        // the CI Mac of round 17: 5376 MiB available
+        let m = MachineState {
+            mem_available_mib: 5376,
+            ..crate::testkit::machine(Profile::Workstation)
+        };
+        assert_eq!(crate::admit::budget(&m, &w).mem_mib, 5376 - 1536 - 4096);
+        assert_eq!(crate::admit::budget(&m, &small).mem_mib, 5376 - 1536 - 1024);
     }
 
     #[test]

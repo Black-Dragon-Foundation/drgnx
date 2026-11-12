@@ -10,5 +10,5 @@
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "call:read_file {\"path\": \"$ROOT/project/README\"}\ncall:write_file {\"path\": \"$ROOT/project/README\", \"content\": \"one\\ntwo\\n\"}"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
 {"do": "poll", "conn": "c", "json": {"id": 3, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 3, "result": {"session": {"id": "$sid", "status": "idle"}, "entries": {"$contains": [{"type": "agent", "text": "call: one\r\ncall: written to the file on disk (no editor has it open)"}]}}}, "within_ms": 20000}
-{"do": "run", "bin": "/bin/sh", "args": ["-c", "od -c $ROOT/project/README | head -1"], "expect_code": 0, "expect_stdout": "0000000   o   n   e  \\r  \\n   t   w   o  \\r  \\n\n"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "cat -v $ROOT/project/README"], "expect_code": 0, "expect_stdout": "one^M\ntwo^M\n"}
 {"do": "poll", "conn": "c", "json": {"id": 4, "method": "history/blame", "params": {"path": "README", "worktree_root": "$ROOT/project", "start": 4, "end": 8}}, "expect": {"id": 4, "result": {"spans": {"$contains": [{"author": {"kind": "agent", "session": "$sid"}, "session": "$sid"}]}}}, "within_ms": 30000, "every_ms": 200}
