@@ -124,6 +124,19 @@ pub(crate) struct TaskFacts {
     pub held: Option<String>,
     /// That card's id (its actions: `job/card`).
     pub card: Option<i64>,
+    /// Where its tree started.
+    pub base: Option<String>,
+    /// Its commits after the base, oldest first.
+    pub commits: Vec<CommitFact>,
+}
+
+/// One commit of a task's branch.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CommitFact {
+    pub sha: String,
+    pub subject: String,
+    /// It changes test paths only (the pack's test globs).
+    pub tests: bool,
 }
 
 /// One task's row.
@@ -1167,19 +1180,43 @@ fn clears(gate: &str) -> &'static str {
     }
 }
 
-/// One evidence record in a line: its kind, its rows' counts, its run and its tree.
-fn evidence_line(e: &Evidence) -> String {
-    if e.kind == "waiver" {
-        return format!("waiver · {}", e.note.as_deref().unwrap_or(""));
-    }
+/// One run's cell of the evidence table: its job, the machine it ran on and its rows' counts.
+fn run_cell(e: &Evidence) -> String {
     let pass = e.rows.iter().filter(|r| r.verdict == Verdict::Pass).count();
     let fail = failing(&e.rows).count();
-    let run = e.facts.selector.lines().last().unwrap_or_default();
-    let tree: String = e.facts.tree_key.chars().take(7).collect();
-    format!(
-        "{} · {pass} pass · {fail} failed · {run} · tree {tree}",
-        e.kind
-    )
+    let host = e.facts.platform.rsplit('/').next().unwrap_or_default();
+    let mut s = format!("job {} · {host} · {pass} pass", e.job);
+    if fail > 0 {
+        s.push_str(&format!(" · {fail} failed"));
+    }
+    s
+}
+
+/// The commits block of task FACTS for a tile CHARS wide: its base .. tip and each commit (its number, short sha,
+/// tests or code, subject), as the merge gate last checked them.
+fn commits_lines(facts: &TaskFacts, chars: usize) -> Vec<String> {
+    let short = |s: &str| s.chars().take(7).collect::<String>();
+    let Some(base) = &facts.base else {
+        return Vec::new();
+    };
+    let Some(tip) = facts.commits.last() else {
+        return vec![format!("base {}", short(base))];
+    };
+    let n = facts.commits.len();
+    let mut out = vec![format!(
+        "base {} .. tip {} · {n} commit{}",
+        short(base),
+        short(&tip.sha),
+        if n == 1 { "" } else { "s" }
+    )];
+    for (i, c) in facts.commits.iter().enumerate() {
+        let kind = if c.tests { "tests" } else { "code" };
+        out.push(fit(
+            &format!("{} {} {kind} · {}", i + 1, short(&c.sha), c.subject),
+            chars,
+        ));
+    }
+    out
 }
 
 /// The detail tile of task TASK of FLOW for ENV, one line per row: its head (the task's id and its card's on it),
@@ -1244,6 +1281,7 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
         .filter(|(_, c)| c.chip == Chip::Held)
         .map(|(g, c)| (*g, c))
         .collect();
+    let commits = commits_lines(facts, chars);
     if let Some(why) = &t.held {
         line("d:gap1".into(), " ", None);
         line("d:why-h".into(), "Why it is held", Some(HEAD));
@@ -1254,6 +1292,10 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
                 &format!("{g}: {}", c.text),
                 Some(TEXT),
             );
+        }
+        // the commits the merge checks, under why (the mockup)
+        for (i, l) in commits.iter().enumerate() {
+            line(format!("d:commits:{i}"), l, Some(LABEL));
         }
         line("d:gap2".into(), " ", None);
         line("d:clear-h".into(), "What clears it", Some(HEAD));
@@ -1269,20 +1311,77 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
             line(format!("d:clear:{g}"), clears(g), Some(TEXT));
         }
     }
-    line("d:gap3".into(), " ", None);
-    line("d:ev-h".into(), "Evidence so far", Some(HEAD));
-    if facts.evidence.is_empty() {
-        line("d:ev".into(), "none recorded", Some(LABEL));
-    }
-    for (i, e) in facts.evidence.iter().enumerate() {
-        let face = if e.kind == "red" || failing(&e.rows).next().is_none() {
-            LABEL
-        } else {
-            Chip::Err.face()
-        };
-        line(format!("d:ev:{i}"), &evidence_line(e), Some(face));
+    if t.held.is_none() && !commits.is_empty() {
+        line("d:gap-c".into(), " ", None);
+        for (i, l) in commits.iter().enumerate() {
+            line(format!("d:commits:{i}"), l, Some(LABEL));
+        }
     }
     out.append(&mut rows);
+    // the evidence table: a label column, then the newest of each (brief, tests, green, red); waivers after
+    out.push(RowBuilder::new("d:gap3").finish());
+    let mut h = RowBuilder::new("d:ev-h");
+    h.push("Evidence so far", Some(HEAD));
+    out.push(h.finish());
+    let newest = |kind: &str| facts.evidence.iter().rev().find(|e| e.kind == kind);
+    let runs = facts.evidence.iter().rev().find(|e| e.kind != "waiver");
+    let pack = flow.pack.as_ref().map_or_else(
+        || "none".to_owned(),
+        |p| format!("{} v{}", p.name, p.version),
+    );
+    let none = || ("none recorded".to_owned(), Chip::Held.face());
+    let table = [
+        (
+            "brief",
+            (
+                format!("{} · plan §{} · rules {pack}", t.label, t.label),
+                TEXT,
+            ),
+        ),
+        (
+            "tests",
+            runs.map_or_else(none, |e| {
+                let sel = e.facts.selector.lines().last().unwrap_or_default();
+                (format!("{sel} · {} rows", e.rows.len()), TEXT)
+            }),
+        ),
+        (
+            "green",
+            newest("green").map_or_else(none, |e| {
+                let face = if failing(&e.rows).next().is_some() {
+                    Chip::Err.face()
+                } else {
+                    TEXT
+                };
+                (run_cell(e), face)
+            }),
+        ),
+        (
+            "red",
+            newest("red").map_or_else(none, |e| (run_cell(e), TEXT)),
+        ),
+    ];
+    let col = env.cell.0 * 7;
+    for (label, (value, face)) in table {
+        let mut b = RowBuilder::new(format!("d:ev:{label}"));
+        b.push(label, Some(LABEL)).stop(col);
+        b.push(&fit(&value, chars.saturating_sub(7)), Some(face));
+        out.push(b.finish());
+    }
+    for (i, e) in facts
+        .evidence
+        .iter()
+        .filter(|e| e.kind == "waiver")
+        .enumerate()
+    {
+        let mut b = RowBuilder::new(format!("d:ev:waiver:{i}"));
+        b.push("waiver", Some(LABEL)).stop(col);
+        b.push(
+            &fit(e.note.as_deref().unwrap_or(""), chars.saturating_sub(7)),
+            Some(TEXT),
+        );
+        out.push(b.finish());
+    }
     // the actions, with their keys (the Flow's own map)
     out.push(RowBuilder::new("d:gap4").finish());
     if t.card.is_some() {
@@ -2094,6 +2193,71 @@ mod tests {
     /// [D] The detail tile of a held task: its head (id and card on it), why it is held (the card's words and the
     /// held gates), what clears it, the evidence so far, and the actions with their keys, the waiver the user's
     /// alone; a task the gates don't hold has no hold sections and only the evidence action; an unknown task says so.
+    /// [D] The detail tile's commits block (base .. tip, each commit with its sha, tests-only ones marked) and its
+    /// evidence table: a label column (brief, tests, green, red) at a stop, the value after it; no red says "none
+    /// recorded" in the attention (held) face.
+    #[test]
+    fn the_detail_tile_has_the_commits_and_an_evidence_table() {
+        let mut f = flow();
+        f.tasks[1].base = Some("4fe72a5aa1".into());
+        f.tasks[1].commits = vec![
+            CommitFact {
+                sha: "a90e3f1aa".into(),
+                subject: "search: scope tests".into(),
+                tests: true,
+            },
+            CommitFact {
+                sha: "7d21c0eaa".into(),
+                subject: "search: git scopes".into(),
+                tests: false,
+            },
+        ];
+        let mut green = ev(
+            "green",
+            "cargo test -p s",
+            parse("test a::x ... ok\ntest a::y ... ok\n"),
+        );
+        green.facts.platform = "linux-x86_64/desktop".into();
+        f.tasks[1].evidence = vec![green];
+        let mut tile = env(1.0);
+        tile.width_px = 400;
+        let rows = detail_rows(&f, "task:J#5", &tile);
+        let all: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
+        let all = all.join("\n");
+        assert!(
+            all.contains("base 4fe72a5 .. tip 7d21c0e · 2 commits"),
+            "{all}"
+        );
+        assert!(
+            all.contains("1 a90e3f1 tests") && all.contains("2 7d21c0e code"),
+            "{all}"
+        );
+        let row = |label: &str| {
+            rows.iter()
+                .find(|r| r.key == format!("d:ev:{label}"))
+                .unwrap_or_else(|| panic!("no {label} row in\n{all}"))
+        };
+        for label in ["brief", "tests", "green", "red"] {
+            let r = row(label);
+            assert!(r.text.starts_with(label), "{}", r.text);
+            assert_eq!(r.stops.len(), 1, "{label}: a stop before the value");
+        }
+        assert!(
+            row("brief").text.contains("T5") && row("brief").text.contains("rules drgnx-org v4")
+        );
+        assert!(
+            row("tests").text.contains("cargo test -p s") && row("tests").text.contains("2 rows")
+        );
+        assert!(row("green").text.contains("desktop") && row("green").text.contains("2 pass"));
+        let red = row("red");
+        assert!(red.text.contains("none recorded"), "{}", red.text);
+        assert!(
+            red.runs.iter().any(|r| r.2 == Chip::Held.face()),
+            "{:?}",
+            red.runs
+        );
+    }
+
     #[test]
     fn the_detail_tile_says_why_a_task_is_held_and_what_clears_it() {
         let mut f = flow();

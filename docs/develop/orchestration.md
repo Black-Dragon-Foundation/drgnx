@@ -282,8 +282,11 @@ a lock, checked and routing in the accent) and how the hub holds it.
 **The detail tile.** `work/flow/subscribe` with `detail: TASK` makes its view (the Flow's `VIEW/detail`) that task's
 detail tile: rows alone, no model, read again after every write like the Flow. The Flow subscribes it again each
 time its selection moves (`drgnx-view-selected-functions`, the Flow's own). It says what the task is and who works on
-it; for a held task why it is held (the card's words and each held gate) and what clears it; the evidence so far, one
-line per record; and the actions as buttons, each with its key as a keycap badge inside it (`drgnx-work-flow-key`). `r` (**Run the red** for a red-first hold, else **Check again**:
+it; for a held task why it is held (the card's words and each held gate) and what clears it; the commits the merge
+checks (base .. tip, then each commit with its short sha, `tests` for red first's test commit or `code`, and its
+subject: the job data's `commits`, which `orch::gates::before_merge` records each time it looks, and `bases`); the
+evidence so far as a table, a label column (`brief`, `tests`, `green`, `red`, then any `waiver`) and each newest
+record's job, machine and counts, "none recorded" in the attention face where there is none; and the actions as buttons, each with its key as a keycap badge inside it (`drgnx-work-flow-key`). `r` (**Run the red** for a red-first hold, else **Check again**:
 the card's `merge`), `s` (**Tell the agent**: `retry`) and `w` (**Waive once**: `waive`, asking for the reason) answer
 the card with `job/card` as the user; the hub takes the waiver only from the user's connection. The tile shows in the
 right dock where the map's side panel was, and the panel comes back when the lens leaves the Flow.

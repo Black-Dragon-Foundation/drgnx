@@ -322,7 +322,23 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
                 let card = cards.iter().find(|k| {
                     k.task.as_deref() == Some(row.id.as_str()) && k.kind.as_deref() == Some("gate")
                 });
+                // where its tree started and the commits the merge gate checked (`orch::gates::before_merge`)
+                let of = |bucket: &str| data.get(bucket).and_then(|b| b.get(&row.id));
+                let commits = of("commits")
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .map(|c| flow::CommitFact {
+                                sha: c["sha"].as_str().unwrap_or_default().to_owned(),
+                                subject: c["subject"].as_str().unwrap_or_default().to_owned(),
+                                tests: c["tests"].as_bool().unwrap_or(false),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 tasks.push(flow::TaskFacts {
+                    base: of("bases").and_then(Value::as_str).map(str::to_owned),
+                    commits,
                     held: card.map(|k| k.title.clone().unwrap_or_default()),
                     card: card.map(|k| k.id),
                     evidence: norn::read::evidence::of_task(c, &row.id)?,
