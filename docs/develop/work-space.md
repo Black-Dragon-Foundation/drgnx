@@ -600,9 +600,13 @@ timer pass (`drgnx-view-hurry`), not after the view's 0.1 s throttle: that throt
 
 The rectangles are `(X Y W H)` in pixels of the window's text area (`drgnx-work-map--item-rects`): x and w from the
 model's fields `x` and `w` (the margin plus the item's units, as the cards' `:align-to`), y and h from the card's lines
-as the display engine lays them out: y the top of its first line (`pos-visible-in-window-p`), h its lines' height
-(`window-text-pixel-size`). Neither needs a redisplay (both lay the window out from its start), so the new layout is
-measured right after its patches are drawn into the buffer and before the redisplay that shows it. (The drawn lines are not the layout's heights: a card line is as
+as the display engine lays them out: each line's height is `window-text-pixel-size` of that line alone, added up from
+the window's first line down to its bottom, so y is the sum above the card's first line and h its lines' sum. The
+measure of a line runs to the end of the next line with that line left out (`IGNORE-LINE-AT-END`): one that stops at
+the next line's start stops before a display property there and leaves out the newline's height, which is a band
+line's whole height. One line's layout each, so the cost grows with the lines shown (`pos-visible-in-window-p` per
+line laid the window out from its start each time: half the CPU of work-relayout). No redisplay is needed, so the new
+layout is measured right after its patches are drawn into the buffer and before the redisplay that shows it. (The drawn lines are not the layout's heights: a card line is as
 tall as its text, and an emoji or a larger fallback font makes a line taller.) Only the hub's card rows (keys `row:…`)
 count: the outline has no rectangles, so it asks for no capture, and neither does a window that scrolls sideways.
 

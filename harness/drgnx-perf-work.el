@@ -111,8 +111,8 @@ connection, in order), so the first patch applied while the set waits for its an
             (drgnx-perf--rl-note 'layout-patch)
             (setq drgnx-perf--rl-patched (* 1000 (- (float-time) drgnx-perf--rl-t0))))))
       (defun drgnx-perf--rl-drawn (&rest _)
-        "After each draw of the map's view (no timer of the lab's own to wake every millisecond): the layout is drawn
-when the view has nothing pending."
+        "After each draw of the map's view, its timer's and the motion's (`drgnx-view-draw-now'; no timer of the lab's
+own to wake every millisecond): the layout is drawn when the view has nothing pending."
         (when drgnx-perf--rl-timer (drgnx-perf--rl-poll)))
       (defun drgnx-perf--rl-idle (&optional secs)
         "Wait (SECS, default 10 s, at most) until the last layout asked for is drawn."
@@ -170,6 +170,7 @@ none, the layout changed no row: it counts as lost and no command waits for it."
       (advice-add 'drgnx-work-map--send-filters :before #'drgnx-perf--rl-begin)
       (advice-add 'drgnx-view-apply-patch :around #'drgnx-perf--rl-applied)
       (advice-add 'drgnx-view--draw-buffer :after #'drgnx-perf--rl-drawn)
+      (advice-add 'drgnx-view-draw-now :after #'drgnx-perf--rl-drawn)
       (defun drgnx-perf--rl-measure ()
         (drgnx-perf--rl-idle)
         (unless drgnx-perf--rl-ms (error "Premise: no layout was drawn (t0 %S, timer %S)" drgnx-perf--rl-t0 drgnx-perf--rl-timer))
@@ -186,6 +187,7 @@ none, the layout changed no row: it counts as lost and no command waits for it."
         (remove-hook 'pre-command-hook #'drgnx-perf--rl-pre)
         (advice-remove 'drgnx-view-apply-patch #'drgnx-perf--rl-applied)
         (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--rl-drawn)
+        (advice-remove 'drgnx-view-draw-now #'drgnx-perf--rl-drawn)
         (setq drgnx-perf--rl-timer nil drgnx-perf--rl-t0 nil drgnx-perf--rl-sent nil)
         (when drgnx-perf--rl-bt (error "BT %s" (substring drgnx-perf--rl-bt 0 (min 3000 (length drgnx-perf--rl-bt))))))
       t))
