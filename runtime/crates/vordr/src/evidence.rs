@@ -43,6 +43,41 @@ pub struct Evidence {
     pub note: Option<String>,
 }
 
+/// E's class when its run ended without a test result: its only failing row is the job's own
+/// ([`crate::rows::JOB_ROW`]: exit non-zero with no failing test, `error`; out of time, `timeout`; the machine's,
+/// `infra`).  Such a run is neither red nor green to any gate: the run is missing.
+pub fn no_result(e: &Evidence) -> Option<crate::rows::Class> {
+    use crate::rows::{Class, JOB_ROW, Verdict};
+    let mut fails = e.rows.iter().filter(|r| r.verdict == Verdict::Fail);
+    let first = fails.next()?;
+    (first.name == JOB_ROW && fails.next().is_none()).then(|| first.class.unwrap_or(Class::Error))
+}
+
+/// Why the run of SELECTOR at the tree KEY isn't started again, by its runs without a test result in EVIDENCE: an
+/// `error` holds at once (the same command on the same tree fails the same way; its job is named), an `infra` or
+/// `timeout` once two such runs ended there.  None: start it.
+pub fn no_rerun(
+    evidence: &[Evidence],
+    key: &str,
+    selector: &str,
+) -> Option<(crate::rows::Class, String)> {
+    use crate::rows::Class;
+    let ended: Vec<(Class, &str)> = evidence
+        .iter()
+        .filter(|e| e.facts.tree_key == key && e.facts.selector == selector)
+        .filter_map(|e| no_result(e).map(|c| (c, e.job.as_str())))
+        .collect();
+    if let Some((c, job)) = ended.iter().find(|(c, _)| *c == Class::Error) {
+        return Some((*c, (*job).to_owned()));
+    }
+    (ended.len() >= 2).then(|| {
+        (
+            ended[ended.len() - 1].0,
+            ended[ended.len() - 1].1.to_owned(),
+        )
+    })
+}
+
 /// ROWS cut to [`MAX_ROWS`], failed rows first kept: the rows kept, and whether any were left out.
 pub fn bounded(rows: Vec<Row>) -> (Vec<Row>, bool) {
     if rows.len() <= MAX_ROWS {

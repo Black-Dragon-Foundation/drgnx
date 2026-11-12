@@ -68,6 +68,9 @@ process; the hub holds a `Handle` and reads `Update`s in order. Its waits read t
   progress, `invalidated`, ANSI styling), then `launch` / `attach` without waiting for the answer. On `initialized`:
   `setBreakpoints` for each source, `setExceptionBreakpoints` when the adapter has filters, `configurationDone` when it
   has the request. The launch answer may come before or after; a failed launch ends the session with its message.
+  Whatever the adapter sends before the `initialize` answer is kept and handled after it: js-debug sends `initialized`
+  right behind its answer, and on a loaded machine the event can be read first (dropped, the session never
+  configured and js-debug never answered the attach).
 - **Stops and epochs:** each `stopped` opens a new epoch and fetches `threads`, `stackTrace` (20 frames;
   `more_frames` fetches the next 20 while `totalFrames` says there are more), `scopes` of the top frame and the first
   page of `variables` of every scope that is not `expensive`, published as one `Stop`. `variables(epoch, reference)`
@@ -91,7 +94,9 @@ or on a port, or a `debugServer` connected to) and route its updates:
 - `debug-state` to every editor whenever a session starts, runs, stops or ends: `{sessions: [{id, name, parent, root,
   state, reason, caps}]}`; `debug-ended` once per session, with its reason and exit code.
 - `debug-frame` on a stop: the selected frame's `path` (or `ref` for a `sourceReference`), `line`, `col`, `top`,
-  `reason` and `exception`. The editor that started the session gets it with `open: true` (it opens the file); the
+  `reason`, its `name` and its source's `source_name`, and on an exception stop `exception`: `exceptionInfo`'s `{id,
+  message, break_mode, type, trace}` (asked in the same stop when the adapter has `supportsExceptionInfoRequest`), else
+  `{message}` from the stop's description. The editor that started the session gets it with `open: true` (it opens the file); the
   others get `open: false` and draw it only in windows already showing the file (spec §3.3 step 12).
 - `runInTerminal` opens a drgnx terminal for the starting editor (`Terminals`), answers the program's pid and sends
   that editor `debug-terminal {session, term}`.
@@ -215,6 +220,7 @@ roots `debug/trust` called trusted and each root's last started configuration.
 - `debug/control {session, thread?, op}` (`continue`, `pause`, `next`, `step-in`, `step-out`, `restart`, `stop`,
   `stop-and-kill`, `disconnect`), `debug/select {session, thread?, frame}`, and `debug/trust {root, trusted}`, whose
   revocation stops the root's sessions.
+- `debug/source {session, ref}`: the adapter's `source` request for a frame with no file, answered `{text, mime?}`.
 - `debug/install {adapter, adapters?}`: the adapter's `:install` entry carried out (see Adapters); the answer says what
   was installed. A system package's, an adapter without an entry and an unknown id are errors (conformance
   `debug/install-refusals`; the downloads are the unit tests' `debug::tests_install`, from local files).
@@ -312,6 +318,32 @@ point's line through the column.
 Its tests (`test/unit/debug-gutter-test.el`) script the hub with a small store of their own;
 `test/ui/debug-gutter-gui-test.el` reads the margin's pixels: no dot at rest on a plain, current (hl-line), region or
 banded line, and the pointer noted on a dot lights it.
+
+### The stopped line (spec §5)
+
+The module's handler (`drgnx-debug--event`) gives each `debug-frame` to `drgnx-debug-gutter-show-frame`:
+
+- A top frame is a new stop (or the top picked again): the session's marks go, then its line gets the arrow (`stop`;
+  `stop-bp` over a breakpoint, whose own glyph is hidden until the stop goes; `exception` on an exception) and a band
+  (`drgnx-debug-stopped-line`, or `drgnx-debug-exception-line`). A caller frame (`top: false`) replaces only the
+  session's caller mark: the outline arrow and `drgnx-debug-frame-line`. The marks are overlays tagged
+  `drgnx-debug-stop` (`top` / `frame`), kept per session in `drgnx-debug-gutter--stops`; the band ends after the
+  line's newline, so its `:extend` reaches the window's edge and the exception card (its `after-string`: the type,
+  break mode and place, the message, and the active profile's keys for Stop and Continue) starts the next row.
+- `open: true` (the starting editor) visits the file, shows it in the window the session's last stop used (else the
+  selected one), puts point at the line and column (the window scrolls only when the line left it) and, with
+  `drgnx-debug-focus-on-stop`, raises the frame. Without `open` only a buffer already visiting the file is marked.
+- A `ref` (no file) opens the read-only buffer `<source_name> (from the debugger)`, filled by `debug/source`; a frame
+  with neither says `No source: <name>`.
+- `debug-state` with the session running starts a 150 ms timer (`drgnx-debug-gutter-stop-linger`, keyed
+  `(debug-stop . ID)`, owned by the marked buffer) that clears its marks unless a stop comes first, so a step does not
+  flicker; a session gone from `debug-state`, or `debug-ended`, clears them at once.
+- The bands' colours are theme tokens: `stop-band` (warn at 15 % in dark, the warn tint in light), `ok-tint`,
+  `error-tint`; high contrast has no tints, so there the arrow alone marks the line. The card is the raised surface
+  ringed in the error colour.
+
+Tests: `test/unit/debug-stop-test.el`; perf row `debug-step-line` (120 steps through the fixture, p95 ≤ 16 ms; 3.4 ms
+measured on the desktop).
 
 ## Live adapters: the image
 
@@ -426,6 +458,69 @@ the breakpoint column; an SVG ring with a dot, `◉` or `o` on a terminal), the 
 a second), the strip buffer (it only inserts the hub's rows: a face or property the editor does not know is dropped),
 and past stops (`drgnx-debug-past-mode`'s keys, the past buffer with the snapshot's text and the banner, the variables
 buffer). Tests: `debug::tests_probes`, `debug::tests_record`, `test/unit/debug-timeline-test.el`.
+
+## What-if forks (spec §19.3)
+
+A fork replays a recorded run in a sealed copy up to a point, changes a value or the code there, and runs on; the
+What-if tab shows it beside the run. Linux only for now; other hosts refuse with the reason.
+
+- **The engine** (`debug/fork.rs`): `check` maps the point onto the run: a stop of the run (a stop reached by
+  stepping maps to the breakpoint stop before it plus the steps since), or a line's N-th pass. Refused: an attach
+  run, an adapter that needs `ptrace` (delve, lldb-dap: Gleipnir allows none), a run with no launch snapshot, a hit
+  beyond the run's. A point the run took more than 60 s to reach asks first. `drive` sets a breakpoint on the point's
+  line and the probes' logpoints (a plain breakpoint wins on a shared line, and the probe there is read by
+  `evaluate`), counts the line's hits itself (continuing the others), repeats the steps, reads the thread's id
+  expression, applies the change (`setExpression` when the adapter has it and the variable an `evaluateName`, else
+  `setVariable`), takes the point's breakpoint away and runs until the next stop, the end, or a probe's next hit.
+  Child sessions (`startDebugging`) are second connections to the same sandbox. It stops every session at the end,
+  children first.
+- **Probes**: the run's own (`debug/probes.rs`), each a logpoint whose message is the one the run recorded with
+  (Python's value its `repr`); hits are parsed out of output events. Threads are paired by the order of their first
+  hit (the id expression differs per run; JavaScript names none, on either side).
+- **Comparison** (`debug/compare.rs`): "matched on N of M hits" on the stopping thread before the point and the first
+  hit that differs; each probe's values after it, then and now.
+- **In the hub** (`debug/fork_hub.rs`): each fork is an object of its own (`fN`), never `history/fork`. Its tree is a
+  folder under the runs root, `debug-forks/FORK/w`, with the run's launch snapshot restored into it (no git branch);
+  `tmp/` beside it is the session's temp. The run's configuration is resolved again from its `debug/start`, and its
+  hash (`record::config_hash`: xxh3 of the substituted configuration with keys sorted) must be the run's, else the
+  fork is refused (the run would not replay). A code what-if stops at `editing` with the tree's path; `debug/fork/run`
+  measures what the edit changed (each file's hash against the tree as restored, `.env` files left out) and runs it.
+  The run's `PYTHONHASHSEED` is replayed. The `debug-fork` event follows the fork; `debug/fork/drop` removes it and
+  its folder. The hub's start removes any trees an earlier hub left under `debug-forks/`.
+- **For the other debugging tools** (`debug/fork_wire.rs`): `trace(front, run, stop, env, files)` replays a run to
+  one of its stops in a tree of its own and ends there (the origin trail): FILES (paths inside the tree) are written
+  into it and ENV, called with the tree's path, adds to the environment before the launch; the tree goes when the
+  returned `TraceTree` does. `run_in(front, run, tree, watch, limit)` runs the run's configuration, sealed, in a
+  bisect slot (TREE, its links resolved, strictly under `fork_seal::slots_root`, `debug-forks/slots`) to the
+  program's end, watching an exception stop at a line or a probe's values (paths relative to the project), and
+  reports where the exception stopped, the values, the exit code, or that LIMIT ran out (`timed_out`, not an error).
+  Both resolve the configuration again and refuse a different hash or an input the run needs; neither makes a fork
+  entry or an event.
+- **The seal** (`debug/fork_seal.rs`): the adapter and the program run under Gleipnir's full tier (the reduced tier
+  is refused): the system, the adapter's install and the hub's own program read-only; the tree and the temp
+  writable; an isolated network with its own loopback and no relay (`net.isolated.loopback` with an empty `relay`,
+  allowed for this alone), so nothing gets out. The project's `.env` and `.env.*` (at its root and the
+  configuration's cwd) and its `envFile` are bound read-only over empty files at their places in the tree: the
+  program reads them, and they are never copied or shown. The configuration's environment values reach the launch
+  and never an event.
+- **The shim** (`etc/debug-fork-shim.py`, `etc/debug-fork-shim.js`; the hub's side `debug/fork_mux.rs`): the hub
+  reaches nothing inside the namespace but stdio, so a shim in the adapter's own runtime (the hub's program and its
+  folder stay closed to sandboxes) multiplexes: each message carries `Drgnx-Conn: N`; connection N is one more
+  `python -m debugpy.adapter` (debugpy's sub-process sessions), or one more TCP connection to js-debug's server, which
+  the shim starts on the namespace's loopback; `Drgnx-Close: N` says one ended. It is written into the fork's temp.
+- **The methods** (runstav `methods::debug_fork`): `debug/fork` (the fork, or `ask` for a slow point, or `needs` for
+  an input whose value was not kept), `debug/fork/run`, `debug/fork/drop`, `debug/compare`.
+- **The editor** (`drgnx-debug-fork.el`): Fork from Here asks what changes and where the fork ends, the What-if tab
+  draws each `debug-fork` event (values that differ in the `warning` face), Open Fork finds the file in the tree, and
+  Take Fork's Change shows each changed file's diff and puts the fork's text into the buffer (undoable, not saved).
+- **Tests:** `debug::tests_fork` (the engine on mock adapters), `debug::tests_fork_hub` (refusals, the event from
+  preparing to done, a code what-if, drop; no environment value in any event; a trace's env and files, plain runs'
+  exception, probe values and time box, the slot check), `debug::tests_fork_seal` (the
+  manifest, the `.env` binds, the spec validates), the mux test, `test/unit/debug-fork-test.el`, and the
+  live rows in `debug::tests_fork_live` (ignored by default; the adapter image, `--sandbox`): Python and JS forks
+  that match 20 of 20, a clock fixture whose first difference is found, a program that cannot connect out or write
+  outside its tree, a `.env` the program reads that is never in the tree, a trace whose program sees its injected
+  value and file, plain runs in bisect slots, and a run recorded live and then forked.
 
 ## Which change broke it: bisect over the edit history (spec §19.6)
 

@@ -11,7 +11,8 @@ fn hooks() -> Hooks {
 
 fn spec(starter: Starter, cwd: &Path, script: &str, timebox: Duration) -> ExecSpec {
     ExecSpec {
-        worktree: matches!(starter, Starter::Session(_)).then(|| cwd.to_path_buf()),
+        worktree: matches!(starter, Starter::Session(_) | Starter::Sealed(_))
+            .then(|| cwd.to_path_buf()),
         starter,
         cwd: cwd.to_path_buf(),
         argv: vec!["sh".into(), "-c".into(), script.into()],
@@ -21,6 +22,23 @@ fn spec(starter: Starter, cwd: &Path, script: &str, timebox: Duration) -> ExecSp
         user: UserJob::default(),
         place: Placement::default(),
     }
+}
+
+/// A sealed job (the hub's run of a command it doesn't trust) names no session: not in its meta, its queue record or
+/// its events, so it never reaches an agent; queued, it stays sealed (never the user's job, never a session's).
+#[test]
+fn a_sealed_job_names_no_session_and_stays_sealed_in_the_queue() {
+    let d = tempfile::tempdir().unwrap();
+    let sealed = Starter::Sealed("sealed-gate-x".into());
+    assert_eq!(sealed.session(), None);
+    assert_eq!(Starter::Session("s1".into()).session(), Some("s1".into()));
+    let s = spec(sealed.clone(), d.path(), "true", Duration::from_secs(30));
+    let pending = Pending::of(&s);
+    assert_eq!(pending.session, None);
+    let back: Pending = serde_json::from_value(serde_json::to_value(&pending).unwrap()).unwrap();
+    let back = back.into_spec();
+    assert_eq!(back.starter, sealed);
+    assert_eq!(back.worktree.as_deref(), Some(d.path()));
 }
 
 /// [D] A test job whose parser counts rows (`ert`, `cargo-test`) must run at least one: its spec expects a row, so a
@@ -1821,6 +1839,30 @@ async fn a_jobs_result_keeps_classified_rows() {
         .unwrap();
     ended(&r, &id).await;
     assert_eq!(row_of(&result_rows(d.path(), &id), "(job)").1, "error");
+}
+
+/// A job ran on whatever its tree held while it ran: when the tree's key at its end isn't the key at its submit (a
+/// commit while it waited or ran), its facts go, so it is no one's evidence and is never reused.
+#[tokio::test]
+async fn a_job_whose_tree_moved_under_it_keeps_no_facts() {
+    let d = tempfile::tempdir().unwrap();
+    let w = d.path().join("w");
+    repo_with_a_commit(&w);
+    let r = open(d.path());
+    let moved = spec(
+        Starter::User,
+        &w,
+        "echo 'test a ... ok'; echo b > b.txt; git add b.txt; \
+         git -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -qm two",
+        Duration::from_secs(30),
+    );
+    let (a, _) = r.start_or_reuse(moved.clone()).await.unwrap();
+    let row = ended(&r, &a).await;
+    assert_eq!(row.status, ExecStatus::Done);
+    assert_eq!(r.facts(&a), None, "the tree moved: no facts");
+    let (b, reused) = r.start_or_reuse(moved).await.unwrap();
+    assert!(!reused && b != a);
+    ended(&r, &b).await;
 }
 
 /// A git repository at DIR with one commit; answers its tree id.
