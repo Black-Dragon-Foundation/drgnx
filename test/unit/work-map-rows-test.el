@@ -36,12 +36,15 @@
                               (list :id "agent:a" :kind "agent" :nav (list :up "ask:1" :right "agent:b")
                                     :fields [["label" "alpha"]])
                               (list :id "agent:b" :kind "agent" :nav (list :up "ask:1" :left "agent:a")
-                                    :fields [["label" "beta"]]))
-                      :edges [["ask:1" "agent:a" "came-from"] ["ask:1" "agent:b" "came-from"]]
+                                    :fields [["label" "beta"]])
+                              (list :id "file:drgnx/src/x.rs" :kind "file" :nav (list :up "agent:a")
+                                    :fields [["label" "x.rs"]]))
+                      :edges [["ask:1" "agent:a" "came-from"] ["ask:1" "agent:b" "came-from"]
+                              ["agent:a" "file:drgnx/src/x.rs" "came-from"]]
                       :lists (vector (list :name "team" :ids ["agent:a" "agent:b"])
                                      (list :name "needs-you" :ids [])
                                      (list :name "outline" :ids ["agent:a" "agent:b"])))))))
-  "A small map model: an ask over two agents.")
+  "A small map model: an ask over two agents, the first with a file.")
 
 (defun drgnx-work-map-rows-test--row (text)
   "One row of every card, TEXT \"QQ AA BB\" or another of that shape (each card two characters at 0, 3 and 6)."
@@ -204,6 +207,40 @@ came before the answer), not a throttle later; an answer with an error hurries n
         (drgnx-work-map-overlaps)
         (funcall (car callbacks) nil "no view")
         (should-not hurried)))))
+
+(declare-function drgnx-work-code-files-command "drgnx-work-code")
+(declare-function drgnx-work-code-diffs-command "drgnx-work-code")
+(declare-function drgnx-work-code--select-file "drgnx-work-code")
+
+(ert-deftest drgnx-work-map-rows/files-and-diffs-take-the-selection ()
+  "Pattern D: on the rows path the files picker and the diffs ask the hub for the session the model's selection stands
+for: a selected agent's own, a file's agent on its chain.  With nothing selected they say so."
+  (drgnx-work-map-rows-test--with
+    (let ((calls nil) (shown nil))
+      (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (method params _cb &rest _) (push (cons method params) calls) 1))
+                ((symbol-function 'display-buffer) (lambda (b &rest _) (push b shown) (selected-window)))
+                ((symbol-function 'select-window) #'ignore))     ; the map stays the current buffer
+        (unwind-protect
+            (progn
+              (should-error (drgnx-work-code-files-command) :type 'user-error)
+              (drgnx-work-map--nav 'select "agent:a")
+              (drgnx-work-code-files-command)
+              (should (equal (list :session "a") (cdr (assoc "work/files" calls))))
+              (setq calls nil)
+              (drgnx-work-map--nav 'select "file:drgnx/src/x.rs")
+              (drgnx-work-code-diffs-command)
+              (should (equal (list :session "a") (cdr (assoc "work/files" calls)))))
+          (mapc #'kill-buffer (seq-filter #'buffer-live-p shown)))))))
+
+(ert-deftest drgnx-work-map-rows/who-is-here-selects-the-file ()
+  "Pattern D: `who is here' selects the file on a map on the rows path when the model has it, and nothing when not."
+  (drgnx-work-map-rows-test--with
+    (cl-letf (((symbol-function 'drgnx-work-map-buffers) (lambda () (list buf)))
+              ((symbol-function 'pop-to-buffer) #'ignore))
+      (drgnx-work-code--select-file "drgnx" "src/x.rs")
+      (should (equal '(file . "file:drgnx/src/x.rs") drgnx-work-map--selection))
+      (drgnx-work-code--select-file "drgnx" "src/none.rs")
+      (should (equal '(file . "file:drgnx/src/x.rs") drgnx-work-map--selection)))))
 
 (ert-deftest drgnx-work-map-rows/old-path-switch-still-draws-the-map ()
   "Pattern D: with `drgnx-view-old-path' the map draws its own frames (its view type) and subscribes without `rows';

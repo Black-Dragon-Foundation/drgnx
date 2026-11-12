@@ -385,13 +385,14 @@ run `drgnx-work-map-select-functions' when it moved.  A broken view keeps the se
                                (nidhogg-view-get h 'list "outline"))))
     (drgnx-work-map--nav 'select first)))
 
-(defun drgnx-work-map--sja-chain-agents (h)
-  "The hub session ids of the team's agents on the selection's chain in H."
-  (let ((chain (drgnx-work-map--class-index h "chain")) out)
-    (dolist (id (nidhogg-view-get h 'list "team"))
-      (when (and chain (eql chain (nidhogg-view-get h 'class id)) (string-prefix-p "agent:" id))
-        (push (substring id (length "agent:")) out)))
-    (nreverse out)))
+(defun drgnx-work-map-chain-agents ()
+  "The hub session ids of the current map's team agents on the selection's chain, in team order (nil without Sjá)."
+  (when-let* ((h (drgnx-work-map--sja)))
+    (let ((chain (drgnx-work-map--class-index h "chain")) out)
+      (dolist (id (nidhogg-view-get h 'list "team"))
+        (when (and chain (eql chain (nidhogg-view-get h 'class id)) (string-prefix-p "agent:" id))
+          (push (substring id (length "agent:")) out)))
+      (nreverse out))))
 
 (defun drgnx-work-map-select (sel)
   "Select SEL, (KIND . ID), in the current map, or nothing with nil.  The rows whose items change class (selected,
@@ -504,7 +505,7 @@ nil, LABEL is the item's label and AGENTS the session ids a file opens at."
                  (cond ((null root) (message "Work: %s is not in this workspace" (car parts)))
                        ((fboundp 'magit-status) (funcall #'magit-status root))
                        (t (funcall show (dired-noselect root))))))
-      ('file (drgnx-work-code-open-file state sel :beside beside :agents agents))
+      ('file (drgnx-work-code-open-file sel :beside beside :agents agents))
       ('machine (drgnx-work-space--show-detail (current-buffer))
                 (message "Work: %s — its queue is in the side panel" label))
       ;; a document's key is the hub's: only a plain local file inside a root of the workspace opens, by its true name
@@ -526,7 +527,7 @@ argument): without moving focus."
     (let ((h (drgnx-work-map--sja)) (sel drgnx-work-map--selection))
       (unless sel (user-error "Nothing is selected"))
       (drgnx-work-map--open-item nil sel beside (nidhogg-view-get h 'field "label" (cdr sel))
-                                 (and (eq (car sel) 'file) (drgnx-work-map--sja-chain-agents h)))))
+                                 (and (eq (car sel) 'file) (drgnx-work-map-chain-agents)))))
    (t
     (let ((state (drgnx-work-map--require-state)))
       (unless drgnx-work-map--selection (user-error "Nothing is selected"))

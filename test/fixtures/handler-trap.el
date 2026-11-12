@@ -120,7 +120,7 @@ naming NAME).  The buffer visiting the file; the caller kills it."
                       1))
                    ((symbol-function 'drgnx-work-code--roots) #'ignore))
            (if (eq how 'work-space)
-               (drgnx-work-code-open-file nil (cons 'file (concat "file:x/" name)) :agents '("s"))
+               (drgnx-work-code-open-file (cons 'file (concat "file:x/" name)) :agents '("s"))
              (drgnx-work-trail-open-step (list :session "s" :seq 1 :detail (list :kind "read" :path name :line_start 1))))))))))
 
 (provide 'handler-trap)

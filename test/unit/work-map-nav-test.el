@@ -149,7 +149,7 @@ with the selection.  A file opens at the agents on its chain."
     (drgnx-work-map--nav 'select "file:r/x.el")
     (let ((agents :none))
       (cl-letf (((symbol-function 'drgnx-work-code-open-file)
-                 (lambda (_state _sel &rest keys) (setq agents (plist-get keys :agents)))))
+                 (lambda (_sel &rest keys) (setq agents (plist-get keys :agents)))))
         (drgnx-work-map-open-selection))
       (should (equal '("b") agents)))))
 

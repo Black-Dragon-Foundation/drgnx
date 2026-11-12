@@ -796,7 +796,8 @@ read-only state each had.
 
 The hub keys presence by the path in the agent's own folder, and a map file item is `file:REPO/REL`, so every question is
 asked for REL in each candidate folder: the worktree (`cwd` of the mirrored session whose hub id is the agent's) of each
-agent on the selection's chain (`drgnx-work-code--chain-sids`, from `drgnx-work-nav-chain`), then the root of the
+agent on the selection's chain (`drgnx-work-map-chain-agents`: the team's agents the model in Sjá classes `chain`), then
+the root of the
 workspace named REPO. `drgnx-work-code--presence` asks `agents/presence/get` for each path and gathers the entries;
 `drgnx-work-code--pick` chooses: the newest entry of the chain's agents that has a line, else the newest with a line of
 any agent, else the newest without one (the buffer opens at the top and `drgnx-work-code--file-only` is set). An
@@ -815,8 +816,9 @@ or the first agent a branch came from) and fills a `drgnx-work-files-mode` buffe
 come from `drgnx-work-code-hint-keys`. The list is the edited files only: `work/files` has no read list yet (its
 `read_at` is filled when the edit history lands). `work-who-is-here` asks for the visited file in the user's checkout and
 in every mirrored worktree of the same repository (found from the `.git` file), keeps each agent's newest entry, selects
-`file:REPO/REL` when the cached frame holds it and echoes the agents. A file the frame shows only as a count chip is not
-given a node: the hub has no way to add one for a selection yet.
+`file:REPO/REL` when the map's model in Sjá holds it and echoes the agents. A file the map shows only as a count chip is
+not given a node: the hub has no way to add one for a selection yet. The three take the selection and its chain's agents
+from the model (`test/unit/work-map-rows-test.el`, `-files-and-diffs-take-the-selection`, `-who-is-here-selects-the-file`).
 
 `work-diffs` (`d`, `drgnx-work-code-diffs`) asks `work/files {session}`, then `work/hunks {session, path}` for each file: the
 hub's diff against the worktree's recorded base (the edit history's branch against its base). Each answer becomes a `drgnx-work-diff-mode` buffer, killed and made again each time. It
