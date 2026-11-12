@@ -165,10 +165,11 @@ as the job (other programs on the Mac could use that port to reach the same host
 that can't be sandboxed doesn't run. Homebrew is read-only there: a build that asks `brew --prefix
 NAME` (as Emacs's configure does for libgccjit) gets the answer from a small `brew` the runner puts first on the job's
 `PATH`, and `brew install` or `brew update` inside a job fails with a message saying so: install what your jobs
-need in your own account (step 3). `/tmp` is not the job's: its temporary folder is `$TMPDIR`. macOS's `/bin/sh`
-(bash 3.2) ignores `TMPDIR` for here-documents (`cat <<EOF`) and puts them in `/tmp`, or else the working directory, so
-in a job that doesn't write its tree a `/bin/sh` here-document fails ("cannot create temp file for here document");
-write the text to a file in `$TMPDIR` instead.
+need in your own account (step 3). `/tmp` is not the job's: its temporary folder is `$TMPDIR`. The one exception is
+`/bin/sh`'s here-documents (`cat <<EOF`): macOS's `/bin/sh` (bash 3.2) ignores `TMPDIR` for them and makes a file named
+`sh-thd…` directly in `/tmp` or `/var/tmp`, so a job may read and write files of that name there, and nothing else in
+either folder. Those files are bash's own (made only if new, readable by the runner account alone), but other jobs of
+the runner run as the same account and could read one while it exists.
 
 ## Runners on the Work map
 
@@ -211,8 +212,15 @@ keys it needs (names only); drgnx gets them to the job on the runner without wri
   editor keeps what it sent in its own memory for the session, sends it again whenever a hub proves itself after a
   reconnect or restart, and forgets it when the runners module is turned off.
 - **Only where trust allows, only after the job started.** Keys go to a `mine` runner, to a `my-cloud` runner only
-  those on its own list, and never to a `shared` one; and only once the job has started there, one at a time. A
-  keyed job never runs on this machine for now: it waits for a runner and says so.
+  those on its own list, and never to a `shared` one; and only once the job has started there, one at a time.
+- **A keyed job on this machine** runs as any other job here does, when placement picks this machine. Its command
+  runs behind `drgnx-key` (next to the hub; without it a keyed job is refused, saying so), which asks the hub for each key on a socket of the job's own (`DRGNX_KEY_SOCK`, mode 0600, removed when
+  the job ends; an agent's job may reach that socket's path and nothing else beside it) and puts it in the variable
+  of its name for the command alone. A key the hub doesn't hold is asked for, as for a runner; one that doesn't come
+  within 60 s ends the job `infra: key not delivered`, never red. Nothing of the keys is written to disk: the job's
+  output reaches its log only through the hub, which masks every key it handed out (as below), so the log, the
+  result and every reply hold only the mask. A hub that restarts ends a keyed job of its own (its socket and log went
+  with it) rather than adopting it. A container job with keys still runs on a runner only, for now.
 - **What went where is recorded.** Each key sent is a `key_sent` record (the job, attempt, key name, runner and time);
   each read by the job, as the runner reports it, is a `key_use` record marked runner-reported. `runners/audit` lists
   them (by job or by key), and so does `drgnx runner audit [--key K] [--job J]` from a terminal (JSON, oldest first);

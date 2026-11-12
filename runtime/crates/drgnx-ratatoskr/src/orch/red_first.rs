@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use vordr::pack::Pack;
 use vordr::redfirst::{self, Inputs};
 
@@ -107,6 +107,30 @@ pub fn inputs(
     Ok(i)
 }
 
+/// The commits BASE..TIP of REPO the merge gate checks, oldest first, as the Flow's detail shows them: each its `sha`,
+/// `subject` and `tests` (under PACK's red first, the first is the test commit) (blocking: git).
+pub fn commits(repo: &Path, base: &str, tip: &str, pack: &Pack) -> Result<Value, String> {
+    let log = git(
+        repo,
+        &[
+            "log",
+            "--reverse",
+            "--format=%H%x09%s",
+            &format!("{base}..{tip}"),
+        ],
+    )?;
+    let red_first = pack.on("red-first");
+    Ok(Value::Array(
+        log.lines()
+            .enumerate()
+            .map(|(i, l)| {
+                let (sha, subject) = l.split_once('\t').unwrap_or((l, ""));
+                json!({"sha": sha, "subject": subject, "tests": red_first && i == 0})
+            })
+            .collect(),
+    ))
+}
+
 /// Task N's body in the job's DATA (as the user approved it).
 pub(crate) fn body_of(data: &Map<String, Value>, n: i64) -> String {
     data.get("tasks")
@@ -186,6 +210,25 @@ mod tests {
         );
         assert!(i.weakened.is_empty(), "{:?}", i.weakened);
         assert_eq!(i.red_none, None);
+    }
+
+    /// [D] The commits the merge gate checks, oldest first, each with its sha and subject; under red first the
+    /// first is the test commit.
+    #[test]
+    fn the_gate_lists_the_commits_it_checks() {
+        let (d, base) = repo();
+        let test = commit(d.path(), "src/a.rs", TESTS);
+        let tip = commit(d.path(), "src/a.rs", DONE);
+        let pack = crate::orch::policy::default_pack();
+        let c = commits(d.path(), &base, &tip, &pack).unwrap();
+        assert_eq!(
+            c,
+            json!([
+                {"sha": test, "subject": "src/a.rs", "tests": true},
+                {"sha": tip, "subject": "src/a.rs", "tests": false}
+            ])
+        );
+        assert_eq!(commits(d.path(), &tip, &tip, &pack).unwrap(), json!([]));
     }
 
     #[test]

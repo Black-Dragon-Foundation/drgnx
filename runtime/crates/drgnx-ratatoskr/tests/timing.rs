@@ -669,3 +669,98 @@ async fn tier1_of_a_checkout_and_one_saved_file() {
         refs as f64 * 100.0 / (total - refs) as f64
     );
 }
+
+/// The hub's steps around a Symbol search's index lookup in a git project of 25,000 synthetic files (50,000 chunks,
+/// with references), each timed over ROUNDS calls: the freshness check before a query, the view, the lookup itself and
+/// the answer's lag. Their sum is what `search/usages` costs before its first row can be drawn (spec §8: the Symbol
+/// view's first rows within 50 ms).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "timing: the steps of search/usages in a project of 50,000 chunks"]
+async fn usages_steps_at_50k_chunks() {
+    use drgnx_ratatoskr::search::project::{Project, ProjectSpec};
+    let files = 25_000;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("p");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    for f in 0..files {
+        std::fs::write(root.join(format!("src/m{f}.rs")), file_text(f, Some(files))).unwrap();
+    }
+    for args in [
+        &["init", "-q"][..],
+        &["add", "-A"],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "one",
+        ],
+    ] {
+        let st = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(st.success(), "git {args:?}");
+    }
+    let (state, home) = (dir.path().join("state"), dir.path().join("home"));
+    std::fs::create_dir_all(&home).unwrap();
+    let p = Project::open(ProjectSpec {
+        root: root.clone(),
+        state,
+        home: home.clone(),
+        config_dir: home.join(".config/drgnx"),
+        config: hrafn::Config::default(),
+        embedders: Vec::new(),
+        power_root: PathBuf::from("/nonexistent"),
+        base: None,
+        #[cfg(feature = "test-hooks")]
+        test_permits: None,
+    })
+    .await
+    .unwrap();
+    let built = Instant::now();
+    let r = p.refresh_now().await.unwrap();
+    println!(
+        "tier 1: {} chunks in {:?}",
+        r.chunks_written,
+        built.elapsed()
+    );
+    let name = fn_name(0, 0);
+    let rounds = 100;
+    let fresh = timed(rounds, |_| async {
+        p.fresh_for_query().await.unwrap();
+    })
+    .await;
+    let view = timed(rounds, |_| async {
+        p.view_for(&root, false).await.unwrap();
+    })
+    .await;
+    let lookup = timed(rounds, |_| async {
+        hrafn::map::usages(p.store(), hrafn::View::Base, &name, Scope::All, 100)
+            .await
+            .unwrap();
+    })
+    .await;
+    let lag = timed(rounds, |_| async {
+        p.lag_in(None, hrafn::View::Base).await.unwrap();
+    })
+    .await;
+    for (what, t) in [
+        ("fresh_for_query", &fresh),
+        ("view_for", &view),
+        ("usages", &lookup),
+        ("lag", &lag),
+    ] {
+        println!(
+            "{what}: p50 {:?} p95 {:?} max {:?}",
+            percentile(t, 0.5),
+            percentile(t, 0.95),
+            t.last().unwrap()
+        );
+    }
+}

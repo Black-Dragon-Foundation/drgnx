@@ -164,20 +164,43 @@ impl Conn {
     }
 
     async fn call(&self, method: &str, params: Value, deadline: Option<Duration>) -> Answer {
+        self.send_call(method, params)?
+            .answer(method, deadline)
+            .await
+    }
+
+    /// The request's line, on its way to the agent when this returns (ahead of any line sent after), and its answer
+    /// to wait for.
+    fn send_call(&self, method: &str, params: Value) -> Result<Sent<'_>, Error> {
         if *self.shared.closed.borrow() {
             return Err(Error::Closed);
         }
         let id = Id::Num(self.shared.next.fetch_add(1, Ordering::Relaxed));
         let (otx, orx) = oneshot::channel();
         self.shared.lock_pending().insert(id.clone(), otx);
-        let _forget = Forget(&self.shared, id.clone());
+        let forget = Forget(&self.shared, id.clone());
         // the watchdog may have drained the table just before our insert
         if *self.shared.closed.borrow() {
             return Err(Error::Closed);
         }
         let line = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         self.tx.send(line.to_string()).map_err(|_| Error::Closed)?;
-        let wait = async { orx.await.unwrap_or(Err(Error::Closed)) };
+        Ok(Sent {
+            answer: orx,
+            _forget: forget,
+        })
+    }
+}
+
+/// A request whose line has gone to the agent; its answer is still to come.
+struct Sent<'a> {
+    answer: oneshot::Receiver<Answer>,
+    _forget: Forget<'a>,
+}
+
+impl Sent<'_> {
+    async fn answer(self, method: &str, deadline: Option<Duration>) -> Answer {
+        let wait = async { self.answer.await.unwrap_or(Err(Error::Closed)) };
         match deadline {
             Some(d) => tokio::time::timeout(d, wait)
                 .await
@@ -185,7 +208,9 @@ impl Conn {
             None => wait.await,
         }
     }
+}
 
+impl Conn {
     async fn typed<T: DeserializeOwned>(&self, method: &str, params: Value) -> Result<T, Error> {
         let v = self.call(method, params, Some(self.opts.deadline)).await?;
         decode(v)
@@ -326,22 +351,41 @@ impl Conn {
         blocks: Vec<ContentBlock>,
         meta: Option<Value>,
     ) -> Result<PromptOutcome, Error> {
-        let mut params = json!({"sessionId": sid, "prompt": blocks});
-        set_meta(&mut params, meta);
-        let r: acp::PromptResponse = decode(self.call("session/prompt", params, None).await?)?;
-        let turn_id = r
-            .meta
-            .as_ref()
-            .and_then(|m| m.get("turnId"))
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        Ok(PromptOutcome {
-            stop: r.stop_reason,
-            usage: r.usage,
-            turn_id,
-        })
+        self.send_prompt(sid, blocks, meta)?.await
     }
 
+    /// As [`Conn::prompt`], with the prompt's line already on its way to the agent when this returns: a
+    /// [`Conn::cancel`] after it reaches the agent after the prompt.  The future is the turn's answer.
+    pub fn send_prompt(
+        &self,
+        sid: &SessionId,
+        blocks: Vec<ContentBlock>,
+        meta: Option<Value>,
+    ) -> Result<impl Future<Output = Result<PromptOutcome, Error>> + '_, Error> {
+        let mut params = json!({"sessionId": sid, "prompt": blocks});
+        set_meta(&mut params, meta);
+        let sent = self.send_call("session/prompt", params)?;
+        Ok(async move { prompt_outcome(sent.answer("session/prompt", None).await?) })
+    }
+}
+
+/// The turn's answer, read.
+fn prompt_outcome(answer: Value) -> Result<PromptOutcome, Error> {
+    let r: acp::PromptResponse = decode(answer)?;
+    let turn_id = r
+        .meta
+        .as_ref()
+        .and_then(|m| m.get("turnId"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Ok(PromptOutcome {
+        stop: r.stop_reason,
+        usage: r.usage,
+        turn_id,
+    })
+}
+
+impl Conn {
     /// Ask the agent to stop the session's turn (a notification; the turn's `prompt` then answers `cancelled`).
     pub fn cancel(&self, sid: &SessionId) -> Result<(), Error> {
         let line =

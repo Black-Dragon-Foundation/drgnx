@@ -80,6 +80,10 @@ struct Shell {
     gap: bool,
     /// A turn started whose prompt the shell has not sent yet, with its text.
     unsent: Option<(u64, String)>,
+    /// The shell's turn writes the prompt's line in a step of its own after `Sending` (it awaits the tree's snapshot
+    /// in between), and the turn whose line is still to write.
+    write_gap: bool,
+    unwritten: Option<(u64, String)>,
     /// The prompts that reached the agent, and those sent to a process the hub's end was ending.
     reached: Vec<String>,
     lost: Vec<String>,
@@ -121,6 +125,8 @@ impl Shell {
             withdrawn: Vec::new(),
             gap: false,
             unsent: None,
+            write_gap: false,
+            unwritten: None,
             reached: Vec::new(),
             lost: Vec::new(),
             emit_timer: false,
@@ -133,6 +139,15 @@ impl Shell {
     fn with_gap() -> Shell {
         Shell {
             gap: true,
+            ..Shell::new()
+        }
+    }
+
+    /// A shell whose turn also writes the prompt's line in a step of its own.
+    fn with_write_gap() -> Shell {
+        Shell {
+            gap: true,
+            write_gap: true,
             ..Shell::new()
         }
     }
@@ -180,6 +195,10 @@ impl Shell {
                         if sent != [TurnEffect::Prompt { turn: *turn }, TurnEffect::Persist] {
                             self.note(format!("turn {turn} started, but its send got {sent:?}"));
                         }
+                        let written = self.core.step(TurnEvent::Written { turn: *turn });
+                        if !written.is_empty() {
+                            self.note(format!("turn {turn} written at once, but got {written:?}"));
+                        }
                         self.running = Some(*turn);
                         self.reached.push(item.text.clone());
                     }
@@ -209,10 +228,19 @@ impl Shell {
                 }
                 TurnEffect::CancelTurn => {
                     let t = self.core.turn();
+                    // the agent reads lines in order: a cancel ahead of its turn's prompt is lost
+                    if self.unwritten.as_ref().map(|u| u.0) == Some(t) {
+                        self.note(format!("turn {t} told to cancel before its prompt's line"));
+                    }
                     *self.cancels.entry(t).or_default() += 1;
                     self.cancel_sent = true;
                 }
                 TurnEffect::ArmStopDeadline { turn } => {
+                    if self.unwritten.as_ref().map(|u| u.0) == Some(*turn) {
+                        self.note(format!(
+                            "turn {turn}'s deadline armed before its prompt's line"
+                        ));
+                    }
                     self.deadlines.push(*turn);
                     self.held = true;
                 }
@@ -367,12 +395,29 @@ impl Shell {
         if self.cancels.contains_key(&t) {
             self.note(format!("turn {t}'s prompt ({text}) went after its cancel"));
         }
+        if self.write_gap {
+            self.unwritten = Some((t, text));
+        } else {
+            self.write(t, text);
+        }
+    }
+
+    /// The shell's turn writes the prompt's line of turn T, then steps `Written`.
+    fn write(&mut self, t: u64, text: String) {
         if self.doomed {
             self.lost.push(text);
-            return;
+        } else {
+            self.running = Some(t);
+            self.reached.push(text);
         }
-        self.running = Some(t);
-        self.reached.push(text);
+        self.feed(TurnEvent::Written { turn: t });
+    }
+
+    /// The line of the prompt `send_prompt` let go, if one waits.
+    fn write_prompt(&mut self) {
+        if let Some((t, text)) = self.unwritten.take() {
+            self.write(t, text);
+        }
     }
 
     fn send(&mut self, text: &str) {
@@ -1128,6 +1173,7 @@ impl Core for ExitShell {
                     .find(|e| matches!(e, TurnEffect::StartTurn { .. }))
                 {
                     c.step(TurnEvent::Sending { turn });
+                    c.step(TurnEvent::Written { turn });
                     self.resumed.push(item.text);
                     fx = c.step(TurnEvent::PromptDone {
                         turn,
@@ -1193,6 +1239,7 @@ enum GapStopEv {
     Stop,
     Deliver,
     Prompt,
+    Write,
     Done,
     Due(usize),
 }
@@ -1201,6 +1248,7 @@ skuld::events!(GapStopEv {
     Stop,
     Deliver,
     Prompt,
+    Write,
     Done,
     Due
 });
@@ -1219,6 +1267,7 @@ impl Core for GapStopShell {
             }
             GapStopEv::Deliver => s.deliver(),
             GapStopEv::Prompt => s.send_prompt(),
+            GapStopEv::Write => s.write_prompt(),
             GapStopEv::Done => s.done(),
             GapStopEv::Due(i) => s.due(i),
         }
@@ -1248,7 +1297,16 @@ fn every_order_a_stop_before_the_send_keeps_the_prompt_from_the_agent() {
             GapStopEv::Deliver,
         ],
     );
-    let turn = p.source("turn", vec![GapStopEv::Prompt, GapStopEv::Prompt]);
+    // (this shell writes the line with `Prompt`: its `Write` steps change nothing)
+    let turn = p.source(
+        "turn",
+        vec![
+            GapStopEv::Prompt,
+            GapStopEv::Write,
+            GapStopEv::Prompt,
+            GapStopEv::Write,
+        ],
+    );
     let agent = p.source("agent", vec![GapStopEv::Done, GapStopEv::Done]);
     let timer = p.source("timer", vec![GapStopEv::Due(0)]);
     p.before((user, 0), (turn, 0));
@@ -1258,6 +1316,44 @@ fn every_order_a_stop_before_the_send_keeps_the_prompt_from_the_agent() {
         &p,
         Bound::default(),
         || GapStopShell(Shell::with_gap()),
+        check_gap_stop,
+    );
+    assert_eq!(r.mode, Mode::Exhaustive);
+    assert!(r.orders > 100, "{} orders", r.orders);
+}
+
+/// The shell awaits between `Sending` and writing the prompt's line (the tree's snapshot): a Stop in between sends
+/// its cancel after the line, and its deadline runs from there (`agents/stop-is-the-only-cancel` on a slow disk).
+#[test]
+fn every_order_a_stop_before_the_prompts_line_cancels_after_it() {
+    let mut p = Partial::new();
+    let user = p.source(
+        "user",
+        vec![
+            GapStopEv::Send("a"),
+            GapStopEv::Send("b"),
+            GapStopEv::Stop,
+            GapStopEv::Deliver,
+        ],
+    );
+    let turn = p.source(
+        "turn",
+        vec![
+            GapStopEv::Prompt,
+            GapStopEv::Write,
+            GapStopEv::Prompt,
+            GapStopEv::Write,
+        ],
+    );
+    let agent = p.source("agent", vec![GapStopEv::Done, GapStopEv::Done]);
+    let timer = p.source("timer", vec![GapStopEv::Due(0)]);
+    p.before((user, 0), (turn, 0));
+    p.before((user, 0), (agent, 0));
+    p.before((user, 2), (timer, 0));
+    let r = every_order(
+        &p,
+        Bound::default(),
+        || GapStopShell(Shell::with_write_gap()),
         check_gap_stop,
     );
     assert_eq!(r.mode, Mode::Exhaustive);
@@ -1983,6 +2079,7 @@ impl SwapShell {
     fn send_prompt(&mut self, t: u64, text: String) {
         let go = self.core.step(TurnEvent::Sending { turn: t });
         if go.contains(&TurnEffect::Prompt { turn: t }) {
+            self.core.step(TurnEvent::Written { turn: t });
             self.running.insert(t, (self.conv, text.clone()));
             self.reached.push((self.conv, text));
         }

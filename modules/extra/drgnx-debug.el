@@ -13,6 +13,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-debug-gutter (expand-file-name "drgnx-debug-gutter" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-debug-timeline (expand-file-name "drgnx-debug-timeline" (file-name-directory (macroexp-file-name))))
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (defvar drgnx-hub-event-functions)
 
@@ -78,6 +79,7 @@ loaded gud's own `C-x C-a' in `global-map' loses to them.")
 (defun drgnx-debug--teardown ()
   "The session keys go with the module (a running session turned them on, not the setup), and the column."
   (drgnx-debug-session-mode -1)
+  (drgnx-debug-timeline-mode -1)
   (drgnx-debug-mode -1))
 
 (defun drgnx-debug-breakpoint-conditional ()
@@ -130,6 +132,10 @@ loaded gud's own `C-x C-a' in `global-map' loses to them.")
                                                (debug-stop "Stop Debugging" drgnx-debug-stop "End the session")
                                                (debug-install-adapter "Install Adapter…" drgnx-debug-install-adapter "Download and install a debug adapter, checked against its pinned hash")
                                                (debug-convert-dape "Convert dape Configurations…" drgnx-debug-convert-dape-configs "Turn your dape configurations into launch configurations, once")))
+                                (drgnx-command-define id :category "Debug" :title title :command fn :doc doc))
+                              ;; recorded runs: probes, the stop timeline, past stops (drgnx-debug-timeline.el)
+                              (drgnx-debug-timeline-mode 1)
+                              (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-timeline-commands)
                                 (drgnx-command-define id :category "Debug" :title title :command fn :doc doc))))
 
 (provide 'drgnx-debug)

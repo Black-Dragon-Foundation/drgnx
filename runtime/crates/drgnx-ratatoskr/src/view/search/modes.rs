@@ -66,27 +66,34 @@ pub(super) fn kind_class(kind: &str) -> &'static str {
     }
 }
 
-/// The files MODE (Symbol or Meaning) finds in ROOT's view of the index, each read for its snapshot and marks; with
-/// CONTEXT, a Symbol search's uses are grouped under the definitions that hold them (label rows, as Text's), its
-/// definitions' own rows standing for theirs; and a Symbol search's definitions' counts per kind. `Err` is why it
-/// could not run.
+/// The files MODE (Symbol or Meaning) finds in ROOT's view of the index, each read for its snapshot and marks (off the
+/// runtime) and handed to EACH as it is read, in the order shown; with CONTEXT, a Symbol search's uses are grouped
+/// under the definitions that hold them (label rows, as Text's), its definitions' own rows standing for theirs. KINDS
+/// gets a Symbol search's definitions' counts per kind (none for Meaning) before the first file. `Ok(false)`: EACH
+/// stopped the run (it was not current any more); `Err` is why it could not run.
 pub(super) async fn found(
     f: &Front,
     root: &AbsPath,
     mode: &Mode,
     context: bool,
-) -> Result<(Vec<(String, Vec<Match>, Option<Read>)>, Option<KindCounts>), String> {
-    let symbol = matches!(mode, Mode::Symbol { .. });
-    let (batches, kinds) = batches(f, root, mode).await?;
-    let files = batches
-        .into_iter()
-        .map(|(file, ms, marks)| {
-            let read =
-                run::read(Path::new(&file), &ms, context && symbol).map(|r| marked(r, marks));
+    kinds: impl FnOnce(Option<KindCounts>),
+    mut each: impl FnMut(String, Vec<Match>, Option<Read>) -> bool,
+) -> Result<bool, String> {
+    let parse = context && matches!(mode, Mode::Symbol { .. });
+    let (batches, counts) = batches(f, root, mode).await?;
+    kinds(counts);
+    for (file, ms, marks) in batches {
+        let (file, ms, read) = crate::clock::blocking(move || {
+            let read = run::read(Path::new(&file), &ms, parse).map(|r| marked(r, marks));
             (file, ms, read)
         })
-        .collect();
-    Ok((files, kinds))
+        .await
+        .map_err(|e| e.to_string())?;
+        if !each(file, ms, read) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// R with MARKS: a definition's row stands for its own label (its context is dropped), so the uses in it get one

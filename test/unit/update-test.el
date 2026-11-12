@@ -516,7 +516,12 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
        (expand-file-name "cargo" tc)
        (format (concat "#!/bin/sh\necho \"cargo $* RUSTUP_HOME=$RUSTUP_HOME CARGO_HOME=$CARGO_HOME TARGET=$CARGO_TARGET_DIR"
                        " COMMIT=$DRGNX_BUILD_COMMIT CHECKOUT=$DRGNX_CHECKOUT\" >> '%s'\n"
-                       "mkdir -p \"$CARGO_TARGET_DIR/release\" && cp \"$STUB_RATATOSKR\" \"$CARGO_TARGET_DIR/release/ratatoskr\"\n")
+                       "mkdir -p \"$CARGO_TARGET_DIR/release\" && cp \"$STUB_RATATOSKR\" \"$CARGO_TARGET_DIR/release/ratatoskr\"\n"
+                       ;; drgnx-key, native or for a --target: a script, so the install has one to copy
+                       "t=; p=; for a; do [ \"$p\" = --target ] && t=$a/; p=$a; done\n"
+                       "case \"$*\" in *'--bin drgnx-key'*) mkdir -p \"$CARGO_TARGET_DIR/${t}release\" &&"
+                       " echo \"#!/bin/sh\" > \"$CARGO_TARGET_DIR/${t}release/drgnx-key\" &&"
+                       " chmod 755 \"$CARGO_TARGET_DIR/${t}release/drgnx-key\";; esac\n")
                cargo-log))
       (set-file-modes (expand-file-name "cargo" tc) #o755)
       ;; the forwarder's musl target is added through the toolchain's rustup (a stub: never the host's)
@@ -535,6 +540,12 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
             (log (drgnx-update-test--slurp cargo-log)))
         (should (eq (car r) 0))
         (should (string-search "cargo build --release --locked -j 4 --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr" log))
+        ;; drgnx-key: native next to the hub (a keyed job here runs behind it), static musl beside the relay's sidecar
+        (let ((arch (string-trim (shell-command-to-string "uname -m"))))
+          (should (string-search "-j 4 --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key RUSTUP_HOME=" log))
+          (should (string-search (format "--target %s-unknown-linux-musl --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key" arch) log))
+          (should (file-executable-p (expand-file-name "data/bin/drgnx-key" dir)))
+          (should (file-executable-p (expand-file-name (format "data/bin/drgnx-key-%s-linux-musl" arch) dir))))
         (should (string-search (format "RUSTUP_HOME=%s/rh CARGO_HOME=%s/ch" dir dir) log))
         (should (string-search (format "TARGET=%s/cache/drgnx/ratatoskr-target COMMIT=%s CHECKOUT=%s/install" dir head dir) log))
         (should-not (string-search "WRONG" log))

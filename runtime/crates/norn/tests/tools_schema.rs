@@ -50,6 +50,7 @@ fn tool_names_are_the_lisp_names() {
                     | "plan_write"
                     | "extensions_suggest"
                     | "huddle_reply"
+                    | "procedure_get"
             ) && !n.starts_with("job_")
         })
         .collect();
@@ -95,7 +96,11 @@ const BUDGET_PART1: usize = 4_266;
 const BUDGET_EXTENSIONS: usize = 800;
 /// `huddle_reply`, which every agent has (a huddle's position).
 const BUDGET_HUDDLE: usize = 800;
-const _: () = assert!(BUDGET_BYTES + BUDGET_JOBS + BUDGET_EXTENSIONS + BUDGET_HUDDLE <= 40_000);
+/// `procedure_get`, which every agent has (the job's pack's procedures).
+const BUDGET_PROCEDURE: usize = 600;
+const _: () = assert!(
+    BUDGET_BYTES + BUDGET_JOBS + BUDGET_EXTENSIONS + BUDGET_HUDDLE + BUDGET_PROCEDURE <= 40_000
+);
 
 const PART1_TOOLS: [&str; 3] = ["report_submit", "plan_read", "plan_write"];
 
@@ -127,6 +132,13 @@ fn the_tool_list_fits_the_budget() {
         huddle <= BUDGET_HUDDLE,
         "huddle_reply is {huddle} bytes, over {BUDGET_HUDDLE}"
     );
+    let procedure = json!({"tools": listing(norn::tools::procedure::tools())})
+        .to_string()
+        .len();
+    assert!(
+        procedure <= BUDGET_PROCEDURE,
+        "procedure_get is {procedure} bytes, over {BUDGET_PROCEDURE}"
+    );
     assert!(
         ext <= BUDGET_EXTENSIONS,
         "extensions_suggest is {ext} bytes, over {BUDGET_EXTENSIONS}"
@@ -148,7 +160,7 @@ fn the_tool_list_fits_the_budget() {
         "tools/list is {bytes} bytes, over the {BUDGET_BYTES} budget: trim the descriptions"
     );
     // the 18 alone: what the list weighs without the job tools, part 1's three and extensions_suggest
-    let base = bytes16 - jobs - part1 - ext - huddle;
+    let base = bytes16 - jobs - part1 - ext - huddle - procedure;
     assert!(
         base <= BUDGET_BYTES_16,
         "tools/list without the tracker, job and part-1 tools is {base} bytes, over {BUDGET_BYTES_16}"

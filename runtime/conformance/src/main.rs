@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
 const USAGE: &str = "usage: domr --hub-bin PATH --scenarios DIR [--only GLOB] [--only-tag TAG] [--require-all]\n\
-    \x20      [--perf OUT.json]\n\
+    \x20      [--perf OUT.json] [--shard K/N]\n\
     \x20      domr connect-as --socket PATH";
 
 struct Args {
@@ -28,12 +28,26 @@ struct Args {
     only_tag: Option<String>,
     require_all: bool,
     perf: Option<PathBuf>,
+    /// `--shard K/N`: of the rows the other filters select, in path order, the Kth of every N (1-based K).
+    shard: Option<(usize, usize)>,
+}
+
+/// `K/N` with 1 <= K <= N.
+fn parse_shard(v: &str) -> Result<(usize, usize), String> {
+    let bad = || format!("--shard {v}: K/N with 1 <= K <= N");
+    let (k, n) = v.split_once('/').ok_or_else(bad)?;
+    let (k, n): (usize, usize) = (k.parse().map_err(|_| bad())?, n.parse().map_err(|_| bad())?);
+    if k == 0 || k > n {
+        return Err(bad());
+    }
+    Ok((k, n))
 }
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let (mut hub_bin, mut scenarios, mut only, mut only_tag, mut perf) =
         (None, None, None, None, None);
     let mut require_all = false;
+    let mut shard = None;
     let mut it = argv.iter();
     while let Some(a) = it.next() {
         let mut value = |name: &str| {
@@ -48,6 +62,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--only-tag" => only_tag = Some(value("--only-tag")?),
             "--perf" => perf = Some(PathBuf::from(value("--perf")?)),
             "--require-all" => require_all = true,
+            "--shard" => shard = Some(parse_shard(&value("--shard")?)?),
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -60,6 +75,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         only_tag,
         require_all,
         perf,
+        shard,
     })
 }
 
@@ -260,6 +276,7 @@ fn main() -> ExitCode {
             .unwrap_or_else(|_| args.scenarios.clone()),
     };
     let mut report = Report::default();
+    let mut selected = 0usize;
     for s in &scenarios {
         if args
             .only
@@ -269,6 +286,12 @@ fn main() -> ExitCode {
                 .only_tag
                 .as_deref()
                 .is_some_and(|t| !s.requires.iter().any(|r| r == t))
+        {
+            continue;
+        }
+        selected += 1;
+        if let Some((k, n)) = args.shard
+            && (selected - 1) % n != k - 1
         {
             continue;
         }
@@ -290,4 +313,18 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
     ExitCode::from(report.exit_code(args.require_all) as u8)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_shard_is_k_of_n() {
+        assert_eq!(parse_shard("1/2"), Ok((1, 2)));
+        assert_eq!(parse_shard("3/3"), Ok((3, 3)));
+        for bad in ["0/2", "3/2", "1", "a/2", "1/0", "-1/2"] {
+            assert!(parse_shard(bad).is_err(), "--shard {bad} is an error");
+        }
+    }
 }

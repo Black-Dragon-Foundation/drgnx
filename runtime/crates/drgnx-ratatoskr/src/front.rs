@@ -946,6 +946,14 @@ impl Front {
             | Params::DebugRunToCursor(_)) => crate::debug::wire::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
+            // recorded runs and probes (`debug/run*`, `debug/probe/op`)
+            p @ (Params::DebugProbeOp(_)
+            | Params::DebugRunsList(_)
+            | Params::DebugRunGet(_)
+            | Params::DebugRunStop(_)
+            | Params::DebugRunPin(_)) => crate::debug::runs_wire::serve(self, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
             // the Extensions view's catalog (`extensions/*`)
             p @ (Params::ExtensionsSearch(_)
             | Params::ExtensionsDetails(_)

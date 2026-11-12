@@ -27,6 +27,7 @@
 (declare-function drgnx-replace--update-status "drgnx-replace")
 (declare-function drgnx-replace--search-now "drgnx-replace")
 (declare-function drgnx-view-nav-selection "drgnx-view-patch")
+(declare-function drgnx-view-row-start "drgnx-view")
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-agents-sessions "drgnx-agents")
 (declare-function drgnx-agents-default-profile "drgnx-agents")
@@ -111,6 +112,9 @@ pair.  Each (LABEL . TO), TO as `search/handoff' takes it."
   (let ((m (make-sparse-keymap))) (set-keymap-parent m drgnx-search-handoff-keys-map) m)
   "The Ask an Agent card's keymap: the profiles' keys; the rest is the instruction's text.")
 
+(defconst drgnx-search-handoff--width 436
+  "The card's window width in logical pixels: the mockup's `.ho' (460) less the modal popup's 12 px border each side.")
+
 (define-derived-mode drgnx-search-handoff-mode text-mode "Ask an Agent"
   "The Ask an Agent card (search-view.html `.ho'): its title, the instruction box (the only text you edit), who it
 goes to as chips and where that agent sends, the context it gets with its size, and Cancel / Send."
@@ -128,9 +132,6 @@ goes to as chips and where that agent sends, the context it gets with its size, 
   "(START . END): markers around the instruction, the card's only editable text.")
 
 (defvar-local drgnx-search-handoff--box-ov nil "The overlay that indents the instruction inside its box.")
-
-(defconst drgnx-search-handoff--width 436
-  "The card's window width in logical pixels: the mockup's `.ho' (460) less the modal popup's 12 px border each side.")
 
 (defun drgnx-search-handoff--gap (px)
   "A stretch PX logical pixels wide."
@@ -153,8 +154,11 @@ a column: a line that reaches the right edge wraps (the window has no right frin
 (defun drgnx-search-handoff--room (px &optional last)
   "A row PX logical pixels high: its text in a tiny font, so the stretch alone sets its height; LAST: the card's
 last row, with no newline after it."
-  (propertize (concat (propertize " " 'display `(space :width (1) :height (,(drgnx-px px)))) (if last "" "\n"))
-              'face '(:height 0.1)))
+  ;; the newline's `line-height' sets the row's height in pixels: a stretch's :height alone came out about half of it
+  (let ((h (drgnx-px px)))
+    (propertize (concat (propertize " " 'display `(space :width (1) :height (,h)))
+                        (if last "" (propertize "\n" 'line-height h)))
+                'face '(:height 0.1))))
 
 (defun drgnx-search-handoff--rule ()
   "The card's rule (the mockup's title and foot lines): a row one line high, filled in the border colour, across the

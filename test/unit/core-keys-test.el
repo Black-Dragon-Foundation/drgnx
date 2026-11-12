@@ -1026,7 +1026,7 @@ The commands of modules that need no installed package are in it, the later stag
                               ;; extra/debug needs no package now (the hub is its client), so it sets up here too
                               debug-start debug-breakpoint debug-breakpoint-conditional debug-logpoint
                               debug-breakpoint-enable debug-run-to-cursor debug-step-over debug-step-in debug-step-out
-                              debug-stop
+                              debug-stop debug-timeline-back debug-timeline-forward debug-timeline-open ; recorded runs' maps
                               terminal-toggle))   ; C-` is Toggle Terminal, as in VS Code (the panel keeps M-j)
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))

@@ -9492,6 +9492,11 @@
                 "type": "string"
               },
               {
+                "const": "gates",
+                "description": "What the merge checks under the job's rule pack, and how to satisfy each (empty without a pack).",
+                "type": "string"
+              },
+              {
                 "const": "findings",
                 "description": "How to record what the agent establishes (findings with sources, decisions).",
                 "type": "string"
@@ -11773,6 +11778,127 @@
       "classes": [
         "user"
       ],
+      "doc": "a project's probes (logpoints whose values are recorded, never printed): add one, add one for what a line assigns on the next line that runs, edit or remove one; it reaches the project's sessions at once",
+      "name": "debug/probe/op",
+      "params": {
+        "$defs": {
+          "DebugProbeChange": {
+            "description": "One change to a project's probes: `add` (PATH, LINE, EXPR), `result` (\"Probe the result\": EXPR, which LINE\nassigns, recorded on the next line that runs; TEXT is the file as the editor has it, LANGUAGE its language),\n`remove` (ID) and `edit` (ID, and EXPR, ENABLED or LINE).",
+            "properties": {
+              "enabled": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "expr": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "language": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "op": {
+                "type": "string"
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/probe/op`: ROOT's probes, after OP when given.",
+        "properties": {
+          "op": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DebugProbeChange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "DebugProbeOp",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A project's probes (`{id, path, line, expr, enabled}`), the path OP changed and the probe it ADDED.",
+        "properties": {
+          "added": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "probes": {
+            "items": true,
+            "type": "array"
+          },
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "probes"
+        ],
+        "title": "DebugProbes",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "Run to Cursor: a session stops once at a line (a breakpoint for it alone, gone at its next stop), continuing if it is stopped",
       "name": "debug/run-to-cursor",
       "params": {
@@ -11803,6 +11929,214 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "boolean",
         "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a recorded run for the stop timeline: a page of its stops and each probe's values over them",
+      "name": "debug/run/get",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/run/get`: run RUN for the strip: COUNT of its stops from FROM (0-based), and the probes' lanes over them.",
+        "properties": {
+          "count": {
+            "default": 200,
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "current": {
+            "description": "The stop (its `index`) the strip rings.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "from": {
+            "default": 0,
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "run": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "title": "DebugRunGet",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A run's page: its record, the stops (`{index, t_ms, reason, thread, path, line, bp_hit?, steps?, session}`), how\nmany it has, the lanes (`{probe, expr, path, line, hits: [{seq, t, thread, value}], shown_from}`), whether more\nstops follow, and the strip's rows (docs/develop/hub.md, \"Rows\": a head, the lane of stops, one lane per probe).",
+        "properties": {
+          "lanes": {
+            "items": true,
+            "type": "array"
+          },
+          "more": {
+            "type": "boolean"
+          },
+          "run": true,
+          "stops": {
+            "items": true,
+            "type": "array"
+          },
+          "strip": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run",
+          "stops",
+          "total",
+          "lanes",
+          "more"
+        ],
+        "title": "DebugRunView",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "keep a recorded run past the 14 days, or let it go with the others",
+      "name": "debug/run/pin",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/run/pin`: keep run RUN past the retention (PINNED), or not.",
+        "properties": {
+          "pinned": {
+            "type": "boolean"
+          },
+          "run": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "pinned"
+        ],
+        "title": "DebugRunPin",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a past stop of a recorded run: its variables and stack as captured then, and a file as it ran (from the launch snapshot), marked when it was unsaved at the launch",
+      "name": "debug/run/stop",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/run/stop`: stop STOP (its `index`) of run RUN, with FILE as it ran (the stop's own file when absent).",
+        "properties": {
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run": {
+            "type": "string"
+          },
+          "stop": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run",
+          "stop"
+        ],
+        "title": "DebugRunStop",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A past stop: the stop, its capture (threads, frames, scopes and variables as fetched then; `cut` counts what the\n64 KB cap left out), the launch snapshot's tree, and the file `{path, text, not_what_ran}` (text null: not in the\nsnapshot).",
+        "properties": {
+          "capture": true,
+          "run": {
+            "type": "string"
+          },
+          "snapshot": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": true,
+          "stop": true
+        },
+        "required": [
+          "run",
+          "stop",
+          "capture",
+          "source"
+        ],
+        "title": "DebugPastStop",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a project's recorded runs, newest first",
+      "name": "debug/runs/list",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/runs/list`: ROOT's recorded runs, newest first.",
+        "properties": {
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "DebugRunsList",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "The runs: each `{id, n, name, started, ended?, outcome?, stops, hits, thinned, dropped, pinned, task?, …}`.",
+        "properties": {
+          "runs": {
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "title": "DebugRuns",
+        "type": "object"
       },
       "writes": false
     },
@@ -11930,6 +12264,13 @@
               "string",
               "null"
             ]
+          },
+          "unsaved": {
+            "description": "Files modified in the editor and not saved: the recorded run marks them \"not what ran\".",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "user": {
             "default": [],

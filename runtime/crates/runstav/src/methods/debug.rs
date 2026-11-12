@@ -94,6 +94,9 @@ pub struct DebugStart {
     pub user: Vec<JsonObject>,
     #[serde(default)]
     pub adapters: Vec<JsonObject>,
+    /// Files modified in the editor and not saved: the recorded run marks them "not what ran".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsaved: Vec<String>,
 }
 
 /// One answer to `debug/start`'s `needs`: the input ID (`pickProcess` for the process picker) and its VALUE.
@@ -306,6 +309,9 @@ fn check_start(p: &DebugStart) -> Result<(), Error> {
     check_text("config", &p.config)?;
     if p.user.len() > LIST_MAX || p.inputs.len() > LIST_MAX || p.adapters.len() > LIST_MAX {
         return Err(invalid("inputs", "at most 256 inputs and configurations"));
+    }
+    if p.unsaved.len() > LIST_MAX || p.unsaved.iter().any(|f| f.len() > TEXT_MAX) {
+        return Err(invalid("unsaved", "at most 256 paths"));
     }
     Ok(())
 }

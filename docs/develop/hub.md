@@ -1378,9 +1378,14 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
 | `debug/control` | user | `{op: string, session: string, thread?: integer}` | `boolean` | no |
 | `debug/install` | user | `{adapter: string, adapters?: [JsonObject]}` | `string` | no |
+| `debug/probe/op` | user | `{op?: {enabled?: boolean, expr?: string, id?: string, language?: string, line?: natnum, op: string, path?: string, text?: string}, root: string}` | `{added?: string, path?: string, probes: [any], root: string}` | no |
 | `debug/run-to-cursor` | user | `{line: natnum, path: string, session: string}` | `boolean` | no |
+| `debug/run/get` | user | `{count?: natnum, current?: natnum, from?: natnum, run: string}` | `DebugRunView` | no |
+| `debug/run/pin` | user | `{pinned: boolean, run: string}` | `boolean` | no |
+| `debug/run/stop` | user | `{file?: string, run: string, stop: natnum}` | `{capture: any, run: string, snapshot?: string, source: any, stop: any}` | no |
+| `debug/runs/list` | user | `{root: string}` | `{runs: [any]}` | no |
 | `debug/select` | user | `{frame: integer, session: string, thread?: integer}` | `boolean` | no |
-| `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, root: string, selection?: string, user?: [JsonObject]}` | `{needs?: any, session?: string}` | no |
+| `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, root: string, selection?: string, unsaved?: [string], user?: [JsonObject]}` | `{needs?: any, session?: string}` | no |
 | `debug/trust` | user | `{root: string, trusted: boolean}` | `boolean` | no |
 | `decisions/effects` | user | `{decision: string}` | `{commits?: [string], decision: string, label: string, later_hunks?: [Hunk]}` | no |
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no |
@@ -1866,7 +1871,8 @@ event and performs what it answers; the entries, steps and transcript stay with 
   `PromptFailed` (closed or not), `Stop` (or the pause after a tool call), `Kill` (`agents/kill`, the hub ending, or
   a Stop's deadline for its turn), `PermissionAsked` (with the turn it came in), `PermissionAnswered`,
   `ToolCompleted`, `EmitTick`, `QueueEdited` (deliver, unqueue, requeue, the freshness gate's notice), `Changed`,
-  `Exited`, `Sending` (the turn's task is about to hand its prompt to the agent), and `Detach` / `Reattach` (a rewind
+  `Exited`, `Sending` (the turn's task is about to hand its prompt to the agent), `Written` (the prompt's line is on
+  its way to the agent), and `Detach` / `Reattach` (a rewind
   swaps the conversation: [Rewind and fork](#rewind-and-fork)). `PromptDone` and `PromptFailed` name their turn.
 - Effects: start a turn with the next prompt, send its prompt now (`Prompt`) or put it back (`PutBack`, the hub's
   end), name what a user's kill drops (`Discard`), end it (waiting on a job, or held), tell the agent to cancel, arm a
@@ -1890,7 +1896,10 @@ What the core keeps:
   a Stop comes or the agent's process exits between a turn's start and that step, the turn is put back: its prompt
   goes back to the front of the queue, on disk too (held, after a Stop; for the next start or resume, after an exit),
   and the shell drops the turn's entries (the transcript file holds a turn's entries
-  only once its prompt was sent). When the
+  only once its prompt was sent). Between `Sending` and `Written` the turn's task still awaits (the tree's snapshot,
+  the transcript): a Stop then sends its `session/cancel` at `Written`, after the prompt's line, and its 2 s deadline
+  runs from there (an agent reads its input in order; a cancel ahead of the prompt would be lost, and the deadline
+  would end a turn the agent was never told to stop). When the
   user's kill comes there instead, the prompt is dropped with the queue, and `Discard` names both, so a peer's
   message among them goes back to `queued` in the store.
 - A turn ends once, at its agent's answer. A second Stop of a stopped turn changes nothing; a Stop's deadline ends
@@ -2410,7 +2419,7 @@ snapshots; the search itself is `hrafn::grep`).
   (Open, a git scope) is searched alone, the globs narrowing it (`hrafn::grep`: a name glob names any part of the path,
   one with a slash the path from the root; a list goes to the searcher a thousand files at a time; files outside the
   root are not searched). It stops the view's earlier search, records the search as recent,
-  sends every class of `view` a `reset` of no rows at once, and answers `{run}`, the run's number. A thread then runs
+  sends every class of `view` a `reset` of no rows at once (Text and Pattern; Symbol's and Meaning's go with their first rows, below), and answers `{run}`, the run's number. A thread then runs
   ripgrep (else `git grep` in a repository, else `grep`) and sends, as each file's lines are complete, one `insert`
   after the last row: the file's header row `f:<file>` and one row `m:<run>:<n>` per match (`n` from 0 in the run's
   order; the id is opaque, the row's props name the match). `<file>` is the path relative to `root` when it is under
@@ -2421,8 +2430,12 @@ snapshots; the search itself is `hrafn::grep`).
   the view (and the editor drops one by `base` as well). `count: true` sends only that event: no model, no rows, no
   context labels, and the search is not recorded as recent (a pinned saved search's live count, on a view id of its
   own, `<view>~pin<N>`).
-- **Symbol and Meaning** (`view/search/modes.rs`) ask the index on a task of their own and send all their files when
-  it answers, then `search-run-done` (its `error` is the index's refusal, e.g. no index yet). Symbol (`{mode:
+- **Symbol and Meaning** (`view/search/modes.rs`) ask the index on a task of their own and, once it answers, send
+  each file as it is read (off the runtime, in the order shown), then `search-run-done` (its `error` is the index's
+  refusal, e.g. no index yet). Their `reset` (and the run's empty model) goes with the first file's rows, or with the
+  end when none came, after `{run}`: sent at once, it was drawn alone one frame on, and the rows that followed the
+  index's answer waited for the view's throttle (`drgnx-view-delay`, 100 ms) instead of sharing the reset's frame, as
+  Text's first file does. The view keeps the previous search's rows until then. Symbol (`{mode:
   "symbol", name, case?}`, case on by default) is `search/usages`' answer: the files that define the name first, each
   definition's line and then the file's uses in line order, then the files that use it in the index's rank (at most
   100), each line's whole-word occurrences of the name a match (the line read from disk; a definition whose line lacks
@@ -2892,7 +2905,7 @@ makes: the hub never grants `Open`) has no network but its sandbox's relay port,
   proxy pins the same names (`Caps.pins`, from `settings::containers::caps`). A runner gets none (its `start` frame's
   `pins` is always empty): a pin names an address on this machine's network, and a runner's proxy reaches only public
   addresses. So a job whose granted hosts include a pinned name stays on this machine (`exec::pinned_host` sets
-  `local_only`), and a keyed one, which runs only on a runner, is refused at start (`exec::keyed_and_pinned`). A `test-hooks` build adds
+  `local_only`). A `test-hooks` build adds
   `DRGNX_TEST_PROXY_PINS` (`NAME=ADDR,…`), so a row reaches the mock LLM on loopback under a name.
 
 Rows: `test/conformance/sandbox-net/`. The real launch: `tests/launch_sandboxed.rs`
@@ -3795,8 +3808,25 @@ shared runner; the shared runner fetches from origin; the shared overlay off by 
 **Naming a key.** `exec/start`'s `keys` (names) must each be on the project's `drgnx-runners-job-keys`
 (`keys::on_the_project_list`, else invalid-params naming the key and the setting); a session's start also passes the
 matrix's `job.keys` (`gate_session_job`; Cautious and Balanced ask, Autonomous allows the manager and workers, chat
-never). The names go to `Placement::keys` and the spec; the job is `private+keys`. A keyed job has no local candidate
-in `Queue::place` (it waits for a runner, saying so): a keyed job on this machine is not wired yet.
+never). The names go to `Placement::keys` and the spec; the job is `private+keys`. This machine is a candidate for a
+keyed job as for any other (`Queue::candidates`).
+
+**Keyed jobs here** (`exec/keys.rs`). A keyed command job (user or session starter) launches behind
+`drgnx-key exec NAME=NAME… -- ARGV` (`Hooks::key_bin`, `drgnx-key` next to the hub; missing: refused at start) with
+`DRGNX_KEY_SOCK` naming its key socket: `<job dir>/key.sock` for a user's job (over 103 bytes, `k-ID.sock` in the hub's
+private temporary folder), `k-ID.sock` in the session's folder for a session's (its sandbox reaches sockets there only;
+`SessionShape::sockets` lists the path alone, which Gleipnir allows by path and Seatbelt by `path-literal`, and
+`drgnx-key` is a `read` file). `keys::serve` binds it 0600 under a temporary name and renames it into place, answers
+this user's connections only, one request line each, and is dropped (the file removed) when the job ends.
+`JobKeys::answer` speaks `sleipnir::keyline` (the job helper's request and answers, shared): only a name the job lists,
+waited for up to 60 s (`Keys::wait_for`, which asks `runners/need-keys` once), every value added to the job's
+`Redactor` before it is written, the first hand-out of each key recorded as `key_sent` on runner `local` (attempt 0); a
+key that never comes writes `why` = `infra: key not delivered` (any `why` starting `infra:` is `ExecStatus::Infra`)
+and a log line naming it, then answers `timeout`. The job's output never goes through the logging shell's file: its
+wrapper (`unit::wrap_to_hub`) leaves stdout and stderr on the pipe the hub reads, and `keys::pump` appends each chunk
+to the log through the redactor (the held-back end at EOF; `watch` waits up to 5 s for it before the result is
+written). `Meta::keyed` marks it: a restarted hub kills such a job and ends it `infra` rather than adopting it. A keyed
+container job is refused here for now (it runs on a runner).
 
 **The handover.** `runners/keys {keys: {NAME: value}}` (user only; refused while `Gate::protects_keys` fails, as
 `gateway/keys` is) puts the values in `Keys` (`SecretString`s in memory; `RunnerKeys` refuses a NUL, an over-64-KiB
@@ -4114,8 +4144,11 @@ since the last write, and the writer keeps that one. The writer holds the step's
 write is served meanwhile; with no edit step waiting, a write costs a lock and nothing more. A step whose row cannot be
 written closes its cell (`EditCell::close`), so no later write takes a tree nobody would keep; a tree taken for it
 already stays held until the session's refs are pruned, since the steps closed before one write share it. Each
-session has its own persistent index file in the shadow repository, so a snapshot only hashes what changed. The
-sandbox's secret file names (`.env`, `.npmrc`, `credentials*`, keys, …) are never in a tree. Over
+session has its own persistent index file in the shadow repository, so a snapshot only hashes what changed. A missing
+shadow repository is made by `git init` in a folder of its own beside it, then renamed into place: a session's first
+two snapshots (its turn's and its base's) are taken at once, and two inits in one folder failed on each other's
+template files, which left the turn without its checkpoint (a revert to its first step then went back to a later
+tree). The sandbox's secret file names (`.env`, `.npmrc`, `credentials*`, keys, …) are never in a tree. Over
 `drgnx-agents-checkpoint-cap` (summed over the shadow repositories), the refs of finished sessions go oldest first and
 the repositories are collected (`git gc --prune=now`); with nothing finished left, snapshots stop and the editors get
 one `notice` (a running task's refs are never removed). Restore and fork are part 4's.
@@ -4537,7 +4570,9 @@ own store write whether the job is still `proposed` (`norn::write::jobs::withdra
 the store's writes are one at a time, so of the two exactly one holds: an approval that lands between a status read
 and the withdrawal runs on, never stopped (every order tested). `job/stop` (the editor's and the card's reject)
 decides in its write the same way (`stop_job`): a proposal is withdrawn and marked never approved, any other job is
-stopped unmarked, so an approval that landed first can still be resumed; the budget pause (`pause_running`) and
+stopped unmarked, so an approval that landed first can still be resumed. It answers only once the job's work in
+flight ended (`Runs::settled`: a start still writing its task's tree, a merge, each clearing its own busy mark), so
+nothing of the job writes after the answer, and an agent such a start made is ended with the rest; the budget pause (`pause_running`) and
 `job/resume` (`resume_job`) read the status in their own write too (every order tested). A say has at
 most one live job: when its proposal starts (the Autonomous preset at once, or the user's `job/approve`, which the
 withdrawal finds), the planning is done: the session is stopped and forgotten, the latest 64 such sessions remember

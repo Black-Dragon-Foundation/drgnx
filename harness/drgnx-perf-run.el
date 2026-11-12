@@ -84,6 +84,74 @@ would be bypassed by native code; the cost timed is the Lisp's, the C lights not
      (global-set-key (kbd \"<f9>\") #'drgnx-debug-gutter-toggle) t)"
           drgnx-ui-repo-dir))
 
+(defun drgnx-perf-run--debug-timeline-setup-form ()
+  "Recorded runs' workloads' setup: the timeline's files and `drgnx-hub-call' answered in the session: ten probes on
+the fixture (`debug/probe/op'), a run of 60 stops (`debug/run/get', with its strip rows) and each stop as it ran
+(`debug/run/stop': the capture and a 2,000-line file).  `<f8>' is one batch of probe hits, what the hub sends every
+50 ms at 2,000 hits a second (100 hits, ten per probe), drawn as the throttle would.  `drgnx-perf--timeline-stop'
+undoes it."
+  (format "(progn (load (expand-file-name \"modules/extra/drgnx-debug-timeline\" %S) nil t) %s)"
+          drgnx-ui-repo-dir
+          (prin1-to-string
+           '(progn
+              (defvar drgnx-perf--timeline-text
+                (mapconcat (lambda (i) (format "    total_%d = compute(item, %d)  # a line of the program as it ran\n" i i))
+                           (number-sequence 1 2000) ""))
+              (defvar drgnx-perf--timeline-seq 0)
+              (defun drgnx-perf--timeline-answer (method params)
+                (pcase method
+                  ("debug/probe/op"
+                   (list :root (plist-get params :root)
+                         :probes (vconcat (mapcar (lambda (i) (list :id (format "p%d" i) :path (expand-file-name buffer-file-name)
+                                                                    :line (* 40 i) :expr (format "total_%d" i) :enabled t))
+                                                  (number-sequence 1 10)))))
+                  ("debug/run/get"
+                   (list :run (list :id "perf" :n 1) :total 60 :lanes [] :more nil
+                         :stops (vconcat (mapcar (lambda (i) (list :index (* 3 i) :reason (if (zerop (% i 4)) "breakpoint" "step")
+                                                                   :path "/p/m.py" :line (* 30 i)))
+                                                 (number-sequence 1 60)))
+                         :strip (vector (list :key "head" :text "Run 1 · 60 stops" :runs (vector (vector 0 5 "drgnx-debug-timeline-head")))
+                                        (list :key "stops" :text (mapconcat (lambda (i) (format "·%d" i)) (number-sequence 1 60) " ")))))
+                  ("debug/run/stop"
+                   (let ((i (plist-get params :stop)))
+                     (list :run "perf" :stop (list :index i :reason "step" :line (* 10 i))
+                           :capture (list :frames (vconcat (mapcar (lambda (f) (list :name (format "fn_%d" f) :line f :source (list :path "/p/m.py")))
+                                                                   (number-sequence 1 20)))
+                                          :scopes (vector (list :scope (list :name "Locals")
+                                                                :variables (vconcat (mapcar (lambda (v) (list :name (format "v%d" v) :value (format "%d" (* v i))))
+                                                                                            (number-sequence 1 40))))))
+                           :snapshot "perf" :source (list :path "/p/m.py" :text drgnx-perf--timeline-text))))
+                  (_ t)))
+              (defun drgnx-perf--timeline-hub (method params cb &rest _)
+                (funcall cb (drgnx-perf--timeline-answer method params) nil) 1)
+              (defun drgnx-perf--timeline-sync (method params &rest _) (drgnx-perf--timeline-answer method params))
+              (defun drgnx-perf--probe-batch ()
+                "One batch of hits (100: ten per probe), then the line ends drawn, as the throttle's timer would."
+                (interactive)
+                (let ((root (drgnx-debug-launch-root)))
+                  (unless drgnx-debug-timeline--runs
+                    (drgnx-debug-timeline--event "debug-run" (list :run "perf" :n 1 :root root :state "recording")))
+                  (drgnx-debug-timeline--event
+                   "debug-probe-hits"
+                   (list :run "perf"
+                         :hits (vconcat (mapcar (lambda (k) (list :probe (format "p%d" (1+ (% k 10)))
+                                                                  :value (number-to-string (% (* 37 (cl-incf drgnx-perf--timeline-seq)) 101))))
+                                                (number-sequence 0 99)))))
+                  (drgnx-timer-cancel (cons 'debug-probe-values root))
+                  (drgnx-debug-timeline--values-changed root)))
+              (defun drgnx-perf--timeline-stop ()
+                (drgnx-debug-timeline-mode -1)
+                (advice-remove 'drgnx-hub-call #'drgnx-perf--timeline-hub)
+                (advice-remove 'drgnx-hub-call-sync #'drgnx-perf--timeline-sync)
+                (global-unset-key (kbd "<f8>"))
+                (define-key drgnx-debug-past-mode-map (kbd "M-<left>") nil t) t)
+              (advice-add 'drgnx-hub-call :override #'drgnx-perf--timeline-hub)
+              (advice-add 'drgnx-hub-call-sync :override #'drgnx-perf--timeline-sync)
+              (global-set-key (kbd "<f8>") #'drgnx-perf--probe-batch)
+              ;; the key profiles' row (keys/*.eld), without the module's setup
+              (define-key drgnx-debug-past-mode-map (kbd "M-<left>") #'drgnx-debug-timeline-back)
+              t))))
+
 (defun drgnx-perf-run--visit-fixture-form ()
   "The form that visits the fixture and puts point where the keys go: the line under `drgnx-perf-run--fixture-mark'."
   (format "(let ((f %S)) (when-let* ((b (find-buffer-visiting f))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
@@ -1500,11 +1568,19 @@ to its first rows.  An error when a key's search drew no rows before the next ke
 (defconst drgnx-perf-run--search-modes-form
   (prin1-to-string
    '(progn
-      (defvar drgnx-perf--sm nil "The running search: [START RESET FIRST DONE], `float-time's (as search-context's).")
+      (defvar drgnx-perf--sm nil "The running search: [START RESET FIRST DONE PATCH], `float-time's (as search-context's;
+PATCH: the first patch after the reset arrived, the rows the hub sent).")
       (defvar drgnx-perf--sm-root nil "The indexed project of 25,000 synthetic Rust files, without a trailing slash.")
       (defun drgnx-perf--sm-chunks ()
         "How many chunks the hub holds of the project."
         (or (plist-get (drgnx-hub-call-sync "search/status" (list :root drgnx-perf--sm-root) 10) :chunks) 0))
+      (defun drgnx-perf--sm-name (f i)
+        "The name of synthetic file F's function I, as Hrafn's timing rows' `fn_name'."
+        (let ((verbs ["parse" "render" "retry" "flush" "resolve" "encode" "split" "merge" "probe" "gather" "release"
+                      "verify"])
+              (nouns ["request" "buffer" "socket" "session" "token" "header" "frame" "window" "project" "symbol"
+                      "manifest" "timer" "channel" "record" "snapshot" "queue"]))
+          (format "%s_%s_%d_%d" (aref verbs (% (+ (* f 7) i) 12)) (aref nouns (% (+ (* f 3) (* i 5)) 16)) f i)))
       (defun drgnx-perf--sm-file (f files)
         "Synthetic file F of FILES, as Hrafn's timing rows' (`tests/timing.rs'): 10 functions of a doc line, a signature
 and a body (about 2 chunks), each calling 4 of the files' functions drawn Zipf-like (rank g goes as 1/(g + 1))."
@@ -1513,7 +1589,7 @@ and a body (about 2 chunks), each calling 4 of the files' functions drawn Zipf-l
               (nouns ["request" "buffer" "socket" "session" "token" "header" "frame" "window" "project" "symbol"
                       "manifest" "timer" "channel" "record" "snapshot" "queue"])
               (all (* files 10)))
-          (cl-flet ((name (f i) (format "%s_%s_%d_%d" (aref verbs (% (+ (* f 7) i) 12)) (aref nouns (% (+ (* f 3) (* i 5)) 16)) f i)))
+          (cl-flet ((name (f i) (drgnx-perf--sm-name f i)))
             (mapconcat
              (lambda (i)
                (let* ((v (aref verbs (% (+ (* f 7) i) 12)))
@@ -1552,6 +1628,7 @@ and a body (about 2 chunks), each calling 4 of the files' functions drawn Zipf-l
                                          (point-min-marker)))
           (select-window editor))
         (advice-add 'drgnx-view-apply-patch :before #'drgnx-perf--sm-patch)
+        (advice-add 'drgnx-view-apply-patch :before #'drgnx-perf--sm-rows)
         (advice-add 'drgnx-replace--rows-boxes :after #'drgnx-perf--sm-drawn)
         (advice-add 'drgnx-replace--hub-event :after #'drgnx-perf--sm-done)
         t)
@@ -1559,6 +1636,10 @@ and a body (about 2 chunks), each calling 4 of the files' functions drawn Zipf-l
         (when-let* ((r drgnx-perf--sm) ((null (aref r 1))) ((equal (plist-get patch :view) drgnx-replace-view))
                     ((drgnx-view-patch--reset-p patch)))
           (aset r 1 (float-time))))
+      (defun drgnx-perf--sm-rows (patch)
+        (when-let* ((r drgnx-perf--sm) ((aref r 1)) ((null (aref r 4))) ((equal (plist-get patch :view) drgnx-replace-view))
+                    ((not (drgnx-view-patch--reset-p patch))))
+          (aset r 4 (float-time))))
       (defun drgnx-perf--sm-drawn (&rest _)
         (when-let* ((r drgnx-perf--sm) ((aref r 1)) ((null (aref r 2)))
                     ((> (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)) 0)))
@@ -1568,9 +1649,10 @@ and a body (about 2 chunks), each calling 4 of the files' functions drawn Zipf-l
                     ((> (or (plist-get data :matches) 0) 0)) (r drgnx-perf--sm) ((aref r 1)) ((null (aref r 3))))
           (aset r 3 (float-time))))
       (defun drgnx-perf--sm-once (mode text)
-        "One search of TEXT in MODE (`symbol' or `meaning'): its first rows' ms from the search's start."
+        "One search of TEXT in MODE (`symbol' or `meaning'): (FIRST PATCH), its first rows drawn and the hub's first
+rows patch arrived, in ms from the search's start."
         (let ((v (drgnx-perf--replace-view)))
-          (setq drgnx-perf--sm (vector (float-time) nil nil nil))
+          (setq drgnx-perf--sm (vector (float-time) nil nil nil nil))
           (with-current-buffer v
             (drgnx-replace--fill 'find text)
             (if (eq (drgnx-replace--opt :mode) mode) (drgnx-replace--search-now) (drgnx-replace--set-mode mode)))
@@ -1582,47 +1664,62 @@ and a body (about 2 chunks), each calling 4 of the files' functions drawn Zipf-l
           (let ((d (+ (float-time) 0.2)))
             (while (< (float-time) d)
               (accept-process-output nil (if (and timer-list (not (time-less-p nil (timer--time (car timer-list))))) 0 0.02))))
-          (* 1000 (- (aref drgnx-perf--sm 2) (aref drgnx-perf--sm 0)))))
+          (let ((r drgnx-perf--sm))
+            (list (* 1000 (- (aref r 2) (aref r 0))) (* 1000 (- (or (aref r 4) (aref r 2)) (aref r 0)))))))
+      (defun drgnx-perf--sm-call (method params)
+        "METHOD's round trip in ms, to the answer's arrival, and its result: (MS . RESULT).  Timed in the answer's
+callback, as the views get answers: `drgnx-hub-call-sync' returns only at the end of one of its 20 ms polls."
+        (let* ((start (float-time)) (r (vector nil nil nil)))
+          (drgnx-hub-call method params (lambda (res err) (aset r 0 (float-time)) (aset r 1 res) (aset r 2 err)) :deadline 30)
+          (unless (drgnx-perf--wait 30 (lambda () (aref r 0))) (error "Premise: %s did not answer" method))
+          (when (aref r 2) (error "Premise: %s failed: %S" method (aref r 2)))
+          (cons (* 1000 (- (aref r 0) start)) (aref r 1))))
       (defun drgnx-perf--sm-usages (name)
         "The ms of `search/usages' of NAME as the Symbol view asks it (100), round trip."
-        (let ((start (float-time)))
-          (drgnx-hub-call-sync "search/usages" (list :root drgnx-perf--sm-root :name name :k 100) 30)
-          (* 1000 (- (float-time) start))))
+        (car (drgnx-perf--sm-call "search/usages" (list :root drgnx-perf--sm-root :name name :k 100))))
       (defun drgnx-perf--sm-query (text)
         "The ms of `search/query' of TEXT as the Meaning view asks it (code, 100 hits), round trip."
-        (let ((start (float-time)))
-          (unless (plist-get (drgnx-hub-call-sync "search/query" (list :root drgnx-perf--sm-root :text text :k 100 :scope "code") 30)
-                             :hits)
-            (error "Premise: search/query %S found nothing" text))
-          (* 1000 (- (float-time) start))))
+        (let ((a (drgnx-perf--sm-call "search/query" (list :root drgnx-perf--sm-root :text text :k 100 :scope "code"))))
+          (unless (plist-get (cdr a) :hits) (error "Premise: search/query %S found nothing" text))
+          (car a)))
       (defun drgnx-perf--sm-measure ()
-        "(:symbol_first_ms STATS) of 100 Symbol searches of `parse_request_0_0' (the most called function), and of 100
-Meaning searches each paired with a `search/query' of its question: :meaning_first_ms, :query_ms, and :meaning_over_ms
-(the pair's difference, whose p95 is the budget); after one of each.  Reported to place a miss: :usages_ms (100
-`search/usages' of the name, the hub's part of a Symbol search)."
+        "Symbol: 100 searches of the names Hrafn's usages row asks (`fn_name((r * r * 31) % 200, r % 10)', its budget's
+names): :symbol_first_ms (to the first rows drawn; the budget), :symbol_patch_ms (to the hub's first rows patch) and
+:usages_ms (`search/usages' of each, the hub's lookup); and 20 of `parse_request_0_0', the most called function (tens
+of thousands of uses), :symbol_hot_first_ms, reported.  Meaning: 100 searches each paired with a `search/query' of
+its question: :meaning_first_ms, :meaning_patch_ms, :query_ms, and :meaning_over_ms (the pair's difference, whose
+p95 is the budget).  One of each first, to warm."
         (let ((questions ["where do we retry a failed request" "how is the session token verified"
                           "parse the header of a frame" "flush the buffer before the socket closes"
                           "release the queue of a project" "encode the record for the channel"])
-              sym meaning query over usages)
-          (drgnx-perf--sm-once 'symbol "parse_request_0_0")
-          (dotimes (_ 100) (push (drgnx-perf--sm-once 'symbol "parse_request_0_0") sym))
-          (dotimes (_ 100) (push (drgnx-perf--sm-usages "parse_request_0_0") usages))
+              sym sym-patch hot meaning meaning-patch query over usages)
+          (drgnx-perf--sm-once 'symbol (drgnx-perf--sm-name 0 0))
+          (dotimes (r 100)
+            (let* ((name (drgnx-perf--sm-name (% (* r r 31) 200) (% r 10))) (o (drgnx-perf--sm-once 'symbol name)))
+              (push (car o) sym)
+              (push (cadr o) sym-patch)
+              (push (drgnx-perf--sm-usages name) usages)))
+          (dotimes (_ 20) (push (car (drgnx-perf--sm-once 'symbol "parse_request_0_0")) hot))
           (drgnx-perf--sm-once 'meaning (aref questions 0))
           (drgnx-perf--sm-query (aref questions 0))
           (dotimes (i 100)
             (let* ((q (aref questions (% i (length questions))))
                    ;; alternating which goes first: neither is always the one a warm cache helps
                    (pair (if (cl-evenp i)
-                             (let ((a (drgnx-perf--sm-query q))) (list a (drgnx-perf--sm-once 'meaning q)))
-                           (let ((b (drgnx-perf--sm-once 'meaning q))) (list (drgnx-perf--sm-query q) b)))))
+                             (let ((a (drgnx-perf--sm-query q))) (cons a (drgnx-perf--sm-once 'meaning q)))
+                           (let ((b (drgnx-perf--sm-once 'meaning q))) (cons (drgnx-perf--sm-query q) b)))))
               (push (car pair) query)
               (push (cadr pair) meaning)
+              (push (caddr pair) meaning-patch)
               (push (- (cadr pair) (car pair)) over)))
           (let ((st (lambda (xs) (mapcar #'drgnx-perf--round (drgnx-perf-stats xs)))))
-            (list :symbol_first_ms (funcall st sym) :meaning_first_ms (funcall st meaning)
-                  :query_ms (funcall st query) :meaning_over_ms (funcall st over) :usages_ms (funcall st usages)))))
+            (list :symbol_first_ms (funcall st sym) :symbol_patch_ms (funcall st sym-patch) :usages_ms (funcall st usages)
+                  :symbol_hot_first_ms (funcall st hot)
+                  :meaning_first_ms (funcall st meaning) :meaning_patch_ms (funcall st meaning-patch)
+                  :query_ms (funcall st query) :meaning_over_ms (funcall st over)))))
       (defun drgnx-perf--sm-down ()
         (advice-remove 'drgnx-view-apply-patch #'drgnx-perf--sm-patch)
+        (advice-remove 'drgnx-view-apply-patch #'drgnx-perf--sm-rows)
         (advice-remove 'drgnx-replace--rows-boxes #'drgnx-perf--sm-drawn)
         (advice-remove 'drgnx-replace--hub-event #'drgnx-perf--sm-done)
         (dolist (b (buffer-list))
@@ -1833,6 +1930,24 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :actions ,(apply #'append (make-list 20 (list (list :keys "<f9>") (list :keys "<down>"))))
        :check "(= 20 (length drgnx-perf--debug-store))"
        :teardown ,(concat "(progn (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
+      ;; recorded runs (spec §19.9): a batch of probe hits (100, ten probes, at the hub's 20 batches a second: 2,000 hits a
+      ;; second) to the sparklines at the lines' ends, 40 batches, within 100 ms each
+      (debug-probe-flood
+       :setup ,(drgnx-perf-run--debug-timeline-setup-form)
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (drgnx-debug-timeline-mode 1) (setq drgnx-perf--timeline-seq 0) t)")
+       :actions ,(funcall keys "<f8>" 40)
+       :check "(with-current-buffer (window-buffer) (= 20 (length drgnx-debug-timeline--overlays)))"   ; ten glyphs, ten line ends
+       :teardown ,(concat "(progn (drgnx-perf--timeline-stop) " kill-fixture ")"))
+      ;; scrubbing: `Alt ←' through 30 past stops, each opened from the hub's answer (the capture and a 2,000-line file
+      ;; as it ran) and drawn with its banner, line and variables, within 50 ms each
+      (debug-scrub
+       :setup ,(drgnx-perf-run--debug-timeline-setup-form)
+       :each ,(concat "(progn (drgnx-debug-timeline-mode 1) " (drgnx-perf-run--visit-fixture-form)
+                      " (drgnx-debug-timeline-show \"perf\") (drgnx-debug-timeline-live)"
+                      " (select-window (get-buffer-window drgnx-debug-timeline-buffer)) t)")
+       :actions ,(funcall keys "M-<left>" 30)
+       :check "(eql drgnx-debug-timeline--current (* 3 31))"   ; from live, 30 back: stop 31 of 60
+       :teardown ,(concat "(progn (drgnx-debug-timeline-live) (drgnx-perf--timeline-stop) " kill-fixture ")"))
       ;; the diff view, split, on a 10k-line diff (built in the session: no git needed)
       (diff-scrolling
        :setup ,(format "(progn (load (expand-file-name \"modules/tools/drgnx-diff\" %S) nil t) t)" drgnx-ui-repo-dir)
@@ -2526,7 +2641,7 @@ version and the commit, as JSON in FILE."
                                 terminal-backfill terminal-flood))
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "graphical debugging: its allocation, CPU and rows are set from three pinned runs on the desktop island (the plan's perf step)"))
-              '(debug-gutter-scroll debug-gutter-baseline debug-breakpoint-click))
+              '(debug-gutter-scroll debug-gutter-baseline debug-breakpoint-click debug-probe-flood debug-scrub))
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))
     ,@(mapcar (lambda (w) (cons w "the Work space's rows are time budgets on the desktop island (typing p95 and the relative +1 ms rules); allocation, CPU and rows follow once the first runs set them"))

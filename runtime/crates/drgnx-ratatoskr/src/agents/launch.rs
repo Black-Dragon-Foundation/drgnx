@@ -85,6 +85,7 @@ pub fn worktree_launch(plan: &LaunchPlan, req: &SandboxReq) -> (LaunchPlan, Sess
         write,
         read: req.read.clone(),
         net: req.net,
+        sockets: vec![],
         browser: None,
     };
     (plan, shape)
@@ -105,6 +106,7 @@ pub async fn spawn_plain(
         write: vec![scratch],
         read: vec![],
         net: NetCell::ProviderOnly,
+        sockets: vec![],
         browser,
     };
     launch(env, plan, &shape).await.map(with_stdin)
@@ -150,6 +152,7 @@ pub fn chat_launch(
         write: vec![scratch],
         read,
         net: NetCell::ProviderOnly,
+        sockets: vec![],
         browser: None,
     };
     Ok((plan, shape))
