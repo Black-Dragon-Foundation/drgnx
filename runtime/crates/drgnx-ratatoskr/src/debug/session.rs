@@ -446,10 +446,21 @@ impl Session {
             "supportsANSIStyling": true,
             "supportsMemoryReferences": false,
         });
+        // what comes before the answer is kept for after it: js-debug sends `initialized` right behind its answer,
+        // and on a loaded machine both are read before this looks (dropped, the session would never configure)
         let pending = self.client.request("initialize", init);
-        let caps = tokio::select! {
-            r = pending => r,
-            g = self.until_gone() => return g,
+        tokio::pin!(pending);
+        let mut early = std::collections::VecDeque::new();
+        let caps = loop {
+            tokio::select! {
+                biased;
+                r = &mut pending => break r,
+                m = self.incoming.recv() => match m {
+                    None => return Ending::Gone("the debug adapter exited".into()),
+                    Some(Incoming::Request(r)) => drop(r),
+                    Some(m) => early.push_back(m),
+                },
+            }
         };
         match caps {
             Ok(c) => {
@@ -466,7 +477,12 @@ impl Session {
         loop {
             tokio::select! {
                 biased;
-                m = self.incoming.recv() => match m {
+                m = async {
+                    match early.pop_front() {
+                        Some(m) => Some(m),
+                        None => self.incoming.recv().await,
+                    }
+                } => match m {
                     None => return Ending::Gone("the debug adapter exited".into()),
                     Some(Incoming::Bad(why)) => tracing::debug!(target: "drgnx::debug", "a bad message: {why}"),
                     Some(Incoming::Request(r)) => self.reverse(r),
@@ -523,17 +539,6 @@ impl Session {
             terminate_debuggee: kill_debuggee.unwrap_or(launch),
             restart: None,
             failed: false,
-        }
-    }
-
-    /// Waits for the connection to end (used where a request could otherwise wait forever).
-    async fn until_gone(&mut self) -> Ending {
-        loop {
-            match self.incoming.recv().await {
-                None => return Ending::Gone("the debug adapter exited".into()),
-                Some(Incoming::Request(r)) => drop(r),
-                Some(_) => {}
-            }
         }
     }
 
