@@ -5,7 +5,10 @@
 //!
 //! A block is claimed machine-wide: an exclusive `flock` on its file in [`LOCK_DIR`] (sticky and open to every
 //! account, so two hubs, a test hub or another user's, never hand out the same block), held for the session's life
-//! and gone with the process. Under the lock each port is bound once on 127.0.0.1, ::1 and 0.0.0.0 and let go: a
+//! and gone with the process. The lock belongs to the open file, which a child forked by any of the hub's threads
+//! shares until it execs (the descriptor is close-on-exec): so the block's drop unlocks it (`LOCK_UN` frees it for
+//! every copy) before closing, and a block is free the moment its session lets it go. A `fcntl` record lock would not
+//! pass to children, but it is the process's, so one hub's two claims of a file would both hold it. Under the lock each port is bound once on 127.0.0.1, ::1 and 0.0.0.0 and let go: a
 //! block locked elsewhere or with a port another process holds is passed over (the macOS runner's spike found 47610
 //! taken now and then), and when every block is taken the session is refused, naming the range.
 //!
@@ -55,8 +58,8 @@ pub struct Block {
     first: u16,
     len: u16,
     taken: Taken,
-    /// The block's lock file, locked; closing it lets go.
-    _lock: File,
+    /// The block's lock file, locked; dropping the block unlocks it (see its `Drop`).
+    lock: File,
 }
 
 impl Default for Blocks {
@@ -155,7 +158,7 @@ impl Blocks {
                     first,
                     len: self.len,
                     taken: self.taken.clone(),
-                    _lock: lock,
+                    lock,
                 });
             }
             first += self.len;
@@ -178,6 +181,9 @@ impl Block {
 
 impl Drop for Block {
     fn drop(&mut self) {
+        // SAFETY: flock(2) on the descriptor this block owns. Unlocking (not only closing) lets go even while a
+        // forked child that has not exec'd yet holds a copy of the descriptor.
+        unsafe { libc::flock(self.lock.as_raw_fd(), libc::LOCK_UN) };
         self.taken
             .lock()
             .unwrap_or_else(|e| e.into_inner())

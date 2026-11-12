@@ -36,6 +36,9 @@
     (trash-2 "⌫" . "d") (copy "⎘" . "c") (settings "⚙" . "*") (terminal "›_" . ">_") (bell "◔" . "!")
     (eye "◉" . "o") (lock "▮" . "#") (tag "⌗" . "#") (shield "⛨" . "!") (panel-right "◫" . "|")
     (triangle "▲" . "^") (hexagon "⬢" . "H") (star "★" . "*") (flask-conical "⚗" . "T")
+    ;; the debug toolbar's (step over, into, out; restart; the session's bug; disconnect)
+    (redo-dot "↷" . ">") (arrow-down-to-dot "↓" . "v") (arrow-up-from-dot "↑" . "^") (rotate-ccw "↺" . "r")
+    (bug "✱" . "*") (unplug "⏏" . "x")
     ;; the Search view's kind chips, as the hub's kind icons on definition rows
     (square-function "ƒ" . "f") (type "◇" . "T") (wand "#" . "#") (variable "≡" . "="))
   "The glyphs of the icons (NAME → (UNICODE . ASCII)), named after the icon files.  Several look alike on a terminal

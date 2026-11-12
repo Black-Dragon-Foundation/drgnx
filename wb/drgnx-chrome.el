@@ -242,9 +242,19 @@ their measured width, made for a row whose text has BOX pixels above and below, 
 `drgnx-chrome--tab-paint') and the `drgnx-look-icons' setting.  A tab line is made again at every tab switch, and the
 buttons' keymaps and pixel measure cost more than all its tabs.  Weak on the frame.")
 
+(defvar drgnx-chrome-tab-row-function nil
+  "A function of an editor window giving a string drawn at the right of its tab row, before the split and more
+buttons (the debug toolbar docked), or nil.  It runs when the tab line is made and answers from cached state; its
+string is part of the line's key (`drgnx-chrome--tab-line-key'), so a new one is drawn at the next `drgnx-chrome-apply'.")
+
+(defun drgnx-chrome--tab-row-extra (w)
+  "What `drgnx-chrome-tab-row-function' puts in W's tab row, or nil."
+  (and drgnx-chrome-tab-row-function (funcall drgnx-chrome-tab-row-function w)))
+
 (defun drgnx-chrome--tab-buttons (w rows rule)
   "The split and more buttons at the right end of W's tab line on a graphical frame (ROWS: `drgnx-chrome--tab-rows';
-RULE: the hairline's face or nil), made once per frame and size (`drgnx-chrome--buttons')."
+RULE: the hairline's face or nil), made once per frame and size (`drgnx-chrome--buttons'), after what
+`drgnx-chrome-tab-row-function' adds."
   (let* ((frame (nth 2 rows)) (box (nth 1 rows))
          (kept (gethash frame drgnx-chrome--buttons))
          (made (if (and kept (eql (aref kept 0) box) (eql (aref kept 1) drgnx-pixels-generation)
@@ -252,10 +262,16 @@ RULE: the hairline's face or nil), made once per frame and size (`drgnx-chrome--
                         (equal (aref kept 4) rule) (eq (aref kept 5) (bound-and-true-p drgnx-look-icons)))
                    kept
                  (puthash frame (drgnx-chrome--tab-buttons-make frame box rule) drgnx-chrome--buttons)))
+         (extra (let ((s (drgnx-chrome--tab-row-extra w))) (and s (copy-sequence s))))
+         (extra-px (if extra (drgnx-look-pixel-width extra 'drgnx-chrome-tab) 0))
          (fringe (or (nth 1 (window-fringes w)) 0))
-         (to (propertize " " 'face 'drgnx-chrome-tab 'display `(space :align-to (- right (,(max 0 (- (aref made 7) fringe))))))))
+         (to (propertize " " 'face 'drgnx-chrome-tab
+                         'display `(space :align-to (- right (,(max 0 (- (+ (aref made 7) extra-px) fringe))))))))
     (when rule (add-face-text-property 0 1 rule nil to))
-    (concat to (aref made 6))))
+    (when extra
+      (add-face-text-property 0 (length extra) 'drgnx-chrome-tab t extra)
+      (when rule (add-face-text-property 0 (length extra) rule nil extra)))
+    (concat to extra (aref made 6))))
 
 (defun drgnx-chrome--tab-buttons-make (frame box rule)
   "The entry of `drgnx-chrome--buttons' for FRAME: window-dark.html's `.tabs .more', the split and more buttons (24 px,
@@ -319,7 +335,8 @@ itself: a switch enables the new theme before its faces reach the frame, and a l
         (bound-and-true-p drgnx-face-glyphs) (bound-and-true-p drgnx-look-icons) drgnx-pixels-generation
         (and (fboundp 'glitnir-active-p) (glitnir-active-p) t) (drgnx-state-frame-kind (window-frame w))
         (frame-char-width (window-frame w)) (frame-char-height (window-frame w)) custom-enabled-themes
-        (face-background 'drgnx-chrome-tab (window-frame w) t)))
+        (face-background 'drgnx-chrome-tab (window-frame w) t)
+        (drgnx-chrome--tab-row-extra w)))
 
 (defun drgnx-chrome--tab-line (w)
   "W's tab line: the one kept while what it shows (`drgnx-chrome--tab-line-key') is the same, else made tab by tab
