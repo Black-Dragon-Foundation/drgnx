@@ -217,7 +217,8 @@ Mac the same way. The key handover (Lisp, `test/unit/runners-client-test.el`) ru
 The hub's lib tests end in a SIGABRT on macOS with no message, so most of them have never run there: in every run so
 far about a hundred tests finished, the last of them just before or among `agents::rewind::live`'s (the first module
 whose tests run live mock sessions, with snapshots and forks). Until they pass,
-a failed workspace step is followed by a diagnostic one: the hub's lib again with `--test-threads 1 --nocapture`, whose
+a failed workspace step is followed by a diagnostic one: the hub's lib again with `--test-threads 1 --nocapture` (the
+binary the workspace build made, run from the crate's folder as cargo runs it), whose
 last `test … ...` line (libtest prints a test's name before it runs it on one thread) names the test running when the
 process died, written to the job's summary (`--nocapture`: a thread a library started inside a test prints into that
 test's captured output otherwise, so its last words were lost). An abort libsystem raises says why only in its crash
@@ -227,6 +228,17 @@ alone with `--nocapture`. Rounds 1 and 2 named
 `exec::container::name_and_pull_tests::a_fake_podman_runs_while_another_thread_forks`; round 2's report showed
 wasmtime's Mach port thread calling `abort()`, which the plugin host now leaves out (docs/develop/plugins.md, "Failures").
 The step goes once the lib passes on macOS.
+
+The macOS tests job has 45 minutes, and a cold build takes 26 of them (a scratch branch restores no cache), so it
+builds once: a `--no-run` step first (`--message-format=json-render-diagnostics`, the list of test binaries in
+`test-bins.json`), then the workspace's tests, and every later step reuses that build. The serial lib run and the
+terminal worker's root run start the listed binaries; the sshd step runs `--test macos` with `--workspace` and the
+workspace's features. A `-p` alone resolves other features, so it rebuilt the hub (about four minutes a step). Also
+out of the job: the plugin fixtures, built by the setup action where the tests look for them
+([plugins.md](plugins.md)), and hrafn-embed's `parity_cpu`, which `macos-perf` runs in release. A report-only step
+prints each test's time in the slowest binaries (hrafn's `overlay`, verdandi's and the hub's libs; `--report-time`,
+with `RUSTC_BOOTSTRAP` given to the binaries alone, since cargo rebuilds everything when it changes), for choosing
+what moves next; it goes once those times are read.
 
 ## The tiers workflow
 

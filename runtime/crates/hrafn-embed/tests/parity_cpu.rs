@@ -1,5 +1,8 @@
 //! The CPU path against the reference vectors. It must agree with the GPU path, because vectors from both land in one
 //! index: that's the fallback's premise, and `cpu_and_gpu_agree` in `parity_gpu.rs` holds it.
+//!
+//! A debug build on macOS ignores every row: unoptimised they took over a minute of the macOS tests job's 45, so
+//! runtime.yml's `macos-perf` job runs them there in release (`--release`) instead.
 
 use hrafn_embed::{Device, LocalEmbedder, MODELS, ModelSpec, Tuning};
 use serde_json::Value;
@@ -88,16 +91,28 @@ fn length_sweep(model: &mut LocalEmbedder, id: &str) {
 }
 
 #[test]
+#[cfg_attr(
+    all(target_os = "macos", debug_assertions),
+    ignore = "release only on macOS: runtime.yml's macos-perf runs it"
+)]
 fn length_sweep_gte() {
     length_sweep(&mut gte(), GTE);
 }
 
 #[test]
+#[cfg_attr(
+    all(target_os = "macos", debug_assertions),
+    ignore = "release only on macOS: runtime.yml's macos-perf runs it"
+)]
 fn length_sweep_granite() {
     length_sweep(&mut granite(), GRANITE);
 }
 
 #[test]
+#[cfg_attr(
+    all(target_os = "macos", debug_assertions),
+    ignore = "release only on macOS: runtime.yml's macos-perf runs it"
+)]
 fn reference_chunks_and_queries_gte() {
     let mut model = gte();
     let f = fixture(GTE);
@@ -120,6 +135,10 @@ fn reference_chunks_and_queries_gte() {
 }
 
 #[test]
+#[cfg_attr(
+    all(target_os = "macos", debug_assertions),
+    ignore = "release only on macOS: runtime.yml's macos-perf runs it"
+)]
 fn batched_equals_alone() {
     let mut model = gte();
     let batch: Vec<Vec<u32>> = sweep(GTE)
@@ -137,6 +156,10 @@ fn batched_equals_alone() {
 }
 
 #[test]
+#[cfg_attr(
+    all(target_os = "macos", debug_assertions),
+    ignore = "release only on macOS: runtime.yml's macos-perf runs it"
+)]
 fn baseline_matches_avx2() {
     let tuning = Tuning {
         baseline_cpu: true,
@@ -157,6 +180,10 @@ fn baseline_matches_avx2() {
 }
 
 #[test]
+#[cfg_attr(
+    all(target_os = "macos", debug_assertions),
+    ignore = "release only on macOS: runtime.yml's macos-perf runs it"
+)]
 fn normalised() {
     let mut model = granite();
     let query = model

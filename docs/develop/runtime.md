@@ -1520,7 +1520,9 @@ production skips software adapters, a test's named adapter doesn't. `tests/parit
 software Vulkan, so no GPU is needed; `full_references_*` (`#[ignore]`) are for a real GPU, as are the rows of `tests/timing.rs` (a timing file: the real-time lint exempts it),
 which print throughput, query time and the stall a second process sees on the same card, and assert nothing. Its `bench_cpu`
 row prints the CPU path's figures and needs no GPU. `tests/parity_cpu.rs` holds the CPU path against the references, and
-`cpu_and_gpu_agree` in `parity_gpu.rs` holds the two paths against each other.
+`cpu_and_gpu_agree` in `parity_gpu.rs` holds the two paths against each other. A debug build on macOS ignores
+`parity_cpu`'s rows (over a minute unoptimised in the macOS tests job); runtime.yml's `macos-perf` job runs them in
+release.
 
 ## Building and installing Ratatoskr
 
