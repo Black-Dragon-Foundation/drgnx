@@ -8,7 +8,8 @@ license.workspace = true
 publish = false
 
 [features]
-# The migration's hub seams (`DRGNX_TEST_MIGRATE7_FAIL`, `DRGNX_TEST_MIGRATE7_PAUSE`): drgnx-ratatoskr's test-hooks
+# The migration's hub seams (`DRGNX_TEST_MIGRATE7_FAIL`, `DRGNX_TEST_MIGRATE7_PAUSE`) and the project's git
+# (`DRGNX_TEST_GIT`): drgnx-ratatoskr's test-hooks
 test-hooks = []
 
 [dependencies]
@@ -31,6 +32,7 @@ tracing.workspace = true
 sha1.workspace = true
 
 [dev-dependencies]
+drgnx-exe = { path = "../drgnx-exe", version = "0.1.0" }  # stand-in scripts written and run, never busy (ETXTBSY)
 # `test-hooks`: `urdr::graph::Tx::for_test`, so the policy's tests write through the primitives without a writer
 urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
 # tests/canary.rs: the hub's entity embedder (door 4) over the canary store (a dev-dependency cycle cargo allows)

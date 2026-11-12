@@ -417,9 +417,7 @@ mod macos {
         ];
         for (name, body) in tools {
             let f = bin.join(name);
-            std::fs::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
-            std::fs::set_permissions(&f, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-                .unwrap();
+            drgnx_exe::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
         }
     }
 
@@ -592,13 +590,11 @@ mod macos {
         let bin = dir.path().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let uname = bin.join("uname");
-        std::fs::write(
+        drgnx_exe::write(
             &uname,
             "#!/bin/sh\ncase \"$1\" in -m) echo amd64 ;; -s) echo FreeBSD ;; esac\n",
         )
         .unwrap();
-        std::fs::set_permissions(&uname, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
         let (queue, _events) = Queue::new(QueueCfg {
             hub_id: "hub".into(),
             exec_root: dir.path().join("exec"),

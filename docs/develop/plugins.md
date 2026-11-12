@@ -301,7 +301,10 @@ and reaches nothing else unless `HostIo`, the hub's side, gives it.
   stdout and stderr reach `HostIo::log` when the call ends (as `info` and `warn`).
 - **Failures.** `CallError::Timeout` (the epoch trap or the timeout), `Trap(message)`, `Refused(why)` (too large,
   not declared, not JSON), `Busy`, and `Plugin(message)` for the plugin's own `Err`. Wasmtime's signal handlers chain
-  to the ones installed before them, so a fault outside a guest still reaches the hub's handler.
+  to the ones installed before them, so a fault outside a guest still reaches the hub's handler. On macOS too the
+  engine catches guest faults with signal handlers (`macos_use_mach_ports(false)`), never with wasmtime's Mach port
+  thread: a signal the hub handles (SIGCHLD while children run) can land on that thread, its receive is interrupted,
+  and wasmtime aborts the process.
 
 `brokkr/tests/host.rs` (feature `test-support`) runs these against the fixtures, and against component text parsed
 by the `wat` crate (a dev-dependency only) for a disabled proposal and for 1 001 handles.

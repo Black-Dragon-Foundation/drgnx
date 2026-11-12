@@ -600,9 +600,20 @@ stays the truth for a setting; the store records its history as entities of kind
 `norn::project`. A project's id is `project:<root commit, 12 hex>`.
 
 - `resolve(cwd)` runs the hardened git of `hello` (`draugr::git`, the root-owned git, a minimal environment, 3 s)
-  and answers a `ProjectRef { id, root, slug, root_commit, roots }`, or `None` outside a repository, for the home
-  folder itself, or when no trusted git runs (Android). It is blocking: it never runs on an async worker or under
-  the writer's lock.
+  and answers `Ok(Some(ProjectRef { id, root, slug, root_commit, roots }))`, or `Ok(None)` outside a repository
+  (git ran and said so, or the folder does not exist) and for the home folder itself. When git cannot answer — no
+  trusted git (Android), it cannot start, or a call takes over its 3 s (it is killed) — it is an error naming the
+  git command, the folder and what was seen (how long the start took; whether git was still running, or had ended
+  with its output still held open elsewhere). No caller reads that as "no project": the hub's callers that answer a
+  request (a job's placement and its project's settings, a session's launch and its hooks, a proposal, a plan
+  run's step, `tasks/write`, the graph's writes, a session's scope, the coordination tools' caller, a search, whose
+  error the Search view shows on its state line) answer the error. A hook point fails closed: a project's hooks can
+  be guards, so the step behind it (at the seam, the adapter's `before_tool` and Codex's, a hub tool's server) is
+  refused, the agent is told why and the chat shows it; only the seam's row that a hub tool is hooked at its server
+  (a note, not a guard) is left out, with a warning. A task's scope, the manager's budget and the tracker's head go
+  without the project with a warning in the log. Nothing is kept, so the next look asks git again; the migration
+  stops as busy and tries again on the next tick. It is
+  blocking: it never runs on an async worker or under the writer's lock.
   - `root` is the main repository's top-level: a linked worktree's common git dir is the main `.git`, so worktrees
     share their repository's project. `slug` is its folder name.
   - With several root commits (an unrelated history merged in), the earliest committer date wins, ties by sha.
@@ -615,7 +626,8 @@ stays the truth for a setting; the store records its history as entities of kind
   - without one, the `project:x-…` project of the same folder.
   - The slug becomes a `project_alias` row when no project holds it yet (a rename adds one). The row is written by
     urdr's `entity::set_alias`, the one writer of `project_alias`.
-- `ProjectCache` keeps resolved folders so `Caller::from_identity` runs no git: `fill(dir)` resolves (blocking),
+- `ProjectCache` keeps resolved folders so `Caller::from_identity` runs no git: `fill(dir)` resolves (blocking;
+  git's error is returned and nothing kept),
   `unregistered()` lists what one write should `register`, `set_registered(id, n)` records the answer,
   `project_n(dir)` is what callers get, `forget(dir)` drops one. The hub fills it when a session starts; the
   migration fills it before its transaction.

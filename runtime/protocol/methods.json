@@ -11720,6 +11720,13 @@
           "DebugBreakpointOp": {
             "description": "One change to the breakpoint store, by id: `add` (PATH, LINE; the breakpoint already on that line if any),\n`remove` (ID), `edit` (ID and the fields given; an empty text clears one), `move` (ID, LINE: the saved line),\n`add-function` (NAME, CONDITION) and `remove-function` (NAME).",
             "properties": {
+              "adapter": {
+                "description": "`filter`'s adapter type.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "condition": {
                 "type": [
                   "string",
@@ -12133,6 +12140,105 @@
       "classes": [
         "user"
       ],
+      "doc": "evaluate an expression in a stopped session's frame (the value to copy, a hover, the console)",
+      "name": "debug/evaluate",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/evaluate`: EXPR in SESSION's FRAME (none: the selected one) in CONTEXT (`repl`, `hover`, `clipboard`,\n`watch`).",
+        "properties": {
+          "context": {
+            "type": "string"
+          },
+          "expr": {
+            "type": "string"
+          },
+          "frame": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "expr",
+          "context"
+        ],
+        "title": "DebugEvaluate",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/evaluate`'s answer: the RESULT, its TYPE, and its children's REFERENCE when it has some.",
+        "properties": {
+          "reference": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "result": {
+            "type": "string"
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "DebugEvaluated",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "open or close a node of the Run and Debug view: a variable's children, a chunk of a long array, another thread's frames, more frames",
+      "name": "debug/expand",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/expand`: NODE of VIEW opened (OPEN) or closed; a variable's children, a chunk, another thread's frames are\nfetched; \"Load more frames\" (`m:` node) fetches the next page.",
+        "properties": {
+          "node": {
+            "type": "string"
+          },
+          "open": {
+            "type": "boolean"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "node",
+          "open"
+        ],
+        "title": "DebugExpand",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "fork a recorded run in a sealed copy (Linux): from a stop or a line's N-th pass, setting a value there or editing the code, until the next stop, the end or a probe's next hit; the fork's id, or a question first (a slow replay, an input)",
       "name": "debug/fork",
       "params": {
@@ -12251,6 +12357,11 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "`debug/fork`: fork RUN at AT with CHANGE, running UNTIL `stop` (the next stop, the default), `exit`, or\n`{\"probe\": ID}` (that probe's next hit). CONFIRM: the user said yes to a slow replay. INPUTS answer an earlier\n`needs` (an input the run's configuration asks, whose value was not kept).",
         "properties": {
+          "anyway": {
+            "default": false,
+            "description": "Fork at this pass even though a local differed from the run's that may come from a source the fork does not\nreplay (the clock, random numbers): what a failed fork's `anyway` offers.",
+            "type": "boolean"
+          },
           "at": {
             "$ref": "#/$defs/DebugForkAt"
           },
@@ -12876,6 +12987,50 @@
       "classes": [
         "user"
       ],
+      "doc": "set a variable or watched expression of the Run and Debug view to a new value in the debugged program",
+      "name": "debug/set-value",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/set-value`: the variable or watch NODE of VIEW is now VALUE (`setExpression` when the adapter has it and\nthe node an `evaluateName`, else `setVariable`).",
+        "properties": {
+          "node": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "node",
+          "value"
+        ],
+        "title": "DebugSetValue",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/set-value`'s answer: the value as the adapter now shows it.",
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "DebugValue",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the text of a frame's source that has no file (its sourceReference), from the adapter, for a read-only buffer",
       "name": "debug/source",
       "params": {
@@ -13072,6 +13227,113 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "boolean",
         "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "show the Run and Debug view of a project: its variables, watches, call stack and breakpoints, built by the hub at every stop and change",
+      "name": "debug/view",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/view`: VIEW is the Run and Debug view of ROOT's sessions, its Variables and Watch of SESSION (none: the\nfirst stopped one), a level INDENT logical px (default 12), only the rows whose name or value contains FILTER\n(any case) and the rows above them. The hub builds it now and at every change.",
+        "properties": {
+          "filter": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "indent": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "root": {
+            "type": "string"
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "root"
+        ],
+        "title": "DebugView",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "add, edit, remove or move a project's watch expression (kept with its breakpoints): the list",
+      "name": "debug/watch",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/watch`: ROOT's watch expressions changed: `add` EXPR (at the end), `edit` INDEX to EXPR, `remove` INDEX,\n`move` INDEX to TO. The answer is the list.",
+        "properties": {
+          "expr": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "index": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "op": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "to": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "root",
+          "op"
+        ],
+        "title": "DebugWatch",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "items": {
+          "type": "string"
+        },
+        "title": "Array_of_string",
+        "type": "array"
       },
       "writes": false
     },
@@ -24261,7 +24523,12 @@
               "chat.project-read",
               "plugin.abilities",
               "chat.project-edit",
-              "huddles"
+              "huddles",
+              "debug.read",
+              "debug.probe",
+              "debug.fork",
+              "debug.live-eval",
+              "debug.drive"
             ],
             "type": "string"
           },
@@ -24493,7 +24760,12 @@
               "chat.project-read",
               "plugin.abilities",
               "chat.project-edit",
-              "huddles"
+              "huddles",
+              "debug.read",
+              "debug.probe",
+              "debug.fork",
+              "debug.live-eval",
+              "debug.drive"
             ],
             "type": "string"
           },

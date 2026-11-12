@@ -35,6 +35,8 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | debug-breakpoint-click | F9 then `<down>`, 20 times: each a `debug/breakpoints` add answered at once and the column redrawn | input latency |
 | debug-step-line | the 12k-line fixture, then F10 120 times: each one `debug-frame` (a step's stop, sent to the starting editor) for the next line, the arrow and band moved, point placed, the window scrolled only when the line left it | input latency; within 16 ms p95 (spec §5) |
 | debug-toolbar-show | F8 120 times, alternating a `debug-state` with one stopped session and one with none: the toolbar's card shown and hidden (made once, then reused), the status bar's segment and the Paused chip with it | input latency; within 5 ms p95 (spec §12) |
+| debug-step-variables | the Run and Debug view (no hub: the hub's model and rows from the workload) with 300 variables and a 10,000-element list in 100 chunks, then F10 120 times: each a step's model diff and rows patch, ten values changed, drawn | input latency; within 30 ms p95 with the hub's half, the bench `debug_view` (spec §7) |
+| debug-expand-chunks | the same view, F8 100 times: the next closed chunk of the list opened from its row (`debug/expand`, answered as the hub answers it: the chunk's 100 rows inserted, their nodes added), drawn | input latency; within 15 ms p95 (spec §7) |
 | debug-probe-flood | ten probes on the fixture (recorded runs), then `<f8>` 40 times: each one batch of probe hits as the hub sends them at 2,000 hits a second (100 hits every 50 ms), the line ends' sparklines drawn (the hub answered in the session) | input latency; the batch to the sparklines within 100 ms (spec §19.9) |
 | debug-bisect-typing | `<f7>` 40 times beside a bisect's card: each a character typed and a `debug-bisect` event (the card's rows: a head, nine dots, the result and its actions) drawn, as a 3-way bisect's slots end | input latency; keystroke p95 under 16 ms while a bisect runs (spec §19.9) |
 | debug-scrub | the stop timeline of a 60-stop run, then `Alt ←` 30 times: each a past stop opened from the hub's answer (its capture and a 2,000-line file as it ran) and drawn with its banner, line and variables | input latency; within 50 ms (spec §19.9) |
@@ -1054,6 +1056,13 @@ the hub's cache keeps (the parsed file and the index): live bytes counted by the
 resident memory, which a warm process's arenas hide. It is `#[ignore]`d;
 run it once, optimized and alone on a pinned host:
 `perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench extensions -- --ignored --nocapture --test-threads 1`.
+
+The Run and Debug view's hub rows are the bench `runtime/crates/drgnx-ratatoskr/benches/debug_view.rs`:
+`debug-step-variables` (the hub's half of a step: lines, model, model diff and rows built again with 300 variables, ten
+changed; with the editor's half within 30 ms at the 95th percentile) and `debug-hub-memory` (a 100,000-element list
+open to its two chunk levels with one page fetched, its lines, model and rows: at most 64 MB more heap, counted by the
+bench's own allocator; the same with 200 pages fetched is reported, not budgeted). Ignored like the others:
+`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench debug_view -- --ignored --nocapture --test-threads 1`.
 
 Recorded runs' hub rows are the bench `runtime/crates/drgnx-ratatoskr/benches/debug_record.rs`: `debug-launch-snapshot`
 (the launch snapshot of a 5,000-file project with nothing changed, at most 150 ms at the 95th percentile) and

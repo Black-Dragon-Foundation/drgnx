@@ -46,6 +46,8 @@
   "A selected caller frame's arrow." :group 'drgnx)
 (defface drgnx-debug-exception '((t :inherit drgnx-status-fail))
   "The arrow of a stop on an exception." :group 'drgnx)
+(defface drgnx-debug-agent-ring '((t :inherit drgnx-agent-1))
+  "The ring around an agent's breakpoint or probe, and the agent's name in the Investigation." :group 'drgnx)
 
 (defface drgnx-debug-stopped-line '((t :extend t))
   "The top frame's line: a band in the warn tint (the theme sets it)." :group 'drgnx)
@@ -99,10 +101,11 @@
   (let ((c (alist-get kind drgnx-debug-gutter--chars)))
     (if ascii (cdr c) (car c))))
 
-(defun drgnx-debug-gutter--svg (kind h w bp unv stop frame editor &optional pad)
+(defun drgnx-debug-gutter--svg (kind h w bp unv stop frame editor &optional pad ring)
   "KIND's glyph as SVG text, H by W pixels, its 16-unit drawing centred; colours BP (the breakpoint), UNV (not bound),
 STOP (the top frame), FRAME (a caller frame) and EDITOR (the bars and marks cut into a glyph).  PAD pixels of nothing
-come first (the margin's columns outside the claim: a margin string's image cannot follow other text)."
+come first (the margin's columns outside the claim: a margin string's image cannot follow other text).  RING, a
+colour, rings the glyph (an agent's mark)."
   (let* ((pad (or pad 0)) (vw (/ (* 16.0 (+ w pad)) h)) (x0 (- (/ (- 16 (/ (* 16.0 w) h)) 2) (/ (* 16.0 pad) h)))
          (arrow "M1.5 3.2h7.6L14.6 8l-5.5 4.8H1.5Z")
          (body
@@ -117,8 +120,9 @@ come first (the margin's columns outside the claim: a margin string's image cann
             ('stop-bp (format "<path d='%s' fill='%s'/><circle cx='6.6' cy='8' r='3' fill='%s'/>" arrow stop bp))
             ('frame (format "<path d='M2.2 3.9h6.6L13.6 8l-4.8 4.1H2.2Z' fill='none' stroke='%s' stroke-width='1.4' stroke-linejoin='round'/>" frame))
             ('exception (format "<path d='%s' fill='%s'/><path d='M6.8 5.4v3.2M6.8 10.6v.1' stroke='%s' stroke-width='1.5' stroke-linecap='round'/>" arrow bp editor)))))
-    (format "<svg xmlns='http://www.w3.org/2000/svg' width='%d' height='%d' viewBox='%.3f 0 %.3f 16'>%s</svg>"
-            (+ w pad) h x0 vw body)))
+    (format "<svg xmlns='http://www.w3.org/2000/svg' width='%d' height='%d' viewBox='%.3f 0 %.3f 16'>%s%s</svg>"
+            (+ w pad) h x0 vw body
+            (if ring (format "<circle cx='8' cy='8' r='7.1' fill='none' stroke='%s' stroke-width='1.2'/>" ring) ""))))
 
 (defvar drgnx-debug-gutter--images (make-hash-table :test 'equal)
   "(KIND W H COLOURS) → image.  Ten kinds at a few sizes per theme; emptied past 64 entries (a theme change makes new
@@ -136,8 +140,9 @@ unspecified."
       (max 1 (ceiling (drgnx-px drgnx-debug-gutter--width) (frame-char-width)))
     1))
 
-(defun drgnx-debug-gutter--image (kind &optional pad)
-  "KIND's glyph image at this frame's size and the theme's colours, after PAD columns of nothing."
+(defun drgnx-debug-gutter--image (kind &optional pad agent)
+  "KIND's glyph image at this frame's size and the theme's colours, after PAD columns of nothing; ringed when AGENT
+(an agent's session) set the mark."
   (let* ((w (* (drgnx-debug-gutter--columns) (frame-char-width)))
          (pad (* (or pad 0) (frame-char-width)))
          (h (min (drgnx-px 16) (frame-char-height)))
@@ -146,24 +151,32 @@ unspecified."
                         (drgnx-debug-gutter--colour 'drgnx-debug-stopped)
                         (drgnx-debug-gutter--colour 'drgnx-debug-frame)
                         (drgnx-debug-gutter--colour 'default t)))
-         (key (list kind w h pad colours)))
+         (ring (and agent (drgnx-debug-gutter--colour 'drgnx-debug-agent-ring)))
+         (key (list kind w h pad colours ring)))
     (or (gethash key drgnx-debug-gutter--images)
         (progn
           (when (> (hash-table-count drgnx-debug-gutter--images) 64) (clrhash drgnx-debug-gutter--images))
-          (puthash key (create-image (apply #'drgnx-debug-gutter--svg kind h w (append colours (list pad))) 'svg t
+          (puthash key (create-image (apply #'drgnx-debug-gutter--svg kind h w (append colours (list pad ring))) 'svg t
                                      :ascent 'center :scale 1)
                    drgnx-debug-gutter--images)))))
 
-(defun drgnx-debug-gutter--margin-string (kind help)
+(defun drgnx-debug-gutter--ring-char (char agent)
+  "CHAR, a mark's terminal character, in the agent ring's face when AGENT (an agent's session) set the mark."
+  (if agent (propertize char 'face 'drgnx-debug-agent-ring) char))
+
+(defun drgnx-debug-gutter--margin-string (kind help &optional agent)
   "The `before-string' of a mark of KIND, HELP its tooltip: on a graphical frame with SVG an image (the pad of the
-column's claim drawn into it), else the pad and a character in KIND's face."
+column's claim drawn into it), else the pad and a character in KIND's face.  An AGENT's mark is ringed (a terminal: the
+character wears the ring's face)."
   (propertize " " 'display
               (list '(margin left-margin)
                     (if (and (display-graphic-p) (image-type-available-p 'svg))
-                        (drgnx-debug-gutter--image kind (drgnx-margins-offset 'debug))
+                        (drgnx-debug-gutter--image kind (drgnx-margins-offset 'debug) agent)
                       (concat (drgnx-margins-pad 'debug)
-                              (propertize (drgnx-debug-gutter--char kind (drgnx-ui-ascii-frame-p))
-                                          'face (drgnx-debug-gutter--face kind)))))
+                              (drgnx-debug-gutter--ring-char
+                               (propertize (drgnx-debug-gutter--char kind (drgnx-ui-ascii-frame-p))
+                                           'face (drgnx-debug-gutter--face kind))
+                               agent))))
               'help-echo help))
 
 ;;;; The hover dot
@@ -367,7 +380,8 @@ the buffer's start (a click deep in a long file was 10 ms of `forward-line')."
                    (when-let* ((c (plist-get bp :condition))) (format "when %s" c))
                    (when-let* ((h (plist-get bp :hit))) (format "hit count %s" h))
                    (when-let* ((l (plist-get bp :log))) (format "logs %s" l))
-                   (plist-get bp :message)))
+                   (plist-get bp :message)
+                   (when-let* ((a (plist-get bp :agent))) (format "set by agent %s" a))))
    " · "))
 
 (defun drgnx-debug-gutter--place (bp)
@@ -386,8 +400,10 @@ the buffer's start (a click deep in a long file was 10 ms of `forward-line')."
   (let ((kind (drgnx-debug-gutter--kind bp)))
     (overlay-put o 'drgnx-debug-kind kind)
     (overlay-put o 'drgnx-debug-help (drgnx-debug-gutter--help bp))
+    (overlay-put o 'drgnx-debug-agent (plist-get bp :agent))
     (unless (overlay-get o 'drgnx-debug-under-stop)
-      (overlay-put o 'before-string (drgnx-debug-gutter--margin-string kind (overlay-get o 'drgnx-debug-help))))))
+      (overlay-put o 'before-string (drgnx-debug-gutter--margin-string kind (overlay-get o 'drgnx-debug-help)
+                                                                       (plist-get bp :agent))))))
 
 (defun drgnx-debug-gutter--draw ()
   "Draw `drgnx-debug-gutter--bps': marks moved by edits stay where the text put them while the buffer has unsaved
@@ -423,7 +439,8 @@ changes (drafts); otherwise each sits on the store's line."
           (when (and (overlay-buffer (cdr e)) (not (overlay-get (cdr e) 'drgnx-debug-under-stop)))
             (overlay-put (cdr e) 'before-string
                          (drgnx-debug-gutter--margin-string (overlay-get (cdr e) 'drgnx-debug-kind)
-                                                            (overlay-get (cdr e) 'drgnx-debug-help)))))))))
+                                                            (overlay-get (cdr e) 'drgnx-debug-help)
+                                                            (overlay-get (cdr e) 'drgnx-debug-agent)))))))))
 
 (defun drgnx-debug-gutter--clear ()
   "Take every mark out."
@@ -641,7 +658,8 @@ the next row."
         (with-current-buffer b
           (overlay-put mark 'before-string (drgnx-debug-gutter--margin-string
                                             (overlay-get mark 'drgnx-debug-kind)
-                                            (overlay-get mark 'drgnx-debug-help))))))
+                                            (overlay-get mark 'drgnx-debug-help)
+                                            (overlay-get mark 'drgnx-debug-agent))))))
     (delete-overlay o)))
 
 (defun drgnx-debug-gutter-stop-clear (session &optional role)

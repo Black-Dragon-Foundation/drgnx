@@ -68,7 +68,8 @@ While the session is stopped the same command continues; **Toggle Breakpoint**, 
 **Step Out** and **Stop Debugging** do what they say. If you used dape, **Convert dape Configurations…** (the palette)
 turns your `dape-configs` into launch configurations once (dape itself is no longer needed).
 In the VS Code key profile: F5, F9, F10, F11 (Step Into while a session runs — Zen Mode otherwise), S-F11, S-F5,
-C-S-F5 (**Restart**), F6 (**Pause**, while a session runs); the Emacs and Vim profiles reach them in the palette.
+C-S-F5 (**Restart**); the Emacs and Vim profiles reach them in the palette. **Pause** is on the toolbar and in the
+palette in every profile: VS Code's F6 stays free as the terminal's chord key ([Legacy terminals](terminal.md#legacy-terminals-altshift-and-f6)).
 Module `extra/debug`; it needs no package.
 
 While a session runs, a toolbar floats over the editor: Continue (Pause while the program runs), the three steps,
@@ -77,6 +78,14 @@ you put it in that frame. With two sessions or more, its chip picks the one the 
 `drgnx-debug-toolbar` docks it in the editor's tab row (`docked`) or hides it (`hidden`); a terminal frame has no
 toolbar. The status bar names the session and its state, and a **Paused** chip in the title row takes you back to the
 stopped line.
+
+**Run and Debug** (C-S-d in VS Code keys; the status bar's debug segment) is a sidebar view with four sections:
+**Variables** (the stopped frame's scopes; values that changed since the last stop are highlighted, big arrays open in
+pages of 100), **Watch** (expressions kept per project, evaluated at every stop), **Call Stack** (threads and frames;
+pick a frame to move the editor and the variables to it) and **Breakpoints** (exception filters and every breakpoint,
+each with a tick box). Arrow keys move and open, RET acts on the row, typing after `C-M-f` (`/` in the Emacs and Vim
+profiles) filters it, F2 (`e`, `c`) sets a value; Copy Value, Copy as Expression and Add to Watch are in the
+palette. Its header starts the configuration picked there. While the program runs, the last stop's values stay, dimmed.
 
 Breakpoints live in a column left of the line numbers, kept per project (they survive restarts and reach a running
 session at once). Click the column to add or remove one, shift-click for a logpoint (a message printed instead of
@@ -97,7 +106,8 @@ step, a triangle for an exception), and one lane per probe. Click a stop (or `RE
 a past stop, to open it read-only: the file as it ran under a banner (it says "not what ran" when
 the file was unsaved at the start), the stop's line marked with its variables, and the stack and variables as they
 were in a window beside it. `Alt →` past the newest stop, **Back to Live** (the palette) or the banner's button returns.
-Recorded runs hold your program's values, so they stay yours: agents cannot read them. They are kept 14 days (a pinned
+Recorded runs hold your program's values: an agent reads them only as the matrix's `debug.read` row lets it (Cautious asks
+first). They are kept 14 days (a pinned
 run, or one for an open task, longer), at most 2 GB per project, oldest first. Probes need an adapter with logpoints
 (debugpy and the JavaScript debugger take 2000 values a second, the rest 200, and delve and codelldb stop and resume
 the program for each one; values past the rate are thinned and counted).
@@ -110,10 +120,24 @@ far the copy did what the run did before the point, and the first value that dif
 values after the point, then and now, and how each side went on. For a code what-if the fork's copy opens first
 (**Open Fork** finds this file there); edit it and **Run Fork**; **Take Fork's Change…** shows each file it changed
 as a diff and puts the fork's text into your buffer (undoable, not saved). **Drop Fork** removes one.
+A fork checks that it reached the run's pass: the same stack, and the values that change from pass to pass. When the
+run passed the line only once, any value that differs stops the fork, since it may be the clock or a random number
+(the fork replays Python's hash seed, nothing else); the tab says which value, and **Fork Anyway** forks at that pass
+regardless.
 The copy cannot reach the network or write outside itself; your `.env` files are read in place, never copied. Python
 (debugpy) and JavaScript (js-debug) only: Go and native programs need `ptrace`, which the sandbox never allows, and
 macOS forks wait for a sandbox rule of their own. A run whose configuration resolves differently now (an input, a
 setting, launch.json) is refused, and a point the run took over a minute to reach asks first.
+
+**Debugging with an agent.** Ask an agent to debug this with you and it works beside you, under the permissions
+matrix's `debug.*` rows ([security.md](security.md#the-permissions-matrix)): it reads your sessions and recorded runs,
+adds probes and breakpoints (ringed in the agent's colour; the tooltip says which agent set them, and it removes only
+its own), forks what-ifs, and, where the matrix allows, evaluates or steps in your live session. If you step first,
+its step is refused: yours wins. It writes down hypotheses with their evidence; **Show Investigation** lists them
+(open, confirmed, rejected) and **Explain Investigation…** asks it to tell the story in its chat. A fix is offered only
+after it ran in a fresh fork of the run and passed (the program ended cleanly without the failure): **Review Agent's
+Fix** shows its diff against your buffers with the hypothesis' evidence, and **Accept Agent's Fix** puts it in your
+buffers as the agent's change in the edit history (undoable, not saved).
 
 **Find the Change That Broke It…** (the palette) answers "which change broke it?". Pick a state where it worked (a
 commit, a recorded run's start, one of your saves or an agent's step) and a command that fails now, such as a test

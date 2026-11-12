@@ -239,7 +239,8 @@ enum Cmd {
     Op(Op, oneshot::Sender<Result<(), String>>),
     Variables {
         epoch: u64,
-        reference: i64,
+        /// `variables`' arguments: the reference, and a page's `filter`, `start` and `count`.
+        args: Value,
         reply: oneshot::Sender<Result<Vec<Value>, String>>,
     },
     MoreFrames {
@@ -280,12 +281,14 @@ impl Handle {
 
     /// The variables of REFERENCE, from the stop EPOCH (refused unless it is the current one).
     pub async fn variables(&self, epoch: u64, reference: i64) -> Result<Vec<Value>, String> {
-        self.ask(|reply| Cmd::Variables {
-            epoch,
-            reference,
-            reply,
-        })
-        .await
+        self.variables_with(epoch, json!({"variablesReference": reference}))
+            .await
+    }
+
+    /// [`Handle::variables`] with `variables`' whole ARGS (a page: `filter`, `start`, `count`).
+    pub async fn variables_with(&self, epoch: u64, args: Value) -> Result<Vec<Value>, String> {
+        self.ask(|reply| Cmd::Variables { epoch, args, reply })
+            .await
     }
 
     /// The next page of THREAD's frames in stop EPOCH.
@@ -852,14 +855,10 @@ impl Session {
     async fn command(&mut self, c: Cmd) -> Option<Ending> {
         match c {
             Cmd::Op(op, reply) => self.op(op, reply).await,
-            Cmd::Variables {
-                epoch,
-                reference,
-                reply,
-            } => {
+            Cmd::Variables { epoch, args, reply } => {
                 let r = if self.stop.as_ref().is_some_and(|s| s.epoch == epoch) {
                     self.client
-                        .request("variables", json!({"variablesReference": reference}))
+                        .request("variables", args)
                         .await
                         .map(|b| arr(&b, "variables"))
                         .map_err(msg)

@@ -500,14 +500,20 @@ takes it.  Another stealer may have moved it first: that is not an error."
         (ignore-errors (delete-directory aside t))))))
 
 (defun drgnx-file--lock (target timeout)
-  "Take TARGET's lock: (LOCK . OWNER).  Retried every `drgnx-file-lock-retry' seconds up to TIMEOUT (0: one
-attempt), a stale lock taken; then `drgnx-file-busy' (data (TARGET HOLDER)).  Never prompts."
+  "Take TARGET's lock: (LOCK . OWNER).  Retried every `drgnx-file-lock-retry' seconds while one holder has had it
+less than TIMEOUT (0: one attempt), a stale lock taken; then `drgnx-file-busy' (data (TARGET HOLDER)).  Never
+prompts.  The time counts per holder, not in all: a lock that changes hands is in use, not stuck, so a writer
+behind another one that takes it again for each of many changes waits its turn (each attempt here can fall between
+two of them) instead of failing."
   (let ((lock (drgnx-file--lock-name target))
-        (deadline (+ (drgnx-file--now) timeout)))
+        (deadline (+ (drgnx-file--now) timeout)) (seen nil))
     (catch 'taken
       (while t
         (when-let* ((me (drgnx-file--try-lock lock))) (throw 'taken (cons lock me)))
         (let ((owner (drgnx-file--owner lock)))
+          (when (and (> timeout 0) owner (not (equal owner seen)))   ; a new holder: its own TIMEOUT
+            (when seen (setq deadline (+ (drgnx-file--now) timeout)))
+            (setq seen owner))
           (when (drgnx-file--stale-p lock owner)
             (drgnx-file--steal lock)
             (when-let* ((me (drgnx-file--try-lock lock))) (throw 'taken (cons lock me))))

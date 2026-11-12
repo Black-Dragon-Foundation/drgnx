@@ -1378,11 +1378,13 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/bisect/cancel` | user | `{bisect: string}` | `boolean` | no |
 | `debug/bisect/narrow` | user | `{bisect: string}` | `boolean` | no |
 | `debug/bisect/states` | user | `{good?: {id: string, kind: string}, root: string}` | `{states: [any]}` | no |
-| `debug/breakpoints` | user | `{op?: {condition?: string, enabled?: boolean, hit?: string, id?: natnum, line?: natnum, log?: string, name?: string, op: string, path?: string}, path?: string, root: string}` | `DebugBreakpointsView` | no |
+| `debug/breakpoints` | user | `{op?: {adapter?: string, condition?: string, enabled?: boolean, hit?: string, id?: natnum, line?: natnum, log?: string, name?: string, op: string, path?: string}, path?: string, root: string}` | `DebugBreakpointsView` | no |
 | `debug/compare` | user | `{fork: string, run: string}` | `DebugForkView` | no |
 | `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
 | `debug/control` | user | `{op: string, session: string, thread?: integer}` | `boolean` | no |
-| `debug/fork` | user | `{at: {hit?: natnum, line?: natnum, path?: string, stop?: natnum}, change?: {code?: boolean, value?: {path: [string], text: string}}, confirm?: boolean, inputs?: [{id: string, value: string}], run: string, until?: DebugForkUntil}` | `{ask?: string, fork?: string, needs?: any}` | no |
+| `debug/evaluate` | user | `{context: string, expr: string, frame?: integer, session: string}` | `{reference?: integer, result: string, type?: string}` | no |
+| `debug/expand` | user | `{node: string, open: boolean, view: string}` | `boolean` | no |
+| `debug/fork` | user | `{anyway?: boolean, at: {hit?: natnum, line?: natnum, path?: string, stop?: natnum}, change?: {code?: boolean, value?: {path: [string], text: string}}, confirm?: boolean, inputs?: [{id: string, value: string}], run: string, until?: DebugForkUntil}` | `{ask?: string, fork?: string, needs?: any}` | no |
 | `debug/fork/drop` | user | `{fork: string}` | `boolean` | no |
 | `debug/fork/run` | user | `{fork: string}` | `boolean` | no |
 | `debug/install` | user | `{adapter: string, adapters?: [JsonObject]}` | `string` | no |
@@ -1394,9 +1396,12 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/run/stop` | user | `{file?: string, run: string, stop: natnum}` | `{capture: any, run: string, snapshot?: string, source: any, stop: any}` | no |
 | `debug/runs/list` | user | `{root: string}` | `{runs: [any]}` | no |
 | `debug/select` | user | `{frame: integer, session: string, thread?: integer}` | `boolean` | no |
+| `debug/set-value` | user | `{node: string, value: string, view: string}` | `{value: string}` | no |
 | `debug/source` | user | `{ref: integer, session: string}` | `{mime?: string, text: string}` | no |
 | `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, root: string, selection?: string, unsaved?: [string], user?: [JsonObject]}` | `{needs?: any, session?: string}` | no |
 | `debug/trust` | user | `{root: string, trusted: boolean}` | `boolean` | no |
+| `debug/view` | user | `{filter?: string, indent?: natnum, root: string, session?: string, view: string}` | `boolean` | no |
+| `debug/watch` | user | `{expr?: string, index?: natnum, op: string, root: string, to?: natnum}` | `[string]` | no |
 | `decisions/effects` | user | `{decision: string}` | `{commits?: [string], decision: string, label: string, later_hunks?: [Hunk]}` | no |
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no |
 | `events/add` | user | `{agent?: AgentName, best_effort?: boolean, data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text, task?: TaskRef}` | `{id?: natnum}` | yes |
@@ -1475,7 +1480,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes |
 | `machines/list` | user | `{}` | `{machines?: [Machine]}` | no |
 | `machines/report` | user | `{machine: string, slots?: [{holder?: string, id: string, kind: string}], ttl: number}` | `{local: boolean, machine: string, slots?: [Slot]}` | no |
-| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "job.keys" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read" \| "plugin.abilities" \| "chat.project-edit" \| "huddles", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
+| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "job.keys" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read" \| "plugin.abilities" \| "chat.project-edit" \| "huddles" \| "debug.read" \| "debug.probe" \| "debug.fork" \| "debug.live-eval" \| "debug.drive", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
 | `matrix/get` | user | `{plan?: string, project?: string, who?: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `MatrixView` | no |
 | `mcp/attach` | service | `{kind: AgentKind}` | `{identity: string}` | no |
 | `mcp/session` | user | `{agent: AgentName, cwd?: AbsPath, job?: Id, owner: natnum, profile?: Id, sid?: SessionId, task?: TaskRef, tools?: {tracker: boolean}}` | `{sid: string, socket: string}` | no |
@@ -4395,7 +4400,9 @@ there: a copy of its write end outside the group (any fork beside the host holds
 tests, every thread of the test binary forks) would hold that back, and what such a copy writes is never read as the
 browser. A Chromium without a group of its own (a filter refused `setpgid`) is waited for by the pipe's end, for up to
 1 s. The next `start` is a fresh
-Chromium through the same host.
+Chromium through the same host. The host counts the browser as ended in the same hold of its stream as it writes
+`exited`, so a `start` the hub sends once it has read `exited` always gets a fresh Chromium: never the dead one's
+`started` (whose CDP would then be dropped), however late the waiting thread runs on a loaded machine.
 
 **The hub goes.** EOF on fd 3 (the hub ended, or restarted: an inherited fd cannot be handed over again), or a reset
 (the hub closed its end with the host's last lines unread), stops Chromium as

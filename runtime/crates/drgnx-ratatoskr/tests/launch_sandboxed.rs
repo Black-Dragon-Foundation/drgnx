@@ -428,7 +428,7 @@ fn hub_socket_identifies_its_session() {
     }
     // the bridge is this build's binary, copied where the child may run it
     let bridge = fx.p("wt/ratatoskr");
-    std::fs::copy(RATATOSKR, &bridge).unwrap();
+    drgnx_exe::copy(RATATOSKR.as_ref(), &bridge).unwrap();
     let out = fx.p("wt/child.out");
     let script = format!("exec >{}\n{IDENTIFY}", out.display())
         .replace("$OWN", &sockets[0])

@@ -385,7 +385,7 @@ mod tests {
             PathBuf::from(std::env::var("SLEIPNIR_BIN").expect("SLEIPNIR_BIN: a built sleipnir"));
         let staged = root.join("bin/b1/sleipnir");
         std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
-        std::fs::copy(&exe, &staged).unwrap();
+        drgnx_exe::copy(&exe, &staged).unwrap();
         let shim = crate::darwin::brew::ensure_shim(&root, &staged).unwrap();
         let spec = sandbox::spec(&sandbox::Job {
             dir: &dir,
@@ -560,13 +560,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn install_records_each_pin() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         // by its true name: macOS's temporary folder is under /var, a link to /private/var, and mise sees $PWD resolved
         let root = dir.path().canonicalize().unwrap();
         let bin = tempfile::tempdir().unwrap();
         let mise = bin.path().join("mise");
-        std::fs::write(
+        drgnx_exe::write(
             &mise,
             "#!/bin/sh\n\
              echo \"$PWD|$MISE_DATA_DIR|$CARGO_HOME|$RUSTUP_HOME|$*\" >> \"$MISE_DATA_DIR.log\"\n\
@@ -576,7 +575,6 @@ mod tests {
              esac\n",
         )
         .unwrap();
-        std::fs::set_permissions(&mise, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::create_dir_all(root.as_path().join("tools")).unwrap();
         let out = install(
             &mise,

@@ -152,11 +152,14 @@ pub async fn role(f: &Front, c: &Caller, p: RoleParams) -> Result<bool, Error> {
 async fn link_budget(f: &Front, sid: &str, job: Option<&str>, cwd: &Path) {
     let b = &f.core.budgets;
     let mine = session::scope_of(Role::Manager, sid);
-    let dir = cwd.to_path_buf();
-    let project = crate::clock::blocking(move || norn::project::resolve(&dir).map(|p| p.id))
-        .await
-        .ok()
-        .flatten();
+    let project = match crate::graph::project_of(cwd).await {
+        Ok(p) => p.map(|p| p.id),
+        // the budget links up to its plan only, and the log says why
+        Err(e) => {
+            tracing::warn!(sid, "the manager's budget scope: {e}");
+            None
+        }
+    };
     let project = project.map(|p| BudgetScope::Project(Bounded(p)));
     match (job, &project) {
         (Some(j), Some(pr)) => {
@@ -720,7 +723,7 @@ fn owned(f: &Front, manager: &str, id: &str) -> Result<Arc<Session>, String> {
 
 /// The facts of manager tool OP called with ARGS, as the hub parsed them: the card shows them and the user's answer
 /// counts for this call only (another call of the same kind is another question).
-fn call_facts(op: &str, args: &Value) -> Facts {
+pub(crate) fn call_facts(op: &str, args: &Value) -> Facts {
     let all = format!("{op} {args}");
     let mut command = all.clone();
     if command.len() > 4096 {
@@ -742,7 +745,7 @@ fn call_facts(op: &str, args: &Value) -> Facts {
 /// The gate for MANAGER doing A with FACTS: allowed, or the refusal (a card to wait on, or never).  An action that
 /// asked is asked again only through its card (the user's answer, nothing said in a message), and only for a call
 /// with the same facts.
-async fn gate(
+pub(crate) async fn gate(
     f: &Front,
     manager: &str,
     who: &Who,

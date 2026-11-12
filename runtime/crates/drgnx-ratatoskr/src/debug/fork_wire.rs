@@ -149,6 +149,7 @@ async fn fork(front: &Front, p: DebugFork) -> Result<DebugForked, Error> {
             change: change_of(&p),
             until: until_of(&p),
             confirm: p.confirm,
+            anyway: p.anyway,
             resolved,
         })
         .map_err(err)?;
@@ -167,7 +168,7 @@ async fn fork(front: &Front, p: DebugFork) -> Result<DebugForked, Error> {
 }
 
 /// RUN's configuration resolved now as `debug/fork` resolves it, for a use without the user (no inputs asked).
-fn resolved_for(front: &Front, run: &RunInfo) -> Result<Value, String> {
+pub(super) fn resolved_for(front: &Front, run: &RunInfo) -> Result<Value, String> {
     match resolve(front, run, &[]).map_err(|e| e.message)? {
         Ok(v) => Ok(v),
         Err(first) if first.needs == Some(serde_json::json!("trust")) => {

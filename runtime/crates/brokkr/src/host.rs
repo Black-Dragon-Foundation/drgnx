@@ -160,9 +160,12 @@ pub struct Host {
 /// The engine's configuration: epoch interruption, the component model, and every Wasm proposal off that Rust's
 /// `wasm32-wasip2` does not emit (bulk memory, sign extension, non-trapping conversions, multi-value, reference
 /// types and SIMD stay on; with the `gc` feature off, GC, exceptions and function references are off already).
+/// Guest faults are caught by signal handlers on macOS too, as on Linux, never by wasmtime's Mach port thread: that
+/// thread aborts the process when a signal the hub handles (SIGCHLD, with children running) lands on it.
 fn config() -> Config {
     let mut c = Config::new();
-    c.epoch_interruption(true)
+    c.macos_use_mach_ports(false)
+        .epoch_interruption(true)
         .wasm_component_model(true)
         .wasm_tail_call(false)
         .wasm_memory64(false)

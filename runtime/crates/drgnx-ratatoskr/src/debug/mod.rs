@@ -9,6 +9,7 @@
 //!   stopping (children before their parent; every session at the hub's end).
 
 pub mod adapters;
+pub mod agent;
 pub mod bisect;
 pub mod bisect_card;
 pub mod bisect_wire;
@@ -36,6 +37,8 @@ pub mod tasks;
 mod tests;
 #[cfg(test)]
 mod tests_adapters;
+#[cfg(test)]
+mod tests_agent;
 #[cfg(test)]
 mod tests_bisect;
 #[cfg(test)]
@@ -236,6 +239,22 @@ struct Inner {
     store_dir: Option<PathBuf>,
     /// The recorded runs and the probes (none: nothing is recorded).
     rec: OnceLock<Arc<record::Records>>,
+    /// Told of every change of a session's state or stop, or of breakpoints (the Run and Debug views).
+    listeners: Mutex<Vec<Listener>>,
+}
+
+/// A function told that a session or breakpoint changed.
+pub type Listener = Arc<dyn Fn() + Send + Sync>;
+
+/// One session as the views read it: its id, name, phase, stop, capabilities and adapter type.
+#[derive(Clone, Debug)]
+pub struct Snap {
+    pub id: String,
+    pub name: String,
+    pub state: &'static str,
+    pub stop: Option<Stop>,
+    pub caps: Value,
+    pub adapter: String,
 }
 
 /// The hub's debug sessions.
@@ -267,6 +286,7 @@ impl Debug {
                 stores: Mutex::new(BTreeMap::new()),
                 store_dir,
                 rec: OnceLock::new(),
+                listeners: Mutex::new(Vec::new()),
             }),
         }
     }
@@ -317,6 +337,18 @@ impl Debug {
         }
     }
 
+    /// ROOT's breakpoint ID is agent session AGENT's (D4): the editors see it ringed.
+    pub fn mark_breakpoint(&self, root: &str, id: u64, agent: &str) {
+        if let Some(path) = self.store(root, |s| s.mark(id, agent)) {
+            self.publish_bps(root, &path);
+        }
+    }
+
+    /// The agent session ROOT's breakpoint ID is of (none: the user's, or no such breakpoint).
+    pub fn breakpoint_owner(&self, root: &str, id: u64) -> Option<String> {
+        self.store(root, |s| s.owner(id))
+    }
+
     /// F on ROOT's breakpoint store.
     fn store<R>(&self, root: &str, f: impl FnOnce(&mut Store) -> R) -> R {
         let mut stores = self
@@ -336,7 +368,8 @@ impl Debug {
         f(s)
     }
 
-    fn root_of(&self, id: &str) -> Option<String> {
+    /// The project session ID debugs.
+    pub fn root_of(&self, id: &str) -> Option<String> {
         lock(&self.inner.state)
             .sessions
             .get(id)
@@ -348,6 +381,165 @@ impl Debug {
         let mut v = self.store(root, |s| s.view(path));
         v["root"] = json!(root);
         self.inner.sink.broadcast("debug-breakpoints", v, None);
+        self.changed();
+    }
+
+    /// Tell F of every change of a session or a breakpoint from now on.
+    pub fn on_change(&self, f: Listener) {
+        self.inner
+            .listeners
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(f);
+    }
+
+    fn changed(&self) {
+        let ls = self
+            .inner
+            .listeners
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        for f in ls {
+            f();
+        }
+    }
+
+    /// ROOT's sessions (children too), in id order.
+    pub fn snapshot(&self, root: &str) -> Vec<Snap> {
+        lock(&self.inner.state)
+            .sessions
+            .iter()
+            .filter(|(_, e)| e.root == root)
+            .map(|(id, e)| Snap {
+                id: id.clone(),
+                name: e.name.clone(),
+                state: e.phase.name(),
+                stop: e.stop.clone(),
+                caps: e.caps.clone(),
+                adapter: e.start.adapter_id.clone(),
+            })
+            .collect()
+    }
+
+    /// ROOT's function breakpoints, and each file's breakpoints as the gutter has them (files in path order).
+    pub fn bp_lists(&self, root: &str) -> (Vec<Value>, Vec<(String, Vec<Value>)>) {
+        self.store(root, |s| {
+            let files = s
+                .paths()
+                .into_iter()
+                .filter_map(|p| {
+                    let v = s.view(&p);
+                    let list = v["breakpoints"].as_array().cloned().unwrap_or_default();
+                    (!list.is_empty()).then_some((p, list))
+                })
+                .collect();
+            (s.functions(), files)
+        })
+    }
+
+    /// The exception filters on for adapters of type ADAPTER with CAPS in ROOT.
+    pub fn filters_on(&self, root: &str, adapter: &str, caps: &Value) -> Vec<String> {
+        self.store(root, |s| s.filters(adapter, caps))
+    }
+
+    /// ROOT's watch expressions, in order.
+    pub fn watches(&self, root: &str) -> Vec<String> {
+        self.store(root, |s| s.watches())
+    }
+
+    /// ROOT's watch expressions are now LIST (kept with its breakpoints).
+    pub fn set_watches(&self, root: &str, list: Vec<String>) {
+        self.store(root, |s| s.set_watches(list));
+        self.changed();
+    }
+
+    /// The exception filter FILTER of adapters of type ADAPTER in ROOT turned ON or off: kept for the type, and sent
+    /// to its sessions at once.
+    pub async fn set_filter(&self, root: &str, adapter: &str, filter: &str, on: bool) {
+        let caps = self
+            .snapshot(root)
+            .into_iter()
+            .find(|s| s.adapter == adapter)
+            .map(|s| s.caps)
+            .unwrap_or(Value::Null);
+        let mut list = self.filters_on(root, adapter, &caps);
+        list.retain(|f| f != filter);
+        if on {
+            list.push(filter.to_owned());
+        }
+        self.store(root, |s| s.set_filters(adapter, list.clone()));
+        for snap in self.snapshot(root) {
+            if snap.adapter != adapter {
+                continue;
+            }
+            if let Some(h) = self.handle(&snap.id)
+                && let Err(e) = h
+                    .request("setExceptionBreakpoints", json!({"filters": list}))
+                    .await
+            {
+                tracing::debug!(target: "drgnx::debug", "setExceptionBreakpoints: {e}");
+            }
+        }
+        self.changed();
+    }
+
+    /// Every breakpoint of ROOT removed (REMOVE), or enabled or disabled (ENABLED): each file changed is published
+    /// and sent to ROOT's sessions.
+    pub async fn all_breakpoints(&self, root: &str, remove: bool, enabled: bool) {
+        let ops: Vec<breakpoints::Op> = self.store(root, |s| {
+            let mut ops = vec![];
+            for p in s.paths() {
+                for b in s.view(&p)["breakpoints"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                {
+                    let Some(id) = b["id"].as_u64() else { continue };
+                    ops.push(if remove {
+                        breakpoints::Op::Remove { id }
+                    } else {
+                        breakpoints::Op::Edit {
+                            id,
+                            enabled: Some(enabled),
+                            condition: None,
+                            hit: None,
+                            log: None,
+                        }
+                    });
+                }
+            }
+            if remove {
+                for f in s.functions() {
+                    let name = f["name"].as_str().unwrap_or_default().to_owned();
+                    ops.push(breakpoints::Op::RemoveFunction { name });
+                }
+            }
+            ops
+        });
+        let mut paths = std::collections::BTreeSet::new();
+        let mut functions = false;
+        for op in ops {
+            if let Some(c) = self.store(root, |s| s.apply(op)) {
+                if c.path.is_empty() {
+                    functions = true;
+                } else {
+                    paths.insert(c.path);
+                }
+            }
+        }
+        for path in &paths {
+            self.publish_bps(root, path);
+        }
+        for id in self.sessions_in(root) {
+            for path in &paths {
+                self.resend(&id, path).await;
+            }
+            if functions {
+                self.resend_functions(&id).await;
+            }
+        }
+        self.changed();
     }
 
     /// Send session ID PATH's breakpoints again (an edit, a Run to Cursor, one gone at a stop) and show its answer.
@@ -435,6 +627,7 @@ impl Debug {
                 for id in self.sessions_in(root) {
                     self.resend_functions(&id).await;
                 }
+                self.changed();
             } else {
                 self.publish_bps(root, &c.path);
                 for id in self.sessions_in(root) {
@@ -762,6 +955,7 @@ impl Debug {
         self.inner
             .sink
             .broadcast("debug-state", json!({ "sessions": sessions }), None);
+        self.changed();
     }
 
     async fn updates(&self, id: String, mut rx: mpsc::UnboundedReceiver<Update>) {

@@ -1,7 +1,8 @@
 //! Debugging (docs/develop/debugging.md, spec §11): the editor lists a project's launch configurations
 //! (`debug/configs`), starts one (`debug/start`, which may first need inputs or trust), controls a session
 //! (`debug/control`, `debug/select`), tells the hub a project's trust (`debug/trust`) and installs an adapter
-//! (`debug/install`) and reads a source with no file (`debug/source`). The hub's events:
+//! (`debug/install`) and reads a source with no file (`debug/source`). The Run and Debug view (`debug/view`,
+//! `debug/expand`, `debug/watch`, `debug/set-value`, `debug/evaluate`) is a hub-fed view. The hub's events:
 //! `debug-state` (every session), `debug-frame` (a stop's line), `debug-terminal` (`runInTerminal`'s terminal),
 //! `debug-ended`.
 
@@ -262,9 +263,14 @@ pub struct DebugBreakpointOp {
     pub log: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// `filter`'s adapter type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<String>,
 }
 
-/// The operations `debug/breakpoints` knows.
+/// The operations `debug/breakpoints` knows; `filter` turns exception filter NAME of adapters of type ADAPTER on or
+/// off (ENABLED), `enable-all` sets every source breakpoint's ENABLED, `remove-all` removes them and the function
+/// breakpoints.
 pub const BP_OPS: &[&str] = &[
     "add",
     "remove",
@@ -272,7 +278,90 @@ pub const BP_OPS: &[&str] = &[
     "move",
     "add-function",
     "remove-function",
+    "filter",
+    "enable-all",
+    "remove-all",
 ];
+
+/// `debug/view`: VIEW is the Run and Debug view of ROOT's sessions, its Variables and Watch of SESSION (none: the
+/// first stopped one), a level INDENT logical px (default 12), only the rows whose name or value contains FILTER
+/// (any case) and the rows above them. The hub builds it now and at every change.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugView {
+    pub view: String,
+    pub root: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indent: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
+}
+
+/// `debug/expand`: NODE of VIEW opened (OPEN) or closed; a variable's children, a chunk, another thread's frames are
+/// fetched; "Load more frames" (`m:` node) fetches the next page.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugExpand {
+    pub view: String,
+    pub node: String,
+    pub open: bool,
+}
+
+/// `debug/watch`: ROOT's watch expressions changed: `add` EXPR (at the end), `edit` INDEX to EXPR, `remove` INDEX,
+/// `move` INDEX to TO. The answer is the list.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugWatch {
+    pub root: String,
+    pub op: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expr: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<u32>,
+}
+
+/// The operations `debug/watch` knows.
+pub const WATCH_OPS: &[&str] = &["add", "edit", "remove", "move"];
+
+/// `debug/set-value`: the variable or watch NODE of VIEW is now VALUE (`setExpression` when the adapter has it and
+/// the node an `evaluateName`, else `setVariable`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugSetValue {
+    pub view: String,
+    pub node: String,
+    pub value: String,
+}
+
+/// `debug/set-value`'s answer: the value as the adapter now shows it.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugValue {
+    pub value: String,
+}
+
+/// `debug/evaluate`: EXPR in SESSION's FRAME (none: the selected one) in CONTEXT (`repl`, `hover`, `clipboard`,
+/// `watch`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugEvaluate {
+    pub session: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<i64>,
+    pub expr: String,
+    pub context: String,
+}
+
+/// The contexts `debug/evaluate` knows.
+pub const EVAL_CONTEXTS: &[&str] = &["repl", "hover", "clipboard", "watch"];
+
+/// `debug/evaluate`'s answer: the RESULT, its TYPE, and its children's REFERENCE when it has some.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugEvaluated {
+    pub result: String,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub ty: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<i64>,
+}
 
 /// A file's breakpoints (`debug/breakpoints`' answer, and the event `debug-breakpoints`): PATH's VERSION and its
 /// BREAKPOINTS (`{id, line, enabled, condition?, hit?, log?, verified, message?, bound_line?, unsupported}`), with the
@@ -380,7 +469,7 @@ fn check_breakpoints(p: &DebugBreakpoints) -> Result<(), Error> {
     if !BP_OPS.contains(&op.op.as_str()) {
         return Err(invalid(
             "op.op",
-            "one of add, remove, edit, move, add-function, remove-function",
+            "one of add, remove, edit, move, add-function, remove-function, filter, enable-all, remove-all",
         ));
     }
     for (k, v) in [
@@ -405,6 +494,13 @@ fn check_breakpoints(p: &DebugBreakpoints) -> Result<(), Error> {
             need("op.line", op.line.is_some_and(|l| l > 0))
         }
         "remove" | "edit" => need("op.id", op.id.is_some()),
+        "filter" => {
+            check_text("op.adapter", op.adapter.as_deref().unwrap_or_default())?;
+            check_text("op.name", op.name.as_deref().unwrap_or_default())?;
+            need("op.enabled", op.enabled.is_some())
+        }
+        "enable-all" => need("op.enabled", op.enabled.is_some()),
+        "remove-all" => Ok(()),
         "move" => {
             need("op.id", op.id.is_some())?;
             need("op.line", op.line.is_some_and(|l| l > 0))
@@ -418,6 +514,61 @@ fn check_run_to(p: &DebugRunToCursor) -> Result<(), Error> {
     check_path("path", &p.path)?;
     if p.line == 0 {
         return Err(invalid("line", "a line number from 1"));
+    }
+    Ok(())
+}
+
+fn check_view(p: &DebugView) -> Result<(), Error> {
+    check_text("view", &p.view)?;
+    check_root(&p.root)?;
+    if let Some(s) = &p.session {
+        check_text("session", s)?;
+    }
+    if p.filter.as_ref().is_some_and(|f| f.len() > TEXT_MAX) {
+        return Err(invalid("filter", "at most 4096 bytes"));
+    }
+    if p.indent.is_some_and(|i| i > 256) {
+        return Err(invalid("indent", "at most 256"));
+    }
+    Ok(())
+}
+
+fn check_expand(p: &DebugExpand) -> Result<(), Error> {
+    check_text("view", &p.view)?;
+    check_text("node", &p.node)
+}
+
+fn check_watch(p: &DebugWatch) -> Result<(), Error> {
+    check_root(&p.root)?;
+    if !WATCH_OPS.contains(&p.op.as_str()) {
+        return Err(invalid("op", "one of add, edit, remove, move"));
+    }
+    if matches!(p.op.as_str(), "add" | "edit") {
+        check_text("expr", p.expr.as_deref().unwrap_or_default())?;
+    }
+    if p.op != "add" && p.index.is_none() {
+        return Err(invalid("index", "required by this op"));
+    }
+    if p.op == "move" && p.to.is_none() {
+        return Err(invalid("to", "required by this op"));
+    }
+    Ok(())
+}
+
+fn check_set_value(p: &DebugSetValue) -> Result<(), Error> {
+    check_text("view", &p.view)?;
+    check_text("node", &p.node)?;
+    if p.value.len() > TEXT_MAX {
+        return Err(invalid("value", "at most 4096 bytes"));
+    }
+    Ok(())
+}
+
+fn check_evaluate(p: &DebugEvaluate) -> Result<(), Error> {
+    check_text("session", &p.session)?;
+    check_text("expr", &p.expr)?;
+    if !EVAL_CONTEXTS.contains(&p.context.as_str()) {
+        return Err(invalid("context", "one of repl, hover, clipboard, watch"));
     }
     Ok(())
 }
@@ -459,6 +610,36 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "show a frame of a session's stop: its scopes and variables are fetched in the same stop, and debug-frame names its line",
             check: check_select,
+        ),
+        method!(
+            "debug/view", DebugView(DebugView) -> bool,
+            classes: [User], writes: false,
+            doc: "show the Run and Debug view of a project: its variables, watches, call stack and breakpoints, built by the hub at every stop and change",
+            check: check_view,
+        ),
+        method!(
+            "debug/expand", DebugExpand(DebugExpand) -> bool,
+            classes: [User], writes: false,
+            doc: "open or close a node of the Run and Debug view: a variable's children, a chunk of a long array, another thread's frames, more frames",
+            check: check_expand,
+        ),
+        method!(
+            "debug/watch", DebugWatch(DebugWatch) -> Vec<String>,
+            classes: [User], writes: false,
+            doc: "add, edit, remove or move a project's watch expression (kept with its breakpoints): the list",
+            check: check_watch,
+        ),
+        method!(
+            "debug/set-value", DebugSetValue(DebugSetValue) -> DebugValue,
+            classes: [User], writes: false,
+            doc: "set a variable or watched expression of the Run and Debug view to a new value in the debugged program",
+            check: check_set_value,
+        ),
+        method!(
+            "debug/evaluate", DebugEvaluate(DebugEvaluate) -> DebugEvaluated,
+            classes: [User], writes: false,
+            doc: "evaluate an expression in a stopped session's frame (the value to copy, a hover, the console)",
+            check: check_evaluate,
         ),
         method!(
             "debug/trust", DebugTrust(DebugTrust) -> bool,

@@ -1665,9 +1665,8 @@ impl Inner {
                 setup("the static drgnx-key was not found next to the hub: a keyed container job can't get its keys")
             })?;
         let bin = dir.join("drgnx-key");
-        // the container runs this copy: its write descriptor kept out of the hub's other forks (crate::exe)
-        crate::exe::private_fds(|| std::fs::copy(&from, &bin))
-            .and_then(|r| r)
+        // the container runs this copy: its write descriptor kept out of the hub's other forks (drgnx-exe)
+        drgnx_exe::copy(&from, &bin)
             .map_err(|e| setup(format!("drgnx-key for the job ({}): {e}", from.display())))?;
         Ok(KeySocket {
             socket: None,
@@ -2645,13 +2644,19 @@ fn machine(p: &StartParams, q: &Queue) -> Result<Machine, Error> {
 }
 
 /// Where the request asks its job to run, and what its project's settings and the starter's `machines` cell say.
-async fn placement(f: &Front, c: &Caller, p: &StartParams, m: Machine, runners: bool) -> Placement {
+async fn placement(
+    f: &Front,
+    c: &Caller,
+    p: &StartParams,
+    m: Machine,
+    runners: bool,
+) -> Result<Placement, Error> {
     // the project's own value (the set the editor sent for it, under its id or slug), else the global one
     let projects = match p.cwd.as_ref().map(|c| PathBuf::from(c.as_str())) {
-        Some(at) => crate::clock::blocking(move || norn::project::resolve(&at))
+        // a git that cannot answer refuses the start: the global settings are never used in its project's place
+        Some(at) => crate::graph::project_of(&at)
             .await
-            .ok()
-            .flatten()
+            .map_err(|e| error(ErrorCode::Internal, e))?
             .map(|r| vec![r.id, r.slug])
             .unwrap_or_default(),
         None => vec![],
@@ -2745,7 +2750,7 @@ async fn placement(f: &Front, c: &Caller, p: &StartParams, m: Machine, runners: 
             )
         }
     };
-    Placement {
+    Ok(Placement {
         machine: m,
         heavy: p.heavy == Some(true) || marked,
         keys: p
@@ -2774,7 +2779,7 @@ async fn placement(f: &Front, c: &Caller, p: &StartParams, m: Machine, runners: 
         net_hosts: vec![],
         os,
         features,
-    }
+    })
 }
 
 /// The hosts a container job's network grant reaches (its cell over the caps' `drgnx-agents-net-hosts`): what its
@@ -3061,7 +3066,7 @@ async fn start_as(
         }
         _ => None,
     };
-    let place = placement(f, c, &p, machine, runners).await;
+    let place = placement(f, c, &p, machine, runners).await?;
     // a Mac job runs on a Mac runner as a host job: never in a container, never on this machine
     if place.os == forseti::Os::Macos && (container.is_some() || place.local_only) {
         return Err(error(

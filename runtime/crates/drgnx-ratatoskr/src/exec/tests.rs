@@ -830,7 +830,7 @@ async fn a_container_job_whose_caps_podman_cannot_enforce_is_refused() {
     let d = tempfile::tempdir().unwrap();
     let fake = d.path().join("podman");
     let ran = d.path().join("ran");
-    crate::exe::write_executable(
+    drgnx_exe::write(
         &fake,
         format!(
             "#!/bin/sh\nif [ \"$1\" = info ]; then echo '{{\"host\":{{\"cgroupVersion\":\"v2\",\
@@ -858,7 +858,7 @@ async fn a_container_job_runs_the_fixed_podman_line() {
     let d = tempfile::tempdir().unwrap();
     // a stand-in for podman: it enforces limits, the image is "present", and `run` prints the line it was given
     let fake = d.path().join("podman");
-    crate::exe::write_executable(&fake,
+    drgnx_exe::write(&fake,
         format!("#!/bin/sh\n{INFO_ENFORCES}if [ \"$1\" = image ]; then exit 0; fi\nprintf '%s\\n' \"$@\"\n"),
     ).unwrap();
     let r = Runner::default();
@@ -1437,7 +1437,7 @@ fn net_hooks(d: &Path, info: &str) -> Hooks {
     }
     let fake = d.join("podman");
     let d = d.display();
-    crate::exe::write_executable(
+    drgnx_exe::write(
         &fake,
         format!(
             "#!/bin/sh\n{info}case \"$1\" in\n  image|import|rmi) exit 0 ;;\n  ps|images) echo '[]'; exit 0 ;;\n  rm) for a in \"$@\"; do n=$a; done; echo \"rm $n\" >> {d}/ran; exit 0 ;;\nesac\n\
@@ -1651,6 +1651,7 @@ async fn a_projects_own_runner_settings_reach_its_jobs_only() {
         let p = params(json!({"cwd": cwd.to_str().unwrap()}));
         placement(&f, &c, &p, Machine::Auto, false)
             .await
+            .unwrap()
             .shared_overlay
     };
     assert!(overlay("alpha").await);
@@ -1709,7 +1710,8 @@ async fn a_mac_job_needs_its_projects_homebrew_packages() {
         Machine::Auto,
         true,
     )
-    .await;
+    .await
+    .unwrap();
     assert_eq!(mac.os, forseti::Os::Macos);
     assert_eq!(
         mac.features,
@@ -1732,7 +1734,8 @@ async fn a_mac_job_needs_its_projects_homebrew_packages() {
         Machine::Auto,
         true,
     )
-    .await;
+    .await
+    .unwrap();
     assert_eq!(linux.os, forseti::Os::Linux);
     assert!(linux.features.is_empty());
     assert!(!linux.heavy);
@@ -2095,7 +2098,7 @@ fn fake_key(d: &Path, value: &str) -> PathBuf {
         "#!/bin/sh\ntest -S \"$DRGNX_KEY_SOCK\" && echo socket-there\n\
          while [ \"$1\" != -- ]; do shift; done; shift\nTOKEN='{value}' exec \"$@\"\n"
     );
-    crate::exe::write_executable(&bin, script).unwrap();
+    drgnx_exe::write(&bin, script).unwrap();
     bin
 }
 
@@ -2186,7 +2189,7 @@ async fn a_keyed_container_job_reads_its_keys_through_its_sidecar() {
     // podman's arguments recorded, then the stand-in
     std::fs::rename(d.path().join("podman"), d.path().join("podman-real")).unwrap();
     let rec = d.path().join("podman");
-    crate::exe::write_executable(
+    drgnx_exe::write(
         &rec,
         format!(
             "#!/bin/sh\necho \"$*\" >> {0}/args\nexec {0}/podman-real \"$@\"\n",

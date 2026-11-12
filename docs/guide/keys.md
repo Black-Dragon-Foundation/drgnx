@@ -491,7 +491,8 @@ palette)". Several chords of one key are shown once ("C-k chords").
 
 **Copy and paste**: `Ctrl+Shift+C` copies the selected text of the terminal (nothing selected, nothing happens) and
 `Ctrl+Shift+V` pastes, on a Mac `Cmd+C` / `Cmd+V`. They are the commands *Terminal: Copy* and *Terminal: Paste* and
-work in terminal buffers only. The Emacs profile pastes with `C-y`, and copies with `C-c C-e` (*Terminal: Copy
+work in terminal buffers only. The editor's Copy key with text selected (`C-c`, `Cmd+C`) is *Terminal: Copy* there too,
+so the selection clears or stays as `selection-clear-on-copy` says, whichever key copied. The Emacs profile pastes with `C-y`, and copies with `C-c C-e` (*Terminal: Copy
 Mode*) then `M-w`.
 
 **Copy mode** (*Terminal: Copy Mode*) stops the screen and makes the terminal an ordinary read-only buffer: move,

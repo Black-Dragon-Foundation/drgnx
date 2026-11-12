@@ -368,6 +368,66 @@ The session's controls, drawn from `drgnx-debug--sessions` at each `debug-state`
 
 Tests: `test/unit/debug-toolbar-test.el`; perf row `debug-toolbar-show` (120 shows and hides, p95 ≤ 5 ms).
 
+## The Run and Debug view (spec §7)
+
+A sidebar view the hub builds, as the Explorer is (Sjá: the hub sends the model and the rows; keys answer from the
+replica in the key's own frame). Hub: `view/debug.rs` keeps each (connection, view)'s state and builds it; the pure
+parts are `view/debug/model.rs` (the lines, the model, the requests that fill it) and `view/debug/rows.rs` (the rows).
+Editor: `modules/extra/drgnx-debug-view.el`, the section `run-and-debug` of the sidebar view `debug`
+(`drgnx-debug-view`, also the status bar's debug segment's click).
+
+- **Sections:** VARIABLES (the selected session's scopes: a cheap scope open with the variables its stop fetched, an
+  `expensive` one closed and fetched when opened), WATCH, CALL STACK (sessions only when two or more → threads →
+  frames), BREAKPOINTS (each adapter type's exception filters as tick boxes, function breakpoints, each file's source
+  breakpoints: tick = enabled, dim = unverified, the adapter's message as a field). Each header opens and closes.
+- **Node ids are paths, stable across stops:** `v:SESSION:SCOPE/NAME/…`, chunks `…/[100..199]`, watches `w:EXPR`,
+  threads `t:SESSION:THREAD`, frames `f:SESSION:THREAD:N` (their place in the stack), hidden runs `h:…:N`, more frames
+  `m:SESSION:THREAD`, filters `x:TYPE:FILTER`, `fn:NAME`, `b:ID`. A `/` or `%` in a name is escaped; a name seen twice
+  under a parent gets `#2`. So a step's model diff (`Doc::diff`) and row patch carry only what changed, and the
+  editor's selection survives it.
+- **Open nodes** are kept per view (each node has a default: sections, cheap scopes, the stopped thread and sessions
+  open; the user's opening or closing wins). At each stop the hub fetches the open paths again, breadth first
+  (`model::wants`), at most `FETCH_CAP` = 200 calls (`variables`, or `stackTrace` for another thread's frames); past
+  it a node is shown closed with "expand again", and opening it fetches it past the cap. A fetch that fails is kept
+  with its message and not asked again in that stop.
+- **Paging:** a node with more than 100 `indexedVariables` lists its named children (`filter: named`, unless
+  `namedVariables` is 0), then chunks; past 100 chunks the chunk size grows by 100 (100,000 is ten chunks of 10,000,
+  each a hundred of 100). Only an opened leaf chunk is fetched (`filter: indexed`, `start`, `count`).
+- **Lazy values** (`presentationHint.lazy`) show `(…)`; opened, the one child's value shows in their place (its own
+  children then come from `PATH/(…)`).
+- **Changed values:** the selected session's values at its last stop are kept by `evaluateName` (else path); a value
+  that differs now is drawn in `drgnx-debug-view-changed`. A new value is not marked.
+- **Running again:** the last stop's nodes stay, dim, and fetch nothing (`Line::dim`; the editor refuses to open them)
+  until the next stop.
+- **Watch:** the project's expressions, saved with its breakpoints (`Store::watches`), evaluated in the selected
+  frame (`context: watch`) once per stop and frame and after every change of the list; an error is kept as its
+  message (`drgnx-debug-view-error`).
+- **Call Stack:** a thread's chip says why it stopped (`PAUSED ON BREAKPOINT`, `… EXCEPTION`, `… STEP`, `… ENTRY`)
+  or `PAUSED` / `RUNNING`; a run of two or more `subtle` (or `deemphasize`d) frames folds into "N frames hidden";
+  `label` frames are dim separators; "Load more frames" (`debug/expand` on the `m:` node) fetches the next page
+  (`Handle::more_frames`), kept with the view.
+- **Filter on typing:** `debug/view`'s `filter` keeps the rows whose label or value contains it (any case), the rows
+  above them and the section headers (`model::filter`).
+- **Rebuilds:** `Debug::on_change` listeners are told at every `debug-state` and breakpoint change; the views build
+  again, one at a time (a change meanwhile builds once more), and a class that sends its env gets the last lines.
+
+Methods (runstav `methods::debug`, the user class; served by `view::debug::serve`):
+
+- `debug/view {view, root, session?, indent?, filter?}` → bool: show ROOT's view (the open nodes are kept while the
+  root is the same).
+- `debug/expand {view, node, open}` → bool.
+- `debug/watch {root, op: add | edit | remove | move, index?, expr?, to?}` → the list.
+- `debug/set-value {view, node, value}` → `{value}`: `setExpression` when the adapter has it and the node an
+  `evaluateName`, else `setVariable` on the parent's reference; the view's fetched values are then fetched again.
+- `debug/evaluate {session, frame?, expr, context: repl | hover | clipboard | watch}` → `{result, type?, reference?}`
+  (Copy Value uses `clipboard` when the adapter has `supportsClipboardContext`).
+- `debug/breakpoints`' ops `filter {adapter, name, enabled}` (kept per adapter type and sent to its sessions at once),
+  `enable-all {enabled}` and `remove-all` (function breakpoints too).
+
+The editor's half asks on the connection the rows come on (`drgnx-hub--events`): the hub keeps the view per
+connection. A key that opens or closes a node waits up to `drgnx-debug-view-await-limit` (12 ms) for the rows, so
+they show in the key's own frame. The header line holds Start (▶) and the configuration picker.
+
 ## Live adapters: the image
 
 The tests that run real adapters (debugpy, js-debug, delve, lldb-dap) use `drgnx-debug-adapters:f45`, built from
@@ -527,8 +587,12 @@ What-if tab shows it beside the run. Linux only for now; other hosts refuse with
   `hitCondition`, for js-debug a condition with a counter that V8 runs (under `Symbol.for('drgnx.forkPass')`, a key no program
   name can clash with), since its `hitCondition` pauses at every pass;
   the landing must have had the run's probe hits before it and the stack the run recorded at that stop (names and
-  lines), and, where no probe hit tells the passes apart, the run's plain locals there (values without children),
-  else the fork fails naming both sides; otherwise the
+  lines), and, where no probe hit tells the passes apart, the run's plain locals there (values without children):
+  when the run recorded two or more passes of the line, only the locals that change between them (`fork::varying`:
+  loop counters, accumulators), and a difference fails naming both sides; without that record any plain local, and a
+  difference fails saying it may come from a source the fork does not replay, with `anyway` in the failed view (the
+  editor's Fork Anyway sends `debug/fork` again with `anyway`). Only `PYTHONHASHSEED` is replayed: the clock, random
+  numbers and the environment's other values are the program's own; otherwise the
   hub counts, stopping and continuing at each pass), repeats the steps, reads the thread's id
   expression, applies the change (`setExpression` when the adapter has it and the variable an `evaluateName`, else
   `setVariable`), takes the point's breakpoint away and runs until the next stop, the end, or a probe's next hit.
@@ -581,6 +645,48 @@ What-if tab shows it beside the run. Linux only for now; other hosts refuse with
   that match 20 of 20, a clock fixture whose first difference is found, a program that cannot connect out or write
   outside its tree, a `.env` the program reads that is never in the tree, a trace whose program sees its injected
   value and file, plain runs in bisect slots, and a run recorded live and then forked.
+
+## Debugging with an agent (spec §19.5)
+
+A partner agent debugs beside the user through six norn tools (`norn/src/tools/debug.rs`), which every session gets;
+each is a thin `CoordTool` whose call reaches the hub as `Hub::debug(sid, op, args)` with the caller's session (an
+outside agent is refused: "the debugger's tools are for agents drgnx runs"). The hub's half is
+`drgnx-ratatoskr/src/debug/agent.rs`: `tool` finds the session, maps the op to its matrix row (`action_of`), gates it
+with the manager's `gate` (an Ask makes a card and the call answers "X needs the user's yes (card N)"; Never answers
+its reason), then dispatches:
+
+- `debug_read` (`debug.read`): the sessions, a session's stop, a recorded run's summary or one stop (`Runs::capture`),
+  a fork's view. `history/*` stays the user's: no tool reads the edit history.
+- `debug_probe` (`debug.probe`): adds a probe or breakpoint marked with the agent's session (`Probe.agent`,
+  `Bp.agent`; `Probes::mark`, `Debug::mark_breakpoint`) and removes only its own. `debug-probes` tells the editors.
+- `debug_fork` (`debug.fork`): a value or replay what-if, marked as the agent's (`Forks::mark`, the view's `agent`).
+  A code what-if is refused here: code goes through `debug_fix`.
+- `debug_live` (`debug.live-eval` for `evaluate`, `debug.drive` for steps): carries the `epoch` of the stop the agent
+  read. `still_at` checks it before and again right before the control op, so a step the user took first wins.
+- `debug_hypothesis`: an Urdr record of kind `debug_hypothesis` (`norn::write::debug::hypothesis`; open, confirmed or
+  rejected, with evidence), written as `agent:SID` and changed only by the agent that made it; `debug-investigation`
+  `{root, hypothesis}` tells the editors.
+- `debug_fix` (`debug.fork`): `Forks::check_fix` makes a fresh tree from the run's launch snapshot, writes the files
+  (relative paths inside the tree only), runs the run's configuration in it (`run_in`, `FIX_LIMIT` 120 s) and drops the
+  tree. The fix is offered (`debug-investigation` `{root, fix}`) only when the predicate passes: a clean exit with no
+  stop on the failure's `watch` text (`Predicate`).
+
+The editor's half is `drgnx-debug-investigation.el`: it keeps the hypotheses (200) and fixes (20) the events bring,
+draws the **Investigation** buffer, asks the agent to explain itself (`agents/send`), shows a fix as diffs against the
+user's buffers and accepts it through `drgnx-history-with-origin "agent:SID#fix-H"`, so the history and undo record it
+as the agent's step. The gutter and the probe column ring an agent's marks in `drgnx-debug-agent-ring` (inheriting
+`drgnx-agent-1`) and name the agent in the tooltip.
+
+Tests: `debug::tests_agent` (each row gates its tool, the user's step wins, an agent removes only its own marks
+(`may_remove`), a fix passes only a clean exit without the failure, and one that still fails is not offered
+(`offer`)), the fork hub's `a_fix_is_run_in_a_fresh_tree_with_its_files` and `a_forks_view_names_the_agent_that_made_it`,
+norn's `each_debugger_tool_reaches_the_hub_as_its_session`, `a_hypothesis_is_recorded_changed_by_its_agent_only` and
+`debug_rows_per_preset`, `test/unit/debug-investigation-test.el`, and the conformance scenarios
+`debug/partner-agent-under-cautious` (Never: a reason, no card), `debug/partner-agent-under-balanced` (Ask: a card)
+and `debug/partner-agent-investigates` (the mock adapter, Autonomous: the agent reads the stop, cannot remove the
+user's breakpoint, sets its own, which the editors get with its agent, and its step read before the user's step is
+refused while its step at the new stop runs). The tools' schemas are held to `BUDGET_DEBUG` (5,000 bytes; 3,791 when
+it was set) in `tools_schema`.
 
 ## Which change broke it: bisect over the edit history (spec §19.6)
 

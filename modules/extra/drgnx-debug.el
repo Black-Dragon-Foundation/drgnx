@@ -16,8 +16,11 @@
 (require 'drgnx-debug-fork (expand-file-name "drgnx-debug-fork" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-timeline (expand-file-name "drgnx-debug-timeline" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-bisect (expand-file-name "drgnx-debug-bisect" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-debug-investigation
+         (expand-file-name "drgnx-debug-investigation" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-origin (expand-file-name "drgnx-debug-origin" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-toolbar (expand-file-name "drgnx-debug-toolbar" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-debug-view (expand-file-name "drgnx-debug-view" (file-name-directory (macroexp-file-name))))
 (defvar drgnx-statusbar-left)
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (defvar drgnx-hub-event-functions)
@@ -107,6 +110,7 @@ the toolbar's cards go too."
 
 (defun drgnx-debug--teardown ()
   "The session keys go with the module (a running session turned them on, not the setup), and the column."
+  (drgnx-debug-view--teardown)
   (drgnx-debug-session-mode -1)
   (drgnx-debug-timeline-mode -1)
   (drgnx-debug-bisect-events-mode -1)
@@ -169,6 +173,7 @@ the toolbar's cards go too."
                                                (debug-pick-session "Select Debug Session…" drgnx-debug-toolbar-pick-session "Choose the session the controls act on")
                                                (debug-install-adapter "Install Adapter…" drgnx-debug-install-adapter "Download and install a debug adapter, checked against its pinned hash")
                                                (debug-fork "Fork from Here…" drgnx-debug-fork "Replay the recorded run in a sealed copy to this point, change a value or the code, and run on")
+                                               (debug-fork-anyway "Fork Anyway" drgnx-debug-fork-anyway "Fork at the same pass again when a value may differ only because the fork does not replay it")
                                                (debug-fork-show "Show What-if" drgnx-debug-fork-show "A fork beside its run: matched hits, the first difference, the values after")
                                                (debug-fork-open "Open Fork" drgnx-debug-fork-open "This file as the fork has it, to edit a code what-if")
                                                (debug-fork-run "Run Fork" drgnx-debug-fork-run "Run a code what-if once its tree is edited")
@@ -194,6 +199,16 @@ the toolbar's cards go too."
                                                       (if (memq 'branch drgnx-statusbar-left)
                                                           (append (butlast drgnx-statusbar-left (length tail)) '(debug) tail)
                                                         (cons 'debug drgnx-statusbar-left))))))
+                              ;; Run and Debug: the sidebar view the hub builds (drgnx-debug-view.el); its row keys in
+                              ;; its own map
+                              (drgnx-wb-define-section 'run-and-debug :view 'debug :slot 0 :title " RUN AND DEBUG"
+                                                       :buffer #'drgnx-debug-view--buffer)
+                              (let ((in-view (lambda () (derived-mode-p 'drgnx-debug-view-mode))))
+                                (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-view-commands)
+                                  (if (memq id drgnx-debug-view-global-commands)
+                                      (drgnx-command-define id :category "Debug" :title title :command fn :doc doc)
+                                    (drgnx-command-define id :category "Debug" :title title :command fn :doc doc
+                                                          :map 'drgnx-debug-view-mode-map :when in-view))))
                               ;; recorded runs: probes, the stop timeline, past stops (drgnx-debug-timeline.el)
                               (drgnx-debug-timeline-mode 1)
                               (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-timeline-commands)
@@ -205,6 +220,14 @@ the toolbar's cards go too."
                               ;; where did this come from: the origin trail (drgnx-debug-origin.el)
                               (drgnx-debug-origin-events-mode 1)
                               (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-origin-commands)
+                                (drgnx-command-define id :category "Debug" :title title :command fn :doc doc))
+                              ;; debugging with an agent: its hypotheses and fixes (drgnx-debug-investigation.el)
+                              (add-hook 'drgnx-hub-event-functions #'drgnx-debug-investigation--event)
+                              (pcase-dolist (`(,id ,title ,fn ,doc)
+                                             '((debug-investigation "Show Investigation" drgnx-debug-investigation-show "An agent's hypotheses with their evidence, and the fixes it offers")
+                                               (debug-investigation-explain "Explain Investigation…" drgnx-debug-investigation-explain "Ask the agent debugging with you to tell its investigation in its chat")
+                                               (debug-review-fix "Review Agent's Fix" drgnx-debug-investigation-review-fix "The fix an agent offers, which passed in a fresh fork, as a diff against your buffers")
+                                               (debug-accept-fix "Accept Agent's Fix" drgnx-debug-investigation-accept-fix "Put the agent's fix in your buffers as its change (undoable, not saved)")))
                                 (drgnx-command-define id :category "Debug" :title title :command fn :doc doc))))
 
 (provide 'drgnx-debug)

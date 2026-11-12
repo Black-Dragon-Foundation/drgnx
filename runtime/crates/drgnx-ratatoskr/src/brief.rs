@@ -439,12 +439,14 @@ pub async fn task_scope(front: &Front, task: &str) -> Option<(String, Option<Str
     let plan = plan.map_or_else(|| format!("plan:{job}"), |p| format!("plan:{p}"));
     // the project is found by git, off the db's thread
     let project = match repo {
-        Some(r) => {
-            crate::clock::blocking(move || norn::project::resolve(Path::new(&r)).map(|p| p.id))
-                .await
-                .ok()
-                .flatten()
-        }
+        Some(r) => match crate::graph::project_of(Path::new(&r)).await {
+            Ok(p) => p.map(|p| p.id),
+            // the scope is said without its project, and the log says why
+            Err(e) => {
+                tracing::warn!("a task's scope: {e}");
+                None
+            }
+        },
         None => None,
     };
     Some((plan, project))

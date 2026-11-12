@@ -404,7 +404,8 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
       (write-region "#!/bin/sh\necho \"$*\" >> '" nil f)
       (write-region (format "%s'\nexit 1\n" log) nil f t)
       (drgnx-update-test--push dir "README" "two\n" "second")
-      (let ((r (drgnx-update-test--run dir nil bin "update" "--restart")))
+      ;; Linux without drgnx.service (whatever the host): systemctl is never asked to restart
+      (let ((r (drgnx-update-test--run dir '("DRGNX_UPDATE_PLATFORM=Linux") bin "update" "--restart")))
         (should (eq 0 (car r)))
         (should (string-match-p "no drgnx service is installed" (cdr r)))
         (should-not (string-match-p "--user restart" (drgnx-update-test--slurp log))))
@@ -541,7 +542,8 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
         (should (eq (car r) 0))
         (should (string-search "cargo build --release --locked -j 4 --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr" log))
         ;; drgnx-key: native next to the hub (a keyed job here runs behind it), static musl beside the relay's sidecar
-        (let ((arch (string-trim (shell-command-to-string "uname -m"))))
+        ;; the Rust triple's arch: Apple Silicon's uname says arm64, Rust's triple aarch64
+        (let ((arch (string-replace "arm64" "aarch64" (string-trim (shell-command-to-string "uname -m")))))
           (should (string-search "-j 4 --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key RUSTUP_HOME=" log))
           (should (string-search (format "--target %s-unknown-linux-musl --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key" arch) log))
           (should (file-executable-p (expand-file-name "data/bin/drgnx-key" dir)))
