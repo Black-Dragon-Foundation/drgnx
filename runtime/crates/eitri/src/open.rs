@@ -2,7 +2,7 @@
 //! (`any(target_os = "linux", target_os = "android")`: a kernel fact); macOS: `O_NOFOLLOW_ANY`.
 
 use std::io;
-use std::os::fd::{BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path};
 
@@ -105,10 +105,39 @@ pub struct Meta {
 }
 
 /// The status of `rel` beneath `dir`, resolved as `open_beneath` resolves it (no link in any component, never outside
-/// `dir`): an `O_PATH` open and an `fstat` on Linux and Android, so the file is never opened for reading.
+/// `dir`): its directory pinned, then [`stat_in`] there, so the file is never opened.
 pub fn stat_beneath(dir: BorrowedFd<'_>, rel: &Path) -> Result<Meta, FsError> {
     checked_rel(rel)?;
-    let st = fstat(raw_open(Some(dir), rel, How::Pin(Kind::Any))?)?;
+    let name = rel
+        .file_name()
+        .ok_or_else(|| invalid("a path with no file name"))?;
+    match rel.parent().filter(|p| !p.as_os_str().is_empty()) {
+        Some(parent) => stat_in(
+            open_beneath(dir, parent, Kind::Dir)?.fd.as_fd(),
+            Path::new(name),
+        ),
+        None => stat_in(dir, Path::new(name)),
+    }
+}
+
+/// The status of NAME, one component, in the directory `dir` (one `fstatat`, the link itself never followed): a link
+/// is `Link`. With `dir` pinned by `open_beneath` this resolves as `stat_beneath` does, for a syscall a file.
+pub fn stat_in(dir: BorrowedFd<'_>, name: &Path) -> Result<Meta, FsError> {
+    let mut comps = name.components();
+    if !matches!(
+        (comps.next(), comps.next()),
+        (Some(Component::Normal(_)), None)
+    ) {
+        return Err(invalid("stat_in takes one path component"));
+    }
+    no_nul(name)?;
+    let st = rustix::fs::statat(dir, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?;
+    let ft = FileType::from_raw_mode(st.st_mode);
+    if ft == FileType::Symlink {
+        return Err(FsError::Link {
+            path: name.to_path_buf(),
+        });
+    }
     #[allow(clippy::unnecessary_cast)] // the fields' types differ between Linux, Android and macOS
     Ok(Meta {
         dev: st.st_dev as u64,
@@ -116,7 +145,7 @@ pub fn stat_beneath(dir: BorrowedFd<'_>, rel: &Path) -> Result<Meta, FsError> {
         size: st.st_size as u64,
         mtime_ns: st.st_mtime as i128 * 1_000_000_000 + st.st_mtime_nsec as i128,
         ctime_ns: st.st_ctime as i128 * 1_000_000_000 + st.st_ctime_nsec as i128,
-        regular: FileType::from_raw_mode(st.st_mode) == FileType::RegularFile,
+        regular: ft == FileType::RegularFile,
     })
 }
 
@@ -316,6 +345,11 @@ mod tests {
             stat_beneath(fd.as_fd(), Path::new("../b/f")),
             Err(FsError::Escapes)
         ));
+        assert!(
+            stat_in(fd.as_fd(), Path::new("b/f")).is_err(),
+            "one component only"
+        );
+        assert!(stat_in(fd.as_fd(), Path::new("..")).is_err());
     }
 
     #[test]

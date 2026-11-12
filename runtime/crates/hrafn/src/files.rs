@@ -820,7 +820,22 @@ pub fn list_with(
     }
     let rules = Rules::new(config, &git.nested(root)?);
     let paths = git.ls_files(root)?;
-    let stat = |p: &str| eitri::stat_beneath(root_fd.fd.as_fd(), Path::new(p)).ok();
+    // a file's status: its directory pinned once for the files in it (ls-files lists them together), then one
+    // `fstatat` each
+    let mut dir: Option<(String, Option<eitri::Pinned>)> = None;
+    let mut stat = |p: &str| -> Option<eitri::Meta> {
+        let (parent, name) = p.rsplit_once('/').unwrap_or(("", p));
+        if parent.is_empty() {
+            return eitri::stat_in(root_fd.fd.as_fd(), Path::new(name)).ok();
+        }
+        if dir.as_ref().is_none_or(|d| d.0 != parent) {
+            let pinned =
+                eitri::open_beneath(root_fd.fd.as_fd(), Path::new(parent), eitri::Kind::Dir).ok();
+            dir = Some((parent.to_string(), pinned));
+        }
+        let fd = dir.as_ref()?.1.as_ref()?.fd.as_fd();
+        eitri::stat_in(fd, Path::new(name)).ok()
+    };
     let attributes: Vec<(String, Option<eitri::Meta>)> = paths
         .iter()
         .filter(|p| p.rsplit('/').next() == Some(".gitattributes"))
