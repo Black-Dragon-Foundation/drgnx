@@ -2405,8 +2405,10 @@ A rows view is drawn in the form `work/map/set {outline}` asks (or `work/map/sub
 the word and sends it again; row `work/map-subscribe-keeps-the-outline-asked-for`): `on` the outline, `off` the cards, `auto` (until one is
 asked) the outline only where the cards do not fit or in a terminal; a new form is drawn at once, laid out as it is.
 An open huddle (`runner::huddle`, waiting for the user or going on) is a needs-you card of every map, `huddle: CLASH`
-about its two agents (`work::map::huddle_card`, kind `huddle`): on the strip and in the `needs-you` list, marking
-neither agent. A conclusion that changed since the view was last drawn marks its card `new` for 4 s of the hub's
+about its two agents (`work::map::huddle_card`, kind `huddle`): on the strip and in the `needs-you` list, after the
+other cards and the agents that need you, marking and covering neither agent (`vegvisir::nav::strip_entries`, one
+order for both, so `g N` is the Nth chip; an entry about nothing shown holds its card's id; unit
+`the_strip_and_the_needs_you_list_line_up`). A conclusion that changed since the view was last drawn marks its card `new` for 4 s of the hub's
 clock (`NewMarks`; an item seen for the first time marks nothing); one wake per view draws it again when the oldest
 mark leaves. Unit: `outline_follows_the_users_choice`, `open_huddle_is_on_the_strip_and_the_needs_you_list`,
 `a_new_conclusion_is_marked_for_four_seconds`.

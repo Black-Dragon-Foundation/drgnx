@@ -836,6 +836,68 @@ fn map_model_carries_review_fields_overlaps_and_plans() {
     );
 }
 
+/// The strip's chips and the needs-you list `g N` walks are one order, the editor's strip's: the cards (by id), the
+/// agents that need you with no card (a huddle covers nobody), then the open huddles. An entry about nothing the view
+/// shows keeps its place, its card's id standing for it (not a node: `g N` there says nothing needs you).
+#[test]
+fn the_strip_and_the_needs_you_list_line_up() {
+    let mut core = core_with(2);
+    for i in 3..=4 {
+        let snap: Snapshot =
+            serde_json::from_value(json!({"id": format!("s{i}"), "name": format!("agent {i}")}))
+                .expect("a snapshot");
+        let sess = Sess {
+            snap,
+            kids: Vec::new(),
+            place: None,
+            seq: i,
+            state: State::NeedsYou,
+            since: 0,
+            job: None,
+        };
+        for ev in sess.facts() {
+            core.step(ev);
+        }
+    }
+    let who = ["s1".to_owned(), "s4".to_owned()];
+    core.step(Event::Card(huddle_card(
+        "h1",
+        Some("both edit a.rs"),
+        &who,
+        true,
+    )));
+    for (id, about, text) in [("c1", "agent:s2", "which?"), ("c0", "agent:gone", "gone")] {
+        core.step(Event::Card(CardFact {
+            id: id.into(),
+            kind: CardKind::Question,
+            about: vec![about.into()],
+            text: text.into(),
+            open: true,
+        }));
+    }
+    let v = rows_view(core.model(), 226);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new());
+    let at = |chip: &str| {
+        rows[0]
+            .text
+            .find(chip)
+            .unwrap_or_else(|| panic!("{chip} in {}", rows[0].text))
+    };
+    let chips = [
+        at("gone  g1"),
+        at("which?  g2"),
+        at("agent 3 needs you  g3"),
+        at("agent 4 needs you  g4"),
+        at("huddle: both edit a.rs  g5"),
+    ];
+    assert!(chips.is_sorted(), "{}", rows[0].text);
+    let d = model::doc(core.model(), v.layout.as_ref().expect("laid out"), &v.sent);
+    assert_eq!(
+        d.lists["needs-you"],
+        vec!["c0", "agent:s2", "agent:s3", "agent:s4", "agent:s1"]
+    );
+}
+
 /// [D] An open huddle is a needs-you entry of the map: the strip says "huddle: CLASH", `g N` reaches the first of its
 /// agents the view shows, and its agents are not marked as needing you (a huddle that talks waits for nobody); a
 /// decided or closed one leaves.

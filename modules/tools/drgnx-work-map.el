@@ -339,10 +339,13 @@ switch), then KEYS, the lens's own keys ((LABEL . KEY) …), as chips with their
 
 (defun drgnx-work-map-needs-you (n)
   "Select the item the strip's Nth chip (g N) is about, the Nth entry of the model's needs-you list.  It selects;
-nothing is approved, pushed or answered."
-  (if (nth (1- n) (nidhogg-view-get (drgnx-work-map--require-sja) 'list "needs-you"))
-      (progn (setq drgnx-work-map--needs-at (1- n)) (drgnx-work-map--nav 'walk-to "needs-you" (1- n)))
-    (message "Work: nothing needs you at g%d" n)))
+nothing is approved, pushed or answered.  An entry about nothing the map shows (its card's id, no node) selects
+nothing; n and p go on from it."
+  (let* ((h (drgnx-work-map--require-sja)) (id (nth (1- n) (nidhogg-view-get h 'list "needs-you"))))
+    (when id (setq drgnx-work-map--needs-at (1- n)))
+    (if (and id (nidhogg-view-get h 'kind id))
+        (drgnx-work-map--nav 'walk-to "needs-you" (1- n))
+      (message "Work: nothing needs you at g%d" n))))
 
 (defun drgnx-work-map-needs-you-here-next (&optional back)
   "Select the next (BACK: previous) thing that needs you, cycling."

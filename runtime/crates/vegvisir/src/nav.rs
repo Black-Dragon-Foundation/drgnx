@@ -189,24 +189,53 @@ pub fn team(m: &Model, ids: &BTreeSet<ItemId>) -> Vec<ItemId> {
     out
 }
 
-/// What the needs-you keys walk: for each entry of the strip (its cards, then the agents that need you with no card,
-/// by id) the first shown item it is about. An entry about nothing shown has no place in it.
-pub fn needs_you(m: &Model, ids: &BTreeSet<ItemId>) -> Vec<ItemId> {
-    let cards = m.needs_you();
-    let covered: BTreeSet<&ItemId> = cards.iter().flat_map(|c| &c.about).collect();
-    let mut out: Vec<ItemId> = cards
+/// One entry of the needs-you strip: its chip's text, and what `g N` takes: the first item it is about that the view
+/// shows, else (nothing it is about is shown) its card's id, which is no item.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StripEntry {
+    pub text: String,
+    pub id: ItemId,
+}
+
+/// The strip's entries, in the editor's strip's order: the cards (NEEDS, by id) but the huddles, then the agents among
+/// ITEMS (the shown ones) that need you with no such card (by id; a huddle covers nobody), then the open huddles.
+pub fn strip_entries(needs: &[crate::NeedsYou], items: &BTreeMap<ItemId, Item>) -> Vec<StripEntry> {
+    let (huddles, cards): (Vec<_>, Vec<_>) = needs
         .iter()
-        .filter_map(|c| c.about.iter().find(|a| ids.contains(*a)).cloned())
-        .collect();
+        .partition(|n| n.kind == crate::CardKind::Huddle);
+    let entry = |n: &crate::NeedsYou| StripEntry {
+        text: n.text.clone(),
+        id: n
+            .about
+            .iter()
+            .find(|a| items.contains_key(*a))
+            .cloned()
+            .unwrap_or_else(|| ItemId(n.card.clone())),
+    };
+    let covered: BTreeSet<&ItemId> = cards.iter().flat_map(|c| &c.about).collect();
+    let mut out: Vec<StripEntry> = cards.iter().map(|c| entry(c)).collect();
     out.extend(
-        shown(m, ids)
-            .into_values()
+        items
+            .values()
             .filter(|it| {
                 it.kind == Kind::Agent
                     && it.fields.state == Some(State::NeedsYou)
                     && !covered.contains(&it.id)
             })
-            .map(|it| it.id),
+            .map(|it| StripEntry {
+                text: format!("{} needs you", it.label),
+                id: it.id.clone(),
+            }),
     );
+    out.extend(huddles.iter().map(|h| entry(h)));
     out
+}
+
+/// What the needs-you keys walk: the strip's entries (`strip_entries`) in its order, each the id `g N` takes, so the
+/// Nth chip is the list's Nth entry.
+pub fn needs_you(m: &Model, ids: &BTreeSet<ItemId>) -> Vec<ItemId> {
+    strip_entries(&m.needs_you(), &shown(m, ids))
+        .into_iter()
+        .map(|e| e.id)
+        .collect()
 }
