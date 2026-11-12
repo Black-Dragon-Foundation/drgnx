@@ -14,6 +14,7 @@ pub mod bisect_card;
 pub mod bisect_wire;
 pub mod blocked;
 pub mod breakpoints;
+pub mod install;
 pub mod launch;
 pub mod ports;
 pub mod probes;
@@ -22,6 +23,7 @@ pub mod runfile;
 pub mod runs_wire;
 pub mod session;
 pub mod strip;
+pub mod tasks;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -37,6 +39,8 @@ mod tests_blocked_live;
 #[cfg(test)]
 mod tests_breakpoints;
 #[cfg(test)]
+mod tests_install;
+#[cfg(test)]
 mod tests_launch;
 #[cfg(test)]
 mod tests_ports;
@@ -46,6 +50,8 @@ mod tests_probes;
 mod tests_record;
 #[cfg(test)]
 mod tests_registry;
+#[cfg(test)]
+mod tests_tasks;
 pub mod wire;
 
 use breakpoints::Store;
@@ -659,7 +665,8 @@ impl Debug {
             .collect()
     }
 
-    async fn wait_end(&self, id: &str) {
+    /// Resolves once session ID has ended (at once if there is no such session).
+    pub(crate) async fn wait_end(&self, id: &str) {
         let rx = lock(&self.inner.state)
             .sessions
             .get(id)

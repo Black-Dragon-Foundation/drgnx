@@ -27,25 +27,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use zeroize::Zeroize;
 
+use crate::keyline;
+
+/// The request and its answers, shared with the hub's key socket (`crate::keyline`).
+pub use crate::keyline::{KEY_WAIT, MAX_KEY, MAX_LINE, NOT_DELIVERED, plain_name};
 /// The socket `serve` hands keys over, and the records of key requests that timed out (one name per line) and of
 /// delivered reads (`{"name":…,"at":…}` per line), in the attempt's folder.
 pub use crate::linux::jobexec::{HELPER_SOCK, KEY_TIMEOUT, KEY_USE};
-/// How long a request waits for its key.
-pub const KEY_WAIT: Duration = Duration::from_secs(60);
-/// `drgnx-key`'s exit status when its key never came.
-pub const NOT_DELIVERED: i32 = 75;
-/// The largest key value taken.
-pub const MAX_KEY: usize = 64 << 10;
-/// The longest request line.
-pub const MAX_LINE: u64 = 512;
-
-/// A key name: what the job spec lists and `drgnx-key` asks for (letters, digits, `_`, `-`, `.`; at most 128).
-pub fn plain_name(n: &str) -> bool {
-    !n.is_empty()
-        && n.len() <= 128
-        && n.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"_-.".contains(&b))
-}
 
 /// Bytes that never reach swap or a core dump: an anonymous private mapping, `mlock`ed and marked `MADV_DONTDUMP`;
 /// zeroed, unlocked and unmapped when dropped. It has no `Debug`, `Clone` or `Serialize`.
@@ -330,11 +318,11 @@ impl Answer {
 /// Answers one request line REQ (without its newline) from STORE, waiting up to WAIT for the key; the records go in
 /// DIR. Blocks while it waits.
 pub fn answer(store: &KeyStore, dir: &Path, wait: Duration, req: &str) -> Answer {
-    let Some(name) = req.strip_prefix("get ").filter(|n| plain_name(n)) else {
-        return Answer::Text(b"no not `get NAME`\n".to_vec());
+    let Some(name) = keyline::requested(req) else {
+        return Answer::Text(keyline::not_a_request());
     };
     let built = store.with(name, wait, |v| {
-        Locked::concat(&[format!("ok {}\n", v.len()).as_bytes(), v])
+        Locked::concat(&[keyline::ok_head(v.len()).as_bytes(), v])
     });
     match built {
         Ok(Ok(l)) => {
@@ -347,13 +335,11 @@ pub fn answer(store: &KeyStore, dir: &Path, wait: Duration, req: &str) -> Answer
         Ok(Err(e)) => {
             Answer::Text(format!("no key {name}: memory that can't be locked: {e}\n").into_bytes())
         }
-        Err(Miss::NotListed) => {
-            Answer::Text(format!("no the job doesn't name the key {name}\n").into_bytes())
-        }
+        Err(Miss::NotListed) => Answer::Text(keyline::not_listed(name)),
         Err(Miss::TimedOut) => {
             // recorded first: by the time drgnx-key exits 75, the record that classifies it is there
             let _ = append(&dir.join(KEY_TIMEOUT), &format!("{name}\n"));
-            Answer::Text(b"timeout\n".to_vec())
+            Answer::Text(keyline::TIMEOUT.to_vec())
         }
     }
 }

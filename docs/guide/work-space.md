@@ -85,7 +85,7 @@ appears in the needs-you strip; its key jumps to the agents in it.
   `↑` `↓` move between tasks, `Tab` walks the held ones, `e` shows the selected task's evidence (every run the hub
   recorded for it, with its failing rows, and any waiver you gave) and `R` opens the run's rule pack in the bottom
   panel: each rule, whether the hub enforces it, checks it or only routes by it, and how. The Flow shows the
-  newest running job. Its strip, under the run's line, has a chip for each task the gates hold ("T5 held: …", with
+  newest running job. Its strip, under the lens bar and above the run's line, has a chip for each task the gates hold ("T5 held: …", with
   its jump key: `g 1` selects the first), the push the line gate leaves to you once it is green, and on the right the
   run's cost against its plan's budget and each machine's load. The right dock shows the selected
   task's detail: why it is held, what clears it, its evidence so far, and its actions. `r` runs its gates again, `s`

@@ -774,7 +774,9 @@ run it, with the plan's own encoding and line endings — and leaves alone a pla
 When a plan run starts a task, its worker gets a brief built from the graph: the task's section of the plan (found
 by its number in the plan file), the AGENTS.md at the run's repository root, the permissions matrix as it applies to
 a worker (one line for every action that is not Never), the base branch, the interfaces that the reports of the
-tasks it waits on list, the check to run (the plan's own line when it names one), a paragraph on recording what it
+tasks it waits on list, the check to run (the plan's own line when it names one), the gates (for a job under a rule
+pack: each rule that gates the merge, what it checks and how to pass it, and which paths count as tests), a paragraph
+on recording what it
 learns (a `note_add` of kind `finding` that names its sources; `record_decision` for a choice between ways) and, for an
 agent without drgnx's tools, the plan file's path and the `drgnx-report` block to end with. A part with nothing to say
 is left empty.

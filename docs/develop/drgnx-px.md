@@ -154,8 +154,9 @@ and `KEY_MARK`; it is carried like any other stream and counts against the 64.
 - Every buffer a stream's bytes pass through on either side (the reader's and decoder's, a frame's payload once
   encoded, the writer's, the copy loops') is zeroed (`zeroize`) before it is freed or reused.
 
-Who owns the channel: the job helper, for every job with keys (all of them are runner jobs: a keyed job never runs on
-the hub's machine); the hub's `JobNetwork` for its own networked exec jobs, which never have keys and run `owner::run`.
+Who owns the channel: the job helper, for every job with keys on a runner; the hub's `JobNetwork` for its own networked
+exec jobs, which run `owner::run` (a keyed command job on the hub's machine has a path socket of its own instead,
+docs/develop/hub.md "Keyed jobs here"; a keyed container job runs on a runner only).
 
 ## The owner (`owner`)
 
@@ -248,7 +249,8 @@ outlives its limit. `image::binary_for(dir, podman_arch)` picks `drgnx-px-x86_64
 The binary is static musl. `drgnx runtime build` builds it for the host's architecture (on a Mac, the Linux target of
 the same architecture, cross-built with Rust's self-contained musl and `rust-lld`: no C toolchain for Linux) into its
 own target folder, and `drgnx runtime install` puts it beside `ratatoskr` as `drgnx-px-<arch>-linux-musl`. `drgnx build
-runner-bundle --arch <arch>` puts it into the runner bundle under the same name. `drgnx-px --version` prints
+runner-bundle --arch <arch>` puts it into the runner bundle under the same name. `drgnx-key` is built and installed
+the same way beside it, as `drgnx-key-<arch>-linux-musl` (and natively as `drgnx-key`, next to the hub). `drgnx-px --version` prints
 `drgnx-px <version>` and starts no relay.
 
 The row `an_imported_image_runs_px` needs rootless podman and `DRGNX_TEST_PX_DIR` (a folder holding the binary as above);

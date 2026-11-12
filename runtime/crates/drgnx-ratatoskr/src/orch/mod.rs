@@ -9,7 +9,9 @@
 //! - [`queue`]: the merge queue's batches.
 //! - [`groups`]: the affected groups a batch runs before it merges.
 //! - [`push`]: the push gate, one full run on the exact commit before a job's agent pushes.
+//! - [`advice`]: the soft deny of a code commit before a red, in a hook-capable agent's loop (never the gate).
 
+pub mod advice;
 pub mod evidence;
 pub mod gates;
 pub mod groups;

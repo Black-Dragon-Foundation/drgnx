@@ -9,7 +9,7 @@
 use crate::view::model::Doc;
 use drgnx_rows::fit::Measure;
 use drgnx_rows::{ImageId, Row, RowBuilder};
-use runstav::methods::view::ViewEnv;
+use runstav::methods::view::{Display, ViewEnv};
 use serde_json::{Map, Value, json};
 use vordr::evidence::Evidence;
 use vordr::gates::{State, checks, selector_of, state};
@@ -124,6 +124,19 @@ pub(crate) struct TaskFacts {
     pub held: Option<String>,
     /// That card's id (its actions: `job/card`).
     pub card: Option<i64>,
+    /// Where its tree started.
+    pub base: Option<String>,
+    /// Its commits after the base, oldest first.
+    pub commits: Vec<CommitFact>,
+}
+
+/// One commit of a task's branch.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CommitFact {
+    pub sha: String,
+    pub subject: String,
+    /// It changes test paths only (the pack's test globs).
+    pub tests: bool,
 }
 
 /// One task's row.
@@ -177,6 +190,12 @@ pub(crate) struct Flow {
     pub machines: Vec<(String, u32, u32)>,
     /// The run's spend in USD and its plan's USD budget, when it has one.
     pub cost: Option<(f64, Option<f64>)>,
+    /// How many agents the run works with at once, once a task started.
+    pub agents: Option<u32>,
+    /// The run takes its tasks in an order the user set.
+    pub ordered: bool,
+    /// Where the run's line started (its first tree's base), once a task started.
+    pub base: Option<String>,
 }
 
 /// What one Flow view shows: the lens, one task's detail tile, or the Rules tile.
@@ -274,7 +293,13 @@ pub(crate) fn cells(t: &TaskFacts, pack: Option<&Pack>) -> [Cell; 6] {
             Queue::None => cell(Chip::Wait, "—"),
         }
     };
-    let review = if on("review") {
+    // the review happens at the plan's end whether the pack gates on it or routes it; advice is no review
+    let reviewed = pack.is_some_and(|p| {
+        p.rules
+            .iter()
+            .any(|r| r.id == "review" && r.kind != "advice")
+    });
+    let review = if reviewed {
         cell(Chip::Wait, "at plan end")
     } else {
         cell(Chip::Na, "—")
@@ -376,10 +401,15 @@ fn cell_px(m: &dyn Measure, icon: u32, gate: &str, c: &Cell) -> u32 {
 /// The least the task column keeps, in logical px.
 const TASK_MIN: f32 = 96.0;
 
-/// The columns' left edges for TS in ENV (device px, M measuring): the task, the agent, then the six gates.  Each gate
-/// column is as wide as its widest cell or heading, the agent's as its widest agent, each with a gap after; the task
-/// column takes the rest of the window (at least [`TASK_MIN`]), so the cells are never cut and the titles give way.
-fn columns(ts: &[Task], env: &ViewEnv, m: &dyn Measure) -> Vec<u32> {
+/// The least a gate column keeps when it gives way, in logical px.
+const GATE_MIN: f32 = 44.0;
+
+/// The columns' left edges for TS in ENV (device px, M measuring): the task, the agent, then the six gates; and the
+/// gates' widths.  Each gate column wants its widest cell or heading, the agent's is its widest agent, each with a gap
+/// after.  The task column wants its widest title, up to a third of the window; when the gates' wants don't leave it
+/// that, the widest gate columns give way first (their cells are cut, [`fit_cell`]), down to [`GATE_MIN`] each, and
+/// only then the titles, down to [`TASK_MIN`].
+fn columns(ts: &[Task], env: &ViewEnv, m: &dyn Measure) -> (Vec<u32>, Vec<u32>) {
     let (icon, gap) = (dpx(env, 14.0), dpx(env, 10.0));
     let mut gates: Vec<u32> = GATES
         .iter()
@@ -396,7 +426,31 @@ fn columns(ts: &[Task], env: &ViewEnv, m: &dyn Measure) -> Vec<u32> {
         .chain([text_px(m, "Agent")])
         .max()
         .unwrap_or(0);
-    let right = agent + gap + gates.iter().map(|g| g + gap).sum::<u32>();
+    let fixed = agent + gap + gap * gates.len() as u32;
+    let title = ts
+        .iter()
+        .map(|t| text_px(m, &format!("{}  ", t.label)) + text_px(m, &t.title) + gap)
+        .max()
+        .unwrap_or(0)
+        .min(env.width_px / 3)
+        .max(dpx(env, TASK_MIN));
+    let room = env.width_px.saturating_sub(fixed + title);
+    if gates.iter().sum::<u32>() > room {
+        // the highest level L with every gate cut to L (but not below its least) fitting ROOM, or the leasts
+        let least = dpx(env, GATE_MIN);
+        let at_level = |l: u32| -> u32 { gates.iter().map(|&g| g.min(l.max(least))).sum() };
+        let (mut lo, mut hi) = (0, gates.iter().copied().max().unwrap_or(0));
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            if at_level(mid) <= room {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        gates = gates.iter().map(|&g| g.min(lo.max(least))).collect();
+    }
+    let right = fixed + gates.iter().sum::<u32>();
     let task = env.width_px.saturating_sub(right).max(dpx(env, TASK_MIN));
     let mut at = vec![0, task];
     let mut x = task + agent + gap;
@@ -404,7 +458,21 @@ fn columns(ts: &[Task], env: &ViewEnv, m: &dyn Measure) -> Vec<u32> {
         at.push(x);
         x += g + gap;
     }
-    at
+    (at, gates)
+}
+
+/// C, a cell of GATE, with its text cut so the cell is at most W device px wide as [`draw_cell`] draws it (M
+/// measuring, ICON the icons' size).
+fn fit_cell(m: &dyn Measure, icon: u32, gate: &str, c: &Cell, w: u32) -> Cell {
+    let px = cell_px(m, icon, gate, c);
+    if px <= w || (c.chip == Chip::Wait && c.text == "—") {
+        return c.clone();
+    }
+    let room = w.saturating_sub(px - text_px(m, &c.text));
+    Cell {
+        text: drgnx_rows::fit::fit(m, ROLE, &c.text, room as f32),
+        ..c.clone()
+    }
 }
 
 /// V logical px in ENV's device px.
@@ -595,8 +663,8 @@ fn draw_cell(b: &mut RowBuilder, pics: &mut Pics, gate: &str, c: &Cell) {
     }
 }
 
-/// The lens's rows for ENV and the icons they draw: the run's line, the needs-you chips (one per held task, carrying
-/// its id), the column headings with their icons, a row per task (its id, title, agent and a chip per gate, carrying
+/// The lens's rows for ENV and the icons they draw: the strip ([`strip_row`]: the needs-you chips, one per held task
+/// carrying its id, the push, the cost and the machines), the run's line, the column headings with their icons, a row per task (its id, title, agent and a chip per gate, carrying
 /// the task's id and its gate card), then the merge batch ([`batch_rows`]) and the line gate ([`line_rows`]).  FONTS
 /// measure the columns ([`columns`]).  The rule pack is its own tile ([`rules_rows`]).
 pub(crate) fn flow_rows(
@@ -606,8 +674,8 @@ pub(crate) fn flow_rows(
 ) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let mut pics = Pics::new(env);
     let ts = tasks(flow);
-    let at = columns(&ts, env, fonts);
-    let gap = dpx(env, 10.0);
+    let (at, widths) = columns(&ts, env, fonts);
+    let (gap, icon) = (dpx(env, 10.0), dpx(env, 14.0));
     let done = ts.iter().filter(|t| t.cells[4].chip == Chip::Ok).count();
     let mut head = RowBuilder::new("head");
     pics.put(&mut head, "list-checks", "≡");
@@ -625,6 +693,19 @@ pub(crate) fn flow_rows(
             Some(LABEL),
         )
         .push("  ", None);
+    // the run's meta chips (the mockup): how many agents at once and its order, the tasks done, its base
+    if let Some(n) = flow.agents {
+        let mut words = if n == 1 {
+            "one agent".to_owned()
+        } else {
+            format!("{n} agents")
+        };
+        if flow.ordered {
+            words.push_str(" · in order");
+        }
+        chip(&mut head, &mut pics, None, &words, Chip::Wait.face());
+        head.push(" ", None);
+    }
     chip(
         &mut head,
         &mut pics,
@@ -632,11 +713,23 @@ pub(crate) fn flow_rows(
         &format!("{done} / {} done", ts.len()),
         Chip::Wait.face(),
     );
-    let mut rows = vec![head.finish()];
-    if let Some(strip) = strip_row(flow, &ts, env, fonts, &mut pics) {
-        rows.push(strip);
+    if let Some(base) = &flow.base {
+        head.push(" ", None);
+        chip(
+            &mut head,
+            &mut pics,
+            None,
+            &format!("base {}", &base[..base.len().min(7)]),
+            Chip::Wait.face(),
+        );
     }
+    // the strip first, under the lens bar, then the run's line (the mockup)
+    let mut rows: Vec<Row> = strip_row(flow, &ts, env, fonts, &mut pics)
+        .into_iter()
+        .collect();
+    rows.push(head.finish());
     let mut cols = RowBuilder::new("cols");
+    strut(&mut cols, env, 24.0);
     for (i, name) in ["Task", "Agent"].iter().chain(GATES.iter()).enumerate() {
         cols.stop(at[i]);
         if i >= 2 {
@@ -645,8 +738,18 @@ pub(crate) fn flow_rows(
             cols.push(" ", None);
             let end = cols.pos();
             cols.face(start, end, LABEL);
+            let room = widths[i - 2].saturating_sub(icon + text_px(fonts, " "));
+            if text_px(fonts, name) <= room {
+                cols.push(name, Some(LABEL));
+            } else {
+                cols.push(
+                    &drgnx_rows::fit::fit(fonts, ROLE, name, room as f32),
+                    Some(LABEL),
+                );
+            }
+        } else {
+            cols.push(name, Some(LABEL));
         }
-        cols.push(name, Some(LABEL));
     }
     rule(&mut cols, "cols", env);
     rows.push(cols.finish());
@@ -657,6 +760,7 @@ pub(crate) fn flow_rows(
     }
     for t in &ts {
         let mut b = RowBuilder::new(format!("task:{}", t.id));
+        strut(&mut b, env, 30.0);
         let start = b.pos();
         let label = format!("{}  ", t.label);
         let room = at[1].saturating_sub(text_px(fonts, &label) + gap);
@@ -668,7 +772,12 @@ pub(crate) fn flow_rows(
             .push(t.agent.as_deref().unwrap_or("—"), Some(LABEL));
         for (i, c) in t.cells.iter().enumerate() {
             b.stop(at[i + 2]);
-            draw_cell(&mut b, &mut pics, GATES[i], c);
+            draw_cell(
+                &mut b,
+                &mut pics,
+                GATES[i],
+                &fit_cell(fonts, icon, GATES[i], c, widths[i]),
+            );
         }
         let end = b.pos();
         b.prop(start, end, "drgnx-work-id", json!(t.id));
@@ -683,6 +792,13 @@ pub(crate) fn flow_rows(
     rows.push(blank.finish());
     rows.extend(card_rows(flow, env, fonts, &mut pics));
     (rows, pics.out)
+}
+
+/// B's row padded to LOGICAL px high (the mockup's rows): a strut first, a 1 px space that high; none on a terminal.
+fn strut(b: &mut RowBuilder, env: &ViewEnv, logical: f32) {
+    if env.display == Display::Gui {
+        b.space(1, dpx(env, logical), TEXT);
+    }
 }
 
 /// B's row, keyed KEY, as a rule block (`BLOCK`): a hairline under it across the table, which Glitnir draws.
@@ -1053,6 +1169,13 @@ fn wrap(text: &str, chars: usize) -> Vec<String> {
     out
 }
 
+/// A button in B: LABEL in FACE with its KEY as a keycap badge (the key face) inside it, as in the mockup.
+fn button(b: &mut RowBuilder, label: &str, key: &str, face: &str) {
+    b.push(&format!(" {label} "), Some(face))
+        .push(key, Some(KEY))
+        .push(" ", Some(face));
+}
+
 /// What clears a hold of GATE (a column of [`GATES`]).
 fn clears(gate: &str) -> &'static str {
     match gate {
@@ -1066,19 +1189,43 @@ fn clears(gate: &str) -> &'static str {
     }
 }
 
-/// One evidence record in a line: its kind, its rows' counts, its run and its tree.
-fn evidence_line(e: &Evidence) -> String {
-    if e.kind == "waiver" {
-        return format!("waiver · {}", e.note.as_deref().unwrap_or(""));
-    }
+/// One run's cell of the evidence table: its job, the machine it ran on and its rows' counts.
+fn run_cell(e: &Evidence) -> String {
     let pass = e.rows.iter().filter(|r| r.verdict == Verdict::Pass).count();
     let fail = failing(&e.rows).count();
-    let run = e.facts.selector.lines().last().unwrap_or_default();
-    let tree: String = e.facts.tree_key.chars().take(7).collect();
-    format!(
-        "{} · {pass} pass · {fail} failed · {run} · tree {tree}",
-        e.kind
-    )
+    let host = e.facts.platform.rsplit('/').next().unwrap_or_default();
+    let mut s = format!("job {} · {host} · {pass} pass", e.job);
+    if fail > 0 {
+        s.push_str(&format!(" · {fail} failed"));
+    }
+    s
+}
+
+/// The commits block of task FACTS for a tile CHARS wide: its base .. tip and each commit (its number, short sha,
+/// tests or code, subject), as the merge gate last checked them.
+fn commits_lines(facts: &TaskFacts, chars: usize) -> Vec<String> {
+    let short = |s: &str| s.chars().take(7).collect::<String>();
+    let Some(base) = &facts.base else {
+        return Vec::new();
+    };
+    let Some(tip) = facts.commits.last() else {
+        return vec![format!("base {}", short(base))];
+    };
+    let n = facts.commits.len();
+    let mut out = vec![format!(
+        "base {} .. tip {} · {n} commit{}",
+        short(base),
+        short(&tip.sha),
+        if n == 1 { "" } else { "s" }
+    )];
+    for (i, c) in facts.commits.iter().enumerate() {
+        let kind = if c.tests { "tests" } else { "code" };
+        out.push(fit(
+            &format!("{} {} {kind} · {}", i + 1, short(&c.sha), c.subject),
+            chars,
+        ));
+    }
+    out
 }
 
 /// The detail tile of task TASK of FLOW for ENV, one line per row: its head (the task's id and its card's on it),
@@ -1143,6 +1290,7 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
         .filter(|(_, c)| c.chip == Chip::Held)
         .map(|(g, c)| (*g, c))
         .collect();
+    let commits = commits_lines(facts, chars);
     if let Some(why) = &t.held {
         line("d:gap1".into(), " ", None);
         line("d:why-h".into(), "Why it is held", Some(HEAD));
@@ -1153,6 +1301,10 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
                 &format!("{g}: {}", c.text),
                 Some(TEXT),
             );
+        }
+        // the commits the merge checks, under why (the mockup)
+        for (i, l) in commits.iter().enumerate() {
+            line(format!("d:commits:{i}"), l, Some(LABEL));
         }
         line("d:gap2".into(), " ", None);
         line("d:clear-h".into(), "What clears it", Some(HEAD));
@@ -1168,20 +1320,77 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
             line(format!("d:clear:{g}"), clears(g), Some(TEXT));
         }
     }
-    line("d:gap3".into(), " ", None);
-    line("d:ev-h".into(), "Evidence so far", Some(HEAD));
-    if facts.evidence.is_empty() {
-        line("d:ev".into(), "none recorded", Some(LABEL));
-    }
-    for (i, e) in facts.evidence.iter().enumerate() {
-        let face = if e.kind == "red" || failing(&e.rows).next().is_none() {
-            LABEL
-        } else {
-            Chip::Err.face()
-        };
-        line(format!("d:ev:{i}"), &evidence_line(e), Some(face));
+    if t.held.is_none() && !commits.is_empty() {
+        line("d:gap-c".into(), " ", None);
+        for (i, l) in commits.iter().enumerate() {
+            line(format!("d:commits:{i}"), l, Some(LABEL));
+        }
     }
     out.append(&mut rows);
+    // the evidence table: a label column, then the newest of each (brief, tests, green, red); waivers after
+    out.push(RowBuilder::new("d:gap3").finish());
+    let mut h = RowBuilder::new("d:ev-h");
+    h.push("Evidence so far", Some(HEAD));
+    out.push(h.finish());
+    let newest = |kind: &str| facts.evidence.iter().rev().find(|e| e.kind == kind);
+    let runs = facts.evidence.iter().rev().find(|e| e.kind != "waiver");
+    let pack = flow.pack.as_ref().map_or_else(
+        || "none".to_owned(),
+        |p| format!("{} v{}", p.name, p.version),
+    );
+    let none = || ("none recorded".to_owned(), Chip::Held.face());
+    let table = [
+        (
+            "brief",
+            (
+                format!("{} · plan §{} · rules {pack}", t.label, t.label),
+                TEXT,
+            ),
+        ),
+        (
+            "tests",
+            runs.map_or_else(none, |e| {
+                let sel = e.facts.selector.lines().last().unwrap_or_default();
+                (format!("{sel} · {} rows", e.rows.len()), TEXT)
+            }),
+        ),
+        (
+            "green",
+            newest("green").map_or_else(none, |e| {
+                let face = if failing(&e.rows).next().is_some() {
+                    Chip::Err.face()
+                } else {
+                    TEXT
+                };
+                (run_cell(e), face)
+            }),
+        ),
+        (
+            "red",
+            newest("red").map_or_else(none, |e| (run_cell(e), TEXT)),
+        ),
+    ];
+    let col = env.cell.0 * 7;
+    for (label, (value, face)) in table {
+        let mut b = RowBuilder::new(format!("d:ev:{label}"));
+        b.push(label, Some(LABEL)).stop(col);
+        b.push(&fit(&value, chars.saturating_sub(7)), Some(face));
+        out.push(b.finish());
+    }
+    for (i, e) in facts
+        .evidence
+        .iter()
+        .filter(|e| e.kind == "waiver")
+        .enumerate()
+    {
+        let mut b = RowBuilder::new(format!("d:ev:waiver:{i}"));
+        b.push("waiver", Some(LABEL)).stop(col);
+        b.push(
+            &fit(e.note.as_deref().unwrap_or(""), chars.saturating_sub(7)),
+            Some(TEXT),
+        );
+        out.push(b.finish());
+    }
     // the actions, with their keys (the Flow's own map)
     out.push(RowBuilder::new("d:gap4").finish());
     if t.card.is_some() {
@@ -1191,17 +1400,17 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
             "Check again"
         };
         let mut act = RowBuilder::new("d:act");
-        act.push(&format!(" {first} r "), Some(Chip::Run.face()))
-            .push(" ", None)
-            .push(" Tell the agent s ", Some(Chip::Wait.face()));
+        button(&mut act, first, "r", Chip::Run.face());
+        act.push(" ", None);
+        button(&mut act, "Tell the agent", "s", Chip::Wait.face());
         out.push(act.finish());
     }
     let mut act = RowBuilder::new("d:act2");
     if t.card.is_some() {
-        act.push(" Waive once w ", Some(Chip::Wait.face()))
-            .push(" ", None);
+        button(&mut act, "Waive once", "w", Chip::Wait.face());
+        act.push(" ", None);
     }
-    act.push(" Evidence e ", Some(Chip::Wait.face()));
+    button(&mut act, "Evidence", "e", Chip::Wait.face());
     out.push(act.finish());
     if t.card.is_some() {
         for (i, l) in wrap(
@@ -1222,7 +1431,6 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use runstav::methods::view::Display;
     use vordr::facts::Facts;
     use vordr::pack::{Check, Rule};
     use vordr::rows::{Row as VRow, parse};
@@ -1296,6 +1504,15 @@ mod tests {
                 (Chip::Wait, "at plan end")
             ]
         );
+        // a review the pack routes (not gating) still happens at the plan's end; advice shows none
+        for (kind, want) in [("routing", "at plan end"), ("advice", "—")] {
+            let mut r = pack();
+            r.rules
+                .iter_mut()
+                .filter(|x| x.id == "review")
+                .for_each(|x| x.kind = kind.into());
+            assert_eq!(cells(&q, Some(&r))[5].text, want, "{kind}");
+        }
         let build = selector_of(&p.author_check[0]);
         let mut t = task(1, "in-review");
         t.evidence = vec![
@@ -1365,7 +1582,45 @@ mod tests {
             push: None,
             machines: vec![],
             cost: None,
+            agents: None,
+            ordered: false,
+            base: None,
         }
+    }
+
+    /// [D] The run's line carries its meta chips: how many agents it runs at once, "in order" when the user set one,
+    /// then the tasks done and its base (short); before any task started, neither agents nor base.
+    #[test]
+    fn the_runs_line_says_its_agents_order_and_base() {
+        let head = |f: &Flow| {
+            let (rows, _) = flow_rows(f, &env(1.0), &fonts());
+            rows.into_iter()
+                .find(|r| r.key == "head")
+                .expect("head")
+                .text
+        };
+        let t = head(&Flow {
+            agents: Some(1),
+            ordered: true,
+            base: Some("4fe72a5aa1".into()),
+            ..flow()
+        });
+        assert!(t.contains("one agent · in order"), "{t}");
+        assert!(t.contains("base 4fe72a5") && !t.contains("4fe72a5a"), "{t}");
+        assert!(
+            t.find("in order") < t.find("done") && t.find("done") < t.find("base"),
+            "{t}"
+        );
+        let t = head(&Flow {
+            agents: Some(3),
+            ..flow()
+        });
+        assert!(
+            t.contains("3 agents") && !t.contains("in order") && !t.contains("base"),
+            "{t}"
+        );
+        let t = head(&flow());
+        assert!(!t.contains("agent"), "{t}");
     }
 
     fn fonts() -> drgnx_rows::fit::FontSet {
@@ -1398,8 +1653,33 @@ mod tests {
         e
     }
 
-    /// [D] The columns fit the window: each gate column is as wide as its widest cell (never cut), the agent's as its
-    /// widest agent, and the task column takes the rest, its titles cut to it.
+    /// [D] The table's rows have the mockup's padding: a task row is 30 logical px high, the column heads 24, by a
+    /// strut (a 1 px space that high) first on the row, at the window's scale; a terminal has none.
+    #[test]
+    fn the_tables_rows_are_padded_to_the_mockups_heights() {
+        for scale in [1.0, 2.0] {
+            let (rows, _) = flow_rows(&flow(), &env(scale), &fonts());
+            let strut = |key: &str| {
+                let r = rows.iter().find(|r| r.key == key).expect(key);
+                r.spaces.first().copied()
+            };
+            let px = |v: f32| (v * scale).round() as u32;
+            assert_eq!(
+                strut("task:task:J#1"),
+                Some((0, 1, px(30.0))),
+                "scale {scale}"
+            );
+            assert_eq!(strut("cols"), Some((0, 1, px(24.0))), "scale {scale}");
+        }
+        let mut tty = env(1.0);
+        tty.display = Display::Tty;
+        let (rows, _) = flow_rows(&flow(), &tty, &fonts());
+        assert!(rows.iter().all(|r| r.spaces.is_empty()));
+    }
+
+    /// [D] The columns fit the window: in a window that holds the cells and a third for the titles, each gate column is
+    /// as wide as its widest cell (whole), the agent's as its widest agent, and the task column takes the rest, a title
+    /// longer than that cut to it.
     #[test]
     fn the_columns_fit_the_window_and_the_task_column_gives_way() {
         let mut f = flow();
@@ -1408,10 +1688,13 @@ mod tests {
         f.tasks[0].evidence = vec![ev("red", "s", parse("test a::x ... FAILED\n"))];
         for scale in [1.0, 2.0] {
             let mut e = env(scale);
-            e.width_px = (760.0 * scale) as u32;
             // the env's fonts are its scale's (device px)
             let mut m = drgnx_rows::fit::FontSet::new();
             m.set_role(ROLE, None, 7.0 * scale);
+            let mut wide = e.clone();
+            wide.width_px = 100_000;
+            let natural = 100_000 - columns(&tasks(&f), &wide, &m).0[1];
+            e.width_px = natural * 3 / 2 + 3;
             let (rows, _) = flow_rows(&f, &e, &m);
             let t1 = &rows[3];
             let stops: Vec<u32> = t1.stops.iter().map(|s| s.1).collect();
@@ -1431,6 +1714,79 @@ mod tests {
                 t1.text
             );
             assert!(!rows[4].text.contains("no red · h…"), "{}", rows[4].text);
+        }
+    }
+
+    /// [D] The gate columns give way to the titles before the titles give way (as in the mockup): in a window too
+    /// narrow for both, a title of a usual length stays whole and the widest cells are cut instead, each within its
+    /// column; a title longer than its column's share is still cut, and in a very narrow window the title gives way
+    /// too, down to the least the task column keeps.
+    #[test]
+    fn the_columns_give_way_to_the_titles_before_the_titles_do() {
+        let mut f = flow();
+        f.tasks[0].title = "Open buffers in the model".into();
+        f.tasks[0].evidence = vec![ev("red", "s", parse("test a::x ... FAILED\n"))];
+        f.tasks[1].title =
+            "A task with a title far too long for any task column's share of a window".into();
+        for scale in [1.0, 2.0] {
+            let mut e = env(scale);
+            let mut m = drgnx_rows::fit::FontSet::new();
+            m.set_role(ROLE, None, 7.0 * scale);
+            // the natural cells and the whole title don't both fit here
+            let title = drgnx_rows::fit::width(&m, ROLE, "T1  Open buffers in the model") as u32;
+            let natural = {
+                let mut wide = e.clone();
+                wide.width_px = 100_000;
+                let (at, _) = columns(&tasks(&f), &wide, &m);
+                100_000 - at[1]
+            };
+            e.width_px = natural + title / 2;
+            let (rows, _) = flow_rows(&f, &e, &m);
+            let (t1, t5) = (&rows[3], &rows[4]);
+            assert!(
+                t1.text.contains("Open buffers in the model"),
+                "scale {scale}: {}",
+                t1.text
+            );
+            assert!(
+                t5.text.contains("A task") && t5.text.contains('…'),
+                "scale {scale}: {}",
+                t5.text
+            );
+            let stops: Vec<u32> = t1.stops.iter().map(|s| s.1).collect();
+            assert!(stops.windows(2).all(|w| w[0] < w[1]), "{stops:?}");
+            // each cell ends before the next column starts, the last inside the window
+            for row in [t1, t5] {
+                let mut ends = row.stops.iter().map(|s| s.1).skip(1).chain([e.width_px]);
+                for (i, s) in row.stops.iter().enumerate() {
+                    let next = ends.next().unwrap();
+                    let from = s.0 as usize + 1;
+                    let upto = row
+                        .stops
+                        .get(i + 1)
+                        .map_or(row.text.chars().count(), |n| n.0 as usize);
+                    let cell: String = row
+                        .text
+                        .chars()
+                        .skip(from)
+                        .take(upto.saturating_sub(from))
+                        .collect();
+                    let w = drgnx_rows::fit::width(&m, ROLE, cell.trim_end()) as u32;
+                    assert!(
+                        s.1 + w <= next,
+                        "scale {scale}: {cell:?} at {} + {w} > {next}",
+                        s.1
+                    );
+                }
+            }
+            // very narrow: the title gives way too, the task column keeps its least
+            e.width_px = natural / 2;
+            let (rows, _) = flow_rows(&f, &e, &m);
+            assert!(
+                rows[3].stops[0].1 >= dpx(&e, TASK_MIN),
+                "{:?}",
+                rows[3].stops
+            );
         }
     }
 
@@ -1655,8 +2011,8 @@ mod tests {
             assert_eq!(
                 keys,
                 [
-                    "head",
                     "needs",
+                    "head",
                     "cols",
                     "task:task:J#1",
                     "task:task:J#5",
@@ -1667,7 +2023,7 @@ mod tests {
                 ]
             );
             assert!(
-                rows[0].text.contains("Search view") && rows[0].text.contains("rules drgnx-org v4")
+                rows[1].text.contains("Search view") && rows[1].text.contains("rules drgnx-org v4")
             );
             let px = |v: f32| (v * scale).round() as u32;
             // every image a row names is in the build's images, once, at 14 logical px
@@ -1687,7 +2043,7 @@ mod tests {
             // six column icons on the headings
             assert_eq!(rows[2].images.len(), 6);
             // the needs-you chips: one per held task, in the held face, carrying the task's id
-            let needs = &rows[1];
+            let needs = &rows[0];
             assert!(needs.text.contains("T5 held: no red"), "{}", needs.text);
             assert!(needs.runs.iter().any(|r| r.2 == Chip::Held.face()));
             assert!(
@@ -1747,7 +2103,7 @@ mod tests {
             };
             let e = env(scale);
             let (rows, _) = flow_rows(&f, &e, &fonts());
-            let strip = &rows[1];
+            let strip = &rows[0];
             assert_eq!(strip.key, "needs");
             assert!(strip.text.contains("T5 held: no red"), "{}", strip.text);
             assert!(
@@ -1793,7 +2149,7 @@ mod tests {
         e.width_px = 900;
         let fs = fonts();
         let (rows, _) = flow_rows(&f, &e, &fs);
-        let strip = &rows[1];
+        let strip = &rows[0];
         assert!(
             strip.text.contains("push job/J? gate green"),
             "{}",
@@ -1808,7 +2164,7 @@ mod tests {
         // narrower still: the cost and the machines give way to what needs you
         e.width_px = 400;
         let (rows, _) = flow_rows(&f, &e, &fs);
-        let strip = &rows[1];
+        let strip = &rows[0];
         assert!(
             strip.stops.is_empty() && !strip.text.contains("desk 4/6"),
             "{}",
@@ -1824,7 +2180,7 @@ mod tests {
             cost: Some((1.5, None)),
             ..flow()
         };
-        let strip = &flow_rows(&f, &env(1.0), &fonts()).0[1];
+        let strip = &flow_rows(&f, &env(1.0), &fonts()).0[0];
         assert!(!strip.text.contains("push job/"));
         assert!(strip.text.contains("$1.50") && !strip.text.contains(" / $"));
     }
@@ -1869,6 +2225,71 @@ mod tests {
     /// [D] The detail tile of a held task: its head (id and card on it), why it is held (the card's words and the
     /// held gates), what clears it, the evidence so far, and the actions with their keys, the waiver the user's
     /// alone; a task the gates don't hold has no hold sections and only the evidence action; an unknown task says so.
+    /// [D] The detail tile's commits block (base .. tip, each commit with its sha, tests-only ones marked) and its
+    /// evidence table: a label column (brief, tests, green, red) at a stop, the value after it; no red says "none
+    /// recorded" in the attention (held) face.
+    #[test]
+    fn the_detail_tile_has_the_commits_and_an_evidence_table() {
+        let mut f = flow();
+        f.tasks[1].base = Some("4fe72a5aa1".into());
+        f.tasks[1].commits = vec![
+            CommitFact {
+                sha: "a90e3f1aa".into(),
+                subject: "search: scope tests".into(),
+                tests: true,
+            },
+            CommitFact {
+                sha: "7d21c0eaa".into(),
+                subject: "search: git scopes".into(),
+                tests: false,
+            },
+        ];
+        let mut green = ev(
+            "green",
+            "cargo test -p s",
+            parse("test a::x ... ok\ntest a::y ... ok\n"),
+        );
+        green.facts.platform = "linux-x86_64/desktop".into();
+        f.tasks[1].evidence = vec![green];
+        let mut tile = env(1.0);
+        tile.width_px = 400;
+        let rows = detail_rows(&f, "task:J#5", &tile);
+        let all: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
+        let all = all.join("\n");
+        assert!(
+            all.contains("base 4fe72a5 .. tip 7d21c0e · 2 commits"),
+            "{all}"
+        );
+        assert!(
+            all.contains("1 a90e3f1 tests") && all.contains("2 7d21c0e code"),
+            "{all}"
+        );
+        let row = |label: &str| {
+            rows.iter()
+                .find(|r| r.key == format!("d:ev:{label}"))
+                .unwrap_or_else(|| panic!("no {label} row in\n{all}"))
+        };
+        for label in ["brief", "tests", "green", "red"] {
+            let r = row(label);
+            assert!(r.text.starts_with(label), "{}", r.text);
+            assert_eq!(r.stops.len(), 1, "{label}: a stop before the value");
+        }
+        assert!(
+            row("brief").text.contains("T5") && row("brief").text.contains("rules drgnx-org v4")
+        );
+        assert!(
+            row("tests").text.contains("cargo test -p s") && row("tests").text.contains("2 rows")
+        );
+        assert!(row("green").text.contains("desktop") && row("green").text.contains("2 pass"));
+        let red = row("red");
+        assert!(red.text.contains("none recorded"), "{}", red.text);
+        assert!(
+            red.runs.iter().any(|r| r.2 == Chip::Held.face()),
+            "{:?}",
+            red.runs
+        );
+    }
+
     #[test]
     fn the_detail_tile_says_why_a_task_is_held_and_what_clears_it() {
         let mut f = flow();
@@ -1905,6 +2326,29 @@ mod tests {
             "yours only",
         ] {
             assert!(all.contains(want), "no {want:?} in\n{all}");
+        }
+        // each button's key is a keycap badge (the key face) inside the button
+        for button in [
+            "Run the red r",
+            "Tell the agent s",
+            "Waive once w",
+            "Evidence e",
+        ] {
+            let row = rows
+                .iter()
+                .find(|r| r.text.contains(button))
+                .expect("a button row");
+            let at = row.text[..row.text.find(button).expect("button")]
+                .chars()
+                .count()
+                + button.chars().count()
+                - 1;
+            let at = at as u32;
+            assert!(
+                row.runs.iter().any(|r| r.0 <= at && at < r.1 && r.2 == KEY),
+                "{button}: {:?}",
+                row.runs
+            );
         }
         // the lines fit the tile: none longer than its width in cells
         assert!(text.iter().all(|t| t.chars().count() <= 50), "{all}");

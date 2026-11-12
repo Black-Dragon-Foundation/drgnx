@@ -34,6 +34,8 @@ pub struct Keys {
     audit: Mutex<VecDeque<AuditRow>>,
     tell: OnceLock<Tell>,
     sink: OnceLock<Sink>,
+    /// Woken by every [`Keys::take`]: a job on this machine waiting for a key ([`Keys::wait_for`]).
+    came: tokio::sync::Notify,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -57,7 +59,34 @@ impl Keys {
         for (name, value) in pairs {
             held.insert(name, value);
         }
-        held.keys().cloned().collect()
+        let names = held.keys().cloned().collect();
+        drop(held);
+        self.came.notify_waiters();
+        names
+    }
+
+    /// A copy of NAME's value once the hub holds it, waiting up to WAIT (asking for it once with
+    /// `runners/need-keys` when it isn't held); none when it didn't come in time.
+    pub async fn wait_for(&self, name: &str, wait: std::time::Duration) -> Option<SecretString> {
+        let end = crate::clock::real_now() + wait;
+        let mut asked = false;
+        loop {
+            // registered before the look, so a `take` between the look and the wait still wakes it
+            let came = self.came.notified();
+            tokio::pin!(came);
+            came.as_mut().enable();
+            if let Some(v) = self.value(name) {
+                return Some(v);
+            }
+            if !asked {
+                self.ask(&[name.to_string()]);
+                asked = true;
+            }
+            let left = end.saturating_duration_since(crate::clock::real_now());
+            if crate::clock::real_timeout(left, came).await.is_err() {
+                return None;
+            }
+        }
     }
 
     /// `runners/keys-held`: the names, never a value.

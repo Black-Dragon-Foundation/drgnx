@@ -22,6 +22,7 @@ pub mod jobs;
 pub mod manager;
 pub mod pair;
 pub mod plan;
+pub mod procedure;
 pub mod read;
 pub mod records;
 pub mod report;

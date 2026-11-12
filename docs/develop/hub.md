@@ -1381,6 +1381,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/breakpoints` | user | `{op?: {condition?: string, enabled?: boolean, hit?: string, id?: natnum, line?: natnum, log?: string, name?: string, op: string, path?: string}, path?: string, root: string}` | `DebugBreakpointsView` | no |
 | `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
 | `debug/control` | user | `{op: string, session: string, thread?: integer}` | `boolean` | no |
+| `debug/install` | user | `{adapter: string, adapters?: [JsonObject]}` | `string` | no |
 | `debug/probe/op` | user | `{op?: {enabled?: boolean, expr?: string, id?: string, language?: string, line?: natnum, op: string, path?: string, text?: string}, root: string}` | `{added?: string, path?: string, probes: [any], root: string}` | no |
 | `debug/run-to-cursor` | user | `{line: natnum, path: string, session: string}` | `boolean` | no |
 | `debug/run/get` | user | `{count?: natnum, current?: natnum, from?: natnum, run: string}` | `DebugRunView` | no |
@@ -2908,7 +2909,7 @@ makes: the hub never grants `Open`) has no network but its sandbox's relay port,
   proxy pins the same names (`Caps.pins`, from `settings::containers::caps`). A runner gets none (its `start` frame's
   `pins` is always empty): a pin names an address on this machine's network, and a runner's proxy reaches only public
   addresses. So a job whose granted hosts include a pinned name stays on this machine (`exec::pinned_host` sets
-  `local_only`), and a keyed one, which runs only on a runner, is refused at start (`exec::keyed_and_pinned`). A `test-hooks` build adds
+  `local_only`). A `test-hooks` build adds
   `DRGNX_TEST_PROXY_PINS` (`NAME=ADDR,…`), so a row reaches the mock LLM on loopback under a name.
 
 Rows: `test/conformance/sandbox-net/`. The real launch: `tests/launch_sandboxed.rs`
@@ -3811,8 +3812,25 @@ shared runner; the shared runner fetches from origin; the shared overlay off by 
 **Naming a key.** `exec/start`'s `keys` (names) must each be on the project's `drgnx-runners-job-keys`
 (`keys::on_the_project_list`, else invalid-params naming the key and the setting); a session's start also passes the
 matrix's `job.keys` (`gate_session_job`; Cautious and Balanced ask, Autonomous allows the manager and workers, chat
-never). The names go to `Placement::keys` and the spec; the job is `private+keys`. A keyed job has no local candidate
-in `Queue::place` (it waits for a runner, saying so): a keyed job on this machine is not wired yet.
+never). The names go to `Placement::keys` and the spec; the job is `private+keys`. This machine is a candidate for a
+keyed job as for any other (`Queue::candidates`).
+
+**Keyed jobs here** (`exec/keys.rs`). A keyed command job (user or session starter) launches behind
+`drgnx-key exec NAME=NAME… -- ARGV` (`Hooks::key_bin`, `drgnx-key` next to the hub; missing: refused at start) with
+`DRGNX_KEY_SOCK` naming its key socket: `<job dir>/key.sock` for a user's job (over 103 bytes, `k-ID.sock` in the hub's
+private temporary folder), `k-ID.sock` in the session's folder for a session's (its sandbox reaches sockets there only;
+`SessionShape::sockets` lists the path alone, which Gleipnir allows by path and Seatbelt by `path-literal`, and
+`drgnx-key` is a `read` file). `keys::serve` binds it 0600 under a temporary name and renames it into place, answers
+this user's connections only, one request line each, and is dropped (the file removed) when the job ends.
+`JobKeys::answer` speaks `sleipnir::keyline` (the job helper's request and answers, shared): only a name the job lists,
+waited for up to 60 s (`Keys::wait_for`, which asks `runners/need-keys` once), every value added to the job's
+`Redactor` before it is written, the first hand-out of each key recorded as `key_sent` on runner `local` (attempt 0); a
+key that never comes writes `why` = `infra: key not delivered` (any `why` starting `infra:` is `ExecStatus::Infra`)
+and a log line naming it, then answers `timeout`. The job's output never goes through the logging shell's file: its
+wrapper (`unit::wrap_to_hub`) leaves stdout and stderr on the pipe the hub reads, and `keys::pump` appends each chunk
+to the log through the redactor (the held-back end at EOF; `watch` waits up to 5 s for it before the result is
+written). `Meta::keyed` marks it: a restarted hub kills such a job and ends it `infra` rather than adopting it. A keyed
+container job is refused here for now (it runs on a runner).
 
 **The handover.** `runners/keys {keys: {NAME: value}}` (user only; refused while `Gate::protects_keys` fails, as
 `gateway/keys` is) puts the values in `Keys` (`SecretString`s in memory; `RunnerKeys` refuses a NUL, an over-64-KiB
@@ -4556,7 +4574,9 @@ own store write whether the job is still `proposed` (`norn::write::jobs::withdra
 the store's writes are one at a time, so of the two exactly one holds: an approval that lands between a status read
 and the withdrawal runs on, never stopped (every order tested). `job/stop` (the editor's and the card's reject)
 decides in its write the same way (`stop_job`): a proposal is withdrawn and marked never approved, any other job is
-stopped unmarked, so an approval that landed first can still be resumed; the budget pause (`pause_running`) and
+stopped unmarked, so an approval that landed first can still be resumed. It answers only once the job's work in
+flight ended (`Runs::settled`: a start still writing its task's tree, a merge, each clearing its own busy mark), so
+nothing of the job writes after the answer, and an agent such a start made is ended with the rest; the budget pause (`pause_running`) and
 `job/resume` (`resume_job`) read the status in their own write too (every order tested). A say has at
 most one live job: when its proposal starts (the Autonomous preset at once, or the user's `job/approve`, which the
 withdrawal finds), the planning is done: the session is stopped and forgotten, the latest 64 such sessions remember

@@ -9492,6 +9492,11 @@
                 "type": "string"
               },
               {
+                "const": "gates",
+                "description": "What the merge checks under the job's rule pack, and how to satisfy each (empty without a pack).",
+                "type": "string"
+              },
+              {
                 "const": "findings",
                 "description": "How to record what the agent establishes (findings with sources, decisions).",
                 "type": "string"
@@ -11981,6 +11986,46 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "boolean",
         "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "install an adapter from its pinned download (checked against its sha256) or into the tools venv with its hash required; a system package's command is named, never run: what was installed",
+      "name": "debug/install",
+      "params": {
+        "$defs": {
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/install`: ADAPTER's `:install` entry carried out (Debug: Install Adapter): a pinned archive checked and\nunpacked into drgnx's tools folder, debugpy into the tools venv; ADAPTERS are the user's own, as for `debug/start`.",
+        "properties": {
+          "adapter": {
+            "type": "string"
+          },
+          "adapters": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/JsonObject"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "adapter"
+        ],
+        "title": "DebugInstall",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "string",
+        "type": "string"
       },
       "writes": false
     },
