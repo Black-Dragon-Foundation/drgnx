@@ -9,6 +9,9 @@
 //!   stopping (children before their parent; every session at the hub's end).
 
 pub mod adapters;
+pub mod bisect;
+pub mod bisect_card;
+pub mod bisect_wire;
 pub mod blocked;
 pub mod breakpoints;
 pub mod compare;
@@ -31,6 +34,10 @@ pub mod tasks;
 mod tests;
 #[cfg(test)]
 mod tests_adapters;
+#[cfg(test)]
+mod tests_bisect;
+#[cfg(test)]
+mod tests_bisect_wire;
 #[cfg(test)]
 mod tests_blocked;
 #[cfg(test)]

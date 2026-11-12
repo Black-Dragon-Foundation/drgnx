@@ -40,4 +40,6 @@
  (:file "modules/extra/drgnx-debug-timeline.el" :in drgnx-debug-timeline--render :what erase-buffer :kind document :why "the stop timeline (a head, the stops, a lane per probe: a handful of rows the hub built) is drawn when the user opens it and again, at most four times a second, when its run changes")
  (:file "modules/extra/drgnx-debug-timeline.el" :in drgnx-debug-timeline--show-past :what erase-buffer :kind document :why "a past stop's file, as it ran, is drawn when the user opens that stop")
  (:file "modules/extra/drgnx-debug-timeline.el" :in drgnx-debug-timeline--show-vars :what erase-buffer :kind document :why "a past stop's stack and variables are drawn when the user opens that stop")
+ (:file "modules/extra/drgnx-debug-bisect.el" :in drgnx-debug-bisect--render :what erase-buffer :kind document :why "the bisect card (a head, a dot per state, the result and its actions: a handful of rows the hub built) is drawn when a bisect starts and again, at most ten times a second, as its runs end")
+ (:file "modules/extra/drgnx-debug-bisect.el" :in drgnx-debug-bisect-show-step :what erase-buffer :kind document :why "the breaking change's diff is drawn when the user asks for it")
  (:file "modules/tools/drgnx-search-edit.el" :in drgnx-search-edit--faces :what erase-buffer :kind document :why "a hidden buffer holding one line to fontify, never shown"))
