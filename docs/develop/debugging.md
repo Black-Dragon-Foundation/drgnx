@@ -68,6 +68,9 @@ process; the hub holds a `Handle` and reads `Update`s in order. Its waits read t
   progress, `invalidated`, ANSI styling), then `launch` / `attach` without waiting for the answer. On `initialized`:
   `setBreakpoints` for each source, `setExceptionBreakpoints` when the adapter has filters, `configurationDone` when it
   has the request. The launch answer may come before or after; a failed launch ends the session with its message.
+  Whatever the adapter sends before the `initialize` answer is kept and handled after it: js-debug sends `initialized`
+  right behind its answer, and on a loaded machine the event can be read first (dropped, the session never
+  configured and js-debug never answered the attach).
 - **Stops and epochs:** each `stopped` opens a new epoch and fetches `threads`, `stackTrace` (20 frames;
   `more_frames` fetches the next 20 while `totalFrames` says there are more), `scopes` of the top frame and the first
   page of `variables` of every scope that is not `expensive`, published as one `Stop`. `variables(epoch, reference)`
