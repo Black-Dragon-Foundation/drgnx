@@ -2393,7 +2393,9 @@ a :measure without :actions each have :timeout seconds to answer (120)."
       ;; `drgnx-perf-run--relative-fails'): a session starting in a file that already shows hunks
       (debug-gutter-baseline
        :setup ,(drgnx-perf-run--debug-setup-form)
+       ;; (the module turns the column on in every file's buffer as it is visited: off again here)
        :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
+                      " (drgnx-debug-gutter-mode -1)"
                       " (drgnx-margins-claim 'hunks 1 :order 2)"
                       " (drgnx-margins-claim 'debug (drgnx-debug-gutter--columns) :order 0) t)")
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))

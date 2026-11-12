@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; The editor's half of debugging with an agent (docs/guide/editing.md, "Debugging with an agent"; the hub's
+;; The editor's half of debugging with an agent (docs/guide/debugging.md, "Debugging with an agent"; the hub's
 ;; `debug/agent.rs').  An agent debugs beside you through the hub's `debug_*' tools, under the permissions matrix's
 ;; `debug.*' rows.  Its probes and breakpoints carry its session (`:agent'), and the breakpoint column and the probe
 ;; column ring them.  The hub sends `debug-investigation' as the agent works:

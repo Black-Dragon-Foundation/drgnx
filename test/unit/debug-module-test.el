@@ -162,6 +162,39 @@
     (should (equal asked '("debug/evaluate" :session "s1" :expr "self.items" :context "hover")))
     (should (string-match-p "self\\.items.*\\[1, 2\\]" shown))))
 
+(ert-deftest drgnx-debug/hover-tips-come-through-quick-help ()
+  "The mouse's data tips: the module puts an eldoc function that never answers (the echo area evaluates nothing)
+and its fuller sibling for quick help's card, which evaluates the expression there (`hover') in the stopped
+session and answers once it comes; nothing without a stopped session or on an error."
+  (drgnx-test-with-modules '(extra/debug) :strict t
+                           (should (memq #'drgnx-debug-hover-eldoc (default-value 'eldoc-documentation-functions)))
+                           (should (eq (alist-get 'drgnx-debug-hover-eldoc drgnx-quickhelp-fuller-functions) 'drgnx-debug-hover-doc)))
+  (should-not (memq #'drgnx-debug-hover-eldoc (default-value 'eldoc-documentation-functions)))
+  (should-not (alist-get 'drgnx-debug-hover-eldoc (bound-and-true-p drgnx-quickhelp-fuller-functions)))
+  (let* ((asked nil) (answers nil) (cb (lambda (doc &rest _) (push doc answers))))
+    (debug-module-test--with '((:id "s1" :root "/p" :state "stopped"))
+      (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (m p cb &rest _) (push (list m p cb) asked))))
+        (with-temp-buffer
+          (insert "print(self.items)")
+          (goto-char 13)
+          (should-not (drgnx-debug-hover-eldoc cb))
+          (should-not asked)
+          (should (drgnx-debug-hover-doc cb))
+          (pcase-let ((`(,m ,p ,answer) (car asked)))
+            (should (equal (list m p) '("debug/evaluate" (:session "s1" :expr "self.items" :context "hover"))))
+            (funcall answer '(:result "[1, 2]" :type "list") nil))
+          (should (equal (car answers) "self.items = [1, 2]  (list)"))
+          (drgnx-debug-hover-doc cb)
+          (funcall (nth 2 (car asked)) nil "name 'self' is not defined")
+          (should (equal answers '(nil "self.items = [1, 2]  (list)"))))))
+    (setq asked nil)
+    (debug-module-test--with '((:id "s1" :root "/p" :state "running"))
+      (with-temp-buffer
+        (insert "print(self.items)")
+        (goto-char 13)
+        (should-not (drgnx-debug-hover-doc cb)))
+      (should-not calls))))
+
 (ert-deftest drgnx-debug/open-launch-json-makes-one-when-there-is-none ()
   (let ((dir (file-name-as-directory (make-temp-file "dl" t))))
     (unwind-protect

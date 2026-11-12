@@ -683,3 +683,25 @@ fn a_subtree_spliced_is_what_the_whole_walk_draws() {
     assert_eq!(wants.len(), 1);
     assert!(walk_alone(&open, &ls[0]).is_none(), "a section has no Src");
 }
+
+/// A variable whose adapter gives a `memoryReference` carries it as `memory_reference`, for View Binary Data; one
+/// without has none.
+#[test]
+fn a_variables_memory_reference_is_a_field() {
+    let mut buf = v("buf", "b'ab'", 0);
+    buf["memoryReference"] = json!("0x1000");
+    let ls = build(
+        &[session(1, vec![buf, v("x", "1", 0)])],
+        &Opened::default(),
+        &HashMap::new(),
+    );
+    let field = |id: &str| {
+        line(&ls, id)
+            .fields
+            .iter()
+            .find(|(k, _)| *k == "memory_reference")
+            .map(|(_, v)| v.clone())
+    };
+    assert_eq!(field("v:s1:Locals/buf"), Some(json!("0x1000")));
+    assert_eq!(field("v:s1:Locals/x"), None);
+}

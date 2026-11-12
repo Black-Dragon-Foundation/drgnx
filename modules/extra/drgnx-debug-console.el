@@ -10,6 +10,7 @@
 (require 'seq)
 
 (declare-function drgnx-hub-call "drgnx-hub-client" (method params callback &rest keys))
+(declare-function drgnx-hub-call-sync "drgnx-hub-client" (method params &optional timeout))
 (declare-function drgnx-wb-area-show "drgnx-area" (area &optional tab buffer))
 (declare-function drgnx-debug--session "drgnx-debug" (&optional state))
 (defvar drgnx-debug--sessions)
@@ -53,6 +54,8 @@
 (defvar-local drgnx-debug-console--last nil "The last output line's start (a marker) and its count: (MARKER . COUNT).")
 (defvar-local drgnx-debug-console--history nil "What was evaluated, newest first.")
 (defvar-local drgnx-debug-console--history-at -1 "The history entry the input shows (-1: the one being typed).")
+(defvar-local drgnx-debug-console--closed nil
+  "The groups folded now: a hash of (SESSION . GROUP) → t, emptied with the output.")
 (defvar drgnx-debug-console--names nil
   "Alist (SESSION . NAME) of the sessions whose output the console holds, to clear it when NAME starts again.")
 
@@ -67,6 +70,7 @@
 selected frame, S-RET adds a line)."
   (setq-local truncate-lines nil)
   (setq-local header-line-format '(:eval (drgnx-debug-console--header)))
+  (setq-local completion-at-point-functions (list #'drgnx-debug-console-complete-at-point))
   (buffer-disable-undo))
 
 (defun drgnx-debug-console--header ()
@@ -91,6 +95,7 @@ selected frame, S-RET adds a line)."
       (with-current-buffer (generate-new-buffer drgnx-debug-console-buffer-name t)
         (drgnx-debug-console-mode)
         (setq drgnx-debug-console--end (copy-marker (point-min)))
+        (setq drgnx-debug-console--closed (make-hash-table :test #'equal))
         (drgnx-debug-console--prompt)
         (current-buffer))))
 
@@ -118,7 +123,11 @@ selected frame, S-RET adds a line)."
   (let* ((text (copy-sequence (plist-get line :text))) (node (plist-get line :node))
          (face (if (plist-get line :source) 'drgnx-debug-console-logpoint
                  (drgnx-debug-console--category-face (plist-get line :category))))
-         (lead (concat (make-string (* 2 (or (plist-get line :depth) 0)) ?\s) (if node "▸ " ""))))
+         (group (plist-get line :group))
+         (lead (concat (make-string (* 2 (or (plist-get line :depth) 0)) ?\s)
+                       (cond (group (if (gethash group drgnx-debug-console--closed) "▸ " "▾ "))
+                             (node "▸ ")
+                             (t "")))))
     (pcase-dolist (`(,from ,to ,face) (plist-get line :runs)) ; the hub's (FROM TO FACE), in characters
       (add-face-text-property from to (intern face) t text))
     (when face (add-face-text-property 0 (length text) face t text))
@@ -155,6 +164,10 @@ selected frame, S-RET adds a line)."
   (let ((start (point)) (n (or (plist-get line :count) 1)))
     (insert (drgnx-debug-console--text line) (drgnx-debug-console--count-text n) "\n")
     (put-text-property start (point) 'read-only t)
+    (when-let* ((g (plist-get line :group))) (put-text-property start (point) 'drgnx-debug-console-group g))
+    (when-let* ((in (plist-get line :within)))
+      (put-text-property start (point) 'drgnx-debug-console-within in)
+      (when (drgnx-debug-console--folded-p in) (put-text-property start (point) 'invisible t)))
     (set-marker drgnx-debug-console--end (point))
     (when drgnx-debug-console--last (set-marker (car drgnx-debug-console--last) nil))
     (setq drgnx-debug-console--last (cons (copy-marker start) n))
@@ -186,6 +199,7 @@ selected frame, S-RET adds a line)."
     (let ((inhibit-read-only t))
       (delete-region (point-min) drgnx-debug-console--end)
       (setq drgnx-debug-console--lines 0)
+      (clrhash drgnx-debug-console--closed)
       (when drgnx-debug-console--last (set-marker (car drgnx-debug-console--last) nil))
       (setq drgnx-debug-console--last nil))))
 
@@ -196,7 +210,14 @@ selected frame, S-RET adds a line)."
       (setf (alist-get id drgnx-debug-console--names nil nil #'equal) (plist-get s :name)))
     ;; a structured value opens in its session's stop
     (dolist (l lines)
-      (when-let* ((node (plist-get l :node))) (plist-put l :node (plist-put node :session id))))
+      (when-let* ((node (plist-get l :node))) (plist-put l :node (plist-put node :session id)))
+      ;; a group is its session's: (SESSION . GROUP)
+      (when-let* ((g (plist-get l :group)))
+        (plist-put l :group (cons id g))
+        (when (plist-get l :collapsed)
+          (puthash (cons id g) t (buffer-local-value 'drgnx-debug-console--closed (drgnx-debug-console--buffer)))))
+      (when-let* ((in (plist-get l :within)))
+        (plist-put l :within (mapcar (lambda (g) (cons id g)) in))))
     (drgnx-debug-console--insert lines (plist-get data :skipped))))
 
 (defun drgnx-debug-console-sessions (sessions)
@@ -229,12 +250,51 @@ selected frame, S-RET adds a line)."
     (let ((expr (string-trim (drgnx-debug-console--input))) (s (drgnx-debug--session)))
       (cond ((string-empty-p expr))
             ((not s) (user-error "No debug session to evaluate in"))
-            (t (push expr drgnx-debug-console--history)
-               (setq drgnx-debug-console--history-at -1)
-               (drgnx-debug-console--set-input "")
-               (drgnx-debug-console--insert (list (list :text expr :category "input")))
-               (drgnx-hub-call "debug/evaluate" (list :session (plist-get s :id) :expr expr :context "repl")
-                               (drgnx-debug-console--answer (plist-get s :id))))))))
+            (t (drgnx-debug-console--set-input "")
+               (drgnx-debug-console--evaluate s expr))))))
+
+(defun drgnx-debug-console--evaluate (session expr)
+  "Evaluate EXPR in SESSION's selected frame (`repl') as if typed: echoed, kept in the history, answered below."
+  (with-current-buffer (drgnx-debug-console--buffer)
+    (push expr drgnx-debug-console--history)
+    (setq drgnx-debug-console--history-at -1)
+    (drgnx-debug-console--insert (list (list :text expr :category "input")))
+    (drgnx-hub-call "debug/evaluate" (list :session (plist-get session :id) :expr expr :context "repl")
+                    (drgnx-debug-console--answer (plist-get session :id)))))
+
+(defun drgnx-debug-console-evaluate (expr &optional select)
+  "Evaluate EXPR in the Debug Console, in the stopped frame, keeping what its input holds; its tab shows without
+taking the focus, or selected with SELECT."
+  (let ((s (or (drgnx-debug--session) (user-error "No debug session to evaluate in")))
+        (b (drgnx-debug-console--buffer)))
+    (let ((w (if (fboundp 'drgnx-wb-area-show)
+                 (save-selected-window (drgnx-wb-area-show 'panel 'debug-console b))
+               (display-buffer b))))
+      (drgnx-debug-console--evaluate s expr)
+      (when (and select w) (select-window w)))))
+
+(defun drgnx-debug-console-complete-at-point ()
+  "Completion in the input from the session's adapter (`debug/completions'): the span a target names, else the
+word before point; nil outside the input, with no session, or when the adapter has none."
+  (when-let* (((>= (point) (drgnx-debug-console--input-start)))
+              (s (drgnx-debug--session))
+              (start (drgnx-debug-console--input-start))
+              (r (condition-case nil
+                     (drgnx-hub-call-sync "debug/completions"
+                                          (list :session (plist-get s :id) :text (drgnx-debug-console--input)
+                                                :column (- (point) start))
+                                          2)
+                   (error nil)))
+              (targets (append (plist-get r :targets) nil)))
+    (let* ((first (car targets))
+           (beg (if (plist-get first :start) (+ start (plist-get first :start))
+                  (save-excursion (skip-syntax-backward "w_" start) (point))))
+           (end (if (plist-get first :length) (min (point-max) (+ beg (plist-get first :length))) (point)))
+           (types (mapcar (lambda (tg) (cons (or (plist-get tg :text) (plist-get tg :label)) (plist-get tg :type)))
+                          targets)))
+      (list beg end (mapcar #'car types)
+            :exclusive 'no
+            :annotation-function (lambda (c) (when-let* ((ty (cdr (assoc c types)))) (concat " " ty)))))))
 
 (defun drgnx-debug-console--answer (session)
   "The callback that inserts an evaluation's answer in SESSION."
@@ -274,14 +334,43 @@ selected frame, S-RET adds a line)."
   "Open the structured value at point in place (its children below it), or close it.  A value of a stop that is over
 does not open."
   (interactive)
-  (let ((node (get-text-property (point) 'drgnx-debug-console-node)))
-    (unless node (user-error "Nothing to open here"))
-    (let ((bol (line-beginning-position)) (eol (line-end-position)))
-      (if (get-text-property bol 'drgnx-debug-console-open)
-          (drgnx-debug-console--close bol)
-        (drgnx-hub-call "debug/children" (list :session (plist-get node :session) :reference (plist-get node :reference)
-                                               :epoch (plist-get node :epoch))
-                        (drgnx-debug-console--children (copy-marker bol) (copy-marker eol) node))))))
+  (let ((node (get-text-property (point) 'drgnx-debug-console-node))
+        (group (get-text-property (line-beginning-position) 'drgnx-debug-console-group)))
+    (unless (or node group) (user-error "Nothing to open here"))
+    (if (and group (not node))
+        (drgnx-debug-console--fold group (not (gethash group drgnx-debug-console--closed)))
+      (let ((bol (line-beginning-position)) (eol (line-end-position)))
+        (if (get-text-property bol 'drgnx-debug-console-open)
+            (drgnx-debug-console--close bol)
+          (drgnx-hub-call "debug/children" (list :session (plist-get node :session) :reference (plist-get node :reference)
+                                                 :epoch (plist-get node :epoch))
+                          (drgnx-debug-console--children (copy-marker bol) (copy-marker eol) node)))))))
+
+(defun drgnx-debug-console--folded-p (within)
+  "Whether a line in the groups WITHIN is hidden: one of them is folded."
+  (seq-some (lambda (g) (gethash g drgnx-debug-console--closed)) within))
+
+(defun drgnx-debug-console--fold (group close)
+  "Fold GROUP (CLOSE), or open it: its chevron turns, and every line in it hides, or shows unless a group inside it
+stays folded."
+  (if close (puthash group t drgnx-debug-console--closed) (remhash group drgnx-debug-console--closed))
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (goto-char (point-min))
+      (while (< (point) drgnx-debug-console--end)
+        (let ((bol (point)) (in (get-text-property (point) 'drgnx-debug-console-within)))
+          (forward-line 1)
+          (cond ((equal (get-text-property bol 'drgnx-debug-console-group) group)
+                 (save-excursion
+                   (goto-char bol)
+                   (skip-chars-forward " ")
+                   (let ((props (text-properties-at (point))))
+                     (delete-char 1)
+                     (insert (apply #'propertize (if close "▸" "▾") props)))))
+                ((member group in)
+                 (if (drgnx-debug-console--folded-p in)
+                     (put-text-property bol (point) 'invisible t)
+                   (remove-text-properties bol (point) '(invisible nil))))))))))
 
 (defun drgnx-debug-console--depth (bol)
   "The depth of the line at BOL (its leading spaces, two a level)."

@@ -120,6 +120,8 @@
   "drgnx-say/approve-starts-and-ends-the-session"
   "drgnx-say/reject-stops-the-job"
   "drgnx-say/an-unproven-connection-raises-nothing"
+  "drgnx-debug-hub/console-groups-fold"
+  "drgnx-debug-hub/inline-candidates-and-an-inline-breakpoint"
   "drgnx-extensions-hub/a-suggestion-card-opens-details-and-has-no-install"
   "drgnx-history/three-worktrees-keep-their-own-authors"
   "drgnx-history/a-removed-worktree-is-frozen-and-still-comparable"

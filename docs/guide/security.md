@@ -432,7 +432,7 @@ Three rows are about the agent's own browser, which runs inside its sandbox ([ag
   It asks in every preset, Autonomous included, and an Allow you write for it still asks: no setting turns this
   card off.
 
-Five rows are about debugging with an agent ([editing.md](editing.md#debugging)); its forks are sealed, so a fork
+Five rows are about debugging with an agent ([debugging.md](debugging.md#debugging-with-an-agent)); its forks are sealed, so a fork
 with network would use the `network` row:
 
 - **`debug.read`**: read your debug sessions and recorded runs (their values included). Cautious asks; the others
