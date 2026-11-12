@@ -1253,7 +1253,7 @@ the command it names (Hub: Restart Now).  A condition: the hub, or the next hell
       (when (and (stringp id) (stringp text) (member severity '("info" "warn" "fail")))
         (drgnx-notify 'hub (intern severity) text :id (intern id)
                       :life (if (equal (plist-get data :life) "condition") 'condition 'event)
-                      ;; only a registry id: the click runs it through `drgnx-ui--run'
+                      ;; only a registry id: the click runs it through `drgnx-ui-kit-run'
                       :command (let ((sym (and (stringp command) (intern-soft command))))
                                  (and sym (fboundp 'drgnx-commands-get) (drgnx-commands-get sym) sym)))))))
 

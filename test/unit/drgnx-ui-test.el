@@ -497,6 +497,14 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should-not (file-exists-p (expand-file-name name runtime)))
       (should-not (file-exists-p (expand-file-name (concat name ".lock") runtime))))))
 
+(ert-deftest drgnx-ui/the-ui-kit-leaves-the-harness-its-functions ()
+  "The UI kit (core/drgnx-ui-kit.el) once defined its own `drgnx-ui--run', a button's action: loaded after the
+harness, it replaced the harness's (PROGRAM &rest ARGS), and every later stop, reap and pgrep failed with
+wrong-number-of-arguments (19 rows of this file, once a row loaded the kit)."
+  (require 'drgnx-ui-kit)
+  (should (equal (func-arity 'drgnx-ui--run) '(1 . many)))
+  (should (equal (car (drgnx-ui--run "true")) 0)))
+
 (ert-deftest drgnx-ui/process-groups-are-verified-before-signalling ()
   (should-not (drgnx-ui--group-ours-p "1" "/any/run"))
   (should-not (drgnx-ui--group-ours-p "0" "/any/run"))

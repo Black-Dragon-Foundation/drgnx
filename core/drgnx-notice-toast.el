@@ -144,7 +144,7 @@ thing waiting on you)."
         ((consp action) (if (fboundp (car action)) (apply (car action) (cdr action))
                           (message "%s is not available (its module is off)" (car action))))
         ((commandp action) (call-interactively action))
-        (t (drgnx-ui--run action))))
+        (t (drgnx-ui-kit-run action))))
 
 (defun drgnx-notice-toast--render (notice)
   "The text of NOTICE's toast."

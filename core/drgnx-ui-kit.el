@@ -113,7 +113,7 @@ An unknown SEVERITY is `info'."
 (defvar drgnx-ui--button-maps (make-hash-table :test #'eq :weakness 'key)
   "ACTION → alist WHERE → the keymap of a button that runs ACTION.  Weak: a closure's maps go with it.")
 
-(defun drgnx-ui--run (action)
+(defun drgnx-ui-kit-run (action)
   "Run ACTION: a registry id through `drgnx-surfaces-run' (the usage count and the key tip follow), else a command
 called interactively, else a function of no arguments.  A symbol that is none of these (its module is off) says so."
   (cond ((and (symbolp action) (drgnx-commands-get action)) (drgnx-surfaces-run action))
@@ -125,7 +125,7 @@ called interactively, else a function of no arguments.  A symbol that is none of
   "The keymap of a button that runs ACTION on WHERE, built once per (ACTION . WHERE)."
   (let ((maps (gethash action drgnx-ui--button-maps)))
     (or (alist-get where maps)
-        (let ((m (make-sparse-keymap)) (run (lambda () (interactive) (drgnx-ui--run action))))
+        (let ((m (make-sparse-keymap)) (run (lambda () (interactive) (drgnx-ui-kit-run action))))
           (if (eq where 'text)
               (progn (define-key m [mouse-1] run) (define-key m [mouse-2] run) (define-key m (kbd "RET") run))
             (define-key m (vector where 'mouse-1) run))
