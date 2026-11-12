@@ -100,8 +100,9 @@ The **Debug Console** (the panel's tab; C-S-y in VS Code keys) shows the program
 repeated lines counted (`×3`) and logpoints' messages with their file and line. Type an expression at the bottom and
 press RET to evaluate it in the selected frame (S-RET adds a line; Up / Down, M-p / M-n or C-p / C-n go through what
 you typed before; C-M-i completes from the debugger, when it offers completions). Debug: Evaluate in Debug Console
-sends the selection or the expression at point there from the editor. A result with children opens in place (RET or TAB on it); once the program runs on, it dims and no
-longer opens. The output stays after the session ends and is cleared when the same configuration starts again
+sends the selection or the expression at point there from the editor. A result with children opens in place (RET or
+TAB on it); once the program runs on, it dims and no longer opens. Groups the program prints (`console.group` in
+JavaScript, for one) fold the same way, on their first line. The output stays after the session ends and is cleared when the same configuration starts again
 (`drgnx-debug-console-clear-on-restart`). A `postDebugTask` that fails says so there.
 
 Breakpoints live in a column left of the line numbers, kept per project (they survive restarts and reach a running

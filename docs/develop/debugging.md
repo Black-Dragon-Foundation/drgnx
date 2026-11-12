@@ -529,6 +529,11 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
   children shows a chevron: RET or TAB opens it in place (`debug/children {session, reference, epoch}` →
   `{variables: [{name, value, type?, reference?}]}`; `debug/evaluate`'s answer names its stop as `epoch`); after a
   resume the stop is over, the hub says so, and the value turns stale (dim, no longer opens).
+- Groups fold: the hub numbers each session's `group: start | startCollapsed` (`:group N` on the line that opens it,
+  `:collapsed` when it starts folded) and gives every line the groups it is in, outermost first (`:within`). The
+  editor keys them (SESSION . N), keeps the folded ones in `drgnx-debug-console--closed` (emptied with the output),
+  draws a chevron on the opening line and hides a line (`invisible`) while any group it is in is folded, also as
+  lines arrive. TAB or RET on the opening line folds or opens it; a group inside stays as it was.
 - The console stays after its session ends; starting a configuration of the same name again clears it once no
   session of the last run is left (`drgnx-debug-console-clear-on-restart`, on by default).
 - Completion in the input: `drgnx-debug-console-complete-at-point` is the console's only `completion-at-point`

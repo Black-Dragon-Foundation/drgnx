@@ -106,6 +106,39 @@ its children below it (`debug/children' of its stop) and closes them; a value of
       (should-not (get-text-property (point) 'drgnx-debug-console-node))
       (should (memq 'drgnx-debug-console-stale (ensure-list (get-text-property (point) 'face)))))))
 
+(defun debug-console-test--shown ()
+  "The output as it shows: the text no fold hides."
+  (with-current-buffer drgnx-debug-console-buffer-name
+    (let ((s "") (p (point-min)) (end (marker-position drgnx-debug-console--end)))
+      (while (< p end)
+        (let ((next (min end (next-single-char-property-change p 'invisible))))
+          (unless (invisible-p p) (setq s (concat s (buffer-substring-no-properties p next))))
+          (setq p next)))
+      s)))
+
+(ert-deftest drgnx-debug-console/groups-fold ()
+  "A group's first line (`:group') has a chevron and folds what it holds (the lines whose `:within' names it), a
+collapsed one (`:collapsed') starts folded; TAB or RET on it opens or closes it; an inner fold stays as it was."
+  (debug-console-test--with
+    (debug-console-test--output (list :text "Group A" :category "stdout" :count 1 :group 1)
+                                (list :text "child" :category "stdout" :count 1 :depth 1 :within '(1))
+                                (list :text "inner" :category "stdout" :count 1 :depth 1 :within '(1) :group 2
+                                      :collapsed t)
+                                (list :text "deep" :category "stdout" :count 1 :depth 2 :within '(1 2))
+                                (list :text "out" :category "stdout" :count 1))
+    (should (equal (debug-console-test--text) "▾ Group A\n  child\n  ▸ inner\n    deep\nout\n"))
+    (should (equal (debug-console-test--shown) "▾ Group A\n  child\n  ▸ inner\nout\n"))
+    (with-current-buffer drgnx-debug-console-buffer-name
+      (goto-char (point-min))
+      (search-forward "Group")
+      (drgnx-debug-console-toggle)
+      (should (equal (debug-console-test--shown) "▸ Group A\nout\n"))
+      (drgnx-debug-console-toggle)
+      (should (equal (debug-console-test--shown) "▾ Group A\n  child\n  ▸ inner\nout\n"))
+      (search-forward "inner")
+      (drgnx-debug-console-toggle)
+      (should (equal (debug-console-test--shown) "▾ Group A\n  child\n  ▾ inner\n    deep\nout\n")))))
+
 (ert-deftest drgnx-debug-console/evaluates-from-the-editor ()
   "`drgnx-debug-console-evaluate': EXPR evaluated as if typed (echoed, in the history, `repl'), what the input held
 kept; the tab shown without the focus, or selected with SELECT."
