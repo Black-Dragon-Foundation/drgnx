@@ -92,6 +92,34 @@ fn pin(fd: OwnedFd, kind: Kind) -> Result<Pinned, FsError> {
     }
 }
 
+/// What [`stat_beneath`] tells of a file: enough to see that it changed (its identity, size and both times).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Meta {
+    pub dev: u64,
+    pub ino: u64,
+    pub size: u64,
+    /// Modification and status-change times, nanoseconds since the epoch.
+    pub mtime_ns: i128,
+    pub ctime_ns: i128,
+    pub regular: bool,
+}
+
+/// The status of `rel` beneath `dir`, resolved as `open_beneath` resolves it (no link in any component, never outside
+/// `dir`): an `O_PATH` open and an `fstat` on Linux and Android, so the file is never opened for reading.
+pub fn stat_beneath(dir: BorrowedFd<'_>, rel: &Path) -> Result<Meta, FsError> {
+    checked_rel(rel)?;
+    let st = fstat(raw_open(Some(dir), rel, How::Pin(Kind::Any))?)?;
+    #[allow(clippy::unnecessary_cast)] // the fields' types differ between Linux, Android and macOS
+    Ok(Meta {
+        dev: st.st_dev as u64,
+        ino: st.st_ino as u64,
+        size: st.st_size as u64,
+        mtime_ns: st.st_mtime as i128 * 1_000_000_000 + st.st_mtime_nsec as i128,
+        ctime_ns: st.st_ctime as i128 * 1_000_000_000 + st.st_ctime_nsec as i128,
+        regular: FileType::from_raw_mode(st.st_mode) == FileType::RegularFile,
+    })
+}
+
 /// How `raw_open` opens: an fd that pins the file (`O_PATH` where there is one), or one to read a regular file.
 #[derive(Clone, Copy)]
 pub(crate) enum How {
@@ -259,6 +287,35 @@ mod tests {
                 other => panic!("{rel} (absolute): {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn stat_beneath_sees_the_file_and_refuses_a_link() {
+        let (root, fd) = tree();
+        let m = fs::metadata(root.path().join("b/f")).unwrap();
+        let s = stat_beneath(fd.as_fd(), Path::new("b/f")).unwrap();
+        assert_eq!(
+            (s.dev, s.ino, s.size, s.regular),
+            (m.dev(), m.ino(), 1, true)
+        );
+        assert_eq!(
+            s.mtime_ns,
+            m.mtime() as i128 * 1_000_000_000 + m.mtime_nsec() as i128
+        );
+        assert!(!stat_beneath(fd.as_fd(), Path::new("b")).unwrap().regular);
+        for rel in ["a/l/f", "a/lf"] {
+            assert!(
+                matches!(
+                    stat_beneath(fd.as_fd(), Path::new(rel)),
+                    Err(FsError::Link { .. })
+                ),
+                "{rel}"
+            );
+        }
+        assert!(matches!(
+            stat_beneath(fd.as_fd(), Path::new("../b/f")),
+            Err(FsError::Escapes)
+        ));
     }
 
     #[test]

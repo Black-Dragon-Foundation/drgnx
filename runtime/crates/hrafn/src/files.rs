@@ -736,15 +736,53 @@ pub(crate) fn read_admitted(root_fd: &eitri::Pinned, path: &str) -> Option<Vec<u
 
 /// The listed row of an admitted file: its BLOB, BYTES and whether `.gitattributes` marks it generated (ATTR).
 pub(crate) fn listed(path: String, blob: String, bytes: &[u8], attr: bool) -> Listed {
-    let lang = lang_of(&path, &bytes[..bytes.len().min(256)]);
-    Listed {
-        class: class_of(&path, lang),
-        generated: generated_by_marker(bytes) || attr || generated_by_name(&path),
-        lang,
-        size: bytes.len() as u64,
-        blob,
-        path,
+    Read::of(&path, blob, bytes).row(path, attr)
+}
+
+/// What a file's content gives its listed row: everything but the `.gitattributes` mark.
+#[derive(Clone)]
+struct Read {
+    blob: String,
+    lang: Lang,
+    /// A generated-file marker among its first lines.
+    marked: bool,
+    size: u64,
+}
+
+impl Read {
+    fn of(path: &str, blob: String, bytes: &[u8]) -> Read {
+        Read {
+            blob,
+            lang: lang_of(path, &bytes[..bytes.len().min(256)]),
+            marked: generated_by_marker(bytes),
+            size: bytes.len() as u64,
+        }
     }
+
+    fn row(self, path: String, attr: bool) -> Listed {
+        Listed {
+            class: class_of(&path, self.lang),
+            generated: self.marked || attr || generated_by_name(&path),
+            lang: self.lang,
+            size: self.size,
+            blob: self.blob,
+            path,
+        }
+    }
+}
+
+/// A file modified less than this before a listing began is read again by the next one: a write later in the same
+/// timestamp tick would leave its status as it was (a 2-second tick on FAT, 1 on HFS+ and ext3, a jiffy on others).
+const RACY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// What one listing read, for the next to reuse: per path, the file's status when it was read and what the read gave
+/// (`None`: not admitted, binary or too large), and the status of every `.gitattributes`. The next listing reads and
+/// hashes again only the files whose status moved, and all of them when a `.gitattributes` did (its attributes and
+/// clean filters go into every blob).
+#[derive(Default)]
+pub struct Snapshot {
+    files: std::collections::HashMap<String, (eitri::Meta, Option<Read>)>,
+    attributes: Vec<(String, Option<eitri::Meta>)>,
 }
 
 /// The files of the project at `root` that Hrafn indexes, sorted by path. `allow` is the hub's deny-list check on a
@@ -755,6 +793,25 @@ pub fn list(
     config: &Config,
     allow: &dyn Fn(&str) -> bool,
 ) -> io::Result<Vec<Listed>> {
+    list_with(root, git, config, allow, &mut Snapshot::default())
+}
+
+/// [`list`], reusing what SNAP holds of an earlier listing of the same `root` and leaving this one's there: a file
+/// whose status (device, inode, size, both times) is what it was, and was modified at least [`RACY`] before that
+/// listing began, is neither read nor hashed again. The paths, the rules, `.gitattributes`' marks and the nested
+/// repositories are asked anew every time.
+pub fn list_with(
+    root: &Path,
+    git: &dyn Git,
+    config: &Config,
+    allow: &dyn Fn(&str) -> bool,
+    snap: &mut Snapshot,
+) -> io::Result<Vec<Listed>> {
+    let began = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .saturating_sub(RACY)
+        .as_nanos() as i128;
     let root_fd = eitri::open_path(root, eitri::Kind::Dir)
         .map_err(|e| io::Error::other(format!("project root: {e}")))?;
     check_search_eld(&root_fd)?;
@@ -762,28 +819,70 @@ pub fn list(
         return Ok(vec![]);
     }
     let rules = Rules::new(config, &git.nested(root)?);
-    let mut cands: Vec<(String, Vec<u8>)> = Vec::new();
+    let paths = git.ls_files(root)?;
+    let stat = |p: &str| eitri::stat_beneath(root_fd.fd.as_fd(), Path::new(p)).ok();
+    let attributes: Vec<(String, Option<eitri::Meta>)> = paths
+        .iter()
+        .filter(|p| p.rsplit('/').next() == Some(".gitattributes"))
+        .map(|p| (p.clone(), stat(p)))
+        .collect();
+    let mut was = std::mem::take(&mut snap.files);
+    if attributes != snap.attributes {
+        was.clear();
+    }
+    snap.attributes = attributes;
+    // per admitted path: its status when it is not racy, and what an earlier listing read or the bytes read now
+    type Cand = (String, Option<eitri::Meta>, Result<Read, Vec<u8>>);
+    let mut cands: Vec<Cand> = Vec::new();
     let mut seen = HashSet::new();
-    for path in git.ls_files(root)? {
+    for path in paths {
         if !seen.insert(path.clone()) || !rules.admits(&path, allow) {
             continue;
         }
-        let Some(bytes) = read_admitted(&root_fd, &path) else {
-            continue;
+        let meta = stat(&path);
+        let kept = match (meta, was.remove(&path)) {
+            (Some(m), Some((old, read))) if m == old => Some(read),
+            _ => None,
         };
-        cands.push((path, bytes));
+        let read = match kept {
+            Some(read) => read.map(Ok),
+            None => read_admitted(&root_fd, &path).map(Err),
+        };
+        let meta = meta.filter(|m| m.mtime_ns < began);
+        match read {
+            Some(read) => cands.push((path, meta, read)),
+            None => {
+                if let Some(m) = meta {
+                    snap.files.insert(path, (m, None));
+                }
+            }
+        }
     }
-    let paths: Vec<String> = cands.iter().map(|c| c.0.clone()).collect();
-    let blobs = git.blobs(root, &paths)?;
-    let attr: HashSet<String> = git.generated(root, &paths)?.into_iter().collect();
-    let mut out: Vec<Listed> = cands
-        .into_iter()
-        .zip(blobs)
-        .map(|((path, bytes), blob)| {
-            let generated = attr.contains(&path);
-            listed(path, blob, &bytes, generated)
-        })
+    let fresh: Vec<String> = cands
+        .iter()
+        .filter(|c| c.2.is_err())
+        .map(|c| c.0.clone())
         .collect();
+    let mut blobs = git.blobs(root, &fresh)?.into_iter();
+    let all: Vec<String> = cands.iter().map(|c| c.0.clone()).collect();
+    let attr: HashSet<String> = git.generated(root, &all)?.into_iter().collect();
+    let mut out = Vec::with_capacity(cands.len());
+    for (path, meta, read) in cands {
+        let read = match read {
+            Ok(r) => r,
+            Err(bytes) => {
+                let blob = blobs.next().ok_or_else(|| {
+                    io::Error::other("git hash-object answered a different count")
+                })?;
+                Read::of(&path, blob, &bytes)
+            }
+        };
+        if let Some(m) = meta {
+            snap.files.insert(path.clone(), (m, Some(read.clone())));
+        }
+        let generated = attr.contains(&path);
+        out.push(read.row(path, generated));
+    }
     out.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(out)
 }
