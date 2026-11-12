@@ -37,4 +37,7 @@
  (:file "wb/drgnx-rules.el" :in drgnx-wb-show-unrouted :what erase-buffer :kind document :why "the unrouted list is shown on the user's action")
  (:file "modules/tools/drgnx-search-edit.el" :in drgnx-search-edit--open :what erase-buffer :kind document :why "Edit Results is built when the user opens it; afterwards the user edits it")
  (:file "modules/tools/drgnx-search-handoff.el" :in drgnx-search-handoff--draw :what erase-buffer :kind document :why "the Ask an Agent card (a dozen lines) is drawn when the user opens it, chooses who, switches hidden files, and once when the hub sends its context box; the instruction is kept")
+ (:file "modules/extra/drgnx-debug-timeline.el" :in drgnx-debug-timeline--render :what erase-buffer :kind document :why "the stop timeline (a head, the stops, a lane per probe: a handful of rows the hub built) is drawn when the user opens it and again, at most four times a second, when its run changes")
+ (:file "modules/extra/drgnx-debug-timeline.el" :in drgnx-debug-timeline--show-past :what erase-buffer :kind document :why "a past stop's file, as it ran, is drawn when the user opens that stop")
+ (:file "modules/extra/drgnx-debug-timeline.el" :in drgnx-debug-timeline--show-vars :what erase-buffer :kind document :why "a past stop's stack and variables are drawn when the user opens that stop")
  (:file "modules/tools/drgnx-search-edit.el" :in drgnx-search-edit--faces :what erase-buffer :kind document :why "a hidden buffer holding one line to fontify, never shown"))

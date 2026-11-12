@@ -1,12 +1,12 @@
 //! How far a fork matched its run (spec §19.3, "matched on N hits"), and the What-if tab's lanes.
 //!
 //! An `output` event carries no thread, so each probe hit names its thread by the thread expression's value
-//! ([`super::fork_probes::thread_expr`]). Those values differ between two runs (`threading.get_ident()`), so threads
+//! ([`super::probes::thread_expr`]). Those values differ between two runs (`threading.get_ident()`), so threads
 //! are paired by the order of their first hit: the fork's stopping thread is the k-th thread to hit a probe in the
 //! fork, and is compared with the k-th thread of the run. Matching is a count, not a yes or no: the hits of that
 //! thread before the fork point, in order, until the first difference.
 
-use super::fork_run::{RunHit, RunProbe};
+use super::record::{RunHit, RunProbe};
 
 /// The first hit that differs: the probe, its how-manyth hit on the thread (1-based), the run's value and the fork's
 /// (none: the fork had fewer hits).
@@ -114,6 +114,7 @@ mod tests {
             thread: thread.into(),
             value: value.into(),
             seq,
+            t_ms: 0,
         }
     }
 

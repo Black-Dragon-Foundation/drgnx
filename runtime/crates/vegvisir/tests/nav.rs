@@ -72,10 +72,14 @@ fn links_match_the_frozen_lisp_on_the_30_agent_fixture() {
     if std::env::var_os("UPDATE_VEGVISIR_GOLDEN").is_some() {
         std::fs::write(&frame_path, &frame).expect("the frame is written");
     }
-    assert_eq!(
-        std::fs::read_to_string(&frame_path).expect("the recorded frame"),
-        frame,
-        "the fixture's frame moved: record the golden again from the editor's navigation"
+    // compared as JSON, not as text: serde_json keeps a map's insertion order when another crate of the build turns on
+    // `preserve_order` (a workspace test run does, `-p vegvisir` alone does not), and that is the same frame
+    let recorded: Value =
+        serde_json::from_str(&std::fs::read_to_string(&frame_path).expect("the recorded frame"))
+            .expect("the recorded frame is JSON");
+    assert!(
+        recorded == serde_json::from_str::<Value>(&frame).expect("a frame"),
+        "the fixture's frame moved: record the golden again from the editor's navigation\n{frame}"
     );
     let golden: Value = serde_json::from_str(
         &std::fs::read_to_string(golden_path("nav-thirty-1600")).expect("the golden"),

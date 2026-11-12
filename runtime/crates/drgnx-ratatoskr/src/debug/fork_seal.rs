@@ -1,7 +1,9 @@
 //! A fork's tree and its sealed session on Linux (spec §19.3, items 1–3).
 //!
 //! - [`DirTrees`]: a fork's folder under the runs root, `<runs>/debug-forks/<fork>/` with the tree in `w/` (the run's
-//!   launch snapshot restored into an empty folder: no git branch is made) and the session's temp in `tmp/`.
+//!   launch snapshot restored into an empty folder: no git branch is made) and the session's temp in `tmp/`. A
+//!   trace's tree is the same (`t<n>/`); a plain run in a caller's tree has only its temp here (`r<n>/tmp`); D5's
+//!   bisect slots live under [`slots_root`]. None of it outlives the hub: [`sweep`] clears it all at the hub's start.
 //! - [`Sealed`]: the adapter and the program inside Gleipnir's full tier with an isolated network and its own loopback
 //!   (`net.isolated.loopback`, no relay: nothing gets out), writing only the tree and the temp. The hub speaks to a
 //!   small shim on stdio ([`super::fork_mux`]) that starts the adapter inside, in the adapter's own runtime (the hub's
@@ -13,7 +15,7 @@
 use super::adapters::{self, Found, Table};
 use super::fork_hub::{Sealer, Trees};
 use super::fork_mux::Mux;
-use super::fork_run::RunInfo;
+use super::record::RunInfo;
 use super::session::NoProc;
 use super::{BoxFut, Connected, Launcher};
 use gleipnir::{Bind, Layers, Mode, Net, Spec, Target, Trace};
@@ -38,6 +40,32 @@ pub const MANIFEST_MAX: usize = 100_000;
 pub struct DirTrees {
     pub root: PathBuf,
     made: Mutex<HashMap<PathBuf, BTreeMap<String, u64>>>,
+}
+
+/// The forks' root: `<runs>/debug-forks`.
+pub fn forks_root(env: &runstav::paths::Env) -> PathBuf {
+    crate::sandbox::runs_root(env).join("debug-forks")
+}
+
+/// Where D5's bisect slots are made (`<forks root>/slots/<bisect>/slot-N/`, …): the only trees a plain run takes.
+pub fn slots_root(env: &runstav::paths::Env) -> PathBuf {
+    forks_root(env).join("slots")
+}
+
+/// Everything under ROOT (the forks' root) goes: an earlier hub's forks, traces and slots, none of which outlives it.
+/// The folder is moved aside at once (a fork made right after starts empty) and removed in the background.
+pub fn sweep(root: &Path) {
+    if !root.exists() {
+        return;
+    }
+    let aside = root.with_extension(format!("swept-{}", std::process::id()));
+    if let Err(e) = std::fs::rename(root, &aside) {
+        tracing::warn!(target: "drgnx::debug", "the forks' folder {} stays: {e}", root.display());
+        return;
+    }
+    crate::clock::spawn("debug:fork-sweep", async move {
+        let _ = crate::clock::blocking(move || std::fs::remove_dir_all(aside)).await;
+    });
 }
 
 impl DirTrees {
@@ -151,6 +179,12 @@ impl Trees for DirTrees {
                 .await
                 .unwrap_or_default()
         })
+    }
+
+    fn scratch(&self, id: &str) -> Result<PathBuf, String> {
+        let tmp = self.root.join(id).join("tmp");
+        std::fs::create_dir_all(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        Ok(tmp)
     }
 
     fn remove<'a>(&'a self, tree: &'a Path) -> BoxFut<'a, ()> {
@@ -293,7 +327,7 @@ impl Sealer for Sealed {
         run: &RunInfo,
         tree: &Path,
         config: &Value,
-        _id: &str,
+        tmp: &Path,
     ) -> Result<Arc<dyn Launcher>, String> {
         let table = Table::builtin();
         let a = table
@@ -307,11 +341,7 @@ impl Sealer for Sealed {
         };
         let found =
             adapters::find(a, &env).ok_or_else(|| format!("{} is not installed", a.name))?;
-        let tmp = tree
-            .parent()
-            .ok_or("the fork's tree has no folder")?
-            .join("tmp");
-        std::fs::create_dir_all(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        std::fs::create_dir_all(tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
         let mut read = vec![];
         let argv: Vec<String> = match (adapter, &found) {
             ("debugpy", Found::Python(py)) => {
@@ -359,7 +389,7 @@ impl Sealer for Sealed {
             .ok()
             .and_then(|p| p.into_string().ok())
             .unwrap_or_else(|| "/usr/local/bin:/usr/bin:/bin".into());
-        let env_files = env_files(&run.root, tree, config);
+        let env_files = env_files(Path::new(&run.root), tree, config);
         // empty files for the binds to land on (the tree never holds their text)
         for (_, dst) in &env_files {
             if !dst.exists() {
@@ -368,7 +398,7 @@ impl Sealer for Sealed {
         }
         let shape = Shape {
             tree,
-            tmp: &tmp,
+            tmp,
             read,
             env_files,
             path,

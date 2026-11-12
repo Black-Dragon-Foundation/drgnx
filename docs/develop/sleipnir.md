@@ -392,8 +392,9 @@ A key reaches a job without touching disk (design 6.6):
    secrets are used: both end up in podman's stored config or in files.
 
 `serve` gives every keyed job its own copy of the bundle's `drgnx-key` in its attempt folder, since each container
-relabels what it mounts (`Z`). The job helper owns the channel of every job with keys: every keyed job is a runner job
-(a keyed job never runs on the hub's machine); the hub's own exec jobs never carry keys, and their network goes through the
+relabels what it mounts (`Z`). The job helper owns the channel of every keyed runner job (a keyed command job on the
+hub's machine asks the hub's own key socket, docs/develop/hub.md "Keyed jobs here", with the same request and answers:
+`keyline`, built on every target); the hub's own container jobs carry no keys, and their network goes through the
 hub's `JobNetwork` (docs/develop/hub.md). A sidecar's image is imported from the bundle's
 `drgnx-px-<arch>-linux-musl` (tagged by content) when `serve` launches it; under Q8 `serve` creates no network.
 

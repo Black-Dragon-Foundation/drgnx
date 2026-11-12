@@ -288,7 +288,20 @@ pub async fn seed(front: &Front) -> Result<(), String> {
                             deps: vec![],
                         })
                         .collect(),
-                    data: None,
+                    // the run's facts its first start records (`runner::tick::run_facts`) and the user's order
+                    data: Some(json!({
+                        "agents": 1,
+                        "base": "4fe72a5aa1c3",
+                        "order": tasks.iter().map(|t| format!("{JOB}#{}", t.n)).collect::<Vec<_>>(),
+                        "bases": tasks.iter().map(|t| (format!("{JOB}#{}", t.n), json!("4fe72a5aa1c3")))
+                            .collect::<serde_json::Map<_, _>>(),
+                        // what the merge gate checked of the held task (`orch::gates::before_merge`)
+                        "commits": {format!("{JOB}#{}", held.0): [
+                            {"sha": "a90e3f1c2b7d", "subject": "search: git scope tests", "tests": true},
+                            {"sha": "5b1c9e04d3aa", "subject": "search: changed-lines scope", "tests": false},
+                            {"sha": "7d21c0e8f611", "subject": "search: git scopes in the picker", "tests": false}
+                        ]},
+                    })),
                 },
                 now,
             )?;
@@ -383,6 +396,7 @@ mod tests {
                 queue: if t.batch { Queue::Batch } else { Queue::None },
                 held: (t.n == r.held.0).then(|| r.held.1.to_owned()),
                 card: None,
+                ..TaskFacts::default()
             };
             seen.extend(cells(&f, Some(&r.pack)).map(|c| c.chip));
         }

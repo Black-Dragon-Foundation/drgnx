@@ -1178,12 +1178,9 @@ async fn merge(
     let git = f.core.runs.git();
     // the integration branch has a tree of its own next to the workers'
     let job_tree: PathBuf = tree.path.with_file_name("_job");
-    if !job_tree.exists() {
-        let p = job_tree.to_string_lossy().into_owned();
-        runner::tick::git(&repo, &["worktree", "add", "-q", &p, &target])
-            .await
-            .map_err(|e| e.stderr)?;
-    }
+    runner::review::branch_tree(&repo, &target, &job_tree)
+        .await
+        .map_err(|e| e.stderr)?;
     if runner::tick::git(
         &job_tree,
         &["merge-base", "--is-ancestor", &tree.branch, "HEAD"],

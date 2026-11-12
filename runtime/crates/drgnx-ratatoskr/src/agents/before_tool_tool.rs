@@ -101,6 +101,16 @@ pub async fn run(front: &Front, sid: &str, args: &Value) -> Value {
         },
     };
     call.step = session.as_ref().and_then(|s| s.current_step());
+    // advice before the gate: a code commit before the task's red
+    if let Some(s) = &session
+        && let Some(reason) = crate::orch::advice::at_seam(front, &site, &call, s.cwd()).await
+    {
+        return json!({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }});
+    }
     let out = hook_points::before_tool(front, &site, &call, None).await;
     answer(call.step_name(), &out)
 }

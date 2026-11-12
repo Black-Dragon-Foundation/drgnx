@@ -10,15 +10,19 @@
 //!   adapter has it and the value an `evaluateName`, else `setVariable`), and on to the chosen end; the probes' hits
 //!   on both sides of the point, for [`super::compare`].
 //!
+//! - [`watch`]: a plain run in a tree of the caller's (D5's predicates), to the program's end: where a watched
+//!   exception stops, or a probe's values, within a time box.
+//!
 //! The tree, the sandbox and the protocol are in [`super::fork_hub`].
 
-use super::fork_probes::{marker, parse, thread_expr};
-use super::fork_run::{RunHit, RunInfo, RunProbe};
+use super::probes::{log_message, parse, thread_expr};
+use super::record::{RunHit, RunInfo, RunProbe};
 use super::session::{self, Handle, Op, Request, SourceBps, Start, Stop, Update};
 use super::{Connected, Launcher};
 use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// The most hits of the fork line the hub counts through.
@@ -53,6 +57,8 @@ pub enum Until {
     Exit,
     /// The next hit of this probe after the point.
     Probe(String),
+    /// The point itself: the fork ends there (a replay to a stop, D3's trace).
+    Here,
 }
 
 /// The fork point as the session reaches it: the breakpoint at PATH:LINE stopped HIT times, then STEPS.
@@ -95,7 +101,7 @@ pub fn fork_adapter(ty: &str) -> Result<&'static str, String> {
 /// RUN forked at AT on this machine (LINUX: forks run on Linux only for now); CONFIRMED: the user said yes to a slow
 /// replay.
 pub fn check(run: &RunInfo, at: &At, linux: bool, confirmed: bool) -> Result<Target, Refused> {
-    if run.request == Request::Attach {
+    if run.request == "attach" {
         return Err(Refused::No(
             "an attach session cannot be replayed: the hub did not start its program".into(),
         ));
@@ -221,10 +227,11 @@ pub fn for_tree(config: &Value, root: &Path, tree: &Path) -> Value {
     }
 }
 
-/// The fork's breakpoints: the probes as logpoints (thread expression of ADAPTER), and the fork line's plain
-/// breakpoint (a probe on that line is read at each of its stops instead), plus STOP_AT's lines; paths as given.
+/// The fork's breakpoints: the probes as logpoints, their messages as the run recorded them for ADAPTER_ID (the
+/// configuration's type), and the fork line's plain breakpoint (a probe on that line is read at each of its stops
+/// instead), plus STOP_AT's lines; paths as given.
 pub fn breakpoints(
-    adapter: &str,
+    adapter_id: &str,
     probes: &[RunProbe],
     fork_line: Option<(&str, u32)>,
     stop_at: &[(String, u32)],
@@ -251,7 +258,7 @@ pub fn breakpoints(
     for p in probes {
         put(
             &p.path,
-            json!({"line": p.line, "logMessage": marker(&p.id, thread_expr(adapter), &p.expr)}),
+            json!({"line": p.line, "logMessage": log_message(adapter_id, &p.id, &p.expr)}),
         );
     }
     by_path
@@ -347,6 +354,7 @@ impl Tree {
             thread,
             value,
             seq: self.seq,
+            t_ms: 0,
         };
         self.seq += 1;
         self.hits.push(h.clone());
@@ -377,61 +385,73 @@ fn top(stop: &Stop) -> (String, u32) {
 }
 
 impl Drive {
-    /// The next update that matters, handling the rest (children, caps, ends of children).
+    /// The next update that matters (see [`next_of`]).
     async fn next(&self, t: &mut Tree) -> Result<Next, String> {
-        loop {
-            let Some((i, u)) = t.rx.recv().await else {
-                return Err("the fork's session is gone".into());
-            };
-            match u {
-                Update::Caps(c) => t.sessions[i].caps = c,
-                Update::Stopped(s) => return Ok(Next::Stopped(i, s)),
-                Update::Event { event, body } if event == "output" => {
-                    if let Some(h) = body
-                        .get("output")
-                        .and_then(Value::as_str)
-                        .and_then(|o| t.hit(o))
-                    {
-                        return Ok(Next::Hit(h));
-                    }
+        next_of(&self.start, &self.launcher, t).await
+    }
+}
+
+/// The next update of T that matters, handling the rest (children started like START through LAUNCHER, caps, ends
+/// of children).
+async fn next_of(
+    start0: &Start,
+    launcher: &Arc<dyn Launcher>,
+    t: &mut Tree,
+) -> Result<Next, String> {
+    loop {
+        let Some((i, u)) = t.rx.recv().await else {
+            return Err("the fork's session is gone".into());
+        };
+        match u {
+            Update::Caps(c) => t.sessions[i].caps = c,
+            Update::Stopped(s) => return Ok(Next::Stopped(i, s)),
+            Update::Event { event, body } if event == "output" => {
+                if let Some(h) = body
+                    .get("output")
+                    .and_then(Value::as_str)
+                    .and_then(|o| t.hit(o))
+                {
+                    return Ok(Next::Hit(h));
                 }
-                Update::StartDebugging { arguments, reply } => {
-                    let mut start = self.start.clone();
-                    start.breakpoints = t.bps.clone();
-                    start.arguments = arguments
-                        .get("configuration")
-                        .cloned()
-                        .unwrap_or_else(|| json!({}));
-                    start.request =
-                        if arguments.get("request").and_then(Value::as_str) == Some("attach") {
-                            Request::Attach
-                        } else {
-                            Request::Launch
-                        };
-                    match self.launcher.child().await {
-                        Ok(c) => {
-                            t.add(start, c);
-                            let _ = reply.send(Ok(()));
-                        }
-                        Err(e) => {
-                            let _ = reply.send(Err(e));
-                        }
-                    }
-                }
-                Update::RunInTerminal { reply, .. } => {
-                    let _ = reply.send(Err("a fork has no terminal".into()));
-                }
-                Update::Ended(end) => {
-                    t.sessions[i].ended = true;
-                    if i == 0 {
-                        return Ok(Next::Ended(end.exit_code));
-                    }
-                }
-                _ => {}
             }
+            Update::StartDebugging { arguments, reply } => {
+                let mut start = start0.clone();
+                start.breakpoints = t.bps.clone();
+                start.arguments = arguments
+                    .get("configuration")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                start.request =
+                    if arguments.get("request").and_then(Value::as_str) == Some("attach") {
+                        Request::Attach
+                    } else {
+                        Request::Launch
+                    };
+                match launcher.child().await {
+                    Ok(c) => {
+                        t.add(start, c);
+                        let _ = reply.send(Ok(()));
+                    }
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                    }
+                }
+            }
+            Update::RunInTerminal { reply, .. } => {
+                let _ = reply.send(Err("a fork has no terminal".into()));
+            }
+            Update::Ended(end) => {
+                t.sessions[i].ended = true;
+                if i == 0 {
+                    return Ok(Next::Ended(end.exit_code));
+                }
+            }
+            _ => {}
         }
     }
+}
 
+impl Drive {
     /// Every configured session gets PATH's breakpoints BPS.
     async fn set_bps(&self, t: &mut Tree, all: &[SourceBps]) {
         t.bps = all.to_vec();
@@ -470,7 +490,11 @@ impl Drive {
                 .and_then(|b| b.get("result").and_then(Value::as_str).map(str::to_owned))
             }
         };
-        let thread = eval(thread_expr(&self.adapter).to_owned()).await;
+        let thread = match thread_expr(&self.start.adapter_id) {
+            // no thread in the language: the run's hits name none either
+            "" => Some(String::new()),
+            e => eval(e.to_owned()).await,
+        };
         let value = eval(p.expr.clone()).await;
         if let (Some(thread), Some(value)) = (thread, value) {
             let h = RunHit {
@@ -478,6 +502,7 @@ impl Drive {
                 thread,
                 value,
                 seq: t.seq,
+                t_ms: 0,
             };
             t.seq += 1;
             t.hits.push(h);
@@ -588,7 +613,7 @@ pub async fn drive(d: Drive) -> Result<Outcome, String> {
     };
     let mut start = d.start.clone();
     start.breakpoints = breakpoints(
-        &d.adapter,
+        &d.start.adapter_id,
         &d.probes,
         Some((&d.target.path, d.target.line)),
         &[],
@@ -659,15 +684,18 @@ async fn reach_and_run(d: &Drive, t: &mut Tree) -> Result<Outcome, String> {
     let before = std::mem::take(&mut t.hits);
     // the stopping thread, named as the probes name it
     let frame = stop.frames.first().and_then(|f| f.get("id")).cloned();
-    let thread = t.sessions[si]
-        .handle
-        .request(
-            "evaluate",
-            json!({"expression": thread_expr(&d.adapter), "frameId": frame, "context": "watch"}),
-        )
-        .await
-        .ok()
-        .and_then(|b| b.get("result").and_then(Value::as_str).map(str::to_owned));
+    let thread = match thread_expr(&d.start.adapter_id) {
+        "" => Some(String::new()),
+        e => t.sessions[si]
+            .handle
+            .request(
+                "evaluate",
+                json!({"expression": e, "frameId": frame, "context": "watch"}),
+            )
+            .await
+            .ok()
+            .and_then(|b| b.get("result").and_then(Value::as_str).map(str::to_owned)),
+    };
     // 3. the change
     let applied = match &d.change {
         Change::Value { path, text } => Some(
@@ -682,13 +710,29 @@ async fn reach_and_run(d: &Drive, t: &mut Tree) -> Result<Outcome, String> {
         ),
         Change::Nothing | Change::Code => None,
     };
+    if d.until == Until::Here {
+        let (path, line) = at.clone();
+        return Ok(Outcome {
+            before,
+            after: vec![],
+            thread,
+            applied,
+            end: End::Stop {
+                path,
+                line,
+                reason: stop.reason.clone(),
+                locals: locals(&stop),
+            },
+            at,
+        });
+    }
     // 4. on to the end: the fork line's breakpoint goes (the run's later lines come for a next stop)
     let later: &[(String, u32)] = if d.until == Until::NextStop {
         &d.later
     } else {
         &[]
     };
-    let mut bps = breakpoints(&d.adapter, &d.probes, None, later);
+    let mut bps = breakpoints(&d.start.adapter_id, &d.probes, None, later);
     if !bps.iter().any(|s| s.path == d.target.path) {
         bps.push(SourceBps {
             path: d.target.path.clone(),
@@ -761,4 +805,124 @@ fn locals(stop: &Stop) -> Vec<Value> {
         .iter()
         .find_map(|s| s.variables.clone())
         .unwrap_or_default()
+}
+
+/// What a plain run watches (D5's predicates), its path in the tree it runs in.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Watch {
+    /// An exception stopping at PATH:LINE.
+    Exception { path: String, line: u32 },
+    /// EXPR's value each time PATH:LINE runs.
+    Probe {
+        path: String,
+        line: u32,
+        expr: String,
+    },
+}
+
+/// How a watched run ended.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RunEnd {
+    /// The watched exception's place, when it stopped there (paths as the watch named them).
+    pub exception_at: Option<(String, u32)>,
+    /// The probe's values, in the order they came.
+    pub probe_values: Vec<String>,
+    /// The program's exit code, when it ended and the adapter said.
+    pub exit: Option<i64>,
+    /// The time box ran out first (the session was stopped).
+    pub timed_out: bool,
+}
+
+/// A plain run: started with START through LAUNCHER, ADAPTER's language, WATCH watched, LIMIT the time box.
+pub struct Watched {
+    pub launcher: Arc<dyn Launcher>,
+    pub start: Start,
+    pub adapter: String,
+    pub watch: Watch,
+    pub limit: Duration,
+}
+
+/// The exception filter that stops at every raised exception, in ADAPTER's names.
+fn raised_filter(adapter: &str) -> &'static str {
+    match adapter {
+        "js-debug" | "pwa-node" | "node" => "all",
+        _ => "raised",
+    }
+}
+
+/// W's run to the program's end (or the watched exception, or the time box), its sessions stopped after.
+pub async fn watch(w: Watched) -> Result<RunEnd, String> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let mut t = Tree {
+        sessions: vec![],
+        tx,
+        rx,
+        seq: 0,
+        hits: vec![],
+        bps: vec![],
+    };
+    let probes = match &w.watch {
+        Watch::Probe { path, line, expr } => vec![RunProbe {
+            id: "watch".into(),
+            path: path.clone(),
+            line: *line,
+            expr: expr.clone(),
+        }],
+        Watch::Exception { .. } => vec![],
+    };
+    let mut start = w.start.clone();
+    start.breakpoints = breakpoints(&w.start.adapter_id, &probes, None, &[]);
+    if matches!(w.watch, Watch::Exception { .. }) {
+        start.exception_filters = Some(vec![raised_filter(&w.adapter).to_owned()]);
+    }
+    t.bps = start.breakpoints.clone();
+    let c = w.launcher.connect().await?;
+    t.add(start.clone(), c);
+    let r = crate::clock::timeout(w.limit, watch_run(&w, &start, &mut t)).await;
+    Drive::finish(&mut t).await;
+    let values = |t: &Tree| t.hits.iter().map(|h| h.value.clone()).collect::<Vec<_>>();
+    match r {
+        Ok(Ok(mut end)) => {
+            end.probe_values = values(&t);
+            Ok(end)
+        }
+        Ok(Err(e)) => Err(e),
+        Err(_) => Ok(RunEnd {
+            probe_values: values(&t),
+            timed_out: true,
+            ..RunEnd::default()
+        }),
+    }
+}
+
+async fn watch_run(w: &Watched, start: &Start, t: &mut Tree) -> Result<RunEnd, String> {
+    loop {
+        match next_of(start, &w.launcher, t).await? {
+            Next::Hit(_) => {}
+            Next::Ended(exit) => {
+                return Ok(RunEnd {
+                    exit,
+                    ..RunEnd::default()
+                });
+            }
+            Next::Stopped(i, s) => {
+                if let Watch::Exception { path, line } = &w.watch
+                    && s.reason == "exception"
+                    && top(&s) == (path.clone(), *line)
+                {
+                    return Ok(RunEnd {
+                        exception_at: Some((path.clone(), *line)),
+                        ..RunEnd::default()
+                    });
+                }
+                // any other stop (another exception, an entry) runs on
+                t.sessions[i]
+                    .handle
+                    .op(Op::Continue {
+                        thread: Some(s.thread),
+                    })
+                    .await?;
+            }
+        }
+    }
 }

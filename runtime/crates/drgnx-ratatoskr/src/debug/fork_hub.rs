@@ -9,16 +9,21 @@
 //!   project's `.env` files are bound into the tree read-only ([`Sealer`]); neither is stored.
 //! - The result compares the fork with the run ([`super::compare`]): "matched on N of M hits" on the stopping thread
 //!   before the point, the probes' lanes after it, and how each ended.
+//! - Two uses without a fork of their own (no entry, no events): [`Forks::trace`] replays a run to a stop with extra
+//!   environment and files in the tree (D3's origin trail), its tree kept until the [`TraceTree`] goes;
+//!   [`Forks::run_in`] runs the run's configuration in a tree of the caller's to the end, watching an exception or a
+//!   probe (D5's predicates).
 
 use super::compare::{self, Matched};
-use super::fork::{self, At, Change, Drive, End, Outcome, Refused, Until};
-use super::fork_run::{RunInfo, Runs, config_hash};
+use super::fork::{self, At, Change, Drive, End, Outcome, Refused, RunEnd, Until, Watch, Watched};
+use super::record::{RunInfo, Runs, config_hash};
 use super::session::{Request, Start};
 use super::{BoxFut, Launcher, Sink};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// Where forks' trees come from.
 pub trait Trees: Send + Sync {
@@ -28,19 +33,21 @@ pub trait Trees: Send + Sync {
     fn changed<'a>(&'a self, tree: &'a Path) -> BoxFut<'a, Vec<String>>;
     /// TREE and everything of its fork goes.
     fn remove<'a>(&'a self, tree: &'a Path) -> BoxFut<'a, ()>;
+    /// A scratch folder for ID's sandbox (its tmp), outside any tree; [`Trees::remove`] of it takes it away.
+    fn scratch(&self, id: &str) -> Result<PathBuf, String>;
 }
 
 /// The sealed adapter of a fork.
 pub trait Sealer: Send + Sync {
-    /// The launcher of ADAPTER (`debugpy`, `js-debug`) for fork ID in TREE, RUN's project's `.env` files bound
-    /// read-only; CONFIG is the resolved configuration, moved into the tree.
+    /// The launcher of ADAPTER (`debugpy`, `js-debug`) in TREE, TMP the sandbox's tmp, RUN's project's `.env`
+    /// files bound read-only; CONFIG is the resolved configuration, moved into the tree.
     fn launcher(
         &self,
         adapter: &str,
         run: &RunInfo,
         tree: &Path,
         config: &Value,
-        id: &str,
+        tmp: &Path,
     ) -> Result<Arc<dyn Launcher>, String>;
 }
 
@@ -62,6 +69,65 @@ pub enum Made {
     Fork(String),
     /// A question for the user (the replay is slow).
     Ask(String),
+}
+
+/// RESOLVED is the configuration RUN ran with (its hash).
+fn same_config(run: &RunInfo, resolved: &Value) -> Result<(), String> {
+    if run.config_hash.as_deref() != Some(config_hash(resolved).as_str()) {
+        return Err(
+            "the configuration resolves differently now than at the run (launch.json, an input, a setting or an \
+             environment value changed): the fork would not replay the same run"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// A replay's tree (D3's trace): removed when this goes, never anything outside the forks' root.
+pub struct TraceTree {
+    pub path: PathBuf,
+    trees: Arc<dyn Trees>,
+}
+
+impl std::fmt::Debug for TraceTree {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TraceTree")
+            .field("path", &self.path)
+            .finish()
+    }
+}
+
+impl Drop for TraceTree {
+    fn drop(&mut self) {
+        let (trees, path) = (self.trees.clone(), std::mem::take(&mut self.path));
+        // outside the hub's runtime (it is stopping) the hub-start sweep takes it
+        if tokio::runtime::Handle::try_current().is_ok() {
+            crate::clock::spawn("debug:trace-tree", async move { trees.remove(&path).await });
+        }
+    }
+}
+
+/// REL is a relative path inside a tree: no root, no `..`.
+fn relative(rel: &str) -> Result<(), String> {
+    use std::path::Component;
+    let p = Path::new(rel);
+    if rel.is_empty() || !p.components().all(|c| matches!(c, Component::Normal(_))) {
+        return Err(format!("{rel:?} is not a path inside the tree"));
+    }
+    Ok(())
+}
+
+/// RESOLVED (`env` an object) with VARS added to its environment.
+fn with_env(mut config: Value, vars: &[(String, String)]) -> Value {
+    if let Value::Object(c) = &mut config {
+        let env = c.entry("env").or_insert_with(|| json!({}));
+        if let Value::Object(env) = env {
+            for (k, v) in vars {
+                env.insert(k.clone(), json!(v));
+            }
+        }
+    }
+    config
 }
 
 struct Entry {
@@ -130,18 +196,8 @@ impl Forks {
             Err(Refused::No(why)) => return Err(why),
             Err(Refused::Ask(q)) => return Ok(Made::Ask(q)),
         }
-        if config_hash(&ask.resolved) != run.config_hash {
-            return Err(
-                "the configuration resolves differently now than at the run (launch.json, an input, a setting or \
-                 an environment value changed): the fork would not replay the same run"
-                    .into(),
-            );
-        }
-        let id = {
-            let mut n = lock(&self.inner.next);
-            *n += 1;
-            format!("f{n}")
-        };
+        same_config(&run, &ask.resolved)?;
+        let id = self.next_id("f");
         lock(&self.inner.forks).insert(
             id.clone(),
             Entry {
@@ -156,6 +212,168 @@ impl Forks {
         let fid = id.clone();
         crate::clock::spawn("debug:fork", async move { me.prepare(&fid).await });
         Ok(Made::Fork(id))
+    }
+
+    /// A new id with PREFIX (`f` a fork, `t` a trace, `r` a plain run's scratch).
+    fn next_id(&self, prefix: &str) -> String {
+        let mut n = lock(&self.inner.next);
+        *n += 1;
+        format!("{prefix}{n}")
+    }
+
+    /// Run RUN replayed to its stop STOP and ended there (D3's trace): FILES (relative path, bytes) written into the
+    /// tree and ENV(the tree's path) added to RESOLVED's environment before the launch. No fork entry, no events.
+    pub fn trace<F>(
+        &self,
+        run: &str,
+        stop: u64,
+        resolved: Value,
+        env: F,
+        files: Vec<(String, Vec<u8>)>,
+    ) -> BoxFut<'static, Result<TraceTree, String>>
+    where
+        F: FnOnce(&Path) -> Vec<(String, String)> + Send + 'static,
+    {
+        let me = self.clone();
+        let run_id = run.to_owned();
+        Box::pin(async move {
+            let run = me
+                .inner
+                .runs
+                .run(&run_id)
+                .ok_or_else(|| format!("no recorded run {run_id}"))?;
+            match fork::check(&run, &At::Stop(stop), me.inner.linux, true) {
+                Ok(_) => {}
+                Err(Refused::No(w) | Refused::Ask(w)) => return Err(w),
+            }
+            same_config(&run, &resolved)?;
+            for (rel, _) in &files {
+                relative(rel)?;
+            }
+            let id = me.next_id("t");
+            let tree = me
+                .inner
+                .trees
+                .make(&run, &id)
+                .await
+                .map_err(|e| format!("the trace's tree: {e}"))?;
+            let guard = TraceTree {
+                path: tree.clone(),
+                trees: me.inner.trees.clone(),
+            };
+            for (rel, bytes) in files {
+                let at = tree.join(&rel);
+                if let Some(d) = at.parent() {
+                    std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+                }
+                std::fs::write(&at, bytes).map_err(|e| format!("{}: {e}", at.display()))?;
+            }
+            let extra = env(&tree);
+            let ask = Ask {
+                run: run_id,
+                at: At::Stop(stop),
+                change: Change::Nothing,
+                until: Until::Here,
+                confirm: true,
+                resolved,
+            };
+            me.drive(&run, &ask, &tree, &extra).await?;
+            Ok(guard)
+        })
+    }
+
+    /// Run RUN's configuration (RESOLVED) in the caller's TREE, sealed, to the program's end: WATCH (paths relative to
+    /// the project) watched, LIMIT the time box. No fork entry, no events; TREE is neither made nor removed.
+    pub fn run_in(
+        &self,
+        run: &str,
+        resolved: Value,
+        tree: PathBuf,
+        watch: Watch,
+        limit: Duration,
+    ) -> BoxFut<'static, Result<RunEnd, String>> {
+        let me = self.clone();
+        let run_id = run.to_owned();
+        Box::pin(async move {
+            let run = me
+                .inner
+                .runs
+                .run(&run_id)
+                .ok_or_else(|| format!("no recorded run {run_id}"))?;
+            if !me.inner.linux {
+                return Err("runs in a sealed tree are Linux only for now".into());
+            }
+            if run.request == "attach" {
+                return Err(
+                    "an attach session cannot be run again: the hub did not start its program"
+                        .into(),
+                );
+            }
+            same_config(&run, &resolved)?;
+            let ty = resolved
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or(&run.adapter_id)
+                .to_owned();
+            let adapter = fork::fork_adapter(&ty)?;
+            let root = Path::new(&run.root);
+            let mut config = fork::for_tree(&resolved, root, &tree);
+            if let Some(seed) = run.hash_seed {
+                config = with_env(config, &[("PYTHONHASHSEED".into(), seed.to_string())]);
+            }
+            let in_tree = |rel: &str| tree.join(rel).display().to_string();
+            let watch_t = match &watch {
+                Watch::Exception { path, line } => {
+                    relative(path)?;
+                    Watch::Exception {
+                        path: in_tree(path),
+                        line: *line,
+                    }
+                }
+                Watch::Probe { path, line, expr } => {
+                    relative(path)?;
+                    Watch::Probe {
+                        path: in_tree(path),
+                        line: *line,
+                        expr: expr.clone(),
+                    }
+                }
+            };
+            let id = me.next_id("r");
+            let tmp = me.inner.trees.scratch(&id)?;
+            let r = async {
+                let launcher = me
+                    .inner
+                    .sealer
+                    .launcher(adapter, &run, &tree, &config, &tmp)?;
+                fork::watch(Watched {
+                    launcher,
+                    start: Start {
+                        name: format!("Run of {} in {}", run.id, tree.display()),
+                        adapter_id: ty,
+                        request: Request::Launch,
+                        arguments: super::launch::adapter_arguments(&config),
+                        breakpoints: vec![],
+                        functions: vec![],
+                        exception_filters: None,
+                    },
+                    adapter: adapter.to_owned(),
+                    watch: watch_t,
+                    limit,
+                })
+                .await
+            }
+            .await;
+            me.inner.trees.remove(&tmp).await;
+            let mut end = r?;
+            // the watched place as the caller named it
+            if end.exception_at.is_some()
+                && let Watch::Exception { path, line } = watch
+            {
+                end.exception_at = Some((path, line));
+            }
+            Ok(end)
+        })
     }
 
     /// A code what-if, edited: run it.
@@ -227,8 +445,7 @@ impl Forks {
             let mut forks = lock(&self.inner.forks);
             let Some(e) = forks.get_mut(id) else { return };
             if e.view.is_null() {
-                e.view =
-                    json!({"fork": id, "run": e.run.id, "root": e.run.root.display().to_string()});
+                e.view = json!({"fork": id, "run": e.run.id, "root": e.run.root});
             }
             if let (Value::Object(v), Value::Object(d)) = (&mut e.view, data) {
                 v.extend(d);
@@ -277,7 +494,7 @@ impl Forks {
             id,
             json!({"state": "running", "tree": tree.display().to_string()}),
         );
-        match self.drive(id, &run, &ask, &tree).await {
+        match self.drive(&run, &ask, &tree, &[]).await {
             Ok(view) => self.publish(id, view),
             Err(e) => self.failed(id, e),
         }
@@ -285,10 +502,10 @@ impl Forks {
 
     async fn drive(
         &self,
-        id: &str,
         run: &RunInfo,
         ask: &Ask,
         tree: &Path,
+        extra_env: &[(String, String)],
     ) -> Result<Value, String> {
         let target = match fork::check(run, &ask.at, self.inner.linux, true) {
             Ok(t) => t,
@@ -301,18 +518,20 @@ impl Forks {
             .unwrap_or(&run.adapter_id)
             .to_owned();
         let adapter = fork::fork_adapter(&ty)?;
-        let root = run.root.as_path();
+        let root = Path::new(&run.root);
         let mut config = fork::for_tree(&ask.resolved, root, tree);
-        if let (Some(seed), Value::Object(c)) = (run.hash_seed, &mut config) {
-            let env = c.entry("env").or_insert_with(|| json!({}));
-            if let Value::Object(env) = env {
-                env.insert("PYTHONHASHSEED".into(), json!(seed.to_string()));
-            }
+        if let Some(seed) = run.hash_seed {
+            config = with_env(config, &[("PYTHONHASHSEED".into(), seed.to_string())]);
         }
+        let config = with_env(config, extra_env);
+        let tmp = tree
+            .parent()
+            .ok_or("the fork's tree has no folder")?
+            .join("tmp");
         let launcher = self
             .inner
             .sealer
-            .launcher(adapter, run, tree, &config, id)?;
+            .launcher(adapter, run, tree, &config, &tmp)?;
         let into = |p: &str| fork::into_tree(p, root, tree);
         let mut target_t = target.clone();
         target_t.path = into(&target.path);

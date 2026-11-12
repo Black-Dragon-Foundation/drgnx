@@ -6,13 +6,13 @@
 //! the adapters are; the tests give them a tools folder of their own, as Debug: Install Adapter would.
 //!
 //! A recorded run is stood in for: its stops and probe hits are what the fixture prints (it is deterministic but for
-//! the clock row), and its launch snapshot is taken of the fixture.
-use super::Sink;
-use super::fork::{At, Change, Until};
+//! the clock row), and its launch snapshot is taken of the fixture; one row records a real run (D1) and forks it.
+//! Also: a trace (D3) with an injected environment value and file, and plain runs in a bisect slot (D5).
+use super::fork::{At, Change, RunEnd, Until, Watch};
 use super::fork_hub::{Ask, Forks, Made};
-use super::fork_run::{RunHit, RunInfo, RunProbe, RunSnapshot, RunStop, Runs, config_hash};
 use super::fork_seal::{DirTrees, Sealed};
-use super::session::Request;
+use super::record::{RunHit, RunInfo, RunProbe, RunSnapshot, RunStop, Runs, config_hash};
+use super::{BoxFut, Connected, Launcher, Opened, Sink, Terminals};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -129,6 +129,7 @@ fn fixture(
             } else {
                 101 + u64::from(i)
             },
+            t_ms: 0,
         })
         .collect();
     let stop = |index, line, hit| RunStop {
@@ -140,14 +141,15 @@ fn fixture(
         line,
         bp_hit: Some(hit),
         steps: vec![],
+        session: "d1".into(),
     };
     let run = RunInfo {
         id: "r1".into(),
-        root: root.clone(),
+        root: root.display().to_string(),
         start: json!({}),
-        config_hash: config_hash(&resolved),
+        config_hash: Some(config_hash(&resolved)),
         adapter_id: resolved["type"].as_str().unwrap().into(),
-        request: Request::Launch,
+        request: "launch".into(),
         snapshot: Some(RunSnapshot {
             checkpoints,
             source: root.clone(),
@@ -351,4 +353,312 @@ async fn a_js_fork_replays_its_run_sealed() {
         "{v}"
     );
     assert_eq!(v["now"]["line"], json!(9), "{v}");
+}
+
+/// The trace row's program: given `TRACE_AT` (the tree's path), it writes what it saw into the tree first.
+const PY_SEES: &str = "O = __import__('os').environ.get('TRACE_AT'); O and open(O + '/seen.txt', 'w').write(O + '|' + open(O + '/in/given.txt').read())\n";
+
+#[tokio::test]
+#[ignore = "live: the adapter image with bwrap"]
+async fn a_python_trace_sees_its_injected_env_and_file() {
+    // one line first: the run's lines move down by one
+    let text = format!("{PY_SEES}{PY}");
+    let f = fixture("stock.py", &text, py_config, (6, 9, 25), |i| {
+        ((i * 7) % 13).to_string()
+    });
+    let g = f
+        .forks
+        .trace(
+            "r1",
+            100,
+            f.resolved.clone(),
+            |tree: &Path| vec![("TRACE_AT".into(), tree.display().to_string())],
+            vec![("in/given.txt".into(), b"origin-17".to_vec())],
+        )
+        .await
+        .unwrap();
+    let seen = std::fs::read_to_string(g.path.join("seen.txt")).unwrap();
+    assert_eq!(seen, format!("{}|origin-17", g.path.display()));
+    // no fork entry; the tree goes with the guard
+    assert!(f.forks.list().is_empty());
+    let tree = g.path.clone();
+    drop(g);
+    for _ in 0..100 {
+        if !tree.exists() {
+            break;
+        }
+        crate::clock::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(!tree.exists(), "{} is still there", tree.display());
+}
+
+#[tokio::test]
+#[ignore = "live: the adapter image with bwrap"]
+async fn python_runs_in_bisect_slots_report_a_probe_and_an_exception() {
+    let f = fixture("stock.py", PY, py_config, (5, 8, 24), |i| {
+        ((i * 7) % 13).to_string()
+    });
+    let slots = f._dir.path().join("runs/debug-forks/slots/b1");
+    // slot 1: the project as it is; the probe's values, the program's exit
+    let one = slots.join("s1");
+    std::fs::create_dir_all(&one).unwrap();
+    std::fs::copy(f.root.join("stock.py"), one.join("stock.py")).unwrap();
+    let end = f
+        .forks
+        .run_in(
+            "r1",
+            f.resolved.clone(),
+            one,
+            Watch::Probe {
+                path: "stock.py".into(),
+                line: 5,
+                expr: "shortfall".into(),
+            },
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    let want: Vec<String> = (0..N).map(|i| ((i * 7) % 13).to_string()).collect();
+    assert_eq!(end.probe_values, want, "{end:?}");
+    assert_eq!(end.exit, Some(0), "{end:?}");
+    assert!(!end.timed_out && end.exception_at.is_none(), "{end:?}");
+    // slot 2: a version that raises (one caught on line 2 first): the watched raise is found
+    let two = slots.join("s2");
+    std::fs::create_dir_all(&two).unwrap();
+    std::fs::write(
+        two.join("stock.py"),
+        "def f():\n    raise ValueError('x')\ntry:\n    f()\nexcept ValueError:\n    pass\nraise KeyError('y')\n",
+    )
+    .unwrap();
+    let end = f
+        .forks
+        .run_in(
+            "r1",
+            f.resolved.clone(),
+            two,
+            Watch::Exception {
+                path: "stock.py".into(),
+                line: 7,
+            },
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(end.exception_at, Some(("stock.py".into(), 7)), "{end:?}");
+    // slot 3: a program that never ends: the time box
+    let three = slots.join("s3");
+    std::fs::create_dir_all(&three).unwrap();
+    std::fs::write(
+        three.join("stock.py"),
+        "import time\nwhile True:\n    time.sleep(0.1)\n",
+    )
+    .unwrap();
+    let end = f
+        .forks
+        .run_in(
+            "r1",
+            f.resolved.clone(),
+            three,
+            Watch::Probe {
+                path: "stock.py".into(),
+                line: 3,
+                expr: "1".into(),
+            },
+            Duration::from_secs(3),
+        )
+        .await
+        .unwrap();
+    assert!(end.timed_out, "{end:?}");
+    assert!(!end.probe_values.is_empty(), "{end:?}");
+    assert_ne!(end, RunEnd::default());
+}
+
+struct NoTerms;
+
+impl Terminals for NoTerms {
+    fn open(
+        &self,
+        _: u64,
+        _: String,
+        _: Vec<String>,
+        _: Vec<(String, String)>,
+    ) -> BoxFut<'_, Result<Opened, String>> {
+        Box::pin(async { Err("no terminals".into()) })
+    }
+}
+
+/// debugpy's adapter on stdio, unsealed: how the user's own run is debugged.
+struct Debugpy;
+
+impl Launcher for Debugpy {
+    fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
+        Box::pin(async move {
+            let python =
+                std::env::var("DRGNX_DEBUG_LIVE_PYTHON").unwrap_or_else(|_| "python3".into());
+            let mut child = draugr::spawn(draugr::Spec {
+                program: PathBuf::from(python),
+                args: vec!["-m".into(), "debugpy.adapter".into()],
+                env: std::env::vars_os().collect(),
+                cwd: None,
+                stdin_null: false,
+                pass_fds: vec![],
+                new_session: false,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+            let (Some(stdin), Some(stdout)) = (child.take_stdin(), child.take_stdout()) else {
+                return Err("no stdio".into());
+            };
+            let (client, incoming) = vor::Client::new(stdout, stdin);
+            Ok(Connected {
+                client,
+                incoming,
+                proc: Box::new(child),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+#[ignore = "live: the adapter image with bwrap"]
+async fn a_recorded_python_run_is_forked_end_to_end() {
+    pin_hub();
+    let d = tempfile::tempdir_in("/tmp").unwrap();
+    let home = d.path().join("home");
+    let root = d.path().join("proj");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&root).unwrap();
+    let text = PY.replace("@ROOT@", &root.display().to_string());
+    let file = root.join("stock.py");
+    std::fs::write(&file, &text).unwrap();
+    let path = file.display().to_string();
+    let root_s = root.display().to_string();
+    let resolved = py_config(&root);
+
+    // the user's run, recorded: a probe on `shortfall`, a breakpoint at the end
+    let ev = Arc::new(Events::default());
+    let dbg = super::Debug::new(ev.clone(), Arc::new(NoTerms));
+    let rec = dbg.record_into(super::record::Opts::new(
+        d.path().join("runs"),
+        d.path().join("checkpoints"),
+    ));
+    rec.probes(&root_s, |p| {
+        p.apply(super::probes::Op::Result {
+            path: path.clone(),
+            line: 4,
+            expr: "shortfall".into(),
+            text: text.clone(),
+            lang: super::probes::Lang::Python,
+        })
+        .unwrap()
+    });
+    let start = super::session::Start {
+        name: "Stock".into(),
+        adapter_id: "debugpy".into(),
+        request: super::session::Request::Launch,
+        arguments: resolved.clone(),
+        breakpoints: vec![super::session::SourceBps {
+            path: path.clone(),
+            breakpoints: vec![json!({"line": 24})],
+        }],
+        functions: vec![],
+        exception_filters: None,
+    };
+    let launch = super::record::Launch {
+        config_hash: Some(config_hash(&resolved)),
+        start: json!({"root": root_s, "config": "launch:0"}),
+        ..Default::default()
+    };
+    let id = dbg
+        .start_with(1, &root_s, start, Arc::new(Debugpy), launch)
+        .await
+        .unwrap();
+    let mut stop = None;
+    for _ in 0..600 {
+        stop = dbg.stop_of(&id);
+        if stop.is_some() {
+            break;
+        }
+        crate::clock::sleep(Duration::from_millis(100)).await;
+    }
+    let stop = stop.expect("the run stops at the end");
+    dbg.control(
+        &id,
+        super::Op::Continue {
+            thread: Some(stop.thread),
+        },
+    )
+    .await
+    .unwrap();
+    let ended = || {
+        ev.0.lock()
+            .unwrap()
+            .iter()
+            .any(|(e, d)| e == "debug-run" && d["state"] == json!("ended"))
+    };
+    for _ in 0..600 {
+        if ended() {
+            break;
+        }
+        crate::clock::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ended(), "the run did not end");
+    let runs = rec.list(&root_s);
+    assert_eq!(runs.len(), 1);
+    let info = rec.run(&runs[0].id).unwrap();
+    assert_eq!(info.hits.len(), N as usize);
+    assert_eq!(info.stops.len(), 1);
+
+    // forked from its stop, sealed, to the end: every hit before the point matched
+    let path_env = std::env::var("PATH").unwrap();
+    let env = runstav::paths::Env::new(
+        &[
+            ("HOME", home.to_str().unwrap()),
+            ("PATH", &path_env),
+            ("XDG_RUNTIME_DIR", d.path().join("run").to_str().unwrap()),
+        ],
+        unsafe { libc::getuid() },
+    );
+    let fev = Arc::new(Events::default());
+    let forks = Forks::new(
+        fev.clone(),
+        rec.clone(),
+        Arc::new(DirTrees::new(d.path().join("runs/debug-forks"))),
+        Arc::new(Sealed {
+            env,
+            path: std::env::split_paths(&path_env).collect(),
+            tools: tools(d.path()),
+        }),
+        true,
+    );
+    let Made::Fork(fork) = forks
+        .fork(Ask {
+            run: info.id.clone(),
+            at: At::Stop(info.stops[0].index),
+            change: Change::Nothing,
+            until: Until::Exit,
+            confirm: false,
+            resolved,
+        })
+        .unwrap()
+    else {
+        panic!("asked");
+    };
+    let mut v = Value::Null;
+    for _ in 0..1200 {
+        if let Some(l) = fev.last(&fork)
+            && matches!(l["state"].as_str(), Some("done" | "failed"))
+        {
+            v = l;
+            break;
+        }
+        crate::clock::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(v["state"], json!("done"), "{v}");
+    assert_eq!(
+        v["matched"],
+        json!({"matched": N, "of": N, "first": null}),
+        "{v}"
+    );
+    assert_eq!(v["now"]["kind"], json!("exit"), "{v}");
 }

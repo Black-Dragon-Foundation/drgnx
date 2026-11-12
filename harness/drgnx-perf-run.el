@@ -84,6 +84,74 @@ would be bypassed by native code; the cost timed is the Lisp's, the C lights not
      (global-set-key (kbd \"<f9>\") #'drgnx-debug-gutter-toggle) t)"
           drgnx-ui-repo-dir))
 
+(defun drgnx-perf-run--debug-timeline-setup-form ()
+  "Recorded runs' workloads' setup: the timeline's files and `drgnx-hub-call' answered in the session: ten probes on
+the fixture (`debug/probe/op'), a run of 60 stops (`debug/run/get', with its strip rows) and each stop as it ran
+(`debug/run/stop': the capture and a 2,000-line file).  `<f8>' is one batch of probe hits, what the hub sends every
+50 ms at 2,000 hits a second (100 hits, ten per probe), drawn as the throttle would.  `drgnx-perf--timeline-stop'
+undoes it."
+  (format "(progn (load (expand-file-name \"modules/extra/drgnx-debug-timeline\" %S) nil t) %s)"
+          drgnx-ui-repo-dir
+          (prin1-to-string
+           '(progn
+              (defvar drgnx-perf--timeline-text
+                (mapconcat (lambda (i) (format "    total_%d = compute(item, %d)  # a line of the program as it ran\n" i i))
+                           (number-sequence 1 2000) ""))
+              (defvar drgnx-perf--timeline-seq 0)
+              (defun drgnx-perf--timeline-answer (method params)
+                (pcase method
+                  ("debug/probe/op"
+                   (list :root (plist-get params :root)
+                         :probes (vconcat (mapcar (lambda (i) (list :id (format "p%d" i) :path (expand-file-name buffer-file-name)
+                                                                    :line (* 40 i) :expr (format "total_%d" i) :enabled t))
+                                                  (number-sequence 1 10)))))
+                  ("debug/run/get"
+                   (list :run (list :id "perf" :n 1) :total 60 :lanes [] :more nil
+                         :stops (vconcat (mapcar (lambda (i) (list :index (* 3 i) :reason (if (zerop (% i 4)) "breakpoint" "step")
+                                                                   :path "/p/m.py" :line (* 30 i)))
+                                                 (number-sequence 1 60)))
+                         :strip (vector (list :key "head" :text "Run 1 · 60 stops" :runs (vector (vector 0 5 "drgnx-debug-timeline-head")))
+                                        (list :key "stops" :text (mapconcat (lambda (i) (format "·%d" i)) (number-sequence 1 60) " ")))))
+                  ("debug/run/stop"
+                   (let ((i (plist-get params :stop)))
+                     (list :run "perf" :stop (list :index i :reason "step" :line (* 10 i))
+                           :capture (list :frames (vconcat (mapcar (lambda (f) (list :name (format "fn_%d" f) :line f :source (list :path "/p/m.py")))
+                                                                   (number-sequence 1 20)))
+                                          :scopes (vector (list :scope (list :name "Locals")
+                                                                :variables (vconcat (mapcar (lambda (v) (list :name (format "v%d" v) :value (format "%d" (* v i))))
+                                                                                            (number-sequence 1 40))))))
+                           :snapshot "perf" :source (list :path "/p/m.py" :text drgnx-perf--timeline-text))))
+                  (_ t)))
+              (defun drgnx-perf--timeline-hub (method params cb &rest _)
+                (funcall cb (drgnx-perf--timeline-answer method params) nil) 1)
+              (defun drgnx-perf--timeline-sync (method params &rest _) (drgnx-perf--timeline-answer method params))
+              (defun drgnx-perf--probe-batch ()
+                "One batch of hits (100: ten per probe), then the line ends drawn, as the throttle's timer would."
+                (interactive)
+                (let ((root (drgnx-debug-launch-root)))
+                  (unless drgnx-debug-timeline--runs
+                    (drgnx-debug-timeline--event "debug-run" (list :run "perf" :n 1 :root root :state "recording")))
+                  (drgnx-debug-timeline--event
+                   "debug-probe-hits"
+                   (list :run "perf"
+                         :hits (vconcat (mapcar (lambda (k) (list :probe (format "p%d" (1+ (% k 10)))
+                                                                  :value (number-to-string (% (* 37 (cl-incf drgnx-perf--timeline-seq)) 101))))
+                                                (number-sequence 0 99)))))
+                  (drgnx-timer-cancel (cons 'debug-probe-values root))
+                  (drgnx-debug-timeline--values-changed root)))
+              (defun drgnx-perf--timeline-stop ()
+                (drgnx-debug-timeline-mode -1)
+                (advice-remove 'drgnx-hub-call #'drgnx-perf--timeline-hub)
+                (advice-remove 'drgnx-hub-call-sync #'drgnx-perf--timeline-sync)
+                (global-unset-key (kbd "<f8>"))
+                (define-key drgnx-debug-past-mode-map (kbd "M-<left>") nil t) t)
+              (advice-add 'drgnx-hub-call :override #'drgnx-perf--timeline-hub)
+              (advice-add 'drgnx-hub-call-sync :override #'drgnx-perf--timeline-sync)
+              (global-set-key (kbd "<f8>") #'drgnx-perf--probe-batch)
+              ;; the key profiles' row (keys/*.eld), without the module's setup
+              (define-key drgnx-debug-past-mode-map (kbd "M-<left>") #'drgnx-debug-timeline-back)
+              t))))
+
 (defun drgnx-perf-run--visit-fixture-form ()
   "The form that visits the fixture and puts point where the keys go: the line under `drgnx-perf-run--fixture-mark'."
   (format "(let ((f %S)) (when-let* ((b (find-buffer-visiting f))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
@@ -1862,6 +1930,24 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :actions ,(apply #'append (make-list 20 (list (list :keys "<f9>") (list :keys "<down>"))))
        :check "(= 20 (length drgnx-perf--debug-store))"
        :teardown ,(concat "(progn (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
+      ;; recorded runs (spec §19.9): a batch of probe hits (100, ten probes, at the hub's 20 batches a second: 2,000 hits a
+      ;; second) to the sparklines at the lines' ends, 40 batches, within 100 ms each
+      (debug-probe-flood
+       :setup ,(drgnx-perf-run--debug-timeline-setup-form)
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (drgnx-debug-timeline-mode 1) (setq drgnx-perf--timeline-seq 0) t)")
+       :actions ,(funcall keys "<f8>" 40)
+       :check "(with-current-buffer (window-buffer) (= 20 (length drgnx-debug-timeline--overlays)))"   ; ten glyphs, ten line ends
+       :teardown ,(concat "(progn (drgnx-perf--timeline-stop) " kill-fixture ")"))
+      ;; scrubbing: `Alt ←' through 30 past stops, each opened from the hub's answer (the capture and a 2,000-line file
+      ;; as it ran) and drawn with its banner, line and variables, within 50 ms each
+      (debug-scrub
+       :setup ,(drgnx-perf-run--debug-timeline-setup-form)
+       :each ,(concat "(progn (drgnx-debug-timeline-mode 1) " (drgnx-perf-run--visit-fixture-form)
+                      " (drgnx-debug-timeline-show \"perf\") (drgnx-debug-timeline-live)"
+                      " (select-window (get-buffer-window drgnx-debug-timeline-buffer)) t)")
+       :actions ,(funcall keys "M-<left>" 30)
+       :check "(eql drgnx-debug-timeline--current (* 3 31))"   ; from live, 30 back: stop 31 of 60
+       :teardown ,(concat "(progn (drgnx-debug-timeline-live) (drgnx-perf--timeline-stop) " kill-fixture ")"))
       ;; the diff view, split, on a 10k-line diff (built in the session: no git needed)
       (diff-scrolling
        :setup ,(format "(progn (load (expand-file-name \"modules/tools/drgnx-diff\" %S) nil t) t)" drgnx-ui-repo-dir)
@@ -2555,7 +2641,7 @@ version and the commit, as JSON in FILE."
                                 terminal-backfill terminal-flood))
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "graphical debugging: its allocation, CPU and rows are set from three pinned runs on the desktop island (the plan's perf step)"))
-              '(debug-gutter-scroll debug-gutter-baseline debug-breakpoint-click))
+              '(debug-gutter-scroll debug-gutter-baseline debug-breakpoint-click debug-probe-flood debug-scrub))
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))
     ,@(mapcar (lambda (w) (cons w "the Work space's rows are time budgets on the desktop island (typing p95 and the relative +1 ms rules); allocation, CPU and rows follow once the first runs set them"))

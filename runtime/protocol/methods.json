@@ -1930,65 +1930,6 @@
     {
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`debug-fork` (and `debug/compare`'s answer): a fork as it goes. STATE is `preparing`, `editing` (a code what-if's\nTREE waits for the edit), `running`, `done`, `failed` (ERROR) or `dropped`. Done: AT (the point, in the project),\nMATCHED (`{matched, of, first}`: the hits before the point on the stopping thread, and the first that differs),\nAPPLIED (the value as the adapter took it), LANES (each probe's values after the point, then and now), THEN and NOW\n(how the run and the fork went on: `{kind: stop|exit|probe, …}`), CHANGED (the files a code what-if changed).\nNever an environment value.",
-        "properties": {
-          "applied": true,
-          "at": true,
-          "changed": {
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "error": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "fork": {
-            "type": "string"
-          },
-          "lanes": true,
-          "matched": true,
-          "now": true,
-          "root": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "run": {
-            "type": "string"
-          },
-          "state": {
-            "type": "string"
-          },
-          "then": true,
-          "tree": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "fork",
-          "run",
-          "state"
-        ],
-        "title": "DebugForkView",
-        "type": "object"
-      },
-      "doc": "a what-if fork as it goes (preparing, editing, running, done, failed, dropped), to every editor: when done, matched on N of M hits, the first difference, each probe's values then and now, how each side went on",
-      "name": "debug-fork"
-    },
-    {
-      "data": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "`debug-frame`: a stop's selected frame. OPEN: this editor started the session and opens the file; the others draw\nit only where the file is shown.",
         "properties": {
           "col": {
@@ -9551,6 +9492,11 @@
                 "type": "string"
               },
               {
+                "const": "gates",
+                "description": "What the merge checks under the job's rule pack, and how to satisfy each (empty without a pack).",
+                "type": "string"
+              },
+              {
                 "const": "findings",
                 "description": "How to record what the agent establishes (findings with sources, decisions).",
                 "type": "string"
@@ -11601,87 +11547,6 @@
       "classes": [
         "user"
       ],
-      "doc": "a what-if fork beside its recorded run: matched on N of M hits before the point, the first difference, each probe's values after it, and how each went on",
-      "name": "debug/compare",
-      "params": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`debug/compare`: FORK beside its RUN.",
-        "properties": {
-          "fork": {
-            "type": "string"
-          },
-          "run": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "run",
-          "fork"
-        ],
-        "title": "DebugCompare",
-        "type": "object"
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`debug-fork` (and `debug/compare`'s answer): a fork as it goes. STATE is `preparing`, `editing` (a code what-if's\nTREE waits for the edit), `running`, `done`, `failed` (ERROR) or `dropped`. Done: AT (the point, in the project),\nMATCHED (`{matched, of, first}`: the hits before the point on the stopping thread, and the first that differs),\nAPPLIED (the value as the adapter took it), LANES (each probe's values after the point, then and now), THEN and NOW\n(how the run and the fork went on: `{kind: stop|exit|probe, …}`), CHANGED (the files a code what-if changed).\nNever an environment value.",
-        "properties": {
-          "applied": true,
-          "at": true,
-          "changed": {
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "error": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "fork": {
-            "type": "string"
-          },
-          "lanes": true,
-          "matched": true,
-          "now": true,
-          "root": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "run": {
-            "type": "string"
-          },
-          "state": {
-            "type": "string"
-          },
-          "then": true,
-          "tree": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "fork",
-          "run",
-          "state"
-        ],
-        "title": "DebugForkView",
-        "type": "object"
-      },
-      "writes": false
-    },
-    {
-      "classes": [
-        "user"
-      ],
       "doc": "the launch configurations the Start picker shows for a project: launch.json's (a syntax error with its line and column), the user's own, and the adapters' defaults for the file's language once the project is trusted",
       "name": "debug/configs",
       "params": {
@@ -11873,34 +11738,34 @@
       "classes": [
         "user"
       ],
-      "doc": "fork a recorded run in a sealed copy (Linux): from a stop or a line's N-th pass, setting a value there or editing the code, until the next stop, the end or a probe's next hit; the fork's id, or a question first (a slow replay, an input)",
-      "name": "debug/fork",
+      "doc": "a project's probes (logpoints whose values are recorded, never printed): add one, add one for what a line assigns on the next line that runs, edit or remove one; it reaches the project's sessions at once",
+      "name": "debug/probe/op",
       "params": {
         "$defs": {
-          "DebugAnswer": {
-            "description": "One answer to `debug/start`'s `needs`: the input ID (`pickProcess` for the process picker) and its VALUE.",
+          "DebugProbeChange": {
+            "description": "One change to a project's probes: `add` (PATH, LINE, EXPR), `result` (\"Probe the result\": EXPR, which LINE\nassigns, recorded on the next line that runs; TEXT is the file as the editor has it, LANGUAGE its language),\n`remove` (ID) and `edit` (ID, and EXPR, ENABLED or LINE).",
             "properties": {
-              "id": {
-                "type": "string"
-              },
-              "value": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "value"
-            ],
-            "type": "object"
-          },
-          "DebugForkAt": {
-            "description": "Where a fork starts: a STOP of the run (its index), or the HIT-th pass of PATH's LINE.",
-            "properties": {
-              "hit": {
-                "format": "uint32",
-                "minimum": 0,
+              "enabled": {
                 "type": [
-                  "integer",
+                  "boolean",
+                  "null"
+                ]
+              },
+              "expr": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "language": {
+                "type": [
+                  "string",
                   "null"
                 ]
               },
@@ -11912,204 +11777,81 @@
                   "null"
                 ]
               },
+              "op": {
+                "type": "string"
+              },
               "path": {
                 "type": [
                   "string",
                   "null"
                 ]
               },
-              "stop": {
-                "format": "uint64",
-                "minimum": 0,
+              "text": {
                 "type": [
-                  "integer",
+                  "string",
                   "null"
                 ]
               }
             },
-            "type": "object"
-          },
-          "DebugForkChange": {
-            "description": "What a fork changes: a VALUE, or the CODE (the fork's tree is edited first); neither: nothing (a replay).",
-            "properties": {
-              "code": {
-                "default": false,
-                "type": "boolean"
-              },
-              "value": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/DebugForkValue"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "type": "object"
-          },
-          "DebugForkUntil": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "properties": {
-                  "probe": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "probe"
-                ],
-                "type": "object"
-              }
-            ],
-            "description": "Where a fork ends: `\"stop\"` (the next stop) or `\"exit\"`, or a probe's next hit (`{\"probe\": ID}`)."
-          },
-          "DebugForkValue": {
-            "description": "A value a fork sets at its point: the variable at PATH (names from a scope down, `[\"item\", \"reserve\"]`) gets TEXT,\nan expression in the program's language.",
-            "properties": {
-              "path": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "text": {
-                "type": "string"
-              }
-            },
             "required": [
-              "path",
-              "text"
+              "op"
             ],
             "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`debug/fork`: fork RUN at AT with CHANGE, running UNTIL `stop` (the next stop, the default), `exit`, or\n`{\"probe\": ID}` (that probe's next hit). CONFIRM: the user said yes to a slow replay. INPUTS answer an earlier\n`needs` (an input the run's configuration asks, whose value was not kept).",
+        "description": "`debug/probe/op`: ROOT's probes, after OP when given.",
         "properties": {
-          "at": {
-            "$ref": "#/$defs/DebugForkAt"
-          },
-          "change": {
+          "op": {
             "anyOf": [
               {
-                "$ref": "#/$defs/DebugForkChange"
+                "$ref": "#/$defs/DebugProbeChange"
               },
               {
                 "type": "null"
               }
             ]
           },
-          "confirm": {
-            "default": false,
-            "type": "boolean"
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "DebugProbeOp",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A project's probes (`{id, path, line, expr, enabled}`), the path OP changed and the probe it ADDED.",
+        "properties": {
+          "added": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
-          "inputs": {
-            "default": [],
-            "items": {
-              "$ref": "#/$defs/DebugAnswer"
-            },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "probes": {
+            "items": true,
             "type": "array"
           },
-          "run": {
-            "type": "string"
-          },
-          "until": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/DebugForkUntil"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "run",
-          "at"
-        ],
-        "title": "DebugFork",
-        "type": "object"
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`debug/fork`'s answer: the FORK's id, or ASK (a question: the replay is slow; ask again with `confirm`), or NEEDS\n(as `debug/start`'s).",
-        "properties": {
-          "ask": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "fork": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "needs": true
-        },
-        "title": "DebugForked",
-        "type": "object"
-      },
-      "writes": false
-    },
-    {
-      "classes": [
-        "user"
-      ],
-      "doc": "a what-if fork goes, with its tree",
-      "name": "debug/fork/drop",
-      "params": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`debug/fork/run` and `debug/fork/drop`: one FORK.",
-        "properties": {
-          "fork": {
+          "root": {
             "type": "string"
           }
         },
         "required": [
-          "fork"
+          "root",
+          "probes"
         ],
-        "title": "DebugForkId",
+        "title": "DebugProbes",
         "type": "object"
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "boolean",
-        "type": "boolean"
-      },
-      "writes": false
-    },
-    {
-      "classes": [
-        "user"
-      ],
-      "doc": "run a code what-if whose tree was edited (Run Fork): the files it changed are what Take Fork's Change offers",
-      "name": "debug/fork/run",
-      "params": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`debug/fork/run` and `debug/fork/drop`: one FORK.",
-        "properties": {
-          "fork": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "fork"
-        ],
-        "title": "DebugForkId",
-        "type": "object"
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "boolean",
-        "type": "boolean"
       },
       "writes": false
     },
@@ -12147,6 +11889,214 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "boolean",
         "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a recorded run for the stop timeline: a page of its stops and each probe's values over them",
+      "name": "debug/run/get",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/run/get`: run RUN for the strip: COUNT of its stops from FROM (0-based), and the probes' lanes over them.",
+        "properties": {
+          "count": {
+            "default": 200,
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "current": {
+            "description": "The stop (its `index`) the strip rings.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "from": {
+            "default": 0,
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "run": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "title": "DebugRunGet",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A run's page: its record, the stops (`{index, t_ms, reason, thread, path, line, bp_hit?, steps?, session}`), how\nmany it has, the lanes (`{probe, expr, path, line, hits: [{seq, t, thread, value}], shown_from}`), whether more\nstops follow, and the strip's rows (docs/develop/hub.md, \"Rows\": a head, the lane of stops, one lane per probe).",
+        "properties": {
+          "lanes": {
+            "items": true,
+            "type": "array"
+          },
+          "more": {
+            "type": "boolean"
+          },
+          "run": true,
+          "stops": {
+            "items": true,
+            "type": "array"
+          },
+          "strip": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run",
+          "stops",
+          "total",
+          "lanes",
+          "more"
+        ],
+        "title": "DebugRunView",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "keep a recorded run past the 14 days, or let it go with the others",
+      "name": "debug/run/pin",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/run/pin`: keep run RUN past the retention (PINNED), or not.",
+        "properties": {
+          "pinned": {
+            "type": "boolean"
+          },
+          "run": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "pinned"
+        ],
+        "title": "DebugRunPin",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a past stop of a recorded run: its variables and stack as captured then, and a file as it ran (from the launch snapshot), marked when it was unsaved at the launch",
+      "name": "debug/run/stop",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/run/stop`: stop STOP (its `index`) of run RUN, with FILE as it ran (the stop's own file when absent).",
+        "properties": {
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run": {
+            "type": "string"
+          },
+          "stop": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run",
+          "stop"
+        ],
+        "title": "DebugRunStop",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A past stop: the stop, its capture (threads, frames, scopes and variables as fetched then; `cut` counts what the\n64 KB cap left out), the launch snapshot's tree, and the file `{path, text, not_what_ran}` (text null: not in the\nsnapshot).",
+        "properties": {
+          "capture": true,
+          "run": {
+            "type": "string"
+          },
+          "snapshot": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": true,
+          "stop": true
+        },
+        "required": [
+          "run",
+          "stop",
+          "capture",
+          "source"
+        ],
+        "title": "DebugPastStop",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a project's recorded runs, newest first",
+      "name": "debug/runs/list",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/runs/list`: ROOT's recorded runs, newest first.",
+        "properties": {
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "DebugRunsList",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "The runs: each `{id, n, name, started, ended?, outcome?, stops, hits, thinned, dropped, pinned, task?, …}`.",
+        "properties": {
+          "runs": {
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "title": "DebugRuns",
+        "type": "object"
       },
       "writes": false
     },
@@ -12274,6 +12224,13 @@
               "string",
               "null"
             ]
+          },
+          "unsaved": {
+            "description": "Files modified in the editor and not saved: the recorded run marks them \"not what ran\".",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "user": {
             "default": [],

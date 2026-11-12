@@ -509,8 +509,10 @@ pub async fn start(
     // its edits are against where the task's tree started, not where the job's branch is later: kept from the first
     if data_for(&data, "bases", tid).is_none() {
         let (key, base) = (tid.to_owned(), tree.base.clone());
+        let agents = agent_slots(front);
         update_data(front, &svc, job, move |d| {
             put_in(d, "bases", &key, Some(json!(base)));
+            run_facts(d, &base, agents);
         })
         .await?;
     }
@@ -731,10 +733,30 @@ impl RunGit for BasicGit {
     }
 }
 
+/// The run's facts the Flow's head shows, kept from the first task's start: its `base` (where its first tree started)
+/// and `agents` (how many it runs at once).
+pub(crate) fn run_facts(d: &mut serde_json::Map<String, Value>, base: &str, agents: usize) {
+    d.entry("base").or_insert_with(|| json!(base));
+    d.entry("agents").or_insert_with(|| json!(agents));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use norn::read::jobs::Job;
+
+    /// [D] The first task to start records the run's base (where the job's line started) and how many agents it runs
+    /// at once; a later start changes neither.
+    #[test]
+    fn the_first_start_records_the_runs_base_and_agents() {
+        let mut d = serde_json::Map::new();
+        run_facts(&mut d, "4fe72a5aa", 1);
+        assert_eq!(d["base"], json!("4fe72a5aa"));
+        assert_eq!(d["agents"], json!(1));
+        run_facts(&mut d, "9999999", 3);
+        assert_eq!(d["base"], json!("4fe72a5aa"));
+        assert_eq!(d["agents"], json!(1));
+    }
 
     #[test]
     fn the_run_state_remembers_carded_keys_from_the_job_data() {

@@ -2,31 +2,24 @@
 //! `debug/start`, resolved again now (inputs whose values were not kept are asked again, as `debug/start`'s `needs`),
 //! then handed to the hub's [`Forks`].
 
-use super::fork::{At, Change, Until};
-use super::fork_hub::{Ask, Forks, Made};
-use super::fork_run::{RunInfo, Runs};
-use super::fork_seal::{DirTrees, Sealed};
+use super::fork::{At, Change, RunEnd, Until, Watch};
+use super::fork_hub::{Ask, Forks, Made, TraceTree};
+use super::fork_seal::{DirTrees, Sealed, forks_root, slots_root};
 use super::launch::{self, Os};
+use super::record::RunInfo;
 use super::wire::{config_of, need_json, table, tools_dir, vars};
 use crate::front::Front;
 use runstav::methods::Params;
-use runstav::methods::debug::DebugStart;
+use runstav::methods::debug::{DebugAnswer, DebugStart};
 use runstav::methods::debug_fork::{
     DebugCompare, DebugFork, DebugForkId, DebugForkUntil, DebugForked,
 };
 use runstav::wire::{Error, ErrorCode};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-/// The recorded runs forks are made of, until the recorder's store is wired in: none.
-struct NoRuns;
-
-impl Runs for NoRuns {
-    fn run(&self, _: &str) -> Option<RunInfo> {
-        None
-    }
-}
+use std::time::Duration;
 
 fn err(message: impl Into<String>) -> Error {
     Error {
@@ -47,12 +40,16 @@ pub(super) fn forks(front: &Front) -> &Forks {
             .find(|(k, _)| k == "PATH")
             .map(|(_, v)| std::env::split_paths(v).collect())
             .unwrap_or_default();
+        // the hub records every session (`Debug::record_into` when the debugger starts): forks are of those runs
+        let runs = front
+            .debug
+            .debug(front)
+            .records()
+            .expect("the debugger records its sessions");
         Forks::new(
             front.editors.clone(),
-            Arc::new(NoRuns),
-            Arc::new(DirTrees::new(
-                crate::sandbox::runs_root(&env).join("debug-forks"),
-            )),
+            runs,
+            Arc::new(DirTrees::new(forks_root(&env))),
             Arc::new(Sealed {
                 env,
                 path,
@@ -100,12 +97,12 @@ fn until_of(p: &DebugFork) -> Until {
 fn resolve(
     front: &Front,
     run: &RunInfo,
-    p: &DebugFork,
+    given: &[DebugAnswer],
 ) -> Result<Result<Value, DebugForked>, Error> {
     let mut start: DebugStart = serde_json::from_value(run.start.clone())
         .map_err(|e| err(format!("the run's start cannot be read: {e}")))?;
-    if !p.inputs.is_empty() {
-        start.inputs = p.inputs.clone();
+    if !given.is_empty() {
+        start.inputs = given.to_vec();
     }
     if !front.debug.is_trusted(&start.root) {
         return Ok(Err(DebugForked {
@@ -141,7 +138,7 @@ async fn fork(front: &Front, p: DebugFork) -> Result<DebugForked, Error> {
     let run = f
         .recorded(&p.run)
         .ok_or_else(|| err(format!("no recorded run {}", p.run)))?;
-    let resolved = match resolve(front, &run, &p)? {
+    let resolved = match resolve(front, &run, &p.inputs)? {
         Ok(v) => v,
         Err(first) => return Ok(first),
     };
@@ -167,6 +164,83 @@ async fn fork(front: &Front, p: DebugFork) -> Result<DebugForked, Error> {
             needs: None,
         },
     })
+}
+
+/// RUN's configuration resolved now as `debug/fork` resolves it, for a use without the user (no inputs asked).
+fn resolved_for(front: &Front, run: &RunInfo) -> Result<Value, String> {
+    match resolve(front, run, &[]).map_err(|e| e.message)? {
+        Ok(v) => Ok(v),
+        Err(first) if first.needs == Some(serde_json::json!("trust")) => {
+            Err(format!("the project of run {} is not trusted", run.id))
+        }
+        Err(first) => {
+            let ids: Vec<String> = first
+                .needs
+                .as_ref()
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|n| {
+                    n.pointer("/input/id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .or_else(|| Some(n.to_string()))
+                })
+                .collect();
+            Err(format!("run {} needs input {}", run.id, ids.join(", ")))
+        }
+    }
+}
+
+/// Run RUN replayed to its stop STOP in a tree of its own and ended there (D3's origin trail): FILES (relative path,
+/// bytes) written into the tree and ENV(the tree's absolute path) added to the environment before the launch. The tree
+/// goes when the [`TraceTree`] does.
+pub async fn trace<F>(
+    front: Arc<Front>,
+    run: String,
+    stop: u64,
+    env: F,
+    files: Vec<(String, Vec<u8>)>,
+) -> Result<TraceTree, String>
+where
+    F: FnOnce(&Path) -> Vec<(String, String)> + Send + 'static,
+{
+    let f = forks(&front);
+    let info = f
+        .recorded(&run)
+        .ok_or_else(|| format!("no recorded run {run}"))?;
+    let resolved = resolved_for(&front, &info)?;
+    f.trace(&run, stop, resolved, env, files).await
+}
+
+/// Run RUN's configuration in TREE (one of D5's bisect slots: strictly under [`slots_root`], links resolved) to the
+/// program's end, WATCH watched (paths relative to the project), LIMIT the time box (`timed_out`, not an error).
+pub async fn run_in(
+    front: Arc<Front>,
+    run: String,
+    tree: PathBuf,
+    watch: Watch,
+    limit: Duration,
+) -> Result<RunEnd, String> {
+    let tree = in_slots(&slots_root(&front.shell_env.paths_env()), &tree)?;
+    let f = forks(&front);
+    let info = f
+        .recorded(&run)
+        .ok_or_else(|| format!("no recorded run {run}"))?;
+    let resolved = resolved_for(&front, &info)?;
+    f.run_in(&run, resolved, tree, watch, limit).await
+}
+
+/// TREE, links resolved, when it is strictly under SLOTS (also resolved).
+pub(super) fn in_slots(slots: &Path, tree: &Path) -> Result<PathBuf, String> {
+    let refuse = || format!("{} is not a bisect slot of the hub's", tree.display());
+    let slots = std::fs::canonicalize(slots).map_err(|_| refuse())?;
+    let t = std::fs::canonicalize(tree).map_err(|_| refuse())?;
+    if t != slots && t.starts_with(&slots) {
+        Ok(t)
+    } else {
+        Err(refuse())
+    }
 }
 
 fn answer<T: serde::Serialize>(r: Result<T, Error>) -> Result<Value, Error> {

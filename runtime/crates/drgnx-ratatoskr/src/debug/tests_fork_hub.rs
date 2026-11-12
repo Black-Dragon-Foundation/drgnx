@@ -1,9 +1,10 @@
 //! Forks as hub objects with fake trees and mock adapters: refusals, the config hash, the `debug-fork` event from
-//! preparing to done, a code what-if's two calls, drop, compare, and that environment values are never in an event.
-use super::fork::{At, Change, Until};
+//! preparing to done, a code what-if's two calls, drop, compare, and that environment values are never in an event;
+//! a trace (D3) with its injected environment and files; a plain run in a caller's tree (D5) and its time box.
+use super::fork::{At, Change, RunEnd, Until, Watch};
 use super::fork_hub::{Ask, Forks, Made, Sealer, Trees};
-use super::fork_run::{RunHit, RunInfo, RunProbe, RunSnapshot, RunStop, Runs, config_hash};
-use super::session::{Proc, Request, Sig};
+use super::record::{RunHit, RunInfo, RunProbe, RunSnapshot, RunStop, Runs, config_hash};
+use super::session::{Proc, Sig};
 use super::{BoxFut, Connected, Launcher, Sink};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -51,18 +52,37 @@ impl Runs for OneRun {
     }
 }
 
+/// Trees at `/forks/<id>/w` (nothing on disk), or real folders under `base`.
 #[derive(Default)]
 struct FakeTrees {
+    base: Option<PathBuf>,
     made: Mutex<Vec<String>>,
     removed: Mutex<Vec<PathBuf>>,
+}
+
+impl FakeTrees {
+    fn root(&self) -> PathBuf {
+        self.base.clone().unwrap_or_else(|| PathBuf::from("/forks"))
+    }
 }
 
 impl Trees for FakeTrees {
     fn make<'a>(&'a self, _: &'a RunInfo, id: &'a str) -> BoxFut<'a, Result<PathBuf, String>> {
         Box::pin(async move {
             self.made.lock().unwrap().push(id.to_owned());
-            Ok(PathBuf::from(format!("/forks/{id}/w")))
+            let w = self.root().join(id).join("w");
+            if self.base.is_some() {
+                std::fs::create_dir_all(&w).unwrap();
+            }
+            Ok(w)
         })
+    }
+    fn scratch(&self, id: &str) -> Result<PathBuf, String> {
+        let tmp = self.root().join(id).join("tmp");
+        if self.base.is_some() {
+            std::fs::create_dir_all(&tmp).unwrap();
+        }
+        Ok(tmp)
     }
     fn changed<'a>(&'a self, _: &'a Path) -> BoxFut<'a, Vec<String>> {
         Box::pin(async { vec!["stock.py".to_owned()] })
@@ -86,6 +106,7 @@ impl Proc for Exits {
 struct MockSealer {
     scripts: Mutex<VecDeque<Vec<Value>>>,
     configs: Mutex<Vec<Value>>,
+    trees: Mutex<Vec<PathBuf>>,
     running: Arc<Mutex<Vec<Mock>>>,
 }
 
@@ -123,10 +144,12 @@ impl Sealer for MockSealer {
         _: &RunInfo,
         tree: &Path,
         config: &Value,
-        _: &str,
+        tmp: &Path,
     ) -> Result<Arc<dyn Launcher>, String> {
         assert_eq!(adapter, "debugpy");
-        assert!(tree.starts_with("/forks"));
+        // the sandbox's temp is never inside the tree
+        assert!(!tmp.starts_with(tree), "{tmp:?} in {tree:?}");
+        self.trees.lock().unwrap().push(tree.to_path_buf());
         self.configs.lock().unwrap().push(config.clone());
         Ok(Arc::new(OneMock {
             script: Mutex::new(self.scripts.lock().unwrap().pop_front()),
@@ -146,14 +169,15 @@ fn run() -> RunInfo {
         thread: "111".into(),
         value: v.into(),
         seq,
+        t_ms: 0,
     };
     RunInfo {
         id: "r1".into(),
-        root: PathBuf::from("/p"),
+        root: "/p".into(),
         start: json!({"root": "/p", "config": "launch:0"}),
-        config_hash: config_hash(&resolved()),
+        config_hash: Some(config_hash(&resolved())),
         adapter_id: "debugpy".into(),
-        request: Request::Launch,
+        request: "launch".into(),
         snapshot: Some(RunSnapshot {
             checkpoints: "/c".into(),
             source: "/p".into(),
@@ -171,6 +195,7 @@ fn run() -> RunInfo {
                 line: 20,
                 bp_hit: Some(1),
                 steps: vec![],
+                session: "d1".into(),
             },
             RunStop {
                 index: 5,
@@ -181,6 +206,7 @@ fn run() -> RunInfo {
                 line: 20,
                 bp_hit: Some(2),
                 steps: vec![],
+                session: "d1".into(),
             },
         ],
         probes: vec![RunProbe {
@@ -365,4 +391,294 @@ async fn a_code_what_if_waits_for_its_edit_then_runs() {
     );
     assert_eq!(ev.states().last().map(String::as_str), Some("dropped"));
     assert!(f.list().is_empty());
+}
+
+fn setup_in(
+    scripts: Vec<Vec<Value>>,
+    base: &Path,
+) -> (Forks, Arc<Events>, Arc<FakeTrees>, Arc<MockSealer>) {
+    let ev = Arc::new(Events::default());
+    let trees = Arc::new(FakeTrees {
+        base: Some(base.to_path_buf()),
+        ..Default::default()
+    });
+    let sealer = Arc::new(MockSealer {
+        scripts: Mutex::new(scripts.into()),
+        ..Default::default()
+    });
+    let f = Forks::new(
+        ev.clone(),
+        Arc::new(OneRun(run())),
+        trees.clone(),
+        sealer.clone(),
+        true,
+    );
+    (f, ev, trees, sealer)
+}
+
+/// A stop of thread 1 at PATH:LINE (REASON), as the session reads it.
+fn stop_at(path: &str, line: u32, reason: &str) -> Vec<Value> {
+    vec![
+        json!({"event": "stopped", "body": {"reason": reason, "threadId": 1}}),
+        json!({"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}),
+        json!({"expect": "stackTrace", "ok": {"stackFrames": [{"id": 5, "name": "f", "line": line, "column": 1, "source": {"path": path}}]}}),
+        json!({"expect": "scopes", "ok": {"scopes": []}}),
+    ]
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_trace_reaches_its_stop_with_the_env_and_files_it_was_given() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().to_path_buf();
+    let tree = base.join("t1").join("w");
+    let py = tree.join("stock.py").display().to_string();
+    let origin = tree.join(".drgnx-origin").display().to_string();
+    // the program gets the injected value, the tree's own path in it, with the run's seed
+    let mut s = vec![
+        json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true, "supportsLogPoints": true}}),
+        json!({"expect": "launch", "args": {"program": py, "env": {"PYTHONHASHSEED": "1234", "PYTHONPATH": origin}}, "ok": {}}),
+        json!({"event": "initialized"}),
+        json!({"expect": "setBreakpoints", "args": {"source": {"path": py}}, "ok": {"breakpoints": [{"verified": true}, {"verified": true}]}}),
+        json!({"expect": "configurationDone"}),
+    ];
+    // stop 2 of the run: line 20's first pass; the trace ends there
+    s.extend(stop_at(&py, 20, "breakpoint"));
+    s.push(json!({"expect": "evaluate", "ok": {"result": "999"}}));
+    s.push(json!({"expect": "disconnect", "ok": {}}));
+    s.push(json!({"die": true}));
+    let (f, ev, trees, sealer) = setup_in(vec![s], &base);
+    let g = f
+        .trace(
+            "r1",
+            2,
+            resolved(),
+            |t: &Path| {
+                vec![(
+                    "PYTHONPATH".into(),
+                    t.join(".drgnx-origin").display().to_string(),
+                )]
+            },
+            vec![(
+                ".drgnx-origin/sitecustomize.py".into(),
+                b"import tracer\n".to_vec(),
+            )],
+        )
+        .await
+        .unwrap();
+    assert_eq!(g.path, tree);
+    assert_eq!(
+        std::fs::read(tree.join(".drgnx-origin/sitecustomize.py")).unwrap(),
+        b"import tracer\n"
+    );
+    let config = sealer.configs.lock().unwrap()[0].clone();
+    assert_eq!(config["env"]["PYTHONPATH"], json!(origin));
+    // the user's environment values still reach it; no fork entry, no event
+    assert_eq!(config["env"]["API_TOKEN"], json!("s3cr3t-value"));
+    assert!(ev.forks().is_empty());
+    assert!(f.list().is_empty());
+    // the tree goes with the guard
+    drop(g);
+    until(|| trees.removed.lock().unwrap().contains(&tree)).await;
+    // a file outside the tree is refused before anything is made
+    let e = f
+        .trace(
+            "r1",
+            2,
+            resolved(),
+            |_: &Path| vec![],
+            vec![("../x".into(), vec![])],
+        )
+        .await
+        .unwrap_err();
+    assert!(e.contains("inside the tree"), "{e}");
+    assert_eq!(*trees.made.lock().unwrap(), ["t1"]);
+    // a configuration resolved differently is refused too
+    let mut r = resolved();
+    r["program"] = json!("/p/other.py");
+    let e = f
+        .trace("r1", 2, r, |_: &Path| vec![], vec![])
+        .await
+        .unwrap_err();
+    assert!(e.contains("differently"), "{e}");
+}
+
+/// A plain run's adapter: launch in TREE, then BODY, then the session's end.
+fn plain(tree: &Path, caps: Value, configure: Vec<Value>, body: Vec<Value>) -> Vec<Value> {
+    let py = tree.join("stock.py").display().to_string();
+    let mut s = vec![
+        json!({"expect": "initialize", "ok": caps}),
+        json!({"expect": "launch", "args": {"program": py, "env": {"PYTHONHASHSEED": "1234"}}, "ok": {}}),
+        json!({"event": "initialized"}),
+    ];
+    s.extend(configure);
+    s.push(json!({"expect": "configurationDone"}));
+    s.extend(body);
+    s
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_plain_run_finds_the_watched_exception_and_runs_past_others() {
+    let dir = tempfile::tempdir().unwrap();
+    let slot = dir.path().join("slots/b1/slot-1");
+    std::fs::create_dir_all(&slot).unwrap();
+    let py = slot.join("stock.py").display().to_string();
+    let mut body = stop_at(&py, 9, "exception");
+    body.push(json!({"expect": "continue", "ok": {}}));
+    body.extend(stop_at(&py, 30, "exception"));
+    body.push(json!({"expect": "disconnect", "ok": {}}));
+    body.push(json!({"die": true}));
+    let s = plain(
+        &slot,
+        json!({"supportsConfigurationDoneRequest": true,
+               "exceptionBreakpointFilters": [{"filter": "raised", "label": "Raised"}]}),
+        vec![
+            json!({"expect": "setExceptionBreakpoints", "args": {"filters": ["raised"]}, "ok": {}}),
+        ],
+        body,
+    );
+    let (f, ev, trees, sealer) = setup_in(vec![s], dir.path());
+    let end = f
+        .run_in(
+            "r1",
+            resolved(),
+            slot.clone(),
+            Watch::Exception {
+                path: "stock.py".into(),
+                line: 30,
+            },
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        end,
+        RunEnd {
+            exception_at: Some(("stock.py".into(), 30)),
+            ..RunEnd::default()
+        }
+    );
+    // the caller's tree is used as it is: neither made nor removed; the temp beside it goes
+    assert_eq!(*sealer.trees.lock().unwrap(), vec![slot]);
+    assert!(trees.made.lock().unwrap().is_empty());
+    assert_eq!(*trees.removed.lock().unwrap(), [dir.path().join("r1/tmp")]);
+    assert!(ev.forks().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_plain_run_returns_a_probes_values_and_its_exit() {
+    let dir = tempfile::tempdir().unwrap();
+    let slot = dir.path().join("slots/b1/slot-2");
+    std::fs::create_dir_all(&slot).unwrap();
+    let py = slot.join("stock.py").display().to_string();
+    let out = |v: &str| json!({"event": "output", "body": {"output": format!("\u{1e}drgnx:watch:1:{v}\n")}});
+    let s = plain(
+        &slot,
+        json!({"supportsConfigurationDoneRequest": true, "supportsLogPoints": true}),
+        vec![
+            json!({"expect": "setBreakpoints", "args": {"source": {"path": py}}, "ok": {"breakpoints": [{"verified": true}]}}),
+        ],
+        vec![
+            out("16"),
+            out("12"),
+            json!({"event": "exited", "body": {"exitCode": 3}}),
+            json!({"event": "terminated"}),
+            json!({"expect": "disconnect", "ok": {}}),
+            json!({"die": true}),
+        ],
+    );
+    let (f, _, _, _) = setup_in(vec![s], dir.path());
+    let end = f
+        .run_in(
+            "r1",
+            resolved(),
+            slot,
+            Watch::Probe {
+                path: "stock.py".into(),
+                line: 22,
+                expr: "shortfall".into(),
+            },
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(end.probe_values, ["16", "12"]);
+    assert_eq!(end.exit, Some(3));
+    assert!(!end.timed_out && end.exception_at.is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_plain_run_past_its_time_box_is_timed_out_not_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let slot = dir.path().join("slots/b1/slot-3");
+    std::fs::create_dir_all(&slot).unwrap();
+    let py = slot.join("stock.py").display().to_string();
+    let out = |v: &str| json!({"event": "output", "body": {"output": format!("\u{1e}drgnx:watch:1:{v}\n")}});
+    // one value, then the program runs on and on
+    let s = plain(
+        &slot,
+        json!({"supportsConfigurationDoneRequest": true, "supportsLogPoints": true}),
+        vec![
+            json!({"expect": "setBreakpoints", "args": {"source": {"path": py}}, "ok": {"breakpoints": [{"verified": true}]}}),
+        ],
+        vec![
+            out("7"),
+            json!({"expect": "disconnect", "ok": {}}),
+            json!({"die": true}),
+        ],
+    );
+    let (f, _, _, _) = setup_in(vec![s], dir.path());
+    let end = f
+        .run_in(
+            "r1",
+            resolved(),
+            slot,
+            Watch::Probe {
+                path: "stock.py".into(),
+                line: 22,
+                expr: "shortfall".into(),
+            },
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+    assert!(end.timed_out);
+    assert_eq!(end.probe_values, ["7"]);
+    // a watched path out of the tree is refused
+    let e = f
+        .run_in(
+            "r1",
+            resolved(),
+            dir.path().join("slots/b1/slot-3"),
+            Watch::Exception {
+                path: "/etc/passwd".into(),
+                line: 1,
+            },
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err();
+    assert!(e.contains("inside the tree"), "{e}");
+}
+
+#[test]
+fn a_plain_run_takes_only_a_tree_strictly_under_the_slots_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let slots = dir.path().join("slots");
+    let nested = slots.join("b1/narrow/slot-4");
+    std::fs::create_dir_all(&nested).unwrap();
+    let outside = dir.path().join("elsewhere");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, slots.join("b1/out")).unwrap();
+    let ok = super::fork_wire::in_slots(&slots, &nested).unwrap();
+    assert_eq!(ok, std::fs::canonicalize(&nested).unwrap());
+    // the root itself, a link out of it, a path outside, a missing one: refused
+    for bad in [
+        slots.clone(),
+        slots.join("b1/out"),
+        outside,
+        slots.join("b1/../../elsewhere"),
+        slots.join("nope"),
+    ] {
+        assert!(super::fork_wire::in_slots(&slots, &bad).is_err(), "{bad:?}");
+    }
 }

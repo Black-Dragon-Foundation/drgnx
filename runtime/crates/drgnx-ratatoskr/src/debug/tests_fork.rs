@@ -1,12 +1,12 @@
 //! What-if forks with mock adapters: what can be forked, the configuration moved into the tree, hit counting, the
 //! recorded steps, the change, the probes on both sides of the point, js-debug's child sessions.
 use super::fork::{self, At, Change, Drive, End, Refused, Target, Until};
-use super::fork_run::{RunHit, RunInfo, RunProbe, RunSnapshot, RunStop, config_hash};
+use super::record::{RunHit, RunInfo, RunProbe, RunSnapshot, RunStop, config_hash};
 use super::session::{Proc, Request, Sig, Start};
 use super::{BoxFut, Connected, Launcher};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use vor::mock::{Mock, Script};
 
@@ -76,11 +76,11 @@ const THREAD: &str = "__import__('threading').get_ident()";
 fn run() -> RunInfo {
     RunInfo {
         id: "r1".into(),
-        root: PathBuf::from("/p"),
+        root: "/p".into(),
         start: json!({"root": "/p", "config": "launch:0"}),
-        config_hash: "h".into(),
+        config_hash: Some("h".into()),
         adapter_id: "debugpy".into(),
-        request: Request::Launch,
+        request: "launch".into(),
         snapshot: Some(RunSnapshot {
             checkpoints: "/state/checkpoints".into(),
             source: "/p".into(),
@@ -117,13 +117,14 @@ fn stop(
         line,
         bp_hit: bp,
         steps: steps.iter().map(|s| s.to_string()).collect(),
+        session: "d1".into(),
     }
 }
 
 #[test]
 fn attach_runs_and_ptrace_adapters_are_refused_with_the_reason() {
     let mut r = run();
-    r.request = Request::Attach;
+    r.request = "attach".into();
     assert!(
         matches!(fork::check(&r, &At::Stop(3), true, false), Err(Refused::No(m)) if m.contains("attach"))
     );
@@ -323,7 +324,7 @@ async fn hit_three_is_counted_by_the_hub_and_the_value_set_before_it_runs_on() {
         caps(),
         vec![
             json!({"expect": "setBreakpoints", "args": {"source": {"path": PY},
-                      "breakpoints": [{"line": 20}, {"line": 22, "logMessage": format!("\u{1e}drgnx:shortfall:{{{THREAD}}}:{{shortfall}}")}]},
+                      "breakpoints": [{"line": 20}, {"line": 22, "logMessage": format!("\u{1e}drgnx:shortfall:{{{THREAD}}}:{{repr(shortfall)}}")}]},
                       "ok": {"breakpoints": [{"verified": true}, {"verified": true}]}}),
         ],
     );
@@ -519,7 +520,7 @@ async fn a_probe_on_the_fork_line_is_read_at_its_stops() {
     s.push(json!({"expect": "evaluate", "args": {"expression": "total"}, "ok": {"result": "9"}}));
     s.push(json!({"expect": "evaluate", "args": {"expression": THREAD}, "ok": {"result": "140"}}));
     // the logpoint comes back once the plain breakpoint goes
-    s.push(json!({"expect": "setBreakpoints", "args": {"breakpoints": [{"line": 20, "logMessage": format!("\u{1e}drgnx:total:{{{THREAD}}}:{{total}}")}]}, "ok": {"breakpoints": [{"verified": true}]}}));
+    s.push(json!({"expect": "setBreakpoints", "args": {"breakpoints": [{"line": 20, "logMessage": format!("\u{1e}drgnx:total:{{{THREAD}}}:{{repr(total)}}")}]}, "ok": {"breakpoints": [{"verified": true}]}}));
     s.push(cont());
     s.push(probe_out("total", "15"));
     s.push(json!({"expect": "terminate", "ok": {}}));
@@ -576,7 +577,6 @@ async fn js_debugs_child_session_is_where_it_stops() {
         json!({"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}),
         json!({"expect": "stackTrace", "ok": {"stackFrames": [{"id": 5, "name": "f", "line": 4, "column": 1, "source": {"path": js}}]}}),
         json!({"expect": "scopes", "ok": {"scopes": []}}),
-        json!({"expect": "evaluate", "args": {"expression": "process.pid"}, "ok": {"result": "4242"}}),
         json!({"expect": "setBreakpoints", "ok": {"breakpoints": []}}),
         json!({"expect": "continue", "ok": {}}),
         json!({"event": "stopped", "body": {"reason": "breakpoint", "threadId": 1}}),
@@ -607,7 +607,8 @@ async fn js_debugs_child_session_is_where_it_stops() {
     })
     .await
     .unwrap();
-    assert_eq!(out.thread.as_deref(), Some("4242"));
+    // JavaScript names no thread: neither do the run's hits
+    assert_eq!(out.thread.as_deref(), Some(""));
     assert!(matches!(out.end, End::Stop { line: 9, .. }));
     m.logs().await;
 }
