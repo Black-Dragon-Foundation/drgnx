@@ -29,22 +29,31 @@
          (vector
           (list :reset
                 (list :descriptor (list :scheme "links" :chain_kinds ["came-from"] :match_fields ["label"]
-                                        :lists ["team" "needs-you" "outline"] :classes ["selected" "match" "chain" "dim"]
-                                        :flags ["needs-you"] :forms (vector (list :name "graph")) :start "team")
+                                        :lists ["team" "needs-you" "outline" "plans"]
+                                        :classes ["selected" "match" "chain" "dim"]
+                                        :flags ["needs-you"]
+                                        :forms (vector (list :name "graph") (list :name "outline" :list "outline"))
+                                        :start "team")
                       :nodes (vector
                               (list :id "ask:1" :kind "ask" :nav (list :down "agent:a") :fields [["label" "Fix"]])
                               (list :id "agent:a" :kind "agent" :nav (list :up "ask:1" :right "agent:b")
-                                    :fields [["label" "alpha"]])
+                                    :fields [["label" "alpha"] ["done" 2] ["steps" 5] ["edit_files" 3] ["edit_plus" 10]
+                                             ["edit_minus" 4] ["reads" 7] ["conclusion" "tests pass"] ["spend" "$0.40"]
+                                             ["minutes" 12] ["overlaps" "agent:b"]])
                               (list :id "agent:b" :kind "agent" :nav (list :up "ask:1" :left "agent:a")
-                                    :fields [["label" "beta"]])
+                                    :fields [["label" "beta"] ["overlaps" "agent:a"]])
                               (list :id "file:drgnx/src/x.rs" :kind "file" :nav (list :up "agent:a")
-                                    :fields [["label" "x.rs"]]))
+                                    :fields [["label" "x.rs"]])
+                              (list :id "plan:p1" :kind "plan" :nav (list :up "ask:1") :fields [["label" "p1"]])
+                              (list :id "plan:p2" :kind "plan" :fields [["label" "p2"]]))
                       :edges [["ask:1" "agent:a" "came-from"] ["ask:1" "agent:b" "came-from"]
-                              ["agent:a" "file:drgnx/src/x.rs" "came-from"]]
+                              ["agent:a" "file:drgnx/src/x.rs" "came-from"] ["ask:1" "plan:p1" "came-from"]]
                       :lists (vector (list :name "team" :ids ["agent:a" "agent:b"])
                                      (list :name "needs-you" :ids [])
-                                     (list :name "outline" :ids ["agent:a" "agent:b"])))))))
-  "A small map model: an ask over two agents, the first with a file.")
+                                     (list :name "outline" :ids ["agent:a" "agent:b"])
+                                     (list :name "plans" :ids ["plan:p1" "plan:p2"])))))))
+  "A small map model: an ask over two agents (the first with a file, the two overlapping) and a plan; a second plan
+apart.")
 
 (defun drgnx-work-map-rows-test--row (text)
   "One row of every card, TEXT \"QQ AA BB\" or another of that shape (each card two characters at 0, 3 and 6)."
@@ -211,6 +220,9 @@ came before the answer), not a throttle later; an answer with an error hurries n
 (declare-function drgnx-work-code-files-command "drgnx-work-code")
 (declare-function drgnx-work-code-diffs-command "drgnx-work-code")
 (declare-function drgnx-work-code--select-file "drgnx-work-code")
+(declare-function drgnx-work-board-plans-for "drgnx-work-board")
+(declare-function drgnx-work-review--summary "drgnx-work-review")
+(declare-function drgnx-work-huddle-overlap "drgnx-work-detail")
 
 (ert-deftest drgnx-work-map-rows/files-and-diffs-take-the-selection ()
   "Pattern D: on the rows path the files picker and the diffs ask the hub for the session the model's selection stands
@@ -241,6 +253,52 @@ for: a selected agent's own, a file's agent on its chain.  With nothing selected
       (should (equal '(file . "file:drgnx/src/x.rs") drgnx-work-map--selection))
       (drgnx-work-code--select-file "drgnx" "src/none.rs")
       (should (equal '(file . "file:drgnx/src/x.rs") drgnx-work-map--selection)))))
+
+(ert-deftest drgnx-work-map-rows/the-outline-key-asks-the-hub-for-its-form ()
+  "Pattern D: the outline key asks the hub to draw the outline (`work/map/set' :outline \"on\"), then the cards again
+(\"off\")."
+  (drgnx-work-map-rows-test--with
+    (let ((asked nil) (drgnx-work-space--view "wsv"))
+      (cl-letf (((symbol-function 'drgnx-work-client-set) (lambda (id &rest params) (push (cons id params) asked))))
+        (drgnx-work-map-toggle-outline)
+        (should (equal '("wsv" :outline "on") (car asked)))
+        (drgnx-work-map-toggle-outline)
+        (should (equal '("wsv" :outline "off") (car asked)))))))
+
+(ert-deftest drgnx-work-map-rows/the-board-is-scoped-by-the-models-plans ()
+  "Pattern D: the design's table 8.2, Map to Board, from the model: a plan scopes the Board to itself, an ask (or a
+spec) to the plans on its chain; anything else, or nothing selected, to every task."
+  (drgnx-work-map-rows-test--with
+    (should-not (drgnx-work-board-plans-for buf))
+    (drgnx-work-map--nav 'select "ask:1")
+    (should (equal '("plan:p1") (drgnx-work-board-plans-for buf)))
+    (drgnx-work-map--nav 'select "plan:p2")
+    (should (equal '("plan:p2") (drgnx-work-board-plans-for buf)))
+    (drgnx-work-map--nav 'select "agent:a")
+    (should-not (drgnx-work-board-plans-for buf))))
+
+(ert-deftest drgnx-work-map-rows/the-review-summary-reads-the-agents-card ()
+  "Pattern D: the review panel's summary is the model's card of the agent: its plan steps, edits, reads, last
+conclusion and spend; an agent the model has no card for says so."
+  (drgnx-work-map-rows-test--with
+    (should (equal (concat "plan:   2 of 5 steps done\n"
+                           "did:    edits 3 files (+10 −4) · reads 7 · last: tests pass\n"
+                           "spent:  $0.40 · 12 min\n")
+                   (drgnx-work-review--summary buf "a")))
+    (should (equal "plan:   no plan steps recorded\ndid:    \nspent:  \n" (drgnx-work-review--summary buf "b")))
+    (should (equal "the map holds no card for this agent\n" (drgnx-work-review--summary buf "zz")))))
+
+(ert-deftest drgnx-work-map-rows/h-huddles-the-agents-the-model-says-overlap ()
+  "Pattern D: `work-huddle' on a selected agent starts a huddle with the agent its card overlaps (the model's
+`overlaps' field); anything but an agent is refused."
+  (drgnx-work-map-rows-test--with
+    (let (calls)
+      (cl-letf (((symbol-function 'drgnx-agents-editor-here-huddle) (lambda (a b) (push (list a b) calls))))
+        (drgnx-work-map--nav 'select "agent:a")
+        (drgnx-work-huddle-overlap)
+        (should (equal '(("a" "b")) calls))
+        (drgnx-work-map--nav 'select "ask:1")
+        (should-error (drgnx-work-huddle-overlap) :type 'user-error)))))
 
 (ert-deftest drgnx-work-map-rows/old-path-switch-still-draws-the-map ()
   "Pattern D: with `drgnx-view-old-path' the map draws its own frames (its view type) and subscribes without `rows';

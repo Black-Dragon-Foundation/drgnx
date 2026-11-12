@@ -18,7 +18,6 @@
 (drgnx-test-modules-preload '(tools/work-space))
 
 (declare-function drgnx-work-space-open "drgnx-work-space")
-(declare-function drgnx-work-board-plans-for "drgnx-work-board")
 (declare-function drgnx-work-trail-open "drgnx-work-trail")
 (declare-function drgnx-work-trail-row-text "drgnx-work-trail")
 (declare-function drgnx-work-trail-conclusion-text "drgnx-work-trail")
@@ -56,17 +55,6 @@ connected to it, and `workspace' the workspace of the test's home folder."
          ;; these tests read the frames this Emacs draws: the old path (the hub's rows: work-map-rows-test.el)
          (let ((drgnx-view-old-path t) (workspace (list :id "workspace:000000000001" :roots (list (getenv "HOME")))))
            ,@body)))))
-
-;;;; Board
-
-(ert-deftest drgnx-work-board/plans-follow-the-map-selection ()
-  ;; pattern D: the design's table 8.2, Map to Board: a plan, spec or ask scopes the Board to its plans; anything
-  ;; else shows every task (the cards and their selection are the hub's: work-board-rows-test.el)
-  (let ((s (drgnx-work-client-init (drgnx-work-fixture-frame))))
-    (dolist (sel '((plan . "plan:deferred") (spec . "spec:race-proof") (ask . "ask:1")))
-      (should (equal '("plan:deferred") (drgnx-work-board-plans-for s sel))))
-    (dolist (sel '((agent . "agent:a1") (file . "file:drgnx/src/session.rs") (machine . "machine:desktop")))
-      (should-not (drgnx-work-board-plans-for s sel)))))
 
 ;;;; Timeline and the research trail
 

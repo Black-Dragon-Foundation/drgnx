@@ -1583,7 +1583,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `work/hunks` | user | `{path: string, session: Id}` | `{diff: string}` | no |
 | `work/map/close` | user | `{view: string}` | `boolean` | no |
 | `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, outline?: string, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
-| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, rows?: boolean, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `MapFrame \| MapRows` | no |
+| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, outline?: string, rows?: boolean, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `MapFrame \| MapRows` | no |
 | `work/trail/close` | user | `{view: string}` | `boolean` | no |
 | `work/trail/subscribe` | user | `{lanes?: [{label: string, session: string}], session?: string, view: string}` | `{hub: natnum}` | no |
 <!-- hub-methods:end -->
@@ -2372,7 +2372,8 @@ its card's rect `x y w h` in layout units, what the review panel's summary reads
 and `overlaps`, the agents it overlaps (ids, space-separated: the huddle key). Rows: `test/conformance/view-model/`,
 `work/map-set-clear-drops-selected`; unit: `work::map::tests::map_model_carries_review_fields_overlaps_and_plans`.
 
-A rows view is drawn in the form `work/map/set {outline}` asks: `on` the outline, `off` the cards, `auto` (until one is
+A rows view is drawn in the form `work/map/set {outline}` asks (or `work/map/subscribe {outline}`: the editor keeps
+the word and sends it again; row `work/map-subscribe-keeps-the-outline-asked-for`): `on` the outline, `off` the cards, `auto` (until one is
 asked) the outline only where the cards do not fit or in a terminal; a new form is drawn at once, laid out as it is.
 An open huddle (`runner::huddle`, waiting for the user or going on) is a needs-you card of every map, `huddle: CLASH`
 about its two agents (`work::map::huddle_card`, kind `huddle`): on the strip and in the `needs-you` list, marking

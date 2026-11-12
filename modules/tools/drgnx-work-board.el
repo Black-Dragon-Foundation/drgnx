@@ -30,8 +30,10 @@
 (declare-function drgnx-work-map-select "drgnx-work-map")
 (declare-function drgnx-work-map-buffer "drgnx-work-map")
 (declare-function drgnx-work-lens-string "drgnx-work-map")
-(declare-function drgnx-work-map--state "drgnx-work-map")
 (declare-function drgnx-work-nav-chain "drgnx-work-detail")
+(declare-function drgnx-work-map--sja "drgnx-work-map")
+(declare-function drgnx-work-map--class-index "drgnx-work-map" (h name))
+(declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
 (defvar drgnx-work-lens--map)
 (defvar drgnx-work-lens-nav)
 (defvar drgnx-work-lens-map)
@@ -49,14 +51,19 @@
     (seq-filter (lambda (id) (equal (plist-get (drgnx-work-client-item state id) :kind) "agent"))
                 (append (nth 0 chain) (nth 1 chain)))))
 
-(defun drgnx-work-board-plans-for (state sel)
-  "The plans the Board is scoped to for the map selection SEL (KIND . ID) of STATE: a plan itself, or the plans below a
-spec or an ask; nil for anything else (every task)."
-  (pcase (car sel)
-    ('plan (list (cdr sel)))
-    ((or 'spec 'ask)
-     (seq-filter (lambda (id) (equal (plist-get (drgnx-work-client-item state id) :kind) "plan"))
-                 (nth 1 (drgnx-work-nav-chain state sel))))))
+(defun drgnx-work-board-plans-for (map-buffer)
+  "The plans the Board is scoped to for MAP-BUFFER's selection, from the map's model (Sjá): a plan itself, or the plans
+on a spec's or an ask's chain (the model's list `plans', class `chain'); nil for anything else, or without Sjá (every
+task)."
+  (let ((sel (buffer-local-value 'drgnx-work-map--selection map-buffer))
+        (h (with-current-buffer map-buffer (drgnx-work-map--sja))))
+    (when h
+      (pcase (car sel)
+        ('plan (list (cdr sel)))
+        ((or 'spec 'ask)
+         (let ((chain (drgnx-work-map--class-index h "chain")))
+           (seq-filter (lambda (id) (and chain (eql chain (nidhogg-view-get h 'class id))))
+                       (nidhogg-view-get h 'list "plans"))))))))
 
 ;;;; The board buffer
 
@@ -167,9 +174,7 @@ the board says so instead."
                    (drgnx-view-env-register (car rows) buffer))
           (drgnx-work-board--no-rows)))
       (setq drgnx-work-board--map map-buffer drgnx-work-lens--map map-buffer)
-      (let ((state (drgnx-work-map--state map-buffer))
-            (sel (buffer-local-value 'drgnx-work-map--selection map-buffer)))
-        (setq drgnx-work-board--plans (and state sel (drgnx-work-board-plans-for state sel))))
+      (setq drgnx-work-board--plans (drgnx-work-board-plans-for map-buffer))
       (setq drgnx-work-map--lens (drgnx-work-lens-string 'board (drgnx-work-lens-name map-buffer)))
       (when rows (drgnx-work-board-rows-attached))
       (drgnx-work-board-refresh buffer))

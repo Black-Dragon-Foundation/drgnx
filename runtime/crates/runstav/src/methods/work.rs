@@ -291,6 +291,9 @@ pub struct MapSubscribe {
     /// `work-map` event comes; the width is the env's (`width_units` is ignored). The answer is `{hub, version}`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rows: bool,
+    /// The form the user asked for (`work/map/set {outline}`, sent again by the editor): `on`, `off` or `auto`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<String>,
 }
 
 /// `work/map/subscribe`'s answer: the full frame, or (`rows`) the hub's instance id and the view's version.

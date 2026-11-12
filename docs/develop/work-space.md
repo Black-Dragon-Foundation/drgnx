@@ -394,11 +394,11 @@ it was recorded in, and computes the steps it rests on. `work/conclusions {sessi
   session's `machine` is the job's machine, so the "runs on" edge points at the runner. The agent item carries `job`;
   the Lisp card turns it into `job · MACHINE · M:SS/Nm`, and the side panel of a machine lists the jobs on it
   (`drgnx-work-detail--machine-queue`), `l` (`work-job-log`) calling `exec/log` for the row's job.
-- Huddles on the map (client only): `drgnx-work-map--needs-you` appends one strip entry for each open huddle
-  (`drgnx-agent-panel-huddle-open-records`, subject = the clash; its jump selects the agents in it), and the huddle
-  module's `drgnx-agent-panel-huddle-changed-hook` redraws the strips. On an agent with an `overlap` edge, `H`
-  (`work-huddle`, `drgnx-work-huddle-overlap`) starts a huddle with the agent at the other end through
-  `agents/huddle/start`; the side panel's edge line says "H huddle". In the editor, a `conflict` gutter range of an agent
+- Huddles on the map: the hub makes each open huddle a needs-you card of every map, `huddle: CLASH` about its two
+  agents (on the strip and in the `needs-you` list; docs/develop/hub.md, the Work map's model). On an agent whose
+  card overlaps another (the model's `overlaps` field), `H` (`work-huddle`, `drgnx-work-huddle-overlap`) starts a
+  huddle with that agent through `agents/huddle/start` (a choice by label when there are several; row
+  `drgnx-work-map-rows/h-huddles-the-agents-the-model-says-overlap`). In the editor, a `conflict` gutter range of an agent
   in an open huddle reads "huddle open · o opens it" on hover, and `o` in the follow view opens the thread.
 - `machines/report` takes user connections only (`classes: [User]`, in `test/conformance/class-matrix.json`); a report
   for `local`, a ttl outside 0..86400, more than 256 slots or a slot without id and kind is `invalid-params`.
@@ -595,7 +595,8 @@ chain, the edge selection, the item that finished) and the commands are in `drgn
   moved. Left, right, why and touches follow the `left` `right` `up` `down` links (from nothing, the team's first);
   next and previous agent walk `team`; `g N` walks to entry N of `needs-you` and `n`/`N` cycle it; search sets the
   model's search (non-matches dim on their spans) and selects the first matching agent of `outline`; Esc clears it;
-  `O` sets the model's form, so up and down walk `outline`. Back and forward follow Sjá's reserved links `back` and `forward` (the instance's
+  `O` sets the model's form, so up and down walk `outline`, and asks the hub to draw that form (`work/map/set
+  {outline: on|off}`, kept for the next subscription; row `drgnx-work-map-rows/the-outline-key-asks-the-hub-for-its-form`). Back and forward follow Sjá's reserved links `back` and `forward` (the instance's
   history; Nidhogg's `nidhogg/sja/README.md`, "History"): in the map through `drgnx-work-map--nav`, in a view of it
   through `drgnx-view-nav`. Open reads the label once; a file opens at the team's
   agents on its chain. Motion capture's card rects (`drgnx-work-map--item-rects`) take x and w from the model's fields. The trailing notice is `work/map/set {view, selected}` (or `{view, clear}`). Tests:
@@ -713,7 +714,9 @@ act through `drgnx-work-lens-nav` (buffer-local): a view that is not the map set
 (`drgnx-work-client--call`: the hub sends a view's rows to the connection that asked and finds the map there), again 0.3 s after the map's frame
 changes (`drgnx-timer-soon` keyed `(work-board . VIEW)`), and the hub sends its model and rows (the columns, three rows
 a card, the bar a row `spaces` entry). `drgnx-work-board-plans-for` is the design's table 8.2 from the map to the
-Board: a plan, spec or ask scopes it to its plans. Beside a map that is not on the rows path (no Sjá, or
+Board, read from the map's model in Sjá: a plan scopes it to itself, a spec or an ask to the plans of the model's list
+`plans` on its chain (class `chain`); anything else to every task (row
+`drgnx-work-map-rows/the-board-is-scoped-by-the-models-plans`). Beside a map that is not on the rows path (no Sjá, or
 `drgnx-view-old-path`) the Board says so and draws nothing; its old Lisp drawing went in plan sja-complete B2. Its keys
 answer from its own model (`drgnx-work-board--nav`: the `board` form's links, `team` for the agent keys, the card's
 `agent` field to open). Its selection is its own: it
@@ -769,7 +772,8 @@ title, and `drgnx-work-trail-row-text` its row (the gap before the time is a `di
 `modules/tools/drgnx-work-review.el`. `drgnx-work-review-open` asks `work/conclusions`, then `decisions/effects` for each
 decision (alist `drgnx-work-review--effects`), `work/files` and `work/hunks` for each file; every answer draws the view
 again with `drgnx-work-review-install`. Row keys: `(:decisions)`, `(:decision N)` (origin order: from the brief, own,
-needs you), `(:summary)`, `(:files)`, `(:file PATH)`, `(:hunk PATH I)`; `drgnx-work-review-parse-hunks` splits a
+needs you), `(:summary)` (the agent's card in the map's model: its fields `done` `steps` `edit_*` `reads`
+`conclusion` `spend` `minutes`; row `drgnx-work-map-rows/the-review-summary-reads-the-agents-card`), `(:files)`, `(:file PATH)`, `(:hunk PATH I)`; `drgnx-work-review-parse-hunks` splits a
 unified diff at its `@@` lines. `a` is a `review/mark` `accepted` with the sha1 of the file's whole diff (what the merge
 gate compares); `D` is a `review/mark` `pending` and an `agents/send` naming the hunk (the hub has no hunk revert until
 the edit history lands; nothing here writes into the agent's folder). `V` writes a plan

@@ -880,7 +880,9 @@ and its latest conclusion.  The form of terminals, of a map that does not fit an
   (interactive)
   (setq drgnx-work-map--outline (if (eq drgnx-work-map--outline t) 'off t))
   (when-let* ((h (drgnx-work-map--sja)))          ; the model's up and down walk the outline list in that form
-    (nidhogg-view-set h 'form (if (eq drgnx-work-map--outline t) "outline" "graph")))
+    (nidhogg-view-set h 'form (if (eq drgnx-work-map--outline t) "outline" "graph"))
+    ;; the hub draws the form asked for (kept for the next subscription)
+    (drgnx-work-client-set drgnx-work-space--view :outline (if (eq drgnx-work-map--outline t) "on" "off")))
   (drgnx-view-touch drgnx-view))
 
 ;;;; The strip and the lens: header line and tab line, strings drawn when the frame changes

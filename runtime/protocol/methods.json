@@ -38273,6 +38273,13 @@
               "overlaps": false
             }
           },
+          "outline": {
+            "description": "The form the user asked for (`work/map/set {outline}`, sent again by the editor): `on`, `off` or `auto`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "rows": {
             "description": "Rows: the view's rows come as `view-patch` per display class (`view/env`), the first a reset, and no\n`work-map` event comes; the width is the env's (`width_units` is ignored). The answer is `{hub, version}`.",
             "type": "boolean"

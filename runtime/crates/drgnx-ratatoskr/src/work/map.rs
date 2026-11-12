@@ -431,6 +431,19 @@ fn outline_of(word: &str) -> Option<render::Outline> {
     }
 }
 
+/// The `outline` param WORD of `work/map/set` or `work/map/subscribe` (none: not given), refused at the field when it
+/// is not a word [`outline_of`] knows.
+fn outline_param(word: Option<&str>) -> Result<Option<render::Outline>, Error> {
+    word.map(|w| {
+        outline_of(w).ok_or_else(|| Error {
+            code: ErrorCode::InvalidParams,
+            message: format!("outline is on, off or auto, not {w:?}"),
+            path: Some("outline".into()),
+        })
+    })
+    .transpose()
+}
+
 /// The open (OPEN) or ended huddle ID about CLASH between the sessions PARTICIPANTS, as the map's needs-you card:
 /// `huddle: CLASH` (its id when it names no clash), about the two agents.
 pub(crate) fn huddle_card(
@@ -1564,6 +1577,8 @@ impl Map {
 
 /// `work/map/subscribe`: VIEW of CALLER's connection opens (again) on its workspace; the answer is its full frame.
 pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapSubscribed, Error> {
+    // the form the user asked for, kept by the editor across subscriptions
+    let outline = outline_param(p.outline.as_deref())?.unwrap_or(render::Outline::Auto);
     let map = &f.core.map;
     let _ = map.editors.set(f.editors.clone());
     let roots: Vec<PathBuf> = p
@@ -1643,7 +1658,7 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapSubs
         layout: None,
         sent: BTreeSet::new(),
         co: Coalescer::default(),
-        outline: render::Outline::Auto,
+        outline,
         marks: NewMarks::default(),
         new_wake: None,
     };
@@ -1698,12 +1713,7 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
     }
     // the form the user asked for draws at once, laid out as it is
     let mut reform = false;
-    if let Some(word) = &p.outline {
-        let o = outline_of(word).ok_or_else(|| Error {
-            code: ErrorCode::InvalidParams,
-            message: format!("outline is on, off or auto, not {word:?}"),
-            path: Some("outline".into()),
-        })?;
+    if let Some(o) = outline_param(p.outline.as_deref())? {
         reform = o != v.outline;
         v.outline = o;
     }
