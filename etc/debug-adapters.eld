@@ -65,7 +65,7 @@
   :find (:path "netcoredbg")
   :start (:stdio ("{program}" "--interpreter=vscode")))
  (:id "cpptools" :name "C, C++ (cpptools)" :types ("cppdbg" "cppvsdbg") :not-built-in t)
- (:id "codelldb" :name "C, C++, Rust (CodeLLDB)" :types ("lldb") :languages () :tested nil
+ (:id "codelldb" :name "C, C++, Rust (CodeLLDB)" :types ("lldb") :languages () :tested t
   :find (:tools "codelldb/extension/adapter/codelldb")
   :start (:tcp ("{program}" "--port" "{port}"))
   :install (:into "codelldb"

@@ -1,5 +1,5 @@
-//! Live: the spec §13 scenario against each built-in adapter that drgnx tests (debugpy, delve, lldb-dap, js-debug), through
-//! the hub's sessions and the production launcher. A launch with three breakpoints (a hit count, a condition, a
+//! Live: the spec §13 scenario against each built-in adapter that drgnx tests (debugpy, delve, lldb-dap, js-debug,
+//! CodeLLDB), through the hub's sessions and the production launcher. A launch with three breakpoints (a hit count, a condition, a
 //! logpoint), the hit-count stop, the condition stop with Variables (a structure expanded), `setVariable` and a watch,
 //! step in, out and over, an exception filter's stop, a restart, a child session (debugpy's `subprocess`, js-debug's
 //! `child_process.fork`), lldb-dap's `runInTerminal`, and Stop. debugpy and lldb-dap also attach to a running process
@@ -8,9 +8,10 @@
 //!
 //! Run alone, in the adapter image (`test/container/Containerfile.debug`) with ptrace (`ctr.sh --ptrace`):
 //! `nextest run -p drgnx-ratatoskr --lib --features test-hooks --run-ignored only debug::tests_live_adapters`.
-//! `DRGNX_DEBUG_LIVE_PYTHON` (default `python3`, with debugpy) and `DRGNX_DEBUG_LIVE_JS_DEBUG` (default
-//! `/opt/js-debug/src/dapDebugServer.js`) say where those adapters are; delve (`dlv`) and `lldb-dap` are found on
-//! `PATH`.
+//! `DRGNX_DEBUG_LIVE_PYTHON` (default `python3`, with debugpy), `DRGNX_DEBUG_LIVE_JS_DEBUG` (default
+//! `/opt/js-debug/src/dapDebugServer.js`) and `DRGNX_DEBUG_LIVE_CODELLDB` (default
+//! `/opt/codelldb/extension/adapter/codelldb`) say where those adapters are; delve (`dlv`) and `lldb-dap` are found on
+//! `PATH`. CodeLLDB and lldb-dap also break on a value change (a data breakpoint).
 use super::adapters::{self, Found, Table, Transport};
 use super::breakpoints::Op as BpOp;
 use super::session::{Op, Request, Start, Stop};
@@ -404,6 +405,15 @@ fn path_is(f: &Value, file: &Path) -> bool {
         .is_some_and(|p| Path::new(p) == file || std::fs::canonicalize(p).is_ok_and(|c| c == file))
 }
 
+/// Whether frame F is an exception filter's stop: reason `exception`, or (CodeLLDB, whose filters are breakpoints on
+/// the runtime's throw) a `breakpoint` stop in `__cxa_throw`.
+fn an_exception_stop(f: &Value) -> bool {
+    let thrown = f["name"]
+        .as_str()
+        .is_some_and(|n| n.contains("__cxa_throw"));
+    f["reason"] == json!("exception") || (f["reason"] == json!("breakpoint") && thrown)
+}
+
 /// The spec §13 scenario; its report.
 async fn scenario(s: Scn) -> Value {
     let ev = Arc::new(Events::default());
@@ -578,7 +588,7 @@ async fn scenario(s: Scn) -> Value {
 
     // the exception
     let (c, f) = ev.stop(c).await;
-    assert_eq!(f["reason"], json!("exception"), "exception: {f}");
+    assert!(an_exception_stop(&f), "exception: {f}");
     if let Some(line) = l.exc {
         assert!(
             path_is(&f, &s.file) && line_of(&f) == line,
@@ -590,7 +600,7 @@ async fn scenario(s: Scn) -> Value {
     // restart: the same configuration again, to the exception
     d.control(&sid, Op::Restart).await.unwrap();
     let (c, f) = ev.stop(c).await;
-    assert_eq!(f["reason"], json!("exception"), "after the restart: {f}");
+    assert!(an_exception_stop(&f), "after the restart: {f}");
     let sid2 = f["session"].as_str().unwrap().to_owned();
     report["restart"] = json!(if sid2 == sid {
         "request"
@@ -1152,4 +1162,117 @@ async fn lldb_dap_probe_cost() {
     let config = json!({"type": "lldb-dap", "request": "launch", "name": "cp", "program": dir.join("probe"),
                         "cwd": dir, "disableASLR": false});
     probes("lldb-dap", on_path("lldb-dap"), &dir, config, &[], &file, 7).await;
+}
+
+fn codelldb() -> Found {
+    Found::Program(
+        std::env::var("DRGNX_DEBUG_LIVE_CODELLDB")
+            .unwrap_or_else(|_| "/opt/codelldb/extension/adapter/codelldb".into())
+            .into(),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: CodeLLDB and clang in the adapter image, with ptrace (see the module's doc)"]
+async fn codelldb_runs_the_scenario() {
+    let dir = live_dir("codelldb");
+    let file = write(&dir, "prog.cpp", CPP);
+    run(&dir, "clang++", &["-g", "-O0", "-o", "prog", "prog.cpp"]);
+    let config = json!({"type": "lldb", "request": "launch", "name": "cpp", "program": dir.join("prog"),
+                        "cwd": dir});
+    scenario(Scn {
+        id: "codelldb",
+        found: codelldb(),
+        dir: dir.clone(),
+        file,
+        config,
+        env: vec![],
+        lines: Lines {
+            cond: 19,
+            log: 20,
+            hit: 21,
+            callee: 10,
+            exc: None,
+        },
+        filter: Some("cpp_throw"),
+        structure: ("point", "x"),
+        child: None,
+    })
+    .await;
+}
+
+/// Break on Value Change with a native adapter: stopped in the loop, a data breakpoint on `count`; the next stop is
+/// its change (0 → 1), with the adapter's reason reported.
+async fn breaks_on_value_change(id: &'static str, found: Found, ty: &str) {
+    let dir = live_dir(&format!("{id}-data"));
+    let file = write(&dir, "prog.cpp", CPP);
+    run(&dir, "clang++", &["-g", "-O0", "-o", "prog", "prog.cpp"]);
+    let config = json!({"type": ty, "request": "launch", "name": "data", "program": dir.join("prog"),
+                        "cwd": dir, "disableASLR": false});
+    let ev = Arc::new(Events::default());
+    let seen: Seen = Arc::default();
+    let d = Debug::new(ev.clone(), Arc::new(Procs::default()));
+    let root = dir.display().to_string();
+    let bp = add(&d, &root, &file, 20, None, None, None).await;
+    let start = Start {
+        name: id.into(),
+        adapter_id: ty.into(),
+        request: Request::Launch,
+        arguments: super::launch::adapter_arguments(&config),
+        breakpoints: vec![],
+        functions: vec![],
+        exception_filters: None,
+    };
+    let tap = Arc::new(Tap {
+        inner: launcher(id, &found, &dir, &[]),
+        seen,
+    });
+    d.start(1, &root, start, tap).await.unwrap();
+    let (c, f) = ev.stop(0).await;
+    assert_eq!(line_of(&f), 20, "{f}");
+    let sid = f["session"].as_str().unwrap().to_owned();
+    let stop = d.stop_of(&sid).unwrap();
+    let (count, _, scope) = local(&stop, "count");
+    assert_eq!(int_of(&count), 0);
+    let list = d
+        .add_data_breakpoint(&sid, scope, "count", None)
+        .await
+        .unwrap();
+    assert_eq!(list.len(), 1, "{list:?}");
+    assert_eq!(list[0]["verified"], json!(true), "{list:?}");
+    remove(&d, &root, bp).await;
+    d.control(&sid, Op::Continue { thread: None })
+        .await
+        .unwrap();
+    let (_, f) = ev.stop(c).await;
+    let stop = d.stop_of(&sid).unwrap();
+    let (count, _, _) = local(&stop, "count");
+    assert_eq!(int_of(&count), 1, "the stop after the change: {f}");
+    println!(
+        "T10-REPORT {}",
+        json!({"adapter": id, "data_breakpoint": {"reason": stop.reason, "line": line_of(&f),
+                                                  "description": list[0]["description"]}})
+    );
+    d.control(
+        &sid,
+        Op::Stop {
+            kill_debuggee: None,
+        },
+    )
+    .await
+    .unwrap();
+    ev.next(0, "debug-ended", |e| e["session"] == json!(sid))
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: CodeLLDB and clang in the adapter image, with ptrace (see the module's doc)"]
+async fn codelldb_breaks_on_value_change() {
+    breaks_on_value_change("codelldb", codelldb(), "lldb").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: lldb-dap and clang in the adapter image, with ptrace (see the module's doc)"]
+async fn lldb_dap_breaks_on_value_change() {
+    breaks_on_value_change("lldb-dap", on_path("lldb-dap"), "lldb-dap").await;
 }

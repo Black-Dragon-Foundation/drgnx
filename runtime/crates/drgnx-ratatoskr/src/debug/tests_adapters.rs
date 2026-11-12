@@ -11,14 +11,17 @@ fn exe(p: &Path) {
 }
 
 #[test]
-fn the_built_in_table_reads_and_marks_the_four_tested_adapters() {
+fn the_built_in_table_reads_and_marks_the_five_tested_adapters() {
     let t = Table::builtin();
     let tested: Vec<&str> =
         t.0.iter()
             .filter(|a| a.tested)
             .map(|a| a.id.as_str())
             .collect();
-    assert_eq!(tested, ["debugpy", "js-debug", "delve", "lldb-dap"]);
+    assert_eq!(
+        tested,
+        ["debugpy", "js-debug", "delve", "lldb-dap", "codelldb"]
+    );
     assert!(
         t.0.iter()
             .filter(|a| !a.not_built_in)

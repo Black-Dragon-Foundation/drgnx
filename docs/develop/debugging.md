@@ -196,7 +196,8 @@ js-debug, delve, lldb-dap), how to find it and how to start it:
   (only its `:root` folder, when given) replaces `<data>/debug-adapters/DIR` whole through `DIR.partial` and `DIR.old`,
   so any failure leaves the folder as it was. debugpy goes into the tools venv (made first if missing) with `pip
   install --require-hashes --no-deps`. A system package is never run: the error names its command. js-debug and
-  CodeLLDB are pinned archives (CodeLLDB is built in, untested, started from its `extension/adapter/codelldb`).
+  CodeLLDB are pinned archives (CodeLLDB started from its `extension/adapter/codelldb`; tested live in the adapter
+  image, which carries the same pinned `.vsix`).
 
 `debug/configs` marks a configuration whose adapter is not found here with `missing` `{adapter, name, install,
 command?}` (`wire::missing_of`; `install` is `download`, `pip`, `system` with its command, or `none`; a `debugServer`
