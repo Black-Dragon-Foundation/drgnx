@@ -288,7 +288,12 @@ pub async fn seed(front: &Front) -> Result<(), String> {
                             deps: vec![],
                         })
                         .collect(),
-                    data: None,
+                    // the run's facts its first start records (`runner::tick::run_facts`) and the user's order
+                    data: Some(json!({
+                        "agents": 1,
+                        "base": "4fe72a5aa1c3",
+                        "order": tasks.iter().map(|t| format!("{JOB}#{}", t.n)).collect::<Vec<_>>(),
+                    })),
                 },
                 now,
             )?;

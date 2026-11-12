@@ -177,6 +177,12 @@ pub(crate) struct Flow {
     pub machines: Vec<(String, u32, u32)>,
     /// The run's spend in USD and its plan's USD budget, when it has one.
     pub cost: Option<(f64, Option<f64>)>,
+    /// How many agents the run works with at once, once a task started.
+    pub agents: Option<u32>,
+    /// The run takes its tasks in an order the user set.
+    pub ordered: bool,
+    /// Where the run's line started (its first tree's base), once a task started.
+    pub base: Option<String>,
 }
 
 /// What one Flow view shows: the lens, one task's detail tile, or the Rules tile.
@@ -674,6 +680,19 @@ pub(crate) fn flow_rows(
             Some(LABEL),
         )
         .push("  ", None);
+    // the run's meta chips (the mockup): how many agents at once and its order, the tasks done, its base
+    if let Some(n) = flow.agents {
+        let mut words = if n == 1 {
+            "one agent".to_owned()
+        } else {
+            format!("{n} agents")
+        };
+        if flow.ordered {
+            words.push_str(" · in order");
+        }
+        chip(&mut head, &mut pics, None, &words, Chip::Wait.face());
+        head.push(" ", None);
+    }
     chip(
         &mut head,
         &mut pics,
@@ -681,6 +700,16 @@ pub(crate) fn flow_rows(
         &format!("{done} / {} done", ts.len()),
         Chip::Wait.face(),
     );
+    if let Some(base) = &flow.base {
+        head.push(" ", None);
+        chip(
+            &mut head,
+            &mut pics,
+            None,
+            &format!("base {}", &base[..base.len().min(7)]),
+            Chip::Wait.face(),
+        );
+    }
     // the strip first, under the lens bar, then the run's line (the mockup)
     let mut rows: Vec<Row> = strip_row(flow, &ts, env, fonts, &mut pics)
         .into_iter()
@@ -1446,7 +1475,45 @@ mod tests {
             push: None,
             machines: vec![],
             cost: None,
+            agents: None,
+            ordered: false,
+            base: None,
         }
+    }
+
+    /// [D] The run's line carries its meta chips: how many agents it runs at once, "in order" when the user set one,
+    /// then the tasks done and its base (short); before any task started, neither agents nor base.
+    #[test]
+    fn the_runs_line_says_its_agents_order_and_base() {
+        let head = |f: &Flow| {
+            let (rows, _) = flow_rows(f, &env(1.0), &fonts());
+            rows.into_iter()
+                .find(|r| r.key == "head")
+                .expect("head")
+                .text
+        };
+        let t = head(&Flow {
+            agents: Some(1),
+            ordered: true,
+            base: Some("4fe72a5aa1".into()),
+            ..flow()
+        });
+        assert!(t.contains("one agent · in order"), "{t}");
+        assert!(t.contains("base 4fe72a5") && !t.contains("4fe72a5a"), "{t}");
+        assert!(
+            t.find("in order") < t.find("done") && t.find("done") < t.find("base"),
+            "{t}"
+        );
+        let t = head(&Flow {
+            agents: Some(3),
+            ..flow()
+        });
+        assert!(
+            t.contains("3 agents") && !t.contains("in order") && !t.contains("base"),
+            "{t}"
+        );
+        let t = head(&flow());
+        assert!(!t.contains("agent"), "{t}");
     }
 
     fn fonts() -> drgnx_rows::fit::FontSet {

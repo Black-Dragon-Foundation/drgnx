@@ -232,6 +232,10 @@ judged by. A tip that edits one is a `code.ci-config` change at its merge (`runn
 else the newest running job), its tasks and their evidence, its rule pack, its merge queue (ready and batch) and its
 open `gate` cards, and builds the model and the rows (`work::trail::flow`, pure):
 
+- the run's line: its title, the plan run, the job and its pack, then chips: how many agents it runs at once ("one
+  agent", with "· in order" when the user ordered its tasks), the tasks done, and its base (short). The job's first
+  task start records `agents` and `base` in the job's data (`runner::tick::run_facts`; the base is that task's tree's);
+  before then the run shows neither;
 - a row per task, a column per gate: Brief, Red first, Build, Author check, Merge batch, Review, each heading with its
   Lucide icon. Each cell is a chip in its state's face (`drgnx-work-flow-chip-ok` passed, `-run` running, `-held`
   held, with a lock, `-err` failed, `-wait` waiting; drgnx-work-flow.el, the UI font over the theme's chips), an empty
