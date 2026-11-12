@@ -355,6 +355,25 @@ Replace All refuses."
     (drgnx-replace-search-mode-symbol)
     (should (eq 'symbol (drgnx-replace--opt :mode)))))
 
+(ert-deftest drgnx-replace-rows/an-index-mode-s-first-window-is-drawn-at-once ()
+  "Pattern D: a Symbol or Meaning search's first patch, the hub's reset holding its first window, is drawn at the next
+pass (`drgnx-view-patch-hurry'), not a frame on: there is no burst to wait for.  A Text search's reset still waits the
+frame for the rows that follow it apart."
+  (drgnx-replace-rows-test--with
+    (drgnx-replace--fill 'find "needle")
+    (drgnx-replace--search-now)
+    (should-not drgnx-view-patch-hurry)
+    (drgnx-replace-search-mode-symbol)
+    (should drgnx-view-patch-hurry)
+    (drgnx-view-apply-patch
+     (drgnx-replace-rows-test--patch
+      view 0 1 (list (list :reset (list (drgnx-replace-rows-test--row "f:a.rs" "a.rs")
+                                        (drgnx-replace-rows-test--row "m:1:0" "  needle()"))))))
+    (should-not drgnx-view-patch-hurry)
+    (drgnx-replace-search-mode-next)
+    (should (eq 'meaning (drgnx-replace--opt :mode)))
+    (should drgnx-view-patch-hurry)))
+
 (ert-deftest drgnx-replace-rows/a-text-search-that-finds-nothing-offers-meaning ()
   "Pattern D: no automatic mode: a Text search that finds nothing says so with a \"Try Meaning\" link on the status
 line, which searches the same words by meaning; a search that found something offers nothing."

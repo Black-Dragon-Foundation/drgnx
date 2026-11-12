@@ -225,6 +225,98 @@ fn uncommitted_edit_changes_blob() {
     assert_ne!(before, after);
 }
 
+/// GitCli, recording the paths each `blobs` call hashed.
+struct Hashes(std::cell::RefCell<Vec<Vec<String>>>);
+
+impl hrafn::Git for Hashes {
+    fn ls_files(&self, root: &Path) -> std::io::Result<Vec<String>> {
+        GitCli.ls_files(root)
+    }
+    fn blobs(&self, root: &Path, paths: &[String]) -> std::io::Result<Vec<String>> {
+        self.0.borrow_mut().push(paths.to_vec());
+        GitCli.blobs(root, paths)
+    }
+    fn head(&self, root: &Path) -> std::io::Result<String> {
+        GitCli.head(root)
+    }
+    fn nested(&self, root: &Path) -> std::io::Result<Vec<String>> {
+        GitCli.nested(root)
+    }
+    fn generated(&self, root: &Path, paths: &[String]) -> std::io::Result<Vec<String>> {
+        GitCli.generated(root, paths)
+    }
+    fn history(&self, root: &Path, limit: usize) -> std::io::Result<Vec<hrafn::Commit>> {
+        GitCli.history(root, limit)
+    }
+    fn show(&self, root: &Path, rev: &str, path: &str) -> std::io::Result<Vec<u8>> {
+        GitCli.show(root, rev, path)
+    }
+}
+
+/// Sets FILE's modification time back to 2001 (a file changed this moment is read again on every listing); its
+/// status-change time still moves, so a backdated edit is seen.
+fn backdate(file: &Path) {
+    let then = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+    std::fs::File::options()
+        .write(true)
+        .open(file)
+        .unwrap()
+        .set_modified(then)
+        .unwrap();
+}
+
+#[test]
+fn a_second_listing_hashes_only_what_changed() {
+    let d = repo(&[
+        ("a.el", "a\n"),
+        ("b.el", "b\n"),
+        ("c.rs", "fn c() {}\n"),
+        (".gitattributes", "a.el linguist-generated\n"),
+    ]);
+    let file = |p: &str| d.path().join(p);
+    for p in ["a.el", "b.el", "c.rs", ".gitattributes"] {
+        backdate(&file(p));
+    }
+    let git = Hashes(Default::default());
+    let mut snap = hrafn::files::Snapshot::default();
+    let mut list_again = || {
+        git.0.borrow_mut().clear();
+        let l =
+            hrafn::files::list_with(d.path(), &git, &Config::default(), &all, &mut snap).unwrap();
+        assert_eq!(
+            l,
+            run(d.path(), &Config::default()).unwrap(),
+            "the same list as a cold one"
+        );
+        let hashed: Vec<String> = git.0.borrow().concat();
+        (l, hashed)
+    };
+    let (l, hashed) = list_again();
+    assert_eq!(hashed, ["a.el", "b.el", "c.rs"]);
+    assert!(l[0].generated && !l[1].generated);
+    assert!(list_again().1.is_empty(), "nothing changed, nothing hashed");
+    std::fs::write(file("b.el"), "b two\n").unwrap();
+    backdate(&file("b.el"));
+    assert_eq!(list_again().1, ["b.el"]);
+    assert!(list_again().1.is_empty());
+    // a file written this moment: its time cannot tell a later write in the same tick, so it is read every time
+    std::fs::write(file("d.el"), "d\n").unwrap();
+    assert_eq!(list_again().1, ["d.el"]);
+    assert_eq!(list_again().1, ["d.el"]);
+    backdate(&file("d.el"));
+    assert_eq!(list_again().1, ["d.el"]);
+    assert!(list_again().1.is_empty());
+    std::fs::remove_file(file("a.el")).unwrap();
+    let (l, hashed) = list_again();
+    assert_eq!((paths(&l), hashed.len()), (vec!["b.el", "c.rs", "d.el"], 0));
+    // .gitattributes moves the attributes and the clean filters a blob goes through: everything is read again
+    std::fs::write(file(".gitattributes"), "c.rs linguist-generated\n").unwrap();
+    backdate(&file(".gitattributes"));
+    let (l, hashed) = list_again();
+    assert_eq!(hashed, ["b.el", "c.rs", "d.el"]);
+    assert!(l[1].generated);
+}
+
 fn listed(path: &str, class: Class, size: u64) -> Listed {
     Listed {
         path: path.into(),

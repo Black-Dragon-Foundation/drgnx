@@ -257,6 +257,8 @@ struct Inner {
     swept: Mutex<Option<tokio::time::Instant>>,
     /// Directories Hrafn watches at most: half of `max_user_watches`.
     watch_budget: Mutex<Option<usize>>,
+    /// What the base's last listing read: the next reads and hashes only the files whose status moved.
+    listing: Mutex<hrafn::files::Snapshot>,
     #[cfg(feature = "test-hooks")]
     permits: Option<Arc<tokio::sync::Semaphore>>,
 }
@@ -356,6 +358,7 @@ impl Project {
                 fed: false.into(),
                 swept: Mutex::new(None),
                 watch_budget: Mutex::new(None),
+                listing: Mutex::new(Default::default()),
                 #[cfg(feature = "test-hooks")]
                 permits: spec.test_permits,
             }),
@@ -519,7 +522,8 @@ impl Project {
     }
 
     /// Before a query, for a project with no watches: the blobs diffed (at most [`DIFF_LIMIT`] named), tier 1 when
-    /// any differ.
+    /// any differ. The listing reads and hashes only the files whose status moved since the last one
+    /// (`hrafn::files::list_with`).
     pub async fn fresh_for_query(&self) -> Result<Option<Refresh>, ProjectError> {
         let has_watch = self.inner.events.lock().is_ok_and(|e| e.is_some());
         if has_watch {
@@ -1185,9 +1189,17 @@ impl Inner {
 
     /// The file list (blocking: git and a read of every file).
     fn list(&self) -> io::Result<Vec<Listed>> {
-        hrafn::list(&self.base, &GitCli, &self.config, &|p: &str| {
-            self.allowed(p)
-        })
+        let mut snap = self
+            .listing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        hrafn::files::list_with(
+            &self.base,
+            &GitCli,
+            &self.config,
+            &|p: &str| self.allowed(p),
+            &mut snap,
+        )
     }
 
     fn models(&self) -> Vec<(String, usize)> {

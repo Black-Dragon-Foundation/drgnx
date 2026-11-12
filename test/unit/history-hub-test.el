@@ -100,5 +100,26 @@ BODY made are gone at the end.  Skipped without the hub or the hook (without the
       (drgnx-history-hub-test--settle (lambda () (eq (drgnx-history-last-result b) 'ok)) "the next batch is ok")
       (should (eq (drgnx-history-last-result b) 'ok)))))
 
+(ert-deftest drgnx-history/a-hashless-batch-is-taken ()
+  ;; B: a buffer over the limit sends its batches with no hash and the hub takes them (ok); a later batch under a
+  ;; raised limit carries the hash again, and its ok says the hub's text is the buffer's
+  (drgnx-history-hub-test--with
+    (let ((b (find-file-noselect (concat dir "a.txt"))) (drgnx-history-large-size 4) (hashed nil))
+      (drgnx-history-mode 1)
+      (drgnx-history-hub-test--settle (lambda () (drgnx-history-tracked-p b)) "the file registered")
+      (with-current-buffer b (goto-char 1) (insert "typed ") (goto-char (point-max)) (insert "more\n"))
+      (drgnx-history-hub-test--settle (lambda () (eq (drgnx-history-last-result b) 'ok)) "the hub took the batch")
+      (setq drgnx-history-large-size (* 256 1024))
+      (setf (drgnx-history--st-last (gethash b drgnx-history--buffers)) nil)
+      (cl-letf* ((send (symbol-function 'drgnx-history--send))
+                 ((symbol-function 'drgnx-history--send)
+                  (lambda (method params callback)
+                    (when (and (equal method "history/batch") (plist-get params :region_hash)) (setq hashed t))
+                    (funcall send method params callback))))
+        (with-current-buffer b (insert "checked\n"))
+        (drgnx-history-hub-test--settle (lambda () (and hashed (eq (drgnx-history-last-result b) 'ok)))
+                                        "the hashed batch is ok"))
+      (should (eq (drgnx-history-last-result b) 'ok)))))
+
 (provide 'history-hub-test)
 ;;; history-hub-test.el ends here

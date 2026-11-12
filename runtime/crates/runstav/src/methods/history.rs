@@ -50,8 +50,10 @@ pub struct BatchParams {
     pub buffer_id: String,
     /// At most 1 MiB of inserted text; more is refused as `split-required` and the editor splits it.
     pub changes: Vec<BatchChange>,
-    /// SHA-256 in hex of the buffer's whole text after the batch.
-    pub region_hash: String,
+    /// SHA-256 in hex of the buffer's whole text after the batch, sent only for a text of at most 256 KiB; without it
+    /// the hub checks nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_hash: Option<String>,
     /// The buffer's version once the batch is in: the editor's count of its drains (a resync is one of them). The
     /// frames of its file name it as `doc_version`.
     pub version: u64,
@@ -749,4 +751,24 @@ pub struct Blocked {
     pub commit: String,
     pub session: String,
     pub branch: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // pattern: D
+    #[test]
+    fn batch_params_hash_is_optional() {
+        let without = serde_json::json!({"buffer_id": "b1", "changes": [], "version": 1});
+        let p: BatchParams = serde_json::from_value(without.clone()).unwrap();
+        assert_eq!(p.region_hash, None);
+        assert_eq!(serde_json::to_value(&p).unwrap(), without);
+        let with = serde_json::json!({"buffer_id": "b1", "changes": [], "region_hash": "ab", "version": 1});
+        let p: BatchParams = serde_json::from_value(with.clone()).unwrap();
+        assert_eq!(p.region_hash.as_deref(), Some("ab"));
+        assert_eq!(serde_json::to_value(&p).unwrap(), with);
+        let typo = serde_json::json!({"buffer_id": "b1", "changes": [], "region_hashh": "ab", "version": 1});
+        assert!(serde_json::from_value::<BatchParams>(typo).is_err());
+    }
 }

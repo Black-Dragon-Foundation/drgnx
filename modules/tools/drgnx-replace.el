@@ -68,6 +68,7 @@
 (declare-function drgnx-palette-keycaps "drgnx-palette" (key))
 (declare-function drgnx-surfaces-key-label "drgnx-surfaces")
 (declare-function drgnx-hub-call-sync "drgnx-hub-client")
+(declare-function drgnx-hub-start-for-command "drgnx-hub-client" (on-fail))
 (declare-function drgnx-view-env-register "drgnx-view-env" (view buffer &optional resubscribe))
 (declare-function drgnx-view-env-unregister "drgnx-view-env" (view))
 (defvar drgnx-hub--events)
@@ -971,7 +972,7 @@ Branch's base and `±'."
 
 (defun drgnx-replace--field-action (name)
   "RET in field NAME: the view searches now; the bar goes to the next match, or replaces it (the replace field)."
-  (cond ((not (drgnx-replace--bar-p)) (drgnx-replace--search-now))
+  (cond ((not (drgnx-replace--bar-p)) (drgnx-replace--search-now) (drgnx-replace--start-hub))
         ((eq name 'replace) (drgnx-replace--bar-replace-one))
         (t (drgnx-replace--bar-step 1))))
 
@@ -987,7 +988,24 @@ Branch's base and `±'."
 (defun drgnx-replace--focus-find (window)
   "The Search view focused in WINDOW by its key (VS Code's Ctrl+Shift+F): point in the find field."
   (with-current-buffer (window-buffer window)
-    (set-window-point window (widget-field-start (drgnx-replace--widget 'find)))))
+    (set-window-point window (widget-field-start (drgnx-replace--widget 'find))))
+  (drgnx-replace--start-hub))
+
+(defun drgnx-replace--start-hub ()
+  "A command of the Search view's (its key, RET, Search in Files): the hub its text search runs on is started when
+none runs (`drgnx-hub-start-for-command'), and a search waiting for it starts once it is up (`drgnx-replace--hub-up');
+when no hub can be had, the status line says why."
+  (when (fboundp 'nidhogg-view--call)                 ; without Sjá the status line says so, and no hub would help
+    (require 'drgnx-hub-client)
+    (drgnx-hub-start-for-command #'drgnx-replace--no-hub)))
+
+(defun drgnx-replace--no-hub (why)
+  "No hub for the Search view, for WHY (a string): a search waiting for one waits no more, and the status line says
+why."
+  (when-let* ((buf (get-buffer drgnx-replace-buffer-name)))
+    (with-current-buffer buf
+      (setq drgnx-replace--waiting nil)
+      (drgnx-replace--message "No hub to search with: %s" why))))
 
 (defun drgnx-replace--view-buffer ()
   "The Search view's buffer, drawn the first time."
@@ -1549,7 +1567,8 @@ buffers' text goes to the hub after a pause (`drgnx-replace--send-buffers'), whi
 (defun drgnx-replace-in-files ()
   "Show the Search view for the project, the word at point to find; Symbol on at a name the server can rename."
   (interactive)
-  (drgnx-replace--open :symbol 'auto))
+  (drgnx-replace--open :symbol 'auto)
+  (drgnx-replace--start-hub))
 
 (defun drgnx-replace-rename-symbol ()
   "Show the Search view with Symbol on: the language server's edits for the name at point, the new name to type."
@@ -2010,6 +2029,10 @@ text is sent too: the hub empties the rows and stops the search before.  The mat
     (setq text "" drgnx-replace--status "This file: the view was not opened from a file"))
   (let ((off (prog1 drgnx-replace--carry (setq drgnx-replace--carry nil))))
     (setq drgnx-replace--searching t drgnx-replace--grow nil)
+    ;; Symbol's and Meaning's first patch is their first window whole, in one reset (the hub holds the files until
+    ;; it is full): drawn at the next pass, with no burst to wait a frame for
+    (when (and (memq (drgnx-replace--opt :mode) '(symbol meaning)) (not (drgnx-replace--pattern-p)))
+      (setq drgnx-view-patch-hurry t))
     (drgnx-replace--send-buffers)
     (drgnx-replace--hub-call
      "search/run"

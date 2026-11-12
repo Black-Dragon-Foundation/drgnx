@@ -1,6 +1,6 @@
-//! The Search view's index modes through the real hub: a Symbol search's reset goes with its first rows, after the
-//! index has answered, never ahead of them. Sent at once, the reset was drawn alone one frame on, and rows that came
-//! after the index's answer waited for the view's throttle (`drgnx-view-delay`) instead of sharing that frame.
+//! The Search view's index modes through the real hub: a Symbol search's first patch is one reset holding its first
+//! file's rows, after the index has answered. The view draws it at once (`drgnx-view-patch-hurry`): a reset alone would be
+//! drawn empty, and rows apart from it would wait for the view's throttle (`drgnx-view-delay`).
 //!
 //! test-pattern: handshake (C): the hub answers a ping when it is ready, and an index's progress is read from
 //! `search/status` until it holds the files (`skuld::wait_until`, whose deadline only bounds a failure).
@@ -30,7 +30,7 @@ fn call(c: &mut Client, id: u64, method: &str, params: Value) -> Value {
 
 /// Pattern C.
 #[test]
-fn a_symbol_search_resets_its_rows_with_the_first_of_them() {
+fn a_symbol_search_s_first_patch_is_a_reset_with_its_first_rows() {
     let root = Root::new();
     let proj = root.dir.path().join("h/proj");
     std::fs::create_dir_all(&proj).unwrap();
@@ -88,20 +88,14 @@ fn a_symbol_search_resets_its_rows_with_the_first_of_them() {
     let at = |p: &dyn Fn(&Value) -> bool| lines.iter().position(p);
     let s_patch = |v: &Value| v["event"] == "view-patch" && v["data"]["view"] == "s";
     let answer = at(&|v| v["id"] == json!(run)).expect("the run's answer");
-    let reset =
-        at(&|v| s_patch(v) && v["data"]["ops"][0].get("reset").is_some()).expect("the reset");
-    let rows =
-        at(&|v| s_patch(v) && v["data"]["ops"][0].get("reset").is_none()).expect("the first rows");
+    let first = at(&s_patch).expect("the first patch");
     assert!(
-        answer < reset,
-        "the reset came before the index answered: {lines:#?}"
+        answer < first,
+        "the first patch came before the index answered: {lines:#?}"
     );
-    assert!(reset < rows, "{lines:#?}");
-    // nothing but the run's model between its reset and its first rows: they are one burst
-    assert!(
-        lines[reset + 1..rows]
-            .iter()
-            .all(|v| v["event"] == "view-model"),
-        "{lines:#?}"
-    );
+    // one reset holding the first file's rows (a header and a match), never a reset alone
+    let ops = lines[first]["data"]["ops"].as_array().unwrap();
+    assert_eq!(ops.len(), 1, "{lines:#?}");
+    let reset = ops[0]["reset"].as_array().expect("a reset");
+    assert!(reset.len() >= 2, "{lines:#?}");
 }

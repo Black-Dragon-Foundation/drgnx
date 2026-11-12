@@ -8,7 +8,8 @@ still works.
 ## drgnx's terminal
 
 Your shell runs in a small program of its own (a worker the drgnx hub starts, on Ghostty's terminal engine); the
-terminal's buffer only shows the screen it sends. So:
+terminal's buffer only shows the screen it sends. When no hub runs, New Terminal starts it; when none can be started,
+the terminal says why in the echo area. So:
 
 - **Output never stalls typing.** A command that prints a flood shows the screen as it goes; the lines that scrolled
   past fill in, newest first, as soon as the output pauses.

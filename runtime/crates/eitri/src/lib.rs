@@ -2,7 +2,8 @@
 //!
 //! Generic: no drgnx type and no drgnx path. Used by gleipnir and draugr, and later by the file service.
 //!
-//! - `open`: `open_path` and `open_beneath`, which refuse a link in any component and return the fd they checked.
+//! - `open`: `open_path` and `open_beneath`, which refuse a link in any component and return the fd they checked;
+//!   `stat_beneath` and `stat_in`, the status of a file resolved the same way.
 //! - `read`: bounded reads of regular files only (a FIFO is never read).
 //! - `write`: writes by a temporary file and a rename, never through a link; a leaf removed or made a link at the
 //!   parent's held fd.
@@ -17,7 +18,7 @@ mod read;
 mod trusted;
 mod write;
 
-pub use open::{Kind, Pinned, open_beneath, open_path};
+pub use open::{Kind, Meta, Pinned, open_beneath, open_path, stat_beneath, stat_in};
 pub use read::read_regular;
 pub use trusted::{TrustedProgram, trusted_program};
 pub use write::{remove_beneath, symlink_beneath, write_regular};

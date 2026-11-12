@@ -441,6 +441,12 @@ async fn overlay_predicates_use_indexes() {
         plan.contains("ref_name (name=?)"),
         "references by name:\n{plan}"
     );
+    // a name's usages rank the rows on the index alone, the view's pairs filtered by its graph (no `file` join)
+    let plan = plan_of(&s, hrafn::refs::COUNTS_SQL, 0).await;
+    assert!(
+        plan.contains("COVERING INDEX ref_name (name=?)"),
+        "usages' counts by name:\n{plan}"
+    );
     // the keyword ranking reads the FTS index only; the view is applied to its candidates by VISIBLE_SQL
     let plan = plan_of(&s, hrafn::query::KEYWORD_RANK_SQL, 0).await;
     assert!(

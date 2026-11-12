@@ -847,6 +847,15 @@ never waits: CALLBACK gets nil when a hub answers, or the reason (the process's 
 path (`inhibit-interaction`) it returns at once and they go, or a `hub` notice `start` is posted, when the start ends. `DRGNX_NO_HUB_START` is honoured; with
 no binary every caller says "Ratatoskr is not built: run `drgnx runtime build`".
 
+**A command that needs the subscription.** `drgnx-hub-start-for-command ON-FAIL` is for commands the user invoked whose
+answer comes on the subscribed connection: New Terminal and Reconnect (`drgnx-term`), the Search view's key, `RET` and
+Search in Files, and the Work space. With no subscription up or being made it calls `drgnx-hub--ensure-running` (not
+waited for) and connects when the hub answers; ON-FAIL gets the reason when no hub can be had (the terminal fails and
+says it in the echo area, the Search view on its status line). In a daemon path (`inhibit-interaction`) it starts
+nothing and only connects to a hub already there: timers, hooks, sentinels and startup never start one. Before it,
+these only connected, so with no hub running they waited for good. The Extensions view and Debug's commands ask the hub
+by call, which signals "no hub" and shows the reason; they do not start it.
+
 **At daemon start.** The nightly graph backup (`backup_timer.rs`) runs inside the hub, so a daemon must not wait for AI
 to start one. `drgnx-hub-ask-at-daemon-start` (core, on `emacs-startup-hook`) schedules the layer timer
 `hub-daemon-start` (2 s, owner `:core`) in a daemon only: not in batch, not in a plain Emacs, not with
@@ -1449,7 +1458,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `graph/settings` | user | `{get?: Empty, set?: {only_user_closes?: boolean}}` | `{only_user_closes: boolean}` | yes |
 | `graph/sql` | user | `{deadline_ms?: natnum, params?: [SqlParam], rows?: natnum, sql: string}` | `{columns?: [string], rows?: [[any]], truncated: boolean}` | no |
 | `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum, session?: string}` | `HelloReply` | no |
-| `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash: string, version: natnum}` | `{ok?: boolean, resync?: boolean}` | yes |
+| `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash?: string, version: natnum}` | `{ok?: boolean, resync?: boolean}` | yes |
 | `history/blame` | user | `{end: integer, path: string, start: integer, worktree_root: string}` | `{spans: [BlameSpan]}` | no |
 | `history/compare` | user | `{a: string, b: string}` | `{files: [ComparedFile]}` | no |
 | `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
@@ -2447,10 +2456,13 @@ snapshots; the search itself is `hrafn::grep`).
   own, `<view>~pin<N>`).
 - **Symbol and Meaning** (`view/search/modes.rs`) ask the index on a task of their own and, once it answers, send
   each file as it is read (off the runtime, in the order shown), then `search-run-done` (its `error` is the index's
-  refusal, e.g. no index yet). Their `reset` (and the run's empty model) goes with the first file's rows, or with the
-  end when none came, after `{run}`: sent at once, it was drawn alone one frame on, and the rows that followed the
-  index's answer waited for the view's throttle (`drgnx-view-delay`, 100 ms) instead of sharing the reset's frame, as
-  Text's first file does. The view keeps the previous search's rows until then. Symbol (`{mode:
+  refusal, e.g. no index yet). The first file (or the end, when none came) goes as one patch: the `reset` with its
+  rows (and the run's model), after `{run}`. (Holding the whole first window instead put a Symbol search's first
+  rows at 55–70 ms, p50, against 26 ms: a name's files are read one by one.) The
+  editor sets `drgnx-view-patch-hurry` for these runs, so that patch is drawn at the view's next pass rather than a
+  frame later (`drgnx-view-first-delay` waits for the rest of a burst, and this one has none); the files after it go
+  as Text's do. Sent at once, the reset was drawn alone one frame on, and the rows that followed waited for the view's
+  throttle (`drgnx-view-delay`, 100 ms). The view keeps the previous search's rows until then. Symbol (`{mode:
   "symbol", name, case?}`, case on by default) is `search/usages`' answer: the files that define the name first, each
   definition's line and then the file's uses in line order, then the files that use it in the index's rank (at most
   100), each line's whole-word occurrences of the name a match (the line read from disk; a definition whose line lacks
@@ -2481,7 +2493,7 @@ snapshots; the search itself is `hrafn::grep`).
   node; `upto` to a row under it opens the folders above it, and a regroup opens all. A regroup re-parents every
   node, so its model goes as a first window of 2,000 entries (`FIRST_MODEL_WINDOW`) with the first window's rows;
   once those are drawn the editor asks for the whole window (`view/window`), which drains after them (spec §8's
-  50 ms is the first window's). Files in the order found need nothing; any other
+  50 ms is the first window's). Files in the run's order need nothing; any other
   grouping or a sort builds a layout of the run's files (every row in order with its parent node), again only when the
   files change. Folders: a tree by path, folders before files, one-child chains joined, `d:<path>` nodes (kind
   `folder`, a `count` field) parenting their folders and files. Symbols: each file's matches under `s:<path>:<start
@@ -2529,8 +2541,12 @@ snapshots; the search itself is `hrafn::grep`).
   search starts at the first again.
 - **The window** (the agent panel's shape, `agents/panel/look`): the hub keeps every match and Sjá's model holds them
   (so Next Match, Previous Match and Replace All, which read the model, act on all of them), but the rows sent are
-  the first 200 (a file's header and its matches, in the order the files were complete) and no more until the editor
-  asks; the totals (files, matches) come with `search-run-done`. `search/grep-look {view, more?, fill?, upto?}` goes
+  the first 200 (a file's header and its matches) and no more until the editor asks. A Text or Pattern search keeps
+  its files by path, component by component (`a/x` before `a-b/x`, as VS Code lists them), whatever order the walk
+  finds them in (rg's threads and the file system: macOS's walk lists `b.txt` before `a.txt`), each file's lines in
+  file order: a file after the last goes as an insert, one inside the rows (or any while the rows are stale) sends
+  the rows and the model whole as diffs, at most once per throttle window (as a grouped search's) and at the end, and
+  moves a block after it down; Symbol and Meaning keep their own order; the totals (files, matches) come with `search-run-done`. `search/grep-look {view, more?, fill?, upto?}` goes
   on: `more` is one window more (the editor's window neared the end of the rows), `upto` a row's key (Next or Previous
   Match went to a match beyond them): the rows up to it and 100 after it. A row more than 400 rows (`FAR`) past the
   rows sent comes in a block, the 100 rows before it, it and the 100 after, after a gap row (key `gap`, "⋯ N more"),
