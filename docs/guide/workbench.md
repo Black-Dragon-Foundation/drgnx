@@ -272,7 +272,8 @@ mode line (ibuffer, Info) cannot change a window's height — text never jumps (
 needs at least 30 frame lines for the breadcrumb row, which is 31 terminal rows with the menu bar on (the menu bar
 is not a frame line); with fewer, the frame parameter `drgnx-chrome-breadcrumb` is `off` (set by the terminal layout)
 and the row is gone, sticky scroll's scopes with it. It comes back with room, and a buffer's own header line (column
-headings) stays.
+headings) stays. A buffer that sets `drgnx-chrome-own-tab-line` (the Work space's views) shows its own tab line in
+place of the editor's tabs; the row stays, so the text does not move.
 
 Hovering a file tab lights that one only, the whole tab. Tabs are dimmed; the shown tab joins the editor (its colour,
 in the body text's colour in the active editor group and muted in another group). The breadcrumb row is the header
@@ -480,7 +481,8 @@ compositor) `auto` is `float`: the popup shows in one child frame of the window,
 as wide as its text (at most 0.9 of the frame; lines below the visible part count too, so scrolling never scrolls
 sideways) and at most a third of the frame high, or the rule's `:height`. A rule's `:modal t` makes the popup a box in
 the middle of the window, as the palette is, with the palette's padding, ring, shadow and corners and no lane header
-(`(drgnx-wb-place 'MODE 'popup :height 0.8 :modal t)`: the Replace All sheet). A popup whose text comes later (a hub's
+(`(drgnx-wb-place 'MODE 'popup :height 0.8 :modal t)`: the Replace All sheet). A buffer with `drgnx-popup-width` (logical
+pixels) is that wide, its long lines wrapped there (Ask an Agent's card). A popup whose text comes later (a hub's
 answer) calls `(drgnx-popup-refit BUFFER)` to fit the lane again. The frame is made once per
 window and reused; ending the popup (`delete-window`, `quit-window`, `bury-buffer`, killing the buffer) hides it, and
 it is never deleted while the window lives. A popup that came up while you were in the minibuffer (`*Completions*`)

@@ -553,6 +553,13 @@ agent line 30).  Adding FN again moves it to its new depth."
 (defconst drgnx-chrome--own-header '(:eval header-line-format)
   "The header of a buffer that has its own (tabulated-list column headings, clicked to sort).")
 
+(defvar-local drgnx-chrome-own-tab-line nil
+  "Non-nil: an editor window showing this buffer shows its own `tab-line-format' in place of the editor's tabs (the
+Work space's lenses: its tab and the lens bar).  The row stays, so the window's text does not move.")
+
+(defconst drgnx-chrome--own-tab-line '(:eval tab-line-format)
+  "The tab line of a buffer that has its own (`drgnx-chrome-own-tab-line').")
+
 (defun drgnx-chrome--set (w param value)
   "Set W's line format PARAM (`tab-line-format', `header-line-format', `mode-line-format') to VALUE only if it
 changed, and then have W's lines drawn again: Emacs redraws a window for a new parameter only when a face filter names
@@ -565,7 +572,10 @@ it, so without this the next redisplay may keep the old line (the window's text 
   (pcase (drgnx-chrome--role w)
     ('editor
      (when note (drgnx-chrome--note w))
-     (drgnx-chrome--set w 'tab-line-format (let ((s (drgnx-chrome--tab-line w))) (if (equal s "") " " s)))
+     (drgnx-chrome--set w 'tab-line-format
+                        (if (buffer-local-value 'drgnx-chrome-own-tab-line (window-buffer w))
+                            drgnx-chrome--own-tab-line
+                          (let ((s (drgnx-chrome--tab-line w))) (if (equal s "") " " s))))
      (drgnx-chrome--set w 'header-line-format
                         (with-current-buffer (window-buffer w)
                           (cond ((and (local-variable-p 'header-line-format) header-line-format)

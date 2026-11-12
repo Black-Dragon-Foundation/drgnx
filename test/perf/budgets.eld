@@ -128,11 +128,25 @@
  ;; search's end with its rows drawn (the 250 ms typing pause included): 337-356 ms p95 then, x 1.25
  (search-retype (:input :p95) 16) (search-retype (:input :max) 50)
  (search-retype (:search_first_ms :p95) 50) (search-retype (:settle_ms :p95) 450)
+ ;; search-modes: the Search view's index modes over 50,000 chunks (spec §8): Symbol's first rows within 50 ms of the
+ ;; search's start, and Meaning's at most 20 ms past `search/query' of its question (the pair's difference, 100 pairs)
+ (search-modes (:symbol_first_ms :p95) 50) (search-modes (:meaning_over_ms :p95) 20)
  ;; search-context: the Search view's context label rows cost at most 10 % on the first rows and 15 % to the end, the
  ;; p50s of 10 searches with labels over 10 without (100 Rust files, 10k matches, 1,000 labels; spec §8)
  (search-context (:first_ratio) 1.10) (search-context (:done_ratio) 1.15)
+ ;; search-pattern: the Search view's Pattern toggle over 1,000 Rust files narrowed to 100 by the pattern's name
+ ;; (1,000 matches): the first rows within 300 ms and the end within 2 s (spec §8, search view plan A6)
+ (search-pattern (:first_ms :p95) 300) (search-pattern (:done_ms :p95) 2000)
  ;; search-lists: the empty Search view's saved (100, 10 pinned) and recent (50) searches drawn within 5 ms (spec §8)
  (search-lists (:draw_ms :p95) 5)
+ ;; search-regroup: the Search view's 10k matches regrouped (Folders, Symbols, Files) to their first window drawn within 50 ms (spec §8)
+ (search-regroup (:first_ms :p95) 50)
+;; the write path from the editor (spec §8): the Replace All sheet over 10k matches in 500 files shown within 300 ms;
+;; Replace All into 50 open buffers (200 edits) at most 100 ms of Lisp; Edit Results of 5,000 lines in 300 files
+;; open within 400 ms, 500 changed lines in 100 files saved within 600 ms
+(search-sheet (:show_ms :p95) 300)
+(search-apply-open (:lisp_ms :p95) 100)
+(search-edit (:open_ms :p95) 400) (search-edit (:save_ms :p95) 600)
  ;; work-board: 40 moves over a Board of 200 cards on the hub's rows path (plan sja-complete B1).  Its allocation is held
  ;; to its old-path pair's, work-board-old (4750-4752 objects a key; the rows path 1932-1944 before and after the bar,
  ;; 2026-11-10, pinned, two runs each); cpu p90 6.8-11.5 ms (the most, 11.48, before the bar), x 1.25

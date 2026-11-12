@@ -1,0 +1,26 @@
+{"scenario": "search/group", "requires": ["v1", "test-hooks"], "doc": "search/group regroups a view's search without searching again: Folders is a tree of the folders (one-child chains joined, each with its count), the files under them without their folder; search/fold folds a folder (its rows go, its row shows ▸); search/run refuses the sort by rank (search/group takes it)."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "s", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "write_file", "path": "$ROOT/proj/sub/deep/a.txt", "text": "needle\n"}
+{"do": "write_file", "path": "$ROOT/proj/b.txt", "text": "needle\n"}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "text", "text": "needle"}}}}}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": 1, "files": 2, "matches": 2}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "search/group", "params": {"view": "s", "group": "tree"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "s", "class": "gui-1", "ops": "$any"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "view/env", "params": {"view": "s", "class": "gui-2", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "s", "class": "gui-2", "ops": [{"reset": [{"key": "d:sub/deep", "text": "▾ [x] sub/deep/  1"}, {"key": "f:sub/deep/a.txt", "text": "  [x] a.txt"}, {"key": "$string", "text": "    [x] needle"}, {"key": "f:b.txt", "text": "[x] b.txt"}, {"key": "$string", "text": "  [x] needle"}]}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "search/fold", "params": {"view": "s", "node": "d:sub/deep", "open": false}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": true}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "view/env", "params": {"view": "s", "class": "gui-3", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "s", "class": "gui-3", "ops": [{"reset": [{"key": "d:sub/deep", "text": "▸ [x] sub/deep/  1"}, {"key": "f:b.txt", "text": "[x] b.txt"}, {"key": "$string", "text": "  [x] needle"}]}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 7, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 8, "method": "search/fold", "params": {"view": "s", "node": "d:nope", "open": false}}}
+{"do": "expect", "conn": "e", "json": {"id": 8, "result": false}}
+{"do": "send", "conn": "e", "json": {"id": 9, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "text", "text": "needle"}}, "sort": "rank"}}}
+{"do": "expect", "conn": "e", "json": {"id": 9, "error": {"code": "invalid-params", "path": "sort"}}}

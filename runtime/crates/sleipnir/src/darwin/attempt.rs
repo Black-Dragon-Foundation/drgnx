@@ -9,6 +9,7 @@ use crate::linux::reserve;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Write};
+use std::os::fd::{AsRawFd, BorrowedFd};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -20,8 +21,16 @@ pub const EXEC_LOG: &str = "job-exec.log";
 
 /// Starts PROGRAM ARGS in a new session at NICE (a workstation's jobs yield to its user: every process of the job
 /// inherits it), with DIR's [`EXEC_LOG`] as its output, and records it in DIR's [`PID`]: its pid. While this process
-/// lives it reaps the child (a thread waits on it); after, launchd does.
-pub fn launch(dir: &Path, program: &Path, args: &[&OsStr], nice: i32) -> io::Result<u32> {
+/// lives it reaps the child (a thread waits on it); after, launchd does. KEEP (a networked job's proxy listener) is
+/// inherited under its own number; every other descriptor of this process is close-on-exec, as Rust opens them.
+pub fn launch(
+    dir: &Path,
+    program: &Path,
+    args: &[&OsStr],
+    nice: i32,
+    keep: Option<BorrowedFd<'_>>,
+) -> io::Result<u32> {
+    let keep = keep.map(|fd| fd.as_raw_fd());
     let log = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -31,11 +40,17 @@ pub fn launch(dir: &Path, program: &Path, args: &[&OsStr], nice: i32) -> io::Res
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
-    // SAFETY: setsid and setpriority are async-signal-safe and touch nothing of the parent's
+    // SAFETY: setsid, setpriority and fcntl are async-signal-safe and touch nothing of the parent's (the kept
+    // descriptor's close-on-exec flag is the child's own copy)
     unsafe {
         c.pre_exec(move || {
             rustix::process::setsid().map_err(io::Error::from)?;
             if nice != 0 && libc::setpriority(libc::PRIO_PROCESS, 0, nice) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if let Some(fd) = keep
+                && libc::fcntl(fd, libc::F_SETFD, 0) != 0
+            {
                 return Err(io::Error::last_os_error());
             }
             Ok(())
@@ -98,6 +113,7 @@ mod tests {
             Path::new("/bin/sh"),
             &[OsStr::new("-c"), OsStr::new(script)],
             0,
+            None,
         )
         .unwrap()
     }
@@ -177,12 +193,40 @@ mod tests {
             Path::new("/bin/sh"),
             &[OsStr::new("-c"), OsStr::new(&script)],
             10,
+            None,
         )
         .unwrap();
         let prio = rustix::process::getpriority_process(rustix::process::Pid::from_raw(pid as i32));
         fs::write(&done, "").unwrap();
         assert_eq!(prio.unwrap(), 10);
         skuld::wait_until("the attempt ends", 30, || (!active(d.path())).then_some(()));
+    }
+
+    /// [D] A kept socket (a networked job's proxy listener) reaches job-exec under its own number; another socket of
+    /// the starter's doesn't.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_kept_socket_reaches_job_exec_and_no_other() {
+        use std::os::fd::{AsFd, AsRawFd};
+        let d = tempfile::tempdir().unwrap();
+        let kept = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let other = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let (k, o) = (kept.as_raw_fd(), other.as_raw_fd());
+        let out = d.path().join("out");
+        let script = format!(
+            "for n in {k} {o}; do if [ -e /dev/fd/$n ]; then echo $n; fi; done > '{0}.tmp'; mv '{0}.tmp' '{0}'",
+            out.display()
+        );
+        launch(
+            d.path(),
+            Path::new("/bin/sh"),
+            &[OsStr::new("-c"), OsStr::new(&script)],
+            0,
+            Some(kept.as_fd()),
+        )
+        .unwrap();
+        let seen = skuld::wait_until("the fds job-exec has", 30, || fs::read_to_string(&out).ok());
+        assert_eq!(seen, format!("{k}\n"));
     }
 
     /// [D] A pid file whose process is gone, or another process under that pid (another start time), is not active,

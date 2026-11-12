@@ -1234,8 +1234,9 @@ fault."
 ;;;; Fitting a label to a width
 
 (defun drgnx-view-text-width (s)
-  "The width of S in pixels in the current buffer (in a terminal, 8 per column)."
-  (if (display-graphic-p) (string-pixel-width s) (* 8 (string-width s))))
+  "The width of S in pixels in the current buffer, with its faces and images and the buffer's face remaps (in a
+terminal, 8 per column)."
+  (if (display-graphic-p) (string-pixel-width s (current-buffer)) (* 8 (string-width s))))
 
 (defvar drgnx-view--text-width-function #'drgnx-view-text-width
   "Called with a string for its width in pixels, by `drgnx-view-fit'; tests set a fixed one.")
@@ -2000,9 +2001,21 @@ foreground, before it the style's other attributes as one anonymous face, shared
         (progn (when (>= (hash-table-count table) 512) (clrhash table))
                (puthash px `(space :align-to (,px)) table)))))
 
+(defun drgnx-view-patch--fit-faced (seg px)
+  "SEG (a string with its faces and images on it) cut at the end, with an ellipsis, to be at most PX pixels wide as
+`drgnx-view-patch-measure-function' measures it.  Only for a segment that overflowed, so it is not memoised."
+  (let ((lo 0) (hi (length seg)))
+    (while (< lo hi)
+      (let ((mid (/ (+ lo hi 1) 2)))
+        (if (<= (funcall drgnx-view-patch-measure-function (concat (substring seg 0 mid) "…")) px)
+            (setq lo mid)
+          (setq hi (1- mid)))))
+    (concat (substring seg 0 lo) "…")))
+
 (defun drgnx-view-patch--fit-guard (state text stops)
-  "The fit guard: one measure of TEXT's segment before its first stop of STOPS (none: nothing measured).  When it
-runs past that stop's PX, the segment is fitted again (`drgnx-view-fit'), padded so later positions keep their
+  "The fit guard: one measure of TEXT's segment before its first stop of STOPS (none: nothing measured), with the
+row's faces and images on it (RENDER dresses TEXT first), so a proportional face measures as it is drawn.  When it runs
+past that stop's PX, the segment is fitted again (`drgnx-view-patch--fit-faced'), padded so later positions keep their
 place, and the measure reported (`view/measured').  Returns the new text, or nil when TEXT fits."
   (when-let* ((stop (car stops)))
     (let* ((end (car stop)) (limit (cadr stop)) (seg (substring text 0 end))
@@ -2012,15 +2025,30 @@ place, and the measure reported (`view/measured').  Returns the new text, or nil
         (cl-incf (drgnx-view-patch-refits state))
         (funcall drgnx-view-patch-send-function "view/measured"
                  (list :view (drgnx-view-patch-view state) :class (drgnx-view-patch-class state)
-                       :measured (list (list "ui" seg w))))
-        (let ((fit (drgnx-view-fit seg limit)))
+                       :measured (list (list "ui" (substring-no-properties seg) w))))
+        (let ((fit (drgnx-view-patch--fit-faced seg limit)))
           (concat fit (make-string (max 0 (- end (length fit))) ?\s) (substring text end)))))))
 
 (defun drgnx-view-patch-render (key)
-  "RENDER of `drgnx-view-rows': KEY's stored row as text, in the current (the view's) buffer."
+  "RENDER of `drgnx-view-rows': KEY's stored row as text, in the current (the view's) buffer.  The guard
+(`drgnx-view-patch-guard-function') sees the text dressed (faces, properties, stops, images), as it is drawn; a text
+it changes is dressed again."
   (let* ((state drgnx-view-patch) (row (gethash key (drgnx-view-patch-rows state)))
-         (text (plist-get row :text)) (stops (plist-get row :stops)))
-    (setq text (or (and stops (funcall drgnx-view-patch-guard-function state text stops)) (copy-sequence text)))
+         (stops (plist-get row :stops))
+         (text (drgnx-view-patch--dress state key row (copy-sequence (plist-get row :text)))))
+    (when-let* ((new (and stops (funcall drgnx-view-patch-guard-function state text stops))))
+      (setq text (drgnx-view-patch--dress state key row new)))
+    (let ((h (plist-get row :height)) (nl (copy-sequence "\n")))
+      (when h
+        (put-text-property 0 1 'line-height
+                           (* (plist-get h :lines) (or drgnx-view--line-height (setq drgnx-view--line-height (default-line-height))))
+                           nl))
+      (concat text nl))))
+
+(defun drgnx-view-patch--dress (state key row text)
+  "TEXT (KEY's ROW's text, or the guard's change of it) with the row's faces, properties, stops, spaces and images
+put on it, in STATE; returns TEXT."
+  (let ((stops (plist-get row :stops)))
     (dolist (run (plist-get row :runs))
       (when-let* ((name (nth 2 run))
                   (face (let ((id (drgnx-view-patch--style-id name)))
@@ -2041,12 +2069,7 @@ place, and the measure reported (`view/measured').  Returns the new text, or nil
       (let ((spec (gethash (nth 1 im) (drgnx-view-patch-images state))))
         (put-text-property (nth 0 im) (1+ (nth 0 im)) 'display (if (or (null spec) (eq spec :alt)) (nth 2 im) spec)
                            text)))
-    (let ((h (plist-get row :height)) (nl (copy-sequence "\n")))
-      (when h
-        (put-text-property 0 1 'line-height
-                           (* (plist-get h :lines) (or drgnx-view--line-height (setq drgnx-view--line-height (default-line-height))))
-                           nl))
-      (concat text nl))))
+    text))
 
 ;;;; Classes and the stale shade: the last step
 

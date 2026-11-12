@@ -2044,9 +2044,11 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
   again from the faces as they are (a theme change in a view whose type has `:epoch-reset nil`), the LRU emptied, with no message to the hub. A terminal's patch also
   carries `term` (cursor, alt screen, mouse tracking, title): the inserter keeps it (`drgnx-view-patch-term`) and
   draws the cursor's row again, so the view type's PATCHED can place the cursor after the draw.
-- **The fit guard:** a row with a stop is measured once (the text before its first stop, `string-pixel-width`); a
-  segment wider than the stop is fitted again with `drgnx-view-fit` (padded, so later positions keep their place) and
-  reported by `view/measured`, after which the hub fits that string by the editor's width.
+- **The fit guard:** a row with a stop is measured once (the text before its first stop, `string-pixel-width` in the
+  view's buffer), dressed as it is drawn: the row's faces (a proportional face measures as itself, not the default
+  font), face remaps and images at their picture's width. A segment wider than the stop is cut again by the same
+  measure (`drgnx-view-patch--fit-faced`, padded, so later positions keep their place), dressed again and reported by
+  `view/measured`, after which the hub fits that string by the editor's width. A row that fits costs one measure.
 - **`drgnx-view-fit TEXT PX`** cuts TEXT with an ellipsis to PX pixels (memoised in `drgnx-view--fit-memo`, emptied
   at 4000). The Work map, the Board and the timeline's lane labels use it too.
 - **The stale shade** is the view's own state, put back by PATCHED after every draw; the classes (selected, match,

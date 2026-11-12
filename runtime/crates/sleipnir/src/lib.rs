@@ -21,6 +21,8 @@ pub mod darwin;
 pub mod helper;
 #[cfg(feature = "linux")]
 pub mod linux;
+#[cfg(feature = "runner")]
+pub mod net;
 #[cfg(feature = "proto")]
 pub mod proto;
 #[cfg(all(feature = "runner", any(target_os = "linux", target_os = "macos")))]

@@ -47,7 +47,8 @@ pub fn random_hex(bytes: usize) -> String {
 
 // ---------------------------------------------------------------- the root every hub lives in
 
-/// `/tmp/rtsk-XXXXXX/` with `home run state data config cache tmp`: `/tmp`, not `$TMPDIR`, so macOS socket paths stay short.
+/// `/tmp/rtsk-XXXXXX/` with `home run state data config cache tmp`: `/tmp`, not `$TMPDIR`, so macOS socket paths stay short
+/// (under its true name, `/private/tmp` on macOS).
 /// `DRGNX_CONFORMANCE_ROOTS=DIR/PREFIX` makes them `DIR/PREFIXXXXXXX/` instead (a short DIR: the socket path must stay
 /// within 103 bytes).
 pub struct Root {
@@ -64,9 +65,13 @@ impl Root {
             ),
             None => (Path::new("/tmp"), std::ffi::OsStr::new("rtsk-")),
         };
+        // The parent's true name, once: on macOS `/tmp` is a link to `/private/tmp`, and the hub refuses a link in a
+        // path it opens and reports the true names, so `$ROOT` must be one already.
+        let parent = std::fs::canonicalize(parent)
+            .map_err(|e| format!("cannot resolve {}: {e}", parent.display()))?;
         let dir = tempfile::Builder::new()
             .prefix(prefix)
-            .tempdir_in(parent)
+            .tempdir_in(&parent)
             .map_err(|e| format!("cannot make a root in {}: {e}", parent.display()))?;
         for sub in ["home", "run", "state", "data", "config", "cache", "tmp"] {
             std::fs::create_dir(dir.path().join(sub))

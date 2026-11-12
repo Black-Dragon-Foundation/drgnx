@@ -78,6 +78,7 @@
 (declare-function drgnx-work-flow-run-red "drgnx-work-flow")
 (declare-function drgnx-work-flow-tell-agent "drgnx-work-flow")
 (declare-function drgnx-work-flow-waive "drgnx-work-flow")
+(declare-function drgnx-work-flow-held "drgnx-work-flow" (n))
 (declare-function drgnx-work-detail-buffer "drgnx-work-detail")
 (declare-function drgnx-work-detail-update "drgnx-work-detail")
 (declare-function drgnx-work-detail-buffers "drgnx-work-detail")
@@ -135,6 +136,11 @@ it (a notes repository with the code repositories inside it)."
 (defface drgnx-work-edge '((t :inherit drgnx-text-subtle)) "An edge." :group 'drgnx-work-space)
 (defface drgnx-work-edge-strong '((t :inherit drgnx-text-muted :weight bold)) "An edge that edits." :group 'drgnx-work-space)
 (defface drgnx-work-label '((t :inherit drgnx-text-muted)) "A layer's label." :group 'drgnx-work-space)
+(defface drgnx-work-lens-title '((t :inherit (drgnx-ui-heading tab-line-tab-current)))
+  "The Work space's tab on its lens bar." :group 'drgnx-work-space)
+(defface drgnx-work-lens-current '((t :inherit (bold drgnx-selected-quiet))) "The lens shown, on the lens bar."
+  :group 'drgnx-work-space)
+(defface drgnx-work-lens-key '((t :inherit drgnx-keycap)) "A key's badge on the lens bar." :group 'drgnx-work-space)
 (defface drgnx-work-chip '((t :inherit drgnx-selected-quiet)) "A chip." :group 'drgnx-work-space)
 (defface drgnx-work-new '((t :inherit success)) "The mark of a new conclusion." :group 'drgnx-work-space)
 (defface drgnx-work-agent-1 '((t :inherit drgnx-agent-1)) "The first agent colour." :group 'drgnx-work-space)
@@ -285,6 +291,13 @@ opened now.  It selects; it never approves, pushes or answers."
                     (car (drgnx-work-map-buffers)) (drgnx-work-space-open))))
     (pop-to-buffer buffer)
     (with-current-buffer buffer (drgnx-work-map-needs-you-here-next))))
+
+(defun drgnx-work-needs-you (n)
+  "`g N': on the map, select the Nth thing on its strip that needs you; in the Flow, the Nth task a gate holds.  It
+selects; nothing is approved, pushed, merged or answered."
+  (cond ((derived-mode-p 'drgnx-work-flow-mode) (drgnx-work-flow-held n))
+        ((derived-mode-p 'drgnx-work-map-mode) (drgnx-work-map-needs-you n))
+        (t (user-error "Work: g %d selects on the map and in the Flow" n))))
 
 (defun drgnx-work-space--show-detail (map-buffer)
   "The side panel of MAP-BUFFER in a window of the right dock (pane kind `work-detail'), the map keeping focus."
@@ -531,8 +544,9 @@ follows the windows; the commands."
     (let ((n (1+ i)))
       (drgnx-command-define (intern (format "work-needs-you-%d" n)) :category "Work"
                             :title (format "Select Thing %d That Needs You" n)
-                            :command (lambda () (interactive) (drgnx-work-map-needs-you n))
-                            :map 'drgnx-work-map-mode-map :doc "Jump to it; nothing is approved or answered")))
+                            :command (lambda () (interactive) (drgnx-work-needs-you n))
+                            :map 'drgnx-work-lens-map
+                            :doc "Jump to it (in the Flow: the Nth held task); nothing is approved or answered")))
   (dotimes (i 6)
     (let ((n (1+ i)))
       (drgnx-command-define (intern (format "work-collapse-layer-%d" n)) :category "Work"

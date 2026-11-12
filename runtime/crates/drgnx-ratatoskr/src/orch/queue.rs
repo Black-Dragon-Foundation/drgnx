@@ -20,11 +20,13 @@ struct Line {
     seen: Seen,
 }
 
-/// What the Flow shows of a job's queue besides its tasks: what the queue last said to each member, the combined
-/// tree the groups gate judged last (with the groups it listed there) and the head and tree the push gate judged last.
+/// What the Flow shows of a job's queue besides its tasks: what the queue last said to each member, what the
+/// merge-notes check found on it, the combined tree the groups gate judged last (with the groups it listed there) and
+/// the head and tree the push gate judged last.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Seen {
     pub said: std::collections::BTreeMap<String, String>,
+    pub audited: std::collections::BTreeMap<String, String>,
     pub groups: Option<(String, Vec<vordr::pack::Check>)>,
     pub push: Option<(String, String)>,
 }
@@ -84,7 +86,15 @@ impl Queue {
             line.ready.retain(|x| x.task != task);
             line.batch.retain(|x| x.task != task);
             line.seen.said.remove(task);
+            line.seen.audited.remove(task);
         }
+    }
+
+    /// The merge-notes check found WORDS on TASK of JOB.
+    pub fn audit(&self, job: &str, task: &str, words: &str) {
+        let mut jobs = self.jobs.lock().unwrap();
+        let line = jobs.entry(job.to_owned()).or_default();
+        line.seen.audited.insert(task.to_owned(), words.to_owned());
     }
 
     /// The queue said WORDS to TASK of JOB (its turn: merge, wait or back).
@@ -227,8 +237,19 @@ fn turn_of(queue: &Queue, dir: &Path, e: Entry<'_>) -> Result<Turn, String> {
                 n.files.join(", ")
             )));
         }
+        queue.audit(job, task, &audit_words(n.hunks.len()));
     }
     Ok(Turn::Merge)
+}
+
+/// What the Flow says of a member the merge-notes check passed, with HUNKS the hunks both sides changed (each
+/// resolved by intent in the merge's notes).
+pub fn audit_words(hunks: usize) -> String {
+    match hunks {
+        0 => "shared paths audited".into(),
+        1 => "1 hunk by intent · notes".into(),
+        n => format!("{n} hunks by intent · notes"),
+    }
 }
 
 #[cfg(test)]
@@ -302,5 +323,23 @@ mod tests {
         q.forget("j", "a");
         assert!(q.seen("j").said.is_empty());
         assert_eq!(q.seen("other"), Seen::default());
+    }
+
+    /// [D] The merge-notes check's result is kept per member next to its words, and leaves with it.
+    #[test]
+    fn the_queue_keeps_what_the_notes_check_found() {
+        let q = Queue::default();
+        q.audit("j", "a", "1 hunk by intent · notes");
+        q.audit("j", "b", "shared paths audited");
+        let s = q.seen("j");
+        assert_eq!(
+            s.audited.get("a").map(String::as_str),
+            Some("1 hunk by intent · notes")
+        );
+        assert_eq!(audit_words(0), "shared paths audited");
+        assert_eq!(audit_words(1), "1 hunk by intent · notes");
+        assert_eq!(audit_words(3), "3 hunks by intent · notes");
+        q.forget("j", "a");
+        assert_eq!(q.seen("j").audited.keys().collect::<Vec<_>>(), vec!["b"]);
     }
 }

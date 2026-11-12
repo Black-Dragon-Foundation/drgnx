@@ -37,10 +37,15 @@
 (unless (featurep 'drgnx-search-edit)
   (load (expand-file-name "drgnx-search-edit" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-search-edit-change "drgnx-search-edit")
+(declare-function drgnx-search-edit-evil-aux "drgnx-search-edit")
+(declare-function drgnx-search-edit--refresh-vim-prefixes "drgnx-search-edit")
+(defvar drgnx-search-edit-mode-map)
+(defvar drgnx-search-edit-normal-state-map)
 (unless (featurep 'drgnx-search-handoff)
   (load (expand-file-name "drgnx-search-handoff" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-search-handoff-event "drgnx-search-handoff")
 (declare-function drgnx-search-handoff-chip "drgnx-search-handoff")
+(declare-function drgnx-search-handoff-agent-chips "drgnx-search-handoff")
 (declare-function svg-create "svg")      ; the sheet's key chip (`drgnx-replace--chip-image'), loaded when drawn
 (declare-function svg-rectangle "svg")
 (declare-function svg-text "svg")
@@ -399,6 +404,10 @@ edit skipped with why; an unedited buffer whose file changed on disk is read aga
   "A context label row: the definition the matches below it are in." :group 'drgnx)
 (defface drgnx-replace-kind '((t :inherit font-lock-function-name-face))
   "Symbol mode's kind icon on a definition row; Meaning's hit names." :group 'drgnx)
+(defface drgnx-replace-folder '((t :inherit bold))
+  "A folder row's name when the Search view's results are grouped by folder." :group 'drgnx)
+(defface drgnx-replace-symbol '((t :inherit font-lock-function-name-face))
+  "A definition row's name when the Search view's results are grouped by definition." :group 'drgnx)
 (defface drgnx-replace-score '((t :inherit font-lock-keyword-face))
   "Meaning's score bar: how close a hit is, as a share of the best one." :group 'drgnx)
 
@@ -463,6 +472,18 @@ matches of the new run in `search-run-done', which are unticked again.")
   '((fn square-function "Functions") (macro wand "Macros") (var variable "Variables and constants") (type type "Types"))
   "The kind chips, in order: (KIND ICON HELP); KIND as the hub names it.")
 
+(defvar-local drgnx-replace--group 'file
+  "How the Search view's results are grouped: `file', `tree' (Folders) or `symbol' (Symbols).")
+(defvar-local drgnx-replace--grow nil
+  "After a regroup on the rows path: the hub sent the first window of the model (`FIRST_MODEL_WINDOW'), and the view
+asks for the whole window once its rows are drawn (`drgnx-replace--grow-window').")
+(defconst drgnx-replace--model-window 20000
+  "The longest window of the Search view's model the hub sends (its `MODEL_WINDOW').")
+(defvar-local drgnx-replace--sort nil
+  "The order of the Search view's groups: nil (as found; Folders and Symbols by path), `path', `count' or `rank'
+\(the files' rank in the project's map, most central first).")
+(defconst drgnx-replace--groups '((file . "Files") (tree . "Folders") (symbol . "Symbols"))
+  "The groupings of the Search view's results, in the segmented control's order.")
 (defvar-local drgnx-replace--kinds-on nil "The kind chips on (KIND symbols): the Symbol search's `kinds'.")
 (defvar-local drgnx-replace--kind-counts nil
   "The last Symbol search's definitions per kind, a plist (:fn 2 :macro 1…), before the chips' filter.")
@@ -513,6 +534,12 @@ next match, or replace it in the Replace field.")
 profiles.")
 (defvar drgnx-replace--find-field-map (make-composed-keymap (list drgnx-replace-find-keys-map drgnx-replace--field-map))
   "The Search view's Find field.")
+(defvar drgnx-replace-normal-state-map (make-sparse-keymap)
+  "The Search view's keys in Vim's normal state (`i' Edit Results; the view starts in Emacs state, C-z leaves it),
+from the key profiles.  Evil reads it through the view's normal-state auxiliary map (`drgnx-replace--evil-maps').")
+(defvar drgnx-replace-find-insert-state-map (make-sparse-keymap)
+  "The Search view's Find field's keys in Vim's insert state (C-p / C-n walk the history), from the key profiles.
+Evil reads it through the Find field's insert-state auxiliary map (`drgnx-replace--evil-maps').")
 (defvar drgnx-replace--bar-field-map
   (make-composed-keymap (list drgnx-replace-bar-keys-map drgnx-replace-keys-map widget-field-keymap))
   "The find bar's fields.")
@@ -550,8 +577,23 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
         (drgnx-modules-push-undo (format "evil state %s" mode)
                                  (lambda () (when (eq (evil-initial-state mode) 'emacs) (evil-set-initial-state mode old))))))))
 
+(defun drgnx-replace--evil-maps ()
+  "Vim's state keys of the Search view and Edit Results, read by evil through auxiliary maps (the module's setup runs
+this once evil is loaded): the view's normal state (`drgnx-replace-normal-state-map'), the Find field's insert state
+\(`drgnx-replace-find-insert-state-map'), Edit Results' normal state (`drgnx-search-edit-normal-state-map', with evil's
+own keys under its prefixes, made again after each apply of the keys).  The undo takes each out again."
+  (when (fboundp 'evil-set-auxiliary-keymap)
+    (pcase-dolist (`(,mode-map ,state ,keys)
+                   `((,drgnx-replace-mode-map normal ,drgnx-replace-normal-state-map)
+                     (,drgnx-replace--find-field-map insert ,drgnx-replace-find-insert-state-map)
+                     (,drgnx-search-edit-mode-map normal ,drgnx-search-edit-normal-state-map)))
+      (drgnx-modules-push-undo (format "evil %s-state keys" state) (drgnx-search-edit-evil-aux mode-map state keys)))
+    (add-hook 'drgnx-keys-after-apply-functions #'drgnx-search-edit--refresh-vim-prefixes)))
+
 (define-button-type 'drgnx-replace-box 'action #'drgnx-replace--box-pressed 'follow-link t 'face nil
   'help-echo "Tick or untick: Replace All writes the ticked matches")
+(define-button-type 'drgnx-replace-fold 'action #'drgnx-replace--fold-pressed 'follow-link t 'face nil
+  'help-echo "Fold or open this folder")
 (define-button-type 'drgnx-replace-row 'action #'drgnx-replace--row-pressed 'follow-link t 'face nil
   'help-echo "Show in the editor")
 
@@ -593,7 +635,7 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
 
 (defun drgnx-replace--button-face (name)
   "The face of button NAME: on or off, for toggles and scopes."
-  (cond ((memq name '(:symbol :case :word :regexp :lines))
+  (cond ((memq name '(:symbol :case :word :regexp :pattern :lines))
          (if (drgnx-replace--opt name) 'drgnx-replace-on 'drgnx-replace-dim))
         ((assq name drgnx-replace--scopes) (if (eq (drgnx-replace--opt :scope) name) 'drgnx-replace-on 'drgnx-replace-dim))
         (t 'widget-button)))
@@ -606,9 +648,12 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
       (save-excursion (widget-value-set w (widget-value w))))))
 
 (defun drgnx-replace--insert-toggles (&optional symbol)
-  "The Aa, ab and .* toggles; with SYMBOL (the find bar) the ⟨⟩ Symbol toggle before them."
+  "The Aa, ab and .* toggles; with SYMBOL (the find bar) the ⟨⟩ Symbol toggle before them, else (the view) the {}
+Pattern toggle after them."
   (pcase-dolist (`(,name ,label ,help) `(,@(and symbol '((:symbol "⟨⟩ Symbol" "Rename the symbol: the language server's edits")))
-                                         (:case "Aa" "Match case") (:word "ab" "Whole word") (:regexp ".*" "Regular expression")))
+                                         (:case "Aa" "Match case") (:word "ab" "Whole word") (:regexp ".*" "Regular expression")
+                                         ,@(and (not symbol)
+                                                '((:pattern "{}" "Pattern: code with $A (one node) and $$$A (any number)")))))
     (drgnx-replace--insert-button name label help (lambda () (drgnx-replace--toggle name)))))
 
 (defconst drgnx-replace--modes
@@ -616,22 +661,87 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
     (meaning "Meaning" "describe what the code does"))
   "The Search view's modes, in the chip's order: (MODE LABEL HINT); HINT says what to type in Find.")
 
+(defun drgnx-replace--pattern-p ()
+  "Non-nil when Find is a code pattern: Text mode with {} on."
+  (and (drgnx-replace--opt :pattern) (eq (drgnx-replace--opt :mode) 'text) (not (drgnx-replace--opt :symbol))))
+
 (defun drgnx-replace--chip-label ()
-  "The mode chip's text: the mode, or Rename while the view shows the language server's edits."
-  (format "%-7s" (if (drgnx-replace--opt :symbol) "Rename"
-                   (nth 1 (assq (drgnx-replace--opt :mode) drgnx-replace--modes)))))
+  "The mode chip's text: the mode, Pattern while {} is on, or Rename while the view shows the language server's edits."
+  (format "%-7s" (cond ((drgnx-replace--opt :symbol) "Rename")
+                       ((drgnx-replace--pattern-p) "Pattern")
+                       (t (nth 1 (assq (drgnx-replace--opt :mode) drgnx-replace--modes))))))
 
 (defun drgnx-replace--hint ()
   "What to type in Find, for the view's mode."
-  (if (drgnx-replace--opt :symbol) "" (or (nth 2 (assq (drgnx-replace--opt :mode) drgnx-replace--modes)) "")))
+  (cond ((drgnx-replace--opt :symbol) "")
+        ((drgnx-replace--pattern-p) "code with $A for one node, $$$A for any number")
+        (t (or (nth 2 (assq (drgnx-replace--opt :mode) drgnx-replace--modes)) ""))))
+
+(defconst drgnx-replace--pattern-langs
+  '(("el" . "elisp") ("rs" . "rust") ("c" . "c") ("h" . "c") ("sh" . "shell") ("bash" . "shell") ("zsh" . "shell")
+    ("py" . "python") ("pyi" . "python") ("js" . "javascript") ("mjs" . "javascript") ("cjs" . "javascript")
+    ("jsx" . "javascript") ("ts" . "typescript") ("mts" . "typescript") ("cts" . "typescript") ("tsx" . "tsx")
+    ("go" . "go") ("java" . "java"))
+  "File extension → the language a Pattern search parses it as (Hrafn's names, the languages with a grammar).")
+
+(defun drgnx-replace--pattern-lang-of (file)
+  "The Pattern language of FILE (by its extension), or nil."
+  (and file (cdr (assoc (file-name-extension file) drgnx-replace--pattern-langs))))
+
+(defun drgnx-replace--set-pattern (on)
+  "Turn {} ON or off (on: .* off, the language the origin file's unless one was chosen); redraw what it changes."
+  (setq drgnx-replace--opts (plist-put drgnx-replace--opts :pattern on))
+  (when on
+    (setq drgnx-replace--opts (plist-put drgnx-replace--opts :regexp nil))
+    (unless (drgnx-replace--opt :lang)
+      (setq drgnx-replace--opts (plist-put drgnx-replace--opts :lang
+                                           (drgnx-replace--pattern-lang-of (drgnx-replace--origin-file))))))
+  (drgnx-replace--restyle :pattern)
+  (drgnx-replace--restyle :regexp)
+  (drgnx-replace--apply-mode))
+
+(defun drgnx-replace--set-regexp (on)
+  "Turn .* ON or off (on: {} off)."
+  (setq drgnx-replace--opts (plist-put drgnx-replace--opts :regexp on))
+  (when (and on (drgnx-replace--opt :pattern)) (drgnx-replace--set-pattern nil))
+  (drgnx-replace--restyle :regexp))
+
+(defun drgnx-replace-search-toggle-pattern ()
+  "Turn the Search view's {} Pattern toggle on or off: Find as code with metavariables, and search again."
+  (interactive)
+  (with-current-buffer (drgnx-replace--live-view)
+    (drgnx-replace--set-pattern (not (drgnx-replace--opt :pattern)))
+    (drgnx-replace--requery)))
+
+(defun drgnx-replace-search-pattern-language (lang)
+  "The language of the Search view's Pattern search: LANG (asked), `any' for every language with a grammar."
+  (interactive (list (completing-read "Pattern language: "
+                                      (cons "any" (delete-dups (mapcar #'cdr drgnx-replace--pattern-langs)))
+                                      nil t)))
+  (with-current-buffer (drgnx-replace--live-view)
+    (setq drgnx-replace--opts (plist-put drgnx-replace--opts :lang (unless (equal lang "any") lang)))
+    (drgnx-replace--search-now)))
+
+(defun drgnx-replace--pattern-line ()
+  "With {} on, the language chip and a newline (the chip chooses another), else \"\"."
+  (if (not (drgnx-replace--pattern-p)) ""
+    (let ((lang (or (drgnx-replace--opt :lang) "any")))
+      (with-temp-buffer
+        (insert (propertize "Pattern " 'face 'drgnx-text-subtle))
+        (insert-text-button (concat lang " ▾") 'face 'drgnx-replace-on 'follow-link t
+                            'help-echo "The pattern's language (any: each file's own)"
+                            'action (lambda (_) (call-interactively #'drgnx-replace-search-pattern-language)))
+        (insert "\n")
+        (buffer-string)))))
 
 (defun drgnx-replace--apply-mode ()
   "Name the mode on the chip and grey out what it does not use: Symbol and Meaning are read-only (no replace field,
 no globs; Symbol keeps Aa); Rename (the language server's edits) keeps the replace field only."
-  (let ((off (cond ((drgnx-replace--opt :symbol) '(include exclude :case :word :regexp))
-                   ((eq (drgnx-replace--opt :mode) 'symbol) '(replace include exclude :word :regexp))
-                   ((eq (drgnx-replace--opt :mode) 'meaning) '(replace include exclude :case :word :regexp)))))
-    (dolist (name '(replace include exclude :case :word :regexp))
+  (let ((off (cond ((drgnx-replace--opt :symbol) '(include exclude :case :word :regexp :pattern))
+                   ((drgnx-replace--pattern-p) '(replace :case :word))
+                   ((eq (drgnx-replace--opt :mode) 'symbol) '(replace include exclude :word :regexp :pattern))
+                   ((eq (drgnx-replace--opt :mode) 'meaning) '(replace include exclude :case :word :regexp :pattern)))))
+    (dolist (name '(replace include exclude :case :word :regexp :pattern))
       (when-let* ((w (drgnx-replace--widget name)))
         (let ((buffer-undo-list t)) (widget-apply w (if (memq name off) :deactivate :activate)))))
     (when-let* ((w (drgnx-replace--widget 'mode)))
@@ -655,7 +765,7 @@ no globs; Symbol keeps Aa); Rename (the language server's edits) keeps the repla
         (pcase-dolist (`(,kind ,icon ,help) drgnx-replace--kinds)
           (let* ((n (or (plist-get counts (intern (format ":%s" kind))) 0))
                  (on (memq kind kinds-on))
-                 (face (cond (on 'drgnx-replace-on) ((zerop n) 'drgnx-text-subtle) (t 'drgnx-replace-dim))))
+                 (face (cond (on 'drgnx-pill-accent) ((zerop n) '(drgnx-text-subtle drgnx-pill)) (t 'drgnx-pill))))
             (insert-text-button (concat (drgnx-look-icon icon nil 14) " " (symbol-name kind)
                                         (if (> n 0) (format " %d" n) ""))
                                 'face face 'follow-link t 'help-echo (format "%s (%s)" help (if on "on" "off"))
@@ -683,7 +793,8 @@ no globs; Symbol keeps Aa); Rename (the language server's edits) keeps the repla
 
 (defun drgnx-replace--check-writable ()
   "A user error in a mode that finds without replacing (Symbol, Meaning)."
-  (when (and (not (drgnx-replace--opt :symbol)) (memq (drgnx-replace--opt :mode) '(symbol meaning)))
+  (when (and (not (drgnx-replace--opt :symbol))
+             (or (memq (drgnx-replace--opt :mode) '(symbol meaning)) (drgnx-replace--pattern-p)))
     (user-error "%s searches only find: Text mode replaces" (string-trim (drgnx-replace--chip-label)))))
 
 (defun drgnx-replace--mode-command (mode)
@@ -717,10 +828,12 @@ no globs; Symbol keeps Aa); Rename (the language server's edits) keeps the repla
   "Turn the toggle NAME (:symbol :case :word :regexp) on or off, and search again.  A greyed-out toggle stays."
   (let ((w (drgnx-replace--widget name)))
     (when (and w (widget-apply w :active))
-      (if (eq name :symbol)
-          (drgnx-replace--set-symbol (not (drgnx-replace--opt :symbol)))
-        (setq drgnx-replace--opts (plist-put drgnx-replace--opts name (not (drgnx-replace--opt name))))
-        (drgnx-replace--restyle name))
+      (pcase name
+        (:symbol (drgnx-replace--set-symbol (not (drgnx-replace--opt :symbol))))
+        (:pattern (drgnx-replace--set-pattern (not (drgnx-replace--opt :pattern))))
+        (:regexp (drgnx-replace--set-regexp (not (drgnx-replace--opt :regexp))))
+        (_ (setq drgnx-replace--opts (plist-put drgnx-replace--opts name (not (drgnx-replace--opt name))))
+           (drgnx-replace--restyle name)))
       (drgnx-replace--requery))))
 
 (defun drgnx-replace--git-scope-p ()
@@ -888,8 +1001,8 @@ Branch's base and `±'."
 
 (defun drgnx-replace--render-view ()
   "Draw the view's fields, toggles and buttons; the results go below."
-  (setq drgnx-replace--opts (list :mode 'text :symbol nil :case nil :word nil :regexp nil :scope 'project
-                                  :base nil :lines nil)
+  (setq drgnx-replace--opts (list :mode 'text :symbol nil :case nil :word nil :regexp nil :pattern nil :lang nil
+                                  :scope 'project :base nil :lines nil)
         drgnx-replace--widgets nil
         drgnx-replace--off (make-hash-table :test #'eq)
         drgnx-replace--seen (make-hash-table :test #'equal)
@@ -957,6 +1070,7 @@ Branch's base and `±'."
      (delete-region drgnx-replace--status-beg drgnx-replace--status-end)
      (goto-char drgnx-replace--status-beg)
      (insert (drgnx-replace--kinds-line))
+     (insert (drgnx-replace--pattern-line))
      (insert (propertize line 'face 'drgnx-replace-dim))
      ;; the newest hand-off to an agent: its state chip
      (insert (drgnx-search-handoff-chip))
@@ -970,7 +1084,69 @@ Branch's base and `±'."
                 (not (plist-get drgnx-replace--scope-done :needs_base)))
        (insert (propertize " · " 'face 'drgnx-replace-dim))
        (insert-text-button "Try Meaning" 'face 'link 'follow-link t 'help-echo "Search these words by meaning"
-                           'action (lambda (_) (drgnx-replace-search-mode-meaning)))))))
+                           'action (lambda (_) (drgnx-replace-search-mode-meaning))))
+     ;; the grouping's segmented control, under the status line (the hub's rows only)
+     (when (and drgnx-view-patch (> n 0))
+       (insert "\n" (drgnx-replace--group-line))))))
+
+(defun drgnx-replace--group-line ()
+  "The grouping's segmented control: Files, Folders, Symbols, the one on lit; a click regroups at once."
+  (let ((group drgnx-replace--group))
+    (with-temp-buffer
+      (pcase-dolist (`(,g . ,label) drgnx-replace--groups)
+        (insert-text-button (format " %s " label) 'face (if (eq g group) 'drgnx-replace-on 'drgnx-replace-dim)
+                            'follow-link t 'help-echo (format "Group the results by %s" (downcase label))
+                            'action (lambda (_) (drgnx-replace-search-group g))))
+      (buffer-string))))
+
+(defun drgnx-replace-search-group (group &optional sort)
+  "Group the Search view's results by GROUP: `file', `tree' (Folders: a tree, one-child chains joined) or `symbol'
+\(Symbols: each file's matches under their definitions), at once, without searching again; the ticks stay.
+SORT (`path', `count', the most matches first, or `rank', the files most central in the project's map first) orders
+the groups; interactively, a prefix argument asks for it."
+  (interactive (list (cdr (assoc (completing-read "Group by: " (mapcar #'cdr drgnx-replace--groups) nil t)
+                                 (mapcar (lambda (g) (cons (cdr g) (car g))) drgnx-replace--groups)))
+                     (and current-prefix-arg
+                          (intern (completing-read "Sort by: " '("path" "count" "rank") nil t)))))
+  (with-current-buffer (drgnx-replace--live-view)
+    (setq drgnx-replace--group group)
+    (when sort (setq drgnx-replace--sort sort))
+    (when (drgnx-replace--rows-p)
+      (setq drgnx-replace--grow t)
+      (drgnx-replace--hub-call "search/group"
+                               (append (list :view drgnx-replace-view :group (symbol-name group))
+                                       (and drgnx-replace--sort (list :sort (symbol-name drgnx-replace--sort))))))
+    (when (markerp drgnx-replace--status-beg) (drgnx-replace--update-status))))
+
+(defun drgnx-replace--fold-pressed (button)
+  "Fold or open the folder of BUTTON (its chevron)."
+  (drgnx-replace-search-fold (get-text-property (button-start button) 'drgnx-replace-fold)))
+
+(defun drgnx-replace-search-fold (&optional folder)
+  "Fold or open FOLDER (default: the folder row at point, or the folder above the row) in the Search view grouped by
+Folders: its rows go or come back, its count stays; ticks are kept, and going to a match in it opens it again."
+  (interactive)
+  (with-current-buffer (drgnx-replace--live-view)
+    (unless (and (drgnx-replace--rows-p) (eq drgnx-replace--group 'tree))
+      (user-error "Folders fold when the results are grouped by Folders"))
+    (let* ((id (or folder (get-text-property (point) 'drgnx-work-id) (drgnx-view-nav-selection)))
+           (folder (if (and id (drgnx-replace--rows-kind-p id "folder")) id
+                     (seq-find (lambda (a) (drgnx-replace--rows-kind-p a "folder"))
+                               (and id (drgnx-replace--rows-ancestors id)))))
+           (beg (and folder (drgnx-view-row-start drgnx-view folder)))
+           (fold (and beg (text-property-not-all beg (save-excursion (goto-char beg) (line-end-position))
+                                                 'drgnx-replace-fold nil))))
+      (unless fold (user-error "No folder here"))
+      (drgnx-replace--hub-call "search/fold" (list :view drgnx-replace-view :node folder
+                                                   :open (if (eq (char-after fold) ?▸) t :false))))))
+
+(defun drgnx-replace-search-group-next ()
+  "Group the Search view's results the next way: Files → Folders → Symbols → Files (no search again)."
+  (interactive)
+  (with-current-buffer (drgnx-replace--live-view)
+    (drgnx-replace-search-group (car (or (cadr (memq (assq drgnx-replace--group drgnx-replace--groups)
+                                                     drgnx-replace--groups))
+                                         (car drgnx-replace--groups))))))
 
 (defun drgnx-replace--message (fmt &rest args)
   "Show FMT with ARGS on the status line."
@@ -1522,6 +1698,7 @@ each replaced by NEW."
   "The Search view is now hub-fed (the rows path): its tick boxes follow the ticks after every draw."
   (add-hook 'drgnx-view-patch-patched-functions #'drgnx-replace--rows-boxes nil t)
   (add-hook 'drgnx-view-patch-patched-functions #'drgnx-replace--reached nil t)
+  (add-hook 'drgnx-view-patch-patched-functions #'drgnx-search-handoff-agent-chips nil t)
   (add-hook 'drgnx-view-nav-paged-functions #'drgnx-replace--paged nil t)
   (add-hook 'window-scroll-functions #'drgnx-replace--scrolled nil t))
 
@@ -1549,8 +1726,24 @@ each replaced by NEW."
             extra)))
 
 (defun drgnx-replace--rows-kind-p (id kind)
-  "Whether node ID of the model is of KIND (\"file\" or \"match\")."
+  "Whether node ID of the model is of KIND (\"file\", \"match\", \"folder\" or \"symbol\")."
   (equal (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'kind id) kind))
+
+(defun drgnx-replace--rows-group-p (id)
+  "Whether node ID is a group of matches: a file, a folder (Folders) or a definition (Symbols)."
+  (member (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'kind id) '("file" "folder" "symbol")))
+
+(defun drgnx-replace--rows-ancestors (id)
+  "The nodes above node ID, nearest first: its file, and its definition or folders."
+  (let ((h (drgnx-view-patch-handle drgnx-view-patch)) up)
+    (while (setq id (nidhogg-view-get h 'parent id))
+      (push id up))
+    (nreverse up)))
+
+(defun drgnx-replace--rows-file-of (id)
+  "The file node of node ID: itself, or the file above it; nil for a folder."
+  (if (drgnx-replace--rows-kind-p id "file") id
+    (seq-find (lambda (a) (drgnx-replace--rows-kind-p a "file")) (drgnx-replace--rows-ancestors id))))
 
 (defun drgnx-replace--rows-off ()
   "The unticked matches: a hash ID → t."
@@ -1558,18 +1751,26 @@ each replaced by NEW."
     (mapc (lambda (id) (puthash id t off)) (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'ticked))
     off))
 
-(defun drgnx-replace--rows-file-matches (file)
-  "The ids of node FILE's matches, in order: the model's order holds them right after it."
-  (let ((tail (cdr (member file (append (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'list "order")
-                                        nil))))
-        ms)
-    (while (and tail (drgnx-replace--rows-kind-p (car tail) "match"))
-      (push (pop tail) ms))
-    (nreverse ms)))
+(defun drgnx-replace--rows-under (group)
+  "The ids of the nodes under node GROUP (a file, folder or definition), in order: the model's order holds them right
+after it, up to the first node that is not under it."
+  (let* ((h (drgnx-view-patch-handle drgnx-view-patch))
+         (tail (cdr (member group (append (nidhogg-view-get h 'list "order") nil))))
+         under)
+    (while (and tail (let ((p (nidhogg-view-get h 'parent (car tail))))
+                       (while (and p (not (equal p group))) (setq p (nidhogg-view-get h 'parent p)))
+                       p))
+      (push (pop tail) under))
+    (nreverse under)))
+
+(defun drgnx-replace--rows-file-matches (group)
+  "The ids of the matches under node GROUP (a file, folder or definition), in order."
+  (seq-filter (lambda (id) (drgnx-replace--rows-kind-p id "match")) (drgnx-replace--rows-under group)))
 
 (defun drgnx-replace--rows-box-text (key off)
-  "The tick box of row KEY (a node id) with the unticked matches OFF: a file's is [x], [ ] or [-] for some."
-  (if (drgnx-replace--rows-kind-p key "file")
+  "The tick box of row KEY (a node id) with the unticked matches OFF: a group's (a file, folder or definition) is
+[x], [ ] or [-] for some."
+  (if (drgnx-replace--rows-group-p key)
       (let* ((ms (drgnx-replace--rows-file-matches key)) (n (cl-count-if (lambda (m) (gethash m off)) ms)))
         (cond ((zerop n) "[x]") ((= n (length ms)) "[ ]") (t "[-]")))
     (if (gethash key off) "[ ]" "[x]")))
@@ -1590,10 +1791,26 @@ runs it after a draw."
           (with-silent-modifications
             (let ((inhibit-read-only t))
               (make-text-button pos (+ pos 3) :type 'drgnx-replace-box 'mouse-face 'drgnx-hover))))
+        ;; a folder's fold chevron (Folders): a button too
+        (when-let* ((fold (and beg (text-property-not-all beg (or pos beg) 'drgnx-replace-fold nil))))
+          (unless (get-text-property fold 'button)
+            (with-silent-modifications
+              (let ((inhibit-read-only t))
+                (make-text-button fold (1+ fold) :type 'drgnx-replace-fold 'mouse-face 'drgnx-hover)))))
         (if (equal text "[x]")
             (when ov (delete-overlay ov) (remhash key table))
           (if ov (move-overlay ov pos (+ pos 3)) (setq ov (make-overlay pos (+ pos 3))) (puthash key ov table))
-          (overlay-put ov 'display text))))))
+          (overlay-put ov 'display text))))
+    (when drgnx-replace--grow (drgnx-replace--grow-window))))
+
+(defun drgnx-replace--grow-window ()
+  "After a regroup, once the first window's rows are drawn: ask the hub for the whole window of the model (a regroup
+sends a short one first, so its rows come at once; the rest drains after them)."
+  (when-let* ((h (drgnx-view-patch-handle drgnx-view-patch))
+              (window (nidhogg-view-get h 'window "order")))
+    (when (< (nth 1 window) (min (nth 2 window) drgnx-replace--model-window))
+      (setq drgnx-replace--grow nil)
+      (drgnx-replace--hub-call "view/window" (list :view drgnx-replace-view :list "order" :from (nth 0 window))))))
 
 (defun drgnx-replace--rows-untick-all ()
   "On the rows path, every match ticked again: Sjá's ticked set emptied (a new search, Replace All's leftovers), the
@@ -1605,17 +1822,21 @@ boxes shown as the hub sends them."
       (clrhash drgnx-replace--box-overlays))))
 
 (defun drgnx-replace--rows-tick (&optional id)
-  "Tick or untick ID (default: the selection) on the rows path: a match, or a file, all of its matches (ticked when
-every one was unticked, else unticked)."
+  "Tick or untick ID (default: the selection) on the rows path: a match, or a group (a file, folder or definition),
+all the matches under it (ticked when every one was unticked, else unticked)."
   (let* ((h (drgnx-view-patch-handle drgnx-view-patch))
          (id (or id (drgnx-view-nav-selection) (user-error "No match is selected")))
-         (file (if (drgnx-replace--rows-kind-p id "file") id (nidhogg-view-get h 'parent id)))
-         (ms (drgnx-replace--rows-file-matches file)))
-    (if (equal id file)
-        (let* ((off (drgnx-replace--rows-off)) (tick (cl-every (lambda (m) (gethash m off)) ms)))
+         (under (and (drgnx-replace--rows-group-p id) (drgnx-replace--rows-under id))))
+    (if under
+        (let* ((off (drgnx-replace--rows-off))
+               (ms (seq-filter (lambda (u) (drgnx-replace--rows-kind-p u "match")) under))
+               (tick (cl-every (lambda (m) (gethash m off)) ms)))
           (dolist (m ms) (when (eq tick (gethash m off)) (nidhogg-view-set h 'tick m))))
       (nidhogg-view-set h 'tick id))
-    (drgnx-replace--rows-boxes drgnx-view (cons file ms))
+    ;; the boxes of the row, what is under it and what is above it (a file's or folder's [-])
+    (let ((up (drgnx-replace--rows-ancestors id)))
+      (drgnx-replace--rows-boxes drgnx-view (append up (list id) under
+                                                    (and up (not under) (drgnx-replace--rows-under (car up))))))
     (drgnx-replace--previews-later)))
 
 
@@ -1757,6 +1978,7 @@ query on the header line; its keys move and visit (`drgnx-replace--twin-keys'), 
     (drgnx-view-patch-detach)
     (remove-hook 'drgnx-view-patch-patched-functions #'drgnx-replace--rows-boxes t)
     (remove-hook 'drgnx-view-patch-patched-functions #'drgnx-replace--reached t)
+    (remove-hook 'drgnx-view-patch-patched-functions #'drgnx-search-handoff-agent-chips t)
     (remove-hook 'drgnx-view-nav-paged-functions #'drgnx-replace--paged t)
     (remove-hook 'window-scroll-functions #'drgnx-replace--scrolled t)
     (when drgnx-replace--box-overlays (maphash (lambda (_ ov) (delete-overlay ov)) drgnx-replace--box-overlays)
@@ -1787,13 +2009,20 @@ text is sent too: the hub empties the rows and stops the search before.  The mat
   (when (and (eq (drgnx-replace--opt :scope) 'file) (not file))
     (setq text "" drgnx-replace--status "This file: the view was not opened from a file"))
   (let ((off (prog1 drgnx-replace--carry (setq drgnx-replace--carry nil))))
-    (setq drgnx-replace--searching t)
+    (setq drgnx-replace--searching t drgnx-replace--grow nil)
     (drgnx-replace--send-buffers)
     (drgnx-replace--hub-call
      "search/run"
      (append (list :view drgnx-replace-view :root drgnx-replace--root :search (drgnx-replace--spec text file))
              (and off (list :off (vconcat off)))
-             (and (not drgnx-search-context) (list :context :false))))))
+             (and (not drgnx-search-context) (list :context :false))
+             (and (not (eq drgnx-replace--group 'file)) (list :group (symbol-name drgnx-replace--group)))
+             (and (memq drgnx-replace--sort '(path count)) (list :sort (symbol-name drgnx-replace--sort)))))
+    ;; the sort by rank waits for the project's index: the hub takes it as a regroup of the new search
+    (when (eq drgnx-replace--sort 'rank)
+      (setq drgnx-replace--grow t)
+      (drgnx-replace--hub-call "search/group" (list :view drgnx-replace-view :group (symbol-name drgnx-replace--group)
+                                                    :sort "rank")))))
 
 (defun drgnx-replace--spec (text file)
   "The view's search of TEXT (in FILE for This file) as the hub takes it (`search/run', the saved searches): the
@@ -1801,15 +2030,18 @@ mode's query, and in Text mode the replacement and the globs; the scope."
   (let* ((globs (lambda (name) (drgnx-replace--globs (drgnx-replace--text name))))
          (on (lambda (name) (if (drgnx-replace--opt name) t :false)))
          (mode (drgnx-replace--opt :mode))
+         (pattern (drgnx-replace--pattern-p))
          (text-p (not (memq mode '(symbol meaning)))))   ; Symbol and Meaning: no replacement, no globs
-    (append (list :query (pcase mode
+    (append (list :query (pcase (if pattern 'pattern mode)
                            ('symbol (append (list :mode "symbol" :name text :case (funcall on :case))
                                             (and drgnx-replace--kinds-on
                                                  (list :kinds (vconcat (mapcar #'symbol-name drgnx-replace--kinds-on))))))
                            ('meaning (list :mode "meaning" :question text))
+                           ('pattern (append (list :mode "pattern" :pattern text)
+                                             (when-let* ((l (drgnx-replace--opt :lang))) (list :lang l))))
                            (_ (list :mode "text" :text text :case (funcall on :case)
                                     :word (funcall on :word) :regexp (funcall on :regexp)))))
-            (and text-p (list :replace (drgnx-replace--text 'replace)))
+            (and text-p (not pattern) (list :replace (drgnx-replace--text 'replace)))
             (list :scope (drgnx-replace--scope-param file))
             (when-let* ((_ text-p) (g (funcall globs 'include))) (list :include (vconcat g)))
             (when-let* ((_ text-p) (g (funcall globs 'exclude))) (list :exclude (vconcat g))))))
@@ -1833,7 +2065,8 @@ it would draw stays as it was)."
 
 (defun drgnx-replace--spec-text (spec)
   "What SPEC's query searched for."
-  (let ((q (plist-get spec :query))) (or (plist-get q :text) (plist-get q :name) (plist-get q :question) "")))
+  (let ((q (plist-get spec :query)))
+    (or (plist-get q :text) (plist-get q :name) (plist-get q :question) (plist-get q :pattern) "")))
 
 (defun drgnx-replace--spec-label (spec)
   "SPEC as a line of the lists: its words, its mode unless Text, its scope unless Project."
@@ -1850,6 +2083,12 @@ it would draw stays as it was)."
     (when (drgnx-replace--opt :symbol) (drgnx-replace--set-symbol nil))
     (setq drgnx-replace--opts (plist-put drgnx-replace--opts :mode (intern (or (plist-get q :mode) "text")))
           drgnx-replace--kinds-on (mapcar #'intern (append (plist-get q :kinds) nil)))
+    ;; a pattern search is Text mode with {} on
+    (let ((pattern (equal (plist-get q :mode) "pattern")))
+      (when pattern (setq drgnx-replace--opts (plist-put drgnx-replace--opts :mode 'text)))
+      (setq drgnx-replace--opts (plist-put drgnx-replace--opts :pattern pattern)
+            drgnx-replace--opts (plist-put drgnx-replace--opts :lang (plist-get q :lang)))
+      (drgnx-replace--restyle :pattern))
     (dolist (k '(:case :word :regexp))
       (setq drgnx-replace--opts (plist-put drgnx-replace--opts k (drgnx-replace--true (plist-get q k))))
       (drgnx-replace--restyle k))
@@ -2046,7 +2285,7 @@ view shows.  A timer: never signals."
       (dolist (id ids)
         (unless (gethash id off) (nidhogg-view-set h 'tick id))
         (push id shown)
-        (when-let* ((file (nidhogg-view-get h 'parent id))) (push file shown)))
+        (dolist (up (drgnx-replace--rows-ancestors id)) (push up shown)))
       (drgnx-replace--rows-boxes drgnx-view (delete-dups shown)))))
 
 (defun drgnx-replace--write-event (event data)
@@ -2267,11 +2506,12 @@ A file edited since is left alone."
 (defun drgnx-replace-prev () "The previous match, shown in the editor." (interactive) (drgnx-replace--step -1))
 
 (defun drgnx-replace--file-step (dir)
-  "Select the next (DIR 1) or previous (DIR -1) file's row of the Search view: on the rows path through Sjá
-\(`down:file' / `up:file'), else the next header row."
+  "Select the next (DIR 1) or previous (DIR -1) group's row of the Search view (a file's; a definition's in Symbols):
+on the rows path through Sjá (`down:file' / `up:file'), else the next header row."
   (with-current-buffer (drgnx-replace--live-view)
     (if (drgnx-replace--rows-p)
-        (let ((id (drgnx-view-nav 'follow (if (> dir 0) "down:file" "up:file"))))
+        (let* ((kind (if (eq drgnx-replace--group 'symbol) "symbol" "file"))
+               (id (drgnx-view-nav 'follow (format "%s:%s" (if (> dir 0) "down" "up") kind))))
           (when (stringp id) (drgnx-replace--reach id))
           id)
       (let ((pos (save-excursion
@@ -2280,9 +2520,12 @@ A file edited since is left alone."
                             when (get-text-property (point) 'drgnx-replace-file) return (point)))))
         (goto-char (or pos (user-error "No other file")))))))
 
-(defun drgnx-replace-next-file () "The next file of the Search view's results." (interactive) (drgnx-replace--file-step 1))
+(defun drgnx-replace-next-file ()
+  "The next group of the Search view's results: a file (a definition when grouped by Symbols)."
+  (interactive) (drgnx-replace--file-step 1))
 (defun drgnx-replace-prev-file ()
-  "The previous file of the Search view's results." (interactive) (drgnx-replace--file-step -1))
+  "The previous group of the Search view's results: a file (a definition when grouped by Symbols)."
+  (interactive) (drgnx-replace--file-step -1))
 
 ;;;;; The find bar
 
@@ -2556,6 +2799,10 @@ The find bar's button; not a command of its own (it needs the bar)."
                                        "The Search view finds a name's definitions, then its uses (read-only)")
                    (search-mode-meaning "Meaning Mode" drgnx-replace-search-mode-meaning
                                         "The Search view finds the code its words describe (read-only)")
+                   (search-toggle-pattern "Toggle Pattern Search" drgnx-replace-search-toggle-pattern
+                                          "The Search view's {} toggle: Find as code with $A metavariables (read-only)")
+                   (search-pattern-language "Pattern Language…" drgnx-replace-search-pattern-language
+                                            "The language a Pattern search parses its files as (any: each file's own)")
                    (search-history-prev "Previous Search" drgnx-replace-search-history-prev
                                         "The project's search before this one, restored whole and run")
                    (search-history-next "Next Search" drgnx-replace-search-history-next
@@ -2600,6 +2847,12 @@ The find bar's button; not a command of its own (it needs the bar)."
                                              "In Edit Results: show the file's current text for the line at point")
                    (search-edit-undo-saves "Undo All Saves of Edited Results" drgnx-search-edit-undo-saves
                                            "In Edit Results: put back every save of it, newest first")
+                   (search-group-next "Next Grouping of Results" drgnx-replace-search-group-next
+                                      "Group the Search view's results by files, folders or definitions, in turn")
+                   (search-fold "Fold or Open This Folder" drgnx-replace-search-fold
+                                "In the Search view grouped by Folders: hide or show the folder's rows")
+                   (search-group "Group Results By…" drgnx-replace-search-group
+                                 "Group the Search view's results by files, folders or definitions (C-u: and sort them)")
                    (search-kinds "Filter Symbol Results by Kind…" drgnx-replace-search-kinds
                                  "In Symbol mode: only the definitions of some kinds (fn, macro, var, type) and their files' uses")
                    (search-to-agent "Ask an Agent" drgnx-search-to-agent
@@ -2960,7 +3213,7 @@ line's buttons have none of their own)."
     (let* ((h (drgnx-view-patch-handle drgnx-view-patch))
            (id (or (get-text-property (point) 'drgnx-work-id) (drgnx-view-nav-selection)
                    (user-error "No file on this row")))
-           (file (if (drgnx-replace--rows-kind-p id "file") id (nidhogg-view-get h 'parent id)))
+           (file (drgnx-replace--rows-file-of id))
            (path (or (and file (nidhogg-view-get h 'field "path" file)) (user-error "No file on this row")))
            (path (expand-file-name path drgnx-replace--root))
            (buf (drgnx-replace--preview-buffer path)))
@@ -3084,11 +3337,25 @@ between each (the mockup's `.fl')."
           (drgnx-replace--gap 8) (drgnx-look-file-icon (plist-get f :path) 'drgnx-text-muted)
           (drgnx-replace--gap 8) (drgnx-replace--sheet-name f)))
 
+(defvar-local drgnx-replace--sheet-edge-memo nil
+  "`drgnx-replace--sheet-edge' as last measured: (FILES SKIPPED HUNK SCALE . EDGE), the first three compared by `eq',
+SCALE (`drgnx-px' of 100) by `eql'.  Every row and the card ask for the edge; measured once per edit set, hunk and
+scale (a theme change clears it).")
+
 (defun drgnx-replace--sheet-edge (files skipped)
   "The sheet's right edge in pixels, in this buffer: the widest head, a gap, the widest tail; the tails end there.
-Further when the selected file's hunk (shown under it) has a wider line: the code stays inside the rows' ring."
-  (let ((px (lambda (str) (string-pixel-width str (current-buffer))))
-        (h (plist-get drgnx-replace--sheet :hunk)))
+Further when the selected file's hunk (shown under it) has a wider line: the code stays inside the rows' ring.
+Measured once per FILES, SKIPPED and hunk (`drgnx-replace--sheet-edge-memo'): every row asks."
+  (let ((h (plist-get drgnx-replace--sheet :hunk)) (scale (drgnx-px 100)) (m drgnx-replace--sheet-edge-memo))
+    (if (and m (eq (nth 0 m) files) (eq (nth 1 m) skipped) (eq (nth 2 m) h) (eql (nth 3 m) scale))
+        (nthcdr 4 m)
+      (let ((edge (drgnx-replace--sheet-measure-edge files skipped h)))
+        (setq drgnx-replace--sheet-edge-memo (cl-list* files skipped h scale edge))
+        edge))))
+
+(defun drgnx-replace--sheet-measure-edge (files skipped h)
+  "`drgnx-replace--sheet-edge' of FILES, SKIPPED and the selected file's hunk H, measured."
+  (let ((px (lambda (str) (string-pixel-width str (current-buffer)))))
     (max (+ (drgnx-px 6)                                     ; the row's inset (outside its ring)
             (apply #'max 0 (mapcar (lambda (f) (funcall px (drgnx-replace--sheet-head f t))) files))
             (drgnx-px 32)
@@ -3230,6 +3497,7 @@ the text again, so the markers collapsed) only puts its markers back: the window
   (when-let* ((b (get-buffer drgnx-replace-sheet-buffer-name)))
     (with-current-buffer b
       (when (derived-mode-p 'drgnx-replace-sheet-mode)
+        (setq drgnx-replace--sheet-edge-memo nil)
         (drgnx-replace--sheet-blocks)))))
 
 (defun drgnx-replace--sheet-unblock ()
@@ -3349,8 +3617,9 @@ cancels those."
                               (add-hook 'drgnx-hub-connected-functions #'drgnx-replace--hub-up)
                               (drgnx-state-define-role 'bar) ; the find bar's window: no editor, no chrome
                               (drgnx-wb-place 'drgnx-replace-sheet-mode 'popup :height 0.8 :modal t) ; the sheet: the popup lane, tall
-                              (drgnx-wb-place 'drgnx-search-handoff-mode 'popup :height 0.3 :modal t) ; Ask an Agent's card
-                              (eval-after-load 'evil (drgnx-modules-with-owner (drgnx-replace--evil-states)))
+                              (drgnx-wb-place 'drgnx-search-handoff-mode 'popup :height 0.6 :modal t) ; Ask an Agent's card
+                              (eval-after-load 'evil (drgnx-modules-with-owner (drgnx-replace--evil-states)
+                                                                               (drgnx-replace--evil-maps)))
                               ;; wb/drgnx-persist.el saves the main area with `window-state-get': the bar's window would be in it.
                               (advice-add 'drgnx-persist-save :before #'drgnx-replace--close-bars)))
 

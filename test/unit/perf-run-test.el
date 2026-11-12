@@ -35,6 +35,18 @@
       (should (member "TEARDOWN" calls))
       (should (seq-find (lambda (f) (string-search "drgnx-perf-audit-end" f)) calls)))))   ; the probes are undone too
 
+(ert-deftest drgnx-perf-run/a-workload-timeout-reaches-its-setup-and-measure ()
+  ;; search-modes: the setup indexes 25,000 files, longer than the calls' 120 s
+  (let (waits)
+    (cl-letf (((symbol-function 'drgnx-perf-run--call) (lambda (_s f &optional secs) (push (cons f secs) waits) (list :x 1)))
+              ((symbol-function 'drgnx-ui-measure) #'ignore))
+      (drgnx-perf-run-workload 'sess '(:setup "s" :measure "m" :repeat 1 :timeout 1200))
+      (should (eql (cdr (assoc "s" waits)) 1200))
+      (should (eql (cdr (assoc "m" waits)) 1200))
+      (setq waits nil)
+      (drgnx-perf-run-workload 'sess '(:setup "s" :measure "m" :repeat 1))
+      (should (eql (cdr (assoc "s" waits)) 120)))))
+
 (ert-deftest drgnx-perf-run/a-daemon-that-never-serves-is-an-error ()
   :tags '(:cond)
   ;; I1: a daemon that dies (or never answers) is not a fast start.

@@ -614,7 +614,8 @@ hub clock's module (`drgnx-ratatoskr/src/clock*`).
 
 `domr` runs **scenarios** (data) against a hub binary: a process that answers the hub protocol on its socket.
 Every scenario gets fresh temporary roots under `/tmp/rtsk-XXXXXX/` (`/tmp`, not `$TMPDIR`, so macOS socket paths stay
-short) holding `home run state data config cache tmp`, and the hub's `HOME`, `XDG_*`, `DRGNX_DATA_DIR`,
+short; taken by its true name, so `$ROOT` is `/private/tmp/rtsk-XXXXXX` on macOS, where `/tmp` is a link the hub
+refuses in a path and resolves in what it reports) holding `home run state data config cache tmp`, and the hub's `HOME`, `XDG_*`, `DRGNX_DATA_DIR`,
 `DRGNX_CONFIG_DIR` and `TMPDIR` point there. A hub is started with `--parent-pid` of the harness, so it ends with the
 test, and `RATATOSKR_SUPERVISOR=none` keeps a supervisor out of it. Only `PATH`, `DRGNX_EMACS` (for the rows that
 run the editor's own CLIs, such as the personal-notes canary) and `DBUS_SESSION_BUS_ADDRESS` are inherited.
@@ -652,6 +653,11 @@ A scenario is one file, `test/conformance/<group>/<name>.jsonl`. Line 1 is the h
 ```
 
 Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in failure messages.
+
+**The row's bound** (`"bound_s": N` in the header, 600 without it): once N seconds have passed since the row started,
+its next step, or the next repeat of a `measure`, fails the row with "the scenario's bound of N s ran out" (for a
+`measure`, how many repeats it did and their mean), and the run goes on with the next row. A step in flight is not cut
+short: it stops at its own `within_ms`.
 
 **Tags** (`requires`): `v1` (hello v1: every row), `sudo` (euid 0, or `sudo -n true` succeeds), `test-hooks` (the
 binary's `version --json` says `"test_hooks": true`), `linux`, `macos`, `perf`, `agent-locks`, `podman` (`podman` is on
@@ -705,7 +711,7 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
 | `pid` | `capture`, `alive` (true), `within_ms` (5000), `stays_for_ms` | a captured pid is (or is no longer) running; a reused pid does not count. With `stays_for_ms` a pid that is running must stay so that long (a signal sent a moment ago has landed by then) |
 | `class_matrix` | `table`, `args`, `env`, `agent`, `last`, `within_ms` | every method of `table` (`{method: [classes]}`, `class-matrix.json`) gets `{}` from `user` (a valid hello), `service` (no hello) and, with `agent: SID`, `agent` (that session's socket, which `args` such as `["--agent-socket", "s1:j1"]` makes the hub serve). A listed class must not get `not-allowed`; any other must. The step starts its own hubs with `args` and `env`: one for the table, and for each method of `last` (default `restart`, `shutdown`, which a user call runs) one per class |
 | `bad_params` | `conn`, `registry`, `within_ms` | every method of the registry file (`methods.json`; a relative path is from the current directory) with required params gets `{}` and a wrong type for its first required key (`true` where a list belongs, else `[]`) on `conn`; each must be `invalid-params` with a `path` (one of the required keys, then that key). `hello`, and a method whose classes leave out `user` (`mcp/attach`), go on a fresh connection (service class) each time |
-| `measure` | `name`, `repeat`, `steps` | times the steps, `repeat` times, and records the milliseconds for `--perf` |
+| `measure` | `name`, `repeat`, `steps` | times the steps, `repeat` times, and records the milliseconds for `--perf` (nothing when the row's bound runs out first) |
 
 **`ratatoskr-mock`** (`conformance/src/bin/`, std only; `$MOCK` is its path, beside `domr`) stands in for the network:
 
@@ -965,6 +971,9 @@ budgets (a recorded baseline, not a regression gate); the `agents-*` rows check 
 | `hook-overhead` | one permission request (an edit the matrix allows), `permission-bare` with no rule subscribed and `permission-hooked` with one annotating rule; the added cost is the difference of the p95s, bound 5 ms | 100 each |
 | `hook-overhead-parallel` | eight permission requests sent before the first answer is read (`ask:burst 8`, as Claude issues parallel tool calls), `burst-bare` and `burst-hooked`; none is refused as busy (the turn says `burst: 8/8 allowed`), same 5 ms bound on the difference | 50 each |
 | `ability-20-sessions` | 20 sessions started with a plugin ability (each holds a `drgnx-plugins` server): the `ping` round trip, `ping-no-sessions` before and `ping-20-ability-sessions` with them idle; bound 100 ms | 200 each |
+| `search-write` | the Search view's write path on 500 files of 20 matches (10k), none open: `search-edit-set-10k` the edit set (`search/edits`; spec §8: 250 ms), `search-apply-500-closed` the edit set and its write on disk to `search-change` (1.5 s, disk-bound) | 5, 1 |
+| `search-preview` | `search/preview` of a 2,000-line file with 50 matches: its diff, hunks and groups (spec §8: 15 ms) | 50 |
+| `search-handoff` | `search/handoff` of 1,000 ticked matches in 100 files to a live mock session, to its answer: the brief built, the hand-off recorded, the prompt sent (spec §8: 100 ms) | 20 |
 
 The three plugin rows only measure; their bounds are judged at the gate, from a run pinned with `DRGNX_PERF_CPUS=4`
 (`builder-run.sh perf-exclusive.sh …`), never from a whole-machine run.
@@ -1230,8 +1239,8 @@ name's exact definitions, then the view's `ref` rows for it without the lines in
 file, each under the innermost definition holding its first line, ranked by the file's rank × `ln(1 + n)`, tests after
 code. It is by name only: same-named things in other scopes show up too.
 
-For Emacs Lisp (`tree-sitter` 0.25, ABI 15, with `tree-sitter-elisp` 1.7; 0.26 and later needed Rust 1.90, above the
-workspace's MSRV of the time, 1.88) the units are the top-level forms, each with the comments right above it, and the stretches between
+For Emacs Lisp (`tree-sitter` 0.27, which loads grammar ABI 13–15, with `tree-sitter-elisp` 1.7; moved from 0.25 for
+`ast-grep-core`, below, with the chunker's goldens and the eval unchanged) the units are the top-level forms, each with the comments right above it, and the stretches between
 them. Adjacent units merge greedily up to the budget and never across a section heading (a `;;;` line with text, at
 column 0). A form over the budget splits at its child forms; every part's header repeats the signature, the first
 docstring line and "part i/n". A `defconst`, `defvar` or `defcustom` whose value is a literal list or vector and
@@ -1286,6 +1295,28 @@ rows with its header rows repeated in `embed_text`. Plain text is line windows u
 The test fixtures' form spans come from the Emacs reader: `tests/fixtures/elisp/gen.el` writes `NAME.forms.json` for
 each `NAME.el` next to it (run it once in a Nidhogg 31 container, `emacs --batch -Q -l …/gen.el`), and the test holds
 the grammar's top-level spans to them.
+
+### Structural search
+
+`hrafn::structural` matches a code pattern with metavariables (ast-grep's syntax) in a file's syntax tree, for the
+Search view's Pattern toggle. The engine is `ast-grep-core` (pinned exactly, its one feature `tree-sitter`), fed
+Hrafn's own grammars through its `Language` trait: `Grammar::of(Lang)` gives each grammar and the character a
+metavariable's `$` becomes before the pattern is parsed (`µ` where `$` cannot start a name: Rust, C, shell, Python,
+Go). The engine stays behind the module, so a bump or a swap touches nothing else.
+
+- `Pattern::new(lang, pattern, rewrite)` parses the pattern once per language. An error node inside the pattern's own
+  node refuses it with the language and the column (`pattern is not valid Rust at col 14`); the error node a grammar
+  wraps a lone expression in at a file's top level does not.
+- `Pattern::find(bytes)` gives the outermost matches: bytes, line and column (characters) of the start and end, each
+  named metavariable's text, and the rewrite template's expansion. Bytes that are not UTF-8 are skipped with a reason.
+- `Pattern::literals()` lists the pattern's names that are not metavariables (identifiers, symbols; never strings or
+  numbers, which can be written several ways). A file that matches holds every one, so the hub reads only the files
+  `hrafn::grep` finds holding the longest (`Query::first`: each file's first match only). The golden test
+  `the_pre_filter_never_drops_a_match` holds that over a corpus per language.
+
+The hub's side is `view/search/pattern.rs`: `FindQuery::Pattern {pattern, lang?}` runs on the search's thread over
+Text's files (scopes and globs apply), and each match carries a `Span` mark (lines past its first, its metavariables)
+that its row draws as `+N lines` and a hover.
 
 ### The embedder
 

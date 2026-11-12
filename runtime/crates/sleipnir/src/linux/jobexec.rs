@@ -84,6 +84,12 @@ pub struct HelperSpec {
     /// The job's container, killed when the disk watch stops the job.
     #[serde(default)]
     pub container: Option<String>,
+    /// A Mac job's proxy (`darwin::proxy`): the listener job-exec inherits under this number, and its loopback port.
+    /// Linux's helper has none.
+    #[serde(default)]
+    pub proxy_fd: Option<i32>,
+    #[serde(default)]
+    pub proxy_port: Option<u16>,
 }
 
 /// The record of key requests that got no key in time (the helper writes it before `drgnx-key` exits 75).

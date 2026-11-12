@@ -36,6 +36,8 @@
 (defvar drgnx-work-lens-nav)
 (defvar drgnx-work-lens-map)
 (defvar drgnx-work-map--lens)
+(defvar drgnx-chrome-own-tab-line)
+(declare-function drgnx-work-lens-name "drgnx-work-map")
 (defvar drgnx-work-map--selection)
 (defvar drgnx-work-timeline--sel)
 
@@ -71,7 +73,7 @@ spec or an ask; nil for anything else (every task)."
 
 (define-derived-mode drgnx-work-board-mode special-mode "Work board"
   "The Work space's Board: the tracker's tasks by column, scoped to the selected plan."
-  (setq-local truncate-lines t cursor-type nil
+  (setq-local truncate-lines t cursor-type nil drgnx-chrome-own-tab-line t
               tab-line-format '("" drgnx-work-map--lens)))
 
 (declare-function drgnx-view-env-twin "drgnx-view-env" (class prefixes &optional setup))
@@ -168,7 +170,7 @@ the board says so instead."
       (let ((state (drgnx-work-map--state map-buffer))
             (sel (buffer-local-value 'drgnx-work-map--selection map-buffer)))
         (setq drgnx-work-board--plans (and state sel (drgnx-work-board-plans-for state sel))))
-      (setq drgnx-work-map--lens (drgnx-work-lens-string 'board))
+      (setq drgnx-work-map--lens (drgnx-work-lens-string 'board (drgnx-work-lens-name map-buffer)))
       (when rows (drgnx-work-board-rows-attached))
       (drgnx-work-board-refresh buffer))
     buffer))

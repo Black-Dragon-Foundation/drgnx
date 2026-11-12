@@ -238,4 +238,33 @@ with no mode of its own stays plain."
                     (ensure-list (get-text-property (1+ (drgnx-search-edit--line-start l)) 'face)))))
     (should-not (get-text-property (drgnx-search-edit--line-start (drgnx-search-edit-test--line "l:3")) 'face))))
 
+(ert-deftest drgnx-search-edit/saving-the-buffer-saves-the-lines ()
+  "Pattern D: every save of the buffer (`save-buffer': the profiles' Save, Vim's `:w') saves the edited lines, never
+asking for a file; a line marked for deletion alone is something to save; the global before-save hooks never touch
+the lines."
+  (drgnx-search-edit-test--with '(("search/edits" . (:change 6 :files nil :skipped nil)) ("search/apply" . t))
+    (drgnx-search-edit-test--goto "l:1")
+    (drgnx-search-edit-delete-line)
+    (should (buffer-modified-p))
+    (let ((touched nil))
+      (cl-letf (((symbol-function 'read-file-name) (lambda (&rest _) (error "Asked for a file")))
+                ((default-value 'before-save-hook) (list (lambda () (setq touched t)))))
+        (save-buffer))
+      (should-not touched))
+    (should (equal (append (plist-get (drgnx-search-edit-test--sent "search/edits") :lines) nil)
+                   '((:line_id "l:1" :path "/r/a.el" :line 2 :old ";; between" :eol t))))
+    (should-not buffer-file-name)))
+
 ;;; search-edit-test.el ends here
+
+(ert-deftest drgnx-search-edit/a-buffer-opened-again-marks-its-edits ()
+  "Pattern D: Edit Results opened again over itself (the same search, nothing unsaved) is made again, and a line
+changed in it (a `replace-match' inside the line) is marked for the save."
+  (drgnx-search-edit-test--with '()
+    (drgnx-search-edit--open "s" "one" "/r/" drgnx-search-edit-test--doc)
+    (let ((l (drgnx-search-edit-test--line "l:3")))
+      (goto-char (drgnx-search-edit--line-start l))
+      (should (search-forward "more" (drgnx-search-edit--line-end l) t))
+      (replace-match "less" t t)
+      (should (equal (drgnx-search-edit--text l) "one less"))
+      (should (= (hash-table-count drgnx-search-edit--marked) 1)))))

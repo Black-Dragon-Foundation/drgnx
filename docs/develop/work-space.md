@@ -300,7 +300,10 @@ channel, session, message_id?}`) and `asked` links from it to specs, plans, task
   or any later one (a turn the hub woke on a job, a batched wake), and every agent it starts, links to it. A worker
   inherits its starter's current ask at its start: the manager that started it (`parent`), or the session whose
   transaction made its plan run (`job.tx`). The channel is `manager` for a manager, `brainstorm` for a session with a
-  design document, else `chat`.
+  design document, else `chat`. The turn's first step is out before that moment (the snapshot of the tree comes
+  between, and the turn's user entry step is closed by then too), so a test waits for the agent's answer, not for a
+  step; a test-hooks hub started with
+  `RATATOSKR_TEST_ASK_DELAY_MS=N` waits N ms there, which makes a test that waits too early fail every time.
 - **Lazily made:** the ask entity is made at its first link, so a message that leads to no work leaves nothing. Writes
   the hub did not see a session make (an import, the scan, the user's own) get no ask.
 - `AskCore` is pure (`step(AskEv) -> Vec<AskOut>`, events `UserMessage`, `SteerDelivered`, `GraphWrite`, `AgentStart`,

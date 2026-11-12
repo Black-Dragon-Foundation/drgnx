@@ -22,7 +22,7 @@
 
 (ert-deftest drgnx-search-kinds/the-chips-show-the-counts-and-toggle ()
   "Pattern D: in Symbol mode with the hub's counts, the chips line lists fn, macro, var and type in order with their
-counts (a kind with none has no count, in the subtle face); a click toggles its kind on and searches again; the
+counts as pills (a kind with none has no count, its text subtle; one on is the accent's); a click toggles its kind on and searches again; the
 spec sent to the hub carries the kinds on; another mode has no chips."
   (drgnx-search-kinds-test--with 'symbol
     (should (equal (drgnx-replace--kinds-line) ""))          ; no search yet: no counts
@@ -31,15 +31,15 @@ spec sent to the hub carries the kinds on; another mode has no chips."
     (setq drgnx-replace--kind-counts '(:fn 2 :macro 1 :var 1))
     (let ((line (drgnx-replace--kinds-line)))
       (should (string-match-p "^Kinds .*fn 2 .*macro 1 .*var 1 .*type \n$" (substring-no-properties line)))
-      (should (eq 'drgnx-text-subtle (get-text-property (string-search "type" line) 'face line)))
-      (should (eq 'drgnx-replace-dim (get-text-property (string-search "fn" line) 'face line))))
+      (should (equal '(drgnx-text-subtle drgnx-pill) (get-text-property (string-search "type" line) 'face line)))
+      (should (eq 'drgnx-pill (get-text-property (string-search "fn" line) 'face line))))
     (should-not (plist-get (plist-get (drgnx-replace--spec "parse" nil) :query) :kinds))
     (drgnx-replace-kind-toggle 'fn)
     (drgnx-replace-kind-toggle 'var)
     (should (= searched 2))
     (should (equal (plist-get (plist-get (drgnx-replace--spec "parse" nil) :query) :kinds) ["fn" "var"]))
     (let ((line (drgnx-replace--kinds-line)))
-      (should (eq 'drgnx-replace-on (get-text-property (string-search "fn" line) 'face line))))
+      (should (eq 'drgnx-pill-accent (get-text-property (string-search "fn" line) 'face line))))
     (drgnx-replace-kind-toggle 'fn)
     (should (equal (plist-get (plist-get (drgnx-replace--spec "parse" nil) :query) :kinds) ["var"])))
   (drgnx-search-kinds-test--with 'text

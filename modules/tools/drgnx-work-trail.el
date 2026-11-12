@@ -52,6 +52,8 @@
 (defvar drgnx-work-lens-nav)
 (defvar drgnx-work-lens-map)
 (defvar drgnx-work-map--lens)
+(defvar drgnx-chrome-own-tab-line)
+(declare-function drgnx-work-lens-name "drgnx-work-map")
 (defvar drgnx-work-map--selection)
 (defvar drgnx-work-timeline--sel)
 (defvar drgnx-work-review--session)
@@ -702,7 +704,7 @@ list of (SEQ X W KIND), each at least 2 px wide.  A step that is still open runs
 
 (define-derived-mode drgnx-work-timeline-mode special-mode "Work timeline"
   "The Work space's Timeline: a lane for each agent, its steps as segments over time."
-  (setq-local truncate-lines t cursor-type nil tab-line-format '("" drgnx-work-map--lens)))
+  (setq-local truncate-lines t cursor-type nil drgnx-chrome-own-tab-line t tab-line-format '("" drgnx-work-map--lens)))
 
 (defun drgnx-work-timeline-buffers ()
   (seq-filter (lambda (b) (and (eq (buffer-local-value 'major-mode b) 'drgnx-work-timeline-mode) (not (drgnx-view-patch-twin-p b)))) (buffer-list)))
@@ -815,7 +817,8 @@ list of (SEQ X W KIND), each at least 2 px wide.  A step that is still open runs
         (setq drgnx-work-lens-nav #'drgnx-work-timeline--nav
               drgnx-work-timeline--steps (make-hash-table :test #'equal))
         (drgnx-view-attach 'work-timeline)))
-      (setq drgnx-work-lens--map map-buffer drgnx-work-map--lens (drgnx-work-lens-string 'timeline))
+      (setq drgnx-work-lens--map map-buffer
+            drgnx-work-map--lens (drgnx-work-lens-string 'timeline (drgnx-work-lens-name map-buffer)))
       (unless drgnx-view-patch               ; on the hub's rows the hub reads the lanes and lights them
         (let* ((state (drgnx-work-map--state map-buffer)) (sel (buffer-local-value 'drgnx-work-map--selection map-buffer))
                (lit (and state sel (drgnx-work-timeline--lit-for state sel))))

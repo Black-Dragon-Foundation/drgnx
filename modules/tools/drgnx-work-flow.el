@@ -17,6 +17,7 @@
 (require 'drgnx-view)
 (require 'drgnx-view-nav)
 (require 'drgnx-work-client)
+(require 'drgnx-pixels)
 (unless (featurep 'drgnx-work-map)
   (load (expand-file-name "drgnx-work-map" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
@@ -25,7 +26,9 @@
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function nidhogg-view-set "nidhogg-views" (h what value))
 (declare-function drgnx-work-lens-string "drgnx-work-map")
+(declare-function drgnx-work-lens-name "drgnx-work-map")
 (defvar drgnx-work-lens--map)
+(defvar drgnx-chrome-own-tab-line)
 (defvar drgnx-work-lens-nav)
 (defvar drgnx-work-lens-map)
 (defvar drgnx-work-map--lens)
@@ -36,6 +39,8 @@
   :group 'drgnx-work-space)
 (defface drgnx-work-flow-label '((t :inherit (drgnx-ui-caption drgnx-text-muted)))
   "The Flow's labels: task ids, agents, column headings." :group 'drgnx-work-space)
+(defface drgnx-work-flow-key '((t :inherit (drgnx-ui-caption drgnx-keycap)))
+  "A key's badge on the Flow's chips (`g 1' on a held task)." :group 'drgnx-work-space)
 (defface drgnx-work-flow-heading '((t :inherit drgnx-ui-heading)) "The Flow's headings: the run, the batch, a tile's."
   :group 'drgnx-work-space)
 (defface drgnx-work-flow-chip-ok '((t :inherit (drgnx-ui-caption drgnx-chip-ok))) "A gate that passed."
@@ -92,7 +97,7 @@ rows or its pass count; a waiver says its reason."
 
 (define-derived-mode drgnx-work-flow-mode special-mode "Work flow"
   "The Work space's Flow lens: a plan run's tasks by gate, its merge batch and its rule pack."
-  (setq-local truncate-lines t cursor-type nil
+  (setq-local truncate-lines t cursor-type nil drgnx-chrome-own-tab-line t
               tab-line-format '("" drgnx-work-map--lens)))
 
 (defun drgnx-work-flow--twin (class)
@@ -128,6 +133,79 @@ rows or its pass count; a waiver says its reason."
       ('previous-agent (drgnx-view-nav 'walk "held" -1))))
   t)
 
+(defun drgnx-work-flow-held (n)
+  "Select the Nth task a gate holds (the strip's `g N' badge).  It selects; nothing is merged, retried or waived."
+  (when (drgnx-work-flow--rows-p)
+    (drgnx-view-nav 'walk-to "held" (1- n))))
+
+;;;; The cards' rings and the rows' rules: Glitnir blocks (`glitnir-blocks', Nidhogg's `glitnir.el')
+;; The hub marks them on its rows (`drgnx-work-flow-block': ["ring" ID X0 X1] on a card's span of each of its rows,
+;; ["rule" KEY X0 X1] on a row with a hairline under it, device px); the rows give the cards' fill.  A box could not
+;; draw them: a box is one row high, the chips have boxes of their own, and the two cards share their rows.  The
+;; window parameter is set only when the blocks changed, never per redisplay; their colours are faces, which Glitnir
+;; resolves again on a theme change.
+
+(defface drgnx-work-flow-card '((t :inherit drgnx-surface-panel)) "A Flow card's fill: the batch, the line gate."
+  :group 'drgnx-work-space)
+;; a span of the rows has one face, so the text on a card names its twin, which carries the fill
+(defface drgnx-work-flow-card-text '((t :inherit (drgnx-work-flow-text drgnx-work-flow-card)))
+  "The Flow's text on a card." :group 'drgnx-work-space)
+(defface drgnx-work-flow-card-label '((t :inherit (drgnx-work-flow-label drgnx-work-flow-card)))
+  "The Flow's labels on a card." :group 'drgnx-work-space)
+(defface drgnx-work-flow-card-heading '((t :inherit (drgnx-work-flow-heading drgnx-work-flow-card)))
+  "A card's heading." :group 'drgnx-work-space)
+
+(defvar-local drgnx-work-flow--blocks nil "The Flow's blocks as last set (`glitnir-blocks'), with markers.")
+(defvar-local drgnx-work-flow--blocks-key nil
+  "`drgnx-work-flow--blocks' with positions for its markers, as last computed: what a patch compares.")
+
+(defun drgnx-work-flow--block-spec ()
+  "The Flow's blocks from its rows' `drgnx-work-flow-block' marks: a `glitnir-blocks' value with positions, one block
+per mark from the first row it is on to the end of the last (a ring: radius 8 px in `drgnx-border', its corners in
+the colour of `default' beneath; a rule: a hairline in `drgnx-border-subtle')."
+  (let ((pos (point-min)) (spans (make-hash-table :test 'equal)) order)
+    (while (< pos (point-max))
+      (let ((v (get-text-property pos 'drgnx-work-flow-block))
+            (next (next-single-property-change pos 'drgnx-work-flow-block nil (point-max))))
+        (when v
+          (let ((span (gethash v spans)))
+            (if span (setcdr span next) (puthash v (cons pos next) spans) (push v order))))
+        (setq pos next)))
+    (mapcar (lambda (v)
+              (let ((span (gethash v spans)) (ring (equal (elt v 0) "ring")))
+                `(,(if ring 'ring 'rule) ,(car span) ,(cdr span) :x0 ,(elt v 2) :x1 ,(elt v 3)
+                  ,@(if ring `(:radius ,(drgnx-px 8) :ring drgnx-border :beneath default)
+                      '(:ring drgnx-border-subtle)))))
+            (nreverse order))))
+
+(defun drgnx-work-flow--blocks ()
+  "Give the windows showing this Flow its blocks, when they changed.  A patch that gives the same blocks only puts
+their markers back: the window parameter stays the same object."
+  (let ((key (drgnx-work-flow--block-spec)))
+    (if (equal key drgnx-work-flow--blocks-key)
+        (cl-loop for b in drgnx-work-flow--blocks for k in key
+                 do (set-marker (nth 1 b) (nth 1 k)) (set-marker (nth 2 b) (nth 2 k)))
+      (dolist (b drgnx-work-flow--blocks) (set-marker (nth 1 b) nil) (set-marker (nth 2 b) nil))
+      (setq drgnx-work-flow--blocks-key key
+            drgnx-work-flow--blocks
+            (mapcar (lambda (k) (append (list (car k) (copy-marker (nth 1 k)) (copy-marker (nth 2 k))) (nthcdr 3 k)))
+                    key)))
+    (dolist (w (get-buffer-window-list (current-buffer) nil t))
+      (unless (eq (window-parameter w 'glitnir-blocks) drgnx-work-flow--blocks)
+        (set-window-parameter w 'glitnir-blocks drgnx-work-flow--blocks)))))
+
+(defun drgnx-work-flow--patched (_view _keys)
+  "`drgnx-view-patch-patched-functions' in a Flow: its blocks follow its rows."
+  (drgnx-work-flow--blocks))
+
+(defun drgnx-work-flow--unblock ()
+  "The Flow goes (`kill-buffer-hook'): no window keeps its blocks."
+  (let ((blocks drgnx-work-flow--blocks))
+    (when blocks
+      (walk-windows (lambda (w) (when (eq (window-parameter w 'glitnir-blocks) blocks)
+                                  (set-window-parameter w 'glitnir-blocks nil)))
+                    nil t))))
+
 (defun drgnx-work-flow--name (map-buffer)
   (format "*drgnx work flow: %s*" (string-trim (buffer-name map-buffer) "\\*drgnx work: " "\\*")))
 
@@ -149,12 +227,16 @@ map that is not on the rows path it says so instead."
                    (drgnx-view-env-register (car rows) buffer)
                    (nidhogg-view-set (drgnx-view-patch-handle drgnx-view-patch) 'form "flow")
                    ;; the selection is the Flow's own: its tile follows it
-                   (add-hook 'drgnx-view-selected-functions #'drgnx-work-flow--selected-moved nil t))
+                   (add-hook 'drgnx-view-selected-functions #'drgnx-work-flow--selected-moved nil t)
+                   ;; the cards' rings and the rows' rules follow every patch
+                   (add-hook 'drgnx-view-patch-patched-functions #'drgnx-work-flow--patched nil t)
+                   (add-hook 'kill-buffer-hook #'drgnx-work-flow--unblock nil t))
           (let ((inhibit-read-only t))
             (insert "The Flow needs Sjá, Nidhogg's view model: it is drawn from the hub's rows, and this Emacs has"
                     " no Sjá (or `drgnx-view-old-path' is set).\n"))))
       (setq drgnx-work-flow--map map-buffer drgnx-work-lens--map map-buffer
-            drgnx-work-map--lens (drgnx-work-lens-string 'flow))
+            drgnx-work-map--lens (drgnx-work-lens-string 'flow (drgnx-work-lens-name map-buffer)
+                                                         '(("evidence" . "e") ("rules" . "R"))))
       (drgnx-work-flow-refresh buffer))
     buffer))
 
@@ -379,6 +461,8 @@ waive (the hub takes a waiver from the user's connection alone)."
   (interactive)
   (let ((flow (drgnx-work-flow-open (drgnx-work-lens-map-buffer))))
     (pop-to-buffer-same-window flow)
+    ;; its blocks on the window it shows in now
+    (with-current-buffer flow (when drgnx-work-flow--blocks (drgnx-work-flow--blocks)))
     (drgnx-work-flow-detail-show flow)))
 
 (declare-function drgnx-work-lens-map-buffer "drgnx-work-board")
