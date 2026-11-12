@@ -773,6 +773,11 @@ per monitor (a count other than the monitors' fails with "scales need one per mo
 scale is applied before Emacs starts, and `ui start` then waits up to 10 s for the root frame to show the first
 monitor's scale, else stops the session and fails with `scale S not applied`.
 
+A row that needs a monitor of its own size names it at scale 1 through `(drgnx-ui-size-at-scale "1400x800")`, which
+multiplies it by the tier's scale (the largest of `DRGNX_UI_SCALES`, else `DRGNX_UI_SCALE`): the same logical monitor
+at every scale. A bare `"1400x800"` at scale 2 is 700×400 logical pixels, below mutter's smallest scaled monitor, so
+`gdctl` fails with "Scale 2.0 not supported by mode" and the session never becomes ready.
+
 A test that puts a frame on another monitor (sway: `swaymsg '[title="T"] move to output HEADLESS-2'`, the frame made
 with a `title`) waits for that frame's paint first (`drgnx-test-wait-presented :frame`): a new frame becomes a
 compositor window only when it is drawn and presented, so a wait that only reads process output leaves it unmapped

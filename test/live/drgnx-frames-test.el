@@ -13,7 +13,7 @@
           (s (progn
                (dolist (f '("README.md" "a.txt" "b.txt")) (make-directory project t)
                        (write-region (format "%s\n" f) nil (expand-file-name f project) nil 'silent))
-               (drgnx-ui-start "drgnx" "1400x800" 30)))
+               (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)))
           (,sess (drgnx-ui-own-session (plist-get s :name))))
      (unwind-protect
          (progn
@@ -102,7 +102,7 @@
     (dolist (f '("README.md" "a.txt")) (make-directory project t)
             (write-region "x\n" nil (expand-file-name f project) nil 'silent))
     (unwind-protect
-        (let* ((s (drgnx-ui-start "drgnx" "1400x800" 30)) (sess (drgnx-ui-own-session (plist-get s :name))))
+        (let* ((s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)) (sess (drgnx-ui-own-session (plist-get s :name))))
           (drgnx-ui-call sess (format "(progn (setq drgnx-persist-file %S)
                                          (find-file %S) (drgnx-chrome-apply nil t)
                                          (find-file %S) (drgnx-chrome-apply nil t)
@@ -112,7 +112,7 @@
           (drgnx-ui-measure sess nil)
           (drgnx-ui-stop (plist-get s :name))
           (should (= 2 (length (plist-get (with-temp-buffer (insert-file-contents file) (read (current-buffer))) :frames))))
-          (let* ((s2 (drgnx-ui-start "drgnx" "1400x800" 30)) (sess2 (drgnx-ui-own-session (plist-get s2 :name))))
+          (let* ((s2 (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)) (sess2 (drgnx-ui-own-session (plist-get s2 :name))))
             (unwind-protect
                 (progn
                   (drgnx-ui-call sess2 (format "(progn (setq drgnx-persist-file %S) (drgnx-persist-restore) (drgnx-uitest--json (list :ok t)))" file))

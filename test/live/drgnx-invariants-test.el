@@ -38,7 +38,7 @@ frame is made once and kept, hidden, between popups.")
                  (make-directory (file-name-directory (expand-file-name f project)) t)
                  (write-region (format "%s\n" f) nil (expand-file-name f project) nil 'silent))
                (make-directory (expand-file-name ".git" project))
-               (drgnx-ui-start "drgnx" "1400x800" 30)))
+               (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)))
           (,sess (drgnx-ui-own-session (plist-get s :name))))
      (unwind-protect
          (progn
@@ -194,7 +194,7 @@ settled within 250 ms."
                      :tab (format \"%s\" (drgnx-wb-area-tab 'panel)))))")
          first)
     (unwind-protect
-        (let* ((s (drgnx-ui-start "drgnx" "1400x800" 30)) (sess (drgnx-ui-own-session (plist-get s :name))))
+        (let* ((s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)) (sess (drgnx-ui-own-session (plist-get s :name))))
           (drgnx-ui-wait-start-page sess)
           (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "M-j") (list :keys "C-M-b")))
           (drgnx-ui-call sess (format "(let ((window-resize-pixelwise t))
@@ -207,7 +207,7 @@ settled within 250 ms."
           (setq first (drgnx-ui-call sess q))
           (drgnx-ui-stop (plist-get s :name))
           (should (file-exists-p file))
-          (let* ((s2 (drgnx-ui-start "drgnx" "1400x800" 30)) (sess2 (drgnx-ui-own-session (plist-get s2 :name))))
+          (let* ((s2 (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)) (sess2 (drgnx-ui-own-session (plist-get s2 :name))))
             (unwind-protect
                 (progn
                   (drgnx-ui-wait-start-page sess2)
@@ -222,7 +222,7 @@ settled within 250 ms."
   ;; toggles (I2), keys with no collateral move and no guard violation (I1, I9), on both windows.
   (let* ((root (make-temp-file "drgnx-2mon" t))
          (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
-         (s (drgnx-ui-start "drgnx" "1280x800" 30 nil 2))
+         (s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1280x800") 30 nil 2))
          (sess (drgnx-ui-own-session (plist-get s :name))))
     (unwind-protect
         (progn

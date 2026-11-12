@@ -12,7 +12,7 @@
           (file (expand-file-name "f.el" root))
           (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
           (s (progn (write-region "(defun f ()\n  (list 1\n        2))\n" nil file nil 'silent)
-                    (drgnx-ui-start "drgnx" "1400x800" 30)))
+                    (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)))
           (,sess (drgnx-ui-own-session (plist-get s :name))))
      (unwind-protect
          (progn
