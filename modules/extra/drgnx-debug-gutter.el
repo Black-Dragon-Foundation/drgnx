@@ -511,6 +511,18 @@ changes (drafts); otherwise each sits on the store's line."
   (with-current-buffer (window-buffer (posn-window (event-start event)))
     (drgnx-debug-gutter-toggle (drgnx-debug-gutter--event-line event))))
 
+(defun drgnx-debug-gutter-drag (event)
+  "Mouse EVENT dragged from a mark in the column to another line of the same window: the breakpoint moves there
+(`move': its saved line plus the lines dragged, as a save would send)."
+  (interactive "e")
+  (let* ((start (event-start event)) (end (event-end event)) (w (posn-window start)))
+    (when (and (eq w (posn-window end)) (posn-point end))
+      (with-current-buffer (window-buffer w)
+        (let* ((from (line-number-at-pos (posn-point start))) (to (line-number-at-pos (posn-point end)))
+               (id (drgnx-debug-gutter--mark-at from)) (bp (and id (drgnx-debug-gutter--bp id))))
+          (when (and bp (/= from to))
+            (drgnx-debug-gutter--ask (list :op "move" :id id :line (+ (plist-get bp :line) (- to from))))))))))
+
 (defun drgnx-debug-gutter-shift-click (event)
   "Shifted mouse EVENT in the column: a logpoint on that line."
   (interactive "e")
@@ -885,11 +897,14 @@ buffer, replacing the session's last ones in place."
 
 (defvar drgnx-debug-gutter-mode-map
   (let ((m (make-sparse-keymap)))
+    (define-key m [left-margin down-mouse-1] #'ignore)  ; no text selection from the column: a drag moves a mark
     (define-key m [left-margin mouse-1] #'drgnx-debug-gutter-click)
+    (define-key m [left-margin drag-mouse-1] #'drgnx-debug-gutter-drag)
     (define-key m [left-margin S-mouse-1] #'drgnx-debug-gutter-shift-click)
     (define-key m [left-margin mouse-3] #'drgnx-debug-gutter-menu)
     m)
-  "The column's mouse: click toggles a breakpoint, shift-click adds a logpoint, the right button opens its menu.")
+  "The column's mouse: click toggles a breakpoint, a drag moves one, shift-click adds a logpoint, the right button
+opens its menu.")
 
 (defun drgnx-debug-gutter--in-use-p ()
   "Whether some buffer has the column."

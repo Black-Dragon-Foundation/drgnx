@@ -116,6 +116,33 @@ failed \"no hub\" through it).  The hub is not stubbed."
       (should-not (debug-gutter-test--marks))
       (should (equal (debug-gutter-test--ops) '(("add" 4) ("remove" 1)))))))
 
+(defun debug-gutter-test--posn (line &optional window area)
+  "A mouse position on LINE of WINDOW (default: the selected one) in AREA (default: the left margin)."
+  (let ((pos (save-excursion (goto-char (point-min)) (forward-line (1- line)) (point))))
+    (list (or window (selected-window)) (or area 'left-margin) '(0 . 0) 0 nil pos '(0 . 0) nil '(0 . 0) '(0 . 0))))
+
+(ert-deftest drgnx-debug-gutter/a-drag-moves-the-breakpoint ()
+  "Dragged in the column from a mark to another line (in the column or the text), the breakpoint moves there (`move',
+its saved line plus the lines dragged); from a line without one, or into another window, nothing.  A press there
+starts no text selection."
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0))
+    (debug-gutter-test--with 10
+      (drgnx-debug-gutter-toggle 4)
+      (drgnx-debug-gutter-drag (list 'drag-mouse-1 (debug-gutter-test--posn 4) (debug-gutter-test--posn 7)))
+      (should (equal (debug-gutter-test--marks) '((7 . bp))))
+      (drgnx-debug-gutter-drag (list 'drag-mouse-1 (debug-gutter-test--posn 7) (debug-gutter-test--posn 2 nil 3)))
+      (should (equal (debug-gutter-test--marks) '((2 . bp))))
+      (drgnx-debug-gutter-drag (list 'drag-mouse-1 (debug-gutter-test--posn 5) (debug-gutter-test--posn 8)))
+      (drgnx-debug-gutter-drag (list 'drag-mouse-1 (debug-gutter-test--posn 2)
+                                     (debug-gutter-test--posn 9 (minibuffer-window))))
+      (should (equal (debug-gutter-test--ops) '(("add" 4) ("move" 1) ("move" 1))))
+      (should (equal (delq nil (mapcar (lambda (c) (let ((op (plist-get (cdr c) :op)))
+                                                     (and (equal (plist-get op :op) "move") (plist-get op :line))))
+                                       debug-gutter-test--calls))
+                     '(7 2)))
+      (should (eq (lookup-key drgnx-debug-gutter-mode-map [left-margin drag-mouse-1]) #'drgnx-debug-gutter-drag))
+      (should (eq (lookup-key drgnx-debug-gutter-mode-map [left-margin down-mouse-1]) #'ignore)))))
+
 (ert-deftest drgnx-debug-gutter/the-column-shows-when-the-file-has-breakpoints ()
   (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0) (drgnx-debug-gutter-show 'auto))
     (debug-gutter-test--with 10

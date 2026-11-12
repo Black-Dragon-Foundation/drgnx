@@ -105,8 +105,8 @@ longer opens. The output stays after the session ends and is cleared when the sa
 (`drgnx-debug-console-clear-on-restart`). A `postDebugTask` that fails says so there.
 
 Breakpoints live in a column left of the line numbers, kept per project (they survive restarts and reach a running
-session at once). Click the column to add or remove one, shift-click for a logpoint (a message printed instead of
-a stop; `{expression}` is replaced by its value), right-click for the line's menu: a condition, a hit count, a log
+session at once). Click the column to add or remove one, drag one to another line to move it, shift-click for a
+logpoint (a message printed instead of a stop; `{expression}` is replaced by its value), right-click for the line's menu: a condition, a hit count, a log
 message, enable or disable, and Run to Cursor while a session runs. The dot is red when an adapter bound it, grey
 before, hollow when disabled; a dot with two bars has a condition, a diamond is a logpoint. A line you move by
 editing keeps its breakpoint, which takes the new line when you save. `drgnx-debug-gutter-show` chooses when the

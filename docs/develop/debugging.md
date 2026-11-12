@@ -318,7 +318,9 @@ only).
   adapter bound elsewhere (`bound_line`) sits on that line.
 - `drgnx-debug-gutter-show`: `auto` (while the file has breakpoints or a session runs in its project, from
   `debug-state`), `always` or `never`.
-- Mouse: `mouse-1` in the column toggles (`drgnx-debug-gutter-toggle`), `S-mouse-1` adds a logpoint, `mouse-3`
+- Mouse: `mouse-1` in the column toggles (`drgnx-debug-gutter-toggle`), a drag from a mark moves it
+  (`drgnx-debug-gutter-drag`: `move` to its saved line plus the lines dragged; `down-mouse-1` there selects no
+  text), `S-mouse-1` adds a logpoint, `mouse-3`
   opens the line's menu (`drgnx-debug-gutter--menu-items`): Add Breakpoint / Conditional / Logpoint on an empty line;
   Remove, Edit Condition / Hit Count / Log Message and Enable or Disable on a breakpoint; Run to Cursor while a session
   runs in the project (`debug/run-to-cursor`).
