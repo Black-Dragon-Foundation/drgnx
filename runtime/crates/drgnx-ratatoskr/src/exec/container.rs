@@ -16,7 +16,8 @@ use std::path::Path;
 use std::time::Duration;
 
 pub use sleipnir::linux::podman::{
-    CONTROLLERS, Caps, ContainerReq, JobNet, NetNames, PIDS, WORK, limits_enforced, net_names,
+    CONTROLLERS, Caps, ContainerReq, JobNet, KeyMounts, NetNames, PIDS, WORK, limits_enforced,
+    net_names,
 };
 
 fn refuse(message: impl Into<String>) -> Refusal {
@@ -249,6 +250,7 @@ mod tests {
             subdir: PathBuf::new(),
             job: "x1a".into(),
             net: false,
+            keys: None,
             runner: None,
         }
     }

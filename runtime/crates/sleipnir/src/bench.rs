@@ -100,11 +100,11 @@ pub fn argv(image: &str, src: &Path, target: &Path) -> Result<Vec<String>, Strin
         subdir: PathBuf::new(),
         job: ID.into(),
         net: false,
+        keys: None,
         runner: Some(RunnerMounts {
             writes_tree: false,
             target: target.to_path_buf(),
             caches: vec![],
-            keys: None,
         }),
     };
     let ra = RunnerArgs {

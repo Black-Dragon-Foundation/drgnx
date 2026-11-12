@@ -3820,7 +3820,11 @@ and a log line naming it, then answers `timeout`. The job's output never goes th
 wrapper (`unit::wrap_to_hub`) leaves stdout and stderr on the pipe the hub reads, and `keys::pump` appends each chunk
 to the log through the redactor (the held-back end at EOF; `watch` waits up to 5 s for it before the result is
 written). `Meta::keyed` marks it: a restarted hub kills such a job and ends it `infra` rather than adopting it. A keyed
-container job is refused here for now (it runs on a runner).
+container job (`Runner::container_keys`) has no socket: the static `drgnx-key-<arch>-linux-musl` next to the hub
+(`keys::static_key_name`; missing: refused) is copied into its folder and mounted read-only as its entrypoint
+(`ContainerReq::keys`, the names only in its argv), and its relay starts even without a network grant (no host
+allowed): `net::prepare_net` gives the sidecar `--keys drgnx-key` and runs `owner::run_keyed` with `keys::Source`, so
+the same `JobKeys` answers its key streams, redacts its output and records `key_sent`.
 
 **The handover.** `runners/keys {keys: {NAME: value}}` (user only; refused while `Gate::protects_keys` fails, as
 `gateway/keys` is) puts the values in `Keys` (`SecretString`s in memory; `RunnerKeys` refuses a NUL, an over-64-KiB

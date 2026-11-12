@@ -1012,6 +1012,7 @@ fn a_container_job_in_a_subfolder_mounts_the_worktree() {
         subdir: "crates/x".into(),
         job: "x1a".into(),
         net: false,
+        keys: None,
         runner: None,
     };
     let caps = container::Caps {
@@ -2086,4 +2087,70 @@ async fn a_keyed_job_without_drgnx_key_is_refused() {
         }
     };
     assert!(e.contains("drgnx-key was not found"), "{e}");
+}
+
+/// A keyed container job runs here as on a runner: with no network granted it still gets its own sidecar, which takes
+/// its keys' listener (`--keys drgnx-key`); the job runs its own copy of the static drgnx-key (from its folder,
+/// read-only) as the entrypoint with the names only, and no proxy variables.  Without the static drgnx-key next to
+/// the hub the job is refused.
+#[tokio::test]
+async fn a_keyed_container_job_reads_its_keys_through_its_sidecar() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let h = net_hooks(d.path(), &info_net("5.4.2", true));
+    // podman's arguments recorded, then the stand-in
+    std::fs::rename(d.path().join("podman"), d.path().join("podman-real")).unwrap();
+    let rec = d.path().join("podman");
+    std::fs::write(
+        &rec,
+        format!(
+            "#!/bin/sh\necho \"$*\" >> {0}/args\nexec {0}/podman-real \"$@\"\n",
+            d.path().display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&rec, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let px = h.px_dir.clone().unwrap();
+    let r = Runner::default();
+    r.open(d.path().join("exec"), h);
+    let keyed = || {
+        let mut s = container_spec(d.path());
+        s.place.keys = vec!["CANARY_TOKEN".into()];
+        s
+    };
+    let e = r.start(keyed()).await.unwrap_err();
+    assert!(e.message.contains("static drgnx-key"), "{}", e.message);
+    for arch in ["amd64", "arm64"] {
+        std::fs::write(px.join(keys::static_key_name(arch)), b"key").unwrap();
+    }
+    let id = r.start(keyed()).await.unwrap();
+    let dir = d.path().join("exec").join(&id);
+    assert_eq!(std::fs::read(dir.join("drgnx-key")).unwrap(), b"key");
+    let args = std::fs::read_to_string(d.path().join("args")).unwrap();
+    let sidecar = args
+        .lines()
+        .find(|l| l.starts_with("run -i"))
+        .expect("the job's sidecar");
+    assert!(sidecar.ends_with("--keys drgnx-key"), "{sidecar}");
+    // the job's own run comes from its wrapper's shell, after start answers
+    let name = container::name_of(&id).unwrap();
+    let job = skuld::wait_until_async("the job's run", 30, || {
+        let args = std::fs::read_to_string(d.path().join("args")).unwrap_or_default();
+        std::future::ready(
+            args.lines()
+                .find(|l| l.contains(&name) && l.starts_with("run "))
+                .map(str::to_string),
+        )
+    })
+    .await;
+    let mount = format!("{}:/run/drgnx/key:ro,Z", dir.join("drgnx-key").display());
+    assert!(job.contains(&mount), "{job}");
+    assert!(
+        job.contains("--entrypoint /run/drgnx/key")
+            && job.ends_with("exec CANARY_TOKEN=CANARY_TOKEN -- make test"),
+        "{job}"
+    );
+    assert!(!job.contains("PROXY"), "{job}");
+    assert!(r.inner.get().unwrap().meta(&id).unwrap().keyed);
+    r.stop(&id).await.unwrap();
 }

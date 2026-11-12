@@ -593,7 +593,8 @@ jobs:
       - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
         run: bash .github/ci/commit-times.sh runtime/target/.drgnx-built-from
       # + the relay sidecar a job granted network runs, static (as `drgnx runtime build` makes it: its own target dir)
-      # and beside the hub under the name the hub looks for (drgnx_px::image::binary_for)
+      # and beside the hub under the name the hub looks for (drgnx_px::image::binary_for); and drgnx-key the same way,
+      # the entrypoint of a keyed container job (exec::keys::static_key_name)
       - id: build
         run: |
           cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
@@ -601,6 +602,8 @@ jobs:
           rustup target add x86_64-unknown-linux-musl
           cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-px --bin drgnx-px --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd
           cp runtime/target/fwd/x86_64-unknown-linux-musl/debug/drgnx-px runtime/target/debug/drgnx-px-x86_64-linux-musl
+          cargo build --locked --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd
+          cp runtime/target/fwd/x86_64-unknown-linux-musl/debug/drgnx-key runtime/target/debug/drgnx-key-x86_64-linux-musl
       # sleipnir in jobq's shape (`linux,sync`: docs/develop/sleipnir.md) builds static too, in the same musl target dir
       - if: ${{ !cancelled() }}
         run: cargo build --locked --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --features linux,sync --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd
@@ -1113,7 +1116,8 @@ jobs:
           # the timing rows are #[ignore] too: a debug build on a shared runner would judge a release budget
           skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == "drgnx-ratatoskr" { printf " --skip %s", $3 }')
           cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --test macos -- --ignored $skips
-      # the relay sidecar of a networked container job is a Linux binary: build-only here (no podman machine to run it in).
+      # the relay sidecar of a networked container job (and a keyed one's drgnx-key) is a Linux binary: build-only here
+      # (no podman machine to run it in).
       # Apple Silicon builds aarch64 musl with Rust's self-contained musl and rust-lld, as `drgnx runtime build` does
       - name: the relay sidecar cross-builds (Linux musl, no C toolchain)
         if: ${{ !cancelled() }}
@@ -1123,6 +1127,8 @@ jobs:
           l=$(printf '%s' "$arch-unknown-linux-musl" | tr 'a-z-' 'A-Z_')
           env "CARGO_TARGET_${l}_LINKER=rust-lld" "CARGO_TARGET_${l}_RUSTFLAGS=-C link-self-contained=yes" \
             cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-px --bin drgnx-px --target "$arch-unknown-linux-musl"
+          env "CARGO_TARGET_${l}_LINKER=rust-lld" "CARGO_TARGET_${l}_RUSTFLAGS=-C link-self-contained=yes" \
+            cargo build --locked --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key --target "$arch-unknown-linux-musl"
       # The pure-Rust crates' tests through clippy on darwin: only clippy's test build shows code that is dead on macOS
       # (gate review M21). Whatever the tests said, so neither hides the other.
       - name: clippy on darwin (the pure-Rust crates)
