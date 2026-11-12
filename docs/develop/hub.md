@@ -4379,7 +4379,8 @@ It answers `{"ev":"started","pid":N}`. A program that cannot be exec'd gets `{"e
 **The relay.** A CDP frame from the hub goes to the pipe with its NUL. Each NUL-ended message from the pipe goes back as
 one CDP frame; one over the limit is dropped up to its NUL. A CDP frame while no browser runs is dropped.
 
-**Stop and exit.** `{"op":"stop","why":W}` closes the pipe, sends SIGTERM to Chromium's process group, and SIGKILL after
+**Stop and exit.** `{"op":"stop","why":W}` sends SIGTERM to Chromium's process group, then closes the pipe (in that order: with
+the pipe closed first, a browser that ends at the pipe's end could exit 0 before the signal came), and SIGKILL after
 2 s. However Chromium ends (stopped, crashed, or on its own), the host waits for the main process without reaping it,
 kills what is left of its group (the group's id is still held by the unreaped leader), tells the pipe's reader how many
 bytes the pipe holds then (`FIONREAD`: all the group wrote), reaps it, and sends `{"ev":"exited","code":N|null,
