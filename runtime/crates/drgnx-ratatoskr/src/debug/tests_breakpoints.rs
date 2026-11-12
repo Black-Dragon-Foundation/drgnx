@@ -535,7 +535,7 @@ async fn a_save_that_waits_on_the_disk_holds_no_worker() {
         .status()
         .unwrap();
     assert!(made.success());
-    let applied = tokio::spawn(async move {
+    let applied = crate::clock::spawn("debug:test-save", async move {
         let mut s = Store::open(Some(file));
         s.apply(add("/p/a.py", 7)).is_some()
     });
