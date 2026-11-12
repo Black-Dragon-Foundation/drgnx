@@ -3520,6 +3520,9 @@ A test that guards a cost asserts what load does not move. Load the fixture as t
   conses for its own bookkeeping. `(drgnx-test-compile PREFIX…)` byte-compiles in place every interpreted function
   whose name starts with one of the prefix strings, so the number is what users run and does not depend on which
   test compiled what before. BODY itself runs as written: its own `let`s count when the test file is loaded from source.
+  A bound read from `memory-use-counts` directly (a fixed number of conses, "conses nothing") compiles first too: in
+  a checkout without `.elc` files it fails on every run otherwise. A ratio between two sizes of the same call does not
+  need it (the interpreter's share is the same on both sides).
 - **CPU when allocation cannot say it.** `(drgnx-test-cpu-ms (&key (n 50)) BODY…)` is the median `current-cpu-time` of
   N runs, in ms (with N even, the mean of the middle two). CPU time moves less with load than wall clock, but it
   moves: keep 3× headroom over the host's median.
