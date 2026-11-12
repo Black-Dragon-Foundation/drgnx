@@ -304,6 +304,18 @@ roots `debug/trust` called trusted and each root's last started configuration.
   `instructionPointerReference`. At most 500 instructions (`DISASSEMBLE_MAX`; more is `invalid-params`); answered
   `{instructions: [{address, bytes?, instruction, symbol?, path?, line?, end_line?}]}`. Refused with words without
   `supportsDisassembleRequest`; `debug-state`'s caps carry it and `supportsInstructionBreakpoints`.
+- `debug/hot-reload {session, path}` (`debug/hot_reload.rs`, spec §19.7 D8, Python first): the stopped program takes
+  the saved file's changed function bodies. DAP has no code-replace request, so it is for debugpy sessions only (the
+  adapter type `debugpy` or `python`; others are refused with words). One `evaluate` (context `clipboard`, so nothing
+  is truncated) in the selected frame runs `etc/debug-hot-reload.py` with `exec` in a namespace of its own (the frame's
+  locals untouched): it compiles the file, walks its code objects by qualified name, and sets `__code__` on each live
+  function of that module (module level, classes, static and class methods) whose code changed and whose free
+  variables match; nothing at module level runs again. Its answer comes back as JSON hex-encoded in a string, so no
+  repr quoting reaches the hub: `{patched: [qualname], skipped: [{name, why}], restarted}`. `why` is `its closure
+  changed` or `new: it exists from the next run`. Frames already running keep their old code (jurigged's limit): where
+  the adapter has `supportsRestartFrame` the selected frame restarts (`restarted: true`), else the change applies from
+  the next call (debugpy today). Refused while the program runs. Tests: row `debug/hot-reload` (mock), live
+  `debugpy_hot_reloads_a_saved_function`.
 - These and `debug/breakpoint-locations` read the session's capabilities: asked before the adapter has given them
   (the session is starting) they are refused, so the editors offer them once `debug-state` shows the capability.
 - `debug/install {adapter, adapters?}`: the adapter's `:install` entry carried out (see Adapters); the answer says what

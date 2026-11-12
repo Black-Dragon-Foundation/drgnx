@@ -251,6 +251,29 @@ pub struct DebugDisassembly {
     pub instructions: Vec<DisassembledInstruction>,
 }
 
+/// `debug/hot-reload`: SESSION's stopped Python program takes PATH's changed function bodies as saved (D8).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugHotReload {
+    pub session: String,
+    pub path: String,
+}
+
+/// What a hot reload could not take, and why.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct HotReloadSkip {
+    pub name: String,
+    pub why: String,
+}
+
+/// `debug/hot-reload`'s answer: the functions PATCHED (qualified names), those SKIPPED, and whether the selected
+/// frame RESTARTED with the new code (else running frames keep the old code until their next call).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugHotReloaded {
+    pub patched: Vec<String>,
+    pub skipped: Vec<HotReloadSkip>,
+    pub restarted: bool,
+}
+
 /// `debug/completions`: the Debug Console's completions for TEXT with point at COLUMN (0-based, in characters), in
 /// FRAME (the stopped one when none).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -766,6 +789,11 @@ fn check_breakpoint_locations(p: &DebugBreakpointLocations) -> Result<(), Error>
     Ok(())
 }
 
+fn check_hot_reload(p: &DebugHotReload) -> Result<(), Error> {
+    check_text("session", &p.session)?;
+    check_path("path", &p.path)
+}
+
 fn check_disassemble(p: &DebugDisassemble) -> Result<(), Error> {
     check_text("session", &p.session)?;
     check_text("reference", &p.reference)?;
@@ -1042,6 +1070,12 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "a project's trust changed: a project never told trusted runs no configuration, and revoking trust stops its sessions",
             check: check_trust,
+        ),
+        method!(
+            "debug/hot-reload", DebugHotReload(DebugHotReload) -> DebugHotReloaded,
+            classes: [User], writes: false,
+            doc: "the stopped Python program takes a saved file's changed function bodies (frames running keep their old code unless the adapter restarts the frame)",
+            check: check_hot_reload,
         ),
         method!(
             "debug/disassemble", DebugDisassemble(DebugDisassemble) -> DebugDisassembly,

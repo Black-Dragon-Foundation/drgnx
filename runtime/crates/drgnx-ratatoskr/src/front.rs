@@ -946,6 +946,7 @@ impl Front {
             | Params::DebugBreakpointLocations(_)
             | Params::DebugCompletions(_)
             | Params::DebugDisassemble(_)
+            | Params::DebugHotReload(_)
             | Params::DebugReadMemory(_)
             | Params::DebugWriteMemory(_)
             | Params::DebugBreakpoints(_)

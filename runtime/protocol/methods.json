@@ -12981,6 +12981,78 @@
       "classes": [
         "user"
       ],
+      "doc": "the stopped Python program takes a saved file's changed function bodies (frames running keep their old code unless the adapter restarts the frame)",
+      "name": "debug/hot-reload",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/hot-reload`: SESSION's stopped Python program takes PATH's changed function bodies as saved (D8).",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "path"
+        ],
+        "title": "DebugHotReload",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "HotReloadSkip": {
+            "description": "What a hot reload could not take, and why.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "why"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/hot-reload`'s answer: the functions PATCHED (qualified names), those SKIPPED, and whether the selected\nframe RESTARTED with the new code (else running frames keep the old code until their next call).",
+        "properties": {
+          "patched": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "restarted": {
+            "type": "boolean"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/$defs/HotReloadSkip"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "patched",
+          "skipped",
+          "restarted"
+        ],
+        "title": "DebugHotReloaded",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "install an adapter from its pinned download (checked against its sha256) or into the tools venv with its hash required; a system package's command is named, never run: what was installed",
       "name": "debug/install",
       "params": {
