@@ -177,6 +177,9 @@ impl Doc {
     }
 }
 
+/// A span of a list for [`Sent::splice`]: where it starts, how many ids it held, its nodes now.
+pub type Span = (usize, usize, Vec<(String, Value)>);
+
 /// A windowed list's move ([`Sent::move_window`]): list NAME's new WINDOW (total, from); HELD, every node id of the new
 /// model, the list's ids `HELD[ORDER]` and the others their parents.
 pub struct WindowMove<'a> {
@@ -247,6 +250,73 @@ impl Sent {
             return None;
         }
         Some(self.send(vec![json!({ "nodes": changed })]))
+    }
+
+    /// The editor's model has, for each span (AT, REMOVE, NODES) of SPANS, list NAME's ids `AT..AT + REMOVE` replaced
+    /// by NODES' (wire objects, `id` included, in the list's order); the spans come last first and do not overlap. The
+    /// ids that left go, the nodes new or changed are sent, and the list is spliced, in one `view-model`. The caller
+    /// vouches that every other node and id stays as it is, so the cost is the spans', not the model's. None (the
+    /// builder publishes the whole) when nothing was sent, a reset is due, NAME is a window or not a list, or the spans
+    /// are out of order or past its end; Some(None) when nothing changed.
+    pub fn splice(&mut self, name: &str, spans: Vec<Span>) -> Option<Option<Out>> {
+        if self.reset_due {
+            return None;
+        }
+        let doc = self.doc.as_mut()?;
+        if doc.windows.contains_key(name) {
+            return None;
+        }
+        let list = doc.lists.get_mut(name)?;
+        let mut limit = list.len();
+        for (at, remove, _) in &spans {
+            if at + remove > limit {
+                return None;
+            }
+            limit = *at;
+        }
+        let kept: std::collections::HashSet<String> = spans
+            .iter()
+            .flat_map(|(_, _, nodes)| nodes.iter().map(|(id, _)| id.clone()))
+            .collect();
+        let gone: Vec<String> = spans
+            .iter()
+            .flat_map(|(at, remove, _)| list[*at..at + remove].iter())
+            .filter(|id| !kept.contains(id.as_str()))
+            .cloned()
+            .collect();
+        let mut ops = Vec::new();
+        for id in &gone {
+            doc.nodes.remove(id);
+        }
+        if !gone.is_empty() {
+            ops.push(json!({ "remove": gone }));
+        }
+        let mut changed = Vec::new();
+        let mut splices = Vec::new();
+        for (at, remove, nodes) in spans {
+            let ids: Vec<String> = nodes.iter().map(|(id, _)| id.clone()).collect();
+            for (id, n) in nodes {
+                if doc.nodes.get(&id) != Some(&n) {
+                    doc.nodes.insert(id, n.clone());
+                    changed.push(n);
+                }
+            }
+            if list[at..at + remove] != ids[..] {
+                splices.push(
+                    json!({"splice": {"name": name, "at": at, "remove": remove, "ids": ids}}),
+                );
+                list.splice(at..at + remove, ids);
+            }
+        }
+        if !changed.is_empty() {
+            ops.push(json!({ "nodes": changed }));
+        }
+        ops.extend(splices);
+        self.outside = None;
+        if ops.is_empty() {
+            return Some(None);
+        }
+        Some(Some(self.send(ops)))
     }
 
     /// The editor's model, one list NAME that is a window and its nodes, moves to WINDOW over HELD ([`WindowMove`]);
@@ -623,8 +693,92 @@ mod tests {
         }
     }
 
+    fn new_of(sent: &Sent) -> Doc {
+        sent.doc.clone().unwrap()
+    }
+
     fn node(id: &str) -> (String, Value) {
         (id.to_owned(), json!({"id": id, "kind": "match"}))
+    }
+
+    /// A splice is the ops the diff would send for the same change, made from the span alone: only the span's ids that
+    /// left go and only its new or changed nodes are sent, and the sent model is the new one. Refused with no model
+    /// sent, a reset due, a windowed list, or a span past the list's end (the builder publishes the whole).
+    #[test]
+    fn a_splice_sends_what_the_diff_would() {
+        let mut sent = Sent::default();
+        assert!(
+            sent.splice("order", vec![(0, 0, vec![node("n:0")])])
+                .is_none()
+        );
+        let mut old = doc(ids(0..6), None);
+        old.nodes = ids(0..6).iter().map(|i| node(i)).collect();
+        sent.publish(old.clone()).unwrap();
+        assert!(
+            sent.splice("order", vec![(5, 2, vec![])]).is_none(),
+            "past the end"
+        );
+        assert!(
+            sent.splice("order", vec![(0, 1, vec![]), (3, 1, vec![])])
+                .is_none(),
+            "first first"
+        );
+        // n:2 changes, n:3 goes, n:7 and n:8 come after n:2
+        let span = vec![
+            ("n:2".to_owned(), json!({"id": "n:2", "kind": "open"})),
+            node("n:7"),
+            node("n:8"),
+        ];
+        let mut new = old.clone();
+        new.nodes.remove("n:3");
+        for (id, n) in &span {
+            new.nodes.insert(id.clone(), n.clone());
+        }
+        new.lists
+            .get_mut("order")
+            .unwrap()
+            .splice(2..4, span.iter().map(|(id, _)| id.clone()));
+        let out = sent
+            .splice("order", vec![(2, 2, span.clone())])
+            .unwrap()
+            .unwrap();
+        let ops = out.model["ops"].as_array().unwrap().clone();
+        let mut state = state_of(&old);
+        apply(&ops, &mut state);
+        assert_eq!(state, state_of(&new));
+        assert_eq!(ops[0], json!({"remove": ["n:3"]}));
+        assert_eq!(ops[1]["nodes"].as_array().unwrap().len(), 3);
+        assert!(sent.publish(new).is_none(), "the sent model is the new one");
+        assert_eq!(
+            sent.splice("order", vec![(2, 3, span)]).unwrap(),
+            None,
+            "nothing changed"
+        );
+        // two spans in one model, the last first: n:8 goes from the end, n:0 gets a child n:9
+        let held = state_of(&new_of(&sent));
+        let out = sent
+            .splice(
+                "order",
+                vec![
+                    (4, 2, vec![node("n:4")]),
+                    (0, 1, vec![node("n:0"), node("n:9")]),
+                ],
+            )
+            .unwrap()
+            .unwrap();
+        let mut state = held;
+        apply(out.model["ops"].as_array().unwrap(), &mut state);
+        let want: Vec<String> = ["n:0", "n:9", "n:1", "n:2", "n:7", "n:4", "n:5"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(state["order"].0, want);
+        assert_eq!(new_of(&sent).lists["order"], want);
+        assert!(!new_of(&sent).nodes.contains_key("n:8"));
+        sent.reset_due();
+        assert!(sent.splice("order", vec![(0, 0, vec![])]).is_none());
+        let mut windowed = Sent::default();
+        windowed.publish(doc(ids(0..3), Some((9, 0)))).unwrap();
+        assert!(windowed.splice("order", vec![(0, 1, vec![])]).is_none());
     }
 
     /// A window move is the ops the diff would send for the same move, made from the move alone: the node builder runs

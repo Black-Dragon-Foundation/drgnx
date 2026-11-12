@@ -577,3 +577,72 @@ fn open_pages_are_bounded_and_closed_pages_let_their_elements_go() {
     assert!(o.set("v:s1:Locals/obj", true).is_empty());
     assert_eq!(o.pages.len(), PAGE_CAP - 1);
 }
+
+/// An opened or closed Variables node's subtree, walked alone ([`subtree`]) and spliced over its old one, is what the
+/// whole walk draws: a chunk of a long array and a variable with children, both ways.
+#[test]
+fn a_subtree_spliced_is_what_the_whole_walk_draws() {
+    let mut locals: Vec<Value> = (0..5)
+        .map(|i| v(&format!("v{i}"), &format!("{i}"), 0))
+        .collect();
+    locals.push(v("obj", "Obj", 3));
+    locals.push(
+        json!({"name": "arr", "value": "list[1000]", "variablesReference": 8,
+                       "indexedVariables": 1000, "namedVariables": 0}),
+    );
+    let mut s = session(2, locals);
+    s.tree.kids.insert(
+        "v:s1:Locals/obj".into(),
+        vec![Var::of(&v("x", "1", 0)), Var::of(&v("y", "2", 0))],
+    );
+    let page = "v:s1:Locals/arr/[300..399]";
+    s.tree.kids.insert(
+        page.into(),
+        (300..400)
+            .map(|i| Var::of(&v(&format!("{i}"), &format!("{}", i * 3), 0)))
+            .collect(),
+    );
+    let sessions = [s];
+    let prev = HashMap::from([("v:s1:Locals/obj/x".to_owned(), "0".to_owned())]);
+    let walk = |opened: &Opened| build(&sessions, opened, &prev);
+    let walk_alone = |opened: &Opened, line: &Line| {
+        subtree(
+            &Input {
+                sessions: &sessions,
+                selected: None,
+                watches: &[],
+                bps: &Bps::default(),
+                opened,
+                prev: &prev,
+            },
+            line,
+        )
+    };
+    let mut closed = Opened::default();
+    closed.set("v:s1:Locals/arr", true);
+    for node in [page, "v:s1:Locals/obj"] {
+        let mut open = closed.clone();
+        open.set(node, true);
+        for (from, to) in [(&closed, &open), (&open, &closed)] {
+            let mut ls = walk(from);
+            let i = ls.iter().position(|l| l.id == node).unwrap();
+            let end = subtree_end(&ls, i);
+            let (sub, wants, _) = walk_alone(to, &ls[i]).expect("a Variables node");
+            assert!(wants.is_empty(), "{wants:?}");
+            ls.splice(i..end, sub);
+            assert_eq!(ls, walk(to), "{node}");
+        }
+    }
+    // a page not fetched yet: its subtree is its line and the request for it
+    let mut open = closed.clone();
+    open.set("v:s1:Locals/arr/[0..99]", true);
+    let ls = walk(&closed);
+    let i = ls
+        .iter()
+        .position(|l| l.id == "v:s1:Locals/arr/[0..99]")
+        .unwrap();
+    let (sub, wants, _) = walk_alone(&open, &ls[i]).unwrap();
+    assert_eq!(sub.len(), 1);
+    assert_eq!(wants.len(), 1);
+    assert!(walk_alone(&open, &ls[0]).is_none(), "a section has no Src");
+}

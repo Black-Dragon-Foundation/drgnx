@@ -18,7 +18,7 @@ use crate::debug::session::Handle;
 use crate::debug::{Debug, Snap};
 use crate::dispatch::Caller;
 use crate::front::Front;
-use model::{Bps, FETCH_CAP, Filter, Input, Line, Opened, SessionView, Tree, Var};
+use model::{Bps, FETCH_CAP, Filter, Input, Line, Opened, SessionView, Tree, Var, Want};
 use runstav::methods::Params;
 use runstav::methods::debug::{
     DebugChild, DebugChildList, DebugChildren, DebugEvaluate, DebugEvaluated, DebugExpand,
@@ -26,7 +26,7 @@ use runstav::methods::debug::{
 };
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
@@ -118,34 +118,39 @@ pub(crate) async fn fill(h: &Handle, view: &mut SessionView, calls: &mut usize, 
             return;
         }
         for w in wants {
-            if *calls >= FETCH_CAP {
-                view.tree.capped.insert(w.path);
-                continue;
+            fetch(h, epoch, view, calls, w).await;
+        }
+    }
+}
+
+/// W fetched through H into VIEW, one of the stop's CALLS; past [`FETCH_CAP`] its path is capped instead.
+async fn fetch(h: &Handle, epoch: u64, view: &mut SessionView, calls: &mut usize, w: Want) {
+    if *calls >= FETCH_CAP {
+        view.tree.capped.insert(w.path);
+        return;
+    }
+    *calls += 1;
+    if w.command == "stackTrace" {
+        let tid = w.args["threadId"].as_i64().unwrap_or(0);
+        match h.request("stackTrace", w.args).await {
+            Ok(b) => {
+                let frames = b["stackFrames"].as_array().cloned().unwrap_or_default();
+                view.thread_frames.insert(tid, frames);
             }
-            *calls += 1;
-            if w.command == "stackTrace" {
-                let tid = w.args["threadId"].as_i64().unwrap_or(0);
-                match h.request("stackTrace", w.args).await {
-                    Ok(b) => {
-                        let frames = b["stackFrames"].as_array().cloned().unwrap_or_default();
-                        view.thread_frames.insert(tid, frames);
-                    }
-                    Err(e) => {
-                        view.tree.failed.insert(w.path, e);
-                    }
-                }
-                continue;
+            Err(e) => {
+                view.tree.failed.insert(w.path, e);
             }
-            match h.variables_with(epoch, w.args).await {
-                Ok(vs) => {
-                    view.tree
-                        .kids
-                        .insert(w.path, vs.iter().map(Var::of).collect());
-                }
-                Err(e) => {
-                    view.tree.failed.insert(w.path, e);
-                }
-            }
+        }
+        return;
+    }
+    match h.variables_with(epoch, w.args).await {
+        Ok(vs) => {
+            view.tree
+                .kids
+                .insert(w.path, vs.iter().map(Var::of).collect());
+        }
+        Err(e) => {
+            view.tree.failed.insert(w.path, e);
         }
     }
 }
@@ -317,6 +322,155 @@ impl DebugViews {
         publish(f, conn, view, &lines, indent);
     }
 
+    /// CONN's VIEW after NODE, a node of the selected session's Variables, was opened or closed, and the pages SHUT with
+    /// it (an open past the page cap closes the one opened longest ago): only their subtrees are fetched, walked and sent
+    /// (their lines, their model nodes and list splices in one `view-model`, their rows in one patch), the rest kept as
+    /// they are. False, having done nothing, when that does not hold (a filter, another session shown, a new stop, a
+    /// line with no [`model::Src`]): then the caller builds the whole view.
+    async fn splice(&self, f: &Front, conn: u64, view: &str, node: &str, shut: &[String]) -> bool {
+        let _gate = self.gate.lock().await;
+        let key = (conn, view.to_owned());
+        let d = f.debug.debug(f).clone();
+        let taken = {
+            let mut views = lock(&self.views);
+            let Some(st) = views.get_mut(&key) else {
+                return false;
+            };
+            let Some(sid) = st.shown.clone() else {
+                return false;
+            };
+            let line = st.lines.iter().find(|l| l.id == node).cloned();
+            let fresh = |c: &Cached| {
+                d.stop_of(&sid).is_some_and(|s| {
+                    !c.view.tree.stale && c.view.tree.epoch == s.epoch && c.frame == s.frame
+                })
+            };
+            match (line, st.trees.get(&sid)) {
+                (Some(line), Some(c)) if st.filter.is_none() && line.src.is_some() && fresh(c) => {
+                    let c = st.trees.remove(&sid).unwrap_or_default();
+                    Some((sid, line, c, st.opened.clone()))
+                }
+                _ => None,
+            }
+        };
+        let Some((sid, line, mut c, opened)) = taken else {
+            return false;
+        };
+        // fetch what NODE's subtree still needs, breadth first, as a whole build's fill would (a shut page needs none)
+        if let (Some(h), Some(epoch)) = (d.session(&sid), c.view.stop.as_ref().map(|s| s.epoch)) {
+            let none = HashMap::new();
+            loop {
+                let wants = {
+                    let sessions = std::slice::from_ref(&c.view);
+                    let input = Input {
+                        sessions,
+                        selected: Some(&sid),
+                        watches: &[],
+                        bps: &Bps::default(),
+                        opened: &opened,
+                        prev: &none,
+                    };
+                    model::subtree(&input, &line)
+                        .map(|t| t.1)
+                        .unwrap_or_default()
+                };
+                if wants.is_empty() {
+                    break;
+                }
+                for w in wants {
+                    fetch(&h, epoch, &mut c.view, &mut c.calls, w).await;
+                }
+            }
+        }
+        let spliced = {
+            let mut views = lock(&self.views);
+            let Some(st) = views.get_mut(&key) else {
+                return true;
+            };
+            // each subtree's span (start, end, its lines now), the last first; a shut page no longer drawn has none
+            let mut spans: Vec<(usize, usize, Vec<Line>)> = Vec::new();
+            let mut whole = false;
+            for id in shut
+                .iter()
+                .map(String::as_str)
+                .filter(|s| *s != node)
+                .chain([node])
+            {
+                let Some(i) = st.lines.iter().position(|l| l.id == id) else {
+                    whole |= id == node;
+                    continue;
+                };
+                let walked = {
+                    let sessions = std::slice::from_ref(&c.view);
+                    let input = Input {
+                        sessions,
+                        selected: Some(&sid),
+                        watches: &[],
+                        bps: &Bps::default(),
+                        opened: &st.opened,
+                        prev: &st.prev,
+                    };
+                    model::subtree(&input, &st.lines[i])
+                };
+                match walked {
+                    Some((ls, _, values)) => {
+                        st.cur.extend(values);
+                        spans.push((i, model::subtree_end(&st.lines, i), ls));
+                    }
+                    None => whole = true,
+                }
+            }
+            st.trees.insert(sid, c);
+            spans.sort_by_key(|s| std::cmp::Reverse(s.0));
+            whole |= spans.windows(2).any(|w| w[1].1 > w[0].0);
+            (!whole).then(|| {
+                let lines = Arc::make_mut(&mut st.lines);
+                for (i, end, ls) in &spans {
+                    lines.splice(*i..*end, ls.iter().cloned());
+                }
+                (spans, st.lines.clone(), st.indent)
+            })
+        };
+        let Some((spans, lines, indent)) = spliced else {
+            self.build(f, conn, view).await;
+            return true;
+        };
+        let views = &f.core.views;
+        let nodes = spans
+            .iter()
+            .map(|(i, end, ls)| {
+                let nodes = ls.iter().map(|l| (l.id.clone(), model::node(l))).collect();
+                (*i, end - i, nodes)
+            })
+            .collect();
+        if !views.splice_model(f, conn, view, model::LIST, nodes) {
+            publish(f, conn, view, &lines, indent);
+            return true;
+        }
+        for class in views.classes(conn, view) {
+            let key = (conn, view.to_owned(), class);
+            let spliced = views.publish_spliced(f, &key, |env, _| {
+                let look = RowLook::of(env, indent, 2);
+                let mut images = BTreeMap::new();
+                let rows = spans
+                    .iter()
+                    .map(|(i, end, ls)| {
+                        let (rs, imgs) = rows::rows(ls, &look);
+                        images.extend(imgs);
+                        (*i, end - i, rs)
+                    })
+                    .collect();
+                (rows, images.into_iter().collect())
+            });
+            if !spliced {
+                views.publish_built(f, &key, |env, _| {
+                    rows::rows(&lines, &RowLook::of(env, indent, 2))
+                });
+            }
+        }
+        true
+    }
+
     /// KEY's rows from its view's last lines, for a class that just got its env; false when it is no such view.
     pub(super) fn env_build(&self, f: &Front, key: &Key) -> bool {
         let Some((lines, indent)) = lock(&self.views)
@@ -402,6 +556,8 @@ async fn subscribe(f: &Front, c: &Caller, p: DebugView) -> Result<bool, Error> {
 async fn expand(f: &Front, c: &Caller, p: DebugExpand) -> Result<bool, Error> {
     let dv = &f.core.views.debugs;
     let key = (c.conn_id, p.view.clone());
+    // a variable's or a chunk's subtree alone (`DebugViews::splice`) unless the open closed other pages
+    let (mut splice, mut shut) = (false, Vec::new());
     if let Some(rest) = p.node.strip_prefix("m:") {
         let (sid, tid) = rest
             .rsplit_once(':')
@@ -444,8 +600,12 @@ async fn expand(f: &Front, c: &Caller, p: DebugExpand) -> Result<bool, Error> {
                 }
             }
         }
+        splice = p.node.starts_with("v:") && gone.iter().all(|g| g.starts_with("v:"));
+        shut = gone;
     }
-    dv.build(f, c.conn_id, &p.view).await;
+    if !(splice && dv.splice(f, c.conn_id, &p.view, &p.node, &shut).await) {
+        dv.build(f, c.conn_id, &p.view).await;
+    }
     Ok(true)
 }
 
