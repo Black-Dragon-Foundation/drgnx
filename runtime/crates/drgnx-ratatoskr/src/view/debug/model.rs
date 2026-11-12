@@ -1081,6 +1081,7 @@ impl<'a> Cx<'a> {
                     continue;
                 };
                 let line = b.get("line").and_then(Value::as_u64).unwrap_or(0);
+                let column = b.get("column").and_then(Value::as_u64);
                 let text = |k: &str| b.get(k).and_then(Value::as_str).map(str::to_owned);
                 let verified = b.get("verified").and_then(Value::as_bool) == Some(true);
                 let mut fields = vec![
@@ -1089,6 +1090,9 @@ impl<'a> Cx<'a> {
                     ("line", json!(line)),
                     ("verified", json!(i64::from(verified))),
                 ];
+                if let Some(c) = column {
+                    fields.push(("column", json!(c)));
+                }
                 if let Some(m) = text("message") {
                     fields.push(("message", json!(m)));
                 }
@@ -1103,7 +1107,7 @@ impl<'a> Cx<'a> {
                     parent: parent.clone(),
                     depth: 1,
                     kind: "breakpoint",
-                    label: format!("{}:{line}", basename(path)),
+                    label: bp_label(path, line, column),
                     detail: waits
                         .map(|t| format!("waits for {}", bp_name(&bps.files, t)))
                         .or(text("condition"))
@@ -1150,6 +1154,14 @@ impl<'a> Cx<'a> {
 }
 
 /// Breakpoint ID as the view names it (`file:line`), from FILES.
+/// A breakpoint's name: `file:line`, `file:line:col` for an inline one.
+fn bp_label(path: &str, line: u64, column: Option<u64>) -> String {
+    match column {
+        Some(c) => format!("{}:{line}:{c}", basename(path)),
+        None => format!("{}:{line}", basename(path)),
+    }
+}
+
 fn bp_name(files: &[(String, Vec<Value>)], id: u64) -> String {
     files
         .iter()
@@ -1157,8 +1169,11 @@ fn bp_name(files: &[(String, Vec<Value>)], id: u64) -> String {
             list.iter()
                 .find(|b| b.get("id").and_then(Value::as_u64) == Some(id))
                 .map(|b| {
-                    let line = b.get("line").and_then(Value::as_u64).unwrap_or(0);
-                    format!("{}:{line}", basename(path))
+                    bp_label(
+                        path,
+                        b.get("line").and_then(Value::as_u64).unwrap_or(0),
+                        b.get("column").and_then(Value::as_u64),
+                    )
                 })
         })
         .unwrap_or_else(|| format!("breakpoint {id}"))

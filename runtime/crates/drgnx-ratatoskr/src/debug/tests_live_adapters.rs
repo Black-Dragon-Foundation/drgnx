@@ -380,6 +380,7 @@ async fn add(
             Some(BpOp::Add {
                 path: path.display().to_string(),
                 line,
+                column: None,
                 enabled: true,
                 condition: cond.map(str::to_owned),
                 hit: hit.map(str::to_owned),

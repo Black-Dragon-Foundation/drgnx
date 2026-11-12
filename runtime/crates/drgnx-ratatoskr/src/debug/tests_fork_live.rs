@@ -657,6 +657,7 @@ async fn a_recorded_python_run_is_forked_end_to_end() {
         Some(super::breakpoints::Op::Add {
             path: path.clone(),
             line: 24,
+            column: None,
             enabled: true,
             condition: None,
             hit: None,

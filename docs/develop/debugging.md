@@ -219,6 +219,12 @@ root>.json`, written atomically. If the file is damaged, it is moved aside to `â
     So two editors toggling one file never undo each other.
   - Every change raises the file's version.
   - The line held is the saved line: the editor keeps a moved line as a draft and sends `move` on save.
+  - **Inline breakpoints** have a `column` (1-based, in characters on the wire; `add` and `move` take one, a `move`
+    without one keeps the breakpoint's). One at another column of a line, or one without a column on the same line,
+    is its own breakpoint; `add` at an existing line and column answers that one's id in `added`. The hub turns the
+    column into the adapter's UTF-16 units (`columnsStartAt1`) from the line's text on disk when it is set
+    (`breakpoints::col_of`, read off the workers), keeps both, and sends `{line, column}`. The view shows `column`
+    in characters; the Breakpoints rows are named `file:line:col` with a field `column`.
 - **What each session made of a breakpoint:** its adapter id, verified, message and line. These come from the
   `setBreakpoints` answer, read in the order sent, and from `breakpoint` events by adapter id.
   - A breakpoint shows verified when any session verified it.
@@ -268,6 +274,9 @@ roots `debug/trust` called trusted and each root's last started configuration.
   `stop-and-kill`, `disconnect`), `debug/select {session, thread?, frame}`, and `debug/trust {root, trusted}`, whose
   revocation stops the root's sessions.
 - `debug/source {session, ref}`: the adapter's `source` request for a frame with no file, answered `{text, mime?}`.
+- `debug/breakpoint-locations {session, path, line}`: the adapter's `breakpointLocations` for the line, answered
+  `{locations: [{line, column, end_line?, end_column?}]}` with columns turned back into characters from the file's
+  lines (`breakpoints::chars_of`); empty when the adapter lacks `supportsBreakpointLocationsRequest`.
 - `debug/install {adapter, adapters?}`: the adapter's `:install` entry carried out (see Adapters); the answer says what
   was installed. A system package's, an adapter without an entry and an unknown id are errors (conformance
   `debug/install-refusals`; the downloads are the unit tests' `debug::tests_install`, from local files).

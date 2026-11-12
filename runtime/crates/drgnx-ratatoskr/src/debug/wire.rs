@@ -3,7 +3,7 @@
 //! `runInTerminal`'s terminals through the hub's [`crate::term::Terms`].
 
 use super::adapters::{self, Adapter, Table, Transport};
-use super::breakpoints::Op as BpOp;
+use super::breakpoints::{Col, Op as BpOp, chars_of, col_of};
 use super::launch::{self, LaunchFile, Need, Os, Vars};
 use super::session::{NoProc, Op, Request, Start};
 use super::{BoxFut, Connected, Debug, Launcher, Opened, Terminals};
@@ -11,9 +11,10 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::Params;
 use runstav::methods::debug::{
-    DebugBreakpointOp, DebugBreakpoints, DebugBreakpointsView, DebugConfig, DebugConfigList,
-    DebugConfigs, DebugControl, DebugFileError, DebugInstall, DebugMissing, DebugRunToCursor,
-    DebugSelect, DebugSource, DebugSourceText, DebugStart, DebugStarted, DebugTrust,
+    BreakpointLocation, DebugBreakpointLocations, DebugBreakpointLocationsList, DebugBreakpointOp,
+    DebugBreakpoints, DebugBreakpointsView, DebugConfig, DebugConfigList, DebugConfigs,
+    DebugControl, DebugFileError, DebugInstall, DebugMissing, DebugRunToCursor, DebugSelect,
+    DebugSource, DebugSourceText, DebugStart, DebugStarted, DebugTrust,
 };
 use runstav::types::JsonObject;
 use runstav::wire::{Error, ErrorCode};
@@ -733,6 +734,7 @@ fn bp_op(o: DebugBreakpointOp) -> Result<BpOp, Error> {
         "add" => BpOp::Add {
             path: o.path.clone().unwrap_or_default(),
             line: o.line.unwrap_or(1),
+            column: o.column.map(|c| Col { chars: c, utf16: c }),
             enabled: o.enabled.unwrap_or(true),
             condition: o.condition,
             hit: o.hit,
@@ -749,6 +751,7 @@ fn bp_op(o: DebugBreakpointOp) -> Result<BpOp, Error> {
         "move" => BpOp::Move {
             id: id(&o)?,
             line: o.line.unwrap_or(1),
+            column: o.column.map(|c| Col { chars: c, utf16: c }),
         },
         "add-function" => BpOp::AddFunction {
             name: o.name.unwrap_or_default(),
@@ -793,9 +796,88 @@ async fn breakpoints(
         }
         _ => {}
     }
-    let op = p.op.map(bp_op).transpose()?;
-    let v = d.breakpoints(&p.root, op, p.path.as_deref()).await;
+    let mut op = p.op.map(bp_op).transpose()?;
+    // a column in characters becomes the adapters' UTF-16 one from the line's text on disk
+    let at = match &mut op {
+        Some(BpOp::Add {
+            path,
+            line,
+            column: Some(c),
+            ..
+        }) => Some((path.clone(), *line, c)),
+        Some(BpOp::Move {
+            id,
+            line,
+            column: Some(c),
+        }) => d
+            .store(&p.root, |s| s.path_of(*id))
+            .map(|path| (path, *line, c)),
+        _ => None,
+    };
+    if let Some((path, line, c)) = at {
+        let text = line_text(path, line).await;
+        *c = col_of(text.as_deref(), c.chars);
+    }
+    let existing = match &op {
+        Some(BpOp::Add {
+            path, line, column, ..
+        }) => Some((path.clone(), *line, column.map(|c| c.chars))),
+        _ => None,
+    };
+    let mut v = d.breakpoints(&p.root, op, p.path.as_deref()).await;
+    // adding a breakpoint that is there names that one
+    if let Some((path, line, column)) = existing
+        && v.get("added").is_none()
+        && let Some(id) = d.store(&p.root, |s| s.at(&path, line, column))
+    {
+        v["added"] = json!(id);
+    }
     serde_json::from_value(v).map_err(|e| err(e.to_string()))
+}
+
+/// Line LINE (1-based) of file PATH, read off the hub's workers; none when it cannot be read.
+async fn line_text(path: String, line: u32) -> Option<String> {
+    crate::clock::blocking(move || {
+        let text = std::fs::read_to_string(&path).ok()?;
+        text.lines()
+            .nth(line.saturating_sub(1) as usize)
+            .map(str::to_owned)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Inline breakpoints: where on PATH's LINE SESSION's adapter can stop (`breakpointLocations`), in characters.
+async fn breakpoint_locations(
+    front: &Front,
+    p: DebugBreakpointLocations,
+) -> Result<DebugBreakpointLocationsList, Error> {
+    let d = front.debug.debug(front);
+    let found = d
+        .breakpoint_locations(&p.session, &p.path, p.line)
+        .await
+        .map_err(err)?;
+    let mut locations = vec![];
+    for l in found {
+        let num = |k: &str| l.get(k).and_then(Value::as_u64).map(|n| n as u32);
+        let Some(line) = num("line") else { continue };
+        let end_line = num("endLine");
+        let text = line_text(p.path.clone(), line).await;
+        let end_text = match end_line {
+            Some(e) if e != line => line_text(p.path.clone(), e).await,
+            _ => text.clone(),
+        };
+        locations.push(BreakpointLocation {
+            line,
+            column: num("column")
+                .map(|c| chars_of(text.as_deref(), c))
+                .unwrap_or(1),
+            end_line,
+            end_column: num("endColumn").map(|c| chars_of(end_text.as_deref(), c)),
+        });
+    }
+    Ok(DebugBreakpointLocationsList { locations })
 }
 
 async fn run_to_cursor(front: &Front, p: DebugRunToCursor) -> Result<bool, Error> {
@@ -860,6 +942,7 @@ pub async fn serve(
         Params::DebugTrust(p) => answer(trust(front, p).await),
         Params::DebugInstall(p) => answer(install_adapter(front, p).await),
         Params::DebugSource(p) => answer(source(front, p).await),
+        Params::DebugBreakpointLocations(p) => answer(breakpoint_locations(front, p).await),
         Params::DebugBreakpoints(p) => answer(breakpoints(front, p).await),
         Params::DebugRunToCursor(p) => answer(run_to_cursor(front, p).await),
         other => return Err(Box::new(other)),

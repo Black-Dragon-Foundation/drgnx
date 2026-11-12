@@ -1,12 +1,13 @@
 //! The breakpoint store, without sessions: operations by id, what the adapters made of them, persistence.
 
-use super::breakpoints::{Change, DataBp, Op, Store, fit};
+use super::breakpoints::{Change, Col, DataBp, Op, Store, chars_of, col_of, fit};
 use serde_json::{Value, json};
 
 fn add(path: &str, line: u32) -> Op {
     Op::Add {
         path: path.into(),
         line,
+        column: None,
         enabled: true,
         condition: None,
         hit: None,
@@ -101,7 +102,11 @@ fn edits_by_id_and_empty_clears() {
 fn a_move_holds_the_saved_line() {
     let mut s = Store::open(None);
     s.apply(add("/p/a.py", 5));
-    s.apply(Op::Move { id: 1, line: 9 });
+    s.apply(Op::Move {
+        id: 1,
+        line: 9,
+        column: None,
+    });
     assert_eq!(bp(&s, "/p/a.py", 1)["line"], 9);
     // the editor's toggle on the saved line finds it
     assert_eq!(s.apply(add("/p/a.py", 9)), None);
@@ -181,6 +186,7 @@ fn conditions_hits_and_logs_go_only_to_adapters_that_take_them() {
     s.apply(Op::Add {
         path: "/p/a.py".into(),
         line: 3,
+        column: None,
         enabled: true,
         condition: Some("x".into()),
         hit: None,
@@ -415,4 +421,102 @@ fn data_breakpoints_are_one_sessions_and_go_with_it() {
     s.ended("d1");
     assert!(s.data_list("d1").is_empty());
     assert!(s.data_view().is_empty());
+}
+
+fn add_at(path: &str, line: u32, chars: u32, utf16: u32) -> Op {
+    Op::Add {
+        path: path.into(),
+        line,
+        column: Some(Col { chars, utf16 }),
+        enabled: true,
+        condition: None,
+        hit: None,
+        log: None,
+    }
+}
+
+#[test]
+fn breakpoints_at_two_columns_of_one_line_are_two_and_go_out_in_utf16() {
+    let mut s = Store::open(None);
+    let line = s.apply(add("/p/a.js", 3)).unwrap().id.unwrap();
+    let a = s.apply(add_at("/p/a.js", 3, 5, 6)).unwrap().id.unwrap();
+    let b = s.apply(add_at("/p/a.js", 3, 12, 13)).unwrap().id.unwrap();
+    assert_eq!(ids(&s, "/p/a.js"), vec![line, a, b]);
+    // the same column again is the same breakpoint
+    assert_eq!(s.apply(add_at("/p/a.js", 3, 5, 6)), None);
+    assert_eq!(s.at("/p/a.js", 3, Some(5)), Some(a));
+    assert_eq!(s.at("/p/a.js", 3, None), Some(line));
+    // the view gives the column in characters, never the adapter's units
+    assert_eq!(bp(&s, "/p/a.js", a)["column"], 5);
+    assert!(bp(&s, "/p/a.js", a).get("column_utf16").is_none());
+    assert!(bp(&s, "/p/a.js", line).get("column").is_none());
+    // the adapter gets UTF-16 columns (columnsStartAt1), the line breakpoint none
+    assert_eq!(
+        s.send_list("s1", "/p/a.js"),
+        vec![
+            json!({"line": 3}),
+            json!({"line": 3, "column": 6}),
+            json!({"line": 3, "column": 13})
+        ]
+    );
+}
+
+#[test]
+fn a_move_keeps_the_column_unless_it_gives_one() {
+    let mut s = Store::open(None);
+    let a = s.apply(add_at("/p/a.js", 3, 5, 5)).unwrap().id.unwrap();
+    assert!(
+        s.apply(Op::Move {
+            id: a,
+            line: 4,
+            column: None
+        })
+        .is_some()
+    );
+    assert_eq!(
+        (
+            bp(&s, "/p/a.js", a)["line"].clone(),
+            bp(&s, "/p/a.js", a)["column"].clone()
+        ),
+        (json!(4), json!(5))
+    );
+    assert!(
+        s.apply(Op::Move {
+            id: a,
+            line: 4,
+            column: Some(Col {
+                chars: 9,
+                utf16: 10
+            })
+        })
+        .is_some()
+    );
+    assert_eq!(bp(&s, "/p/a.js", a)["column"], 9);
+    assert_eq!(
+        s.send_list("s1", "/p/a.js"),
+        vec![json!({"line": 4, "column": 10})]
+    );
+}
+
+#[test]
+fn columns_turn_between_characters_and_utf16_units() {
+    // U+1D465 is two UTF-16 units, é one
+    let text = "\u{1D465}é = f(y)";
+    assert_eq!(col_of(Some(text), 1), Col { chars: 1, utf16: 1 });
+    assert_eq!(col_of(Some(text), 2), Col { chars: 2, utf16: 3 });
+    assert_eq!(col_of(Some(text), 5), Col { chars: 5, utf16: 6 });
+    // past the line's end (or no text) each character counts one unit
+    assert_eq!(
+        col_of(Some(text), 12),
+        Col {
+            chars: 12,
+            utf16: 13
+        }
+    );
+    assert_eq!(col_of(None, 7), Col { chars: 7, utf16: 7 });
+    assert_eq!(chars_of(Some(text), 1), 1);
+    assert_eq!(chars_of(Some(text), 3), 2);
+    assert_eq!(chars_of(Some(text), 6), 5);
+    assert_eq!(chars_of(Some(text), 20), 19);
+    assert_eq!(chars_of(None, 4), 4);
 }

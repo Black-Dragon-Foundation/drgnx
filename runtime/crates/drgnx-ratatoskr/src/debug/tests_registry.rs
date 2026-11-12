@@ -528,6 +528,7 @@ fn add_bp(path: &str, line: u32, condition: Option<&str>) -> super::breakpoints:
     super::breakpoints::Op::Add {
         path: path.into(),
         line,
+        column: None,
         enabled: true,
         condition: condition.map(str::to_owned),
         hit: None,

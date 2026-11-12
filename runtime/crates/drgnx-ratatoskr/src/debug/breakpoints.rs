@@ -10,6 +10,10 @@
 //! verified it. Conditions, hit counts and log messages reach an adapter only when its capabilities say it takes them
 //! ([`fit`]); the store keeps them and marks them unsupported for that session. Run to Cursor's breakpoint belongs to
 //! one session, is never shown or saved, and goes at that session's next stop or end.
+//!
+//! An inline breakpoint has a column: in characters for the editors, in UTF-16 units (1-based) for the adapters
+//! ([`Col`], turned by [`col_of`] from the line's text when it is set). Breakpoints at two columns of one line, or one
+//! with a column and one without, are separate breakpoints.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -19,10 +23,11 @@ use std::path::PathBuf;
 /// An editor's change to the store.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Op {
-    /// A breakpoint on PATH's LINE (the one already there, if any).
+    /// A breakpoint on PATH's LINE, at COLUMN when given (the one already there, if any).
     Add {
         path: String,
         line: u32,
+        column: Option<Col>,
         enabled: bool,
         condition: Option<String>,
         hit: Option<String>,
@@ -39,10 +44,11 @@ pub enum Op {
         hit: Option<String>,
         log: Option<String>,
     },
-    /// The breakpoint's line after a save.
+    /// The breakpoint's line after a save or a drag; its column when given, else the one it had.
     Move {
         id: u64,
         line: u32,
+        column: Option<Col>,
     },
     AddFunction {
         name: String,
@@ -56,6 +62,42 @@ pub enum Op {
         id: u64,
         by: Option<u64>,
     },
+}
+
+/// An inline breakpoint's column, 1-based: in characters (the editors') and in UTF-16 units (the adapters').
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Col {
+    pub chars: u32,
+    pub utf16: u32,
+}
+
+/// Character column CHARS of a line with TEXT (none: unknown, one unit a character), with its UTF-16 column.
+pub fn col_of(text: Option<&str>, chars: u32) -> Col {
+    let before = chars.saturating_sub(1) as usize;
+    let mut units = 0;
+    let mut seen = 0;
+    for c in text.unwrap_or_default().chars().take(before) {
+        units += c.len_utf16();
+        seen += 1;
+    }
+    Col {
+        chars,
+        utf16: (units + (before - seen) + 1) as u32,
+    }
+}
+
+/// The character column of UTF-16 column UTF16 of a line with TEXT (none: one unit a character).
+pub fn chars_of(text: Option<&str>, utf16: u32) -> u32 {
+    let mut left = utf16.saturating_sub(1) as usize;
+    let mut chars = 0;
+    for c in text.unwrap_or_default().chars() {
+        if left == 0 {
+            break;
+        }
+        left = left.saturating_sub(c.len_utf16());
+        chars += 1;
+    }
+    (chars + left + 1) as u32
 }
 
 /// A data breakpoint (Break on Value Change): the adapter's DATA_ID for a variable, as `dataBreakpointInfo` gave it.
@@ -79,6 +121,11 @@ pub struct Change {
 struct Bp {
     id: u64,
     line: u32,
+    /// An inline breakpoint's column in characters, and in UTF-16 units as the adapters get it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    column: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    column_utf16: Option<u32>,
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,6 +266,9 @@ fn shown(field: &str) -> &'static str {
 fn source_bp(line: u32, b: Option<&Bp>) -> Value {
     let mut o = Map::new();
     o.insert("line".into(), json!(line));
+    if let Some(c) = b.and_then(|b| b.column_utf16) {
+        o.insert("column".into(), json!(c));
+    }
     if let Some(b) = b {
         for (k, v) in [
             ("condition", &b.condition),
@@ -292,6 +342,22 @@ impl Store {
         self.data.files.get(&path)?.bps[i].agent.clone()
     }
 
+    /// The breakpoint at PATH's LINE and COLUMN (characters; none: the line's breakpoint without a column).
+    pub fn at(&self, path: &str, line: u32, column: Option<u32>) -> Option<u64> {
+        self.data
+            .files
+            .get(path)?
+            .bps
+            .iter()
+            .find(|b| b.line == line && b.column == column)
+            .map(|b| b.id)
+    }
+
+    /// Breakpoint ID's path.
+    pub fn path_of(&self, id: u64) -> Option<String> {
+        self.find(id).map(|(p, _)| p)
+    }
+
     fn find(&self, id: u64) -> Option<(String, usize)> {
         self.data.files.iter().find_map(|(p, f)| {
             f.bps
@@ -319,13 +385,15 @@ impl Store {
             Op::Add {
                 path,
                 line,
+                column,
                 enabled,
                 condition,
                 hit,
                 log,
             } => {
                 let f = self.data.files.entry(path.clone()).or_default();
-                if f.bps.iter().any(|b| b.line == line) {
+                let chars = column.map(|c| c.chars);
+                if f.bps.iter().any(|b| b.line == line && b.column == chars) {
                     return None;
                 }
                 self.data.next += 1;
@@ -334,6 +402,8 @@ impl Store {
                 f.bps.push(Bp {
                     id,
                     line,
+                    column: chars,
+                    column_utf16: column.map(|c| c.utf16),
                     enabled,
                     condition: none(condition),
                     hit: none(hit),
@@ -396,13 +466,18 @@ impl Store {
                 }
                 self.bump(&path, None)
             }
-            Op::Move { id, line } => {
+            Op::Move { id, line, column } => {
                 let (path, i) = self.find(id)?;
                 let b = &mut self.data.files.get_mut(&path)?.bps[i];
-                if b.line == line {
+                let col = column.map(|c| (Some(c.chars), Some(c.utf16)));
+                if b.line == line && col.is_none_or(|c| c == (b.column, b.column_utf16)) {
                     return None;
                 }
                 b.line = line;
+                if let Some((chars, utf16)) = col {
+                    b.column = chars;
+                    b.column_utf16 = utf16;
+                }
                 self.bump(&path, None)
             }
             Op::AddFunction { name, condition } => {
@@ -740,6 +815,7 @@ impl Store {
                     }
                 }
                 if let Some(m) = o.as_object_mut() {
+                    m.remove("column_utf16");
                     m.insert(
                         "waiting".into(),
                         json!(

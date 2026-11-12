@@ -393,6 +393,7 @@ fn breakpoints_section() {
             "/p/app.py".into(),
             vec![
                 json!({"id": 3, "line": 12, "enabled": true, "verified": true}),
+                json!({"id": 6, "line": 12, "column": 7, "enabled": true, "verified": true}),
                 json!({"id": 4, "line": 20, "enabled": false, "verified": false,
                        "message": "no code here", "condition": "y"}),
                 json!({"id": 5, "line": 30, "enabled": true, "verified": false,
@@ -422,6 +423,11 @@ fn breakpoints_section() {
     assert_eq!(fnb.detail.as_deref(), Some("x > 1"));
     let b = line(&ls, "b:3");
     assert_eq!((b.ticked, b.label.as_str()), (Some(true), "app.py:12"));
+    assert!(!b.fields.iter().any(|(k, _)| *k == "column"));
+    // an inline breakpoint names its column
+    let b6 = line(&ls, "b:6");
+    assert_eq!(b6.label, "app.py:12:7");
+    assert!(b6.fields.contains(&("column", json!(7))));
     let b4 = line(&ls, "b:4");
     assert_eq!(b4.ticked, Some(false));
     assert!(b4.dim);
@@ -435,7 +441,15 @@ fn breakpoints_section() {
         .collect();
     assert_eq!(
         order,
-        ["x:python:raised", "fn:main", "b:3", "b:4", "b:5", "d:s1:x1"]
+        [
+            "x:python:raised",
+            "fn:main",
+            "b:3",
+            "b:6",
+            "b:4",
+            "b:5",
+            "d:s1:x1"
+        ]
     );
     // a triggered breakpoint says what it waits for
     let b5 = line(&ls, "b:5");

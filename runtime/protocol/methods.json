@@ -11623,6 +11623,93 @@
       "classes": [
         "user"
       ],
+      "doc": "where on a line the session's adapter can stop (inline breakpoints), in characters; none when it cannot say",
+      "name": "debug/breakpoint-locations",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/breakpoint-locations`: where on PATH's LINE SESSION's adapter can stop (inline breakpoints).",
+        "properties": {
+          "line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "path",
+          "line"
+        ],
+        "title": "DebugBreakpointLocations",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "BreakpointLocation": {
+            "description": "One place a breakpoint can go: LINE and COLUMN (1-based, in characters), to END_LINE and END_COLUMN when it covers a\nrange.",
+            "properties": {
+              "column": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "end_column": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "end_line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "line",
+              "column"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/breakpoint-locations`' answer: the LOCATIONS in the adapter's order; none when it cannot say\n(`supportsBreakpointLocationsRequest`).",
+        "properties": {
+          "locations": {
+            "items": {
+              "$ref": "#/$defs/BreakpointLocation"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "locations"
+        ],
+        "title": "DebugBreakpointLocationsList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a project's breakpoints: a change by id (add, remove, edit, move, function breakpoints) that reaches its sessions at once, and the file's breakpoints with what the adapters made of them",
       "name": "debug/breakpoints",
       "params": {
@@ -11634,6 +11721,15 @@
                 "description": "`filter`'s adapter type.",
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "column": {
+                "description": "`add`'s and `move`'s column (1-based, in characters): an inline breakpoint. `move` without one keeps the\nbreakpoint's.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               },

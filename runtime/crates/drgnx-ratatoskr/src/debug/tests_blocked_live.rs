@@ -157,6 +157,7 @@ async fn run(
         Some(BpOp::Add {
             path: child.display().to_string(),
             line,
+            column: None,
             enabled: true,
             condition: None,
             hit: None,
