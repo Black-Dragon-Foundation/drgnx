@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use vor::Incoming;
 
@@ -109,7 +109,7 @@ impl Tap {
         let (tx, rx) = mpsc::unbounded_channel();
         let mut incoming = c.incoming;
         let seen = self.seen.clone();
-        tokio::spawn(async move {
+        crate::clock::spawn("test:live-tap", async move {
             while let Some(m) = incoming.recv().await {
                 if let Incoming::Event { event, body } = &m {
                     seen.lock().unwrap().push((event.clone(), body.clone()));
@@ -434,7 +434,7 @@ async fn scenario(s: Scn) -> Value {
         inner: launcher(s.id, &s.found, &s.dir, &s.env),
         seen: seen.clone(),
     });
-    let t0 = Instant::now();
+    let t0 = crate::clock::now();
     let root_sid = d.start(1, &root, start, tap).await.unwrap();
     let mut report = json!({"adapter": s.id});
 
@@ -1049,7 +1049,7 @@ async fn probes(
             inner: launcher(id, &found, dir, env),
             seen: seen.clone(),
         });
-        let t0 = Instant::now();
+        let t0 = crate::clock::now();
         d.start(1, &root, start, tap).await.unwrap();
         ev.next(0, "debug-ended", |_| true).await;
         times.push(t0.elapsed());

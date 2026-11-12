@@ -868,12 +868,12 @@ async fn a_debugpy_child_connects_to_its_parent_adapters_listener() {
     let mut s = start();
     s.adapter_id = "debugpy".into();
     let id = d.start(7, "/p", s, m.clone()).await.unwrap();
-    let (mut conn, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
+    let (mut conn, _) = crate::clock::timeout(Duration::from_secs(10), listener.accept())
         .await
         .expect("the child connected to the parent adapter's listener")
         .unwrap();
     let mut buf = vec![0u8; 4096];
-    let n = tokio::time::timeout(Duration::from_secs(10), conn.read(&mut buf))
+    let n = crate::clock::timeout(Duration::from_secs(10), conn.read(&mut buf))
         .await
         .unwrap()
         .unwrap();
