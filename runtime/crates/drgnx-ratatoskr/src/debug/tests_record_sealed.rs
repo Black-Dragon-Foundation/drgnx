@@ -225,6 +225,6 @@ async fn with_the_key_gone_runs_cannot_be_read_and_prune_still_works() {
     assert!(rec2.run(&run).is_none());
     // retention goes on: 15 days after its end the run goes
     let now = crate::clock::wall_secs() + 15.0 * 86400.0;
-    assert_eq!(rec2.prune(now).await, [run.clone()]);
+    assert_eq!(rec2.prune(now).await, [run]);
     assert!(files(&d.path().join("runs")).is_empty());
 }

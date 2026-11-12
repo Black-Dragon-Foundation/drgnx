@@ -170,7 +170,7 @@ impl KeyStore for Memory {
 pub fn os() -> std::sync::Arc<dyn KeyStore> {
     #[cfg(target_os = "linux")]
     {
-        std::sync::Arc::new(secret::SecretStore::default())
+        std::sync::Arc::new(secret::SecretStore)
     }
     #[cfg(target_os = "macos")]
     {
