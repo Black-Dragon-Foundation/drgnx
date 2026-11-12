@@ -89,7 +89,7 @@ The hub's sessions (`debug::Debug`, in `debug/mod.rs`) start each through a `Lau
 or on a port, or a `debugServer` connected to) and route its updates:
 
 - `debug-state` to every editor whenever a session starts, runs, stops or ends: `{sessions: [{id, name, parent, root,
-  state, reason, caps}]}`; `debug-ended` once per session, with its reason and exit code.
+  state, reason, caps, attach}]}` (`attach`: an attach session, whose toolbar shows Disconnect); `debug-ended` once per session, with its reason and exit code.
 - `debug-frame` on a stop: the selected frame's `path` (or `ref` for a `sourceReference`), `line`, `col`, `top`,
   `reason`, its `name` and its source's `source_name`, and on an exception stop `exception`: `exceptionInfo`'s `{id,
   message, break_mode, type, trace}` (asked in the same stop when the adapter has `supportsExceptionInfoRequest`), else
@@ -341,6 +341,29 @@ The module's handler (`drgnx-debug--event`) gives each `debug-frame` to `drgnx-d
 
 Tests: `test/unit/debug-stop-test.el`; perf row `debug-step-line` (120 steps through the fixture, p95 ≤ 16 ms; 3.4 ms
 measured on the desktop).
+
+## The toolbar: `drgnx-debug-toolbar.el` (spec §6)
+
+The session's controls, drawn from `drgnx-debug--sessions` at each `debug-state` (`drgnx-debug-toolbar-sync`):
+
+- **Where** (`drgnx-debug-toolbar`): `floating` puts a card in a child frame over each graphical root frame, centred at
+  the top of its editor window under the tab row (over the breadcrumb). The card is made once per root frame
+  (`drgnx-debug-toolbar--children`, weak) and hidden between sessions, never deleted; its text is drawn again only
+  when what it shows changed. It never takes the focus: a click runs the command in the parent's editor window, the
+  registry's way. The grip drags it sideways (the mouse is tracked only while the button is down); the offset is kept
+  per frame and the card stays inside the window. `docked` gives the same buttons to the editor window's tab row,
+  before the split and more buttons, through `drgnx-chrome-tab-row-function`. `hidden`, and every terminal frame,
+  have the keys, the palette and the status bar's segment only.
+- **Buttons**: Continue while stopped, Pause while running (disabled while starting), Step Over / Into / Out only while
+  stopped, Restart always (the hub stops and starts again when the adapter has no `restart`), and Stop, or Disconnect
+  for an attach session (`debug-state`'s `attach`). Their colours are the roles: accent, muted, ok, error. Hover shows
+  the registry title with the active profile's key. With two or more sessions a chip names the session the controls
+  act on; picking another (Select Debug Session) sets `drgnx-debug--focus`, which every debug command then follows.
+- **Status bar**: the segment `debug` (after `branch`), `<bug> NAME · STATE` in the warn colour while a session runs
+  ("paused on breakpoint", "running"); a click opens Run and Debug. **Title row**: the Paused chip (the warn pill)
+  while the session is stopped, through `drgnx-topline-paused-function`; a click goes to the stopped line.
+
+Tests: `test/unit/debug-toolbar-test.el`; perf row `debug-toolbar-show` (120 shows and hides, p95 ≤ 5 ms).
 
 ## Live adapters: the image
 

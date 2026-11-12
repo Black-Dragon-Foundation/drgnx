@@ -730,6 +730,8 @@ impl Debug {
                     "state": e.phase.name(),
                     "reason": e.reason,
                     "caps": e.caps,
+                    // the toolbar's Disconnect in place of Stop
+                    "attach": e.start.request == session::Request::Attach,
                 })
             })
             .collect();
