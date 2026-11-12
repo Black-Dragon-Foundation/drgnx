@@ -173,3 +173,17 @@ async fn a_pre_launch_task_comes_from_the_roots_tasks_json() {
     .unwrap_err();
     assert!(e.contains("tasks.json") && e.contains('x'), "{e}");
 }
+
+#[test]
+fn a_post_debug_task_comes_from_the_same_file() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir(d.path().join(".vscode")).unwrap();
+    std::fs::write(
+        d.path().join(".vscode/tasks.json"),
+        r#"{"tasks": [{"label": "clean", "type": "process", "command": "rm", "args": ["-f", "out"]}]}"#,
+    )
+    .unwrap();
+    let config = json!({"preLaunchTask": "nope", "postDebugTask": "clean"});
+    let steps = tasks::after_debug(d.path(), &config, Os::Linux, &|s| Ok(s.into())).unwrap();
+    assert_eq!(steps[0].argv, ["rm", "-f", "out"]);
+}

@@ -366,14 +366,15 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
     let config = launch::substitute(&config, &vars, &answers).map_err(err)?;
     let ty = text(&config, "type");
     let adapter = table.for_type(&ty).map_err(err)?;
-    // preLaunchTask: its steps run to the end first; a failure is the start's error
-    let steps = super::tasks::before_launch(Path::new(&p.root), &config, Os::this(), &|s| {
-        match launch::substitute(&Value::String(s.to_owned()), &vars, &answers)? {
-            Value::String(s) => Ok(s),
-            _ => Ok(s.to_owned()),
-        }
-    })
-    .map_err(err)?;
+    let subst = |s: &str| match launch::substitute(&Value::String(s.to_owned()), &vars, &answers)? {
+        Value::String(s) => Ok(s),
+        _ => Ok(s.to_owned()),
+    };
+    // preLaunchTask: its steps run to the end first; a failure is the start's error. postDebugTask's are checked now,
+    // so a wrong name stops the start too
+    let root = Path::new(&p.root);
+    let steps = super::tasks::before_launch(root, &config, Os::this(), &subst).map_err(err)?;
+    let after = super::tasks::after_debug(root, &config, Os::this(), &subst).map_err(err)?;
     super::tasks::run(&steps, &front.shell_env.vars_os())
         .await
         .map_err(err)?;
@@ -398,6 +399,17 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
         .start(caller.conn_id, &p.root, start, launcher)
         .await
         .map_err(err)?;
+    if !after.is_empty() {
+        let d = front.debug.debug(front).clone();
+        let env = front.shell_env.vars_os();
+        let id = id.clone();
+        crate::clock::spawn("debug:post-debug-task", async move {
+            d.wait_end(&id).await;
+            if let Err(e) = super::tasks::run(&after, &env).await {
+                tracing::warn!(target: "drgnx::debug", "postDebugTask of {id}: {e}");
+            }
+        });
+    }
     front
         .debug
         .last

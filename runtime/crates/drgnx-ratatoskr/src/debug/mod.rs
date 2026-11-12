@@ -537,7 +537,8 @@ impl Debug {
             .collect()
     }
 
-    async fn wait_end(&self, id: &str) {
+    /// Resolves once session ID has ended (at once if there is no such session).
+    pub(crate) async fn wait_end(&self, id: &str) {
         let rx = lock(&self.inner.state)
             .sessions
             .get(id)

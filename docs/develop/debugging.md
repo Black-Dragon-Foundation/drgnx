@@ -136,7 +136,9 @@ each `args` item quoted for the shell; a `process` task runs `command` and `args
 refused. The steps run one at a time before the adapter starts (so a TCP adapter's free port is picked after the
 build); the first that fails stops the rest and the start, and the error gives its exit status and the end of its
 output (2,000 bytes of stdout, then stderr's tail). `${defaultBuildTask}` is the label of the task whose `group` is
-`{"kind": "build", "isDefault": true}`. `postDebugTask` is not run yet.
+`{"kind": "build", "isDefault": true}`. `postDebugTask` is read from the same file at the start (a wrong name stops the
+start too) and runs once the root session has ended, a restart's end included; its failure goes to the hub's log
+until the debug console shows it.
 
 ## Adapters
 

@@ -1,4 +1,5 @@
-//! tasks.json (spec §9.2, tier 2): what a configuration's `preLaunchTask` runs before the session starts.
+//! tasks.json (spec §9.2, tier 2): what a configuration's `preLaunchTask` runs before the session starts, and its
+//! `postDebugTask` once the session has ended.
 //!
 //! - Read as launch.json is (JSONC), each task with its platform section merged over it.
 //! - `shell` tasks run their command line in `/bin/sh -c` (each `args` item quoted for the shell), `process` tasks
@@ -195,12 +196,32 @@ pub fn before_launch(
     os: Os,
     subst: &dyn Fn(&str) -> Result<String, String>,
 ) -> Result<Vec<Step>, String> {
-    let Some(name) = config.get("preLaunchTask").and_then(Value::as_str) else {
+    steps_for("preLaunchTask", root, config, os, subst)
+}
+
+/// The steps CONFIG's `postDebugTask` runs once its session has ended, as [`before_launch`].
+pub fn after_debug(
+    root: &Path,
+    config: &Value,
+    os: Os,
+    subst: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<Vec<Step>, String> {
+    steps_for("postDebugTask", root, config, os, subst)
+}
+
+fn steps_for(
+    field: &str,
+    root: &Path,
+    config: &Value,
+    os: Os,
+    subst: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<Vec<Step>, String> {
+    let Some(name) = config.get(field).and_then(Value::as_str) else {
         return Ok(vec![]);
     };
     let path = root.join(".vscode/tasks.json");
     let text = std::fs::read_to_string(&path)
-        .map_err(|e| format!("preLaunchTask {name}: {}: {e}", path.display()))?;
+        .map_err(|e| format!("{field} {name}: {}: {e}", path.display()))?;
     let tasks = parse(&text).map_err(|e| format!("{}:{e}", path.display()))?;
     let tasks = tasks
         .iter()
