@@ -466,6 +466,7 @@ impl Debug {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let con = c.entry(id.to_owned()).or_default();
+            con.set_time(wall_ms());
             con.output(body, ansi);
             con.full()
         };
@@ -517,6 +518,7 @@ impl Debug {
     pub fn console_say(&self, id: &str, text: &str, category: &str) {
         let batch = {
             let mut con = console::Console::default();
+            con.set_time(wall_ms());
             con.say(text, category, None);
             con.take(true)
         };
@@ -1581,4 +1583,11 @@ fn terminal_args(a: &Value) -> (String, Vec<String>, Vec<(String, String)>) {
         })
         .unwrap_or_default();
     (cwd, args, env)
+}
+
+/// The hub's time of day in ms since the epoch (the console lines' `time`).
+fn wall_ms() -> u64 {
+    crate::clock::wall()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
 }
