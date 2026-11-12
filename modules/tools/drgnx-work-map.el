@@ -493,40 +493,41 @@ reduced (the desktop's setting through Glitnir, or `drgnx-look-motion')."
 
 (defun drgnx-work-map--item-rects (window)
   "Alist id → (X Y W H): the cards WINDOW shows, at least in part, in pixels of its text area.  X and W are the
-model's (fields x and w, from Sjá); Y and H where the display engine lays out the card's lines: Y the top of its first
-line (`pos-visible-in-window-p', which lays the window out from its start and needs no redisplay), H its lines' height
-\(`window-text-pixel-size'), so a line taller than the layout (an emoji, a larger fallback font) is where it is drawn.
-Only the card rows count: the outline moves nothing.  Nil when WINDOW scrolls sideways."
+model's (fields x and w, from Sjá); Y and H where the display engine lays out the card's lines, so a line taller than
+the layout (an emoji, a larger fallback font) is where it is drawn: each line's height is `window-text-pixel-size' of
+that line alone (from its start to the next line's end, the next line's height left out), added up from the window's
+first line down to its bottom, one line's layout each (no redisplay).  Only the card rows count: the outline moves
+nothing.  Nil when WINDOW scrolls sideways."
   (when (zerop (window-hscroll window))
-    (let* ((h (drgnx-work-map--sja)) (margin (drgnx-work-map--margin-px))
-           ;; `pos-visible-in-window-p' counts from the window's top (the header and tab lines too): the text area
-           ;; starts at the window start's y
-           (top (or (cadr (pos-visible-in-window-p (window-start window) window t)) 0))
-           (spans (make-hash-table :test #'equal)) (order nil) (seen nil) (done nil) out)
-      ;; each card: (Y FIRST-BOL . LAST-EOL), from the window's first line down to the first line it does not show
+    (let ((h (drgnx-work-map--sja)) (margin (drgnx-work-map--margin-px)) (bottom (window-body-height window t))
+          (spans (make-hash-table :test #'equal)) (order nil) (y 0) out)
+      ;; each card: (TOP . BOTTOM), the y its first line starts at and its last line ends at
       (save-excursion
         (goto-char (window-start window))
-        (while (not (or done (eobp)))
-          (let ((bol (point)) (eol (line-end-position)))
+        (while (and (< y bottom) (not (eobp)))
+          (let* ((bol (point)) (eol (line-end-position)) (next (min (point-max) (1+ eol)))
+                 ;; up to the next line's end, that line left out: a measure that stops at the next line's start
+                 ;; stops before a display property there, and leaves out this line's newline (its height)
+                 (lh (cdr (if (< eol next)
+                              (window-text-pixel-size window bol (save-excursion (goto-char next) (line-end-position))
+                                                      nil nil nil t)
+                            (window-text-pixel-size window bol eol)))))
             (when (drgnx-work-map--card-row-p (drgnx-view-key-at bol))
-              (if-let* ((pv (pos-visible-in-window-p bol window t)))
-                  (let ((p bol))
-                    (setq seen t)
-                    (while (< p eol)
-                      (let ((id (get-text-property p 'drgnx-work-id))
-                            (q (next-single-property-change p 'drgnx-work-id nil eol)))
-                        (when id
-                          (if-let* ((s (gethash id spans))) (setcdr (cdr s) eol)
-                            (puthash id (cons (- (cadr pv) top) (cons bol eol)) spans)
-                            (push id order)))
-                        (setq p q))))
-                (setq done seen)))
-            (forward-line 1))))
+              (let ((p bol))
+                (while (< p eol)
+                  (let ((id (get-text-property p 'drgnx-work-id))
+                        (q (next-single-property-change p 'drgnx-work-id nil eol)))
+                    (when id
+                      (if-let* ((s (gethash id spans))) (setcdr s (+ y lh))
+                        (puthash id (cons y (+ y lh)) spans)
+                        (push id order)))
+                    (setq p q)))))
+            (setq y (+ y lh))
+            (goto-char next))))
       (dolist (id order)
         (when-let* ((x (nidhogg-view-get h 'field "x" id)) (w (nidhogg-view-get h 'field "w" id)))
           (let ((left (+ margin (drgnx-work-map--px x))) (s (gethash id spans)))
-            (push (list id left (car s) (- (+ margin (drgnx-work-map--px (+ x w))) left)
-                        (cdr (window-text-pixel-size window (cadr s) (cddr s))))
+            (push (list id left (car s) (- (+ margin (drgnx-work-map--px (+ x w))) left) (- (cdr s) (car s)))
                   out))))
       out)))
 

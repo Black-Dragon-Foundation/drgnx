@@ -638,6 +638,68 @@ fn fields_only_change_sends_model_and_no_rows() {
     assert!(s.publish_model(CONN, "v", doc(2)).is_none());
 }
 
+/// [D] A row splice patches the span alone: the editor's rows after it are the rows spliced, the span's new rows go
+/// after the row before it; with no env, or a reset due, the builder sends the whole.
+#[test]
+fn a_row_splice_patches_the_span_alone() {
+    let mut s = Store::new(7);
+    assert!(s.publish_splice(&key("g"), vec![], &[]).is_none(), "no env");
+    s.env(CONN, env("g", 1, 600));
+    assert!(
+        s.publish_splice(&key("g"), vec![], &[]).is_none(),
+        "a reset is due"
+    );
+    let old = rows("g", 6, 1);
+    let mut held = vec![];
+    let p = s.publish(&key("g"), old.clone(), &[]).expect("rows");
+    apply(&mut held, &p.ops).unwrap();
+    let mut changed = rows("g", 6, 2)[2].clone();
+    changed.key = "r2".into();
+    let mut span = vec![changed];
+    span.extend(rows("x", 2, 1).into_iter().map(|mut r| {
+        r.key = format!("new-{}", r.key);
+        r
+    }));
+    let p = s
+        .publish_splice(&key("g"), vec![(2, 2, span.clone())], &[])
+        .expect("a splice")
+        .expect("a patch");
+    assert!(
+        !p.ops.iter().any(|o| matches!(o, Op::Reset(_))),
+        "{:?}",
+        p.ops
+    );
+    apply(&mut held, &p.ops).unwrap();
+    let mut want = old;
+    want.splice(2..4, span);
+    assert_eq!(held, want);
+    assert!(
+        s.publish(&key("g"), want.clone(), &[]).is_none(),
+        "the store holds the spliced rows"
+    );
+    // two spans, the last first: row 4 replaced by two, row 0 gone
+    let a: Vec<Row> = rows("y", 2, 1)
+        .into_iter()
+        .map(|mut r| {
+            r.key = format!("y-{}", r.key);
+            r
+        })
+        .collect();
+    let p = s
+        .publish_splice(&key("g"), vec![(4, 1, a.clone()), (0, 1, vec![])], &[])
+        .expect("a splice")
+        .expect("a patch");
+    apply(&mut held, &p.ops).unwrap();
+    want.splice(4..5, a);
+    want.splice(0..1, vec![]);
+    assert_eq!(held, want);
+    assert!(
+        s.publish_splice(&key("g"), vec![(9, 1, vec![])], &[])
+            .is_none(),
+        "past the end"
+    );
+}
+
 /// [D] Nodes added to (or changed in) the model an editor holds go alone; with no model held, or a reset due, there
 /// is none to extend and the builder sends the whole.
 #[test]

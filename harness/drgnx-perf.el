@@ -90,12 +90,19 @@ the compositor (`wl_surface.commit'), on either side of an A/B.")
   "Glitnir's monotonic ns now (no allocation), or nil on a build without the present time."
   (and (fboundp 'glitnir--last-paint) (plist-member (glitnir--last-paint) :present-ns) (glitnir--now-ns)))
 
+(defvar drgnx-perf--present-cut 0
+  "While recording: the commands whose wait for a present the next input ended (nothing presented by then).")
+
 (defun drgnx-perf--await-present (ns)
-  "Wait (100 ms at most) for the first paint sent to the compositor after NS; push its delay, if it came."
-  (let ((end (+ (float-time) 0.1)) (p 0))
-    (while (and (< (setq p (plist-get (glitnir--last-paint) :present-ns)) ns) (< (float-time) end))
-      (accept-process-output nil 0.001))
-    (when (>= p ns) (push (/ (- p ns) 1e6) drgnx-perf--presents))))
+  "Wait (100 ms at most, and only while no input is pending) for the first paint sent to the compositor after NS;
+push its delay, if it came.  The wait is a responsive one (`sit-for', which returns on input), as the command loop's
+own: a command that changed nothing on the screen has no paint to wait for, and a busy wait (`accept-process-output')
+held the next key and kept the main thread out of its idle wait, so a run of such keys read as one stall of seconds."
+  (let ((end (+ (float-time) 0.1)) (p 0) (quiet t))
+    (while (and (< (setq p (plist-get (glitnir--last-paint) :present-ns)) ns) (< (float-time) end)
+                (setq quiet (sit-for 0.001 t))))
+    (if (>= p ns) (push (/ (- p ns) 1e6) drgnx-perf--presents)
+      (unless quiet (cl-incf drgnx-perf--present-cut)))))
 
 (defvar drgnx-perf--audit)
 (defvar drgnx-perf--timers-on nil "While recording: timers are timed per command (`drgnx-perf--timers-ad').")
@@ -566,6 +573,7 @@ timers took per command (`:timer-ms')."
         drgnx-perf--timer-key timers drgnx-perf--timers-on t drgnx-perf--timer-cur nil drgnx-perf--timer-after 0.0
         drgnx-perf--cmd-lat nil drgnx-perf--timer-ms nil drgnx-perf--busy-ms nil drgnx-perf--ahead nil)
   (advice-add 'timer-event-handler :around #'drgnx-perf--timers-ad)
+  (setq drgnx-perf--present-cut 0)
   (add-hook 'pre-command-hook #'drgnx-perf--pre -100)
   (add-hook 'post-command-hook #'drgnx-perf--post 100)
   (add-hook 'post-gc-hook #'drgnx-perf--gc))
@@ -602,7 +610,8 @@ with the load on the machine; wall clock does.  :compose is Glitnir's record sin
            :gc_pause (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--gc-pauses))
            :rss_kb (drgnx-perf-rss-kb) :rss_start_kb rss)
      (and drgnx-perf--presents
-          (list :present (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--presents))))
+          (list :present (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--presents))
+                :present_cut drgnx-perf--present-cut))
      (and compose (list :compose compose)))))
 
 ;;;; Redisplay and frames

@@ -170,7 +170,10 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    let _ = origin;
+    // the stall watchdog's names ([`crate::stall`]), when it runs
+    if crate::stall::on() {
+        return tokio::spawn(crate::stall::Named::new(origin.into().0, f));
+    }
     tokio::spawn(f)
 }
 
@@ -182,7 +185,13 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    virt::spawn(origin.into(), f)
+    let origin = origin.into();
+    // the stall watchdog's names ([`crate::stall`]), when it runs (never on the virtual clock)
+    if crate::stall::on() {
+        let named = crate::stall::Named::new(origin.0.clone(), f);
+        return virt::spawn(origin, named);
+    }
+    virt::spawn(origin, f)
 }
 
 /// What an advance did: the virtual time now, how many sleepers it woke, the tasks still running after

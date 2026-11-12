@@ -498,6 +498,13 @@ Editor: `modules/extra/drgnx-debug-view.el`, the section `run-and-debug` of the 
   above them and the section headers (`model::filter`).
 - **Rebuilds:** `Debug::on_change` listeners are told at every `debug-state` and breakpoint change; the views build
   again, one at a time (a change meanwhile builds once more), and a class that sends its env gets the last lines.
+- **An expand costs its subtree:** opening or closing a node of the selected session's Variables (`v:` ids) fetches,
+  walks and sends only that node's subtree, and the page the cap closed with it (`DebugViews::splice`): each line
+  keeps what drew it (`Line::src`), `model::subtree` walks it again alone, and the spans go out as one `view-model`
+  (`Sent::splice`: the nodes that left, the new or changed ones, a list `splice` per span) and one `view-patch`
+  (`Store::publish_splice`: each span's row diff, its first new rows after the row before it). A filter, another
+  session shown, a new stop, or a model or rows the editor must get whole build the view whole instead. The perf row
+  `debug-expand-chunks` holds it (a whole build was ~15 ms of the hub's per key at 4,500 lines).
 
 Methods (runstav `methods::debug`, the user class; served by `view::debug::serve`):
 

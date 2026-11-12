@@ -55,6 +55,22 @@ pub async fn run(args: ServeArgs) -> Exit {
     if args.test_clock {
         crate::clock::install_virtual();
     }
+    // the stall watchdog (`DRGNX_RATATOSKR_STALL_MS`; on in test builds off the virtual clock): tasks are named from
+    // here on, and its thread starts once the log does
+    let stall = crate::stall::threshold(
+        std::env::var("DRGNX_RATATOSKR_STALL_MS").ok().as_deref(),
+        cfg!(feature = "test-hooks"),
+        {
+            #[cfg(feature = "test-hooks")]
+            let v = crate::clock::is_virtual();
+            #[cfg(not(feature = "test-hooks"))]
+            let v = false;
+            v
+        },
+    );
+    if stall.is_some() {
+        crate::stall::enable();
+    }
     // `--test-sequencer`: before any connection, so every one is known to it
     #[cfg(feature = "test-hooks")]
     if args.test_sequencer {
@@ -101,6 +117,9 @@ pub async fn run(args: ServeArgs) -> Exit {
             return Exit::CannotStart;
         }
     };
+    if let Some(t) = stall {
+        crate::stall::start(t);
+    }
     let lock_path = paths::lock_path(&socket);
     let lock = match lock::acquire(&lock_path, &lock::System) {
         Ok(l) => l,
@@ -442,7 +461,7 @@ pub async fn run(args: ServeArgs) -> Exit {
         tokio::select! {
             a = listener.accept() => match a {
                 Ok((stream, _)) => {
-                    tokio::spawn(conn::serve(stream, front.clone(), Socket::Main));
+                    crate::stall::spawn("conn", conn::serve(stream, front.clone(), Socket::Main));
                 }
                 Err(e) => {
                     // out of descriptors, for example: never a hot loop
@@ -723,7 +742,7 @@ async fn accept(listener: UnixListener, front: Arc<Front>, socket: Socket) {
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
-                tokio::spawn(conn::serve(stream, front.clone(), socket.clone()));
+                crate::stall::spawn("conn", conn::serve(stream, front.clone(), socket.clone()));
             }
             Err(e) => {
                 tracing::warn!("accept failed: {e}");

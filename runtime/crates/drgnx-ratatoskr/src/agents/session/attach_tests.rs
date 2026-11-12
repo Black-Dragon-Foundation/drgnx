@@ -203,3 +203,73 @@ async fn gemini_lands_as_summary() {
     assert!(l.level_why.is_some());
     assert_eq!(fx.logged("g.log", "session/new").len(), 1);
 }
+
+/// A session's file that waits on the disk holds none of the hub's two workers: its queue file is a FIFO with no
+/// reader (an open for writing waits there, as one waits on a slow disk), a reader of the session's state comes
+/// next, and the runtime still runs a task.  The write lands once the disk answers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_write_that_waits_on_the_disk_holds_no_worker() {
+    let fx = Fx::new();
+    let p: runstav::methods::agents::StartParams =
+        serde_json::from_value(json!({"profile": "mock-claude", "cwd": fx.work()})).unwrap();
+    let agents = &fx.front.core.agents;
+    let sid = agents
+        .start(&fx.front, p, &crate::runner::user())
+        .await
+        .expect("a session")
+        .id;
+    // a turn that stays busy, and a message queued behind it: the queue on disk holds "later"
+    agents.send(&sid, "silent 30".into()).unwrap();
+    agents.send(&sid, "later".into()).unwrap();
+    let queue = fx
+        .dir
+        .path()
+        .join(format!("hub/transcripts/{sid}.queue.json"));
+    let q = queue.clone();
+    crate::clock::blocking(move || {
+        skuld::wait_until("the queue on disk", 60, || {
+            std::fs::read_to_string(&q)
+                .ok()
+                .filter(|t| t.contains("later"))
+        })
+    })
+    .await
+    .unwrap();
+    let s = agents.find(&sid).unwrap();
+    s.disk.written().await;
+    std::fs::remove_file(&queue).unwrap();
+    let made = std::process::Command::new("mkfifo")
+        .arg(&queue)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    // the write is queued and the task that asked for it ends, on a worker, while the open waits on the FIFO (a write
+    // done in the task held its worker and the state lock until a reader came: the test hung here)
+    let w = s.clone();
+    tokio::spawn(async move { w.persist_queue() })
+        .await
+        .unwrap();
+    // the state is free for the next reader, on a worker
+    let r = s.clone();
+    tokio::spawn(async move {
+        r.observe();
+    })
+    .await
+    .unwrap();
+    let mut landed = std::pin::pin!(s.disk.written());
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(
+        std::future::Future::poll(landed.as_mut(), &mut cx).is_pending(),
+        "the queue's write still waits on the disk"
+    );
+    // the disk answers: the write waiting on the FIFO goes on
+    let read = std::thread::spawn(move || {
+        let text = std::fs::read_to_string(&queue);
+        // the session's later writes (its turn's end, the test's end) find a plain file again
+        std::fs::remove_file(&queue).unwrap();
+        text
+    });
+    landed.await;
+    let written = read.join().unwrap().unwrap();
+    assert!(written.contains("later"), "the queue written: {written}");
+}
