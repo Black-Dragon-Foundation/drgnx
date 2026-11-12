@@ -176,7 +176,7 @@ proven on CI:
 
 | Lane | What it runs | Gates |
 |---|---|---|
-| `linux` (Runtime) | the workspace tests with `drgnx-ratatoskr/test-hooks`: forseti, sleipnir's pure rows, the hub's lib and `runners_orders`, the repo-wide rules (`real_time_in_tests`, `hub_reads_its_clock`), and `tests/macos.rs`' four rows that need no sshd | yes |
+| `linux` (Runtime) | the workspace tests with `drgnx-ratatoskr/test-hooks`: forseti, sleipnir's pure rows, the hub's lib and `runners_orders`, the repo-wide rules (`real_time_in_tests`, `hub_reads_its_clock`), and the rows of `tests/macos.rs` that need no sshd | yes |
 | `android` | `forseti` and the hub (with the cloud code) type-check for `aarch64-linux-android` with the other pure-Rust crates; `forseti` and `sleipnir --no-default-features --features proto,sync` (the shape jobq and the Android door take) also pass clippy `-D warnings` on their test builds | yes |
 | `macos` (Runtime) | the same workspace tests as `linux` on macOS 27, so `tests/macos.rs` runs there, then its sshd row (below) | yes |
 | `fleet` | the fake runners (`test/runners/`): the spike's checks and linger over ssh | no: on demand only (`only=rt-fleet`) |
@@ -191,9 +191,12 @@ and it joins the gate. Until then the fleet rows run on the desktop (`test/runne
 ### macOS
 
 A Mac is a hub, never a runner (`docs/guide/runners.md`): OpenSSH ships with macOS and the private agent's socket is
-under `$TMPDIR`. `runtime/crates/drgnx-ratatoskr/tests/macos.rs` holds the five rows that say the hub works there:
+under `$TMPDIR`. `runtime/crates/drgnx-ratatoskr/tests/macos.rs` holds the rows that say the hub works there, among them:
 
 - `placement_and_trust_filter`: the trust table and the pick, with the Mac as the local candidate;
+- `returned_files_never_go_through_a_link`: a runner's returned files are written beneath the job's folder and never
+  through a link (macOS refuses one in any component with `O_NOFOLLOW_ANY`, Linux with `openat2`): a linked folder, a
+  link deeper in the path and `..` are refused with nothing written behind them, a linked file is replaced;
 - `an_agents_job_with_no_runner_runs_here_with_its_reason`: a job no runner may take is placed on the Mac with the
   design's "runs here: …" words, and a queue with no runner starts it there;
 - `sync_into_a_local_mirror`: a commit reaches a mirror (real git), the hub measures the gap, and the plan is a push;
@@ -203,13 +206,18 @@ under `$TMPDIR`. `runtime/crates/drgnx-ratatoskr/tests/macos.rs` holds the five 
 - `the_generated_config_against_a_localhost_sshd`: the generated ssh config's forced options win over the user's
   file, and the transport opens a session over it. It is `#[ignore = "macos-sshd"]` and needs a real `sshd`.
 
-The first four run with the workspace tests on every platform. The last one runs as its own step of the `macos` job:
+All but the sshd row run with the workspace tests on every platform. That one runs as its own step of the `macos` job:
 `.github/ci/macos-sshd.sh up` turns Remote Login on (`launchctl enable system/com.openssh.sshd`), makes a throwaway
 key that may log in as the runner user, adds a `Host drgnx-sshd-test` entry to `~/.ssh/config` and the host key to
 `known_hosts`, and prints the host name; the step passes it as `DRGNX_TEST_SSHD_HOST` and runs `cargo test --test macos
 -- --ignored`. `down` removes the key, the entry and the service again, whatever the step said. Run it by hand on a
 Mac the same way. The key handover (Lisp, `test/unit/runners-client-test.el`) runs in the `macos` tier of
 `drgnx-tiers.yml`, which runs the whole unit suite.
+
+The hub's lib tests end in a SIGABRT on macOS with no message, so none of them have run there yet. Until they pass,
+a failed workspace step is followed by a diagnostic one: the hub's lib again with `--test-threads 1`, whose last
+`test … ...` line (libtest prints a test's name before it runs it on one thread) names the test running when the
+process died, written to the job's summary. The step goes once the lib passes on macOS.
 
 ## The tiers workflow
 

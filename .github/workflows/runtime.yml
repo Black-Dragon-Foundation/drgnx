@@ -1069,6 +1069,20 @@ jobs:
       # GPU tests are ignored on macOS (the runner has no GPU; Metal parity is a real Mac's)
       - id: test
         run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
+      # The hub's lib tests ended in a SIGABRT on macOS with no message, so none of them ran there: when the run above
+      # failed, the lib runs again one test at a time, which names the test running when the process dies (libtest
+      # prints a test's name before it runs it with one thread), and that name goes to the job's summary. Diagnostic:
+      # the step fails as the lib does, and is dropped once the lib passes on macOS
+      - name: the hub's lib, one test at a time (names the one that aborts)
+        if: ${{ !cancelled() && steps.test.outcome == 'failure' }}
+        run: |
+          set +e
+          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --lib -- --test-threads 1 > lib-serial.log 2>&1
+          rc=$?
+          tail -n 40 lib-serial.log
+          last=$(grep -E '^test .* \.\.\. ' lib-serial.log | tail -n 1)
+          echo "- the hub's lib one at a time: exit $rc; last line: \`${last:-none}\`" >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
       # The terminal worker's peer check on a Mac (getpeereid): the workspace run above checks that this user's
       # connection is served; another uid's needs root, so the same test runs again under sudo (the runner's user has
       # passwordless sudo), and a run that did not check (no root) fails. The worker's log goes to the job's log.
