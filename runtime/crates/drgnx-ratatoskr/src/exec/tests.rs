@@ -1520,13 +1520,16 @@ async fn a_sidecar_exit_ends_the_job_infra() {
     assert!(log.contains("bad frame"), "{log}");
 }
 
-/// Design §6 through the job's start: a podman before 5.0 and a rootful one each refuse with the fix, and no job runs.
+/// Design §6 through the job's start: a podman before 5.0 and (on Linux) a rootful one each refuse with the fix, and
+/// no job runs.  On a Mac `podman info` is the machine's, reached through the rootless connection the hub chose
+/// (`net::rootless_connection`, which refuses a machine without one), so its `rootless` is not judged there.
 #[tokio::test]
 async fn a_refused_check_names_the_fix() {
-    for (info, want) in [
-        (info_net("4.9.3", true), "podman 5.0 or newer"),
-        (info_net("5.4.2", false), "this podman is rootful"),
-    ] {
+    let mut cases = vec![(info_net("4.9.3", true), "podman 5.0 or newer")];
+    if cfg!(not(target_os = "macos")) {
+        cases.push((info_net("5.4.2", false), "this podman is rootful"));
+    }
+    for (info, want) in cases {
         let d = tempfile::tempdir().unwrap();
         let r = Runner::default();
         r.open(d.path().join("exec"), net_hooks(d.path(), &info));
