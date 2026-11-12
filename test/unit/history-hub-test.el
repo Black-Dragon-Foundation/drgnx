@@ -104,8 +104,7 @@ BODY made are gone at the end.  Skipped without the hub or the hook (without the
   ;; B: a buffer over the limit sends its batches with no hash and the hub takes them (ok); a later batch under a
   ;; raised limit carries the hash again, and its ok says the hub's text is the buffer's
   (drgnx-history-hub-test--with
-    (with-temp-file (concat dir "a.txt") (insert (make-string 199 ?x) "\n"))
-    (let ((b (find-file-noselect (concat dir "a.txt"))) (drgnx-history-large-size 64) (hashed nil))
+    (let ((b (find-file-noselect (concat dir "a.txt"))) (drgnx-history-large-size 4) (hashed nil))
       (drgnx-history-mode 1)
       (drgnx-history-hub-test--settle (lambda () (drgnx-history-tracked-p b)) "the file registered")
       (with-current-buffer b (goto-char 1) (insert "typed ") (goto-char (point-max)) (insert "more\n"))
