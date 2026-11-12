@@ -9,7 +9,7 @@
 use crate::view::model::Doc;
 use drgnx_rows::fit::Measure;
 use drgnx_rows::{ImageId, Row, RowBuilder};
-use runstav::methods::view::ViewEnv;
+use runstav::methods::view::{Display, ViewEnv};
 use serde_json::{Map, Value, json};
 use vordr::evidence::Evidence;
 use vordr::gates::{State, checks, selector_of, state};
@@ -729,6 +729,7 @@ pub(crate) fn flow_rows(
         .collect();
     rows.push(head.finish());
     let mut cols = RowBuilder::new("cols");
+    strut(&mut cols, env, 24.0);
     for (i, name) in ["Task", "Agent"].iter().chain(GATES.iter()).enumerate() {
         cols.stop(at[i]);
         if i >= 2 {
@@ -759,6 +760,7 @@ pub(crate) fn flow_rows(
     }
     for t in &ts {
         let mut b = RowBuilder::new(format!("task:{}", t.id));
+        strut(&mut b, env, 30.0);
         let start = b.pos();
         let label = format!("{}  ", t.label);
         let room = at[1].saturating_sub(text_px(fonts, &label) + gap);
@@ -790,6 +792,13 @@ pub(crate) fn flow_rows(
     rows.push(blank.finish());
     rows.extend(card_rows(flow, env, fonts, &mut pics));
     (rows, pics.out)
+}
+
+/// B's row padded to LOGICAL px high (the mockup's rows): a strut first, a 1 px space that high; none on a terminal.
+fn strut(b: &mut RowBuilder, env: &ViewEnv, logical: f32) {
+    if env.display == Display::Gui {
+        b.space(1, dpx(env, logical), TEXT);
+    }
 }
 
 /// B's row, keyed KEY, as a rule block (`BLOCK`): a hairline under it across the table, which Glitnir draws.
@@ -1422,7 +1431,6 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use runstav::methods::view::Display;
     use vordr::facts::Facts;
     use vordr::pack::{Check, Rule};
     use vordr::rows::{Row as VRow, parse};
@@ -1643,6 +1651,30 @@ mod tests {
         e.facts.tree_key = tree.into();
         e.facts.platform = format!("linux-x86_64/{machine}");
         e
+    }
+
+    /// [D] The table's rows have the mockup's padding: a task row is 30 logical px high, the column heads 24, by a
+    /// strut (a 1 px space that high) first on the row, at the window's scale; a terminal has none.
+    #[test]
+    fn the_tables_rows_are_padded_to_the_mockups_heights() {
+        for scale in [1.0, 2.0] {
+            let (rows, _) = flow_rows(&flow(), &env(scale), &fonts());
+            let strut = |key: &str| {
+                let r = rows.iter().find(|r| r.key == key).expect(key);
+                r.spaces.first().copied()
+            };
+            let px = |v: f32| (v * scale).round() as u32;
+            assert_eq!(
+                strut("task:task:J#1"),
+                Some((0, 1, px(30.0))),
+                "scale {scale}"
+            );
+            assert_eq!(strut("cols"), Some((0, 1, px(24.0))), "scale {scale}");
+        }
+        let mut tty = env(1.0);
+        tty.display = Display::Tty;
+        let (rows, _) = flow_rows(&flow(), &tty, &fonts());
+        assert!(rows.iter().all(|r| r.spaces.is_empty()));
     }
 
     /// [D] The columns fit the window: in a window that holds the cells and a third for the titles, each gate column is
