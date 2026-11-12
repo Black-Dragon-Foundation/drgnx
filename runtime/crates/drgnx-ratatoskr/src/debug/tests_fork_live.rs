@@ -101,6 +101,18 @@ fn fixture(
     lines: (u32, u32, u32),
     value: impl Fn(u32) -> String,
 ) -> Fixture {
+    fixture_at(file, text, config, lines, value, POINT)
+}
+
+/// [`fixture`] with the point's stop at pass POINT of its line.
+fn fixture_at(
+    file: &str,
+    text: &str,
+    config: impl Fn(&Path) -> Value,
+    lines: (u32, u32, u32),
+    value: impl Fn(u32) -> String,
+    point: u32,
+) -> Fixture {
     pin_hub();
     let d = tempfile::tempdir_in("/tmp").unwrap();
     let home = d.path().join("home");
@@ -124,7 +136,7 @@ fn fixture(
             thread: "1".into(),
             value: value(i),
             // the point's stop is seq 100: the passes before it come before
-            seq: if i + 1 < POINT {
+            seq: if i + 1 < point {
                 u64::from(i) + 1
             } else {
                 101 + u64::from(i)
@@ -157,7 +169,7 @@ fn fixture(
         }),
         hash_seed: Some(0),
         to_stop_ms: Some(100),
-        stops: vec![stop(100, point_line, POINT), stop(500, end_line, 1)],
+        stops: vec![stop(100, point_line, point), stop(500, end_line, 1)],
         probes: vec![RunProbe {
             id: "shortfall".into(),
             path: path.clone(),
@@ -688,4 +700,39 @@ async fn a_recorded_python_run_is_forked_end_to_end() {
         "{v}"
     );
     assert_eq!(v["now"]["kind"], json!("exit"), "{v}");
+}
+
+/// `debug-fork-start` (spec §22, at most 2 s at the 95th percentile on Linux): a fork's tree restored, its sandbox and
+/// adapter started and its program run to its first stop (the point is the first pass of its line), here a trace,
+/// ten times. It measures and prints; the combined pass judges.
+#[tokio::test]
+#[ignore = "timing: live, the adapter image with bwrap"]
+async fn debug_fork_start() {
+    let f = fixture_at(
+        "stock.py",
+        PY,
+        py_config,
+        (5, 8, 24),
+        |i| ((i * 7) % 13).to_string(),
+        1,
+    );
+    let mut took = vec![];
+    for _ in 0..10 {
+        let t0 = crate::clock::now();
+        let g = f
+            .forks
+            .trace("r1", 100, f.resolved.clone(), |_: &Path| vec![], vec![])
+            .await
+            .unwrap();
+        took.push(t0.elapsed());
+        drop(g);
+    }
+    took.sort();
+    let p95 = took[(took.len() * 95).div_ceil(100) - 1];
+    println!(
+        "debug-fork-start: 10 forks to the point, p50 {:.0} ms, p95 {:.0} ms, max {:.0} ms (budget p95 2000)",
+        took[took.len() / 2].as_secs_f64() * 1000.0,
+        p95.as_secs_f64() * 1000.0,
+        took[took.len() - 1].as_secs_f64() * 1000.0
+    );
 }
