@@ -553,13 +553,10 @@ pub async fn start(
     };
     // the session's steps are filed under its plan and project
     let plan = super::plan_scope(&l.job);
-    let project = {
-        let dir = repo.clone();
-        crate::clock::blocking(move || norn::project::resolve(&dir).map(|p| p.id))
-            .await
-            .ok()
-            .flatten()
-    };
+    let project = crate::graph::project_of(&repo)
+        .await
+        .map_err(super::internal)?
+        .map(|p| p.id);
     // spend counts toward the plan, and the plan toward its project; the gateway books the session's requests
     // under the job
     {

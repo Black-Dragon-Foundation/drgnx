@@ -361,20 +361,37 @@ struct Out(Arc<Mutex<File>>);
 
 impl Out {
     fn frame(&self, kind: u8, payload: &[u8]) -> io::Result<()> {
-        let len =
-            u32::try_from(payload.len()).map_err(|_| io::Error::other("a frame over 4 GiB"))?;
-        let mut header = [0u8; HEADER_LEN];
-        header[0] = kind;
-        header[1..].copy_from_slice(&len.to_be_bytes());
         let mut w = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        w.write_all(&header)?;
-        w.write_all(payload)
+        write_frame(&mut w, kind, payload)
     }
 
     /// A control event; a hub that is gone is the reading side's to notice.
     fn control(&self, v: Value) {
         let _ = self.frame(KIND_CONTROL, v.to_string().as_bytes());
     }
+
+    /// [`Self::control`], then THEN while no other frame can be written: whoever takes the stream after sees THEN's
+    /// effect along with the event.
+    fn control_then(&self, v: Value, then: impl FnOnce()) {
+        let mut w = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let _ = write_frame(&mut w, KIND_CONTROL, v.to_string().as_bytes());
+        then();
+    }
+
+    /// F, once no frame is being written.
+    fn between_frames<T>(&self, f: impl FnOnce() -> T) -> T {
+        let _w = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        f()
+    }
+}
+
+fn write_frame(w: &mut File, kind: u8, payload: &[u8]) -> io::Result<()> {
+    let len = u32::try_from(payload.len()).map_err(|_| io::Error::other("a frame over 4 GiB"))?;
+    let mut header = [0u8; HEADER_LEN];
+    header[0] = kind;
+    header[1..].copy_from_slice(&len.to_be_bytes());
+    w.write_all(&header)?;
+    w.write_all(payload)
 }
 
 /// Chromium's stderr, for every start: the tail file and the rate-limited events.
@@ -434,6 +451,11 @@ struct Browser {
     to_chrome: Option<Sender<Vec<u8>>>,
     /// Sent once by the waiter, after `exited`.
     done: Receiver<()>,
+    /// Set by the waiter in the same hold of the stream as its `exited`: a hub that read `exited` and answers (a
+    /// `start`) finds it set, however late the waiter thread runs after.
+    sent: Arc<AtomicBool>,
+    /// The stream `sent` goes with.
+    out: Out,
 }
 
 impl Browser {
@@ -560,7 +582,10 @@ impl Browser {
             sk.flush();
         });
         let (done_tx, done) = mpsc::channel::<()>();
-        let o = out.clone();
+        let sent = Arc::new(AtomicBool::new(false));
+        let (o, s) = (out.clone(), sent.clone());
+        #[cfg(test)]
+        let bdir = cfg.dir.clone();
         std::thread::spawn(move || {
             let (code, signal) = wait_and_clear(pid, group, || {
                 let Some(mut g) = gone_w else { return };
@@ -577,7 +602,14 @@ impl Browser {
             eprintln!(
                 "ratatoskr browser-host: the browser exited (code {code:?}, signal {signal:?})"
             );
-            o.control(json!({"ev": "exited", "code": code, "signal": signal}));
+            o.control_then(
+                json!({"ev": "exited", "code": code, "signal": signal}),
+                || {
+                    s.store(true, Ordering::Release);
+                },
+            );
+            #[cfg(test)]
+            tests::exited_delay(&bdir);
             let _ = done_tx.send(());
         });
         Browser {
@@ -585,12 +617,15 @@ impl Browser {
             group,
             to_chrome: Some(tx),
             done,
+            sent,
+            out: out.clone(),
         }
     }
 
-    /// The waiter has sent `exited`.
+    /// The waiter has sent `exited`: read once no frame is being written, so an `exited` the hub has read is seen here.
     fn ended(&self) -> bool {
-        !matches!(self.done.try_recv(), Err(mpsc::TryRecvError::Empty))
+        self.out
+            .between_frames(|| self.sent.load(Ordering::Acquire))
     }
 
     fn send(&self, msg: Vec<u8>) {
@@ -950,6 +985,17 @@ mod tests {
         }
     }
 
+    /// The waiter held between `exited` and its word to the host's loop while the test keeps `exited-hold` in the
+    /// browser's dir: a waiter thread that a loaded machine runs late.
+    pub(super) fn exited_delay(dir: &Path) {
+        let hold = dir.join("exited-hold");
+        if hold.exists() {
+            skuld::wait_until("the test lets the waiter go", 30, || {
+                (!hold.exists()).then_some(())
+            });
+        }
+    }
+
     fn control_ev(f: &Frame) -> Option<Value> {
         (f.kind == KIND_CONTROL).then(|| serde_json::from_slice(&f.payload).ok())?
     }
@@ -1035,6 +1081,38 @@ mod tests {
         let full = chromium_argv(&cfg);
         assert_eq!(full[full.len() - 2..], ["--headless", "about:blank"]);
         assert!(!full.iter().any(|a| a.contains("swiftshader")));
+    }
+
+    /// A start the hub sends once it has read `exited` gets a fresh browser, however late the waiter that sent
+    /// `exited` gets on: never the dead one, whose messages would be dropped.
+    #[test]
+    fn a_start_after_exited_gets_a_fresh_browser() {
+        let mut fx = Fx::new();
+        let mut line = String::new();
+        fx.ready.read_to_string(&mut line).unwrap();
+        let hold = fx.bdir().join("exited-hold");
+        std::fs::write(&hold, "").unwrap();
+        struct Release(PathBuf);
+        impl Drop for Release {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let release = Release(hold);
+        let pid = fx.start();
+        fx.cdp(r#"{"id":1,"method":"Fake.crash"}"#);
+        fx.event("exited", Duration::from_secs(5));
+        // the hub read `exited` and starts again while the waiter has not got on yet
+        fx.control(json!({"op": "start"}));
+        let again = fx.event("started", Duration::from_secs(5));
+        drop(release);
+        assert_ne!(
+            again["pid"].as_i64(),
+            Some(i64::from(pid)),
+            "a fresh browser, not the one that exited: {again}"
+        );
+        fx.cdp(r#"{"id":2,"method":"Page.enable"}"#);
+        fx.reply(2);
     }
 
     #[test]

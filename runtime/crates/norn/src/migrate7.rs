@@ -1031,7 +1031,8 @@ fn migrate(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> Result<Mig
     let mut cache = ProjectCache::default();
     for dir in project_dirs(conn, &deny)? {
         hook(path, "resolve")?;
-        cache.fill(&dir);
+        // git that cannot answer now: nothing moved, the next tick tries again
+        cache.fill(&dir).map_err(Stop::Busy)?;
     }
     // 1. The checked copy.
     let copy = backup(conn, path, &opts.backup_dir)?;

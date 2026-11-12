@@ -134,10 +134,7 @@ pub(crate) async fn scope_of_session(f: &Front, sid: &str) -> Result<Scope, Erro
             jobs.extend(s.job_id().map(str::to_owned));
         }
     }
-    let found = crate::clock::blocking(move || norn::project::resolve(&cwd))
-        .await
-        .ok()
-        .flatten();
+    let found = crate::graph::project_of(&cwd).await.map_err(internal)?;
     let from_run = f.core.runs.scope_of(sid).and_then(|(_, project)| project);
     Ok(Scope::Project {
         id: from_run.or_else(|| found.as_ref().map(|p| p.id.clone())),
