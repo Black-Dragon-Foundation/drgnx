@@ -37,11 +37,13 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// A file that is test code as a whole: the clock itself, and the `tests.rs` / `tests/` files of a module.
+/// A file that is test code as a whole: the clock itself, and the `tests.rs` / `*_tests.rs` / `tests/` files of a
+/// module (each included under `#[cfg(test)]`).
 fn exempt(rel: &str) -> bool {
     rel == "clock.rs"
         || rel.starts_with("clock/")
         || rel.ends_with("/tests.rs")
+        || rel.ends_with("_tests.rs")
         || rel == "tests.rs"
         || rel.contains("/tests/")
 }

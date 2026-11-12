@@ -210,10 +210,7 @@ fn also_to(line: &str) {
     let Some(path) = std::env::var_os("DRGNX_RATATOSKR_STALL_FILE") else {
         return;
     };
-    let at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0);
+    let at = crate::clock::wall_secs();
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -245,9 +242,11 @@ pub fn start(threshold: Duration) {
     let b = beat.clone();
     // a plain tokio task (not named, not on the virtual clock): its lateness is the stall
     tokio::spawn(async move {
+        // real time (the watchdog never runs on the virtual clock); a late tick is followed by one a TICK after it
+        let mut tick = crate::clock::real_interval(TICK);
         loop {
+            tick.tick().await;
             b.last.store(b.ms(), Ordering::Relaxed);
-            tokio::time::sleep(TICK).await;
         }
     });
     let spawned = std::thread::Builder::new()

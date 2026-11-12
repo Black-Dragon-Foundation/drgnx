@@ -3842,7 +3842,12 @@ impl Session {
     fn persist_queue(&self) {
         let Some(store) = &self.store else { return };
         let st = lock(&self.state);
-        let (store, sid, kept, paused) = (store.clone(), self.id.clone(), st.core.kept(), st.core.paused());
+        let (store, sid, kept, paused) = (
+            store.clone(),
+            self.id.clone(),
+            st.core.kept(),
+            st.core.paused(),
+        );
         self.disk.push(move || {
             if let Err(e) = store.save_queue(&sid, &kept, paused) {
                 tracing::warn!(sid, "queue not kept: {e}");

@@ -221,7 +221,10 @@ async fn a_write_that_waits_on_the_disk_holds_no_worker() {
     // a turn that stays busy, and a message queued behind it: the queue on disk holds "later"
     agents.send(&sid, "silent 30".into()).unwrap();
     agents.send(&sid, "later".into()).unwrap();
-    let queue = fx.dir.path().join(format!("hub/transcripts/{sid}.queue.json"));
+    let queue = fx
+        .dir
+        .path()
+        .join(format!("hub/transcripts/{sid}.queue.json"));
     let q = queue.clone();
     crate::clock::blocking(move || {
         skuld::wait_until("the queue on disk", 60, || {
@@ -240,28 +243,33 @@ async fn a_write_that_waits_on_the_disk_holds_no_worker() {
         .status()
         .unwrap();
     assert!(made.success());
-    // from here the test's own thread (not a worker) waits with plain sleeps: with both workers held, no timer fires
+    // the write is queued and the task that asked for it ends, on a worker, while the open waits on the FIFO (a write
+    // done in the task held its worker and the state lock until a reader came: the test hung here)
     let w = s.clone();
-    tokio::spawn(async move { w.persist_queue() });
-    std::thread::sleep(Duration::from_millis(100));
+    tokio::spawn(async move { w.persist_queue() })
+        .await
+        .unwrap();
+    // the state is free for the next reader, on a worker
     let r = s.clone();
     tokio::spawn(async move {
         r.observe();
-    });
-    std::thread::sleep(Duration::from_millis(100));
-    let (tx, rx) = std::sync::mpsc::channel();
-    tokio::spawn(async move { tx.send(()) });
-    let free = rx.recv_timeout(Duration::from_millis(300)).is_ok();
+    })
+    .await
+    .unwrap();
+    let mut landed = std::pin::pin!(s.disk.written());
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(
+        std::future::Future::poll(landed.as_mut(), &mut cx).is_pending(),
+        "the queue's write still waits on the disk"
+    );
     // the disk answers: the write waiting on the FIFO goes on
-    let written = std::thread::spawn(move || {
+    let read = std::thread::spawn(move || {
         let text = std::fs::read_to_string(&queue);
         // the session's later writes (its turn's end, the test's end) find a plain file again
         std::fs::remove_file(&queue).unwrap();
         text
-    })
-    .join()
-    .unwrap()
-    .unwrap();
-    assert!(free, "a worker free while the write waits on the disk");
+    });
+    landed.await;
+    let written = read.join().unwrap().unwrap();
     assert!(written.contains("later"), "the queue written: {written}");
 }
