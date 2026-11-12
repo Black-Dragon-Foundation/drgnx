@@ -153,6 +153,23 @@ impl Store {
         Some(s.extend(nodes).map(|out| Self::model_event(hub, view, out)))
     }
 
+    /// CONN's VIEW's model has list NAME's SPANS replaced ([`model::Sent::splice`]): the `view-model` of the spans
+    /// alone (Some(None): nothing changed), or `None` when the builder publishes the whole.
+    pub fn splice_model(
+        &mut self,
+        conn: u64,
+        view: &str,
+        name: &str,
+        spans: Vec<model::Span>,
+    ) -> Option<Option<ViewModel>> {
+        let hub = self.hub;
+        let out = self
+            .models
+            .get_mut(&(conn, view.to_owned()))?
+            .splice(name, spans)?;
+        Some(out.map(|out| Self::model_event(hub, view, out)))
+    }
+
     /// CONN's VIEW's model gains NODES, new, and their IDS at the end of list NAME ([`model::Sent::append`]): the
     /// `view-model` of that change alone, or `None` when there is no model to append to (none sent, a reset due, a
     /// windowed list) and the builder publishes the whole.
@@ -351,6 +368,71 @@ impl Store {
         }
         p.rows = rows;
         Some(Self::send(self.hub, key, p, ops, images, model))
+    }
+
+    /// The patch that replaces, for each span (AT, REMOVE, ROWS) of SPANS (the last first, not overlapping), the rows
+    /// `AT..AT + REMOVE` KEY's editor holds by ROWS, the rest kept as they are (the caller vouches for them): the spans'
+    /// ops alone, so it costs the spans, not the view. None (the builder publishes the whole) when the pair has no env,
+    /// a reset is due, or the spans are out of order or past the rows' end; Some(None) when nothing changed or (an
+    /// acknowledged view) a patch is in flight: then the spliced rows wait for its ack.
+    pub fn publish_splice(
+        &mut self,
+        key: &Key,
+        spans: Vec<(usize, usize, Vec<Row>)>,
+        images: &[(ImageId, String)],
+    ) -> Option<Option<Patch>> {
+        let held = self.in_flight(key);
+        let model = self.model_version(key);
+        let p = self.pairs.get_mut(key)?;
+        if p.reset_due || (!held && p.pending.is_some()) {
+            return None;
+        }
+        let len = if held {
+            p.pending.as_ref().map_or(p.rows.len(), Vec::len)
+        } else {
+            p.rows.len()
+        };
+        let mut limit = len;
+        for (at, remove, _) in &spans {
+            if at + remove > limit {
+                return None;
+            }
+            limit = *at;
+        }
+        if held {
+            let mut all = p.pending.take().unwrap_or_else(|| p.rows.clone());
+            for (at, remove, rows) in spans {
+                all.splice(at..at + remove, rows);
+            }
+            for (id, svg) in images {
+                p.images.put(*id, svg);
+            }
+            p.pending = Some(all);
+            return Some(None);
+        }
+        let mut ops = Vec::new();
+        for (at, remove, rows) in spans {
+            let mut span = drgnx_rows::diff(&p.rows[at..at + remove], &rows);
+            if span.iter().any(|o| matches!(o, Op::Reset(_))) {
+                return None;
+            }
+            // the span's diff puts its first new rows at the top: they go after the row before the span
+            let before = at.checked_sub(1).map(|i| p.rows[i].key.clone());
+            for o in &mut span {
+                if let Op::Insert {
+                    after: a @ None, ..
+                } = o
+                {
+                    a.clone_from(&before);
+                }
+            }
+            ops.extend(span);
+            p.rows.splice(at..at + remove, rows);
+        }
+        if ops.is_empty() {
+            return Some(None);
+        }
+        Some(Some(Self::send(self.hub, key, p, ops, images, model)))
     }
 
     /// The patch of OPS for P, which now holds its new rows: the next version, and the images its rows name that the
@@ -633,6 +715,51 @@ impl Views {
         if let Some(m) = out {
             f.send_to(conn, "view-model", Store::model_data(m));
         }
+        true
+    }
+
+    /// CONN's VIEW's model spliced ([`Store::splice_model`]): false when the builder publishes the whole.
+    pub fn splice_model(
+        &self,
+        f: &Front,
+        conn: u64,
+        view: &str,
+        name: &str,
+        spans: Vec<model::Span>,
+    ) -> bool {
+        let Some(out) = lock(&self.store).splice_model(conn, view, name, spans) else {
+            return false;
+        };
+        if let Some(m) = out {
+            f.send_to(conn, "view-model", Store::model_data(m));
+        }
+        true
+    }
+
+    /// KEY's rows spliced ([`Store::publish_splice`]): BUILD makes the spans (AT, REMOVE, ROWS), the last first, and
+    /// the images they name. False when the builder publishes the whole.
+    pub fn publish_spliced(
+        &self,
+        f: &Front,
+        key: &Key,
+        build: impl FnOnce(
+            &ViewEnv,
+            &FontSet,
+        ) -> (Vec<(usize, usize, Vec<Row>)>, Vec<(ImageId, String)>),
+    ) -> bool {
+        let Some(env) = lock(&self.store).env_of(key).cloned() else {
+            return false;
+        };
+        let Some((spans, images)) = self.with_fonts(key, |set| build(&env, set)) else {
+            return false;
+        };
+        let Some(patch) = lock(&self.store).publish_splice(key, spans, &images) else {
+            return false;
+        };
+        if let Some(p) = patch {
+            f.send_to(key.0, "view-patch", json!(p));
+        }
+        self.ask(f, key);
         true
     }
 

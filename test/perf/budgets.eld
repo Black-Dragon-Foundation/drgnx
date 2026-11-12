@@ -31,6 +31,12 @@
  ;; chunk of a big list opened from the hub's answer (15 ms)
  (debug-step-variables (:input :p95) 30) (debug-step-variables (:input :max) 80)
  (debug-expand-chunks (:input :p95) 15) (debug-expand-chunks (:input :max) 50)
+ ;; any hub-fed view: 100 rows removed above the window of a 6,000-row view and 100 added below, drawn in a frame
+ ;; (its check fails the row when the buffer's paragraphs are left to Emacs: then redisplay walks back to its start)
+ (view-remove-above (:input :p95) 16) (view-remove-above (:input :max) 50)
+ ;; any hub-fed view: the selection and a search set (every other row dim) or cleared in a 6,000-row view within a
+ ;; frame (its check holds the overlays to the dim runs, never one per row)
+ (view-select-dim (:input :p95) 16) (view-select-dim (:input :max) 50)
  ;; the debug console (spec §10): a 64 KiB batch of output inserted within a frame
  (debug-console-flood (:input :p95) 16) (debug-console-flood (:input :max) 50)
  ;; recorded runs (spec §19.9): a batch of probe hits to the sparklines within 100 ms at 2,000 hits a second; a scrub to a

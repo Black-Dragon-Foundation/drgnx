@@ -302,6 +302,16 @@ pub struct Line {
     pub lazy: bool,
     /// What the editor's commands read of it (session, frame, evaluateName, path, line …).
     pub fields: Vec<(&'static str, Value)>,
+    /// What drew a variable's or a chunk's line, so its subtree can be walked again alone ([`subtree`]); never sent.
+    pub src: Option<Src>,
+}
+
+/// What drew a line of the Variables section: a variable (or scope) of a kind, or a chunk (start, count, the reference
+/// it pages).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Src {
+    Var(Var, &'static str),
+    Chunk(i64, i64, i64),
 }
 
 /// The requests that fill S's open nodes not fetched yet (Variables, Watch, other threads' frames), breadth first.
@@ -354,6 +364,88 @@ pub fn filter(lines: Vec<Line>, text: &str) -> Vec<Line> {
     lines.into_iter().filter(|l| keep.contains(&l.id)).collect()
 }
 
+/// What a walk made: its lines, the requests they still need (breadth first), the values they show.
+pub type Walk = (Vec<Line>, Vec<Want>, HashMap<String, String>);
+
+/// The lines of the selected session's Variables node LINE (a variable, a scope or a chunk) and all under it, as
+/// [`lines`] would draw them from INPUT, with the requests they still need (breadth first) and the values they show;
+/// None for a line not drawn by the Variables walk (no [`Src`]). An expand costs its subtree, not the view.
+pub fn subtree(input: &Input, line: &Line) -> Option<Walk> {
+    let src = line.src.as_ref()?;
+    let parent = line.parent.as_deref()?;
+    let mut cx = Cx::new(input);
+    let tree = &cx.selected()?.tree;
+    match src {
+        Src::Var(v, kind) => cx.var(tree, line.id.clone(), parent, line.depth, v, kind),
+        Src::Chunk(start, count, reference) => cx.chunk(
+            tree,
+            line.id.clone(),
+            parent,
+            line.depth,
+            *start,
+            *count,
+            *reference,
+        ),
+    }
+    let mut w = cx.wants;
+    w.sort_by_key(|w| w.depth);
+    Some((cx.lines, w, cx.values))
+}
+
+/// The index past the subtree of LINES' line I: the next line no deeper than it.
+pub fn subtree_end(lines: &[Line], i: usize) -> usize {
+    let depth = lines[i].depth;
+    lines[i + 1..]
+        .iter()
+        .position(|l| l.depth <= depth)
+        .map_or(lines.len(), |k| i + 1 + k)
+}
+
+/// The model node of LINE ([`doc`]).
+pub fn node(l: &Line) -> Value {
+    let mut fields = vec![json!(["label", l.label])];
+    for (k, v) in [
+        ("value", &l.value),
+        ("type", &l.ty),
+        ("detail", &l.detail),
+        ("chip", &l.chip),
+    ] {
+        if let Some(v) = v {
+            fields.push(json!([k, v]));
+        }
+    }
+    for (k, on) in [
+        ("dim", l.dim),
+        ("error", l.error),
+        ("changed", l.changed),
+        ("current", l.current),
+        ("capped", l.capped),
+        ("lazy", l.lazy),
+    ] {
+        if on {
+            fields.push(json!([k, 1]));
+        }
+    }
+    if let Some(t) = l.ticked {
+        fields.push(json!(["ticked", i64::from(t)]));
+    }
+    if l.open.is_some() {
+        fields.push(json!(["openable", 1]));
+    }
+    for (k, v) in &l.fields {
+        fields.push(json!([k, v]));
+    }
+    let mut node = json!({"id": l.id, "kind": l.kind, "flags": u8::from(l.open == Some(true)),
+                          "fields": fields});
+    if let Some(p) = &l.parent {
+        node["parent"] = json!(p);
+    }
+    node
+}
+
+/// The model's one list: the lines' order ([`doc`]).
+pub const LIST: &str = "order";
+
 /// The model of LINES: a `tree` with a node per line (its kind, `expanded` when open, its parent) whose fields are the
 /// label, the value and what the commands read; the list `order` in the lines' order.
 pub fn doc(lines: &[Line]) -> super::super::model::Doc {
@@ -372,47 +464,10 @@ pub fn doc(lines: &[Line]) -> super::super::model::Doc {
     };
     let mut order = Vec::with_capacity(lines.len());
     for l in lines {
-        let mut fields = vec![json!(["label", l.label])];
-        for (k, v) in [
-            ("value", &l.value),
-            ("type", &l.ty),
-            ("detail", &l.detail),
-            ("chip", &l.chip),
-        ] {
-            if let Some(v) = v {
-                fields.push(json!([k, v]));
-            }
-        }
-        for (k, on) in [
-            ("dim", l.dim),
-            ("error", l.error),
-            ("changed", l.changed),
-            ("current", l.current),
-            ("capped", l.capped),
-            ("lazy", l.lazy),
-        ] {
-            if on {
-                fields.push(json!([k, 1]));
-            }
-        }
-        if let Some(t) = l.ticked {
-            fields.push(json!(["ticked", i64::from(t)]));
-        }
-        if l.open.is_some() {
-            fields.push(json!(["openable", 1]));
-        }
-        for (k, v) in &l.fields {
-            fields.push(json!([k, v]));
-        }
-        let mut node = json!({"id": l.id, "kind": l.kind, "flags": u8::from(l.open == Some(true)),
-                              "fields": fields});
-        if let Some(p) = &l.parent {
-            node["parent"] = json!(p);
-        }
-        d.nodes.insert(l.id.clone(), node);
+        d.nodes.insert(l.id.clone(), node(l));
         order.push(l.id.clone());
     }
-    d.lists.insert("order".into(), order);
+    d.lists.insert(LIST.into(), order);
     d
 }
 
@@ -642,6 +697,7 @@ impl<'a> Cx<'a> {
             capped,
             lazy: pending,
             fields,
+            src: Some(Src::Var(var.clone(), kind)),
             ..Line::default()
         });
         if pending && wanted {
@@ -694,6 +750,7 @@ impl<'a> Cx<'a> {
             dim: tree.stale,
             capped: tree.capped.contains(&id),
             fields: vec![("reference", json!(reference))],
+            src: Some(Src::Chunk(start, count, reference)),
             ..Line::default()
         });
         if !open {
