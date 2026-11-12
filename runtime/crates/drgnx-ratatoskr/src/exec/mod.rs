@@ -1495,7 +1495,8 @@ impl Inner {
         let env = self.hooks.shell_env.paths_env();
         let session = match &spec.starter {
             Starter::Session(s) => Some(s.as_str()),
-            Starter::User => None,
+            // a sealed job has no agent session: its key socket goes in the job's dir, as a user job's
+            Starter::User | Starter::Sealed(_) => None,
         };
         let path = keys::socket_path(&env, session, dir, id)
             .ok_or_else(|| setup("the job's key socket has no path within a socket's length"))?;
