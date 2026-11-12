@@ -168,3 +168,31 @@ node it goes to the first child; an old stop's node does not open."
         (drgnx-debug-view-start)
         (should (equal '("/p" "c1") started))
         (should (string-match-p "Python: app ▾" (drgnx-debug-view--header)))))))
+
+(ert-deftest drgnx-debug-view/a-step-patches-its-rows-in-place ()
+  "A step's model diff and rows patch (the hub's `:replace' of the rows that changed) are drawn in place; a chunk
+opened from its row is answered with its rows inserted after it.  (The perf rows `debug-step-variables' and
+`debug-expand-chunks' run the same.)"
+  (debug-view-test--with
+    (drgnx-view-model-event (list :view "debug" :hub 7 :base 1 :version 2
+                                  :model (json-serialize
+                                          (list :ops (vector (list :nodes (vector (list :id "v:d1:Locals/n" :kind "var"
+                                                                                        :flags 0 :parent "v:d1:Locals"
+                                                                                        :fields [["label" "n"] ["value" "6"]]))))))))
+    (drgnx-view-apply-patch (list :view "debug" :class "unshown" :hub 7 :base 1 :version 2 :env_epoch 0 :model 2
+                                  :ops (list (list :replace (list (list :key "v:d1:Locals/n" :text "      n: 6"
+                                                                        :props '((0 10 "drgnx-work-id" "v:d1:Locals/n"))))))))
+    (drgnx-view-draw-now drgnx-view)
+    (should (string-match-p "      n: 6\n" (buffer-substring-no-properties (point-min) (point-max))))
+    (cl-letf (((symbol-function 'drgnx-hub--call-on)
+               (lambda (_conn method params _cb &rest _)
+                 (when (equal method "debug/expand")
+                   (drgnx-view-apply-patch
+                    (list :view "debug" :class "unshown" :hub 7 :base 2 :version 3 :env_epoch 0 :model 2
+                          :ops (list (list :insert (list :after (plist-get params :node)
+                                                         :rows (list (list :key "v:d1:Locals/obj/a" :text "      a: 1"
+                                                                           :props '((0 10 "drgnx-work-id" "v:d1:Locals/obj/a")))))))))
+                   (drgnx-view-draw-now drgnx-view)))))
+      (debug-view-test--goto "v:d1:Locals/obj")
+      (drgnx-debug-view-expand)
+      (should (string-match-p "obj: Obj\n      a: 1\n" (buffer-substring-no-properties (point-min) (point-max)))))))
