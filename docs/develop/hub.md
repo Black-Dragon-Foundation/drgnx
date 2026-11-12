@@ -4395,7 +4395,9 @@ there: a copy of its write end outside the group (any fork beside the host holds
 tests, every thread of the test binary forks) would hold that back, and what such a copy writes is never read as the
 browser. A Chromium without a group of its own (a filter refused `setpgid`) is waited for by the pipe's end, for up to
 1 s. The next `start` is a fresh
-Chromium through the same host.
+Chromium through the same host. The host counts the browser as ended in the same hold of its stream as it writes
+`exited`, so a `start` the hub sends once it has read `exited` always gets a fresh Chromium: never the dead one's
+`started` (whose CDP would then be dropped), however late the waiting thread runs on a loaded machine.
 
 **The hub goes.** EOF on fd 3 (the hub ended, or restarted: an inherited fd cannot be handed over again), or a reset
 (the hub closed its end with the host's last lines unread), stops Chromium as

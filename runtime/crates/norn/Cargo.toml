@@ -8,7 +8,8 @@ license.workspace = true
 publish = false
 
 [features]
-# The migration's hub seams (`DRGNX_TEST_MIGRATE7_FAIL`, `DRGNX_TEST_MIGRATE7_PAUSE`): drgnx-ratatoskr's test-hooks
+# The migration's hub seams (`DRGNX_TEST_MIGRATE7_FAIL`, `DRGNX_TEST_MIGRATE7_PAUSE`) and the project's git
+# (`DRGNX_TEST_GIT`): drgnx-ratatoskr's test-hooks
 test-hooks = []
 
 [dependencies]

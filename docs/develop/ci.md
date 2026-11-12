@@ -217,11 +217,15 @@ Mac the same way. The key handover (Lisp, `test/unit/runners-client-test.el`) ru
 The hub's lib tests end in a SIGABRT on macOS with no message, so most of them have never run there: in every run so
 far about a hundred tests finished, the last of them just before or among `agents::rewind::live`'s (the first module
 whose tests run live mock sessions, with snapshots and forks). Until they pass,
-a failed workspace step is followed by a diagnostic one: the hub's lib again with `--test-threads 1`, whose last
-`test … ...` line (libtest prints a test's name before it runs it on one thread) names the test running when the
-process died, written to the job's summary. An abort libsystem raises says why only in its crash report, so the step
-then prints the newest `drgnx_ratatoskr*.ips` under `~/Library/Logs/DiagnosticReports` and runs the named test alone
-with `--nocapture`. Round 1 named `exec::container::name_and_pull_tests::a_fake_podman_runs_while_another_thread_forks`.
+a failed workspace step is followed by a diagnostic one: the hub's lib again with `--test-threads 1 --nocapture`, whose
+last `test … ...` line (libtest prints a test's name before it runs it on one thread) names the test running when the
+process died, written to the job's summary (`--nocapture`: a thread a library started inside a test prints into that
+test's captured output otherwise, so its last words were lost). An abort libsystem raises says why only in its crash
+report, so the step then prints the `.ips` under `~/Library/Logs/DiagnosticReports` named for the binary that died and
+written after the step started (round 2 printed the newest one, which was the workspace run's), and runs the named test
+alone with `--nocapture`. Rounds 1 and 2 named
+`exec::container::name_and_pull_tests::a_fake_podman_runs_while_another_thread_forks`; round 2's report showed
+wasmtime's Mach port thread calling `abort()`, which the plugin host now leaves out (docs/develop/plugins.md, "Failures").
 The step goes once the lib passes on macOS.
 
 ## The tiers workflow

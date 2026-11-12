@@ -39,23 +39,47 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(3);
 /// The variables git keeps from the hub's environment (as `hello`'s, call 10).
 const GIT_ENV: [&str; 6] = ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR"];
 
-/// git ARGS in DIR, blocking: its whole output, or `None` when git is not the trusted one, fails, or takes over
-/// [`GIT_TIMEOUT`] (it is killed). `draugr::git`'s overrides, no terminal, stdin closed, a minimal environment.
-pub(crate) fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    use draugr::git::{GitCall, Place, command, git_program};
-    let program = git_program().ok()?;
+/// What git said: its output when it succeeded, `None` when it ran and failed (not a repository, no `HEAD`).
+pub(crate) type GitAnswer = Result<Option<String>, String>;
+
+/// git ARGS in DIR, blocking: its whole output; `Ok(None)` when it ran and failed, or DIR is not a folder; an error
+/// naming git when git is not the trusted one, cannot start, or takes over [`GIT_TIMEOUT`] (it is killed): no answer
+/// is never read as a "no". `draugr::git`'s overrides, no terminal, stdin closed, a minimal environment. With the
+/// `test-hooks` feature, the hub's seam `DRGNX_TEST_GIT=<program>` runs PROGRAM instead (a git that hangs).
+pub(crate) fn git(dir: &Path, args: &[&str]) -> GitAnswer {
+    #[cfg(feature = "test-hooks")]
+    if let Some(program) = std::env::var_os("DRGNX_TEST_GIT") {
+        return git_at(Path::new(&program), dir, args, GIT_TIMEOUT);
+    }
+    let program = draugr::git::git_program().map_err(|e| {
+        format!(
+            "git {} in {}: no trusted git: {e}",
+            args.join(" "),
+            dir.display()
+        )
+    })?;
+    git_at(&program.path, dir, args, GIT_TIMEOUT)
+}
+
+fn git_at(program: &Path, dir: &Path, args: &[&str], timeout: Duration) -> GitAnswer {
+    use draugr::git::{GitCall, Place, command};
+    let fail = |what: String| format!("git {} in {}: {what}", args.join(" "), dir.display());
+    if !dir.is_dir() {
+        return Ok(None);
+    }
     let (argv, extra) = command(&GitCall {
         place: Place::Trusted { read_only: true },
         allow_protocols: Vec::new(),
         args: args.iter().map(OsString::from).collect(),
     })
-    .ok()?;
+    .map_err(|e| fail(format!("{e:?}")))?;
     let set: Vec<(&str, &OsStr)> = extra
         .iter()
         .filter_map(|(k, v)| Some((k.to_str()?, v.as_os_str())))
         .collect();
     let env = draugr::env::build(&GIT_ENV, &[], &set);
-    let mut child = Command::new(&program.path)
+    let started = std::time::Instant::now();
+    let mut child = Command::new(program)
         .args(&argv)
         .current_dir(dir)
         .env_clear()
@@ -64,23 +88,43 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> Option<String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .ok()?;
-    let mut stdout = child.stdout.take()?;
+        .map_err(|e| fail(format!("cannot start: {e}")))?;
+    let spawned = started.elapsed();
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| fail("no stdout".into()))?;
     let (send, recv) = mpsc::channel();
     std::thread::spawn(move || {
         let mut out = Vec::new();
-        let read = stdout.read_to_end(&mut out).map(|_| out).ok();
+        let read = stdout.read_to_end(&mut out).map(|_| out);
         let _ = send.send(read);
     });
-    let Ok(out) = recv.recv_timeout(GIT_TIMEOUT) else {
+    let Ok(out) = recv.recv_timeout(timeout) else {
+        // whether git itself was still running, or something else held its output open after it ended
+        let ended = child.try_wait().ok().flatten();
         let _ = child.kill();
         let _ = child.wait();
-        return None;
+        return Err(fail(format!(
+            "no answer within {} ms (started in {} ms; {})",
+            timeout.as_millis(),
+            spawned.as_millis(),
+            match ended {
+                Some(st) => format!("git had ended ({st}), its output still open"),
+                None => "git still running, killed".into(),
+            }
+        )));
     };
-    if !child.wait().ok()?.success() {
-        return None;
+    let out = out.map_err(|e| fail(format!("reading its output: {e}")))?;
+    let status = child
+        .wait()
+        .map_err(|e| fail(format!("waiting for it: {e}")))?;
+    if !status.success() {
+        return Ok(None);
     }
-    String::from_utf8(out?).ok()
+    String::from_utf8(out)
+        .map(Some)
+        .map_err(|_| fail("its output is not UTF-8".into()))
 }
 
 fn first_line(text: &str) -> Option<&str> {
@@ -117,27 +161,44 @@ pub(crate) fn base36(mut v: u64, len: usize) -> String {
     String::from_utf8(out).expect("ASCII digits")
 }
 
-/// The git top-level of CWD and its project; `None` outside a repository, for the home folder itself (a repository
-/// of dotfiles holds no project, as `hello` rules), or when the trusted git cannot run. Blocking (runs git): not on
+/// The git top-level of CWD and its project; `None` outside a repository (or CWD is not a folder), and for the home
+/// folder itself (a repository of dotfiles holds no project, as `hello` rules). An error, naming git, when git
+/// cannot answer (not trusted, cannot start, over its time): never read as "no project". Blocking (runs git): not on
 /// an async worker, never under the writer's lock.
-pub fn resolve(cwd: &Path) -> Option<ProjectRef> {
-    let top = git(cwd, &["rev-parse", "--show-toplevel"])?;
-    let top = std::fs::canonicalize(first_line(&top)?).ok()?;
+pub fn resolve(cwd: &Path) -> Result<Option<ProjectRef>, String> {
+    resolve_by(cwd, git)
+}
+
+/// [`resolve`] with GIT for the trusted git.
+fn resolve_by(
+    cwd: &Path,
+    git: impl Fn(&Path, &[&str]) -> GitAnswer,
+) -> Result<Option<ProjectRef>, String> {
+    let Some(top) = git(cwd, &["rev-parse", "--show-toplevel"])? else {
+        return Ok(None);
+    };
+    let Some(top) = first_line(&top) else {
+        return Ok(None);
+    };
+    let top = std::fs::canonicalize(top).map_err(|e| format!("git's top-level {top}: {e}"))?;
     // A linked worktree's common dir is its main repository's `.git`: the main top-level is its parent.
     let root = git(
         cwd,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )
+    )?
     .and_then(|out| first_line(&out).and_then(|l| std::fs::canonicalize(l).ok()))
     .filter(|common| common.file_name() == Some(OsStr::new(".git")))
     .and_then(|common| common.parent().map(Path::to_path_buf))
     .unwrap_or(top);
     if home_dir().as_deref() == Some(root.as_path()) {
-        return None;
+        return Ok(None);
     }
-    let slug = root.file_name()?.to_string_lossy().into_owned();
+    let Some(slug) = root.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+        return Ok(None);
+    };
+    // no `HEAD` yet (no commit): no root commit
     let mut roots: Vec<(i64, String)> =
-        git(cwd, &["log", "--max-parents=0", "--format=%ct %H", "HEAD"])
+        git(cwd, &["log", "--max-parents=0", "--format=%ct %H", "HEAD"])?
             .map(|out| {
                 out.lines()
                     .filter_map(|l| {
@@ -155,13 +216,13 @@ pub fn resolve(cwd: &Path) -> Option<ProjectRef> {
         Some(sha) => format!("project:{}", &sha[..12]),
         None => format!("project:{}", random_x()),
     };
-    Some(ProjectRef {
+    Ok(Some(ProjectRef {
         id,
         root,
         slug,
         root_commit,
         roots,
-    })
+    }))
 }
 
 /// A live `project` entity: `(n, data.root, data.path)`.
@@ -298,9 +359,10 @@ pub struct ProjectCache {
 
 impl ProjectCache {
     /// Resolve DIR now ([`resolve`]: blocking, runs git) and keep the answer; a known `n` is kept while the
-    /// resolved id is unchanged.
-    pub fn fill(&mut self, dir: &Path) -> Option<&ProjectRef> {
-        let resolved = resolve(dir);
+    /// resolved id is unchanged. When git cannot answer, nothing is kept (the next look asks again) and the error
+    /// is returned.
+    pub fn fill(&mut self, dir: &Path) -> Result<Option<&ProjectRef>, String> {
+        let resolved = resolve(dir)?;
         let n = match (self.dirs.get(dir), &resolved) {
             (Some(Some((old, n))), Some(new)) if old.id == new.id => *n,
             _ => None,
@@ -309,7 +371,7 @@ impl ProjectCache {
         if let Some(n) = n {
             self.set_n(dir, n);
         }
-        self.get(dir)
+        Ok(self.get(dir))
     }
 
     /// Keep PROJECT (an answer of [`resolve`], or `None`: no project) for DIR, unregistered.
@@ -424,12 +486,12 @@ pub(crate) mod tests {
     fn root_commit_is_stable_across_a_folder_rename() {
         let base = tempfile::tempdir().unwrap();
         let alpha = repo(base.path(), "alpha", Some(1_600_000_000));
-        let before = resolve(&alpha).expect("a repository");
+        let before = resolve(&alpha).unwrap().expect("a repository");
         assert!(before.id.starts_with("project:") && before.id.len() == "project:".len() + 12);
         assert_eq!(before.slug, "alpha");
         let beta = base.path().join("beta");
         std::fs::rename(&alpha, &beta).unwrap();
-        let after = resolve(&beta).expect("a repository");
+        let after = resolve(&beta).unwrap().expect("a repository");
         assert_eq!(after.id, before.id);
         assert_eq!(after.slug, "beta");
 
@@ -451,7 +513,7 @@ pub(crate) mod tests {
     fn several_roots_pick_the_earliest() {
         let base = tempfile::tempdir().unwrap();
         let dir = repo(base.path(), "many", Some(1_700_000_000));
-        let first = resolve(&dir).unwrap();
+        let first = resolve(&dir).unwrap().unwrap();
         let (_d, _p, mut conn) = testkit::db();
         let n = testkit::write(&mut conn, hub(), |tx| register(tx, &first)).unwrap();
         // An unrelated history with an earlier root, merged in.
@@ -474,7 +536,7 @@ pub(crate) mod tests {
             ],
             Some(1_700_000_100),
         );
-        let merged = resolve(&dir).unwrap();
+        let merged = resolve(&dir).unwrap().unwrap();
         assert_eq!(merged.roots.len(), 2);
         assert_ne!(
             merged.id, first.id,
@@ -500,26 +562,26 @@ pub(crate) mod tests {
             None,
         );
         let wt = base.path().join("side-wt");
-        let a = resolve(&main).unwrap();
-        let b = resolve(&wt).unwrap();
+        let a = resolve(&main).unwrap().unwrap();
+        let b = resolve(&wt).unwrap().unwrap();
         assert_eq!(a, b);
         assert_eq!(b.slug, "main-repo");
         // From a folder inside the worktree too.
         std::fs::create_dir(wt.join("sub")).unwrap();
-        assert_eq!(resolve(&wt.join("sub")).unwrap().id, a.id);
+        assert_eq!(resolve(&wt.join("sub")).unwrap().unwrap().id, a.id);
     }
 
     #[test]
     fn no_commits_gets_x_then_moves() {
         let base = tempfile::tempdir().unwrap();
         let dir = repo(base.path(), "fresh", None);
-        let x = resolve(&dir).unwrap();
+        let x = resolve(&dir).unwrap().unwrap();
         assert!(x.id.starts_with("project:x-") && x.id.len() == "project:x-".len() + 8);
         assert_eq!(x.root_commit, None);
         let (_d, _p, mut conn) = testkit::db();
         let nx = testkit::write(&mut conn, hub(), |tx| register(tx, &x)).unwrap();
         // Resolved again (a new random id): the same folder's project.
-        let x2 = resolve(&dir).unwrap();
+        let x2 = resolve(&dir).unwrap().unwrap();
         assert_eq!(
             testkit::write(&mut conn, hub(), |tx| register(tx, &x2)).unwrap(),
             nx
@@ -529,7 +591,7 @@ pub(crate) mod tests {
             &["commit", "-q", "--allow-empty", "-m", "first"],
             Some(1_600_000_000),
         );
-        let real = resolve(&dir).unwrap();
+        let real = resolve(&dir).unwrap().unwrap();
         assert!(!real.id.starts_with("project:x-"));
         let n = testkit::write(&mut conn, hub(), |tx| register(tx, &real)).unwrap();
         assert_ne!(n, nx);
@@ -539,16 +601,40 @@ pub(crate) mod tests {
         assert_eq!(old.data["moved_to"], json!(real.id));
     }
 
+    /// A git that does not answer in time is no answer about the project: `resolve` says git failed, naming it, and
+    /// never reads it as "no project" (whose callers then use the global settings).
+    #[test]
+    fn a_git_that_hangs_is_an_error_not_no_project() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = repo(d.path(), "r", Some(1_000_000_000));
+        let slow = d.path().join("slow-git");
+        drgnx_exe::write(&slow, "#!/bin/sh\nsleep 5\n").unwrap();
+        // the error names the 300 ms bound it gave up at: the first call, not the sleep's 5 s
+        let r = resolve_by(&dir, |d, a| git_at(&slow, d, a, Duration::from_millis(300)));
+        let e = r.expect_err("a git that does not answer is an error");
+        assert!(
+            e.contains("git rev-parse --show-toplevel") && e.contains("no answer within 300 ms"),
+            "{e}"
+        );
+        // a git that answers "no" is still no project
+        let no = d.path().join("no-git");
+        drgnx_exe::write(&no, "#!/bin/sh\nexit 128\n").unwrap();
+        assert_eq!(
+            resolve_by(&dir, |d, a| git_at(&no, d, a, Duration::from_secs(5))),
+            Ok(None)
+        );
+    }
+
     #[test]
     fn outside_a_repo_is_none() {
         let base = tempfile::tempdir().unwrap();
         // Unless the temp folder itself lies in a repository (then there is nothing to show here).
-        if git(base.path(), &["rev-parse", "--show-toplevel"]).is_none() {
-            assert_eq!(resolve(base.path()), None);
+        if git(base.path(), &["rev-parse", "--show-toplevel"]) == Ok(None) {
+            assert_eq!(resolve(base.path()), Ok(None));
         }
-        assert_eq!(resolve(&base.path().join("missing")), None);
+        assert_eq!(resolve(&base.path().join("missing")), Ok(None));
         let mut cache = ProjectCache::default();
-        assert_eq!(cache.fill(&base.path().join("missing")), None);
+        assert_eq!(cache.fill(&base.path().join("missing")), Ok(None));
         assert_eq!(cache.project_n(&base.path().join("missing")), None);
     }
 
@@ -557,13 +643,13 @@ pub(crate) mod tests {
         let base = tempfile::tempdir().unwrap();
         let dir = repo(base.path(), "cached", Some(1_600_000_000));
         let mut cache = ProjectCache::default();
-        let p = cache.fill(&dir).cloned().unwrap();
+        let p = cache.fill(&dir).unwrap().cloned().unwrap();
         assert_eq!(cache.project_n(&dir), None);
         assert_eq!(cache.unregistered(), std::slice::from_ref(&p));
         cache.set_registered(&p.id, 7);
         assert_eq!(cache.project_n(&dir), Some(7));
         assert!(cache.unregistered().is_empty());
-        cache.fill(&dir);
+        cache.fill(&dir).unwrap();
         assert_eq!(cache.project_n(&dir), Some(7), "the same id keeps its n");
         cache.forget(&dir);
         assert_eq!(cache.get(&dir), None);

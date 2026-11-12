@@ -308,7 +308,12 @@ async fn before_tool(s: &Arc<Session>, tool: Value) -> Value {
     if call.kind == "other" && points::hub_tool_name(call.name.as_deref()) {
         return allow;
     }
-    let site = s.hook_site(At::Adapter).await;
+    let site = match s.hook_site(At::Adapter).await {
+        Ok(site) => site,
+        Err(e) => {
+            return json!({"outcome": "deny", "reason": s.hooks_unread(call.step_name(), &e)});
+        }
+    };
     // advice before the gate: a code commit before the task's red
     if let Some(reason) = crate::orch::advice::at_seam(&front, &site, &call, s.cwd()).await {
         return json!({"outcome": "deny", "reason": reason});

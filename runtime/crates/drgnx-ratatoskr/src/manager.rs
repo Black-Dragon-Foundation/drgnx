@@ -152,11 +152,14 @@ pub async fn role(f: &Front, c: &Caller, p: RoleParams) -> Result<bool, Error> {
 async fn link_budget(f: &Front, sid: &str, job: Option<&str>, cwd: &Path) {
     let b = &f.core.budgets;
     let mine = session::scope_of(Role::Manager, sid);
-    let dir = cwd.to_path_buf();
-    let project = crate::clock::blocking(move || norn::project::resolve(&dir).map(|p| p.id))
-        .await
-        .ok()
-        .flatten();
+    let project = match crate::graph::project_of(cwd).await {
+        Ok(p) => p.map(|p| p.id),
+        // the budget links up to its plan only, and the log says why
+        Err(e) => {
+            tracing::warn!(sid, "the manager's budget scope: {e}");
+            None
+        }
+    };
     let project = project.map(|p| BudgetScope::Project(Bounded(p)));
     match (job, &project) {
         (Some(j), Some(pr)) => {
