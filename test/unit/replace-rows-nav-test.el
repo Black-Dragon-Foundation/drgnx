@@ -10,18 +10,25 @@
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-view)
 (require 'drgnx-view-nav)
+(defvar drgnx-hub--events)
 (load (expand-file-name "modules/tools/drgnx-replace" drgnx-dir) nil t)
 
 (defvar drgnx-replace-rows-nav-test--n 0 "Each run's view gets a name of its own in Sjá.")
 
-(defun drgnx-replace-rows-nav-test--model ()
-  "The hub's model of a search: a.txt (matches on lines 1 and 2), then b.txt (one match on line 5)."
-  (let ((file (lambda (f name) (list :id (concat "f:" (substring f 3)) :kind "file" :flags 1
-                                     :fields (vector (vector "label" name) (vector "path" f)))))
-        (hit (lambda (f line) (list :id (format "m:%s:%d:4" (substring f 3) line) :kind "match" :flags 0
-                                    :parent (concat "f:" (substring f 3))
-                                    :fields (vector (vector "label" "let needle;") (vector "line" line)
-                                                    (vector "col" 4) (vector "end" 10) (vector "text" "needle"))))))
+(defvar drgnx-replace-rows-nav-test--grouped nil
+  "Non-nil: the model and rows are grouped, the hub's generic tree (view/search/group.rs): a folder `d:r' above
+a.txt, each file's matches under their definitions (`s:'), b.txt's under \"(top level)\".")
+
+(defun drgnx-replace-rows-nav-test--grouped-model ()
+  "The grouped model (see `drgnx-replace-rows-nav-test--grouped')."
+  (let ((node (lambda (id kind parent label path)
+                (append (list :id id :kind kind :flags 1)
+                        (and parent (list :parent parent))
+                        (list :fields (vector (vector "label" label) (vector "path" path))))))
+        (hit (lambda (f line parent)
+               (list :id (format "m:%s:%d:4" f line) :kind "match" :flags 0 :parent parent
+                     :fields (vector (vector "label" "let needle;") (vector "line" line)
+                                     (vector "col" 4) (vector "end" 10) (vector "text" "needle"))))))
     (json-serialize
      (list :ops
            (vector
@@ -29,13 +36,41 @@
                   (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"] :lists ["order"]
                                           :classes ["selected" "match" "dim"] :flags ["expanded"] :forms []
                                           :start "order")
-                        :nodes (vector (funcall file "/r/a.txt" "a.txt") (funcall hit "/r/a.txt" 1)
-                                       (funcall hit "/r/a.txt" 2) (funcall file "/r/b.txt" "b.txt")
-                                       (funcall hit "/r/b.txt" 5))
+                        :nodes (vector (funcall node "d:r" "folder" nil "r" "/r/r")
+                                       (funcall node "f:a.txt" "file" "d:r" "a.txt" "/r/a.txt")
+                                       (funcall node "s:a.txt:0:9:f" "symbol" "f:a.txt" "f" "/r/a.txt")
+                                       (funcall hit "a.txt" 1 "s:a.txt:0:9:f") (funcall hit "a.txt" 2 "s:a.txt:0:9:f")
+                                       (funcall node "f:b.txt" "file" nil "b.txt" "/r/b.txt")
+                                       (funcall node "s:b.txt:top" "symbol" "f:b.txt" "(top level)" "/r/b.txt")
+                                       (funcall hit "b.txt" 5 "s:b.txt:top"))
                         :edges []
                         :lists (vector (list :name "order"
-                                             :ids ["f:a.txt" "m:a.txt:1:4" "m:a.txt:2:4" "f:b.txt"
-                                                   "m:b.txt:5:4"])))))))))
+                                             :ids ["d:r" "f:a.txt" "s:a.txt:0:9:f" "m:a.txt:1:4" "m:a.txt:2:4"
+                                                   "f:b.txt" "s:b.txt:top" "m:b.txt:5:4"])))))))))
+
+(defun drgnx-replace-rows-nav-test--model ()
+  "The hub's model of a search: a.txt (matches on lines 1 and 2), then b.txt (one match on line 5)."
+  (if drgnx-replace-rows-nav-test--grouped (drgnx-replace-rows-nav-test--grouped-model)
+    (let ((file (lambda (f name) (list :id (concat "f:" (substring f 3)) :kind "file" :flags 1
+                                       :fields (vector (vector "label" name) (vector "path" f)))))
+          (hit (lambda (f line) (list :id (format "m:%s:%d:4" (substring f 3) line) :kind "match" :flags 0
+                                      :parent (concat "f:" (substring f 3))
+                                      :fields (vector (vector "label" "let needle;") (vector "line" line)
+                                                      (vector "col" 4) (vector "end" 10) (vector "text" "needle"))))))
+      (json-serialize
+       (list :ops
+             (vector
+              (list :reset
+                    (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"] :lists ["order"]
+                                            :classes ["selected" "match" "dim"] :flags ["expanded"] :forms []
+                                            :start "order")
+                          :nodes (vector (funcall file "/r/a.txt" "a.txt") (funcall hit "/r/a.txt" 1)
+                                         (funcall hit "/r/a.txt" 2) (funcall file "/r/b.txt" "b.txt")
+                                         (funcall hit "/r/b.txt" 5))
+                          :edges []
+                          :lists (vector (list :name "order"
+                                               :ids ["f:a.txt" "m:a.txt:1:4" "m:a.txt:2:4" "f:b.txt"
+                                                     "m:b.txt:5:4"]))))))))))
 
 (defun drgnx-replace-rows-nav-test--row (id text box)
   "The hub's row ID: TEXT, its tick box at BOX, the node id over the whole row."
@@ -43,11 +78,21 @@
         :props (list (list box (+ box 3) "drgnx-replace-box" id) (list 0 (length text) "drgnx-work-id" id))))
 
 (defun drgnx-replace-rows-nav-test--rows ()
-  (list (drgnx-replace-rows-nav-test--row "f:a.txt" "[x] a.txt" 0)
-        (drgnx-replace-rows-nav-test--row "m:a.txt:1:4" "  [x] let needle;" 2)
-        (drgnx-replace-rows-nav-test--row "m:a.txt:2:4" "  [x] let needle;" 2)
-        (drgnx-replace-rows-nav-test--row "f:b.txt" "[x] b.txt" 0)
-        (drgnx-replace-rows-nav-test--row "m:b.txt:5:4" "  [x] let needle;" 2)))
+  (if drgnx-replace-rows-nav-test--grouped
+      (list (let ((row (drgnx-replace-rows-nav-test--row "d:r" "▾ [x] r/  2" 2)))
+              (plist-put row :props (cons (list 0 1 "drgnx-replace-fold" "d:r") (plist-get row :props))))
+            (drgnx-replace-rows-nav-test--row "f:a.txt" "  [x] a.txt" 2)
+            (drgnx-replace-rows-nav-test--row "s:a.txt:0:9:f" "    [x] ƒ f  2" 4)
+            (drgnx-replace-rows-nav-test--row "m:a.txt:1:4" "      [x] let needle;" 6)
+            (drgnx-replace-rows-nav-test--row "m:a.txt:2:4" "      [x] let needle;" 6)
+            (drgnx-replace-rows-nav-test--row "f:b.txt" "[x] b.txt" 0)
+            (drgnx-replace-rows-nav-test--row "s:b.txt:top" "  [x] (top level)  1" 2)
+            (drgnx-replace-rows-nav-test--row "m:b.txt:5:4" "    [x] let needle;" 4))
+    (list (drgnx-replace-rows-nav-test--row "f:a.txt" "[x] a.txt" 0)
+          (drgnx-replace-rows-nav-test--row "m:a.txt:1:4" "  [x] let needle;" 2)
+          (drgnx-replace-rows-nav-test--row "m:a.txt:2:4" "  [x] let needle;" 2)
+          (drgnx-replace-rows-nav-test--row "f:b.txt" "[x] b.txt" 0)
+          (drgnx-replace-rows-nav-test--row "m:b.txt:5:4" "  [x] let needle;" 2))))
 
 (defmacro drgnx-replace-rows-nav-test--with (&rest body)
   "BODY in the Search view's buffer on the rows path holding the model and rows above, nothing selected, nothing sent."
@@ -566,3 +611,128 @@ the gap row the view asks for the rows before it (`fill'), again only once the r
         (set-window-buffer win old)))))
 
 ;;; replace-rows-nav-test.el ends here
+
+(ert-deftest drgnx-replace-rows/grouped-ticks-cascade-down-the-tree ()
+  "Pattern D: grouped (Folders, Symbols), a group's box ticks everything under it (the file box's rule, a level up):
+a folder's every file's matches, a definition's its own; a match's box shows [-] on each group above it; Replace
+finds a match's file on its definition's `path'."
+  (let ((drgnx-replace-rows-nav-test--grouped t))
+    (drgnx-replace-rows-nav-test--with
+      (should (equal '("m:a.txt:1:4" "m:a.txt:2:4") (drgnx-replace--rows-file-matches "d:r")))
+      (drgnx-replace--rows-tick "m:a.txt:2:4")
+      (should (equal '("[-]" "[-]" "[-]" "[x]" "[ ]" "[x]" "[x]" "[x]") (drgnx-replace-rows-nav-test--boxes)))
+      (drgnx-replace--rows-tick "d:r")
+      (should (equal '("[ ]" "[ ]" "[ ]" "[ ]" "[ ]" "[x]" "[x]" "[x]") (drgnx-replace-rows-nav-test--boxes)))
+      (drgnx-replace--rows-tick "s:a.txt:0:9:f")
+      (should (equal '("[x]" "[x]" "[x]" "[x]" "[x]" "[x]" "[x]" "[x]") (drgnx-replace-rows-nav-test--boxes)))
+      (drgnx-replace--rows-tick "s:b.txt:top")
+      (should (equal '("[x]" "[x]" "[x]" "[x]" "[x]" "[ ]" "[ ]" "[ ]") (drgnx-replace-rows-nav-test--boxes)))
+      (should (equal "/r/b.txt" (plist-get (drgnx-replace--rows-match "m:b.txt:5:4") :file)))
+      (should (equal "f:a.txt" (drgnx-replace--rows-file-of "s:a.txt:0:9:f")))
+      (should-not (drgnx-replace--rows-file-of "d:r")))))
+
+(ert-deftest drgnx-replace-rows/next-group-walks-the-definitions-in-symbols ()
+  "Pattern D: grouped by Symbols, Next File / Previous File (Next Group) walk the definitions (`down:symbol')."
+  (let ((drgnx-replace-rows-nav-test--grouped t))
+    (drgnx-replace-rows-nav-test--with
+      (setq drgnx-replace--group 'symbol)
+      (drgnx-view-nav 'select "m:a.txt:1:4")
+      (drgnx-replace-next-file)
+      (should (equal "s:b.txt:top" (drgnx-view-nav-selection)))
+      (drgnx-replace-prev-file)
+      (should (equal "s:a.txt:0:9:f" (drgnx-view-nav-selection))))))
+
+(ert-deftest drgnx-replace-rows/a-regroup-asks-the-whole-window-after-its-first-draw ()
+  "Pattern D: a regroup's model comes as a first window (its rows at once); after the first draw that holds it, the
+view asks the hub for the whole window (`view/window'), once; a draw of the model before the regroup's asks nothing."
+  (let ((drgnx-replace-rows-nav-test--grouped t))
+    (drgnx-replace-rows-nav-test--with
+      (drgnx-replace-rows-nav-test--hub
+        (let* ((get (symbol-function 'nidhogg-view-get)) (win '(0 20000 30000))
+               (windows (lambda () (seq-filter (lambda (c) (equal (car c) "view/window")) calls))))
+          (cl-letf (((symbol-function 'nidhogg-view-get)
+                     (lambda (h what &rest args) (if (eq what 'window) win (apply get h what args)))))
+            (drgnx-replace-search-group 'tree)
+            (should drgnx-replace--grow)
+            ;; the model before the regroup's is drawn: its window is whole, nothing is asked
+            (drgnx-replace--rows-boxes drgnx-view nil)
+            (should-not (funcall windows))
+            ;; the regroup's first window is drawn: the whole one is asked for, from where it starts
+            (setq win '(0 2000 3033))
+            (drgnx-replace--rows-boxes drgnx-view nil)
+            (should (equal (list (list "view/window" :view drgnx-replace-view :list "order" :from 0)) (funcall windows)))
+            (drgnx-replace--rows-boxes drgnx-view nil)
+            (should (= 1 (length (funcall windows))))
+            ;; a new search asks nothing after its draws
+            (drgnx-replace-search-group 'symbol)
+            (cl-letf (((symbol-function 'drgnx-replace--send-buffers) #'ignore)
+                      ((symbol-function 'drgnx-replace--hub-attach) #'ignore))
+              (drgnx-replace--hub-search "needle" nil))
+            (should-not drgnx-replace--grow)))))))
+
+(ert-deftest drgnx-replace-rows/grouping-regroups-without-searching ()
+  "Pattern D: the grouping control (and Next Grouping) asks the hub to regroup (`search/group', the sort with it),
+never a search again; a new search keeps the grouping (`search/run''s `group' and `sort'); the keys are in every
+profile."
+  (let ((drgnx-replace-rows-nav-test--grouped t))
+    (drgnx-replace-rows-nav-test--with
+      (drgnx-replace-rows-nav-test--hub
+        (let ((searched 0))
+          (cl-letf (((symbol-function 'drgnx-replace--search-now) (lambda (&rest _) (cl-incf searched))))
+            (drgnx-replace-search-group-next)
+            (should (eq 'tree drgnx-replace--group))
+            (should (equal "search/group" (caar calls)))
+            (should (equal "tree" (plist-get (cdar calls) :group)))
+            (drgnx-replace-search-group 'symbol 'count)
+            (should (equal '("symbol" "count") (list (plist-get (cdar calls) :group) (plist-get (cdar calls) :sort))))
+            (should (= 0 searched))
+            ;; Folders: a folder's chevron folds it (`search/fold'), on its row or a row under it
+            (drgnx-replace-search-group 'tree)
+            (drgnx-replace-search-fold "d:r")
+            (should (equal '("search/fold" :view nil :node "d:r" :open :false)
+                           (cons (caar calls) (plist-put (cdar calls) :view nil))))
+            (drgnx-replace-search-group 'symbol)
+            (should-error (drgnx-replace-search-fold "d:r") :type 'user-error))
+          (cl-letf (((symbol-function 'drgnx-replace--send-buffers) #'ignore)
+                    ((symbol-function 'drgnx-replace--hub-attach) #'ignore))
+            (drgnx-replace--hub-search "needle" nil))
+          (should (equal "search/run" (caar calls)))
+          (should (equal '("symbol" "count") (list (plist-get (cdar calls) :group) (plist-get (cdar calls) :sort))))))))
+  (dolist (id '(search-group-next search-group search-fold))
+    (dolist (profile '("vscode" "emacs" "vim"))
+      (with-temp-buffer
+        (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
+        (should (search-forward (format "(%s " id) nil t))))))
+
+(ert-deftest drgnx-replace-rows/a-long-sheet-measures-its-edge-once ()
+  "Pattern D: every row of the Replace All sheet ends at its edge (the widest head and tail), which is measured once
+per edit set and hunk, not once per row: a sheet of 500 files draws in one measurement, and its hunk's coming in one
+more."
+  (drgnx-replace-rows-nav-test--with
+    (let ((drgnx-hub--events nil)       ; the hub client is stubbed, never loaded: its connection's name only
+          (answer (list :change 7 :skipped nil
+                        :files (mapcar (lambda (i) (list :path (format "/r/f%03d.txt" i) :source "disk"
+                                                         :edits (list (list :id (format "m:%d:1" i) :line 1))))
+                                       (number-sequence 0 499))))
+          (measured 0) (measure (symbol-function 'drgnx-replace--sheet-measure-edge)))
+      (cl-letf (((symbol-function 'drgnx-hub--call-on)
+                 (lambda (_conn method _params cb &rest _)
+                   (pcase method
+                     ("search/edits" (funcall cb answer nil))
+                     ("search/preview" (funcall cb drgnx-replace-rows-nav-test--preview nil))
+                     (_ (funcall cb t nil)))))
+                ((symbol-function 'drgnx-replace--live-view) (lambda () (get-buffer drgnx-replace-buffer-name)))
+                ((symbol-function 'drgnx-replace--text) (lambda (_) "pin"))
+                ((symbol-function 'drgnx-popup-refit) #'ignore)
+                ((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'drgnx-replace--sheet-measure-edge)
+                 (lambda (&rest args) (setq measured (1+ measured)) (apply measure args))))
+        (unwind-protect
+            (progn
+              (drgnx-replace--rows-replace-all "pin" t)
+              (with-current-buffer drgnx-replace-sheet-buffer-name
+                (should (string-match-p "Replace 500 matches in 500 files" (buffer-string)))
+                (should (plist-get drgnx-replace--sheet :hunk))
+                ;; the rows before the hunk came, then the rows with it
+                (should (<= measured 2))))
+          (when-let* ((b (get-buffer drgnx-replace-sheet-buffer-name))) (kill-buffer b)))))))

@@ -674,6 +674,62 @@ match on line 209 (the `puthash' line) unticked; the view's buffer, or nil."
                                                        (plist-get (buffer-local-value 'drgnx-replace--sheet b) :hunk)))))
     (drgnx-look-scene--answer)))
 
+(declare-function drgnx-search-to-agent "drgnx-search-handoff")
+(defvar drgnx-search-handoff-buffer-name)
+(defvar drgnx-search-handoff--ask)
+
+(defun drgnx-look-scene-search-kinds ()
+  "Symbol mode with its kind chips (search-view.html's \"Symbol with kind chips\"): `drgnx-gateway--queue' in the
+project, the fn chip on."
+  (when-let* ((view (drgnx-look-scene--search)))
+    (drgnx-look-scene--try "symbol"
+      (with-current-buffer view
+        (drgnx-replace--open :text "drgnx-gateway--queue" :mode 'symbol)
+        (when (drgnx-look-scene--until 30 "kinds" (lambda () drgnx-replace--kind-counts))
+          (unless (memq 'fn drgnx-replace--kinds-on) (drgnx-replace-kind-toggle 'fn))
+          (drgnx-look-scene--until 15 "symbol rows"
+                                   (lambda () (and drgnx-replace--hub-counts
+                                                   (not (save-excursion (goto-char (point-min))
+                                                                        (search-forward "--pending" nil t)))))))))
+    (drgnx-look-scene--answer)))
+
+(defun drgnx-look-scene-search-handed ()
+  "The Search view with four matches handed to an agent (search-view.html's results, `Ada 9/14'): a pair of a
+mock profile (the scenes' ratatoskr-mock, written into the settings before the hub starts) in the project; its rows'
+colour bar and the file's chip."
+  (unless (drgnx-hub-running-p)
+    (drgnx-look-scene--try "profile"
+      (drgnx-settings-file-put (expand-file-name "settings.el" (drgnx-user-dir)) 'drgnx-settings nil
+                               'drgnx-agents-profiles
+                               `(("mock-claude" :provider claude
+                                  :command (,(expand-file-name "ratatoskr-mock"
+                                                               (file-name-directory (getenv "DRGNX_RATATOSKR_BIN")))
+                                            "acp" "--as" "claude"))))))
+  (when-let* ((view (drgnx-look-scene--search)))
+    (drgnx-look-scene--try "hand off"
+      (with-current-buffer view
+        (let ((ids (seq-take (drgnx-look-scene--row-ids "m:") 4)))
+          (drgnx-hub--call-on drgnx-hub--events "search/handoff"
+                              (list :view drgnx-replace-view :instruction "Rename it." :ids (vconcat ids)
+                                    :to '(:pair (:profile "mock-claude"))
+                                    :mark '(:face "drgnx-agent-2" :glyph "◆" :name "Ada"))
+                              (lambda (_ err) (when err (push (format "hand off: %S" err) drgnx-look-scene--errors))))))
+      (drgnx-look-scene--until 20 "chip" (lambda () (with-current-buffer view
+                                                      (text-property-not-all (point-min) (point-max)
+                                                                             'drgnx-search-agent nil)))))
+    (drgnx-look-scene--answer)))
+
+(defun drgnx-look-scene-search-ask ()
+  "Ask an Agent's card over the editor (search-view.html's \"Ask an Agent (light, modal)\"), its context read."
+  (when-let* ((view (drgnx-look-scene--search)))
+    (drgnx-look-scene--theme 'drgnx-light)
+    (drgnx-look-scene--try "ask"
+      (with-current-buffer view (drgnx-search-to-agent))
+      (drgnx-look-scene--until 10 "context"
+                               (lambda () (when-let* ((b (get-buffer drgnx-search-handoff-buffer-name)))
+                                            (plist-get (buffer-local-value 'drgnx-search-handoff--ask b) :context)))))
+    (drgnx-look-scene--answer)))
+
 ;; The debugging mockup's file (the-look/debugging.html): its lines 13-33, after twelve lines of header.
 (defconst drgnx-look-scene--inventory
   (concat "\"\"\"Stock levels and the weekly order.\"\"\"\n\nimport logging\nfrom dataclasses import dataclass\n\n"

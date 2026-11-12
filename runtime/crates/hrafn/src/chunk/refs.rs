@@ -157,10 +157,10 @@ pub(super) fn of_tree(kind: Kind, tree: &Tree, text: &str) -> Vec<Ref> {
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(q, tree.root_node(), text.as_bytes());
     while let Some(m) = matches.next() {
-        if !m.captures.iter().any(|c| is_ref[c.index as usize]) {
+        if !m.captures().iter().any(|c| is_ref[c.index as usize]) {
             continue;
         }
-        for c in m.captures.iter().filter(|c| c.index == name_ix) {
+        for c in m.captures().iter().filter(|c| c.index == name_ix) {
             if let Ok(name) = c.node.utf8_text(text.as_bytes()) {
                 tally.add(name, line_of(c.node));
             }

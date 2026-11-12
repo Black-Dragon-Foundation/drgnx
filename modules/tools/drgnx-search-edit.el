@@ -88,31 +88,38 @@ STATE).")
 
 (defun drgnx-search-edit--insert (lines root)
   "Insert LINES (the hub's `search/edit-doc' lines, by file and line) under their files' headers (ROOT their folder);
-the buffer's lines vector."
+the buffer's lines vector.  The text goes in at once and the lines' markers are made after it: a marker made before
+an insertion would be moved by every insertion after it."
   (let* ((width (length (number-to-string (apply #'max 1 (mapcar (lambda (l) (plist-get l :line)) lines)))))
-         (counts (make-hash-table :test #'equal)) (path nil) (out nil))
+         (number (format "%%%dd  " width))
+         (counts (make-hash-table :test #'equal)) (path nil) (pieces nil) (at 0) (spans nil))
     (dolist (l lines) (cl-incf (gethash (plist-get l :path) counts 0)))
     (dolist (l lines)
       (unless (equal (plist-get l :path) path)
         (setq path (plist-get l :path))
-        (insert (drgnx-search-edit--header path root (gethash path counts))))
+        (let ((h (drgnx-search-edit--header path root (gethash path counts))))
+          (push h pieces) (cl-incf at (length h))))
       ;; the number: read-only, nothing typed before it; text typed after it is the line's
-      (insert (propertize (format (format "%%%dd  " width) (plist-get l :line)) 'face 'drgnx-search-edit-number
-                          'read-only t 'front-sticky '(read-only) 'rear-nonsticky t))
-      (let ((start (point-marker)) (context (equal (plist-get l :kind) "context")))
-        (insert (plist-get l :text))
-        (when context (add-face-text-property start (point) 'drgnx-search-edit-context t))
-        (insert (propertize "\n" 'read-only t))
-        (let ((rec (drgnx-search-edit--line-make
-                    :id (plist-get l :line_id) :path path :line (plist-get l :line) :old (plist-get l :text)
-                    :eol (plist-get l :eol) :kind (if context 'context 'match)
-                    ;; text typed at either end is the line's: the start stays before it, the end moves after it
-                    :start start :end (copy-marker (1- (point)) t))))
-          (when (plist-get l :held)
-            (add-text-properties start (1- (point)) '(read-only "An agent holds this line" front-sticky (read-only)))
-            (add-face-text-property start (1- (point)) 'drgnx-search-edit-held))
-          (push rec out))))
-    (vconcat (nreverse out))))
+      (let ((n (propertize (format number (plist-get l :line)) 'face 'drgnx-search-edit-number
+                           'read-only t 'front-sticky '(read-only) 'rear-nonsticky t))
+            (text (copy-sequence (plist-get l :text))))
+        (when (equal (plist-get l :kind) "context") (add-face-text-property 0 (length text) 'drgnx-search-edit-context t text))
+        (when (plist-get l :held)
+          (add-text-properties 0 (length text) '(read-only "An agent holds this line" front-sticky (read-only)) text)
+          (add-face-text-property 0 (length text) 'drgnx-search-edit-held nil text))
+        (push n pieces) (cl-incf at (length n))
+        (push (list l path at (+ at (length text))) spans)
+        (push text pieces) (push (propertize "\n" 'read-only t) pieces) (cl-incf at (1+ (length text)))))
+    (let ((base (point)))
+      (insert (apply #'concat (nreverse pieces)))
+      (vconcat
+       (mapcar (pcase-lambda (`(,l ,path ,from ,to))
+                 (drgnx-search-edit--line-make
+                  :id (plist-get l :line_id) :path path :line (plist-get l :line) :old (plist-get l :text)
+                  :eol (plist-get l :eol) :kind (if (equal (plist-get l :kind) "context") 'context 'match)
+                  ;; text typed at either end is the line's: the start stays before it, the end moves after it
+                  :start (copy-marker (+ base from)) :end (copy-marker (+ base to) t)))
+               (nreverse spans))))))
 
 (defun drgnx-search-edit--buffer-name (query)
   "The tab of an Edit Results buffer of QUERY."
@@ -124,6 +131,12 @@ one of this search has unsaved edits."
   (let ((buf (get-buffer-create (drgnx-search-edit--buffer-name query))))
     (with-current-buffer buf
       (unless (and (derived-mode-p 'drgnx-search-edit-mode) (drgnx-search-edit--unsaved-p))
+        ;; the lines made before let go of their markers and overlays: each would slow every change after
+        (when (derived-mode-p 'drgnx-search-edit-mode)
+          (cl-loop for l across drgnx-search-edit--lines
+                   do (set-marker (drgnx-search-edit--line-start l) nil)
+                   (set-marker (drgnx-search-edit--line-end l) nil))
+          (delete-all-overlays))
         (drgnx-search-edit-mode)
         (setq drgnx-search-edit--view view drgnx-search-edit--title query)
         (let ((inhibit-read-only t) (inhibit-modification-hooks t))
@@ -201,7 +214,9 @@ message (a callback: nothing to signal to)."
 (defun drgnx-search-edit--mark (l state)
   "Mark L as STATE (`edited', `deleted'; nil: unmarked) and show it."
   (setf (drgnx-search-edit--line-state l) state)
-  (if state (puthash l t drgnx-search-edit--marked) (remhash l drgnx-search-edit--marked))
+  ;; modified: a save (`:w' too) has something to write, a deletion included (it changes no text)
+  (if state (progn (puthash l t drgnx-search-edit--marked) (set-buffer-modified-p t))
+    (remhash l drgnx-search-edit--marked))
   (drgnx-search-edit--decorate l))
 
 (defun drgnx-search-edit--changed (beg _end _len)
@@ -298,10 +313,99 @@ message (a callback: nothing to signal to)."
     m)
   "Edit Results' keymap: the profiles' keys, and the profile's save.")
 
+(defvar drgnx-search-edit-normal-state-map (make-sparse-keymap)
+  "Edit Results' keys in Vim's normal state (`d d' Delete Line, `Z Q' Discard), from the key profiles.  Evil reads it
+through the mode's normal-state auxiliary map (`drgnx-search-edit-evil-aux').")
+
+;;;; Vim's states
+
+(defvar evil-normal-state-map)
+(declare-function evil-get-auxiliary-keymap "evil-core")
+(declare-function evil-set-auxiliary-keymap "evil-core")
+
+(defvar drgnx-search-edit--vim-own nil
+  "Non-nil while `drgnx-search-edit--vim-key' runs evil's own command: the view's Vim prefixes stand aside.")
+
+(defun drgnx-search-edit--vim-key ()
+  "A key under one of a view's Vim prefixes that the profile does not bind (`d w' once `d d' is Delete Line, `Z Z'
+once `Z Q' is Discard): what evil's normal state does with it.  A command of its own there (`Z Z') runs; else the
+prefix's own (the `d' operator) runs and reads the rest of the keys as it would have: while it runs, the
+prefixes stand aside (`drgnx-search-edit--vim-own'), so the operator looks its keys up and reads its motion in
+evil's own maps."
+  (interactive)
+  (let* ((keys (this-command-keys-vector))
+         (map (and (boundp 'evil-normal-state-map) evil-normal-state-map))
+         (whole (and map (lookup-key map keys)))
+         (first (and map (lookup-key map (vector (aref keys 0)))))
+         (drgnx-search-edit--vim-own t))
+    (cond ((commandp whole) (setq this-command whole) (call-interactively whole))
+          ((commandp first)
+           (setq unread-command-events (append (cdr (append keys nil)) unread-command-events)
+                 this-command first)
+           (call-interactively first))
+          (t (undefined)))))
+
+(defun drgnx-search-edit--vim-prefix (ev map)
+  "MAP, a view's Vim prefix map under EV; while evil's own command runs (`drgnx-search-edit--vim-own'), what evil's
+normal state binds EV to (the prefix map's parents would still make EV a prefix)."
+  (if drgnx-search-edit--vim-own (lookup-key evil-normal-state-map (vector ev)) map))
+
+(defun drgnx-search-edit--vim-prefixes (wrapper)
+  "Fill WRAPPER, a view's auxiliary map whose parent is a profile-filled state map: under each prefix the profile
+made there (`d' of `d d'), every other key is evil's own (`drgnx-search-edit--vim-key').  Made again from the
+parent each time (an Edit Results buffer opens, the keys are applied again), so a prefix the profile no longer has
+leaves nothing behind."
+  (let ((parent (keymap-parent wrapper)) own)
+    (map-keymap (lambda (ev _) (push ev own)) wrapper)
+    (dolist (ev own) (define-key wrapper (vector ev) nil t))
+    (when parent
+      (map-keymap (lambda (ev def)
+                    (when (keymapp def)
+                      (let ((m (make-sparse-keymap)))
+                        (set-keymap-parent m def)
+                        (define-key m [t] #'drgnx-search-edit--vim-key)
+                        (define-key wrapper (vector ev) `(menu-item "" ,m :filter ,(apply-partially #'drgnx-search-edit--vim-prefix ev))))))
+                  parent))))
+
+(defun drgnx-search-edit-evil-aux (mode-map state keys)
+  "Make the profile-filled keymap KEYS the keys of MODE-MAP's buffers in evil's STATE: a wrapper with KEYS as parent
+becomes MODE-MAP's auxiliary map for STATE, with evil's own keys under KEYS' prefixes
+\(`drgnx-search-edit--vim-prefixes').
+Needs evil loaded.  Returns a function that puts back what MODE-MAP had there (for the module's undo; nothing when
+another took the place since)."
+  (let* ((key (vector (intern (format "%s-state" state))))
+         (prev (lookup-key mode-map key))
+         (wrapper (make-sparse-keymap)))
+    (set-keymap-parent wrapper keys)
+    (evil-set-auxiliary-keymap mode-map state wrapper)
+    (drgnx-search-edit--vim-prefixes wrapper)
+    (lambda ()
+      (when (eq (lookup-key mode-map key) wrapper)
+        (if (keymapp prev) (define-key mode-map key prev) (define-key mode-map key nil t))))))
+
+(defun drgnx-search-edit--refresh-vim-prefixes (&rest _)
+  "Make Edit Results' normal-state prefixes again from the profile's keys (`drgnx-search-edit--vim-prefixes'), when
+evil reads them; `drgnx-keys-after-apply-functions' and every new Edit Results buffer call it."
+  (let ((aux (and (fboundp 'evil-get-auxiliary-keymap)
+                  (evil-get-auxiliary-keymap drgnx-search-edit-mode-map 'normal))))
+    (when (and aux (eq (keymap-parent aux) drgnx-search-edit-normal-state-map))
+      (drgnx-search-edit--vim-prefixes aux))))
+
+(defun drgnx-search-edit--write ()
+  "`write-contents-functions': saving the buffer (`save-buffer', Vim's `:w', the profile's Save) saves the edited
+lines, never a file named by the buffer; true, so nothing else writes."
+  (drgnx-search-edit-save)
+  t)
+
 (define-derived-mode drgnx-search-edit-mode nil "Edit Results"
   "The Search view's results as an editable buffer: change the lines with any command; save writes them to their
 files, each checked against its file; Delete Line deletes a line on save; Abort drops the edits."
   (setq-local truncate-lines t)
+  ;; `:w' and every save reach the edited lines; the global save hooks (whitespace, formatters) never see them
+  (setq-local write-contents-functions (list #'drgnx-search-edit--write))
+  (setq-local before-save-hook nil after-save-hook nil)
+  (setq-local require-final-newline nil)
+  (drgnx-search-edit--refresh-vim-prefixes)
   (setq-local header-line-format '(:eval (drgnx-search-edit--header-line)))
   (font-lock-mode -1)
   (jit-lock-register #'drgnx-search-edit--fontify)

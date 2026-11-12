@@ -24,6 +24,8 @@ pub(super) enum Mode {
     Meaning {
         question: String,
     },
+    /// A code pattern over Text's files (`pattern`).
+    Pattern(super::pattern::Find),
 }
 
 /// How many uses and hits an index mode lists.
@@ -108,7 +110,7 @@ async fn batches(
 ) -> Result<(Vec<Batch>, Option<KindCounts>), String> {
     let dir = Path::new(root.as_str());
     match mode {
-        Mode::Text => Ok((Vec::new(), None)),
+        Mode::Text | Mode::Pattern(_) => Ok((Vec::new(), None)),
         Mode::Symbol { name, case, kinds } => {
             let ans = f
                 .search

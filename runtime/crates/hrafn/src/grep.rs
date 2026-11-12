@@ -39,6 +39,9 @@ pub struct Query {
     pub include: Vec<String>,
     pub exclude: Vec<String>,
     pub ignore: Ignore,
+    /// Only each file's first match (`-m 1`): the files that hold the text, for a search that reads them itself
+    /// (structural search's candidates).
+    pub first: bool,
 }
 
 /// One match: FILE absolute, LINE from 1, COL and END characters of the line from 0.
@@ -203,6 +206,9 @@ pub fn command(b: Backend, q: &Query) -> Vec<String> {
             if q.word {
                 add(&["-w"]);
             }
+            if q.first {
+                add(&["-m", "1"]);
+            }
             if q.ignore == Ignore::Real {
                 add(&["--hidden", "--glob=!.git/"]);
             }
@@ -236,6 +242,9 @@ pub fn command(b: Backend, q: &Query) -> Vec<String> {
             if q.word {
                 add(&["-w"]);
             }
+            if q.first {
+                add(&["-m", "1"]);
+            }
             c.extend(["-e".into(), q.text.clone(), "--".into()]);
             match (file, listed) {
                 (Some(f), _) => c.push(f),
@@ -259,6 +268,9 @@ pub fn command(b: Backend, q: &Query) -> Vec<String> {
             }
             if q.word {
                 add(&["-w"]);
+            }
+            if q.first {
+                add(&["-m", "1"]);
             }
             add(&["--exclude-dir=.git"]);
             c.extend(inc.iter().map(|g| format!("--include={g}")));

@@ -1,0 +1,9 @@
+{"scenario": "perf/search-preview", "requires": ["v1", "perf"], "doc": "The Search view's preview of one file's replacements (search/preview): a 2,000-line file with 50 matches (every 40th line), its diff with hunks and groups, 50 samples (--perf records every sample, no budget; spec: 15 ms in the hub)."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/proj && cd $ROOT/proj && i=0; while [ $i -lt 2000 ]; do if [ $((i % 40)) -eq 0 ]; then echo \"    let x = needle(1, x); // line $i\"; else echo \"    let y = other(2, y); // line $i\"; fi; i=$((i+1)); done > big.rs"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "text", "text": "needle"}, "replace": "pin"}, "context": false}}}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": "$any", "files": 1, "matches": 50}}, "within_ms": 30000}
+{"do": "measure", "name": "search-preview-2000-lines-50-edits", "repeat": 50, "steps": [{"do": "send", "conn": "e", "json": {"id": 3, "method": "search/preview", "params": {"view": "s", "path": "$ROOT/proj/big.rs", "off": []}}}, {"do": "expect", "conn": "e", "json": {"id": 3, "result": {"path": "$ROOT/proj/big.rs", "diff": "$any", "plus": 50, "minus": 50, "hunks": "$any"}}, "within_ms": 10000}]}

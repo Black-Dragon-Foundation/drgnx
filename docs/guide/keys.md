@@ -549,6 +549,11 @@ may not change them. Below, "`keys.eld`" in older sections means these entries.
   mixed stack a key that starts with `SPC` (or `C-w`, the leader keys) always goes in the leader map, whatever `:map` says.
   A global key that evil binds in some state (`C-p`, `C-o` …) beats evil's there: drgnx binds it in evil's map too
   and puts evil's key back when the stack switches (see "Vim's claims are per state").
+- `:key-map` gives some of the entry's keys a keymap of their own, `((KEY MAP)…)`, where a command works in two
+  places: Vim's `(search-history-prev "M-p" "C-p" :map (drgnx-replace . drgnx-replace-keys-map) :key-map (("C-p"
+  (drgnx-replace . drgnx-replace-find-insert-state-map))))` is `M-p` in the Search view and `C-p` in its Find field's
+  insert state. A view's keymap for one Vim state is named `…-STATE-state-map`; the key sheet shows its keys with the
+  state (`C-p (insert state)`).
 - `:mac` gives a different key on macOS: `(palette "C-c p" :mac "s-p")`; `:mac ()` is no key there, and
   `(quit :none "reason" :mac "s-q")` a key only there.
 - `:everywhere` names keys that must work in every mode: ``(toggle-panel "C-`" :everywhere "C-j")`` binds `C-j`

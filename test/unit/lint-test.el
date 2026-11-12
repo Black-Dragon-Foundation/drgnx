@@ -93,7 +93,8 @@ spec's `:box' colour too) or :distant-foreground."
     (cond ((stringp k) (not (string-match-p "mouse\\|wheel\\|\\`<remap>" k)))
           ((vectorp k)
            (let ((first (and (> (length k) 0) (aref k 0))))
-             (not (or (memq first '(remap header-line tab-line mode-line left-fringe right-fringe left-margin right-margin))
+             ;; `t': a prefix map's default binding, every event no other binding takes (never a key typed as such)
+             (not (or (memq first '(t remap header-line tab-line mode-line left-fringe right-fringe left-margin right-margin))
                       (and (symbolp first) (string-match-p "mouse\\|wheel" (symbol-name first))))))))))
 
 (ert-deftest drgnx-lint/the-key-check-tells-keys-from-mouse ()
@@ -104,7 +105,8 @@ spec's `:box' colour too) or :distant-foreground."
   (should-not (drgnx-lint--keyboard-key-p "<remap> <self-insert-command>"))
   (should-not (drgnx-lint--keyboard-key-p [header-line mouse-1]))
   (should-not (drgnx-lint--keyboard-key-p [left-margin mouse-1]))
-  (should-not (drgnx-lint--keyboard-key-p [remap kill-line])))
+  (should-not (drgnx-lint--keyboard-key-p [remap kill-line]))
+  (should-not (drgnx-lint--keyboard-key-p [t])))
 
 (ert-deftest drgnx-lint/keys-come-from-the-profiles ()
   ;; Keyboard keys are registry entries in keys/*.eld; code binds only mouse and chrome events.
@@ -133,6 +135,10 @@ a keyboard key of a command.")
 (defconst drgnx-lint--raw-input-builders '(drgnx-term--fill-map)
   "Functions that fill a raw-input map (`drgnx-lint--raw-input-maps') with every raw event, computed in code.")
 
+(defconst drgnx-lint--state-map-builders '(drgnx-search-edit--vim-prefixes drgnx-search-edit-evil-aux)
+  "Functions that copy into a view's evil auxiliary map what the profiles already put in its state map (its prefixes, the
+binding the map had before): the keys come from the profiles, computed only because they are copied.")
+
 (defun drgnx-lint--names-mouse-p (key)
   "Does the computed KEY form name a mouse or wheel event (a quoted mouse-1, wheel-up…)?"
   (catch 'found
@@ -147,7 +153,8 @@ a keyboard key of a command.")
       (dolist (top (drgnx-lint--forms f))
         (unless (or (and (memq (car-safe top) '(defvar defconst defvar-keymap)) (memq (cadr top) drgnx-lint--raw-input-maps))
                     (and (eq (car-safe top) 'defun) (memq (cadr top) (append drgnx-lint--decode-map-builders
-                                                                             drgnx-lint--raw-input-builders))))
+                                                                             drgnx-lint--raw-input-builders
+                                                                             drgnx-lint--state-map-builders))))
           (drgnx-lint--walk top (lambda (form)
                                   (pcase form
                                     (`(,(or 'define-key 'keymap-set 'keymap-local-set 'local-set-key) ,map ,key . ,_)
