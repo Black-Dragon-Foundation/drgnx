@@ -726,7 +726,9 @@ proposal).
   carries them); the third failure is a `review` card. **No verdict:** a `review` card. A reviewer that is lost (the job
   stopped, the hub restarted) is started again, three times.
 - **Merge.** One merge at a time per job, in a task of its own (the task shows `merging`). The job's branch is checked
-  out in `<runs root>/<job>/_job`. The reviewer's pass is written as `accepted` review marks for every changed file at
+  out in `<runs root>/<job>/_job`, made by one caller at a time (`review::branch_tree`; the manager's merges too: two
+  `worktree add`s at once had the loser remove the winner's folder, leaving it registered but missing), and made again
+  after a `worktree prune` when git still lists it but its folder is gone. The reviewer's pass is written as `accepted` review marks for every changed file at
   its current diff hash (unless the job's gate is `review+accept`: then only the user's marks count and the task waits).
   `RunGit::merge_gate` answers: `Allow` merges exactly the checked tip (`merge_into`: `merge --no-ff`); `Never` is a
   `review` card; `Ask(card)` (CI or build files changed) waits for the matrix card: answered yes, the next tick
