@@ -68,6 +68,8 @@ struct State {
     gates: HashMap<String, i64>,
     /// Task id → when it began to wait for its agent's turn to end.
     since: HashMap<String, f64>,
+    /// Task id → what the gates last said of it, waiting or holding (logged once each time it changes).
+    waits: HashMap<String, String>,
 }
 
 /// The runner's hooks for review, fallback, nudges and the clash reviewers.
@@ -79,6 +81,15 @@ impl PlanHooks {
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Log LINE, what the gates say of task TID of JOB, unless it is what they said last.
+    fn said(&self, job: &str, tid: &str, line: String) {
+        let mut st = self.st();
+        if st.waits.get(tid) != Some(&line) {
+            tracing::info!(job, task = tid, "{line}");
+            st.waits.insert(tid.to_owned(), line);
+        }
     }
 
     fn busy(&self, key: &str) -> bool {
@@ -1143,11 +1154,21 @@ impl PlanHooks {
                     &data,
                 )
                 .await
-                .map_err(internal)?
-                {
-                    Decision::Pass(_) => {}
-                    Decision::Wait(_) => return Ok(()),
+                .map_err(|e| {
+                    tracing::warn!(job, task = tid, "the gates could not judge the merge: {e}");
+                    internal(e)
+                })? {
+                    Decision::Pass(why) => {
+                        self.st().waits.remove(tid);
+                        tracing::info!(job, task = tid, "the gates pass the merge: {why}");
+                    }
+                    // a wait or a hold is logged when it begins or its reason changes, never once per tick
+                    Decision::Wait(why) => {
+                        self.said(job, tid, format!("the gates wait: {why}"));
+                        return Ok(());
+                    }
                     Decision::Hold(why) => {
+                        self.said(job, tid, format!("the gates hold the merge: {why}"));
                         // the tip's tree key: a waiver given on this card holds for this tip only
                         let tip = tick::git(
                             &tree.path,
