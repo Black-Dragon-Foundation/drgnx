@@ -120,6 +120,7 @@
         (debug-breakpoint "SPC d b" "<f9>")
         (debug-breakpoint-conditional "SPC d B")
         (debug-logpoint "SPC d l")
+        (debug-inline-breakpoint "SPC d I")
         (debug-breakpoint-enable "SPC d e")
         (debug-run-to-cursor "SPC d c")
         (debug-step-over "SPC d n" "<f10>")

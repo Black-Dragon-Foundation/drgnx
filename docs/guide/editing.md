@@ -109,8 +109,12 @@ JavaScript, for one) fold the same way, on their first line. The output stays af
 
 Breakpoints live in a column left of the line numbers, kept per project (they survive restarts and reach a running
 session at once). Click the column to add or remove one, drag one to another line to move it, shift-click for a
-logpoint (a message printed instead of a stop; `{expression}` is replaced by its value), right-click for the line's menu: a condition, a hit count, a log
-message, enable or disable, and Run to Cursor while a session runs. The dot is red when an adapter bound it, grey
+logpoint (a message printed instead of a stop; `{expression}` is replaced by its value), right-click for the line's
+menu: a condition, a hit count, a log message, enable or disable, and Run to Cursor while a session runs.
+**Inline Breakpoint** (Shift+F9; `C-x C-a C-i`, `SPC d I`) stops at point's column rather than the line's first
+statement, `a(b(x))` at `b` for one: a dot before that character, clicked to remove. While stopped, the lines with
+breakpoints show faint dots where else the debugger can stop; click one to put an inline breakpoint there
+(`drgnx-debug-inline-breakpoint-candidates` turns them off). The dot is red when an adapter bound it, grey
 before, hollow when disabled; a dot with two bars has a condition, a diamond is a logpoint. A line you move by
 editing keeps its breakpoint, which takes the new line when you save. `drgnx-debug-gutter-show` chooses when the
 column shows (`auto`: while the file has breakpoints or a session runs). Keys: VS Code F9 and C-F10 (Run to Cursor);

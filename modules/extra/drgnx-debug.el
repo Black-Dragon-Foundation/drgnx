@@ -277,6 +277,7 @@ console's tab shows without taking the focus."
                                                (debug-breakpoint "Toggle Breakpoint" drgnx-debug-gutter-toggle "A breakpoint on this line, or none")
                                                (debug-breakpoint-conditional "Add Conditional Breakpoint…" drgnx-debug-breakpoint-conditional "A breakpoint that stops only when its condition holds")
                                                (debug-logpoint "Add Logpoint…" drgnx-debug-logpoint "Print a message here instead of stopping")
+                                               (debug-inline-breakpoint "Inline Breakpoint" drgnx-debug-inline-breakpoint "A breakpoint at this column of the line, or none")
                                                (debug-breakpoint-enable "Enable / Disable Breakpoint" drgnx-debug-breakpoint-enable "Keep this line's breakpoint but stop or start using it")
                                                (debug-run-to-cursor "Run to Cursor" drgnx-debug-run-to-cursor "Continue until this line")
                                                (debug-step-over "Step Over" drgnx-debug-step-over "To the next line")

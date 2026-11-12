@@ -106,6 +106,7 @@
         (debug-breakpoint "<f9>")
         (debug-breakpoint-conditional :none "the breakpoint column's menu; the palette")
         (debug-logpoint :none "the breakpoint column's menu, S-mouse-1; the palette")
+        (debug-inline-breakpoint "S-<f9>")
         (debug-breakpoint-enable :none "the breakpoint column's menu; the palette")
         (debug-run-to-cursor "C-<f10>")
         (debug-step-over "<f10>")

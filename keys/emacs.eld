@@ -106,6 +106,7 @@
         (debug-breakpoint "C-x C-a C-b" :map drgnx-debug-mode-map)
         (debug-breakpoint-conditional "C-x C-a C-c" :map drgnx-debug-mode-map)
         (debug-logpoint "C-x C-a C-l" :map drgnx-debug-mode-map)
+        (debug-inline-breakpoint "C-x C-a C-i" :map drgnx-debug-mode-map)
         (debug-breakpoint-enable "C-x C-a C-e" :map drgnx-debug-mode-map)
         (debug-run-to-cursor "C-x C-a C-u" :map drgnx-debug-mode-map)
         (debug-step-over "C-x C-a C-n" :map drgnx-debug-mode-map)

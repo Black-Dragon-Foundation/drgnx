@@ -63,6 +63,17 @@
 (defface drgnx-debug-exception-hint '((t :inherit (drgnx-text-subtle drgnx-ui-caption)))
   "The exception card's last row: what the keys do." :group 'drgnx)
 
+(defface drgnx-debug-breakpoint-inline '((t :inherit drgnx-debug-breakpoint))
+  "An inline breakpoint's dot, before its column's character." :group 'drgnx)
+(defface drgnx-debug-breakpoint-candidate '((t :inherit drgnx-text-disabled))
+  "A faint dot where an inline breakpoint can go, while stopped." :group 'drgnx)
+
+(defcustom drgnx-debug-inline-breakpoint-candidates t
+  "Whether, while this project's session is stopped, each line with a breakpoint shows faint dots where the adapter
+can also stop (its `breakpointLocations', when there are two or more); a click on one adds an inline breakpoint there
+\(VS Code's `debug.showInlineBreakpointCandidates')."
+  :type 'boolean :group 'drgnx)
+
 (defcustom drgnx-debug-focus-on-stop nil
   "Whether a stop raises the Emacs frame that shows it (VS Code's `debug.focusWindowOnBreak'; off here)."
   :type 'boolean :group 'drgnx)
@@ -72,6 +83,9 @@
 (defvar-local drgnx-debug-gutter--bps nil "The file's breakpoints as the hub last said: plists.")
 (defvar-local drgnx-debug-gutter--version 0 "The version of `drgnx-debug-gutter--bps'.")
 (defvar-local drgnx-debug-gutter--overlays nil "(ID . OVERLAY) of each mark.")
+(defvar-local drgnx-debug-gutter--candidates nil "The candidate dots' overlays.")
+(defvar-local drgnx-debug-gutter--candidates-gen 0 "Bumped at each refresh: an older answer is dropped.")
+(defvar drgnx-debug-gutter--inline-map)
 (defvar drgnx-debug-gutter--sessions nil "The debug sessions as `debug-state' last said: plists with :id and :root.")
 
 ;;;; Glyphs
@@ -388,8 +402,14 @@ the buffer's start (a click deep in a long file was 10 ms of `forward-line')."
   "Put BP's mark on its line (the adapter's line where it bound it elsewhere)."
   (let* ((line (or (plist-get bp :bound_line) (plist-get bp :line)))
          (b (drgnx-debug-gutter--line-bounds line))
-         (o (make-overlay (car b) (max (cdr b) (car b)) nil t nil)))
-    (unless (= (car b) (cdr b)) (overlay-put o 'evaporate t))
+         (col (plist-get bp :column))
+         (o (if col
+                (let ((at (drgnx-debug-gutter--column-pos (car b) col)))
+                  (make-overlay at at nil nil nil))
+              (make-overlay (car b) (max (cdr b) (car b)) nil t nil))))
+    (if col
+        (overlay-put o 'drgnx-debug-column col)
+      (unless (= (car b) (cdr b)) (overlay-put o 'evaporate t)))
     (overlay-put o 'drgnx-debug-bp (plist-get bp :id))
     (overlay-put o 'drgnx-debug-drawn line)
     (push (cons (plist-get bp :id) o) drgnx-debug-gutter--overlays)
@@ -401,9 +421,14 @@ the buffer's start (a click deep in a long file was 10 ms of `forward-line')."
     (overlay-put o 'drgnx-debug-kind kind)
     (overlay-put o 'drgnx-debug-help (drgnx-debug-gutter--help bp))
     (overlay-put o 'drgnx-debug-agent (plist-get bp :agent))
-    (unless (overlay-get o 'drgnx-debug-under-stop)
-      (overlay-put o 'before-string (drgnx-debug-gutter--margin-string kind (overlay-get o 'drgnx-debug-help)
-                                                                       (plist-get bp :agent))))))
+    (if (overlay-get o 'drgnx-debug-column)
+        (overlay-put o 'before-string
+                     (propertize "●" 'face (if (eq kind 'off) 'drgnx-debug-unverified 'drgnx-debug-breakpoint-inline)
+                                 'help-echo (overlay-get o 'drgnx-debug-help) 'mouse-face 'highlight 'pointer 'hand
+                                 'keymap drgnx-debug-gutter--inline-map 'drgnx-debug-bp (plist-get bp :id)))
+      (unless (overlay-get o 'drgnx-debug-under-stop)
+        (overlay-put o 'before-string (drgnx-debug-gutter--margin-string kind (overlay-get o 'drgnx-debug-help)
+                                                                         (plist-get bp :agent)))))))
 
 (defun drgnx-debug-gutter--draw ()
   "Draw `drgnx-debug-gutter--bps': marks moved by edits stay where the text put them while the buffer has unsaved
@@ -422,7 +447,8 @@ changes (drafts); otherwise each sits on the store's line."
           (delete-overlay o)
           (setq drgnx-debug-gutter--overlays (assq-delete-all (plist-get bp :id) drgnx-debug-gutter--overlays))
           (setq o nil))
-        (drgnx-debug-gutter--dress (or o (drgnx-debug-gutter--place bp)) bp)))))
+        (drgnx-debug-gutter--dress (or o (drgnx-debug-gutter--place bp)) bp))))
+  (drgnx-debug-gutter--candidates-refresh))
 
 (defun drgnx-debug-gutter--restring (buffer)
   "`drgnx-margins-changed-functions': the column moved in BUFFER's margin; its marks take the new pad."
@@ -436,7 +462,8 @@ changes (drafts); otherwise each sits on the store's line."
                                            (if (eq (overlay-get o 'drgnx-debug-stop) 'top)
                                                "Paused here" "The selected frame")))))
         (dolist (e drgnx-debug-gutter--overlays)
-          (when (and (overlay-buffer (cdr e)) (not (overlay-get (cdr e) 'drgnx-debug-under-stop)))
+          (when (and (overlay-buffer (cdr e)) (not (overlay-get (cdr e) 'drgnx-debug-under-stop))
+                     (not (overlay-get (cdr e) 'drgnx-debug-column)))
             (overlay-put (cdr e) 'before-string
                          (drgnx-debug-gutter--margin-string (overlay-get (cdr e) 'drgnx-debug-kind)
                                                             (overlay-get (cdr e) 'drgnx-debug-help)
@@ -445,7 +472,8 @@ changes (drafts); otherwise each sits on the store's line."
 (defun drgnx-debug-gutter--clear ()
   "Take every mark out."
   (dolist (e drgnx-debug-gutter--overlays) (delete-overlay (cdr e)))
-  (setq drgnx-debug-gutter--overlays nil))
+  (setq drgnx-debug-gutter--overlays nil)
+  (drgnx-debug-gutter--candidates-clear))
 
 ;;;; The hub
 
@@ -477,12 +505,15 @@ changes (drafts); otherwise each sits on the store's line."
      (setq drgnx-debug-gutter--sessions (plist-get data :sessions))
      (dolist (b (buffer-list))
        (when (buffer-local-value 'drgnx-debug-gutter-mode b)
-         (with-current-buffer b (drgnx-debug-gutter--claim)))))))
+         (with-current-buffer b
+           (drgnx-debug-gutter--claim)
+           (drgnx-debug-gutter--candidates-refresh)))))))
 
 (defun drgnx-debug-gutter--mark-at (line)
   "The id of the mark on LINE, or nil."
   (let ((b (drgnx-debug-gutter--line-bounds line)))
-    (car (seq-find (lambda (e) (and (overlay-buffer (cdr e)) (= (overlay-start (cdr e)) (car b))))
+    (car (seq-find (lambda (e) (and (overlay-buffer (cdr e)) (not (overlay-get (cdr e) 'drgnx-debug-column))
+                                    (= (overlay-start (cdr e)) (car b))))
                    drgnx-debug-gutter--overlays))))
 
 (defun drgnx-debug-gutter-toggle (&optional line)
@@ -492,6 +523,84 @@ changes (drafts); otherwise each sits on the store's line."
     (drgnx-debug-gutter--ask (if-let* ((id (drgnx-debug-gutter--mark-at line)))
                                  (list :op "remove" :id id)
                                (list :op "add" :path buffer-file-name :line line)))))
+
+;;;; Inline breakpoints
+
+(defun drgnx-debug-gutter--column-pos (bol column)
+  "The position of 1-based character COLUMN on the line at BOL (its end when the line is shorter)."
+  (save-excursion (goto-char bol) (min (+ bol (1- column)) (line-end-position))))
+
+(defun drgnx-debug-inline-breakpoint ()
+  "An inline breakpoint at point's column (it stops there, not at the line's first statement), or none."
+  (interactive)
+  (let* ((line (line-number-at-pos)) (col (1+ (- (point) (line-beginning-position))))
+         (bp (seq-find (lambda (b) (and (eql (plist-get b :line) line) (eql (plist-get b :column) col)))
+                       drgnx-debug-gutter--bps)))
+    (drgnx-debug-gutter--ask (if bp (list :op "remove" :id (plist-get bp :id))
+                               (list :op "add" :path buffer-file-name :line line :column col)))))
+
+(defun drgnx-debug-gutter--inline-click (event)
+  "Mouse EVENT on an inline breakpoint's dot: remove it; on a candidate's: add one there."
+  (interactive "e")
+  (let* ((posn (event-start event)) (str (posn-string posn)))
+    (with-current-buffer (window-buffer (posn-window posn))
+      (if-let* ((id (and str (get-text-property (cdr str) 'drgnx-debug-bp (car str)))))
+          (drgnx-debug-gutter--ask (list :op "remove" :id id))
+        (when-let* ((add (and str (get-text-property (cdr str) 'drgnx-debug-candidate (car str)))))
+          (funcall add))))))
+
+(defvar drgnx-debug-gutter--inline-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m [down-mouse-1] #'ignore)
+    (define-key m [mouse-1] #'drgnx-debug-gutter--inline-click)
+    m)
+  "The dots' mouse: a click removes an inline breakpoint, or adds one at a candidate.")
+
+(defun drgnx-debug-gutter--stopped-session ()
+  "This project's stopped session, or nil."
+  (let ((root (drgnx-debug-launch-root)))
+    (seq-find (lambda (s) (and (equal (plist-get s :state) "stopped") (equal (plist-get s :root) root)))
+              drgnx-debug-gutter--sessions)))
+
+(defun drgnx-debug-gutter--candidates-clear ()
+  (mapc #'delete-overlay drgnx-debug-gutter--candidates)
+  (setq drgnx-debug-gutter--candidates nil))
+
+(defun drgnx-debug-gutter--candidates-refresh ()
+  "Ask again where inline breakpoints can go on the lines with breakpoints, while this project's session is stopped
+and `drgnx-debug-inline-breakpoint-candidates' is on; else none."
+  (drgnx-debug-gutter--candidates-clear)
+  (let ((gen (cl-incf drgnx-debug-gutter--candidates-gen)) (buffer (current-buffer)))
+    (when-let* ((drgnx-debug-inline-breakpoint-candidates) (buffer-file-name)
+                (s (drgnx-debug-gutter--stopped-session)))
+      (dolist (line (delete-dups (mapcar (lambda (b) (plist-get b :line)) drgnx-debug-gutter--bps)))
+        (drgnx-hub-call "debug/breakpoint-locations" (list :session (plist-get s :id) :path buffer-file-name :line line)
+                        (lambda (r error)
+                          (when (and r (not error) (buffer-live-p buffer))
+                            (with-current-buffer buffer
+                              (when (= gen drgnx-debug-gutter--candidates-gen)
+                                (drgnx-debug-gutter--candidates-put line (plist-get r :locations)))))))))))
+
+(defun drgnx-debug-gutter--candidates-put (line locations)
+  "Faint dots on LINE at LOCATIONS' columns (the adapter's, two or more) that hold no inline breakpoint."
+  (let ((taken (delq nil (mapcar (lambda (b) (and (eql (plist-get b :line) line) (plist-get b :column)))
+                                 drgnx-debug-gutter--bps)))
+        (cols (delete-dups (delq nil (mapcar (lambda (l) (and (memql (plist-get l :line) (list nil line))
+                                                              (plist-get l :column)))
+                                             (append locations nil)))))
+        (bol (car (drgnx-debug-gutter--line-bounds line)))
+        (file buffer-file-name))
+    (when (cdr cols)
+      (dolist (col cols)
+        (unless (memql col taken)
+          (let* ((at (drgnx-debug-gutter--column-pos bol col)) (o (make-overlay at at nil nil nil))
+                 (add (lambda () (drgnx-debug-gutter--ask (list :op "add" :path file :line line :column col)))))
+            (overlay-put o 'drgnx-debug-candidate add)
+            (overlay-put o 'before-string
+                         (propertize "○" 'face 'drgnx-debug-breakpoint-candidate 'mouse-face 'highlight 'pointer 'hand
+                                     'help-echo "Click to add an inline breakpoint" 'keymap drgnx-debug-gutter--inline-map
+                                     'drgnx-debug-candidate add))
+            (push o drgnx-debug-gutter--candidates)))))))
 
 (defun drgnx-debug-gutter-add-logpoint (line message)
   "A logpoint on LINE printing MESSAGE (`{expression}' is replaced by its value)."
@@ -607,7 +716,9 @@ it), a mark whose line was deleted sends `remove'."
             (drgnx-debug-gutter--ask (list :op "remove" :id id))
           (let ((delta (- (line-number-at-pos (overlay-start o)) (overlay-get o 'drgnx-debug-drawn))))
             (unless (zerop delta)
-              (drgnx-debug-gutter--ask (list :op "move" :id id :line (+ (plist-get bp :line) delta))))))))))
+              (drgnx-debug-gutter--ask (append (list :op "move" :id id :line (+ (plist-get bp :line) delta))
+                                               (when-let* ((col (overlay-get o 'drgnx-debug-column)))
+                                                 (list :column col)))))))))))
 
 (defun drgnx-debug-gutter--reverted ()
   "`after-revert-hook': the text is the saved file again, so the marks go back to the store's lines."

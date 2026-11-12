@@ -8,6 +8,7 @@
 (load (expand-file-name "modules/extra/drgnx-debug-gutter" drgnx-dir) nil t)
 
 (defvar debug-gutter-test--calls nil "Every (METHOD . PARAMS) the test's hub was asked, in order.")
+(defvar debug-gutter-test--locations nil "What the test's hub answers `debug/breakpoint-locations' with.")
 
 (defmacro debug-gutter-test--with (lines &rest body)
   "BODY in a file buffer of LINES numbered lines, shown in the selected window, with the hub scripted: a
@@ -19,7 +20,11 @@
      (cl-letf (((symbol-function 'drgnx-hub-call)
                 (lambda (method params cb &rest _)
                   (setq debug-gutter-test--calls (append debug-gutter-test--calls (list (cons method params))))
-                  (funcall cb (if (equal method "debug/breakpoints") (debug-gutter-test--answer params) t) nil)
+                  (funcall cb (pcase method
+                                ("debug/breakpoints" (debug-gutter-test--answer params))
+                                ("debug/breakpoint-locations" (list :locations debug-gutter-test--locations))
+                                (_ t))
+                           nil)
                   1))
                ((symbol-function 'drgnx-hub-running-p) (lambda () t))
                ((symbol-function 'drgnx-debug-launch-root) (lambda () dir)))
@@ -57,10 +62,12 @@ failed \"no hub\" through it).  The hub is not stubbed."
   "The scripted hub's `debug/breakpoints': apply PARAMS' op to `debug-gutter-test--store', answer the view."
   (let ((op (plist-get params :op)))
     (pcase (plist-get op :op)
-      ("add" (unless (cl-find (plist-get op :line) debug-gutter-test--store
-                              :key (lambda (e) (plist-get (cdr e) :line)))
+      ("add" (unless (cl-find (list (plist-get op :line) (plist-get op :column)) debug-gutter-test--store
+                              :key (lambda (e) (list (plist-get (cdr e) :line) (plist-get (cdr e) :column)))
+                              :test #'equal)
                (push (cons (cl-incf debug-gutter-test--next)
                            (list :id debug-gutter-test--next :line (plist-get op :line) :enabled t :verified t
+                                 :column (plist-get op :column)
                                  :log (plist-get op :log) :condition (plist-get op :condition)))
                      debug-gutter-test--store)))
       ("edit" (let ((bp (cdr (assq (plist-get op :id) debug-gutter-test--store))))
@@ -142,6 +149,67 @@ starts no text selection."
                      '(7 2)))
       (should (eq (lookup-key drgnx-debug-gutter-mode-map [left-margin drag-mouse-1]) #'drgnx-debug-gutter-drag))
       (should (eq (lookup-key drgnx-debug-gutter-mode-map [left-margin down-mouse-1]) #'ignore)))))
+
+(defun debug-gutter-test--inline ()
+  "The inline marks: (LINE COLUMN STRING) of each breakpoint overlay with a column, in order."
+  (sort (mapcar (lambda (o) (list (line-number-at-pos (overlay-start o))
+                                  (1+ (- (overlay-start o) (save-excursion (goto-char (overlay-start o))
+                                                                           (line-beginning-position))))
+                                  (substring-no-properties (overlay-get o 'before-string))))
+                (seq-filter (lambda (o) (and (overlay-get o 'drgnx-debug-bp) (overlay-get o 'drgnx-debug-column)))
+                            (overlays-in (point-min) (point-max))))
+        (lambda (a b) (< (car a) (car b)))))
+
+(ert-deftest drgnx-debug-gutter/an-inline-breakpoint-sits-at-its-column ()
+  "Inline Breakpoint: a breakpoint at point's line and column (`add' with `:column'), drawn as a dot before that
+character, not in the column; again there removes it.  The line's own toggle leaves it alone."
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0))
+    (debug-gutter-test--with 10
+      (goto-char (point-min)) (forward-line 2) (forward-char 4)
+      (drgnx-debug-inline-breakpoint)
+      (should (equal (debug-gutter-test--inline) '((3 5 "●"))))
+      (should (equal (plist-get (plist-get (cdr (car (last debug-gutter-test--calls))) :op) :column) 5))
+      (drgnx-debug-gutter-toggle 3)
+      (should (equal (debug-gutter-test--marks) '((3 . bp) (3 . bp))))
+      (drgnx-debug-gutter-toggle 3)
+      (should (equal (debug-gutter-test--inline) '((3 5 "●"))))
+      (drgnx-debug-inline-breakpoint)
+      (should-not (debug-gutter-test--marks))
+      (should (equal (debug-gutter-test--ops) '(("add" 3) ("add" 3) ("remove" 2) ("remove" 1)))))))
+
+(ert-deftest drgnx-debug-gutter/inline-candidates-while-stopped ()
+  "While this project's session is stopped, each line with a breakpoint shows faint dots where the adapter can stop
+(`debug/breakpoint-locations', two or more on the line), but not where one already is; a click on a dot adds an
+inline breakpoint there.  None with the setting off, or once the session runs."
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0)
+        (debug-gutter-test--locations (vector (list :line 2 :column 1) (list :line 2 :column 3) (list :line 2 :column 6))))
+    (debug-gutter-test--with 10
+      (let ((cands (lambda () (sort (mapcar (lambda (o) (1+ (- (overlay-start o) (pos-bol 2))))
+                                            (seq-filter (lambda (o) (overlay-get o 'drgnx-debug-candidate))
+                                                        (overlays-in (point-min) (point-max))))
+                                    #'<))))
+        (drgnx-debug-gutter-toggle 2)
+        (should-not (funcall cands))
+        (drgnx-debug-gutter--event "debug-state" (list :sessions (vector (list :id "s1" :root (drgnx-debug-launch-root)
+                                                                               :state "stopped"))))
+        (should (equal (cdr (assoc "debug/breakpoint-locations" debug-gutter-test--calls))
+                       (list :session "s1" :path buffer-file-name :line 2)))
+        (should (equal (funcall cands) '(1 3 6)))
+        (let ((o (seq-find (lambda (o) (and (overlay-get o 'drgnx-debug-candidate) (= (overlay-start o) (+ (pos-bol 2) 2))))
+                           (overlays-in (point-min) (point-max)))))
+          (funcall (overlay-get o 'drgnx-debug-candidate)))
+        (should (equal (debug-gutter-test--inline) '((2 3 "●"))))
+        (should (equal (funcall cands) '(1 6)))
+        (let ((drgnx-debug-inline-breakpoint-candidates nil))
+          (drgnx-debug-gutter--event "debug-state" (list :sessions (vector (list :id "s1" :root (drgnx-debug-launch-root)
+                                                                                 :state "stopped"))))
+          (should-not (funcall cands)))
+        (drgnx-debug-gutter--event "debug-state" (list :sessions (vector (list :id "s1" :root (drgnx-debug-launch-root)
+                                                                               :state "stopped"))))
+        (should (funcall cands))
+        (drgnx-debug-gutter--event "debug-state" (list :sessions (vector (list :id "s1" :root (drgnx-debug-launch-root)
+                                                                               :state "running"))))
+        (should-not (funcall cands))))))
 
 (ert-deftest drgnx-debug-gutter/the-column-shows-when-the-file-has-breakpoints ()
   (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0) (drgnx-debug-gutter-show 'auto))

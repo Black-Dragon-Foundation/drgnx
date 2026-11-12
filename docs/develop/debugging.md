@@ -324,6 +324,16 @@ only).
   opens the line's menu (`drgnx-debug-gutter--menu-items`): Add Breakpoint / Conditional / Logpoint on an empty line;
   Remove, Edit Condition / Hit Count / Log Message and Enable or Disable on a breakpoint; Run to Cursor while a session
   runs in the project (`debug/run-to-cursor`).
+- Inline breakpoints: a breakpoint with a `column` (1-based characters; the hub converts for the adapter) is its
+  own breakpoint beside the line's. `drgnx-debug-inline-breakpoint` (Shift+F9) adds or removes one at point's
+  column. Its mark is a zero-length overlay before that character (`drgnx-debug-column`) whose `before-string` is a
+  dot (`drgnx-debug-breakpoint-inline`), not a margin glyph; `--mark-at` (the line's toggle, the drag, the stop
+  arrow) skips it; a save that moved it sends `move` with its column. A click on the dot removes it.
+- Candidates (`drgnx-debug-inline-breakpoint-candidates`, on): while this project's session is stopped, each line
+  with a breakpoint asks `debug/breakpoint-locations {session, path, line}` → `{locations: [{line, column, …}]}`
+  (again at each `debug-state` and redraw; an older answer is dropped by a generation count) and, when there are two
+  or more, puts a faint `○` (`drgnx-debug-breakpoint-candidate`) at each column without an inline breakpoint; a
+  click adds one there.
 - The prompt (`drgnx-debug-gutter-edit`) starts from the field's text; an empty answer clears it (an `edit` op with
   `""`), and on a line without a breakpoint a non-empty answer adds one with that field.
 - The hover dot: with the pointer over the column, a line without a mark shows a faint dot ("Click to add a
