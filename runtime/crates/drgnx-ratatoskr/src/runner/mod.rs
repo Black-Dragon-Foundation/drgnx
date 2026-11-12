@@ -438,6 +438,29 @@ impl Runs {
     }
 }
 
+/// A task's busy mark ([`Runs::set_busy`]) held by the work it marks: cleared when dropped, so a start or merge
+/// that returns early or panics never leaves `job/stop` waiting on it.
+pub struct BusyMark {
+    front: Arc<Front>,
+    task: String,
+}
+
+impl BusyMark {
+    pub fn set(front: &Arc<Front>, task: &str, what: &'static str) -> BusyMark {
+        front.core.runs.set_busy(task, Some(what));
+        BusyMark {
+            front: front.clone(),
+            task: task.to_owned(),
+        }
+    }
+}
+
+impl Drop for BusyMark {
+    fn drop(&mut self) {
+        self.front.core.runs.set_busy(&self.task, None);
+    }
+}
+
 /// What a [`RunGit`] call answers.
 pub type GitFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, GitError>> + std::marker::Send + 'a>>;
@@ -532,13 +555,18 @@ pub trait RunGit: std::marker::Send + Sync {
     }
     /// The gate's card for BRANCH was answered yes: its checked tip may merge.
     fn clear_gate(&self, _branch: &str) {}
+    /// The tip the gate checked and cleared for BRANCH: the commit the hub's gates judge (none: they read the branch).
+    fn checked_tip(&self, _branch: &str) -> Option<String> {
+        None
+    }
     /// Merge exactly the tip the gate checked into the job's tree (`merge --no-ff`), with MESSAGE as its commit message
-    /// (none: `Merge BRANCH`).
+    /// (none: `Merge BRANCH`); with JUDGED, only when the checked tip is that commit.
     fn merge_into<'a>(
         &'a self,
         _job_tree: &'a Path,
         _tree: &'a TaskTree,
         _message: Option<&'a str>,
+        _judged: Option<&'a str>,
     ) -> GitFuture<'a, git::MergeOutcome> {
         Box::pin(async {
             Err(GitError {
@@ -2662,5 +2690,24 @@ mod resume_tests {
         // the start ends: the stop answers
         f.core.runs.set_busy(&task, None);
         stopping.await.unwrap().unwrap();
+    }
+
+    /// A start or merge that panics still clears its mark (`BusyMark` drops on the unwind), so `job/stop` answers
+    /// instead of waiting for a mark no one will clear.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_mark_whose_work_panicked_is_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = Arc::new(front(dir.path()));
+        let task = format!("{JOB}#1");
+        let mark = BusyMark::set(&f, &task, "merging");
+        assert_eq!(f.core.runs.busy_of(&task), Some("merging"));
+        let died = tokio::spawn(async move {
+            let _mark = mark;
+            panic!("a merge that panics");
+        })
+        .await;
+        assert!(died.is_err());
+        assert_eq!(f.core.runs.busy_of(&task), None);
+        f.core.runs.settled(JOB).await;
     }
 }
