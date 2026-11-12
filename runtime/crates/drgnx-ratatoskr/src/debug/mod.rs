@@ -880,6 +880,53 @@ impl Debug {
         Ok(self.data_of(&root, id))
     }
 
+    /// OP on session ID's instruction breakpoints (refused when its adapter has none), the session's whole list sent
+    /// (`setInstructionBreakpoints`) and published (`debug-breakpoints` with the session, no path). The view.
+    pub async fn instruction_breakpoints(
+        &self,
+        id: &str,
+        op: Option<breakpoints::InstrOp>,
+    ) -> Result<Value, String> {
+        let root = self
+            .root_of(id)
+            .ok_or_else(|| format!("no debug session {id}"))?;
+        let Some(op) = op else {
+            return Ok(self.instr_view(&root, id));
+        };
+        let (h, caps) = self.handle_caps(id)?;
+        if caps
+            .get("supportsInstructionBreakpoints")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            return Err("this adapter has no instruction breakpoints".into());
+        }
+        self.store(&root, |s| s.instr_op(id, op))?;
+        let list = self.store(&root, |s| s.instr_list(id, &caps));
+        match h
+            .request("setInstructionBreakpoints", json!({ "breakpoints": list }))
+            .await
+        {
+            Ok(body) => {
+                let got = body["breakpoints"].as_array().cloned().unwrap_or_default();
+                self.store(&root, |s| s.instr_answer(id, &got));
+            }
+            Err(e) => tracing::debug!(target: "drgnx::debug", "setInstructionBreakpoints: {e}"),
+        }
+        let v = self.instr_view(&root, id);
+        self.inner
+            .sink
+            .broadcast("debug-breakpoints", v.clone(), None);
+        self.changed();
+        Ok(v)
+    }
+
+    fn instr_view(&self, root: &str, id: &str) -> Value {
+        let mut v = self.store(root, |s| s.instr_view(id));
+        v["root"] = json!(root);
+        v
+    }
+
     /// Session ID's data breakpoints as the view shows them.
     pub fn data_breakpoints(&self, id: &str) -> Result<Vec<Value>, String> {
         let root = self
@@ -1537,6 +1584,7 @@ impl Debug {
             "source_name": source.get("name"),
             "line": frame.get("line"),
             "col": frame.get("column"),
+            "instruction_pointer": frame.get("instructionPointerReference"),
             "top": top,
             "reason": stop.reason,
             "exception": (stop.reason == "exception").then(|| exception_card(stop)),

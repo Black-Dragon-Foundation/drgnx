@@ -3,7 +3,7 @@
 //! `runInTerminal`'s terminals through the hub's [`crate::term::Terms`].
 
 use super::adapters::{self, Adapter, Table, Transport};
-use super::breakpoints::{Col, Op as BpOp, chars_of, col_of};
+use super::breakpoints::{Col, InstrOp, Op as BpOp, chars_of, col_of};
 use super::launch::{self, LaunchFile, Need, Os, Vars};
 use super::session::{NoProc, Op, Request, Start};
 use super::{BoxFut, Connected, Debug, Launcher, Opened, Terminals};
@@ -13,10 +13,10 @@ use runstav::methods::Params;
 use runstav::methods::debug::{
     BreakpointLocation, CompletionTarget, DebugBreakpointLocations, DebugBreakpointLocationsList,
     DebugBreakpointOp, DebugBreakpoints, DebugBreakpointsView, DebugCompletionList,
-    DebugCompletions, DebugConfig, DebugConfigList, DebugConfigs, DebugControl, DebugFileError,
-    DebugInstall, DebugMemory, DebugMemoryWritten, DebugMissing, DebugReadMemory, DebugRunToCursor,
-    DebugSelect, DebugSource, DebugSourceText, DebugStart, DebugStarted, DebugTrust,
-    DebugWriteMemory,
+    DebugCompletions, DebugConfig, DebugConfigList, DebugConfigs, DebugControl, DebugDisassemble,
+    DebugDisassembly, DebugFileError, DebugInstall, DebugMemory, DebugMemoryWritten, DebugMissing,
+    DebugReadMemory, DebugRunToCursor, DebugSelect, DebugSource, DebugSourceText, DebugStart,
+    DebugStarted, DebugTrust, DebugWriteMemory, DisassembledInstruction,
 };
 use runstav::types::JsonObject;
 use runstav::wire::{Error, ErrorCode};
@@ -666,7 +666,27 @@ async fn start_compound(
 async fn control(front: &Front, p: DebugControl) -> Result<bool, Error> {
     let d = front.debug.debug(front);
     let t = p.thread;
-    let op = match p.op.as_str() {
+    let op = match (p.op.as_str(), p.granularity.is_some()) {
+        ("next", true) => Op::Instruction {
+            thread: t,
+            step: "next",
+        },
+        ("step-in", true) => Op::Instruction {
+            thread: t,
+            step: "in",
+        },
+        ("step-out", true) => Op::Instruction {
+            thread: t,
+            step: "out",
+        },
+        (op, _) => control_op(op, t)?,
+    };
+    d.control(&p.session, op).await.map_err(err)?;
+    Ok(true)
+}
+
+fn control_op(op: &str, t: Option<i64>) -> Result<Op, Error> {
+    Ok(match op {
         "continue" => Op::Continue { thread: t },
         "pause" => Op::Pause { thread: t },
         "next" => Op::Next { thread: t },
@@ -681,9 +701,7 @@ async fn control(front: &Front, p: DebugControl) -> Result<bool, Error> {
         },
         "disconnect" => Op::Disconnect,
         other => return Err(bad("op", format!("no control {other}"))),
-    };
-    d.control(&p.session, op).await.map_err(err)?;
-    Ok(true)
+    })
 }
 
 async fn select(front: &Front, p: DebugSelect) -> Result<bool, Error> {
@@ -775,6 +793,9 @@ async fn breakpoints(
     mut p: DebugBreakpoints,
 ) -> Result<DebugBreakpointsView, Error> {
     let d = front.debug.debug(front);
+    if p.kind.as_deref() == Some("instruction") {
+        return instruction_breakpoints(d, p).await;
+    }
     // the Run and Debug view's ops over many breakpoints; the answer is PATH's view as for no op
     match p.op.as_ref().map(|o| o.op.as_str()) {
         Some("filter") => {
@@ -835,6 +856,86 @@ async fn breakpoints(
         v["added"] = json!(id);
     }
     serde_json::from_value(v).map_err(|e| err(e.to_string()))
+}
+
+/// A session's instruction breakpoints: the op (`add-instruction`, `remove-instruction`, `edit-instruction`), the view.
+async fn instruction_breakpoints(
+    d: &Debug,
+    p: DebugBreakpoints,
+) -> Result<DebugBreakpointsView, Error> {
+    let session = p.session.unwrap_or_default();
+    let op = p.op.map(|o| match o.op.as_str() {
+        "add-instruction" => InstrOp::Add {
+            instruction: o.instruction.unwrap_or_default(),
+            offset: o.offset,
+            condition: o.condition,
+            hit: o.hit,
+        },
+        "remove-instruction" => InstrOp::Remove {
+            n: o.id.unwrap_or_default(),
+        },
+        _ => InstrOp::Edit {
+            n: o.id.unwrap_or_default(),
+            enabled: o.enabled,
+            condition: o.condition,
+            hit: o.hit,
+        },
+    });
+    let v = d.instruction_breakpoints(&session, op).await.map_err(err)?;
+    serde_json::from_value(v).map_err(|e| err(e.to_string()))
+}
+
+/// The disassembly view's instructions: the adapter's `disassemble` (symbols resolved), its fields as the view
+/// names them; refused when it has none.
+async fn disassemble(front: &Front, p: DebugDisassemble) -> Result<DebugDisassembly, Error> {
+    let d = front.debug.debug(front);
+    let (h, caps) = d.handle_caps(&p.session).map_err(err)?;
+    if caps
+        .get("supportsDisassembleRequest")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err(err("this adapter cannot disassemble"));
+    }
+    let b = h
+        .request(
+            "disassemble",
+            json!({
+                "memoryReference": p.reference,
+                "offset": p.offset.unwrap_or(0),
+                "instructionOffset": p.instruction_offset.unwrap_or(0),
+                "instructionCount": p.count,
+                "resolveSymbols": true,
+            }),
+        )
+        .await
+        .map_err(err)?;
+    let text = |i: &Value, k: &str| i.get(k).and_then(Value::as_str).map(str::to_owned);
+    let line = |i: &Value, k: &str| {
+        i.get(k)
+            .and_then(Value::as_u64)
+            .and_then(|l| u32::try_from(l).ok())
+    };
+    let instructions = b
+        .get("instructions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|i| DisassembledInstruction {
+            address: text(i, "address").unwrap_or_default(),
+            bytes: text(i, "instructionBytes"),
+            instruction: text(i, "instruction").unwrap_or_default(),
+            symbol: text(i, "symbol"),
+            path: i
+                .get("location")
+                .and_then(|l| l.get("path"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            line: line(i, "line"),
+            end_line: line(i, "endLine"),
+        })
+        .collect();
+    Ok(DebugDisassembly { instructions })
 }
 
 /// Line LINE (1-based) of file PATH, read off the hub's workers; none when it cannot be read.
@@ -1046,6 +1147,7 @@ pub async fn serve(
         Params::DebugSource(p) => answer(source(front, p).await),
         Params::DebugBreakpointLocations(p) => answer(breakpoint_locations(front, p).await),
         Params::DebugCompletions(p) => answer(completions(front, p).await),
+        Params::DebugDisassemble(p) => answer(disassemble(front, p).await),
         Params::DebugReadMemory(p) => answer(read_memory(front, p).await),
         Params::DebugWriteMemory(p) => answer(write_memory(front, p).await),
         Params::DebugBreakpoints(p) => answer(breakpoints(front, p).await),

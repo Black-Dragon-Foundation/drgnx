@@ -67,6 +67,7 @@
   "debug/configs": ["user"],
   "debug/control": ["user"],
   "debug/data-breakpoint": ["user"],
+  "debug/disassemble": ["user"],
   "debug/evaluate": ["user"],
   "debug/expand": ["user"],
   "debug/origin": ["user"],

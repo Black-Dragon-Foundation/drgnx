@@ -1,6 +1,6 @@
 //! The breakpoint store, without sessions: operations by id, what the adapters made of them, persistence.
 
-use super::breakpoints::{Change, Col, DataBp, Op, Store, chars_of, col_of, fit};
+use super::breakpoints::{Change, Col, DataBp, InstrOp, Op, Store, chars_of, col_of, fit};
 use serde_json::{Value, json};
 
 fn add(path: &str, line: u32) -> Op {
@@ -548,4 +548,47 @@ async fn a_save_that_waits_on_the_disk_holds_no_worker() {
     );
     let written = reader.join().unwrap();
     assert!(written.contains("a.py"), "{written}");
+}
+
+#[test]
+fn instruction_breakpoints_are_one_sessions_sent_when_enabled_and_go_with_it() {
+    let mut s = Store::open(None);
+    let caps = json!({"supportsConditionalBreakpoints": true});
+    let add = |at: &str, c: Option<&str>| InstrOp::Add {
+        instruction: at.into(),
+        offset: None,
+        condition: c.map(str::to_owned),
+        hit: None,
+    };
+    s.instr_op("d1", add("0x10", Some("x > 1"))).unwrap();
+    s.instr_op("d1", add("0x20", None)).unwrap();
+    s.instr_op(
+        "d1",
+        InstrOp::Edit {
+            n: 1,
+            enabled: Some(false),
+            condition: None,
+            hit: Some("3".into()),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        s.instr_list("d1", &caps),
+        vec![json!({"instructionReference": "0x20"})],
+        "only the enabled one; no hit counts without the capability"
+    );
+    s.instr_answer("d1", &[json!({"verified": true})]);
+    let v = s.instr_view("d1");
+    assert_eq!(v["session"], "d1");
+    assert_eq!(v["breakpoints"][0]["id"], "i:d1:1");
+    assert_eq!(v["breakpoints"][0]["condition"], "x > 1");
+    assert_eq!(v["breakpoints"][0]["verified"], false);
+    assert_eq!(v["breakpoints"][1]["verified"], true);
+    let before = v["version"].as_u64().unwrap();
+    assert!(s.instr_op("d1", InstrOp::Remove { n: 7 }).is_err());
+    s.instr_op("d1", InstrOp::Remove { n: 2 }).unwrap();
+    assert!(s.instr_view("d1")["version"].as_u64().unwrap() > before);
+    assert!(s.instr_list("d2", &caps).is_empty());
+    s.ended("d1");
+    assert_eq!(s.instr_view("d1")["breakpoints"], json!([]));
 }

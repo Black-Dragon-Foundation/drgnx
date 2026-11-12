@@ -150,6 +150,10 @@ pub struct DebugControl {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread: Option<i64>,
     pub op: String,
+    /// `instruction`: `next`, `step-in` and `step-out` step one instruction (the adapter's
+    /// `supportsSteppingGranularity`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub granularity: Option<String>,
 }
 
 /// The controls `debug/control` knows.
@@ -206,6 +210,45 @@ pub struct BreakpointLocation {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct DebugBreakpointLocationsList {
     pub locations: Vec<BreakpointLocation>,
+}
+
+/// `debug/disassemble`: COUNT instructions (at most [`DISASSEMBLE_MAX`]) from INSTRUCTION_OFFSET instructions after
+/// the one at OFFSET bytes from SESSION's memory REFERENCE (a frame's `instruction_pointer`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugDisassemble {
+    pub session: String,
+    pub reference: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction_offset: Option<i64>,
+    pub count: u32,
+}
+
+/// The most instructions one `debug/disassemble` reads.
+pub const DISASSEMBLE_MAX: u32 = 500;
+
+/// One instruction: its ADDRESS, BYTES, text, SYMBOL, and the source PATH and LINE(s) it comes from.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DisassembledInstruction {
+    pub address: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<String>,
+    pub instruction: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<u32>,
+}
+
+/// `debug/disassemble`'s answer: the INSTRUCTIONS in address order.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugDisassembly {
+    pub instructions: Vec<DisassembledInstruction>,
 }
 
 /// `debug/completions`: the Debug Console's completions for TEXT with point at COLUMN (0-based, in characters), in
@@ -371,6 +414,12 @@ pub struct DebugBreakpoints {
     pub path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub op: Option<DebugBreakpointOp>,
+    /// With KIND `instruction`: SESSION's instruction breakpoints (they are the session's, never kept), their view
+    /// and their ops (`add-instruction`, `remove-instruction`, `edit-instruction`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 /// One change to the breakpoint store, by id: `add` (PATH, LINE; the breakpoint already on that line if any),
@@ -402,6 +451,12 @@ pub struct DebugBreakpointOp {
     /// `trigger`'s triggering breakpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triggered_by: Option<u64>,
+    /// `add-instruction`'s instruction (a memory reference: a frame's `instruction_pointer`, a disassembled
+    /// address) and its OFFSET in bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<i64>,
     /// `add`'s and `move`'s column (1-based, in characters): an inline breakpoint. `move` without one keeps the
     /// breakpoint's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -423,6 +478,9 @@ pub const BP_OPS: &[&str] = &[
     "enable-all",
     "toggle-all",
     "remove-all",
+    "add-instruction",
+    "remove-instruction",
+    "edit-instruction",
 ];
 
 /// `debug/view`: VIEW is the Run and Debug view of ROOT's sessions, its Variables and Watch of SESSION (none: the
@@ -540,7 +598,11 @@ pub struct DebugChild {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct DebugBreakpointsView {
     pub root: String,
-    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// The session of an instruction view (no path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
     pub version: u64,
     pub breakpoints: Vec<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -673,7 +735,14 @@ fn check_control(p: &DebugControl) -> Result<(), Error> {
             "one of continue, pause, next, step-in, step-out, restart, stop, stop-and-kill, disconnect",
         ));
     }
-    Ok(())
+    match p.granularity.as_deref() {
+        None => Ok(()),
+        Some("instruction") if matches!(p.op.as_str(), "next" | "step-in" | "step-out") => Ok(()),
+        Some(_) => Err(invalid(
+            "granularity",
+            "instruction, with next, step-in or step-out",
+        )),
+    }
 }
 
 fn check_select(p: &DebugSelect) -> Result<(), Error> {
@@ -693,6 +762,15 @@ fn check_breakpoint_locations(p: &DebugBreakpointLocations) -> Result<(), Error>
     check_text("path", &p.path)?;
     if p.line == 0 {
         return Err(invalid("line", "1-based"));
+    }
+    Ok(())
+}
+
+fn check_disassemble(p: &DebugDisassemble) -> Result<(), Error> {
+    check_text("session", &p.session)?;
+    check_text("reference", &p.reference)?;
+    if p.count == 0 || p.count > DISASSEMBLE_MAX {
+        return Err(invalid("count", "1 to 500 instructions"));
     }
     Ok(())
 }
@@ -742,6 +820,11 @@ fn check_path(path: &str, s: &str) -> Result<(), Error> {
 
 fn check_breakpoints(p: &DebugBreakpoints) -> Result<(), Error> {
     check_root(&p.root)?;
+    match p.kind.as_deref() {
+        None => {}
+        Some("instruction") => check_text("session", p.session.as_deref().unwrap_or_default())?,
+        Some(_) => return Err(invalid("kind", "instruction or none")),
+    }
     if let Some(path) = &p.path {
         check_path("path", path)?;
     }
@@ -749,7 +832,14 @@ fn check_breakpoints(p: &DebugBreakpoints) -> Result<(), Error> {
     if !BP_OPS.contains(&op.op.as_str()) {
         return Err(invalid(
             "op.op",
-            "one of add, remove, edit, move, add-function, remove-function, trigger, filter, enable-all, toggle-all, remove-all",
+            "one of add, remove, edit, move, add-function, remove-function, trigger, filter, enable-all, toggle-all, remove-all, add-instruction, remove-instruction, edit-instruction",
+        ));
+    }
+    let instruction_op = op.op.ends_with("-instruction");
+    if instruction_op != (p.kind.as_deref() == Some("instruction")) {
+        return Err(invalid(
+            "kind",
+            "instruction with an instruction op, none otherwise",
         ));
     }
     for (k, v) in [
@@ -773,7 +863,13 @@ fn check_breakpoints(p: &DebugBreakpoints) -> Result<(), Error> {
             check_path("op.path", op.path.as_deref().unwrap_or_default())?;
             need("op.line", op.line.is_some_and(|l| l > 0))
         }
-        "remove" | "edit" | "trigger" => need("op.id", op.id.is_some()),
+        "remove" | "edit" | "trigger" | "remove-instruction" | "edit-instruction" => {
+            need("op.id", op.id.is_some())
+        }
+        "add-instruction" => check_text(
+            "op.instruction",
+            op.instruction.as_deref().unwrap_or_default(),
+        ),
         "filter" => {
             check_text("op.adapter", op.adapter.as_deref().unwrap_or_default())?;
             check_text("op.name", op.name.as_deref().unwrap_or_default())?;
@@ -946,6 +1042,12 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "a project's trust changed: a project never told trusted runs no configuration, and revoking trust stops its sessions",
             check: check_trust,
+        ),
+        method!(
+            "debug/disassemble", DebugDisassemble(DebugDisassemble) -> DebugDisassembly,
+            classes: [User], writes: false,
+            doc: "the debugged program's instructions around a memory reference (a frame's instruction pointer), at most 500, for the disassembly view",
+            check: check_disassemble,
         ),
         method!(
             "debug/completions", DebugCompletions(DebugCompletions) -> DebugCompletionList,

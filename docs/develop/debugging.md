@@ -249,6 +249,15 @@ probes are saved the same way. If the file is damaged, it is moved aside to `…
   as VS Code's Break on Value Change sends it: lldb-dap's own default also stops on reads, before the value changes. They live in the store per session
   (`data_add`, `data_answer`, `data_view`), never saved, and go when it ends; the Run and Debug view lists them under
   Breakpoints (`kind: "data"`). Adapters without `supportsDataBreakpoints` are refused.
+- **Instruction breakpoints** (`debug/breakpoints {root, session, kind: "instruction", op?}` with the ops
+  `add-instruction {instruction, offset?, condition?, hit?}`, `remove-instruction {id: N}` and `edit-instruction {id:
+  N, enabled?, condition?, hit?}`): a session's own, at a memory reference (a frame's `instruction_pointer`, a
+  disassembled address). They live in the store per session (`instr_op`, `instr_list`, `instr_answer`, `instr_view`),
+  never saved, and go when it ends; each op sends the session's enabled ones in `setInstructionBreakpoints` (fitted to
+  the adapter's fields like source breakpoints). The view, and the `debug-breakpoints` event it is published as, is
+  `{root, session, version, breakpoints: [{id: "i:SESSION:N", n, kind: "instruction", instruction, offset?, verified,
+  enabled, condition?, hit?, message?}]}`, with no path; a newer version wins. Adapters without
+  `supportsInstructionBreakpoints` are refused.
 
 The registry starts each session with the store's breakpoints, and sends a changed file to every session of the
 root at once. It tells the editors with the `debug-breakpoints` event: the file's view, with its root. The editors use `debug/breakpoints` (`{root, path?, op?}`: an operation by id, answered with the file's view) and
@@ -272,8 +281,10 @@ roots `debug/trust` called trusted and each root's last started configuration.
   `invalid-params` at `inputs`. With every answer: the platform section, the variables, the type's adapter (the user's
   `adapters`, from the setting `debug.adapters` in the table's fields, before `etc/debug-adapters.eld`'s), and
   `{session}`.
-- `debug/control {session, thread?, op}` (`continue`, `pause`, `next`, `step-in`, `step-out`, `restart`, `stop`,
-  `stop-and-kill`, `disconnect`), `debug/select {session, thread?, frame}`, and `debug/trust {root, trusted}`, whose
+- `debug/control {session, thread?, op, granularity?}` (`continue`, `pause`, `next`, `step-in`, `step-out`, `restart`,
+  `stop`, `stop-and-kill`, `disconnect`; `granularity: "instruction"` steps `next`, `step-in` and `step-out` one
+  instruction, for the disassembly view, and a recorded run keeps it as `next-i`, `in-i`, `out-i` for its forks),
+  `debug/select {session, thread?, frame}`, and `debug/trust {root, trusted}`, whose
   revocation stops the root's sessions.
 - `debug/source {session, ref}`: the adapter's `source` request for a frame with no file, answered `{text, mime?}`.
 - `debug/breakpoint-locations {session, path, line}`: the adapter's `breakpointLocations` for the line, answered
@@ -288,6 +299,11 @@ roots `debug/trust` called trusted and each root's last started configuration.
   base64. A read is at most 64 KiB (`READ_MEMORY_MAX`; more is `invalid-params` before the adapter) and answers
   `{address, data, unreadable?}`; a write answers `{offset?, written?}`. Refused with words when the adapter lacks
   `supportsReadMemoryRequest` / `supportsWriteMemoryRequest`.
+- `debug/disassemble {session, reference, offset?, instruction_offset?, count}`: the adapter's `disassemble` (symbols
+  resolved) around a memory reference, most often the `instruction_pointer` that `debug-frame` carries from the frame's
+  `instructionPointerReference`. At most 500 instructions (`DISASSEMBLE_MAX`; more is `invalid-params`); answered
+  `{instructions: [{address, bytes?, instruction, symbol?, path?, line?, end_line?}]}`. Refused with words without
+  `supportsDisassembleRequest`; `debug-state`'s caps carry it and `supportsInstructionBreakpoints`.
 - These and `debug/breakpoint-locations` read the session's capabilities: asked before the adapter has given them
   (the session is starting) they are refused, so the editors offer them once `debug-state` shows the capability.
 - `debug/install {adapter, adapters?}`: the adapter's `:install` entry carried out (see Adapters); the answer says what

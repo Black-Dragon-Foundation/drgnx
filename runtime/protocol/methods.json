@@ -1870,10 +1870,20 @@
             ]
           },
           "path": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "root": {
             "type": "string"
+          },
+          "session": {
+            "description": "The session of an instruction view (no path).",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "version": {
             "format": "uint64",
@@ -1883,7 +1893,6 @@
         },
         "required": [
           "root",
-          "path",
           "version",
           "breakpoints"
         ],
@@ -11759,6 +11768,13 @@
                   "null"
                 ]
               },
+              "instruction": {
+                "description": "`add-instruction`'s instruction (a memory reference: a frame's `instruction_pointer`, a disassembled\naddress) and its OFFSET in bytes.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "line": {
                 "format": "uint32",
                 "minimum": 0,
@@ -11776,6 +11792,13 @@
               "name": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "offset": {
+                "format": "int64",
+                "type": [
+                  "integer",
                   "null"
                 ]
               },
@@ -11807,6 +11830,12 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "`debug/breakpoints`: ROOT's breakpoints. OP changes them (it reaches ROOT's sessions at once); the answer is the\nview of the file OP changed, else of PATH.",
         "properties": {
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "op": {
             "anyOf": [
               {
@@ -11825,6 +11854,13 @@
           },
           "root": {
             "type": "string"
+          },
+          "session": {
+            "description": "With KIND `instruction`: SESSION's instruction breakpoints (they are the session's, never kept), their view\nand their ops (`add-instruction`, `remove-instruction`, `edit-instruction`).",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -11857,10 +11893,20 @@
             ]
           },
           "path": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "root": {
             "type": "string"
+          },
+          "session": {
+            "description": "The session of an instruction view (no path).",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "version": {
             "format": "uint64",
@@ -11870,7 +11916,6 @@
         },
         "required": [
           "root",
-          "path",
           "version",
           "breakpoints"
         ],
@@ -12341,6 +12386,13 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "`debug/control`: OP on SESSION (on THREAD, else the stopped one): `continue`, `pause`, `next`, `step-in`,\n`step-out`, `restart`, `stop`, `stop-and-kill` (an attach session's debuggee too) or `disconnect`.",
         "properties": {
+          "granularity": {
+            "description": "`instruction`: `next`, `step-in` and `step-out` step one instruction (the adapter's\n`supportsSteppingGranularity`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "op": {
             "type": "string"
           },
@@ -12449,6 +12501,121 @@
           "breakpoints"
         ],
         "title": "DebugDataBreakpoints",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the debugged program's instructions around a memory reference (a frame's instruction pointer), at most 500, for the disassembly view",
+      "name": "debug/disassemble",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/disassemble`: COUNT instructions (at most [`DISASSEMBLE_MAX`]) from INSTRUCTION_OFFSET instructions after\nthe one at OFFSET bytes from SESSION's memory REFERENCE (a frame's `instruction_pointer`).",
+        "properties": {
+          "count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "instruction_offset": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reference": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "reference",
+          "count"
+        ],
+        "title": "DebugDisassemble",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DisassembledInstruction": {
+            "description": "One instruction: its ADDRESS, BYTES, text, SYMBOL, and the source PATH and LINE(s) it comes from.",
+            "properties": {
+              "address": {
+                "type": "string"
+              },
+              "bytes": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "end_line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "instruction": {
+                "type": "string"
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "symbol": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "address",
+              "instruction"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/disassemble`'s answer: the INSTRUCTIONS in address order.",
+        "properties": {
+          "instructions": {
+            "items": {
+              "$ref": "#/$defs/DisassembledInstruction"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "instructions"
+        ],
+        "title": "DebugDisassembly",
         "type": "object"
       },
       "writes": false

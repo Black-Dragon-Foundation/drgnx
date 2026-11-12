@@ -588,6 +588,9 @@ impl Records {
             Op::Next { .. } => "next",
             Op::StepIn { .. } => "in",
             Op::StepOut { .. } => "out",
+            Op::Instruction { step: "in", .. } => "in-i",
+            Op::Instruction { step: "out", .. } => "out-i",
+            Op::Instruction { .. } => "next-i",
             _ => return,
         };
         let Some(run) = self.run_of(session) else {
