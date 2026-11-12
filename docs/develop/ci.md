@@ -219,7 +219,10 @@ far about a hundred tests finished, the last of them just before or among `agent
 whose tests run live mock sessions, with snapshots and forks). Until they pass,
 a failed workspace step is followed by a diagnostic one: the hub's lib again with `--test-threads 1`, whose last
 `test … ...` line (libtest prints a test's name before it runs it on one thread) names the test running when the
-process died, written to the job's summary. The step goes once the lib passes on macOS.
+process died, written to the job's summary. An abort libsystem raises says why only in its crash report, so the step
+then prints the newest `drgnx_ratatoskr*.ips` under `~/Library/Logs/DiagnosticReports` and runs the named test alone
+with `--nocapture`. Round 1 named `exec::container::name_and_pull_tests::a_fake_podman_runs_while_another_thread_forks`.
+The step goes once the lib passes on macOS.
 
 ## The tiers workflow
 

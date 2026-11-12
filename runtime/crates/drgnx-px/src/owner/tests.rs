@@ -428,15 +428,13 @@ async fn a_closed_stream_fires_its_gone() {
 #[cfg(unix)]
 #[tokio::test]
 async fn stop_finishes_while_the_sidecar_floods() {
-    use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::Builder::new().prefix("px-").tempdir().unwrap();
     let podman = dir.path().join("podman");
-    std::fs::write(
+    drgnx_exe::write(
         &podman,
         "#!/bin/sh\ncase \"$1\" in\nrun) while :; do echo flood; echo flood >&2; done ;;\nrm) exit 0 ;;\nesac\n",
     )
     .unwrap();
-    std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o755)).unwrap();
     let mut sc = Sidecar::start(&podman, vec!["run".into()], &[])
         .await
         .expect("the stand-in starts");

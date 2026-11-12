@@ -54,6 +54,7 @@ runtime/
 | `verdandi` | the edit history: `history.db` (records, documents, branches) on urdr's store, a Loro document per tracked file and branch, the operation log and its settle rule, span revert on element ids; no hub or editor type ([history.md](history.md)) |
 | `vor` | a Debug Adapter Protocol client: framing, requests matched to answers, events and reverse requests, types generated from the protocol's schema; generic, used by the hub's debug sessions ([debugging.md](debugging.md)) |
 | `vordr` | the orchestration gates' pure core: a job's log as rows with failure classes, facts, evidence, the rule pack; pure, `serde` only ([orchestration.md](orchestration.md)) |
+| `drgnx-exe` | a file written or copied and then run, never busy (ETXTBSY): the writing on a thread with a private file table ([below](#files-written-and-then-run-drgnx-exe)); libc only |
 | `skuld` | test support, never shipped: every order of a pure core, and the one real-time wait Rust tests may use ([below](#every-order-skuld)); crates name it under `[dev-dependencies]` only |
 | `heimdall` | the CDP broker's pure part: envelope parsing over `serde_json`'s `RawValue` (params never re-encoded), routing one browser connection between the agent and the hub by session owner, the refusal list, downloads, cleanup when the agent goes, and the pipe's NUL and frame codecs; no I/O, std and serde only, built for Android too ([hub.md](hub.md#the-cdp-broker)) |
 | `drgnx-px` | a networked container job's relay sidecar: the channel's frames, its pure state machine and writer order, the shell both ends run, the `drgnx-px` binary, and the owner's end on gleipnir's proxy; tokio current-thread, libc ([drgnx-px.md](drgnx-px.md)) |
@@ -610,17 +611,19 @@ What a test does instead:
 Exempt: `#[ignore = "timing…"]` tests and `tests/timing.rs`, `skuld/src/wait.rs` (where these functions live) and the
 hub clock's module (`drgnx-ratatoskr/src/clock*`).
 
-## Files the hub writes and runs
+## Files written and then run: drgnx-exe
 
 On Linux, running a file that any process holds open for writing fails with ETXTBSY ("Text file busy"). A child that
 another thread forks copies the whole file table, the write descriptor included, and holds it until its own `exec`; so
-a script written and then run at once fails now and then while other threads fork (the lib's tests always do). A
-rename keeps the same file and does not help. The hub's code and tests write such a file with
-`crate::exe::write_executable(path, contents)`, or do the writing inside `crate::exe::private_fds(|| …)`: a thread of
-its own with its own file table (`unshare(CLONE_FILES)`), which no other fork copies. That table starts as a copy, so
-the thread closes every descriptor but 0, 1 and 2 first (a pipe another thread closes meanwhile still ends at once); the
-closure opens what it uses itself. The hub uses it for the browser it
-unpacks and the `drgnx-key` it copies into a container job's folder.
+a script written (or a binary copied) and then run at once fails now and then while other threads fork (every test
+binary's other tests do). A rename keeps the same file and does not help, and a lock helps only against forks that take
+it. `crates/drgnx-exe` is the one way the runtime does it: `drgnx_exe::write(path, contents)` (mode 0755),
+`drgnx_exe::copy(from, to)`, or any writing inside `drgnx_exe::private_fds(|| …)`: a thread of its own with its own
+file table (`unshare(CLONE_FILES)`), which no other fork copies. That table starts as a copy, so the thread closes every
+descriptor but 0, 1 and 2 first (a pipe another thread closes meanwhile still ends at once); the closure opens what it
+uses itself. Elsewhere than Linux the closure runs in place. The hub uses it for the browser it unpacks and the
+`drgnx-key` it copies into a container job's folder, the runner for its job's `drgnx-key` copy, domr for the hub copies
+and scripts its scenarios run, the escape harness for its probe's copy, and the tests for every stand-in script they run.
 
 ## The conformance harness
 

@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 # std-only harness (threads, blocking UnixStreams): no async runtime here.
 [dependencies]
+drgnx-exe = { path = "../crates/drgnx-exe", version = "0.1.0" }  # the hub copies and scripts it runs, never busy (ETXTBSY)
 tempfile.workspace = true
 rusqlite.workspace = true
 hmac.workspace = true
