@@ -438,7 +438,8 @@ buffer). Tests: `debug::tests_probes`, `debug::tests_record`, `test/unit/debug-t
   the folder as it is (`take_kept`, ref `refs/drgnx/bisect/<id>` until the next bisect of the project). At most 512
   (the newest).
 - **Their trees** (`bisect_wire::materialise`): each state is a tree in the bisect's own shadow repository
-  (`<state>/debug/bisect/<id>/`), which borrows the objects of the project's repository and of the snapshots'
+  (`<state>/hub/runs/debug-forks/slots/<id>/`, the forks' slots root: the one place in the state folder a sealed
+  job's tree may be), which borrows the objects of the project's repository and of the snapshots'
   through `objects/info/alternates`, so a commit's or a launch's tree is used as it is and nothing is copied. A record
   is the history branch's base commit with every document as it was after it (`History::texts_after`) written over
   it (blobs by `hash-object`, the base's file modes kept). A state whose tree equals the one before it is dropped.
@@ -453,8 +454,9 @@ buffer). Tests: `debug::tests_probes`, `debug::tests_record`, `test/unit/debug-t
   The slots go when the bisect ends; the repository stays for narrowing until the project's next bisect, and nothing
   outlives the hub (the folder is cleared at the first bisect of a hub).
 - **The predicate** (`bisect_wire::Jobs`): `test` (ARGV's exit code) or `exit` (ARGV exits with CODE: bad), with an
-  optional BUILD run first (its failure skips the state), each run a user job (`exec`, the user's rights, the time
-  box `timebox_s`, default 600 s) in the slot's folder. `exception` and `probe` (replay the recorded run in a what-if
+  optional BUILD run first (its failure skips the state), each run a sealed job in the slot's folder
+  (`exec::start_sealed`, label `bisect-<id>`: an agent's sandbox with the slot its only writable folder, since the
+  states may be an agent's writing; the time box `timebox_s`, default 600 s). `exception` and `probe` (replay the recorded run in a what-if
   fork, spec §19.3) are accepted by the schema and wait for the fork's replay seam.
 - **Narrowing** (`bisect::narrow`): the hunks from the last good tree to the first bad one (`git diff -U0`), then delta
   debugging (ddmin) over them: each set tried is the good tree with those hunks applied (`git apply --cached

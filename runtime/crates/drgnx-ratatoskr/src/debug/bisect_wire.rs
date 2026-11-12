@@ -2,12 +2,12 @@
 //! launch snapshots (their kept trees) and the edit history's saves and agent steps (the branch's base commit with
 //! every document as it was after the record), each written as a tree into a bisect's own shadow repository, which
 //! borrows the objects of the project's repository and of its snapshots (`objects/info/alternates`): nothing is
-//! copied, and no state touches the disk until a slot runs it.  The predicate runs as the user's jobs (`exec`), one
-//! per state, in the slot's folder.
+//! copied, and no state touches the disk until a slot runs it.  The predicate runs as sealed jobs (`exec::start_sealed`:
+//! an agent's sandbox, the slot its only writable folder), one per state, in the slot's folder.
 
 use super::bisect::{self, Bisect, Canceller, Candidate, Ending, Found, Outcome, Prober, Stage};
 use crate::dispatch::Caller;
-use crate::exec::{CheckKind, ExecSpec, JobEvent, Starter, UserJob};
+use crate::exec::JobEvent;
 use crate::front::Front;
 use crate::timeline::snapshot::{repo_of, run_git};
 use runstav::methods::Params;
@@ -20,7 +20,6 @@ use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
-use std::time::Duration;
 
 fn err(code: ErrorCode, message: impl Into<String>) -> Error {
     Error {
@@ -289,7 +288,7 @@ impl Bisects {
     }
 }
 
-/// The predicate as the user's jobs, one per state, in the state's folder.
+/// The predicate as sealed jobs, one per state, in the state's folder.
 #[derive(Clone)]
 struct Jobs {
     front: Weak<Front>,
@@ -302,26 +301,23 @@ impl Jobs {
     async fn job(&self, dir: &Path, argv: &[String]) -> Result<Option<i32>, String> {
         let front = self.front.upgrade().ok_or("the hub is stopping")?;
         let mut events = front.core.exec.subscribe();
-        let spec = ExecSpec {
-            starter: Starter::User,
-            cwd: dir.to_owned(),
-            worktree: None,
-            argv: argv.to_vec(),
-            timebox: Duration::from_secs(self.predicate.timebox_s.unwrap_or(600)),
-            kind: CheckKind::Other,
-            container: None,
-            user: UserJob {
-                name: Some(format!("bisect {}", self.bisect)),
-                ..UserJob::default()
-            },
-            place: Default::default(),
+        // the project's own command over states an agent may have written: an agent's sandbox, the slot its only
+        // writable folder (`exec::start_sealed`)
+        let params = serde_json::from_value(json!({
+            "argv": argv,
+            "cwd": dir.to_string_lossy(),
+            "timebox_s": self.predicate.timebox_s.unwrap_or(600),
+            "name": format!("bisect {}", self.bisect),
+        }))
+        .map_err(|e| e.to_string())?;
+        let sealed = crate::exec::Sealed {
+            label: format!("bisect-{}", self.bisect),
+            tree: dir.to_owned(),
         };
-        let id = front
-            .core
-            .exec
-            .start(spec)
+        let id = crate::exec::start_sealed(&front, &sealed, params)
             .await
-            .map_err(|r| r.to_string())?;
+            .map_err(|e| e.message)?
+            .id;
         drop(front);
         self.running.lock().expect("bisect jobs").insert(id.clone());
         let r = loop {
@@ -414,11 +410,12 @@ impl bisect::Sink for Events {
     }
 }
 
-/// Where a hub's bisects keep their folders: `<state>/debug/bisect`.
+/// Where a hub's bisects keep their folders: `<runs>/debug-forks/slots` (the forks' `slots_root`), the one place in
+/// the state folder a sealed job's tree may be.
 fn bisect_dir(front: &Front) -> PathBuf {
-    runstav::paths::state_dir(&front.shell_env.paths_env())
-        .join("debug")
-        .join("bisect")
+    crate::sandbox::runs_root(&front.shell_env.paths_env())
+        .join("debug-forks")
+        .join("slots")
 }
 
 fn checkpoints(front: &Front) -> PathBuf {
