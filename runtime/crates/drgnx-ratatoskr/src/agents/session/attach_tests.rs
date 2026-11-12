@@ -218,7 +218,9 @@ async fn a_write_that_waits_on_the_disk_holds_no_worker() {
         .await
         .expect("a session")
         .id;
-    // a turn that stays busy, and a message queued behind it: the queue on disk holds "later"
+    // a turn that stays busy, and a message queued behind it: the queue on disk holds "later" alone once the turn has
+    // taken "silent 30" (a file that still held both was written again when the turn began, and could come back
+    // between the test's remove and its mkfifo)
     agents.send(&sid, "silent 30".into()).unwrap();
     agents.send(&sid, "later".into()).unwrap();
     let queue = fx
@@ -230,7 +232,7 @@ async fn a_write_that_waits_on_the_disk_holds_no_worker() {
         skuld::wait_until("the queue on disk", 60, || {
             std::fs::read_to_string(&q)
                 .ok()
-                .filter(|t| t.contains("later"))
+                .filter(|t| t.contains("later") && !t.contains("silent 30"))
         })
     })
     .await
@@ -272,4 +274,59 @@ async fn a_write_that_waits_on_the_disk_holds_no_worker() {
     landed.await;
     let written = read.join().unwrap().unwrap();
     assert!(written.contains("later"), "the queue written: {written}");
+}
+
+/// A resume whose files wait on the disk holds no thread of the runtime: the closed session's meta file is a FIFO
+/// whose writer writes only once the runtime has run another task, on a runtime of one thread.  A read done in the
+/// resume's task held that thread, so the other task never ran and the writer never wrote: the test hung here.
+#[tokio::test]
+async fn a_resume_that_waits_on_the_disk_holds_no_thread() {
+    let fx = Fx::new();
+    let p: runstav::methods::agents::StartParams =
+        serde_json::from_value(json!({"profile": "mock-claude", "cwd": fx.work()})).unwrap();
+    let agents = &fx.front.core.agents;
+    let sid = agents
+        .start(&fx.front, p, &crate::runner::user())
+        .await
+        .expect("a session")
+        .id;
+    agents.find(&sid).unwrap().close_now().await;
+    let meta = fx
+        .dir
+        .path()
+        .join(format!("hub/transcripts/{sid}.meta.json"));
+    let text = std::fs::read_to_string(&meta).unwrap_or_else(|_| "{}".into());
+    let _ = std::fs::remove_file(&meta);
+    let made = std::process::Command::new("mkfifo")
+        .arg(&meta)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    // the disk: answers once the resume reads, and writes once it is told to
+    let (opened_tx, opened) = std::sync::mpsc::channel::<()>();
+    let (go, go_rx) = std::sync::mpsc::channel::<()>();
+    let fifo = meta.clone();
+    let disk = std::thread::spawn(move || {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+        opened_tx.send(()).unwrap();
+        go_rx.recv().unwrap();
+        f.write_all(text.as_bytes()).unwrap();
+    });
+    let other = async {
+        crate::clock::blocking(move || opened.recv().unwrap())
+            .await
+            .unwrap();
+        // another task runs while the resume waits on the disk
+        tokio::task::yield_now().await;
+        go.send(()).unwrap();
+    };
+    let (resumed, ()) = tokio::join!(
+        crate::agents::session::resume_closed(agents, &fx.front, &sid),
+        other
+    );
+    resumed.expect("the session resumes");
+    disk.join().unwrap();
+    // the session's later writes find a plain file again
+    let _ = std::fs::remove_file(&meta);
 }
