@@ -1081,35 +1081,20 @@ jobs:
         run: |
           cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks \
             --no-run --message-format=json-render-diagnostics > "$RUNNER_TEMP/test-bins.json"
+      # its output kept (tests.log) for the step after it
       - id: test
-        run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
-      # Diagnostic, report-only: each test's time in the slowest binaries (hrafn's overlay, verdandi's and the hub's
-      # libs), for choosing what leaves this job. --report-time is unstable: RUSTC_BOOTSTRAP is given to the binaries
-      # alone, since cargo would rebuild everything for it (proc-macro2's build script watches it). The step goes once
-      # those times are read
-      - name: the slowest test binaries, each test's time
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        timeout-minutes: 12
         run: |
-          for t in hrafn/overlay verdandi/verdandi drgnx-ratatoskr/drgnx_ratatoskr; do
-            pkg=${t%/*} name=${t#*/}
-            bin=$(jq -r --arg p "$pkg" --arg n "$name" \
-              'select(.profile.test == true and .target.name == $n and (.package_id | test("/" + $p + "#"))) | .executable' \
-              "$RUNNER_TEMP/test-bins.json" | tail -n 1)
-            [ -x "$bin" ] || { echo "no test binary for $t"; continue; }
-            (cd "runtime/crates/$pkg" && RUSTC_BOOTSTRAP=1 "$bin" -Z unstable-options --report-time > "$RUNNER_TEMP/times.log" 2>&1)
-            echo "--- $t: exit $?, the 25 slowest tests"
-            sed -nE 's/^test (.*) \.\.\. [a-zA-Z]+ <([0-9.]+)s>$/\2 \1/p' "$RUNNER_TEMP/times.log" | sort -rn | head -n 25
-          done
-      # The hub's lib tests ended in a SIGABRT on macOS with no message, so none of them ran there: when the run above
-      # failed, the lib runs again one test at a time, which names the test running when the process dies (libtest
-      # prints a test's name before it runs it with one thread), and that name goes to the job's summary. Diagnostic:
-      # the step fails as the lib does, and is dropped once the lib passes on macOS. An abort libsystem raises says why
-      # only in its crash report (os_log, not stderr), so the report of this run's binary, written after the run
-      # started, is printed (never an earlier run's), and the named test runs once more alone with its output shown.
-      # --nocapture: a library thread a test started (wasmtime's) prints why it aborts to stderr, which libtest would
-      # otherwise keep in that test's captured output
-      - name: the hub's lib, one test at a time (names the one that aborts)
+          set -o pipefail
+          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks 2>&1 |
+            tee "$RUNNER_TEMP/tests.log"
+      # The hub's lib's failures, each run again alone with its output (--exact --nocapture): which fail only beside
+      # the others, and each one's whole message, in the job's summary. Seconds, where running the whole lib one test at a
+      # time again took six minutes and cut the job at its 45 (round 4). When the lib's binary died instead (no `test
+      # result` line in its part of the run: a signal; wasmtime's SIGABRT was one), the lib runs one test at a time,
+      # which names the test running when it dies (libtest prints a name before it runs it on one thread), and the
+      # crash report of this run's binary, written after the step started, is printed: an abort libsystem raises says
+      # why only there (os_log, not stderr)
+      - name: the hub's lib's failures, each alone
         if: ${{ !cancelled() && steps.test.outcome == 'failure' }}
         run: |
           set +e
@@ -1118,28 +1103,33 @@ jobs:
           bin=$(jq -r 'select(.profile.test == true and .target.name == "drgnx_ratatoskr" and (.target.kind | index("lib"))) | .executable' \
             "$RUNNER_TEMP/test-bins.json" | tail -n 1)
           [ -x "$bin" ] || { echo "::error::no test binary for the hub's lib"; exit 1; }
-          (cd runtime/crates/drgnx-ratatoskr && "$bin" --test-threads 1 --nocapture) > lib-serial.log 2>&1
+          run() { (cd runtime/crates/drgnx-ratatoskr && "$bin" "$@"); }
+          # the lib's part of the workspace run: from its `Running unittests src/lib.rs (…/drgnx_ratatoskr-…)` on
+          awk -v b="${bin##*/}" '/^ *Running /{on = index($0, b) > 0} on' "$RUNNER_TEMP/tests.log" > lib-run.log
+          if grep -q '^test result: ' lib-run.log; then
+            rc=0
+            for name in $(sed -nE 's/^test (.*) \.\.\. FAILED$/\1/p' lib-run.log); do
+              echo "--- $name alone"
+              run --exact "$name" --nocapture --test-threads 1; r=$?
+              echo "- \`$name\` alone: exit $r" >> "$GITHUB_STEP_SUMMARY"
+              [ "$r" -eq 0 ] || rc=1
+            done
+            exit $rc
+          fi
+          run --test-threads 1 --nocapture > lib-serial.log 2>&1
           rc=$?
           tail -n 40 lib-serial.log
           last=$(grep -E '^test .* \.\.\. ' lib-serial.log | tail -n 1)
-          echo "- the hub's lib one at a time: exit $rc; last line: \`${last:-none}\`" >> "$GITHUB_STEP_SUMMARY"
-          if [ "$rc" -ne 0 ]; then
-            # ReportCrash writes the report a few seconds after the process dies; its name is the binary's and the time
-            for _ in $(seq 30); do
-              ips=$(find "$HOME/Library/Logs/DiagnosticReports" -name "${bin##*/}-*.ips" -newer lib-serial.start 2>/dev/null | sort | tail -n 1)
-              [ -n "$ips" ] && break
-              sleep 1
-            done
-            echo "--- the crash report of ${bin##*/} in this run: ${ips:-none}"
-            [ -n "$ips" ] && head -c 60000 "$ips"
-            name=$(printf '%s\n' "$last" | sed -E 's/^test (.*) \.\.\. .*$/\1/')
-            if [ -n "$name" ]; then
-              echo "--- $name alone"
-              (cd runtime/crates/drgnx-ratatoskr && "$bin" --exact "$name" --nocapture --test-threads 1)
-              echo "- $name alone: exit $?" >> "$GITHUB_STEP_SUMMARY"
-            fi
-          fi
-          exit $rc
+          echo "- the hub's lib died; one at a time: exit $rc; last line: \`${last:-none}\`" >> "$GITHUB_STEP_SUMMARY"
+          # ReportCrash writes the report a few seconds after the process dies; its name is the binary's and the time
+          for _ in $(seq 30); do
+            ips=$(find "$HOME/Library/Logs/DiagnosticReports" -name "${bin##*/}-*.ips" -newer lib-serial.start 2>/dev/null | sort | tail -n 1)
+            [ -n "$ips" ] && break
+            sleep 1
+          done
+          echo "--- the crash report of ${bin##*/} in this run: ${ips:-none}"
+          [ -n "$ips" ] && head -c 60000 "$ips"
+          exit 1
       # The terminal worker's peer check on a Mac (getpeereid): the workspace run above checks that this user's
       # connection is served; another uid's needs root, so the same test runs again under sudo (the runner's user has
       # passwordless sudo), and a run that did not check (no root) fails. The worker's log goes to the job's log.
