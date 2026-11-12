@@ -265,9 +265,12 @@ the entry is back.
 
 ### Chrome
 
-Every window's chrome is decided by its **role**, never by its buffer: an **editor** window has a tab line, a
-breadcrumb header and a mode line; a **dock** section has its title only; the **panel** and the **right dock** have
-their tab row only; a popup has none. The chrome lives in window parameters, so a mode that sets its own header or
+Every window's chrome is decided by its **role**, never by its buffer: an **editor** window has a tab line and a
+breadcrumb header (and a mode line only when `drgnx-statusbar-place` is `editors`; by default the status bar is one
+window across the frame's foot, which stays there when a dock or the panel opens); a **dock** section has its title
+only; the **panel** and the **right dock** have their tab row only, from the moment they are made; a popup has none.
+While a prompt is in the echo box, the workbench is still the frame the box belongs to: a buffer shown from the
+prompt (help on a command) goes to that frame's editor or panel. The chrome lives in window parameters, so a mode that sets its own header or
 mode line (ibuffer, Info) cannot change a window's height — text never jumps (invariant I3). A terminal window
 needs at least 30 frame lines for the breadcrumb row, which is 31 terminal rows with the menu bar on (the menu bar
 is not a frame line); with fewer, the frame parameter `drgnx-chrome-breadcrumb` is `off` (set by the terminal layout)

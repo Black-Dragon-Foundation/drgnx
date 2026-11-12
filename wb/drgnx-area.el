@@ -106,8 +106,8 @@ Returns non-nil when TAB was defined."
     (and pos t)))
 
 (defun drgnx-wb-area-window (area &optional frame)
-  "The window showing AREA on FRAME, or nil."
-  (seq-find (lambda (w) (eq (window-parameter w 'drgnx-role) area)) (window-list frame 'nomini)))
+  "The window showing AREA on FRAME (default: `drgnx-wb-frame'), or nil."
+  (seq-find (lambda (w) (eq (window-parameter w 'drgnx-role) area)) (window-list (or frame (drgnx-wb-frame)) 'nomini)))
 
 ;;;; Per-frame state: the shown tab, and each tab's buffer, start and point
 

@@ -8,10 +8,20 @@
 
 (defconst drgnx-inv--probe
   "(drgnx-uitest--json
+   (with-selected-frame (drgnx-wb-frame)           ; the workbench's, also while a prompt is in the echo box
      (let ((p (drgnx-wb-area-window 'panel)) (r (drgnx-wb-area-window 'right)) (e (drgnx-wb-section-window 'explorer)))
        (list :geometry (format \"%S\" (sort (mapcar #'window-pixel-edges (window-list nil 'nomini))   ; any order
                                             (lambda (a b) (or (< (car a) (car b)) (and (= (car a) (car b)) (< (cadr a) (cadr b)))))))
-             :frames (length (visible-frame-list))
+             ;; the same with the sidebar's sections as one box: the Open section fits its rows, so its foot moves
+             :outer (let* ((ws (window-list nil 'nomini))
+                           (dock (mapcar #'window-pixel-edges (seq-filter (lambda (w) (eq (window-parameter w 'drgnx-role) 'dock)) ws)))
+                           (rest (mapcar #'window-pixel-edges (seq-remove (lambda (w) (eq (window-parameter w 'drgnx-role) 'dock)) ws))))
+                      (format \"%S\" (sort (if dock (cons (list (apply #'min (mapcar #'car dock)) (apply #'min (mapcar #'cadr dock))
+                                                             (apply #'max (mapcar #'caddr dock)) (apply #'max (mapcar #'cadddr dock)))
+                                                       rest)
+                                             rest)
+                                         (lambda (a b) (or (< (car a) (car b)) (and (= (car a) (car b)) (< (cadr a) (cadr b))))))))
+             :frames (length (seq-remove #'frame-parent (visible-frame-list)))   ; the echo box is a child frame
              :editors (length (seq-filter #'drgnx-signal-editor-window-p (window-list nil 'nomini)))
              :panel (if p (window-pixel-height p) 0) :right (if r (window-pixel-width r) 0)
              :left (if e (window-pixel-width e) 0)
@@ -23,9 +33,10 @@
                           (if (or buffer-file-name
                                   (derived-mode-p 'dired-mode 'Buffer-menu-mode 'ibuffer-mode 'Custom-mode 'proced-mode
                                                   'edit-abbrevs-mode 'bookmark-bmenu-mode 'command-history-mode 'lisp-interaction-mode))
-                              t (format \"%s (%s)\" (buffer-name) major-mode))))))"
-  "The layout facts the invariants are about.  :frames counts the visible ones: under Glitnir the popup lane's child
-frame is made once and kept, hidden, between popups.")
+                              t (format \"%s (%s)\" (buffer-name) major-mode)))))))"
+  "The layout facts the invariants are about, of the workbench frame (`drgnx-wb-frame').  :frames counts the visible
+top-level ones: the echo box shows while a prompt is in it, and under Glitnir the popup lane's child frame is made once
+and kept, hidden, between popups.")
 
 (defmacro drgnx-inv--with (sess &rest body)
   "BODY with SESS a fresh GUI session (config=drgnx) whose editor shows a fixture project's file."

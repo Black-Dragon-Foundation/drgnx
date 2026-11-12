@@ -69,7 +69,8 @@
     ;; Open in New Window: the same buffer in both; closing its tab in one keeps it in the other (RF4).
     (drgnx-frames-test--eval sess "(progn (select-frame-set-input-focus kx-f1) (drgnx-frames-open-editor) t)")
     (drgnx-ui-measure sess nil)
-    (should (= 3 (drgnx-frames-test--eval sess "(length (frame-list))")))
+    ;; three windows; the echo box and the popup lane are child frames
+    (should (= 3 (drgnx-frames-test--eval sess "(length (seq-remove #'frame-parent (frame-list)))")))
     (drgnx-frames-test--eval sess "(progn (drgnx-chrome-close-tab) t)")
     (should (member "README.md" (drgnx-frames-test--eval sess "(with-selected-frame kx-f1 (mapcar #'buffer-name (drgnx-chrome-tabs (car (drgnx-groups-list)))))")))
     ;; Move Editor Group to New Window: frame 1's second group (b.txt) moves with its tabs.
