@@ -11,7 +11,7 @@
 
 (defvar drgnx-hub--events)
 
-(defun quick-open-rows-test--patch(view base version ops &optional hub)
+(defun quick-open-rows-test--patch (view base version ops &optional hub)
   (list :view view :class "gui-1" :hub (or hub 7) :base base :version version :env_epoch 0 :ops ops))
 
 (defun quick-open-rows-test--row (path) (list :key path :text path))
