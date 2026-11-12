@@ -12,8 +12,8 @@ use crate::front::Front;
 use runstav::methods::Params;
 use runstav::methods::debug::{
     DebugBreakpointOp, DebugBreakpoints, DebugBreakpointsView, DebugConfig, DebugConfigList,
-    DebugConfigs, DebugControl, DebugFileError, DebugInstall, DebugRunToCursor, DebugSelect,
-    DebugSource, DebugSourceText, DebugStart, DebugStarted, DebugTrust,
+    DebugConfigs, DebugControl, DebugFileError, DebugInstall, DebugMissing, DebugRunToCursor,
+    DebugSelect, DebugSource, DebugSourceText, DebugStart, DebugStarted, DebugTrust,
 };
 use runstav::types::JsonObject;
 use runstav::wire::{Error, ErrorCode};
@@ -185,20 +185,71 @@ fn entry(id: String, source: &str, c: &Value, needs_trust: bool) -> DebugConfig 
         ty: text(c, "type"),
         request: text(c, "request"),
         needs_trust,
+        missing: None,
     }
+}
+
+/// Where adapters are looked for: the shell's `PATH` and drgnx's tools folder.
+fn adapter_env(front: &Front) -> adapters::Env {
+    let path = front
+        .shell_env
+        .vars_os()
+        .iter()
+        .find(|(k, _)| k == "PATH")
+        .map(|(_, v)| std::env::split_paths(v).collect())
+        .unwrap_or_default();
+    adapters::Env {
+        path,
+        tools: tools_dir(front),
+    }
+}
+
+/// CONFIG's adapter when TABLE has it and it is not found in ENV (a `debugServer` configuration needs none here), with
+/// how drgnx installs it.
+fn missing_of(table: &Table, env: &adapters::Env, config: &Value) -> Option<DebugMissing> {
+    if matches!(launch::debug_server(config), Ok(Some(_))) {
+        return None;
+    }
+    let a = table.for_type(&text(config, "type")).ok()?;
+    if adapters::find(a, env).is_some() {
+        return None;
+    }
+    let plan = a
+        .install
+        .as_ref()
+        .filter(|_| !a.not_built_in)
+        .and_then(|i| super::install::plan(i, &super::install::platform_key()).ok());
+    let (install, command) = match plan {
+        Some(super::install::Plan::System(c)) => ("system", Some(c)),
+        Some(super::install::Plan::Pip { .. }) => ("pip", None),
+        Some(super::install::Plan::Archive { .. }) => ("download", None),
+        None => ("none", None),
+    };
+    Some(DebugMissing {
+        adapter: a.id.clone(),
+        name: a.name.clone(),
+        install: install.into(),
+        command,
+    })
 }
 
 async fn configs(front: &Front, p: DebugConfigs) -> Result<DebugConfigList, Error> {
     let needs_trust = !front.debug.is_trusted(&p.root);
     let (file, error) = read_launch(&p.root);
     let mut out = vec![];
+    // an adapter not found marks its rows (the picker offers its install); a table that does not read marks none
+    let found = table(&p.adapters).ok().map(|t| (t, adapter_env(front)));
+    let mark = |mut e: DebugConfig, c: &Value| {
+        if let Some((t, env)) = &found {
+            e.missing = missing_of(t, env, c);
+        }
+        e
+    };
     if let Some(f) = &file {
         for i in launch::listed(&f.configs) {
-            out.push(entry(
-                format!("launch:{i}"),
-                "launch",
+            out.push(mark(
+                entry(format!("launch:{i}"), "launch", &f.configs[i], needs_trust),
                 &f.configs[i],
-                needs_trust,
             ));
         }
         for i in launch::listed(&f.compounds) {
@@ -211,16 +262,18 @@ async fn configs(front: &Front, p: DebugConfigs) -> Result<DebugConfigList, Erro
         }
     }
     for (i, c) in p.user.iter().enumerate() {
-        out.push(entry(
-            format!("user:{i}"),
-            "user",
-            &Value::Object(c.clone().into_inner()),
-            needs_trust,
+        let c = Value::Object(c.clone().into_inner());
+        out.push(mark(
+            entry(format!("user:{i}"), "user", &c, needs_trust),
+            &c,
         ));
     }
     if let Some(lang) = &p.language {
         for (i, c) in table(&p.adapters)?.defaults_for(lang).iter().enumerate() {
-            out.push(entry(format!("default:{i}"), "default", c, needs_trust));
+            out.push(mark(
+                entry(format!("default:{i}"), "default", c, needs_trust),
+                c,
+            ));
         }
     }
     let last = front
@@ -349,15 +402,7 @@ fn launcher(
         return Ok(Arc::new(Server { addr }));
     }
     let env_os = front.shell_env.vars_os();
-    let path = env_os
-        .iter()
-        .find(|(k, _)| k == "PATH")
-        .map(|(_, v)| std::env::split_paths(v).collect())
-        .unwrap_or_default();
-    let env = adapters::Env {
-        path,
-        tools: tools_dir(front),
-    };
+    let env = adapter_env(front);
     let found = adapters::find(adapter, &env).ok_or_else(|| {
         format!(
             "{} is not installed: install it with Debug: Install Adapter, or put it on PATH",

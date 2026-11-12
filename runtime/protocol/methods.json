@@ -12007,6 +12007,17 @@
                 "description": "`launch:N`, `user:N`, `default:ADAPTER:N` or `compound:N` (launch.json's compounds, after its\nconfigurations): what `debug/start` takes.",
                 "type": "string"
               },
+              "missing": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DebugMissing"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Its adapter is not found here (none: found, or it connects to a running adapter, or a compound)."
+              },
               "name": {
                 "type": "string"
               },
@@ -12060,6 +12071,32 @@
               "line",
               "col",
               "message"
+            ],
+            "type": "object"
+          },
+          "DebugMissing": {
+            "description": "An adapter `debug/configs` did not find, and how drgnx installs it: `download` (a pinned archive) or `pip` (into\nthe tools venv) through `debug/install`; `system` (COMMAND names the package); `none` (the user adds it).",
+            "properties": {
+              "adapter": {
+                "type": "string"
+              },
+              "command": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "install": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "adapter",
+              "name",
+              "install"
             ],
             "type": "object"
           }

@@ -177,6 +177,12 @@ js-debug, delve, lldb-dap), how to find it and how to start it:
   install --require-hashes --no-deps`. A system package is never run: the error names its command. js-debug and
   CodeLLDB are pinned archives (CodeLLDB is built in, untested, started from its `extension/adapter/codelldb`).
 
+`debug/configs` marks a configuration whose adapter is not found here with `missing` `{adapter, name, install,
+command?}` (`wire::missing_of`; `install` is `download`, `pip`, `system` with its command, or `none`; a `debugServer`
+configuration and a compound carry none). The picker (`drgnx-debug-launch-read-config`) shows such a row as "not
+installed", and picking it offers the install on one yes (`drgnx-debug-launch--offer-install`, from the command only),
+then starts; a `system` adapter's error names its command.
+
 The untested entries' command lines come from dape's recipes (credited in the file). Adapters drgnx cannot start are
 listed with `:not-built-in t`, so their type says to add them in the setting `debug.adapters`; an unknown type lists
 the known ones.

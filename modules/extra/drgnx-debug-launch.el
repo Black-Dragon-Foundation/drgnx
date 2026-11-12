@@ -139,10 +139,34 @@ project's settings never set this."
             (list :annotation-function
                   (lambda (name)
                     (let ((c (cdr (assoc name rows))))
-                      (format "  %s · %s%s" (plist-get c :type) (plist-get c :source)
-                              (if (eq (plist-get c :needs_trust) t) " · not trusted" ""))))))
-           (name (completing-read "Debug configuration: " rows nil t nil nil (and last (plist-get last :name)))))
-      (plist-get (cdr (assoc name rows)) :id))))
+                      (format "  %s · %s%s%s" (plist-get c :type) (plist-get c :source)
+                              (if (eq (plist-get c :needs_trust) t) " · not trusted" "")
+                              (if (plist-get c :missing) " · not installed" ""))))))
+           (name (completing-read "Debug configuration: " rows nil t nil nil (and last (plist-get last :name))))
+           (c (cdr (assoc name rows))))
+      (when-let* ((missing (plist-get c :missing))) (drgnx-debug-launch--offer-install missing))
+      (plist-get c :id))))
+
+(defun drgnx-debug-launch--offer-install (missing)
+  "MISSING (`debug/configs'' :missing): install its adapter on one yes, else say why it cannot start.  Only the
+picker calls this, from a command: nothing downloads without the user's yes."
+  (let ((name (plist-get missing :name)) (how (plist-get missing :install)))
+    (pcase how
+      ((or "download" "pip")
+       (unless (yes-or-no-p (format "%s is not installed.  Install it now (%s)? " name
+                                    (if (equal how "pip") "pip, its hashes required"
+                                      "the pinned download, checked against its sha256")))
+         (user-error "Not started: %s is not installed" name))
+       (message "Installing %s…" name)
+       (drgnx-hub-call-sync "debug/install"
+                            (append (list :adapter (plist-get missing :adapter))
+                                    (when drgnx-debug-adapters
+                                      (list :adapters (vconcat (mapcar #'drgnx-debug-launch--adapter
+                                                                       drgnx-debug-adapters)))))
+                            600)
+       (message "Installed %s" name))
+      ("system" (user-error "%s is not installed: install it with `%s'" name (plist-get missing :command)))
+      (_ (user-error "%s is not installed: put it on PATH, or add it in the setting `drgnx-debug-adapters'" name)))))
 
 ;;;; Inputs
 

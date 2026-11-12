@@ -177,6 +177,52 @@ holds (METHOD . PARAMS) of every call, in order."
                           'info)))))
       (delete-directory dir t))))
 
+
+(defun debug-launch-test--missing-configs (missing)
+  "A `debug/configs' answer with one configuration whose adapter is MISSING."
+  `(("debug/configs" (:configs [(:id "launch:0" :name "Go" :source "launch" :type "go" :needs_trust :false
+                                     :missing ,missing)]))
+    ("debug/install" "installed")))
+
+(ert-deftest drgnx-debug-launch/a-missing-adapter-installs-on-one-yes ()
+  ;; the picker's row says "not installed"; picking it offers the pinned download, and yes installs, then starts
+  (let ((asked nil))
+    (debug-launch-test--with-hub
+        (debug-launch-test--missing-configs '(:adapter "js-debug" :name "JavaScript" :install "download"))
+      (cl-letf (((symbol-function 'drgnx-debug-launch-trusted-p) #'always)
+                ((symbol-function 'yes-or-no-p) (lambda (p) (setq asked p) t))
+                ((symbol-function 'completing-read)
+                 (lambda (_p _coll &rest _)
+                   (should (string-match-p "not installed"
+                                           (funcall (plist-get completion-extra-properties :annotation-function)
+                                                    "Go")))
+                   "Go")))
+        (with-temp-buffer (should (equal (drgnx-debug-launch-read-config "/p") "launch:0"))))
+      (should (string-match-p "JavaScript" asked))
+      (should (equal (car (car (last calls))) "debug/install"))
+      (should (equal (plist-get (cdr (car (last calls))) :adapter) "js-debug")))))
+
+(ert-deftest drgnx-debug-launch/a-missing-adapter-declined-installs-nothing ()
+  (debug-launch-test--with-hub
+      (debug-launch-test--missing-configs '(:adapter "debugpy" :name "Python" :install "pip"))
+    (cl-letf (((symbol-function 'drgnx-debug-launch-trusted-p) #'always)
+              ((symbol-function 'yes-or-no-p) #'ignore)
+              ((symbol-function 'completing-read) (lambda (&rest _) "Go")))
+      (with-temp-buffer (should-error (drgnx-debug-launch-read-config "/p") :type 'user-error)))
+    (should-not (assoc "debug/install" calls))))
+
+(ert-deftest drgnx-debug-launch/a-system-adapter-names-its-command ()
+  ;; nothing to download: the error says the system's command, and nothing is asked
+  (debug-launch-test--with-hub
+      (debug-launch-test--missing-configs
+       '(:adapter "delve" :name "Go (delve)" :install "system" :command "dnf install delve"))
+    (cl-letf (((symbol-function 'drgnx-debug-launch-trusted-p) #'always)
+              ((symbol-function 'yes-or-no-p) (lambda (_) (error "asked")))
+              ((symbol-function 'completing-read) (lambda (&rest _) "Go")))
+      (with-temp-buffer
+        (should (string-match-p "dnf install delve"
+                                (cadr (should-error (drgnx-debug-launch-read-config "/p") :type 'user-error))))))
+    (should-not (assoc "debug/install" calls))))
 ;;; debug-launch-test.el ends here
 
 ;;;; Debug: Install Adapter

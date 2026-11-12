@@ -60,7 +60,8 @@ you to trust it (**Trust This Folder**): an untrusted folder's configurations ne
 
 **Install Adapter…** (the palette) downloads the JavaScript debugger or CodeLLDB, checked against the version drgnx
 pins, or puts debugpy into drgnx's own Python, and names the system package to install for the others (`drgnx doctor`
-lists which are found).
+lists which are found). The Start picker marks a configuration whose debugger is missing "not installed"; picking it
+offers the same install, on your yes, and then starts.
 
 A stop opens its file at the line, marked by an amber arrow and band; a caller frame you pick is marked green, and a
 stop on an exception is red, with a card under the line saying what was raised (code with no file, such as an

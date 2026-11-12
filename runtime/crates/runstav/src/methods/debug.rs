@@ -51,6 +51,20 @@ pub struct DebugConfig {
     pub request: String,
     /// ROOT is not trusted: starting it shows the trust card first.
     pub needs_trust: bool,
+    /// Its adapter is not found here (none: found, or it connects to a running adapter, or a compound).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing: Option<DebugMissing>,
+}
+
+/// An adapter `debug/configs` did not find, and how drgnx installs it: `download` (a pinned archive) or `pip` (into
+/// the tools venv) through `debug/install`; `system` (COMMAND names the package); `none` (the user adds it).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugMissing {
+    pub adapter: String,
+    pub name: String,
+    pub install: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 /// A launch.json that could not be read, and where.
