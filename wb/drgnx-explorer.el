@@ -889,6 +889,20 @@ roots changed which.  Non-nil when it attached now (the attach asked the hub alr
     (cond ((and want (not have)) (drgnx-explorer-rows-attach drgnx-explorer-hub-view-name "unshown") t)
           ((and have (not want)) (drgnx-explorer--rows-detach) nil))))
 
+(declare-function drgnx-hub-start-for-command "drgnx-hub-client" (on-fail))
+
+(defun drgnx-explorer-start-hub ()
+  "A command shows the Explorer: when the hub lists its folders (`drgnx-explorer--hub-lists-p') and none runs, start it
+\(`drgnx-hub-start-for-command', not waited for); the rows come once it answers.  Only commands call this: a hook or a
+timer never starts the hub."
+  (when (drgnx-explorer--hub-lists-p)
+    (require 'drgnx-hub-client)
+    (drgnx-hub-start-for-command #'drgnx-explorer--no-hub)))
+
+(defun drgnx-explorer--no-hub (why)
+  "`drgnx-explorer-start-hub' found no hub to have: say WHY."
+  (message "The Explorer cannot list the folders without the hub: %s" why))
+
 (defun drgnx-explorer--rows-detach ()
   "In the Explorer's buffer: no longer the hub's view; the buffer is a new Explorer, for the Lisp listing to draw
 \(it replaces the text)."
@@ -1366,8 +1380,8 @@ tree's visible rows in order."
 (defun drgnx-explorer-toggle () "Expand or collapse the folder at point."
        (interactive) (let ((drgnx-explorer--remote-reads t) (drgnx-explorer--await t)) (drgnx-explorer-toggle-at (point))))
 
-(defun drgnx-explorer-focus () "Show the sidebar and focus the Explorer."
-       (interactive) (drgnx-wb-focus-section 'explorer))
+(defun drgnx-explorer-focus () "Show the sidebar and focus the Explorer; start the hub when none runs."
+       (interactive) (drgnx-wb-focus-section 'explorer) (drgnx-explorer-start-hub))
 
 ;;;; Find
 

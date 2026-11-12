@@ -140,7 +140,8 @@ would report one leak as two lines."
     items))
 
 (defvar drgnx-modules-fingerprint--own nil
-  "(HOOKS . FUNCTION-VARIABLES): the bound `drgnx-*' symbols ending in -hook, -hooks, -functions / -function.
+  "(HOOKS . FUNCTION-VARIABLES): the bound `drgnx-*' symbols ending in -hook, -functions / -function (a -hooks name
+holds hook names: `drgnx-modules-fingerprint--hook-name-p').
 Read once per Emacs (`apropos-internal', in C) and again by every FULL scan; nil until then.  A library loaded
 after that, and not scanned since, is not in it (the next FULL scan adds it).")
 
@@ -151,7 +152,7 @@ after that, and not scanned since, is not in it (the next FULL scan adds it).")
   "`drgnx-modules-fingerprint--own', read from the obarray on first use."
   (or drgnx-modules-fingerprint--own
       (let (hooks fvars)
-        (dolist (s (apropos-internal "\\`drgnx-.*\\(?:-hooks?\\|-functions?\\)\\'" #'default-boundp))
+        (dolist (s (apropos-internal "\\`drgnx-.*\\(?:-hook\\|-functions?\\)\\'" #'default-boundp))
           (when (eq (indirect-variable s) s)
             (if (string-suffix-p "-function" (symbol-name s)) (push s fvars) (push s hooks))))
         (setq drgnx-modules-fingerprint--own (cons hooks fvars)))))
@@ -175,8 +176,11 @@ Rebuilt only when one of its inputs is a different list."
 (defun drgnx-modules-fingerprint--function-variable-names () (cadr (drgnx-modules-fingerprint--names)))
 
 (defun drgnx-modules-fingerprint--hook-name-p (name)
+  "Whether NAME is a hook variable's by Emacs's convention: -hook (normal) or -functions (abnormal).  A -hooks
+name holds hook names (`unload-feature-special-hooks', `drgnx-pixels--quiet-hooks'): read as a hook, each name was an
+entry."
   (and (> (length name) 6)
-       (or (string-suffix-p "-hook" name) (string-suffix-p "-hooks" name) (string-suffix-p "-functions" name))))
+       (or (string-suffix-p "-hook" name) (string-suffix-p "-functions" name))))
 
 (defun drgnx-modules-fingerprint--scan ()
   "(:all-hooks ITEMS :advice ITEMS): every bound hook variable's default value, every `-function' variable's

@@ -105,9 +105,25 @@ mounts them). A run narrowed by `DRGNX_TEST_SELECTOR` does not hold the list. Th
 The GUI suite (`test --ui`'s session) holds every hub row to run, narrowed or not. A session inherits no
 `DRGNX_RATATOSKR_BIN`, so `drgnx-ui-run-ui-session-tests` passes it explicitly: the caller's value, or else the checkout's
 `runtime/target/debug/ratatoskr`. It also sets `DRGNX_TEST_HUB_REQUIRED=1`, and under that a hub fixture that finds no
-Ratatoskr fails the row (`drgnx-test-no-hub`) instead of skipping it. Neither `test --ui` nor `--container --ui` builds
-the hub. Build it first (`cargo build -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks` in
-`runtime/`); CI's GUI tier fetches the test-hooks bins its `bins-linux` job built (`fetch-test-bins`).
+Ratatoskr fails the row (`drgnx-test-no-hub`) instead of skipping it.
+
+#### The test hub
+
+`bin/drgnx test --ui` (and `--container --ui`, on the host before the container starts) gives every contributor the same
+hub: `test_hub` fetches libghostty-vt's pinned tarballs when they are missing (`runtime/crates/ghostty-vt-sys/fetch.sh`,
+as `install.sh` sets the terminal's engine up; Zig 0.17 builds it), builds `cargo build --locked -p drgnx-ratatoskr -p
+domr -p drgnx-term --bins --features drgnx-ratatoskr/test-hooks` (cargo builds nothing when the binaries are current) and
+sets `DRGNX_RATATOSKR_BIN` to `runtime/target/debug/ratatoskr`, with `ratatoskr-mock` (the gateway tests' provider) and
+`drgnx-term` (the terminal rows' worker) beside it. `--container` mounts that directory, so both siblings are seen inside.
+
+- `DRGNX_RATATOSKR_BIN` already naming a binary: used as it is, nothing built (CI builds its own: its GUI tier fetches
+  the bins its `bins-linux` job built, drgnx-term included, `fetch-test-bins`); a missing `drgnx-term` beside it is said.
+- `DRGNX_TEST_CARGO`: the cargo to build with, a command run from the checkout's root that adds `--locked` and the
+  manifest itself (a wrapper that builds in a container); without it, the cargo `install.sh` recorded, else the one on
+  `PATH`, with the Zig `install.sh` recorded first on `PATH`.
+- `DRGNX_TEST_HUB_BUILD=0`: nothing is built (the run inside `--container` gets it: the host built the hub).
+
+A hub that does not build stops the run with the reason before any session starts.
 
 The helpers of the hub-client tests (`test/fixtures/hub-client-fixture.el`) are a fixture so that loading them registers
 no test: a test file that loaded `hub-client-test.el` whole ran its 54 tests again in its own session.
@@ -182,8 +198,8 @@ seconds (default 110; `bin/drgnx check` gives its `ui` job 300) and never leaves
 `core/drgnx-modules-fingerprint.el` is what the leak census and the module test helper read global state with.
 `(drgnx-modules-fingerprint)` returns a plist of the state a test or a module can leave behind: timers (with their
 repeat), processes, buffers, `features`, the default values of the hooks in `drgnx-modules-fingerprint-hooks` (Emacs's
-and third-party hooks, by hand), `unload-feature-special-hooks` and every bound `drgnx-*` variable ending in `-hook`,
-`-hooks` or `-functions` (found once per Emacs with one `apropos-internal`, about 10 ms, and again by every full
+and third-party hooks, by hand), `unload-feature-special-hooks` and every bound `drgnx-*` variable ending in `-hook`
+or `-functions` (a `-hooks` name holds hook names, as `unload-feature-special-hooks` does: no hook) (found once per Emacs with one `apropos-internal`, about 10 ms, and again by every full
 scan, so a new drgnx hook needs no line anywhere), the `add-function` advice on
 `drgnx-modules-fingerprint-function-variables`, `global-mode-string`, `auto-mode-alist`, `major-mode-remap-alist`,
 `after-load-alist`, `emulation-mode-map-alists`, `default-frame-alist`, `global-minor-modes`, the length of
@@ -1732,7 +1748,10 @@ and cursor, inputs, the mixed stack) and `test/live/drgnx-modal-daemon-test.el` 
 `:qa` in a daemon that keeps running) each start a session of config `drgnx` per test. `test/fixtures/modal-session.el`
 loads evil there from `DRGNX_MODAL_ELPA` (a session inherits it), starts the engine with `drgnx-modal-engine-start-now`,
 applies the key stack, and presses keys through the harness queue (`drgnx-ui-measure`, one event per 40 ms tick); each
-test prints a line summing its jank reports. Screenshots (`modal-normal.png`, `modal-visual-line.png`,
+test prints a line summing its jank reports. A test whose views need the hub (the Explorer's rows, the terminal) says
+`:hub t`: the session starts the test's Ratatoskr (`DRGNX_RATATOSKR_BIN`, with `drgnx-term` built beside it) as an
+install does and subscribes; without the binary the test skips, or fails where the hub is required
+(`DRGNX_TEST_HUB_REQUIRED=1`). Screenshots (`modal-normal.png`, `modal-visual-line.png`,
 `modal-explorer.png`, `modal-explorer-leader.png`) go to `$DRGNX_TEST_SHOTS` when set — the UI evidence of a run —
 else to the run's temp directory. To run only these: `DRGNX_TEST_SELECTOR='"^drgnx-\\(ui\\|live\\)-modal/"'` with
 `bin/drgnx test --ui` (the GUI half still runs all of `test/ui`).

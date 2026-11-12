@@ -23,8 +23,9 @@
 
 (defun drgnx-bin-test--call (bin env &rest args)
   "Run BIN (a bin/drgnx) with ENV (\"K=V\" strings) and ARGS in `drgnx-bin-test--cwd'; return (EXIT . OUTPUT),
-stderr included.  DRGNX_EMACS is unset unless ENV sets it; HOME is the caller's temp directory in ENV."
-  (let ((process-environment (append env (list "DRGNX_EMACS") process-environment))
+stderr included.  DRGNX_EMACS is unset unless ENV sets it; HOME is the caller's temp directory in ENV.  `test --ui'
+builds no test hub unless ENV unsets DRGNX_TEST_HUB_BUILD (a bare name)."
+  (let ((process-environment (append env (list "DRGNX_EMACS" "DRGNX_TEST_HUB_BUILD=0") process-environment))
         (default-directory (file-name-as-directory (or drgnx-bin-test--cwd temporary-file-directory))))
     (with-temp-buffer
       (cons (apply #'call-process bin nil t nil args) (buffer-string)))))
@@ -1959,3 +1960,82 @@ when that is non-nil; return (EXIT OUTPUT INSTALLED-DIRECTORY-NAMES)."
     (with-temp-buffer
       (insert-file-contents (expand-file-name file drgnx-bin-test--root))
       (should (equal (drgnx-bin-test--early-waits (buffer-string)) nil)))))
+
+;; The test hub (docs/develop/harness.md, "The test hub"): `test --ui' fetches libghostty-vt's tarballs and builds
+;; Ratatoskr (test hooks), ratatoskr-mock and drgnx-term before the session.  Fakes on PATH stand in for curl, the
+;; checksum and the signature check (no network), DRGNX_TEST_CARGO for cargo and DRGNX_EMACS for the harness.
+(defmacro drgnx-bin-test--with-hub-fakes (vars &rest body)
+  "Bind VARS: DIR, LOG (what the fakes wrote), ENV for a `test --ui' run with fake curl, sha256sum, minisign,
+cargo (DRGNX_TEST_CARGO) and Emacs (DRGNX_EMACS: logs its DRGNX_RATATOSKR_BIN), tarballs in DIR/tarballs."
+  (declare (indent 1))
+  `(let* ((dir (make-temp-file "drgnx-bin-hub" t))
+          (log (expand-file-name "log" dir))
+          (fakes (expand-file-name "fakes" dir))
+          (pin (expand-file-name "runtime/crates/ghostty-vt-sys/pin.toml" drgnx-bin-test--root))
+          (drgnx-bin-test--cwd dir)
+          (env (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config") (concat "DRGNX_DATA_DIR=" dir "/data")
+                     (concat "PATH=" fakes ":/usr/bin:/bin") (concat "GHOSTTY_VT_TARBALLS=" dir "/tarballs")
+                     (concat "DRGNX_TEST_CARGO=" fakes "/cargo") (concat "DRGNX_EMACS=" fakes "/emacs")
+                     "DRGNX_RATATOSKR_BIN" "DRGNX_TEST_HUB_BUILD" "DRGNX_TEST_SELECTOR")))
+     (make-directory fakes)
+     (drgnx-bin-test--fake-emacs (expand-file-name "curl" fakes)
+                                 (format "echo \"curl $*\" >> %s\nwhile [ $# -gt 0 ]; do [ \"$1\" = -o ] && : > \"$2\"; shift; done" log))
+     ;; the pinned sha256 of the file whose name (less .new) is the argument, as sha256sum prints it
+     (drgnx-bin-test--fake-emacs (expand-file-name "sha256sum" fakes)
+                                 (format "f=$(basename \"$1\" .new); awk -v f=\"$f\" '$1 == \"file\" {gsub(/\"/, \"\", $3); c = $3} $1 == \"sha256\" && c == f {gsub(/\"/, \"\", $3); print $3 \"  x\"}' %s" pin))
+     (drgnx-bin-test--fake-emacs (expand-file-name "minisign" fakes) "exit 0")
+     (drgnx-bin-test--fake-emacs (expand-file-name "cargo" fakes) (format "echo \"cargo $*\" >> %s" log))
+     (drgnx-bin-test--fake-emacs (expand-file-name "emacs" fakes) (format "echo \"emacs hub=$DRGNX_RATATOSKR_BIN\" >> %s" log))
+     (ignore env)
+     (unwind-protect (let ,vars ,@body)
+       (delete-directory dir t))))
+
+(ert-deftest drgnx-bin/test-ui-builds-the-test-hub-first ()
+  (drgnx-bin-test--with-hub-fakes ()
+    (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin env "test" "--ui"))))
+    (let ((lines (split-string (drgnx-bin-test--slurp log) "\n" t)))
+      ;; both pinned tarballs fetched (and their signatures), into the tarballs directory
+      (should (= 2 (seq-count (lambda (l) (string-suffix-p ".tar.gz" l)) lines)))
+      (should (= 2 (seq-count (lambda (l) (string-suffix-p ".tar.gz.minisig" l)) lines)))
+      (should (file-exists-p (expand-file-name "tarballs/libghostty-vt-1.0.0.tar.gz" dir)))
+      ;; then one build of the three binaries, then the harness with the hub named
+      (should (equal (seq-remove (lambda (l) (string-prefix-p "curl " l)) lines)
+                     (list "cargo build -p drgnx-ratatoskr -p domr -p drgnx-term --bins --features drgnx-ratatoskr/test-hooks"
+                           (concat "emacs hub=" drgnx-bin-test--root "runtime/target/debug/ratatoskr")))))))
+
+(ert-deftest drgnx-bin/test-ui-stops-when-the-test-hub-cannot-be-built ()
+  (drgnx-bin-test--with-hub-fakes ()
+    ;; the build fails: the run stops with the reason, no session starts
+    (drgnx-bin-test--fake-emacs (expand-file-name "fakes/cargo" dir) (format "echo \"cargo $*\" >> %s; exit 101" log))
+    (let ((r (drgnx-bin-test--call drgnx-bin-test--bin env "test" "--ui")))
+      (should (eql 1 (car r)))
+      (should (string-search "the test hub did not build" (cdr r)))
+      (should-not (string-search "emacs hub=" (drgnx-bin-test--slurp log))))))
+
+(ert-deftest drgnx-bin/test-ui-uses-a-named-hub-as-it-is ()
+  (drgnx-bin-test--with-hub-fakes ()
+    (let* ((hub (drgnx-bin-test--fake-emacs (expand-file-name "ratatoskr" dir) "exit 0"))
+           (r (drgnx-bin-test--call drgnx-bin-test--bin (cons (concat "DRGNX_RATATOSKR_BIN=" hub) env) "test" "--ui")))
+      (should (eql 0 (car r)))
+      ;; nothing fetched or built; no drgnx-term beside it is said
+      (should (equal (split-string (drgnx-bin-test--slurp log) "\n" t) (list (concat "emacs hub=" hub))))
+      (should (string-search "no drgnx-term beside" (cdr r))))))
+
+(ert-deftest drgnx-bin/a-container-ui-run-mounts-the-hubs-directory-and-builds-nothing-inside ()
+  (drgnx-bin-test--with-hub-fakes ()
+    (let* ((rtlog (expand-file-name "rt.log" dir))
+           (rt (drgnx-bin-test--fake-emacs (expand-file-name "fake-rt" dir)
+                                           (format "for a in \"$@\"; do echo \"$a\" >> %s; done" rtlog)))
+           (bins (expand-file-name "bins" dir))
+           (hub (progn (make-directory bins) (drgnx-bin-test--fake-emacs (expand-file-name "ratatoskr" bins) "exit 0"))))
+      (should (eql 0 (car (drgnx-bin-test--call
+                           drgnx-bin-test--bin
+                           (append (list (concat "DRGNX_CONTAINER=" rt) "DRGNX_TEST_GUI_IMAGE=an-image"
+                                         (concat "DRGNX_RATATOSKR_BIN=" hub))
+                                   env)
+                           "test" "--container" "--ui"))))
+      (let ((args (split-string (drgnx-bin-test--slurp rtlog) "\n" t)))
+        ;; the directory, so ratatoskr-mock and drgnx-term beside the hub are seen inside too
+        (should (member (concat (file-truename bins) ":/opt/ratatoskr:ro") args))
+        (should (member "DRGNX_RATATOSKR_BIN=/opt/ratatoskr/ratatoskr" args))
+        (should (member "DRGNX_TEST_HUB_BUILD=0" args))))))

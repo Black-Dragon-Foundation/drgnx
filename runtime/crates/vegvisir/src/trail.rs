@@ -105,6 +105,7 @@ fn icon(kind: &str) -> &'static str {
         "edit" => "✎",
         "job" => "▦",
         "waiting" => "◷",
+        "resumed" => "▷",
         _ => "›",
     }
 }
@@ -163,7 +164,8 @@ fn duration(s: &Step) -> Option<String> {
 
 /// The trail's rows: each step (oldest first) with the cards of the conclusions stamped on it after it, then the
 /// cards of the conclusions on no step shown. A step's row: its kind's icon, its title, the number of each
-/// conclusion resting on it, and its time and duration 14 columns from the right edge.
+/// conclusion resting on it, and its time and duration 14 columns from the right edge. A pause that ended is followed
+/// by a note row `resumed` at the time it ended.
 pub fn trail_rows(steps: &[Step], concs: &[Conclusion], env: &Env, zone: Zone) -> Vec<Row> {
     let mut steps: Vec<&Step> = steps.iter().collect();
     steps.sort_by_key(|s| (s.seq, s.id));
@@ -193,6 +195,15 @@ pub fn trail_rows(steps: &[Step], concs: &[Conclusion], env: &Env, zone: Zone) -
         out.push(b.finish());
         for c in concs.iter().filter(|c| c.step == Some(s.id)) {
             out.extend(conclusion_rows(c));
+        }
+        // a pause that ended: the agent was resumed then (a note, no node)
+        if let (true, Some(end)) = (s.class == "paused", s.end) {
+            let mut b = RowBuilder::new(format!("resumed:{}", s.id));
+            b.push(icon("resumed"), Some("drgnx-work-label"))
+                .push(" resumed", None)
+                .stop(right)
+                .push(&zone.time(end), None);
+            out.push(b.finish());
         }
     }
     for c in concs

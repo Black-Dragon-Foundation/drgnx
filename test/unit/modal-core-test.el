@@ -112,6 +112,14 @@
     (should (memq 'drgnx-replace-bar-mode drgnx-modal-form-modes))
     (should (memq 'eshell-mode drgnx-modal-input-modes))))
 
+(ert-deftest drgnx-modal/the-agents-list-is-a-panel ()
+  "The agents list (Show Agents, in the right dock) is a read-only view: a panel, in emacs state with the panel keys,
+as the Explorer is (the live row drgnx-ui-modal/panels found it in normal state)."
+  (load (expand-file-name "modules/tools/drgnx-agent-panel-list" drgnx-dir) nil t)
+  (with-temp-buffer
+    (drgnx-agent-panel-list-mode)
+    (should (drgnx-modal-panel-p))))
+
 (ert-deftest drgnx-modal/where-names-the-map ()
   (should (equal (drgnx-modal-where 'drgnx-modal-leader-map) ""))
   (should (equal (drgnx-modal-where 'drgnx-modal-panel-map) "panels"))

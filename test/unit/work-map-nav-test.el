@@ -133,6 +133,26 @@ as one move; forward redoes it; each keeps the map's (KIND . ID)."
     (let ((inhibit-message t)) (drgnx-work-map-needs-you 5))
     (should (equal '(ask . "ask:1") drgnx-work-map--selection))))
 
+(ert-deftest drgnx-work-map-nav/needs-you-n-about-nothing-shown ()
+  "Pattern D: an entry about nothing the view shows keeps its place in the list (its card's id, not a node), so g N
+stays the strip's Nth chip: g 2 says nothing needs you there and keeps the selection; n goes on from it to the ask."
+  (drgnx-work-map-nav-test--with
+    (drgnx-view-model-event
+     (list :view view :hub 7 :base 1 :version 2
+           :model (json-serialize
+                   (list :ops (vector (list :list (list :name "needs-you" :ids ["agent:b" "k9" "ask:1"])))))))
+    (drgnx-view-model--due view)                    ; a model no row patch names applies on its timer: now
+    (should (equal '("agent:b" "k9" "ask:1") (append (nidhogg-view-get (drgnx-work-map--sja) 'list "needs-you") nil)))
+    (drgnx-work-map-needs-you 1)
+    (should (equal '(agent . "agent:b") drgnx-work-map--selection))
+    (let* ((said nil)
+           (_ (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (setq said (apply #'format fmt args)))))
+                (drgnx-work-map-needs-you 2))))
+      (should (equal "Work: nothing needs you at g2" said)))
+    (should (equal '(agent . "agent:b") drgnx-work-map--selection))
+    (drgnx-work-map-needs-you-here-next)
+    (should (equal '(ask . "ask:1") drgnx-work-map--selection))))
+
 (ert-deftest drgnx-work-map-nav/open-reads-fields-once ()
   "Pattern D: opening the selected agent asks Sjá once (its label) and opens that agent's transcript; the kind came
 with the selection.  A file opens at the agents on its chain."

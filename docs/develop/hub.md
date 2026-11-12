@@ -2406,8 +2406,10 @@ A rows view is drawn in the form `work/map/set {outline}` asks (or `work/map/sub
 the word and sends it again; row `work/map-subscribe-keeps-the-outline-asked-for`): `on` the outline, `off` the cards, `auto` (until one is
 asked) the outline only where the cards do not fit or in a terminal; a new form is drawn at once, laid out as it is.
 An open huddle (`runner::huddle`, waiting for the user or going on) is a needs-you card of every map, `huddle: CLASH`
-about its two agents (`work::map::huddle_card`, kind `huddle`): on the strip and in the `needs-you` list, marking
-neither agent. A conclusion that changed since the view was last drawn marks its card `new` for 4 s of the hub's
+about its two agents (`work::map::huddle_card`, kind `huddle`): on the strip and in the `needs-you` list, after the
+other cards and the agents that need you, marking and covering neither agent (`vegvisir::nav::strip_entries`, one
+order for both, so `g N` is the Nth chip; an entry about nothing shown holds its card's id; unit
+`the_strip_and_the_needs_you_list_line_up`). A conclusion that changed since the view was last drawn marks its card `new` for 4 s of the hub's
 clock (`NewMarks`; an item seen for the first time marks nothing); one wake per view draws it again when the oldest
 mark leaves. Unit: `outline_follows_the_users_choice`, `open_huddle_is_on_the_strip_and_the_needs_you_list`,
 `a_new_conclusion_is_marked_for_four_seconds`.
@@ -3346,6 +3348,10 @@ an ERT void function or a file that didn't load; it carries the symbols the erro
 timed out (`timeout`), was lost or ended `infra` (`infra`), was stopped, or failed with no failing row (`error`). The
 summary's `failing` names the failed rows (at most 50, `(job)` left out); `Runner::rows` reads them. The gates read
 rows only (`docs/develop/orchestration.md`).
+
+An `exec/start` that takes over a second of real time logs its phases (`exec/start took N ms: matrix …, keys …,
+network …, placement …, start …`): a slow start lets a task's review overtake the run it should judge, as macOS's
+did once.
 
 The editor's own jobs are the user's `exec/start` with four more fields (`StartParams`: `name`, `env`, `memory_max`,
 `nice`; `StartParams::user_only_field` names the first one a request sets). `exec::start` refuses them from a session

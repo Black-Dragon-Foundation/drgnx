@@ -987,8 +987,8 @@ impl<'a> Edges<'a> {
 // ---- the strip ---------------------------------------------------------------------------------------------------
 
 /// The needs-you strip (the header line), one row `strip`: a chip with its jump key for each of the first nine
-/// entries (the cards, then the agents that need you with no card), +N for the rest, and the MACHINES' load at the
-/// right edge of the view's width.
+/// entries (`nav::strip_entries`: the cards, the agents that need you with no card, the open huddles), +N for the
+/// rest, and the MACHINES' load at the right edge of the view's width.
 pub fn strip(
     s: &Scene,
     needs: &[crate::NeedsYou],
@@ -996,18 +996,10 @@ pub fn strip(
     env: &Env,
     m: &dyn Measure,
 ) -> Row {
-    let covered: BTreeSet<&ItemId> = needs.iter().flat_map(|n| n.about.iter()).collect();
-    let mut entries: Vec<String> = needs.iter().map(|n| n.text.clone()).collect();
-    entries.extend(
-        s.items
-            .values()
-            .filter(|it| {
-                it.kind == Kind::Agent
-                    && it.fields.state == Some(State::NeedsYou)
-                    && !covered.contains(&it.id)
-            })
-            .map(|it| format!("{} needs you", it.label)),
-    );
+    let entries: Vec<String> = crate::nav::strip_entries(needs, s.items)
+        .into_iter()
+        .map(|e| e.text)
+        .collect();
     let mut b = RowBuilder::new("strip");
     for (i, e) in entries.iter().take(9).enumerate() {
         if i > 0 {

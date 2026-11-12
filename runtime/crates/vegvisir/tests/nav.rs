@@ -198,10 +198,10 @@ fn needs_you_lists_targets() {
     );
     let l = layout(&m, &view(376), None);
     let ids = placed(&l);
-    // the cards by id (k1's first shown item, k2's; k3 is about nothing shown), then d: it needs you with no card (e
-    // has one)
+    // the cards by id (k1's first shown item, k2's; k3 is about nothing shown: its card's id keeps its place, as its
+    // chip keeps it on the strip), then d: it needs you with no card (e has one)
     assert_eq!(
         nav::needs_you(&m, &ids),
-        vec![id("agent:c"), id("agent:b"), id("agent:d")]
+        vec![id("agent:c"), id("agent:b"), id("k3"), id("agent:d")]
     );
 }

@@ -503,6 +503,8 @@ pub struct Runner {
     events: tokio::sync::broadcast::Sender<JobEvent>,
     /// The rule pack's `no-cache` words ([`Runner::set_no_cache`]).
     no_cache: Mutex<Vec<String>>,
+    /// The worktrees of the sessions whose `exec/start` is on its way (one entry per start; [`Runner::starting`]).
+    starting: Mutex<Vec<PathBuf>>,
 }
 
 impl Default for Runner {
@@ -512,6 +514,22 @@ impl Default for Runner {
             live: Arc::default(),
             events: tokio::sync::broadcast::channel(256).0,
             no_cache: Mutex::default(),
+            starting: Mutex::default(),
+        }
+    }
+}
+
+/// A session's `exec/start` on its way, in its worktree: dropped (answered or refused), it is not.
+pub(crate) struct Starting<'a> {
+    runner: &'a Runner,
+    worktree: PathBuf,
+}
+
+impl Drop for Starting<'_> {
+    fn drop(&mut self) {
+        let mut s = self.runner.starting.lock().unwrap();
+        if let Some(i) = s.iter().position(|w| *w == self.worktree) {
+            s.swap_remove(i);
         }
     }
 }
@@ -896,6 +914,29 @@ impl Runner {
             },
             None => true,
         }
+    }
+
+    /// A session's `exec/start` in WORKTREE is on its way until the answer drops.
+    pub(crate) fn starting(&self, worktree: PathBuf) -> Starting<'_> {
+        self.starting.lock().unwrap().push(worktree.clone());
+        Starting {
+            runner: self,
+            worktree,
+        }
+    }
+
+    /// Whether a run in TOP (or a folder inside it) has no result yet: a session's `exec/start` there on its way, or a
+    /// job there queued or running.
+    pub fn busy_in(&self, top: &Path) -> bool {
+        self.starting
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|w| w.starts_with(top))
+            || self
+                .list(None, true)
+                .iter()
+                .any(|r| Path::new(&r.cwd).starts_with(top))
     }
 
     /// The jobs, newest first; SESSION only that session's, RUNNING only those that run.
@@ -2938,6 +2979,29 @@ async fn start_as(
     p: StartParams,
     gate: Option<&Sealed>,
 ) -> Result<Started, Error> {
+    // a session's start is on its way until it answers: the merge gates wait for the run it brings (`orch::gates`)
+    let _starting = match (gate, &c.sid) {
+        (None, Some(sid)) => f
+            .core
+            .agents
+            .worktree(sid)
+            .map(|wt| f.core.exec.starting(wt)),
+        _ => None,
+    };
+    // `RATATOSKR_TEST_EXEC_START_DELAY_MS` (test-hooks): a session's start answers that late, as a slow machine's
+    #[cfg(feature = "test-hooks")]
+    if c.sid.is_some() && gate.is_none() {
+        static DELAY: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+        let ms = *DELAY.get_or_init(|| {
+            std::env::var("RATATOSKR_TEST_EXEC_START_DELAY_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0)
+        });
+        if ms > 0 {
+            crate::clock::sleep(std::time::Duration::from_millis(ms)).await;
+        }
+    }
     // the hub sets an agent's job's priority; only the user's connections choose one
     if c.sid.is_some() && p.priority.is_some() {
         return Err(crate::agents::session::invalid(
@@ -3018,11 +3082,16 @@ async fn start_as(
         Some(wt) => confined(&cwd, wt)?,
         None => cwd,
     };
+    // each phase's real time, logged when the start took over a second (macOS round 5: an agent's start took ~15 s,
+    // and the review overtook it)
+    let mut phases = Phases::new();
     if let Some(sid) = &c.sid {
         let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
         gate_session_job(f, sid, &cwd, &argv, action).await?;
+        phases.end("matrix");
     }
     job_keys(f, c, &p, &cwd).await?;
+    phases.end("keys");
     // a confined user_u login can't run rootless podman: refused here, with the cause and an admin's fix
     if kind == CheckKind::Container
         && let Some(why) = sleipnir::linux::confined::refusal()
@@ -3066,7 +3135,9 @@ async fn start_as(
         }
         _ => None,
     };
+    phases.end("network");
     let place = placement(f, c, &p, machine, runners).await?;
+    phases.end("placement");
     // a Mac job runs on a Mac runner as a host job: never in a container, never on this machine
     if place.os == forseti::Os::Macos && (container.is_some() || place.local_only) {
         return Err(error(
@@ -3092,6 +3163,8 @@ async fn start_as(
         .start(spec)
         .await
         .map_err(|r| error(ErrorCode::InvalidParams, r.message))?;
+    phases.end("start");
+    phases.log_if_slow(&id);
     let text = if r.is_queued(&id) {
         let why = r
             .get(&id)
@@ -3107,6 +3180,48 @@ async fn start_as(
         format!("job {id} runs: end your turn; you will be woken with the result")
     };
     Ok(Started { text, id })
+}
+
+/// An `exec/start`'s phases in real time: each [`Phases::end`] closes one; [`Phases::log_if_slow`] logs them all when
+/// the whole start took over a second (a slow start lets a review overtake the run it should see).
+struct Phases {
+    began: std::time::Instant,
+    last: std::time::Instant,
+    done: Vec<(&'static str, Duration)>,
+}
+
+impl Phases {
+    fn new() -> Self {
+        let now = crate::clock::real_now();
+        Phases {
+            began: now,
+            last: now,
+            done: Vec::new(),
+        }
+    }
+
+    fn end(&mut self, phase: &'static str) {
+        let now = crate::clock::real_now();
+        self.done.push((phase, now - self.last));
+        self.last = now;
+    }
+
+    fn log_if_slow(&self, id: &str) {
+        let total = self.last - self.began;
+        if total > Duration::from_secs(1) {
+            let each: Vec<String> = self
+                .done
+                .iter()
+                .map(|(p, d)| format!("{p} {} ms", d.as_millis()))
+                .collect();
+            tracing::info!(
+                job = id,
+                "exec/start took {} ms: {}",
+                total.as_millis(),
+                each.join(", ")
+            );
+        }
+    }
 }
 
 /// The time box a request asks for: its `timebox_s`, else an hour (a job that asked for none ignores it).

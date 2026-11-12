@@ -108,7 +108,7 @@ SNAP is the snapshot, SINCE when it began running (float seconds) and NOW the ti
   "The header's ⋯ menu (`drgnx-agent-panel-header-menu') at EVENT; run the chosen command."
   (interactive "e")
   (when-let* ((choice (x-popup-menu event (list "Agent" (cons "" drgnx-agent-panel-header-menu)))))
-    (drgnx-ui--run choice)))
+    (drgnx-ui-kit-run choice)))
 
 (defvar drgnx-agent-panel--header-maps nil "The header buttons' keymaps: (PIN . MORE), built on first use.")
 

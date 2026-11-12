@@ -153,7 +153,7 @@ The steering keys work in every Work view, on the agent selected there:
 |---|---|
 | `s` | message the agent (queued or steering as its mode says, never a cancel) |
 | `p` | pause it after its current tool call ("Pausing after the current tool call · u resume") |
-| `u` | resume it with a plain "Continue." ("Work: Resumed") |
+| `u` | resume it with a plain "Continue." ("Work: Resumed"); its trail shows the pause and a `resumed` note when it goes on |
 | `x` | stop it, after a confirmation line |
 | `?` | this view's keys |
 

@@ -10,6 +10,11 @@
 (require 'drgnx)
 (require 'drgnx-keys)
 (require 'drgnx-work-client)
+;; what opening the Work space loads to start the hub (`drgnx-hub-start-for-command' → `drgnx-hub--ensure-running'
+;; requires drgnx-ai, which drgnx loads at boot), loaded with the test: the census would read its load-time config
+;; definitions and after-load forms as the module's
+(require 'drgnx-hub-client)
+(require 'drgnx-ai)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (drgnx-test-modules-preload '(tools/work-space))
 

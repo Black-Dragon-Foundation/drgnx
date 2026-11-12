@@ -25,8 +25,13 @@
 (load (expand-file-name "test/fixtures/delivery-gate-fixture" drgnx-dir) nil t)
 (require 'drgnx-exec)
 (require 'drgnx-settings-runtime)
+;; the libraries the client's first dial loads for its event handlers (`drgnx-hub--dial'), loaded with the fixture: a
+;; test that dials a real hub loads nothing then (drgnx-history-revert's drgnx-ui-kit brings drgnx-surfaces, whose
+;; load-time hooks and contexts the leak census read as the test's)
 (require 'drgnx-settings-agents nil t)
 (require 'drgnx-records-review nil t)
+(require 'drgnx-history-revert nil t)
+(require 'drgnx-say nil t)
 
 (defvar drgnx-exec--jobs)
 (defvar drgnx-exec--stale)

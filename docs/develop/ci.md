@@ -260,7 +260,9 @@ branches (only a writer can push one). A pull request's ref (`refs/pull/…`) or
 serves from this repository, fails the job. The actions save a cache only for drgnx's own run of the workflow's own
 commit (`github.sha`), never for a `drgnx_ref` another repository's run names:
 
-- `build-test-bins`: Ratatoskr with the test hooks, `ratatoskr-mock` and huginn's `dump`, with a cargo cache
+- `build-test-bins`: Ratatoskr with the test hooks, `ratatoskr-mock` and huginn's `dump` (with `term: "true"`, which
+  `bins-linux` passes after installing Zig and fetching libghostty-vt's tarballs, `drgnx-term` too: the same test hub
+  `bin/drgnx test --ui` builds, [harness.md](harness.md#the-test-hub)), with a cargo cache
   (`cargo-OS-drgnx-test-bins-TOOLCHAIN-HASH`, [What is cached](#what-is-cached)) saved on Linux by a push or manual run of
   `main` only, never by a pull request, a `ci/*` branch or a fork (Nidhogg's run restores it and never writes; macOS rebuilds
   through sccache). `bins-linux` runs it once, for `unit`, `no-lisp-writes`, `hub-chaos`, `ui` and `perf` (whose agent workloads start a hub with
