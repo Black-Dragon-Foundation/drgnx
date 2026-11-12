@@ -373,3 +373,73 @@ async fn exit_reaches_the_owner_and_the_record_goes() {
         [(3, "term/title".to_owned()), (3, "term/exit".to_owned())]
     );
 }
+
+#[tokio::test]
+async fn wait_exit_gives_a_command_end_s_status_or_the_program_s_exit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let rec = record(dir, "aa", "s1");
+    let l = UnixListener::bind(&rec.socket).unwrap();
+    // the worker writes each batch when the test says so, after the test has started waiting
+    let (go, mut gone) = mpsc::unbounded_channel::<Vec<Out>>();
+    let worker = crate::clock::spawn("test:term-wait-exit", async move {
+        let (s, _) = l.accept().await.unwrap();
+        let (_r, mut w) = s.into_split();
+        let hello = Out::Hello {
+            proto: PROTO,
+            pid: 1,
+            shell_pid: 4242,
+        };
+        w.write_all((serde_json::to_string(&hello).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+        while let Some(batch) = gone.recv().await {
+            for out in batch {
+                w.write_all((serde_json::to_string(&out).unwrap() + "\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        }
+    });
+    let (t, _ev) = open(dir).await;
+    t.hello(3, "s1");
+    for _ in 0..50 {
+        if t.record("aa").is_some() {
+            break;
+        }
+        crate::clock::sleep(Duration::from_millis(20)).await;
+    }
+    // OSC 133: a prompt and a command start say nothing; the command's end with its status does
+    let first = t.wait_exit("aa");
+    go.send(vec![
+        Out::Prompt {
+            kind: 1,
+            exit: None,
+        },
+        Out::Prompt {
+            kind: 3,
+            exit: None,
+        },
+        Out::Prompt {
+            kind: 4,
+            exit: Some(3),
+        },
+    ])
+    .unwrap();
+    let got = crate::clock::timeout(Duration::from_secs(5), first).await;
+    assert_eq!(got, Ok(Some(3)), "the command end's status");
+    // the program's end: a signal reads as 128 + it, as a shell says
+    let second = t.wait_exit("aa");
+    go.send(vec![Out::Exit {
+        code: None,
+        signal: Some(9),
+    }])
+    .unwrap();
+    let got = crate::clock::timeout(Duration::from_secs(5), second).await;
+    assert_eq!(got, Ok(Some(137)), "the program's end");
+    // no such terminal (this one ended): at once
+    let got = crate::clock::timeout(Duration::from_secs(5), t.wait_exit("aa")).await;
+    assert_eq!(got, Ok(None));
+    drop(go);
+    let _ = crate::clock::timeout(Duration::from_secs(5), worker).await;
+}

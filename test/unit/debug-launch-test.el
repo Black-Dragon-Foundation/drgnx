@@ -223,7 +223,6 @@ holds (METHOD . PARAMS) of every call, in order."
         (should (string-match-p "dnf install delve"
                                 (cadr (should-error (drgnx-debug-launch-read-config "/p") :type 'user-error))))))
     (should-not (assoc "debug/install" calls))))
-;;; debug-launch-test.el ends here
 
 ;;;; Debug: Install Adapter
 
@@ -245,3 +244,39 @@ holds (METHOD . PARAMS) of every call, in order."
       (drgnx-debug-install-adapter "js-debug")
       (should (equal calls '(("debug/install" :adapter "js-debug"
                               :adapters [(:id "mine" :name "Mine" :types ["m"])])))))))
+
+(ert-deftest drgnx-debug-launch/a-start-with-a-frame-runs-its-tasks-in-a-tab ()
+  ;; the hub runs preLaunchTask in a terminal tab and answers when it ends: the wait draws (the tab shows the task)
+  ;; and allows a long build
+  (let ((sent nil) (deadline nil))
+    (cl-letf (((symbol-function 'drgnx-debug-launch-trusted-p) #'always)
+              ((symbol-function 'drgnx-debug-launch--tab-p) #'always)
+              ((symbol-function 'drgnx-hub-call-sync)
+               (lambda (method &rest _) (unless (equal method "debug/trust") (error "Waited without drawing: %s" method))))
+              ((symbol-function 'drgnx-hub-call)
+               (lambda (method params cb &rest keys)
+                 (when (equal method "debug/start") (setq sent params deadline (plist-get keys :deadline)))
+                 (funcall cb (list :session "d1") nil))))
+      (with-temp-buffer (should (equal (drgnx-debug-launch-start "/p" "launch:0") "d1"))))
+    (should (eq (plist-get sent :terminal) t))
+    (should (>= deadline 600))))
+
+(ert-deftest drgnx-debug-launch/a-start-without-a-frame-keeps-the-captured-run ()
+  ;; batch, or a daemon with no frame: nothing opens, the task's output is captured as before
+  (should-not (drgnx-debug-launch--tab-p))
+  (debug-launch-test--with-hub '(("debug/start" (:session "d1")))
+    (cl-letf (((symbol-function 'drgnx-debug-launch-trusted-p) #'always))
+      (with-temp-buffer (should (equal (drgnx-debug-launch-start "/p" "launch:0") "d1"))))
+    (should-not (plist-member (cdr (assoc "debug/start" calls)) :terminal))))
+
+(ert-deftest drgnx-debug-launch/a-debug-terminal-for-this-emacs-opens-its-tab ()
+  (let ((opened nil))
+    (cl-letf (((symbol-function 'drgnx-term-reattach-one)
+               (lambda (row &optional select) (push (list row select) opened))))
+      (drgnx-debug-launch-show-terminal (list :term "t1" :view "term:t1" :task "build" :editor drgnx-hub-session))
+      (drgnx-debug-launch-show-terminal (list :term "t2" :view "term:t2" :task "build" :editor "another-emacs")))
+    (should (equal (mapcar (lambda (o) (plist-get (car o) :id)) opened) '("t1")))
+    (should (equal (plist-get (caar opened) :place) "panel"))
+    (should (string-match-p "build" (plist-get (caar opened) :title)))))
+
+;;; debug-launch-test.el ends here

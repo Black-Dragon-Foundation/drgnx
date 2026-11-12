@@ -1,0 +1,21 @@
+{"scenario": "debug/task-runs-in-a-tab", "requires": ["v1", "test-hooks", "linux"], "doc": "A start from an editor with a frame (`terminal`) runs its preLaunchTask in a terminal tab (`debug-terminal` to the editor): the start waits for its exit 0. A failing task fails the start with its status and its output, and its tab stays open; a task that succeeds closes its tab and the session starts."}
+{"do": "start", "hub": "h"}
+{"do": "write_file", "path": "$ROOT/proj/.vscode/launch.json", "json": {"version": "0.2.0", "configurations": [{"type": "mocka", "request": "launch", "name": "Fails", "program": "p", "preLaunchTask": "fail"}, {"type": "mocka", "request": "launch", "name": "Builds", "program": "p", "preLaunchTask": "build"}]}}
+{"do": "write_file", "path": "$ROOT/proj/.vscode/tasks.json", "json": {"version": "2.0.0", "tasks": [{"label": "fail", "type": "shell", "command": "echo boom; exit 3"}, {"label": "build", "type": "shell", "command": "echo built > ${workspaceFolder}/built.txt"}]}}
+{"do": "write_file", "path": "$ROOT/a.json", "json": [{"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true}}, {"expect": "launch", "ok": {}}, {"event": "initialized"}, {"expect": "configurationDone"}, {"expect": "disconnect", "ok": {}}, {"die": true}]}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "debug/trust", "params": {"root": "$ROOT/proj", "trusted": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "debug/start", "params": {"root": "$ROOT/proj", "config": "launch:0", "terminal": true, "adapters": [{"id": "mocka", "name": "Mock A", "types": ["mocka"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/a.json"]}}]}}}
+{"do": "expect", "conn": "e", "json": {"event": "debug-terminal", "data": {"term": "$capture:t", "task": "fail"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "error": {"code": "internal", "message": "task fail failed (exit 3):\nboom"}}, "within_ms": 10000}
+{"do": "poll", "conn": "e", "json": {"id": 4, "method": "term/list", "params": {}}, "expect": {"id": 4, "result": {"$contains": [{"id": "$t"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "debug/start", "params": {"root": "$ROOT/proj", "config": "launch:1", "terminal": true, "adapters": [{"id": "mocka", "name": "Mock A", "types": ["mocka"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/a.json"]}}]}}}
+{"do": "expect", "conn": "e", "json": {"event": "debug-terminal", "data": {"term": "$capture:u", "task": "build"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": {"session": "$capture:s"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "term/exit", "data": {"id": "$u", "code": 0}}, "within_ms": 10000}
+{"do": "file", "path": "$ROOT/proj/built.txt", "contains": "built", "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "term/close", "params": {"id": "$t", "signal": 9}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": true}}

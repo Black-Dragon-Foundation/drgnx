@@ -59,6 +59,7 @@ impl Terminals for NoTerms {
                 term: "t1".into(),
                 view: "term:t1".into(),
                 pid: 4242,
+                editor: None,
             })
         })
     }

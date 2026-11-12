@@ -99,7 +99,8 @@ or on a port, or a `debugServer` connected to) and route its updates:
   `{message}` from the stop's description. The editor that started the session gets it with `open: true` (it opens the file); the
   others get `open: false` and draw it only in windows already showing the file (spec §3.3 step 12).
 - `runInTerminal` opens a drgnx terminal for the starting editor (`Terminals`), answers the program's pid and sends
-  that editor `debug-terminal {session, term}`.
+  that editor `debug-terminal {session, term, view, editor}` (to every editor when the start's connection takes no
+  events: `editor` says whose it is; `debug::show_terminal`).
 - `startDebugging` starts a child session (`Launcher::child`: a second connection for a TCP adapter) under its parent.
   A stop or disconnect stops the children first and resolves when all have ended (a parent that ends on its own
   meanwhile, as js-debug's root session does once the program is gone, counts as stopped); the hub's end stops every
@@ -149,7 +150,17 @@ each `args` item quoted for the shell; a `process` task runs `command` and `args
 refused. The steps run one at a time before the adapter starts (so a TCP adapter's free port is picked after the
 build); the first that fails stops the rest and the start, and the error gives its exit status and the end of its
 output (2,000 bytes of stdout, then stderr's tail). `${defaultBuildTask}` is the label of the task whose `group` is
-`{"kind": "build", "isDefault": true}`. `postDebugTask` is read from the same file at the start (a wrong name stops the
+`{"kind": "build", "isDefault": true}`.
+
+A start from an editor with a frame (`debug/start` `terminal`, sent by `drgnx-debug-launch--call-start` when
+`drgnx-debug-launch--tab-p`) runs each `preLaunchTask` step in a drgnx terminal tab instead (`tasks::run_in`, spec
+§9.3): `sh -c` a wrapper that waits for the hub's go (a line, sent once the hub waits: `Terminals::run_task`), runs the
+step, marks its end with OSC 133 `D;status` and, on a failure, keeps the tab open until Enter. The hub waits for that
+status (`term::Terms::wait_exit`: the first command end with a status, or the program's exit); a failure's error has
+the status and the end of the tab's text (`term/text-range`, without the wrapper's line). The editor shows the tab on
+`debug-terminal {term, view, task, editor}` and waits for the answer drawing, up to half an hour. A headless or daemon
+start (no frame) runs the steps captured as above, so nothing opens there. Either way the step runs with the user's
+rights and the shell's environment. `postDebugTask` is read from the same file at the start (a wrong name stops the
 start too) and runs once the root session has ended, a restart's end included; its failure goes to the hub's log
 until the debug console shows it.
 
@@ -246,8 +257,8 @@ over pipes; a TCP adapter with stdin on `/dev/null`, on a free port of 127.0.0.1
 An adapter that goes on its own ends its session with the end of its stderr in the reason.
 
 `runInTerminal` opens a drgnx terminal in the panel (`term::Terms::spawn`, 80×24 until the editor sizes it) with the
-shell's environment and the adapter's `env` over it; `debug-terminal {session, term, view}` tells the starting editor,
-which shows the view. At the hub's end every session stops, children first, before the store closes.
+shell's environment and the adapter's `env` over it; `debug-terminal {session, term, view, editor}` tells the starting
+editor, which shows it in the panel (`drgnx-debug-launch-show-terminal`). At the hub's end every session stops, children first, before the store closes.
 
 ## The module: `drgnx-debug.el`
 

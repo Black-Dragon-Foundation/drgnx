@@ -113,6 +113,10 @@ pub struct DebugStart {
     /// Files modified in the editor and not saved: the recorded run marks them "not what ran".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unsaved: Vec<String>,
+    /// The editor has a frame: the tasks run in terminal tabs it shows (`debug-terminal`), and the start waits for
+    /// each to exit 0.  Without it (a headless or daemon start) they run captured, as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub terminal: bool,
 }
 
 /// One answer to `debug/start`'s `needs`: the input ID (`pickProcess` for the process picker) and its VALUE.

@@ -175,6 +175,17 @@ pub struct Opened {
     pub term: String,
     pub view: String,
     pub pid: i64,
+    /// The editor session it belongs to.
+    pub editor: Option<String>,
+}
+
+/// Terminal DATA (`term`, `view`, `editor`, …) for connection CONN's editor to show (`debug-terminal`): to CONN when
+/// it takes events, else to every editor, `editor` saying which one it is for (a start comes on a connection that
+/// takes none).
+pub fn show_terminal(sink: &dyn Sink, conn: u64, data: Value) {
+    if !sink.send(conn, "debug-terminal", data.clone()) {
+        sink.broadcast("debug-terminal", data, None);
+    }
 }
 
 /// The program `runInTerminal` asks for, in a drgnx terminal.
@@ -187,6 +198,14 @@ pub trait Terminals: Send + Sync {
         args: Vec<String>,
         env: Vec<(String, String)>,
     ) -> BoxFut<'_, Result<Opened, String>>;
+
+    /// Let terminal TERM's task run (its wrapper waits for a line, so this waits from before it can end) and give its
+    /// exit status (the first command end with one, or its program's exit; none when it is gone) and, when that is not
+    /// 0, its text.
+    fn run_task(&self, term: String) -> BoxFut<'_, (Option<i32>, String)> {
+        let _ = term;
+        Box::pin(async { (None, String::new()) })
+    }
 }
 
 /// The phase a session shows.
@@ -1078,10 +1097,10 @@ impl Debug {
                         let (cwd, args, env) = terminal_args(&arguments);
                         match terms.open(conn, cwd, args, env).await {
                             Ok(o) => {
-                                sink.send(
+                                show_terminal(
+                                    &*sink,
                                     conn,
-                                    "debug-terminal",
-                                    json!({"session": sid, "term": o.term, "view": o.view}),
+                                    json!({"session": sid, "term": o.term, "view": o.view, "editor": o.editor}),
                                 );
                                 let _ = reply.send(Ok(o.pid));
                             }

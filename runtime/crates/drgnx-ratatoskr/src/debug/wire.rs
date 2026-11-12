@@ -465,7 +465,7 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
     let root = Path::new(&p.root);
     let steps = super::tasks::before_launch(root, &config, Os::this(), &subst).map_err(err)?;
     let after = super::tasks::after_debug(root, &config, Os::this(), &subst).map_err(err)?;
-    super::tasks::run(&steps, &front.shell_env.vars_os())
+    run_tasks(front, caller.conn_id, p.terminal, &steps)
         .await
         .map_err(err)?;
     // after the tasks: a TCP adapter's free port is picked just before it starts
@@ -573,7 +573,7 @@ async fn start_compound(
     };
     let steps = super::tasks::before_launch(Path::new(&p.root), &compound, Os::this(), &subst)
         .map_err(err)?;
-    super::tasks::run(&steps, &front.shell_env.vars_os())
+    run_tasks(front, caller.conn_id, p.terminal, &steps)
         .await
         .map_err(err)?;
     let d = front.debug.debug(front).clone();
@@ -1000,7 +1000,60 @@ impl Terminals for TermDoor {
                 term: rec.id,
                 view: rec.view,
                 pid: rec.shell_pid.map_or(0, i64::from),
+                editor: rec.session,
             })
         })
     }
+
+    fn run_task(&self, term: String) -> BoxFut<'_, (Option<i32>, String)> {
+        // waiting before the go: the task cannot end unseen
+        let exit = self.terms.wait_exit(&term);
+        Box::pin(async move {
+            let go = drgnx_term::proto::In::Text { text: "\r".into() };
+            if !self.terms.send(&term, &go) {
+                return (None, String::new());
+            }
+            let code = exit.await;
+            let mut text = String::new();
+            if code.is_some_and(|c| c != 0) {
+                let range = |req| drgnx_term::proto::In::TextRange {
+                    req,
+                    from_key: None,
+                    to_key: None,
+                };
+                if let Ok(drgnx_term::proto::Out::Answer { result, .. }) =
+                    self.terms.ask(&term, range, LISTEN_WITHIN).await
+                {
+                    text = result["text"].as_str().unwrap_or_default().to_owned();
+                }
+            }
+            (code, text)
+        })
+    }
+}
+
+/// A start's task STEPS: with a frame (TAB) each in a terminal tab of connection CONN's editor, shown to it
+/// (`debug-terminal`); else captured.  Either runs with the user's rights and the shell's environment, as before.
+async fn run_tasks(
+    front: &Front,
+    conn: u64,
+    tab: bool,
+    steps: &[super::tasks::Step],
+) -> Result<(), String> {
+    if !tab || steps.is_empty() {
+        return super::tasks::run(steps, &front.shell_env.vars_os()).await;
+    }
+    let door = TermDoor {
+        terms: front.core.terms.clone(),
+        base: front.shell_env.vars_os(),
+    };
+    let editors = front.editors.clone();
+    super::tasks::run_in(steps, &door, conn, &move |s, o| {
+        super::show_terminal(
+            &*editors,
+            conn,
+            json!({"term": o.term, "view": o.view, "task": s.label, "editor": o.editor}),
+        );
+    })
+    .await
 }

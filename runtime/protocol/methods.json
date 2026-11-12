@@ -13197,6 +13197,10 @@
               "null"
             ]
           },
+          "terminal": {
+            "description": "The editor has a frame: the tasks run in terminal tabs it shows (`debug-terminal`), and the start waits for\neach to exit 0.  Without it (a headless or daemon start) they run captured, as before.",
+            "type": "boolean"
+          },
           "unsaved": {
             "description": "Files modified in the editor and not saved: the recorded run marks them \"not what ran\".",
             "items": {

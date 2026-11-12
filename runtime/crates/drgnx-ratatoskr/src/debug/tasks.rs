@@ -295,3 +295,59 @@ pub async fn run(steps: &[Step], env: &[(OsString, OsString)]) -> Result<(), Str
     }
     Ok(())
 }
+
+/// [`run`] with each step in a terminal tab of connection CONN's editor (TERMS): the start waits for its exit 0; a
+/// failing step's tab stays open, and the error carries its status and the end of its text.
+/// A step's tab, in `sh -c TAB_WRAP drgnx-task ARGV…`: it waits for the hub's go (a line), runs ARGV, marks its end
+/// with the status (OSC 133 `D`) and, when that is not 0, keeps the tab open until Enter.
+const TAB_WRAP: &str = r#"IFS= read -r _; printf '\033]133;C\007'; "$@"; s=$?; printf '\033]133;D;%d\007' "$s"; if [ "$s" -ne 0 ]; then printf '\n%s' 'Enter closes this tab.'; IFS= read -r _; fi; exit "$s""#;
+
+/// The wrapper's last line in a failed tab: not the task's output.
+const TAB_CLOSE: &str = "Enter closes this tab.";
+
+/// SHOW is told of each tab as it opens.
+pub async fn run_in(
+    steps: &[Step],
+    terms: &dyn super::Terminals,
+    conn: u64,
+    show: &(dyn Fn(&Step, &super::Opened) + Send + Sync),
+) -> Result<(), String> {
+    for s in steps {
+        let mut args: Vec<String> = vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            TAB_WRAP.into(),
+            "drgnx-task".into(),
+        ];
+        args.extend(s.argv.iter().cloned());
+        let cwd = s.cwd.to_string_lossy().into_owned();
+        let o = terms
+            .open(conn, cwd, args, s.env.clone())
+            .await
+            .map_err(|e| format!("task {}: {e}", s.label))?;
+        show(s, &o);
+        match terms.run_task(o.term.clone()).await {
+            (Some(0), _) => {}
+            (Some(c), text) => {
+                let text = text.trim_end();
+                let text = text.strip_suffix(TAB_CLOSE).unwrap_or(text).trim();
+                let mut cut = text.len().saturating_sub(TAIL);
+                while !text.is_char_boundary(cut) {
+                    cut += 1;
+                }
+                return Err(format!(
+                    "task {} failed (exit {c}):\n{}",
+                    s.label,
+                    &text[cut..]
+                ));
+            }
+            (None, _) => {
+                return Err(format!(
+                    "task {}: its tab closed before the task ended",
+                    s.label
+                ));
+            }
+        }
+    }
+    Ok(())
+}

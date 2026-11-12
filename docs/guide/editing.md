@@ -55,7 +55,8 @@ C, C++ and Rust. It offers the project's configurations: those of `.vscode/launc
 comments, `${…}` variables, `inputs` and platform sections included), your own in the setting `debug.configurations`,
 and a default for the file's language when there is neither. A launch.json `compounds` entry starts its
 configurations together (its own `preLaunchTask` first; with `stopAll`, stopping one stops them all). A configuration's `preLaunchTask` (and `postDebugTask`)
-runs from `.vscode/tasks.json` first; a failing task stops the start and says why. The first start in a folder asks
+runs from `.vscode/tasks.json` first, in a terminal tab where you watch it; a failing task stops the start, says
+why, and leaves its tab open (Enter closes it). The first start in a folder asks
 you to trust it (**Trust This Folder**): an untrusted folder's configurations never run.
 
 **Install Adapter…** (the palette) downloads the JavaScript debugger or CodeLLDB, checked against the version drgnx

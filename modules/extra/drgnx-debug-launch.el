@@ -17,6 +17,8 @@
 (require 'project)
 (require 'drgnx-setting)
 (require 'drgnx-hub-client)
+(require 'drgnx-frame-kind)
+(declare-function drgnx-term-reattach-one "drgnx-term" (row &optional select))
 (declare-function drgnx-trust-folder "drgnx-trust")
 (declare-function drgnx-settings-defaults-save "drgnx-settings-defaults")
 (defvar dape-configs)
@@ -198,6 +200,34 @@ picker calls this, from a command: nothing downloads without the user's yes."
 
 ;;;; Starting
 
+(defun drgnx-debug-launch--tab-p ()
+  "Non-nil when this Emacs has a frame to show a task's terminal tab in: not batch, not a daemon with no frame."
+  (and (not noninteractive) (drgnx-state-workbench-frame-p (selected-frame))))
+
+(defun drgnx-debug-launch--call-start (params)
+  "`debug/start' with PARAMS; its answer.  With a frame (`drgnx-debug-launch--tab-p') the hub runs the tasks in
+terminal tabs and answers when they end: the wait draws (the tab shows the task) for up to half an hour, and
+\[keyboard-quit] stops waiting (the start goes on).  Without one the tasks run captured, as before."
+  (if (not (drgnx-debug-launch--tab-p))
+      (drgnx-hub-call-sync "debug/start" params 30)
+    (let ((done nil) (result nil) (failed nil))
+      (drgnx-hub-call "debug/start" (append params (list :terminal t))
+                      (lambda (r e) (setq done t result r failed e))
+                      :deadline 1800)
+      (while (not done)
+        (accept-process-output nil 0.05)
+        (redisplay))
+      (if failed (error "drgnx hub: %s" failed) result))))
+
+(defun drgnx-debug-launch-show-terminal (data)
+  "`debug-terminal' DATA: the terminal a task (`:task') or the debugged program (`runInTerminal') runs in, shown in
+the panel when it is this Emacs's (`:editor')."
+  (let ((editor (plist-get data :editor)))
+    (when (and (or (null editor) (equal editor drgnx-hub-session)) (fboundp 'drgnx-term-reattach-one))
+      (drgnx-term-reattach-one
+       (list :id (plist-get data :term) :place "panel" :command ["sh"]
+             :title (if-let* ((task (plist-get data :task))) (format "Task: %s" task) "Debugged program"))))))
+
 (defun drgnx-debug-launch-start (root config)
   "Start CONFIG (an id of `debug/configs') in ROOT: trust first, then the inputs it needs; the session's id."
   (drgnx-debug-launch--tell-trust root)
@@ -207,10 +237,9 @@ picker calls this, from a command: nothing downloads without the user's yes."
                             (list :selection (buffer-substring-no-properties (region-beginning) (region-end))))))
         (answers nil) (session nil) (asked 0))
     (while (not session)
-      (let* ((r (drgnx-hub-call-sync "debug/start"
-                                     (apply #'drgnx-debug-launch--params root
-                                            (append (list :config config :inputs (vconcat answers)) place))
-                                     30))
+      (let* ((r (drgnx-debug-launch--call-start
+                 (apply #'drgnx-debug-launch--params root
+                        (append (list :config config :inputs (vconcat answers)) place))))
              (needs (plist-get r :needs)))
         (cond ((plist-get r :session) (setq session (plist-get r :session)))
               ((equal needs "trust")

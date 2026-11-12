@@ -94,3 +94,9 @@
         (drgnx-debug-mode -1)
         (when (buffer-live-p b) (kill-buffer b))
         (delete-directory dir t)))))
+
+(ert-deftest drgnx-debug/a-debug-terminal-event-opens-its-tab ()
+  (let ((seen nil))
+    (cl-letf (((symbol-function 'drgnx-debug-launch-show-terminal) (lambda (d) (push d seen))))
+      (drgnx-debug--event "debug-terminal" (list :term "t1")))
+    (should (equal seen '((:term "t1"))))))

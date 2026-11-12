@@ -162,6 +162,7 @@ impl Terminals for Procs {
                 term: "t1".into(),
                 view: "v1".into(),
                 pid,
+                editor: None,
             })
         })
     }

@@ -1407,7 +1407,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/select` | user | `{frame: integer, session: string, thread?: integer}` | `boolean` | no |
 | `debug/set-value` | user | `{node: string, value: string, view: string}` | `{value: string}` | no |
 | `debug/source` | user | `{ref: integer, session: string}` | `{mime?: string, text: string}` | no |
-| `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, root: string, selection?: string, unsaved?: [string], user?: [JsonObject]}` | `{needs?: any, session?: string, sessions?: [string]}` | no |
+| `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, root: string, selection?: string, terminal?: boolean, unsaved?: [string], user?: [JsonObject]}` | `{needs?: any, session?: string, sessions?: [string]}` | no |
 | `debug/trust` | user | `{root: string, trusted: boolean}` | `boolean` | no |
 | `debug/view` | user | `{filter?: string, indent?: natnum, root: string, session?: string, view: string}` | `boolean` | no |
 | `debug/watch` | user | `{expr?: string, index?: natnum, op: string, root: string, to?: natnum}` | `[string]` | no |
