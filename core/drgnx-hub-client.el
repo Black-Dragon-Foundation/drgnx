@@ -323,6 +323,17 @@ never asked.  Event lines (Ratatoskr's challenge comes first) are skipped: the f
             (delete-process c))))
     (error nil)))
 
+(defun drgnx-hub--accepts-p (socket)
+  "Does something take a connection on SOCKET?  A hub that is there, if too busy to answer `drgnx-hub--ping-socket'
+within its second (a socket file left by a hub that ended refuses).  Never one not private to this user; never an
+error."
+  (condition-case nil
+      (and (file-exists-p socket) (not (drgnx-hub--untrusted socket))
+           (progn (delete-process (make-network-process :name "drgnx-hub-accepts" :family 'local :service socket
+                                                        :noquery t))
+                  t))
+    (error nil)))
+
 (defun drgnx-hub--connect-socket (filter)
   "A connection to the hub's socket — never one that is not private to this user (`drgnx-hub--untrusted')."
   (let ((socket (drgnx-hub-socket)))
@@ -1064,11 +1075,16 @@ or the user is told, when the start ends."
   "Make sure a hub runs, without waiting: CALLBACK is called with nil once one answers (at once when one does already)
 or with the reason it does not, when the one asynchronous `ratatoskr ensure --timeout 5' ends or passes
 `drgnx-hub-ensure-deadline'.  Returns that process (nil when a hub ran already).  Signals when it cannot start one:
-Ratatoskr is not built, or starting is off (DRGNX_NO_HUB_START)."
+Ratatoskr is not built, or starting is off (DRGNX_NO_HUB_START) and no hub is there.  With starting off, a hub that
+takes the connection but does not answer the probe's second (a busy one) runs: `drgnx-hub--accepts-p'.  (With starting
+on, `ratatoskr ensure' judges it, with its own longer wait.)"
   (require 'drgnx-ai)
   (cond ((drgnx-hub-running-p) (funcall callback nil) nil)
         ((getenv "DRGNX_NO_HUB_START")
-         (error "No drgnx hub runs, and starting one is off here (DRGNX_NO_HUB_START)"))
+         (unless (drgnx-hub--accepts-p (drgnx-hub-socket))
+           (error "No drgnx hub runs, and starting one is off here (DRGNX_NO_HUB_START)"))
+         (funcall callback nil)
+         nil)
         ((process-live-p drgnx-hub--ensuring)
          (process-put drgnx-hub--ensuring :callbacks (cons callback (process-get drgnx-hub--ensuring :callbacks)))
          drgnx-hub--ensuring)
