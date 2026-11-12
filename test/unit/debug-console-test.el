@@ -106,6 +106,58 @@ its children below it (`debug/children' of its stop) and closes them; a value of
       (should-not (get-text-property (point) 'drgnx-debug-console-node))
       (should (memq 'drgnx-debug-console-stale (ensure-list (get-text-property (point) 'face)))))))
 
+(ert-deftest drgnx-debug-console/evaluates-from-the-editor ()
+  "`drgnx-debug-console-evaluate': EXPR evaluated as if typed (echoed, in the history, `repl'), what the input held
+kept; the tab shown without the focus, or selected with SELECT."
+  (debug-console-test--with
+    (let ((shown nil) (here (selected-window)))
+      (cl-letf (((symbol-function 'drgnx-wb-area-show)
+                 (lambda (area tab buffer) (push (list area tab (buffer-name buffer)) shown) here)))
+        (with-current-buffer (drgnx-debug-console--buffer)
+          (goto-char (point-max))
+          (insert "half typed"))
+        (with-temp-buffer
+          (let ((b (current-buffer)))
+            (drgnx-debug-console-evaluate "items[0]")
+            (should (eq (current-buffer) b))
+            (should (eq (selected-window) here)))
+          (should (equal shown (list (list 'panel 'debug-console drgnx-debug-console-buffer-name))))
+          (pcase-let ((`(,method ,params ,cb) (car calls)))
+            (should (equal method "debug/evaluate"))
+            (should (equal params (list :session "s1" :expr "items[0]" :context "repl")))
+            (funcall cb (list :result "3") nil)))
+        (should (equal (debug-console-test--text) "items[0]\n3\n"))
+        (with-current-buffer drgnx-debug-console-buffer-name
+          (should (equal "half typed" (drgnx-debug-console--input)))
+          (should (equal '("items[0]") drgnx-debug-console--history)))
+        (let ((selected nil))
+          (cl-letf (((symbol-function 'select-window) (lambda (w &rest _) (setq selected w))))
+            (drgnx-debug-console-evaluate "n" t))
+          (should (eq selected here)))))))
+
+(ert-deftest drgnx-debug-console/completes-from-the-adapter ()
+  "TAB-less completion at point in the input: the adapter's targets for the input and point (`debug/completions'),
+the span a target names replaced, else the word before point; their types as annotations; none outside the input."
+  (debug-console-test--with
+    (let ((asked nil)
+          (answer (list :targets (vector (list :label "items" :type "variable") (list :label "iter" :type "function")))))
+      (cl-letf (((symbol-function 'drgnx-hub-call-sync)
+                 (lambda (method params &optional _timeout) (push (list method params) asked) answer)))
+        (with-current-buffer (drgnx-debug-console--buffer)
+          (goto-char (point-max))
+          (insert "len(it")
+          (pcase-let ((`(,beg ,end ,table . ,props) (run-hook-with-args-until-success 'completion-at-point-functions)))
+            (should (equal (car asked) (list "debug/completions" (list :session "s1" :text "len(it" :column 6))))
+            (should (equal (buffer-substring-no-properties beg end) "it"))
+            (should (equal (all-completions "it" table) '("items" "iter")))
+            (should (equal (funcall (plist-get props :annotation-function) "iter") " function")))
+          ;; a target that names its span: it replaces from there
+          (setq answer (list :targets (vector (list :label "len(items)" :start 0 :length 6))))
+          (pcase-let ((`(,beg ,end . ,_) (run-hook-with-args-until-success 'completion-at-point-functions)))
+            (should (equal (buffer-substring-no-properties beg end) "len(it")))
+          (goto-char (point-min))
+          (should-not (run-hook-with-args-until-success 'completion-at-point-functions)))))))
+
 (ert-deftest drgnx-debug-console/history-per-profile ()
   "The input's history: back and forth through what was evaluated; the keys in the three profiles."
   (debug-console-test--with

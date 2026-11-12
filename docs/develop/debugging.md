@@ -524,7 +524,14 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
   resume the stop is over, the hub says so, and the value turns stale (dim, no longer opens).
 - The console stays after its session ends; starting a configuration of the same name again clears it once no
   session of the last run is left (`drgnx-debug-console-clear-on-restart`, on by default).
-- Completion in the input (`completions`) is tier 2 and not built yet.
+- Completion in the input: `drgnx-debug-console-complete-at-point` is the console's only `completion-at-point`
+  function (C-M-i, or a completion UI). It asks `debug/completions {session, frame?, text, column}` (characters,
+  0-based) → `{targets: [{label, text?, type?, start?, length?}]}` on the call connection (2 s); a target's
+  `start`/`length` name the span of the input it replaces, else the word before point; the type is the annotation.
+  Nothing outside the input, with no session, or when the adapter has no `completions`.
+- From the editor: `drgnx-debug-console-evaluate (EXPR &optional SELECT)` (Debug: Evaluate in Debug Console)
+  evaluates as if typed (echoed, in the history) while keeping what the input holds; the tab shows without the
+  focus, or selected with SELECT.
 
 ## Live adapters: the image
 

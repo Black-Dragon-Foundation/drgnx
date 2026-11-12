@@ -10,6 +10,7 @@
 (require 'seq)
 
 (declare-function drgnx-hub-call "drgnx-hub-client" (method params callback &rest keys))
+(declare-function drgnx-hub-call-sync "drgnx-hub-client" (method params &optional timeout))
 (declare-function drgnx-wb-area-show "drgnx-area" (area &optional tab buffer))
 (declare-function drgnx-debug--session "drgnx-debug" (&optional state))
 (defvar drgnx-debug--sessions)
@@ -67,6 +68,7 @@
 selected frame, S-RET adds a line)."
   (setq-local truncate-lines nil)
   (setq-local header-line-format '(:eval (drgnx-debug-console--header)))
+  (setq-local completion-at-point-functions (list #'drgnx-debug-console-complete-at-point))
   (buffer-disable-undo))
 
 (defun drgnx-debug-console--header ()
@@ -229,12 +231,51 @@ selected frame, S-RET adds a line)."
     (let ((expr (string-trim (drgnx-debug-console--input))) (s (drgnx-debug--session)))
       (cond ((string-empty-p expr))
             ((not s) (user-error "No debug session to evaluate in"))
-            (t (push expr drgnx-debug-console--history)
-               (setq drgnx-debug-console--history-at -1)
-               (drgnx-debug-console--set-input "")
-               (drgnx-debug-console--insert (list (list :text expr :category "input")))
-               (drgnx-hub-call "debug/evaluate" (list :session (plist-get s :id) :expr expr :context "repl")
-                               (drgnx-debug-console--answer (plist-get s :id))))))))
+            (t (drgnx-debug-console--set-input "")
+               (drgnx-debug-console--evaluate s expr))))))
+
+(defun drgnx-debug-console--evaluate (session expr)
+  "Evaluate EXPR in SESSION's selected frame (`repl') as if typed: echoed, kept in the history, answered below."
+  (with-current-buffer (drgnx-debug-console--buffer)
+    (push expr drgnx-debug-console--history)
+    (setq drgnx-debug-console--history-at -1)
+    (drgnx-debug-console--insert (list (list :text expr :category "input")))
+    (drgnx-hub-call "debug/evaluate" (list :session (plist-get session :id) :expr expr :context "repl")
+                    (drgnx-debug-console--answer (plist-get session :id)))))
+
+(defun drgnx-debug-console-evaluate (expr &optional select)
+  "Evaluate EXPR in the Debug Console, in the stopped frame, keeping what its input holds; its tab shows without
+taking the focus, or selected with SELECT."
+  (let ((s (or (drgnx-debug--session) (user-error "No debug session to evaluate in")))
+        (b (drgnx-debug-console--buffer)))
+    (let ((w (if (fboundp 'drgnx-wb-area-show)
+                 (save-selected-window (drgnx-wb-area-show 'panel 'debug-console b))
+               (display-buffer b))))
+      (drgnx-debug-console--evaluate s expr)
+      (when (and select w) (select-window w)))))
+
+(defun drgnx-debug-console-complete-at-point ()
+  "Completion in the input from the session's adapter (`debug/completions'): the span a target names, else the
+word before point; nil outside the input, with no session, or when the adapter has none."
+  (when-let* (((>= (point) (drgnx-debug-console--input-start)))
+              (s (drgnx-debug--session))
+              (start (drgnx-debug-console--input-start))
+              (r (condition-case nil
+                     (drgnx-hub-call-sync "debug/completions"
+                                          (list :session (plist-get s :id) :text (drgnx-debug-console--input)
+                                                :column (- (point) start))
+                                          2)
+                   (error nil)))
+              (targets (append (plist-get r :targets) nil)))
+    (let* ((first (car targets))
+           (beg (if (plist-get first :start) (+ start (plist-get first :start))
+                  (save-excursion (skip-syntax-backward "w_" start) (point))))
+           (end (if (plist-get first :length) (min (point-max) (+ beg (plist-get first :length))) (point)))
+           (types (mapcar (lambda (tg) (cons (or (plist-get tg :text) (plist-get tg :label)) (plist-get tg :type)))
+                          targets)))
+      (list beg end (mapcar #'car types)
+            :exclusive 'no
+            :annotation-function (lambda (c) (when-let* ((ty (cdr (assoc c types)))) (concat " " ty)))))))
 
 (defun drgnx-debug-console--answer (session)
   "The callback that inserts an evaluation's answer in SESSION."
