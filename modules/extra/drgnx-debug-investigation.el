@@ -70,7 +70,8 @@ most 20.")
 ;;;; The Investigation buffer
 
 (define-derived-mode drgnx-debug-investigation-mode special-mode "Investigation"
-  "An agent's hypotheses and fixes.")
+  "An agent's hypotheses and fixes."
+  (buffer-disable-undo))
 
 (defun drgnx-debug-investigation--state-face (state)
   (pcase state
