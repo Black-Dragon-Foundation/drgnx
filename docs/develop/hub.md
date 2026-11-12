@@ -2419,6 +2419,12 @@ A builder fits each label to its segment's width with `drgnx_rows::fit` (the ter
 hub sums the advances of the font file Emacs uses for the role (`view/env`'s `fonts`), read with skrifa, and trims
 with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an estimate: no shaping, kerning or hinting.
 
+- **Per grapheme cluster.** A cluster (a letter and its combining marks, an emoji ZWJ sequence, a flag) counts its
+  first char's advance, and a cut never splits one. The marks and joined chars after it are drawn into that glyph;
+  asked of the editor one by one (no font file, as on macOS) each had a width of its own, and the combining and ZWJ
+  labels were cut 21 to 35 px short. A cluster the font draws wider than its first char (an unjoined ZWJ sequence)
+  runs over, and the fit guard measures it.
+
 - **Measured against Emacs.** `test/ui/rows-fit-gui-test.el` compares the sums (`test/fixtures/rows-fit-sums.eld`,
   written by `drgnx-rows`' `fit_sums`) with `string-pixel-width` for 40-char Latin, digit and punctuation strings in
   Inter and JetBrains Mono at 11 to 16 px. The rounding with the smaller largest error is `fit::ROUNDING`: each
