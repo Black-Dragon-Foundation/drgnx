@@ -228,6 +228,16 @@
       (remove-function after-focus-change-function #'drgnx-fp-test-fn)
       (setq-default fp-test-aliased-hook nil))))
 
+(ert-deftest drgnx-fingerprint/a-list-of-hook-names-is-not-a-hook ()
+  "A variable ending in -hooks holds hook names (as `unload-feature-special-hooks'; `drgnx-pixels--quiet-hooks'): it is
+not a hook, so a library that defines one leaks nothing (the census named each name in the list as an entry added)."
+  (let ((before (drgnx-modules-fingerprint t)))
+    (unwind-protect
+        (progn
+          (set-default 'drgnx-fp-test-quiet-hooks '(window-size-change-functions buffer-list-update-hook))
+          (should-not (drgnx-fp-test--whats (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint t)))))
+      (makunbound 'drgnx-fp-test-quiet-hooks))))
+
 (ert-deftest drgnx-fingerprint/a-dotted-list-in-a-hook-variable-does-not-stop-the-scan ()
   (let ((before (drgnx-modules-fingerprint t)))
     (unwind-protect
