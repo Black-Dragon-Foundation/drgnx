@@ -42,6 +42,7 @@ libc = { workspace = true, optional = true }
 notify = { workspace = true, optional = true }
 
 [dev-dependencies]
+drgnx-exe = { path = "../drgnx-exe", version = "0.1.0" }  # stand-in scripts written and run, never busy (ETXTBSY)
 skuld = { path = "../skuld", version = "0.1.0" }  # every order of the settle core
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }

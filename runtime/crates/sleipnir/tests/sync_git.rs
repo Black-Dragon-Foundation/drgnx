@@ -11,7 +11,6 @@ mod git {
     use std::ffi::OsStr;
     use std::fs;
     use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
@@ -55,8 +54,7 @@ mod git {
     }
 
     fn script(at: &Path, body: &str) {
-        fs::write(at, body).unwrap();
-        fs::set_permissions(at, fs::Permissions::from_mode(0o755)).unwrap();
+        drgnx_exe::write(at, body).unwrap();
     }
 
     // [D] pure (real git behind a recording fake; no clock, no other process waited on)

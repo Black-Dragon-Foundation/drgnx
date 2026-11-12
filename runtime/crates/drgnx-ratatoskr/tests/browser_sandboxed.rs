@@ -261,7 +261,7 @@ fn launch_with(agent: &str, probe: bool) -> Launched {
             built.display()
         );
         std::fs::create_dir_all(b.join("bin")).unwrap();
-        std::fs::copy(&built, b.join("bin/gleipnir-probe")).unwrap();
+        drgnx_exe::copy(&built, &b.join("bin/gleipnir-probe")).unwrap();
         read.push(b.join("bin"));
     }
     let shape = SessionShape {

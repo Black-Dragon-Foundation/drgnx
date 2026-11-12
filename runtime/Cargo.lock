@@ -1362,6 +1362,7 @@ dependencies = [
 name = "domr"
 version = "0.1.0"
 dependencies = [
+ "drgnx-exe",
  "getrandom 0.4.3",
  "hmac",
  "libc",
@@ -1378,6 +1379,7 @@ dependencies = [
 name = "draugr"
 version = "0.1.0"
 dependencies = [
+ "drgnx-exe",
  "eitri",
  "libc",
  "skuld",
@@ -1386,9 +1388,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "drgnx-exe"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "drgnx-px"
 version = "0.1.0"
 dependencies = [
+ "drgnx-exe",
  "gleipnir",
  "libc",
  "serde",
@@ -1410,6 +1421,7 @@ dependencies = [
  "brokkr",
  "bytes",
  "draugr",
+ "drgnx-exe",
  "drgnx-px",
  "drgnx-rows",
  "drgnx-term",
@@ -2928,6 +2940,7 @@ name = "gleipnir-escape"
 version = "0.1.0"
 dependencies = [
  "draugr",
+ "drgnx-exe",
  "gleipnir",
  "libc",
  "rustix",
@@ -3109,6 +3122,7 @@ name = "hrafn"
 version = "0.1.0"
 dependencies = [
  "ast-grep-core",
+ "drgnx-exe",
  "eitri",
  "gix",
  "inotify",
@@ -4241,6 +4255,7 @@ version = "0.1.0"
 dependencies = [
  "brokkr",
  "draugr",
+ "drgnx-exe",
  "drgnx-ratatoskr",
  "huginn",
  "insta",
@@ -5972,6 +5987,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 name = "sleipnir"
 version = "0.1.0"
 dependencies = [
+ "drgnx-exe",
  "drgnx-px",
  "forseti",
  "gleipnir",

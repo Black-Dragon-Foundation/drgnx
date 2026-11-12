@@ -516,7 +516,8 @@ impl Conn {
     pub fn open_as_other_uid(path: &Path, dir: &Path) -> Result<Conn, String> {
         let me = std::env::current_exe().map_err(|e| e.to_string())?;
         let copy = dir.join("connect-as");
-        std::fs::copy(&me, &copy)
+        // run at once: copied through drgnx-exe, never held open for writing by another thread's fork
+        drgnx_exe::copy(&me, &copy)
             .map_err(|e| format!("cannot copy the harness for connect-as: {e}"))?;
         std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| e.to_string())?;

@@ -274,8 +274,8 @@ pub(crate) async fn install_with(
     if got != expected {
         return Err(InstallError::DigestMismatch { expected, got });
     }
-    // the browser is run from these files: their write descriptors kept out of the hub's other forks (crate::exe)
-    crate::exe::private_fds(|| unpack(&zip_path, &partial, limits))
+    // the browser is run from these files: their write descriptors kept out of the hub's other forks (drgnx-exe)
+    drgnx_exe::private_fds(|| unpack(&zip_path, &partial, limits))
         .map_err(|e| io_err(&partial, e))??;
     fs::remove_file(&zip_path).map_err(|e| io_err(&zip_path, e))?;
 
