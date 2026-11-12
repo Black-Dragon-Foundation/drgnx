@@ -191,13 +191,15 @@
                                 (drgnx-platform-test--with-frame 'pgtk '("SWAYSOCK=/s" "WAYLAND_DISPLAY=wayland-1")
                                   (set-frame-parameter frame 'title "before")
                                   (let ((seen nil))
-                                    ;; the window shows up with its placing title only after about 0.3 s
-                                    (run-at-time 0.3 nil (lambda ()
-                                                           (setq seen (frame-parameter frame 'title))
-                                                           (drgnx-platform-wm-test--write "get_tree.json" (drgnx-platform-wm-test--ours seen))))
+                                    ;; the window shows up with its placing title only after the first poll's answer
+                                    ;; (the reply the fake tool serves next), never by the clock: under load a timer
+                                    ;; at 0.3 s came before the first poll ran, which then saw the window at once
                                     (should (eq 'ok (drgnx-platform-wm-test--leaving-no-timer
                                                       (drgnx-platform-wm-test--result
-                                                       (lambda (cb) (drgnx-platform-place-frame frame (drgnx-platform-wm-test--monitor "HEADLESS-2" 1280) cb))))))
+                                                       (lambda (cb)
+                                                         (drgnx-platform-place-frame frame (drgnx-platform-wm-test--monitor "HEADLESS-2" 1280) cb)
+                                                         (setq seen (frame-parameter frame 'title))
+                                                         (drgnx-platform-wm-test--write "get_tree.json.next" (drgnx-platform-wm-test--ours seen)))))))
                                     (should (string-match-p (format "\\`drgnx \\[placing %d-[0-9]+\\]\\'" (emacs-pid)) seen))
                                     (should (equal "before" (frame-parameter frame 'title)))
                                     (let ((cmds (drgnx-platform-wm-test--commands)))
