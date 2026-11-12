@@ -16,6 +16,7 @@ pub mod bisect_wire;
 pub mod blocked;
 pub mod breakpoints;
 pub mod compare;
+pub mod console;
 pub mod fork;
 pub mod fork_hub;
 pub mod fork_mux;
@@ -51,6 +52,10 @@ mod tests_blocked_live;
 #[cfg(test)]
 mod tests_breakpoints;
 #[cfg(test)]
+mod tests_console;
+#[cfg(test)]
+mod tests_console_hub;
+#[cfg(test)]
 mod tests_fork;
 #[cfg(test)]
 mod tests_fork_hub;
@@ -83,7 +88,7 @@ pub mod wire;
 use breakpoints::Store;
 use serde_json::{Value, json};
 use session::{End, Handle, Op, Proc, Start, Stop, Update};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -249,6 +254,9 @@ struct Inner {
     inline: inline::Inline,
     /// Told of every change of a session's state or stop, or of breakpoints (the Run and Debug views).
     listeners: Mutex<Vec<Listener>>,
+    /// Each session's console output waiting to be sent (`debug-output`), and the sessions whose batch is due.
+    consoles: Mutex<HashMap<String, console::Console>>,
+    armed: Mutex<HashSet<String>>,
 }
 
 /// A function told that a session or breakpoint changed.
@@ -300,6 +308,8 @@ impl Debug {
                 on_state: OnceLock::new(),
                 inline: inline::Inline::new(),
                 listeners: Mutex::new(Vec::new()),
+                consoles: Mutex::new(HashMap::new()),
+                armed: Mutex::new(HashSet::new()),
             }),
         }
     }
@@ -415,6 +425,79 @@ impl Debug {
         v["root"] = json!(root);
         self.inner.sink.broadcast("debug-breakpoints", v, None);
         self.changed();
+    }
+
+    /// An `output` event's BODY into ID's console: sent at once past [`console::BATCH_BYTES`], else with what comes in
+    /// the next [`console::BATCH`].
+    fn console_output(&self, id: &str, body: &Value) {
+        let ansi = lock(&self.inner.state).sessions.get(id).is_some_and(|e| {
+            e.caps.get("supportsANSIStyling").and_then(Value::as_bool) == Some(true)
+        });
+        let full = {
+            let mut c = self
+                .inner
+                .consoles
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let con = c.entry(id.to_owned()).or_default();
+            con.output(body, ansi);
+            con.full()
+        };
+        if full {
+            self.console_flush(id, false);
+        } else if self
+            .inner
+            .armed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.to_owned())
+        {
+            let d = self.clone();
+            let id = id.to_owned();
+            crate::clock::spawn("debug:console", async move {
+                crate::clock::sleep(console::BATCH).await;
+                d.console_flush(&id, false);
+            });
+        }
+    }
+
+    /// Send ID's console batch (`debug-output {session, lines, skipped?}`) to every editor; END: the session is over
+    /// (its last line goes without its newline, and its console with it).
+    pub fn console_flush(&self, id: &str, end: bool) {
+        self.inner
+            .armed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
+        let batch = {
+            let mut c = self
+                .inner
+                .consoles
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let b = c.get_mut(id).and_then(|con| con.take(end));
+            if end {
+                c.remove(id);
+            }
+            b
+        };
+        if let Some(mut b) = batch {
+            b["session"] = json!(id);
+            self.inner.sink.broadcast("debug-output", b, None);
+        }
+    }
+
+    /// TEXT in ID's console in CATEGORY, sent at once (a task's failure after the session ended).
+    pub fn console_say(&self, id: &str, text: &str, category: &str) {
+        let batch = {
+            let mut con = console::Console::default();
+            con.say(text, category, None);
+            con.take(true)
+        };
+        if let Some(mut b) = batch {
+            b["session"] = json!(id);
+            self.inner.sink.broadcast("debug-output", b, None);
+        }
     }
 
     /// Tell F of every change of a session or a breakpoint from now on.
@@ -1150,6 +1233,9 @@ impl Debug {
                         },
                         _ => body,
                     };
+                    if event == "output" {
+                        self.console_output(&id, &body);
+                    }
                     if event == "breakpoint"
                         && let Some(root) = self.root_of(&id)
                         && let Some(path) = self.store(&root, |s| s.event(&id, &body))
@@ -1183,6 +1269,8 @@ impl Debug {
         self.inner.inline.forget(id);
         let e = lock(&self.inner.state).sessions.remove(id);
         self.publish_state();
+        // the console keeps what it printed: the line that waited for its newline goes too
+        self.console_flush(id, true);
         let Some(e) = e else { return };
         // what it made of the breakpoints goes with it
         let paths = self.store(&e.root, |s| {

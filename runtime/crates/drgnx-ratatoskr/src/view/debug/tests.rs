@@ -545,3 +545,35 @@ fn the_filter_keeps_matches_and_their_parents() {
         ]
     );
 }
+
+#[test]
+fn open_pages_are_bounded_and_closed_pages_let_their_elements_go() {
+    assert!(is_page("v:s1:Locals/arr/[0..9999]/[100..199]"));
+    assert!(!is_page("v:s1:Locals/arr/[0..9999]"));
+    assert!(!is_page("v:s1:Locals/arr"));
+    let mut t = Tree::default();
+    let mut o = Opened::default();
+    let page = |i: usize| format!("v:s1:Locals/arr/[0..99999]/[{}..{}]", i * 100, i * 100 + 99);
+    let el = |i: usize| vec![Var::of(&v(&format!("{i}"), "1", 0))];
+    for i in 0..PAGE_CAP {
+        assert!(o.set(&page(i), true).is_empty());
+        t.kids.insert(page(i), el(i));
+        t.kids.insert(format!("{}/{}", page(i), i * 100), el(i));
+    }
+    // one page more: the first closes, and its elements and all under them go
+    let gone = o.set(&page(PAGE_CAP), true);
+    assert_eq!(gone, [page(0)]);
+    t.forget(&gone);
+    assert!(!o.is_open(&page(0), false) && o.is_open(&page(1), false));
+    assert!(!t.kids.contains_key(&page(0)) && !t.kids.contains_key(&format!("{}/0", page(0))));
+    assert!(t.kids.contains_key(&page(1)));
+    assert_eq!(o.pages.len(), PAGE_CAP);
+    // a page closed lets its elements go; one opened again goes to the end of the line
+    t.forget(&o.set(&page(1), false));
+    assert!(!t.kids.contains_key(&page(1)));
+    o.set(&page(2), true);
+    assert_eq!(o.pages.back(), Some(&page(2)));
+    // a node that is not a page is not counted
+    assert!(o.set("v:s1:Locals/obj", true).is_empty());
+    assert_eq!(o.pages.len(), PAGE_CAP - 1);
+}

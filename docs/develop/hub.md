@@ -1388,10 +1388,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/bisect/narrow` | user | `{bisect: string}` | `boolean` | no |
 | `debug/bisect/states` | user | `{good?: {id: string, kind: string}, root: string}` | `{states: [any]}` | no |
 | `debug/breakpoints` | user | `{op?: {adapter?: string, condition?: string, enabled?: boolean, hit?: string, id?: natnum, line?: natnum, log?: string, name?: string, op: string, path?: string}, path?: string, root: string}` | `DebugBreakpointsView` | no |
+| `debug/children` | user | `{epoch?: natnum, reference: integer, session: string}` | `{variables: [DebugChild]}` | no |
 | `debug/compare` | user | `{fork: string, run: string}` | `DebugForkView` | no |
 | `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
 | `debug/control` | user | `{op: string, session: string, thread?: integer}` | `boolean` | no |
-| `debug/evaluate` | user | `{context: string, expr: string, frame?: integer, session: string}` | `{reference?: integer, result: string, type?: string}` | no |
+| `debug/evaluate` | user | `{context: string, expr: string, frame?: integer, session: string}` | `{epoch?: natnum, reference?: integer, result: string, type?: string}` | no |
 | `debug/expand` | user | `{node: string, open: boolean, view: string}` | `boolean` | no |
 | `debug/fork` | user | `{anyway?: boolean, at: {hit?: natnum, line?: natnum, path?: string, stop?: natnum}, change?: {code?: boolean, value?: {path: [string], text: string}}, confirm?: boolean, inputs?: [{id: string, value: string}], run: string, until?: DebugForkUntil}` | `{ask?: string, fork?: string, needs?: any}` | no |
 | `debug/fork/drop` | user | `{fork: string}` | `boolean` | no |
