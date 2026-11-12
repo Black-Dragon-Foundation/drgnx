@@ -196,6 +196,8 @@ struct Temp {
 /// One project's breakpoints.
 pub struct Store {
     file: Option<PathBuf>,
+    /// The file's writes, in order, off the hub's workers (with a file).
+    disk: Option<std::sync::Arc<crate::disk::Ordered>>,
     data: Data,
     /// (session, path) → the ids last sent, in the order sent (`answer` reads the adapter's answer in that order).
     sent: BTreeMap<(String, String), Vec<u64>>,
@@ -305,6 +307,12 @@ impl Store {
             None => Data::default(),
         };
         Store {
+            disk: file.as_ref().map(|_| {
+                std::sync::Arc::new(crate::disk::Ordered::reporting(
+                    "debug:breakpoints",
+                    |what, e| tracing::warn!(target: "drgnx::debug", "{what}: {e}"),
+                ))
+            }),
             file,
             data,
             sent: BTreeMap::new(),
@@ -317,15 +325,24 @@ impl Store {
         }
     }
 
+    /// The store as it is now, queued for its file: written in order off the hub's workers (`crate::disk`).
     fn save(&self) {
-        let Some(f) = &self.file else { return };
-        if let Some(dir) = f.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
+        let (Some(f), Some(disk)) = (&self.file, &self.disk) else {
+            return;
+        };
         let text = serde_json::to_string(&self.data).unwrap_or_default();
-        if let Err(e) = crate::records::write_atomic(f, &text) {
-            tracing::warn!(target: "drgnx::debug", "breakpoints {}: {e}", f.display());
-        }
+        let f = f.clone();
+        disk.push(format!("breakpoints {}", f.display()), move || {
+            if let Some(dir) = f.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            crate::records::write_atomic(&f, &text)
+        });
+    }
+
+    /// The file's writer: its `written` is every save so far landed (none: no file).
+    pub(crate) fn disk(&self) -> Option<std::sync::Arc<crate::disk::Ordered>> {
+        self.disk.clone()
     }
 
     /// Breakpoint ID is agent session AGENT's (D4): its path, when there is one.

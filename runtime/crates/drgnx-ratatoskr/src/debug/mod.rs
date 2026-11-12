@@ -437,6 +437,21 @@ impl Debug {
         f(s)
     }
 
+    /// Every breakpoint store's saves queued so far have landed (or failed).
+    pub async fn written(&self) {
+        let disks: Vec<_> = self
+            .inner
+            .stores
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .filter_map(Store::disk)
+            .collect();
+        for d in disks {
+            d.written().await;
+        }
+    }
+
     /// The project session ID debugs.
     pub fn root_of(&self, id: &str) -> Option<String> {
         lock(&self.inner.state)

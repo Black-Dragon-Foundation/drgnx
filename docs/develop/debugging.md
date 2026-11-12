@@ -212,7 +212,9 @@ the known ones.
 ## Breakpoints: the store (`debug/breakpoints.rs`)
 
 Each project (by root) has one store, saved in the hub's state directory as `debug-breakpoints/<hash of the
-root>.json`, written atomically. If the file is damaged, it is moved aside to `….damaged` and the store starts empty.
+root>.json`, written atomically, in order and off the hub's async workers (`crate::disk::Ordered`, one per
+project: the operation answers at once and the save lands after it; `Debug::written` waits for them). A project's
+probes are saved the same way. If the file is damaged, it is moved aside to `….damaged` and the store starts empty.
 
 - **Operations by id** (`Op`): add, remove, edit, move, add or remove a function breakpoint.
   - Adding a line that already has a breakpoint gives that one. Removing or editing one that is gone is no change.

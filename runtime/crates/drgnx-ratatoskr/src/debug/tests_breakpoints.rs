@@ -219,8 +219,8 @@ fn run_to_cursor_is_one_sessions_until_its_next_stop() {
     assert!(s.send_list("d1", "/p/b.py").is_empty());
 }
 
-#[test]
-fn the_store_survives_the_hub_and_writes_atomically() {
+#[tokio::test]
+async fn the_store_survives_the_hub_and_writes_atomically() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("bps.json");
     {
@@ -239,6 +239,7 @@ fn the_store_survives_the_hub_and_writes_atomically() {
             condition: None,
         });
         s.set_filters("debugpy", vec!["raised".into()]);
+        s.disk().unwrap().written().await;
     }
     let names: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
@@ -257,8 +258,8 @@ fn the_store_survives_the_hub_and_writes_atomically() {
     assert_eq!(s.apply(add("/p/a.py", 6)).unwrap().id, Some(2));
 }
 
-#[test]
-fn a_damaged_file_starts_empty_and_is_kept_aside() {
+#[tokio::test]
+async fn a_damaged_file_starts_empty_and_is_kept_aside() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("bps.json");
     std::fs::write(&file, "{not json").unwrap();
@@ -266,6 +267,7 @@ fn a_damaged_file_starts_empty_and_is_kept_aside() {
     assert!(s.paths().is_empty());
     assert!(dir.path().join("bps.json.damaged").exists());
     s.apply(add("/p/a.py", 1));
+    s.disk().unwrap().written().await;
     assert!(std::fs::read_to_string(&file).unwrap().contains("a.py"));
 }
 
@@ -519,4 +521,31 @@ fn columns_turn_between_characters_and_utf16_units() {
     assert_eq!(chars_of(Some(text), 6), 5);
     assert_eq!(chars_of(Some(text), 20), 19);
     assert_eq!(chars_of(None, 4), 4);
+}
+
+/// A save that waits on the disk (here a FIFO in place of the temp file, opened by nobody) holds no async worker: the
+/// operation answers at once and the file lands once the disk does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_save_that_waits_on_the_disk_holds_no_worker() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("bps.json");
+    let tmp = dir.path().join("bps.json.drgnx-tmp");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&tmp)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let applied = tokio::spawn(async move {
+        let mut s = Store::open(Some(file));
+        s.apply(add("/p/a.py", 7)).is_some()
+    });
+    let answered = crate::clock::timeout(std::time::Duration::from_secs(10), applied).await;
+    // the disk answers: the write waiting on the FIFO goes on (and a worker held by it is freed)
+    let reader = std::thread::spawn(move || std::fs::read_to_string(&tmp).unwrap_or_default());
+    assert!(
+        matches!(answered, Ok(Ok(true))),
+        "the operation waited for the disk on a worker"
+    );
+    let written = reader.join().unwrap();
+    assert!(written.contains("a.py"), "{written}");
 }
