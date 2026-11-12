@@ -535,6 +535,9 @@ impl Forks {
         let into = |p: &str| fork::into_tree(p, root, tree);
         let mut target_t = target.clone();
         target_t.path = into(&target.path);
+        target_t.recorded = target
+            .landing
+            .and_then(|i| self.inner.runs.capture(&run.id, i));
         let probes: Vec<_> = run
             .probes
             .iter()
