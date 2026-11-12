@@ -64,6 +64,8 @@ lists which are found).
 A stop opens its file at the line, marked by an amber arrow and band; a caller frame you pick is marked green, and a
 stop on an exception is red, with a card under the line saying what was raised (code with no file, such as an
 `eval`, opens read-only from the debugger). Set `drgnx-debug-focus-on-stop` to bring Emacs to the front on a stop.
+While stopped, the function's variables show their values at the ends of the lines that set them (a value that changed
+since the last stop in amber); a file edited since its save shows none, and `drgnx-debug-inline-values` turns them off.
 While the session is stopped the same command continues; **Toggle Breakpoint**, **Step Over**, **Step Into**,
 **Step Out** and **Stop Debugging** do what they say. If you used dape, **Convert dape Configurations…** (the palette)
 turns your `dape-configs` into launch configurations once (dape itself is no longer needed).
@@ -101,6 +103,7 @@ Every session is recorded, against a snapshot of the files as they were when it 
 expression each time its line runs, without stopping the program and without printing anything; **Probe the
 Result…** records what the line assigns, on the next line that runs (a probe runs before its line). A probe is a
 ring with a dot in its own column, and its newest values show at the line's end as a sparkline and the last value.
+A file opened while no hub runs opens without its probes.
 **Show Stop Timeline** opens a strip at the top: the run's stops, numbered (a dot for a breakpoint, a small dot for a
 step, a triangle for an exception), and one lane per probe. Click a stop (or `RET` on it), or press `Alt ←` / `Alt →` in the strip or
 a past stop, to open it read-only: the file as it ran under a banner (it says "not what ran" when

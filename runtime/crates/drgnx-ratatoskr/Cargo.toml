@@ -97,6 +97,7 @@ verdandi = { path = "../verdandi", version = "0.1.0" }  # the edit history's sto
 # from a whole-file diff, three-way projection and whole-file writes as line hunks (pair::writes); 3.x is not in the
 # lock file yet
 similar = "2.7"
+tree-sitter.workspace = true  # the debugger's inline values walk the frame's function (Hrafn's grammars: hrafn::structural::language)
 xxhash-rust = { version = "0.8.19", features = ["xxh3"] }  # a search's file digests and match keys (view::search; already in the tree through loro)
 zstd = { version = "0.14", default-features = false }  # debug run files: blocks of frames, compressed (debug::runfile)
 heimdall = { path = "../heimdall", version = "0.1.0" }  # the CDP broker's routing and codecs (browser::{host,broker})

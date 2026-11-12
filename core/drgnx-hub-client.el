@@ -720,8 +720,11 @@ error, or when it does not answer."
   (let* ((done nil) result error
          (limit (+ (float-time (time-convert nil t)) (or timeout 5) 1))
          (id (drgnx-hub-call method params (lambda (r e) (setq done t result r error e)) :deadline (or timeout 5))))
-    ;; the deadline ends the wait; the real clock is only a backstop (a test's virtual clock never fires the deadline)
-    (while (and (not done) (< (float-time (time-convert nil t)) limit)) (accept-process-output nil 0.02))
+    ;; the deadline ends the wait; the real clock is only a backstop (a test's virtual clock never fires the deadline).
+    ;; The wait is on the call connection: it returns as soon as that connection is read.  On no process it would
+    ;; return only once no process had written for 10 ms (Emacs's read delay), whatever ended the wait
+    (while (and (not done) (< (float-time (time-convert nil t)) limit))
+      (accept-process-output (and (process-live-p drgnx-hub--client) drgnx-hub--client) 0.02))
     (unless done (drgnx-hub--settle id nil "gave up"))
     (cond ((not done) (error "The drgnx hub did not answer %s" method))
           (error (error "drgnx hub: %s" error))
@@ -1083,6 +1086,19 @@ Ratatoskr is not built, or starting is off (DRGNX_NO_HUB_START)."
            (setq drgnx-hub--ensuring p)
            (drgnx-timer-start 'hub-ensure drgnx-hub-ensure-deadline #'drgnx-hub--ensure-expired :owner :core)
            p))))
+
+(defun drgnx-hub-start-for-command (on-fail)
+  "A command the user invoked needs the hub's subscription (a terminal, a hub-fed view): start Ratatoskr when no hub
+runs (`drgnx-hub--ensure-running', not waited for) and connect once it answers; with one running, connect.  ON-FAIL
+gets the reason, a string, when no hub can be had.  Nothing while a subscription is up or being made.  In a daemon path
+\(`inhibit-interaction') it starts nothing and only connects to a hub already there: timers, hooks, sentinels and
+startup never start one."
+  (unless (or (process-live-p drgnx-hub--events) (process-live-p drgnx-hub--subscribing))
+    (if inhibit-interaction
+        (when (drgnx-hub-running-p) (drgnx-hub-connect))
+      (condition-case e
+          (drgnx-hub--ensure-running (lambda (err) (if err (funcall on-fail err) (drgnx-hub-connect))))
+        (error (funcall on-fail (error-message-string e)))))))
 
 (defun drgnx-hub--restart-legacy ()
   "End the Lisp hub of before this update (protocol 0 has `shutdown', not `restart'), wait up to 5 s for its lock

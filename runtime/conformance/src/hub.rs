@@ -326,7 +326,11 @@ impl Hub {
             .last()
             .and_then(|f| std::fs::read_to_string(f).ok())
             .unwrap_or_default();
-        let lines: Vec<&str> = text.lines().collect();
+        // loro's block diagnostics come by the dozen per export and would push the hub's own lines out
+        let lines: Vec<&str> = text
+            .lines()
+            .filter(|l| !l.contains("\"target\":\"loro_internal"))
+            .collect();
         lines[lines.len().saturating_sub(n)..].join("\n")
     }
 

@@ -282,57 +282,74 @@ pub async fn usages(
                 .prepare(crate::query::PINNED_SQL)?
                 .query_map(rusqlite::params![name, view.tree()], |r| r.get(3))?
                 .collect::<Result<_, _>>()?;
-            let mut out = Vec::new();
-            // (the usage, its pair's blob): the enclosing definitions are read for the K kept only
-            let mut blobs = Vec::new();
-            for r in crate::refs::rows(c, view, &name)? {
-                if !scope.admits(&r.class) {
+            // the name's counts on `ref_name` alone; the graph's files are the view's pairs, so the view needs no join
+            // of `file`. The lines are read for the definers' rows (their own definitions come off the count) and
+            // for the K kept only. (rank, node, n, lines when read)
+            let mut out: Vec<(f64, u32, u32, Option<Vec<u32>>)> = Vec::new();
+            let mut q = c.prepare(crate::refs::COUNTS_SQL)?;
+            let mut it = q.query(rusqlite::params![name])?;
+            while let Some(r) = it.next()? {
+                let Some(i) = g.node(r.get_ref(0)?.as_str().map_err(rusqlite::Error::from)?) else {
+                    continue;
+                };
+                let (path, blob) = (&g.paths[i as usize], &g.blobs[i as usize]);
+                if blob != r.get_ref(1)?.as_str().map_err(rusqlite::Error::from)?
+                    || !scope.admits(g.class[i as usize].as_str())
+                {
                     continue;
                 }
-                let mut lines = r.lines.clone();
-                let mut n = r.n;
-                if defining.contains(&r.path) {
-                    let defs = entries(c, &r.path, &r.blob)?;
-                    lines.retain(|&l| {
-                        !defs
-                            .iter()
-                            .any(|d| d.name == name && d.line_start <= l && l <= d.line_end)
-                    });
-                    n = n.saturating_sub((r.lines.len() - lines.len()) as u32);
+                let mut n: u32 = r.get(2)?;
+                let mut lines = None;
+                if defining.contains(path) {
+                    let all = crate::refs::lines(c, path, blob, &name)?;
+                    let defs = entries(c, path, blob)?;
+                    let own: Vec<u32> = all
+                        .iter()
+                        .copied()
+                        .filter(|&l| {
+                            !defs
+                                .iter()
+                                .any(|d| d.name == name && d.line_start <= l && l <= d.line_end)
+                        })
+                        .collect();
+                    n = n.saturating_sub((all.len() - own.len()) as u32);
+                    lines = Some(own);
                 }
                 if n == 0 {
                     continue;
                 }
-                let file_rank = g.node(&r.path).map_or(0.0, |i| rank[i as usize]);
-                blobs.push(r.blob);
-                out.push((
-                    Usage {
-                        rank: file_rank * (1.0 + n as f64).ln(),
-                        path: r.path,
-                        line: lines.first().copied().unwrap_or(0),
-                        lines,
-                        n,
-                        enclosing: None,
-                        class: r.class,
-                    },
-                    blobs.len() - 1,
-                ));
+                out.push((rank[i as usize] * (1.0 + f64::from(n)).ln(), i, n, lines));
             }
-            out.sort_by(|(a, _), (b, _)| {
-                (a.class == "test")
-                    .cmp(&(b.class == "test"))
-                    .then_with(|| b.rank.total_cmp(&a.rank))
-                    .then_with(|| (&a.path, a.line).cmp(&(&b.path, b.line)))
+            // a pair's path is unique in the view, so it settles every tie
+            out.sort_by(|a, b| {
+                let test = |i: u32| g.class[i as usize] == crate::files::Class::Test;
+                test(a.1)
+                    .cmp(&test(b.1))
+                    .then_with(|| b.0.total_cmp(&a.0))
+                    .then_with(|| g.paths[a.1 as usize].cmp(&g.paths[b.1 as usize]))
             });
             out.truncate(k.max(1));
             let mut kept = Vec::with_capacity(out.len());
-            for (mut u, b) in out {
-                u.enclosing = entries(c, &u.path, &blobs[b])?
-                    .into_iter()
-                    .filter(|d| d.line_start <= u.line && u.line <= d.line_end)
-                    .min_by_key(|d| (d.line_end - d.line_start, u32::MAX - d.depth))
-                    .map(|d| d.name);
-                kept.push(u);
+            for (rank, i, n, lines) in out {
+                let (path, blob) = (&g.paths[i as usize], &g.blobs[i as usize]);
+                let lines = match lines {
+                    Some(l) => l,
+                    None => crate::refs::lines(c, path, blob, &name)?,
+                };
+                let line = lines.first().copied().unwrap_or(0);
+                kept.push(Usage {
+                    rank,
+                    path: path.clone(),
+                    line,
+                    lines,
+                    n,
+                    enclosing: entries(c, path, blob)?
+                        .into_iter()
+                        .filter(|d| d.line_start <= line && line <= d.line_end)
+                        .min_by_key(|d| (d.line_end - d.line_start, u32::MAX - d.depth))
+                        .map(|d| d.name),
+                    class: g.class[i as usize].as_str().to_string(),
+                });
             }
             Ok(kept)
         })

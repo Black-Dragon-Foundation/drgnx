@@ -4,6 +4,7 @@
 (require 'ert)
 (require 'drgnx-ui)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
+(load (expand-file-name "../fixtures/ratatoskr-fixture" (file-name-directory (macroexp-file-name))) nil t)
 
 (defmacro drgnx-live-mod--with (sess &rest body)
   "BODY with SESS a session editing an elisp file (VS Code key profile)."
@@ -42,29 +43,64 @@
       (drgnx-ui-measure sess (list (list :keys "C-k z")))
       (should (equal before (drgnx-live-mod--q sess "(sort (mapcar #'window-pixel-edges (window-list nil 'nomini)) (lambda (a b) (or (< (car a) (car b)) (and (= (car a) (car b)) (< (cadr a) (cadr b))))))"))))))
 
+(defun drgnx-live-mod--found (also)
+  "A form for the session: the hub-fed Search view (the rows path) drew f.el's file row and ALSO (a form) holds."
+  (format "(with-current-buffer (get-buffer drgnx-replace-buffer-name)
+             (and %s (drgnx-replace--rows-p) (> (or (car drgnx-replace--hub-counts) 0) 0)
+                  (save-excursion (goto-char (or drgnx-replace--results (point-min))) (re-search-forward \"\\\\_<f\\\\.el\\\\_>\" nil t))
+                  t))" also))
+
+(defun drgnx-live-mod--may-start-hub (sess)
+  "Let SESS start a hub as an install does (a session has starting off, DRGNX_NO_HUB_START): Ratatoskr is the test's,
+and the hub ends with the session.  Nothing is started here: the commands under test start it."
+  (let ((bin (or (drgnx-test-ratatoskr-bin) (drgnx-test-no-hub))))
+    (should (drgnx-live-mod--q sess (format "(progn (setenv \"DRGNX_NO_HUB_START\") (setenv \"DRGNX_RATATOSKR_BIN\" %S)
+                                                     (setenv \"DRGNX_HUB_PARENT_PID\" (number-to-string (emacs-pid)))
+                                                     (not (drgnx-hub-running-p)))"
+                                            bin)))))
+
+(defun drgnx-live-mod--search (sess secs)
+  "In SESS, C-S-f (View: Search, VS Code's Ctrl+Shift+F: the Search view, the cursor in its Find field), \"list\" and
+RET, after a git init makes the file's folder a project.  Waits up to SECS for f.el's results."
+  ;; Emacs 31 caches "no project here" (the chrome asked when the file opened): forget it after git init.
+  (drgnx-live-mod--q sess "(progn (call-process \"git\" nil nil nil \"-C\" (file-name-directory (buffer-file-name (window-buffer (drgnx-wb-editor-window)))) \"init\" \"-q\") (when (fboundp 'project--clear-cache) (project--clear-cache)) (select-window (drgnx-wb-editor-window)) t)")
+  ;; the view's module sets up at startup, so the view exists when keys are sent back to back
+  (drgnx-ui-measure sess (list (list :keys "C-S-f") (list :type "list") (list :keys "RET")))
+  (should (eq (drgnx-live-mod--q sess "(drgnx-wb-sidebar-view)") 'search))
+  ;; the search runs on the session's hub: its results are asked for until f.el's are in.  The hub-fed view keeps no
+  ;; match list (its rows are the hub's), so f.el's file row is looked for in the drawn rows.
+  (drgnx-test-wait (lambda () (drgnx-live-mod--q sess (drgnx-live-mod--found "(not (drgnx-replace--busy-p))")))
+                   :secs secs :what "the search's results")
+  (should (drgnx-live-mod--q sess (drgnx-live-mod--found "(equal (drgnx-replace--text 'find) \"list\")"))))
+
 (ert-deftest drgnx-live/new-terminal-and-project-search-by-keys ()
+  ;; No hub runs: New Terminal starts it (a command the user invoked), and its terminal opens on it.
   (drgnx-live-mod--with sess
+    (drgnx-live-mod--may-start-hub sess)
     (drgnx-ui-measure sess (list (list :keys "C-S-`")))
     (should (equal (drgnx-live-mod--q sess "(list (eq (selected-window) (drgnx-wb-area-window 'panel)) (drgnx-wb-area-tab 'panel) (with-current-buffer (window-buffer (selected-window)) major-mode))")
-                   '(t terminal drgnx-term-mode)))   ; drgnx's own terminal, on the session's hub
-    ;; Emacs 31 caches "no project here" (the chrome asked when the file opened): forget it after git init.
-    (drgnx-live-mod--q sess "(progn (call-process \"git\" nil nil nil \"-C\" (file-name-directory (buffer-file-name (window-buffer (drgnx-wb-editor-window)))) \"init\" \"-q\") (when (fboundp 'project--clear-cache) (project--clear-cache)) (select-window (drgnx-wb-editor-window)) t)")
-    ;; C-S-f is View: Search (VS Code's Ctrl+Shift+F): the Search view, the cursor in its Find field; RET searches.
-    ;; Its module sets up at startup, so the view exists when keys are sent back to back.
-    (drgnx-ui-measure sess (list (list :keys "C-S-f") (list :type "list") (list :keys "RET")))
-    (should (eq (drgnx-live-mod--q sess "(drgnx-wb-sidebar-view)") 'search))
-    ;; the search runs in the session: its matches are asked for until they are in
-    (drgnx-test-wait (lambda ()
-                       (drgnx-live-mod--q sess "(with-current-buffer (get-buffer drgnx-replace-buffer-name)
-                                                  (and (not (drgnx-replace--busy-p))
-                                                       (seq-some (lambda (m) (string-suffix-p \"/f.el\" (plist-get m :file))) drgnx-replace--matches)
-                                                       t))"))
-                     :secs 10 :what "the search's matches")
-    (should (drgnx-live-mod--q sess "(with-current-buffer (get-buffer drgnx-replace-buffer-name)
-                                       (and (equal (drgnx-replace--text 'find) \"list\")
-                                            (seq-some (lambda (m) (string-suffix-p \"/f.el\" (plist-get m :file))) drgnx-replace--matches)
-                                            t))"))
+                   '(t terminal drgnx-term-mode)))   ; drgnx's own terminal
+    (drgnx-test-wait (lambda () (eq (drgnx-live-mod--q sess "(with-current-buffer (window-buffer (drgnx-wb-area-window 'panel)) drgnx-term--state)") 'open))
+                     :secs 30 :what "the terminal opened on the hub New Terminal started")
+    (drgnx-live-mod--search sess 10)
     (should (equal (drgnx-live-mod--q sess "drgnx-wb-unrouted") nil))))
+
+(ert-deftest drgnx-live/project-search-starts-the-hub ()
+  ;; No hub runs: the Search view's search (a command) starts it, and the results arrive.
+  (drgnx-live-mod--with sess
+    (drgnx-live-mod--may-start-hub sess)
+    (drgnx-live-mod--search sess 30)
+    (should (drgnx-live-mod--q sess "(drgnx-hub-running-p)"))))
+
+(ert-deftest drgnx-live/project-search-without-a-hub-says-why ()
+  ;; Starting off (DRGNX_NO_HUB_START): the status line says why there is no search, never "Waiting".
+  (drgnx-live-mod--with sess
+    (drgnx-live-mod--q sess "(progn (setenv \"DRGNX_NO_HUB_START\" \"1\") t)")
+    (drgnx-ui-measure sess (list (list :keys "C-S-f") (list :type "list") (list :keys "RET")))
+    (drgnx-test-wait (lambda () (drgnx-live-mod--q sess "(with-current-buffer (get-buffer drgnx-replace-buffer-name)
+                                                           (and (string-search \"DRGNX_NO_HUB_START\" drgnx-replace--status) t))"))
+                     :secs 10 :what "the status line says why")
+    (should-not (drgnx-live-mod--q sess "(with-current-buffer (get-buffer drgnx-replace-buffer-name) drgnx-replace--waiting)"))))
 
 (defun drgnx-live-mod--elpa ()
   "The user's ELPA (read-only): DRGNX_USER_ELPA, which the runner names before it swaps HOME, else ~/.config/emacs/elpa."

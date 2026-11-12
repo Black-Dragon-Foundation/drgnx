@@ -216,7 +216,7 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
 ;;;; The registers that only shrink
 
 (defconst drgnx-lint-patterns--pending-allowed
-  '("test/live/daemon-test.el" "test/live/dape-live-test.el" "test/live/drgnx-ai-test.el"
+  '("test/live/daemon-test.el" "test/live/drgnx-ai-test.el"
     "test/live/drgnx-compositor-test.el" "test/live/drgnx-frames-test.el" "test/live/drgnx-invariants-test.el"
     "test/live/drgnx-keys-test.el" "test/live/drgnx-modal-ui-test.el" "test/live/drgnx-onboard-test.el"
     "test/live/drgnx-popup-test.el" "test/live/drgnx-tiling-test.el" "test/live/drgnx-workbench-test.el"

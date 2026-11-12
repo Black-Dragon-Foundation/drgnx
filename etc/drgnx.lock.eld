@@ -50,13 +50,6 @@
 		  "COmpletion in Region FUnction" :commit
 		  "b468efac023dda39332acc943edc9895c80b5a6f" :url
 		  "https://github.com/minad/corfu")
-	   (dape :version "0.27.1" :archive "gnu" :kind tar :file
-		 "dape-0.27.1.tar" :sha256
-		 "67d5f1d4f5ad5abc66a65582f5ce2c5125f864ea5256afb423fc79f5000243d9"
-		 :size 358400 :requires ((jsonrpc "1.0.25")) :summary
-		 "Debug Adapter Protocol for Emacs" :commit
-		 "dcbdffc68a3c89bbb89956161edde9f0fe062e64" :url
-		 "https://github.com/svaante/dape")
 	   (eglot-booster :kind git :url
 			  "https://github.com/jdtsmith/eglot-booster"
 			  :rev "main" :commit

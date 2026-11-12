@@ -141,14 +141,15 @@ impl Hub {
     }
 
     /// Apply CHANGES to BUFFER_ID's document, each as its origin's peer.  Refused as `split-required` when they insert
-    /// more than [`BATCH_MAX`] bytes.  The document's text must then hash to REGION_HASH, else the buffer is out of
-    /// step and wants a `resync`.  VERSION is the buffer's version once the batch is in (the editor's count of its
+    /// more than [`BATCH_MAX`] bytes.  With REGION_HASH the document's text must then hash to it, else the buffer is
+    /// out of step and wants a `resync`; without it (a text over 256 KiB, whose hash would cost the editor a stall)
+    /// nothing is checked, and the text is never read whole.  VERSION is the buffer's version once the batch is in (the editor's count of its
     /// drains): the version the frames of its file name from now on.
     pub fn batch(
         &self,
         buffer_id: &str,
         changes: &[BatchChange],
-        region_hash: &str,
+        region_hash: Option<&str>,
         version: u64,
         now: f64,
     ) -> Result<BatchReply> {
@@ -231,6 +232,14 @@ impl Hub {
         for (op, peer, s) in reverts {
             g.h.record_hunk_revert(op, s, peer, now)?;
         }
+        let Some(region_hash) = region_hash else {
+            if let Some(b) = g.buffers.get_mut(buffer_id) {
+                b.raw = raw;
+            }
+            return Ok(BatchReply::Ok);
+        };
+        #[cfg(test)]
+        TEXT_READS.set(TEXT_READS.get() + 1);
         let text = g.h.activate(doc, branch, || Ok(String::new()))?.text();
         // the key is gone from the buffer (or the two agree again): nothing to keep apart
         let raw = raw.filter(|r| redact(r) != *r);
@@ -287,6 +296,12 @@ impl Hub {
     pub fn unregister(&self, buffer_id: &str) {
         self.lock().buffers.remove(buffer_id);
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How often [`Hub::batch`] read the document's whole text, on this thread (a test's).
+    static TEXT_READS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -407,7 +422,13 @@ mod tests {
         let text = "one two\n";
         let reply = f
             .hub
-            .batch("b1", &[change(3, 0, " two", "user")], &hash(text), 1, 5.0)
+            .batch(
+                "b1",
+                &[change(3, 0, " two", "user")],
+                Some(&hash(text)),
+                1,
+                5.0,
+            )
             .unwrap();
         assert_eq!(reply, BatchReply::Ok);
         assert_eq!(f.hub.text(&f.tree, "a.txt").unwrap().as_deref(), Some(text));
@@ -425,7 +446,13 @@ mod tests {
         f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
         assert_eq!(f.hub.mirror_version(&f.tree, "a.txt").unwrap(), Some(0));
         f.hub
-            .batch("b1", &[change(3, 0, "!", "user")], &hash("one!\n"), 4, 5.0)
+            .batch(
+                "b1",
+                &[change(3, 0, "!", "user")],
+                Some(&hash("one!\n")),
+                4,
+                5.0,
+            )
             .unwrap();
         assert_eq!(f.hub.mirror_version(&f.tree, "a.txt").unwrap(), Some(4));
         f.hub.resync("b1", "one!!\n", 6, 6.0).unwrap();
@@ -444,7 +471,7 @@ mod tests {
             .batch(
                 "b1",
                 &[change(3, 0, "!", "user")],
-                &hash("not what the buffer has"),
+                Some(&hash("not what the buffer has")),
                 1,
                 5.0,
             )
@@ -460,6 +487,50 @@ mod tests {
 
     // pattern: D
     #[test]
+    fn batch_without_hash_is_taken() {
+        let f = fx(&[("a.txt", "one\n")]);
+        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        let reply = f
+            .hub
+            .batch(
+                "b1",
+                &[change(3, 0, " two", "user"), change(0, 1, "O", "user")],
+                None,
+                1,
+                5.0,
+            )
+            .unwrap();
+        assert_eq!(reply, BatchReply::Ok);
+        assert_eq!(
+            f.hub.text(&f.tree, "a.txt").unwrap().as_deref(),
+            Some("One two\n")
+        );
+    }
+
+    // pattern: D
+    #[test]
+    fn batch_without_hash_never_materializes_the_text() {
+        let f = fx(&[("a.txt", "one\n")]);
+        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        TEXT_READS.set(0);
+        f.hub
+            .batch("b1", &[change(3, 0, "!", "user")], None, 1, 5.0)
+            .unwrap();
+        assert_eq!(TEXT_READS.get(), 0);
+        f.hub
+            .batch(
+                "b1",
+                &[change(4, 0, "?", "user")],
+                Some(&hash("one!?\n")),
+                2,
+                6.0,
+            )
+            .unwrap();
+        assert_eq!(TEXT_READS.get(), 1);
+    }
+
+    // pattern: D
+    #[test]
     fn origin_merge_is_attributed_to_its_peer() {
         let f = fx(&[("a.txt", "one\n")]);
         f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
@@ -467,13 +538,19 @@ mod tests {
             .batch(
                 "b1",
                 &[change(3, 0, "X", "agent:s9#1")],
-                &hash("oneX\n"),
+                Some(&hash("oneX\n")),
                 1,
                 5.0,
             )
             .unwrap();
         f.hub
-            .batch("b1", &[change(4, 0, "Y", "user")], &hash("oneXY\n"), 1, 6.0)
+            .batch(
+                "b1",
+                &[change(4, 0, "Y", "user")],
+                Some(&hash("oneXY\n")),
+                1,
+                6.0,
+            )
             .unwrap();
         let authors = f.hub.with(|h| {
             let n = h.count("peer").unwrap();
@@ -499,7 +576,7 @@ mod tests {
             .batch(
                 "b1",
                 &[change(3, 0, "X", "agent:s9#4")],
-                &hash("oneX\n"),
+                Some(&hash("oneX\n")),
                 1,
                 5.0,
             )
@@ -508,7 +585,7 @@ mod tests {
             .batch(
                 "b1",
                 &[change(4, 0, "Y", "agent:s9#5")],
-                &hash("oneXY\n"),
+                Some(&hash("oneXY\n")),
                 1,
                 6.0,
             )
@@ -537,7 +614,7 @@ mod tests {
         let r = f.hub.batch(
             "b1",
             &[change(5, 0, "Z", "agent:s9")],
-            &hash("oneXYZ\n"),
+            Some(&hash("oneXYZ\n")),
             1,
             7.0,
         );
@@ -556,7 +633,7 @@ mod tests {
             .batch(
                 "b1",
                 &[change(3, 0, &format!(" {key}"), "user")],
-                &hash(&typed),
+                Some(&hash(&typed)),
                 1,
                 5.0,
             )
@@ -571,7 +648,13 @@ mod tests {
         let more = format!("one {key}!\n");
         let reply = f
             .hub
-            .batch("b1", &[change(37, 0, "!", "user")], &hash(&more), 1, 6.0)
+            .batch(
+                "b1",
+                &[change(37, 0, "!", "user")],
+                Some(&hash(&more)),
+                1,
+                6.0,
+            )
             .unwrap();
         assert_eq!(reply, BatchReply::Ok);
         // the editor's whole text through a resync is redacted too
@@ -593,7 +676,7 @@ mod tests {
             .batch(
                 "b1",
                 &[change(0, 0, &big, "user")],
-                &hash("anything"),
+                Some(&hash("anything")),
                 1,
                 5.0,
             )

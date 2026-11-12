@@ -772,7 +772,7 @@ mod tests {
             inserted: now.into(),
             origin: origin.into(),
         };
-        let r = f.hub.batch("b1", &[change], &hash, 1, 5.0).unwrap();
+        let r = f.hub.batch("b1", &[change], Some(&hash), 1, 5.0).unwrap();
         assert_eq!(r, crate::history::methods::BatchReply::Ok);
     }
 
@@ -839,7 +839,7 @@ mod tests {
             inserted: "three\nfour\n".into(),
             origin: "agent:s1#7".into(),
         };
-        f.hub.batch("b1", &[change], &h, 2, 6.0).unwrap();
+        f.hub.batch("b1", &[change], Some(&h), 2, 6.0).unwrap();
         // typing no record holds yet is left out of the history's blame: let the agent's change settle
         f.hub.settle_due(1_000.0).unwrap();
         let b = f.hub.git_blame(&f.tree, "a.txt").unwrap();
@@ -924,7 +924,7 @@ mod tests {
             .batch(
                 "b2",
                 &[ch],
-                &crate::history::methods::hash("x\ny\n"),
+                Some(&crate::history::methods::hash("x\ny\n")),
                 1,
                 5.0,
             )

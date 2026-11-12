@@ -229,6 +229,45 @@ answered ok."
       (drgnx-history--forget b)
       (kill-buffer b))))
 
+(defun drgnx-history-test--drain-of (before after)
+  "The params of the one `history/batch' a drain sends for a tracked buffer of BEFORE once AFTER is inserted at its
+end, with Nidhogg's hook real and no idle time faked."
+  (let ((b (generate-new-buffer "history-limit")) (sent nil) (drgnx-history-drained-functions nil))
+    (unwind-protect
+        (drgnx-history-test--draining sent
+          (with-current-buffer b (insert before))
+          (drgnx-history--adopt b "b-1")
+          (with-current-buffer b (goto-char (point-max)) (insert after))
+          (drgnx-history--drain)
+          (should (= (length sent) 1))
+          (car sent))
+      (drgnx-history--forget b)
+      (kill-buffer b))))
+
+(ert-deftest drgnx-history/no-hash-above-the-limit ()
+  ;; D: a batch carries the hash of the buffer's text only while that text is at most `drgnx-history-large-size'
+  ;; bytes; above it the key is left out
+  (drgnx-test-require-nidhogg (drgnx-history-test--hooked-p) "nidhogg-history-track")
+  (let ((drgnx-history-large-size 64))
+    (should (stringp (plist-get (drgnx-history-test--drain-of (make-string 63 ?a) "b") :region_hash)))
+    (should-not (plist-member (drgnx-history-test--drain-of (make-string 64 ?a) "b") :region_hash))))
+
+(ert-deftest drgnx-history/the-limit-counts-bytes ()
+  ;; D: the limit is the text's bytes, not its characters: 30 `é's (60 bytes) are hashed, 30 `€'s (90 bytes) are not
+  (drgnx-test-require-nidhogg (drgnx-history-test--hooked-p) "nidhogg-history-track")
+  (let ((drgnx-history-large-size 64))
+    (should (plist-get (drgnx-history-test--drain-of (make-string 29 ?é) "é") :region_hash))
+    (should-not (plist-member (drgnx-history-test--drain-of (make-string 29 ?€) "€") :region_hash))))
+
+(ert-deftest drgnx-history/a-large-buffer-drains-while-typing ()
+  ;; D: a buffer over the limit drains on the next timer tick like any other, with Emacs never idle: its ring is
+  ;; empty after it
+  (drgnx-test-require-nidhogg (drgnx-history-test--hooked-p) "nidhogg-history-track")
+  (let ((drgnx-history-large-size 64))
+    (let ((p (drgnx-history-test--drain-of (make-string 1024 ?a) "typed")))
+      (should (equal (plist-get p :changes) '((:start 1024 :old_len 0 :inserted "typed")))))
+    (should-not (nidhogg-history-pending-p))))
+
 (ert-deftest drgnx-history/no-prompt-in-event-path ()
   ;; D lint: the code that runs from the hub's events (between the markers of drgnx-history-revert.el) asks nothing and
   ;; waits for nothing; the commands and the cards outside it may prompt, as they run when the user asks

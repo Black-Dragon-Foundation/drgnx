@@ -21,6 +21,7 @@ pub mod fork_hub;
 pub mod fork_mux;
 pub mod fork_seal;
 pub mod fork_wire;
+pub mod inline;
 pub mod install;
 pub mod launch;
 pub mod origin;
@@ -58,9 +59,13 @@ mod tests_fork_live;
 #[cfg(test)]
 mod tests_fork_seal;
 #[cfg(test)]
+mod tests_inline;
+#[cfg(test)]
 mod tests_install;
 #[cfg(test)]
 mod tests_launch;
+#[cfg(test)]
+mod tests_live_adapters;
 #[cfg(test)]
 mod tests_origin;
 #[cfg(test)]
@@ -240,6 +245,8 @@ struct Inner {
     /// Told the roots of the live sessions each time they change (a session starts or ends; a recording starts with
     /// its session): the hub gives the agents there the debugger's tools.
     on_state: OnceLock<StateHook>,
+    /// The inline values' parse cache and each session's last values.
+    inline: inline::Inline,
     /// Told of every change of a session's state or stop, or of breakpoints (the Run and Debug views).
     listeners: Mutex<Vec<Listener>>,
 }
@@ -291,6 +298,7 @@ impl Debug {
                 store_dir,
                 rec: OnceLock::new(),
                 on_state: OnceLock::new(),
+                inline: inline::Inline::new(),
                 listeners: Mutex::new(Vec::new()),
             }),
         }
@@ -749,19 +757,7 @@ impl Debug {
             st.next += 1;
             format!("d{}", st.next)
         };
-        // the project's breakpoints, as the store has them now
-        self.store(&root, |s| {
-            start.breakpoints = s
-                .paths_for(&id)
-                .into_iter()
-                .map(|path| session::SourceBps {
-                    breakpoints: s.send_list(&id, &path),
-                    path,
-                })
-                .collect();
-            start.functions = s.functions();
-            start.exception_filters = s.chosen_filters(&start.adapter_id);
-        });
+        self.fill(&root, &id, &mut start);
         if let Some(rec) = self.records() {
             match &parent {
                 Some(p) => rec.attach(&id, p),
@@ -807,6 +803,22 @@ impl Debug {
             let _ = ended_tx.send(true);
         });
         Ok(id)
+    }
+
+    /// START's breakpoints, functions and exception filters for session ID: ROOT's, as the store has them now.
+    fn fill(&self, root: &str, id: &str, start: &mut Start) {
+        self.store(root, |s| {
+            start.breakpoints = s
+                .paths_for(id)
+                .into_iter()
+                .map(|path| session::SourceBps {
+                    breakpoints: s.send_list(id, &path),
+                    path,
+                })
+                .collect();
+            start.functions = s.functions();
+            start.exception_filters = s.chosen_filters(&start.adapter_id);
+        });
     }
 
     /// START's breakpoints with ROOT's probes added (a path with only probes gets its own entry).
@@ -1036,6 +1048,8 @@ impl Debug {
                     }
                     if let Some(conn) = conn {
                         self.publish_frame(&id, conn, &stop);
+                        let values = self.inner.inline.at_stop(&id, &stop);
+                        self.inner.sink.broadcast("debug-inline", values, None);
                     }
                     // Run to Cursor's breakpoint goes at the next stop
                     if let Some(root) = self.root_of(&id) {
@@ -1099,6 +1113,12 @@ impl Debug {
                     if let Some(n) = start.arguments.get("name").and_then(Value::as_str) {
                         start.name = n.to_owned();
                     }
+                    // debugpy's child: its parent adapter's own listener
+                    let launcher: Arc<dyn Launcher> =
+                        match launch::child_server(&start.adapter_id, &arguments) {
+                            Some(addr) => Arc::new(wire::Server { addr }),
+                            None => launcher,
+                        };
                     let me = self.clone();
                     let pid = id.clone();
                     crate::clock::spawn("debug:child", async move {
@@ -1137,6 +1157,17 @@ impl Debug {
                         self.publish_bps(&root, &path);
                     }
                 }
+                Update::Configure { reply } => {
+                    let entry = lock(&self.inner.state)
+                        .sessions
+                        .get(&id)
+                        .map(|e| (e.root.clone(), e.start.clone()));
+                    if let Some((root, mut start)) = entry {
+                        self.fill(&root, &id, &mut start);
+                        self.add_probes(&root, &mut start);
+                        let _ = reply.send(start);
+                    }
+                }
                 Update::Ended(end) => {
                     self.ended(&id, end).await;
                     return;
@@ -1149,6 +1180,7 @@ impl Debug {
         if let Some(rec) = self.records() {
             rec.end(id, &end);
         }
+        self.inner.inline.forget(id);
         let e = lock(&self.inner.state).sessions.remove(id);
         self.publish_state();
         let Some(e) = e else { return };

@@ -69,4 +69,27 @@
   (skip-unless (drgnx-test-ratatoskr-bin))
   (drgnx-hub-client-framed-test--check nil))
 
+(defun drgnx-hub-client-framed-test--sync-median (framing)
+  "Connect with FRAMING; the median in ms of 21 `drgnx-hub-call-sync' pings, after one."
+  (drgnx-hub-client-framed-test--with framing
+    (drgnx-hub-call-sync "ping" nil)
+    (let ((times (cl-loop repeat 21
+                          collect (let ((t0 (float-time)))
+                                    (should (natnump (plist-get (drgnx-hub-call-sync "ping" nil) :pid)))
+                                    (* 1000 (- (float-time) t0))))))
+      (nth 10 (sort times #'<)))))
+
+;; A sync call returns when its answer is read, not at the end of a fixed poll: a ping is well under a millisecond
+;; of the hub's, so a median of 5 ms is a wait that did not end with the answer (a wait on no process ended 10 ms after the last read).
+(ert-deftest drgnx-hub-client-framed/a-sync-call-returns-with-its-answer-framed ()
+  (skip-unless (drgnx-test-ratatoskr-bin))
+  (require 'nidhogg-views nil t)
+  (drgnx-test-require-nidhogg (and (fboundp 'nidhogg-set-process-framing) (fboundp 'nidhogg-view-push))
+                              ":raw-prefix framing (with nidhogg-view-push)")
+  (should (< (drgnx-hub-client-framed-test--sync-median t) 5)))
+
+(ert-deftest drgnx-hub-client-framed/a-sync-call-returns-with-its-answer-unframed ()
+  (skip-unless (drgnx-test-ratatoskr-bin))
+  (should (< (drgnx-hub-client-framed-test--sync-median nil) 5)))
+
 ;;; hub-client-framed-test.el ends here

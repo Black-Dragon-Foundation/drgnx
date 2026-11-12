@@ -125,6 +125,48 @@ fn streams_rows_per_file() {
     assert_eq!(rows[0].text, "[x] b.txt  sub/");
 }
 
+/// [D] A text search lists its files by path, whatever order the walk finds them in (rg's threads, the file system):
+/// a file found after one that sorts after it goes before it, in the rows the view gets and in the run's files; the
+/// path compares by component (`a/x` before `a-b/x`), as VS Code lists them.
+#[test]
+fn a_text_search_keeps_its_files_in_path_order() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    for file in ["/r/b.txt", "/r/a-b/x.txt", "/r/a/x.txt", "/r/c.txt"] {
+        let ms = vec![m(file, 1, "x ", "needle", " y")];
+        greps
+            .with(CONN, "s", id, |run| {
+                batch_patches(&mut s, CONN, "s", run, file.into(), ms, None)
+            })
+            .unwrap();
+    }
+    let (files, keys) = greps
+        .with(CONN, "s", id, |run| {
+            let keys: Vec<String> = view_rows(run).into_iter().map(|r| r.key).collect();
+            (
+                run.files.iter().map(|f| f.file.clone()).collect::<Vec<_>>(),
+                keys,
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        files,
+        ["/r/a/x.txt", "/r/a-b/x.txt", "/r/b.txt", "/r/c.txt"]
+    );
+    let headers: Vec<&str> = keys
+        .iter()
+        .filter(|k| k.starts_with("f:"))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        headers,
+        ["f:a/x.txt", "f:a-b/x.txt", "f:b.txt", "f:c.txt"],
+        "{keys:?}"
+    );
+}
+
 /// [D] Each file's batch sends the model first: a `tree` of the files in the rows' order, each open, its matches as
 /// children with what Replace writes from; the rows it names carry the node ids, and a later batch is a diff.
 #[test]
