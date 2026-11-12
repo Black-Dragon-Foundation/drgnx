@@ -94,7 +94,6 @@ worktree (its .git is a file) and `own' a checkout of the user's (its .git is a 
 ;; `work/hunks'): the mock agent reports a path and no line, so a line can only come from a stub.  The sessions are the
 ;; mirror's structs, each with its worktree as `cwd'.
 
-(load (expand-file-name "test/fixtures/work-space-fixture" drgnx-dir) nil t)
 (defvar drgnx-work-map--selection)
 (declare-function drgnx-work-code-open-file "drgnx-work-code")
 (declare-function drgnx-work-code-files "drgnx-work-code")
@@ -119,12 +118,12 @@ callback runs at once.  `calls' holds (METHOD . PARAMS), newest first."
 
 (defmacro drgnx-work-code-test--ws (&rest body)
   "BODY with `repo' (the user's checkout of \"drgnx\", .git a directory), two agent worktrees `wt1' `wt2' (their .git a
-file into it), session a1 in wt1 and a2 in wt2 as the mirror's sessions, each holding src/session.rs of 40 lines,
-`state' the fixture frame's client state and `rel' the file's path in the repository."
+file into it), session a1 in wt1 and a2 in wt2 as the mirror's sessions, each holding src/session.rs of 40 lines, and
+`rel' the file's path in the repository."
   (declare (indent 0))
   `(let* ((ws (file-name-as-directory (expand-file-name "ws" (getenv "HOME"))))
           (repo (concat ws "drgnx/")) (wt1 (concat ws "wt1/")) (wt2 (concat ws "wt2/"))
-          (rel "src/session.rs") (state (drgnx-work-client-init (drgnx-work-fixture-frame)))
+          (rel "src/session.rs")
           (drgnx-agents--sessions
            (list (drgnx-agents--make :name "hub rows" :cwd wt1 :remote "a1" :status 'running)
                  (drgnx-agents--make :name "fx-sess" :cwd wt2 :remote "a2" :status 'running))))
@@ -152,16 +151,13 @@ file into it), session a1 in wt1 and a2 in wt2 as the mirror's sessions, each ho
     (let ((table (list (cons (concat wt1 rel) (list (drgnx-work-code-test--entry "a1" (concat wt1 rel) 5 100.0)))
                        (cons (concat wt2 rel) (list (drgnx-work-code-test--entry "a2" (concat wt2 rel) 20 200.0))))))
       (drgnx-work-code-test--answering `(("agents/presence/get" . ,(drgnx-work-code-test--presence table)))
-        ;; Enter on the file in the map: the most recent agent on its chain, in its own worktree
-        (drgnx-work-fixture-with-buffer
-          (setq drgnx-work-map--selection '(file . "file:drgnx/src/session.rs"))
-          (cl-letf (((symbol-function 'drgnx-work-map--state) (lambda (&optional _) state)))
-            (drgnx-work-map-open-selection)))
+        ;; Enter on the file in the map (the agents on its chain): the most recent one, in its own worktree
+        (drgnx-work-code-open-file '(file . "file:drgnx/src/session.rs") :agents '("a1" "a2"))
         (with-current-buffer (get-file-buffer (concat wt2 rel))
           (should (= 20 (line-number-at-pos)))
           (should-not drgnx-work-code--file-only))
         ;; opened for one agent (the picker's way): its line, its worktree
-        (drgnx-work-code-open-file state '(file . "file:drgnx/src/session.rs") :agents '("a1"))
+        (drgnx-work-code-open-file '(file . "file:drgnx/src/session.rs") :agents '("a1"))
         (with-current-buffer (get-file-buffer (concat wt1 rel))
           (should (= 5 (line-number-at-pos))))))))
 
@@ -169,7 +165,7 @@ file into it), session a1 in wt1 and a2 in wt2 as the mirror's sessions, each ho
   (drgnx-work-code-test--ws
     (let ((table (list (cons (concat wt1 rel) (list (drgnx-work-code-test--entry "a1" (concat wt1 rel) nil 100.0 "read"))))))
       (drgnx-work-code-test--answering `(("agents/presence/get" . ,(drgnx-work-code-test--presence table)))
-        (let ((buf (drgnx-work-code-open-file state '(file . "file:drgnx/src/session.rs"))))
+        (let ((buf (drgnx-work-code-open-file '(file . "file:drgnx/src/session.rs") :agents '("a1" "a2"))))
           (with-current-buffer buf
             (should (equal (concat wt1 rel) buffer-file-name))
             (should (= 1 (line-number-at-pos)))
@@ -188,7 +184,7 @@ file into it), session a1 in wt1 and a2 in wt2 as the mirror's sessions, each ho
         (should (equal '("1" "2" "3" "4" "5" "6" "7" "8" "9" "a" "b" "c")
                        (drgnx-work-code-hint-keys 12)))
         (should-not (member "q" (drgnx-work-code-hint-keys 40)))
-        (let ((picker (drgnx-work-code-files state '(agent . "agent:a1") t)))
+        (let ((picker (drgnx-work-code-files '(agent . "agent:a1") nil t)))
           (unwind-protect
               (with-current-buffer picker
                 (should (string-search "+40 −3" (buffer-string)))
@@ -209,7 +205,9 @@ file into it), session a1 in wt1 and a2 in wt2 as the mirror's sessions, each ho
           (selected nil) (said nil))
       (drgnx-work-code-test--answering `(("agents/presence/get" . ,(drgnx-work-code-test--presence table)))
         (cl-letf (((symbol-function 'drgnx-work-map-buffers) (lambda () (list (current-buffer))))
-                  ((symbol-function 'drgnx-work-map--state) (lambda (&optional _) state))
+                  ;; the map's model has the file (the rows path; `work-map-rows-test.el' checks it on Sjá)
+                  ((symbol-function 'drgnx-work-map--sja) (lambda () 'model))
+                  ((symbol-function 'nidhogg-view-get) (lambda (_h what id &rest _) (and (eq what 'kind) id "file")))
                   ((symbol-function 'drgnx-work-map-select) (lambda (sel) (setq selected sel)))
                   ((symbol-function 'message) (lambda (f &rest a) (push (apply #'format f a) said))))
           (with-current-buffer (find-file-noselect (concat repo rel))
@@ -224,7 +222,6 @@ file into it), session a1 in wt1 and a2 in wt2 as the mirror's sessions, each ho
     (let ((selected nil) (said nil))
       (drgnx-work-code-test--answering `(("agents/presence/get" . ,(drgnx-work-code-test--presence nil)))
         (cl-letf (((symbol-function 'drgnx-work-map-buffers) (lambda () (list (current-buffer))))
-                  ((symbol-function 'drgnx-work-map--state) (lambda (&optional _) state))
                   ((symbol-function 'drgnx-work-map-select) (lambda (sel) (setq selected sel)))
                   ((symbol-function 'message) (lambda (f &rest a) (push (apply #'format f a) said))))
           (with-current-buffer (find-file-noselect (concat repo rel))
@@ -267,7 +264,7 @@ diff buffers killed."
   (drgnx-work-code-test--ws
     (drgnx-work-code-test--windows
       (drgnx-work-code-test--answering (drgnx-work-code-test--diff-answers '("a.el" "b.el" "c.el" "d.el" "e.el"))
-        (let ((buffers (drgnx-work-code-diffs state '(agent . "agent:a1"))))
+        (let ((buffers (drgnx-work-code-diffs '(agent . "agent:a1") nil)))
           (should (= 5 (length buffers)))
           (let ((wins (drgnx-work-code-test--diff-windows)))
             (should (= 3 (length wins)))
@@ -282,10 +279,10 @@ diff buffers killed."
     (drgnx-work-code-test--windows
       (let ((before (mapcar #'window-buffer (window-list nil 'never))))
         (drgnx-work-code-test--answering (drgnx-work-code-test--diff-answers '("a.el" "b.el" "c.el"))
-          (drgnx-work-code-diffs state '(agent . "agent:a1"))
+          (drgnx-work-code-diffs '(agent . "agent:a1") nil)
           (should (= 3 (length (drgnx-work-code-test--diff-windows))))
           ;; opening them again keeps the first saved arrangement
-          (drgnx-work-code-diffs state '(agent . "agent:a1"))
+          (drgnx-work-code-diffs '(agent . "agent:a1") nil)
           (with-selected-window (car (drgnx-work-code-test--diff-windows)) (drgnx-work-diff-quit))
           (should (equal before (mapcar #'window-buffer (window-list nil 'never))))
           (should-not (seq-some #'drgnx-work-code-test--diff-buffer-p (buffer-list))))))))
@@ -297,7 +294,7 @@ off) moves it to the new frame and q still puts it back there.  Batch has one fr
     (drgnx-work-code-test--windows
       (let ((before (mapcar #'window-buffer (window-list nil 'never))))
         (drgnx-work-code-test--answering (drgnx-work-code-test--diff-answers '("a.el" "b.el"))
-          (drgnx-work-code-diffs state '(agent . "agent:a1"))
+          (drgnx-work-code-diffs '(agent . "agent:a1") nil)
           (drgnx-work-code--frame-replaced (selected-frame) (selected-frame))
           (with-selected-window (car (drgnx-work-code-test--diff-windows)) (drgnx-work-diff-quit))
           (should (equal before (mapcar #'window-buffer (window-list nil 'never)))))))))
@@ -306,7 +303,7 @@ off) moves it to the new frame and q still puts it back there.  Batch has one fr
   (drgnx-work-code-test--ws
     (drgnx-work-code-test--windows
       (drgnx-work-code-test--answering (drgnx-work-code-test--diff-answers '("src/session.rs"))
-        (let ((buffers (drgnx-work-code-diffs state '(agent . "agent:a1"))))
+        (let ((buffers (drgnx-work-code-diffs '(agent . "agent:a1") nil)))
           ;; the hub's diff against the recorded base is the whole content; nothing else is asked
           (with-current-buffer (car buffers)
             ;; a hunk buffer, no `diff-mode' one: nothing in it opens, applies or reverts the files it names

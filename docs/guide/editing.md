@@ -53,17 +53,22 @@ re-indented on save. A formatter that is not installed, or fails, leaves the fil
 VS Code uses work here: debugpy for Python, the JavaScript/TypeScript debugger, delve for Go, CodeLLDB or lldb-dap for
 C, C++ and Rust. It offers the project's configurations: those of `.vscode/launch.json` (read as VS Code reads it,
 comments, `${…}` variables, `inputs` and platform sections included), your own in the setting `debug.configurations`,
-and a default for the file's language when there is neither. A configuration's `preLaunchTask` (and `postDebugTask`)
-runs from `.vscode/tasks.json` first; a failing task stops the start and says why. The first start in a folder asks
+and a default for the file's language when there is neither. A launch.json `compounds` entry starts its
+configurations together (its own `preLaunchTask` first; with `stopAll`, stopping one stops them all). A configuration's `preLaunchTask` (and `postDebugTask`)
+runs from `.vscode/tasks.json` first, in a terminal tab where you watch it; a failing task stops the start, says
+why, and leaves its tab open (Enter closes it). The first start in a folder asks
 you to trust it (**Trust This Folder**): an untrusted folder's configurations never run.
 
 **Install Adapter…** (the palette) downloads the JavaScript debugger or CodeLLDB, checked against the version drgnx
 pins, or puts debugpy into drgnx's own Python, and names the system package to install for the others (`drgnx doctor`
-lists which are found).
+lists which are found). The Start picker marks a configuration whose debugger is missing "not installed"; picking it
+offers the same install, on your yes, and then starts.
 
 A stop opens its file at the line, marked by an amber arrow and band; a caller frame you pick is marked green, and a
 stop on an exception is red, with a card under the line saying what was raised (code with no file, such as an
 `eval`, opens read-only from the debugger). Set `drgnx-debug-focus-on-stop` to bring Emacs to the front on a stop.
+While stopped, the function's variables show their values at the ends of the lines that set them (a value that changed
+since the last stop in amber); a file edited since its save shows none, and `drgnx-debug-inline-values` turns them off.
 While the session is stopped the same command continues; **Toggle Breakpoint**, **Step Over**, **Step Into**,
 **Step Out** and **Stop Debugging** do what they say. If you used dape, **Convert dape Configurations…** (the palette)
 turns your `dape-configs` into launch configurations once (dape itself is no longer needed).
@@ -109,6 +114,7 @@ Every session is recorded, against a snapshot of the files as they were when it 
 expression each time its line runs, without stopping the program and without printing anything; **Probe the
 Result…** records what the line assigns, on the next line that runs (a probe runs before its line). A probe is a
 ring with a dot in its own column, and its newest values show at the line's end as a sparkline and the last value.
+A file opened while no hub runs opens without its probes and breakpoints.
 **Show Stop Timeline** opens a strip at the top: the run's stops, numbered (a dot for a breakpoint, a small dot for a
 step, a triangle for an exception), and one lane per probe. Click a stop (or `RET` on it), or press `Alt ←` / `Alt →` in the strip or
 a past stop, to open it read-only: the file as it ran under a banner (it says "not what ran" when
@@ -133,8 +139,8 @@ run passed the line only once, any value that differs stops the fork, since it m
 (the fork replays Python's hash seed, nothing else); the tab says which value, and **Fork Anyway** forks at that pass
 regardless.
 The copy cannot reach the network or write outside itself; your `.env` files are read in place, never copied. Python
-(debugpy) and JavaScript (js-debug) only: Go and native programs need `ptrace`, which the sandbox never allows, and
-macOS forks wait for a sandbox rule of their own. A run whose configuration resolves differently now (an input, a
+(debugpy) and JavaScript (js-debug) only: Go and native programs need `ptrace`, which the sandbox never allows. On
+macOS the copy runs in the system's sandbox with a small block of local ports of its own, nothing else. A run whose configuration resolves differently now (an input, a
 setting, launch.json) is refused, and a point the run took over a minute to reach asks first.
 
 **Debugging with an agent.** Ask an agent to debug this with you and it works beside you, under the permissions

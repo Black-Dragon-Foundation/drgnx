@@ -98,6 +98,8 @@ struct State {
     sessions: HashMap<u64, String>,
     next_req: u64,
     waiting: HashMap<u64, oneshot::Sender<Out>>,
+    /// Terminal id → who waits for its exit status ([`Terms::wait_exit`]).
+    exits: HashMap<String, Vec<oneshot::Sender<Option<i32>>>>,
 }
 
 #[derive(Default)]
@@ -378,7 +380,13 @@ impl Terms {
                 "term/clipboard-write",
                 json!({"primary": primary, "mime": mime, "data": data}),
             ),
-            Out::Prompt { kind, exit } => ev("term/prompt", json!({"kind": kind, "exit": exit})),
+            Out::Prompt { kind, exit } => {
+                // kind 4: a command ended (OSC 133 D)
+                if kind == 4 && exit.is_some() {
+                    self.exited(id, exit);
+                }
+                ev("term/prompt", json!({"kind": kind, "exit": exit}))
+            }
             Out::Status { req, .. } | Out::Answer { req, .. } => {
                 if let Some(w) = lock(&self.inner.state).waiting.remove(&req) {
                     let _ = w.send(out);
@@ -390,6 +398,7 @@ impl Terms {
                 }
             }
             Out::Exit { code, signal } => {
+                self.exited(id, code.or(signal.map(|s| 128 + s)));
                 self.ended(id, json!({"id": id, "code": code, "signal": signal}));
                 return true;
             }
@@ -399,7 +408,12 @@ impl Terms {
 
     /// Terminal ID ended: `term/exit` to its editor, its record and socket gone.
     fn ended(&self, id: &str, data: Value) {
-        let t = lock(&self.inner.state).terms.remove(id);
+        let t = {
+            let mut st = lock(&self.inner.state);
+            // anyone still waiting hears none
+            st.exits.remove(id);
+            st.terms.remove(id)
+        };
         let Some(t) = t else { return };
         self.send_event(t.owner, "term/exit", data);
         if let Some(dir) = self.dir() {
@@ -805,6 +819,34 @@ impl Terms {
     /// The editor session connection CONN said hello as.
     pub fn session_of(&self, conn: u64) -> Option<String> {
         lock(&self.inner.state).sessions.get(&conn).cloned()
+    }
+
+    /// Terminal ID's exit status: the status of the first command end (OSC 133 `D`) with one, or its program's exit
+    /// (128 + the signal that ended it), whichever comes first after this call; none when there is no such terminal or
+    /// it ends without either.  The wait starts when this is called, not when the future is first polled.
+    pub fn wait_exit(&self, id: &str) -> impl Future<Output = Option<i32>> + Send + 'static {
+        let rx = {
+            let mut st = lock(&self.inner.state);
+            st.terms.contains_key(id).then(|| {
+                let (tx, rx) = oneshot::channel();
+                st.exits.entry(id.to_owned()).or_default().push(tx);
+                rx
+            })
+        };
+        async move {
+            match rx {
+                Some(rx) => rx.await.ok().flatten(),
+                None => None,
+            }
+        }
+    }
+
+    /// Terminal ID's exit STATUS to those waiting for it.
+    fn exited(&self, id: &str, status: Option<i32>) {
+        let waiting = lock(&self.inner.state).exits.remove(id);
+        for w in waiting.unwrap_or_default() {
+            let _ = w.send(status);
+        }
     }
 
     /// The record of terminal ID.

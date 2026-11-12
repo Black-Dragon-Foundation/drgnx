@@ -99,14 +99,14 @@ bar's segment only).  A terminal frame has neither: the segment and the keys.  A
 
 (defun drgnx-debug-toolbar--press (action event)
   "Run ACTION for a click EVENT: in the editor window of the frame the card floats over (the card's own window would
-have no project), the registry's way (`drgnx-ui--run': its use counted)."
+have no project), the registry's way (`drgnx-ui-kit-run': its use counted)."
   (let* ((w (posn-window (event-start event)))
          (frame (and (window-live-p w) (window-frame w)))
          (root (and frame (or (frame-parent frame) frame)))
          (editor (and root (drgnx-state-editor-window root))))
     (if (window-live-p editor)
-        (with-selected-window editor (drgnx-ui--run action))
-      (drgnx-ui--run action))))
+        (with-selected-window editor (drgnx-ui-kit-run action))
+      (drgnx-ui-kit-run action))))
 
 (defun drgnx-debug-toolbar--px (n frame)
   "A stretch N logical pixels wide on FRAME, as tall as a button (26)."

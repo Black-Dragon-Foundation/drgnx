@@ -8,6 +8,7 @@
 (require 'drgnx-view)
 (require 'drgnx-view-nav)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/view-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-view-nav-test--sent nil "What the view sent the hub, newest first: (METHOD . PARAMS).")
 (defvar drgnx-view-nav-test--n 0 "Each run's view gets a name of its own in Sjá.")
@@ -25,7 +26,7 @@ sending captured, the notice method \"t/set\".  `h' is the buffer's instance in 
            (drgnx-view-selected-functions nil)
            (drgnx-view-patch-send-function (lambda (m p) (push (cons m p) drgnx-view-nav-test--sent)))
            (view (format "vn-test-%d" (cl-incf drgnx-view-nav-test--n))))
-       (with-temp-buffer
+       (drgnx-view-test-with-buffer
          (let ((buf (current-buffer)))
            (drgnx-view-patch-attach view "c" :epoch 1)
            (setq-local drgnx-view-nav-notice-method "t/set")

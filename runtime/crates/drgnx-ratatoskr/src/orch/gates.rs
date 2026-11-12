@@ -284,6 +284,13 @@ async fn start_claimed(
     let started = match crate::exec::start_sealed(front, &gate, params).await {
         Ok(s) => s,
         Err(e) => {
+            tracing::warn!(
+                task,
+                tree = %dir.display(),
+                "the gate's run of {} did not start: {}",
+                rerun.argv.join(" "),
+                e.message
+            );
             let run = Run {
                 task: task.to_owned(),
                 key: (key.to_owned(), rerun.selector.clone()),
@@ -294,6 +301,13 @@ async fn start_claimed(
         }
     };
     let id = started.id;
+    tracing::info!(
+        task,
+        job = %id,
+        tree = %dir.display(),
+        "the gate runs {} at {commit}",
+        rerun.argv.join(" ")
+    );
     front.orch.started(
         claim,
         id.clone(),
@@ -440,6 +454,13 @@ pub async fn before_merge(
         return Ok(Decision::Pass(format!("waived by the user: {why}")));
     }
     let top = tree.path.as_path();
+    // a run of the task's that has no result yet (its exec/start on its way, or queued or running) is evidence to
+    // come: red first waits for it and is judged again, never holds without it (a slow start, the macOS lane's)
+    if front.core.exec.busy_in(top) {
+        return Ok(Decision::Wait(
+            "a run in the task's tree has no result yet".into(),
+        ));
+    }
     let meta = |id: &str| front.core.exec.meta(id);
     match redfirst::decide(&pack, &inputs, &evidence) {
         Decision::Pass(_) => {}

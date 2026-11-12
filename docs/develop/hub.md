@@ -468,7 +468,9 @@ the CLI only — it waits), `drgnx-hub-call` (asynchronous, with a deadline), `d
 again before the hub answers — up to `drgnx-hub-subscribe-deadline`, 5 s, after which an unanswered one is given up
 and the next call subscribes again; each new one hands over the keys this Emacs holds) + `drgnx-hub-event-functions`. The unit
 runner sets `DRGNX_NO_HUB_START=1`: a test never starts a hub that would outlive the suite unless it unsets it (the
-hub's own tests do, and stop what they start). It also sets `DRGNX_HUB_PARENT_PID` to its own pid, which a hub
+hub's own tests do, and stop what they start). With starting off, a hub that takes the connection but does not answer
+the ping probe within its second (a busy one: thirty agents streaming) still counts as running (`drgnx-hub--accepts-p`),
+so `drgnx-hub-ensure` does not fail on a hub that is there. It also sets `DRGNX_HUB_PARENT_PID` to its own pid, which a hub
 inherits: a hub whose parent is gone exits (checked each second), so an interrupted run leaves none behind.
 
 **Ratatoskr's socket** (`runtime/crates/drgnx-ratatoskr`: `lock.rs`, `conn.rs`, `server.rs`) keeps the same path,
@@ -846,6 +848,15 @@ never waits: CALLBACK gets nil when a hub answers, or the reason (the process's 
 (commands, the CLI) waits for that and then hands over the provider table and the keys ([Keys](#keys)); in a daemon
 path (`inhibit-interaction`) it returns at once and they go, or a `hub` notice `start` is posted, when the start ends. `DRGNX_NO_HUB_START` is honoured; with
 no binary every caller says "Ratatoskr is not built: run `drgnx runtime build`".
+
+**A command that needs the subscription.** `drgnx-hub-start-for-command ON-FAIL` is for commands the user invoked whose
+answer comes on the subscribed connection: New Terminal and Reconnect (`drgnx-term`), the Search view's key, `RET` and
+Search in Files, and the Work space. With no subscription up or being made it calls `drgnx-hub--ensure-running` (not
+waited for) and connects when the hub answers; ON-FAIL gets the reason when no hub can be had (the terminal fails and
+says it in the echo area, the Search view on its status line). In a daemon path (`inhibit-interaction`) it starts
+nothing and only connects to a hub already there: timers, hooks, sentinels and startup never start one. Before it,
+these only connected, so with no hub running they waited for good. The Extensions view and Debug's commands ask the hub
+by call, which signals "no hub" and shows the reason; they do not start it.
 
 **At daemon start.** The nightly graph backup (`backup_timer.rs`) runs inside the hub, so a daemon must not wait for AI
 to start one. `drgnx-hub-ask-at-daemon-start` (core, on `emacs-startup-hook`) schedules the layer timer
@@ -1399,7 +1410,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/select` | user | `{frame: integer, session: string, thread?: integer}` | `boolean` | no |
 | `debug/set-value` | user | `{node: string, value: string, view: string}` | `{value: string}` | no |
 | `debug/source` | user | `{ref: integer, session: string}` | `{mime?: string, text: string}` | no |
-| `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, root: string, selection?: string, unsaved?: [string], user?: [JsonObject]}` | `{needs?: any, session?: string}` | no |
+| `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, no_debug?: boolean, root: string, selection?: string, terminal?: boolean, unsaved?: [string], user?: [JsonObject]}` | `{needs?: any, session?: string, sessions?: [string]}` | no |
 | `debug/trust` | user | `{root: string, trusted: boolean}` | `boolean` | no |
 | `debug/view` | user | `{filter?: string, indent?: natnum, root: string, session?: string, view: string}` | `boolean` | no |
 | `debug/watch` | user | `{expr?: string, index?: natnum, op: string, root: string, to?: natnum}` | `[string]` | no |
@@ -1415,7 +1426,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `explorer/subscribe` | user | `{around?: AbsPath, compact?: boolean, exclude?: [string], expanded?: [AbsPath], indent?: natnum, only?: [AbsPath], roots: [AbsPath], view: string, window?: natnum}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
-| `extensions/list` | user | `{dense?: boolean, glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
+| `extensions/list` | user | `{dense?: boolean, generations?: [{copies?: string, current?: boolean, differs?: [string], in_use?: boolean, n: natnum, note?: string, size?: string, time?: string}], glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
 | `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
 | `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
 | `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
@@ -1450,7 +1461,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `graph/settings` | user | `{get?: Empty, set?: {only_user_closes?: boolean}}` | `{only_user_closes: boolean}` | yes |
 | `graph/sql` | user | `{deadline_ms?: natnum, params?: [SqlParam], rows?: natnum, sql: string}` | `{columns?: [string], rows?: [[any]], truncated: boolean}` | no |
 | `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum, session?: string}` | `HelloReply` | no |
-| `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash: string, version: natnum}` | `{ok?: boolean, resync?: boolean}` | yes |
+| `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash?: string, version: natnum}` | `{ok?: boolean, resync?: boolean}` | yes |
 | `history/blame` | user | `{end: integer, path: string, start: integer, worktree_root: string}` | `{spans: [BlameSpan]}` | no |
 | `history/compare` | user | `{a: string, b: string}` | `{files: [ComparedFile]}` | no |
 | `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
@@ -1604,8 +1615,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `work/flow/subscribe` | user | `{detail?: string, job?: string, map: string, rules?: boolean, view: string}` | `{hub: natnum}` | no |
 | `work/hunks` | user | `{path: string, session: Id}` | `{diff: string}` | no |
 | `work/map/close` | user | `{view: string}` | `boolean` | no |
-| `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
-| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, rows?: boolean, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `MapFrame \| MapRows` | no |
+| `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, outline?: string, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
+| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, outline?: string, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `{hub: natnum, version: natnum}` | no |
 | `work/trail/close` | user | `{view: string}` | `boolean` | no |
 | `work/trail/subscribe` | user | `{lanes?: [{label: string, session: string}], session?: string, view: string}` | `{hub: natnum}` | no |
 <!-- hub-methods:end -->
@@ -1699,7 +1710,6 @@ result is (`event(NAME).check`):
 | `machines-changed` | machines (the front) | `{machines: [{machine, slots: [{id, holder?, kind}], local}]}`: the whole list, sent when a report, an expiry or the local slots changed it |
 | `agent-presence` | the presence model (to the connections that asked) | `{file, rel?, repo?, entries: [{session, file, mode, line?, line_end?, col?, source, step, at, live?, tool_call?}]}`: who is in the file now (running tool calls included), at most once per file per 100 ms ("The presence model") |
 | `agent-buffer` | the buffer views (to the view's connection only) | `{view, version, base, doc_version?, approximate?, agents: [{session, ordinal?, handle?, mode, line?, line_end?, col?, source, live?, projected?, step_title?, plan_entry?}], gutter: [{session, kind, start, end, projected?, help}]}`: a watched buffer's frame, at most once per view per 50 ms ("The buffer view") |
-| `work-map` | the Work map (to the view's connection only) | `{view, version, base, full?, changed: [Item], removed: [Id], entered: [Id], places?, edges?, layout?, needs_you?, chips?, stale?}`: what changed in one map view since version `base` ("The Work map") |
 | `agent-follow` | the follow feed (to the view's connection only) | `{view, session, file?, worktree, line?, col?, mode: listed \| read \| pending \| write \| edit, step_title?, plan_entry?, why_source: plan_entry \| step_title, changed?}`: where the followed session is now, at most once per 200 ms ("The follow feed") |
 | `supervisor` | the supervisor | `{rule, session?, exec?, task?, card?, text}` |
 | `view-written` | records | `{path, kind, hash}`: a view file written (never committed) |
@@ -2135,39 +2145,36 @@ overlays from it):
 
 ### The Work map
 
-The Work space's map (`work::map`): the hub feeds the pure map core `vegvisir` from its sources and sends each map
-view only what changed, to the connection that shows it.
+The Work space's map (`work::map`): the hub feeds the pure map core `vegvisir` from its sources, lays each map view
+out, and sends the connection that shows it the view's model and rows.
 
 - **Methods** (user connections). `work/map/subscribe {view, workspace: {id, roots}, width_units, density?, filters?,
-  collapsed?, selected?}` opens one view of the connection (again, if it is open) and answers its full frame `{version,
-  items, edges, layout, needs_you, chips}`. `view` is the editor's id for it: one editor can show two workspaces, or one
-  at two widths, so the hub keeps state per (connection, view). `work/map/set {view, filters? | collapsed? |
-  width_units? | density? | shown? | selected?}` answers `{version}`; an unknown view is `invalid-params`.
-  `work/map/close {view}` ends one; a connection's views end with it. A workspace no view shows is dropped.
-- **Rows** (`work/map/subscribe`'s `rows: true`; "Rows" below). The view's rows are built in the hub
-  (`vegvisir::render`, `docs/develop/work-space.md`, "The rows") and go to each display class the editor sent a
-  `view/env` for (the env's `view` is the map view's id) as `view-patch`, the first per class a reset; the answer is
-  `{hub, version}` and no `work-map` event comes for that view (nor a stale mark when it is hidden: its editor hid it).
-  Its width is its narrowest GUI class's window (`(width_px / scale - 96) / 4` units; `width_units` until one sent an
-  env, and a terminal class alone keeps it): an env whose width moves the units lays the view out again at once, as the
-  user's change; any other env, a delta, a full frame or a new `selected` (the chain's edges) draws the classes again,
-  and each gets only what changed (a resize: `replace`s of the rows whose fit changed). The coalescing, the quiet
-  reflow and the held chain are the frames' own. The first row is `strip` (the needs-you strip and the machines'
-  load). Without `rows` the view keeps its frames and `work-map` events, unchanged.
-- **The event** `work-map` goes by `Front::send_to` to the view's connection only. `version` counts the view's events
-  from the frame's 1, and `base` names the version it applies to: an editor drops an older one and subscribes again on
-  a gap. A full frame (`full`) carries every item shown in `changed` and the new `layout`; a delta carries the items
-  new or changed (whole), `removed` ids, and `edges` (all, among the items shown) when the edge set changed.
+  collapsed?, selected?, outline?}` opens one view of the connection (again, if it is open) and answers `{hub,
+  version}`. `view` is the editor's id for it: one editor can show two workspaces, or one at two widths, so the hub
+  keeps state per (connection, view). `work/map/set {view, filters? | collapsed? | width_units? | density? | shown? |
+  selected? | clear? | outline?}` answers `{version}`; an unknown view is `invalid-params`. `work/map/close {view}`
+  ends one; a connection's views end with it. A workspace no view shows is dropped. `version` counts the view's
+  layouts and changes from the subscription's 1.
+- **Model and rows** ("The native view model" and "Rows" below). The subscription sends the view's model as
+  `view-model` (a reset first: the items shown as nodes with their links, the edges among them, the lists the keys
+  walk), then its rows, built in the hub (`vegvisir::render`, `docs/develop/work-space.md`, "The rows"), to each
+  display class the editor sent a `view/env` for (the env's `view` is the map view's id) as `view-patch`, the first per
+  class a reset, each naming the model's version. Both go by `Front::send_to` to the view's connection only. Its width
+  is its narrowest GUI class's window (`(width_px / scale - 96) / 4` units; `width_units` until one sent an env, and a
+  terminal class alone keeps it): an env whose width moves the units lays the view out again at once, as the user's
+  change; any other env, a delta, a relayout or a new `selected` (the chain's edges) draws the classes again, and each
+  gets only what changed (a resize: `replace`s of the rows whose fit changed). The first row is `strip` (the needs-you
+  strip and the machines' load). Task 34 of the render offload removed the editor's own drawing and with it the
+  hub's frames (`work-map`).
 - **Coalescing** (design §11.3 step 5; `work::map::Coalescer`, pure, tested in every order). Field changes go out at
   most once per 100 ms per view: the first change arms a flush 100 ms later on the hub's clock. A live arrival takes a
-  free place at the end of its layer's last row (or a row of its own at the bottom) and fades in (`entered`, with its
-  rectangle and form in `places`); a departure fades out and leaves its place empty; nothing else moves
-  (`vegvisir::layout::place_live`). What arrived and went reflows after a quiet second (no change and no
-  `work/map/set` with `selected` for 1 s) as one full frame, unless that would move an item of the selection's chain:
-  then it waits for the user. The user's own change (filters, collapsed layers, width, density, shown again)
-  relayouts at once. The clock's minute is one delta (time fields are minutes).
-- **Hidden:** `shown: false` gets no deltas: one `work-map` with `stale: true` at the next change, then nothing;
-  `shown: true` sends one full frame.
+  free place at the end of its layer's last row (or a row of its own at the bottom); a departure leaves its place
+  empty; nothing else moves (`vegvisir::layout::place_live`). What arrived and went reflows after a quiet second (no
+  change and no `work/map/set` with `selected` for 1 s) as one relayout, unless that would move an item of the
+  selection's chain: then it waits for the user. The user's own change (filters, collapsed layers, width, density,
+  shown again) relayouts at once. The clock's minute is one delta (time fields are minutes).
+- **Hidden:** `shown: false` (its editor hid it) gets nothing however much changes: no model, no rows; `shown: true`
+  lays it out and draws it anew, its model a reset.
 - **Sources.** Each session's snapshot and subagents at its `agent` emit (state, spend, context; its branch and tree
   read from its folder's `.git` at first sight: `branch:REPO/NAME`, REPO being the main tree's folder name, so a linked
   worktree is a branch of its repository); each closed step (the card's activity); the presence model's changed files
@@ -2178,8 +2185,8 @@ view only what changed, to the connection that shows it.
   workspace when its folder, its tree or its repository is under one of the roots. Overlaps are the core's: two live
   agents on two branches changing one file, from their edits in flight and from their worktrees' changed sets, so a
   finished edit still overlaps.
-- **Restart:** nothing is kept. The editor's re-subscription after a restart gets a full frame from the new hub's
-  sessions and store.
+- **Restart:** nothing is kept. The editor's re-subscription after a restart gets a model reset and its rows from the
+  new hub's sessions and store, under the new hub's id.
 
 ### The trail and the Timeline
 
@@ -2385,11 +2392,26 @@ and version it last sent (`view::Store`'s models, `view::model`), and sends what
   {selected}` moves it, `{clear: true}` drops it; neither changes the model.
 
 The Work map's model (`work::map::model`): scheme `links`; the chain kinds `came-from`, `edits`, `reads`, `runs-on`;
-search over `label` and `task`; the lists `team`, `needs-you`, `outline` (`vegvisir::nav`); classes `selected`,
-`match`, `chain`, `dim` (the editor's faces by index); flags `needs-you`, `warn`, `live`; forms `graph` and `outline`
-(up and down walk the outline). Each node is an item the view shows, with its `nav` links, `then`, `parent`, and the
-fields `label`, `state`, `task` and its card's rect `x y w h` in layout units. Rows: `test/conformance/view-model/`,
-`work/map-set-clear-drops-selected`.
+search over `label` and `task`; the lists `team`, `needs-you`, `outline` (`vegvisir::nav`) and `plans` (the plans
+the view shows: the Board's scope is those on the selection's chain); classes `selected`, `match`, `chain`, `dim` (the
+editor's faces by index); flags `needs-you`, `warn`, `live`; forms `graph` and `outline` (up and down walk the outline).
+Each node is an item the view shows, with its `nav` links, `then`, `parent`, and the fields `label`, `state`, `task`,
+its card's rect `x y w h` in layout units, what the review panel's summary reads (`done` of `steps`, `edit_files`
+`edit_plus` `edit_minus`, `reads`, `conclusion`, `spend`, `minutes`; each when known, `work::map::model::card_fields`)
+and `overlaps`, the agents it overlaps (ids, space-separated: the huddle key). Rows: `test/conformance/view-model/`,
+`work/map-set-clear-drops-selected`; unit: `work::map::tests::map_model_carries_review_fields_overlaps_and_plans`.
+
+A rows view is drawn in the form `work/map/set {outline}` asks (or `work/map/subscribe {outline}`: the editor keeps
+the word and sends it again; row `work/map-subscribe-keeps-the-outline-asked-for`): `on` the outline, `off` the cards, `auto` (until one is
+asked) the outline only where the cards do not fit or in a terminal; a new form is drawn at once, laid out as it is.
+An open huddle (`runner::huddle`, waiting for the user or going on) is a needs-you card of every map, `huddle: CLASH`
+about its two agents (`work::map::huddle_card`, kind `huddle`): on the strip and in the `needs-you` list, after the
+other cards and the agents that need you, marking and covering neither agent (`vegvisir::nav::strip_entries`, one
+order for both, so `g N` is the Nth chip; an entry about nothing shown holds its card's id; unit
+`the_strip_and_the_needs_you_list_line_up`). A conclusion that changed since the view was last drawn marks its card `new` for 4 s of the hub's
+clock (`NewMarks`; an item seen for the first time marks nothing); one wake per view draws it again when the oldest
+mark leaves. Unit: `outline_follows_the_users_choice`, `open_huddle_is_on_the_strip_and_the_needs_you_list`,
+`a_new_conclusion_is_marked_for_four_seconds`.
 
 ### Fitting: text to a pixel width
 
@@ -2448,10 +2470,13 @@ snapshots; the search itself is `hrafn::grep`).
   own, `<view>~pin<N>`).
 - **Symbol and Meaning** (`view/search/modes.rs`) ask the index on a task of their own and, once it answers, send
   each file as it is read (off the runtime, in the order shown), then `search-run-done` (its `error` is the index's
-  refusal, e.g. no index yet). Their `reset` (and the run's empty model) goes with the first file's rows, or with the
-  end when none came, after `{run}`: sent at once, it was drawn alone one frame on, and the rows that followed the
-  index's answer waited for the view's throttle (`drgnx-view-delay`, 100 ms) instead of sharing the reset's frame, as
-  Text's first file does. The view keeps the previous search's rows until then. Symbol (`{mode:
+  refusal, e.g. no index yet). The first file (or the end, when none came) goes as one patch: the `reset` with its
+  rows (and the run's model), after `{run}`. (Holding the whole first window instead put a Symbol search's first
+  rows at 55–70 ms, p50, against 26 ms: a name's files are read one by one.) The
+  editor sets `drgnx-view-patch-hurry` for these runs, so that patch is drawn at the view's next pass rather than a
+  frame later (`drgnx-view-first-delay` waits for the rest of a burst, and this one has none); the files after it go
+  as Text's do. Sent at once, the reset was drawn alone one frame on, and the rows that followed waited for the view's
+  throttle (`drgnx-view-delay`, 100 ms). The view keeps the previous search's rows until then. Symbol (`{mode:
   "symbol", name, case?}`, case on by default) is `search/usages`' answer: the files that define the name first, each
   definition's line and then the file's uses in line order, then the files that use it in the index's rank (at most
   100), each line's whole-word occurrences of the name a match (the line read from disk; a definition whose line lacks
@@ -2482,7 +2507,7 @@ snapshots; the search itself is `hrafn::grep`).
   node; `upto` to a row under it opens the folders above it, and a regroup opens all. A regroup re-parents every
   node, so its model goes as a first window of 2,000 entries (`FIRST_MODEL_WINDOW`) with the first window's rows;
   once those are drawn the editor asks for the whole window (`view/window`), which drains after them (spec §8's
-  50 ms is the first window's). Files in the order found need nothing; any other
+  50 ms is the first window's). Files in the run's order need nothing; any other
   grouping or a sort builds a layout of the run's files (every row in order with its parent node), again only when the
   files change. Folders: a tree by path, folders before files, one-child chains joined, `d:<path>` nodes (kind
   `folder`, a `count` field) parenting their folders and files. Symbols: each file's matches under `s:<path>:<start
@@ -2530,8 +2555,12 @@ snapshots; the search itself is `hrafn::grep`).
   search starts at the first again.
 - **The window** (the agent panel's shape, `agents/panel/look`): the hub keeps every match and Sjá's model holds them
   (so Next Match, Previous Match and Replace All, which read the model, act on all of them), but the rows sent are
-  the first 200 (a file's header and its matches, in the order the files were complete) and no more until the editor
-  asks; the totals (files, matches) come with `search-run-done`. `search/grep-look {view, more?, fill?, upto?}` goes
+  the first 200 (a file's header and its matches) and no more until the editor asks. A Text or Pattern search keeps
+  its files by path, component by component (`a/x` before `a-b/x`, as VS Code lists them), whatever order the walk
+  finds them in (rg's threads and the file system: macOS's walk lists `b.txt` before `a.txt`), each file's lines in
+  file order: a file after the last goes as an insert, one inside the rows (or any while the rows are stale) sends
+  the rows and the model whole as diffs, at most once per throttle window (as a grouped search's) and at the end, and
+  moves a block after it down; Symbol and Meaning keep their own order; the totals (files, matches) come with `search-run-done`. `search/grep-look {view, more?, fill?, upto?}` goes
   on: `more` is one window more (the editor's window neared the end of the rows), `upto` a row's key (Next or Previous
   Match went to a match beyond them): the rows up to it and 100 after it. A row more than 400 rows (`FAR`) past the
   rows sent comes in a block, the 100 rows before it, it and the 100 after, after a gap row (key `gap`, "⋯ N more"),
@@ -3319,6 +3348,10 @@ timed out (`timeout`), was lost or ended `infra` (`infra`), was stopped, or fail
 summary's `failing` names the failed rows (at most 50, `(job)` left out); `Runner::rows` reads them. The gates read
 rows only (`docs/develop/orchestration.md`).
 
+An `exec/start` that takes over a second of real time logs its phases (`exec/start took N ms: matrix …, keys …,
+network …, placement …, start …`): a slow start lets a task's review overtake the run it should judge, as macOS's
+did once.
+
 The editor's own jobs are the user's `exec/start` with four more fields (`StartParams`: `name`, `env`, `memory_max`,
 `nice`; `StartParams::user_only_field` names the first one a request sets). `exec::start` refuses them from a session
 (`user_job`: `invalid-params`), `env` and `memory_max` from a container job, and `memory_max` on macOS; the decode check
@@ -4037,7 +4070,12 @@ and never reaches the network here: the refresh job (`drgnx extensions refresh`)
   `dense` a shadowed `ID/2` line with summary, source and trust) and the model (a tree: section nodes with `label`,
   `section`, `count`; row nodes with `label`, `name`, `state`, `signed`, `source`, `section`, `version`, `latest`),
   publishes both to the `extensions` view of that connection, and answers each section's `{name, total, loaded}`. The
-  last list per connection is kept to rebuild on a resync, dropped when the connection goes.
+  editor also sends the package generations it reads from disk (`generations`, newest first, at most 256: `n`, `time`,
+  `note`, `differs`, `in_use`, `current`, `size`, `copies`); they end the list as a Generations section (header
+  `section:generations`, a row `gen:N` with glyph, number, time, note, "in use" or "current" and size, then `gen:N/2`
+  for what differs and `gen:N/3` for the copies note; model nodes of kind `generation` with `label` and `gen`).
+  Roll Back Packages reads the selected row's `gen`. With `@generations` typed the editor sends no sections and the
+  generations alone. The last list per connection is kept to rebuild on a resync, dropped when the connection goes.
 - **Classes:** `extensions/search` and `extensions/details` are open to agents; `extensions/rows`,
   `extensions/list` and `extensions/modules` are the user's.
 

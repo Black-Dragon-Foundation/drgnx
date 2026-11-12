@@ -73,10 +73,7 @@
     (should (string-search "drgnx-panel-replay-down" (plist-get spec :teardown)))
     (should-not (plist-get spec :actions))
     (should (eql 1 (plist-get spec :repeat))))
-  ;; the paired row: the same stream on the old path
-  (let ((spec (cdr (assq 'panel-replay-old (drgnx-perf-run--workloads)))))
-    (should (string-search "(drgnx-panel-replay-up drgnx-perf--hub-bin t)" (plist-get spec :setup)))
-    (should (eql 1 (plist-get spec :repeat))))
+  (should-not (assq 'panel-replay-old (drgnx-perf-run--workloads)))
   (let* ((lines (split-string (drgnx-panel-replay-program) "\n"))
          (words (mapcan (lambda (l) (split-string l "\\\\n" t)) lines))
          (reads (seq-filter (lambda (w) (string-prefix-p "provider:read" w)) words))

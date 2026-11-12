@@ -1,10 +1,9 @@
 ;;; extensions-plugins-shots-test.el --- plugins in the Extensions list and a changed plugin's page on screen -*- lexical-binding: t -*-
 ;; test-class: cond
 ;; test-pattern: handshake
-;; The list and a changed plugin's page are drawn from fixture state (no hub) in the selected window and captured under
-;; a dark and a light theme.  The evidence folder (DRGNX_UI_EVIDENCE) keeps the PNGs.
+;; A changed plugin's page is drawn from fixture state (no hub) in the selected window and captured under a dark and a
+;; light theme (the list's rows are the hub's).  The evidence folder (DRGNX_UI_EVIDENCE) keeps the PNGs.
 (require 'ert)
-(defvar drgnx-view-old-path)
 (require 'cl-lib)
 (require 'drgnx-uitest)
 
@@ -35,14 +34,6 @@
         (drgnx-ext-plugins-shots--plugin "notify" "unapproved")
         (drgnx-ext-plugins-shots--plugin "old-tool" "disabled")))
 
-(defun drgnx-ext-plugins-shots--list-row (p on)
-  (let ((state (pcase (plist-get p :state)
-                 ("approved" (if (member (plist-get p :name) on) "on" "off"))
-                 (s s))))
-    (list :id (concat "plugin:" (plist-get p :name)) :kind "plugin" :name (plist-get p :name) :version "0.2"
-          :summary "Plugin: 1 ability, 2 hooks, 1 host" :state state :source "plugin"
-          :signed (if (equal state "off") "hash-approved" (if (equal state "on") "hash-approved" "none")))))
-
 (defun drgnx-ext-plugins-shots--shoot (name)
   (let* ((dir (make-temp-file "ext-plugins-shots" t))
          (shot (plist-get (drgnx-uitest-capture dir) :root))
@@ -67,17 +58,6 @@
           (progn
             (add-hook 'drgnx-plugins-page-sections #'drgnx-extensions-plugins--diff-section)
             (drgnx-extensions-list--reset)
-            (drgnx-extensions-list--receive
-             'plugins (mapcar (lambda (p) (drgnx-ext-plugins-shots--list-row p default-value-on)) plugins) 4 0)
-            (let* ((drgnx-view-old-path t) (buf (drgnx-extensions-list--buffer)))
-              (switch-to-buffer buf)
-              (delete-other-windows)
-              (drgnx-view-draw-now drgnx-view)
-              (redisplay t)
-              (with-current-buffer buf
-                (should (string-search "changed: approve it again" (buffer-string)))
-                (should (string-search "not approved" (buffer-string))))
-              (drgnx-ext-plugins-shots--shoot (format "plugins-list-%s" tag)))
             (let ((page (drgnx-extensions-details-open "plugin:rewrite-msg")))
               (switch-to-buffer page)
               (delete-other-windows)
@@ -94,9 +74,7 @@
         (remove-hook 'drgnx-plugins-page-sections #'drgnx-extensions-plugins--diff-section)
         (dolist (b (buffer-list))
           (when (string-prefix-p "*Extension" (buffer-name b)) (kill-buffer b)))
-        (when (get-buffer drgnx-extensions-list-buffer-name) (kill-buffer drgnx-extensions-list-buffer-name))
         (drgnx-extensions-list--reset)
-        (drgnx-view--undefine 'extensions)
         (drgnx-view--undefine 'extension-details)
         (disable-theme theme)))))
 

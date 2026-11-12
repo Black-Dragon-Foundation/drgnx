@@ -45,8 +45,16 @@ fn tidy(p: &Path) -> PathBuf {
 }
 
 /// ROOT's git directory and its common folder, read as an agent-writable pointer is: no link followed.  A `.git` file
-/// (a linked worktree) is followed to its `gitdir:` and `commondir`.
+/// (a linked worktree) is followed to its `gitdir:` and `commondir`.  The common folder, which names the project's
+/// history, is given by its true name: git writes a linked worktree's `gitdir:` resolved, so a project under a link
+/// (macOS's /var, a moved home) would otherwise be two projects, its main tree's and its worktrees'.
 pub(crate) fn git_dirs(root: &Path) -> Option<(PathBuf, PathBuf)> {
+    let (git_dir, common) = git_dirs_as_named(root)?;
+    let common = std::fs::canonicalize(&common).unwrap_or(common);
+    Some((git_dir, common))
+}
+
+fn git_dirs_as_named(root: &Path) -> Option<(PathBuf, PathBuf)> {
     use rustix::fs::{Mode, OFlags};
     let dir = rustix::fs::open(
         root,
@@ -307,10 +315,11 @@ pub async fn batch(f: &Front, _: &Caller, p: w::BatchParams) -> Result<w::BatchR
     let file = hub.buffer_file(&id);
     // the time is read here: a blocking thread does not carry the virtual clock
     let now = crate::clock::wall_secs();
-    let reply = crate::clock::blocking(move || hub.batch(&id, &changes, &hash, version, now))
-        .await
-        .map_err(|e| internal(e.to_string()))?
-        .map_err(failed)?;
+    let reply =
+        crate::clock::blocking(move || hub.batch(&id, &changes, hash.as_deref(), version, now))
+            .await
+            .map_err(|e| internal(e.to_string()))?
+            .map_err(failed)?;
     if by_agent && let Some(file) = file {
         let file = crate::work::presence::true_name(&file.to_string_lossy());
         f.core.buffers.changed(&[file]);

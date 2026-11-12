@@ -10,7 +10,7 @@
 ;; the patch rules (`drgnx-view-patch--accept': its base is behind the version).  The rows are kept as a list of keys
 ;; here, not in a view buffer: vertico does the moving.
 ;;
-;; Without the hub (or behind `drgnx-view-old-path'), Quick Open of a big project streams the listing: with Nidhogg's
+;; Without the hub, Quick Open of a big project streams the listing: with Nidhogg's
 ;; framing on (see core/drgnx-file-stream.el) the files arrive in batches and the list grows under your cursor; without
 ;; it, or on a remote folder, Quick Open is `project-find-file' as before.
 ;;
@@ -208,8 +208,8 @@ update can break them, so each is checked and an error only reports.  Without ve
     t))
 
 (defun drgnx-quick-open--hub-p (root)
-  "Non-nil when the hub ranks ROOT's files: a local ROOT, the hub connected, and not the old path."
-  (and (not drgnx-view-old-path) (not (file-remote-p root))
+  "Non-nil when the hub ranks ROOT's files: a local ROOT, and the hub connected."
+  (and (not (file-remote-p root))
        (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events)))
 
 (cl-defstruct (drgnx-quick-open--rows (:constructor drgnx-quick-open--rows--make) (:copier nil))

@@ -12,6 +12,7 @@
 (require 'seq)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-file)
 (require 'drgnx-debug-gutter (expand-file-name "drgnx-debug-gutter" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-fork (expand-file-name "drgnx-debug-fork" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-timeline (expand-file-name "drgnx-debug-timeline" (file-name-directory (macroexp-file-name))))
@@ -43,8 +44,9 @@ on it while it lives.")
 
 (defun drgnx-debug--event (event data)
   "`drgnx-hub-event-functions': `debug-state' gives the sessions (the session keys, the toolbar and the status bar
-follow them, a running session's stop marks go), `debug-frame' marks and opens a stop's line, `debug-ended' takes its
-marks away, `debug-output' goes to the debug console."
+follow them, a running session's stop marks go), `debug-frame' marks and opens a stop's line, `debug-inline' shows
+its values at line ends, `debug-ended' takes its marks away, `debug-output' goes to the debug console,
+`debug-terminal' shows a task's or the program's terminal."
   (pcase event
     ("debug-state"
      (setq drgnx-debug--sessions (append (plist-get data :sessions) nil))
@@ -56,7 +58,9 @@ marks away, `debug-output' goes to the debug console."
      (drgnx-debug-toolbar-sync))
     ("debug-output" (drgnx-debug-console-output data))
     ("debug-frame" (drgnx-debug-gutter-show-frame data))
-    ("debug-ended" (drgnx-debug-gutter-stop-clear (plist-get data :session)))))
+    ("debug-inline" (drgnx-debug-gutter-inline data))
+    ("debug-ended" (drgnx-debug-gutter-stop-clear (plist-get data :session)))
+    ("debug-terminal" (drgnx-debug-launch-show-terminal data))))
 
 (defun drgnx-debug--session (&optional state)
   "The session the commands act on: the picked one (`drgnx-debug--focus') when it is in STATE (any, STATE nil), else
@@ -120,6 +124,7 @@ the toolbar's cards go too."
   (drgnx-debug-timeline-mode -1)
   (drgnx-debug-bisect-events-mode -1)
   (drgnx-debug-origin-events-mode -1)
+  (drgnx-debug-select-config-forget)
   (drgnx-debug-mode -1))
 
 (defun drgnx-debug-breakpoint-conditional ()
@@ -146,12 +151,92 @@ the toolbar's cards go too."
   (drgnx-debug-gutter-run-to-cursor (line-number-at-pos)))
 
 (defun drgnx-debug-start-or-continue ()
-  "Continue this project's stopped session, or start one (a configuration is picked)."
+  "Continue this project's stopped session, or start one (the selected configuration, else one is picked)."
   (interactive)
   (if-let* ((s (drgnx-debug--session "stopped")))
       (drgnx-hub-call "debug/control" (list :session (plist-get s :id) :op "continue") #'drgnx-debug--answered)
     (let ((root (drgnx-debug-launch-root)))
-      (drgnx-debug-launch-start root (drgnx-debug-launch-read-config root)))))
+      (drgnx-debug-launch-start root (drgnx-debug--config root)))))
+
+;;;; Run Without Debugging, configurations, launch.json, function breakpoints, evaluate (spec §14)
+
+(defvar drgnx-debug--selected (make-hash-table :test #'equal)
+  "Project root → the configuration Select Debug Configuration chose: Start uses it without asking.  As many entries
+as projects the user selected in, cleared by the module's teardown.")
+
+(defun drgnx-debug--config (root)
+  "The configuration to start in ROOT: the selected one, else picked."
+  (or (gethash root drgnx-debug--selected) (drgnx-debug-launch-read-config root)))
+
+(defun drgnx-debug-select-config ()
+  "Pick this project's configuration once: Start Debugging and Run Without Debugging use it without asking."
+  (interactive)
+  (let* ((root (drgnx-debug-launch-root)) (id (drgnx-debug-launch-read-config root)))
+    (puthash root id drgnx-debug--selected)
+    id))
+
+(defun drgnx-debug-select-config-forget ()
+  "Forget every project's selected configuration (Start asks again)."
+  (clrhash drgnx-debug--selected))
+
+(defun drgnx-debug-run-no-debug ()
+  "Run the configuration without the debugger: the adapter launches it with `noDebug'; breakpoints do not stop it."
+  (interactive)
+  (let ((root (drgnx-debug-launch-root)))
+    (drgnx-debug-launch-start root (drgnx-debug--config root) t)))
+
+(defun drgnx-debug-open-launch-json ()
+  "Open this project's .vscode/launch.json, made with an empty list of configurations when there is none."
+  (interactive)
+  (let ((file (expand-file-name ".vscode/launch.json" (drgnx-debug-launch-root))))
+    (unless (file-exists-p file)
+      (make-directory (file-name-directory file) t)
+      (drgnx-file-write-text file "{\n  \"version\": \"0.2.0\",\n  \"configurations\": [\n  ]\n}\n"))
+    (find-file file)
+    (goto-char (point-min))
+    (when (search-forward "\"configurations\": [" nil t) (forward-line 1))))
+
+(defun drgnx-debug-breakpoints-toggle-all ()
+  "Turn every breakpoint of the project off when any is on, else all on."
+  (interactive)
+  (drgnx-hub-call "debug/breakpoints" (list :root (drgnx-debug-launch-root) :op (list :op "toggle-all"))
+                  #'drgnx-debug--answered))
+
+(defun drgnx-debug-function-breakpoint (name)
+  "Stop when the function NAME is called (a function breakpoint of the project)."
+  (interactive (list (read-string "Function breakpoint: " (thing-at-point 'symbol t))))
+  (when (string-empty-p (string-trim name)) (user-error "No function named"))
+  (drgnx-hub-call "debug/breakpoints" (list :root (drgnx-debug-launch-root)
+                                            :op (list :op "add-function" :name (string-trim name)))
+                  #'drgnx-debug--answered))
+
+(defun drgnx-debug--expression-at-point ()
+  "The active region's text, else the symbol at point with the member chain before it (`self.items'); nil if none."
+  (if (use-region-p)
+      (buffer-substring-no-properties (region-beginning) (region-end))
+    (when-let* ((b (bounds-of-thing-at-point 'symbol)))
+      (save-excursion
+        (goto-char (car b))
+        (while (and (memq (char-before) '(?.)) (progn (backward-char) (skip-syntax-backward "w_") t)))
+        (buffer-substring-no-properties (point) (cdr b))))))
+
+(defun drgnx-debug-evaluate (expr)
+  "Evaluate EXPR (the selection, else the expression at point) in the Debug Console, in the stopped frame; the
+console's tab shows without taking the focus."
+  (interactive (list (or (drgnx-debug--expression-at-point) (read-string "Evaluate: "))))
+  (unless (drgnx-debug--session) (user-error "No debug session to evaluate in"))
+  (if (fboundp 'drgnx-debug-console-evaluate)
+      (drgnx-debug-console-evaluate expr)
+    (user-error "The Debug Console cannot evaluate from here yet")))
+
+(defun drgnx-debug-show-value ()
+  "Show the value of the selection, else of the expression at point, in the echo area (the adapter's hover)."
+  (interactive)
+  (let ((expr (or (drgnx-debug--expression-at-point) (user-error "No expression at point")))
+        (s (or (drgnx-debug--session "stopped") (user-error "No stopped debug session"))))
+    (let ((r (drgnx-hub-call-sync "debug/evaluate" (list :session (plist-get s :id) :expr expr :context "hover") 5)))
+      (message "%s = %s%s" expr (plist-get r :result)
+               (if-let* ((ty (plist-get r :type))) (format "  (%s)" ty) "")))))
 
 (drgnx-module-define 'extra/debug
                      :doc "A debugger (the hub's, Debug Adapter Protocol): breakpoints, stepping, VS Code's keys in that profile."
@@ -184,7 +269,14 @@ the toolbar's cards go too."
                                                (debug-fork-run "Run Fork" drgnx-debug-fork-run "Run a code what-if once its tree is edited")
                                                (debug-fork-take "Take Fork's Change…" drgnx-debug-fork-take "Each file the fork changed as a review card: Apply puts it in your buffer")
                                                (debug-fork-drop "Drop Fork" drgnx-debug-fork-drop "The fork goes, with its tree")
-                                               (debug-convert-dape "Convert dape Configurations…" drgnx-debug-convert-dape-configs "Turn your dape configurations into launch configurations, once")))
+                                               (debug-convert-dape "Convert dape Configurations…" drgnx-debug-convert-dape-configs "Turn your dape configurations into launch configurations, once")
+                                               (debug-run-no-debug "Run Without Debugging" drgnx-debug-run-no-debug "Run the configuration without the debugger: breakpoints do not stop it")
+                                               (debug-select-config "Select Debug Configuration…" drgnx-debug-select-config "The configuration Start uses in this project, without asking")
+                                               (debug-open-launch-json "Open launch.json" drgnx-debug-open-launch-json "This project's launch configurations (made when there are none)")
+                                               (debug-breakpoints-toggle-all "Toggle All Breakpoints" drgnx-debug-breakpoints-toggle-all "Every breakpoint off when any is on, else all on")
+                                               (debug-function-breakpoint "Add Function Breakpoint…" drgnx-debug-function-breakpoint "Stop when a function is called")
+                                               (debug-evaluate "Evaluate in Debug Console" drgnx-debug-evaluate "The selection, or the expression at point, in the stopped frame")
+                                               (debug-show-value "Show Value at Point" drgnx-debug-show-value "The value of the expression at point, in the echo area")))
                                 (drgnx-command-define id :category "Debug" :title title :command fn :doc doc))
                               ;; the toolbar (drgnx-debug-toolbar.el): docked in the tab row, the status bar's segment
                               ;; after the branch, the title row's Paused chip
@@ -205,8 +297,10 @@ the toolbar's cards go too."
                                                           (append (butlast drgnx-statusbar-left (length tail)) '(debug) tail)
                                                         (cons 'debug drgnx-statusbar-left))))))
                               ;; the Debug Console tab of the panel (drgnx-debug-console.el); its input's keys in its
-                              ;; own map
-                              (drgnx-wb-define-tab 'panel 'debug-console :title "Debug Console")
+                              ;; own map.  The panel is the workbench's: without it (a bare Emacs) there is no tab
+                              ;; to define, as for Review's
+                              (when (fboundp 'drgnx-wb-define-tab)
+                                (drgnx-wb-define-tab 'panel 'debug-console :title "Debug Console"))
                               (let ((in-console (lambda () (derived-mode-p 'drgnx-debug-console-mode))))
                                 (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-console-commands)
                                   (if (memq id '(debug-console debug-console-clear))

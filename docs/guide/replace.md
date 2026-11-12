@@ -18,8 +18,9 @@ brings it back) with the word at point, or the selected text, in **Find**. It ha
 - **Replace All** and **Undo**, then a status line (how many results, what the last replacement did).
 
 The search runs a quarter of a second after you stop typing (`RET` in a field searches at once), in drgnx's hub, in
-the background. Results stream in, grouped by file. A search typed before the hub is up (the first seconds after
-drgnx starts, or while it restarts) says "Waiting for the hub" and starts when the hub comes; an Emacs without
+the background. Results stream in, grouped by file. When no hub runs, opening the view, `RET` or Search in Files
+starts it; a search typed before it is up (the first seconds, or while it restarts) says "Waiting for the hub" and starts
+when the hub comes. When no hub can be started, the status line says why; an Emacs without
 Nidhogg's view model (Sjá) says it cannot search (Rename still works). Each match is a row with
 a tick box and shows the change as old → new: only the characters that change are tinted, the old ones struck
 through (`foo` → `foobar` shows `foo` with `bar` added). A file's box ticks or unticks all its
@@ -374,8 +375,7 @@ makes the hub send a reset and drop the old search's late rows, and the editor d
 base.  `search-run-done` ends the search and gives the count the status line shows; the status line shows
 "Searching…" until then.  Typing in the Replace field is `search/grep-replace`: the hub patches the previews and
 nothing is searched again.  Symbol mode (the language server's edits) keeps rows of Emacs's own (the `replace-results`
-view type), and the view changes between the two with each search; `drgnx-view-old-path` has no Search path of its
-own any more (plan sja-complete S2 removed the Lisp text engine).  The file watches stay Lisp: a listed file that changes on disk is searched again through the hub after half a second.  The hub reads the disk, so before each search, and half a second after an edit, the view sends it the text of each
+view type), and the view changes between the two with each search.  The file watches stay Lisp: a listed file that changes on disk is searched again through the hub after half a second.  The hub reads the disk, so before each search, and half a second after an edit, the view sends it the text of each
 buffer under the folder that has unsaved edits (`search/buffer`, only what changed since): the hub searches that text
 in place of the file, also when the file on disk has no match, and the search shown takes it at once.  Those matches
 are rows like any other, with tick boxes, in the model Next Match walks and Replace All writes.  A buffer over 4 MiB,

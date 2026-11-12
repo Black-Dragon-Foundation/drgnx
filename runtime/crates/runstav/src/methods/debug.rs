@@ -40,16 +40,31 @@ pub struct DebugConfigs {
 /// One configuration of `debug/configs`' list.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct DebugConfig {
-    /// `launch:N`, `user:N` or `default:ADAPTER:N`: what `debug/start` takes.
+    /// `launch:N`, `user:N`, `default:ADAPTER:N` or `compound:N` (launch.json's compounds, after its
+    /// configurations): what `debug/start` takes.
     pub id: String,
     pub name: String,
-    /// `launch`, `user` or `default`.
+    /// `launch`, `user`, `default` or `compound` (whose type and request are empty).
     pub source: String,
     #[serde(rename = "type")]
     pub ty: String,
     pub request: String,
     /// ROOT is not trusted: starting it shows the trust card first.
     pub needs_trust: bool,
+    /// Its adapter is not found here (none: found, or it connects to a running adapter, or a compound).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing: Option<DebugMissing>,
+}
+
+/// An adapter `debug/configs` did not find, and how drgnx installs it: `download` (a pinned archive) or `pip` (into
+/// the tools venv) through `debug/install`; `system` (COMMAND names the package); `none` (the user adds it).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugMissing {
+    pub adapter: String,
+    pub name: String,
+    pub install: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 /// A launch.json that could not be read, and where.
@@ -98,6 +113,13 @@ pub struct DebugStart {
     /// Files modified in the editor and not saved: the recorded run marks them "not what ran".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unsaved: Vec<String>,
+    /// The editor has a frame: the tasks run in terminal tabs it shows (`debug-terminal`), and the start waits for
+    /// each to exit 0.  Without it (a headless or daemon start) they run captured, as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub terminal: bool,
+    /// Run Without Debugging: the configuration launches with `noDebug: true` (its breakpoints do not stop it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_debug: bool,
 }
 
 /// One answer to `debug/start`'s `needs`: the input ID (`pickProcess` for the process picker) and its VALUE.
@@ -108,13 +130,16 @@ pub struct DebugAnswer {
 }
 
 /// `debug/start`'s answer: the session, or what must come first: `"trust"`, or the inputs to ask
-/// (`[{input: {id, kind, description, default, options, password}} | "pickProcess"]`).
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+/// (`[{input: {id, kind, description, default, options, password}} | "pickProcess"]`). A compound's start answers
+/// every member's session in SESSIONS, in the compound's order (SESSION is the first).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct DebugStarted {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub needs: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sessions: Vec<String>,
 }
 
 /// `debug/control`: OP on SESSION (on THREAD, else the stopped one): `continue`, `pause`, `next`, `step-in`,
@@ -269,8 +294,8 @@ pub struct DebugBreakpointOp {
 }
 
 /// The operations `debug/breakpoints` knows; `filter` turns exception filter NAME of adapters of type ADAPTER on or
-/// off (ENABLED), `enable-all` sets every source breakpoint's ENABLED, `remove-all` removes them and the function
-/// breakpoints.
+/// off (ENABLED), `enable-all` sets every source breakpoint's ENABLED, `toggle-all` turns them all off when any is on,
+/// else all on, `remove-all` removes them and the function breakpoints.
 pub const BP_OPS: &[&str] = &[
     "add",
     "remove",
@@ -280,6 +305,7 @@ pub const BP_OPS: &[&str] = &[
     "remove-function",
     "filter",
     "enable-all",
+    "toggle-all",
     "remove-all",
 ];
 
@@ -498,7 +524,7 @@ fn check_breakpoints(p: &DebugBreakpoints) -> Result<(), Error> {
     if !BP_OPS.contains(&op.op.as_str()) {
         return Err(invalid(
             "op.op",
-            "one of add, remove, edit, move, add-function, remove-function, filter, enable-all, remove-all",
+            "one of add, remove, edit, move, add-function, remove-function, filter, enable-all, toggle-all, remove-all",
         ));
     }
     for (k, v) in [
@@ -529,7 +555,7 @@ fn check_breakpoints(p: &DebugBreakpoints) -> Result<(), Error> {
             need("op.enabled", op.enabled.is_some())
         }
         "enable-all" => need("op.enabled", op.enabled.is_some()),
-        "remove-all" => Ok(()),
+        "remove-all" | "toggle-all" => Ok(()),
         "move" => {
             need("op.id", op.id.is_some())?;
             need("op.line", op.line.is_some_and(|l| l > 0))

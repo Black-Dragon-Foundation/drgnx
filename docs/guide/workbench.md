@@ -181,8 +181,8 @@ about is kept in the hidden buffer ` *drgnx git errors*` (its last `drgnx-git-er
 
 With the hub up, the hub reads the status instead (`git/letters`, [hub.md](../develop/hub.md)) and sends the letters as rows
 of a view of its own per repository, which no window shows; the Explorer and the Buffers list read their marks from those
-rows, and the folders that get a `●` are the roots and the open folders (opening one asks the hub again).  Without the hub,
-with the old path switch or when a repository has no letters yet, the status is read by Emacs as above.  The same 16
+rows, and the folders that get a `●` are the roots and the open folders (opening one asks the hub again).  Without the hub
+or when a repository has no letters yet, the status is read by Emacs as above.  The same 16
 repositories are kept.  `test/unit/git-letters-test.el` covers the rows with no hub.
 
 ### Buffers panel
@@ -340,7 +340,9 @@ Search), the panel and its tab, the right dock — each with its pixel size — 
 ([layouts.md](layouts.md#after-a-restart)), the editor groups with their sizes, tabs and shown files, and the
 Explorer's folders (the status bar across the frame's foot is not part of the saved tree: it never comes back as an
 editor group). The left dock and the groups keep their saved pixel widths when the window manager gives the new window
-its size only after the restore, in one step or several (a client's window at scale 2 does), until your first command. A window that rebuilds itself comes back where and how big it was (only where a monitor still is; never bigger than its screen).
+its size only after the restore, in one step or several (a client's window at scale 2 does), until your first command. A window that rebuilds itself comes back where and how big it was (only where a monitor still is; never bigger than its screen), and maximized or
+full screen only if it was: one nearly as big as the screen, which GNOME maximizes when it appears, is given its own
+size back.
 A job window saved before M12f comes back as the Work space: no frame of its own, and the
 restored panes, sizes and focus stay as they were ([jobs.md](jobs.md#a-job-in-the-work-space)).
 

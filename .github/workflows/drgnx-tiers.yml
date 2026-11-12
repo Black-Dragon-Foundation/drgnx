@@ -163,13 +163,22 @@ jobs:
           git clone -q --bare --no-tags --filter=tree:0 https://github.com/Black-Dragon-Foundation/drgnx.git "$RUNNER_TEMP/drgnx-branches"
           [ -n "$(git -C "$RUNNER_TEMP/drgnx-branches" branch --contains "$sha" 2>/dev/null)" ] ||
             { echo "::error::drgnx_ref $ASKED ($sha) is on none of drgnx's branches (a fork's or a pull request's commit)"; exit 1; }
+      # the test hub `bin/drgnx test --ui` builds (docs/develop/harness.md): drgnx-term too, so the terminal rows open one
+      - name: Zig and libghostty-vt's pinned tarballs (drgnx-term's engine)
+        working-directory: drgnx
+        run: |
+          sudo bash test/container/zig.sh linux
+          bash runtime/crates/ghostty-vt-sys/fetch.sh
       - uses: ./drgnx/.github/actions/build-test-bins
+        with:
+          term: "true"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: drgnx-test-bins-linux
           path: |
             drgnx/runtime/target/debug/ratatoskr
             drgnx/runtime/target/debug/ratatoskr-mock
+            drgnx/runtime/target/debug/drgnx-term
             drgnx/runtime/target/debug/examples/dump
           if-no-files-found: error
           retention-days: 1

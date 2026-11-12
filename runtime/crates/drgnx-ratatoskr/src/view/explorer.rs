@@ -644,10 +644,12 @@ fn watcher(tx: Sender<Heard>) -> Option<notify::RecommendedWatcher> {
 }
 
 /// Watch exactly WANT with WATCHER (WATCHING: what it watches now). A folder that cannot be watched (gone, the
-/// inotify limit) is left out and tried again on the next relisting.
+/// inotify limit) is left out and tried again on the next relisting. ALIASES maps each watched folder's true name to
+/// its listed one where they differ (a link above it), for [`as_listed`].
 fn rewatch(
     watcher: &mut Option<notify::RecommendedWatcher>,
     watching: &mut HashSet<PathBuf>,
+    aliases: &mut HashMap<PathBuf, PathBuf>,
     want: HashSet<PathBuf>,
 ) {
     use notify::{RecursiveMode, Watcher};
@@ -656,10 +658,29 @@ fn rewatch(
         let _ = w.unwatch(gone);
     }
     watching.retain(|d| want.contains(d));
+    aliases.retain(|_, d| want.contains(d));
     for d in want {
         if !watching.contains(&d) && w.watch(&d, RecursiveMode::NonRecursive).is_ok() {
+            if let Ok(t) = d.canonicalize()
+                && t != d
+            {
+                aliases.insert(t, d.clone());
+            }
             watching.insert(d);
         }
+    }
+}
+
+/// P, a path the watcher reported, as the listing names it. The watcher may report a folder by its true name (macOS's
+/// FSEvents: `/private/var/…` for a folder listed as `/var/…`), so a watched folder, or a name in one, whose true name
+/// is in ALIASES is put back under its listed name; any other path is P.
+fn as_listed(aliases: &HashMap<PathBuf, PathBuf>, p: PathBuf) -> PathBuf {
+    if let Some(l) = aliases.get(&p) {
+        return l.clone();
+    }
+    match (p.parent().and_then(|d| aliases.get(d)), p.file_name()) {
+        (Some(l), Some(n)) => l.join(n),
+        _ => p,
     }
 }
 
@@ -696,8 +717,13 @@ pub(crate) fn list_and_watch(
     };
     // watched before the listing goes out: a change made once it is seen is never missed
     let mut w = watcher(tx);
-    let mut watching = HashSet::new();
-    rewatch(&mut w, &mut watching, cache.keys().cloned().collect());
+    let (mut watching, mut aliases) = (HashSet::new(), HashMap::new());
+    rewatch(
+        &mut w,
+        &mut watching,
+        &mut aliases,
+        cache.keys().cloned().collect(),
+    );
     if !send(&at, last.clone(), false) {
         return;
     }
@@ -710,6 +736,7 @@ pub(crate) fn list_and_watch(
             match h {
                 Heard::Changed(paths) => {
                     for p in paths {
+                        let p = as_listed(&aliases, p);
                         if let Some(parent) = p.parent() {
                             dirty.insert(parent.to_path_buf());
                         }
@@ -771,7 +798,12 @@ pub(crate) fn list_and_watch(
         if cache.len() > used.len() + KEPT_CLOSED {
             cache.retain(|d, _| used.contains(d));
         }
-        rewatch(&mut w, &mut watching, cache.keys().cloned().collect());
+        rewatch(
+            &mut w,
+            &mut watching,
+            &mut aliases,
+            cache.keys().cloned().collect(),
+        );
         if relisted || now != last {
             if !send(&at, now.clone(), !relisted) {
                 return;

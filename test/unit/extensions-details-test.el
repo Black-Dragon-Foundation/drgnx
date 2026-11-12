@@ -144,9 +144,7 @@
             (should (equal (mapcar (lambda (r) (plist-get r :in-use)) rows) '(nil t)))
             (should (equal (mapcar (lambda (r) (plist-get r :current)) rows) '(t nil)))
             (should (equal (plist-get (car rows) :differs) '("magit 4.1 → 4.2")))
-            (let ((text (substring-no-properties (drgnx-extensions-details-generation-row 1))))
-              (should (string-search "in use" text))
-              (should (string-search "note 1" text)))
+            (should (equal (plist-get (cadr rows) :note) "note 1"))   ; the hub's rows show it (view/extensions.rs)
             (should (string-search "copies the packages twice" (drgnx-extensions-details-copies-note)))))
       (dolist (n '(1 2)) (delete-directory (expand-file-name (number-to-string n) gens) t)))))
 

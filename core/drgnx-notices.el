@@ -200,7 +200,7 @@
     (dolist (item (cdr items))
       (unless (eq (plist-get item :source) (plist-get first :source)) (setq one nil)))
     (if (and first one (plist-get first :command))
-        (drgnx-ui--run (drgnx-notices--action (plist-get first :command)))
+        (drgnx-ui-kit-run (drgnx-notices--action (plist-get first :command)))
       (drgnx-notices-show))))
 
 (defun drgnx-notice-needs-you-text ()

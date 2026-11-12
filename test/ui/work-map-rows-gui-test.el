@@ -29,7 +29,6 @@
 (declare-function drgnx-work-thirty-stop "work-space-thirty-fixture")
 (declare-function drgnx-work-thirty-map "work-space-thirty-fixture")
 (declare-function nidhogg-view-get "nidhogg-views")
-(defvar drgnx-view-old-path)
 
 (defun drgnx-work-map-rows-gui--bin ()
   "The hub: DRGNX_RATATOSKR_BIN, else the checkout's own build (a GUI session does not inherit the variable)."
@@ -44,7 +43,7 @@
   `(progn
      (skip-unless (and (display-graphic-p) (fboundp 'nidhogg-view--call)))
      (drgnx-test-with-modules '(tools/work-space)
-       (let ((drgnx-view-old-path nil) (root (drgnx-uitest-root-frame)) (buf nil))
+       (let ((root (drgnx-uitest-root-frame)) (buf nil))
          (unwind-protect
              (with-selected-frame root
                (delete-other-windows)

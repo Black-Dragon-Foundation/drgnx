@@ -323,6 +323,17 @@ never asked.  Event lines (Ratatoskr's challenge comes first) are skipped: the f
             (delete-process c))))
     (error nil)))
 
+(defun drgnx-hub--accepts-p (socket)
+  "Does something take a connection on SOCKET?  A hub that is there, if too busy to answer `drgnx-hub--ping-socket'
+within its second (a socket file left by a hub that ended refuses).  Never one not private to this user; never an
+error."
+  (condition-case nil
+      (and (file-exists-p socket) (not (drgnx-hub--untrusted socket))
+           (progn (delete-process (make-network-process :name "drgnx-hub-accepts" :family 'local :service socket
+                                                        :noquery t))
+                  t))
+    (error nil)))
+
 (defun drgnx-hub--connect-socket (filter)
   "A connection to the hub's socket — never one that is not private to this user (`drgnx-hub--untrusted')."
   (let ((socket (drgnx-hub-socket)))
@@ -720,8 +731,11 @@ error, or when it does not answer."
   (let* ((done nil) result error
          (limit (+ (float-time (time-convert nil t)) (or timeout 5) 1))
          (id (drgnx-hub-call method params (lambda (r e) (setq done t result r error e)) :deadline (or timeout 5))))
-    ;; the deadline ends the wait; the real clock is only a backstop (a test's virtual clock never fires the deadline)
-    (while (and (not done) (< (float-time (time-convert nil t)) limit)) (accept-process-output nil 0.02))
+    ;; the deadline ends the wait; the real clock is only a backstop (a test's virtual clock never fires the deadline).
+    ;; The wait is on the call connection: it returns as soon as that connection is read.  On no process it would
+    ;; return only once no process had written for 10 ms (Emacs's read delay), whatever ended the wait
+    (while (and (not done) (< (float-time (time-convert nil t)) limit))
+      (accept-process-output (and (process-live-p drgnx-hub--client) drgnx-hub--client) 0.02))
     (unless done (drgnx-hub--settle id nil "gave up"))
     (cond ((not done) (error "The drgnx hub did not answer %s" method))
           (error (error "drgnx hub: %s" error))
@@ -1061,11 +1075,16 @@ or the user is told, when the start ends."
   "Make sure a hub runs, without waiting: CALLBACK is called with nil once one answers (at once when one does already)
 or with the reason it does not, when the one asynchronous `ratatoskr ensure --timeout 5' ends or passes
 `drgnx-hub-ensure-deadline'.  Returns that process (nil when a hub ran already).  Signals when it cannot start one:
-Ratatoskr is not built, or starting is off (DRGNX_NO_HUB_START)."
+Ratatoskr is not built, or starting is off (DRGNX_NO_HUB_START) and no hub is there.  With starting off, a hub that
+takes the connection but does not answer the probe's second (a busy one) runs: `drgnx-hub--accepts-p'.  (With starting
+on, `ratatoskr ensure' judges it, with its own longer wait.)"
   (require 'drgnx-ai)
   (cond ((drgnx-hub-running-p) (funcall callback nil) nil)
         ((getenv "DRGNX_NO_HUB_START")
-         (error "No drgnx hub runs, and starting one is off here (DRGNX_NO_HUB_START)"))
+         (unless (drgnx-hub--accepts-p (drgnx-hub-socket))
+           (error "No drgnx hub runs, and starting one is off here (DRGNX_NO_HUB_START)"))
+         (funcall callback nil)
+         nil)
         ((process-live-p drgnx-hub--ensuring)
          (process-put drgnx-hub--ensuring :callbacks (cons callback (process-get drgnx-hub--ensuring :callbacks)))
          drgnx-hub--ensuring)
@@ -1083,6 +1102,19 @@ Ratatoskr is not built, or starting is off (DRGNX_NO_HUB_START)."
            (setq drgnx-hub--ensuring p)
            (drgnx-timer-start 'hub-ensure drgnx-hub-ensure-deadline #'drgnx-hub--ensure-expired :owner :core)
            p))))
+
+(defun drgnx-hub-start-for-command (on-fail)
+  "A command the user invoked needs the hub's subscription (a terminal, a hub-fed view): start Ratatoskr when no hub
+runs (`drgnx-hub--ensure-running', not waited for) and connect once it answers; with one running, connect.  ON-FAIL
+gets the reason, a string, when no hub can be had.  Nothing while a subscription is up or being made.  In a daemon path
+\(`inhibit-interaction') it starts nothing and only connects to a hub already there: timers, hooks, sentinels and
+startup never start one."
+  (unless (or (process-live-p drgnx-hub--events) (process-live-p drgnx-hub--subscribing))
+    (if inhibit-interaction
+        (when (drgnx-hub-running-p) (drgnx-hub-connect))
+      (condition-case e
+          (drgnx-hub--ensure-running (lambda (err) (if err (funcall on-fail err) (drgnx-hub-connect))))
+        (error (funcall on-fail (error-message-string e)))))))
 
 (defun drgnx-hub--restart-legacy ()
   "End the Lisp hub of before this update (protocol 0 has `shutdown', not `restart'), wait up to 5 s for its lock
@@ -1221,7 +1253,7 @@ the command it names (Hub: Restart Now).  A condition: the hub, or the next hell
       (when (and (stringp id) (stringp text) (member severity '("info" "warn" "fail")))
         (drgnx-notify 'hub (intern severity) text :id (intern id)
                       :life (if (equal (plist-get data :life) "condition") 'condition 'event)
-                      ;; only a registry id: the click runs it through `drgnx-ui--run'
+                      ;; only a registry id: the click runs it through `drgnx-ui-kit-run'
                       :command (let ((sym (and (stringp command) (intern-soft command))))
                                  (and sym (fboundp 'drgnx-commands-get) (drgnx-commands-get sym) sym)))))))
 

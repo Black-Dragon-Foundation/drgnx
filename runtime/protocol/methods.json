@@ -4852,96 +4852,6 @@
       },
       "doc": "the user gives back the wheel of a session in a worktree of its own: the editor saves its buffers there and answers agents/wheel/saved with the files left unsaved",
       "name": "wheel-save"
-    },
-    {
-      "data": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "description": "The data of `work-map`: what changed in one view since version `base`.",
-        "properties": {
-          "base": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "changed": {
-            "default": [],
-            "description": "Items new or changed, whole.",
-            "items": true,
-            "type": "array"
-          },
-          "chips": {
-            "items": true,
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "edges": {
-            "description": "Every edge between the items shown, when the edge set changed.",
-            "items": true,
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "entered": {
-            "default": [],
-            "description": "Ids that arrived live: they fade in at their place in `places`.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "full": {
-            "description": "A full frame (a relayout): `changed` is every item shown, `layout` the new one.",
-            "type": "boolean"
-          },
-          "layout": true,
-          "needs_you": {
-            "items": true,
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "places": {
-            "description": "The free places the arrivals took (id → rect), and their forms."
-          },
-          "removed": {
-            "default": [],
-            "description": "Ids no longer shown: they fade out and leave their place empty.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "stale": {
-            "description": "The view is hidden and its frame is out of date: shown again, it gets a full frame.",
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "version": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "view": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "view",
-          "version",
-          "base"
-        ],
-        "title": "WorkMap",
-        "type": "object"
-      },
-      "doc": "what changed in one Work map view since its version base, to that view's connection only (work/map/subscribe): at most one delta per 100 ms, a full frame on a relayout, a stale mark for a hidden view",
-      "name": "work-map"
     }
   ],
   "methods": [
@@ -12087,8 +11997,19 @@
             "description": "One configuration of `debug/configs`' list.",
             "properties": {
               "id": {
-                "description": "`launch:N`, `user:N` or `default:ADAPTER:N`: what `debug/start` takes.",
+                "description": "`launch:N`, `user:N`, `default:ADAPTER:N` or `compound:N` (launch.json's compounds, after its\nconfigurations): what `debug/start` takes.",
                 "type": "string"
+              },
+              "missing": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DebugMissing"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Its adapter is not found here (none: found, or it connects to a running adapter, or a compound)."
               },
               "name": {
                 "type": "string"
@@ -12101,7 +12022,7 @@
                 "type": "string"
               },
               "source": {
-                "description": "`launch`, `user` or `default`.",
+                "description": "`launch`, `user`, `default` or `compound` (whose type and request are empty).",
                 "type": "string"
               },
               "type": {
@@ -12143,6 +12064,32 @@
               "line",
               "col",
               "message"
+            ],
+            "type": "object"
+          },
+          "DebugMissing": {
+            "description": "An adapter `debug/configs` did not find, and how drgnx installs it: `download` (a pinned archive) or `pip` (into\nthe tools venv) through `debug/install`; `system` (COMMAND names the package); `none` (the user adds it).",
+            "properties": {
+              "adapter": {
+                "type": "string"
+              },
+              "command": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "install": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "adapter",
+              "name",
+              "install"
             ],
             "type": "object"
           }
@@ -13243,6 +13190,10 @@
               "null"
             ]
           },
+          "no_debug": {
+            "description": "Run Without Debugging: the configuration launches with `noDebug: true` (its breakpoints do not stop it).",
+            "type": "boolean"
+          },
           "root": {
             "type": "string"
           },
@@ -13251,6 +13202,10 @@
               "string",
               "null"
             ]
+          },
+          "terminal": {
+            "description": "The editor has a frame: the tasks run in terminal tabs it shows (`debug-terminal`), and the start waits for\neach to exit 0.  Without it (a headless or daemon start) they run captured, as before.",
+            "type": "boolean"
           },
           "unsaved": {
             "description": "Files modified in the editor and not saved: the recorded run marks them \"not what ran\".",
@@ -13276,7 +13231,7 @@
       },
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`debug/start`'s answer: the session, or what must come first: `\"trust\"`, or the inputs to ask\n(`[{input: {id, kind, description, default, options, password}} | \"pickProcess\"]`).",
+        "description": "`debug/start`'s answer: the session, or what must come first: `\"trust\"`, or the inputs to ask\n(`[{input: {id, kind, description, default, options, password}} | \"pickProcess\"]`). A compound's start answers\nevery member's session in SESSIONS, in the compound's order (SESSION is the first).",
         "properties": {
           "needs": true,
           "session": {
@@ -13284,6 +13239,12 @@
               "string",
               "null"
             ]
+          },
+          "sessions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "title": "DebugStarted",
@@ -15850,6 +15811,65 @@
             },
             "type": "object"
           },
+          "Generation": {
+            "description": "One package generation as the Generations section shows it.",
+            "properties": {
+              "copies": {
+                "default": null,
+                "description": "A note the newest generation carries (this file system copies the packages twice per change).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "current": {
+                "default": false,
+                "description": "The packages the next start uses.",
+                "type": "boolean"
+              },
+              "differs": {
+                "default": [],
+                "description": "What differs from the generation before it (\"magit 4.1 → 4.2\", \"+name\", \"-name\").",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "in_use": {
+                "default": false,
+                "description": "A running session still uses it.",
+                "type": "boolean"
+              },
+              "n": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "note": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "size": {
+                "default": null,
+                "description": "Its size on disk, as the editor writes it (\"2.1M\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "time": {
+                "default": "",
+                "type": "string"
+              }
+            },
+            "required": [
+              "n"
+            ],
+            "type": "object"
+          },
           "Glyph": {
             "description": "A kind's glyph in a graphical and in a terminal class.",
             "properties": {
@@ -15987,6 +16007,14 @@
             "default": false,
             "description": "One line per row (no summary line).",
             "type": "boolean"
+          },
+          "generations": {
+            "default": [],
+            "description": "The package generations, newest first (the editor reads them from disk): a Generations section ends the list.",
+            "items": {
+              "$ref": "#/$defs/Generation"
+            },
+            "type": "array"
           },
           "glyphs": {
             "default": [],
@@ -20854,8 +20882,11 @@
             "type": "array"
           },
           "region_hash": {
-            "description": "SHA-256 in hex of the buffer's whole text after the batch.",
-            "type": "string"
+            "description": "SHA-256 in hex of the buffer's whole text after the batch, sent only for a text of at most 256 KiB; without it\nthe hub checks nothing.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "version": {
             "description": "The buffer's version once the batch is in: the editor's count of its drains (a resync is one of them). The\nframes of its file name it as `doc_version`.",
@@ -20867,7 +20898,6 @@
         "required": [
           "buffer_id",
           "changes",
-          "region_hash",
           "version"
         ],
         "title": "BatchParams",
@@ -39541,6 +39571,13 @@
               }
             ]
           },
+          "outline": {
+            "description": "The form a rows view is drawn in: `on` the outline, `off` the cards, `auto` (where none was asked) the outline\nonly where the cards do not fit.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "selected": {
             "description": "The selection moved (a map key).",
             "type": [
@@ -39549,7 +39586,7 @@
             ]
           },
           "shown": {
-            "description": "False: hidden (no deltas, one stale mark); true again: a full frame.",
+            "description": "False: hidden (nothing is sent); true again: its model and rows drawn anew (the model a reset).",
             "type": [
               "boolean",
               "null"
@@ -39596,7 +39633,7 @@
       "classes": [
         "user"
       ],
-      "doc": "open (or open again) one map view of this connection: the answer is its full frame, and work-map events follow, to this connection only; with rows, its rows come as view-patch per display class instead",
+      "doc": "open (or open again) one map view of this connection: its model comes as view-model (a reset first) and its rows as view-patch per display class, to this connection only; the answer is the hub's id and the view's version",
       "name": "work/map/subscribe",
       "params": {
         "$defs": {
@@ -39655,7 +39692,7 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`work/map/subscribe`'s params: one map view of this connection (VIEW is the editor's id for it), the workspace it\nshows, and how.",
+        "description": "`work/map/subscribe`'s params: one map view of this connection (VIEW is the editor's id for it), the workspace it\nshows, and how. Its rows come as `view-patch` per display class (`view/env`), the first a reset.",
         "properties": {
           "collapsed": {
             "default": [],
@@ -39679,9 +39716,12 @@
               "overlaps": false
             }
           },
-          "rows": {
-            "description": "Rows: the view's rows come as `view-patch` per display class (`view/env`), the first a reset, and no\n`work-map` event comes; the width is the env's (`width_units` is ignored). The answer is `{hub, version}`.",
-            "type": "boolean"
+          "outline": {
+            "description": "The form the user asked for (`work/map/set {outline}`, sent again by the editor): `on`, `off` or `auto`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "selected": {
             "description": "The selected item: a quiet reflow that would move its chain waits for the user.",
@@ -39694,7 +39734,7 @@
             "type": "string"
           },
           "width_units": {
-            "description": "The drawing width, in units of 4 px.",
+            "description": "The drawing width, in units of 4 px, until the view's GUI classes sent a `view/env` (then theirs).",
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
@@ -39712,84 +39752,27 @@
         "type": "object"
       },
       "result": {
-        "$defs": {
-          "MapFrame": {
-            "additionalProperties": false,
-            "description": "A map view's full frame: `work/map/subscribe`'s answer.",
-            "properties": {
-              "chips": {
-                "default": [],
-                "description": "The mission chips (the machines' load).",
-                "items": true,
-                "type": "array"
-              },
-              "edges": {
-                "default": [],
-                "description": "The edges between them.",
-                "items": true,
-                "type": "array"
-              },
-              "items": {
-                "default": [],
-                "description": "The items the view shows, each with its kind, label, flags and card fields.",
-                "items": true,
-                "type": "array"
-              },
-              "layout": {
-                "description": "Rows, positions and forms, lanes, ports and bands, in units of 4 px."
-              },
-              "needs_you": {
-                "default": [],
-                "description": "The needs-you strip.",
-                "items": true,
-                "type": "array"
-              },
-              "version": {
-                "description": "The frame's version; every `work-map` after it names the version it applies to (`base`).",
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              }
-            },
-            "required": [
-              "version",
-              "layout"
-            ],
-            "type": "object"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/map/subscribe`'s answer: the view's patches name this hub and start from a reset.",
+        "properties": {
+          "hub": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
           },
-          "MapRows": {
-            "additionalProperties": false,
-            "description": "`work/map/subscribe`'s answer to a rows view: its patches name this hub and start from a reset.",
-            "properties": {
-              "hub": {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              },
-              "version": {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              }
-            },
-            "required": [
-              "hub",
-              "version"
-            ],
-            "type": "object"
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
           }
         },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "anyOf": [
-          {
-            "$ref": "#/$defs/MapFrame"
-          },
-          {
-            "$ref": "#/$defs/MapRows"
-          }
+        "required": [
+          "hub",
+          "version"
         ],
-        "description": "`work/map/subscribe`'s answer: the full frame, or (`rows`) the hub's instance id and the view's version.",
-        "title": "MapSubscribed"
+        "title": "MapRows",
+        "type": "object"
       },
       "writes": false
     },

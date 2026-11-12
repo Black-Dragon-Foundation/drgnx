@@ -99,7 +99,8 @@ or on a port, or a `debugServer` connected to) and route its updates:
   `{message}` from the stop's description. The editor that started the session gets it with `open: true` (it opens the file); the
   others get `open: false` and draw it only in windows already showing the file (spec §3.3 step 12).
 - `runInTerminal` opens a drgnx terminal for the starting editor (`Terminals`), answers the program's pid and sends
-  that editor `debug-terminal {session, term}`.
+  that editor `debug-terminal {session, term, view, editor}` (to every editor when the start's connection takes no
+  events: `editor` says whose it is; `debug::show_terminal`).
 - `startDebugging` starts a child session (`Launcher::child`: a second connection for a TCP adapter) under its parent.
   A stop or disconnect stops the children first and resolves when all have ended (a parent that ends on its own
   meanwhile, as js-debug's root session does once the program is gone, counts as stopped); the hub's end stops every
@@ -126,6 +127,14 @@ read for variables again and an `args` item stays one argument. It knows all of 
 through a short table of VS Code names (`python.defaultInterpreterPath` → `debug-python-interpreter`). Paths are true
 names (symlinks resolved). An unknown variable, setting or folder is an error that names it.
 
+`compounds` are listed after the configurations as `compound:N` (by `presentation` as configurations are; source
+`compound`, empty type and request). Starting one (`wire::start_compound`) resolves its `configurations` by name
+(`launch::compound_members`; `{name, folder}` is read by its name, one folder here; an unknown name is an error naming
+the compound), asks every member's inputs at once, runs the compound's own `preLaunchTask`, then starts each member as
+`launch:I` with its own tasks, in order. A member that fails stops those started and is the start's error. The answer
+carries `sessions` (all, in order) and `session` (the first). With `stopAll` (off unless set, as in VS Code) the first
+member to end stops the others.
+
 `debugServer` connects to this machine only (a port, or `localhost:N`). The fields drgnx reads itself
 (`presentation`, `preLaunchTask`, `postDebugTask`, `debugServer`, `internalConsoleOptions`, `serverReadyAction`) are
 not passed to the adapter; every other field is.
@@ -141,7 +150,17 @@ each `args` item quoted for the shell; a `process` task runs `command` and `args
 refused. The steps run one at a time before the adapter starts (so a TCP adapter's free port is picked after the
 build); the first that fails stops the rest and the start, and the error gives its exit status and the end of its
 output (2,000 bytes of stdout, then stderr's tail). `${defaultBuildTask}` is the label of the task whose `group` is
-`{"kind": "build", "isDefault": true}`. `postDebugTask` is read from the same file at the start (a wrong name stops the
+`{"kind": "build", "isDefault": true}`.
+
+A start from an editor with a frame (`debug/start` `terminal`, sent by `drgnx-debug-launch--call-start` when
+`drgnx-debug-launch--tab-p`) runs each `preLaunchTask` step in a drgnx terminal tab instead (`tasks::run_in`, spec
+§9.3): `sh -c` a wrapper that waits for the hub's go (a line, sent once the hub waits: `Terminals::run_task`), runs the
+step, marks its end with OSC 133 `D;status` and, on a failure, keeps the tab open until Enter. The hub waits for that
+status (`term::Terms::wait_exit`: the first command end with a status, or the program's exit); a failure's error has
+the status and the end of the tab's text (`term/text-range`, without the wrapper's line). The editor shows the tab on
+`debug-terminal {term, view, task, editor}` and waits for the answer drawing, up to half an hour. A headless or daemon
+start (no frame) runs the steps captured as above, so nothing opens there. Either way the step runs with the user's
+rights and the shell's environment. `postDebugTask` is read from the same file at the start (a wrong name stops the
 start too) and runs once the root session has ended, a restart's end included; its failure goes to the hub's log
 until the debug console shows it.
 
@@ -168,6 +187,12 @@ js-debug, delve, lldb-dap), how to find it and how to start it:
   so any failure leaves the folder as it was. debugpy goes into the tools venv (made first if missing) with `pip
   install --require-hashes --no-deps`. A system package is never run: the error names its command. js-debug and
   CodeLLDB are pinned archives (CodeLLDB is built in, untested, started from its `extension/adapter/codelldb`).
+
+`debug/configs` marks a configuration whose adapter is not found here with `missing` `{adapter, name, install,
+command?}` (`wire::missing_of`; `install` is `download`, `pip`, `system` with its command, or `none`; a `debugServer`
+configuration and a compound carry none). The picker (`drgnx-debug-launch-read-config`) shows such a row as "not
+installed", and picking it offers the install on one yes (`drgnx-debug-launch--offer-install`, from the command only),
+then starts; a `system` adapter's error names its command.
 
 The untested entries' command lines come from dape's recipes (credited in the file). Adapters drgnx cannot start are
 listed with `:not-built-in t`, so their type says to add them in the setting `debug.adapters`; an unknown type lists
@@ -232,8 +257,8 @@ over pipes; a TCP adapter with stdin on `/dev/null`, on a free port of 127.0.0.1
 An adapter that goes on its own ends its session with the end of its stderr in the reason.
 
 `runInTerminal` opens a drgnx terminal in the panel (`term::Terms::spawn`, 80×24 until the editor sizes it) with the
-shell's environment and the adapter's `env` over it; `debug-terminal {session, term, view}` tells the starting editor,
-which shows the view. At the hub's end every session stops, children first, before the store closes.
+shell's environment and the adapter's `env` over it; `debug-terminal {session, term, view, editor}` tells the starting
+editor, which shows it in the panel (`drgnx-debug-launch-show-terminal`). At the hub's end every session stops, children first, before the store closes.
 
 ## The module: `drgnx-debug.el`
 
@@ -323,7 +348,8 @@ banded line, and the pointer noted on a dot lights it.
 
 The module's handler (`drgnx-debug--event`) gives each `debug-frame` to `drgnx-debug-gutter-show-frame`:
 
-- A top frame is a new stop (or the top picked again): the session's marks go, then its line gets the arrow (`stop`;
+- A top frame is a new stop (or the top picked again): the session's marks go (its inline values stay until the
+  stop's own `debug-inline` replaces them, below), then its line gets the arrow (`stop`;
   `stop-bp` over a breakpoint, whose own glyph is hidden until the stop goes; `exception` on an exception) and a band
   (`drgnx-debug-stopped-line`, or `drgnx-debug-exception-line`). A caller frame (`top: false`) replaces only the
   session's caller mark: the outline arrow and `drgnx-debug-frame-line`. The marks are overlays tagged
@@ -344,6 +370,34 @@ The module's handler (`drgnx-debug--event`) gives each `debug-frame` to `drgnx-d
 
 Tests: `test/unit/debug-stop-test.el`; perf row `debug-step-line` (120 steps through the fixture, p95 ≤ 16 ms; 3.4 ms
 measured on the desktop).
+
+### Inline values (spec §8)
+
+At each stop the hub sends `debug-inline` (`{session, epoch, path, lines: [{line, text, changed}]}`) after the
+`debug-frame`, from `debug/inline.rs`, which picks what to show:
+
+- **Which names:** the frame's file is parsed with Hrafn's grammar for its language (unsupported: none); the
+  innermost function around the stopped line (else the top level) gives its identifiers from its first line to the
+  stopped line, plus the rest of the outermost loop around it (its later lines ran on earlier passes). Called names,
+  a function's own name and fields after a dot are not values. They are matched against the frame's fetched scopes:
+  Locals and Arguments, then Globals only for names no local has; registers are skipped.
+- **Where:** each name on the last line it appears on up to the stop (else its last line in the loop), at most three a
+  line, `name = value` with the value on one line and cut at 60 characters, the line cut at 120.
+- **Changed:** values that differ from the session's previous stop; `changed` gives each one's character range.
+- **Cost:** one parse per file text, cached by its digest (8 trees), the walk only over the function.
+
+`drgnx-debug-gutter-inline` draws them: one overlay per line at its end (`after-string` two spaces, then the text in
+`drgnx-debug-inline-value`, the changed ranges in `drgnx-debug-inline-value-changed`, the cursor kept before them),
+priority 90 so diagnostics (100) come after them. They are the session's stop marks with the role `inline`: a new
+stop's frame leaves them, its `debug-inline` updates the lines that keep values in the same overlays, adds the new and
+deletes the rest; they go 150 ms after the session runs and at once when it ends. A buffer modified since its save gets
+none (the program runs the saved file) and the echo area says so. The overlays carry `drgnx-blame-yield`: the blame
+overlay on such a line goes, and `drgnx-blame--show` shows none on a line that has one. `drgnx-debug-inline-values`
+(`on`/`off`) turns them off at once.
+
+Tests: `debug::tests_inline` and `tests_registry::a_stop_publishes_its_inline_values` (the hub),
+`test/unit/debug-inline-test.el` (the editor); perf rows `debug-inline` (the editor's, p95 ≤ 2 ms) and the bench
+`benches/debug_inline.rs` (the hub's, p95 ≤ 8 ms).
 
 ## The toolbar: `drgnx-debug-toolbar.el` (spec §6)
 
@@ -435,7 +489,9 @@ Methods (runstav `methods::debug`, the user class; served by `view::debug::serve
   children while its stop (EPOCH, default the current one) lasts; after it, the error says the stop is over.
   (Copy Value uses `clipboard` when the adapter has `supportsClipboardContext`).
 - `debug/breakpoints`' ops `filter {adapter, name, enabled}` (kept per adapter type and sent to its sessions at once),
-  `enable-all {enabled}` and `remove-all` (function breakpoints too).
+  `enable-all {enabled}`, `toggle-all` (all off when any is on, else all on: Toggle All Breakpoints) and `remove-all`
+  (function breakpoints too).
+- `debug/start`'s `no_debug` (Run Without Debugging) launches the configuration with `noDebug: true`, as VS Code does.
 
 The editor's half asks on the connection the rows come on (`drgnx-hub--events`): the hub keeps the view per
 connection. A key that opens or closes a node waits up to `drgnx-debug-view-await-limit` (12 ms) for the rows, so
@@ -482,6 +538,35 @@ container may not turn address randomisation off.
 
 Inside the sandbox (Gleipnir) `ptrace` stays refused in both tiers, so delve and lldb-dap run outside it; Python and
 JavaScript adapters run in the full tier.
+
+### Live adapters: the runs (spec §13)
+
+`debug::tests_live_adapters` (ignored in normal runs) starts each adapter for real through the hub's own launcher
+(`adapters::command`, `wire::Spawned`) and drives the hub's API, wire level: no editor is needed, since the events the
+editor gets are what it checks. Each adapter runs the same scenario over a small program: a breakpoint hit, a
+condition (`i == 3`) and a hit count (`2`), a logpoint's output, step in, out and over, Variables with a structure
+expanded, `setVariable` (the program then uses the value set), a watch (`evaluate`), an exception filter's stop, a
+restart and Stop (the hub empty, the debuggee gone). debugpy adds a `subprocess` child, js-debug a `fork` child (both
+through `startDebugging`), and lldb-dap starts its program through `runInTerminal`. debugpy and lldb-dap also attach
+to a running process by PID, where Stop leaves the process running. Each test prints a `T10-REPORT` line: the
+capabilities, the exception filters and what each step saw. The `*_probe_cost` tests run a 500-pass loop with a probe's
+logpoint and without, and print a `T10-PROBES` line: the cost of a hit and its value's text, per adapter (debugpy
+0.6 ms, js-debug 2.5 ms, delve 8.7 ms, lldb-dap 1 ms on the desktop; lldb-dap shows a struct as its type name only).
+
+The hub's library test binary, run with `--ignored --test-threads=1 --nocapture debug::tests_live_adapters` inside
+`drgnx-debug-adapters:f45` with `ctr.sh --ptrace` (about 3 GB of memory), runs them all in about 2 minutes. What the
+runs showed, and the hub keeps to:
+
+- debugpy's children are attaches whose `connect` names the parent adapter's own client listener (it serves one even
+  over stdio): a child session connects there (`launch::child_server`), as VS Code's Python extension does.
+- delve restarts in place: `restart` is answered, then `initialized` comes again and the adapter waits for its
+  configuration. The session configures again with the project's breakpoints, functions and filters of now
+  (`Update::Configure`). debugpy, js-debug and lldb-dap restart as a new session.
+- Adapters differ in where a step lands: delve's step in stops on the function's `func` line (its prologue) before the
+  body, and js-debug's step out lands on the line after the call when the call's value is assigned there. The
+  scenario accepts both and reports which.
+- After a `setVariable` the same stop is published again, in the same epoch; a new stop has the next epoch, which is
+  how the scenario tells them apart.
 
 ## Sessions inside a port block (spec §21)
 
@@ -533,6 +618,13 @@ session gets a block of ports and its launch configuration becomes an attach the
   adapters send what it prints as output events (debugpy with `redirectOutput`; js-debug the console's calls).
 - The hub owns both processes: they get the session's signals, and once the adapter is gone the program is killed.
 - lldb-dap runs outside the sandbox on macOS (no task port) and delve needs `ptrace`: both are refused here.
+- **Sealed (what-if forks on macOS):** `fork_seal::Sealed` claims a block from the hub's table (`ports::machine`)
+  and gives `Blocked` a seal (`Blocked::sealed`) that starts the adapter and the program each through Seatbelt
+  under `fork_seal::mac_spec`: the fork's spec with the block as its only `mac_loopback_ports` and each `.env` pinned
+  read-only at its own place, a link to it in the tree (`link_env_files`; no mount namespace, never copied). Each
+  process's environment and folder go into the spec, then `sandbox-exec` runs it. The macOS fork row of the runtime
+  workflow (`debug::tests_fork_live::mac_forks_keep_to_their_port_block`) runs a Python and a JS fork while lsof
+  sweeps their process groups every 50 ms: every socket has an end in one block.
 
 The live tests (`debug/tests_blocked_live.rs`, ignored by default) run both adapters through the hub's sessions in
 the adapter image: each program starts a child at once (js-debug forks on its first line), the breakpoint is in the
@@ -589,7 +681,8 @@ buffer). Tests: `debug::tests_probes`, `debug::tests_record`, `test/unit/debug-t
 ## What-if forks (spec §19.3)
 
 A fork replays a recorded run in a sealed copy up to a point, changes a value or the code there, and runs on; the
-What-if tab shows it beside the run. Linux only for now; other hosts refuse with the reason.
+What-if tab shows it beside the run. Linux (Gleipnir's full tier: the shim over stdio, its own loopback) and macOS
+(Seatbelt with a port block, below); other hosts refuse with the reason (`fork::SEALS_HERE`).
 
 - **The engine** (`debug/fork.rs`): `check` maps the point onto the run: a stop of the run (a stop reached by
   stepping maps to the breakpoint stop before it plus the steps since), or a line's N-th pass. Refused: an attach
@@ -661,7 +754,8 @@ What-if tab shows it beside the run. Linux only for now; other hosts refuse with
 
 ## Debugging with an agent (spec §19.5)
 
-A partner agent debugs beside the user through six norn tools (`norn/src/tools/debug.rs`), which every session gets;
+A partner agent debugs beside the user through six norn tools (`norn/src/tools/debug.rs`), which a session gets once its project debugs (a launch
+configuration, a live session or a recorded run; [coordination.md](coordination.md)), mid-session too;
 each is a thin `CoordTool` whose call reaches the hub as `Hub::debug(sid, op, args)` with the caller's session (an
 outside agent is refused: "the debugger's tools are for agents drgnx runs"). The hub's half is
 `drgnx-ratatoskr/src/debug/agent.rs`: `tool` finds the session, maps the op to its matrix row (`action_of`), gates it

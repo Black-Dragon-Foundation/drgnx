@@ -40,7 +40,6 @@
             (drgnx-view-patch--buffers (make-hash-table :test #'equal))
             (drgnx-view-model--views (make-hash-table :test #'equal))
             (drgnx-view-patch--hooked nil)
-            (drgnx-view-old-path nil)
             (drgnx-view-patch-send-function #'ignore)
             (drgnx-view-env-send-function #'ignore)
             (drgnx-hub--events nil)
@@ -116,10 +115,22 @@ buffer, never silence; the status of that root stays what it was."
           (with-current-buffer " *drgnx git errors*"
             (should (string-match-p "dubious ownership" (buffer-string)))))))))
 
-(ert-deftest drgnx-git/old-path-switch-reads-no-letters ()
-  "Pattern D: with `drgnx-view-old-path' the hub is not asked, and a root has no letters (its status is the cache's)."
-  (let ((drgnx-view-old-path t))
-    (should-not (drgnx-git--hub-ready-p))
-    (should-not (drgnx-git-letters-active-p))))
+(ert-deftest drgnx-git/hub-down-reads-the-status-with-git-itself ()
+  "With Sjá here but no hub connection the hub is not asked, a root has no letters, and `git status' run by Emacs
+fills the cache `drgnx-git-status' answers from."
+  (skip-unless (executable-find "git"))
+  (let ((root (file-name-as-directory (make-temp-file "drgnx-git-down" t)))
+        (drgnx-hub--events nil) (drgnx-git--roots (make-hash-table :test #'equal)))
+    (unwind-protect
+        (let ((default-directory root))
+          (should (zerop (call-process "git" nil nil nil "init" "-q")))
+          (write-region "x\n" nil (expand-file-name "a.txt" root) nil 'silent)
+          (cl-letf (((symbol-function 'nidhogg-view--call) #'ignore)
+                    ((symbol-function 'drgnx-hub--call-on) (lambda (&rest _) (error "The hub is down"))))
+            (should-not (drgnx-git--hub-ready-p))
+            (drgnx-git-refresh root t)
+            (should-not (drgnx-git-letters-active-p))
+            (should (eq (drgnx-git-status (expand-file-name "a.txt" root)) 'untracked))))
+      (delete-directory root t))))
 
 ;;; git-letters-test.el ends here

@@ -31,14 +31,14 @@ fn hub_only(tx: &WTx<'_>) -> Result<(), CoordError> {
     }
 }
 
-/// What a conclusion names: a file with optional lines, or a page.
+/// A file (lines optional) or a page.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum Source {
     Path {
         /// A file
         path: String,
-        /// First and last line, 1-based
+        /// First, last (1-based)
         #[serde(default, skip_serializing_if = "Option::is_none")]
         lines: Option<[u32; 2]>,
     },

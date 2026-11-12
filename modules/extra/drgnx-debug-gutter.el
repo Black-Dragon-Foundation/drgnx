@@ -760,8 +760,10 @@ after the line when given."
          (open (eq (plist-get data :open) t))
          (path (plist-get data :path)) (ref (plist-get data :ref)))
     (drgnx-timer-cancel (cons 'debug-stop session))
-    ;; a top frame is a new stop (or the top picked again): every mark of the session goes; a caller replaces a caller
-    (drgnx-debug-gutter-stop-clear session (unless top 'frame))
+    ;; a top frame is a new stop (or the top picked again): its marks go (the inline values stay, for the stop's own
+    ;; `debug-inline' to replace in place); a caller replaces a caller
+    (when top (drgnx-debug-gutter-stop-clear session 'top))
+    (drgnx-debug-gutter-stop-clear session 'frame)
     (cond
      ((stringp path)
       (when-let* ((buf (if open (find-file-noselect path) (get-file-buffer path))))
@@ -789,6 +791,96 @@ after the line when given."
                                    #'drgnx-debug-gutter-stop-clear :args (list id)
                                    :owner (overlay-buffer (car (drgnx-debug-gutter--stop-overlays id)))))))))
 
+;;;; Inline values (spec §8)
+
+;; A stop's `debug-inline' (the hub picks the names, places them, cuts them and marks what changed: debug/inline.rs)
+;; puts the values after their lines' ends: overlays tagged `drgnx-debug-stop' `inline' among the session's stop marks,
+;; so they go with them (150 ms after it runs, at once when it ends).  A new stop's frame leaves them, and its own
+;; `debug-inline' replaces them in place (a line that keeps values keeps its overlay).  Blame yields on those lines
+;; (`drgnx-blame-yield').  A buffer modified since its save gets none: the program runs the saved file.
+
+(defun drgnx-debug-gutter--inline-set (symbol value)
+  "`:set' of `drgnx-debug-inline-values': off takes every value away at once."
+  (set-default symbol value)
+  (unless (eq value 'on) (drgnx-debug-gutter-inline-clear-all)))
+
+(defcustom drgnx-debug-inline-values 'on
+  "Whether a stop shows its variables' values at the ends of their lines."
+  :type '(choice (const :tag "On" on) (const :tag "Off" off)) :group 'drgnx
+  :set #'drgnx-debug-gutter--inline-set)
+
+(defface drgnx-debug-inline-value '((t :inherit drgnx-text-subtle :slant italic))
+  "A value after its line while stopped." :group 'drgnx)
+(defface drgnx-debug-inline-value-changed '((t :inherit drgnx-status-warn :slant italic))
+  "A value that changed since the last stop." :group 'drgnx)
+
+(defconst drgnx-debug-gutter--inline-priority 90 "Below diagnostics' 100: the values come first after the line.")
+
+(defvar drgnx-blame--overlay)
+
+(defun drgnx-debug-gutter--inline-clear (session)
+  "Take SESSION's inline values away (its other stop marks stay)."
+  (let ((gone (drgnx-debug-gutter--stop-overlays session 'inline)))
+    (when gone
+      (mapc #'delete-overlay gone)
+      (let ((left (drgnx-debug-gutter--stop-overlays session)))
+        (setq drgnx-debug-gutter--stops
+              (if left (cons (cons session left) (assoc-delete-all session drgnx-debug-gutter--stops))
+                (assoc-delete-all session drgnx-debug-gutter--stops)))))))
+
+(defun drgnx-debug-gutter-inline-clear-all ()
+  "Take every session's inline values away."
+  (dolist (s (mapcar #'car drgnx-debug-gutter--stops)) (drgnx-debug-gutter--inline-clear s)))
+
+(defun drgnx-debug-gutter--inline-string (text changed)
+  "TEXT after a line: in the value face, the CHANGED ranges ([START END] each) in the changed face."
+  (let ((s (concat "  " (copy-sequence text))))
+    (add-face-text-property 0 (length s) 'drgnx-debug-inline-value t s)
+    (seq-doseq (r changed)
+      (let ((b (+ 2 (elt r 0))) (e (+ 2 (elt r 1))))
+        (when (<= b e (length s))
+          (put-text-property b e 'face 'drgnx-debug-inline-value-changed s))))
+    (put-text-property 0 1 'cursor t s)
+    s))
+
+(defun drgnx-debug-gutter-inline (data)
+  "A `debug-inline' event (DATA: :session, :path, :lines of :line, :text, :changed): show the values in the file's
+buffer, replacing the session's last ones in place."
+  (let* ((session (plist-get data :session)) (path (plist-get data :path))
+         (buf (and (eq drgnx-debug-inline-values 'on) (stringp path) (get-file-buffer path)))
+         (old (drgnx-debug-gutter--stop-overlays session 'inline))
+         (lines (append (plist-get data :lines) nil)))
+    (cond
+     ((or (null buf) (null lines)) (drgnx-debug-gutter--inline-clear session))
+     ((buffer-modified-p buf)
+      (drgnx-debug-gutter--inline-clear session)
+      (message "No inline values: %s was modified since it was saved" (buffer-name buf)))
+     (t
+      (with-current-buffer buf
+        (save-excursion
+          (let ((keep nil))
+            (dolist (l lines)
+              (goto-char (point-min))
+              (when (zerop (forward-line (1- (plist-get l :line))))
+                (let* ((eol (line-end-position))
+                       (o (or (seq-find (lambda (o) (and (eq (overlay-buffer o) buf) (= (overlay-start o) eol))) old)
+                              (let ((n (make-overlay eol eol nil t nil)))
+                                (overlay-put n 'drgnx-debug-stop 'inline)
+                                (overlay-put n 'drgnx-blame-yield t)
+                                (overlay-put n 'priority drgnx-debug-gutter--inline-priority)
+                                n))))
+                  (overlay-put o 'after-string
+                               (drgnx-debug-gutter--inline-string (plist-get l :text) (plist-get l :changed)))
+                  (push o keep)
+                  ;; blame on this line yields (`drgnx-blame--show' checks `drgnx-blame-yield' before it shows again)
+                  (when (and (bound-and-true-p drgnx-blame--overlay) (overlay-buffer drgnx-blame--overlay)
+                             (= (overlay-start drgnx-blame--overlay) eol))
+                    (delete-overlay drgnx-blame--overlay)))))
+            (mapc #'delete-overlay (seq-remove (lambda (o) (memq o keep)) old))
+            (let ((others (seq-remove (lambda (o) (eq (overlay-get o 'drgnx-debug-stop) 'inline))
+                                      (drgnx-debug-gutter--stop-overlays session))))
+              (setf (alist-get session drgnx-debug-gutter--stops nil nil #'equal) (append keep others))))))))))
+
 ;;;; The mode
 
 (defvar drgnx-debug-gutter-mode-map
@@ -814,7 +906,9 @@ after the line when given."
         (add-hook 'drgnx-hub-event-functions #'drgnx-debug-gutter--event)
         (add-hook 'pre-redisplay-functions #'drgnx-debug-gutter--pool-update nil t)
         (add-hook 'window-scroll-functions #'drgnx-debug-gutter--pool-scrolled nil t)
-        (when buffer-file-name (drgnx-debug-gutter--ask nil))
+        ;; asked from `find-file-hook' (`drgnx-debug--gutter-on'): with no hub to answer, the file has no breakpoints
+        ;; to show; it never fails the visit (`drgnx-hub-call' signals when no hub serves).  The commands still say why
+        (when buffer-file-name (condition-case nil (drgnx-debug-gutter--ask nil) (error nil)))
         (drgnx-debug-gutter--claim))
     (remove-hook 'after-save-hook #'drgnx-debug-gutter--saved t)
     (remove-hook 'after-revert-hook #'drgnx-debug-gutter--reverted t)

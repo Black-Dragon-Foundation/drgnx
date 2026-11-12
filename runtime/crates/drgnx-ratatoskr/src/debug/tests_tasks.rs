@@ -187,3 +187,121 @@ fn a_post_debug_task_comes_from_the_same_file() {
     let steps = tasks::after_debug(d.path(), &config, Os::Linux, &|s| Ok(s.into())).unwrap();
     assert_eq!(steps[0].argv, ["rm", "-f", "out"]);
 }
+
+/// An opened tab: its connection, folder, argv and environment.
+type Open = (u64, String, Vec<String>, Vec<(String, String)>);
+
+/// Terminals that record what they open and end each with the next of EXITS, the tab's text TEXT.
+struct Tabs {
+    opened: std::sync::Mutex<Vec<Open>>,
+    exits: std::sync::Mutex<Vec<Option<i32>>>,
+    text: String,
+}
+
+impl super::Terminals for Tabs {
+    fn open(
+        &self,
+        conn: u64,
+        cwd: String,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+    ) -> super::BoxFut<'_, Result<super::Opened, String>> {
+        let mut o = self.opened.lock().unwrap();
+        o.push((conn, cwd, args, env));
+        let n = o.len();
+        Box::pin(async move {
+            Ok(super::Opened {
+                term: format!("t{n}"),
+                view: format!("term:t{n}"),
+                pid: 1,
+                editor: None,
+            })
+        })
+    }
+
+    fn run_task(&self, term: String) -> super::BoxFut<'_, (Option<i32>, String)> {
+        let code = self.exits.lock().unwrap().remove(0);
+        let text = if code == Some(0) {
+            String::new()
+        } else {
+            format!("{term}: {}", self.text)
+        };
+        Box::pin(async move { (code, text) })
+    }
+}
+
+#[tokio::test]
+async fn in_a_tab_each_step_runs_wrapped_and_a_failure_says_its_status_and_text() {
+    let d = tempfile::tempdir().unwrap();
+    let tabs = Tabs {
+        opened: Default::default(),
+        exits: std::sync::Mutex::new(vec![Some(0), Some(2)]),
+        text: "error: no rule\nEnter closes this tab.".into(),
+    };
+    let steps = vec![
+        step("gen", "echo gen", d.path()),
+        step("make", "make", d.path()),
+        step("after", "echo after", d.path()),
+    ];
+    let shown = std::sync::Mutex::new(vec![]);
+    let e = tasks::run_in(&steps, &tabs, 7, &|s, o| {
+        shown
+            .lock()
+            .unwrap()
+            .push((s.label.clone(), o.term.clone()))
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(
+        *shown.lock().unwrap(),
+        [
+            ("gen".to_owned(), "t1".to_owned()),
+            ("make".into(), "t2".into())
+        ],
+        "each tab shown as it opens"
+    );
+    assert!(
+        e.contains("task make failed (exit 2)") && e.contains("t2: error: no rule"),
+        "{e}"
+    );
+    assert!(
+        !e.contains("Enter closes"),
+        "the tab's own line is not the task's: {e}"
+    );
+    let opened = tabs.opened.lock().unwrap();
+    assert_eq!(opened.len(), 2, "the first failure stops the rest");
+    let (conn, cwd, args, env) = &opened[0];
+    assert_eq!(*conn, 7);
+    assert_eq!(cwd, &d.path().to_string_lossy());
+    assert_eq!(
+        &args[..2],
+        ["/bin/sh", "-c"],
+        "the step runs in the tab's wrapper"
+    );
+    assert_eq!(
+        &args[3..],
+        ["drgnx-task", "/bin/sh", "-c", "echo gen"],
+        "its argv as is"
+    );
+    assert_eq!(env, &[("DRGNX_TASK_TEST".to_owned(), "1".to_owned())]);
+    // the wrapper marks the end with the status (OSC 133 D) and keeps a failed tab open
+    assert!(
+        args[2].contains("133;D;%d") && args[2].contains("read"),
+        "{}",
+        args[2]
+    );
+}
+
+#[tokio::test]
+async fn a_tab_that_goes_without_a_status_fails_the_start() {
+    let d = tempfile::tempdir().unwrap();
+    let tabs = Tabs {
+        opened: Default::default(),
+        exits: std::sync::Mutex::new(vec![None]),
+        text: String::new(),
+    };
+    let e = tasks::run_in(&[step("b", "true", d.path())], &tabs, 1, &|_, _| {})
+        .await
+        .unwrap_err();
+    assert!(e.contains("task b") && e.contains("closed"), "{e}");
+}

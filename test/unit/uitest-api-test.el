@@ -37,3 +37,19 @@
 (ert-deftest drgnx-uitest/api-as-runs-for-its-own-id ()
   (let ((drgnx-uitest-session-id "drgnx-ui-1-aaaaaa"))
     (should (equal (drgnx-uitest-api-as "drgnx-ui-1-aaaaaa" (concat "a" "b")) "ab"))))
+
+(defun drgnx-uitest-test--asks-the-hub ()
+  "A caller that asks the hub, as a hook in a GUI row would."
+  (drgnx-hub--connect-socket #'ignore))
+
+(ert-deftest drgnx-uitest/a-hub-asked-with-none-names-its-callers ()
+  ;; the GUI rows run no hub: code that asks one fails, and the error names who asked (`drgnx-uitest--hub-callers')
+  (require 'drgnx-hub-client)
+  (let* ((root (make-temp-file "drgnx-uitest-hub" t))
+         (process-environment (cons (concat "XDG_RUNTIME_DIR=" root) process-environment)))
+    (unwind-protect
+        (let ((msg (error-message-string (should-error (drgnx-uitest-test--asks-the-hub)))))
+          (should (string-search "does not exist (no hub)" msg))
+          (should (string-search "called from: " msg))
+          (should (string-search "drgnx-uitest-test--asks-the-hub" msg)))
+      (delete-directory root t))))

@@ -42,6 +42,7 @@ fn params(dense: bool) -> w::ListParams {
             tty: "#".into(),
         }],
         restart: vec!["pkg:b".into()],
+        generations: vec![],
     }
 }
 
@@ -132,5 +133,88 @@ fn extensions_rows_carry_every_list_column() {
         d.nodes["pkg:b"]["fields"]
             .to_string()
             .contains(r#"["state","update"]"#)
+    );
+}
+
+/// The Generations section: the editor sends the generations (it reads them from disk), the hub ends the list with a
+/// header and a row per generation (number, time, note, in use or current, size), the differences and the copies
+/// note as lines under it; each row's span names `gen:N`, and the model's node carries the `gen` the rollback reads.
+#[test]
+fn extensions_generations_end_the_list_with_their_gen() {
+    let mut p = params(false);
+    p.generations = vec![
+        w::Generation {
+            n: 4,
+            time: "2026-11-12 10:00".into(),
+            note: Some("update magit".into()),
+            differs: vec!["magit 4.1 → 4.2".into()],
+            in_use: false,
+            current: true,
+            size: Some("2k".into()),
+            copies: Some("This file system copies the packages twice per change.".into()),
+        },
+        w::Generation {
+            n: 3,
+            time: "2026-11-11 09:00".into(),
+            note: None,
+            differs: vec![],
+            in_use: true,
+            current: false,
+            size: None,
+            copies: None,
+        },
+    ];
+    let (b, _) = build(
+        &p,
+        vec![(1, vec![row("pkg:a", w::State::Installed)]), (0, vec![])],
+    );
+    let rows = rows(&b, Display::Gui);
+    let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+    assert_eq!(
+        keys,
+        [
+            "section:installed",
+            "pkg:a",
+            "pkg:a/2",
+            "section:generations",
+            "gen:4",
+            "gen:4/2",
+            "gen:4/3",
+            "gen:3"
+        ]
+    );
+    assert_eq!(text(&rows, "section:generations"), "Generations (2)");
+    assert_eq!(
+        text(&rows, "gen:4"),
+        "▣ #4  2026-11-12 10:00  update magit  current  2k"
+    );
+    assert_eq!(text(&rows, "gen:4/2"), "    magit 4.1 → 4.2");
+    assert_eq!(
+        text(&rows, "gen:4/3"),
+        "    This file system copies the packages twice per change."
+    );
+    assert_eq!(text(&rows, "gen:3"), "▣ #3  2026-11-11 09:00  in use");
+    let props =
+        serde_json::to_value(rows.iter().find(|r| r.key == "gen:4/2").unwrap()).unwrap()["props"]
+            .to_string();
+    assert!(props.contains(r#""drgnx-work-id","gen:4""#), "{props}");
+    assert!(!props.contains("drgnx-extensions-id"), "{props}");
+    let d = doc(&b);
+    assert_eq!(
+        d.lists["order"],
+        [
+            "section:installed",
+            "pkg:a",
+            "section:generations",
+            "gen:4",
+            "gen:3"
+        ]
+    );
+    assert_eq!(d.nodes["gen:4"]["kind"], "generation");
+    assert_eq!(d.nodes["gen:4"]["parent"], "section:generations");
+    assert!(
+        d.nodes["gen:4"]["fields"]
+            .to_string()
+            .contains(r#"["gen",4]"#)
     );
 }

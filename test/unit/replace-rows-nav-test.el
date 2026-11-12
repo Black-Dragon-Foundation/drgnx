@@ -103,7 +103,6 @@ a.txt, each file's matches under their definitions (`s:'), b.txt's under \"(top 
      (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
            (drgnx-view-model--views (make-hash-table :test #'equal))
            (drgnx-view-patch--hooked nil)
-           (drgnx-view-old-path nil)
            (drgnx-view-patch-send-function #'ignore)
            (view (format "rrn-test-%d" (cl-incf drgnx-replace-rows-nav-test--n)))
            (buf (get-buffer-create drgnx-replace-buffer-name)))
@@ -245,7 +244,10 @@ both have keys in every profile (SJA-SEARCH-1 (4))."
   "BODY with the hub's calls recorded in `calls' (newest first, (METHOD . PARAMS)): `search/edits' answers change 7,
 skipping nothing; the others answer t."
   (declare (indent 0))
-  `(let ((calls nil))
+  `(let ((calls nil)
+         ;; the hub client is stubbed, never loaded: the calls name its connection, which is void until it loads (a
+         ;; test alone in its Emacs found it so, and its call failed before it was recorded)
+         (drgnx-hub--events nil))
      (cl-letf (((symbol-function 'drgnx-hub--call-on)
                 (lambda (_conn method params cb &rest _)
                   (push (cons method params) calls)
@@ -296,7 +298,7 @@ tile is asked for again."
               ((symbol-function 'drgnx-replace--text) (lambda (_) "pin"))
               ((symbol-function 'drgnx-wb-show-in-editor) #'ignore))
       (unwind-protect
-          (let ((calls nil))
+          (let ((calls nil) (drgnx-hub--events nil))   ; the hub client is stubbed, never loaded
             (cl-letf (((symbol-function 'drgnx-hub--call-on)
                        (lambda (_conn method params cb &rest _)
                          (push (cons method params) calls)
@@ -375,7 +377,8 @@ shows a buffer's own header line (Open File, Replace in This File) only when it 
 and removed, what is skipped and why; Cancel writes nothing, Replace writes that edit set (`search/apply' of its
 change); `C-u' Replace All writes at once, no sheet."
   (drgnx-replace-rows-nav-test--with
-    (let ((answer '(:change 7 :skipped ((:id "m:b.txt:5:4" :path "/r/b.txt" :why "changed on disk since the search"))
+    (let ((drgnx-hub--events nil)
+          (answer '(:change 7 :skipped ((:id "m:b.txt:5:4" :path "/r/b.txt" :why "changed on disk since the search"))
                             :files ((:path "/r/a.txt" :source "disk"
                                            :edits ((:id "m:a.txt:1:4" :line 1) (:id "m:a.txt:2:4" :line 2))))))
           (calls nil) (refits nil))
@@ -437,7 +440,8 @@ rows, 40 px in, radius 6, in `drgnx-border-subtle', its corners in the colour un
 window parameter is set once per change, never again for a redraw that changes nothing, and again when the theme
 changes the colour beneath."
   (drgnx-replace-rows-nav-test--with
-    (let ((answer '(:change 7 :skipped nil
+    (let ((drgnx-hub--events nil)
+          (answer '(:change 7 :skipped nil
                             :files ((:path "/r/a.txt" :source "disk"
                                            :edits ((:id "m:a.txt:1:4" :line 1) (:id "m:a.txt:2:4" :line 2))))))
           (sets 0) (setp (symbol-function 'set-window-parameter)))

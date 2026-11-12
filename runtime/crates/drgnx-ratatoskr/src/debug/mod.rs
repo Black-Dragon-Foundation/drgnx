@@ -22,6 +22,7 @@ pub mod fork_hub;
 pub mod fork_mux;
 pub mod fork_seal;
 pub mod fork_wire;
+pub mod inline;
 pub mod install;
 pub mod launch;
 pub mod origin;
@@ -63,9 +64,13 @@ mod tests_fork_live;
 #[cfg(test)]
 mod tests_fork_seal;
 #[cfg(test)]
+mod tests_inline;
+#[cfg(test)]
 mod tests_install;
 #[cfg(test)]
 mod tests_launch;
+#[cfg(test)]
+mod tests_live_adapters;
 #[cfg(test)]
 mod tests_origin;
 #[cfg(test)]
@@ -175,6 +180,17 @@ pub struct Opened {
     pub term: String,
     pub view: String,
     pub pid: i64,
+    /// The editor session it belongs to.
+    pub editor: Option<String>,
+}
+
+/// Terminal DATA (`term`, `view`, `editor`, …) for connection CONN's editor to show (`debug-terminal`): to CONN when
+/// it takes events, else to every editor, `editor` saying which one it is for (a start comes on a connection that
+/// takes none).
+pub fn show_terminal(sink: &dyn Sink, conn: u64, data: Value) {
+    if !sink.send(conn, "debug-terminal", data.clone()) {
+        sink.broadcast("debug-terminal", data, None);
+    }
 }
 
 /// The program `runInTerminal` asks for, in a drgnx terminal.
@@ -187,6 +203,14 @@ pub trait Terminals: Send + Sync {
         args: Vec<String>,
         env: Vec<(String, String)>,
     ) -> BoxFut<'_, Result<Opened, String>>;
+
+    /// Let terminal TERM's task run (its wrapper waits for a line, so this waits from before it can end) and give its
+    /// exit status (the first command end with one, or its program's exit; none when it is gone) and, when that is not
+    /// 0, its text.
+    fn run_task(&self, term: String) -> BoxFut<'_, (Option<i32>, String)> {
+        let _ = term;
+        Box::pin(async { (None, String::new()) })
+    }
 }
 
 /// The phase a session shows.
@@ -242,6 +266,11 @@ struct Inner {
     store_dir: Option<PathBuf>,
     /// The recorded runs and the probes (none: nothing is recorded).
     rec: OnceLock<Arc<record::Records>>,
+    /// Told the roots of the live sessions each time they change (a session starts or ends; a recording starts with
+    /// its session): the hub gives the agents there the debugger's tools.
+    on_state: OnceLock<StateHook>,
+    /// The inline values' parse cache and each session's last values.
+    inline: inline::Inline,
     /// Told of every change of a session's state or stop, or of breakpoints (the Run and Debug views).
     listeners: Mutex<Vec<Listener>>,
     /// Each session's console output waiting to be sent (`debug-output`), and the sessions whose batch is due.
@@ -262,6 +291,9 @@ pub struct Snap {
     pub caps: Value,
     pub adapter: String,
 }
+
+/// What [`Debug::on_state`] calls.
+pub type StateHook = Arc<dyn Fn(Vec<String>) + Send + Sync>;
 
 /// The hub's debug sessions.
 #[derive(Clone)]
@@ -292,11 +324,33 @@ impl Debug {
                 stores: Mutex::new(BTreeMap::new()),
                 store_dir,
                 rec: OnceLock::new(),
+                on_state: OnceLock::new(),
+                inline: inline::Inline::new(),
                 listeners: Mutex::new(Vec::new()),
                 consoles: Mutex::new(HashMap::new()),
                 armed: Mutex::new(HashSet::new()),
             }),
         }
+    }
+
+    /// Call HOOK with the live sessions' roots whenever they change (once; a later hook is ignored).
+    pub fn on_state(&self, hook: StateHook) {
+        let _ = self.inner.on_state.set(hook);
+    }
+
+    /// The roots that debug: a live session's, or a recorded run's.
+    pub fn debugged_roots(&self) -> Vec<String> {
+        let mut roots: Vec<String> = lock(&self.inner.state)
+            .sessions
+            .values()
+            .map(|e| e.root.clone())
+            .collect();
+        if let Some(rec) = self.records() {
+            roots.extend(rec.list("").into_iter().map(|m| m.root));
+        }
+        roots.sort();
+        roots.dedup();
+        roots
     }
 
     /// Record every session from now on, as OPTS says (once; later calls answer the first records).
@@ -567,6 +621,19 @@ impl Debug {
 
     /// Every breakpoint of ROOT removed (REMOVE), or enabled or disabled (ENABLED): each file changed is published
     /// and sent to ROOT's sessions.
+    /// Toggle All Breakpoints: every breakpoint of ROOT off when any is on, else all on; the state it leaves.
+    pub async fn toggle_all_breakpoints(&self, root: &str) -> bool {
+        let any_on = self.store(root, |s| {
+            s.paths().iter().any(|p| {
+                s.view(p)["breakpoints"]
+                    .as_array()
+                    .is_some_and(|bs| bs.iter().any(|b| b["enabled"] == true))
+            })
+        });
+        self.all_breakpoints(root, false, !any_on).await;
+        !any_on
+    }
+
     pub async fn all_breakpoints(&self, root: &str, remove: bool, enabled: bool) {
         let ops: Vec<breakpoints::Op> = self.store(root, |s| {
             let mut ops = vec![];
@@ -805,19 +872,7 @@ impl Debug {
             st.next += 1;
             format!("d{}", st.next)
         };
-        // the project's breakpoints, as the store has them now
-        self.store(&root, |s| {
-            start.breakpoints = s
-                .paths_for(&id)
-                .into_iter()
-                .map(|path| session::SourceBps {
-                    breakpoints: s.send_list(&id, &path),
-                    path,
-                })
-                .collect();
-            start.functions = s.functions();
-            start.exception_filters = s.chosen_filters(&start.adapter_id);
-        });
+        self.fill(&root, &id, &mut start);
         if let Some(rec) = self.records() {
             match &parent {
                 Some(p) => rec.attach(&id, p),
@@ -863,6 +918,22 @@ impl Debug {
             let _ = ended_tx.send(true);
         });
         Ok(id)
+    }
+
+    /// START's breakpoints, functions and exception filters for session ID: ROOT's, as the store has them now.
+    fn fill(&self, root: &str, id: &str, start: &mut Start) {
+        self.store(root, |s| {
+            start.breakpoints = s
+                .paths_for(id)
+                .into_iter()
+                .map(|path| session::SourceBps {
+                    breakpoints: s.send_list(id, &path),
+                    path,
+                })
+                .collect();
+            start.functions = s.functions();
+            start.exception_filters = s.chosen_filters(&start.adapter_id);
+        });
     }
 
     /// START's breakpoints with ROOT's probes added (a path with only probes gets its own entry).
@@ -1029,6 +1100,14 @@ impl Debug {
                 })
             })
             .collect();
+        if let Some(hook) = self.inner.on_state.get() {
+            let mut roots: Vec<String> = sessions
+                .iter()
+                .filter_map(|s| s["root"].as_str().map(str::to_owned))
+                .collect();
+            roots.dedup();
+            hook(roots);
+        }
         self.inner
             .sink
             .broadcast("debug-state", json!({ "sessions": sessions }), None);
@@ -1084,6 +1163,8 @@ impl Debug {
                     }
                     if let Some(conn) = conn {
                         self.publish_frame(&id, conn, &stop);
+                        let values = self.inner.inline.at_stop(&id, &stop);
+                        self.inner.sink.broadcast("debug-inline", values, None);
                     }
                     // Run to Cursor's breakpoint goes at the next stop
                     if let Some(root) = self.root_of(&id) {
@@ -1112,10 +1193,10 @@ impl Debug {
                         let (cwd, args, env) = terminal_args(&arguments);
                         match terms.open(conn, cwd, args, env).await {
                             Ok(o) => {
-                                sink.send(
+                                show_terminal(
+                                    &*sink,
                                     conn,
-                                    "debug-terminal",
-                                    json!({"session": sid, "term": o.term, "view": o.view}),
+                                    json!({"session": sid, "term": o.term, "view": o.view, "editor": o.editor}),
                                 );
                                 let _ = reply.send(Ok(o.pid));
                             }
@@ -1147,6 +1228,12 @@ impl Debug {
                     if let Some(n) = start.arguments.get("name").and_then(Value::as_str) {
                         start.name = n.to_owned();
                     }
+                    // debugpy's child: its parent adapter's own listener
+                    let launcher: Arc<dyn Launcher> =
+                        match launch::child_server(&start.adapter_id, &arguments) {
+                            Some(addr) => Arc::new(wire::Server { addr }),
+                            None => launcher,
+                        };
                     let me = self.clone();
                     let pid = id.clone();
                     crate::clock::spawn("debug:child", async move {
@@ -1188,6 +1275,17 @@ impl Debug {
                         self.publish_bps(&root, &path);
                     }
                 }
+                Update::Configure { reply } => {
+                    let entry = lock(&self.inner.state)
+                        .sessions
+                        .get(&id)
+                        .map(|e| (e.root.clone(), e.start.clone()));
+                    if let Some((root, mut start)) = entry {
+                        self.fill(&root, &id, &mut start);
+                        self.add_probes(&root, &mut start);
+                        let _ = reply.send(start);
+                    }
+                }
                 Update::Ended(end) => {
                     self.ended(&id, end).await;
                     return;
@@ -1200,6 +1298,7 @@ impl Debug {
         if let Some(rec) = self.records() {
             rec.end(id, &end);
         }
+        self.inner.inline.forget(id);
         let e = lock(&self.inner.state).sessions.remove(id);
         self.publish_state();
         // the console keeps what it printed: the line that waited for its newline goes too

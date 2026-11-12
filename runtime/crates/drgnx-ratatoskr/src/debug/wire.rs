@@ -12,8 +12,8 @@ use crate::front::Front;
 use runstav::methods::Params;
 use runstav::methods::debug::{
     DebugBreakpointOp, DebugBreakpoints, DebugBreakpointsView, DebugConfig, DebugConfigList,
-    DebugConfigs, DebugControl, DebugFileError, DebugInstall, DebugRunToCursor, DebugSelect,
-    DebugSource, DebugSourceText, DebugStart, DebugStarted, DebugTrust,
+    DebugConfigs, DebugControl, DebugFileError, DebugInstall, DebugMissing, DebugRunToCursor,
+    DebugSelect, DebugSource, DebugSourceText, DebugStart, DebugStarted, DebugTrust,
 };
 use runstav::types::JsonObject;
 use runstav::wire::{Error, ErrorCode};
@@ -67,10 +67,24 @@ impl Hub {
     /// The front, once it is in its `Arc`: a bisect's jobs outlive the call that started it.
     pub fn bind(&self, front: &Arc<Front>) {
         self.bisects.bind(front);
+        // a project that starts debugging: its agents get the debugger's tools in their running sessions
+        let weak = Arc::downgrade(front);
+        self.debug(front).on_state(Arc::new(move |roots| {
+            if let Some(f) = weak.upgrade() {
+                crate::clock::spawn("sessions:debug-tools", async move {
+                    f.mcp.debug_seen(roots).await;
+                });
+            }
+        }));
         self.origins
             .set_replay(Arc::new(super::origin_wire::ForkReplay {
                 front: Arc::downgrade(front),
             }));
+    }
+
+    /// The roots that debug (a live session's or a recorded run's), for the agents' tool lists.
+    pub fn debugged_roots(&self, front: &Front) -> Vec<String> {
+        self.debug(front).debugged_roots()
     }
 
     pub(super) fn is_trusted(&self, root: &str) -> bool {
@@ -171,34 +185,95 @@ fn entry(id: String, source: &str, c: &Value, needs_trust: bool) -> DebugConfig 
         ty: text(c, "type"),
         request: text(c, "request"),
         needs_trust,
+        missing: None,
     }
+}
+
+/// Where adapters are looked for: the shell's `PATH` and drgnx's tools folder.
+fn adapter_env(front: &Front) -> adapters::Env {
+    let path = front
+        .shell_env
+        .vars_os()
+        .iter()
+        .find(|(k, _)| k == "PATH")
+        .map(|(_, v)| std::env::split_paths(v).collect())
+        .unwrap_or_default();
+    adapters::Env {
+        path,
+        tools: tools_dir(front),
+    }
+}
+
+/// CONFIG's adapter when TABLE has it and it is not found in ENV (a `debugServer` configuration needs none here), with
+/// how drgnx installs it.
+fn missing_of(table: &Table, env: &adapters::Env, config: &Value) -> Option<DebugMissing> {
+    if matches!(launch::debug_server(config), Ok(Some(_))) {
+        return None;
+    }
+    let a = table.for_type(&text(config, "type")).ok()?;
+    if adapters::find(a, env).is_some() {
+        return None;
+    }
+    let plan = a
+        .install
+        .as_ref()
+        .filter(|_| !a.not_built_in)
+        .and_then(|i| super::install::plan(i, &super::install::platform_key()).ok());
+    let (install, command) = match plan {
+        Some(super::install::Plan::System(c)) => ("system", Some(c)),
+        Some(super::install::Plan::Pip { .. }) => ("pip", None),
+        Some(super::install::Plan::Archive { .. }) => ("download", None),
+        None => ("none", None),
+    };
+    Some(DebugMissing {
+        adapter: a.id.clone(),
+        name: a.name.clone(),
+        install: install.into(),
+        command,
+    })
 }
 
 async fn configs(front: &Front, p: DebugConfigs) -> Result<DebugConfigList, Error> {
     let needs_trust = !front.debug.is_trusted(&p.root);
     let (file, error) = read_launch(&p.root);
     let mut out = vec![];
+    // an adapter not found marks its rows (the picker offers its install); a table that does not read marks none
+    let found = table(&p.adapters).ok().map(|t| (t, adapter_env(front)));
+    let mark = |mut e: DebugConfig, c: &Value| {
+        if let Some((t, env)) = &found {
+            e.missing = missing_of(t, env, c);
+        }
+        e
+    };
     if let Some(f) = &file {
         for i in launch::listed(&f.configs) {
-            out.push(entry(
-                format!("launch:{i}"),
-                "launch",
+            out.push(mark(
+                entry(format!("launch:{i}"), "launch", &f.configs[i], needs_trust),
                 &f.configs[i],
+            ));
+        }
+        for i in launch::listed(&f.compounds) {
+            out.push(entry(
+                format!("compound:{i}"),
+                "compound",
+                &f.compounds[i],
                 needs_trust,
             ));
         }
     }
     for (i, c) in p.user.iter().enumerate() {
-        out.push(entry(
-            format!("user:{i}"),
-            "user",
-            &Value::Object(c.clone().into_inner()),
-            needs_trust,
+        let c = Value::Object(c.clone().into_inner());
+        out.push(mark(
+            entry(format!("user:{i}"), "user", &c, needs_trust),
+            &c,
         ));
     }
     if let Some(lang) = &p.language {
         for (i, c) in table(&p.adapters)?.defaults_for(lang).iter().enumerate() {
-            out.push(entry(format!("default:{i}"), "default", c, needs_trust));
+            out.push(mark(
+                entry(format!("default:{i}"), "default", c, needs_trust),
+                c,
+            ));
         }
     }
     let last = front
@@ -220,10 +295,10 @@ pub(super) fn config_of(p: &DebugStart, table: &Table) -> Result<(Value, Vec<Val
     let (kind, n) = p
         .config
         .split_once(':')
-        .ok_or_else(|| bad("config", "launch:N, user:N or default:N"))?;
+        .ok_or_else(|| bad("config", "launch:N, user:N, default:N or compound:N"))?;
     let n: usize = n
         .parse()
-        .map_err(|_| bad("config", "launch:N, user:N or default:N"))?;
+        .map_err(|_| bad("config", "launch:N, user:N, default:N or compound:N"))?;
     let gone = || bad("config", format!("no configuration {}", p.config));
     match kind {
         "launch" => {
@@ -327,15 +402,7 @@ fn launcher(
         return Ok(Arc::new(Server { addr }));
     }
     let env_os = front.shell_env.vars_os();
-    let path = env_os
-        .iter()
-        .find(|(k, _)| k == "PATH")
-        .map(|(_, v)| std::env::split_paths(v).collect())
-        .unwrap_or_default();
-    let env = adapters::Env {
-        path,
-        tools: tools_dir(front),
-    };
+    let env = adapter_env(front);
     let found = adapters::find(adapter, &env).ok_or_else(|| {
         format!(
             "{} is not installed: install it with Debug: Install Adapter, or put it on PATH",
@@ -360,9 +427,13 @@ fn launcher(
 async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugStarted, Error> {
     if !front.debug.is_trusted(&p.root) {
         return Ok(DebugStarted {
-            session: None,
             needs: Some(json!("trust")),
+            ..DebugStarted::default()
         });
+    }
+    if let Some(n) = p.config.strip_prefix("compound:") {
+        let n = n.to_owned();
+        return Box::pin(start_compound(front, caller, p, &n)).await;
     }
     let table = table(&p.adapters)?;
     let (config, inputs) = config_of(&p, &table)?;
@@ -375,13 +446,16 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
     let needs = launch::needs(&config, &inputs, &answers).map_err(err)?;
     if !needs.is_empty() {
         return Ok(DebugStarted {
-            session: None,
             needs: Some(Value::Array(needs.iter().map(need_json).collect())),
+            ..DebugStarted::default()
         });
     }
     launch::check_answers(&config, &inputs, &answers).map_err(|e| bad("inputs", e))?;
     let vars = vars(front, &p);
-    let config = launch::substitute(&config, &vars, &answers).map_err(err)?;
+    let mut config = launch::substitute(&config, &vars, &answers).map_err(err)?;
+    if p.no_debug {
+        config["noDebug"] = Value::Bool(true);
+    }
     let config_hash = super::record::config_hash(&config);
     let ty = text(&config, "type");
     let adapter = table.for_type(&ty).map_err(err)?;
@@ -394,7 +468,7 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
     let root = Path::new(&p.root);
     let steps = super::tasks::before_launch(root, &config, Os::this(), &subst).map_err(err)?;
     let after = super::tasks::after_debug(root, &config, Os::this(), &subst).map_err(err)?;
-    super::tasks::run(&steps, &front.shell_env.vars_os())
+    run_tasks(front, caller.conn_id, p.terminal, &steps)
         .await
         .map_err(err)?;
     // after the tasks: a TCP adapter's free port is picked just before it starts
@@ -450,7 +524,132 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
         .insert(p.root, p.config);
     Ok(DebugStarted {
         session: Some(id),
-        needs: None,
+        ..DebugStarted::default()
+    })
+}
+
+/// Start launch.json's compound N: the inputs of all its members are asked first, its own `preLaunchTask` runs once,
+/// then each member starts as `launch:I` (with its own tasks), in the compound's order. A member that fails stops the
+/// ones started. With `stopAll`, the end of one stops the others.
+async fn start_compound(
+    front: &Front,
+    caller: &Caller,
+    p: DebugStart,
+    n: &str,
+) -> Result<DebugStarted, Error> {
+    let gone = || bad("config", format!("no configuration {}", p.config));
+    let n: usize = n.parse().map_err(|_| gone())?;
+    let (file, error) = read_launch(&p.root);
+    if let Some(e) = error {
+        return Err(err(format!(
+            "{}:{}:{}: {}",
+            e.path, e.line, e.col, e.message
+        )));
+    }
+    let f = file.ok_or_else(gone)?;
+    let compound = f.compounds.get(n).cloned().ok_or_else(gone)?;
+    let members = launch::compound_members(&compound, &f.configs).map_err(err)?;
+    let answers: HashMap<String, String> = p
+        .inputs
+        .iter()
+        .map(|a| (a.id.clone(), a.value.clone()))
+        .collect();
+    let mut needs: Vec<Value> = vec![];
+    for &i in &members {
+        let config = launch::for_platform(&f.configs[i], Os::this());
+        for need in launch::needs(&config, &f.inputs, &answers).map_err(err)? {
+            let j = need_json(&need);
+            if !needs.contains(&j) {
+                needs.push(j);
+            }
+        }
+    }
+    if !needs.is_empty() {
+        return Ok(DebugStarted {
+            needs: Some(Value::Array(needs)),
+            ..DebugStarted::default()
+        });
+    }
+    let vars = vars(front, &p);
+    let subst = |s: &str| match launch::substitute(&Value::String(s.to_owned()), &vars, &answers)? {
+        Value::String(s) => Ok(s),
+        _ => Ok(s.to_owned()),
+    };
+    let steps = super::tasks::before_launch(Path::new(&p.root), &compound, Os::this(), &subst)
+        .map_err(err)?;
+    run_tasks(front, caller.conn_id, p.terminal, &steps)
+        .await
+        .map_err(err)?;
+    let d = front.debug.debug(front).clone();
+    let mut ids: Vec<String> = vec![];
+    for &i in &members {
+        let one = DebugStart {
+            config: format!("launch:{i}"),
+            ..p.clone()
+        };
+        match Box::pin(start(front, caller, one)).await {
+            Ok(DebugStarted {
+                session: Some(id), ..
+            }) => ids.push(id),
+            other => {
+                for id in &ids {
+                    let _ = d
+                        .control(
+                            id,
+                            Op::Stop {
+                                kill_debuggee: None,
+                            },
+                        )
+                        .await;
+                }
+                return match other {
+                    Err(e) => Err(e),
+                    Ok(_) => Err(err(format!(
+                        "compound {}: {} did not start",
+                        text(&compound, "name"),
+                        text(&f.configs[i], "name")
+                    ))),
+                };
+            }
+        }
+    }
+    if launch::stop_all(&compound) && ids.len() > 1 {
+        let ids = ids.clone();
+        crate::clock::spawn("debug:compound-stop-all", async move {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(ids.len());
+            for id in &ids {
+                let (d, id, tx) = (d.clone(), id.clone(), tx.clone());
+                crate::clock::spawn("debug:compound-member", async move {
+                    d.wait_end(&id).await;
+                    let _ = tx.send(()).await;
+                });
+            }
+            drop(tx);
+            // the first to end stops the rest
+            if rx.recv().await.is_some() {
+                for id in &ids {
+                    let _ = d
+                        .control(
+                            id,
+                            Op::Stop {
+                                kill_debuggee: None,
+                            },
+                        )
+                        .await;
+                }
+            }
+        });
+    }
+    front
+        .debug
+        .last
+        .lock()
+        .expect("debug last")
+        .insert(p.root.clone(), p.config.clone());
+    Ok(DebugStarted {
+        session: ids.first().cloned(),
+        sessions: ids,
+        ..DebugStarted::default()
     })
 }
 
@@ -573,6 +772,10 @@ async fn breakpoints(
             let on = p.op.take().and_then(|o| o.enabled).unwrap_or(true);
             d.all_breakpoints(&p.root, false, on).await;
         }
+        Some("toggle-all") => {
+            p.op = None;
+            d.toggle_all_breakpoints(&p.root).await;
+        }
         Some("remove-all") => {
             p.op = None;
             d.all_breakpoints(&p.root, true, false).await;
@@ -685,11 +888,11 @@ pub(super) fn over_tcp(s: tokio::net::TcpStream, proc: Box<dyn super::session::P
 }
 
 /// An adapter the hub starts: on stdio, or listening on PORT.
-struct Spawned {
-    argv: Vec<String>,
-    env: Vec<(OsString, OsString)>,
-    cwd: PathBuf,
-    port: Option<u16>,
+pub(super) struct Spawned {
+    pub(super) argv: Vec<String>,
+    pub(super) env: Vec<(OsString, OsString)>,
+    pub(super) cwd: PathBuf,
+    pub(super) port: Option<u16>,
 }
 
 impl Launcher for Spawned {
@@ -745,8 +948,8 @@ impl Launcher for Spawned {
 }
 
 /// `debugServer`: an adapter the user runs, on a port of this machine.
-struct Server {
-    addr: SocketAddr,
+pub(super) struct Server {
+    pub(super) addr: SocketAddr,
 }
 
 impl Launcher for Server {
@@ -805,7 +1008,60 @@ impl Terminals for TermDoor {
                 term: rec.id,
                 view: rec.view,
                 pid: rec.shell_pid.map_or(0, i64::from),
+                editor: rec.session,
             })
         })
     }
+
+    fn run_task(&self, term: String) -> BoxFut<'_, (Option<i32>, String)> {
+        // waiting before the go: the task cannot end unseen
+        let exit = self.terms.wait_exit(&term);
+        Box::pin(async move {
+            let go = drgnx_term::proto::In::Text { text: "\r".into() };
+            if !self.terms.send(&term, &go) {
+                return (None, String::new());
+            }
+            let code = exit.await;
+            let mut text = String::new();
+            if code.is_some_and(|c| c != 0) {
+                let range = |req| drgnx_term::proto::In::TextRange {
+                    req,
+                    from_key: None,
+                    to_key: None,
+                };
+                if let Ok(drgnx_term::proto::Out::Answer { result, .. }) =
+                    self.terms.ask(&term, range, LISTEN_WITHIN).await
+                {
+                    text = result["text"].as_str().unwrap_or_default().to_owned();
+                }
+            }
+            (code, text)
+        })
+    }
+}
+
+/// A start's task STEPS: with a frame (TAB) each in a terminal tab of connection CONN's editor, shown to it
+/// (`debug-terminal`); else captured.  Either runs with the user's rights and the shell's environment, as before.
+async fn run_tasks(
+    front: &Front,
+    conn: u64,
+    tab: bool,
+    steps: &[super::tasks::Step],
+) -> Result<(), String> {
+    if !tab || steps.is_empty() {
+        return super::tasks::run(steps, &front.shell_env.vars_os()).await;
+    }
+    let door = TermDoor {
+        terms: front.core.terms.clone(),
+        base: front.shell_env.vars_os(),
+    };
+    let editors = front.editors.clone();
+    super::tasks::run_in(steps, &door, conn, &move |s, o| {
+        super::show_terminal(
+            &*editors,
+            conn,
+            json!({"term": o.term, "view": o.view, "task": s.label, "editor": o.editor}),
+        );
+    })
+    .await
 }

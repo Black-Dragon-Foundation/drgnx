@@ -141,8 +141,7 @@ it takes `image-scaling-factor', a guess from the font: 1.6 at scale 2, and the 
 (ert-deftest drgnx-view-patch/overflowing-line-is-refit-and-reported ()
   (drgnx-view-patch-test--with
     ;; every character is 10 px: "abcdefgh" (80 px) overflows its stop at 50
-    (let ((drgnx-view-patch-measure-function (lambda (s) (* 10 (length s))))
-          (drgnx-view--text-width-function (lambda (s) (* 10 (length s)))))
+    (let ((drgnx-view-patch-measure-function (lambda (s) (* 10 (length s)))))
       (drgnx-view-apply-patch (drgnx-view-patch-test--patch
                                (list (list :reset (list (drgnx-view-patch-test--row "a" "abcdefgh rest"
                                                                                     :stops '((8 50))))))))
@@ -166,7 +165,7 @@ a narrow (proportional) face that fits is kept whole and nothing is reported; an
                                             ((eq (get-text-property i 'face s) 'drgnx-view-patch-test-narrow) 5)
                                             (t 10)))))
                        w))))
-      (let ((drgnx-view-patch-measure-function measure) (drgnx-view--text-width-function measure))
+      (let ((drgnx-view-patch-measure-function measure))
         ;; "abcdefgh" in the narrow face is 40 px: it fits its stop at 50
         (drgnx-view-apply-patch (drgnx-view-patch-test--patch
                                  (list (list :reset (list (drgnx-view-patch-test--row
@@ -188,20 +187,14 @@ a narrow (proportional) face that fits is kept whole and nothing is reported; an
         (should (= 1 n))
         (should (= 0 (drgnx-view-patch-refits drgnx-view-patch)))))))
 
-(ert-deftest drgnx-view-patch/board-fits-through-drgnx-view-fit ()
-  (should (fboundp 'drgnx-view-fit))
-  (let ((drgnx-view--text-width-function (lambda (s) (* 10 (length s))))
-        (drgnx-view--fit-memo (make-hash-table :test #'equal)))
-    (should (equal "abc…" (drgnx-view-fit "abcdefgh" 40)))
-    (should (equal "ab" (drgnx-view-fit "ab" 40))))
-  ;; the map and the timeline's lane labels fit through it (the Board's are fitted in the hub since sja-complete B2),
-  ;; and the map's old name is gone (no alias)
-  (dolist (f '("drgnx-work-map.el" "drgnx-work-trail.el"))
+(ert-deftest drgnx-view-patch/the-work-views-fit-nothing-in-lisp ()
+  ;; the map's, the Timeline's and the Board's labels are fitted in the hub (render offload Task 34): no Lisp fitter
+  ;; is left, under its old names or the view layer's
+  (should-not (fboundp 'drgnx-view-fit))
+  (dolist (f '("drgnx-work-map.el" "drgnx-work-trail.el" "drgnx-work-board.el"))
     (with-temp-buffer
       (insert-file-contents (expand-file-name (concat "modules/tools/" f) drgnx-dir))
-      (should (search-forward "(drgnx-view-fit " nil t))
-      (goto-char (point-min))
-      (should-not (re-search-forward "drgnx-work-map--fit\\_>" nil t)))))
+      (should-not (re-search-forward "drgnx-view-fit\\_>\\|drgnx-work-map--fit\\_>" nil t)))))
 
 ;;;; Every order
 

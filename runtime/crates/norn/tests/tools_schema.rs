@@ -37,24 +37,27 @@ fn tool_names_are_the_lisp_names() {
     assert_eq!(lisp.len(), 16, "the Lisp defines 16 tools: {lisp:?}");
     // the two settings tools (unified-settings Task 32), the job tools (Task 15), `report_submit` and the plan tools
     // (Task 21) are Rust's only; the Lisp server is frozen
-    let mut rust: Vec<String> = tools_for(ToolSets { tracker: false })
-        .iter()
-        .map(|t| t.name().to_owned())
-        .filter(|n| {
-            !matches!(
-                n.as_str(),
-                "settings_get"
-                    | "settings_change"
-                    | "report_submit"
-                    | "plan_read"
-                    | "plan_write"
-                    | "extensions_suggest"
-                    | "huddle_reply"
-                    | "procedure_get"
-            ) && !n.starts_with("job_")
-                && !n.starts_with("debug_")
-        })
-        .collect();
+    let mut rust: Vec<String> = tools_for(ToolSets {
+        tracker: false,
+        debug: true,
+    })
+    .iter()
+    .map(|t| t.name().to_owned())
+    .filter(|n| {
+        !matches!(
+            n.as_str(),
+            "settings_get"
+                | "settings_change"
+                | "report_submit"
+                | "plan_read"
+                | "plan_write"
+                | "extensions_suggest"
+                | "huddle_reply"
+                | "procedure_get"
+        ) && !n.starts_with("job_")
+            && !n.starts_with("debug_")
+    })
+    .collect();
     lisp.sort();
     rust.sort();
     assert_eq!(rust, lisp);
@@ -99,7 +102,8 @@ const BUDGET_EXTENSIONS: usize = 800;
 const BUDGET_HUDDLE: usize = 800;
 /// `procedure_get`, which every agent has (the job's pack's procedures).
 const BUDGET_PROCEDURE: usize = 600;
-/// The six debugger tools every agent has (graphical debugging D4; the matrix's `debug.*` rows decide each call).
+/// The six debugger tools a session gets once its project debugs (graphical debugging D4; the matrix's `debug.*` rows
+/// decide each call).
 const BUDGET_DEBUG: usize = 5_000;
 const _: () = assert!(
     BUDGET_BYTES
@@ -116,7 +120,12 @@ const PART1_TOOLS: [&str; 3] = ["report_submit", "plan_read", "plan_write"];
 #[test]
 fn the_tool_list_fits_the_budget() {
     let bytes = json!({"tools": listing(tools())}).to_string().len();
-    let without_tracker = || tools_for(ToolSets { tracker: false });
+    let without_tracker = || {
+        tools_for(ToolSets {
+            tracker: false,
+            debug: true,
+        })
+    };
     let bytes16 = json!({"tools": listing(without_tracker())})
         .to_string()
         .len();

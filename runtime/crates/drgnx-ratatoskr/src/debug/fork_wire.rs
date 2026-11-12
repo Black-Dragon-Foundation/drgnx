@@ -55,7 +55,7 @@ pub(super) fn forks(front: &Front) -> &Forks {
                 path,
                 tools: tools_dir(front),
             }),
-            cfg!(target_os = "linux"),
+            super::fork::SEALS_HERE,
         )
     })
 }

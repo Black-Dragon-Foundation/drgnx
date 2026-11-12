@@ -2140,7 +2140,7 @@ rows patch arrived, in ms from the search's start."
             (list (* 1000 (- (aref r 2) (aref r 0))) (* 1000 (- (or (aref r 4) (aref r 2)) (aref r 0)))))))
       (defun drgnx-perf--sm-call (method params)
         "METHOD's round trip in ms, to the answer's arrival, and its result: (MS . RESULT).  Timed in the answer's
-callback, as the views get answers: `drgnx-hub-call-sync' returns only at the end of one of its 20 ms polls."
+callback, as the views get answers."
         (let* ((start (float-time)) (r (vector nil nil nil)))
           (drgnx-hub-call method params (lambda (res err) (aset r 0 (float-time)) (aset r 1 res) (aset r 2 err)) :deadline 30)
           (unless (drgnx-perf--wait 30 (lambda () (aref r 0))) (error "Premise: %s did not answer" method))
@@ -2157,20 +2157,25 @@ callback, as the views get answers: `drgnx-hub-call-sync' returns only at the en
       (defun drgnx-perf--sm-measure ()
         "Symbol: 100 searches of the names Hrafn's usages row asks (`fn_name((r * r * 31) % 200, r % 10)', its budget's
 names): :symbol_first_ms (to the first rows drawn; the budget), :symbol_patch_ms (to the hub's first rows patch) and
-:usages_ms (`search/usages' of each, the hub's lookup); and 20 of `parse_request_0_0', the most called function (tens
+:usages_ms (`search/usages' of each, the hub's lookup), :usages_sync_ms (the same through
+`drgnx-hub-call-sync', as a command waits for it); and 20 of `parse_request_0_0', the most called function (tens
 of thousands of uses), :symbol_hot_first_ms, reported.  Meaning: 100 searches each paired with a `search/query' of
 its question: :meaning_first_ms, :meaning_patch_ms, :query_ms, and :meaning_over_ms (the pair's difference, whose
 p95 is the budget).  One of each first, to warm."
         (let ((questions ["where do we retry a failed request" "how is the session token verified"
                           "parse the header of a frame" "flush the buffer before the socket closes"
                           "release the queue of a project" "encode the record for the channel"])
-              sym sym-patch hot meaning meaning-patch query over usages)
+              sym sym-patch hot meaning meaning-patch query over usages sync)
           (drgnx-perf--sm-once 'symbol (drgnx-perf--sm-name 0 0))
           (dotimes (r 100)
             (let* ((name (drgnx-perf--sm-name (% (* r r 31) 200) (% r 10))) (o (drgnx-perf--sm-once 'symbol name)))
               (push (car o) sym)
               (push (cadr o) sym-patch)
-              (push (drgnx-perf--sm-usages name) usages)))
+              (push (drgnx-perf--sm-usages name) usages)
+              (push (let ((t0 (float-time)))   ; the same call as a command waits for it
+                      (drgnx-hub-call-sync "search/usages" (list :root drgnx-perf--sm-root :name name :k 100) 30)
+                      (* 1000 (- (float-time) t0)))
+                    sync)))
           (dotimes (_ 20) (push (car (drgnx-perf--sm-once 'symbol "parse_request_0_0")) hot))
           (drgnx-perf--sm-once 'meaning (aref questions 0))
           (drgnx-perf--sm-query (aref questions 0))
@@ -2185,7 +2190,7 @@ p95 is the budget).  One of each first, to warm."
               (push (caddr pair) meaning-patch)
               (push (- (cadr pair) (car pair)) over)))
           (let ((st (lambda (xs) (mapcar #'drgnx-perf--round (drgnx-perf-stats xs)))))
-            (list :symbol_first_ms (funcall st sym) :symbol_patch_ms (funcall st sym-patch) :usages_ms (funcall st usages)
+            (list :symbol_first_ms (funcall st sym) :symbol_patch_ms (funcall st sym-patch) :usages_ms (funcall st usages) :usages_sync_ms (funcall st sync)
                   :symbol_hot_first_ms (funcall st hot)
                   :meaning_first_ms (funcall st meaning) :meaning_patch_ms (funcall st meaning-patch)
                   :query_ms (funcall st query) :meaning_over_ms (funcall st over)))))
@@ -2419,6 +2424,28 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :actions ,(funcall keys "<f10>" 120)   ; p95 is judged from 100 samples
        :check "(with-current-buffer (window-buffer) (and (= (line-number-at-pos) 220) (= 1 (length (drgnx-debug-gutter--stop-overlays \"perf\")))))"
        :teardown ,(concat "(progn (drgnx-debug-gutter-stop-clear-all) (drgnx-debug-gutter-mode -1) " kill-fixture
+                          " (global-unset-key (kbd \"<f10>\")) (drgnx-perf--debug-stop) t)"))
+      ;; inline values (spec §8, §12): stopped at line 200, F10 is one `debug-inline' as the hub sends it for a step:
+      ;; twelve lines' values (two changed), the line that keeps values updated in place, the next added, the oldest gone
+      (debug-inline
+       :setup ,(concat "(progn " (drgnx-perf-run--debug-setup-form)
+                       (format " (load (expand-file-name \"modules/extra/drgnx-debug\" %S) nil t)" drgnx-ui-repo-dir)
+                       " (defvar drgnx-perf--inline-n 0)"
+                       " (defun drgnx-perf--inline () (interactive)"
+                       "   (let ((n (cl-incf drgnx-perf--inline-n)))"
+                       "     (drgnx-debug-gutter-inline (list :session \"perf\" :epoch n :path buffer-file-name"
+                       "       :lines (vconcat (mapcar (lambda (k) (list :line (+ 188 n k)"
+                       "                                     :text (format \"total = %d  i = %d  name = 'row %d'\" (* n k) k n)"
+                       "                                     :changed (if (< k 2) [[0 9]] [])))"
+                       "                              (number-sequence 0 11))))))))"
+                       " (global-set-key (kbd \"<f10>\") #'drgnx-perf--inline) t)")
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
+                      " (goto-char (point-min)) (forward-line 199) (setq drgnx-perf--inline-n 0)"
+                      " (drgnx-debug-gutter-show-frame (list :session \"perf\" :epoch 0 :thread 1 :path buffer-file-name"
+                      "   :line 200 :col 1 :top t :reason \"step\" :open t :name \"main\")) t)")
+       :actions ,(funcall keys "<f10>" 120)   ; p95 is judged from 100 samples
+       :check "(= 12 (length (drgnx-debug-gutter--stop-overlays \"perf\" 'inline)))"
+       :teardown ,(concat "(progn (drgnx-debug-gutter-stop-clear-all) " kill-fixture
                           " (global-unset-key (kbd \"<f10>\")) (drgnx-perf--debug-stop) t)"))
       ;; the toolbar (spec §12): F8 alternates a stopped session and none, so each key shows or hides the card (the
       ;; child frame made once, then reused), the status segment and the Paused chip; within 5 ms each
@@ -3184,8 +3211,7 @@ version and the commit, as JSON in FILE."
     (write-region (concat (json-serialize doc) "\n") nil file nil 'silent)))
 
 (defconst drgnx-perf-run-workers-seeded
-  '(explorer-git-rows quick-open-typing quick-open-typing-old agents-line-motion agents-line-motion-old
-                      presence-burst presence-burst-old)
+  '(explorer-git-rows quick-open-typing agents-line-motion presence-burst)
   "The off-the-main-thread workloads with allocation, CPU and rows budgets (the render offload measured them).")
 
 (defconst drgnx-perf-run-unseeded
@@ -3199,7 +3225,8 @@ version and the commit, as JSON in FILE."
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "graphical debugging: its allocation, CPU and rows are set from three pinned runs on the desktop island (the plan's perf step)"))
               '(debug-gutter-scroll debug-gutter-baseline debug-breakpoint-click debug-probe-flood debug-scrub
-                                    debug-step-line debug-toolbar-show debug-step-variables debug-expand-chunks debug-console-flood
+                                    debug-step-line debug-inline debug-toolbar-show debug-step-variables debug-expand-chunks
+                                    debug-console-flood
                                     debug-bisect-typing view-remove-above view-select-dim))
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))

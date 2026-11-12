@@ -65,11 +65,11 @@ one Nidhogg's reader pushed to Sjá itself (framed).")
        (delete-directory root t))))
 
 (defun drgnx-view-model-hub-test--subscribe (root)
-  "Subscribe the rows map view \"vm\" of a workspace on ROOT/work on the events connection; wait for its answer."
+  "Subscribe the map view \"vm\" of a workspace on ROOT/work on the events connection; wait for its answer."
   (let ((answer nil))
     (drgnx-hub--call-on drgnx-hub--events "work/map/subscribe"
                         (list :view "vm" :workspace (list :id "workspace:000000000000" :roots (vector (concat root "work")))
-                              :width_units 250 :rows t)
+                              :width_units 250)
                         (lambda (r e) (setq answer (list r e))))
     (drgnx-test-wait (lambda () answer) :secs 30 :what "the map subscription's answer")
     (should-not (nth 1 answer))))

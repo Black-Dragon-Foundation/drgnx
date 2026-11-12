@@ -3,12 +3,11 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; Part of module tools/agents-in-editor.  The workspace's presence (`agents/presence/subscribe', the event
-;; `agent-presence') is cached by the file it names; from it this file builds, when the presence changes and never in
+;; Part of module tools/agents-in-editor.  The workspace's presence (`agents/presence/subscribe') is the hub's view
+;; model `agents-here' (see "The hub's model" below); from it this file builds, when the presence changes and never in
 ;; redisplay:
 ;;   - Explorer badges: on each file an agent is editing (or has changed) a few marks, "+N" past three; on a folder one
-;;     dot per agent with files under it.  A worktree agent's file lands on the user's tree: the entry's repository
-;;     (its `.git' file names the main checkout) and path relative to its top.
+;;     dot per agent with files under it.  A worktree agent's file lands on the user's tree (the hub works that out).
 ;;   - the `agents-here' status segment: one mark per agent working in the project (eight, then "+N"), in the attention
 ;;     face for an agent that needs you; it opens who is here.
 ;;   - who is here: a small list window, one row per agent (mark, handle, mode, file, line); RET follows the agent,
@@ -38,7 +37,6 @@
 (defvar drgnx-hub-event-functions)
 (defvar drgnx-hub-connected-functions)
 (defvar drgnx-hub--events)
-(defvar drgnx-view-old-path)
 (defvar drgnx-view-patch)
 (defvar drgnx-view-patch-apply-function)
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
@@ -57,30 +55,22 @@
 (defvar drgnx-agents-editor-here-paired-function nil
   "A function of a session id: non-nil when the agent is paired with you (its mark gets a ring).")
 
-(defconst drgnx-agents-editor-here--editing '("pending" "write" "edit")
-  "The presence modes that put a badge on a file: about to change, written by a command, changed by an edit.")
-
 (defvar drgnx-agents-editor-here--on nil "Non-nil while the module shows who is here (work-who-is-here then lists the agents).")
-(defvar drgnx-agents-editor-here--files (make-hash-table :test 'equal)
-  "The agent's file name → its `agent-presence' data (:file :rel :repo :entries).")
 (defvar drgnx-agents-editor-here--badges (make-hash-table :test 'equal)
   "The user's path (no trailing slash) → the badge string of its Explorer row.")
 (defvar drgnx-agents-editor-here--rows nil
   "Who is here: ((SESSION ORDINAL MODE USER-FILE LINE)...), one per agent, its newest entry.")
 (defvar drgnx-agents-editor-here--status nil "The status segment's string, or nil.")
 (defvar drgnx-agents-editor-here--initials (make-hash-table) "Ordinal → the first letter of its agent's name.")
-(defvar drgnx-agents-editor-here--tops (make-hash-table :test 'equal) "Directory → its repository's main checkout, or t.")
 
 (defun drgnx-agents-editor-here--ordinal (session)
   (and drgnx-agents-editor-here-ordinal-function (funcall drgnx-agents-editor-here-ordinal-function session)))
 
 (defun drgnx-agents-editor-here-identities-changed ()
-  "A session's ordinal came, changed or went: rebuild what is drawn (while the module shows who is here); on the hub's
-model the agents' marks are made again from the model held."
-  (when drgnx-agents-editor-here--on
-    (if (drgnx-agents-editor-here-rows-p)
-        (when-let* ((h (drgnx-agents-editor-here--model))) (drgnx-agents-editor-here--agents-from h))
-      (drgnx-agents-editor-here--rebuild))))
+  "A session's ordinal came, changed or went: the agents' marks are made again from the hub's model held (while the
+module shows who is here)."
+  (when (and drgnx-agents-editor-here--on (fboundp 'nidhogg-view--call))
+    (when-let* ((h (drgnx-agents-editor-here--model))) (drgnx-agents-editor-here--agents-from h))))
 
 (defun drgnx-agents-editor-here--needs-you (session)
   (when-let* ((s (and (fboundp 'drgnx-work-code--session) (drgnx-work-code--session session))))
@@ -90,41 +80,6 @@ model the agents' marks are made again from the model held."
   (if-let* ((s (and (fboundp 'drgnx-work-code--session) (drgnx-work-code--session session))))
       (drgnx-agent-session-name s)
     (format "agent %s" session)))
-
-(defun drgnx-agents-editor-here--roots ()
-  "The workspace's roots (directories with a trailing slash)."
-  (plist-get (and (fboundp 'drgnx-work-space-workspace) (drgnx-work-space-workspace)) :roots))
-
-;;;; Landing on the user's tree
-
-(defun drgnx-agents-editor-here--main-checkout (top)
-  "The main checkout (with a trailing slash) of the checkout or linked worktree TOP: TOP itself when its `.git' is a
-directory, the repository its `.git' file names when TOP is a linked worktree, else nil.  Only the head of the file is
-read, and no file name handler runs."
-  (let* ((file-name-handler-alist nil) (git (expand-file-name ".git" top)))
-    (cond ((file-directory-p git) (file-name-as-directory top))
-          ((file-regular-p git)
-           (with-temp-buffer
-             (insert-file-contents git nil 0 4096)
-             (let ((gitdir (and (re-search-forward "^gitdir: \\(.*\\)$" nil t) (match-string 1))))
-               (when (and gitdir (string-match "\\`\\(.*?\\)/\\.git/worktrees/" gitdir))
-                 (file-name-as-directory (match-string 1 gitdir)))))))))
-
-(defun drgnx-agents-editor-here--user-path (fp roots)
-  "The path in the user's tree that presence data FP is about, or nil when it is in none of ROOTS.  A file under a
-root is itself; a file in a linked worktree lands at its relative path in the main checkout, when that is a root."
-  (let ((file (plist-get fp :file)) (rel (plist-get fp :rel)))
-    (or (and (cl-some (lambda (r) (string-prefix-p r file)) roots) file)
-        (when-let* ((rel rel)
-                    (dir (file-name-directory file))
-                    (main (let ((hit (gethash dir drgnx-agents-editor-here--tops)))
-                            (if hit (and (stringp hit) hit)
-                              (let ((m (when-let* ((top (locate-dominating-file dir ".git")))
-                                         (drgnx-agents-editor-here--main-checkout top))))
-                                (puthash dir (or m t) drgnx-agents-editor-here--tops)
-                                m))))
-                    ((member main roots)))
-          (expand-file-name rel main)))))
 
 ;;;; Building what is drawn
 
@@ -150,41 +105,6 @@ root is itself; a file in a linked worktree lands at its relative path in the ma
 
 (defun drgnx-agents-editor-here--initial (ordinal)
   (or (gethash ordinal drgnx-agents-editor-here--initials) ""))
-
-(defun drgnx-agents-editor-here--rebuild ()
-  "Work out the badges, the rows and the status segment from the cached presence."
-  (clrhash drgnx-agents-editor-here--badges)
-  (let ((roots (drgnx-agents-editor-here--roots)) (files (make-hash-table :test 'equal)) (dirs (make-hash-table :test 'equal))
-        (sessions nil) (rows nil))
-    (maphash
-     (lambda (_ fp)
-       (when-let* ((path (drgnx-agents-editor-here--user-path fp roots)))
-         (dolist (e (plist-get fp :entries))
-           (when-let* ((sid (plist-get e :session)) (ord (drgnx-agents-editor-here--ordinal sid)))
-             (puthash ord (upcase (substring (drgnx-agents-editor-here--name sid) 0 1)) drgnx-agents-editor-here--initials)
-             (cl-pushnew sid sessions :test #'equal)
-             (let ((old (assoc sid rows)))
-               (when (or (null old) (> (or (plist-get e :at) 0) (or (nth 5 old) 0)))
-                 (setq rows (cons (list sid ord (plist-get e :mode) path (plist-get e :line) (plist-get e :at))
-                                  (assoc-delete-all sid rows)))))
-             (when (member (plist-get e :mode) drgnx-agents-editor-here--editing)
-               (cl-pushnew ord (gethash path files))
-               (let ((d (file-name-directory path)))
-                 (while (and d (cl-some (lambda (r) (string-prefix-p r d)) roots))
-                   (cl-pushnew ord (gethash (directory-file-name d) dirs))
-                   (setq d (and (not (member d roots)) (file-name-directory (directory-file-name d)))))))))))
-     drgnx-agents-editor-here--files)
-    (maphash (lambda (p ords) (puthash p (drgnx-agents-editor-here--badge (sort (copy-sequence ords) #'<) 3 t)
-                                       drgnx-agents-editor-here--badges))
-             files)
-    (maphash (lambda (p ords) (unless (gethash p files)
-                                (puthash p (drgnx-agents-editor-here--badge (sort (copy-sequence ords) #'<) 6 nil)
-                                         drgnx-agents-editor-here--badges)))
-             dirs)
-    (setq drgnx-agents-editor-here--rows (sort rows (lambda (a b) (< (nth 1 a) (nth 1 b)))))
-    (setq drgnx-agents-editor-here--status
-          (drgnx-agents-editor-here--status-of (mapcar (lambda (s) (cons s (drgnx-agents-editor-here--ordinal s))) sessions)))
-    (force-mode-line-update t)))
 
 (defun drgnx-agents-editor-here--status-of (agents)
   "The status segment's string for AGENTS ((SESSION . ORDINAL)...): their marks by ordinal, eight then \"+N\"; nil for
@@ -328,35 +248,11 @@ named yet (no ordinal) is not listed."
 
 ;;;; The feed
 
-(defun drgnx-agents-editor-here--note (fp)
-  "Cache presence data FP (a file's entries) and rebuild what is drawn."
-  (let ((file (plist-get fp :file)))
-    (if (plist-get fp :entries) (puthash file fp drgnx-agents-editor-here--files) (remhash file drgnx-agents-editor-here--files))
-    (drgnx-agents-editor-here--rebuild)))
-
-(defun drgnx-agents-editor-here--event (event data)
-  ;; on the hub's rows the view's patches carry who is here; `agent-presence' stays for the cursors and the gutter
-  (when (and (equal event "agent-presence") (not (drgnx-agents-editor-here-rows-p)))
-    (drgnx-agents-editor-here--note data)))
-
 (defun drgnx-agents-editor-here--subscribe ()
-  "Ask the hub for the workspace's presence; a missing hub is quiet (the next connection asks again)."
-  (when-let* ((ws (and (fboundp 'drgnx-work-space-workspace) (drgnx-work-space-workspace))))
-    (if (drgnx-agents-editor-here-rows-p)
-        (drgnx-agents-editor-here--rows-subscribe ws)
-      (drgnx-agents-editor-here--old-subscribe ws))))
-
-(defun drgnx-agents-editor-here--old-subscribe (ws)
-  "The old path's subscription to WS's presence: the answer and the `agent-presence' events fill the cache."
-  (condition-case nil
-      (drgnx-hub-call "agents/presence/subscribe" (list :workspace (list :id (plist-get ws :id) :roots (plist-get ws :roots)))
-                      (lambda (result err)
-                        (unless err
-                          (clrhash drgnx-agents-editor-here--files)
-                          (dolist (fp (append (plist-get result :files) nil))
-                            (puthash (plist-get fp :file) fp drgnx-agents-editor-here--files))
-                          (drgnx-agents-editor-here--rebuild))))
-    (error nil)))
+  "Ask the hub for the workspace's presence; a missing hub is quiet (the next connection asks again).  Without Sjá
+nothing is shown."
+  (when-let* (((fboundp 'nidhogg-view--call)) (ws (and (fboundp 'drgnx-work-space-workspace) (drgnx-work-space-workspace))))
+    (drgnx-agents-editor-here--rows-subscribe ws)))
 
 ;;;; The hub's model
 
@@ -375,10 +271,6 @@ named yet (no ordinal) is not listed."
 
 (defvar drgnx-agents-editor-here--keys nil
   "The keys the rows' patches named since the model was last read, newest first; t: everything (a reset).")
-
-(defun drgnx-agents-editor-here-rows-p ()
-  "Non-nil when who is here comes from the hub's view model: Sjá is here and not `drgnx-view-old-path'."
-  (and (not (bound-and-true-p drgnx-view-old-path)) (fboundp 'nidhogg-view--call)))
 
 (defun drgnx-agents-editor-here--rows-buffer (&optional existing)
   "The rows' buffer, attached to the view's data class (made when missing, unless EXISTING)."
@@ -480,9 +372,6 @@ agent's row is among them, the agents and the status segment; a reset makes ever
 
 (defun drgnx-agents-editor-here-setup ()
   "Cache the workspace's presence and show it.  Called by the module's setup."
-  (drgnx-module-hook 'drgnx-hub-event-functions here-event (event data)
-    :module 'tools/agents-in-editor
-    (drgnx-agents-editor-here--event event data))
   (drgnx-module-hook 'drgnx-hub-connected-functions here-connected ()
     :module 'tools/agents-in-editor
     (drgnx-agents-editor-here--subscribe))
@@ -513,10 +402,8 @@ agent's row is among them, the agents and the status segment; a reset makes ever
 (defun drgnx-agents-editor-here-teardown ()
   "Take the badges out of the Explorer and forget the cached presence."
   (remove-hook 'drgnx-explorer-badge-functions #'drgnx-agents-editor-here--explorer-badge)
-  (clrhash drgnx-agents-editor-here--files)
   (clrhash drgnx-agents-editor-here--badges)
   (clrhash drgnx-agents-editor-here--initials)
-  (clrhash drgnx-agents-editor-here--tops)
   (when-let* ((b (get-buffer drgnx-agents-here-buffer-name))) (kill-buffer b))
   (when-let* ((b (get-buffer drgnx-agents-editor-here--rows-name))) (kill-buffer b))
   (drgnx-timer-cancel 'drgnx-agents-editor-here-take)

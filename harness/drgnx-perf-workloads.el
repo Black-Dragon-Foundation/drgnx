@@ -20,8 +20,8 @@
 
 (defconst drgnx-perf-workers-names
   '(lsp-burst lsp-typing ts-open ts-paste ts-typing ts-typing-unclosed compile-flood image-open
-              explorer-expand explorer-git-rows explorer-watch quick-open-large quick-open-typing quick-open-typing-old
-              agents-line-motion agents-line-motion-old presence-burst presence-burst-old autosave-typing)
+              explorer-expand explorer-git-rows explorer-watch quick-open-large quick-open-typing
+              agents-line-motion presence-burst autosave-typing)
   "The new workloads, in the order they run.")
 
 (defconst drgnx-perf-workers-lsp-sizes "500000,1000000,3000000"
@@ -193,45 +193,36 @@ whatever they found)."
         :check "(drgnx-perf-w-quick-open-done)"
         :teardown ,(concat "(progn (drgnx-perf-w-quick-open-teardown) " kill-fixture " t)"))
        ;; Quick Open (its key queued by :each), then thirteen keys typed into it over the same repository: what each key
-       ;; allocates, on the hub's rows (a hub of the workload's own, `drgnx-perf-run--hub-form') and on the old path
-       ;; (the streamed listing)
-       ,@(mapcar (lambda (old)
-                   `(,(if old 'quick-open-typing-old 'quick-open-typing)
-                     :setup ,(if old (drgnx-perf-workers--form "(drgnx-perf-w-quick-open-setup)")
-                               (concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) "
-                                       (drgnx-perf-workers--form "(drgnx-perf-w-quick-open-setup)") ")"))
-                     :each ,(if old "(drgnx-perf-w-quick-open-typing-old-each)" "(drgnx-perf-w-quick-open-typing-each)")
-                     :actions ,(append (mapcar (lambda (c) (funcall type (string c))) "d012/f001.txt") (list (list :keys "C-g")))
-                     :complete-when "(drgnx-perf-w-quick-open-typing-done)"
-                     :digest "(drgnx-perf-w-quick-open-typing-digest)"
-                     :check "(drgnx-perf-w-quick-open-typing-check)"
-                     :teardown ,(if old "(drgnx-perf-w-quick-open-typing-teardown)"
-                                  "(progn (drgnx-perf-w-quick-open-typing-teardown) (drgnx-perf--hub-stop))")))
-                 '(nil t))
+       ;; allocates, on the hub's rows (a hub of the workload's own, `drgnx-perf-run--hub-form')
+       (quick-open-typing
+        :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) "
+                        (drgnx-perf-workers--form "(drgnx-perf-w-quick-open-setup)") ")")
+        :each "(drgnx-perf-w-quick-open-typing-each)"
+        :actions ,(append (mapcar (lambda (c) (funcall type (string c))) "d012/f001.txt") (list (list :keys "C-g")))
+        :complete-when "(drgnx-perf-w-quick-open-typing-done)"
+        :digest "(drgnx-perf-w-quick-open-typing-digest)"
+        :check "(drgnx-perf-w-quick-open-typing-check)"
+        :teardown "(progn (drgnx-perf-w-quick-open-typing-teardown) (drgnx-perf--hub-stop))")
        ;; twenty point motions in a Lisp file with three agents, an agent frame per command: what the agent line's
-       ;; name costs, kept per line, and on the old path (named every frame)
-       ,@(mapcar (lambda (old)
-                   `(,(if old 'agents-line-motion-old 'agents-line-motion)
-                     :setup ,(drgnx-perf-workers--form "(drgnx-perf-w-agents-line-setup)")
-                     :each ,(if old "(drgnx-perf-w-agents-line-old-each)" "(drgnx-perf-w-agents-line-each)")
-                     :actions ,(make-list 20 (list :keys "<down>"))
-                     :complete-when "(drgnx-perf-w-agents-line-done)"
-                     :digest "(drgnx-perf-w-agents-line-digest)"
-                     :check "(drgnx-perf-w-agents-line-done)"
-                     :teardown "(drgnx-perf-w-agents-line-teardown)"))
-                 '(nil t))
+       ;; name costs, kept per line
+       (agents-line-motion
+        :setup ,(drgnx-perf-workers--form "(drgnx-perf-w-agents-line-setup)")
+        :each "(drgnx-perf-w-agents-line-each)"
+        :actions ,(make-list 20 (list :keys "<down>"))
+        :complete-when "(drgnx-perf-w-agents-line-done)"
+        :digest "(drgnx-perf-w-agents-line-digest)"
+        :check "(drgnx-perf-w-agents-line-done)"
+        :teardown "(drgnx-perf-w-agents-line-teardown)")
        ;; twenty presence changes, one per command, with 30 agents over 90 files held: what who is here costs per
-       ;; change, from the hub's rows (path by path) and on the old path (the cached presence rebuilt per event)
-       ,@(mapcar (lambda (old)
-                   `(,(if old 'presence-burst-old 'presence-burst)
-                     :setup ,(drgnx-perf-workers--form "(drgnx-perf-w-presence-burst-setup)")
-                     :each ,(if old "(drgnx-perf-w-presence-burst-old-each)" "(drgnx-perf-w-presence-burst-each)")
-                     :actions ,(make-list 20 (list :keys "<down>"))
-                     :complete-when "(drgnx-perf-w-presence-burst-done)"
-                     :digest "(drgnx-perf-w-presence-burst-digest)"
-                     :check "(drgnx-perf-w-presence-burst-done)"
-                     :teardown "(drgnx-perf-w-presence-burst-teardown)"))
-                 '(nil t))
+       ;; change, from the hub's rows (path by path)
+       (presence-burst
+        :setup ,(drgnx-perf-workers--form "(drgnx-perf-w-presence-burst-setup)")
+        :each "(drgnx-perf-w-presence-burst-each)"
+        :actions ,(make-list 20 (list :keys "<down>"))
+        :complete-when "(drgnx-perf-w-presence-burst-done)"
+        :digest "(drgnx-perf-w-presence-burst-digest)"
+        :check "(drgnx-perf-w-presence-burst-done)"
+        :teardown "(drgnx-perf-w-presence-burst-teardown)")
        ;; typing in a 50 MB buffer across an auto-save
        (autosave-typing
         :setup ,(drgnx-perf-workers--form)

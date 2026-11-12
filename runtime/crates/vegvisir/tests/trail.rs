@@ -201,6 +201,40 @@ fn apply(mut rows: Vec<Row>, ops: &[Op]) -> Vec<Row> {
     rows
 }
 
+/// [D] A pause is the trail's paused step, at the time it began; when it ends (the agent was resumed) a note row
+/// `resumed` follows it at the time it ended. A pause still going has no note.
+#[test]
+fn a_pause_and_its_resume_are_notes_in_the_trail() {
+    let p = Palette::default();
+    let paused = |id: i64, start: f64, end: Option<f64>| Step {
+        class: "paused".into(),
+        tool: None,
+        detail: Detail::default(),
+        end,
+        ..step(id, start)
+    };
+    let s = vec![
+        step(1, 1000.0),
+        paused(2, 1002.0, Some(1060.0)),
+        step(3, 1061.0),
+    ];
+    let rows = trail::trail_rows(&s, &[], &env(&p), Zone(0));
+    let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+    assert_eq!(keys, ["step:1", "step:2", "resumed:2", "step:3"]);
+    assert!(
+        rows[1].text.contains("paused") && rows[1].text.contains("00:16:42"),
+        "{}",
+        rows[1].text
+    );
+    assert!(
+        rows[2].text.contains("resumed") && rows[2].text.contains("00:17:40"),
+        "{}",
+        rows[2].text
+    );
+    let open = trail::trail_rows(&[paused(2, 1002.0, None)], &[], &env(&p), Zone(0));
+    assert_eq!(open.len(), 1, "{open:?}");
+}
+
 /// [D] One step, two zones: two row texts, each the step's time in its zone.
 #[test]
 fn timestamps_use_the_env_time_zone() {

@@ -127,6 +127,11 @@ ends. A run is claimed in the same step as the check that none is in flight (`Ru
 once (two pushes) start it once (unit test `a_run_is_claimed_once_until_it_ends`). The watcher that settles them
 settles every ended run again when it falls behind the job events (`Runs::take_ended`).
 
+**The hub's log** says what the gates decide of each task's merge, an info line each time it changes ("the gates
+wait: …", "the gates hold the merge: …", "the gates pass the merge: …"; a failure to judge is a warning), and of
+each run they start: "the gate runs CMD at COMMIT" with its job and tree (a start refused: a warning naming why),
+then "the gate's run ended: red|green", or a warning when it ended as no evidence and why (`orch::evidence::settle`).
+
 **Runs the gates start** are an agent's command, or the pack's over the tree an agent wrote, so they run as an agent's
 job does, as a **sealed job** (`exec::start_sealed`, starter `Starter::Sealed`): in the session's launch shape, on
 this machine, with the detached tree the only folder they can write, the network a session's job has (the provider
@@ -135,7 +140,11 @@ the tree's folder name; a sealed job names no session in its meta, queue record 
 asks no matrix cell (the gate's run is the hub's decision). Other hub runs of untrusted commands (a bisect's
 predicate) use the same starter. Unit test `a_sealed_job_names_no_session_and_stays_sealed_in_the_queue`. Row `runner/a-gate-run-keeps-the-agents-sandbox`. The job's end is the task's
 evidence like any other; the next tick looks again. A hold is a `gate` card on the task (key `gates`, `tip` its tree
-key) saying what is wrong; a red-first wait with no run of the task's tests to repeat is a hold too. Its actions:
+key) saying what is wrong; a red-first wait with no run of the task's tests to repeat is a hold too, but not while a
+run in the task's tree has no result yet (a session's `exec/start` on its way, `exec::Runner::busy_in`, or a job there
+queued or running): red first then waits, and the next tick judges it with that run (a start that answered later
+than the review came, as on the macOS lane; row `runner/a-gate-waits-for-a-run-still-starting`, whose hub answers
+`exec/start` 30 s late with the test hook `RATATOSKR_TEST_EXEC_START_DELAY_MS`). Its actions:
 **Check again**, **Tell the agent** (the task goes back to its agent with the card's words), **Waive once…** (with a
 reason) and **Drop the task**.
 

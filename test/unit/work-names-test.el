@@ -13,8 +13,6 @@
 (require 'drgnx-paths)
 (require 'drgnx-modules)
 (require 'drgnx-agents)
-(require 'drgnx-work-client)
-(load (expand-file-name "test/fixtures/work-space-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
 (drgnx-test-modules-preload '(tools/work-space))
@@ -88,14 +86,13 @@ of the params, set in BODY); `calls' holds (METHOD . PARAMS), newest first.  The
             ("work/files" . ,(lambda (_) (list :files (list (list :path "README" :plus 1 :minus 0)))))))
     (let ((before (buffer-list)) (searched nil) (map (generate-new-buffer " *work-names-map*")))
       (cl-letf (((symbol-function 'project-find-regexp) (lambda (&rest _) (push default-directory searched)))
-                ((symbol-function 'drgnx-work-map-buffers) (lambda () (list map)))
-                ((symbol-function 'drgnx-work-map--state) #'ignore))
+                ((symbol-function 'drgnx-work-map-buffers) (lambda () (list map))))
         (drgnx-test-with-handler-trap
           ;; Enter on a file the far agent edits; one the map names by a remote path of its own
-          (drgnx-work-code-open-file nil '(file . "file:drgnx/README") :agents '("a2"))
-          (drgnx-work-code-open-file nil (cons 'file (concat "file:drgnx/" far "README")) :agents '("a1"))
+          (drgnx-work-code-open-file'(file . "file:drgnx/README") :agents '("a2"))
+          (drgnx-work-code-open-file(cons 'file (concat "file:drgnx/" far "README")) :agents '("a1"))
           ;; the far agent's files picker, its first file
-          (let ((picker (drgnx-work-code-files nil '(agent . "agent:a2") t)))
+          (let ((picker (drgnx-work-code-files '(agent . "agent:a2") nil t)))
             (with-current-buffer picker (drgnx-work-files--pick 0)))
           ;; the far agent's steps: a read of its file, its search; a step naming a remote file
           (drgnx-work-trail-open-step (list :session "a2" :seq 1 :detail (list :kind "read" :path "README" :line_start 1)))
@@ -135,11 +132,11 @@ of the params, set in BODY); `calls' holds (METHOD . PARAMS), newest first.  The
                       (push file special)
                       (generate-new-buffer " *work-names-refused*")))))
         (dolist (name '("zero" "key" "pipe" "sub" "../secret.txt" "sub/../../secret.txt"))
-          (drgnx-work-code-open-file nil (cons 'file (concat "file:drgnx/" name)) :agents '("a1")))
+          (drgnx-work-code-open-file(cons 'file (concat "file:drgnx/" name)) :agents '("a1")))
         (dolist (path (list "key" "../secret.txt" "zero" (concat root "secret.txt")))
           (drgnx-work-trail-open-step (list :session "a1" :seq 1 :detail (list :kind "read" :path path :line_start 1))))
         ;; a document of the map: its key is the hub's, relative to a root of the workspace
-        (drgnx-work-map--open-item (drgnx-work-client-init (drgnx-work-fixture-frame)) '(spec . "spec:../secret.txt") nil))
+        (drgnx-work-map--open-item '(spec . "spec:../secret.txt") nil "secret"))
       (should-not special)
       (should-not (drgnx-work-names-test--visited before)))))
 
@@ -158,13 +155,12 @@ of the params, set in BODY); `calls' holds (METHOD . PARAMS), newest first.  The
                                   :entries (list (list :session "a1" :file (plist-get p :file) :line 1 :at 1.0)))))
             ("work/files" . ,(lambda (_) (list :files (list (list :path "up-ssh/y") (list :path "n.gz")))))))
     (let ((before (buffer-list)) (map (generate-new-buffer " *work-names-map*")))
-      (cl-letf (((symbol-function 'drgnx-work-map-buffers) (lambda () (list map)))
-                ((symbol-function 'drgnx-work-map--state) #'ignore))
+      (cl-letf (((symbol-function 'drgnx-work-map-buffers) (lambda () (list map))))
         (drgnx-test-with-handler-trap
           (dolist (name '("abs-ssh/y" "abs-sudo/y" "up-ssh/y" "up-sudo/y" "gz" "gpg" "n.gz" "a.zip/y"))
-            (drgnx-work-code-open-file nil (cons 'file (concat "file:drgnx/" name)) :agents '("a1")))
-          (drgnx-work-code-open-file nil '(file . "file:drgnx/README") :agents '("a3"))
-          (let ((picker (drgnx-work-code-files nil '(agent . "agent:a1") t)))
+            (drgnx-work-code-open-file(cons 'file (concat "file:drgnx/" name)) :agents '("a1")))
+          (drgnx-work-code-open-file'(file . "file:drgnx/README") :agents '("a3"))
+          (let ((picker (drgnx-work-code-files '(agent . "agent:a1") nil t)))
             (dotimes (i 2) (with-current-buffer picker (drgnx-work-files--pick i))))
           (dolist (name '("abs-ssh/y" "up-ssh/y" "gz" "n.gz"))
             (drgnx-work-trail-open-step (list :session "a1" :seq 1 :detail (list :kind "read" :path name))))
@@ -196,7 +192,7 @@ of the params, set in BODY); `calls' holds (METHOD . PARAMS), newest first.  The
              . ,(lambda (p) (list :file (plist-get p :file)
                                   :entries (list (list :session "a1" :file (plist-get p :file) :line 1 :at 1.0)))))))
     (let ((before (buffer-list)))
-      (drgnx-work-code-open-file nil '(file . "file:drgnx/loop") :agents '("a1"))
+      (drgnx-work-code-open-file'(file . "file:drgnx/loop") :agents '("a1"))
       (drgnx-work-trail-open-step (list :session "a1" :seq 1 :detail (list :kind "read" :path "loop")))
       (should-not (drgnx-work-names-test--visited before)))))
 
@@ -248,7 +244,7 @@ of the params, set in BODY); `calls' holds (METHOD . PARAMS), newest first.  The
         (unwind-protect
             (drgnx-test-with-handler-trap
               (let ((default-directory wt))    ; the user stands in the agent's folder
-                (setq shown (drgnx-work-code-diffs nil '(agent . "agent:a1")))
+                (setq shown (drgnx-work-code-diffs '(agent . "agent:a1") nil))
                 (push (drgnx-work-trail-open-step (list :session "a1" :seq 1 :detail (list :kind "edit" :path "README")))
                       shown))
               (should (= 5 (length shown)))
@@ -298,7 +294,7 @@ of the params, set in BODY); `calls' holds (METHOD . PARAMS), newest first.  The
           (drgnx-work-review--accept "README"))
         (let ((config (current-window-configuration)))
           (unwind-protect
-              (dolist (b (drgnx-work-code-diffs nil '(agent . "agent:a1")))
+              (dolist (b (drgnx-work-code-diffs '(agent . "agent:a1") nil))
                 (with-current-buffer b
                   (should-error (drgnx-work-diff-reject-hunk) :type 'user-error)
                   (should-error (drgnx-work-diff-accept-hunk) :type 'user-error)))

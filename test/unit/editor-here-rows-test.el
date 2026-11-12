@@ -13,14 +13,12 @@
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (drgnx-test-modules-preload '(tools/agents-in-editor))
 
-(declare-function drgnx-agents-editor-here--event "drgnx-agents-editor-here")
 (declare-function drgnx-agents-editor-here--subscribe "drgnx-agents-editor-here")
 (declare-function drgnx-agents-editor-here--rows-buffer "drgnx-agents-editor-here")
 (defvar drgnx-agents-editor-here--rows)
 (defvar drgnx-agents-editor-here--badges)
 (defvar drgnx-agents-editor-here--status)
 (defvar drgnx-agents-editor-here-ordinal-function)
-(defvar drgnx-view-old-path)
 (defvar drgnx-hub--events)
 (defvar drgnx-view-patch--buffers)
 (defvar drgnx-view-model--views)
@@ -29,21 +27,20 @@
 
 (defmacro drgnx-editor-here-rows-test--with (&rest body)
   "BODY with the module on, a workspace whose one root is `root', the hub's calls recorded in `calls' (METHOD .
-PARAMS), the subscribed connection a live pipe and `rebuilds' counting `drgnx-agents-editor-here--rebuild'."
+PARAMS) and the subscribed connection a live pipe."
   (declare (indent 0))
   `(let* ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
           (drgnx-view-model--views (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
           (root (file-name-as-directory (file-truename (make-temp-file "here-rows" t))))
-          (conn (make-pipe-process :name "here-rows" :noquery t)) (calls nil) (rebuilds 0))
+          (conn (make-pipe-process :name "here-rows" :noquery t)) (calls nil))
      (unwind-protect
          (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) 1)))
            (drgnx-test-with-modules '(tools/agents-in-editor)
              (cl-letf (((symbol-function 'drgnx-work-space-workspace)
                         (lambda (&rest _) (list :id "workspace:000000000000" :roots (list root))))
                        ((symbol-function 'drgnx-hub--call-on)
-                        (lambda (_p method params &rest _) (push (cons method params) calls) 1))
-                       ((symbol-function 'drgnx-agents-editor-here--rebuild) (lambda () (cl-incf rebuilds))))
-               (let ((drgnx-view-old-path nil) (drgnx-hub--events conn)
+                        (lambda (_p method params &rest _) (push (cons method params) calls) 1)))
+               (let ((drgnx-hub--events conn)
                      (drgnx-agents-editor-here-ordinal-function (lambda (s) (and (equal s "s1") 1))))
                  ,@body))))
        (delete-process conn)
@@ -90,8 +87,7 @@ PARAMS), the subscribed connection a live pipe and `rebuilds' counting `drgnx-ag
 
 (ert-deftest drgnx-agents-editor-here/rows-applied-not-rebuilt ()
   "The hub's model gives who is here, the badges and the status segment path by path, as its rows name them: a reset,
-then a change of one file's node, then its removal; nothing is rebuilt from the cached presence, and `agent-presence'
-is the cursors' only."
+then a change of one file's node, then its removal."
   (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
   (drgnx-editor-here-rows-test--with
     (drgnx-agents-editor-here--subscribe)
@@ -123,10 +119,7 @@ is the cursors' only."
        (list (list :remove (list (concat "p:" file))))
        :base 2 :version 3)
       (should-not (gethash file drgnx-agents-editor-here--badges))
-      (should (gethash dir drgnx-agents-editor-here--badges))
-      ;; the old feed changes nothing here
-      (drgnx-agents-editor-here--event "agent-presence" (list :file file :entries (list (list :session "s1" :mode "edit"))))
-      (should (= 0 rebuilds)))))
+      (should (gethash dir drgnx-agents-editor-here--badges)))))
 
 (ert-deftest drgnx-agents-editor-here/reconnect-redraws-from-reset ()
   "A new hub: the connection's hook subscribes again (the data class's env first), and the new hub's reset replaces
@@ -152,7 +145,6 @@ everything held, badges of paths it no longer names included."
        :hub 8)
       (should-not (gethash old drgnx-agents-editor-here--badges))
       (should (gethash new drgnx-agents-editor-here--badges))
-      (should (equal (nth 3 (car drgnx-agents-editor-here--rows)) new))
-      (should (= 0 rebuilds)))))
+      (should (equal (nth 3 (car drgnx-agents-editor-here--rows)) new)))))
 
 ;;; editor-here-rows-test.el ends here

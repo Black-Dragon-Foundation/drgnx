@@ -101,6 +101,39 @@ pub fn listed(configs: &[Value]) -> Vec<usize> {
     v.into_iter().map(|(_, _, i)| i).collect()
 }
 
+/// COMPOUND's configurations, as indices into CONFIGS in the compound's order: each named by its `name` (a string, or
+/// `{name, folder}`: one folder here, so the name decides). A name not in CONFIGS, or none, is an error naming the
+/// compound.
+pub fn compound_members(compound: &Value, configs: &[Value]) -> Result<Vec<usize>, String> {
+    let title = compound.get("name").and_then(Value::as_str).unwrap_or("");
+    let names: Vec<&str> = compound
+        .get("configurations")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|c| c.as_str().or_else(|| c.get("name")?.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+    if names.is_empty() {
+        return Err(format!("compound {title} names no configuration"));
+    }
+    names
+        .into_iter()
+        .map(|n| {
+            configs
+                .iter()
+                .position(|c| c.get("name").and_then(Value::as_str) == Some(n))
+                .ok_or_else(|| format!("compound {title}: no configuration named {n}"))
+        })
+        .collect()
+}
+
+/// Whether stopping one of COMPOUND's sessions stops the others (`stopAll`; off unless set, as in VS Code).
+pub fn stop_all(compound: &Value) -> bool {
+    compound.get("stopAll").and_then(Value::as_bool) == Some(true)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Os {
     Linux,
@@ -512,5 +545,26 @@ pub fn adapter_arguments(config: &Value) -> Value {
                 .collect(),
         ),
         v => v.clone(),
+    }
+}
+
+/// Where a child session of an ADAPTER_TYPE session connects, from `startDebugging`'s ARGUMENTS (`request` and
+/// `configuration`), when not to its launcher's adapter: debugpy's children are attaches whose configuration's
+/// `connect` names the parent adapter's own client listener (it serves one even on stdio; the configuration is a copy
+/// of the launch's and may still say `launch`), which VS Code's Python extension connects to; this machine only.
+/// None: the launcher's child.
+pub fn child_server(adapter_type: &str, arguments: &Value) -> Option<SocketAddr> {
+    if !matches!(adapter_type, "debugpy" | "python")
+        || arguments.get("request").and_then(Value::as_str) != Some("attach")
+    {
+        return None;
+    }
+    let connect = arguments.get("configuration")?.get("connect")?;
+    let port = u16::try_from(connect.get("port")?.as_u64()?).ok()?;
+    match connect.get("host").and_then(Value::as_str) {
+        None | Some("localhost" | "127.0.0.1") => {
+            Some(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
+        }
+        Some(_) => None,
     }
 }

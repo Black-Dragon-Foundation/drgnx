@@ -3,8 +3,8 @@
 //! The hub turns each of its sources (Urdr records, sessions and their steps, the edit history, the presence model,
 //! git refs, machines, cards, the clock) into a typed [`Event`] and steps a [`Core`] with it. The core keeps the
 //! map's [`Model`] (items in six fixed layers, the edges between them, overlaps, needs-you) and each view's state,
-//! and returns [`Effect`]s: a delta for a shown view, a stale mark for a hidden one, a relayout when the user changed
-//! a view. It never does I/O and never reads a clock, so its tests run it in every order of its inputs.
+//! and returns [`Effect`]s: a delta for a shown view (a hidden one gets nothing), a relayout when the user changed or
+//! showed a view. It never does I/O and never reads a clock, so its tests run it in every order of its inputs.
 //!
 //! The layout ([`layout::layout`]) runs in the same crate on a [`Model`] and a view's state.
 
@@ -220,18 +220,15 @@ impl Delta {
 /// What the core asks its shell to do.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Effect {
-    /// Send this shown view what changed.
+    /// Send this shown view what changed (a hidden one gets nothing until it is shown again).
     Delta { view: ViewKey, delta: Delta },
-    /// A hidden view's frame went stale (sent once, until it is shown again).
-    Stale { view: ViewKey },
-    /// Lay this view out again and send it a full frame: the user opened, changed or showed it.
+    /// Lay this view out again and draw it anew: the user opened, changed or showed it.
     Relayout { view: ViewKey },
 }
 
 struct ViewEntry {
     state: ViewState,
     shown: bool,
-    stale: bool,
 }
 
 /// The map core: the model and each view's state.
@@ -270,19 +267,13 @@ impl Core {
                     return Vec::new();
                 }
                 let mut out = Vec::new();
-                for (key, v) in &mut self.views {
+                for (key, v) in self.views.iter().filter(|(_, v)| v.shown) {
                     let delta = self.model.delta_for(&change, v.state.filters.finished);
-                    if delta.is_empty() {
-                        continue;
-                    }
-                    if v.shown {
+                    if !delta.is_empty() {
                         out.push(Effect::Delta {
                             view: key.clone(),
                             delta,
                         });
-                    } else if !v.stale {
-                        v.stale = true;
-                        out.push(Effect::Stale { view: key.clone() });
                     }
                 }
                 out
@@ -293,14 +284,7 @@ impl Core {
     fn view_op(&mut self, op: ViewOp) -> Vec<Effect> {
         match op {
             ViewOp::Open { view, state, shown } => {
-                self.views.insert(
-                    view.clone(),
-                    ViewEntry {
-                        state,
-                        shown,
-                        stale: !shown,
-                    },
-                );
+                self.views.insert(view.clone(), ViewEntry { state, shown });
                 if shown {
                     vec![Effect::Relayout { view }]
                 } else {
@@ -313,7 +297,6 @@ impl Core {
                     if v.shown {
                         vec![Effect::Relayout { view }]
                     } else {
-                        v.stale = true;
                         Vec::new()
                     }
                 }
@@ -323,7 +306,6 @@ impl Core {
                 Some(v) if v.shown != shown => {
                     v.shown = shown;
                     if shown {
-                        v.stale = false;
                         vec![Effect::Relayout { view }]
                     } else {
                         Vec::new()

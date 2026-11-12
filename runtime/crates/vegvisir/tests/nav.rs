@@ -1,10 +1,9 @@
 //! The map's navigation for the native view model (pure, [D]): the links, `then` and the walking orders, against the
-//! editor's own navigation on the 30-agent fixture and on small scenarios.
+//! editor's former navigation on the 30-agent fixture and on small scenarios.
 //!
-//! The golden (`tests/golden/nav-thirty-1600.json`) was recorded from the editor's navigation
-//! (`drgnx-work-nav-move`, `drgnx-work-nav-chain`, `drgnx-work-map--outline-ids`, `drgnx-work-nav--team`) over the
-//! frame in `tests/golden/nav-thirty-1600-frame.json`, which `UPDATE_VEGVISIR_GOLDEN=1 cargo test -p vegvisir --test
-//! nav` writes from this crate's layout of the fixture.
+//! The golden (`tests/golden/nav-thirty-1600.json`) was recorded from the editor's former Lisp navigation (removed
+//! when the hub took the map's drawing) over the frame in `tests/golden/nav-thirty-1600-frame.json`, which
+//! `UPDATE_VEGVISIR_GOLDEN=1 cargo test -p vegvisir --test nav` writes from this crate's layout of the fixture.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -199,10 +198,10 @@ fn needs_you_lists_targets() {
     );
     let l = layout(&m, &view(376), None);
     let ids = placed(&l);
-    // the cards by id (k1's first shown item, k2's; k3 is about nothing shown), then d: it needs you with no card (e
-    // has one)
+    // the cards by id (k1's first shown item, k2's; k3 is about nothing shown: its card's id keeps its place, as its
+    // chip keeps it on the strip), then d: it needs you with no card (e has one)
     assert_eq!(
         nav::needs_you(&m, &ids),
-        vec![id("agent:c"), id("agent:b"), id("agent:d")]
+        vec![id("agent:c"), id("agent:b"), id("k3"), id("agent:d")]
     );
 }

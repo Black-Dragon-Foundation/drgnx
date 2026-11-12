@@ -10,7 +10,7 @@
 {"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
 {"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "m", "class": "tty", "display": "tty", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 8, 8]], "cell": [1, 1], "width_px": 60, "palette": [["accent", "#123456"], ["edge", "#654321"]], "epoch": 1}}}
 {"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
-{"do": "send", "conn": "e", "json": {"id": 3, "method": "work/map/subscribe", "params": {"view": "m", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250, "rows": true}}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "work/map/subscribe", "params": {"view": "m", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250}}}
 {"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "m", "class": "tty", "hub": "$capture:hub", "base": 0, "version": 1, "env_epoch": 1, "ops": [{"reset": "$any"}]}}, "within_ms": 10000}
 {"do": "expect", "conn": "e", "json": {"id": 3, "result": {"hub": "$hub", "version": "$number"}}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}

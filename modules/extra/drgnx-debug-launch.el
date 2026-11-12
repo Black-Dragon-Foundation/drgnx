@@ -17,6 +17,8 @@
 (require 'project)
 (require 'drgnx-setting)
 (require 'drgnx-hub-client)
+(require 'drgnx-frame-kind)
+(declare-function drgnx-term-reattach-one "drgnx-term" (row &optional select))
 (declare-function drgnx-trust-folder "drgnx-trust")
 (declare-function drgnx-settings-defaults-save "drgnx-settings-defaults")
 (defvar dape-configs)
@@ -139,10 +141,34 @@ project's settings never set this."
             (list :annotation-function
                   (lambda (name)
                     (let ((c (cdr (assoc name rows))))
-                      (format "  %s · %s%s" (plist-get c :type) (plist-get c :source)
-                              (if (eq (plist-get c :needs_trust) t) " · not trusted" ""))))))
-           (name (completing-read "Debug configuration: " rows nil t nil nil (and last (plist-get last :name)))))
-      (plist-get (cdr (assoc name rows)) :id))))
+                      (format "  %s · %s%s%s" (plist-get c :type) (plist-get c :source)
+                              (if (eq (plist-get c :needs_trust) t) " · not trusted" "")
+                              (if (plist-get c :missing) " · not installed" ""))))))
+           (name (completing-read "Debug configuration: " rows nil t nil nil (and last (plist-get last :name))))
+           (c (cdr (assoc name rows))))
+      (when-let* ((missing (plist-get c :missing))) (drgnx-debug-launch--offer-install missing))
+      (plist-get c :id))))
+
+(defun drgnx-debug-launch--offer-install (missing)
+  "MISSING (`debug/configs'' :missing): install its adapter on one yes, else say why it cannot start.  Only the
+picker calls this, from a command: nothing downloads without the user's yes."
+  (let ((name (plist-get missing :name)) (how (plist-get missing :install)))
+    (pcase how
+      ((or "download" "pip")
+       (unless (yes-or-no-p (format "%s is not installed.  Install it now (%s)? " name
+                                    (if (equal how "pip") "pip, its hashes required"
+                                      "the pinned download, checked against its sha256")))
+         (user-error "Not started: %s is not installed" name))
+       (message "Installing %s…" name)
+       (drgnx-hub-call-sync "debug/install"
+                            (append (list :adapter (plist-get missing :adapter))
+                                    (when drgnx-debug-adapters
+                                      (list :adapters (vconcat (mapcar #'drgnx-debug-launch--adapter
+                                                                       drgnx-debug-adapters)))))
+                            600)
+       (message "Installed %s" name))
+      ("system" (user-error "%s is not installed: install it with `%s'" name (plist-get missing :command)))
+      (_ (user-error "%s is not installed: put it on PATH, or add it in the setting `drgnx-debug-adapters'" name)))))
 
 ;;;; Inputs
 
@@ -174,8 +200,37 @@ project's settings never set this."
 
 ;;;; Starting
 
-(defun drgnx-debug-launch-start (root config)
-  "Start CONFIG (an id of `debug/configs') in ROOT: trust first, then the inputs it needs; the session's id."
+(defun drgnx-debug-launch--tab-p ()
+  "Non-nil when this Emacs has a frame to show a task's terminal tab in: not batch, not a daemon with no frame."
+  (and (not noninteractive) (drgnx-state-workbench-frame-p (selected-frame))))
+
+(defun drgnx-debug-launch--call-start (params)
+  "`debug/start' with PARAMS; its answer.  With a frame (`drgnx-debug-launch--tab-p') the hub runs the tasks in
+terminal tabs and answers when they end: the wait draws (the tab shows the task) for up to half an hour, and
+\[keyboard-quit] stops waiting (the start goes on).  Without one the tasks run captured, as before."
+  (if (not (drgnx-debug-launch--tab-p))
+      (drgnx-hub-call-sync "debug/start" params 30)
+    (let ((done nil) (result nil) (failed nil))
+      (drgnx-hub-call "debug/start" (append params (list :terminal t))
+                      (lambda (r e) (setq done t result r failed e))
+                      :deadline 1800)
+      (while (not done)
+        (accept-process-output nil 0.05)
+        (redisplay))
+      (if failed (error "drgnx hub: %s" failed) result))))
+
+(defun drgnx-debug-launch-show-terminal (data)
+  "`debug-terminal' DATA: the terminal a task (`:task') or the debugged program (`runInTerminal') runs in, shown in
+the panel when it is this Emacs's (`:editor')."
+  (let ((editor (plist-get data :editor)))
+    (when (and (or (null editor) (equal editor drgnx-hub-session)) (fboundp 'drgnx-term-reattach-one))
+      (drgnx-term-reattach-one
+       (list :id (plist-get data :term) :place "panel" :command ["sh"]
+             :title (if-let* ((task (plist-get data :task))) (format "Task: %s" task) "Debugged program"))))))
+
+(defun drgnx-debug-launch-start (root config &optional no-debug)
+  "Start CONFIG (an id of `debug/configs') in ROOT: trust first, then the inputs it needs; the session's id.
+NO-DEBUG: Run Without Debugging (the adapter launches it with `noDebug')."
   (drgnx-debug-launch--tell-trust root)
   (let ((place (append (and buffer-file-name (list :file (expand-file-name buffer-file-name)))
                        (list :line (line-number-at-pos) :col (1+ (current-column)))
@@ -183,10 +238,10 @@ project's settings never set this."
                             (list :selection (buffer-substring-no-properties (region-beginning) (region-end))))))
         (answers nil) (session nil) (asked 0))
     (while (not session)
-      (let* ((r (drgnx-hub-call-sync "debug/start"
-                                     (apply #'drgnx-debug-launch--params root
-                                            (append (list :config config :inputs (vconcat answers)) place))
-                                     30))
+      (let* ((r (drgnx-debug-launch--call-start
+                 (apply #'drgnx-debug-launch--params root
+                        (append (list :config config :inputs (vconcat answers))
+                                (and no-debug (list :no_debug t)) place))))
              (needs (plist-get r :needs)))
         (cond ((plist-get r :session) (setq session (plist-get r :session)))
               ((equal needs "trust")

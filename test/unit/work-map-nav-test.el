@@ -44,8 +44,8 @@
   "The hub's map model, small: an ask over two agents, b touching a file; b and the ask need you.")
 
 (defun drgnx-work-map-nav-test--row ()
-  "One row holding every card: \"QQ AA BB FF\"."
-  (list :key "r" :text "QQ AA BB FF"
+  "One card row (a key as the hub's, `row:…') holding every card: \"QQ AA BB FF\"."
+  (list :key "row:3:0:0:0" :text "QQ AA BB FF"
         :props (list (list 0 2 "drgnx-work-id" "ask:1") (list 3 5 "drgnx-work-id" "agent:a")
                      (list 6 8 "drgnx-work-id" "agent:b") (list 9 11 "drgnx-work-id" "file:r/x.el"))))
 
@@ -57,7 +57,6 @@
      (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
            (drgnx-view-model--views (make-hash-table :test #'equal))
            (drgnx-view-patch--hooked nil)
-           (drgnx-view-old-path nil)
            (drgnx-view-patch-send-function #'ignore)
            (drgnx-work-map-select-functions nil)
            (view (format "wmn-test-%d" (cl-incf drgnx-work-map-nav-test--n))))
@@ -134,6 +133,26 @@ as one move; forward redoes it; each keeps the map's (KIND . ID)."
     (let ((inhibit-message t)) (drgnx-work-map-needs-you 5))
     (should (equal '(ask . "ask:1") drgnx-work-map--selection))))
 
+(ert-deftest drgnx-work-map-nav/needs-you-n-about-nothing-shown ()
+  "Pattern D: an entry about nothing the view shows keeps its place in the list (its card's id, not a node), so g N
+stays the strip's Nth chip: g 2 says nothing needs you there and keeps the selection; n goes on from it to the ask."
+  (drgnx-work-map-nav-test--with
+    (drgnx-view-model-event
+     (list :view view :hub 7 :base 1 :version 2
+           :model (json-serialize
+                   (list :ops (vector (list :list (list :name "needs-you" :ids ["agent:b" "k9" "ask:1"])))))))
+    (drgnx-view-model--due view)                    ; a model no row patch names applies on its timer: now
+    (should (equal '("agent:b" "k9" "ask:1") (append (nidhogg-view-get (drgnx-work-map--sja) 'list "needs-you") nil)))
+    (drgnx-work-map-needs-you 1)
+    (should (equal '(agent . "agent:b") drgnx-work-map--selection))
+    (let* ((said nil)
+           (_ (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (setq said (apply #'format fmt args)))))
+                (drgnx-work-map-needs-you 2))))
+      (should (equal "Work: nothing needs you at g2" said)))
+    (should (equal '(agent . "agent:b") drgnx-work-map--selection))
+    (drgnx-work-map-needs-you-here-next)
+    (should (equal '(ask . "ask:1") drgnx-work-map--selection))))
+
 (ert-deftest drgnx-work-map-nav/open-reads-fields-once ()
   "Pattern D: opening the selected agent asks Sjá once (its label) and opens that agent's transcript; the kind came
 with the selection.  A file opens at the agents on its chain."
@@ -149,7 +168,7 @@ with the selection.  A file opens at the agents on its chain."
     (drgnx-work-map--nav 'select "file:r/x.el")
     (let ((agents :none))
       (cl-letf (((symbol-function 'drgnx-work-code-open-file)
-                 (lambda (_state _sel &rest keys) (setq agents (plist-get keys :agents)))))
+                 (lambda (_sel &rest keys) (setq agents (plist-get keys :agents)))))
         (drgnx-work-map-open-selection))
       (should (equal '("b") agents)))))
 
@@ -167,17 +186,21 @@ clears it."
     (should-not drgnx-work-map--search)
     (should-not (memq 'drgnx-view-match (drgnx-work-map-nav-test--faces 3)))))
 
-(ert-deftest drgnx-work-map-nav/motion-rects-come-from-the-model ()
-  "Pattern D: on the rows path a card's rect for motion capture is the model's fields x y w h; a card without them
-has none."
+(ert-deftest drgnx-work-map-nav/motion-reads-the-card-rows ()
+  "Pattern D: the cards motion compares before and after are the ids on the hub's card rows (keys `row:…'); a row of
+another kind (the strip, a band, the outline) holds none.  The rectangles' geometry needs a display: the GUI rows in
+test/ui/work-space-gui-test.el check it."
   (drgnx-work-map-nav-test--with
-    (should (equal '(:x 0 :y 10 :w 20 :h 6) (drgnx-work-map--rect nil "agent:a")))
-    (should-not (drgnx-work-map--rect nil "agent:b"))))
+    (should (equal '("agent:a" "agent:b" "ask:1" "file:r/x.el")
+                   (sort (hash-table-keys (drgnx-work-map--drawn-ids)) #'string<)))
+    (should (drgnx-work-map--card-row-p "row:3:0:0:0"))
+    (should-not (drgnx-work-map--card-row-p "strip"))
+    (should-not (drgnx-work-map--card-row-p "band:3:0:0"))
+    (should-not (drgnx-work-map--card-row-p "outline:agent:a:0"))))
 
 (ert-deftest drgnx-work-detail/rows-follow-the-selection ()
   "Pattern D: beside a map on the rows path the Detail panel is the hub's view VIEW/detail in the map's class: its
-rows are what the hub sends there, and a selection move redraws nothing here (the hub follows the selection, which
-the map sends as work/map/set)."
+rows are what the hub sends there (the hub follows the selection, which the map sends as work/map/set)."
   (drgnx-work-map-nav-test--with
     (load (expand-file-name "modules/tools/drgnx-work-detail" drgnx-dir) nil t)
     (let* ((map-view (drgnx-view-patch-view drgnx-view-patch))
@@ -190,11 +213,7 @@ the map sends as work/map/set)."
                                           :env_epoch 0
                                           :ops (list (list :reset (list (list :key "head/0" :text "beta · agent"))))))
             (drgnx-view-draw-now drgnx-view)
-            (should (equal "beta · agent" (string-trim (buffer-string))))
-            (let ((touched 0))
-              (cl-letf (((symbol-function 'drgnx-view-touch) (lambda (&rest _) (cl-incf touched))))
-                (drgnx-work-detail-update (buffer-local-value 'drgnx-work-detail--map detail)))
-              (should (= 0 touched))))
+            (should (equal "beta · agent" (string-trim (buffer-string)))))
         (kill-buffer detail)))))
 
 ;;; work-map-nav-test.el ends here

@@ -254,6 +254,16 @@ cap }`, `Escapes`, `Untrusted { path, why }`, `Unsupported` or `Io`.
   Not every system program is one (Ubuntu 26.04's `coreutils-from-uutils` makes `/usr/bin/env` a link into
   `/usr/lib/cargo/bin/coreutils/`), so the tests that need a trusted program take `/usr/bin/env`'s resolved path.
 
+**True names of the hub's own roots.** A link above a folder the hub owns is the system's (macOS's `/etc`, `/var` and
+`/tmp` are links into `/private`; a home moved behind a link), so those roots are taken by their true name once and
+everything below them is then checked with no link followed: the hub's state folder at start, the plugins folder at
+install, a fork's system read roots (`/usr`, `/etc`, `/opt`), and a project's git common folder, which names its
+history (git writes a linked worktree's `gitdir:` resolved, so the main tree and its worktrees are one project).
+Links inside an agent's tree or a plugin's source stay refused. The explorer's watcher may report a watched folder
+by its true name (macOS's FSEvents), so a reported path is put back under the folder's listed name. On macOS the
+runners' ssh socket folder goes under `/tmp` when `$TMPDIR` (`/var/folders/…/T/`) is too long for a socket path.
+`TMPDIR` set to a folder behind a link reproduces the class on Linux.
+
 `cargo test -p eitri` runs the unit tests (links in every component, `..` refused with no syscall made, a FIFO
 refused within 100 ms, the cap, a write over a link, no temporary file left, `ENOSYS`/`EINVAL` from `openat2`
 injected through a test seam, each `Untrusted.why`) and the proptest `tests/tree.rs`: random trees with links to
@@ -377,7 +387,9 @@ Ratatoskr gives it a connection.
 - **Two protocol eras** (`version`):
   - **`initialize`** (2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25): `negotiate` echoes the client's version when
     it is one of these, else answers `2025-11-25`. The answer is `{protocolVersion, capabilities: {tools:
-    {listChanged: false}}, serverInfo}`. Before `initialize`, a request other than `initialize`, `ping` or
+    {listChanged: false}}, serverInfo}`; `serve_live` (a list that changes) answers `listChanged: true`, takes a
+    change between two answers, never during one, and then sends `notifications/tools/list_changed` once the client
+    has been answered anything. Before `initialize`, a request other than `initialize`, `ping` or
     `server/discover` is `-32600` "initialize first": an error, never silence, since a client's discovery probe falls
     back only after an error or a timeout.
   - **Stateless 2026-07-28**: a request whose `params._meta["io.modelcontextprotocol/protocolVersion"]` is set is
@@ -675,6 +687,17 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 its next step, or the next repeat of a `measure`, fails the row with "the scenario's bound of N s ran out" (for a
 `measure`, how many repeats it did and their mean), and the run goes on with the next row. A step in flight is not cut
 short: it stops at its own `within_ms`.
+
+**What a failure asks** (`"on_failure": [{"conn": NAME, "json": REQUEST}, …]` in the header, each request with an
+`id`): when a row that is not `pending` fails, after the steps' timing and the hubs' log tails (loro's block
+diagnostics left out), each request is sent on its connection (default `c`, captures substituted) and its answer, the
+line with its id within 3 s, is added to the failure (6000 characters of it at most). A row whose red comes only on
+another machine (the macOS lane) names there what the next run must show; the gate-run rows ask `job/status`,
+`exec/list` and `orch/evidence`; `runner/verdict-parsed` asks `status` (the writer's batches and last COMMIT) and
+`job/status`, and starts its hub with `DRGNX_RATATOSKR_LOG=info,drgnx_ratatoskr::runner::propose=debug`, so its log
+tail holds `job proposed`: each stage of `job/propose` (plan, pack, id, project, forecast, say, write, after) in
+milliseconds of the hub's clock and `commit_ms`, the last batch's COMMIT, beside the write's whole wait. Unit test
+`scenario::tests::on_failure_is_requests_with_ids`.
 
 **Tags** (`requires`): `v1` (hello v1: every row), `sudo` (euid 0, or `sudo -n true` succeeds), `test-hooks` (the
 binary's `version --json` says `"test_hooks": true`), `linux`, `macos`, `perf`, `agent-locks`, `podman` (`podman` is on
@@ -1072,7 +1095,7 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 ### The code store
 
 `CodeStore::open(<state>/code/<project-id>.db)` opens one SQLite file through `urdr` (one owning thread, WAL, mode
-0600, migrations as data). Schema v5:
+0600, migrations as data). Schema v6:
 
 | Table | Holds |
 |---|---|
@@ -1081,7 +1104,7 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 | `chunk` | path and `blob` (the content it was cut from), byte and line span, symbol, content `key`, `embed` flag, and `embed_text` (the only copy of a chunk's text, because `chunk_fts` is contentless) |
 | `chunk_fts` | FTS5 over `path, symbols, doc, body`, contentless with `contentless_delete=1`; rowid = `chunk.id`; a trigger removes the row, and the chunk's symbols, with the chunk |
 | `symbol`, `symbol_fts` | defined names with kind, span and lines, signature (`sig`: the definition's lines up to the one that names it, cut before a `{`), `(path, blob)`, chunk and definer (`id` an explicit rowid, so it survives `VACUUM`); a trigram FTS over the names |
-| `ref` | the names a pair's content uses: `(path, blob, name)`, how often (`n`) and the first 8 lines it is used on; `ref_name` finds a name's users |
+| `ref` | the names a pair's content uses: `(path, blob, name)`, how often (`n`) and the first 8 lines it is used on; `ref_name` (`name, path, blob, n`) finds a name's users and their counts on the index alone (v6) |
 | `vec` | one quantized vector per `(model, key)` |
 | `meta` | `urdr`'s table: the schema version, `chunker_version`, `parse_version`, `built_from` and the like |
 
@@ -1177,6 +1200,16 @@ from a `#!` line when it has none. A file is marked `generated` (listed, not dro
 `linguist-generated`/`linguist-vendored`, by "generated" or "DO NOT EDIT" in its first five lines, or by a name like
 `*-autoloads.el`, `loaddefs.el`, `*.lock` or `*.min.*`.
 
+`files::list_with(…, &mut Snapshot)` is the same listing, reusing what the last one read: per path, the file's status
+when it was read (device, inode, size, modification and status-change times, through `eitri::stat_in` on the parent
+directory, opened once per directory beneath the root; it follows no link) and what the read gave. A file whose status is as it was is neither read nor hashed again; one
+modified less than 2 s before a listing began is read again by the next (a write later in the same timestamp tick would
+leave its status as it was), and a change to any `.gitattributes` reads everything again (its attributes and clean
+filters go into every blob). The paths, the rules, the nested repositories and `.gitattributes`' marks are asked anew
+every time. The project keeps one snapshot for its base, so a query in a project without watches lists in about the
+cost of `ls-files`, a `stat` per file and `check-attr` (at 25,000 files 266 ms, from 834 ms when every file went
+through `hash-object`).
+
 `coverage(listed, chunks_per_file)` reports a class with files but no chunks, and any non-empty file with no chunk.
 
 ### The git door per tree
@@ -1254,7 +1287,9 @@ neighbours in the file. It keeps the most definitions whose text fits the budget
 `ceil(chars / 4)`; the last line gives the counts and the estimate. `map::usages(store, view, name, scope, k)` gives the
 name's exact definitions, then the view's `ref` rows for it without the lines inside the name's own definitions in that
 file, each under the innermost definition holding its first line, ranked by the file's rank × `ln(1 + n)`, tests after
-code. It is by name only: same-named things in other scopes show up too.
+code. The ranking reads the name's `(path, blob, n)` on `ref_name` alone and keeps the pairs the view's cached graph
+holds (no join of `file`); the lines are read for the files that define the name and for the K kept only (a name used
+in 22,000 files: 6.4 ms, from 64 ms). It is by name only: same-named things in other scopes show up too.
 
 For Emacs Lisp (`tree-sitter` 0.27, which loads grammar ABI 13–15, with `tree-sitter-elisp` 1.7; moved from 0.25 for
 `ast-grep-core`, below, with the chunker's goldens and the eval unchanged) the units are the top-level forms, each with the comments right above it, and the stretches between
@@ -1520,7 +1555,9 @@ production skips software adapters, a test's named adapter doesn't. `tests/parit
 software Vulkan, so no GPU is needed; `full_references_*` (`#[ignore]`) are for a real GPU, as are the rows of `tests/timing.rs` (a timing file: the real-time lint exempts it),
 which print throughput, query time and the stall a second process sees on the same card, and assert nothing. Its `bench_cpu`
 row prints the CPU path's figures and needs no GPU. `tests/parity_cpu.rs` holds the CPU path against the references, and
-`cpu_and_gpu_agree` in `parity_gpu.rs` holds the two paths against each other.
+`cpu_and_gpu_agree` in `parity_gpu.rs` holds the two paths against each other. A debug build on macOS ignores
+`parity_cpu`'s rows (over a minute unoptimised in the macOS tests job); runtime.yml's `macos-perf` job runs them in
+release.
 
 ## Building and installing Ratatoskr
 

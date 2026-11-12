@@ -46,7 +46,6 @@
 (declare-function drgnx-extensions-plugins-teardown "drgnx-extensions-plugins")
 (declare-function drgnx-extensions-details--define-view "drgnx-extensions-details")
 (declare-function drgnx-extensions-details-forget-generations "drgnx-extensions-details")
-(declare-function drgnx-extensions-list--define-view "drgnx-extensions-list")
 (declare-function drgnx-extensions-list--jobs-changed "drgnx-extensions-list")
 (declare-function drgnx-extensions-list--teardown "drgnx-extensions-list")
 (declare-function drgnx-extensions-list-catalog-stale-p "drgnx-extensions-list")
@@ -188,7 +187,6 @@ turned off or on (`drgnx-modules-after-teardown-functions').  Never waits or sig
                         :doc "The page of an extension an agent suggested; its Install button is yours"))
 
 (defun drgnx-extensions--setup ()
-  (drgnx-extensions-list--define-view)
   (drgnx-extensions-details--define-view)
   (drgnx-extensions--define-commands)
   (add-hook 'drgnx-extensions-jobs-changed-functions #'drgnx-extensions-list--jobs-changed)

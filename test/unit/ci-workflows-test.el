@@ -95,6 +95,11 @@ there, so what a job does includes them (and theirs)."
                              (drgnx-ci-test--job tiers "bins-linux"))))
     (drgnx-ci-test--has (drgnx-ci-test--job tiers "bins-linux")
                         "uses: ./drgnx/.github/actions/build-test-bins" "name: drgnx-test-bins-linux" "retention-days: 1")
+    ;; the test hub `bin/drgnx test --ui' builds: drgnx-term beside Ratatoskr, so the GUI tier's terminal rows open one
+    (drgnx-ci-test--has (drgnx-ci-test--job tiers "bins-linux") "test/container/zig.sh linux"
+                        "runtime/crates/ghostty-vt-sys/fetch.sh" "term: \"true\"" "drgnx/runtime/target/debug/drgnx-term")
+    (drgnx-ci-test--has (drgnx-ci-test--action "build-test-bins") "-p drgnx-term --bins")
+    (drgnx-ci-test--has (drgnx-ci-test--action "fetch-test-bins") "\"$t/drgnx-term\"")
     (drgnx-ci-test--has (drgnx-ci-test--job tiers "macos") "uses: ./drgnx/.github/actions/build-test-bins"
                         "brew install ripgrep\n" "rustup toolchain install stable --profile minimal"
                         "test/container/nidhogg.sh macos")
@@ -367,7 +372,9 @@ Returns (EXIT . OUTPUT)."
     (dolist (line (split-string rows "\n" t))
       (unless (string-match-p "\\`\\s-*#" line) (push (car (split-string line)) timed)))
     (dolist (line (split-string rt "\n"))
-      (when (and (string-match-p "cargo test .*-- --ignored" line) (string-match "-p \\([a-z0-9-]+\\)" line)
+      ;; the crate is `-p''s, or, in a --workspace run, the one whose features it names (the macos job's ssh rows)
+      (when (and (string-match-p "cargo test .*-- --ignored" line)
+                 (string-match "\\(?:-p \\|--workspace --features \\)\\([a-z0-9-]+\\)" line)
                  (member (match-string 1 line) timed))
         (setq runs (1+ runs))
         (should (string-suffix-p " $skips" line))))

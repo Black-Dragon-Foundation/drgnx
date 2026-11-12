@@ -90,6 +90,7 @@ pub fn run_scenario(cfg: &Config, s: &Scenario, perf: &mut Vec<(String, Vec<f64>
             let mut why = format!("step {} ({}): {e}", i + 1, step.verb);
             if s.pending.is_none() {
                 why.push_str(&r.failure_notes(&timing));
+                why.push_str(&r.failure_answers(&s.on_failure));
             }
             return Err(why);
         }
@@ -129,7 +130,48 @@ impl Runner<'_> {
         }
         notes
     }
+
+    /// The hub's answers to the row's `on_failure` ASKS, each sent on its connection (default `c`) and waited for
+    /// [`FAILURE_ASK_MS`] by its id; an ask that cannot be sent or is not answered says so.
+    fn failure_answers(&mut self, asks: &[Map<String, Value>]) -> String {
+        let mut out = String::new();
+        for a in asks {
+            let idx = self.hub_index(None).ok();
+            let json = self.subst(idx, &a["json"], true);
+            let name = str_of(a, "conn").unwrap_or("c").to_string();
+            let what = json
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+                .to_string();
+            let answer = match self.conns.get_mut(&name) {
+                None => format!("no connection named {name:?}"),
+                Some(conn) => match conn.send_line(&json.to_string(), true) {
+                    Err(e) => format!("not sent: {e}"),
+                    Ok(()) => {
+                        let mut caps = Captures::default();
+                        match conn.expect(
+                            &json!({"id": json["id"]}),
+                            Duration::from_millis(FAILURE_ASK_MS),
+                            &mut caps,
+                        ) {
+                            Ok(v) => v.to_string(),
+                            Err(e) => format!("no answer: {e}"),
+                        }
+                    }
+                },
+            };
+            let cut: String = answer.chars().take(FAILURE_ANSWER_CHARS).collect();
+            out.push_str(&format!("\non failure, {what} answered: {cut}"));
+        }
+        out
+    }
 }
+
+/// How long a failure waits for each `on_failure` answer.
+const FAILURE_ASK_MS: u64 = 3000;
+/// How much of each `on_failure` answer a failure keeps.
+const FAILURE_ANSWER_CHARS: usize = 6000;
 
 impl Drop for Runner<'_> {
     fn drop(&mut self) {

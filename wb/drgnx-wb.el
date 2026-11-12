@@ -159,12 +159,12 @@ drawing."
     (if (eq action 'menu)
         (drgnx-wb-island-show-menu event)
       (drgnx-wb-focus-section (car action))
-      (drgnx-ui--run (cdr action)))))
+      (drgnx-ui-kit-run (cdr action)))))
 
 (defun drgnx-wb-island-show-menu (&optional event)
   "The island header's ⋯ menu (`drgnx-wb-island-menu') at EVENT, or at point; run the chosen command."
   (when-let* ((choice (x-popup-menu (or event t) (list "Sidebar" (cons "" drgnx-wb-island-menu)))))
-    (drgnx-ui--run choice)))
+    (drgnx-ui-kit-run choice)))
 
 (defun drgnx-wb-island-refresh (&optional frame)
   "Put the island header on the top window of FRAME's dock (and on no other dock window): its tab line, and the
@@ -717,7 +717,8 @@ Like VS Code's Ctrl+Shift+E;
 `drgnx-wb-show-view' (a layout, or a program) swaps the view and keeps the focus where it was."
   (interactive)
   (drgnx-wb-show-view 'explorer)
-  (drgnx-wb-focus-section 'explorer))
+  (drgnx-wb-focus-section 'explorer)
+  (when (fboundp 'drgnx-explorer-start-hub) (drgnx-explorer-start-hub)))   ; the hub lists it: started when none runs
 
 (defun drgnx-wb-view-search ()
   "Show the Search view in the sidebar and focus it.

@@ -208,6 +208,8 @@ pub enum CardKind {
     Budget,
     Clash,
     Proposal,
+    /// An open huddle (the hub's own, not a stored card): on the strip, about its two agents, marking neither.
+    Huddle,
 }
 
 /// A card. A clash card names the two agents it is about.
@@ -1264,7 +1266,8 @@ impl Model {
         for (&c, (card, about)) in &f.cards {
             if card.open {
                 d.needs_you.push(c);
-                for y in about {
+                // a huddle that talks waits for nobody: its agents are not marked
+                for y in about.iter().filter(|_| card.kind != CardKind::Huddle) {
                     if let Some(it) = d.items.get_mut(y) {
                         it.needs_you = true;
                     }
