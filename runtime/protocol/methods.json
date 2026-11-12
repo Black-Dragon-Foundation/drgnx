@@ -11394,6 +11394,261 @@
       "classes": [
         "user"
       ],
+      "doc": "which change broke it: the good state re-checked, then the states up to now (agent steps, saves, launch snapshots, commits) run by the predicate in slots, each slot one folder restored by delta; `debug-bisect` events give the dots and the first bad state with its author, step and decision",
+      "name": "debug/bisect",
+      "params": {
+        "$defs": {
+          "DebugBisectState": {
+            "description": "A state a bisect starts from or names: `commit` (ID a commit), `run` (ID a recorded run: its launch snapshot) or\n`record` (ID an edit history record: the project after it).",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          "DebugPredicate": {
+            "description": "What makes a state bad: `test` (ARGV fails: exit 0 good, 125 skip, 1–127 bad, as `git bisect run`), `exit` (ARGV\nexits with CODE: bad; 0 or another code: good; 125 skip).  BUILD, when given, runs first: its failure skips the\nstate.  `exception` and `probe` (Python and JS) replay the run in a what-if fork (spec §19.3).",
+            "properties": {
+              "argv": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "at": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "build": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "code": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "condition": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string"
+              },
+              "run": {
+                "description": "`exception` and `probe`: the recorded run to replay, and what to watch for (a place `path:line`, or a probe's\ncondition).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "timebox_s": {
+                "description": "Each run's time box, in seconds (default 600).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/bisect`: bisect ROOT from GOOD to now by PREDICATE, in PARALLEL slots (default 3).",
+        "properties": {
+          "good": {
+            "$ref": "#/$defs/DebugBisectState"
+          },
+          "parallel": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "predicate": {
+            "$ref": "#/$defs/DebugPredicate"
+          },
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "predicate",
+          "good"
+        ],
+        "title": "DebugBisect",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A bisect started: its id, its states and the estimate (`{runs, slots, states}`); `debug-bisect` events follow.",
+        "properties": {
+          "bisect": {
+            "type": "string"
+          },
+          "estimate": true,
+          "states": {
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "bisect",
+          "states",
+          "estimate"
+        ],
+        "title": "DebugBisectStarted",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "stop a bisect and its runs",
+      "name": "debug/bisect/cancel",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/bisect/cancel`, `debug/bisect/narrow`: one bisect.",
+        "properties": {
+          "bisect": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bisect"
+        ],
+        "title": "DebugBisectId",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "narrow a bisect's first bad state to the hunks that make it fail (delta debugging); a `debug-bisect` event gives them",
+      "name": "debug/bisect/narrow",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/bisect/cancel`, `debug/bisect/narrow`: one bisect.",
+        "properties": {
+          "bisect": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bisect"
+        ],
+        "title": "DebugBisectId",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the states a bisect of a project can stop at after a good state: agent steps, saves, launch snapshots and commits, oldest first",
+      "name": "debug/bisect/states",
+      "params": {
+        "$defs": {
+          "DebugBisectState": {
+            "description": "A state a bisect starts from or names: `commit` (ID a commit), `run` (ID a recorded run: its launch snapshot) or\n`record` (ID an edit history record: the project after it).",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/bisect/states`: the states of ROOT after GOOD (every one the history keeps when none), oldest first.",
+        "properties": {
+          "good": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DebugBisectState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "DebugBisectStates",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "The states: `{id, kind, at, label, author?, step?, decision?, record?}`.",
+        "properties": {
+          "states": {
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "states"
+        ],
+        "title": "DebugBisectStateList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a project's breakpoints: a change by id (add, remove, edit, move, function breakpoints) that reaches its sessions at once, and the file's breakpoints with what the adapters made of them",
       "name": "debug/breakpoints",
       "params": {

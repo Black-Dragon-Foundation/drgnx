@@ -9,6 +9,7 @@
 //! - [`log`]: the operation log's records, their causes, and the settle rule that groups typing into them.
 //! - [`revert`]: span revert on element ids, the overlaps a user's later edits make, the 3-way check.
 //! - [`revert_hunk`]: one record's hunks, one of them reverted with later typing kept, and who undid each.
+//! - [`materialise`]: every document as it was after a record, and the records a bisect can stop at.
 //! - [`pending`]: a revert's pending record (what a crash between its steps needs to finish), and its scope by session.
 
 pub mod anchor;
@@ -17,6 +18,7 @@ pub mod compact;
 pub mod docs;
 pub mod excise;
 pub mod log;
+pub mod materialise;
 mod merge;
 pub mod pending;
 pub mod redact;
