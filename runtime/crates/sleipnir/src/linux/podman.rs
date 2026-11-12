@@ -1729,11 +1729,9 @@ mod tests {
     /// [D]
     #[test]
     fn podman_info_that_fails_refuses_the_job() {
-        use std::os::unix::fs::PermissionsExt;
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("podman");
-        std::fs::write(&p, "#!/bin/sh\necho 'no session' >&2; exit 125\n").unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        drgnx_exe::write(&p, "#!/bin/sh\necho 'no session' >&2; exit 125\n").unwrap();
         let e = check_limits(&p, &[], Duration::from_secs(10)).unwrap_err();
         assert!(e.contains("no session") && e.contains("refused"), "{e}");
     }
