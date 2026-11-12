@@ -121,6 +121,7 @@
         (debug-timeline-forward "M-<right>" :map drgnx-debug-past-mode-map)
         (debug-timeline-open "RET" :map drgnx-debug-strip-mode-map)
         (debug-timeline-live :none "the palette; the past stop's Back to Live")
+        (debug-install-adapter :none "the palette")
         (toggle-indent-guides :none "the palette")
         (toggle-smooth-scrolling :none "the palette")
         (toggle-sticky-scroll :none "the palette")

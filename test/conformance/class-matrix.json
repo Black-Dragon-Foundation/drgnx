@@ -62,6 +62,7 @@
   "debug/fork": ["user"],
   "debug/fork/drop": ["user"],
   "debug/fork/run": ["user"],
+  "debug/install": ["user"],
   "debug/probe/op": ["user"],
   "debug/run-to-cursor": ["user"],
   "debug/run/get": ["user"],

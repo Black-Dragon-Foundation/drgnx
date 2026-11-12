@@ -1258,7 +1258,30 @@ what `ratatoskr doctor --json' said)."
         (should (eq (car r) 'warn))
         (should (string-search v (nth 1 r)))))
     (dolist (v '("3.6.23" "3.51.3" "3.53.0" nil))
-      (should (eq (car (funcall check :emacs-sqlite v)) 'ok)))))
+      (should (eq (car (funcall check :emacs-sqlite v)) 'ok)))
+    ;; drgnx-key missing next to the hub: a keyed job here is refused
+    (let ((r (funcall check :key-missing "/data/bin/drgnx-key")))
+      (should (eq (car r) 'warn))
+      (should (string-search "/data/bin/drgnx-key" (nth 1 r)))
+      (should (string-search "keyed job" (nth 1 r)))
+      (should (string-search "drgnx runtime build --install" (nth 2 r))))))
+
+(ert-deftest drgnx-doctor/ratatoskr-fact-names-a-missing-drgnx-key ()
+  ;; next to the binary the hub runs from (a link to it resolved, as the hub's own lookup does)
+  (let* ((d (make-temp-file "drgnx-doctor-key" t))
+         (bin (expand-file-name "ratatoskr" d))
+         (link (expand-file-name "rtsk" d)))
+    (unwind-protect
+        (progn
+          (with-temp-file bin (insert "#!/bin/sh\nexit 1\n"))
+          (set-file-modes bin #o755)
+          (make-symbolic-link bin link)
+          (should (equal (drgnx-doctor--key-missing link) (expand-file-name "drgnx-key" d)))
+          (with-temp-file (expand-file-name "drgnx-key" d) (insert "#!/bin/sh\n"))
+          (set-file-modes (expand-file-name "drgnx-key" d) #o755)
+          (should-not (drgnx-doctor--key-missing link))
+          (should-not (drgnx-doctor--key-missing nil)))
+      (delete-directory d t))))
 
 (ert-deftest drgnx-doctor/the-environment-keys-are-noted ()
   ;; a key the user put in this Emacs's environment stays there (Task 23c, the user's answer 1): the doctor says so in

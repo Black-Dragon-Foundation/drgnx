@@ -12,8 +12,8 @@ use crate::front::Front;
 use runstav::methods::Params;
 use runstav::methods::debug::{
     DebugBreakpointOp, DebugBreakpoints, DebugBreakpointsView, DebugConfig, DebugConfigList,
-    DebugConfigs, DebugControl, DebugFileError, DebugRunToCursor, DebugSelect, DebugStart,
-    DebugStarted, DebugTrust,
+    DebugConfigs, DebugControl, DebugFileError, DebugInstall, DebugRunToCursor, DebugSelect,
+    DebugStart, DebugStarted, DebugTrust,
 };
 use runstav::types::JsonObject;
 use runstav::wire::{Error, ErrorCode};
@@ -290,7 +290,10 @@ pub(super) fn vars(front: &Front, p: &DebugStart) -> Vars {
         selection: p.selection.clone(),
         home,
         exec_path: std::env::current_exe().unwrap_or_default(),
-        default_build_task: None,
+        default_build_task: std::fs::read_to_string(Path::new(&p.root).join(".vscode/tasks.json"))
+            .ok()
+            .and_then(|t| super::tasks::parse(&t).ok())
+            .and_then(|t| super::tasks::default_build_task(&t)),
         env,
         config,
     }
@@ -364,10 +367,24 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
         });
     }
     launch::check_answers(&config, &inputs, &answers).map_err(|e| bad("inputs", e))?;
-    let config = launch::substitute(&config, &vars(front, &p), &answers).map_err(err)?;
+    let vars = vars(front, &p);
+    let config = launch::substitute(&config, &vars, &answers).map_err(err)?;
     let config_hash = super::record::config_hash(&config);
     let ty = text(&config, "type");
     let adapter = table.for_type(&ty).map_err(err)?;
+    let subst = |s: &str| match launch::substitute(&Value::String(s.to_owned()), &vars, &answers)? {
+        Value::String(s) => Ok(s),
+        _ => Ok(s.to_owned()),
+    };
+    // preLaunchTask: its steps run to the end first; a failure is the start's error. postDebugTask's are checked now,
+    // so a wrong name stops the start too
+    let root = Path::new(&p.root);
+    let steps = super::tasks::before_launch(root, &config, Os::this(), &subst).map_err(err)?;
+    let after = super::tasks::after_debug(root, &config, Os::this(), &subst).map_err(err)?;
+    super::tasks::run(&steps, &front.shell_env.vars_os())
+        .await
+        .map_err(err)?;
+    // after the tasks: a TCP adapter's free port is picked just before it starts
     let launcher = launcher(front, &p.root, &config, adapter).map_err(err)?;
     let start = Start {
         name: text(&config, "name"),
@@ -400,6 +417,17 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
         .start_with(caller.conn_id, &p.root, start, launcher, rec)
         .await
         .map_err(err)?;
+    if !after.is_empty() {
+        let d = front.debug.debug(front).clone();
+        let env = front.shell_env.vars_os();
+        let id = id.clone();
+        crate::clock::spawn("debug:post-debug-task", async move {
+            d.wait_end(&id).await;
+            if let Err(e) = super::tasks::run(&after, &env).await {
+                tracing::warn!(target: "drgnx::debug", "postDebugTask of {id}: {e}");
+            }
+        });
+    }
     front
         .debug
         .last
@@ -533,6 +561,29 @@ async fn run_to_cursor(front: &Front, p: DebugRunToCursor) -> Result<bool, Error
     Ok(true)
 }
 
+/// Debug: Install Adapter: P's adapter from its `:install` entry, into the tools folder.
+async fn install_adapter(front: &Front, p: DebugInstall) -> Result<String, Error> {
+    let table = table(&p.adapters)?;
+    let a = table
+        .by_id(&p.adapter)
+        .ok_or_else(|| bad("adapter", format!("no adapter {}", p.adapter)))?;
+    let entry = a.install.as_ref().ok_or_else(|| {
+        err(format!(
+            "drgnx cannot install {}: add it yourself (the setting debug.adapters)",
+            a.name
+        ))
+    })?;
+    let plan = super::install::plan(entry, &super::install::platform_key()).map_err(err)?;
+    super::install::install(
+        &plan,
+        &tools_dir(front),
+        &super::install::Source::Https,
+        &front.shell_env.vars_os(),
+    )
+    .await
+    .map_err(err)
+}
+
 fn answer<T: serde::Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
     r.map(|v| json!(v))
 }
@@ -549,6 +600,7 @@ pub async fn serve(
         Params::DebugControl(p) => answer(control(front, p).await),
         Params::DebugSelect(p) => answer(select(front, p).await),
         Params::DebugTrust(p) => answer(trust(front, p).await),
+        Params::DebugInstall(p) => answer(install_adapter(front, p).await),
         Params::DebugBreakpoints(p) => answer(breakpoints(front, p).await),
         Params::DebugRunToCursor(p) => answer(run_to_cursor(front, p).await),
         other => return Err(Box::new(other)),

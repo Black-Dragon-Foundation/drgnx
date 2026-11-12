@@ -1381,6 +1381,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/fork` | user | `{at: {hit?: natnum, line?: natnum, path?: string, stop?: natnum}, change?: {code?: boolean, value?: {path: [string], text: string}}, confirm?: boolean, inputs?: [{id: string, value: string}], run: string, until?: DebugForkUntil}` | `{ask?: string, fork?: string, needs?: any}` | no |
 | `debug/fork/drop` | user | `{fork: string}` | `boolean` | no |
 | `debug/fork/run` | user | `{fork: string}` | `boolean` | no |
+| `debug/install` | user | `{adapter: string, adapters?: [JsonObject]}` | `string` | no |
 | `debug/probe/op` | user | `{op?: {enabled?: boolean, expr?: string, id?: string, language?: string, line?: natnum, op: string, path?: string, text?: string}, root: string}` | `{added?: string, path?: string, probes: [any], root: string}` | no |
 | `debug/run-to-cursor` | user | `{line: natnum, path: string, session: string}` | `boolean` | no |
 | `debug/run/get` | user | `{count?: natnum, current?: natnum, from?: natnum, run: string}` | `DebugRunView` | no |

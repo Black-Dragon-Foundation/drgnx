@@ -61,8 +61,9 @@ if (dir && ports.length) {
 // js-debug writes its bootloader into this process's NODE_OPTIONS only once it has attached (100-200 ms in, while
 // the program already runs, since js-debug answers the attach only after configurationDone); a child started before
 // that would run without a debugger. So starting a child first waits for the bootloader, in 5 ms sleeps: between
-// them V8 runs the inspector's pending messages (interrupts), js-debug's evaluate among them. At most 30 s (a loaded
-// machine: a 5 s cap ran out once in a test); past it the child starts without the debugger and that is said.
+// them V8 runs the inspector's pending messages (interrupts), js-debug's evaluate among them. At most 5 s: the wait
+// took 128-165 ms on the macOS runner and at most 52 ms on a desktop under full CPU load; past it the child starts
+// without the debugger and that is said.
 if (process.env.DRGNX_DEBUG_WAIT_BOOTLOADER) {
   const cp = require("child_process");
   const ready = () => /bootloader/.test(process.env.NODE_OPTIONS || "");
@@ -70,10 +71,10 @@ if (process.env.DRGNX_DEBUG_WAIT_BOOTLOADER) {
   const wait = () => {
     if (ready()) return;
     const t0 = Date.now();
-    while (!ready() && Date.now() - t0 < 30000) Atomics.wait(cell, 0, 0, 5);
+    while (!ready() && Date.now() - t0 < 5000) Atomics.wait(cell, 0, 0, 5);
     trace(`waited ${Date.now() - t0} ms for the bootloader: ${ready() ? "there" : "not there"}`);
     if (!ready()) {
-      fs.writeSync(2, `drgnx: process ${process.pid} starts a child without the debugger: js-debug's bootloader did not arrive within 30 s\n`);
+      fs.writeSync(2, `drgnx: process ${process.pid} starts a child without the debugger: js-debug's bootloader did not arrive within 5 s\n`);
     }
   };
   for (const name of ["spawn", "spawnSync", "fork", "exec", "execSync", "execFile", "execFileSync"]) {

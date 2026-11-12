@@ -17,6 +17,7 @@ pub mod fork_hub;
 pub mod fork_mux;
 pub mod fork_seal;
 pub mod fork_wire;
+pub mod install;
 pub mod launch;
 pub mod ports;
 pub mod probes;
@@ -25,6 +26,7 @@ pub mod runfile;
 pub mod runs_wire;
 pub mod session;
 pub mod strip;
+pub mod tasks;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -44,6 +46,8 @@ mod tests_fork_live;
 #[cfg(test)]
 mod tests_fork_seal;
 #[cfg(test)]
+mod tests_install;
+#[cfg(test)]
 mod tests_launch;
 #[cfg(test)]
 mod tests_ports;
@@ -53,6 +57,8 @@ mod tests_probes;
 mod tests_record;
 #[cfg(test)]
 mod tests_registry;
+#[cfg(test)]
+mod tests_tasks;
 pub mod wire;
 
 use breakpoints::Store;
@@ -666,7 +672,8 @@ impl Debug {
             .collect()
     }
 
-    async fn wait_end(&self, id: &str) {
+    /// Resolves once session ID has ended (at once if there is no such session).
+    pub(crate) async fn wait_end(&self, id: &str) {
         let rx = lock(&self.inner.state)
             .sessions
             .get(id)

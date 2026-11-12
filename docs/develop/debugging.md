@@ -125,6 +125,21 @@ names (symlinks resolved). An unknown variable, setting or folder is an error th
 (`presentation`, `preLaunchTask`, `postDebugTask`, `debugServer`, `internalConsoleOptions`, `serverReadyAction`) are
 not passed to the adapter; every other field is.
 
+### Tasks (`debug/tasks.rs`)
+
+A configuration's `preLaunchTask` names a task in the root's `.vscode/tasks.json`, read as JSONC like launch.json, each
+task with its platform section merged over it and its strings through the same variables. The task's `dependsOn` (a
+label or a list) runs first, depth first in the order given, each task once; a cycle (`a → b → a`) or an unknown
+label is an error that names it. A `shell` task (also one without a `type`) runs its command line in `/bin/sh -c`,
+each `args` item quoted for the shell; a `process` task runs `command` and `args` as they are, never split.
+`options.cwd` (relative: under the root) and `options.env` apply. `isBackground` tasks (watchers that never end) are
+refused. The steps run one at a time before the adapter starts (so a TCP adapter's free port is picked after the
+build); the first that fails stops the rest and the start, and the error gives its exit status and the end of its
+output (2,000 bytes of stdout, then stderr's tail). `${defaultBuildTask}` is the label of the task whose `group` is
+`{"kind": "build", "isDefault": true}`. `postDebugTask` is read from the same file at the start (a wrong name stops the
+start too) and runs once the root session has ended, a restart's end included; its failure goes to the hub's log
+until the debug console shows it.
+
 ## Adapters
 
 `etc/debug-adapters.eld` is the adapter table, read by the hub with huginn's reader as data only (strings, numbers,
@@ -137,6 +152,17 @@ js-debug, delve, lldb-dap), how to find it and how to start it:
 - `:start`: `(:stdio ARGV)` or `(:tcp ARGV)`, where `{program}`, `{python}`, `{tools}` and `{port}` are filled in; a
   TCP adapter gets a free port on 127.0.0.1 picked by the hub (`adapters::free_port`; another local process could take
   it first, and DAP has no authentication: spec §9.5).
+
+- `:install` (Debug: Install Adapter, `debug/install`, `debug/install.rs`): `(:url U :sha256 H :into DIR [:root R])`
+  or `(:into DIR :platforms ((:platform "linux-x64" :url U :sha256 H) …))` (the platform keys are `linux-x64`,
+  `linux-arm64`, `darwin-x64`, `darwin-arm64`), `(:pip "debugpy==V" :hash "sha256:…")` or `(:system "dnf install …")`.
+  An archive is downloaded over https through the browser installer's client (`browser::install::fetch`, its proxy and
+  certificate settings), checked against the pin, and unpacked (a tar.gz, or a zip such as CodeLLDB's `.vsix`) with
+  only regular files and folders allowed: an absolute, climbing or linking entry fails the whole install. The result
+  (only its `:root` folder, when given) replaces `<data>/debug-adapters/DIR` whole through `DIR.partial` and `DIR.old`,
+  so any failure leaves the folder as it was. debugpy goes into the tools venv (made first if missing) with `pip
+  install --require-hashes --no-deps`. A system package is never run: the error names its command. js-debug and
+  CodeLLDB are pinned archives (CodeLLDB is built in, untested, started from its `extension/adapter/codelldb`).
 
 The untested entries' command lines come from dape's recipes (credited in the file). Adapters drgnx cannot start are
 listed with `:not-built-in t`, so their type says to add them in the setting `debug.adapters`; an unknown type lists
@@ -189,6 +215,9 @@ roots `debug/trust` called trusted and each root's last started configuration.
 - `debug/control {session, thread?, op}` (`continue`, `pause`, `next`, `step-in`, `step-out`, `restart`, `stop`,
   `stop-and-kill`, `disconnect`), `debug/select {session, thread?, frame}`, and `debug/trust {root, trusted}`, whose
   revocation stops the root's sessions.
+- `debug/install {adapter, adapters?}`: the adapter's `:install` entry carried out (see Adapters); the answer says what
+  was installed. A system package's, an adapter without an entry and an unknown id are errors (conformance
+  `debug/install-refusals`; the downloads are the unit tests' `debug::tests_install`, from local files).
 
 Adapters start in the root with the shell's environment (`env/set`), each in its own process group: a stdio adapter
 over pipes; a TCP adapter with stdin on `/dev/null`, on a free port of 127.0.0.1 that the hub connects to within 5 s
@@ -199,6 +228,16 @@ An adapter that goes on its own ends its session with the end of its stderr in t
 `runInTerminal` opens a drgnx terminal in the panel (`term::Terms::spawn`, 80×24 until the editor sizes it) with the
 shell's environment and the adapter's `env` over it; `debug-terminal {session, term, view}` tells the starting editor,
 which shows the view. At the hub's end every session stops, children first, before the store closes.
+
+## The module: `drgnx-debug.el`
+
+`extra/debug` needs no package (dape is no longer its client). `drgnx-debug-mode` (its setup; off in its teardown)
+puts the breakpoint column in every file's buffer and `drgnx-debug--event` on `drgnx-hub-event-functions`: each
+`debug-state` replaces `drgnx-debug--sessions` and turns `drgnx-debug-session-mode` (the session keys, such as F11 for
+Step Into) on while there is a session. A command acts on the project's session (its root is the project's), the
+stopped one first, so a stopped child comes before its running parent: Start Debugging continues it (`debug/control
+continue`) or, with none stopped, picks a configuration and starts it; Step Over / Into / Out and Stop send `next`,
+`step-in`, `step-out` and `stop`. Tests: `test/unit/debug-module-test.el`.
 
 ## The editor's half: `drgnx-debug-launch.el`
 
@@ -222,7 +261,11 @@ which shows the view. At the hub's end every session stops, children first, befo
 
 `drgnx doctor`'s `debug-adapters` line (group Tools) reads `etc/debug-adapters.eld` as data and says which built-in
 adapters are found (`:path` on `PATH`, `:python-module` importable by `python3`, `:tools` under
-`<data>/debug-adapters/`) and how to get the others.
+`<data>/debug-adapters/`) and how to get the others (a system package's command, else Debug: Install Adapter).
+
+`drgnx-debug-install-adapter` is the palette's **Install Adapter…** (`debug-install-adapter`, on no key in any
+profile): it offers the table's built-in adapters with an `:install` entry and calls `debug/install` with your
+`drgnx-debug-adapters`; the answer or the error is shown in the echo area.
 
 Its tests (`test/unit/debug-launch-test.el`) script the hub's answers.
 
@@ -317,8 +360,9 @@ session gets a block of ports and its launch configuration becomes an attach the
   runs by then (holding `configurationDone` for the answer deadlocks): a child started before the bootloader is there
   would run without a debugger. So `etc/debug-node-preload.js`, first in `NODE_OPTIONS`, makes `child_process`'s
   spawn, fork and exec functions wait for it first (`DRGNX_DEBUG_WAIT_BOOTLOADER`, set unless
-  `autoAttachChildProcesses` is off), in 5 ms sleeps between which V8 runs the inspector's messages, at most 30 s (a
-  5 s cap ran out once on a loaded machine); past it the child starts without the debugger and stderr says so.
+  `autoAttachChildProcesses` is off), in 5 ms sleeps between which V8 runs the inspector's messages, at most 5 s
+  (measured: 128–165 ms on the macOS runner, at most 52 ms on a desktop under full CPU load); past it the child
+  starts without the debugger and stderr says so.
   Children (`startDebugging`) are second connections to A. A child's `inspector.open(0)` goes through the preload
   too: it takes the block's next port, claimed with an O_EXCL file under `TMP/drgnx-debug-ports/`, and drops an
   inherited `--inspect-brk` from forked children's `execArgv`. The preload is written into each session's tmp.

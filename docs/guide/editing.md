@@ -49,15 +49,23 @@ re-indented on save. A formatter that is not installed, or fails, leaves the fil
 
 ## Debugging
 
-**Start Debugging…** runs a debug session through dape, which speaks the Debug Adapter Protocol: the adapters VS
-Code uses — debugpy for Python, the JavaScript/TypeScript debugger, delve for Go, codelldb for C, C++ and Rust — work
-here once installed (dape's documentation lists how to get each). While the session is stopped the same command
-continues; **Toggle Breakpoint**, **Step Over**, **Step Into**, **Step Out** and **Stop Debugging** do what they say.
-If you used dape, **Convert dape Configurations…** (the palette) turns your `dape-configs` into launch configurations
-once.
+**Start Debugging…** runs a debug session through drgnx's own client of the Debug Adapter Protocol, so the adapters
+VS Code uses work here: debugpy for Python, the JavaScript/TypeScript debugger, delve for Go, CodeLLDB or lldb-dap for
+C, C++ and Rust. It offers the project's configurations: those of `.vscode/launch.json` (read as VS Code reads it,
+comments, `${…}` variables, `inputs` and platform sections included), your own in the setting `debug.configurations`,
+and a default for the file's language when there is neither. A configuration's `preLaunchTask` (and `postDebugTask`)
+runs from `.vscode/tasks.json` first; a failing task stops the start and says why. The first start in a folder asks
+you to trust it (**Trust This Folder**): an untrusted folder's configurations never run.
+
+**Install Adapter…** (the palette) downloads the JavaScript debugger or CodeLLDB, checked against the version drgnx
+pins, or puts debugpy into drgnx's own Python, and names the system package to install for the others (`drgnx doctor`
+lists which are found).
+
+While the session is stopped the same command continues; **Toggle Breakpoint**, **Step Over**, **Step Into**,
+**Step Out** and **Stop Debugging** do what they say. If you used dape, **Convert dape Configurations…** (the palette)
+turns your `dape-configs` into launch configurations once (dape itself is no longer needed).
 In the VS Code key profile: F5, F9, F10, F11 (Step Into while a session runs — Zen Mode otherwise), S-F11, S-F5; the
-Emacs and Vim profiles reach them in the palette. dape's windows (scopes, stack, breakpoints, the REPL) open on the
-right, so the panel stays the workbench's. Module `extra/debug`, package `dape`.
+Emacs and Vim profiles reach them in the palette. Module `extra/debug`; it needs no package.
 
 Breakpoints live in a column left of the line numbers, kept per project (they survive restarts and reach a running
 session at once). Click the column to add or remove one, shift-click for a logpoint (a message printed instead of

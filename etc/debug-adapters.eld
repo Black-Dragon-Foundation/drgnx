@@ -11,7 +11,13 @@
 ;;   :start     (:stdio (ARGV...)) or (:tcp (ARGV...)); ARGV may hold {program} (what :find found), {python},
 ;;              {tools} and {port} (a free port on 127.0.0.1 the hub picks)
 ;;   :defaults  configurations offered when launch.json has none for the file's language
-;;   :install   how to get it, shown in the picker's "not installed" row
+;;   :install   how to get it (Debug: Install Adapter; the picker's "not installed" row says which):
+;;              (:pip "NAME==VERSION" :hash "sha256:…")  into the tools venv, the hash required;
+;;              (:url "https://…" :sha256 "…" :into "DIR" [:root "FOLDER"])  a tar.gz or zip checked against the digest
+;;                and unpacked to tools/DIR (only the archive's FOLDER, when given);
+;;              (:into "DIR" :platforms ((:platform "linux-x64" :url … :sha256 …) …))  the same, one pin per platform
+;;                (linux-x64, linux-arm64, darwin-x64, darwin-arm64);
+;;              (:system "COMMAND")  a system package: the command is shown, never run
 ;;   :not-built-in t: drgnx names it but cannot start it; the user adds it in the setting `debug.adapters`
 ;;
 ;; The commands of the untested entries come from dape (https://github.com/svaante/dape, GPL-3.0-or-later), whose
@@ -31,7 +37,8 @@
   :defaults ((:name "Node: Launch File" :type "pwa-node" :request "launch" :program "${file}"
               :cwd "${workspaceFolder}"))
   :install (:url "https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.1/js-debug-dap-v1.140.1.tar.gz"
-            :sha256 "c72fab31bcbfdce6ad1f42adfd28eff8d4681dd3b03b5e2e6f9e72e6f9927faf" :into "js-debug"))
+            :sha256 "c72fab31bcbfdce6ad1f42adfd28eff8d4681dd3b03b5e2e6f9e72e6f9927faf" :into "js-debug"
+            :root "js-debug"))
  (:id "delve" :name "Go (delve)" :types ("go") :languages ("go") :tested t
   :find (:path "dlv")
   :start (:tcp ("{program}" "dap" "--listen" "127.0.0.1:{port}"))
@@ -58,7 +65,19 @@
   :find (:path "netcoredbg")
   :start (:stdio ("{program}" "--interpreter=vscode")))
  (:id "cpptools" :name "C, C++ (cpptools)" :types ("cppdbg" "cppvsdbg") :not-built-in t)
- (:id "codelldb" :name "C, C++, Rust (CodeLLDB)" :types ("lldb") :not-built-in t)
+ (:id "codelldb" :name "C, C++, Rust (CodeLLDB)" :types ("lldb") :languages () :tested nil
+  :find (:tools "codelldb/extension/adapter/codelldb")
+  :start (:tcp ("{program}" "--port" "{port}"))
+  :install (:into "codelldb"
+            :platforms
+            ((:platform "linux-x64" :url "https://github.com/vadimcn/codelldb/releases/download/v1.12.3/codelldb-linux-x64.vsix"
+              :sha256 "1cd7f386598022b51a5b93b9ffa23e812b23f519cfe1833384ec4bef4bfd1be1")
+             (:platform "linux-arm64" :url "https://github.com/vadimcn/codelldb/releases/download/v1.12.3/codelldb-linux-arm64.vsix"
+              :sha256 "0887f67d440554617894266f80706b700907c36b95e6e49d23b95a0e05318101")
+             (:platform "darwin-x64" :url "https://github.com/vadimcn/codelldb/releases/download/v1.12.3/codelldb-darwin-x64.vsix"
+              :sha256 "e25cc716b94c62c07fec268ff2785d2b797245b160502baef8b9c970a0c4d8e8")
+             (:platform "darwin-arm64" :url "https://github.com/vadimcn/codelldb/releases/download/v1.12.3/codelldb-darwin-arm64.vsix"
+              :sha256 "2f114a990e1b368dd1dbd33c80c0e719767af2d228391ec0df0571c957f9ac91"))))
  (:id "java" :name "Java (jdtls)" :types ("java") :not-built-in t)
  (:id "flutter" :name "Dart, Flutter" :types ("dart" "flutter") :not-built-in t)
  (:id "godot" :name "Godot" :types ("godot") :not-built-in t)
