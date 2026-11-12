@@ -22,6 +22,9 @@
  (debug-breakpoint-click (:input :p95) 16) (debug-breakpoint-click (:input :max) 50)
  ;; a step's stop drawn (spec §5): the arrow, band and point moved within a frame (16 ms p95, from the event)
  (debug-step-line (:input :p95) 16) (debug-step-line (:input :max) 50)
+ ;; inline values (spec §8, §12): a step's `debug-inline' drawn, twelve lines replaced in place, within 2 ms p95 (the
+ ;; hub's half, at most 8 ms, is the bench debug_inline)
+ (debug-inline (:input :p95) 2) (debug-inline (:input :max) 50)
  ;; the toolbar shown or hidden with the session (spec §12: 5 ms, the child frame reused)
  (debug-toolbar-show (:input :p95) 5) (debug-toolbar-show (:input :max) 50)
  ;; the Run and Debug view (spec §7): a step's variables drawn (30 ms with the hub's half, the bench `debug_view'); a

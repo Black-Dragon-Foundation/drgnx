@@ -92,7 +92,9 @@ ellipsis) and at most `drgnx-blame--max-width'; nil when WIDTH is under `drgnx-b
 (defun drgnx-blame--show (info)
   "Show INFO at the end of the current line, fitted to the room the window has there (nothing when there is none)."
   (setq drgnx-blame--info info drgnx-blame--bol (line-beginning-position))    ; answered for this line, shown or not
-  (if-let* ((text (drgnx-blame--text info (float-time) (drgnx-blame--room))))
+  (if-let* (((not (seq-some (lambda (o) (overlay-get o 'drgnx-blame-yield))           ; inline values hold the line
+                            (overlays-in (line-beginning-position) (1+ (line-end-position))))))
+            (text (drgnx-blame--text info (float-time) (drgnx-blame--room))))
       (progn
         (unless drgnx-blame--overlay (setq drgnx-blame--overlay (make-overlay 1 1 nil t nil)))
         (move-overlay drgnx-blame--overlay (line-end-position) (line-end-position))

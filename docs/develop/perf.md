@@ -34,6 +34,7 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | debug-gutter-baseline | the same file and keys with hunks' margin and the breakpoint column claimed and empty, the column off: what a user sees when a session starts in a file that shows hunks (see "The breakpoint column's margin" below) | — (the 5 % rule's base) |
 | debug-breakpoint-click | F9 then `<down>`, 20 times: each a `debug/breakpoints` add answered at once and the column redrawn | input latency |
 | debug-step-line | the 12k-line fixture, then F10 120 times: each one `debug-frame` (a step's stop, sent to the starting editor) for the next line, the arrow and band moved, point placed, the window scrolled only when the line left it | input latency; within 16 ms p95 (spec §5) |
+| debug-inline | the 12k-line fixture stopped at line 200, then F10 120 times: each one `debug-inline` as the hub sends it for a step (twelve lines' values, two changed), the lines that keep values updated in place, the next added, the oldest gone | input latency; within 2 ms p95 (spec §8, §12) |
 | debug-toolbar-show | F8 120 times, alternating a `debug-state` with one stopped session and one with none: the toolbar's card shown and hidden (made once, then reused), the status bar's segment and the Paused chip with it | input latency; within 5 ms p95 (spec §12) |
 | debug-step-variables | the Run and Debug view (no hub: the hub's model and rows from the workload) with 300 variables and a 10,000-element list in 100 chunks, then F10 120 times: each a step's model diff and rows patch, ten values changed, drawn | input latency; within 30 ms p95 with the hub's half, the bench `debug_view` (spec §7) |
 | debug-expand-chunks | the same view, F8 100 times: the next closed chunk of the list opened from its row (`debug/expand`, answered as the hub answers it: the chunk's 100 rows inserted, their nodes added), drawn | input latency; within 15 ms p95 (spec §7) |
@@ -1069,6 +1070,11 @@ Recorded runs' hub rows are the bench `runtime/crates/drgnx-ratatoskr/benches/de
 `debug-capture` (a stop's capture cut to 64 KB, appended to the run file and flushed, at most 1 ms at the 95th
 percentile). It is `#[ignore]`d and measures and prints; run it optimized and alone on a pinned host:
 `perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench debug_record -- --ignored --nocapture --test-threads 1`.
+
+Inline values' hub row is the bench `runtime/crates/drgnx-ratatoskr/benches/debug_inline.rs`: `debug-inline`, a stop's
+values for a 2,000-line Python file stopped in a 200-line function with 42 variables, the parse cached (at most 8 ms at
+the 95th percentile; the first parse is printed too). It is `#[ignore]`d and measures and prints:
+`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench debug_inline -- --ignored --nocapture --test-threads 1`.
 
 `debug-fork-start` (a what-if fork's tree restored, its Gleipnir sandbox and adapter started and its program run to
 its first stop: at most 2 s at the 95th percentile on Linux) is the live row `debug::tests_fork_live::debug_fork_start`,

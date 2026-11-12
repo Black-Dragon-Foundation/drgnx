@@ -323,7 +323,8 @@ banded line, and the pointer noted on a dot lights it.
 
 The module's handler (`drgnx-debug--event`) gives each `debug-frame` to `drgnx-debug-gutter-show-frame`:
 
-- A top frame is a new stop (or the top picked again): the session's marks go, then its line gets the arrow (`stop`;
+- A top frame is a new stop (or the top picked again): the session's marks go (its inline values stay until the
+  stop's own `debug-inline` replaces them, below), then its line gets the arrow (`stop`;
   `stop-bp` over a breakpoint, whose own glyph is hidden until the stop goes; `exception` on an exception) and a band
   (`drgnx-debug-stopped-line`, or `drgnx-debug-exception-line`). A caller frame (`top: false`) replaces only the
   session's caller mark: the outline arrow and `drgnx-debug-frame-line`. The marks are overlays tagged
@@ -344,6 +345,34 @@ The module's handler (`drgnx-debug--event`) gives each `debug-frame` to `drgnx-d
 
 Tests: `test/unit/debug-stop-test.el`; perf row `debug-step-line` (120 steps through the fixture, p95 ≤ 16 ms; 3.4 ms
 measured on the desktop).
+
+### Inline values (spec §8)
+
+At each stop the hub sends `debug-inline` (`{session, epoch, path, lines: [{line, text, changed}]}`) after the
+`debug-frame`, from `debug/inline.rs`, which picks what to show:
+
+- **Which names:** the frame's file is parsed with Hrafn's grammar for its language (unsupported: none); the
+  innermost function around the stopped line (else the top level) gives its identifiers from its first line to the
+  stopped line, plus the rest of the outermost loop around it (its later lines ran on earlier passes). Called names,
+  a function's own name and fields after a dot are not values. They are matched against the frame's fetched scopes:
+  Locals and Arguments, then Globals only for names no local has; registers are skipped.
+- **Where:** each name on the last line it appears on up to the stop (else its last line in the loop), at most three a
+  line, `name = value` with the value on one line and cut at 60 characters, the line cut at 120.
+- **Changed:** values that differ from the session's previous stop; `changed` gives each one's character range.
+- **Cost:** one parse per file text, cached by its digest (8 trees), the walk only over the function.
+
+`drgnx-debug-gutter-inline` draws them: one overlay per line at its end (`after-string` two spaces, then the text in
+`drgnx-debug-inline-value`, the changed ranges in `drgnx-debug-inline-value-changed`, the cursor kept before them),
+priority 90 so diagnostics (100) come after them. They are the session's stop marks with the role `inline`: a new
+stop's frame leaves them, its `debug-inline` updates the lines that keep values in the same overlays, adds the new and
+deletes the rest; they go 150 ms after the session runs and at once when it ends. A buffer modified since its save gets
+none (the program runs the saved file) and the echo area says so. The overlays carry `drgnx-blame-yield`: the blame
+overlay on such a line goes, and `drgnx-blame--show` shows none on a line that has one. `drgnx-debug-inline-values`
+(`on`/`off`) turns them off at once.
+
+Tests: `debug::tests_inline` and `tests_registry::a_stop_publishes_its_inline_values` (the hub),
+`test/unit/debug-inline-test.el` (the editor); perf rows `debug-inline` (the editor's, p95 ≤ 2 ms) and the bench
+`benches/debug_inline.rs` (the hub's, p95 ≤ 8 ms).
 
 ## The toolbar: `drgnx-debug-toolbar.el` (spec §6)
 

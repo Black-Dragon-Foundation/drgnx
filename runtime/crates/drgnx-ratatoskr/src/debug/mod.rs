@@ -21,6 +21,7 @@ pub mod fork_hub;
 pub mod fork_mux;
 pub mod fork_seal;
 pub mod fork_wire;
+pub mod inline;
 pub mod install;
 pub mod launch;
 pub mod origin;
@@ -57,6 +58,8 @@ mod tests_fork_hub;
 mod tests_fork_live;
 #[cfg(test)]
 mod tests_fork_seal;
+#[cfg(test)]
+mod tests_inline;
 #[cfg(test)]
 mod tests_install;
 #[cfg(test)]
@@ -239,6 +242,8 @@ struct Inner {
     store_dir: Option<PathBuf>,
     /// The recorded runs and the probes (none: nothing is recorded).
     rec: OnceLock<Arc<record::Records>>,
+    /// The inline values' parse cache and each session's last values.
+    inline: inline::Inline,
     /// Told of every change of a session's state or stop, or of breakpoints (the Run and Debug views).
     listeners: Mutex<Vec<Listener>>,
 }
@@ -286,6 +291,7 @@ impl Debug {
                 stores: Mutex::new(BTreeMap::new()),
                 store_dir,
                 rec: OnceLock::new(),
+                inline: inline::Inline::new(),
                 listeners: Mutex::new(Vec::new()),
             }),
         }
@@ -1007,6 +1013,8 @@ impl Debug {
                     }
                     if let Some(conn) = conn {
                         self.publish_frame(&id, conn, &stop);
+                        let values = self.inner.inline.at_stop(&id, &stop);
+                        self.inner.sink.broadcast("debug-inline", values, None);
                     }
                     // Run to Cursor's breakpoint goes at the next stop
                     if let Some(root) = self.root_of(&id) {
@@ -1137,6 +1145,7 @@ impl Debug {
         if let Some(rec) = self.records() {
             rec.end(id, &end);
         }
+        self.inner.inline.forget(id);
         let e = lock(&self.inner.state).sessions.remove(id);
         self.publish_state();
         let Some(e) = e else { return };
