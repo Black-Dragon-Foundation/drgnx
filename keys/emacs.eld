@@ -112,6 +112,7 @@
         (debug-step-in :none "the palette")
         (debug-step-out :none "the palette")
         (debug-stop :none "the palette")
+        (debug-convert-dape :none "the palette")
         (toggle-indent-guides :none "the palette")
         (toggle-smooth-scrolling :none "the palette")
         (toggle-sticky-scroll :none "the palette")

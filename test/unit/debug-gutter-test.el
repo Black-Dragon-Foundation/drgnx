@@ -300,10 +300,20 @@
     (debug-gutter-test--hovering
       (debug-gutter-test--with 200
         (drgnx-debug-gutter--pool-update (selected-window))
-        (let ((n (length (debug-gutter-test--dots))))
-          ;; scrolled: the dots move to the new lines, no more of them
+        (let ((n (length (debug-gutter-test--dots))) (start (window-start)))
+          ;; scrolled: the scroll's frames draw no dots (unseen at rest anyway); once the window settles they are
+          ;; on the new lines, no more of them
           (set-window-start (selected-window) (save-excursion (goto-char (point-min)) (forward-line 99) (point)))
           (drgnx-debug-gutter--pool-update (selected-window))
+          (should-not (debug-gutter-test--dots))
+          (should (drgnx-timer-active-p (cons 'debug-hover (selected-window))))
+          ;; back where it was before it settled: still none until it does
+          (set-window-start (selected-window) start)
+          (drgnx-debug-gutter--pool-update (selected-window))
+          (should-not (debug-gutter-test--dots))
+          (set-window-start (selected-window) (save-excursion (goto-char (point-min)) (forward-line 99) (point)))
+          (should (drgnx-timer-active-p (cons 'debug-hover (selected-window))))
+          (drgnx-debug-gutter--pool-settle (selected-window) (current-buffer))
           (should (equal (debug-gutter-test--dots) (debug-gutter-test--shown (selected-window))))
           (should (= (length (debug-gutter-test--dots)) n))
           ;; typing that adds lines on screen: one dot per line still, none doubled
@@ -320,8 +330,9 @@
           (unwind-protect
               (progn
                 (set-window-start w2 (save-excursion (goto-char (point-min)) (forward-line 49) (point)))
-                (drgnx-debug-gutter--pool-update w1)
-                (drgnx-debug-gutter--pool-update w2)
+                ;; now: the split resized w1, which would otherwise wait for it to settle
+                (drgnx-debug-gutter--pool-update w1 t)
+                (drgnx-debug-gutter--pool-update w2 t)
                 (should (equal (debug-gutter-test--dots w1) (debug-gutter-test--shown w1)))
                 (should (equal (debug-gutter-test--dots w2) (debug-gutter-test--shown w2)))
                 ;; a closed window's pool goes with the next update

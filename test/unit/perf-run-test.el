@@ -416,3 +416,19 @@ its advice off `timer-event-handler' and the hub batch."
     (should-error (funcall 'drgnx-perf--wait 2 (lambda () (when (> (cl-incf n) 1) (error "Inside the wait")))))
     (should-not (advice-member-p 'drgnx-perf--wait-check 'timer-event-handler))
     (should-not (advice-member-p 'drgnx-perf--wait-check 'drgnx-hub--client-batch))))
+
+(ert-deftest drgnx-perf-run/the-column-may-add-five-percent-or-a-third-of-a-millisecond-over-a-claimed-margin ()
+  ;; the breakpoint column judged against the same scroll with hunks' margin and its own claimed and empty: what a user
+  ;; sees when a session starts in a file that shows hunks (p50s: n is 60, too few for a p95).  The larger of 5 % and
+  ;; 0.3 ms: on a 4 ms frame measured to 0.1 ms, 5 % alone is noise
+  (let* ((res (lambda (g b) `((debug-gutter-scroll :input (:p50 ,g)) (debug-gutter-baseline :input (:p50 ,b)))))
+         (fails (lambda (g b) (seq-some (lambda (l) (string-search "debug-gutter-scroll input p50" l))
+                                        (drgnx-perf-run--relative-fails (funcall res g b))))))
+    (should-not (funcall fails 4.4 4.1))   ; 7 %, but 0.3 ms
+    (should (funcall fails 4.5 4.1))
+    (should-not (funcall fails 10.0 9.6)) ; 0.4 ms, but 4 %
+    (should (funcall fails 10.4 9.6))
+    ;; one side missing: not judged
+    (should-not (drgnx-perf-run--relative-fails '((debug-gutter-scroll :input (:p50 9.0)))))
+    ;; the baseline is a workload of its own, with the column's setup
+    (should (assq 'debug-gutter-baseline (drgnx-perf-run--workloads)))))
