@@ -1,7 +1,8 @@
 //! The debug console's output (docs/develop/debugging.md, "The debug console"; spec §10): a session's `output`
 //! events made into lines the editor only inserts. Text is split into lines (a line without its newline waits for the
 //! rest), ANSI SGR becomes face runs (other escapes are dropped), identical consecutive lines are counted, `group`
-//! starts and ends indent the lines between them, and the lines wait in a batch the session's loop sends every
+//! starts and ends indent the lines between them (the opening line names its group, each line the groups around it,
+//! so the editor folds them), and the lines wait in a batch the session's loop sends every
 //! [`BATCH`] or at [`BATCH_BYTES`]. A batch never holds more than [`QUEUE_CAP`] bytes: past it the oldest lines go and
 //! the next batch says how many ("N lines skipped").
 
@@ -24,6 +25,12 @@ pub struct Line {
     pub category: String,
     /// The group depth it is indented by.
     pub depth: u32,
+    /// The group this line opens (`start` / `startCollapsed`), numbered per session.
+    pub group: Option<u64>,
+    /// The group it opens starts folded (`startCollapsed`).
+    pub collapsed: bool,
+    /// The groups around it, outermost first.
+    pub within: Vec<u64>,
     /// How many identical lines in a row it stands for.
     pub count: u32,
     /// Where a logpoint's message came from: `{path, line}`.
@@ -50,6 +57,15 @@ impl Line {
         }
         if self.depth > 0 {
             o["depth"] = json!(self.depth);
+        }
+        if let Some(g) = self.group {
+            o["group"] = json!(g);
+        }
+        if self.collapsed {
+            o["collapsed"] = json!(true);
+        }
+        if !self.within.is_empty() {
+            o["within"] = json!(self.within);
         }
         if let Some(s) = &self.source {
             o["source"] = s.clone();
@@ -230,7 +246,9 @@ pub struct Console {
     skipped: usize,
     /// The end of the last output that had no newline yet, with its category.
     partial: Option<(String, String)>,
-    depth: u32,
+    /// The groups open now, outermost first, and the last group's number.
+    open: Vec<u64>,
+    groups: u64,
     style: Style,
     /// The last line sent, to count an identical one that comes in a later batch.
     last: Option<Line>,
@@ -261,7 +279,7 @@ impl Console {
             .map(|r| json!({"reference": r}));
         let ansi = ansi || category == "stdout" || category == "stderr";
         if group == Some("end") {
-            self.depth = self.depth.saturating_sub(1);
+            self.open.pop();
             if text.is_empty() {
                 return;
             }
@@ -269,7 +287,7 @@ impl Console {
         let mut whole = match self.partial.take() {
             Some((cat, rest)) if cat == category => rest,
             Some((cat, rest)) => {
-                self.line(&rest, &cat, None, None, ansi);
+                self.line(&rest, &cat, None, None, ansi, None);
                 String::new()
             }
             None => String::new(),
@@ -285,6 +303,10 @@ impl Console {
                 self.partial = Some((category.clone(), last.to_owned()));
             }
         }
+        let opens = matches!(group, Some("start") | Some("startCollapsed")).then(|| {
+            self.groups += 1;
+            (self.groups, group == Some("startCollapsed"))
+        });
         let n = parts.len();
         for (i, p) in parts.into_iter().enumerate() {
             // a structured value or a logpoint's source belongs to the event's last line
@@ -295,16 +317,17 @@ impl Console {
                 if last { source.clone() } else { None },
                 if last { node.clone() } else { None },
                 ansi,
+                if last { opens } else { None },
             );
         }
-        if matches!(group, Some("start") | Some("startCollapsed")) {
-            self.depth += 1;
+        if let Some((g, _)) = opens {
+            self.open.push(g);
         }
     }
 
     /// A line the hub writes itself (an evaluate's answer, a task's failure), in CATEGORY.
     pub fn say(&mut self, text: &str, category: &str, node: Option<Value>) {
-        self.line(text, category, None, node, false);
+        self.line(text, category, None, node, false, None);
     }
 
     fn line(
@@ -314,6 +337,7 @@ impl Console {
         source: Option<Value>,
         node: Option<Value>,
         ansi: bool,
+        opens: Option<(u64, bool)>,
     ) {
         let (text, runs) = if ansi {
             sgr(text, &mut self.style)
@@ -324,7 +348,10 @@ impl Console {
             text,
             runs,
             category: category.to_owned(),
-            depth: self.depth,
+            depth: self.open.len() as u32,
+            group: opens.map(|o| o.0),
+            collapsed: opens.is_some_and(|o| o.1),
+            within: self.open.clone(),
             count: 1,
             source,
             node,
@@ -335,7 +362,9 @@ impl Console {
                 && line.node.is_none()
                 && a.text == line.text
                 && a.category == line.category
-                && a.depth == line.depth
+                && a.group.is_none()
+                && line.group.is_none()
+                && a.within == line.within
                 && a.runs == line.runs
                 && a.source == line.source
         };
@@ -387,7 +416,7 @@ impl Console {
     /// stays unless FLUSH (the session ended).
     pub fn take(&mut self, flush: bool) -> Option<Value> {
         if flush && let Some((cat, rest)) = self.partial.take() {
-            self.line(&rest, &cat, None, None, false);
+            self.line(&rest, &cat, None, None, false, None);
         }
         if self.is_empty() {
             return None;

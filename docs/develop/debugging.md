@@ -537,10 +537,12 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
   session's end), ANSI SGR made into face runs in characters (`drgnx-debug-console-red` …, bold, faint, italic,
   underline; 256-colour's first 16; other escapes dropped) for `stdout` / `stderr` or an adapter with
   `supportsANSIStyling`, identical consecutive lines counted (`count`; one that continues the last line of the
-  batch before says `more`), `group` start / end indenting the lines between (`depth`; folding them is not built),
+  batch before says `more`), `group` start / end indenting the lines between (`depth`), the line that opens one naming it (`group`, numbered per
+  session; `collapsed` for `startCollapsed`) and every line the groups around it, outermost first (`within`), so the
+  editor folds a group with one invisible list per line (an `end` with no group open changes nothing),
   a logpoint's `source {path, line}` and an output's structured value (`node {reference}`) kept, `telemetry` left
   out. The lines wait in a batch the session's loop sends 50 ms after the first (`BATCH`) or at once past 64 KiB
-  (`BATCH_BYTES`), as the event `debug-output {session, lines: [{text, category, count, runs?, depth?, source?,
+  (`BATCH_BYTES`), as the event `debug-output {session, lines: [{text, category, count, runs?, depth?, group?, collapsed?, within?, source?,
   node?, more?}], skipped?}` to every editor. A batch keeps at most 4 MB (`QUEUE_CAP`); past it the oldest lines
   go and `skipped` counts them. At a session's end its last batch goes with it.
 - A `postDebugTask` that fails says so in the console (`important`), after the session's own lines.
