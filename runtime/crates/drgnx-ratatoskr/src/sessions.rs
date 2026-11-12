@@ -242,6 +242,11 @@ struct Live {
     cancel: CancellationToken,
     /// How many tools its `mcp.sock` serves.
     tools: usize,
+    /// Its `mcp.sock`'s tools, as each connection serves them (a change is told to the connected agents).
+    tools_tx: tokio::sync::watch::Sender<ToolList>,
+    /// It has the debugger's tools: they came with the session or when its project began to debug, and stay until it
+    /// ends (an agent mid-investigation never loses them between two calls).
+    debug: bool,
     /// Its `gateway.sock`, once a registration asked for it.
     gateway: Option<PathBuf>,
     /// Its `search.sock`, when the row has one.
@@ -259,20 +264,21 @@ pub struct Sessions {
     tools: Arc<Coord>,
     /// Every tool: an outside bridge's.
     list: ToolList,
-    /// A session's, made when first served: without the tracker tools (16), with them (21).
-    by_sets: [OnceLock<ToolList>; 2],
+    /// A session's, made when first served, by [`set_index`]: with or without the tracker tools, and the debugger's.
+    by_sets: [OnceLock<ToolList>; 4],
     store: OnceLock<Store>,
     live: Mutex<BTreeMap<String, Live>>,
     /// Sessions made managers (Task 25): their socket also serves the manager tools.
     managers: Mutex<BTreeSet<String>>,
-    manager_list: OnceLock<ToolList>,
+    /// A manager's list, without the debugger's tools and with them.
+    manager_list: [OnceLock<ToolList>; 2],
     /// Codex sessions whose hooks subscribe to a kind: their socket also serves `before_tool`, which Codex's managed
     /// hook calls ([`crate::agents::before_tool_tool`]).
     before_tool: Mutex<BTreeSet<String>>,
     /// Chats in a project: their socket also serves the pair tools (`read_file`, `edit_file`, `write_file`).
     project_chats: Mutex<BTreeSet<String>>,
-    /// A project chat's list, without the tracker tools and with them.
-    pair_sets: [OnceLock<ToolList>; 2],
+    /// A project chat's list, by [`set_index`].
+    pair_sets: [OnceLock<ToolList>; 4],
     /// Outside bridges connected now.
     outside: Arc<AtomicUsize>,
     /// The hub ends: every outside bridge's connection closes ([`Sessions::end_outside`]).
@@ -485,6 +491,17 @@ async fn rows(db: &urdr::Handle) -> urdr::Result<Vec<Row>> {
     .await
 }
 
+/// The index of SETS in a list cache: the tracker tools (1) and the debugger's (2).
+fn set_index(sets: norn::tools::ToolSets) -> usize {
+    usize::from(sets.tracker) + 2 * usize::from(sets.debug)
+}
+
+/// Whether a session in CWD works on ROOT's project: one is inside the other (a worktree of the project, or the
+/// project inside a session's folder).
+fn related(cwd: &Path, root: &Path) -> bool {
+    cwd.starts_with(root) || root.starts_with(cwd)
+}
+
 /// The tools a connection of a socket is served.
 type Tools<C> = Arc<[Box<dyn Tool<C>>]>;
 
@@ -504,6 +521,7 @@ async fn accept<C, F, Fut>(
     cancel: CancellationToken,
     uid: u32,
     list: F,
+    live: Option<tokio::sync::watch::Receiver<Tools<C>>>,
 ) where
     C: Send + Sync + 'static,
     F: Fn() -> Fut + Send + Sync + 'static,
@@ -548,14 +566,31 @@ async fn accept<C, F, Fut>(
             continue;
         }
         let counted = Counted::new(&open);
-        let (ctx, list, cancel, sid) = (ctx.clone(), list.clone(), cancel.clone(), sid.clone());
+        let (ctx, list, cancel, sid, live) = (
+            ctx.clone(),
+            list.clone(),
+            cancel.clone(),
+            sid.clone(),
+            live.clone(),
+        );
         tokio::spawn(async move {
             let _counted = counted;
             let (r, w) = stream.into_split();
-            let tools = list().await;
+            let served = async {
+                match live {
+                    // the session's list as it is now, and each change after it, told to the agent
+                    Some(rx) => {
+                        mimir::serve_live(ctx, rx, ServerInfo::default(), r, w, Limits::default()).await
+                    }
+                    None => {
+                        let tools = list().await;
+                        mimir::serve(ctx, tools, ServerInfo::default(), r, w, Limits::default()).await
+                    }
+                }
+            };
             tokio::select! {
                 () = cancel.cancelled() => {}
-                end = mimir::serve(ctx, tools, ServerInfo::default(), r, w, Limits::default()) => {
+                end = served => {
                     tracing::debug!(sid, ?end, "an MCP connection ended");
                 }
             }
@@ -570,17 +605,17 @@ impl Sessions {
             uid,
             tools,
             list,
-            by_sets: [OnceLock::new(), OnceLock::new()],
+            by_sets: Default::default(),
             store: OnceLock::new(),
             live: Mutex::new(BTreeMap::new()),
             outside: Arc::new(AtomicUsize::new(0)),
             outside_end: CancellationToken::new(),
             serial: tokio::sync::Mutex::new(()),
             managers: Mutex::new(BTreeSet::new()),
-            manager_list: OnceLock::new(),
+            manager_list: Default::default(),
             before_tool: Mutex::new(BTreeSet::new()),
             project_chats: Mutex::new(BTreeSet::new()),
-            pair_sets: [OnceLock::new(), OnceLock::new()],
+            pair_sets: Default::default(),
             front: OnceLock::new(),
             search_tools: OnceLock::new(),
             whos: Mutex::new(BTreeMap::new()),
@@ -802,9 +837,10 @@ impl Sessions {
             }
         };
         stages.mark("bind");
-        let list = self.list_for(&row).await;
+        let debug = self.debug_wanted(row.cwd.as_deref());
+        let list = self.list_for(&row, debug).await;
         stages.mark("tools");
-        self.listen(row, dir, path.clone(), listener, list);
+        self.listen(row, dir, path.clone(), listener, list, debug);
         stages.mark("listen");
         Ok(SessionAnswer {
             sid,
@@ -812,13 +848,68 @@ impl Sessions {
         })
     }
 
-    /// The tools ROW's socket serves (call 16): the tracker tools as its task says, else as its profile says, else on.
-    async fn list_for(&self, row: &Row) -> ToolList {
+    /// Whether a session in CWD gets the debugger's tools: its project has a launch configuration (`.vscode/launch.json`
+    /// in CWD or a folder above), a live debug session or a recorded run.
+    fn debug_wanted(&self, cwd: Option<&str>) -> bool {
+        let Some(cwd) = cwd.map(Path::new) else {
+            return false;
+        };
+        if cwd
+            .ancestors()
+            .any(|d| d.join(".vscode").join("launch.json").is_file())
+        {
+            return true;
+        }
+        let Some(front) = self.front.get().and_then(std::sync::Weak::upgrade) else {
+            return false;
+        };
+        front
+            .debug
+            .debugged_roots(&front)
+            .iter()
+            .any(|r| related(cwd, Path::new(r)))
+    }
+
+    /// ROOTS debug now (a session started or ended there): the running sessions working on them that lack the
+    /// debugger's tools get them, told to their agents at once (no restart). Tools are never taken back mid-session.
+    pub async fn debug_seen(&self, roots: Vec<String>) {
+        let _one = self.serial.lock().await;
+        let rows: Vec<Row> = self
+            .live
+            .lock()
+            .expect("sessions")
+            .values()
+            .filter(|l| {
+                !l.debug
+                    && l.row
+                        .cwd
+                        .as_deref()
+                        .is_some_and(|c| roots.iter().any(|r| related(Path::new(c), Path::new(r))))
+            })
+            .map(|l| l.row.clone())
+            .collect();
+        for row in rows {
+            let list = self.list_for(&row, true).await;
+            if let Some(l) = self.live.lock().expect("sessions").get_mut(&row.sid) {
+                l.debug = true;
+                l.tools = list.len();
+                l.tools_tx.send_replace(list);
+                tracing::info!(sid = row.sid, "the debugger's tools came to a running session");
+            }
+        }
+    }
+
+    /// The tools ROW's socket serves (call 16): the tracker tools as its task says, else as its profile says, else on;
+    /// the debugger's when DEBUG.
+    async fn list_for(&self, row: &Row, debug: bool) -> ToolList {
         let task = match row.task_entity() {
             Some(id) => crate::graph::task_tools(&self.tools, id).await,
             None => None,
         };
-        let sets = crate::graph::tool_sets(task, row.tracker);
+        let sets = norn::tools::ToolSets {
+            debug,
+            ..crate::graph::tool_sets(task, row.tracker)
+        };
         let manager = self.managers.lock().expect("sessions").contains(&row.sid);
         let hooked = self
             .before_tool
@@ -832,7 +923,10 @@ impl Sessions {
             .contains(&row.sid);
         if hooked && let Some(front) = self.front.get().cloned() {
             let mut all = if manager {
-                norn::tools::tools_for(norn::tools::ToolSets::default())
+                norn::tools::tools_for(norn::tools::ToolSets {
+                    debug,
+                    ..norn::tools::ToolSets::default()
+                })
             } else {
                 norn::tools::tools_for(sets)
             };
@@ -853,17 +947,19 @@ impl Sessions {
             return list.into();
         }
         if manager {
-            return self
-                .manager_list
+            return self.manager_list[usize::from(debug)]
                 .get_or_init(|| {
-                    let mut all = norn::tools::tools_for(norn::tools::ToolSets::default());
+                    let mut all = norn::tools::tools_for(norn::tools::ToolSets {
+                        debug,
+                        ..norn::tools::ToolSets::default()
+                    });
                     all.extend(norn::tools::manager_tools());
                     after_each(all)
                 })
                 .clone();
         }
         if chat {
-            return self.pair_sets[usize::from(sets.tracker)]
+            return self.pair_sets[set_index(sets)]
                 .get_or_init(|| {
                     let mut all = norn::tools::tools_for(sets);
                     all.extend(norn::tools::pair_tools());
@@ -871,7 +967,7 @@ impl Sessions {
                 })
                 .clone();
         }
-        self.by_sets[usize::from(sets.tracker)]
+        self.by_sets[set_index(sets)]
             .get_or_init(|| after_each(norn::tools::tools_for(sets)))
             .clone()
     }
@@ -884,9 +980,11 @@ impl Sessions {
         path: PathBuf,
         listener: UnixListener,
         list: ToolList,
+        debug: bool,
     ) {
         let cancel = CancellationToken::new();
         let tools = list.len();
+        let (tools_tx, tools_rx) = tokio::sync::watch::channel(list.clone());
         let ctx: Arc<Ctx> = Arc::new((self.tools.clone(), row.identity()));
         tokio::spawn(accept(
             listener,
@@ -895,6 +993,7 @@ impl Sessions {
             cancel.clone(),
             self.uid,
             fixed(list),
+            Some(tools_rx),
         ));
         let search = self.listen_search(&row, &dir, &cancel);
         let plugins = self.listen_plugins(&row, &dir, &cancel);
@@ -914,6 +1013,8 @@ impl Sessions {
                 path,
                 cancel,
                 tools,
+                tools_tx,
+                debug,
                 gateway: None,
                 search,
                 plugins,
@@ -960,6 +1061,7 @@ impl Sessions {
                 cancel.child_token(),
                 self.uid,
                 list,
+                None,
             ),
         );
         tracing::info!(
@@ -1002,6 +1104,7 @@ impl Sessions {
                 cancel.child_token(),
                 self.uid,
                 fixed(list),
+                None,
             ),
         );
         tracing::info!(sid = row.sid, "the search tool on {}", path.display());
@@ -1185,8 +1288,9 @@ impl Sessions {
                 });
             match bound {
                 Ok((dir, path, listener)) => {
-                    let list = self.list_for(&row).await;
-                    self.listen(row, dir, path, listener, list)
+                    let debug = self.debug_wanted(row.cwd.as_deref());
+                    let list = self.list_for(&row, debug).await;
+                    self.listen(row, dir, path, listener, list, debug)
                 }
                 Err(e) => {
                     tracing::warn!(sid = row.sid, "cannot bind a session's mcp.sock again: {e}");

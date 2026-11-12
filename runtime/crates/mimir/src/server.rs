@@ -14,7 +14,7 @@ use runstav::jsonrpc::{
 };
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::jsonrpc_glue as glue;
 use crate::tool::{Tool, ToolResult, valid_name};
@@ -89,10 +89,29 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let conn = Conn::new(ctx, tools, info);
+    serve_with(ctx, tools, None, info, r, w, limits).await
+}
+
+/// [`serve`] and [`serve_live`]: TOOLS, changed as LIVE says when there is one.
+async fn serve_with<Ctx, R, W>(
+    ctx: Arc<Ctx>,
+    tools: Arc<[Box<dyn Tool<Ctx>>]>,
+    live: Option<watch::Receiver<Arc<[Box<dyn Tool<Ctx>>]>>>,
+    info: ServerInfo,
+    r: R,
+    w: W,
+    limits: Limits,
+) -> End
+where
+    Ctx: Send + Sync + 'static,
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut conn = Conn::new(ctx, tools, info);
+    conn.live = live.is_some();
     let (tx, rx) = mpsc::channel(QUEUE);
     let reader = read_lines(BufReader::new(r), tx, limits.max_in);
-    let worker = conn.work(rx, w, limits.max_out);
+    let worker = conn.work(rx, live, w, limits.max_out);
     tokio::pin!(reader);
     tokio::pin!(worker);
     let first = tokio::select! {
@@ -109,6 +128,26 @@ where
         // only after the reader dropped its sender, so it is done too
         First::Work(Ok(())) => reader.await,
     }
+}
+
+/// [`serve`], with the tools TOOLS holds as they change: each change is served from the next line on, and the client is
+/// told (`notifications/tools/list_changed`) once it has been answered anything. An answer is never cut by a change:
+/// a call runs to its end on the tool it started with.
+pub async fn serve_live<Ctx, R, W>(
+    ctx: Arc<Ctx>,
+    tools: watch::Receiver<Arc<[Box<dyn Tool<Ctx>>]>>,
+    info: ServerInfo,
+    r: R,
+    w: W,
+    limits: Limits,
+) -> End
+where
+    Ctx: Send + Sync + 'static,
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let now = tools.borrow().clone();
+    serve_with(ctx, now, Some(tools), info, r, w, limits).await
 }
 
 enum First {
@@ -181,10 +220,30 @@ struct Conn<Ctx> {
     listing: Value,
     info: ServerInfo,
     legacy: bool,
+    /// The list can change ([`serve_live`]): `initialize` says so.
+    live: bool,
+    /// A request was answered: a change of the list is told from then on.
+    greeted: bool,
 }
 
 impl<Ctx: Send + Sync + 'static> Conn<Ctx> {
     fn new(ctx: Arc<Ctx>, tools: Arc<[Box<dyn Tool<Ctx>>]>, info: ServerInfo) -> Self {
+        let mut c = Conn {
+            ctx,
+            tools: Arc::from(Vec::new()),
+            by_name: HashMap::new(),
+            listing: Value::Null,
+            info,
+            legacy: false,
+            live: false,
+            greeted: false,
+        };
+        c.set_tools(tools);
+        c
+    }
+
+    /// Serve TOOLS from now on.
+    fn set_tools(&mut self, tools: Arc<[Box<dyn Tool<Ctx>>]>) {
         let mut order: Vec<usize> = (0..tools.len()).collect();
         order.sort_by_key(|&i| tools[i].name());
         let mut by_name = HashMap::new();
@@ -204,27 +263,47 @@ impl<Ctx: Send + Sync + 'static> Conn<Ctx> {
             }
             listing.push(entry);
         }
-        Conn {
-            ctx,
-            tools,
-            by_name,
-            listing: Value::Array(listing),
-            info,
-            legacy: false,
-        }
+        self.tools = tools;
+        self.by_name = by_name;
+        self.listing = Value::Array(listing);
     }
 
     /// Answer every queued line in order, writing each answer before reading the next line.
+    /// A change of the list (LIVE) is taken between answers, never during one.
     async fn work<W: AsyncWrite + Unpin>(
         mut self,
         mut rx: mpsc::Receiver<Option<String>>,
+        mut live: Option<watch::Receiver<Arc<[Box<dyn Tool<Ctx>>]>>>,
         mut w: W,
         max_out: usize,
     ) -> Result<(), ErrorKind> {
-        while let Some(line) = rx.recv().await {
+        loop {
+            let line = tokio::select! {
+                l = rx.recv() => match l {
+                    Some(l) => l,
+                    None => break,
+                },
+                changed = async { live.as_mut().expect("guarded").changed().await }, if live.is_some() => {
+                    match changed {
+                        Ok(()) => {
+                            let tools = live.as_mut().expect("guarded").borrow_and_update().clone();
+                            self.set_tools(tools);
+                            if self.greeted {
+                                let note = json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"});
+                                w.write_all(format!("{note}\n").as_bytes()).await.map_err(|e| e.kind())?;
+                                w.flush().await.map_err(|e| e.kind())?;
+                            }
+                        }
+                        // the list's owner went: the list stays as it is
+                        Err(_) => live = None,
+                    }
+                    continue;
+                }
+            };
             let Some(answer) = self.answer(line).await else {
                 continue;
             };
+            self.greeted = true;
             let mut text = answer.to_string();
             if text.len() > max_out {
                 text = json!({
@@ -305,7 +384,7 @@ impl<Ctx: Send + Sync + 'static> Conn<Ctx> {
         self.legacy = true;
         Ok(json!({
             "protocolVersion": version::negotiate(requested),
-            "capabilities": {"tools": {"listChanged": false}},
+            "capabilities": {"tools": {"listChanged": self.live}},
             "serverInfo": {"name": self.info.name, "version": self.info.version},
         }))
     }
@@ -624,6 +703,58 @@ mod tests {
 
     fn calls(ctx: &Calls) -> usize {
         ctx.0.load(Ordering::SeqCst)
+    }
+
+    /// A live list: the server says it can change, tells the client when it does, and serves the new list (a tool
+    /// that left is unknown from then on).
+    #[tokio::test]
+    async fn a_live_list_tells_the_client_when_it_changes() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        let (client, server) = tokio::io::duplex(1 << 16);
+        let (sr, sw) = tokio::io::split(server);
+        let (cr, mut cw) = tokio::io::split(client);
+        let (tx, rx) = watch::channel(tools());
+        let serving = tokio::spawn(serve_live(
+            Arc::new(Calls::default()),
+            rx,
+            ServerInfo::default(),
+            sr,
+            sw,
+            Limits::default(),
+        ));
+        let mut lines = tokio::io::BufReader::new(cr).lines();
+        let send = async |cw: &mut tokio::io::WriteHalf<tokio::io::DuplexStream>, line: String| {
+            cw.write_all(format!("{line}\n").as_bytes()).await.unwrap();
+        };
+        let mut next = async || -> Value {
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap()
+        };
+        send(&mut cw, init("2025-11-25")).await;
+        assert_eq!(
+            next().await["result"]["capabilities"]["tools"]["listChanged"],
+            true
+        );
+        send(&mut cw, req(1, "tools/list", json!({}))).await;
+        assert_eq!(next().await["result"]["tools"].as_array().unwrap().len(), 4);
+        let one: Vec<Box<dyn Tool<Calls>>> = vec![Box::new(Echo)];
+        tx.send(Arc::from(one)).unwrap();
+        assert_eq!(
+            next().await,
+            json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+        );
+        send(&mut cw, req(2, "tools/list", json!({}))).await;
+        assert_eq!(next().await["result"]["tools"].as_array().unwrap().len(), 1);
+        send(&mut cw, call(3, "fail", json!({}))).await;
+        let a = next().await;
+        assert!(
+            a["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Unknown tool"),
+            "{a}"
+        );
+        drop(cw);
+        assert_eq!(serving.await.unwrap(), End::ClientClosed);
     }
 
     #[tokio::test]

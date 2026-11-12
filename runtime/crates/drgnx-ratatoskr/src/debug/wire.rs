@@ -67,10 +67,24 @@ impl Hub {
     /// The front, once it is in its `Arc`: a bisect's jobs outlive the call that started it.
     pub fn bind(&self, front: &Arc<Front>) {
         self.bisects.bind(front);
+        // a project that starts debugging: its agents get the debugger's tools in their running sessions
+        let weak = Arc::downgrade(front);
+        self.debug(front).on_state(Arc::new(move |roots| {
+            if let Some(f) = weak.upgrade() {
+                crate::clock::spawn("sessions:debug-tools", async move {
+                    f.mcp.debug_seen(roots).await;
+                });
+            }
+        }));
         self.origins
             .set_replay(Arc::new(super::origin_wire::ForkReplay {
                 front: Arc::downgrade(front),
             }));
+    }
+
+    /// The roots that debug (a live session's or a recorded run's), for the agents' tool lists.
+    pub fn debugged_roots(&self, front: &Front) -> Vec<String> {
+        self.debug(front).debugged_roots()
     }
 
     pub(super) fn is_trusted(&self, root: &str) -> bool {

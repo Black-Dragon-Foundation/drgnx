@@ -36,11 +36,17 @@ use crate::write::meta;
 pub struct ToolSets {
     /// The five tracker and graph tools.
     pub tracker: bool,
+    /// The six debugger tools (graphical debugging D4): on for a session whose project has a launch configuration, a
+    /// live debug session or a recorded run (the hub decides, and adds them mid-session when one appears).
+    pub debug: bool,
 }
 
 impl Default for ToolSets {
     fn default() -> Self {
-        ToolSets { tracker: true }
+        ToolSets {
+            tracker: true,
+            debug: false,
+        }
     }
 }
 
@@ -78,7 +84,9 @@ pub fn tools_for(sets: ToolSets) -> Vec<Box<dyn Tool<Ctx>>> {
     all.extend(super::settings::tools());
     all.extend(super::extensions::tools());
     all.extend(super::huddle::tools());
-    all.extend(super::debug::tools());
+    if sets.debug {
+        all.extend(super::debug::tools());
+    }
     all
 }
 

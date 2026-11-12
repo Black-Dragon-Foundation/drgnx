@@ -1,7 +1,8 @@
-{"scenario": "debug/partner-agent-under-cautious", "requires": ["v1", "test-hooks"], "doc": "Gated (B). Under the Cautious preset a partner agent's evaluate and step in the user's live session are refused outright (debug.live-eval, debug.drive: never; no card), and its read of the sessions waits on a card (debug.read: ask). Pattern B: each call's turn, idle with an agent entry, gates the transcript read."}
+{"scenario": "debug/partner-agent-under-cautious", "requires": ["v1", "test-hooks"], "doc": "Gated (B). Under the Cautious preset a partner agent's evaluate and step in the user's live session are refused outright (debug.live-eval, debug.drive: never; no card), and its read of the sessions waits on a card (debug.read: ask). The project has a launch configuration, so the session has the debugger tools. Pattern B: each call's turn, idle with an agent entry, gates the transcript read."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/work/.vscode/launch.json", "json": {"version": "0.2.0", "configurations": [{"type": "mock", "request": "launch", "name": "Mock", "program": "app"}]}}
 {"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-matrix (:preset cautious)))\n"}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
