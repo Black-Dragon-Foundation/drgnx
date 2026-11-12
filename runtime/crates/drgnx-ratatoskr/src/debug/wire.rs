@@ -43,7 +43,7 @@ pub struct Hub {
 }
 
 impl Hub {
-    pub(super) fn debug(&self, front: &Front) -> &Debug {
+    pub(crate) fn debug(&self, front: &Front) -> &Debug {
         self.debug.get_or_init(|| {
             let d = Debug::with_store(
                 front.editors.clone(),
@@ -548,13 +548,32 @@ fn bp_op(o: DebugBreakpointOp) -> Result<BpOp, Error> {
     })
 }
 
-async fn breakpoints(front: &Front, p: DebugBreakpoints) -> Result<DebugBreakpointsView, Error> {
+async fn breakpoints(
+    front: &Front,
+    mut p: DebugBreakpoints,
+) -> Result<DebugBreakpointsView, Error> {
+    let d = front.debug.debug(front);
+    // the Run and Debug view's ops over many breakpoints; the answer is PATH's view as for no op
+    match p.op.as_ref().map(|o| o.op.as_str()) {
+        Some("filter") => {
+            if let Some(o) = p.op.take() {
+                let (adapter, name) = (o.adapter.unwrap_or_default(), o.name.unwrap_or_default());
+                d.set_filter(&p.root, &adapter, &name, o.enabled.unwrap_or(true))
+                    .await;
+            }
+        }
+        Some("enable-all") => {
+            let on = p.op.take().and_then(|o| o.enabled).unwrap_or(true);
+            d.all_breakpoints(&p.root, false, on).await;
+        }
+        Some("remove-all") => {
+            p.op = None;
+            d.all_breakpoints(&p.root, true, false).await;
+        }
+        _ => {}
+    }
     let op = p.op.map(bp_op).transpose()?;
-    let v = front
-        .debug
-        .debug(front)
-        .breakpoints(&p.root, op, p.path.as_deref())
-        .await;
+    let v = d.breakpoints(&p.root, op, p.path.as_deref()).await;
     serde_json::from_value(v).map_err(|e| err(e.to_string()))
 }
 

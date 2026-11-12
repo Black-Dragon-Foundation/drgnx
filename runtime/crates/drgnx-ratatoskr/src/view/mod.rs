@@ -17,6 +17,7 @@
 //!
 //! [`Store`] is the pure core (no I/O, no clock), tested in every order of envs, rows, resyncs and restarts.
 
+pub mod debug;
 pub mod explorer;
 pub mod extensions;
 pub mod files;
@@ -479,6 +480,8 @@ pub struct Views {
     explorers: explorer::Explorers,
     /// The Extensions lists (`extensions/list`).
     lists: extensions::Lists,
+    /// The Run and Debug views (`debug/view`).
+    pub debugs: debug::DebugViews,
     /// The agent panels' rows (`agent-panel/SESSION`).
     pub panels: Arc<panel::Panels>,
     /// The front, kept once at the hub's start: a search thread reaches the store and the connections through it.
@@ -496,6 +499,7 @@ impl Default for Views {
             files: files::Files::default(),
             explorers: explorer::Explorers::default(),
             lists: extensions::Lists::default(),
+            debugs: debug::DebugViews::default(),
             panels: Arc::default(),
             front: OnceLock::new(),
         }
@@ -515,6 +519,7 @@ impl Views {
             || self.files_build(f, key)
             || self.explorer_build(f, key)
             || self.extensions_build(f, key)
+            || self.debugs.env_build(f, key)
             || f.core.presence.here_build(f, key.0, &key.1)
         {
             return;
@@ -752,6 +757,7 @@ impl Views {
         self.files.gone(conn);
         self.explorers.gone(conn);
         self.lists.gone(conn);
+        self.debugs.gone(conn);
         self.panels.gone(conn, None);
         lock(&self.store).gone(conn);
         lock(&self.fixtures).retain(|(c, _), _| *c != conn);
@@ -863,6 +869,7 @@ pub fn close(f: &Front, c: &Caller, p: ViewClose) -> Result<bool, Error> {
     views.files.stop(c.conn_id, &p.view);
     views.explorers.stop(c.conn_id, &p.view);
     views.lists.stop(c.conn_id, &p.view);
+    views.debugs.stop(c.conn_id, &p.view);
     views.panels.gone(c.conn_id, Some(&p.view));
     let closed = lock(&views.store).close(c.conn_id, &p.view);
     views.prune_fonts();
