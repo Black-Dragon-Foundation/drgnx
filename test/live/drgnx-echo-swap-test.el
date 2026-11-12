@@ -50,7 +50,7 @@
          (s (progn
               (dolist (f '("a.el" "b.el" "c.el")) (make-directory project t)
                       (write-region (format ";; %s\n" f) nil (expand-file-name f project) nil 'silent))
-              (drgnx-ui-start "drgnx" "1400x850" 60)))
+              (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x850") 60)))
          (sess (drgnx-ui-own-session (plist-get s :name))))
     (unwind-protect
         (progn
@@ -128,7 +128,7 @@ window is not its own).")
 (ert-deftest drgnx-live/echo-box-at-startup-swaps-no-frame ()
   (let* ((root (make-temp-file "drgnx-echo-start" t))
          (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
-         (s (drgnx-ui-start "drgnx" "1200x800" 60))
+         (s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1200x800") 60))
          (sess (drgnx-ui-own-session (plist-get s :name))))
     (unwind-protect
         (progn
@@ -141,7 +141,7 @@ window is not its own).")
 (ert-deftest drgnx-live/echo-box-in-a-daemon-swaps-no-frame ()
   (let* ((root (make-temp-file "drgnx-echo-daemon" t))
          (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
-         (s (drgnx-ui-start "drgnx" "1200x800" 60 t))
+         (s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1200x800") 60 t))
          (sess (drgnx-ui-own-session (plist-get s :name))))
     (unwind-protect
         (progn
@@ -157,7 +157,7 @@ box's root, which cannot be resized) gives no error at redisplay.  A question as
 box, which hides again when the question ends."
   (let* ((root (make-temp-file "drgnx-echo-palette" t))
          (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
-         (s (drgnx-ui-start "drgnx" "1200x800" 60))
+         (s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1200x800") 60))
          (sess (drgnx-ui-own-session (plist-get s :name))))
     (unwind-protect
         (progn

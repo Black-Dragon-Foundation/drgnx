@@ -1189,6 +1189,15 @@ and only one; take it away when it should have none.  A window elsewhere that sh
     (drgnx-statusbar--frame-apply)
     (dolist (f (frame-list)) (drgnx-chrome-apply f))))
 
+(defun drgnx-statusbar--side-window (orig buffer alist)
+  "Around `display-buffer-in-side-window': a frame's first side window on a side splits its root, the bar's row
+with it; the bar is back at the foot in the same command, not later from the store's idle event (a timer moving
+windows, I9)."
+  (let ((w (funcall orig buffer alist)))
+    (when (and (window-live-p w) (drgnx-statusbar--frame-p))
+      (drgnx-statusbar--frame-ensure (window-frame w)))
+    w))
+
 (defun drgnx-statusbar--frame-windows-changed (data)
   "The store's `windows-changed' (idle): the frame's bar window is where it belongs again."
   (when (drgnx-statusbar--frame-p)
@@ -1442,6 +1451,7 @@ moves, so other packages' entries are formatted again, once per buffer the bars 
         (drgnx-signal-subscribe 'editor-changed #'drgnx-statusbar--ask-git)
         (advice-add 'flymake--handle-report :after #'drgnx-statusbar--flymake-reported)   ; flymake has no hook for this
         (advice-add 'flymake-start :after #'drgnx-statusbar--flymake-started)               ; nor for this
+        (advice-add 'display-buffer-in-side-window :around #'drgnx-statusbar--side-window)
         (drgnx-statusbar--misc-report-soon)
         (drgnx-statusbar--base-sync)
         (when (fboundp 'drgnx-modal-indicator-off) (drgnx-modal-indicator-off)))   ; the bar shows the modal state
@@ -1453,6 +1463,7 @@ moves, so other packages' entries are formatted again, once per buffer the bars 
     (drgnx-signal-unsubscribe 'editor-changed #'drgnx-statusbar--ask-git)
     (advice-remove 'flymake--handle-report #'drgnx-statusbar--flymake-reported)
     (advice-remove 'flymake-start #'drgnx-statusbar--flymake-started)
+    (advice-remove 'display-buffer-in-side-window #'drgnx-statusbar--side-window)
     (drgnx-timer-cancel 'statusbar-refresh)
     (drgnx-timer-cancel 'statusbar-misc-slow)
     (drgnx-timer-cancel 'statusbar-misc-report)
