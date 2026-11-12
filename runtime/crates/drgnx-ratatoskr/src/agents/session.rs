@@ -1694,7 +1694,7 @@ pub(super) async fn prepare(
     }
     // the kinds the before-tool hooks and rules of its plugin set at launch subscribe to: the lock makes the agent
     // ask about them, so they reach the seam; a fork's lock `_meta` is its parent's
-    let project = session_project(front, sid, cwd).await;
+    let project = session_project(front, sid, cwd).await?;
     let kinds = crate::hook_points::subscribed_kinds(&front.core.plugins, project.as_deref());
     let env = runstav::paths::Env::process();
     let run = runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), sid)
@@ -1773,15 +1773,15 @@ pub(super) async fn prepare(
 
 /// Session SID's Urdr project: its plan's when a plan runs it, else the repository of CWD (`None` outside one). Runs
 /// git, off the hub's workers.
-async fn session_project(front: &Front, sid: &str, cwd: &Path) -> Option<String> {
+async fn session_project(front: &Front, sid: &str, cwd: &Path) -> Result<Option<String>, Error> {
     if let Some(p) = ActionCtx::of_session(&front.core.runs.scopes(), sid).project {
-        return Some(p);
+        return Ok(Some(p));
     }
-    let cwd = cwd.to_path_buf();
-    crate::clock::blocking(move || norn::project::resolve(&cwd).map(|r| r.id))
+    // a git that cannot answer refuses the launch: its project's hooks are never left out unseen
+    crate::graph::project_of(cwd)
         .await
-        .ok()
-        .flatten()
+        .map(|p| p.map(|r| r.id))
+        .map_err(internal)
 }
 
 /// The chain of a gateway profile kind (`drgnx-ai-agent-gateway-chain`): its provider, with the profile's model;
@@ -2116,7 +2116,7 @@ async fn launch(
     // a Codex session whose hooks subscribe to a kind: its socket serves `before_tool`, which its lock's managed hook
     // calls
     if opened && profile.provider() == Some(crate::settings::profiles::Provider::Codex) {
-        let project = session_project(front, sid, cwd).await;
+        let project = session_project(front, sid, cwd).await?;
         if crate::hook_points::subscribed_kinds(&front.core.plugins, project.as_deref())
             .iter()
             .any(|k| k != "drgnx")
@@ -5185,26 +5185,25 @@ impl Session {
         self.tool_hub.front()
     }
 
-    /// Where a `before-tool` point of this session runs AT: its project, folder, role, profile, job and task.
-    pub(crate) async fn hook_site(&self, at: crate::hook_points::At) -> crate::hook_points::Site {
+    /// Where a `before-tool` point of this session runs AT: its project, folder, role, profile, job and task. `Err`
+    /// (naming git) when its project cannot be read: the step behind the point is refused ([`Self::hooks_unread`]),
+    /// never run with fewer hooks, since a project's hooks can be guards; nothing is kept, the next point asks again.
+    pub(crate) async fn hook_site(
+        &self,
+        at: crate::hook_points::At,
+    ) -> Result<crate::hook_points::Site, String> {
         let project = match self.project.get() {
             Some(p) => p.clone(),
             None => {
                 let p = match ActionCtx::of_session(&self.scopes, &self.id).project {
                     Some(p) => Some(p),
-                    None => {
-                        let cwd = self.cwd.clone();
-                        crate::clock::blocking(move || norn::project::resolve(&cwd).map(|r| r.id))
-                            .await
-                            .ok()
-                            .flatten()
-                    }
+                    None => crate::graph::project_of(&self.cwd).await?.map(|r| r.id),
                 };
                 let _ = self.project.set(p.clone());
                 p
             }
         };
-        crate::hook_points::Site {
+        Ok(crate::hook_points::Site {
             at,
             session: self.id.clone(),
             project,
@@ -5215,7 +5214,21 @@ impl Session {
             profile: Some(self.profile.clone()),
             job: self.job.clone(),
             task: self.task.clone(),
+        })
+    }
+
+    /// STEP refused because its hook point's project could not be read (WHY, from [`Self::hook_site`]): the chat
+    /// shows it and the log has it; the answer is the refusal the agent gets.
+    pub(crate) fn hooks_unread(self: &Arc<Self>, step: &str, why: &str) -> String {
+        let text = crate::hook_points::unread_project(step, why);
+        tracing::warn!(sid = %self.id, "{text}");
+        {
+            let mut rest = Map::new();
+            rest.insert("text".into(), json!(text));
+            lock(&self.state).push(EntryType::Error, rest);
         }
+        self.changed();
+        text
     }
 
     /// The tool call TOOL of a permission request as the hooks see it, with what this session folded of the same
@@ -5296,11 +5309,23 @@ impl Session {
         };
         let call = self.tool_call_info(tool);
         if call.kind == "other" && points::hub_tool_name(call.name.as_deref()) {
-            let site = self.hook_site(At::Seam).await;
-            points::hub_tool_at_the_seam(&front, &site, &call).await;
+            // only the seam's row that says so: the step's hooks run (or refuse it) at the hub's server
+            match self.hook_site(At::Seam).await {
+                Ok(site) => points::hub_tool_at_the_seam(&front, &site, &call).await,
+                Err(e) => {
+                    tracing::warn!(sid = %self.id, "a hub tool's seam row is not written: {e}")
+                }
+            }
             return SeamHooks::Today;
         }
-        let site = self.hook_site(At::Seam).await;
+        let site = match self.hook_site(At::Seam).await {
+            Ok(site) => site,
+            Err(e) => {
+                let why = self.hooks_unread(call.step_name(), &e);
+                self.steer_in(why);
+                return SeamHooks::Answer(pick_reject(options));
+            }
+        };
         let Some(prepared) = points::prepare(&front.core.plugins, &site, &call) else {
             return SeamHooks::Today;
         };

@@ -497,15 +497,18 @@ pub async fn at_hub_server(
     args: Value,
 ) -> Result<Value, String> {
     let session = front.core.agents.find(sid).ok();
+    let mut call = ToolCallInfo::hub_tool(server, tool, args.clone());
     let site = match &session {
-        Some(s) => s.hook_site(At::HubServer).await,
+        Some(s) => s
+            .hook_site(At::HubServer)
+            .await
+            .map_err(|e| s.hooks_unread(call.step_name(), &e))?,
         None => Site {
             at: At::HubServer,
             session: sid.to_owned(),
             ..Site::default()
         },
     };
-    let mut call = ToolCallInfo::hub_tool(server, tool, args.clone());
     call.step = session.as_ref().and_then(|s| s.current_step());
     let Some(prepared) = prepare(&front.core.plugins, &site, &call) else {
         return Ok(args);
@@ -587,6 +590,12 @@ fn who(outcome: &Outcome) -> String {
         }) => format!("the hook {name}"),
         None => "the permissions matrix".into(),
     }
+}
+
+/// The refusal of STEP when its session's project could not be read (WHY names git): its project's hooks can be
+/// guards, so the step is refused, never run with fewer hooks.
+pub fn unread_project(step: &str, why: &str) -> String {
+    format!("drgnx refused {step}; its project's hooks could not be read: {why}")
 }
 
 /// What the agent is told of a refused STEP: the hub's words, the rule's or hook's quoted as data.

@@ -833,3 +833,117 @@ fn fault_child() -> ! {
     });
     std::process::exit(1)
 }
+
+/// A plugin whose `call` reads past its one page of memory: a hardware fault wasmtime turns into a trap.
+#[cfg(target_os = "macos")]
+fn fault_plugin(root: &Path) -> Installed {
+    let text = r#"(component
+  (core module $m
+    (memory (export "mem") 1)
+    (func (export "realloc") (param i32 i32 i32 i32) (result i32) (i32.const 1024))
+    (func (export "call") (param i32 i32 i32 i32) (result i32) (i32.load (i32.const 0x7ffffff0))))
+  (core instance $i (instantiate $m))
+  (func $call (param "tool" string) (param "args-json" string) (result (result string (error string)))
+    (canon lift (core func $i "call") (memory (core memory $i "mem")) (realloc (core func $i "realloc"))))
+  (instance $ability (export "call" (func $call)))
+  (export "drgnx:agent-tools/ability@0.1.0" (instance $ability)))"#;
+    let dir = root.join("fault");
+    fs::create_dir_all(&dir).unwrap();
+    let manifest = json!({"name": "fault", "version": "0.1.0", "abilities": [
+        {"name": "echo", "description": "Faults.", "input_schema": {"type": "object"}}]});
+    fs::write(dir.join("plugin.json"), manifest.to_string()).unwrap();
+    fs::write(dir.join("plugin.wasm"), wat::parse_str(text).unwrap()).unwrap();
+    find(root, "fault")
+}
+
+// Pattern C (handshake), macOS: a signal the hub handles (SIGCHLD under tokio, in the lib's tests that run children)
+// can land on any thread that does not block it, wasmtime's trap thread included. With mach ports that thread's
+// receive returned MACH_RCV_INTERRUPTED and wasmtime aborted the process (the lib's SIGABRT on macOS, after a test
+// that started a host; never alone). The test runs itself again in a child process, which starts the host, has a
+// guest fault once, sends SIGUSR1 (handled) to every other thread, waits until each ran the handler, and has a
+// guest fault again: both are traps, and the child exits 42.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_handled_signal_on_any_thread_leaves_the_host_running() {
+    if std::env::var_os("BROKKR_SIGNAL_CHILD").is_some() {
+        signal_child();
+    }
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "a_handled_signal_on_any_thread_leaves_the_host_running",
+            "--nocapture",
+            "--test-threads",
+            "1",
+        ])
+        .env("BROKKR_SIGNAL_CHILD", "1")
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(42),
+        "{:?}\n{}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[allow(
+    deprecated,
+    reason = "libc's mach_task_self and mach_thread_self (mach2 is no dependency of ours)"
+)]
+fn signal_child() -> ! {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static RAN: AtomicUsize = AtomicUsize::new(0);
+    extern "C" fn on_usr1(_: libc::c_int) {
+        RAN.fetch_add(1, Ordering::SeqCst);
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let host = host();
+        let f = fault_plugin(tmp.path());
+        let p = host.load(&f, f.hash).unwrap();
+        let got = host.call_ability(&p, "echo", json!({}), io()).await;
+        assert!(matches!(got, Err(CallError::Trap(_))), "{got:?}");
+        // SAFETY: a handler that only counts, then one SIGUSR1 to each thread of this process but this one
+        let sent = unsafe {
+            let mut sa: libc::sigaction = std::mem::zeroed();
+            sa.sa_sigaction = on_usr1 as extern "C" fn(libc::c_int) as usize;
+            sa.sa_flags = libc::SA_RESTART;
+            libc::sigemptyset(&mut sa.sa_mask);
+            assert_eq!(libc::sigaction(libc::SIGUSR1, &sa, std::ptr::null_mut()), 0);
+            let me = libc::mach_thread_self();
+            let mut list: libc::thread_act_array_t = std::ptr::null_mut();
+            let mut n: libc::mach_msg_type_number_t = 0;
+            assert_eq!(
+                libc::task_threads(libc::mach_task_self(), &mut list, &mut n),
+                0
+            );
+            let mut sent = 0;
+            for i in 0..n as usize {
+                let t = *list.add(i);
+                if t == me {
+                    continue;
+                }
+                let pt = libc::pthread_from_mach_thread_np(t);
+                if pt != 0 && libc::pthread_kill(pt, libc::SIGUSR1) == 0 {
+                    sent += 1;
+                }
+            }
+            sent
+        };
+        assert!(sent > 0);
+        skuld::wait_until("every thread ran the handler", 10, || {
+            (RAN.load(Ordering::SeqCst) >= sent).then_some(())
+        });
+        let got = host.call_ability(&p, "echo", json!({}), io()).await;
+        assert!(matches!(got, Err(CallError::Trap(_))), "{got:?}");
+    });
+    std::process::exit(42)
+}

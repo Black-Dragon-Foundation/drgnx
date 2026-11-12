@@ -21,6 +21,10 @@
 (require 'drgnx-timer)
 (require 'drgnx-notice)
 (defvar drgnx-large-file-open)          ; core/drgnx-large-file.el: bound around the visits, read by editor/large-files
+(defvar drgnx-wb--owned)                ; wb/drgnx-wb.el: windows whose moves are their owner's (I9)
+(defvar drgnx-persist--refit (make-hash-table :test #'eq :weakness 'key)
+  "Frame → (WIDTH HEIGHT . GROUPS): its pixel size when last seen and the editor groups' states it was restored with,
+until the first command after the restore.")
 
 (defcustom drgnx-persist-restore-on-start t
   "Restore the last workbench layout at the first graphical frame."
@@ -436,8 +440,37 @@ input focus back after the other windows are made, unless KEEP-FOCUS (a restore 
       (when (plist-get panel :shown) (drgnx-wb-area-show 'panel (plist-get panel :tab)))
       (when (plist-get right :shown) (drgnx-wb-area-show 'right (plist-get right :tab))))
     (drgnx-persist--fit-groups (plist-get state :groups))
+    (when (plist-get state :groups)                     ; and once more at the frame's next size change (below)
+      (puthash (selected-frame) (cons (frame-pixel-width) (cons (frame-pixel-height) (plist-get state :groups)))
+               drgnx-persist--refit)
+      (add-hook 'window-size-change-functions #'drgnx-persist--refit)
+      (add-hook 'pre-command-hook #'drgnx-persist--refit-done))
     (drgnx-chrome-apply))
   t)
+
+(defun drgnx-persist--refit (frame)
+  "A restored FRAME changed size: a new window is restored at the size it was made with, and the window manager's
+answers (the sizes it gives the window, one or more) can come after, as they do for a client's window at scale 2.
+Emacs shares each change out among the left dock and the editor groups by their sizes at the time (the dock came
+back 636 px, not 512, and a 536/528 split 528/536), so the dock is put back to its width and the groups to their
+saved pixel widths (`drgnx-persist--fit-groups': a correction of rounding only).  At every change of the frame's
+size until the first command (`drgnx-persist--refit-done'): a change of its windows alone (the docks shown after the
+restore) is passed over."
+  (when-let* ((at (gethash frame drgnx-persist--refit))
+              ((not (and (= (car at) (frame-pixel-width frame)) (= (cadr at) (frame-pixel-height frame))))))
+    (puthash frame (cons (frame-pixel-width frame) (cons (frame-pixel-height frame) (cddr at))) drgnx-persist--refit)
+    (with-selected-frame frame
+      (let ((drgnx-wb--owned (append (drgnx-groups-list) (drgnx-wb--dock-windows) drgnx-wb--owned)) ; the restore's (I9)
+            (window-resize-pixelwise t))
+        (when-let* ((px (frame-parameter frame 'drgnx-wb-dock-px)) (w (car (drgnx-wb--dock-windows))))
+          (ignore-errors (window-resize w (- px (window-pixel-width w)) t nil t)))
+        (drgnx-persist--fit-groups (cddr at))))))
+
+(defun drgnx-persist--refit-done ()
+  "The first command after a restore: the window's sizes are yours from now on, nothing is put back any more."
+  (clrhash drgnx-persist--refit)
+  (remove-hook 'window-size-change-functions #'drgnx-persist--refit)
+  (remove-hook 'pre-command-hook #'drgnx-persist--refit-done))
 
 (defun drgnx-persist--fit-groups (specs)
   "Put the editor groups back to the pixel widths SPECS (the groups' states) hold.  `window-state-put' works in
@@ -541,6 +574,7 @@ graphical frame, and at each emacsclient window that opens when no other one is 
     (remove-hook 'kill-emacs-hook #'drgnx-persist--on-exit)
     (remove-hook 'delete-frame-functions #'drgnx-persist--on-delete-frame)
     (advice-remove 'server-delete-client #'drgnx-persist--before-client-delete)
+    (drgnx-persist--refit-done)
     (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-persist--on-start)
     (drgnx-timer-cancel 'persist-visit)))
 

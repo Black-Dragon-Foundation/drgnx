@@ -1080,30 +1080,35 @@ jobs:
       # failed, the lib runs again one test at a time, which names the test running when the process dies (libtest
       # prints a test's name before it runs it with one thread), and that name goes to the job's summary. Diagnostic:
       # the step fails as the lib does, and is dropped once the lib passes on macOS. An abort libsystem raises says why
-      # only in its crash report (os_log, not stderr), so the newest report of the lib's binary is printed, and the named
-      # test runs once more alone with its output shown
+      # only in its crash report (os_log, not stderr), so the report of this run's binary, written after the run
+      # started, is printed (never an earlier run's), and the named test runs once more alone with its output shown.
+      # --nocapture: a library thread a test started (wasmtime's) prints why it aborts to stderr, which libtest would
+      # otherwise keep in that test's captured output
       - name: the hub's lib, one test at a time (names the one that aborts)
         if: ${{ !cancelled() && steps.test.outcome == 'failure' }}
         run: |
           set +e
-          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --lib -- --test-threads 1 > lib-serial.log 2>&1
+          : > lib-serial.start
+          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --lib -- --test-threads 1 --nocapture > lib-serial.log 2>&1
           rc=$?
           tail -n 40 lib-serial.log
           last=$(grep -E '^test .* \.\.\. ' lib-serial.log | tail -n 1)
           echo "- the hub's lib one at a time: exit $rc; last line: \`${last:-none}\`" >> "$GITHUB_STEP_SUMMARY"
           if [ "$rc" -ne 0 ]; then
-            # ReportCrash writes the report a few seconds after the process dies
+            bin=$(sed -nE 's/.*process didn.t exit successfully: `([^` ]+).*/\1/p' lib-serial.log | tail -n 1)
+            bin=${bin##*/}
+            # ReportCrash writes the report a few seconds after the process dies; its name is the binary's and the time
             for _ in $(seq 30); do
-              ips=$(ls -t "$HOME"/Library/Logs/DiagnosticReports/drgnx_ratatoskr*.ips 2>/dev/null | head -n 1)
+              ips=$(find "$HOME/Library/Logs/DiagnosticReports" -name "${bin:-none}-*.ips" -newer lib-serial.start 2>/dev/null | sort | tail -n 1)
               [ -n "$ips" ] && break
               sleep 1
             done
-            echo "--- the newest crash report: ${ips:-none}"
+            echo "--- the crash report of ${bin:-no binary named} in this run: ${ips:-none}"
             [ -n "$ips" ] && head -c 60000 "$ips"
             name=$(printf '%s\n' "$last" | sed -E 's/^test (.*) \.\.\. .*$/\1/')
             if [ -n "$name" ]; then
               echo "--- $name alone"
-              cargo test --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --lib -- --exact "$name" --nocapture --test-threads 1
+              cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --lib -- --exact "$name" --nocapture --test-threads 1
               echo "- $name alone: exit $?" >> "$GITHUB_STEP_SUMMARY"
             fi
           fi
@@ -1147,11 +1152,7 @@ jobs:
             cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-px --bin drgnx-px --target "$arch-unknown-linux-musl"
           env "CARGO_TARGET_${l}_LINKER=rust-lld" "CARGO_TARGET_${l}_RUSTFLAGS=-C link-self-contained=yes" \
             cargo build --locked --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key --target "$arch-unknown-linux-musl"
-      # The pure-Rust crates' tests through clippy on darwin: only clippy's test build shows code that is dead on macOS
-      # (gate review M21). Whatever the tests said, so neither hides the other.
-      - name: clippy on darwin (the pure-Rust crates)
-        if: ${{ !cancelled() }}
-        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -p heimdall -- -D warnings
+      # (clippy on darwin runs in conformance 1/2: here it was cut at this job's 45 minutes)
       - id: prune
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.setup.outputs.target-hit != 'true' && steps.test.outcome == 'success' }}
         run: |
@@ -1170,7 +1171,7 @@ jobs:
           key: ${{ steps.setup.outputs.registry-key }}
 
   # The conformance suite in two halves (domr --shard K/2: every other row, so both take about as long), each against
-  # its own debug build; the Seatbelt escape rows with the first half.
+  # its own debug build; the Seatbelt escape rows and clippy on darwin with the first half.
   macos-conformance:
     name: conformance ${{ matrix.shard }}/2 (macOS 27)
     if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
@@ -1225,6 +1226,12 @@ jobs:
             --probe runtime/target/debug/gleipnir-probe \
             --rows runtime/crates/gleipnir-escape/rows/macos --rows runtime/crates/gleipnir-escape/rows/any \
             --require-all --report "$RUNNER_TEMP/escape/escape-macos.json"
+      # The pure-Rust crates' tests through clippy on darwin: only clippy's test build shows code that is dead on macOS
+      # (gate review M21). In the shorter conformance half (about 20 minutes), not the tests job, whose cargo test
+      # alone takes 30 of its 45. Whatever the rows said, so neither hides the other.
+      - name: clippy on darwin (the pure-Rust crates)
+        if: ${{ !cancelled() && matrix.shard == 1 }}
+        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -p heimdall -- -D warnings
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ always() && matrix.shard == 1 }}
         with:

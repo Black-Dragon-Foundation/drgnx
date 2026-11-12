@@ -380,6 +380,9 @@ events in DRGNX (those reach drgnx: their raw binding goes) and events bound to 
 (defvar drgnx-term-mode-map
   (let ((m (make-sparse-keymap)))
     (define-key m [remap self-insert-command] #'drgnx-term-send-event)
+    ;; the editor's Copy while text is selected (VS Code's C-c, macOS's s-c: `drgnx-editing-region-map', which wins over
+    ;; this map) is the terminal's Copy here, so `drgnx-term-selection-clear-on-copy' holds whichever key copies
+    (define-key m [remap drgnx-editing-copy] #'drgnx-terminal-copy)
     (dolist (ev drgnx-term--mouse-events)
       (define-key m (vector ev) '(menu-item "" drgnx-term-mouse :filter drgnx-term--mouse-filter))
       (define-key m (vector (event-convert-list (list 'shift ev)))
@@ -856,9 +859,11 @@ this buffer no longer draws is passed over in the same direction."
 ;;;; Opening
 
 (defun drgnx-term--terminfo ()
-  "The folder holding Ghostty's compiled xterm-ghostty entry (`drgnx build' puts it in <data>/terminfo), or nil."
+  "The folder holding Ghostty's compiled xterm-ghostty entry (`drgnx build' puts it in <data>/terminfo), or nil.
+tic files the entry under x/, or 78/ (the letter's hex code) where the file system ignores case, as on macOS."
   (let ((dir (expand-file-name "terminfo" (drgnx-paths-dir 'data))))
-    (and (file-exists-p (expand-file-name "x/xterm-ghostty" dir)) dir)))
+    (and (or (file-exists-p (expand-file-name "x/xterm-ghostty" dir)) (file-exists-p (expand-file-name "78/xterm-ghostty" dir)))
+         dir)))
 
 (defun drgnx-term--term-entries ()
   "TERM and TERMINFO from `drgnx-term-term': xterm-ghostty only while its entry is compiled, else xterm-256color."

@@ -1030,6 +1030,9 @@ The commands of modules that need no installed package are in it, the later stag
                               debug-bisect-act ; the bisect card's RET
                               debug-origin-open ; the origin card's RET
                               debug-restart debug-pause ; the toolbar's
+                              debug-view debug-view-next debug-view-previous debug-view-expand debug-view-collapse
+                              debug-view-activate debug-view-filter debug-set-value debug-copy-value debug-watch-remove
+                              debug-watch-move-up debug-watch-move-down ; Run and Debug
                               terminal-toggle))   ; C-` is Toggle Terminal, as in VS Code (the panel keeps M-j)
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
@@ -1040,6 +1043,19 @@ The commands of modules that need no installed package are in it, the later stag
     (should (equal (drgnx-keys-test--keys r 'edit-word-left) '("C-<left>")))
     (should-not (drgnx-keys-test--keys r 'quit))
     (should-not (drgnx-keys-test--keys r 'preferences))))
+
+(ert-deftest drgnx-keys/run-and-debug-keys-in-every-profile ()
+  "The Run and Debug view's row keys are in all three profiles, in the view's own map."
+  (let ((drgnx-keys-test--later-stages t))
+    (pcase-dolist (`(,profile ,next ,expand ,set) '((vscode "<down>" "<right>" "<f2>") (emacs "n" "<right>" "e")
+                                                    (vim "j" "l" "c")))
+      (let ((r (drgnx-keys-test--resolve `((,profile app editing window)) :platform 'linux)))
+        (should (member next (drgnx-keys-test--keys r 'debug-view-next)))
+        (should (member expand (drgnx-keys-test--keys r 'debug-view-expand)))
+        (should (member set (drgnx-keys-test--keys r 'debug-set-value)))
+        (should (eq 'drgnx-debug-view-mode-map
+                    (plist-get (seq-find (lambda (b) (eq (plist-get b :id) 'debug-view-next)) (plist-get r :bindings))
+                               :map)))))))
 
 (ert-deftest drgnx-keys/views-took-their-keys ()
   ;; After M12a: VS Code's C-S-e / C-S-f / C-S-h / F2 and Vim's SPC s r / SPC c R belong to the new views.

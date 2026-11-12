@@ -947,6 +947,14 @@ impl Front {
             | Params::DebugRunToCursor(_)) => crate::debug::wire::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
+            // the Run and Debug view (`debug/view`, `debug/expand`, `debug/watch`, `debug/set-value`, `debug/evaluate`)
+            p @ (Params::DebugView(_)
+            | Params::DebugExpand(_)
+            | Params::DebugWatch(_)
+            | Params::DebugSetValue(_)
+            | Params::DebugEvaluate(_)) => crate::view::debug::serve(self, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
             // what-if forks (`debug/fork*`, `debug/compare`)
             p @ (Params::DebugFork(_)
             | Params::DebugForkRun(_)

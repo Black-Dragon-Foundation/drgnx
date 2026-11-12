@@ -12,15 +12,23 @@
   "A file's temp dir in the runner's short root (`drgnx-run-ert--short-root': in /tmp, else in TMPDIR).")
 
 (defun drgnx-run-ert-test--batch (dir results &rest env)
-  "Run the suite in DIR in a fresh batch Emacs (harness on the load path); return its exit code."
+  "Run the suite in DIR in a fresh batch Emacs (harness on the load path); return its exit code.  Its output goes to
+RESULTS.log (`drgnx-run-ert-test--log')."
   (let ((process-environment (append (cons (concat "DRGNX_TEST_RESULTS=" results) env)
                                      (list "DRGNX_TEST_SELECTOR" "DRGNX_TEST_LEAKS" "DRGNX_TEST_LEAKS_ALLOWED" "DRGNX_TEST_SHUFFLE" "DRGNX_WORK_DB_GATE") ; not this run's selector, census, order or gate
                                      process-environment))
         ;; never a buffer's deleted directory, which call-process refuses
         (default-directory (if (file-directory-p default-directory) default-directory temporary-file-directory)))
-    (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
+    (call-process (expand-file-name invocation-name invocation-directory) nil (list :file (concat results ".log")) nil
                   "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
                   "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" dir)))
+
+(defun drgnx-run-ert-test--log (results)
+  "The last 4000 characters of what the run of `drgnx-run-ert-test--batch' writing RESULTS printed."
+  (let ((f (concat results ".log")))
+    (if (file-exists-p f)
+        (with-temp-buffer (insert-file-contents f) (buffer-substring (max (point-min) (- (point-max) 4000)) (point-max)))
+      "no output")))
 
 (defun drgnx-run-ert-test--json (file)
   (json-parse-string (with-temp-buffer (insert-file-contents file) (buffer-string)) :object-type 'plist))
@@ -813,9 +821,10 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
           (dolist (extra '(nil ("DRGNX_TEST_ONE_PROCESS=1")))
             (ignore-errors (delete-file results))
             (should (equal (apply #'drgnx-run-ert-test--batch suite results "DRGNX_TEST_SELECTOR=iso-none/a" extra) 1))
-            (should (string-match-p "DRGNX_TEST_SELECTOR iso-none/a matched 0 tests"
-                                    (plist-get (aref (plist-get (drgnx-run-ert-test--json results) :failures) 0)
-                                               :condition)))
+            (ert-info ((drgnx-run-ert-test--log results) :prefix "its output: ")   ; macOS: a file's Emacs exited 255
+              (should (string-match-p "DRGNX_TEST_SELECTOR iso-none/a matched 0 tests"
+                                      (plist-get (aref (plist-get (drgnx-run-ert-test--json results) :failures) 0)
+                                                 :condition))))
             ;; the ui tier's halves: nothing run, no failure (the tier checks both halves)
             (should (equal (apply #'drgnx-run-ert-test--batch suite results "DRGNX_TEST_SELECTOR=iso-none/a"
                                   "DRGNX_TEST_EMPTY_OK=1" extra)

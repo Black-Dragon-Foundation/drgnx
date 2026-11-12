@@ -276,6 +276,16 @@ fn refuses_what_it_cannot_run() {
     ));
 }
 
+/// Every adapter this machine has, one `ADAPTER` line each (name, kind, Metal or not), for macOS CI's Metal parity
+/// step (`.github/ci/macos-metal-parity.sh`), which runs the rows above on a Metal adapter when one appears.
+#[test]
+#[ignore = "a listing for macos-metal-parity.sh, not a check"]
+fn lists_the_adapters() {
+    for a in adapters() {
+        println!("ADAPTER\t{}\t{:?}\t{}", a.name, a.kind, a.metal);
+    }
+}
+
 #[test]
 #[cfg_attr(target_os = "macos", ignore = "Metal: a real Mac's row")]
 fn names_its_adapter() {

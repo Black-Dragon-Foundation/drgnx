@@ -573,8 +573,8 @@ colour under the pointer where the row draws a `mouse-face')."
   "The items for BUFFER on a graphical frame PIXELS wide: the design's title row (see above).  The search box is
 centred between the left items and the right ones as the design has them, both chips included (`1 needs you',
 `2 agents'), whether or not they show: a chip that comes or goes never moves it.  A paused debug session's chip adds
-its width to that room (with no session the row is as without the debug module).  It is left out when it would touch the sides; the controls sit
-8 px from the right edge."
+its width to that room (with no session the row is as without the debug module).  It is left out when it would touch
+the sides; the controls sit 8 px from the right edge."
   (let* ((measure (drgnx-statusbar--measure-fn nil 'tab-bar))
          (left (delq nil (list (drgnx-topline--mark-pixels buffer) (drgnx-topline--branch-chip buffer))))
          (paused (drgnx-topline--paused-pill))

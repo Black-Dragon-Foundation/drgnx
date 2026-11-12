@@ -239,10 +239,12 @@ pub(super) async fn caller_of(
                 Some(p) => Some(p),
                 None => {
                     let dir = home.clone();
+                    // git that cannot answer is an error here, never "no project" (nothing is kept: the next call
+                    // asks again)
                     let p = tokio::task::spawn_blocking(move || project::resolve(&dir))
                         .await
-                        .ok()
-                        .flatten();
+                        .map_err(|e| format!("the project of {}: {e}", home.display()))?
+                        .map_err(|e| format!("the project of {}: {e}", home.display()))?;
                     coord
                         .projects()
                         .lock()
@@ -1181,7 +1183,14 @@ impl RichTool for NoteAdd {
 async fn head_of(home: Option<&Path>) -> Option<String> {
     let dir = home?.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        project::git(&dir, &["rev-parse", "HEAD"]).map(|s| s.trim().to_owned())
+        match project::git(&dir, &["rev-parse", "HEAD"]) {
+            Ok(head) => head.map(|s| s.trim().to_owned()),
+            // a note goes on without its commit, and the log says why
+            Err(e) => {
+                tracing::warn!("a note's commit: {e}");
+                None
+            }
+        }
     })
     .await
     .ok()

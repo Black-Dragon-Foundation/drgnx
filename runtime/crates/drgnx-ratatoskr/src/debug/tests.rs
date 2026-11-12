@@ -672,3 +672,89 @@ async fn dropping_the_handle_stops_the_session() {
     }
     mock.finish().await.unwrap();
 }
+
+/// The Run and Debug view's fetch (`view::debug::fill`): a chunk of a long array is fetched only when its leaf is
+/// opened, with `start` and `count`, and nothing for the chunks around it; at a stop with many open paths at most 200
+/// `variables` calls go, breadth first, and the rest are capped (closed, "expand again").
+#[tokio::test(start_paused = true)]
+async fn the_view_fetches_open_paths_within_the_cap() {
+    use crate::view::debug::fill;
+    use crate::view::debug::model::{Opened, SessionView, Tree};
+    let mut locals: Vec<Value> = (0..250)
+        .map(|i| json!({"name": format!("o{i}"), "value": "Obj", "variablesReference": 100 + i}))
+        .collect();
+    locals.push(
+        json!({"name": "arr", "value": "array", "variablesReference": 9,
+                       "indexedVariables": 100_000, "namedVariables": 0}),
+    );
+    let mut steps = launch_steps(json!({}));
+    steps.extend([
+        json!({"event": "stopped", "body": {"reason": "breakpoint", "threadId": 1, "allThreadsStopped": true}}),
+        json!({"expect": "threads", "ok": {"threads": [{"id": 1, "name": "MainThread"}]}}),
+        json!({"expect": "stackTrace", "ok": {"stackFrames": [{"id": 1000, "name": "main", "line": 9}], "totalFrames": 1}}),
+        json!({"expect": "scopes", "ok": {"scopes": [{"name": "Locals", "variablesReference": 7}]}}),
+        json!({"expect": "variables", "args": {"variablesReference": 7}, "ok": {"variables": locals}}),
+        json!({"expect": "variables",
+               "args": {"variablesReference": 9, "filter": "indexed", "start": 10_100, "count": 100},
+               "ok": {"variables": [{"name": "10100", "value": "1", "variablesReference": 0}]}}),
+    ]);
+    for i in 0..200 {
+        steps.push(
+            json!({"expect": "variables", "args": {"variablesReference": 100 + i},
+                          "ok": {"variables": []}}),
+        );
+    }
+    steps.extend([
+        json!({"expect": "disconnect", "ok": {}}),
+        json!({"die": true}),
+    ]);
+    let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
+    let stop = r.stopped().await;
+    let view = |stop: &Stop| SessionView {
+        id: "d1".into(),
+        state: "stopped".into(),
+        tree: Tree::of_stop("d1", stop),
+        stop: Some(stop.clone()),
+        ..SessionView::default()
+    };
+    // the array: three levels opened, one call
+    let mut opened = Opened::default();
+    for p in [
+        "v:d1:Locals/arr",
+        "v:d1:Locals/arr/[10000..19999]",
+        "v:d1:Locals/arr/[10000..19999]/[10100..10199]",
+    ] {
+        opened.set(p, true);
+    }
+    let mut v = view(&stop);
+    let mut calls = 0;
+    fill(&r.h, &mut v, &mut calls, &opened).await;
+    assert_eq!(calls, 1);
+    assert_eq!(
+        v.tree.kids["v:d1:Locals/arr/[10000..19999]/[10100..10199]"].len(),
+        1
+    );
+    // every object opened: 200 calls, the other 50 capped
+    let mut opened = Opened::default();
+    for i in 0..250 {
+        opened.set(&format!("v:d1:Locals/o{i}"), true);
+    }
+    let mut v = view(&stop);
+    let mut calls = 0;
+    fill(&r.h, &mut v, &mut calls, &opened).await;
+    assert_eq!(calls, 200);
+    assert_eq!(v.tree.capped.len(), 50);
+    assert!(v.tree.capped.contains("v:d1:Locals/o249"));
+    r.h.op(Op::Stop {
+        kill_debuggee: None,
+    })
+    .await
+    .unwrap();
+    let (_, log, _) = r.finish().await;
+    let vars = log.commands().iter().filter(|c| **c == "variables").count();
+    assert_eq!(
+        vars,
+        1 + 1 + 200,
+        "the scope's page, the chunk, the objects"
+    );
+}

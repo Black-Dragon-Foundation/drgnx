@@ -150,20 +150,31 @@ fn data_dir(g: &GraphStore) -> PathBuf {
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
-/// DIRS resolved to projects (git), on a blocking thread.
-async fn resolve(dirs: Vec<PathBuf>) -> ProjectCache {
+/// DIRS resolved to projects (git), on a blocking thread; an error naming git when it cannot answer for one.
+async fn resolve(dirs: Vec<PathBuf>) -> Result<ProjectCache, Error> {
     if dirs.is_empty() {
-        return ProjectCache::default();
+        return Ok(ProjectCache::default());
     }
     crate::clock::blocking(move || {
         let mut cache = ProjectCache::default();
         for d in &dirs {
-            cache.fill(d);
+            cache.fill(d)?;
         }
-        cache
+        Ok::<_, String>(cache)
     })
     .await
-    .unwrap_or_default()
+    .map_err(|e| internal(e.to_string()))?
+    .map_err(internal)
+}
+
+/// The project of DIR (`norn::project::resolve`, on a blocking thread): `None` outside a repository; an error naming
+/// git when git cannot answer, which a caller never reads as "no project".
+pub(crate) async fn project_of(dir: &Path) -> Result<Option<project::ProjectRef>, String> {
+    let at = dir.to_path_buf();
+    crate::clock::blocking(move || project::resolve(&at))
+        .await
+        .map_err(|e| format!("the project of {}: {e}", dir.display()))?
+        .map_err(|e| format!("the project of {}: {e}", dir.display()))
 }
 
 /// F in one request of WRITER after its `tx` row from META; a writer that is not open runs its tick (the opening
@@ -273,7 +284,7 @@ pub async fn put_parsed(
         .await
         .map_err(|e| internal(e.to_string()))?
         .map_err(|e| internal(e.to_string()))?;
-    let mut projects = resolve(dirs.into_iter().collect()).await;
+    let mut projects = resolve(dirs.into_iter().collect()).await?;
     #[cfg(test)]
     hooks::between_resolve_and_write(g.writer.path()).await;
     let req = Arc::try_unwrap(req).unwrap_or_else(|r| (*r).clone());
@@ -302,7 +313,7 @@ pub async fn record(
     p: api::RecordParams,
 ) -> Result<Value, Error> {
     let (g, deny) = store(tools)?;
-    let mut projects = resolve(parsed::record_dir(&deny, &p).into_iter().collect()).await;
+    let mut projects = resolve(parsed::record_dir(&deny, &p).into_iter().collect()).await?;
     #[cfg(test)]
     hooks::between_resolve_and_write(g.writer.path()).await;
     let mut meta = coord::tx_meta(caller, "graph/record");
@@ -2102,13 +2113,9 @@ async fn tasks_write(
     p: tasks_api::WriteParams,
 ) -> Result<Value, Error> {
     let found = match (&p.project, &p.cwd) {
-        (None, Some(cwd)) => {
-            let dir = PathBuf::from(cwd.as_str());
-            crate::clock::blocking(move || project::resolve(&dir))
-                .await
-                .ok()
-                .flatten()
-        }
+        (None, Some(cwd)) => project_of(Path::new(cwd.as_str()))
+            .await
+            .map_err(internal)?,
         _ => None,
     };
     let name = p.project.as_ref().map(|x| x.to_string());
