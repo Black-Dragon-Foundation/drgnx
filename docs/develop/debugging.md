@@ -234,7 +234,8 @@ root>.json`, written atomically. If the file is damaged, it is moved aside to `â
   Removing a trigger makes what it held plain again (`drain_touched` names those files to send).
 - **Data breakpoints** (`debug/data-breakpoint {op: add|remove|list, session, reference, name | view, node,
   access_type?, data_id?}`): `dataBreakpointInfo` names the variable (no `dataId`: refused with the adapter's
-  `description`), then the session's whole list goes in `setDataBreakpoints`. They live in the store per session
+  `description`), then the session's whole list goes in `setDataBreakpoints`. `access_type` is `write` when absent,
+  as VS Code's Break on Value Change sends it: lldb-dap's own default also stops on reads, before the value changes. They live in the store per session
   (`data_add`, `data_answer`, `data_view`), never saved, and go when it ends; the Run and Debug view lists them under
   Breakpoints (`kind: "data"`). Adapters without `supportsDataBreakpoints` are refused.
 
