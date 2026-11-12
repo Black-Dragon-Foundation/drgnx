@@ -55,6 +55,10 @@ pub struct Root {
     dir: tempfile::TempDir,
 }
 
+/// A scenario hub's log level when the caller sets none: info, and a session's turn stages at debug (sending, the
+/// snapshot before it, the prompt written, each update read and applied), so a failure's log tail names the stage.
+pub const HUB_LOG: &str = "info,drgnx_ratatoskr::agents::session=debug";
+
 impl Root {
     pub fn new() -> Result<Arc<Root>, String> {
         let roots = std::env::var_os("DRGNX_CONFORMANCE_ROOTS").map(PathBuf::from);
@@ -90,7 +94,8 @@ impl Root {
     }
 
     /// The whole environment a hub or a CLI run gets (nothing else is inherited but `PATH`, `DRGNX_EMACS` (the
-    /// editor's own CLIs that a row runs need it) and `DBUS_SESSION_BUS_ADDRESS`): every directory points into this root, so nothing reaches `~`.  The session bus is
+    /// editor's own CLIs that a row runs need it), `DBUS_SESSION_BUS_ADDRESS` and `DRGNX_RATATOSKR_LOG`, [`HUB_LOG`]
+    /// when unset): every directory points into this root, so nothing reaches `~`.  The session bus is
     /// how a container job's podman reaches the user's systemd, which enforces the job's caps (the hub refuses the job
     /// without it; `XDG_RUNTIME_DIR` here is the root's, so podman cannot find the bus there).  `extra` wins.
     pub fn base_env(&self, extra: Vec<(String, String)>) -> BTreeMap<String, String> {
@@ -101,6 +106,15 @@ impl Root {
                 vars.insert(k.into(), v);
             }
         }
+        // the hub's log level: the caller's, else the turn's stages at debug, so a flaky row's log tail (printed on
+        // a failure) names the stage a session stopped at
+        vars.insert(
+            "DRGNX_RATATOSKR_LOG".into(),
+            std::env::var("DRGNX_RATATOSKR_LOG")
+                .ok()
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| HUB_LOG.into()),
+        );
         for (k, v) in [
             ("HOME", dir("home")),
             ("XDG_RUNTIME_DIR", dir("run")),
@@ -841,6 +855,23 @@ mod tests {
     const CAP: &str = "abababababababababababababababababababababababababababababababab";
     const HUB: &str = "00112233445566778899aabbccddeeff";
     const CLIENT: &str = "000102030405060708090a0b0c0d0e0f";
+
+    #[test]
+    fn a_scenario_hub_logs_the_turn_stages_unless_told_otherwise() {
+        let root = Root::new().unwrap();
+        let env = root.base_env(vec![]);
+        let want = std::env::var("DRGNX_RATATOSKR_LOG")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| HUB_LOG.into());
+        assert_eq!(env.get("DRGNX_RATATOSKR_LOG"), Some(&want));
+        // a row's own level wins
+        let env = root.base_env(vec![("DRGNX_RATATOSKR_LOG".into(), "warn".into())]);
+        assert_eq!(
+            env.get("DRGNX_RATATOSKR_LOG").map(String::as_str),
+            Some("warn")
+        );
+    }
 
     #[test]
     fn proofs_match_an_independent_implementation() {

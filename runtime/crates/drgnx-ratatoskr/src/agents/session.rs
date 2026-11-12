@@ -4154,6 +4154,9 @@ impl Session {
                 }
                 Event::Update { update, .. } => {
                     if let Ok(v) = serde_json::to_value(&update) {
+                        // the turn's stages at debug (a flaky row's log names where it stopped): the kind only
+                        let kind = v.get("sessionUpdate").and_then(Value::as_str).unwrap_or("");
+                        tracing::debug!(sid = %self.id, kind, "turn: an update read");
                         // a switch to a mode the lock refuses ends the session, as one reported at its start does
                         if let Some(plock::LockBroken(why)) =
                             plock::refused_mode_switch(self.locked_as, self.lock_held, &v)
@@ -4226,11 +4229,13 @@ impl Session {
                             }
                         }
                         self.drain_steps();
+                        let tool_ended = stepped.is_some();
                         if let Some(s) = stepped {
                             // the pause after a tool call: the turn ends here, the queue waits
                             self.perform(s);
                         }
                         self.schedule();
+                        tracing::debug!(sid = %self.id, kind, tool_ended, "turn: the update applied");
                     }
                 }
                 Event::Request(Incoming::Permission(req, resp)) => {
@@ -5993,6 +5998,7 @@ impl Session {
             .turn_step(TurnEvent::Sending { turn })
             .fx
             .contains(&TurnEffect::Prompt { turn });
+        tracing::debug!(sid = %self.id, turn, send, "turn: sending");
         if !send {
             return;
         }
@@ -6000,6 +6006,7 @@ impl Session {
         // once that step is written, it could already hold the turn's first write
         if let Some(s) = &self.snap {
             let tree = s.before_turn(&self.id, &self.cwd).await;
+            tracing::debug!(sid = %self.id, turn, taken = tree.is_some(), "turn: the snapshot before it");
             lock(&self.state).before = tree;
         }
         // its entry is the agent's now: in the transcript file first, then off the queue on disk (a hub that dies
@@ -6040,6 +6047,7 @@ impl Session {
         let blocks = serde_json::from_value(json!([block])).unwrap_or_default();
         // a Stop since `Sending` waited for the prompt's line: its cancel goes after it (`Written`)
         let sent = self.conn.send_prompt(&self.acp, blocks, None);
+        tracing::debug!(sid = %self.id, turn, ok = sent.is_ok(), "turn: the prompt written");
         self.turn_event(TurnEvent::Written { turn });
         let out = match sent {
             Ok(answer) => answer.await,
