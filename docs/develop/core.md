@@ -2181,7 +2181,9 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   open folders (`explorer/subscribe`, hub.md, asked on the subscribed connection `drgnx-hub--events`, where its env
   went), watches them, and draws the rows with their icons, git marks and who-is-here ordinals; the jit-lock painting is
   off. With the hub not up yet the buffer shows a line saying it waits (`drgnx-explorer--waiting`) and fills when the
-  hub connects (the env's reconnect subscribes again); nothing is listed in Lisp. Next and previous follow `down` and
+  hub connects (the env's reconnect subscribes again); nothing is listed in Lisp. The commands that show it (Focus
+  Explorer, View: Explorer) start the hub when none runs (`drgnx-explorer-start-hub`, `drgnx-hub-start-for-command`);
+  a hook or timer never does. Next and previous follow `down` and
   `up`, expand on an open folder follows `right` and collapse on anything but an open folder `left`; opening or closing
   a folder changes `drgnx-explorer--expanded` and asks the hub again. In the user's commands that open, close or
   reveal (`drgnx-explorer--await` bound: expand, collapse, toggle, open, a click, the Buffers view's reveal) the command

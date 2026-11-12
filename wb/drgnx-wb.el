@@ -717,7 +717,8 @@ Like VS Code's Ctrl+Shift+E;
 `drgnx-wb-show-view' (a layout, or a program) swaps the view and keeps the focus where it was."
   (interactive)
   (drgnx-wb-show-view 'explorer)
-  (drgnx-wb-focus-section 'explorer))
+  (drgnx-wb-focus-section 'explorer)
+  (when (fboundp 'drgnx-explorer-start-hub) (drgnx-explorer-start-hub)))   ; the hub lists it: started when none runs
 
 (defun drgnx-wb-view-search ()
   "Show the Search view in the sidebar and focus it.

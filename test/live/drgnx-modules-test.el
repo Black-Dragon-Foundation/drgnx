@@ -92,6 +92,21 @@ RET, after a git init makes the file's folder a project.  Waits up to SECS for f
     (drgnx-live-mod--search sess 30)
     (should (drgnx-live-mod--q sess "(drgnx-hub-running-p)"))))
 
+(ert-deftest drgnx-live/the-explorer-starts-the-hub ()
+  ;; No hub runs: View: Explorer (C-S-e, a command) starts it, and the hub lists the folder (on Nidhogg the Explorer is
+  ;; the hub's view: without a hub it would only say it waits).
+  (drgnx-live-mod--with sess
+    (unless (drgnx-live-mod--q sess "(fboundp 'nidhogg-view--call)") (ert-skip "the Explorer lists in Lisp here (no Sjá)"))
+    (drgnx-live-mod--may-start-hub sess)
+    (drgnx-live-mod--q sess (format "(progn (drgnx-explorer-set-roots (list %S)) t)" root))
+    (drgnx-ui-measure sess (list (list :keys "C-S-e")))
+    (drgnx-test-wait (lambda () (drgnx-live-mod--q sess "(with-current-buffer drgnx-explorer-buffer-name
+                                                           (and (drgnx-explorer--rows-p) (not drgnx-explorer--waiting)
+                                                                (save-excursion (goto-char (point-min)) (search-forward \"f.el\" nil t))
+                                                                t))"))
+                     :secs 30 :what "the Explorer listed the folder on the hub its command started")
+    (should (drgnx-live-mod--q sess "(drgnx-hub-running-p)"))))
+
 (ert-deftest drgnx-live/project-search-without-a-hub-says-why ()
   ;; Starting off (DRGNX_NO_HUB_START): the status line says why there is no search, never "Waiting".
   (drgnx-live-mod--with sess
