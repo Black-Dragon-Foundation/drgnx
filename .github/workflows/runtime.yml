@@ -1171,7 +1171,7 @@ jobs:
       - name: the plugin fixtures
         id: fixtures
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: cargo test --locked --manifest-path runtime/Cargo.toml -p brokkr --features test-support --lib fixtures_build_once
+        run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p brokkr --features test-support --lib fixtures_build_once
       # as the runner user; the `sudo` rows reach the socket as nobody through passwordless `sudo -n -u nobody`, so
       # security/another-uid-is-refused covers tokio's getpeereid path. --require-all fails it if it is skipped
       - name: conformance
