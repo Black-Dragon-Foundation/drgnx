@@ -2422,10 +2422,12 @@ snapshots; the search itself is `hrafn::grep`).
   own, `<view>~pin<N>`).
 - **Symbol and Meaning** (`view/search/modes.rs`) ask the index on a task of their own and, once it answers, send
   each file as it is read (off the runtime, in the order shown), then `search-run-done` (its `error` is the index's
-  refusal, e.g. no index yet). Their `reset` (and the run's empty model) goes with the first file's rows, or with the
-  end when none came, after `{run}`: sent at once, it was drawn alone one frame on, and the rows that followed the
-  index's answer waited for the view's throttle (`drgnx-view-delay`, 100 ms) instead of sharing the reset's frame, as
-  Text's first file does. The view keeps the previous search's rows until then. Symbol (`{mode:
+  refusal, e.g. no index yet). The files are held until the first window (`WINDOW`, 200 rows) is full, or the end
+  when fewer came, and sent as one patch: the `reset` with those rows (and the run's empty model), after `{run}`. The
+  editor sets `drgnx-view-patch-hurry` for these runs, so that patch is drawn at the view's next pass rather than a
+  frame later (`drgnx-view-first-delay` waits for the rest of a burst, and this one has none); the files after it go
+  as Text's do. Sent at once, the reset was drawn alone one frame on, and the rows that followed waited for the view's
+  throttle (`drgnx-view-delay`, 100 ms). The view keeps the previous search's rows until then. Symbol (`{mode:
   "symbol", name, case?}`, case on by default) is `search/usages`' answer: the files that define the name first, each
   definition's line and then the file's uses in line order, then the files that use it in the index's rank (at most
   100), each line's whole-word occurrences of the name a match (the line read from disk; a definition whose line lacks
@@ -2456,7 +2458,7 @@ snapshots; the search itself is `hrafn::grep`).
   node; `upto` to a row under it opens the folders above it, and a regroup opens all. A regroup re-parents every
   node, so its model goes as a first window of 2,000 entries (`FIRST_MODEL_WINDOW`) with the first window's rows;
   once those are drawn the editor asks for the whole window (`view/window`), which drains after them (spec §8's
-  50 ms is the first window's). Files in the order found need nothing; any other
+  50 ms is the first window's). Files in the run's order need nothing; any other
   grouping or a sort builds a layout of the run's files (every row in order with its parent node), again only when the
   files change. Folders: a tree by path, folders before files, one-child chains joined, `d:<path>` nodes (kind
   `folder`, a `count` field) parenting their folders and files. Symbols: each file's matches under `s:<path>:<start
@@ -2504,8 +2506,12 @@ snapshots; the search itself is `hrafn::grep`).
   search starts at the first again.
 - **The window** (the agent panel's shape, `agents/panel/look`): the hub keeps every match and Sjá's model holds them
   (so Next Match, Previous Match and Replace All, which read the model, act on all of them), but the rows sent are
-  the first 200 (a file's header and its matches, in the order the files were complete) and no more until the editor
-  asks; the totals (files, matches) come with `search-run-done`. `search/grep-look {view, more?, fill?, upto?}` goes
+  the first 200 (a file's header and its matches) and no more until the editor asks. A Text or Pattern search keeps
+  its files by path, component by component (`a/x` before `a-b/x`, as VS Code lists them), whatever order the walk
+  finds them in (rg's threads and the file system: macOS's walk lists `b.txt` before `a.txt`), each file's lines in
+  file order: a file after the last goes as an insert, one inside the rows (or any while the rows are stale) sends
+  the rows and the model whole as diffs, at most once per throttle window (as a grouped search's) and at the end, and
+  moves a block after it down; Symbol and Meaning keep their own order; the totals (files, matches) come with `search-run-done`. `search/grep-look {view, more?, fill?, upto?}` goes
   on: `more` is one window more (the editor's window neared the end of the rows), `upto` a row's key (Next or Previous
   Match went to a match beyond them): the rows up to it and 100 after it. A row more than 400 rows (`FAR`) past the
   rows sent comes in a block, the 100 rows before it, it and the 100 after, after a gap row (key `gap`, "⋯ N more"),

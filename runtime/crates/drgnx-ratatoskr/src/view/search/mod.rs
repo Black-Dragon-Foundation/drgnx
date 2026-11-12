@@ -116,6 +116,9 @@ pub(super) struct Run {
     kinds: Option<BTreeMap<String, u64>>,
     /// Only the totals go out (`count`): no model, no rows.
     count: bool,
+    /// The files are kept by path ([`sorted_at`]), wherever the walk found them: a Text or Pattern search (an index
+    /// mode keeps its own order).
+    sorted: bool,
     /// How the rows are grouped, in what order (`search/group`), and their layout when not by file in the order found,
     /// built when first asked after the files change ([`Run::layout`]).
     group: GrepGroup,
@@ -202,6 +205,7 @@ impl Greps {
             scope: None,
             kinds: None,
             count: false,
+            sorted: true,
             group: GrepGroup::File,
             sort: None,
             layout: std::cell::OnceCell::new(),
@@ -365,12 +369,26 @@ fn put_file(run: &mut Run, file: &str, put: Put) -> bool {
                 }
                 (Some(i), false) => run.files[i] = found,
                 (None, true) => return false,
-                (None, false) => run.files.push(found),
+                (None, false) => {
+                    let i = sorted_at(run, &found.file);
+                    run.files.insert(i, found);
+                }
             }
         }
     }
     run.files_changed();
     true
+}
+
+/// Where FILE goes in RUN's files: by path, component by component (`a/x` before `a-b/x`), as VS Code lists a
+/// search's files, for a sorted run (a Text or Pattern search, whose walk finds them in no fixed order: rg's threads,
+/// the file system); at the end for an index mode, which keeps its own order.
+fn sorted_at(run: &Run, file: &str) -> usize {
+    if !run.sorted {
+        return run.files.len();
+    }
+    run.files
+        .partition_point(|f| f.file.split('/').cmp(file.split('/')).is_lt())
 }
 
 /// RUN's model in the window CONN's editor asked for (`view/window`; after a regroup, the whole window): the same
@@ -556,11 +574,21 @@ fn batch_patches(
     let found = Found::new(file, ms, ns, read);
     let (nodes, ids) = rows::batch_nodes(&run.query.root, run.id, &found);
     let n = found.rows();
-    run.files.push(found);
+    // a sorted run's file found after one that sorts after it goes before it (and before a block that starts after
+    // it), and so does every file while the rows sent are not the first ones
+    let at = sorted_at(run, &found.file);
+    let inside = at < run.files.len() || (run.sorted && run.stale);
+    if at < run.files.len() {
+        let before: usize = run.files[..at].iter().map(Found::rows).sum();
+        if let Some(b) = run.block.as_mut().filter(|b| b.start >= before) {
+            *b = b.start + n..b.end + n;
+        }
+    }
+    run.files.insert(at, found);
     run.files_changed();
-    if run.layout().is_some() {
-        // grouped: a new file may go anywhere in the rows, so the rows and the model go whole (diffs), at most once
-        // per throttle window, and at the end
+    if run.layout().is_some() || inside {
+        // grouped, or a file inside the rows: it may go anywhere in them, so the rows and the model go whole
+        // (diffs), at most once per throttle window, and at the end
         let due = run
             .model_at
             .is_none_or(|t| crate::clock::now().duration_since(t) >= run.model_every);
@@ -1128,6 +1156,7 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
     // a new search's model (no files yet, its window from the start) and its rows' reset. An index mode's go with its
     // first window, in one reset the view draws at once ([`Views::grep_first`])
     let index = !matches!(mode, Mode::Text | Mode::Pattern(_));
+    views.greps.with(conn, &view, id, |r| r.sorted = !index);
     if !count && !index {
         views.grep_start(f, conn, &view, id);
     }
