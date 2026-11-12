@@ -13280,6 +13280,10 @@
               "null"
             ]
           },
+          "no_debug": {
+            "description": "Run Without Debugging: the configuration launches with `noDebug: true` (its breakpoints do not stop it).",
+            "type": "boolean"
+          },
           "root": {
             "type": "string"
           },
