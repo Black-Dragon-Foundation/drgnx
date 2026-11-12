@@ -267,7 +267,7 @@ inline breakpoint there.  None with the setting off, or once the session runs."
 (ert-deftest drgnx-debug-gutter/breakpoints-and-the-stop-in-the-overview-ruler ()
   "The column hands the overview ruler its marks: a breakpoint in the middle lane (grey while disabled), the stopped
 line across it; the stop's mark goes with the stop, the ruler with the column."
-  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0))
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0) (drgnx-debug-overview-ruler t))
     (debug-gutter-test--with 10
       (let ((ruler (lambda () (mapcar (lambda (m) (list (car m) (nth 1 m) (nth 2 m))) drgnx-ruler--marks))))
         (drgnx-debug-gutter-toggle 5)

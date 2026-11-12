@@ -66,6 +66,11 @@
 
 (defface drgnx-debug-breakpoint-inline '((t :inherit drgnx-debug-breakpoint))
   "An inline breakpoint's dot, before its column's character." :group 'drgnx)
+(defcustom drgnx-debug-overview-ruler nil
+  "Non-nil: the file's breakpoints and the stopped line show in the overview ruler at the editor's right edge.  Off
+until the ruler's drawing meets the scroll budget (docs/develop/core.md, \"The overview ruler\")."
+  :type 'boolean :group 'drgnx)
+
 (defface drgnx-debug-ruler-breakpoint '((t :inherit drgnx-debug-breakpoint :inverse-video t))
   "A breakpoint's mark in the overview ruler (its background)." :group 'drgnx)
 (defface drgnx-debug-ruler-unverified '((t :inherit drgnx-debug-unverified :inverse-video t))
@@ -1084,7 +1089,7 @@ the last column, the global hooks; after a new major mode the module's `find-fil
         ;; to show; it never fails the visit (`drgnx-hub-call' signals when no hub serves).  The commands still say why
         (when buffer-file-name (condition-case nil (drgnx-debug-gutter--ask nil) (error nil)))
         (drgnx-debug-gutter--claim)
-        (drgnx-ruler-source 'debug #'drgnx-debug-gutter--ruler-marks))
+        (when drgnx-debug-overview-ruler (drgnx-ruler-source 'debug #'drgnx-debug-gutter--ruler-marks)))
     (remove-hook 'after-save-hook #'drgnx-debug-gutter--saved t)
     (remove-hook 'after-revert-hook #'drgnx-debug-gutter--reverted t)
     (remove-hook 'change-major-mode-hook #'drgnx-debug-gutter--off t)

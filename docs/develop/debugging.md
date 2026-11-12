@@ -362,6 +362,8 @@ only).
   (`drgnx-debug-gutter--ruler-marks`): each mark's line from its overlay (so a draft move shows), breakpoints in the
   middle lane (`drgnx-debug-ruler-breakpoint`, `-unverified` when disabled or unbound), the top stop across
   (`drgnx-debug-ruler-stop`); it asks the ruler again after each draw and each stop mark or clear.
+  Only with `drgnx-debug-overview-ruler` (off): the ruler's margin costs a scroll 0.7–1.1 ms, over the column's
+  0.3 ms rule, so it stays out of `debug-gutter-scroll` until its drawing is chosen again.
 - `drgnx-debug-gutter-show`: `auto` (while the file has breakpoints or a session runs in its project, from
   `debug-state`), `always` or `never`.
 - A new major mode (`normal-mode` in a revert that does not keep the modes), or killing the buffer, would drop the

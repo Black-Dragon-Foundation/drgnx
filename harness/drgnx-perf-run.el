@@ -2411,10 +2411,10 @@ a :measure without :actions each have :timeout seconds to answer (120)."
                       " (setq drgnx-perf--debug-store (reverse"
                       "   (mapcar (lambda (i) (list :id i :line (* 50 i) :enabled (/= 0 (% i 5)) :verified t))"
                       "           (number-sequence 1 200))))"
-                      " (drgnx-margins-claim 'hunks 1 :order 2) (drgnx-debug-gutter-mode 1) t)")
+                      " (setq drgnx-debug-overview-ruler t) (drgnx-margins-claim 'hunks 1 :order 2) (drgnx-debug-gutter-mode 1) t)")
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
        :check "(with-current-buffer (window-buffer) (and (= 200 (length drgnx-ruler--marks)) (= 10000 drgnx-ruler--lines) (cddr (assq (selected-window) drgnx-ruler--windows)) t))"   ; the ruler drew 200 marks of 10,000 lines
-       :teardown ,(concat "(progn (with-current-buffer (window-buffer) (widen)) (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
+       :teardown ,(concat "(progn (setq drgnx-debug-overview-ruler nil) (with-current-buffer (window-buffer) (widen)) (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
       ;; F9 on 20 lines in a row: each key a `debug/breakpoints' add, its answer and the column redrawn
       (debug-breakpoint-click
        :setup ,(drgnx-perf-run--debug-setup-form)
