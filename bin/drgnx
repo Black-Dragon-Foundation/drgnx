@@ -142,6 +142,10 @@ rt_px_path() { # where rt_build leaves the sidecar's binary
   printf '%s/ratatoskr-px-target/%s-unknown-linux-musl/release/drgnx-px' "$(drgnx_dir cache)" "$arch"
 }
 
+rt_key_musl_path() { # where rt_build leaves the static drgnx-key, for a keyed container job
+  printf '%s/ratatoskr-px-target/%s-unknown-linux-musl/release/drgnx-key' "$(drgnx_dir cache)" "$(rt_px_arch)"
+}
+
 rt_build() { # [--install] [--prefix DIR] — cargo build --release --locked of drgnx-ratatoskr; then rt_install when asked
   local install=0 prefix="" jobs commit cache l
   while (($#)); do
@@ -169,6 +173,10 @@ rt_build() { # [--install] [--prefix DIR] — cargo build --release --locked of 
   printf 'drgnx runtime: building Ratatoskr %s with %s (-j%s)\n' "${commit:0:12}" "$RT_CARGO" "$jobs"
   (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \
         --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr) || { rt_err "the build failed"; return 1; }
+  # drgnx-key, next to the hub: a keyed job on this machine runs its command behind it (the hub refuses one without it)
+  (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \
+        --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key) ||
+    { rt_err "the build of drgnx-key failed"; return 1; }
   # the relay sidecar of a networked container job: static Linux musl, whatever the host (on a Mac it is cross-built with
   # Rust's self-contained musl and rust-lld: no C toolchain for Linux); a failure only warns (no network for jobs then)
   local pxarch pxtriple pxl pxenv
@@ -181,6 +189,10 @@ rt_build() { # [--install] [--prefix DIR] — cargo build --release --locked of 
   (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "${pxenv[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \
         --target "$pxtriple" --manifest-path runtime/Cargo.toml -p drgnx-px --bin drgnx-px) ||
     rt_err "warning: no relay sidecar built (needs the Rust target $pxtriple: rustup target add $pxtriple): container jobs get no network"
+  # and drgnx-key the same way: what a keyed container job's command runs behind, inside the container
+  (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "${pxenv[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \
+        --target "$pxtriple" --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key) ||
+    rt_err "warning: no static drgnx-key built (needs the Rust target $pxtriple): a keyed container job is refused here"
   if ((install)); then
     if [[ -n "$prefix" ]]; then rt_install --prefix "$prefix"; else rt_install; fi
   fi
@@ -284,6 +296,16 @@ rt_install() { # [--prefix DIR] — the built binary to <data>/bin/ratatoskr by 
   else
     rt_err "no relay sidecar built at $px: container jobs get no network until drgnx runtime build runs"
   fi
+  # drgnx-key: native next to the hub (keyed jobs here), static as drgnx-key-<arch>-linux-musl (keyed container jobs)
+  for n in drgnx-key "drgnx-key-$(rt_px_arch)-linux-musl"; do
+    if [[ "$n" == drgnx-key ]]; then px="${built%/*}/drgnx-key"; else px="$(rt_key_musl_path)"; fi
+    if [[ -x "$px" ]]; then
+      cp "$px" "$dir/$n.new" && chmod 755 "$dir/$n.new" && mv -f "$dir/$n.new" "$dir/$n" ||
+        { rt_err "could not install $n into $dir"; return 1; }
+    else
+      rt_err "no $n built at $px: a keyed job is refused here until drgnx runtime build runs"
+    fi
+  done
   if [[ -n "$prefix" ]]; then
     mkdir -p "$prefix/bin"
     for n in ratatoskr rtsk; do ln -sfn "$dir/ratatoskr" "$prefix/bin/$n"; done

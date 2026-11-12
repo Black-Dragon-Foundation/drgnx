@@ -12,8 +12,8 @@ use crate::front::Front;
 use runstav::methods::Params;
 use runstav::methods::debug::{
     DebugBreakpointOp, DebugBreakpoints, DebugBreakpointsView, DebugConfig, DebugConfigList,
-    DebugConfigs, DebugControl, DebugFileError, DebugRunToCursor, DebugSelect, DebugStart,
-    DebugStarted, DebugTrust,
+    DebugConfigs, DebugControl, DebugFileError, DebugInstall, DebugRunToCursor, DebugSelect,
+    DebugSource, DebugSourceText, DebugStart, DebugStarted, DebugTrust,
 };
 use runstav::types::JsonObject;
 use runstav::wire::{Error, ErrorCode};
@@ -36,12 +36,18 @@ pub struct Hub {
     debug: OnceLock<Debug>,
     trusted: Mutex<BTreeSet<String>>,
     last: Mutex<HashMap<String, String>>,
+    /// The what-if forks (`fork_wire`), made on first use.
+    pub(super) forks: OnceLock<super::fork_hub::Forks>,
+    /// The bisects over the edit history (`debug/bisect*`).
+    pub(super) bisects: super::bisect_wire::Bisects,
+    /// The origin trails (`debug/origin`).
+    pub(super) origins: super::origin_wire::Origins,
 }
 
 impl Hub {
-    fn debug(&self, front: &Front) -> &Debug {
+    pub(super) fn debug(&self, front: &Front) -> &Debug {
         self.debug.get_or_init(|| {
-            Debug::with_store(
+            let d = Debug::with_store(
                 front.editors.clone(),
                 Arc::new(TermDoor {
                     terms: front.core.terms.clone(),
@@ -51,11 +57,23 @@ impl Hub {
                     runstav::paths::state_dir(&front.shell_env.paths_env())
                         .join("debug-breakpoints"),
                 ),
-            )
+            );
+            // every session is recorded (spec §19.2)
+            d.record_into(super::runs_wire::opts(front));
+            d
         })
     }
 
-    fn is_trusted(&self, root: &str) -> bool {
+    /// The front, once it is in its `Arc`: a bisect's jobs outlive the call that started it.
+    pub fn bind(&self, front: &Arc<Front>) {
+        self.bisects.bind(front);
+        self.origins
+            .set_replay(Arc::new(super::origin_wire::ForkReplay {
+                front: Arc::downgrade(front),
+            }));
+    }
+
+    pub(super) fn is_trusted(&self, root: &str) -> bool {
         self.trusted.lock().expect("debug trust").contains(root)
     }
 
@@ -130,7 +148,7 @@ fn read_launch(root: &str) -> (Option<LaunchFile>, Option<DebugFileError>) {
 }
 
 /// The user's adapters (ADAPTERS, in the table's fields), then drgnx's.
-fn table(user: &[JsonObject]) -> Result<Table, Error> {
+pub(super) fn table(user: &[JsonObject]) -> Result<Table, Error> {
     let mut all = Vec::with_capacity(user.len());
     for (i, a) in user.iter().enumerate() {
         let a: Adapter = serde_json::from_value(Value::Object(a.clone().into_inner()))
@@ -198,7 +216,7 @@ async fn configs(front: &Front, p: DebugConfigs) -> Result<DebugConfigList, Erro
 }
 
 /// The configuration ID names, and the inputs it may use.
-fn config_of(p: &DebugStart, table: &Table) -> Result<(Value, Vec<Value>), Error> {
+pub(super) fn config_of(p: &DebugStart, table: &Table) -> Result<(Value, Vec<Value>), Error> {
     let (kind, n) = p
         .config
         .split_once(':')
@@ -238,7 +256,7 @@ fn config_of(p: &DebugStart, table: &Table) -> Result<(Value, Vec<Value>), Error
     }
 }
 
-fn need_json(n: &Need) -> Value {
+pub(super) fn need_json(n: &Need) -> Value {
     match n {
         Need::Input {
             id,
@@ -255,7 +273,7 @@ fn need_json(n: &Need) -> Value {
     }
 }
 
-fn vars(front: &Front, p: &DebugStart) -> Vars {
+pub(super) fn vars(front: &Front, p: &DebugStart) -> Vars {
     let root = PathBuf::from(&p.root);
     let name = root
         .file_name()
@@ -285,14 +303,17 @@ fn vars(front: &Front, p: &DebugStart) -> Vars {
         selection: p.selection.clone(),
         home,
         exec_path: std::env::current_exe().unwrap_or_default(),
-        default_build_task: None,
+        default_build_task: std::fs::read_to_string(Path::new(&p.root).join(".vscode/tasks.json"))
+            .ok()
+            .and_then(|t| super::tasks::parse(&t).ok())
+            .and_then(|t| super::tasks::default_build_task(&t)),
         env,
         config,
     }
 }
 
 /// Where the adapters drgnx installs live: `<data>/debug-adapters` (its Python venv is `venv/`).
-fn tools_dir(front: &Front) -> PathBuf {
+pub(super) fn tools_dir(front: &Front) -> PathBuf {
     runstav::paths::data_dir(&front.shell_env.paths_env()).join("debug-adapters")
 }
 
@@ -359,9 +380,24 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
         });
     }
     launch::check_answers(&config, &inputs, &answers).map_err(|e| bad("inputs", e))?;
-    let config = launch::substitute(&config, &vars(front, &p), &answers).map_err(err)?;
+    let vars = vars(front, &p);
+    let config = launch::substitute(&config, &vars, &answers).map_err(err)?;
+    let config_hash = super::record::config_hash(&config);
     let ty = text(&config, "type");
     let adapter = table.for_type(&ty).map_err(err)?;
+    let subst = |s: &str| match launch::substitute(&Value::String(s.to_owned()), &vars, &answers)? {
+        Value::String(s) => Ok(s),
+        _ => Ok(s.to_owned()),
+    };
+    // preLaunchTask: its steps run to the end first; a failure is the start's error. postDebugTask's are checked now,
+    // so a wrong name stops the start too
+    let root = Path::new(&p.root);
+    let steps = super::tasks::before_launch(root, &config, Os::this(), &subst).map_err(err)?;
+    let after = super::tasks::after_debug(root, &config, Os::this(), &subst).map_err(err)?;
+    super::tasks::run(&steps, &front.shell_env.vars_os())
+        .await
+        .map_err(err)?;
+    // after the tasks: a TCP adapter's free port is picked just before it starts
     let launcher = launcher(front, &p.root, &config, adapter).map_err(err)?;
     let start = Start {
         name: text(&config, "name"),
@@ -376,12 +412,35 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
         functions: vec![],
         exception_filters: None,
     };
+    // the run keeps the start as sent, without the answers to its inputs
+    let mut sent = json!(p);
+    if let Some(o) = sent.as_object_mut() {
+        o.remove("inputs");
+    }
+    let rec = super::record::Launch {
+        config_hash: Some(config_hash),
+        start: sent,
+        unsaved: p.unsaved.clone(),
+        task: super::runs_wire::task_of(front, &p.root),
+        ..super::record::Launch::default()
+    };
     let id = front
         .debug
         .debug(front)
-        .start(caller.conn_id, &p.root, start, launcher)
+        .start_with(caller.conn_id, &p.root, start, launcher, rec)
         .await
         .map_err(err)?;
+    if !after.is_empty() {
+        let d = front.debug.debug(front).clone();
+        let env = front.shell_env.vars_os();
+        let id = id.clone();
+        crate::clock::spawn("debug:post-debug-task", async move {
+            d.wait_end(&id).await;
+            if let Err(e) = super::tasks::run(&after, &env).await {
+                tracing::warn!(target: "drgnx::debug", "postDebugTask of {id}: {e}");
+            }
+        });
+    }
     front
         .debug
         .last
@@ -515,6 +574,40 @@ async fn run_to_cursor(front: &Front, p: DebugRunToCursor) -> Result<bool, Error
     Ok(true)
 }
 
+/// A frame's source with no file: its text from the adapter.
+async fn source(front: &Front, p: DebugSource) -> Result<DebugSourceText, Error> {
+    let v = front
+        .debug
+        .debug(front)
+        .source(&p.session, p.reference)
+        .await
+        .map_err(err)?;
+    serde_json::from_value(v).map_err(|e| err(e.to_string()))
+}
+
+/// Debug: Install Adapter: P's adapter from its `:install` entry, into the tools folder.
+async fn install_adapter(front: &Front, p: DebugInstall) -> Result<String, Error> {
+    let table = table(&p.adapters)?;
+    let a = table
+        .by_id(&p.adapter)
+        .ok_or_else(|| bad("adapter", format!("no adapter {}", p.adapter)))?;
+    let entry = a.install.as_ref().ok_or_else(|| {
+        err(format!(
+            "drgnx cannot install {}: add it yourself (the setting debug.adapters)",
+            a.name
+        ))
+    })?;
+    let plan = super::install::plan(entry, &super::install::platform_key()).map_err(err)?;
+    super::install::install(
+        &plan,
+        &tools_dir(front),
+        &super::install::Source::Https,
+        &front.shell_env.vars_os(),
+    )
+    .await
+    .map_err(err)
+}
+
 fn answer<T: serde::Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
     r.map(|v| json!(v))
 }
@@ -531,6 +624,8 @@ pub async fn serve(
         Params::DebugControl(p) => answer(control(front, p).await),
         Params::DebugSelect(p) => answer(select(front, p).await),
         Params::DebugTrust(p) => answer(trust(front, p).await),
+        Params::DebugInstall(p) => answer(install_adapter(front, p).await),
+        Params::DebugSource(p) => answer(source(front, p).await),
         Params::DebugBreakpoints(p) => answer(breakpoints(front, p).await),
         Params::DebugRunToCursor(p) => answer(run_to_cursor(front, p).await),
         other => return Err(Box::new(other)),
@@ -543,7 +638,7 @@ pub(super) async fn connect_tcp(addr: SocketAddr) -> Result<tokio::net::TcpStrea
 }
 
 /// A TCP connection to ADDR, waiting up to WITHIN for something to listen.
-pub(super) async fn connect_tcp_within(
+async fn connect_tcp_within(
     addr: SocketAddr,
     within: Duration,
 ) -> Result<tokio::net::TcpStream, String> {

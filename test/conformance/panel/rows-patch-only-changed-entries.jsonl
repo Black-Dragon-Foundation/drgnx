@@ -1,4 +1,4 @@
-{"scenario": "panel/rows-patch-only-changed-entries", "requires": ["v1", "test-hooks"], "doc": "An editor that sends view/env for agent-panel/SID gets the session's transcript as rows: a reset first, then each turn's entries as an insert after the rows it already holds, never the earlier turns' rows again; agents/panel/look changes what one connection's panel shows."}
+{"scenario": "panel/rows-patch-only-changed-entries", "requires": ["v1", "test-hooks"], "doc": "An editor that sends view/env for agent-panel/SID gets the session's transcript as rows: a reset first, then each turn's entries as an insert after the rows it already holds (the user's row and the agent's answer in one patch or in two: frames are timing), never the earlier turns' rows again; agents/panel/look changes what one connection's panel shows."}
 {"do": "root"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
 {"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
@@ -14,7 +14,7 @@
 {"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"class": "gui-1", "hub": "$capture:hub", "base": 0, "version": 1, "env_epoch": 1, "ops": [{"reset": "$any"}]}}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "say one"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
-{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"class": "gui-1", "hub": "$hub", "ops": [{"insert": {"after": "$any", "rows": {"$contains": [{"key": "e:0", "text": "  ▍ you  say one"}, {"key": "b:1:0", "text": "  one"}]}}}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"class": "gui-1", "hub": "$hub", "ops": [{"insert": {"after": "$any", "rows": {"$contains": [{"key": "e:0", "text": "  ▍ you  say one"}]}}}]}}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "say two"}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
 {"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"class": "gui-1", "ops": [{"insert": {"after": "$string", "rows": {"$contains": [{"key": "$string", "text": "  ▍ you  say two"}]}}}]}}, "within_ms": 10000}

@@ -190,11 +190,12 @@ impl Platform for LinuxPlatform {
         if let Some(why) = crate::linux::confined::refusal() {
             return Err(why);
         }
-        // the job's own copy of the bundle's drgnx-key: each container relabels its mounts (`Z`)
+        // the job's own copy of the bundle's drgnx-key: each container relabels its mounts (`Z`); the container runs it,
+        // so its write descriptor is kept out of the runner's other forks (drgnx-exe)
         let own_copy = |name: &str| -> Result<PathBuf, String> {
             let from = self.exe.with_file_name(name);
             let to = dir.join(name);
-            fs::copy(&from, &to)
+            drgnx_exe::copy(&from, &to)
                 .map(|_| to)
                 .map_err(|e| format!("{name} from the bundle ({}): {e}", from.display()))
         };
@@ -254,11 +255,11 @@ impl Platform for LinuxPlatform {
             },
             job: id.clone(),
             net: hub_allow.is_some(),
+            keys,
             runner: Some(RunnerMounts {
                 writes_tree: meta.spec.writes_tree,
                 target: dir.join("target"),
                 caches: vec![],
-                keys,
             }),
         };
         let container = podman::name_of(&ra.name_prefix, id).map_err(|r| r.message)?;

@@ -200,11 +200,25 @@ that number when it is positive.  The agents module sets it; the row reads it on
   "How many agents work (`drgnx-topline-agents-function'), 0 without one.  A memo key."
   (if drgnx-topline-agents-function (or (funcall drgnx-topline-agents-function) 0) 0))
 
+(defvar drgnx-topline-paused-function nil
+  "A function with no arguments, non-nil while a debug session is paused: the title row shows its Paused chip (a click
+goes to the stopped line).  The debug module sets it; the row reads it on redisplay, so it must be cheap.")
+
+(defun drgnx-topline--paused-p ()
+  "Non-nil while `drgnx-topline-paused-function' says a debug session is paused.  A memo key."
+  (and drgnx-topline-paused-function (funcall drgnx-topline-paused-function) t))
+
+(defconst drgnx-topline--paused-help "A debug session is paused: click for the stopped line")
+
 (defun drgnx-topline--chips ()
-  "The chips at the right of the row: `N needs you' (it opens what waits) and the agents at work, each only while its
-count is positive."
+  "The chips at the right of the row: Paused (a debug session stopped; it goes to the line), `N needs you' (it opens
+what waits) and the agents at work, each only while its count is positive."
   (let ((need (drgnx-topline--attention-count)) (agents (drgnx-topline--agents-count)))
     (append
+     (when (drgnx-topline--paused-p)
+       (list (drgnx-topline--item 'drgnx-topline-paused (propertize " Paused " 'face 'drgnx-status-warn)
+                                  (and (fboundp 'drgnx-debug-toolbar-show-stop) 'drgnx-debug-toolbar-show-stop)
+                                  drgnx-topline--paused-help)))
      (when (> need 0)
        (list (drgnx-topline--item 'drgnx-topline-attention
                                   (propertize (format " %d needs you " need) 'face 'drgnx-status-needs-you)
@@ -489,6 +503,14 @@ cards' gap, `internal-border-width')."
                            (concat (drgnx-topline--space 10) (drgnx-topline--chip parts 'drgnx-chip-quiet 20 4 'git-branch))
                            nil "The branch"))))
 
+(defun drgnx-topline--paused-pill ()
+  "The Paused chip of a graphical row (the warn pill with the bug) after 10 px, while a debug session is paused."
+  (when (drgnx-topline--paused-p)
+    (list (drgnx-topline--item 'drgnx-topline-paused
+                               (concat (drgnx-topline--space 10) (drgnx-topline--chip "Paused" 'drgnx-chip-warn 20 10 'bug))
+                               (and (fboundp 'drgnx-debug-toolbar-show-stop) 'drgnx-debug-toolbar-show-stop)
+                               drgnx-topline--paused-help))))
+
 (defun drgnx-topline--pills (&optional need agents)
   "The attention and agents chips of a graphical row (pills on their tints), each after 10 px, each only while its
 count is positive.  NEED and AGENTS stand for the counts (the room the row keeps for them: the design's 1 and 2)."
@@ -550,20 +572,22 @@ colour under the pointer where the row draws a `mouse-face')."
 (defun drgnx-topline--build-pixels (buffer pixels drawn)
   "The items for BUFFER on a graphical frame PIXELS wide: the design's title row (see above).  The search box is
 centred between the left items and the right ones as the design has them, both chips included (`1 needs you',
-`2 agents'), whether or not they show: a chip that comes or goes never moves it.  It is left out when it would touch
-the sides; the controls sit 8 px from the right edge."
+`2 agents'), whether or not they show: a chip that comes or goes never moves it (a debug session's Paused chip moves
+it only when the right end then outgrows that room).  It is left out when it would touch the sides; the controls sit
+8 px from the right edge."
   (let* ((measure (drgnx-statusbar--measure-fn nil 'tab-bar))
          (left (delq nil (list (drgnx-topline--mark-pixels buffer) (drgnx-topline--branch-chip buffer))))
-         (right (append (drgnx-topline--pills) (and drawn (drgnx-topline--control-buttons))
+         (right (append (drgnx-topline--paused-pill) (drgnx-topline--pills) (and drawn (drgnx-topline--control-buttons))
                         (list (drgnx-topline--pixel-gap 'drgnx-topline-end (drgnx-topline--edge-px 8) nil))))
          (left-px (drgnx-topline--width left measure))
          (right-px (drgnx-topline--width right measure))
          (search (drgnx-topline--search-box))
          (search-px (if search (funcall measure (nth 2 search)) 0))
          ;; the design's right end: both chips, then the controls
-         (room-px (drgnx-topline--width (append (drgnx-topline--pills 1 2) (and drawn (drgnx-topline--control-buttons))
-                                                (list (drgnx-topline--pixel-gap 'drgnx-topline-end (drgnx-topline--edge-px 8) nil)))
-                                        measure))
+         (room-px (max right-px
+                       (drgnx-topline--width (append (drgnx-topline--pills 1 2) (and drawn (drgnx-topline--control-buttons))
+                                                     (list (drgnx-topline--pixel-gap 'drgnx-topline-end (drgnx-topline--edge-px 8) nil)))
+                                             measure)))
          (gap (drgnx-topline--px 10))
          (start (+ left-px gap (/ (- pixels left-px gap search-px gap room-px) 2)))
          (search (and search (>= start (+ left-px (drgnx-topline--px 10)))
@@ -634,7 +658,7 @@ this file alone.")
                           (buffer-local-value 'buffer-file-name buffer)
                           width drawn pixels drgnx-face-glyphs
                           custom-enabled-themes drgnx-pixels-generation   ; the images' colours, the fonts measured
-                          (drgnx-topline--attention-count) (drgnx-topline--agents-count)
+                          (drgnx-topline--attention-count) (drgnx-topline--agents-count) (drgnx-topline--paused-p)
                           (and (framep object) (drgnx-statusbar--layout-key (frame-selected-window object)))
                           (drgnx-epoch drgnx-topline--git-epoch)
                           (and (fboundp 'drgnx-git-roots-known) (drgnx-git-roots-known))

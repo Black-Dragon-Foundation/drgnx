@@ -12,6 +12,7 @@
 
 pub mod container;
 pub(crate) mod hostgrants;
+pub mod keys;
 pub mod net;
 pub mod packages;
 pub mod progress;
@@ -36,7 +37,7 @@ use runstav::methods::exec::{
 use runstav::wire::{Error, ErrorCode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -49,6 +50,20 @@ use unit::Meta;
 pub enum Starter {
     Session(String),
     User,
+    /// The hub, for a command it doesn't trust (a gate's rerun of an agent's command, a bisect's predicate): run in
+    /// the Session launch shape, sealed to its tree, under this label (`sealed-` and letters, digits, `-`, `_`), which
+    /// no session holds: its events name no session, so they reach no agent ([`start_sealed`]).
+    Sealed(String),
+}
+
+impl Starter {
+    /// The agent session the job belongs to (its events and wake go there); none for the user's or a sealed job.
+    pub fn session(&self) -> Option<String> {
+        match self {
+            Starter::Session(s) => Some(s.clone()),
+            Starter::User | Starter::Sealed(_) => None,
+        }
+    }
 }
 
 /// What a job's output is read as.
@@ -202,6 +217,9 @@ pub struct Hooks {
     /// The folder of the relay's binaries (`drgnx-px-<arch>-linux-musl`, next to the hub): the sidecar a container job
     /// granted network runs is imported from there ([`net::prepare_net`]).
     pub px_dir: Option<PathBuf>,
+    /// `drgnx-key`, next to the hub: what a keyed command job here runs in front of its command ([`keys`]); none or
+    /// missing: such a job is refused (`drgnx doctor` says so).
+    pub key_bin: Option<PathBuf>,
     /// How this machine admits the queue's jobs (`runners::local`): live on Linux, else by count.  The user's servers
     /// (no time box) never queue.
     pub admission: Admission,
@@ -236,6 +254,9 @@ impl Default for Hooks {
             px_dir: std::env::current_exe()
                 .ok()
                 .and_then(|e| e.parent().map(Path::to_path_buf)),
+            key_bin: std::env::current_exe()
+                .ok()
+                .and_then(|e| e.parent().map(|d| d.join("drgnx-key"))),
             // tests and the conformance lane admit by count, never by the machine they happen to run on
             admission: if cfg!(any(test, feature = "test-hooks")) {
                 Admission::Fixed(crate::runners::local::FIXED_SLOTS)
@@ -305,6 +326,27 @@ impl Net {
     }
 }
 
+/// The end of a keyed job a restarted hub found running.
+const KEYED_RESTART: &str =
+    "infra: the hub restarted (a keyed job's key socket and log went with it)";
+
+/// A keyed job's keys and the `drgnx-key` that asks for them, made before its launch: a command job's own key socket
+/// and the hub's `drgnx-key`; a container job's copy of the static one in its folder (it asks its sidecar, no socket).
+struct KeySocket {
+    socket: Option<keys::Socket>,
+    keys: Arc<keys::JobKeys>,
+    bin: PathBuf,
+}
+
+/// A running keyed job's key socket (removed when the job ends) and the task that redacts its output into its log.
+struct Keyed {
+    _socket: Option<keys::Socket>,
+    pump: tokio::task::JoinHandle<()>,
+}
+
+/// How long a keyed job's log may take to drain once its process has ended (a child it left may hold the pipe).
+const DRAIN: Duration = Duration::from_secs(5);
+
 /// Ends job DIR `infra: proxy` for REASON: the reason line goes to its log, and `why` says so (before the job's
 /// process is ended, so its result reads it).
 fn write_infra(dir: &Path, reason: &str) {
@@ -325,6 +367,9 @@ fn write_infra(dir: &Path, reason: &str) {
 #[derive(Serialize, Deserialize)]
 struct Pending {
     session: Option<String>,
+    /// A sealed job's label ([`Starter::Sealed`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sealed: Option<String>,
     cwd: PathBuf,
     worktree: Option<PathBuf>,
     argv: Vec<String>,
@@ -340,9 +385,10 @@ struct Pending {
 impl Pending {
     fn of(spec: &ExecSpec) -> Pending {
         Pending {
-            session: match &spec.starter {
-                Starter::Session(s) => Some(s.clone()),
-                Starter::User => None,
+            session: spec.starter.session(),
+            sealed: match &spec.starter {
+                Starter::Sealed(l) => Some(l.clone()),
+                _ => None,
             },
             cwd: spec.cwd.clone(),
             worktree: spec.worktree.clone(),
@@ -357,7 +403,10 @@ impl Pending {
 
     fn into_spec(self) -> ExecSpec {
         ExecSpec {
-            starter: self.session.map_or(Starter::User, Starter::Session),
+            starter: match (self.sealed, self.session) {
+                (Some(l), _) => Starter::Sealed(l),
+                (None, s) => s.map_or(Starter::User, Starter::Session),
+            },
             cwd: self.cwd,
             worktree: self.worktree,
             argv: self.argv,
@@ -470,6 +519,29 @@ impl Default for Runner {
 /// The job folder's file with the job's facts (`vordr::facts::Facts`), written before it is queued.
 const FACTS: &str = "facts.json";
 
+/// The job folder's list of the protected files its sandbox made empty in its tree (`sandbox::note_missing`).
+const STUBS: &str = "stubs";
+
+/// The job folder's tree as its key read it at submit ([`Snap`]).
+const SNAP: &str = "snap.json";
+
+/// The job folder's files that changed in its tree while it ran, one a line, when its facts went for it.
+const MOVED: &str = "moved";
+
+/// The job folder's facts once its tree moved while it ran: no one's evidence, never reused.
+const FACTS_MOVED: &str = "facts.moved.json";
+
+/// What a job's result and a gate's note say of a run whose tree moved while it ran (FILES, [`Runner::moved`]).
+pub fn moved_line(files: &[String]) -> String {
+    if files.is_empty() {
+        return "its tree moved while it ran: no facts kept".into();
+    }
+    format!(
+        "its tree moved while it ran ({}): no facts kept; a file a run writes belongs in .gitignore",
+        some_paths(files)
+    )
+}
+
 /// The Emacs build and the Rust toolchain on this machine (`emacs`, `rustc`, `cargo` `--version`'s first lines, `none`
 /// for one that is missing), read once: as `core/drgnx-affected.el`'s stamp.
 pub(crate) fn env_stamp() -> &'static str {
@@ -497,35 +569,122 @@ pub(crate) fn env_stamp() -> &'static str {
 /// SPEC's facts at submit: its tree's key (the hardened capture of `sleipnir::sync::capture`: the commit's tree, plus
 /// the overlay's input key when anything is uncommitted), this machine's env stamp (with a container job's image), the
 /// platform and the selector.  None outside a git tree.
-async fn facts_of(spec: &ExecSpec) -> Option<vordr::facts::Facts> {
+async fn facts_of(spec: &ExecSpec) -> Option<(vordr::facts::Facts, Snap)> {
     let cwd = spec.cwd.clone();
     let argv = spec.argv.clone();
     let env = spec.user.env.clone();
     let image = spec.container.as_ref().map(|c| c.image.clone());
     crate::clock::blocking(move || {
-        let top = cwd
-            .ancestors()
-            .find(|d| d.join(".git").exists())?
-            .to_path_buf();
-        let inputs = sleipnir::sync::capture::capture(&top, &[]).ok()?;
-        let overlay =
-            (!inputs.manifest.is_empty()).then(|| sleipnir::sync::capture::input_key(&inputs));
+        let (top, tree_key, snap) = tree_key_at(&cwd)?;
         let rel = cwd.strip_prefix(&top).ok()?.to_string_lossy().into_owned();
         let mut stamp = env_stamp().to_string();
         if let Some(i) = image {
             stamp.push_str("\nimage ");
             stamp.push_str(&i);
         }
-        Some(vordr::facts::Facts {
-            tree_key: vordr::facts::tree_key(&inputs.tree, overlay.as_deref()),
+        let facts = vordr::facts::Facts {
+            tree_key,
             env_stamp: stamp,
-            platform: format!("{}-{}/local", std::env::consts::OS, std::env::consts::ARCH),
+            platform: local_platform(),
             selector: vordr::facts::selector(&rel, &argv, &env),
-        })
+        };
+        Some((facts, snap))
     })
     .await
     .ok()
     .flatten()
+}
+
+/// This machine's platform in a job's facts: `OS-ARCH/local`.
+pub(crate) fn local_platform() -> String {
+    format!("{}-{}/local", std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// A tree as a job's key read it: the commit's tree and each uncommitted path with its content's hash (none for a
+/// deleted one).  Kept in the job's folder ([`SNAP`]) so its end can name what moved ([`Snap::moved`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Snap {
+    tree: String,
+    files: BTreeMap<String, Option<String>>,
+}
+
+impl Snap {
+    fn of(inputs: &sleipnir::sync::capture::Inputs) -> Snap {
+        use sleipnir::sync::capture::Entry;
+        let files = inputs
+            .manifest
+            .iter()
+            .map(|e| {
+                let hash = match e {
+                    Entry::File { sha256, .. } => {
+                        Some(sha256.iter().map(|b| format!("{b:02x}")).collect())
+                    }
+                    Entry::Deleted { .. } => None,
+                };
+                (String::from_utf8_lossy(e.path()).into_owned(), hash)
+            })
+            .collect();
+        Snap {
+            tree: inputs.tree.clone(),
+            files,
+        }
+    }
+
+    /// The paths that differ between this snap and NOW, in git TOP: the commits' trees' changes, then an uncommitted
+    /// path changed, added or gone; sorted, each once.  Blocking.
+    fn moved(&self, now: &Snap, top: &Path) -> Vec<String> {
+        let mut out = std::collections::BTreeSet::new();
+        if self.tree != now.tree
+            && let Ok(o) = std::process::Command::new("git")
+                .args([
+                    "diff-tree",
+                    "-r",
+                    "--name-only",
+                    "-z",
+                    &self.tree,
+                    &now.tree,
+                ])
+                .current_dir(top)
+                .output()
+        {
+            out.extend(
+                o.stdout
+                    .split(|b| *b == 0)
+                    .filter(|p| !p.is_empty())
+                    .map(|p| String::from_utf8_lossy(p).into_owned()),
+            );
+        }
+        for path in self.files.keys().chain(now.files.keys()) {
+            if self.files.get(path) != now.files.get(path) {
+                out.insert(path.clone());
+            }
+        }
+        out.into_iter().collect()
+    }
+}
+
+/// PATHS for a reader: the first five, then how many more.
+fn some_paths(paths: &[String]) -> String {
+    let shown = paths.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+    match paths.len() {
+        n if n > 5 => format!("{shown} and {} more", n - 5),
+        _ => shown,
+    }
+}
+
+/// The git tree holding CWD, its key now (the commit's tree, plus the overlay's input key when anything is
+/// uncommitted) and the tree as read.  Blocking.
+fn tree_key_at(cwd: &Path) -> Option<(PathBuf, String, Snap)> {
+    let top = cwd
+        .ancestors()
+        .find(|d| d.join(".git").exists())?
+        .to_path_buf();
+    let inputs = sleipnir::sync::capture::capture(&top, &[]).ok()?;
+    let overlay =
+        (!inputs.manifest.is_empty()).then(|| sleipnir::sync::capture::input_key(&inputs));
+    let key = vordr::facts::tree_key(&inputs.tree, overlay.as_deref());
+    let snap = Snap::of(&inputs);
+    Some((top, key, snap))
 }
 
 fn now() -> f64 {
@@ -621,7 +780,7 @@ impl Runner {
     pub async fn start_or_reuse(&self, spec: ExecSpec) -> Result<(String, bool), Refusal> {
         let i = self.inner()?.clone();
         let facts = facts_of(&spec).await;
-        if let Some(f) = &facts
+        if let Some((f, _)) = &facts
             && vordr::facts::cacheable(&f.selector, &self.no_cache.lock().unwrap())
             && let Some(id) = i.green_with(f)
         {
@@ -640,6 +799,14 @@ impl Runner {
     /// stamp the runner's name); none for a job outside a git tree, a server, or an unknown job.
     pub fn facts(&self, id: &str) -> Option<vordr::facts::Facts> {
         self.inner.get()?.facts(id)
+    }
+
+    /// Job ID's tree moved while it ran: the files that changed (maybe none known) and the facts it had at submit.
+    pub fn moved(&self, id: &str) -> Option<(Vec<String>, vordr::facts::Facts)> {
+        let i = self.inner.get()?;
+        let files = i.moved(id)?;
+        let text = std::fs::read(i.dir(id).join(FACTS_MOVED)).ok()?;
+        Some((files, serde_json::from_slice(&text).ok()?))
     }
 
     /// What job ID is (its command, folder, kind and image), as saved when it started; none when it is unknown.
@@ -804,6 +971,12 @@ impl Inner {
         serde_json::from_str(&text).ok()
     }
 
+    /// The files [`MOVED`] names, when job ID's tree moved while it ran.
+    fn moved(&self, id: &str) -> Option<Vec<String>> {
+        let text = std::fs::read_to_string(self.dir(id).join(MOVED)).ok()?;
+        Some(text.lines().map(String::from).collect())
+    }
+
     fn facts(&self, id: &str) -> Option<vordr::facts::Facts> {
         let text = std::fs::read(self.dir(id).join(FACTS)).ok()?;
         let mut f: vordr::facts::Facts = serde_json::from_slice(&text).ok()?;
@@ -917,7 +1090,7 @@ impl Inner {
             .filter(|c| c.is_dir())
             .ok_or_else(|| refusal(format!("{} is not a folder", spec.cwd.display())))?;
         match (&spec.starter, spec.worktree.take()) {
-            (Starter::Session(_), Some(wt)) => {
+            (Starter::Session(_) | Starter::Sealed(_), Some(wt)) => {
                 let wt = std::fs::canonicalize(&wt)
                     .map_err(|_| refusal(format!("{} is not a folder", wt.display())))?;
                 if !cwd.starts_with(&wt) {
@@ -929,7 +1102,7 @@ impl Inner {
                 }
                 spec.worktree = Some(wt);
             }
-            (Starter::Session(_), None) => {
+            (Starter::Session(_) | Starter::Sealed(_), None) => {
                 return Err(refusal("a session's job needs its worktree"));
             }
             (Starter::User, _) => spec.worktree = Some(cwd.clone()),
@@ -947,11 +1120,11 @@ impl Inner {
         self.start_with(spec, facts).await
     }
 
-    /// Start SPEC, its FACTS (computed at submit) kept in the job's folder.
+    /// Start SPEC, its FACTS (computed at submit, with the tree they read) kept in the job's folder.
     async fn start_with(
         self: Arc<Self>,
         spec: ExecSpec,
-        facts: Option<vordr::facts::Facts>,
+        facts: Option<(vordr::facts::Facts, Snap)>,
     ) -> Result<String, Refusal> {
         if spec.argv.is_empty() || spec.argv[0].is_empty() {
             return Err(refusal("a job needs a command"));
@@ -960,8 +1133,9 @@ impl Inner {
         let id = self.new_id();
         let dir = self.dir(&id);
         std::fs::create_dir_all(&dir).map_err(|e| setup(format!("{}: {e}", dir.display())))?;
-        if let Some(f) = &facts {
+        if let Some((f, snap)) = &facts {
             let _ = std::fs::write(dir.join(FACTS), serde_json::to_vec(f).unwrap_or_default());
+            let _ = std::fs::write(dir.join(SNAP), serde_json::to_vec(snap).unwrap_or_default());
         }
         // The user's servers (no time box: the editor's, which run for days) never queue: they start at once and count
         // only in the memory the machine shows.  Every other job enters the queue.
@@ -976,8 +1150,10 @@ impl Inner {
             let _ = std::fs::remove_dir_all(&dir);
             return Err(e);
         }
-        // admitted at once: started here, so a refused launch is the start's answer
+        // admitted at once: started here, so a refused launch is the start's answer (the queue's tick, woken only
+        // now, finds it taken; one that waits is its)
         let t = self.queue.tick(now() as u64);
+        self.queue.wake_tick();
         let mut mine = None;
         for s in t.starts {
             if s == id {
@@ -1003,10 +1179,7 @@ impl Inner {
     fn enqueue(&self, id: &str, dir: &Path, spec: &ExecSpec) -> Result<(), Refusal> {
         let _ = dir;
         let started = now();
-        let session = match &spec.starter {
-            Starter::Session(s) => Some(s.clone()),
-            Starter::User => None,
-        };
+        let session = spec.starter.session();
         self.save_meta(&Meta {
             id: id.to_string(),
             session: session.clone(),
@@ -1026,9 +1199,11 @@ impl Inner {
             machine: None,
             priority: Some(spec.priority().number()),
             relay: None,
+            keyed: false,
         })?;
         self.live.add(id, session);
-        self.queue.submit(self.submit_of(id, spec), started as u64);
+        // the tick wakes after start's own: a job admitted at once is start's to launch
+        self.queue.enter(self.submit_of(id, spec), started as u64);
         Ok(())
     }
 
@@ -1073,10 +1248,7 @@ impl Inner {
         }
         Submit {
             id: id.to_string(),
-            session: match &spec.starter {
-                Starter::Session(s) => Some(s.clone()),
-                Starter::User => None,
-            },
+            session: spec.starter.session(),
             own: spec.priority(),
             spec: fspec,
             place,
@@ -1331,6 +1503,7 @@ impl Inner {
         id: &str,
         dir: &Path,
         spec: &ExecSpec,
+        keyed: Option<&KeySocket>,
     ) -> Result<(draugr::Spec, Option<net::JobNetwork>), Refusal> {
         let job = spec.container.as_ref().expect("a container job");
         let podman = self
@@ -1354,6 +1527,16 @@ impl Inner {
             subdir,
             job: id.to_string(),
             net: job.net.is_some(),
+            // each key in the variable of its name, as for a command job
+            keys: keyed.map(|k| container::KeyMounts {
+                helper: k.bin.clone(),
+                vars: spec
+                    .place
+                    .keys
+                    .iter()
+                    .map(|n| (n.clone(), n.clone()))
+                    .collect(),
+            }),
             runner: None,
         };
         let (p, reference) = (
@@ -1361,10 +1544,12 @@ impl Inner {
             container::resolve(&caps, &job.image)?.to_string(),
         );
         let shell = self.hooks.shell_env.clone();
-        // A granted network is this job's relay: its sidecar (joined with the host checks and the image pull) and its
-        // proxy, started before the job.  One that cannot be given refuses the job.
+        // A granted network, or keys, is this job's relay: its sidecar (joined with the host checks and the image pull)
+        // and its proxy (for keys alone, with no host allowed), started before the job; a keyed job's key streams are
+        // answered from the hub's keys.  One that cannot be given refuses the job.
         let mut relay = None;
-        if let Some(n) = job.net {
+        if job.net.is_some() || keyed.is_some() {
+            let n = job.net;
             let px_dir = self
                 .hooks
                 .px_dir
@@ -1382,12 +1567,15 @@ impl Inner {
                 &reference,
                 &dir.join("log"),
                 net::job_web(self.hooks.nevers.as_ref()),
+                keyed.map(|k| {
+                    Arc::new(keys::Source(k.keys.clone())) as Arc<dyn drgnx_px::owner::KeySource>
+                }),
             )
             .await?;
             caps.proxy = Some(job_net);
             // a session's job asks for a host port on a card; the session's grants apply live
-            if let (Starter::Session(sid), Some(cards), Some(events)) =
-                (&spec.starter, &self.hooks.cards, jn.take_events())
+            if let (Some(_), Starter::Session(sid), Some(cards), Some(events)) =
+                (n, &spec.starter, &self.hooks.cards, jn.take_events())
             {
                 let (task, _) =
                     hostgrants::start(cards.clone(), id, sid, jn.web().clone(), events).await;
@@ -1426,6 +1614,73 @@ impl Inner {
         ))
     }
 
+    /// Job ID's key socket (in DIR, or its session's folder), answered from the hub's keys, and `drgnx-key`.
+    fn key_socket(&self, id: &str, dir: &Path, spec: &ExecSpec) -> Result<KeySocket, Refusal> {
+        let bin = self
+            .hooks
+            .key_bin
+            .clone()
+            .filter(|b| b.is_file())
+            .ok_or_else(|| {
+                setup("drgnx-key was not found next to the hub: a keyed job can't get its keys")
+            })?;
+        let env = self.hooks.shell_env.paths_env();
+        let session = match &spec.starter {
+            Starter::Session(s) => Some(s.as_str()),
+            // a sealed job has no agent session: its key socket goes in the job's dir, as a user job's
+            Starter::User | Starter::Sealed(_) => None,
+        };
+        let path = keys::socket_path(&env, session, dir, id)
+            .ok_or_else(|| setup("the job's key socket has no path within a socket's length"))?;
+        if let Some(sid) = session {
+            runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), sid)
+                .map_err(|e| setup(format!("the session's folder: {e}")))?;
+        }
+        let jk = keys::JobKeys::new(
+            id,
+            spec.place.keys.clone(),
+            self.queue.keys().clone(),
+            dir,
+            sleipnir::keyline::KEY_WAIT,
+        );
+        let socket = keys::serve(&path, jk.clone())
+            .map_err(|e| setup(format!("the job's key socket {}: {e}", path.display())))?;
+        Ok(KeySocket {
+            socket: Some(socket),
+            keys: jk,
+            bin,
+        })
+    }
+
+    /// Container job ID's keys, answered through its sidecar, and its own copy (in DIR: the container relabels what it
+    /// mounts) of the static `drgnx-key` next to the hub.
+    fn container_keys(&self, id: &str, dir: &Path, spec: &ExecSpec) -> Result<KeySocket, Refusal> {
+        let from = self
+            .hooks
+            .px_dir
+            .as_deref()
+            .map(|d| d.join(keys::static_key_name(net::podman_arch())))
+            .filter(|b| b.is_file())
+            .ok_or_else(|| {
+                setup("the static drgnx-key was not found next to the hub: a keyed container job can't get its keys")
+            })?;
+        let bin = dir.join("drgnx-key");
+        // the container runs this copy: its write descriptor kept out of the hub's other forks (drgnx-exe)
+        drgnx_exe::copy(&from, &bin)
+            .map_err(|e| setup(format!("drgnx-key for the job ({}): {e}", from.display())))?;
+        Ok(KeySocket {
+            socket: None,
+            keys: keys::JobKeys::new(
+                id,
+                spec.place.keys.clone(),
+                self.queue.keys().clone(),
+                dir,
+                sleipnir::keyline::KEY_WAIT,
+            ),
+            bin,
+        })
+    }
+
     async fn launch(
         self: Arc<Self>,
         id: &str,
@@ -1437,26 +1692,49 @@ impl Inner {
         spec.argv = local_argv(&spec.argv, spec.place.suite.as_ref());
         let name = self.hooks.systemd.then(|| unit::unit_name(id));
         let mut relay = None;
+        // a keyed command job asks the hub for its keys on a socket of its own, through drgnx-key in front of it; a
+        // keyed container job asks its sidecar, through its copy of drgnx-key as the entrypoint
+        let keyed = if spec.place.keys.is_empty() {
+            None
+        } else if spec.container.is_some() {
+            Some(self.container_keys(id, dir, &spec)?)
+        } else {
+            let k = self.key_socket(id, dir, &spec)?;
+            spec.argv = keys::wrapped_argv(&k.bin, &spec.place.keys, &spec.argv);
+            Some(k)
+        };
+        let key_env = keyed.as_ref().and_then(|k| k.socket.as_ref()).map(|s| {
+            (
+                "DRGNX_KEY_SOCK".to_string(),
+                s.path().to_string_lossy().into_owned(),
+            )
+        });
         let (inner, status) = match &spec.starter {
             _ if spec.container.is_some() => {
-                let (s, r) = self.container_spec(id, dir, &spec).await?;
+                let (s, r) = self.container_spec(id, dir, &spec, keyed.as_ref()).await?;
                 relay = r;
                 (s, None)
             }
             // the conformance lane has no sandbox for a job: its jobs run as the user's do
-            Starter::Session(_) if unsandboxed_for_tests(&self.hooks) => (
+            Starter::Session(_) | Starter::Sealed(_) if unsandboxed_for_tests(&self.hooks) => (
                 plain_spec(&spec, agent_plain_env(&self.hooks.shell_env)),
                 None,
             ),
-            Starter::Session(sid) => {
+            // a sealed job's label keys its sandbox's folders as a session's id does
+            Starter::Session(sid) | Starter::Sealed(sid) => {
                 let worktree = spec
                     .worktree
                     .clone()
                     .ok_or_else(|| refusal("a session's job needs its worktree"))?;
                 // the lock's protected files stay read-only for a job as for the session itself
+                // the variables the start named (a sealed rerun's test selector; a session's job names none),
+                // then the key socket's, last, so a named variable never redirects it
+                let mut env = tool_env(&self.hooks.shell_env);
+                env.extend(spec.user.env.iter().cloned());
+                env.extend(key_env.clone());
                 let plan = LaunchPlan {
                     argv: spec.argv.iter().map(OsString::from).collect(),
-                    env: tool_env(&self.hooks.shell_env),
+                    env,
                     session_meta: None,
                     protected_ro: crate::agents::lock::PROTECTED_RO
                         .iter()
@@ -1469,12 +1747,22 @@ impl Inner {
                     ro_files: Vec::new(),
                     gateway_url_env: Vec::new(),
                 };
+                // the protected files the launch makes empty to pin them go at the job's end (`finish`), before its
+                // tree's key is read again: they were never the agent's
+                crate::sandbox::note_missing(&dir.join(STUBS), &worktree, &plan.protected_ro)
+                    .map_err(|e| setup(format!("the job's stub list: {e}")))?;
+                // a keyed job reads drgnx-key (the file alone) and reaches its key socket (the path alone)
                 let shape = SessionShape {
                     sid: sid.clone(),
                     cwd: spec.cwd.clone(),
                     write: vec![worktree],
-                    read: vec![],
+                    read: keyed.iter().map(|k| k.bin.clone()).collect(),
                     net: NetCell::ProviderAndPackages,
+                    sockets: keyed
+                        .iter()
+                        .filter_map(|k| k.socket.as_ref())
+                        .map(|s| s.path().to_path_buf())
+                        .collect(),
                     browser: None,
                 };
                 let l = launch::launch(&self.hooks.shell_env.paths_env(), &plan, &shape).await?;
@@ -1493,19 +1781,30 @@ impl Inner {
             inner.env.retain(|(n, _)| n != k.as_str());
             inner.env.push((k.into(), v.into()));
         }
+        // a sandboxed session's job got it in its plan; the others' environment is this one
+        if status.is_none()
+            && let Some((k, v)) = &key_env
+        {
+            inner.env.push((k.into(), v.into()));
+        }
         let memory = spec
             .user
             .memory_max
             .as_deref()
             .unwrap_or(self.hooks.memory.as_str());
-        let wrapped = unit::wrap(
+        let wrap = if keyed.is_some() {
+            unit::wrap_to_hub
+        } else {
+            unit::wrap
+        };
+        let wrapped = wrap(
             inner,
             dir,
             name.as_deref().map(|n| (n, memory)),
             spec.user.nice,
             &self.hooks.shell_env,
         );
-        let child = match draugr::spawn_pinned(wrapped).await {
+        let mut child = match draugr::spawn_pinned(wrapped).await {
             Ok(c) => c,
             Err(e) => {
                 if let Some(r) = relay {
@@ -1515,6 +1814,18 @@ impl Inner {
             }
         };
         let pid = child.id();
+        // a keyed job's output reaches its log only through the hub's redactor
+        let keyed = keyed.map(|k| {
+            let out = child.take_stdout().expect("the job's stdout");
+            let pump = crate::clock::spawn(
+                "exec:key-log",
+                keys::pump(out, dir.join("log"), k.keys.redactor()),
+            );
+            Keyed {
+                _socket: k.socket,
+                pump,
+            }
+        });
         // The sandbox helper reports on a pipe; a launch whose status is not read hangs (Task 10).
         if let Some(fd) = status {
             let log = dir.join("log");
@@ -1540,10 +1851,7 @@ impl Inner {
         let started = now();
         let mut meta = Meta {
             id: id.to_string(),
-            session: match &spec.starter {
-                Starter::Session(s) => Some(s.clone()),
-                Starter::User => None,
-            },
+            session: spec.starter.session(),
             kind: spec.kind.name().to_string(),
             argv: spec.argv.clone(),
             cwd: spec.cwd.display().to_string(),
@@ -1560,6 +1868,7 @@ impl Inner {
             machine: Some(queue::LOCAL.into()),
             priority: Some(spec.priority().number()),
             relay: relay.as_ref().map(|r| r.sidecar_name().to_string()),
+            keyed: keyed.is_some(),
         };
         self.save_meta(&meta)?;
         meta.entity = self.record_start(&meta).await;
@@ -1578,7 +1887,7 @@ impl Inner {
         crate::clock::spawn("exec:watch", async move {
             // a real wait (the child's end): a test's barrier waits for a job that ends, and names one that does not;
             // an advance does not wait for it (the job's time box may be what ends it)
-            crate::clock::real_long(me.clone().watch(&id, Some(child), relay)).await;
+            crate::clock::real_long(me.clone().watch(&id, Some(child), relay, keyed)).await;
             drop(permit);
             me.pump();
         });
@@ -1666,7 +1975,13 @@ impl Inner {
     /// Wait for the job to end (or its time box, or its relay), then record the end.  CHILD is the process this hub
     /// started; none: a job re-attached after a restart, watched by polling.  RELAY is a networked job's: when its
     /// channel ends first (or a graceful hub stop asks), the job ends `infra: proxy`.
-    async fn watch(self: Arc<Self>, id: &str, child: Option<draugr::Child>, relay: Option<Net>) {
+    async fn watch(
+        self: Arc<Self>,
+        id: &str,
+        child: Option<draugr::Child>,
+        relay: Option<Net>,
+        keyed: Option<Keyed>,
+    ) {
         let mut relay = relay;
         let mut acks = Vec::new();
         let Some(meta) = self.meta(id) else { return };
@@ -1743,6 +2058,13 @@ impl Inner {
         if let Some(r) = relay {
             r.net.end().await;
         }
+        // the log is whole before the result reads it; the key socket goes with the job
+        if let Some(k) = keyed {
+            let mut pump = k.pump;
+            if crate::clock::real_timeout(DRAIN, &mut pump).await.is_err() {
+                pump.abort();
+            }
+        }
         self.nets.lock().unwrap().remove(id);
         self.finish(id).await;
         for ack in acks {
@@ -1758,11 +2080,39 @@ impl Inner {
         }
         let Some(meta) = self.meta(id) else { return };
         let dir = self.dir(id);
+        crate::sandbox::remove_made(&dir.join(STUBS));
+        // a job here ran on its tree as it was while it ran (a runner's ran on the inputs frozen at its submit): when
+        // the tree's key moved since the submit, its facts go, so it is no one's evidence and never reused
+        if meta.machine.as_deref().is_none_or(|m| m == "local")
+            && let Some(f) = self.facts(id)
+        {
+            let cwd = PathBuf::from(&meta.cwd);
+            let key = f.tree_key.clone();
+            let before: Option<Snap> = std::fs::read(dir.join(SNAP))
+                .ok()
+                .and_then(|t| serde_json::from_slice(&t).ok());
+            // the files that changed: what a user adds to .gitignore when a run writes them
+            let moved = crate::clock::blocking(move || {
+                let (top, now, snap) = tree_key_at(&cwd)?;
+                (now != key).then(|| before.map(|b| b.moved(&snap, &top)).unwrap_or_default())
+            })
+            .await
+            .ok()
+            .flatten();
+            if let Some(files) = moved {
+                tracing::info!(
+                    "job {id}: its tree moved while it ran ({}): no facts kept",
+                    some_paths(&files)
+                );
+                let _ = std::fs::rename(dir.join(FACTS), dir.join(FACTS_MOVED));
+                let _ = std::fs::write(dir.join(MOVED), files.join("\n"));
+            }
+        }
         let exit = unit::read_exit(&dir);
         let status = match std::fs::read_to_string(dir.join("why")).as_deref() {
             Ok("stopped") => ExecStatus::Stopped,
             Ok("timed-out") => ExecStatus::TimedOut,
-            Ok(w) if w.starts_with(net::INFRA) => ExecStatus::Infra,
+            Ok(w) if w.starts_with("infra:") => ExecStatus::Infra,
             _ if exit.is_some() => ExecStatus::Done,
             _ => ExecStatus::Lost,
         };
@@ -1776,6 +2126,9 @@ impl Inner {
         // rows that ran over several attempts: the split first
         if let Ok(line) = std::fs::read_to_string(dir.join(SPLIT)) {
             summary.lines.insert(0, line);
+        }
+        if let Some(files) = self.moved(id) {
+            summary.lines.push(moved_line(&files));
         }
         // what a runner returned, and where it went
         if let Ok(text) = std::fs::read_to_string(dir.join(RETURNED)) {
@@ -1997,6 +2350,27 @@ impl Inner {
                     });
                     continue;
                 }
+                // a keyed job's key socket and log went with the last hub: it is ended, not adopted
+                if m.keyed {
+                    let me = self.clone();
+                    crate::clock::spawn("exec:end-keyed", async move {
+                        if let Some(p) = m.pid
+                            && m.start_time.is_some()
+                            && m.start_time == draugr::start_time(p).ok()
+                        {
+                            let _ = crate::clock::real(draugr::kill_group(
+                                p,
+                                Duration::from_secs(2),
+                                &draugr::RealSignaller,
+                            ))
+                            .await;
+                        }
+                        let dir = me.dir(&id);
+                        let _ = std::fs::write(dir.join("why"), KEYED_RESTART);
+                        me.finish(&id).await;
+                    });
+                    continue;
+                }
                 running.insert(id.clone());
                 // it still takes its room here
                 if m.timebox_s.is_some() {
@@ -2005,7 +2379,7 @@ impl Inner {
                 }
                 let me = self.clone();
                 crate::clock::spawn("exec:watch", async move {
-                    crate::clock::real_long(me.watch(&id, None, None)).await;
+                    crate::clock::real_long(me.watch(&id, None, None, None)).await;
                 });
             }
         }
@@ -2412,24 +2786,6 @@ fn net_hosts_of(c: Option<&ContainerJob>) -> Vec<String> {
     .unwrap_or_default()
 }
 
-/// Why a job with KEYS that reaches HOSTS can't run anywhere, given PINS: a keyed job runs only on a runner (its keys
-/// reach a runner's job only), and one that reaches a pinned name only here (a runner gets no pins).
-fn keyed_and_pinned(
-    keys: &[String],
-    hosts: &[String],
-    pins: &[(String, std::net::IpAddr)],
-) -> Option<String> {
-    if keys.is_empty() {
-        return None;
-    }
-    pinned_host(hosts, pins).map(|h| {
-        format!(
-            "this job has keys, so it runs only on a runner, but it reaches {h}, a pinned name on this machine's \
-             network that no runner reaches"
-        )
-    })
-}
-
 /// The first of HOSTS (`host:port`) whose name PINS pins (names compared as hosts are: case and a trailing dot aside).
 fn pinned_host(hosts: &[String], pins: &[(String, std::net::IpAddr)]) -> Option<String> {
     let norm = |n: &str| n.trim_end_matches('.').to_ascii_lowercase();
@@ -2539,6 +2895,43 @@ async fn decide_session_job(
 }
 
 pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Error> {
+    start_as(f, c, p, None).await
+}
+
+/// A job the hub starts for a command it doesn't trust (`orch::gates`' runs: the command an agent ran, or the pack's
+/// over a tree an agent wrote; a bisect's predicate).  It runs in an agent's sandbox (the Session launch shape) with
+/// the tree TREE its only writable folder, on this machine, as [`Starter::Sealed`] `sealed-LABEL`: no session holds
+/// it, so its events reach no agent; the hub's own decision, so no matrix cell is asked.
+pub struct Sealed {
+    /// Letters, digits, `-` and `_`: the job's sandbox folders are keyed by it.
+    pub label: String,
+    pub tree: PathBuf,
+}
+
+/// `exec/start` of the sealed job S, made by the hub (P names no priority, keys or network).
+pub async fn start_sealed(f: &Front, s: &Sealed, mut p: StartParams) -> Result<Started, Error> {
+    if s.label.is_empty()
+        || !s
+            .label
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(crate::agents::session::invalid(
+            "label",
+            "a sealed job's label: letters, digits, - and _",
+        ));
+    }
+    // a runner elsewhere would not run it in this sandbox
+    p.local_only = Some(true);
+    start_as(f, &crate::runner::user(), p, Some(s)).await
+}
+
+async fn start_as(
+    f: &Front,
+    c: &Caller,
+    p: StartParams,
+    gate: Option<&Sealed>,
+) -> Result<Started, Error> {
     // the hub sets an agent's job's priority; only the user's connections choose one
     if c.sid.is_some() && p.priority.is_some() {
         return Err(crate::agents::session::invalid(
@@ -2546,9 +2939,17 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
             "only the user's connections set a job's priority (background lowers it)",
         ));
     }
-    // an agent's job never changes the user's packages: the hub's rule, whatever the sandbox would let through
-    if c.sid.is_some() {
+    // an agent's job never changes the user's packages: the hub's rule, whatever the sandbox would let through (a
+    // gate's run is an agent's command)
+    if c.sid.is_some() || gate.is_some() {
         let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
+        // nor pushes: a push goes through the session's shell tool, where the push gate and the matrix see it
+        if crate::orch::push::parse(&argv.join(" ")) != crate::orch::push::Parsed::NotPush {
+            return Err(error(
+                ErrorCode::NotAllowed,
+                "argv: a job never pushes; push from your shell tool, where the push gate judges each ref it sends",
+            ));
+        }
         if let Some(why) = packages::changes_packages(&argv) {
             return Err(error(
                 ErrorCode::NotAllowed,
@@ -2596,14 +2997,16 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         .map(|c| PathBuf::from(c.as_str()))
         .ok_or_else(|| error(ErrorCode::InvalidParams, "cwd: the folder the job runs in"))?;
     // A session's job works in the session's own worktree (or a folder inside it), whatever folder the request names.
-    let worktree = match &c.sid {
-        Some(sid) => Some(f.core.agents.worktree(sid).ok_or_else(|| {
+    // A gate's run works in its detached tree.
+    let worktree = match (gate, &c.sid) {
+        (Some(g), _) => Some(g.tree.clone()),
+        (None, Some(sid)) => Some(f.core.agents.worktree(sid).ok_or_else(|| {
             error(
                 ErrorCode::NotAllowed,
                 format!("session {sid} is not held by this hub"),
             )
         })?),
-        None => None,
+        (None, None) => None,
     };
     let cwd = match &worktree {
         Some(wt) => confined(&cwd, wt)?,
@@ -2665,13 +3068,11 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
             "os: a macos job runs on a Mac runner, never in a container or on this machine only",
         ));
     }
-    if let Some(c) = &container
-        && let Some(why) = keyed_and_pinned(&place.keys, &net_hosts_of(Some(c)), &c.caps.pins)
-    {
-        return Err(error(ErrorCode::InvalidParams, why));
-    }
     let spec = ExecSpec {
-        starter: c.sid.clone().map_or(Starter::User, Starter::Session),
+        starter: match gate {
+            Some(g) => Starter::Sealed(format!("sealed-{}", g.label)),
+            None => c.sid.clone().map_or(Starter::User, Starter::Session),
+        },
         cwd,
         worktree,
         argv: p.argv.iter().map(|a| a.to_string()).collect(),

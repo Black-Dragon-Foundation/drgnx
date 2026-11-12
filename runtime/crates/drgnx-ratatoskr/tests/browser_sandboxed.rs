@@ -113,6 +113,7 @@ fn the_host_starts_under_its_layer() {
         write: vec![b.join("wt")],
         read: vec![data.clone()],
         net: NetCell::ProviderOnly,
+        sockets: vec![],
         browser: None,
     };
     let sb = Sandbox::detect(Tier::Full, helper_at(Path::new(RATATOSKR)), None)
@@ -260,7 +261,7 @@ fn launch_with(agent: &str, probe: bool) -> Launched {
             built.display()
         );
         std::fs::create_dir_all(b.join("bin")).unwrap();
-        std::fs::copy(&built, b.join("bin/gleipnir-probe")).unwrap();
+        drgnx_exe::copy(&built, &b.join("bin/gleipnir-probe")).unwrap();
         read.push(b.join("bin"));
     }
     let shape = SessionShape {
@@ -269,6 +270,7 @@ fn launch_with(agent: &str, probe: bool) -> Launched {
         write: vec![b.join("wt")],
         read,
         net: NetCell::ProviderOnly,
+        sockets: vec![],
         browser: Some(sandbox::BrowserShape {
             program: data.join("fake-chromium.sh"),
             kind: drgnx_ratatoskr::browser::resolve::Kind::Full,

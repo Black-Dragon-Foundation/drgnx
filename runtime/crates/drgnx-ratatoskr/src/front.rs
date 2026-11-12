@@ -941,8 +941,34 @@ impl Front {
             | Params::DebugControl(_)
             | Params::DebugSelect(_)
             | Params::DebugTrust(_)
+            | Params::DebugInstall(_)
+            | Params::DebugSource(_)
             | Params::DebugBreakpoints(_)
             | Params::DebugRunToCursor(_)) => crate::debug::wire::serve(self, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
+            // what-if forks (`debug/fork*`, `debug/compare`)
+            p @ (Params::DebugFork(_)
+            | Params::DebugForkRun(_)
+            | Params::DebugForkDrop(_)
+            | Params::DebugCompare(_)) => crate::debug::fork_wire::serve(self, p).await,
+            // recorded runs and probes (`debug/run*`, `debug/probe/op`)
+            p @ (Params::DebugProbeOp(_)
+            | Params::DebugRunsList(_)
+            | Params::DebugRunGet(_)
+            | Params::DebugRunStop(_)
+            | Params::DebugRunPin(_)) => crate::debug::runs_wire::serve(self, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
+            // bisect over the edit history (`debug/bisect*`)
+            p @ (Params::DebugBisect(_)
+            | Params::DebugBisectCancel(_)
+            | Params::DebugBisectNarrow(_)
+            | Params::DebugBisectStates(_)) => crate::debug::bisect_wire::serve(self, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
+            // where a value came from (`debug/origin`)
+            p @ Params::DebugOrigin(_) => crate::debug::origin_wire::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
             // the Extensions view's catalog (`extensions/*`)

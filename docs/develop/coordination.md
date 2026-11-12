@@ -535,6 +535,8 @@ same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 21 tools, or th
   (`[{session, text}]`, cleaned and cut to 280 characters); at most 3 a session. Each change goes to the editors as a
   `card` event (`Hub::card_event`); `Sessions::end` calls `session_ended`, which drops the session's quotes and
   withdraws a card left with none.
+- `procedure_get` (`tools/procedure.rs`, every agent's): the session's job's rule-pack procedure by `name`, or the
+  names there are; the text is the pack's as the job's approval froze it (`orchestration.md`, "The rule pack").
 - `hello` keeps its first text item and adds a second one and `structuredContent.brief`; `record_decision` takes
   `about: [id]`.
 - `task_read find` ranks by words (FTS) and says `vectors: "behind N"` while entities in the caller's scope (its
@@ -659,7 +661,9 @@ reviewer is left alone); a reached budget pauses the job and makes its `budget` 
 
 `complete_task` from an agent of a job puts the task `in-review`, not `done`, and `update_task` there takes only
 `running`, `needs-input` and `in-review`; the reviewer's verdict decides. The merge is a git process of its own and the
-task shows `merging` meanwhile; one merge at a time in a job's worktree (two at once fail on its HEAD, `cannot lock
+task shows `checking` while the gates look, then `merging`. The mark is set before the merge's task starts, so a
+`job/stop` from then on waits for it and the merge reads the job's status after it; a `BusyMark` clears it however
+the task ends, a panic too (unit test `a_mark_whose_work_panicked_is_cleared`). One merge at a time in a job's worktree (two at once fail on its HEAD, `cannot lock
 ref`), so a task whose review passes while another merges waits, `queued` (stopping the job empties the queue); a merge
 that fails with no unmerged files is no conflict: it goes once more after what merges then, and fails again into a
 `merge-failed` card titled `merge failed: <git output>` (Merge again, Drop, Open — no agent is sent to resolve a
@@ -724,7 +728,9 @@ proposal).
   carries them); the third failure is a `review` card. **No verdict:** a `review` card. A reviewer that is lost (the job
   stopped, the hub restarted) is started again, three times.
 - **Merge.** One merge at a time per job, in a task of its own (the task shows `merging`). The job's branch is checked
-  out in `<runs root>/<job>/_job`. The reviewer's pass is written as `accepted` review marks for every changed file at
+  out in `<runs root>/<job>/_job`, made by one caller at a time (`review::branch_tree`; the manager's merges too: two
+  `worktree add`s at once had the loser remove the winner's folder, leaving it registered but missing), and made again
+  after a `worktree prune` when git still lists it but its folder is gone. The reviewer's pass is written as `accepted` review marks for every changed file at
   its current diff hash (unless the job's gate is `review+accept`: then only the user's marks count and the task waits).
   `RunGit::merge_gate` answers: `Allow` merges exactly the checked tip (`merge_into`: `merge --no-ff`); `Never` is a
   `review` card; `Ask(card)` (CI or build files changed) waits for the matrix card: answered yes, the next tick

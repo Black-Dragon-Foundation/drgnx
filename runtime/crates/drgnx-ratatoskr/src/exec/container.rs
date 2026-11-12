@@ -16,7 +16,8 @@ use std::path::Path;
 use std::time::Duration;
 
 pub use sleipnir::linux::podman::{
-    CONTROLLERS, Caps, ContainerReq, JobNet, NetNames, PIDS, WORK, limits_enforced, net_names,
+    CONTROLLERS, Caps, ContainerReq, JobNet, KeyMounts, NetNames, PIDS, WORK, limits_enforced,
+    net_names,
 };
 
 fn refuse(message: impl Into<String>) -> Refusal {
@@ -249,6 +250,7 @@ mod tests {
             subdir: PathBuf::new(),
             job: "x1a".into(),
             net: false,
+            keys: None,
             runner: None,
         }
     }
@@ -372,20 +374,12 @@ mod name_and_pull_tests {
     use super::*;
     use std::path::PathBuf;
 
-    /// A fake `podman` running BODY. Written under another name and put in place by `install`, a process of its own:
-    /// a write fd to it held here would be inherited by a child another test thread forks meanwhile, and exec'ing the
-    /// script while that child holds it fails with ETXTBSY ("Text file busy").
+    /// A fake `podman` running BODY, written through `drgnx_exe`: a write fd to it held here would be inherited by a
+    /// child another test thread forks meanwhile, and exec'ing the script while that child holds it fails with ETXTBSY
+    /// ("Text file busy").
     fn script(dir: &Path, body: &str) -> PathBuf {
-        let src = dir.join("podman.src");
-        std::fs::write(&src, format!("#!/bin/sh\n{body}\n")).unwrap();
         let p = dir.join("podman");
-        let ok = std::process::Command::new("install")
-            .arg("-m755")
-            .arg(&src)
-            .arg(&p)
-            .status()
-            .unwrap();
-        assert!(ok.success(), "install the fake podman");
+        drgnx_exe::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
         p
     }
 

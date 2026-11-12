@@ -9,7 +9,7 @@
 //! - **js-debug:** the hub starts `node RUNTIME-ARGS… --inspect-brk=127.0.0.1:SECOND PROGRAM ARGS…`, which waits at
 //!   its first line, and the attach names that port. Children call `inspector.open(0)`: the preload
 //!   (`etc/debug-node-preload.js`, first in `NODE_OPTIONS`) maps it to the block's remaining ports, each claimed
-//!   with an O_EXCL file under the session's tmp, so the block's size caps the children (six). js-debug's
+//!   with an O_EXCL file under the session's tmp; a seventh child runs without the debugger and says so. js-debug's
 //!   bootloader reaches the program only after the attach, while it runs: the preload makes a child started before
 //!   that wait for it (`DRGNX_DEBUG_WAIT_BOOTLOADER`).
 //! - Every other adapter is refused here (lldb-dap runs outside the sandbox on macOS; delve needs ptrace).
@@ -287,6 +287,8 @@ pub struct Blocked {
     base: Vec<(OsString, OsString)>,
     cwd: PathBuf,
     _block: Option<Block>,
+    /// The adapter's process group, once it runs: a child's connection checks the port's listener against it.
+    adapter_group: Mutex<Option<i32>>,
 }
 
 impl Blocked {
@@ -302,6 +304,7 @@ impl Blocked {
             base,
             cwd,
             _block: block,
+            adapter_group: Mutex::new(None),
         }
     }
 
@@ -404,25 +407,61 @@ fn local(port: u16) -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], port))
 }
 
+/// Waits (at most WITHIN) until PORT listens with every listener in GROUP (a process the hub started leads its own):
+/// the hub connects to it, or starts a program that will, only then. A stranger's listener (the probe and the bind
+/// are apart) is an error at once, never connected to.
+async fn wait_owned(port: u16, group: i32, within: Duration) -> Result<(), String> {
+    let deadline = crate::clock::now() + within;
+    loop {
+        let owned = crate::clock::blocking(move || super::ports::owned(port, &[group]))
+            .await
+            .map_err(|e| e.to_string())??;
+        if owned {
+            return Ok(());
+        }
+        if crate::clock::now() >= deadline {
+            return Err(format!(
+                "nothing listened on port {port} of the session's block within {} s",
+                within.as_secs()
+            ));
+        }
+        crate::clock::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 impl Launcher for Blocked {
     fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
         Box::pin(async move {
             let slot: Arc<Mutex<Option<draugr::Child>>> = Arc::default();
             // js-debug's program waits at its first line for the attach: it starts first
             if self.plan.debuggee.after_listen.is_none() {
-                let d = start_debuggee(self.debuggee_spec()?).await?;
+                let mut d = start_debuggee(self.debuggee_spec()?).await?;
+                // its inspector's port, which the adapter attaches to
+                if let Some(b) = self.plan.arguments.get("port").and_then(Value::as_u64)
+                    && let Err(e) = wait_owned(b as u16, d.id(), DEBUGGEE_LISTEN_WITHIN).await
+                {
+                    Proc::signal(&mut d, Sig::Kill);
+                    Proc::wait(&mut d).await;
+                    return Err(e);
+                }
                 *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(d);
             }
             let adapter = draugr::spawn(self.spec(&self.plan.adapter, &[], &self.cwd)?)
                 .await
                 .map_err(|e| format!("{}: {e}", self.plan.adapter[0]))?;
             let adapter_pid = adapter.id();
+            *self.adapter_group.lock().unwrap_or_else(|e| e.into_inner()) = Some(adapter_pid);
             let mut pair = Pair {
                 adapter,
                 debuggee: slot.clone(),
                 starter: None,
             };
-            let s = match super::wire::connect_tcp(local(self.plan.port)).await {
+            let connected =
+                match wait_owned(self.plan.port, adapter_pid, DEBUGGEE_LISTEN_WITHIN).await {
+                    Ok(()) => super::wire::connect_tcp(local(self.plan.port)).await,
+                    Err(e) => Err(e),
+                };
+            let s = match connected {
                 Ok(s) => s,
                 Err(e) => {
                     pair.signal(Sig::Kill);
@@ -431,14 +470,13 @@ impl Launcher for Blocked {
                 }
             };
             // debugpy's program connects once, without retrying: it starts when the adapter listens for it (after
-            // the attach); a connection that only probes is dropped by debugpy and it goes on listening
+            // the attach), the listener checked to be the adapter's
             if let Some(port) = self.plan.debuggee.after_listen {
                 let spec = self.debuggee_spec()?;
                 let slot = slot.clone();
                 pair.starter = Some(crate::clock::spawn("debug:debuggee-start", async move {
-                    match super::wire::connect_tcp_within(local(port), DEBUGGEE_LISTEN_WITHIN).await
-                    {
-                        Ok(probe) => drop(probe),
+                    match wait_owned(port, adapter_pid, DEBUGGEE_LISTEN_WITHIN).await {
+                        Ok(()) => {}
                         Err(e) => {
                             tracing::debug!(target: "drgnx::debug", "the program was not started: {e}");
                             let _ = draugr::Signaller::kill(
@@ -469,6 +507,9 @@ impl Launcher for Blocked {
     /// js-debug's children (`startDebugging`) are second connections to the adapter's port.
     fn child(&self) -> BoxFut<'_, Result<Connected, String>> {
         Box::pin(async move {
+            let group = (*self.adapter_group.lock().unwrap_or_else(|e| e.into_inner()))
+                .ok_or("the session's adapter is not running")?;
+            wait_owned(self.plan.port, group, DEBUGGEE_LISTEN_WITHIN).await?;
             Ok(super::wire::over_tcp(
                 super::wire::connect_tcp(local(self.plan.port)).await?,
                 Box::new(NoProc),

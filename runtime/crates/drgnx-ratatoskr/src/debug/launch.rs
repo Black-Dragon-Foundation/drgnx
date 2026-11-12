@@ -36,8 +36,8 @@ impl std::fmt::Display for ParseError {
     }
 }
 
-/// Read launch.json's TEXT.
-pub fn parse(text: &str) -> Result<LaunchFile, ParseError> {
+/// TEXT as VS Code reads its JSON files: comments and trailing commas, nothing looser.
+pub fn jsonc(text: &str) -> Result<Value, ParseError> {
     let opts = jsonc_parser::ParseOptions {
         allow_comments: true,
         allow_trailing_commas: true,
@@ -50,12 +50,16 @@ pub fn parse(text: &str) -> Result<LaunchFile, ParseError> {
         allow_extended_string_escapes: false,
         allow_non_finite_numbers: false,
     };
-    let v: Value = jsonc_parser::parse_to_serde_value(text, &opts).map_err(|e| ParseError {
+    jsonc_parser::parse_to_serde_value(text, &opts).map_err(|e| ParseError {
         line: e.line_display(),
         col: e.column_display(),
         message: e.kind().to_string(),
-    })?;
-    let Value::Object(top) = v else {
+    })
+}
+
+/// Read launch.json's TEXT.
+pub fn parse(text: &str) -> Result<LaunchFile, ParseError> {
+    let Value::Object(top) = jsonc(text)? else {
         return Err(ParseError {
             line: 1,
             col: 1,

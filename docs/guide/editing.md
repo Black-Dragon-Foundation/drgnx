@@ -49,15 +49,34 @@ re-indented on save. A formatter that is not installed, or fails, leaves the fil
 
 ## Debugging
 
-**Start Debugging…** runs a debug session through dape, which speaks the Debug Adapter Protocol: the adapters VS
-Code uses — debugpy for Python, the JavaScript/TypeScript debugger, delve for Go, codelldb for C, C++ and Rust — work
-here once installed (dape's documentation lists how to get each). While the session is stopped the same command
-continues; **Toggle Breakpoint**, **Step Over**, **Step Into**, **Step Out** and **Stop Debugging** do what they say.
-If you used dape, **Convert dape Configurations…** (the palette) turns your `dape-configs` into launch configurations
-once.
-In the VS Code key profile: F5, F9, F10, F11 (Step Into while a session runs — Zen Mode otherwise), S-F11, S-F5; the
-Emacs and Vim profiles reach them in the palette. dape's windows (scopes, stack, breakpoints, the REPL) open on the
-right, so the panel stays the workbench's. Module `extra/debug`, package `dape`.
+**Start Debugging…** runs a debug session through drgnx's own client of the Debug Adapter Protocol, so the adapters
+VS Code uses work here: debugpy for Python, the JavaScript/TypeScript debugger, delve for Go, CodeLLDB or lldb-dap for
+C, C++ and Rust. It offers the project's configurations: those of `.vscode/launch.json` (read as VS Code reads it,
+comments, `${…}` variables, `inputs` and platform sections included), your own in the setting `debug.configurations`,
+and a default for the file's language when there is neither. A configuration's `preLaunchTask` (and `postDebugTask`)
+runs from `.vscode/tasks.json` first; a failing task stops the start and says why. The first start in a folder asks
+you to trust it (**Trust This Folder**): an untrusted folder's configurations never run.
+
+**Install Adapter…** (the palette) downloads the JavaScript debugger or CodeLLDB, checked against the version drgnx
+pins, or puts debugpy into drgnx's own Python, and names the system package to install for the others (`drgnx doctor`
+lists which are found).
+
+A stop opens its file at the line, marked by an amber arrow and band; a caller frame you pick is marked green, and a
+stop on an exception is red, with a card under the line saying what was raised (code with no file, such as an
+`eval`, opens read-only from the debugger). Set `drgnx-debug-focus-on-stop` to bring Emacs to the front on a stop.
+While the session is stopped the same command continues; **Toggle Breakpoint**, **Step Over**, **Step Into**,
+**Step Out** and **Stop Debugging** do what they say. If you used dape, **Convert dape Configurations…** (the palette)
+turns your `dape-configs` into launch configurations once (dape itself is no longer needed).
+In the VS Code key profile: F5, F9, F10, F11 (Step Into while a session runs — Zen Mode otherwise), S-F11, S-F5,
+C-S-F5 (**Restart**), F6 (**Pause**, while a session runs); the Emacs and Vim profiles reach them in the palette.
+Module `extra/debug`; it needs no package.
+
+While a session runs, a toolbar floats over the editor: Continue (Pause while the program runs), the three steps,
+Restart and Stop (Disconnect when you attached to a running program). Drag it sideways by its grip; it stays where
+you put it in that frame. With two sessions or more, its chip picks the one the controls and keys act on. The setting
+`drgnx-debug-toolbar` docks it in the editor's tab row (`docked`) or hides it (`hidden`); a terminal frame has no
+toolbar. The status bar names the session and its state, and a **Paused** chip in the title row takes you back to the
+stopped line.
 
 Breakpoints live in a column left of the line numbers, kept per project (they survive restarts and reach a running
 session at once). Click the column to add or remove one, shift-click for a logpoint (a message printed instead of
@@ -68,6 +87,49 @@ editing keeps its breakpoint, which takes the new line when you save. `drgnx-deb
 column shows (`auto`: while the file has breakpoints or a session runs). Keys: VS Code F9 and C-F10 (Run to Cursor);
 Emacs `C-x C-a` and `C-b` (toggle), `C-c` (condition), `C-l` (logpoint), `C-e` (enable), `C-u` (Run to Cursor), as
 GUD has them; Vim `SPC d` and `b`, `B`, `l`, `e`, `c`.
+
+Every session is recorded, against a snapshot of the files as they were when it started. **Add Probe…** records an
+expression each time its line runs, without stopping the program and without printing anything; **Probe the
+Result…** records what the line assigns, on the next line that runs (a probe runs before its line). A probe is a
+ring with a dot in its own column, and its newest values show at the line's end as a sparkline and the last value.
+**Show Stop Timeline** opens a strip at the top: the run's stops, numbered (a dot for a breakpoint, a small dot for a
+step, a triangle for an exception), and one lane per probe. Click a stop (or `RET` on it), or press `Alt ←` / `Alt →` in the strip or
+a past stop, to open it read-only: the file as it ran under a banner (it says "not what ran" when
+the file was unsaved at the start), the stop's line marked with its variables, and the stack and variables as they
+were in a window beside it. `Alt →` past the newest stop, **Back to Live** (the palette) or the banner's button returns.
+Recorded runs hold your program's values, so they stay yours: agents cannot read them. They are kept 14 days (a pinned
+run, or one for an open task, longer), at most 2 GB per project, oldest first. Probes need an adapter with logpoints
+(debugpy and the JavaScript debugger take 2000 values a second, the rest 200, and delve and codelldb stop and resume
+the program for each one; values past the rate are thinned and counted).
+
+**What-if forks** (Linux): from a stop of a recorded run, **Fork from Here…** replays the run in a sealed copy of the
+project as it was when the run started, up to that point (the same stop, or the same pass of that line), and then
+changes what you choose: a value (`item.reserve` → `0`), the code, or nothing (a replay). It runs on to the next
+stop, the end, or a probe's next hit, and the **What-if** tab shows it beside the run: "matched on N of M hits" (how
+far the copy did what the run did before the point, and the first value that differed if one did), each probe's
+values after the point, then and now, and how each side went on. For a code what-if the fork's copy opens first
+(**Open Fork** finds this file there); edit it and **Run Fork**; **Take Fork's Change…** shows each file it changed
+as a diff and puts the fork's text into your buffer (undoable, not saved). **Drop Fork** removes one.
+The copy cannot reach the network or write outside itself; your `.env` files are read in place, never copied. Python
+(debugpy) and JavaScript (js-debug) only: Go and native programs need `ptrace`, which the sandbox never allows, and
+macOS forks wait for a sandbox rule of their own. A run whose configuration resolves differently now (an input, a
+setting, launch.json) is refused, and a point the run took over a minute to reach asks first.
+
+**Find the Change That Broke It…** (the palette) answers "which change broke it?". Pick a state where it worked (a
+commit, a recorded run's start, one of your saves or an agent's step) and a command that fails now, such as a test
+(exit 0 passes, 125 skips the state, 1–127 fails). The hub runs it over the states in between, three at a time,
+each in a copy of the project moved from state to state, and a card shows a dot per state and then the first bad one:
+what it was, who made it (you, an agent with its step and decision, or a commit's author), and a warning when a state
+gave different answers twice (flaky) or could not be judged. **Show Step** opens the change as a diff; for an agent's
+step, **Revert Step** opens the revert card (nothing changes until you apply it) and **Ask the Agent** tells that
+agent what broke; **Narrow** finds the hunks of the change that make it fail. `RET` on an action runs it.
+
+**Where Did This Come From?** (Alt-click a name at a recorded stop, or the palette) shows, for a Python program, the
+chain that gave a value: the line that last set it, with the values of what it was computed from, then where each of
+those came from, up to three levels. The hub replays the recorded run to that stop with a small tracer on, one replay
+a level, so the chain is exact; a change made inside a call (`items.append(x)`) shows as "changed inside
+`list.append`". `RET` on a link opens it as a past stop. Python older than 3.12 has no tracing hook: the card then
+lists the assignments to the name in the files that ran, labelled "candidates, not traced".
 
 ## Indent guides
 

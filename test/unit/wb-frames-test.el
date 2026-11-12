@@ -4,6 +4,7 @@
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 (require 'drgnx-frames)
 (require 'drgnx-persist)
 
@@ -59,6 +60,7 @@ only notes the frame in `drgnx-frames-test--synced' (the frames are symbols)."
   "A budget: every emacsclient request (`emacsclient -e', a file shown in a window already there) ends in
 `server-delete-client'.  A client that made no frame closes no window, so the check before it conses nothing
 \(`frame-parameter' of `client' copies each frame's whole parameter list)."
+  (drgnx-test-compile "drgnx-persist-")        ; measured as users run it, not interpreted from source
   (let ((proc (make-pipe-process :name "drgnx-test-client" :noquery t))
         ;; compiled, so the loop itself conses nothing; the difference to an empty loop is the calls' own
         (conses (byte-compile (lambda (proc n) (let ((c (car (memory-use-counts))))

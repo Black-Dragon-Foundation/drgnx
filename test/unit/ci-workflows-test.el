@@ -20,7 +20,21 @@
   "The text of .github/actions/NAME/action.yml, or nil outside a checkout that has it."
   (drgnx-ci-test--file (concat ".github/actions/" name "/action.yml")))
 
-(defconst drgnx-ci-test--actions '("build-test-bins" "fetch-test-bins" "test-image" "gate" "test-elpa"))
+(defconst drgnx-ci-test--actions
+  '("build-test-bins" "fetch-test-bins" "test-image" "gate" "test-elpa" "macos-runtime" "sccache"))
+
+(defconst drgnx-ci-test--uses-action "uses: \\./\\(?:drgnx/\\)?\\.github/actions/\\([a-z0-9-]+\\)\n"
+  "A step that runs a local action (the tiers check drgnx out under drgnx/).")
+
+(defun drgnx-ci-test--inline-actions (text)
+  "TEXT with the text of each local action it runs after the step that runs it: a composite action's steps run
+there, so what a job does includes them (and theirs)."
+  (replace-regexp-in-string
+   drgnx-ci-test--uses-action
+   (lambda (step)
+     (string-match drgnx-ci-test--uses-action step)
+     (concat step (drgnx-ci-test--inline-actions (or (drgnx-ci-test--action (match-string 1 step)) ""))))
+   text t t))
 
 (defun drgnx-ci-test--has (text &rest needles)
   (dolist (n needles) (should (string-search n text))))
@@ -31,6 +45,10 @@
     (should start)
     (let ((end (string-match "\n  [a-z0-9-]+:\n" yml (1+ start))))
       (substring yml start end))))
+
+(defun drgnx-ci-test--job-run (yml id)
+  "What job ID in YML runs: its text with the local actions it runs inlined."
+  (drgnx-ci-test--inline-actions (drgnx-ci-test--job yml id)))
 
 ;; The tiers: one definition (drgnx-tiers.yml) of drgnx's Emacs-side jobs, called by drgnx's push workflows on the
 ;; pinned release and by Nidhogg's CI on the tarballs it built (docs/develop/ci.md, "The tiers workflow").
@@ -283,7 +301,7 @@ Returns (EXIT . OUTPUT)."
     (skip-unless (and rt packages))
     (should list)
     (dolist (job '("linux" "macos"))
-      (let* ((text (drgnx-ci-test--job rt job))
+      (let* ((text (drgnx-ci-test--job-run rt job))
              (fetch (string-search "models.sh ../test-models\n" text))
              (test (string-search "--no-fail-fast --" text)))
         (drgnx-ci-test--has text "key: models-${{ hashFiles('.github/ci/models.txt') }}\n" "enableCrossOsArchive: true\n"
@@ -296,7 +314,7 @@ Returns (EXIT . OUTPUT)."
     (should (string-search "run: cargo test --locked --no-fail-fast --workspace --doc " (drgnx-ci-test--job rt "linux")))
     (should-not (string-search "DRGNX_TEST_ADAPTER:" (drgnx-ci-test--job rt "macos")))
     ;; drgnx-term's vttest rows need vttest on the Mac too, before the workspace's tests
-    (let* ((mac (drgnx-ci-test--job rt "macos")) (vt (string-search "run: brew install vttest\n" mac)))
+    (let* ((mac (drgnx-ci-test--job-run rt "macos")) (vt (string-search "run: brew install vttest\n" mac)))
       (should (and vt (< vt (string-search "--no-fail-fast --manifest-path runtime/Cargo.toml --workspace" mac)))))
     (drgnx-ci-test--has packages "vulkan-loader mesa-vulkan-drivers")
     (should (string-search "https://huggingface.co/$repo/resolve/$rev/$name" (drgnx-ci-test--file ".github/ci/models.sh")))))
@@ -410,7 +428,7 @@ Returns (EXIT . OUTPUT)."
   (dolist (spec '(("drgnx-tiers.yml" "macos" "bin/drgnx test") ("runtime.yml" "macos" "cargo test")))
     (let ((yml (drgnx-ci-test--yml (nth 0 spec))))
       (skip-unless yml)
-      (let* ((job (drgnx-ci-test--job yml (nth 1 spec)))
+      (let* ((job (drgnx-ci-test--job-run yml (nth 1 spec)))
              (select (string-search "sudo xcode-select -s /Library/Developer/CommandLineTools" job))
              (tests (string-search (nth 2 spec) job)))
         (should select)
@@ -538,7 +556,11 @@ Returns (EXIT . OUTPUT)."
         (should (string-match "^ *key: \\(.*\\)$" head))
         (let ((key (match-string 1 head)))
           (should (or (string-search "hashFiles(" key)
-                      (string-match-p "\\`\\${{ steps\\.[a-z-]+\\.outputs\\.cache-primary-key }}\\'" key))))
+                      (string-match-p "\\`\\${{ steps\\.[a-z-]+\\.outputs\\.cache-primary-key }}\\'" key)
+                      ;; the macOS jobs' setup action passes its registry restore's key out
+                      (and (string-match-p "\\`\\${{ steps\\.[a-z-]+\\.outputs\\.registry-key }}\\'" key)
+                           (string-search "  registry-key:\n    description: the cargo registry cache's key, for the job that saves it\n    value: ${{ steps.registry.outputs.cache-primary-key }}\n"
+                                          (drgnx-ci-test--action "macos-runtime"))))))
         (when (string-match "^ *restore-keys: \\(.*\\)$" head)
           (let ((rk (match-string 1 head)))
             (should (or (string-search "hashFiles(" rk)
@@ -606,7 +628,9 @@ Returns (EXIT . OUTPUT)."
   (let ((rt (drgnx-ci-test--yml "runtime.yml")) (tiers (drgnx-ci-test--yml "drgnx-tiers.yml"))
         (sh (drgnx-ci-test--file "test/container/nidhogg.sh")))
     (skip-unless (and rt tiers sh))
-    (dolist (job (list (drgnx-ci-test--job rt "macos") (drgnx-ci-test--job tiers "macos")))
+    ;; runtime.yml: the conformance and perf jobs, which run Nidhogg (its tests job needs none)
+    (dolist (job (list (drgnx-ci-test--job-run rt "macos-conformance") (drgnx-ci-test--job-run rt "macos-perf")
+                       (drgnx-ci-test--job-run tiers "macos")))
       (drgnx-ci-test--has job "path: ${{ runner.temp }}/nidhogg-downloads"
                           "key: nidhogg-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('"
                           "NIDHOGG_DOWNLOADS: ${{ runner.temp }}/nidhogg-downloads"
@@ -649,13 +673,16 @@ Returns (EXIT . OUTPUT)."
   ;; every job that restores runtime/target gives the files their last commit's time before cargo runs (and has the
   ;; history for it), and records the commit its saved target was built from, only when every step before passed (a
   ;; half-done build stamped with its commit would pass its stale outputs off as fresh); the registry is its own entry
-  (dolist (yml (list (drgnx-ci-test--yml "runtime.yml") (drgnx-ci-test--action "build-test-bins")))
+  ;; (a job that only restores, as the macOS conformance and perf jobs, prunes and stamps nothing: it saves no target)
+  (dolist (yml (list (drgnx-ci-test--inline-actions (drgnx-ci-test--yml "runtime.yml"))
+                     (drgnx-ci-test--action "build-test-bins")))
     (skip-unless yml)
     (let ((restores (length (drgnx-ci-test--matches "uses: actions/cache/restore@[^\n]*\n *with:\n *path: \\(\\(?:\\${{ inputs\\.dir }}/\\)?runtime/target\\)\n" yml)))
+          (prunes (drgnx-ci-test--matches "\\(cargo-prune\\.sh\"? [^\n]*runtime/target\\)" yml))
           (stamps (drgnx-ci-test--matches "^\\(.*rev-parse HEAD > [^\n]*runtime/target/\\.drgnx-built-from.*\\)$" yml)))
       (should (> restores 0))
       (should (= restores (length (drgnx-ci-test--matches "\\(commit-times\\.sh runtime/target/\\.drgnx-built-from\\)" yml))))
-      (should (= restores (length stamps)))
+      (should (= (length prunes) (length stamps)))
       (dolist (s stamps)
         (should (string-match-p "if \\[ \"\\${{ \\(?:job\\.status\\|steps\\.build\\.outcome\\) }}\" = success \\]; then" s)))
       (should-not (string-match-p "path: |\n *~/\\.cargo/registry/index\n *~/\\.cargo/registry/cache\n *\\(?:\\${{ inputs\\.dir }}/\\)?runtime/target" yml))))

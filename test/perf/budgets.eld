@@ -20,6 +20,16 @@
  ;; graphical debugging's breakpoint column (300 marks while scrolling; F9 on 20 lines): input within a frame
  (debug-gutter-scroll (:input :p95) 16) (debug-gutter-scroll (:input :max) 50)
  (debug-breakpoint-click (:input :p95) 16) (debug-breakpoint-click (:input :max) 50)
+ ;; a step's stop drawn (spec §5): the arrow, band and point moved within a frame (16 ms p95, from the event)
+ (debug-step-line (:input :p95) 16) (debug-step-line (:input :max) 50)
+ ;; the toolbar shown or hidden with the session (spec §12: 5 ms, the child frame reused)
+ (debug-toolbar-show (:input :p95) 5) (debug-toolbar-show (:input :max) 50)
+ ;; recorded runs (spec §19.9): a batch of probe hits to the sparklines within 100 ms at 2,000 hits a second; a scrub to a
+ ;; past stop (the file as it ran, its line, banner and variables) within 50 ms.  The hub's two rows, the launch snapshot
+ ;; (150 ms p95, 5,000 files unchanged) and a stop's capture (1 ms), are the bench `debug_record' (docs/develop/perf.md)
+ (debug-probe-flood (:input :p95) 100) (debug-probe-flood (:input :max) 200)
+ (debug-scrub (:input :p95) 50) (debug-scrub (:input :max) 100)
+ (debug-bisect-typing (:input :p95) 16) (debug-bisect-typing (:input :max) 50)
  (live-view (:input :p95) 16) (live-view (:input :max) 50)
  (agent-settings-open (:draw_ms) 150) (agent-settings-open (:processes) 0)
  ;; the unified settings layer (design 16): read+apply of a 200-entry settings.el 2 ms; the page open 100 ms and a search

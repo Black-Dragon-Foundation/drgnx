@@ -1,22 +1,26 @@
-;;; drgnx-debug.el --- Module extra/debug: a debugger (dape, the Debug Adapter Protocol) -*- lexical-binding: t -*-
+;;; drgnx-debug.el --- Module extra/debug: a debugger (the hub's, the Debug Adapter Protocol) -*- lexical-binding: t -*-
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; Debugging through dape — the Debug Adapter Protocol, so the same adapters as VS Code (debugpy, the JS debugger,
-;; delve, codelldb, …) — with VS Code's keys in that profile: F5 starts (or continues), F9 toggles a breakpoint,
-;; F10 steps over, F11 steps into while a session runs (Zen Mode otherwise), S-F11 steps out, S-F5 stops.  dape's
-;; windows go to the right, so the panel stays the workbench's.  See docs/guide/editing.md.
+;; Debugging through the hub's DAP client (docs/develop/debugging.md) — the Debug Adapter Protocol, so the same
+;; adapters as VS Code (debugpy, the JS debugger, delve, CodeLLDB, …) — with VS Code's keys in that profile: F5 starts
+;; (or continues), F9 toggles a breakpoint, F10 steps over, F11 steps into while a session runs (Zen Mode otherwise),
+;; S-F11 steps out, S-F5 stops.  The sessions are what the hub's `debug-state' last said.  See docs/guide/editing.md.
 
 ;;; Code:
+(require 'seq)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-debug-gutter (expand-file-name "drgnx-debug-gutter" (file-name-directory (macroexp-file-name))))
-(declare-function dape--live-connection "dape")
-(declare-function dape "dape")
-(declare-function dape-continue "dape")
-(defvar dape-active-mode)
-(defvar dape-buffer-window-arrangement)
+(require 'drgnx-debug-fork (expand-file-name "drgnx-debug-fork" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-debug-timeline (expand-file-name "drgnx-debug-timeline" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-debug-bisect (expand-file-name "drgnx-debug-bisect" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-debug-origin (expand-file-name "drgnx-debug-origin" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-debug-toolbar (expand-file-name "drgnx-debug-toolbar" (file-name-directory (macroexp-file-name))))
+(defvar drgnx-statusbar-left)
+(declare-function drgnx-hub-call "drgnx-hub-client")
+(defvar drgnx-hub-event-functions)
 
 (defvar drgnx-debug-session-map (make-sparse-keymap)
   "Keys while a debugging session runs (key profiles: `:map drgnx-debug-session-map').")
@@ -25,9 +29,56 @@
   "On while a debugging session runs: its keys (`drgnx-debug-session-map') come first."
   :global t :group 'drgnx :keymap drgnx-debug-session-map)
 
-(defun drgnx-debug--follow-session ()
-  "`dape-active-mode-hook': the session keys while a session runs."
-  (drgnx-debug-session-mode (if (and (boundp 'dape-active-mode) dape-active-mode) 1 -1)))
+(defvar drgnx-debug--sessions nil
+  "The debug sessions as the hub's `debug-state' last said: plists (:id :name :parent :root :state :attach …).")
+
+(defvar drgnx-debug--focus nil
+  "The id of the session picked on the toolbar's chip (`drgnx-debug-toolbar-pick-session'), or nil: the commands act
+on it while it lives.")
+
+(defun drgnx-debug--event (event data)
+  "`drgnx-hub-event-functions': `debug-state' gives the sessions (the session keys, the toolbar and the status bar
+follow them, a running session's stop marks go), `debug-frame' marks and opens a stop's line, `debug-ended' takes its
+marks away."
+  (pcase event
+    ("debug-state"
+     (setq drgnx-debug--sessions (append (plist-get data :sessions) nil))
+     (unless (seq-find (lambda (s) (equal (plist-get s :id) drgnx-debug--focus)) drgnx-debug--sessions)
+       (setq drgnx-debug--focus nil))
+     (drgnx-debug-session-mode (if drgnx-debug--sessions 1 -1))
+     (drgnx-debug-gutter-stop-sessions drgnx-debug--sessions)
+     (drgnx-debug-toolbar-sync))
+    ("debug-frame" (drgnx-debug-gutter-show-frame data))
+    ("debug-ended" (drgnx-debug-gutter-stop-clear (plist-get data :session)))))
+
+(defun drgnx-debug--session (&optional state)
+  "The session the commands act on: the picked one (`drgnx-debug--focus') when it is in STATE (any, STATE nil), else
+this project's session in STATE, or (STATE nil) its stopped one, else its first; nil when there is none."
+  (let ((focus (and drgnx-debug--focus
+                    (seq-find (lambda (s) (equal (plist-get s :id) drgnx-debug--focus)) drgnx-debug--sessions)))
+        (mine (seq-filter (lambda (s) (equal (plist-get s :root) (drgnx-debug-launch-root))) drgnx-debug--sessions)))
+    (or (and focus (or (null state) (equal (plist-get focus :state) state)) focus)
+        (seq-find (lambda (s) (equal (plist-get s :state) (or state "stopped"))) mine)
+        (and (not state) (car mine)))))
+
+(defun drgnx-debug--answered (_result error)
+  "A `debug/control' answer: its ERROR in the echo area."
+  (when error (message "Debug: %s" error)))
+
+(defun drgnx-debug-control (op)
+  "OP (`next', `step-in', `step-out', `stop', …: `debug/control') on this project's session."
+  (let ((s (drgnx-debug--session)))
+    (unless s (user-error "No debug session in this project"))
+    (drgnx-hub-call "debug/control" (list :session (plist-get s :id) :op op) #'drgnx-debug--answered)))
+
+(defun drgnx-debug-step-over () "To the next line." (interactive) (drgnx-debug-control "next"))
+(defun drgnx-debug-step-in () "Into the call on this line." (interactive) (drgnx-debug-control "step-in"))
+(defun drgnx-debug-step-out () "Out of this function." (interactive) (drgnx-debug-control "step-out"))
+(defun drgnx-debug-stop () "End the session." (interactive) (drgnx-debug-control "stop"))
+(defun drgnx-debug-restart () "Start the session again." (interactive) (drgnx-debug-control "restart"))
+(defun drgnx-debug-pause () "Stop the running program where it is." (interactive) (drgnx-debug-control "pause"))
+(defun drgnx-debug-disconnect () "Leave an attached program running and end the session." (interactive)
+       (drgnx-debug-control "disconnect"))
 
 (defvar drgnx-debug-mode-map (make-sparse-keymap)
   "Keys of the module (key profiles: `:map drgnx-debug-mode-map'); the Emacs profile's `C-x C-a' keys live here, so a
@@ -38,11 +89,17 @@ loaded gud's own `C-x C-a' in `global-map' loses to them.")
   (when buffer-file-name (drgnx-debug-gutter-mode 1)))
 
 (define-minor-mode drgnx-debug-mode
-  "The module's own state: its keys (`drgnx-debug-mode-map') and the breakpoint column in every file's buffer."
+  "The module's own state: its keys (`drgnx-debug-mode-map') and the breakpoint column in every file's buffer; off,
+the toolbar's cards go too."
   :global t :group 'drgnx :keymap drgnx-debug-mode-map
   (if drgnx-debug-mode
-      (add-hook 'find-file-hook #'drgnx-debug--gutter-on)
-    (remove-hook 'find-file-hook #'drgnx-debug--gutter-on))
+      (progn (add-hook 'find-file-hook #'drgnx-debug--gutter-on)
+             (add-hook 'drgnx-hub-event-functions #'drgnx-debug--event))
+    (remove-hook 'find-file-hook #'drgnx-debug--gutter-on)
+    (remove-hook 'drgnx-hub-event-functions #'drgnx-debug--event)
+    (drgnx-debug-gutter-stop-clear-all)
+    (drgnx-debug-toolbar-delete-all)
+    (setq drgnx-debug--sessions nil drgnx-debug--focus nil))
   (dolist (b (buffer-list))
     (with-current-buffer b
       (cond ((and drgnx-debug-mode buffer-file-name) (drgnx-debug-gutter-mode 1))
@@ -51,6 +108,9 @@ loaded gud's own `C-x C-a' in `global-map' loses to them.")
 (defun drgnx-debug--teardown ()
   "The session keys go with the module (a running session turned them on, not the setup), and the column."
   (drgnx-debug-session-mode -1)
+  (drgnx-debug-timeline-mode -1)
+  (drgnx-debug-bisect-events-mode -1)
+  (drgnx-debug-origin-events-mode -1)
   (drgnx-debug-mode -1))
 
 (defun drgnx-debug-breakpoint-conditional ()
@@ -77,21 +137,20 @@ loaded gud's own `C-x C-a' in `global-map' loses to them.")
   (drgnx-debug-gutter-run-to-cursor (line-number-at-pos)))
 
 (defun drgnx-debug-start-or-continue ()
-  "Continue the stopped session, or start one (dape asks which configuration)."
+  "Continue this project's stopped session, or start one (a configuration is picked)."
   (interactive)
-  (if (and (fboundp 'dape--live-connection) (dape--live-connection 'stopped t))
-      (call-interactively #'dape-continue)
-    (call-interactively #'dape)))
+  (if-let* ((s (drgnx-debug--session "stopped")))
+      (drgnx-hub-call "debug/control" (list :session (plist-get s :id) :op "continue") #'drgnx-debug--answered)
+    (let ((root (drgnx-debug-launch-root)))
+      (drgnx-debug-launch-start root (drgnx-debug-launch-read-config root)))))
 
 (drgnx-module-define 'extra/debug
-                     :doc "A debugger (dape, Debug Adapter Protocol): breakpoints, stepping, VS Code's keys in that profile."
-                     :stage 'idle :packages '(dape)
+                     :doc "A debugger (the hub's, Debug Adapter Protocol): breakpoints, stepping, VS Code's keys in that profile."
+                     :stage 'idle
                      :teardown #'drgnx-debug--teardown
                      :setup (lambda ()
-                              (require 'dape)
-                              (drgnx-module-set 'dape-buffer-window-arrangement 'right)   ; the panel stays the workbench's
-                              (add-hook 'dape-active-mode-hook #'drgnx-debug--follow-session)
                               (drgnx-debug-mode 1)
+                              (add-hook 'drgnx-hub-event-functions #'drgnx-debug-fork--event)
                               (pcase-dolist (`(,id ,title ,fn ,doc)
                                              '((debug-start "Start Debugging…" drgnx-debug-start-or-continue "Start a session, or continue the stopped one")
                                                (debug-breakpoint "Toggle Breakpoint" drgnx-debug-gutter-toggle "A breakpoint on this line, or none")
@@ -99,11 +158,53 @@ loaded gud's own `C-x C-a' in `global-map' loses to them.")
                                                (debug-logpoint "Add Logpoint…" drgnx-debug-logpoint "Print a message here instead of stopping")
                                                (debug-breakpoint-enable "Enable / Disable Breakpoint" drgnx-debug-breakpoint-enable "Keep this line's breakpoint but stop or start using it")
                                                (debug-run-to-cursor "Run to Cursor" drgnx-debug-run-to-cursor "Continue until this line")
-                                               (debug-step-over "Step Over" dape-next "To the next line")
-                                               (debug-step-in "Step Into" dape-step-in "Into the call on this line")
-                                               (debug-step-out "Step Out" dape-step-out "Out of this function")
-                                               (debug-stop "Stop Debugging" dape-kill "End the session")
+                                               (debug-step-over "Step Over" drgnx-debug-step-over "To the next line")
+                                               (debug-step-in "Step Into" drgnx-debug-step-in "Into the call on this line")
+                                               (debug-step-out "Step Out" drgnx-debug-step-out "Out of this function")
+                                               (debug-stop "Stop Debugging" drgnx-debug-stop "End the session")
+                                               (debug-restart "Restart" drgnx-debug-restart "Start the session again (the adapter's restart, else stop and start)")
+                                               (debug-pause "Pause" drgnx-debug-pause "Stop the running program where it is")
+                                               (debug-disconnect "Disconnect" drgnx-debug-disconnect "End an attach session and leave the program running")
+                                               (debug-show-stop "Go to the Stopped Line" drgnx-debug-toolbar-show-stop "Show the line the session stopped at")
+                                               (debug-pick-session "Select Debug Session…" drgnx-debug-toolbar-pick-session "Choose the session the controls act on")
+                                               (debug-install-adapter "Install Adapter…" drgnx-debug-install-adapter "Download and install a debug adapter, checked against its pinned hash")
+                                               (debug-fork "Fork from Here…" drgnx-debug-fork "Replay the recorded run in a sealed copy to this point, change a value or the code, and run on")
+                                               (debug-fork-show "Show What-if" drgnx-debug-fork-show "A fork beside its run: matched hits, the first difference, the values after")
+                                               (debug-fork-open "Open Fork" drgnx-debug-fork-open "This file as the fork has it, to edit a code what-if")
+                                               (debug-fork-run "Run Fork" drgnx-debug-fork-run "Run a code what-if once its tree is edited")
+                                               (debug-fork-take "Take Fork's Change…" drgnx-debug-fork-take "Each file the fork changed as a review card: Apply puts it in your buffer")
+                                               (debug-fork-drop "Drop Fork" drgnx-debug-fork-drop "The fork goes, with its tree")
                                                (debug-convert-dape "Convert dape Configurations…" drgnx-debug-convert-dape-configs "Turn your dape configurations into launch configurations, once")))
+                                (drgnx-command-define id :category "Debug" :title title :command fn :doc doc))
+                              ;; the toolbar (drgnx-debug-toolbar.el): docked in the tab row, the status bar's segment
+                              ;; after the branch, the title row's Paused chip
+                              (drgnx-module-set 'drgnx-chrome-tab-row-function #'drgnx-debug-toolbar--tab-row)
+                              ;; the cards follow their editor windows (moved, resized, another editor chosen)
+                              (when (fboundp 'drgnx-state-subscribe)
+                                (dolist (e '(windows-changed frame-resized editor-changed))
+                                  (drgnx-state-subscribe e 'drgnx-debug-toolbar--replace)))
+                              (drgnx-module-set 'drgnx-topline-paused-function #'drgnx-debug-toolbar-paused-p)
+                              (when (fboundp 'drgnx-statusbar-define-segment)
+                                (drgnx-statusbar-define-segment 'debug :fn #'drgnx-debug-toolbar--segment
+                                                                :click 'drgnx-debug-view
+                                                                :help "The debug session: click for Run and Debug")
+                                (unless (memq 'debug drgnx-statusbar-left)
+                                  (let ((tail (cdr (memq 'branch drgnx-statusbar-left))))
+                                    (drgnx-module-set 'drgnx-statusbar-left
+                                                      (if (memq 'branch drgnx-statusbar-left)
+                                                          (append (butlast drgnx-statusbar-left (length tail)) '(debug) tail)
+                                                        (cons 'debug drgnx-statusbar-left))))))
+                              ;; recorded runs: probes, the stop timeline, past stops (drgnx-debug-timeline.el)
+                              (drgnx-debug-timeline-mode 1)
+                              (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-timeline-commands)
+                                (drgnx-command-define id :category "Debug" :title title :command fn :doc doc))
+                              ;; which change broke it: bisect over the edit history (drgnx-debug-bisect.el)
+                              (drgnx-debug-bisect-events-mode 1)
+                              (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-bisect-commands)
+                                (drgnx-command-define id :category "Debug" :title title :command fn :doc doc))
+                              ;; where did this come from: the origin trail (drgnx-debug-origin.el)
+                              (drgnx-debug-origin-events-mode 1)
+                              (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-origin-commands)
                                 (drgnx-command-define id :category "Debug" :title title :command fn :doc doc))))
 
 (provide 'drgnx-debug)

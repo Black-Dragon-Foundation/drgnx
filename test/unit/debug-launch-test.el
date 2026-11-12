@@ -178,3 +178,24 @@ holds (METHOD . PARAMS) of every call, in order."
       (delete-directory dir t))))
 
 ;;; debug-launch-test.el ends here
+
+;;;; Debug: Install Adapter
+
+(ert-deftest drgnx-debug-launch/install-lists-installable-and-asks-the-hub ()
+  "Only built-in adapters with an :install entry are offered; the hub gets the id and your own adapters."
+  (let* ((dir (make-temp-file "dbg" t))
+         (table (expand-file-name "a.eld" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file table
+            (insert "((:id \"js-debug\" :name \"JS\" :install (:url \"https://x\" :sha256 \"00\" :into \"js\"))\n"
+                    " (:id \"gdb\" :name \"GDB\" :install (:system \"dnf install gdb\"))\n"
+                    " (:id \"plain\" :name \"Plain\")\n"
+                    " (:id \"java\" :name \"J\" :not-built-in t :install (:system \"x\")))\n"))
+          (should (equal (drgnx-debug-launch-installable table) '(("JS" . "js-debug") ("GDB" . "gdb")))))
+      (delete-directory dir t)))
+  (let ((drgnx-debug-adapters '((:id "mine" :name "Mine" :types ("m")))))
+    (debug-launch-test--with-hub nil
+      (drgnx-debug-install-adapter "js-debug")
+      (should (equal calls '(("debug/install" :adapter "js-debug"
+                              :adapters [(:id "mine" :name "Mine" :types ["m"])])))))))

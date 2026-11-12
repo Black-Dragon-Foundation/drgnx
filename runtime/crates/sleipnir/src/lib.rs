@@ -10,6 +10,7 @@
 //! - `proto`: the hub–runner protocol: the frames and their wire. Pure.
 //! - the job helper (`helper`, Linux): a job's keys in locked memory behind its key socket, and its disk watch, with
 //!   `linux`; its network proxy (Gleipnir's, on tokio) with `runner`.
+//! - `keyline`, always: the key socket's request and answers, shared with the hub's key socket for its own machine.
 //! - `runner` (default): the binary's modes.
 //! - `test-hooks`: test-only entry points, compiled away otherwise.
 
@@ -19,6 +20,7 @@ pub mod bench;
 pub mod darwin;
 #[cfg(all(feature = "linux", target_os = "linux"))]
 pub mod helper;
+pub mod keyline;
 #[cfg(feature = "linux")]
 pub mod linux;
 #[cfg(feature = "runner")]

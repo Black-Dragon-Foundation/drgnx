@@ -106,8 +106,10 @@ fn write(dir: &Path, name: &str, text: &str) -> PathBuf {
     p
 }
 
-/// Runs CONFIG of the adapter ID found at FOUND with a breakpoint at CHILD:LINE; the stop's line, the listeners
-/// while stopped, the block's ports, and the session's tmp.
+/// Runs CONFIG of the adapter ID found at FOUND with a breakpoint at CHILD:LINE in a block of LEN ports; once
+/// stopped (and, with WAIT_FOR, once that file exists) the stop's line, the listeners, the block's ports, and the
+/// session's tmp.
+#[allow(clippy::too_many_arguments)]
 async fn run(
     id: &str,
     found: Found,
@@ -115,10 +117,12 @@ async fn run(
     dir: &Path,
     child: &Path,
     line: u32,
+    len: u16,
+    wait_for: Option<&Path>,
 ) -> (i64, Vec<u16>, Vec<u16>, PathBuf) {
     let table = Table::builtin();
     let adapter = table.by_id(id).unwrap();
-    let blocks = Blocks::default();
+    let blocks = Blocks::new(super::ports::RANGE, len);
     let block = blocks.claim().unwrap();
     let ports = block.ports();
     let tmp = dir.join("tmp");
@@ -164,6 +168,14 @@ async fn run(
     let sid = d.start(1, &root, start, launcher).await.unwrap();
     let file = child.file_name().unwrap().to_string_lossy().into_owned();
     let stopped = stop_in(&ev, &file).await;
+    if let Some(f) = wait_for {
+        for _ in 0..3000 {
+            if f.exists() {
+                break;
+            }
+            crate::clock::sleep(Duration::from_millis(20)).await;
+        }
+    }
     let held = listeners();
     d.control(
         &sid,
@@ -216,6 +228,8 @@ async fn debugpy_stops_in_a_subprocess_with_every_listener_in_the_block() {
         &dir,
         &child,
         4,
+        super::ports::LEN,
+        None,
     )
     .await;
     assert_eq!(line, 4);
@@ -251,6 +265,8 @@ async fn js_debug_stops_in_a_child_forked_at_once_with_every_listener_in_the_blo
         &dir,
         &child,
         3,
+        super::ports::LEN,
+        None,
     )
     .await;
     assert_eq!(line, 3);
@@ -267,4 +283,59 @@ async fn js_debug_stops_in_a_child_forked_at_once_with_every_listener_in_the_blo
         })
         .unwrap_or_default();
     assert_eq!(claims, [format!("port-{}", ports[2])]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: js-debug in the adapter image, alone (see the module's doc)"]
+async fn a_child_past_the_blocks_ports_runs_without_the_debugger_and_says_so() {
+    let dir = live_dir("js7");
+    // a block of three ports: the adapter's, the program's, one child's. The first child takes it (it has said
+    // "up" once its debugger is there), the second gets none
+    write(
+        &dir,
+        "parent.js",
+        "const cp = require('child_process'), path = require('path');\n\
+         const a = cp.fork(path.join(__dirname, 'child.js'));\n\
+         a.once('message', () => cp.fork(path.join(__dirname, 'second.js')));\n",
+    );
+    let child = write(
+        &dir,
+        "child.js",
+        "process.send('up');\nlet total = 0;\nfor (let i = 0; i < 5; i++) total += i;\nconsole.log(total);\n",
+    );
+    write(
+        &dir,
+        "second.js",
+        "require('fs').writeFileSync(require('path').join(__dirname, 'second.out'), String(require('inspector').url()));\n",
+    );
+    let js = std::env::var("DRGNX_DEBUG_LIVE_JS_DEBUG")
+        .unwrap_or_else(|_| "/opt/js-debug/src/dapDebugServer.js".into());
+    let config = json!({"type": "pwa-node", "request": "launch", "name": "js",
+                        "program": dir.join("parent.js"), "cwd": dir});
+    let out = dir.join("second.out");
+    let (line, held, ports, tmp) = run(
+        "js-debug",
+        Found::Program(js.into()),
+        config,
+        &dir,
+        &child,
+        3,
+        3,
+        Some(&out),
+    )
+    .await;
+    assert_eq!(line, 3);
+    assert!(
+        held.iter().all(|p| ports.contains(p)),
+        "{ports:?}: {held:?}"
+    );
+    // the second child ran, with no inspector, and said why
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), "undefined");
+    let refused: Vec<String> = std::fs::read_dir(tmp.join(blocked::CLAIMS_DIR))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("refused-"))
+        .collect();
+    assert_eq!(refused.len(), 1, "{refused:?}");
 }

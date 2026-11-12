@@ -9,6 +9,10 @@ pub mod agents;
 pub mod config;
 pub mod coord;
 pub mod debug;
+pub mod debug_bisect;
+pub mod debug_fork;
+pub mod debug_origin;
+pub mod debug_runs;
 pub mod editor;
 pub mod exec;
 pub mod extensions;
@@ -302,8 +306,24 @@ params! {
     DebugControl(debug::DebugControl),
     DebugSelect(debug::DebugSelect),
     DebugTrust(debug::DebugTrust),
+    DebugInstall(debug::DebugInstall),
+    DebugSource(debug::DebugSource),
     DebugBreakpoints(debug::DebugBreakpoints),
     DebugRunToCursor(debug::DebugRunToCursor),
+    DebugFork(debug_fork::DebugFork),
+    DebugForkRun(debug_fork::DebugForkId),
+    DebugForkDrop(debug_fork::DebugForkId),
+    DebugCompare(debug_fork::DebugCompare),
+    DebugProbeOp(debug_runs::DebugProbeOp),
+    DebugRunsList(debug_runs::DebugRunsList),
+    DebugRunGet(debug_runs::DebugRunGet),
+    DebugRunStop(debug_runs::DebugRunStop),
+    DebugRunPin(debug_runs::DebugRunPin),
+    DebugBisect(debug_bisect::DebugBisect),
+    DebugBisectCancel(debug_bisect::DebugBisectId),
+    DebugBisectNarrow(debug_bisect::DebugBisectId),
+    DebugBisectStates(debug_bisect::DebugBisectStates),
+    DebugOrigin(debug_origin::DebugOrigin),
     SearchQuery(search::QueryParams),
     SearchStatus(search::RootParams),
     SearchIndex(search::IndexParams),
@@ -423,6 +443,10 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(history::methods());
     v.extend(pair::methods());
     v.extend(debug::methods());
+    v.extend(debug_fork::methods());
+    v.extend(debug_runs::methods());
+    v.extend(debug_bisect::methods());
+    v.extend(debug_origin::methods());
     v
 }
 

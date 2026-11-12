@@ -54,6 +54,18 @@ fn git(
     Ok(String::from_utf8_lossy(&out).trim().to_string())
 }
 
+/// GIT ARGS in the repository REPO (a shadow repository, or a project's git directory read through a temporary INDEX
+/// with WORKTREE as its work tree), with the same environment as the snapshots' own: its output, trimmed.  For the
+/// debug bisect's trees (`debug::bisect`).
+pub fn run_git(
+    repo: &Path,
+    worktree: Option<&Path>,
+    index: Option<&Path>,
+    args: &[&str],
+) -> Result<String, String> {
+    git(repo, worktree, index, args)
+}
+
 /// [`git`]'s output as it is: not trimmed, not decoded.
 fn git_bytes(
     repo: &Path,
@@ -312,10 +324,7 @@ fn write_tree_in(
     key: &str,
     extra: &[String],
 ) -> Result<String, String> {
-    if !repo.join("HEAD").exists() {
-        std::fs::create_dir_all(repo).map_err(|e| format!("{}: {e}", repo.display()))?;
-        git(repo, None, None, &["init", "--bare", "-q", "."])?;
-    }
+    made(repo)?;
     let index = repo.join(format!("index-{}", safe(key)));
     let mut add: Vec<String> = ["add", "-A", "--ignore-errors", "--", "."]
         .iter()
@@ -325,6 +334,37 @@ fn write_tree_in(
     let add: Vec<&str> = add.iter().map(String::as_str).collect();
     git(repo, Some(worktree), Some(&index), &add)?;
     git(repo, Some(worktree), Some(&index), &["write-tree"])
+}
+
+/// The shadow repository REPO, made when it is missing: `git init` in a folder of its own beside it, then renamed into
+/// place, so snapshots taken at once (a turn's and a base's, a session's first two) never init the same folder, where
+/// one's template copy fails on the other's files.  A rename that loses to another's leaves that one.
+fn made(repo: &Path) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    if repo.join("HEAD").exists() {
+        return Ok(());
+    }
+    let parent = repo.parent().ok_or("a shadow repository needs a folder")?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    let mut name = repo.file_name().unwrap_or_default().to_owned();
+    name.push(format!(
+        ".init-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let tmp = parent.join(name);
+    let _ = std::fs::remove_dir_all(&tmp);
+    let done = std::fs::create_dir(&tmp)
+        .map_err(|e| format!("{}: {e}", tmp.display()))
+        .and_then(|()| git(&tmp, None, None, &["init", "--bare", "-q", "."]))
+        .and_then(|_| match std::fs::rename(&tmp, repo) {
+            Ok(()) => Ok(()),
+            Err(_) if repo.join("HEAD").exists() => Ok(()),
+            Err(e) => Err(format!("{}: {e}", repo.display())),
+        });
+    let _ = std::fs::remove_dir_all(&tmp);
+    done
 }
 
 /// The tree of WORKTREE as it is when it is made, kept as `refs/drgnx/base/<hash>` in its shadow repository: the base
@@ -564,6 +604,25 @@ pub fn keep(root: &Path, worktree: &Path, name: &str, tree: &str) -> Result<(), 
     .map(drop)
 }
 
+/// A tree of WORKTREE written through the persistent index of KEY and kept as the ref NAME (`refs/drgnx/…`) of its
+/// shadow repository under ROOT, so it is never pruned (a debug run's launch snapshot); answers the tree id. Blocking.
+pub fn take_kept(root: &Path, worktree: &Path, key: &str, name: &str) -> Result<String, String> {
+    let (repo, tree) = write_tree(root, worktree, key, &[])?;
+    git(&repo, None, None, &["update-ref", name, &tree])?;
+    Ok(tree)
+}
+
+/// The ref NAME of WORKTREE's shadow repository under ROOT gone (its tree is collected with the next prune). Blocking.
+pub fn drop_kept(root: &Path, worktree: &Path, name: &str) -> Result<(), String> {
+    git(
+        &repo_of(root, worktree),
+        None,
+        None,
+        &["update-ref", "-d", name],
+    )
+    .map(drop)
+}
+
 /// TARGET made equal to tree TO of SOURCE's shadow repository under ROOT (ONLY: just those paths), by mode: a regular
 /// file through `eitri::write_regular` with its mode, a link (`120000`) through `eitri::symlink_beneath` with its
 /// target as bytes, a path TO lacks through `eitri::remove_beneath`; a gitlink (`160000`) is skipped and listed, and so
@@ -760,6 +819,37 @@ mod tests {
         assert_eq!(listing(&repo, &t2), ["a.txt"]);
         // the same content again is the same tree
         assert_eq!(take(&root, &wt, "s1", 3, &[]).unwrap(), t2);
+    }
+
+    /// Snapshots taken at once into a shadow repository that does not exist yet (a turn's and a base's, the session's
+    /// first two) all make it: one `git init` each in the same folder failed on the other's template files.
+    #[test]
+    fn snapshots_taken_at_once_all_make_the_shadow_repository() {
+        for round in 0..6 {
+            let d = tempfile::tempdir().unwrap();
+            let (root, wt) = (d.path().join("cp"), d.path().join("wt"));
+            std::fs::create_dir_all(&wt).unwrap();
+            std::fs::write(wt.join("a.txt"), "one").unwrap();
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+            let takers: Vec<_> = (0..8)
+                .map(|i| {
+                    let (root, wt, barrier) = (root.clone(), wt.clone(), barrier.clone());
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        write_tree(&root, &wt, &format!("k{i}"), &[]).map(|(_, t)| t)
+                    })
+                })
+                .collect();
+            let trees: Vec<String> = takers
+                .into_iter()
+                .map(|t| {
+                    t.join()
+                        .unwrap()
+                        .unwrap_or_else(|e| panic!("round {round}: {e}"))
+                })
+                .collect();
+            assert!(trees.windows(2).all(|w| w[0] == w[1]), "{trees:?}");
+        }
     }
 
     /// Pattern D: the base is kept as a ref of its own.

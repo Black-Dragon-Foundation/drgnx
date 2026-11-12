@@ -364,6 +364,7 @@ fn lock_files_are_written_bound_or_refused() {
         write: vec![fx.p("wt")],
         read: vec![],
         net: crate::agents::launch::NetCell::ProviderOnly,
+        sockets: vec![],
         browser: None,
     };
     let mut plan = browser_plan(vec![]);
@@ -412,6 +413,57 @@ fn lock_files_are_written_bound_or_refused() {
     );
 }
 
+// [D] pure: a keyed job's key socket (`exec::keys`, in the session's folder) is a socket the program may connect to, by
+// its path alone; on macOS Seatbelt allows connecting to that path (`path-literal`), never to the folder it is in, and
+// `drgnx-key` is read as the file it is
+#[test]
+fn a_keyed_jobs_key_socket_is_allowed_by_its_path_alone() {
+    let fx = Fx::new();
+    fs::create_dir_all(fx.p("wt")).unwrap();
+    let bin = fx.p("hub/drgnx-key");
+    fs::create_dir_all(bin.parent().unwrap()).unwrap();
+    fs::write(&bin, "x").unwrap();
+    let env = fx.env();
+    let ctx = context_for(&env, None);
+    let run = paths::session_dir(&env, &paths::socket_path(&env), "S4").unwrap();
+    let key = run.join("k-x1.sock");
+    let shape = SessionShape {
+        sid: "S4".into(),
+        cwd: fx.p("wt"),
+        write: vec![fx.p("wt")],
+        read: vec![bin.clone()],
+        net: crate::agents::launch::NetCell::ProviderOnly,
+        sockets: vec![key.clone()],
+        browser: None,
+    };
+    let plan = browser_plan(vec![]);
+    let scratch = crate::agents::launch::scratch_dir(&env, "S4").unwrap();
+    for target in [Target::LinuxBwrap, Target::Macos] {
+        let built = session_spec(&env, &ctx, &plan, &shape, &scratch, Tier::Full, target)
+            .unwrap_or_else(|r| panic!("{target:?} refused: {r}"));
+        assert!(
+            built.spec.sockets.contains(&key),
+            "{:?}",
+            built.spec.sockets
+        );
+        assert!(built.spec.read.contains(&bin), "{:?}", built.spec.read);
+        if target == Target::Macos {
+            let valid =
+                validate(built.spec, &ctx, target).unwrap_or_else(|r| panic!("refused: {r}"));
+            let profile =
+                gleipnir::sbpl::profile(&valid, &gleipnir::sbpl::MacContext::default()).unwrap();
+            let q = |p: &std::path::Path| gleipnir::sbpl::quote(p.to_str().unwrap()).unwrap();
+            let allow = format!(
+                "(allow network-outbound (remote unix-socket (path-literal {})))",
+                q(&key)
+            );
+            assert!(profile.contains(&allow), "{allow} in {profile}");
+            let folder = format!("(remote unix-socket (subpath {})))", q(&run));
+            assert!(!profile.contains(&folder), "{folder} in {profile}");
+        }
+    }
+}
+
 #[test]
 fn browser_spec_shape() {
     let fx = Fx::new();
@@ -428,6 +480,7 @@ fn browser_spec_shape() {
         write: vec![fx.p("wt")],
         read: vec![],
         net: crate::agents::launch::NetCell::ProviderOnly,
+        sockets: vec![],
         browser: Some(b),
     };
     // an editor's endpoint and a display are dropped
@@ -596,4 +649,41 @@ fn a_one_shot_run_removes_only_the_stubs_it_made() {
     // the session's end removes its own as before
     remove_stubs(&scratch, &wt);
     assert!(!wt.join(".envrc").exists());
+}
+
+/// A job's sandbox notes the protected paths missing before its launch, and its end removes the stubs the launch
+/// made for them: the tree is as the job found it, so its key is too.  A file that was there stays, and so does a
+/// noted one written meanwhile.
+#[test]
+fn a_job_removes_the_stubs_its_launch_made() {
+    let fx = Fx::new();
+    let wt = fx.p("wt");
+    fs::create_dir_all(&wt).unwrap();
+    fs::write(wt.join(".envrc"), "export A=1\n").unwrap();
+    let protected: Vec<PathBuf> = [".envrc", "mise.toml", ".claude", ".codex"]
+        .iter()
+        .map(|p| wt.join(p))
+        .collect();
+    let list = fx.p("stubs");
+    note_missing(&list, &wt, &protected).unwrap();
+    let (_, made) = pin_protected(&wt, &protected).unwrap();
+    assert_eq!(
+        made,
+        [wt.join("mise.toml"), wt.join(".claude"), wt.join(".codex")]
+    );
+    fs::write(wt.join(".codex").join("x"), "").unwrap();
+    remove_made(&list);
+    assert!(!wt.join("mise.toml").exists() && !wt.join(".claude").exists());
+    assert!(
+        wt.join(".codex").join("x").exists(),
+        "a folder written meanwhile stays"
+    );
+    assert_eq!(
+        fs::read_to_string(wt.join(".envrc")).unwrap(),
+        "export A=1\n"
+    );
+    assert!(!list.exists());
+    // nothing missing: no list
+    note_missing(&list, &wt, &protected[..1]).unwrap();
+    assert!(!list.exists());
 }

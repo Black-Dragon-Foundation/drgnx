@@ -350,6 +350,10 @@ image; `drgnx runtime build` runs `rustup target add` for it first (a Rust witho
 installed, or the sidecar is skipped). `drgnx runtime install` puts it beside `ratatoskr` as
 `drgnx-px-<arch>-linux-musl` (and removes the older forwarder, `drgnx-fwd`). A sidecar that cannot be built only warns
 and the update goes on; without it, a container job that is allowed a network is refused.
+The same build makes `drgnx-key`, which a job given your keys runs its command behind: a native copy beside
+`ratatoskr` (built like the hub; a failure fails the build) and a static one, `drgnx-key-<arch>-linux-musl`, for a
+container job (it only warns). Without the native copy a keyed job on this machine is refused, and `drgnx doctor`
+says so in its Ratatoskr check.
 install.sh takes the first of these that applies (`--dry-run` says which):
 
 1. `cargo` and `rustc` 1.95 or newer already on `PATH`.

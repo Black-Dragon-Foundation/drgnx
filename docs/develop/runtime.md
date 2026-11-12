@@ -54,6 +54,7 @@ runtime/
 | `verdandi` | the edit history: `history.db` (records, documents, branches) on urdr's store, a Loro document per tracked file and branch, the operation log and its settle rule, span revert on element ids; no hub or editor type ([history.md](history.md)) |
 | `vor` | a Debug Adapter Protocol client: framing, requests matched to answers, events and reverse requests, types generated from the protocol's schema; generic, used by the hub's debug sessions ([debugging.md](debugging.md)) |
 | `vordr` | the orchestration gates' pure core: a job's log as rows with failure classes, facts, evidence, the rule pack; pure, `serde` only ([orchestration.md](orchestration.md)) |
+| `drgnx-exe` | a file written or copied and then run, never busy (ETXTBSY): the writing on a thread with a private file table ([below](#files-written-and-then-run-drgnx-exe)); libc only |
 | `skuld` | test support, never shipped: every order of a pure core, and the one real-time wait Rust tests may use ([below](#every-order-skuld)); crates name it under `[dev-dependencies]` only |
 | `heimdall` | the CDP broker's pure part: envelope parsing over `serde_json`'s `RawValue` (params never re-encoded), routing one browser connection between the agent and the hub by session owner, the refusal list, downloads, cleanup when the agent goes, and the pipe's NUL and frame codecs; no I/O, std and serde only, built for Android too ([hub.md](hub.md#the-cdp-broker)) |
 | `drgnx-px` | a networked container job's relay sidecar: the channel's frames, its pure state machine and writer order, the shell both ends run, the `drgnx-px` binary, and the owner's end on gleipnir's proxy; tokio current-thread, libc ([drgnx-px.md](drgnx-px.md)) |
@@ -610,6 +611,20 @@ What a test does instead:
 Exempt: `#[ignore = "timing…"]` tests and `tests/timing.rs`, `skuld/src/wait.rs` (where these functions live) and the
 hub clock's module (`drgnx-ratatoskr/src/clock*`).
 
+## Files written and then run: drgnx-exe
+
+On Linux, running a file that any process holds open for writing fails with ETXTBSY ("Text file busy"). A child that
+another thread forks copies the whole file table, the write descriptor included, and holds it until its own `exec`; so
+a script written (or a binary copied) and then run at once fails now and then while other threads fork (every test
+binary's other tests do). A rename keeps the same file and does not help, and a lock helps only against forks that take
+it. `crates/drgnx-exe` is the one way the runtime does it: `drgnx_exe::write(path, contents)` (mode 0755),
+`drgnx_exe::copy(from, to)`, or any writing inside `drgnx_exe::private_fds(|| …)`: a thread of its own with its own
+file table (`unshare(CLONE_FILES)`), which no other fork copies. That table starts as a copy, so the thread closes every
+descriptor but 0, 1 and 2 first (a pipe another thread closes meanwhile still ends at once); the closure opens what it
+uses itself. Elsewhere than Linux the closure runs in place. The hub uses it for the browser it unpacks and the
+`drgnx-key` it copies into a container job's folder, the runner for its job's `drgnx-key` copy, domr for the hub copies
+and scripts its scenarios run, the escape harness for its probe's copy, and the tests for every stand-in script they run.
+
 ## The conformance harness
 
 `domr` runs **scenarios** (data) against a hub binary: a process that answers the hub protocol on its socket.
@@ -624,13 +639,15 @@ must stay within 103 bytes.
 
 ```
 domr --hub-bin PATH --scenarios DIR
-     [--only GLOB] [--only-tag TAG] [--require-all] [--perf OUT.json]
+     [--only GLOB] [--only-tag TAG] [--require-all] [--perf OUT.json] [--shard K/N]
 domr connect-as --socket PATH
 ```
 
 - One target, Ratatoskr: every row runs against the one hub binary. There is no Lisp hub and no stand-in backend; a
   row that needs a second process (an agent, a provider, a proxy) starts one of `ratatoskr-mock`'s.
 - `--only GLOB` matches the scenario name (`*` and `?`); `--only-tag TAG` the rows that require the tag.
+- `--shard K/N` (1 <= K <= N): of the rows the other filters select, in path order, the Kth of every N, so N runs
+  (macOS CI's conformance jobs) split the suite evenly and together run every row once.
 - Output: one `PASS name`, `SKIP name (reason)` or `FAIL name: step N (VERB): what` line per scenario, then
   `N passed, N skipped, N failed`. A FAIL of a row that is not `pending` goes on with when each step ran and how long
   it took, and the last 60 lines of each hub's stderr and of its own log, kept before the root is removed: a red that
@@ -1528,10 +1545,14 @@ Users get the binary from install.sh and `drgnx update`; both call `drgnx runtim
   `<cache>/cargo` unless the record sets it, `DRGNX_BUILD_COMMIT` is the checkout's HEAD (plus `-dirty`) and
   `DRGNX_CHECKOUT` the checkout, so `ratatoskr version --json` says what it was built from. On Linux with a user systemd
   the build runs in `systemd-run --user --scope` with `MemoryMax` min(jobs x 1536 MiB + 1 GiB, available - 1 GiB) and
-  `MemorySwapMax=0`; without one, `-j` alone and a note. macOS has no cap.
+  `MemorySwapMax=0`; without one, `-j` alone and a note. macOS has no cap. It then builds `drgnx-key` the same way
+  (`-p sleipnir --no-default-features --bin drgnx-key`; a failure fails the build), and the relay sidecar and a static
+  `drgnx-key` for `<arch>-unknown-linux-musl` into `<cache>/ratatoskr-px-target` (a failure there only warns).
 - `drgnx runtime install [--prefix DIR]`: refuses a binary whose `version --json` says `"test_hooks": true` (or says
   nothing), copies it to `<data>/bin/ratatoskr.new` and renames it to `ratatoskr` (a running hub sees a new inode at
-  its resolved path); with `--prefix` links `DIR/bin/ratatoskr` and `DIR/bin/rtsk`.
+  its resolved path); with `--prefix` links `DIR/bin/ratatoskr` and `DIR/bin/rtsk`. Beside it, the same way: `drgnx-key`
+  (a keyed command job here runs behind it), `drgnx-px-<arch>-linux-musl` and `drgnx-key-<arch>-linux-musl` (a
+  container job's relay sidecar and a keyed one's entrypoint); one not built is named and skipped.
 - `drgnx update` runs `runtime build --install` as its third step; a failure rolls the update back
   (`DRGNX_UPDATE_RUNTIME_CMD` replaces the step in tests). The doctor's `ratatoskr` check (group Agents) reads
   `ratatoskr doctor --json`: no binary, test hooks or a bad socket directory fail; a failed runtime update, a binary or

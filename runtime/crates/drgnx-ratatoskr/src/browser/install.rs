@@ -274,7 +274,9 @@ pub(crate) async fn install_with(
     if got != expected {
         return Err(InstallError::DigestMismatch { expected, got });
     }
-    unpack(&zip_path, &partial, limits)?;
+    // the browser is run from these files: their write descriptors kept out of the hub's other forks (drgnx-exe)
+    drgnx_exe::private_fds(|| unpack(&zip_path, &partial, limits))
+        .map_err(|e| io_err(&partial, e))??;
     fs::remove_file(&zip_path).map_err(|e| io_err(&zip_path, e))?;
 
     let folder = file_stem(&plat.url);
@@ -432,6 +434,28 @@ async fn download(
     Ok(sink.finish())
 }
 
+/// URL's body into the new file TO, over https only, hashed as it comes: its sha256 as lower-case hex.  Debug: Install
+/// Adapter's downloads (`debug/install.rs`) go through here too.
+pub(crate) async fn fetch(url: &str, to: &Path, limits: Limits) -> Result<String, InstallError> {
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(to)
+        .map_err(|e| io_err(to, e))?;
+    let mut sink = Sink {
+        file,
+        hasher: Sha256::new(),
+        written: 0,
+        max: limits.download,
+    };
+    over_http(url, false, &mut sink, limits).await?;
+    sink.file
+        .sync_all()
+        .map_err(|e| InstallError::Io(format!("writing the download: {e}")))?;
+    Ok(sink.finish())
+}
+
 /// Whether BASE lets the download use any scheme (a test's local server).
 fn plain(base: &Base) -> bool {
     #[cfg(test)]
@@ -506,7 +530,7 @@ async fn over_http(
 /// ZIP into DEST.  Only regular files and folders are made; an entry that is absolute, climbs out, links, or repeats a
 /// name fails the whole unpack.  Files are created new (never over anything), and sizes are counted as they are
 /// written, not as the archive declares them.
-fn unpack(zip: &Path, dest: &Path, limits: Limits) -> Result<(), InstallError> {
+pub(crate) fn unpack(zip: &Path, dest: &Path, limits: Limits) -> Result<(), InstallError> {
     let file = File::open(zip).map_err(|e| io_err(zip, e))?;
     let mut archive =
         zip::ZipArchive::new(file).map_err(|e| InstallError::Archive(e.to_string()))?;

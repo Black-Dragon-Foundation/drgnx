@@ -1023,6 +1023,7 @@ impl PlanHooks {
         if l.tasks
             .iter()
             .any(|o| runs.busy_of(&o.row.id) == Some("merging"))
+            || runs.busy_of(&t.row.id).is_some()
         {
             return Ok(());
         }
@@ -1032,11 +1033,16 @@ impl PlanHooks {
             t.row.id.clone(),
             self.clone(),
         );
+        // marked before the merge's own task starts: a `job/stop` from here on waits for it, and the merge reads the
+        // job's status after the mark (`merge` loads it first); the mark goes however the task ends
+        // (`checking` while the gates look, `merging` from the merge itself: one merge at a time in a job)
+        let mark = super::BusyMark::set(front, &tid, "checking");
         self.spawn(t.row.id.clone(), async move {
+            let _mark = mark;
             if let Err(e) = me.merge(&f, &job2, &tid).await {
                 tracing::warn!("plan run {job2}: merge of {tid}: {}", e.message);
             }
-            f.core.runs.set_busy(&tid, None);
+            drop(_mark);
             changed(&f, &job2).await;
         });
         Ok(())
@@ -1125,9 +1131,19 @@ impl PlanHooks {
                 // the gates on the hub's own records (docs/develop/orchestration.md): trailers, red first, the
                 // author check; a run they wait for ends as the task's evidence and the next tick looks again
                 use vordr::redfirst::Decision;
-                match crate::orch::gates::before_merge(front, job, tid, t.row.n, &tree, &data)
-                    .await
-                    .map_err(internal)?
+                // the gates judge the tip the merge gate checked, and only that tip merges
+                let judged = git.checked_tip(&tree.branch);
+                match crate::orch::gates::before_merge(
+                    front,
+                    job,
+                    tid,
+                    t.row.n,
+                    &tree,
+                    judged.as_deref(),
+                    &data,
+                )
+                .await
+                .map_err(internal)?
                 {
                     Decision::Pass(_) => {}
                     Decision::Wait(_) => return Ok(()),
@@ -1156,7 +1172,16 @@ impl PlanHooks {
                 // the merge queue: batches of the pack's size, members one at a time in readiness order
                 use crate::orch::queue::Turn;
                 match self
-                    .queue_turn(front, job, tid, &l, &data, &tree, &job_tree)
+                    .queue_turn(
+                        front,
+                        job,
+                        tid,
+                        &l,
+                        &data,
+                        &tree,
+                        &job_tree,
+                        judged.as_deref(),
+                    )
                     .await?
                 {
                     Turn::Merge => {}
@@ -1172,7 +1197,10 @@ impl PlanHooks {
                 front.core.runs.set_busy(tid, Some("merging"));
                 changed(front, job).await;
                 let old = crate::timeline::snapshot::head_of(&job_tree);
-                match git.merge_into(&job_tree, &tree, message.as_deref()).await {
+                match git
+                    .merge_into(&job_tree, &tree, message.as_deref(), judged.as_deref())
+                    .await
+                {
                     Ok(super::git::MergeOutcome::Merged) => {
                         if let Some(d) = front.dirs.get() {
                             let h = &front.core.history;
@@ -1232,6 +1260,7 @@ impl PlanHooks {
         data: &Map<String, Value>,
         tree: &TaskTree,
         job_tree: &Path,
+        judged: Option<&str>,
     ) -> Result<crate::orch::queue::Turn, Error> {
         use crate::orch::queue::{Entry, Turn, turn};
         let j = job.to_owned();
@@ -1253,11 +1282,14 @@ impl PlanHooks {
             })
             .map(|x| x.row.id.clone())
             .collect();
-        let tip = tick::git(&tree.path, &["rev-parse", &tree.branch])
-            .await
-            .map_err(git_error)?
-            .trim()
-            .to_owned();
+        let tip = match judged {
+            Some(t) => t.to_owned(),
+            None => tick::git(&tree.path, &["rev-parse", &tree.branch])
+                .await
+                .map_err(git_error)?
+                .trim()
+                .to_owned(),
+        };
         let (f, dir, j, t) = (
             front.clone(),
             job_tree.to_path_buf(),
@@ -1471,16 +1503,41 @@ impl PlanHooks {
     }
 }
 
-/// The job's own tree, where its branch is checked out (made beside the task trees when absent).
+/// The job's own tree, where its branch is checked out (made beside the task trees when absent).  One at a time: two
+/// merges making it at once had the losing `worktree add` remove the winner's folder on its way out, leaving the tree
+/// registered but missing, which every later add refused.  A tree registered but missing is pruned and made again.
 async fn job_tree(repo: &Path, job: &str, tree: &TaskTree) -> Result<PathBuf, Error> {
     let path = tree.path.with_file_name("_job");
-    if !path.exists() {
-        let p = path.to_string_lossy().into_owned();
-        tick::git(repo, &["worktree", "add", "-q", &p, &format!("job/{job}")])
-            .await
-            .map_err(git_error)?;
-    }
+    branch_tree(repo, &format!("job/{job}"), &path)
+        .await
+        .map_err(git_error)?;
     Ok(path)
+}
+
+/// BRANCH of REPO checked out at PATH, made when absent (the job's tree; the manager's merges use it too), one
+/// making at a time, a tree registered but missing pruned and made again (see [`job_tree`]).
+pub(crate) async fn branch_tree(
+    repo: &Path,
+    branch: &str,
+    path: &Path,
+) -> Result<(), super::GitError> {
+    static MAKING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    if path.exists() {
+        return Ok(());
+    }
+    let _one = MAKING.lock().await;
+    if path.exists() {
+        return Ok(());
+    }
+    let p = path.to_string_lossy().into_owned();
+    let add = ["worktree", "add", "-q", p.as_str(), branch];
+    match tick::git(repo, &add).await {
+        Err(e) if e.stderr.contains("missing but already registered") => {
+            tick::git(repo, &["worktree", "prune"]).await?;
+            tick::git(repo, &add).await.map(|_| ())
+        }
+        r => r.map(|_| ()),
+    }
 }
 
 /// Merge DATA into card ID's data.
@@ -2315,5 +2372,55 @@ mod tests {
             Some((None, "ask the user".into()))
         );
         assert_eq!(recommendation("I recommend A"), None);
+    }
+
+    fn sh(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// [D] The job's tree is made once whoever asks: two merges of the run asking at once both get it (a second
+    /// `worktree add` failing removed the first one's tree and left it registered, macOS CI), and a tree registered
+    /// but missing is made again rather than refused at every merge.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_jobs_tree_is_made_once_and_made_again_when_missing() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        sh(&repo, &["init", "-q", "-b", "main"]);
+        sh(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+        for i in 0..8 {
+            let job = format!("J{i}");
+            sh(&repo, &["branch", &format!("job/{job}")]);
+            let tree = |n: &str| TaskTree {
+                path: d.path().join("runs").join(&job).join(n),
+                branch: String::new(),
+                base: String::new(),
+                mode: crate::runner::TreeMode::Snapshot,
+            };
+            let (t1, t2) = (tree("1"), tree("2"));
+            let (a, b) = tokio::join!(job_tree(&repo, &job, &t1), job_tree(&repo, &job, &t2));
+            let (a, b) = (a.unwrap(), b.unwrap());
+            assert_eq!(a, b);
+            assert!(a.join(".git").exists(), "{job}: the tree is there");
+            // its folder gone while git still lists it: made again
+            std::fs::remove_dir_all(&a).unwrap();
+            assert!(
+                job_tree(&repo, &job, &t1)
+                    .await
+                    .unwrap()
+                    .join(".git")
+                    .exists()
+            );
+        }
     }
 }

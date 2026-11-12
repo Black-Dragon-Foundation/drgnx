@@ -1,5 +1,6 @@
 //! The hub on macOS (the macOS lane runs the whole workspace, so these rows run there; every row but the sshd one
-//! also runs on Linux, which is where they are written): placement and the trust filter, the generated ssh config
+//! also runs on Linux, which is where they are written): placement and the trust filter, a runner's returned files
+//! never written through a link, the generated ssh config
 //! against a localhost `sshd`, a sync into a local mirror, an agent's job with no eligible runner, and `runner add` of
 //! a macOS host. A Mac is a hub here and never a runner. The sshd row is `#[ignore = "macos-sshd"]`: the lane turns
 //! on Remote Login with a throwaway key and a `localhost` entry in `~/.ssh/config`, names the host in
@@ -198,6 +199,59 @@ mod macos {
         );
     }
 
+    /// [D] A runner's returned files are written beneath the job's folder on a Mac hub as on Linux, never through a
+    /// link (`O_NOFOLLOW_ANY` here, `openat2` there): a linked folder, a link deeper in the path and a link to a folder
+    /// outside refuse the write and make nothing behind them; a linked file is replaced, never written through; `..`
+    /// is refused; a nested path gets its folders.  (The hub's own copy of this row is a lib test.)
+    #[test]
+    fn returned_files_never_go_through_a_link() {
+        use drgnx_ratatoskr::runners::returned::write;
+        use std::os::fd::{AsFd, OwnedFd};
+        use std::os::unix::fs::symlink;
+        let d = tempfile::tempdir().unwrap();
+        let job: OwnedFd = std::fs::File::open(d.path()).unwrap().into();
+        let outside = tempfile::tempdir().unwrap();
+        let sentinel = outside.path().join("sentinel");
+        std::fs::write(&sentinel, "keep").unwrap();
+        symlink(outside.path(), d.path().join("reports")).unwrap();
+        symlink(&sentinel, d.path().join("out.txt")).unwrap();
+        std::fs::create_dir(d.path().join("real")).unwrap();
+        symlink(outside.path(), d.path().join("real/inner")).unwrap();
+
+        for rel in [
+            "reports/junit.xml",
+            "reports/new/deeper.txt",
+            "real/inner/x.txt",
+            "../escape.txt",
+        ] {
+            let r = write(job.as_fd(), rel.as_bytes(), b"x");
+            assert!(r.is_err(), "{rel}: {r:?}");
+        }
+        let mut behind: Vec<_> = std::fs::read_dir(outside.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        behind.sort();
+        assert_eq!(behind, ["sentinel"], "nothing written behind a link");
+        assert!(!d.path().parent().unwrap().join("escape.txt").exists());
+
+        assert_eq!(
+            write(job.as_fd(), b"out.txt", b"returned").unwrap(),
+            PathBuf::from("out.txt")
+        );
+        assert!(
+            std::fs::symlink_metadata(d.path().join("out.txt"))
+                .unwrap()
+                .is_file()
+        );
+        assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "keep");
+        assert_eq!(
+            write(job.as_fd(), b"a/b/c.txt", b"c").unwrap(),
+            PathBuf::from("a/b/c.txt")
+        );
+        assert_eq!(std::fs::read(d.path().join("a/b/c.txt")).unwrap(), b"c");
+    }
+
     /// [D] A job no runner may take runs on the Mac, and says why: placement picks the local machine with the design's
     /// words, and a queue with no runner at all starts it here (its row names the local machine).
     #[test]
@@ -363,9 +417,7 @@ mod macos {
         ];
         for (name, body) in tools {
             let f = bin.join(name);
-            std::fs::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
-            std::fs::set_permissions(&f, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-                .unwrap();
+            drgnx_exe::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
         }
     }
 
@@ -538,13 +590,11 @@ mod macos {
         let bin = dir.path().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let uname = bin.join("uname");
-        std::fs::write(
+        drgnx_exe::write(
             &uname,
             "#!/bin/sh\ncase \"$1\" in -m) echo amd64 ;; -s) echo FreeBSD ;; esac\n",
         )
         .unwrap();
-        std::fs::set_permissions(&uname, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
         let (queue, _events) = Queue::new(QueueCfg {
             hub_id: "hub".into(),
             exec_root: dir.path().join("exec"),

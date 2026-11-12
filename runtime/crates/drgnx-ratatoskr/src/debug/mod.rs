@@ -9,15 +9,37 @@
 //!   stopping (children before their parent; every session at the hub's end).
 
 pub mod adapters;
+pub mod bisect;
+pub mod bisect_card;
+pub mod bisect_wire;
 pub mod blocked;
 pub mod breakpoints;
+pub mod compare;
+pub mod fork;
+pub mod fork_hub;
+pub mod fork_mux;
+pub mod fork_seal;
+pub mod fork_wire;
+pub mod install;
 pub mod launch;
+pub mod origin;
+pub mod origin_wire;
 pub mod ports;
+pub mod probes;
+pub mod record;
+pub mod runfile;
+pub mod runs_wire;
 pub mod session;
+pub mod strip;
+pub mod tasks;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_adapters;
+#[cfg(test)]
+mod tests_bisect;
+#[cfg(test)]
+mod tests_bisect_wire;
 #[cfg(test)]
 mod tests_blocked;
 #[cfg(test)]
@@ -25,11 +47,29 @@ mod tests_blocked_live;
 #[cfg(test)]
 mod tests_breakpoints;
 #[cfg(test)]
+mod tests_fork;
+#[cfg(test)]
+mod tests_fork_hub;
+#[cfg(test)]
+mod tests_fork_live;
+#[cfg(test)]
+mod tests_fork_seal;
+#[cfg(test)]
+mod tests_install;
+#[cfg(test)]
 mod tests_launch;
+#[cfg(test)]
+mod tests_origin;
 #[cfg(test)]
 mod tests_ports;
 #[cfg(test)]
+mod tests_probes;
+#[cfg(test)]
+mod tests_record;
+#[cfg(test)]
 mod tests_registry;
+#[cfg(test)]
+mod tests_tasks;
 pub mod wire;
 
 use breakpoints::Store;
@@ -39,7 +79,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use tokio::sync::{mpsc, watch};
 
 /// `ratatoskr debug-mock SCRIPT.json` (test-hooks builds): the mock adapter on stdio; exit 1 with the reason on stderr
@@ -192,6 +232,8 @@ struct Inner {
     stores: Mutex<BTreeMap<String, Store>>,
     /// Where the stores are saved (none: memory only).
     store_dir: Option<PathBuf>,
+    /// The recorded runs and the probes (none: nothing is recorded).
+    rec: OnceLock<Arc<record::Records>>,
 }
 
 /// The hub's debug sessions.
@@ -222,7 +264,54 @@ impl Debug {
                 state: Mutex::new(State::default()),
                 stores: Mutex::new(BTreeMap::new()),
                 store_dir,
+                rec: OnceLock::new(),
             }),
+        }
+    }
+
+    /// Record every session from now on, as OPTS says (once; later calls answer the first records).
+    pub fn record_into(&self, opts: record::Opts) -> Arc<record::Records> {
+        self.inner
+            .rec
+            .get_or_init(|| record::Records::new(opts, self.inner.sink.clone()))
+            .clone()
+    }
+
+    /// The recorded runs, when sessions are recorded.
+    pub fn records(&self) -> Option<Arc<record::Records>> {
+        self.inner.rec.get().cloned()
+    }
+
+    /// PATH's probes as `SourceBreakpoint`s for a session of ADAPTER_ID in ROOT with CAPS (null: not known yet, the
+    /// adapter is taken to have logpoints and `breakpoints::fit` drops them if not), past the lines BPS take.
+    fn probe_bps(
+        &self,
+        root: &str,
+        path: &str,
+        adapter_id: &str,
+        caps: &Value,
+        bps: &[Value],
+    ) -> Vec<Value> {
+        let Some(rec) = self.records() else {
+            return vec![];
+        };
+        let taken: Vec<u32> = bps
+            .iter()
+            .filter_map(|b| b.get("line").and_then(Value::as_u64))
+            .filter_map(|l| u32::try_from(l).ok())
+            .collect();
+        let caps = if caps.is_null() {
+            json!({"supportsLogPoints": true})
+        } else {
+            caps.clone()
+        };
+        rec.probes(root, |p| p.source_bps(path, adapter_id, &caps, &taken))
+    }
+
+    /// ROOT's probes on PATH changed: its sessions get PATH's breakpoints again.
+    pub async fn probes_changed(&self, root: &str, path: &str) {
+        for id in self.sessions_in(root) {
+            self.resend(&id, path).await;
         }
     }
 
@@ -261,11 +350,14 @@ impl Debug {
 
     /// Send session ID PATH's breakpoints again (an edit, a Run to Cursor, one gone at a stop) and show its answer.
     async fn resend(&self, id: &str, path: &str) {
-        let Some((h, root, caps)) = lock(&self.inner.state)
-            .sessions
-            .get(id)
-            .map(|e| (e.handle.clone(), e.root.clone(), e.caps.clone()))
-        else {
+        let Some((h, root, caps, adapter)) = lock(&self.inner.state).sessions.get(id).map(|e| {
+            (
+                e.handle.clone(),
+                e.root.clone(),
+                e.caps.clone(),
+                e.start.adapter_id.clone(),
+            )
+        }) else {
             return;
         };
         // not initialized yet: its configuration sends them
@@ -273,7 +365,10 @@ impl Debug {
             return;
         }
         let bps = self.store(&root, |s| s.send_list(id, path));
-        let args = json!({"source": {"path": path}, "breakpoints": breakpoints::fit(&bps, &caps)});
+        let mut sent = breakpoints::fit(&bps, &caps);
+        // the probes after the user's breakpoints: `answer` takes the answers in the order sent
+        sent.extend(self.probe_bps(&root, path, &adapter, &caps, &bps));
+        let args = json!({"source": {"path": path}, "breakpoints": sent});
         match h.request("setBreakpoints", args).await {
             Ok(body) => {
                 let got = body
@@ -382,7 +477,21 @@ impl Debug {
         start: Start,
         launcher: Arc<dyn Launcher>,
     ) -> Result<String, String> {
-        self.start_as(conn, root, start, launcher, None).await
+        self.start_with(conn, root, start, launcher, record::Launch::default())
+            .await
+    }
+
+    /// [`Debug::start`], with what the launch adds to its recorded run.
+    pub async fn start_with(
+        &self,
+        conn: u64,
+        root: &str,
+        start: Start,
+        launcher: Arc<dyn Launcher>,
+        launch: record::Launch,
+    ) -> Result<String, String> {
+        self.start_as(conn, root, start, launcher, None, launch)
+            .await
     }
 
     /// Boxed: a session's updates start its children through here.
@@ -393,10 +502,14 @@ impl Debug {
         start: Start,
         launcher: Arc<dyn Launcher>,
         parent: Option<String>,
+        launch: record::Launch,
     ) -> BoxFut<'static, Result<String, String>> {
         let me = self.clone();
         let root = root.to_owned();
-        Box::pin(async move { me.start_boxed(conn, root, start, launcher, parent).await })
+        Box::pin(async move {
+            me.start_boxed(conn, root, start, launcher, parent, launch)
+                .await
+        })
     }
 
     async fn start_boxed(
@@ -406,6 +519,7 @@ impl Debug {
         mut start: Start,
         launcher: Arc<dyn Launcher>,
         parent: Option<String>,
+        launch: record::Launch,
     ) -> Result<String, String> {
         let id = {
             let mut st = lock(&self.inner.state);
@@ -428,6 +542,15 @@ impl Debug {
             start.functions = s.functions();
             start.exception_filters = s.chosen_filters(&start.adapter_id);
         });
+        if let Some(rec) = self.records() {
+            match &parent {
+                Some(p) => rec.attach(&id, p),
+                None => {
+                    rec.begin(&id, &root, &mut start, launch).await;
+                }
+            }
+            self.add_probes(&root, &mut start);
+        }
         let c = if parent.is_some() {
             launcher.child().await?
         } else {
@@ -464,6 +587,29 @@ impl Debug {
             let _ = ended_tx.send(true);
         });
         Ok(id)
+    }
+
+    /// START's breakpoints with ROOT's probes added (a path with only probes gets its own entry).
+    fn add_probes(&self, root: &str, start: &mut Start) {
+        let Some(rec) = self.records() else { return };
+        for path in rec.probes(root, |p| p.paths()) {
+            if !start.breakpoints.iter().any(|s| s.path == path) {
+                start.breakpoints.push(session::SourceBps {
+                    path: path.clone(),
+                    breakpoints: vec![],
+                });
+            }
+        }
+        for s in &mut start.breakpoints {
+            let extra = self.probe_bps(
+                root,
+                &s.path,
+                &start.adapter_id,
+                &Value::Null,
+                &s.breakpoints,
+            );
+            s.breakpoints.extend(extra);
+        }
     }
 
     fn handle(&self, id: &str) -> Option<Handle> {
@@ -506,10 +652,31 @@ impl Debug {
     }
 
     /// OP on session ID. A stop or disconnect stops its children first and resolves once all have ended.
+    /// The text of SESSION's source REFERENCE (a frame with no file): `{text, mime?}`.
+    pub async fn source(&self, id: &str, reference: i64) -> Result<Value, String> {
+        let h = self
+            .handle(id)
+            .ok_or_else(|| format!("no debug session {id}"))?;
+        let b = h
+            .request(
+                "source",
+                json!({"sourceReference": reference, "source": {"sourceReference": reference}}),
+            )
+            .await?;
+        let mut out = json!({"text": b.get("content").and_then(Value::as_str).unwrap_or("")});
+        if let Some(m) = b.get("mimeType").filter(|m| m.is_string()) {
+            out["mime"] = m.clone();
+        }
+        Ok(out)
+    }
+
     pub async fn control(&self, id: &str, op: Op) -> Result<(), String> {
         let h = self
             .handle(id)
             .ok_or_else(|| format!("no debug session {id}"))?;
+        if let Some(rec) = self.records() {
+            rec.op(id, &op);
+        }
         if matches!(op, Op::Stop { .. } | Op::Disconnect) {
             for child in self.children(id) {
                 Box::pin(self.control(&child, op.clone())).await.ok();
@@ -534,7 +701,8 @@ impl Debug {
             .collect()
     }
 
-    async fn wait_end(&self, id: &str) {
+    /// Resolves once session ID has ended (at once if there is no such session).
+    pub(crate) async fn wait_end(&self, id: &str) {
         let rx = lock(&self.inner.state)
             .sessions
             .get(id)
@@ -580,6 +748,8 @@ impl Debug {
                     "state": e.phase.name(),
                     "reason": e.reason,
                     "caps": e.caps,
+                    // the toolbar's Disconnect in place of Stop
+                    "attach": e.start.request == session::Request::Attach,
                 })
             })
             .collect();
@@ -632,6 +802,9 @@ impl Debug {
                         })
                     };
                     self.publish_state();
+                    if let Some(rec) = self.records() {
+                        rec.stop(&id, &stop);
+                    }
                     if let Some(conn) = conn {
                         self.publish_frame(&id, conn, &stop);
                     }
@@ -700,7 +873,16 @@ impl Debug {
                     let me = self.clone();
                     let pid = id.clone();
                     crate::clock::spawn("debug:child", async move {
-                        let r = me.start_as(conn, &root, start, launcher, Some(pid)).await;
+                        let r = me
+                            .start_as(
+                                conn,
+                                &root,
+                                start,
+                                launcher,
+                                Some(pid),
+                                record::Launch::default(),
+                            )
+                            .await;
                         let _ = reply.send(r.map(|_| ()));
                     });
                 }
@@ -711,6 +893,14 @@ impl Debug {
                     }
                 }
                 Update::Event { event, body } => {
+                    // a probe's hits are recorded and stay out of the console
+                    let body = match (event.as_str(), self.records()) {
+                        ("output", Some(rec)) => match rec.output(&id, &body) {
+                            Some(b) => b,
+                            None => continue,
+                        },
+                        _ => body,
+                    };
                     if event == "breakpoint"
                         && let Some(root) = self.root_of(&id)
                         && let Some(path) = self.store(&root, |s| s.event(&id, &body))
@@ -727,6 +917,9 @@ impl Debug {
     }
 
     async fn ended(&self, id: &str, end: End) {
+        if let Some(rec) = self.records() {
+            rec.end(id, &end);
+        }
         let e = lock(&self.inner.state).sessions.remove(id);
         self.publish_state();
         let Some(e) = e else { return };
@@ -774,11 +967,13 @@ impl Debug {
             "thread": stop.thread,
             "path": source.get("path"),
             "ref": source.get("sourceReference").filter(|r| r.as_i64().unwrap_or(0) > 0),
+            "name": frame.get("name"),
+            "source_name": source.get("name"),
             "line": frame.get("line"),
             "col": frame.get("column"),
             "top": top,
             "reason": stop.reason,
-            "exception": (stop.reason == "exception").then(|| stop.description.clone()).flatten(),
+            "exception": (stop.reason == "exception").then(|| exception_card(stop)),
             "open": false,
         });
         // the editor that started the session opens the file; the others draw it where it is already shown
@@ -788,6 +983,29 @@ impl Debug {
         data["open"] = json!(true);
         self.inner.sink.send(conn, "debug-frame", data);
     }
+}
+
+/// An exception stop's card: `exceptionInfo`'s id, message, break mode, type and trace, else the stop's description.
+fn exception_card(stop: &Stop) -> Value {
+    let Some(info) = &stop.exception else {
+        return json!({"message": stop.description});
+    };
+    let mut card = serde_json::Map::new();
+    for (to, v) in [
+        ("id", info.get("exceptionId")),
+        ("message", info.get("description")),
+        ("break_mode", info.get("breakMode")),
+        ("type", info.pointer("/details/typeName")),
+        ("trace", info.pointer("/details/stackTrace")),
+    ] {
+        if let Some(v) = v.filter(|v| !v.is_null()) {
+            card.insert(to.into(), v.clone());
+        }
+    }
+    if !card.contains_key("message") {
+        card.insert("message".into(), json!(stop.description));
+    }
+    Value::Object(card)
 }
 
 /// `runInTerminal`'s cwd, args and env (null values unset nothing here: they are left out).
