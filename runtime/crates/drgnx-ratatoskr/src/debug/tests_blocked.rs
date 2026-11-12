@@ -306,3 +306,23 @@ async fn the_adapter_and_the_program_start_through_the_seal() {
         ]
     );
 }
+
+/// An adapter whose port never listened: the error says whether it still runs and how its stderr ends (a sandbox's
+/// refusal shows there).
+#[test]
+fn a_port_that_never_listened_says_what_the_adapter_did() {
+    let e = blocked::why_not_listening(
+        "nothing listened".into(),
+        i32::MAX,
+        "  PermissionError: denied\n",
+    );
+    assert_eq!(
+        e,
+        "nothing listened (the adapter had exited; its stderr ends:\nPermissionError: denied)"
+    );
+    let e = blocked::why_not_listening("nothing listened".into(), std::process::id() as i32, "");
+    assert_eq!(
+        e,
+        "nothing listened (the adapter still runs, nothing on its stderr)"
+    );
+}
