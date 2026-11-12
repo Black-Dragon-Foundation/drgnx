@@ -510,8 +510,9 @@ mod mac_runner {
         let mut hub = Hub::new(dir.path());
         hub.add("mac", &root).await;
         let (work, blobs) = project(dir.path());
-        // `perl -e`, not a here-document: /bin/sh's (bash 3.2's) ignores TMPDIR and needs a writable /tmp or source
-        let script = r#"/usr/bin/perl -e '
+        // a /bin/sh here-document in a job that doesn't write its tree: bash 3.2 makes it in /tmp (the build addition's
+        // `sh-thd*` rule)
+        let script = r#"/usr/bin/perl - github.com:443 example.org:443 <<'EOF'
 use IO::Socket::INET;
 my ($h, $p) = $ENV{HTTPS_PROXY} =~ m{//([^:/]+):(\d+)} or die "no HTTPS_PROXY\n";
 for my $t (@ARGV) {
@@ -523,7 +524,7 @@ for my $t (@ARGV) {
 }
 my $d = IO::Socket::INET->new(PeerAddr => "1.1.1.1", PeerPort => 443, Timeout => 10);
 print $d ? "direct: open\n" : "direct: refused\n";
-' github.com:443 example.org:443"#;
+EOF"#;
         let mut s = job("xnet", script, freeze(&work, &blobs), 512);
         s.place.net_hosts = vec!["github.com:443".into()];
         hub.submit(s);

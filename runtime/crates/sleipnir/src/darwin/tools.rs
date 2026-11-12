@@ -358,7 +358,8 @@ mod tests {
     /// `rust@1.95`) installed by the user's mise into a root, then a job's Seatbelt profile with that pin finds
     /// `cargo --version` from the root, at the pinned version; and in the same job `brew --prefix --installed` answers
     /// (the runner's brew shim, `SLEIPNIR_BIN`: a built sleipnir), as a configure asks it, and `brew install` fails
-    /// naming the shim; and the account's real home can't be listed.
+    /// naming the shim; and the account's real home can't be listed. A `/bin/sh` here-document works in a job that
+    /// doesn't write its tree (Gleipnir's `BUILD_HEREDOCS`), and no other file can be made in /tmp or /var/tmp.
     #[cfg(all(target_os = "macos", feature = "runner"))]
     #[test]
     #[ignore = "macos-tools"]
@@ -503,6 +504,48 @@ mod tests {
             !ls.status.success() && said.contains("Operation not permitted"),
             "{said}"
         );
+
+        // a job that doesn't write its tree: /bin/sh's here-document (bash 3.2 makes it in /tmp, whatever TMPDIR
+        // says) works, and the job still can't make any other file in /tmp or /var/tmp, nor one inside an `sh-thd`
+        // folder
+        let sh = |script: &str| {
+            let o = std::process::Command::new("/usr/bin/sandbox-exec")
+                .arg("-f")
+                .arg(&sb)
+                .args(["/bin/sh", "-c", script])
+                .env_clear()
+                .envs(valid.spec().env.iter().map(|(k, v)| (k, v)))
+                .current_dir(&valid.spec().chdir)
+                .output()
+                .unwrap();
+            (
+                o.status.success(),
+                format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&o.stdout),
+                    String::from_utf8_lossy(&o.stderr)
+                ),
+            )
+        };
+        let (ok, said) = sh("cat <<EOF\nfrom a here-document\nEOF");
+        assert!(ok && said == "from a here-document\n", "{said}");
+        let tag = std::process::id();
+        for path in [
+            format!("/private/tmp/drgnx-job-{tag}"),
+            format!("/private/var/tmp/drgnx-job-{tag}"),
+            format!("/tmp/drgnx-job-{tag}"),
+            format!("/private/tmp/sh-thd-dir-{tag}/inside"),
+        ] {
+            let (ok, said) = sh(&format!(
+                "mkdir -p \"$(dirname '{path}')\" 2>/dev/null; : > '{path}'"
+            ));
+            assert!(
+                !ok && said.contains("Operation not permitted"),
+                "{path}: {said}"
+            );
+            assert!(!Path::new(&path).exists(), "{path}");
+        }
+        let _ = std::fs::remove_dir(format!("/private/tmp/sh-thd-dir-{tag}"));
     }
 
     /// [D] The install: mise runs in the root with its folders and Rust's homes there, and each pin is recorded; a

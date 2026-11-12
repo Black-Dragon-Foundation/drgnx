@@ -165,10 +165,11 @@ as the job (other programs on the Mac could use that port to reach the same host
 that can't be sandboxed doesn't run. Homebrew is read-only there: a build that asks `brew --prefix
 NAME` (as Emacs's configure does for libgccjit) gets the answer from a small `brew` the runner puts first on the job's
 `PATH`, and `brew install` or `brew update` inside a job fails with a message saying so: install what your jobs
-need in your own account (step 3). `/tmp` is not the job's: its temporary folder is `$TMPDIR`. macOS's `/bin/sh`
-(bash 3.2) ignores `TMPDIR` for here-documents (`cat <<EOF`) and puts them in `/tmp`, or else the working directory, so
-in a job that doesn't write its tree a `/bin/sh` here-document fails ("cannot create temp file for here document");
-write the text to a file in `$TMPDIR` instead.
+need in your own account (step 3). `/tmp` is not the job's: its temporary folder is `$TMPDIR`. The one exception is
+`/bin/sh`'s here-documents (`cat <<EOF`): macOS's `/bin/sh` (bash 3.2) ignores `TMPDIR` for them and makes a file named
+`sh-thd…` directly in `/tmp` or `/var/tmp`, so a job may read and write files of that name there, and nothing else in
+either folder. Those files are bash's own (made only if new, readable by the runner account alone), but other jobs of
+the runner run as the same account and could read one while it exists.
 
 ## Runners on the Work map
 

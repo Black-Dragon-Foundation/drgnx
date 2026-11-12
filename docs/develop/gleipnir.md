@@ -822,8 +822,10 @@ the program may touch is the profile's allow list.
   SharedFrameworks); the account's per-user folder (`getconf DARWIN_USER_DIR`'s parent, by true name) read and written
   (clang's module cache, the compilers' temporary files); `/dev/autofs_nowait` read; `/dev/dtracehelper` and
   `/dev/tty` written (`file-write-data` only, never created or unlinked); the metadata of `/private/tmp` and
-  `/private/var/tmp`; and the mach services `com.apple.system.opendirectoryd.membership` (the xcrun shims' group check)
-  and `com.apple.bsd.dirhelper`. A per-user folder that is `/` or meets `users_dir` is refused.
+  `/private/var/tmp`; the mach services `com.apple.system.opendirectoryd.membership` (the xcrun shims' group check)
+  and `com.apple.bsd.dirhelper`; and `/bin/sh`'s here-documents (`BUILD_HEREDOCS`): read and write of
+  `^/private/tmp/sh-thd[^/]*$` and `^/private/var/tmp/sh-thd[^/]*$`, bash 3.2 making them there whatever `TMPDIR` says,
+  and nothing else of either folder (the user's ruling, 2026-11-11). A per-user folder that is `/` or meets `users_dir` is refused.
 
 ### The profile, in order
 
@@ -838,7 +840,7 @@ policy:
 (allow file-read-metadata (literal …))          ;    directory above an allowed path (stat, never list)
 (allow file-read* (subpath …))                  ; 5. system roots, developer dir, read, write, home, run, tmp
 (allow file-read* (literal "/dev/null") …)      ; 6. the devices, each by name
-(allow sysctl-read) …                           ;    a build's addition: sysctls, its devices, services
+(allow sysctl-read) …                           ;    a build's addition: sysctls, its devices, services, sh-thd*
 (deny file-read* (subpath "/opt/homebrew/var") (regex …) …)          ; 7. Homebrew's data
 (allow file-write* (subpath …))                 ; 8. write, home (rw), tmp
 (allow file-read* (subpath B)) (allow file-write* (subpath B))       ; 9. each bind, in order: rw…
