@@ -27,7 +27,7 @@ mod on {
     use super::*;
     use crate::runners::registry::{Cfg, RegError, Registry, UrdrStore};
     use crate::runners::transport::OpensshTransport;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, OnceLock};
 
     /// This machine's boot id, as a runner's `serve` reports its own: `runner add` of the hub's machine is refused.
@@ -123,14 +123,22 @@ mod on {
 
     /// Where the runners' ssh masters keep their sockets: under the runtime folder, whose paths must stay inside a Unix
     /// socket's 108 bytes with the runner's name and ssh's own suffix (~65 bytes) after them. A longer one (or none)
-    /// gives a private folder under the temporary one, as the hub's own socket does.
+    /// gives a private folder under the temporary one, as the hub's own socket does; under `/tmp` when the temporary
+    /// one is long too (macOS's `/var/folders/…/T/`).
     pub(super) fn link_dir(run: Option<PathBuf>) -> Result<PathBuf, Error> {
+        link_dir_in(run, &std::env::temp_dir())
+    }
+
+    /// [`link_dir`] with TMP as the temporary folder.
+    pub(super) fn link_dir_in(run: Option<PathBuf>, tmp: &Path) -> Result<PathBuf, Error> {
         use std::os::unix::fs::{DirBuilderExt, MetadataExt};
         if let Some(r) = run.filter(|r| r.as_os_str().len() <= 24) {
             return Ok(r);
         }
-        let dir =
-            std::env::temp_dir().join(format!("drgnx-hub-{}", rustix::process::getuid().as_raw()));
+        let name = format!("drgnx-hub-{}", rustix::process::getuid().as_raw());
+        let dir = Some(tmp.join(&name))
+            .filter(|d| d.as_os_str().len() <= 24)
+            .unwrap_or_else(|| Path::new("/tmp").join(&name));
         let fail = |e: std::io::Error| {
             error(
                 ErrorCode::Internal,
@@ -187,7 +195,7 @@ mod on {
 
 #[cfg(all(test, unix, not(target_os = "android")))]
 mod link_dir_tests {
-    use super::on::link_dir;
+    use super::on::{link_dir, link_dir_in};
     use std::path::PathBuf;
 
     // [D] pure
@@ -201,6 +209,14 @@ mod link_dir_tests {
         let d = link_dir(Some(long.clone())).unwrap();
         assert_ne!(d, long);
         assert!(d.as_os_str().len() <= 24, "{d:?}");
+    }
+
+    // [D] pure: a long temporary folder (macOS's /var/folders/…/T/) is passed over for /tmp
+    #[test]
+    fn a_long_temporary_folder_gives_one_under_tmp() {
+        let long = std::path::Path::new("/var/folders/5n/5t77mfb93jd7q8v9s6f0dn0m0000gn/T");
+        let d = link_dir_in(None, long).unwrap();
+        assert!(d.starts_with("/tmp") && d.as_os_str().len() <= 24, "{d:?}");
     }
 }
 
