@@ -11868,6 +11868,89 @@
       "classes": [
         "user"
       ],
+      "doc": "the children of a value the debug console shows, while the stop it is of lasts (after a resume: an error, the value is stale)",
+      "name": "debug/children",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/children`: the children of REFERENCE (a console value's) in SESSION's stop EPOCH (none: the current one).",
+        "properties": {
+          "epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reference": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "reference"
+        ],
+        "title": "DebugChildren",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DebugChild": {
+            "description": "A child: its NAME, VALUE, TYPE, and its own children's REFERENCE when it has some.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "reference": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/children`' answer: the VARIABLES.",
+        "properties": {
+          "variables": {
+            "items": {
+              "$ref": "#/$defs/DebugChild"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "variables"
+        ],
+        "title": "DebugChildList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a what-if fork beside its recorded run: matched on N of M hits before the point, the first difference, each probe's values after it, and how each went on",
       "name": "debug/compare",
       "params": {
@@ -12175,6 +12258,15 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "`debug/evaluate`'s answer: the RESULT, its TYPE, and its children's REFERENCE when it has some.",
         "properties": {
+          "epoch": {
+            "description": "The stop the answer is of: its children are there while that stop lasts (`debug/children`).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "reference": {
             "format": "int64",
             "type": [

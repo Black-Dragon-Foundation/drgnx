@@ -1033,6 +1033,7 @@ The commands of modules that need no installed package are in it, the later stag
                               debug-view debug-view-next debug-view-previous debug-view-expand debug-view-collapse
                               debug-view-activate debug-view-filter debug-set-value debug-copy-value debug-watch-remove
                               debug-watch-move-up debug-watch-move-down ; Run and Debug
+                              debug-console debug-console-history-previous debug-console-history-next ; the console
                               terminal-toggle))   ; C-` is Toggle Terminal, as in VS Code (the panel keeps M-j)
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))

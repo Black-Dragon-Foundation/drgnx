@@ -28,6 +28,8 @@
  ;; chunk of a big list opened from the hub's answer (15 ms)
  (debug-step-variables (:input :p95) 30) (debug-step-variables (:input :max) 80)
  (debug-expand-chunks (:input :p95) 15) (debug-expand-chunks (:input :max) 50)
+ ;; the debug console (spec §10): a 64 KiB batch of output inserted within a frame
+ (debug-console-flood (:input :p95) 16) (debug-console-flood (:input :max) 50)
  ;; recorded runs (spec §19.9): a batch of probe hits to the sparklines within 100 ms at 2,000 hits a second; a scrub to a
  ;; past stop (the file as it ran, its line, banner and variables) within 50 ms.  The hub's two rows, the launch snapshot
  ;; (150 ms p95, 5,000 files unchanged) and a stop's capture (1 ms), are the bench `debug_record' (docs/develop/perf.md)

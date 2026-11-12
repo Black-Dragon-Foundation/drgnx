@@ -952,7 +952,8 @@ impl Front {
             | Params::DebugExpand(_)
             | Params::DebugWatch(_)
             | Params::DebugSetValue(_)
-            | Params::DebugEvaluate(_)) => crate::view::debug::serve(self, &caller, p)
+            | Params::DebugEvaluate(_)
+            | Params::DebugChildren(_)) => crate::view::debug::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
             // what-if forks (`debug/fork*`, `debug/compare`)

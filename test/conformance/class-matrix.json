@@ -60,6 +60,7 @@
   "debug/bisect/narrow": ["user"],
   "debug/bisect/states": ["user"],
   "debug/breakpoints": ["user"],
+  "debug/children": ["user"],
   "debug/compare": ["user"],
   "debug/configs": ["user"],
   "debug/control": ["user"],

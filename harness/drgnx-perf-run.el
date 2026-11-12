@@ -89,9 +89,8 @@ would be bypassed by native code; the cost timed is the Lisp's, the C lights not
 in a side window, with no hub (`drgnx-view-patch-send-function' ignored): what the hub would send comes from here.
 The model and rows are the hub's shapes (view/debug/model.rs): VARIABLES, Locals with 300 variables (v0 to v299)
 and `arr', a 10,000-element list open in its 100 chunks, then CALL STACK with 20 frames.  `drgnx-perf--dv-step' is
-F10: a step's model diff (ten values changed) and its rows patch (those ten rows replaced), drawn.  F8 opens the next
-closed chunk: `debug/expand', answered here as the hub answers it (the chunk's 100 rows inserted, their nodes added),
-drawn before the command returns (the view's await finds them).  `drgnx-perf--dv-stop' undoes it."
+F10: a step's model diff (ten values changed) and its rows patch (those ten rows replaced), drawn.
+`drgnx-perf--dv-stop' undoes it.  (`debug-expand-chunks' runs on the real hub: `drgnx-perf-run--debug-view-hub-form'.)"
   (concat
    (format "(progn (load (expand-file-name \"modules/extra/drgnx-debug\" %S) nil t) " drgnx-ui-repo-dir)
    (prin1-to-string
@@ -103,7 +102,6 @@ drawn before the command returns (the view's await finds them).  `drgnx-perf--dv
        (defvar drgnx-perf--dv-epoch 0)
        (defvar drgnx-perf--dv-chunk 0)
        (defvar drgnx-perf--dv-send nil)
-       (defvar drgnx-perf--dv-why nil "What the first F8 that sent nothing saw.")
        (defvar drgnx-perf--dv-buf nil "The buffer the view's window shows (a twin of its display class).")
        (defvar drgnx-perf--dv-class "unshown" "That buffer's display class: the rows patches name it.")
        (defun drgnx-perf--dv-node (id kind parent label &optional value open)
@@ -166,41 +164,6 @@ drawn before the command returns (the view's await finds them).  `drgnx-perf--dv
            (drgnx-perf--dv-model-send (list (list :nodes (vconcat nodes))))
            (drgnx-perf--dv-rows-send (list (list :replace rows))))
          (with-current-buffer drgnx-perf--dv-buf (drgnx-view-draw-now drgnx-view)))
-       (defun drgnx-perf--dv-call (method params &optional _callback)
-         "`debug/expand' answered as the hub answers it: the chunk's model node open, its 100 elements' nodes and rows
-after it."
-         (when (equal method "debug/expand")
-           (let* ((chunk (plist-get params :node)) (start (* 100 drgnx-perf--dv-chunk)) nodes rows)
-             (dotimes (k 100)
-               (let* ((i (+ start k)) (id (format "%s/%d" chunk i)) (v (format "%d" (* i 3))))
-                 (push (drgnx-perf--dv-node id "var" chunk (format "%d" i) v) nodes)
-                 (push (drgnx-perf--dv-row id 4 (format "  %d: %s" i v)) rows)))
-             (setq nodes (nreverse nodes) rows (nreverse rows))
-             (drgnx-perf--dv-model-send
-              (list (list :nodes (vconcat (list (drgnx-perf--dv-node chunk "chunk" "v:p:Locals/arr"
-                                                                     (format "[%d … %d]" start (+ start 99)) nil t))
-                                          nodes))))
-             (drgnx-perf--dv-rows-send
-              (list (list :replace (list (drgnx-perf--dv-row chunk 3 (format "▾ [%d … %d]" start (+ start 99)))))
-                    (list :insert (list :after chunk :rows rows))))
-             (with-current-buffer drgnx-perf--dv-buf (drgnx-view-draw-now drgnx-view)))))
-       (defun drgnx-perf--dv-open ()
-         "F8: the next closed chunk of `arr' opened from its row, as the view's Expand does."
-         (interactive)
-         (with-current-buffer drgnx-perf--dv-buf
-           (let ((id (format "v:p:Locals/arr/[%d..%d]" (* 100 drgnx-perf--dv-chunk) (+ (* 100 drgnx-perf--dv-chunk) 99))))
-             (goto-char (point-min))
-             (while (and (not (eobp)) (not (equal id (get-text-property (point) drgnx-view-patch-id-prop))))
-               (forward-line 1))
-             (let ((before drgnx-perf--dv-version))
-               (drgnx-debug-view-expand)
-               (when (and (= before drgnx-perf--dv-version) (null drgnx-perf--dv-why))
-                 (setq drgnx-perf--dv-why
-                       (list :id id :at (get-text-property (pos-bol) drgnx-view-patch-id-prop)
-                             :selection (drgnx-view-nav-selection) :openable (drgnx-view-nav-field "openable" id)
-                             :kind (drgnx-debug-view--kind id) :open (drgnx-debug-view--open-p id)
-                             :model-last (ignore-errors (drgnx-view-model-last (gethash "debug" drgnx-view-model--views)))))))
-             (cl-incf drgnx-perf--dv-chunk))))
        (defun drgnx-perf--dv-check (epoch chunk text)
          "t when the keys made EPOCH steps and opened CHUNK chunks and the view shows TEXT; else an error saying what
 it holds."
@@ -208,16 +171,14 @@ it holds."
            (if (and (= drgnx-perf--dv-epoch epoch) (= drgnx-perf--dv-chunk chunk)
                     (save-excursion (goto-char (point-min)) (search-forward text nil t)))
                t
-             (error "Premise: steps %d, chunks %d, %d rows, model %d, rows %d; %S; %S … %S" drgnx-perf--dv-epoch
+             (error "Premise: steps %d, chunks %d, %d rows, model %d, rows %d; %S … %S" drgnx-perf--dv-epoch
                     drgnx-perf--dv-chunk (count-lines (point-min) (point-max)) drgnx-perf--dv-model
-                    drgnx-perf--dv-version drgnx-perf--dv-why (buffer-substring-no-properties (point-min) (min (point-max) 100))
+                    drgnx-perf--dv-version (buffer-substring-no-properties (point-min) (min (point-max) 100))
                     (key-binding (kbd "<f10>"))))))
        (defun drgnx-perf--dv-start ()
          (setq drgnx-perf--dv-send drgnx-view-patch-send-function drgnx-view-patch-send-function #'ignore
                ;; the model's versions go on across workloads: Sjá keeps the view's model while the session lives
-               drgnx-perf--dv-version 0 drgnx-perf--dv-epoch 0 drgnx-perf--dv-chunk 0
-               drgnx-perf--dv-why nil)
-         (advice-add 'drgnx-debug-view--call :override #'drgnx-perf--dv-call)
+               drgnx-perf--dv-version 0 drgnx-perf--dv-epoch 0 drgnx-perf--dv-chunk 0)
          (when (get-buffer drgnx-debug-view-buffer-name) (kill-buffer drgnx-debug-view-buffer-name))
          (let ((w (cl-letf (((symbol-function 'drgnx-debug-launch-root) (lambda () "/nowhere")))
                     (display-buffer (drgnx-debug-view--buffer)
@@ -235,14 +196,194 @@ it holds."
          (with-current-buffer drgnx-perf--dv-buf (drgnx-view-draw-now drgnx-view))
          t)
        (defun drgnx-perf--dv-stop ()
-         (advice-remove 'drgnx-debug-view--call #'drgnx-perf--dv-call)
          (setq drgnx-view-patch-send-function drgnx-perf--dv-send)
          (when-let* ((b (get-buffer drgnx-debug-view-buffer-name))) (kill-buffer b))
          (when (buffer-live-p drgnx-perf--dv-buf) (kill-buffer drgnx-perf--dv-buf))
-         (global-unset-key (kbd "<f10>")) (global-unset-key (kbd "<f8>"))
+         (global-unset-key (kbd "<f10>"))
          t)
        (global-set-key (kbd "<f10>") #'drgnx-perf--dv-step)
-       (global-set-key (kbd "<f8>") #'drgnx-perf--dv-open)
+       t))
+   ")"))
+
+(defun drgnx-perf-run--debug-view-hub-form ()
+  "`debug-expand-chunks' on the hub users get, as a form string, after `drgnx-perf-run--hub-form' and
+`drgnx-perf-run--debug-view-setup-form': a test-hooks Ratatoskr ($DRGNX_RATATOSKR_BIN) runs a debug session of its
+mock adapter (`ratatoskr debug-mock SCRIPT'), stopped with Locals of 300 variables and `arr', 10,000 elements; the
+Run and Debug view shows it in a side window with `arr' open on its 100 chunks.  F8 opens the next chunk from its
+row: the view's Expand, the hub's `variables' call to the adapter (the script answers each page in order), its rows
+drawn in the command.  `drgnx-perf--dvh-stop' ends the session and the hub."
+  (prin1-to-string
+   '(progn
+      (defun drgnx-perf--dvh-script (file)
+        "The mock adapter's script in FILE: the stop, then each chunk's page in order, then the end."
+        (let ((vars (vconcat (cl-loop for i below 300
+                                      collect (list :name (format "v%d" i) :value (format "%d" (* i 7))
+                                                    :variablesReference 0))
+                             (list (list :name "arr" :value "list[10000]" :variablesReference 8
+                                         :indexedVariables 10000 :namedVariables 0))))
+              (pages (cl-loop for c below 100
+                              collect (list :expect "variables"
+                                            :args (list :variablesReference 8 :filter "indexed" :start (* c 100)
+                                                        :count 100)
+                                            :ok (list :variables
+                                                      (vconcat (cl-loop for i from (* c 100) below (* (1+ c) 100)
+                                                                        collect (list :name (format "%d" i)
+                                                                                      :value (format "%d" (* i 3))
+                                                                                      :variablesReference 0))))))))
+          (with-temp-file file
+            (insert (json-serialize
+                     (vconcat
+                      (list (list :expect "initialize" :ok (list :supportsConfigurationDoneRequest t))
+                            (list :expect "launch")
+                            (list :event "initialized")
+                            (list :expect "configurationDone")
+                            (list :event "stopped" :body (list :reason "breakpoint" :threadId 1 :allThreadsStopped t))
+                            (list :expect "threads" :ok (list :threads (vector (list :id 1 :name "main"))))
+                            (list :expect "stackTrace"
+                                  :ok (list :stackFrames (vector (list :id 1000 :name "main" :line 9 :column 1
+                                                                       :source (list :path "/p/a.py")))
+                                            :totalFrames 1))
+                            (list :expect "scopes"
+                                  :ok (list :scopes (vector (list :name "Locals" :variablesReference 7
+                                                                  :expensive :false))))
+                            (list :expect "variables" :args (list :variablesReference 7) :ok (list :variables vars)))
+                      pages
+                      (list (list :expect "disconnect") (list :die t))))))))
+      (defun drgnx-perf--dvh-goto (suffix)
+        "Point to the row whose node's id ends in SUFFIX in the view's buffer; nil when there is none."
+        (with-current-buffer drgnx-perf--dv-buf
+          (goto-char (point-min))
+          (let (found)
+            (while (and (not found) (not (eobp)))
+              (let ((id (get-text-property (point) drgnx-view-patch-id-prop)))
+                (if (and id (string-suffix-p suffix id)) (setq found (point)) (forward-line 1))))
+            found)))
+      (defun drgnx-perf--dvh-text ()
+        (with-current-buffer drgnx-perf--dv-buf
+          (buffer-substring-no-properties (point-min) (min (point-max) 300))))
+      (defun drgnx-perf--dvh-stop ()
+        "End the view, the session (the hub stops its adapter) and the hub."
+        (when (buffer-live-p drgnx-perf--dv-buf) (kill-buffer drgnx-perf--dv-buf))
+        (when-let* ((b (get-buffer drgnx-debug-view-buffer-name))) (kill-buffer b))
+        (drgnx-perf--hub-stop)
+        (global-unset-key (kbd "<f8>"))
+        t)
+      (defun drgnx-perf--dvh-start ()
+        "A hub, the mock's session stopped, the view with `arr' open on its chunks; F8 bound."
+        (when drgnx-perf--hub (drgnx-perf--dvh-stop))
+        ;; `drgnx-perf--hub-start' without its agent profile (no `ratatoskr-mock' here: the adapter is the hub's own)
+        (let ((dir (make-temp-file "drgnx-perf-hub" t)))
+          (unless (and drgnx-perf--hub-bin (file-executable-p drgnx-perf--hub-bin))
+            (error "debug-expand-chunks needs DRGNX_RATATOSKR_BIN (a test-hooks ratatoskr)"))
+          (setq drgnx-perf--hub-dir dir)
+          (make-directory (expand-file-name "config" dir) t)
+          (let ((process-environment (append (list (concat "DRGNX_CONFIG_DIR=" (expand-file-name "config" dir))
+                                                   "RATATOSKR_SUPERVISOR=none"
+                                                   (concat "DRGNX_DIR=" (directory-file-name drgnx-dir)))
+                                             process-environment)))
+            (setq drgnx-perf--hub
+                  (make-process :name "ratatoskr" :noquery t :connection-type 'pipe
+                                :buffer (generate-new-buffer " *ratatoskr*")
+                                :command (list drgnx-perf--hub-bin "serve" "--foreground" "--parent-pid"
+                                               (number-to-string (emacs-pid))))))
+          (unless (drgnx-perf--wait 30 #'drgnx-hub-running-p) (error "Ratatoskr did not answer a ping"))
+          (drgnx-hub-connect)
+          (drgnx-hub-ensure))
+        (let* ((proj (expand-file-name "proj" drgnx-perf--hub-dir))
+               (script (expand-file-name "script.json" drgnx-perf--hub-dir))
+               (adapters (vector (list :id "mock" :name "Mock" :types ["mock"] :find (list :path drgnx-perf--hub-bin)
+                                       :start (list :stdio (vector "{program}" "debug-mock" script))))))
+          (make-directory (expand-file-name ".vscode" proj) t)
+          (with-temp-file (expand-file-name ".vscode/launch.json" proj)
+            (insert (json-serialize (list :version "0.2.0"
+                                          :configurations (vector (list :type "mock" :request "launch" :name "Mock"
+                                                                        :program "app"))))))
+          (drgnx-perf--dvh-script script)
+          (setq drgnx-perf--dv-chunk 0)
+          (drgnx-hub-call-sync "debug/trust" (list :root proj :trusted t))
+          (let ((r (drgnx-hub-call-sync "debug/start" (list :root proj :config "launch:0" :adapters adapters) 10)))
+            (unless (plist-get r :session) (error "Premise: the mock's session did not start: %S" r)))
+          (when-let* ((b (get-buffer drgnx-debug-view-buffer-name))) (kill-buffer b))
+          (let ((w (cl-letf (((symbol-function 'drgnx-debug-launch-root) (lambda () proj)))
+                     (display-buffer (drgnx-debug-view--buffer)
+                                     '(display-buffer-in-side-window (side . left) (window-width . 48))))))
+            ;; the window's display class gets its own buffer (a twin) as its env goes out, as the sidebar's does
+            (drgnx-view-env-update "debug")
+            (setq drgnx-perf--dv-buf (window-buffer w)))
+          (unless (drgnx-perf--wait 30 (lambda () (drgnx-perf--dvh-goto "/arr")))
+            (error "Premise: the stop's rows did not come: %S" (drgnx-perf--dvh-text)))
+          (with-current-buffer drgnx-perf--dv-buf
+            (drgnx-perf--dvh-goto "/arr")
+            (drgnx-debug-view-expand))
+          (unless (drgnx-perf--wait 10 (lambda () (drgnx-perf--dvh-goto "/arr/[9900..9999]")))
+            (error "Premise: arr's chunks did not come: %S" (drgnx-perf--dvh-text))))
+        (global-set-key (kbd "<f8>") #'drgnx-perf--dvh-open)
+        t)
+      (defun drgnx-perf--dvh-open ()
+        "F8: the next closed chunk of `arr' opened from its row (the view's Expand, the hub's answer drawn)."
+        (interactive)
+        (let ((s (* 100 drgnx-perf--dv-chunk)))
+          (with-current-buffer drgnx-perf--dv-buf
+            (unless (drgnx-perf--dvh-goto (format "/arr/[%d..%d]" s (+ s 99)))
+              (error "Premise: no row for chunk %d: %S" s (drgnx-perf--dvh-text)))
+            (drgnx-debug-view-expand)
+            (cl-incf drgnx-perf--dv-chunk))))
+      (defun drgnx-perf--dvh-check ()
+        "t when F8 opened the 100 chunks and the last one's last element shows; else an error saying what is there."
+        (with-current-buffer drgnx-perf--dv-buf
+          (if (and (= drgnx-perf--dv-chunk 100)
+                   (drgnx-perf--dvh-goto "/arr/[9900..9999]/9999")
+                   (string-match-p "29997" (buffer-substring-no-properties (pos-bol) (pos-eol))))
+              t
+            (error "Premise: chunks %d, %d rows; %S" drgnx-perf--dv-chunk (count-lines (point-min) (point-max))
+                   (drgnx-perf--dvh-text)))))
+      t)))
+
+(defun drgnx-perf-run--debug-console-setup-form ()
+  "The debug console's flood (spec §10), as a form string: 10 MB of a program's output as the hub sends it, 160
+batches of 64 KiB (640 lines of 100 characters, every tenth coloured), made before the keys; F8 inserts the next
+batch in the console, shown in a bottom window that follows its end.  `drgnx-perf--dc-stop' undoes it."
+  (concat
+   (format "(progn (load (expand-file-name \"modules/extra/drgnx-debug\" %S) nil t) " drgnx-ui-repo-dir)
+   (prin1-to-string
+    '(progn
+       (defvar drgnx-perf--dc-batches nil "The batches still to send.")
+       (defvar drgnx-perf--dc-sent 0 "The batches sent.")
+       (defun drgnx-perf--dc-start ()
+         (setq drgnx-perf--dc-sent 0
+               drgnx-perf--dc-batches
+               (cl-loop for b below 160
+                        collect (list :session "perf"
+                                      :lines (cl-loop for i below 640
+                                                      for n = (+ (* b 640) i)
+                                                      collect (nconc (list :text (format "%06d %s" n (make-string 93 ?x))
+                                                                           :category "stdout" :count 1)
+                                                                     (and (zerop (% i 10))
+                                                                          (list :runs (list (list 0 6 "drgnx-debug-console-red")))))))))
+         (when-let* ((b (get-buffer drgnx-debug-console-buffer-name))) (kill-buffer b))
+         (let ((w (display-buffer (drgnx-debug-console--buffer)
+                                  '(display-buffer-in-side-window (side . bottom) (window-height . 12)))))
+           (set-window-point w (with-current-buffer (window-buffer w) (point-max))))
+         (global-set-key (kbd "<f8>") #'drgnx-perf--dc-batch)
+         t)
+       (defun drgnx-perf--dc-batch ()
+         "F8: the next batch into the console."
+         (interactive)
+         (drgnx-debug-console-output (pop drgnx-perf--dc-batches))
+         (cl-incf drgnx-perf--dc-sent))
+       (defun drgnx-perf--dc-check ()
+         "t when the 160 batches went in, the console kept its last 10,000 lines and shows the last one."
+         (with-current-buffer drgnx-debug-console-buffer-name
+           (if (and (= drgnx-perf--dc-sent 160) (= drgnx-debug-console--lines 10000)
+                    (save-excursion (goto-char (point-min)) (search-forward "102399 " nil t)))
+               t
+             (error "Premise: %d batches, %d lines" drgnx-perf--dc-sent drgnx-debug-console--lines))))
+       (defun drgnx-perf--dc-stop ()
+         (when-let* ((b (get-buffer drgnx-debug-console-buffer-name)))
+           (let ((kill-buffer-query-functions nil)) (kill-buffer b)))
+         (setq drgnx-perf--dc-batches nil)
+         (global-unset-key (kbd "<f8>"))
+         t)
        t))
    ")"))
 
@@ -2161,7 +2302,7 @@ a :measure without :actions each have :timeout seconds to answer (120)."
                           " (global-unset-key (kbd \"<f8>\")) (drgnx-perf--debug-stop) t)"))
       ;; the Run and Debug view (spec §7): a step's model diff and rows patch, ten of 300 variables changed, drawn
       ;; within 30 ms with the hub's half (the bench `debug_view'); a chunk of a 10,000-element list opened (100 rows
-      ;; inserted from the hub's answer) within 15 ms
+      ;; inserted from the hub's answer: the real hub, a test-hooks build, and its mock adapter) within 15 ms
       (debug-step-variables
        :setup ,(drgnx-perf-run--debug-view-setup-form)
        :each "(drgnx-perf--dv-start)"
@@ -2169,11 +2310,20 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :check "(drgnx-perf--dv-check 120 0 \"v0: 120\")"
        :teardown "(drgnx-perf--dv-stop)")
       (debug-expand-chunks
-       :setup ,(drgnx-perf-run--debug-view-setup-form)
-       :each "(drgnx-perf--dv-start)"
+       :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " " (drgnx-perf-run--debug-view-setup-form) " "
+                       (drgnx-perf-run--debug-view-hub-form) " t)")
+       :each "(drgnx-perf--dvh-start)"
        :actions ,(funcall keys "<f8>" 100)   ; p95 is judged from 100 samples
-       :check "(drgnx-perf--dv-check 0 100 \"9999: 29997\")"
-       :teardown "(drgnx-perf--dv-stop)")
+       :check "(drgnx-perf--dvh-check)"
+       :teardown "(drgnx-perf--dvh-stop)")
+      ;; the debug console (spec §10): a program's 10 MB of output as the hub batches it (64 KiB each), inserted with
+      ;; the 10,000-line cap; no batch keeps the editor more than a frame
+      (debug-console-flood
+       :setup ,(drgnx-perf-run--debug-console-setup-form)
+       :each "(drgnx-perf--dc-start)"
+       :actions ,(funcall keys "<f8>" 160)
+       :check "(drgnx-perf--dc-check)"
+       :teardown "(drgnx-perf--dc-stop)")
       ;; recorded runs (spec §19.9): a batch of probe hits (100, ten probes, at the hub's 20 batches a second: 2,000 hits a
       ;; second) to the sparklines at the lines' ends, 40 batches, within 100 ms each
       (debug-probe-flood
@@ -2898,7 +3048,7 @@ version and the commit, as JSON in FILE."
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "graphical debugging: its allocation, CPU and rows are set from three pinned runs on the desktop island (the plan's perf step)"))
               '(debug-gutter-scroll debug-gutter-baseline debug-breakpoint-click debug-probe-flood debug-scrub
-                                    debug-step-line debug-toolbar-show debug-step-variables debug-expand-chunks
+                                    debug-step-line debug-toolbar-show debug-step-variables debug-expand-chunks debug-console-flood
                                     debug-bisect-typing))
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))

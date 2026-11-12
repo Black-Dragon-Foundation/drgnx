@@ -19,7 +19,9 @@
 (require 'drgnx-debug-origin (expand-file-name "drgnx-debug-origin" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-toolbar (expand-file-name "drgnx-debug-toolbar" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-view (expand-file-name "drgnx-debug-view" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-debug-console (expand-file-name "drgnx-debug-console" (file-name-directory (macroexp-file-name))))
 (defvar drgnx-statusbar-left)
+(declare-function drgnx-wb-define-tab "drgnx-area")
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (defvar drgnx-hub-event-functions)
 
@@ -40,7 +42,7 @@ on it while it lives.")
 (defun drgnx-debug--event (event data)
   "`drgnx-hub-event-functions': `debug-state' gives the sessions (the session keys, the toolbar and the status bar
 follow them, a running session's stop marks go), `debug-frame' marks and opens a stop's line, `debug-ended' takes its
-marks away."
+marks away, `debug-output' goes to the debug console."
   (pcase event
     ("debug-state"
      (setq drgnx-debug--sessions (append (plist-get data :sessions) nil))
@@ -48,7 +50,9 @@ marks away."
        (setq drgnx-debug--focus nil))
      (drgnx-debug-session-mode (if drgnx-debug--sessions 1 -1))
      (drgnx-debug-gutter-stop-sessions drgnx-debug--sessions)
+     (drgnx-debug-console-sessions drgnx-debug--sessions)
      (drgnx-debug-toolbar-sync))
+    ("debug-output" (drgnx-debug-console-output data))
     ("debug-frame" (drgnx-debug-gutter-show-frame data))
     ("debug-ended" (drgnx-debug-gutter-stop-clear (plist-get data :session)))))
 
@@ -109,6 +113,7 @@ the toolbar's cards go too."
 (defun drgnx-debug--teardown ()
   "The session keys go with the module (a running session turned them on, not the setup), and the column."
   (drgnx-debug-view--teardown)
+  (drgnx-debug-console--teardown)
   (drgnx-debug-session-mode -1)
   (drgnx-debug-timeline-mode -1)
   (drgnx-debug-bisect-events-mode -1)
@@ -196,6 +201,15 @@ the toolbar's cards go too."
                                                       (if (memq 'branch drgnx-statusbar-left)
                                                           (append (butlast drgnx-statusbar-left (length tail)) '(debug) tail)
                                                         (cons 'debug drgnx-statusbar-left))))))
+                              ;; the Debug Console tab of the panel (drgnx-debug-console.el); its input's keys in its
+                              ;; own map
+                              (drgnx-wb-define-tab 'panel 'debug-console :title "Debug Console")
+                              (let ((in-console (lambda () (derived-mode-p 'drgnx-debug-console-mode))))
+                                (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-console-commands)
+                                  (if (memq id '(debug-console debug-console-clear))
+                                      (drgnx-command-define id :category "Debug" :title title :command fn :doc doc)
+                                    (drgnx-command-define id :category "Debug" :title title :command fn :doc doc
+                                                          :map 'drgnx-debug-console-mode-map :when in-console))))
                               ;; Run and Debug: the sidebar view the hub builds (drgnx-debug-view.el); its row keys in
                               ;; its own map
                               (drgnx-wb-define-section 'run-and-debug :view 'debug :slot 0 :title " RUN AND DEBUG"

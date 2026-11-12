@@ -392,7 +392,10 @@ Editor: `modules/extra/drgnx-debug-view.el`, the section `run-and-debug` of the 
   with its message and not asked again in that stop.
 - **Paging:** a node with more than 100 `indexedVariables` lists its named children (`filter: named`, unless
   `namedVariables` is 0), then chunks; past 100 chunks the chunk size grows by 100 (100,000 is ten chunks of 10,000,
-  each a hundred of 100). Only an opened leaf chunk is fetched (`filter: indexed`, `start`, `count`).
+  each a hundred of 100). Only an opened leaf chunk is fetched (`filter: indexed`, `start`, `count`). A view keeps
+  at most `PAGE_CAP` = 64 pages (leaf chunks) open: opening one more closes the one opened longest ago, and a page
+  that closes lets its elements, and all fetched under them, go (`Opened::set` returns the pages, `Tree::forget`
+  drops them), so a long look through a big list holds what 64 pages hold (the bench `debug-hub-memory-pages`).
 - **Lazy values** (`presentationHint.lazy`) show `(…)`; opened, the one child's value shows in their place (its own
   children then come from `PATH/(…)`).
 - **Changed values:** the selected session's values at its last stop are kept by `evaluateName` (else path); a value
@@ -419,7 +422,10 @@ Methods (runstav `methods::debug`, the user class; served by `view::debug::serve
 - `debug/watch {root, op: add | edit | remove | move, index?, expr?, to?}` → the list.
 - `debug/set-value {view, node, value}` → `{value}`: `setExpression` when the adapter has it and the node an
   `evaluateName`, else `setVariable` on the parent's reference; the view's fetched values are then fetched again.
-- `debug/evaluate {session, frame?, expr, context: repl | hover | clipboard | watch}` → `{result, type?, reference?}`
+- `debug/evaluate {session, frame?, expr, context: repl | hover | clipboard | watch}` → `{result, type?, reference?,
+  epoch?}` (EPOCH: the stop the answer is of)
+- `debug/children {session, reference, epoch?}` → `{variables: [{name, value, type?, reference?}]}`: a value's
+  children while its stop (EPOCH, default the current one) lasts; after it, the error says the stop is over.
   (Copy Value uses `clipboard` when the adapter has `supportsClipboardContext`).
 - `debug/breakpoints`' ops `filter {adapter, name, enabled}` (kept per adapter type and sent to its sessions at once),
   `enable-all {enabled}` and `remove-all` (function breakpoints too).
@@ -427,6 +433,35 @@ Methods (runstav `methods::debug`, the user class; served by `view::debug::serve
 The editor's half asks on the connection the rows come on (`drgnx-hub--events`): the hub keeps the view per
 connection. A key that opens or closes a node waits up to `drgnx-debug-view-await-limit` (12 ms) for the rows, so
 they show in the key's own frame. The header line holds Start (▶) and the configuration picker.
+
+## The debug console (spec §10)
+
+The panel's **Debug Console** tab. The hub makes the lines; the editor only inserts them.
+
+- **Hub (`debug/console.rs`):** a session's `output` events (probe hits are taken out first, see Recorded runs) go
+  into its `Console`: text split into lines (the end of an event with no newline waits for the rest, or for the
+  session's end), ANSI SGR made into face runs in characters (`drgnx-debug-console-red` …, bold, faint, italic,
+  underline; 256-colour's first 16; other escapes dropped) for `stdout` / `stderr` or an adapter with
+  `supportsANSIStyling`, identical consecutive lines counted (`count`; one that continues the last line of the
+  batch before says `more`), `group` start / end indenting the lines between (`depth`; folding them is not built),
+  a logpoint's `source {path, line}` and an output's structured value (`node {reference}`) kept, `telemetry` left
+  out. The lines wait in a batch the session's loop sends 50 ms after the first (`BATCH`) or at once past 64 KiB
+  (`BATCH_BYTES`), as the event `debug-output {session, lines: [{text, category, count, runs?, depth?, source?,
+  node?, more?}], skipped?}` to every editor. A batch keeps at most 4 MB (`QUEUE_CAP`); past it the oldest lines
+  go and `skipped` counts them. At a session's end its last batch goes with it.
+- A `postDebugTask` that fails says so in the console (`important`), after the session's own lines.
+- **Editor (`drgnx-debug-console.el`):** inserts each line with the hub's runs and its category's face (stderr warn,
+  `important` error, `console` dim, a logpoint's in its own face with its source after it), a count as ` ×N`, keeps
+  the last `drgnx-debug-console-max-lines` (10,000) and scrolls the windows that showed the end. The input at the
+  bottom: RET evaluates it in the selected frame of the console's session (`debug/evaluate`, context `repl`; the
+  header's chip picks the session), S-RET adds a line, history on the profile's keys (Up / Down in VS Code keys,
+  M-p / M-n in Emacs keys, C-p / C-n in Vim keys; in the output they move by line). A result or an output with
+  children shows a chevron: RET or TAB opens it in place (`debug/children {session, reference, epoch}` →
+  `{variables: [{name, value, type?, reference?}]}`; `debug/evaluate`'s answer names its stop as `epoch`); after a
+  resume the stop is over, the hub says so, and the value turns stale (dim, no longer opens).
+- The console stays after its session ends; starting a configuration of the same name again clears it once no
+  session of the last run is left (`drgnx-debug-console-clear-on-restart`, on by default).
+- Completion in the input (`completions`) is tier 2 and not built yet.
 
 ## Live adapters: the image
 

@@ -438,6 +438,7 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
             d.wait_end(&id).await;
             if let Err(e) = super::tasks::run(&after, &env).await {
                 tracing::warn!(target: "drgnx::debug", "postDebugTask of {id}: {e}");
+                d.console_say(&id, &format!("postDebugTask failed: {e}"), "important");
             }
         });
     }
