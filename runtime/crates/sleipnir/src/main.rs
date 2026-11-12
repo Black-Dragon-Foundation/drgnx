@@ -2,6 +2,7 @@
 //!
 //! ```text
 //! sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation
+//!                [--watchdog DIR] [--allow-own-account] [--allow-admin]
 //!                                             the hub's control channel, on stdin and stdout
 //! sleipnir job-exec <attempt folder>          runs the folder's job.json, writes its result.json
 //! sleipnir job-helper --dir D [--hub-allow F] the attempt's keys, proxy and disk watch, until stdin ends
@@ -16,7 +17,7 @@
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation \
-                     [--watchdog DIR]\n       \
+                     [--watchdog DIR] [--allow-own-account] [--allow-admin]\n       \
                      sleipnir job-exec <attempt folder>\n       \
                      sleipnir watchdog --provider aws|gcp --idle S --lifetime S --unattended S --root DIR --dir DIR\n       \
                      sleipnir job-helper --dir D [--hub-allow FILE]\n       \
@@ -238,12 +239,32 @@ fn job_exec(dir: &std::path::Path) -> ExitCode {
     }
 }
 
-/// A Mac's job-exec: the command under `sandbox-exec` (`darwin::jobexec`; anything else is refused).
+/// A Mac's job-exec: the command under `sandbox-exec` (`darwin::jobexec`; anything else is refused), and a networked
+/// job's proxy (`darwin::proxy`) for its life; a proxy that can't start fails the job's setup.
 #[cfg(target_os = "macos")]
 fn job_exec(dir: &std::path::Path) -> ExitCode {
     match sleipnir::linux::jobexec::JobExec::read(dir) {
         Ok(spec) => {
-            sleipnir::darwin::jobexec::run(dir, &spec);
+            let wants = spec
+                .helper
+                .as_ref()
+                .and_then(|h| Some((h.proxy_fd?, h.proxy_port?)))
+                .filter(|_| sleipnir::darwin::jobexec::refusal(&spec).is_none());
+            #[cfg(feature = "runner")]
+            let proxy = wants
+                .map(|(fd, port)| sleipnir::darwin::proxy::take(fd, port, dir))
+                .transpose();
+            #[cfg(not(feature = "runner"))]
+            let proxy: Result<Option<()>, String> = match wants {
+                Some(_) => Err("this build has no proxy".into()),
+                None => Ok(None),
+            };
+            let setup = proxy
+                .as_ref()
+                .err()
+                .map(|e| format!("the job's proxy: {e}"));
+            sleipnir::darwin::jobexec::run_with(dir, &spec, setup);
+            drop(proxy);
             ExitCode::SUCCESS
         }
         Err(e) => {

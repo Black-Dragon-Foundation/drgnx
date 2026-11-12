@@ -538,11 +538,10 @@ impl Fixture {
             "GATEWAY_PORT" => a.gateway_tcp.port().to_string(),
             "TCP_LO_PORT" => a.tcp_lo.port().to_string(),
             "FREE_PORT" => a.free_port.to_string(),
-            // The developer dir the hub gives the Seatbelt profile: `${GIT}`'s, three levels up (`<dev>/usr/bin/git`).
-            "DEVELOPER_DIR" => draugr::git::git_program()
-                .ok()
-                .and_then(|g| g.path.ancestors().nth(3).map(|d| s(d.to_path_buf())))
-                .ok_or("${DEVELOPER_DIR}: no developer dir's git here")?,
+            // The developer dir the hub gives the Seatbelt profile: the active one, by its true name (an Xcode too,
+            // whose git draugr refuses).
+            "DEVELOPER_DIR" => s(developer_dir()?),
+            "LLDB_FRAMEWORKS" => s(lldb_frameworks(&developer_dir()?)),
             "FAKE_BWRAP" => s(self
                 .root_dirs
                 .first()
@@ -877,9 +876,56 @@ async fn echo<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static>(
     let _ = tokio::io::copy(&mut r, &mut w).await;
 }
 
+/// The active developer dir, by its true name, as the hub's Seatbelt profile has it.
+fn developer_dir() -> Result<PathBuf, String> {
+    draugr::git::developer_dir()
+        .ok()
+        .and_then(|d| std::fs::canonicalize(d).ok())
+        .ok_or_else(|| "${DEVELOPER_DIR}: no active developer dir here".to_owned())
+}
+
+/// Where LLDB.framework lives for the developer dir DEV: beside an Xcode's `Contents/Developer` (its
+/// `SharedFrameworks`, read only under the loopback flag), in the Command Line Tools' own `Library/PrivateFrameworks`
+/// (inside the developer dir), or, with neither, DEV itself.
+fn lldb_frameworks(dev: &Path) -> PathBuf {
+    if let Some(app) = dev
+        .ends_with("Contents/Developer")
+        .then(|| dev.parent())
+        .flatten()
+    {
+        return app.join("SharedFrameworks");
+    }
+    let private = dev.join("Library/PrivateFrameworks");
+    if private.is_dir() {
+        private
+    } else {
+        dev.to_path_buf()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lldbs_frameworks_are_beside_xcodes_developer_dir_and_inside_the_command_line_tools() {
+        let t = tempfile::tempdir().unwrap();
+        // Xcode: beside its Contents/Developer, granted only under the loopback flag
+        let dev = t.path().join("Xcode.app/Contents/Developer");
+        std::fs::create_dir_all(&dev).unwrap();
+        assert_eq!(
+            lldb_frameworks(&dev),
+            t.path().join("Xcode.app/Contents/SharedFrameworks")
+        );
+        // the Command Line Tools: their own Library/PrivateFrameworks, inside the developer dir
+        let clt = t.path().join("CommandLineTools");
+        std::fs::create_dir_all(clt.join("Library/PrivateFrameworks")).unwrap();
+        assert_eq!(lldb_frameworks(&clt), clt.join("Library/PrivateFrameworks"));
+        // neither: the developer dir itself
+        let bare = t.path().join("bare");
+        std::fs::create_dir_all(&bare).unwrap();
+        assert_eq!(lldb_frameworks(&bare), bare);
+    }
 
     #[test]
     fn canaries_are_random_and_never_under_the_real_home() {

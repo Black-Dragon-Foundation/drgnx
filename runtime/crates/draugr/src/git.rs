@@ -69,6 +69,20 @@ pub fn git_program() -> Result<TrustedProgram, FsError> {
     platform_git()
 }
 
+/// macOS: the active developer dir, the target of xcode-select's root-owned link (checked as for [`git_program`]),
+/// whether or not its git is trusted: an Xcode under `/Applications` is selected even though its git is refused. What
+/// a Seatbelt profile reads. Elsewhere none.
+pub fn developer_dir() -> Result<PathBuf, FsError> {
+    #[cfg(target_os = "macos")]
+    {
+        developer_dir_from_link(Path::new("/private/var/db/xcode_select_link"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(FsError::Unsupported("no developer dir on this OS"))
+    }
+}
+
 // Linux: the distribution's git. Android: no git at a root-owned path, so the refusal at the end of the chain.
 #[cfg(target_os = "linux")]
 fn platform_git() -> Result<TrustedProgram, FsError> {
@@ -96,12 +110,20 @@ const WHY_NOT_A_LINK: &str = "not a link";
 #[cfg(any(test, target_os = "macos"))]
 const WHY_LINK_OWNER: &str = "the link is not owned by root";
 
-/// The git under the developer dir that `link` (xcode-select's link) names. Every directory from the link's own up
-/// to `/` is opened without links and must be root's and not group- or world-writable; the link must be root's;
-/// `<target>/usr/bin/git` must pass `trusted_program` (so a relative or `..` target is refused). Compiled for tests
-/// on every OS, so the resolver runs against a fixture on Linux.
+/// The git under the developer dir that `link` (xcode-select's link) names ([`developer_dir_from_link`]):
+/// `<target>/usr/bin/git` must pass `trusted_program`. Compiled for tests on every OS, so the resolver runs against a
+/// fixture on Linux.
 #[cfg(any(test, target_os = "macos"))]
 fn git_from_xcode_link(link: &Path) -> Result<TrustedProgram, FsError> {
+    let dev = developer_dir_from_link(link)?;
+    eitri::trusted_program(&[&dev.join("usr/bin/git")])
+}
+
+/// The developer dir `link` (xcode-select's link) names. Every directory from the link's own up to `/` is opened
+/// without links and must be root's and not group- or world-writable; the link must be root's; the target must be
+/// absolute with no `..`.
+#[cfg(any(test, target_os = "macos"))]
+fn developer_dir_from_link(link: &Path) -> Result<PathBuf, FsError> {
     use std::ffi::CString;
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStringExt;
@@ -147,7 +169,14 @@ fn git_from_xcode_link(link: &Path) -> Result<TrustedProgram, FsError> {
     }
     buf.truncate(n);
     let dev = PathBuf::from(OsString::from_vec(buf));
-    eitri::trusted_program(&[&dev.join("usr/bin/git")])
+    if !dev.is_absolute()
+        || dev
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+    {
+        return Err(untrusted(WHY_NOT_A_LINK));
+    }
+    Ok(dev)
 }
 
 /// `fstat` of `fd`, or with `name`, `fstatat(fd, name, AT_SYMLINK_NOFOLLOW)`.
@@ -677,6 +706,32 @@ mod tests {
             );
         }
         assert_eq!(git_from_xcode_link(&link).unwrap().path, git);
+    }
+
+    #[test]
+    fn the_active_developer_dir_is_the_links_even_where_its_git_is_refused() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        if !is_root() {
+            eprintln!(
+                "the_active_developer_dir_is_the_links_even_where_its_git_is_refused: needs uid 0; skipped"
+            );
+            return;
+        }
+        let (top, link, _) = devdir_fixture();
+        let dev = top.path().join("dev");
+        assert_eq!(developer_dir_from_link(&link).unwrap(), dev);
+        // Xcode under an admin-writable /Applications: its git is refused, but it is still the selected developer dir
+        // (what a sandbox profile reads)
+        std::fs::set_permissions(&dev, std::fs::Permissions::from_mode(0o775)).unwrap();
+        assert!(git_from_xcode_link(&link).is_err());
+        assert_eq!(developer_dir_from_link(&link).unwrap(), dev);
+        // a relative target is no developer dir
+        let l = link.parent().unwrap().join("rel");
+        symlink("dev", &l).unwrap();
+        assert!(matches!(
+            developer_dir_from_link(&l),
+            Err(FsError::Untrusted { .. })
+        ));
     }
 
     fn is_root() -> bool {
