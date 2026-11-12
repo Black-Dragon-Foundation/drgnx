@@ -61,7 +61,7 @@ pub fn priority_of(starter: &Starter, background: bool, from: Origin) -> Priorit
         Origin::Upkeep => Priority::P5,
         Origin::Request => match starter {
             Starter::User => Priority::P1,
-            Starter::Session(_) => Priority::P3,
+            Starter::Session(_) | Starter::Sealed(_) => Priority::P3,
         },
     }
 }
@@ -1557,9 +1557,17 @@ impl Queue {
         }
     }
 
-    /// A job enters the queue at NOW. With frozen inputs, its trust is theirs (design §6.6: from what the public
-    /// origin has, and the keys it names), whatever the spec said, and they are kept in `rq_input`.
-    pub fn submit(&self, mut s: Submit, now: u64) {
+    /// A job enters the queue at NOW, and the queue's tick is woken. With frozen inputs, its trust is theirs (design
+    /// §6.6: from what the public origin has, and the keys it names), whatever the spec said, and they are kept in
+    /// `rq_input`.
+    pub fn submit(&self, s: Submit, now: u64) {
+        self.enter(s, now);
+        self.wake_tick();
+    }
+
+    /// [`submit`](Self::submit) without waking the tick: a caller that ticks at once itself (`exec`'s start, so a job
+    /// admitted at once is its own to launch, never the background tick's) wakes it after that tick.
+    pub fn enter(&self, mut s: Submit, now: u64) {
         if let Some(f) = &s.inputs {
             s.spec.trust = f.trust(&s.place.keys);
             self.put_input(f, now);
@@ -1567,6 +1575,10 @@ impl Queue {
         let j = QJob::new(s, now, QState::Queued, 0);
         self.put_job(&j, j.s.own);
         self.lock().jobs.insert(j.s.id.clone(), j);
+    }
+
+    /// Wakes the queue's tick: a job may wait.
+    pub fn wake_tick(&self) {
         self.wake.notify_one();
     }
 

@@ -49,6 +49,24 @@
 (defface drgnx-debug-agent-ring '((t :inherit drgnx-agent-1))
   "The ring around an agent's breakpoint or probe, and the agent's name in the Investigation." :group 'drgnx)
 
+(defface drgnx-debug-stopped-line '((t :extend t))
+  "The top frame's line: a band in the warn tint (the theme sets it)." :group 'drgnx)
+(defface drgnx-debug-frame-line '((t :extend t))
+  "A selected caller frame's line: a band in the ok tint (the theme sets it)." :group 'drgnx)
+(defface drgnx-debug-exception-line '((t :extend t))
+  "The line of a stop on an exception: a band in the error tint (the theme sets it)." :group 'drgnx)
+(defface drgnx-debug-exception-card '((t :inherit (drgnx-ui-text drgnx-surface-raised)))
+  "The exception card under the stopped line: the raised surface, ringed in the error colour (the theme)."
+  :group 'drgnx)
+(defface drgnx-debug-exception-title '((t :inherit (error bold)))
+  "The exception card's type." :group 'drgnx)
+(defface drgnx-debug-exception-hint '((t :inherit (drgnx-text-subtle drgnx-ui-caption)))
+  "The exception card's last row: what the keys do." :group 'drgnx)
+
+(defcustom drgnx-debug-focus-on-stop nil
+  "Whether a stop raises the Emacs frame that shows it (VS Code's `debug.focusWindowOnBreak'; off here)."
+  :type 'boolean :group 'drgnx)
+
 (defconst drgnx-debug-gutter--width 18 "The column's width in logical pixels (the glyphs are 16).")
 
 (defvar-local drgnx-debug-gutter--bps nil "The file's breakpoints as the hub last said: plists.")
@@ -383,8 +401,9 @@ the buffer's start (a click deep in a long file was 10 ms of `forward-line')."
     (overlay-put o 'drgnx-debug-kind kind)
     (overlay-put o 'drgnx-debug-help (drgnx-debug-gutter--help bp))
     (overlay-put o 'drgnx-debug-agent (plist-get bp :agent))
-    (overlay-put o 'before-string (drgnx-debug-gutter--margin-string kind (overlay-get o 'drgnx-debug-help)
-                                                                     (plist-get bp :agent)))))
+    (unless (overlay-get o 'drgnx-debug-under-stop)
+      (overlay-put o 'before-string (drgnx-debug-gutter--margin-string kind (overlay-get o 'drgnx-debug-help)
+                                                                       (plist-get bp :agent))))))
 
 (defun drgnx-debug-gutter--draw ()
   "Draw `drgnx-debug-gutter--bps': marks moved by edits stay where the text put them while the buffer has unsaved
@@ -410,8 +429,14 @@ changes (drafts); otherwise each sits on the store's line."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (when drgnx-debug-gutter-mode
+        (dolist (o (overlays-in (point-min) (point-max)))
+          (when (and (overlay-get o 'drgnx-debug-stop) (overlay-get o 'before-string))
+            (overlay-put o 'before-string (drgnx-debug-gutter--margin-string
+                                           (overlay-get o 'drgnx-debug-kind)
+                                           (if (eq (overlay-get o 'drgnx-debug-stop) 'top)
+                                               "Paused here" "The selected frame")))))
         (dolist (e drgnx-debug-gutter--overlays)
-          (when (overlay-buffer (cdr e))
+          (when (and (overlay-buffer (cdr e)) (not (overlay-get (cdr e) 'drgnx-debug-under-stop)))
             (overlay-put (cdr e) 'before-string
                          (drgnx-debug-gutter--margin-string (overlay-get (cdr e) 'drgnx-debug-kind)
                                                             (overlay-get (cdr e) 'drgnx-debug-help)
@@ -576,6 +601,193 @@ it), a mark whose line was deleted sends `remove'."
   "`after-revert-hook': the text is the saved file again, so the marks go back to the store's lines."
   (drgnx-debug-gutter--clear)
   (drgnx-debug-gutter--draw))
+
+;;;; The stopped line (spec §5)
+
+;; A stop's `debug-frame' marks its line: the top frame with an arrow and a band (`drgnx-debug-stopped-line', the
+;; error colours on an exception, with a card under the line), a caller frame picked in the Call Stack with an outline
+;; arrow and its own band, drawn only when it is not the top frame.  The marks are overlays tagged `drgnx-debug-stop'
+;; (`top' or `frame'), kept per session; a breakpoint under the arrow hides its glyph (the arrow carries its dot) until
+;; the stop goes.  They go 150 ms after the session runs, unless a stop comes first, and at once when it ends.
+
+(defvar drgnx-debug-gutter--stops nil "SESSION → the overlays of its stop marks.")
+(defvar drgnx-debug-gutter--stop-windows nil
+  "SESSION → the window its last stop opened in (reused, like a preview tab).")
+(defconst drgnx-debug-gutter-stop-linger 0.15 "Seconds a stop's marks stay after its session runs (a step's flicker).")
+
+(defun drgnx-debug-gutter--key-hint (command)
+  "COMMAND's key in the active profile as text, or nil."
+  (when-let* ((k (where-is-internal command nil t))) (key-description k)))
+
+(defun drgnx-debug-gutter--exception-card (exception path line)
+  "The card under an exception stop's line: EXCEPTION's type (or id) and break mode, where it was raised (PATH and
+LINE), its message, and what the keys do.  The band ends after the line's newline, so its `after-string' (this) starts
+the next row."
+  (let* ((type (or (plist-get exception :type) (plist-get exception :id) "Exception"))
+         (mode (pcase (plist-get exception :break_mode)
+                 ((or "unhandled" "userUnhandled") "uncaught") ("always" "raised") (_ nil)))
+         (where (and path (format "raised in %s:%d" (file-name-nondirectory path) line)))
+         (cont (drgnx-debug-gutter--key-hint 'drgnx-debug-start-or-continue))
+         (stop (drgnx-debug-gutter--key-hint 'drgnx-debug-stop))
+         (pad (propertize " " 'display '(space :width (12))))
+         (row (lambda (text face)
+                (concat (propertize " " 'display '(space :align-to 6)) pad (propertize text 'face face) pad "\n"))))
+    (concat (funcall row (concat (propertize type 'face 'drgnx-debug-exception-title)
+                                 (propertize (concat (and (or mode where) " · ")
+                                                     (string-join (delq nil (list mode where)) ", "))
+                                             'face 'drgnx-debug-exception-card))
+                     'drgnx-debug-exception-card)
+            (when-let* ((m (plist-get exception :message)))
+              (funcall row (format "%s" m) '(:inherit (default drgnx-debug-exception-card))))
+            (funcall row (string-join (delq nil (list (and stop (format "%s to stop" stop))
+                                                      (format "%s to continue" (or cont "Continue"))))
+                                      " · ")
+                     '(:inherit (drgnx-debug-exception-hint drgnx-debug-exception-card))))))
+
+(defun drgnx-debug-gutter--stop-overlays (session &optional role)
+  "SESSION's live stop overlays, only ROLE's when given."
+  (seq-filter (lambda (o) (and (overlay-buffer o) (or (null role) (eq (overlay-get o 'drgnx-debug-stop) role))))
+              (cdr (assoc session drgnx-debug-gutter--stops))))
+
+(defun drgnx-debug-gutter--unmark (overlays)
+  "Delete the stop OVERLAYS, and show again the breakpoint glyphs they hid."
+  (dolist (o overlays)
+    (when-let* ((b (overlay-buffer o)) (mark (overlay-get o 'drgnx-debug-hides)))
+      (when (overlay-buffer mark)
+        (overlay-put mark 'drgnx-debug-under-stop nil)
+        (with-current-buffer b
+          (overlay-put mark 'before-string (drgnx-debug-gutter--margin-string
+                                            (overlay-get mark 'drgnx-debug-kind)
+                                            (overlay-get mark 'drgnx-debug-help)
+                                            (overlay-get mark 'drgnx-debug-agent))))))
+    (delete-overlay o)))
+
+(defun drgnx-debug-gutter-stop-clear (session &optional role)
+  "Take SESSION's stop marks away (only ROLE's: `top' or `frame', when given)."
+  (drgnx-timer-cancel (cons 'debug-stop session))
+  (let ((gone (drgnx-debug-gutter--stop-overlays session role)))
+    (drgnx-debug-gutter--unmark gone)
+    (let ((left (seq-remove (lambda (o) (memq o gone)) (drgnx-debug-gutter--stop-overlays session))))
+      (setq drgnx-debug-gutter--stops
+            (if left (cons (cons session left) (assoc-delete-all session drgnx-debug-gutter--stops))
+              (assoc-delete-all session drgnx-debug-gutter--stops))))
+    (unless (assoc session drgnx-debug-gutter--stops)
+      (setq drgnx-debug-gutter--stop-windows (assoc-delete-all session drgnx-debug-gutter--stop-windows)))))
+
+(defun drgnx-debug-gutter-stop-clear-all ()
+  "Take every session's stop marks away."
+  (dolist (s (mapcar #'car drgnx-debug-gutter--stops)) (drgnx-debug-gutter-stop-clear s)))
+
+(defun drgnx-debug-gutter--mark-stop (session role kind face line card)
+  "Mark LINE of this buffer for SESSION's ROLE: an arrow of KIND (when the column is on) and a band in FACE, CARD
+after the line when given."
+  (save-excursion
+    (goto-char (point-min))
+    (forward-line (1- line))
+    (let* ((bol (point)) (eol (line-end-position))
+           (band (make-overlay bol (min (point-max) (1+ eol)) nil t nil))
+           (mark (and (eq role 'top) drgnx-debug-gutter-mode (drgnx-debug-gutter--mark-at line))))
+      (when mark
+        (let ((m (cdr (assq mark drgnx-debug-gutter--overlays))))
+          (when (eq kind 'stop) (setq kind 'stop-bp))
+          (overlay-put m 'before-string nil)
+          (overlay-put m 'drgnx-debug-under-stop t)
+          (overlay-put band 'drgnx-debug-hides m)))
+      (overlay-put band 'drgnx-debug-stop role)
+      (overlay-put band 'drgnx-debug-kind kind)
+      (overlay-put band 'face face)
+      (overlay-put band 'priority (if (eq role 'top) 20 19))
+      (when drgnx-debug-gutter-mode
+        (overlay-put band 'before-string
+                     (drgnx-debug-gutter--margin-string kind (if (eq role 'top) "Paused here" "The selected frame"))))
+      (when card (overlay-put band 'after-string card))
+      (push band (alist-get session drgnx-debug-gutter--stops nil nil #'equal)))))
+
+(defvar-local drgnx-debug-gutter--source-ref nil "(SESSION . REF): the debugger source this buffer shows.")
+
+(defun drgnx-debug-gutter--source-buffer (session name ref)
+  "The read-only buffer \"NAME (from the debugger)\" of SESSION's source REF (its text comes from
+`drgnx-debug-gutter--fill-source')."
+  (let ((buf (get-buffer-create (format "%s (from the debugger)" (or name "source")))))
+    (with-current-buffer buf
+      (setq buffer-read-only t)
+      (setq-local drgnx-debug-gutter--source-ref (cons session ref)))
+    buf))
+
+(defun drgnx-debug-gutter--fill-source (buf session ref then)
+  "Fill BUF with SESSION's source REF from the hub, then call THEN."
+  (drgnx-hub-call "debug/source" (list :session session :ref ref)
+                  (lambda (result error)
+                    (when (buffer-live-p buf)
+                      (with-current-buffer buf
+                        (let ((inhibit-read-only t))
+                          (erase-buffer)
+                          (insert (if error (format "The debugger has no text for this source: %s" error)
+                                    (or (plist-get result :text) ""))))
+                        (set-buffer-modified-p nil)
+                        (goto-char (point-min)))
+                      (funcall then)))))
+
+(defun drgnx-debug-gutter--show-stop-in (buf data)
+  "Mark DATA's stop (a `debug-frame') in BUF and, when it says `open', show BUF at the line."
+  (let* ((session (plist-get data :session)) (top (eq (plist-get data :top) t))
+         (open (eq (plist-get data :open) t)) (line (or (plist-get data :line) 1))
+         (exception (and top (equal (plist-get data :reason) "exception") (plist-get data :exception))))
+    (with-current-buffer buf
+      (drgnx-debug-gutter--mark-stop
+       session (if top 'top 'frame)
+       (cond (exception 'exception) (top 'stop) (t 'frame))
+       (cond (exception 'drgnx-debug-exception-line) (top 'drgnx-debug-stopped-line) (t 'drgnx-debug-frame-line))
+       line
+       (and exception (drgnx-debug-gutter--exception-card exception (plist-get data :path) line))))
+    (when open
+      (let* ((prev (alist-get session drgnx-debug-gutter--stop-windows nil nil #'equal))
+             (w (or (get-buffer-window buf)
+                    (and (window-live-p prev) prev)
+                    (selected-window))))
+        (unless (eq (window-buffer w) buf) (set-window-buffer w buf))
+        (setf (alist-get session drgnx-debug-gutter--stop-windows nil nil #'equal) w)
+        (select-window w)
+        (goto-char (point-min))
+        (forward-line (1- line))
+        (move-to-column (max 0 (1- (or (plist-get data :col) 1))))
+        (set-window-point w (point))
+        (when drgnx-debug-focus-on-stop (select-frame-set-input-focus (window-frame w)))))))
+
+(defun drgnx-debug-gutter-show-frame (data)
+  "A `debug-frame' event (DATA): mark its line, and open it in the editor that started the session (`open')."
+  (let* ((session (plist-get data :session)) (top (eq (plist-get data :top) t))
+         (open (eq (plist-get data :open) t))
+         (path (plist-get data :path)) (ref (plist-get data :ref)))
+    (drgnx-timer-cancel (cons 'debug-stop session))
+    ;; a top frame is a new stop (or the top picked again): every mark of the session goes; a caller replaces a caller
+    (drgnx-debug-gutter-stop-clear session (unless top 'frame))
+    (cond
+     ((stringp path)
+      (when-let* ((buf (if open (find-file-noselect path) (get-file-buffer path))))
+        (drgnx-debug-gutter--show-stop-in buf data)))
+     ((and (integerp ref) (> ref 0))
+      (let* ((name (format "%s (from the debugger)" (or (plist-get data :source_name) "source")))
+             (old (get-buffer name)))
+        (when (or open old)
+          (let ((buf (drgnx-debug-gutter--source-buffer session (plist-get data :source_name) ref)))
+            (if (and old (equal (buffer-local-value 'drgnx-debug-gutter--source-ref old) (cons session ref))
+                     (> (buffer-size old) 0))
+                (drgnx-debug-gutter--show-stop-in buf data)
+              (drgnx-debug-gutter--fill-source buf session ref
+                                               (lambda () (drgnx-debug-gutter--show-stop-in buf data))))))))
+     (open (message "No source: %s" (or (plist-get data :name) "this frame"))))))
+
+(defun drgnx-debug-gutter-stop-sessions (sessions)
+  "`debug-state' said SESSIONS: the marks of a session that is gone go now, a running one's after the linger."
+  (dolist (id (mapcar #'car drgnx-debug-gutter--stops))
+    (let ((s (seq-find (lambda (s) (equal (plist-get s :id) id)) sessions)))
+      (cond ((null s) (drgnx-debug-gutter-stop-clear id))
+            ;; owned by a buffer the marks are in: they go with it anyway
+            ((and (equal (plist-get s :state) "running") (drgnx-debug-gutter--stop-overlays id))
+             (drgnx-timer-debounce (cons 'debug-stop id) drgnx-debug-gutter-stop-linger
+                                   #'drgnx-debug-gutter-stop-clear :args (list id)
+                                   :owner (overlay-buffer (car (drgnx-debug-gutter--stop-overlays id)))))))))
 
 ;;;; The mode
 

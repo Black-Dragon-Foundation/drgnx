@@ -279,8 +279,7 @@ mod tests {
 
     fn script(path: &Path, body: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::exe::write_executable(path, format!("#!/bin/sh\n{body}\n")).unwrap();
     }
 
     fn roots(root: &Path) -> Roots {

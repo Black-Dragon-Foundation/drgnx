@@ -114,13 +114,13 @@ pub async fn step(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Err
             {
                 let tr = front.core.agents.get(a).ok();
                 if let (Some(why), Some(tr)) = (fallback::exit_limit(&snap, tr.as_ref()), tr) {
-                    runs.set_busy(&tid, Some("starting"));
+                    let mark = super::BusyMark::set(front, &tid, "starting");
                     let (f, job, task) = (front.clone(), id.to_owned(), t.clone());
                     tokio::spawn(async move {
                         if let Err(e) = fallback::worker(&f, &job, &task, &snap, &tr, &why).await {
                             tracing::warn!("plan run {job}: fallback: {}", e.message);
                         }
-                        f.core.runs.set_busy(&task.row.id, None);
+                        drop(mark);
                     });
                     continue;
                 }
@@ -181,7 +181,7 @@ pub async fn step(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Err
             && count < agent_slots(front)
             && data_for(&data, "blocked", &t.row.id).is_none()
         {
-            runs.set_busy(&t.row.id, Some("starting"));
+            let mark = super::BusyMark::set(front, &t.row.id, "starting");
             let (f, job, task) = (front.clone(), id.to_owned(), t.clone());
             tokio::spawn(async move {
                 if let Err(e) = start(&f, &job, &task, None, None).await {
@@ -191,7 +191,7 @@ pub async fn step(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Err
                         e.message
                     );
                 }
-                f.core.runs.set_busy(&task.row.id, None);
+                drop(mark);
                 changed(&f, &job).await;
             });
             count += 1;

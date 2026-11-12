@@ -36,7 +36,7 @@
   ;; (the sidebar's width comes back from where it went, not out of one group).
   (let* ((root (make-temp-file "drgnx-wb" t))
          (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
-         (s (drgnx-ui-start "drgnx" "1400x850" 30))
+         (s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x850") 30))
          (sess (drgnx-ui-own-session (plist-get s :name)))
          (probe "(drgnx-uitest--json
                    (list :groups (vconcat (mapcar #'window-pixel-width (drgnx-groups-list)))
@@ -99,7 +99,7 @@
   ;; rows it replaced), no row selected on it.
   (let* ((root (make-temp-file "drgnx-wb" t))
          (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
-         (s (drgnx-ui-start "drgnx" "1400x850" 30))
+         (s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x850") 30))
          (sess (drgnx-ui-own-session (plist-get s :name)))
          (el (expand-file-name "a.el" root)) (sh (expand-file-name "b.sh" root))
          (probe "(drgnx-uitest--json

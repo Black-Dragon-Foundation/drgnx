@@ -77,11 +77,11 @@ pub enum State {
 
 /// The state of the check with SELECTOR at the tree KEY, by its newest run in EVIDENCE (oldest first).
 pub fn state(evidence: &[Evidence], key: &str, selector: &str) -> State {
-    let Some(e) = evidence
-        .iter()
-        .rev()
-        .find(|e| e.facts.tree_key == key && e.facts.selector == selector)
-    else {
+    let Some(e) = evidence.iter().rev().find(|e| {
+        e.facts.tree_key == key
+            && e.facts.selector == selector
+            && crate::evidence::no_result(e).is_none()
+    }) else {
         return State::Missing;
     };
     let red: Vec<String> = failing(&e.rows).map(str::to_owned).collect();
@@ -89,6 +89,33 @@ pub fn state(evidence: &[Evidence], key: &str, selector: &str) -> State {
         State::Green
     } else {
         State::Red(red)
+    }
+}
+
+/// The runs in EVIDENCE made with ENV_STAMP on PLATFORM (this machine's now): what an author check or a group counts.
+pub fn current(evidence: &[Evidence], env_stamp: &str, platform: &str) -> Vec<Evidence> {
+    evidence
+        .iter()
+        .filter(|e| e.facts.env_stamp == env_stamp && e.facts.platform == platform)
+        .cloned()
+        .collect()
+}
+
+/// [`state`] once the check with SELECTOR ran at least RUNS times at the tree KEY (runs with a test result); Missing
+/// before.
+pub fn state_after(evidence: &[Evidence], key: &str, selector: &str, runs: usize) -> State {
+    let ran = evidence
+        .iter()
+        .filter(|e| {
+            e.facts.tree_key == key
+                && e.facts.selector == selector
+                && crate::evidence::no_result(e).is_none()
+        })
+        .count();
+    if ran < runs {
+        State::Missing
+    } else {
+        state(evidence, key, selector)
     }
 }
 
@@ -237,6 +264,61 @@ mod tests {
             "the newest run counts"
         );
         assert_eq!(state(&[red, green], "P", &sel), State::Green);
+    }
+
+    /// An author check's or a group's old green after a toolchain bump, or one from another machine, is no run here.
+    #[test]
+    fn only_runs_with_this_machines_stamp_and_platform_count() {
+        let green = |env: &str, platform: &str| {
+            let mut e = ev("P", "s", vec![Row::pass("a::t")]);
+            e.facts.env_stamp = env.into();
+            e.facts.platform = platform.into();
+            e
+        };
+        let all = [
+            green("rustc 1.95", "linux-x86_64/local"),
+            green("rustc 1.96", "linux-x86_64/local"),
+            green("rustc 1.96", "runner/box"),
+        ];
+        let now = current(&all, "rustc 1.96", "linux-x86_64/local");
+        assert_eq!(now, vec![all[1].clone()]);
+        assert_eq!(
+            state(
+                &current(&all[..1], "rustc 1.96", "linux-x86_64/local"),
+                "P",
+                "s"
+            ),
+            State::Missing
+        );
+    }
+
+    /// A one-member batch's tip alone is the batch's own tree: its red group runs once more there before the tip is
+    /// judged; a pass then is a flake (`flaky`), a second fail is the tip's red.
+    #[test]
+    fn a_red_that_needs_a_second_run_waits_for_it() {
+        let fail = || ev("P", "s", vec![Row::fail("a::t", Class::Assert, vec![])]);
+        let pass = || ev("P", "s", vec![Row::pass("a::t")]);
+        let lost = || {
+            ev(
+                "P",
+                "s",
+                vec![Row::fail(crate::rows::JOB_ROW, Class::Infra, vec![])],
+            )
+        };
+        assert_eq!(state_after(&[fail()], "P", "s", 2), State::Missing);
+        // a run without a result is no run
+        assert_eq!(state_after(&[fail(), lost()], "P", "s", 2), State::Missing);
+        assert_eq!(
+            state_after(&[fail(), fail()], "P", "s", 2),
+            State::Red(vec!["a::t".into()])
+        );
+        assert_eq!(state_after(&[fail(), pass()], "P", "s", 2), State::Green);
+        assert_eq!(flaky(&[fail(), pass()]), vec!["a::t"]);
+        // one run needed: the newest
+        assert_eq!(
+            state_after(&[fail()], "P", "s", 1),
+            State::Red(vec!["a::t".into()])
+        );
     }
 
     #[test]

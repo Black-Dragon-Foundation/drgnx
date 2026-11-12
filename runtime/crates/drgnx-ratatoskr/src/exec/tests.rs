@@ -11,7 +11,8 @@ fn hooks() -> Hooks {
 
 fn spec(starter: Starter, cwd: &Path, script: &str, timebox: Duration) -> ExecSpec {
     ExecSpec {
-        worktree: matches!(starter, Starter::Session(_)).then(|| cwd.to_path_buf()),
+        worktree: matches!(starter, Starter::Session(_) | Starter::Sealed(_))
+            .then(|| cwd.to_path_buf()),
         starter,
         cwd: cwd.to_path_buf(),
         argv: vec!["sh".into(), "-c".into(), script.into()],
@@ -21,6 +22,23 @@ fn spec(starter: Starter, cwd: &Path, script: &str, timebox: Duration) -> ExecSp
         user: UserJob::default(),
         place: Placement::default(),
     }
+}
+
+/// A sealed job (the hub's run of a command it doesn't trust) names no session: not in its meta, its queue record or
+/// its events, so it never reaches an agent; queued, it stays sealed (never the user's job, never a session's).
+#[test]
+fn a_sealed_job_names_no_session_and_stays_sealed_in_the_queue() {
+    let d = tempfile::tempdir().unwrap();
+    let sealed = Starter::Sealed("sealed-gate-x".into());
+    assert_eq!(sealed.session(), None);
+    assert_eq!(Starter::Session("s1".into()).session(), Some("s1".into()));
+    let s = spec(sealed.clone(), d.path(), "true", Duration::from_secs(30));
+    let pending = Pending::of(&s);
+    assert_eq!(pending.session, None);
+    let back: Pending = serde_json::from_value(serde_json::to_value(&pending).unwrap()).unwrap();
+    let back = back.into_spec();
+    assert_eq!(back.starter, sealed);
+    assert_eq!(back.worktree.as_deref(), Some(d.path()));
 }
 
 /// [D] A test job whose parser counts rows (`ert`, `cargo-test`) must run at least one: its spec expects a row, so a
@@ -809,11 +827,10 @@ const INFO_ENFORCES: &str = "if [ \"$1\" = info ]; then echo '{\"host\":{\"cgrou
 /// is pulled or run.
 #[tokio::test]
 async fn a_container_job_whose_caps_podman_cannot_enforce_is_refused() {
-    use std::os::unix::fs::PermissionsExt;
     let d = tempfile::tempdir().unwrap();
     let fake = d.path().join("podman");
     let ran = d.path().join("ran");
-    std::fs::write(
+    crate::exe::write_executable(
         &fake,
         format!(
             "#!/bin/sh\nif [ \"$1\" = info ]; then echo '{{\"host\":{{\"cgroupVersion\":\"v2\",\
@@ -823,7 +840,6 @@ async fn a_container_job_whose_caps_podman_cannot_enforce_is_refused() {
         ),
     )
     .unwrap();
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
     let r = Runner::default();
     r.open(
         d.path().join("exec"),
@@ -839,16 +855,12 @@ async fn a_container_job_whose_caps_podman_cannot_enforce_is_refused() {
 
 #[tokio::test]
 async fn a_container_job_runs_the_fixed_podman_line() {
-    use std::os::unix::fs::PermissionsExt;
     let d = tempfile::tempdir().unwrap();
     // a stand-in for podman: it enforces limits, the image is "present", and `run` prints the line it was given
     let fake = d.path().join("podman");
-    std::fs::write(
-        &fake,
+    crate::exe::write_executable(&fake,
         format!("#!/bin/sh\n{INFO_ENFORCES}if [ \"$1\" = image ]; then exit 0; fi\nprintf '%s\\n' \"$@\"\n"),
-    )
-    .unwrap();
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    ).unwrap();
     let r = Runner::default();
     r.open(
         d.path().join("exec"),
@@ -1012,6 +1024,7 @@ fn a_container_job_in_a_subfolder_mounts_the_worktree() {
         subdir: "crates/x".into(),
         job: "x1a".into(),
         net: false,
+        keys: None,
         runner: None,
     };
     let caps = container::Caps {
@@ -1414,7 +1427,6 @@ fn info_net(version: &str, rootless: bool) -> String {
 /// `run -i` sends its READY (from `D/ready`) and then reads until its stdin closes, or (with `D/die`) exits 4 at once;
 /// the job's `run` sleeps.  Answers the hooks with it and a relay binary folder.
 fn net_hooks(d: &Path, info: &str) -> Hooks {
-    use std::os::unix::fs::PermissionsExt;
     let mut ready = Vec::new();
     drgnx_px::frame::encode(&drgnx_px::frame::Frame::ready(net::LISTEN), &mut ready);
     std::fs::write(d.join("ready"), ready).unwrap();
@@ -1425,7 +1437,7 @@ fn net_hooks(d: &Path, info: &str) -> Hooks {
     }
     let fake = d.join("podman");
     let d = d.display();
-    std::fs::write(
+    crate::exe::write_executable(
         &fake,
         format!(
             "#!/bin/sh\n{info}case \"$1\" in\n  image|import|rmi) exit 0 ;;\n  ps|images) echo '[]'; exit 0 ;;\n  rm) for a in \"$@\"; do n=$a; done; echo \"rm $n\" >> {d}/ran; exit 0 ;;\nesac\n\
@@ -1434,7 +1446,6 @@ fn net_hooks(d: &Path, info: &str) -> Hooks {
         ),
     )
     .unwrap();
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
     Hooks {
         podman: Some(fake),
         px_dir: Some(px),
@@ -1830,6 +1841,84 @@ async fn a_jobs_result_keeps_classified_rows() {
     assert_eq!(row_of(&result_rows(d.path(), &id), "(job)").1, "error");
 }
 
+/// A job ran on whatever its tree held while it ran: when the tree's key at its end isn't the key at its submit (a
+/// commit while it waited or ran), its facts go, so it is no one's evidence and is never reused.
+#[tokio::test]
+async fn a_job_whose_tree_moved_under_it_keeps_no_facts() {
+    let d = tempfile::tempdir().unwrap();
+    let w = d.path().join("w");
+    repo_with_a_commit(&w);
+    let r = open(d.path());
+    let moved = spec(
+        Starter::User,
+        &w,
+        "echo 'test a ... ok'; echo b > b.txt; git add b.txt; \
+         git -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -qm two",
+        Duration::from_secs(30),
+    );
+    let (a, _) = r.start_or_reuse(moved.clone()).await.unwrap();
+    let row = ended(&r, &a).await;
+    assert_eq!(row.status, ExecStatus::Done);
+    assert_eq!(r.facts(&a), None, "the tree moved: no facts");
+    let (b, reused) = r.start_or_reuse(moved).await.unwrap();
+    assert!(!reused && b != a);
+    ended(&r, &b).await;
+}
+
+#[tokio::test]
+async fn an_edit_left_uncommitted_while_a_job_ran_moves_its_tree() {
+    let d = tempfile::tempdir().unwrap();
+    let w = d.path().join("w");
+    repo_with_a_commit(&w);
+    let r = open(d.path());
+    let edited = spec(
+        Starter::User,
+        &w,
+        "echo 'test a ... ok'; echo changed > a.txt",
+        Duration::from_secs(30),
+    );
+    let (a, _) = r.start_or_reuse(edited).await.unwrap();
+    let row = ended(&r, &a).await;
+    assert_eq!(row.status, ExecStatus::Done);
+    assert_eq!(
+        r.facts(&a),
+        None,
+        "a tracked file changed while it ran: no facts"
+    );
+}
+
+/// A job whose run writes files git doesn't ignore keeps no facts, and its result names them, so the user sees what
+/// belongs in .gitignore; the facts it had at submit stay for the gate's note.
+#[tokio::test]
+async fn a_moved_job_names_the_files_that_changed() {
+    let d = tempfile::tempdir().unwrap();
+    let w = d.path().join("w");
+    repo_with_a_commit(&w);
+    std::fs::write(w.join("a.txt"), "uncommitted\n").unwrap();
+    let r = open(d.path());
+    let writes = spec(
+        Starter::User,
+        &w,
+        "echo 'test a ... ok'; for n in 1 2 3 4 5 6; do echo x > out$n.log; done; rm a.txt",
+        Duration::from_secs(30),
+    );
+    let (a, _) = r.start_or_reuse(writes).await.unwrap();
+    ended(&r, &a).await;
+    assert_eq!(r.facts(&a), None);
+    let (files, facts) = r.moved(&a).expect("its tree moved");
+    assert_eq!(
+        files,
+        [
+            "a.txt", "out1.log", "out2.log", "out3.log", "out4.log", "out5.log", "out6.log"
+        ]
+    );
+    assert!(facts.tree_key.contains('+'), "{}", facts.tree_key);
+    let line = "its tree moved while it ran (a.txt, out1.log, out2.log, out3.log, out4.log and 2 more): no facts \
+                kept; a file a run writes belongs in .gitignore";
+    let lines = r.done(&a).expect("ended").summary.lines;
+    assert!(lines.iter().any(|l| l == line), "{lines:?}");
+}
+
 /// A git repository at DIR with one commit; answers its tree id.
 fn repo_with_a_commit(dir: &Path) -> String {
     let git = |args: &[&str]| {
@@ -2001,14 +2090,12 @@ async fn a_tasks_jobs_are_its_evidence() {
 /// A stand-in for `drgnx-key` at D/fake-key: `exec NAME=VAR… -- CMD…` runs CMD with TOKEN set to VALUE (what the
 /// real one would have read from the key socket), and says whether its socket is there.
 fn fake_key(d: &Path, value: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let bin = d.join("fake-key");
     let script = format!(
         "#!/bin/sh\ntest -S \"$DRGNX_KEY_SOCK\" && echo socket-there\n\
          while [ \"$1\" != -- ]; do shift; done; shift\nTOKEN='{value}' exec \"$@\"\n"
     );
-    std::fs::write(&bin, script).unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::exe::write_executable(&bin, script).unwrap();
     bin
 }
 
@@ -2086,4 +2173,93 @@ async fn a_keyed_job_without_drgnx_key_is_refused() {
         }
     };
     assert!(e.contains("drgnx-key was not found"), "{e}");
+}
+
+/// A keyed container job runs here as on a runner: with no network granted it still gets its own sidecar, which takes
+/// its keys' listener (`--keys drgnx-key`); the job runs its own copy of the static drgnx-key (from its folder,
+/// read-only) as the entrypoint with the names only, and no proxy variables.  Without the static drgnx-key next to
+/// the hub the job is refused.
+#[tokio::test]
+async fn a_keyed_container_job_reads_its_keys_through_its_sidecar() {
+    let d = tempfile::tempdir().unwrap();
+    let h = net_hooks(d.path(), &info_net("5.4.2", true));
+    // podman's arguments recorded, then the stand-in
+    std::fs::rename(d.path().join("podman"), d.path().join("podman-real")).unwrap();
+    let rec = d.path().join("podman");
+    crate::exe::write_executable(
+        &rec,
+        format!(
+            "#!/bin/sh\necho \"$*\" >> {0}/args\nexec {0}/podman-real \"$@\"\n",
+            d.path().display()
+        ),
+    )
+    .unwrap();
+    let px = h.px_dir.clone().unwrap();
+    let r = Runner::default();
+    r.open(d.path().join("exec"), h);
+    let keyed = || {
+        let mut s = container_spec(d.path());
+        s.place.keys = vec!["CANARY_TOKEN".into()];
+        s
+    };
+    let e = r.start(keyed()).await.unwrap_err();
+    assert!(e.message.contains("static drgnx-key"), "{}", e.message);
+    for arch in ["amd64", "arm64"] {
+        std::fs::write(px.join(keys::static_key_name(arch)), b"key").unwrap();
+    }
+    let id = r.start(keyed()).await.unwrap();
+    let dir = d.path().join("exec").join(&id);
+    assert_eq!(std::fs::read(dir.join("drgnx-key")).unwrap(), b"key");
+    let args = std::fs::read_to_string(d.path().join("args")).unwrap();
+    let sidecar = args
+        .lines()
+        .find(|l| l.starts_with("run -i"))
+        .expect("the job's sidecar");
+    assert!(sidecar.ends_with("--keys drgnx-key"), "{sidecar}");
+    // the job's own run comes from its wrapper's shell, after start answers
+    let name = container::name_of(&id).unwrap();
+    let job = skuld::wait_until_async("the job's run", 30, || {
+        let args = std::fs::read_to_string(d.path().join("args")).unwrap_or_default();
+        std::future::ready(
+            args.lines()
+                .find(|l| l.contains(&name) && l.starts_with("run "))
+                .map(str::to_string),
+        )
+    })
+    .await;
+    let mount = format!("{}:/run/drgnx/key:ro,Z", dir.join("drgnx-key").display());
+    assert!(job.contains(&mount), "{job}");
+    assert!(
+        job.contains("--entrypoint /run/drgnx/key")
+            && job.ends_with("exec CANARY_TOKEN=CANARY_TOKEN -- make test"),
+        "{job}"
+    );
+    assert!(!job.contains("PROXY"), "{job}");
+    assert!(r.inner.get().unwrap().meta(&id).unwrap().keyed);
+    r.stop(&id).await.unwrap();
+}
+
+/// A job this machine admits at once is launched before `start` answers: the queue's own tick (woken by the job
+/// entering it) never takes it first.  It did, now and then: `start` answered while the launch ran on another task,
+/// so a refused launch was not the start's answer, and a hub stopped at that moment left the job queued.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_job_admitted_at_once_is_launched_before_start_answers() {
+    for i in 0..2000 {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        let id = r
+            .start(spec(
+                Starter::User,
+                d.path(),
+                "true",
+                Duration::from_secs(30),
+            ))
+            .await
+            .unwrap();
+        let m = r.inner.get().unwrap().meta(&id).unwrap();
+        assert!(
+            !m.queued && m.pid.is_some(),
+            "start {i} answered before its launch: {m:?}"
+        );
+    }
 }

@@ -61,11 +61,22 @@ you to trust it (**Trust This Folder**): an untrusted folder's configurations ne
 pins, or puts debugpy into drgnx's own Python, and names the system package to install for the others (`drgnx doctor`
 lists which are found).
 
+A stop opens its file at the line, marked by an amber arrow and band; a caller frame you pick is marked green, and a
+stop on an exception is red, with a card under the line saying what was raised (code with no file, such as an
+`eval`, opens read-only from the debugger). Set `drgnx-debug-focus-on-stop` to bring Emacs to the front on a stop.
 While the session is stopped the same command continues; **Toggle Breakpoint**, **Step Over**, **Step Into**,
 **Step Out** and **Stop Debugging** do what they say. If you used dape, **Convert dape Configurations…** (the palette)
 turns your `dape-configs` into launch configurations once (dape itself is no longer needed).
-In the VS Code key profile: F5, F9, F10, F11 (Step Into while a session runs — Zen Mode otherwise), S-F11, S-F5; the
-Emacs and Vim profiles reach them in the palette. Module `extra/debug`; it needs no package.
+In the VS Code key profile: F5, F9, F10, F11 (Step Into while a session runs — Zen Mode otherwise), S-F11, S-F5,
+C-S-F5 (**Restart**), F6 (**Pause**, while a session runs); the Emacs and Vim profiles reach them in the palette.
+Module `extra/debug`; it needs no package.
+
+While a session runs, a toolbar floats over the editor: Continue (Pause while the program runs), the three steps,
+Restart and Stop (Disconnect when you attached to a running program). Drag it sideways by its grip; it stays where
+you put it in that frame. With two sessions or more, its chip picks the one the controls and keys act on. The setting
+`drgnx-debug-toolbar` docks it in the editor's tab row (`docked`) or hides it (`hidden`); a terminal frame has no
+toolbar. The status bar names the session and its state, and a **Paused** chip in the title row takes you back to the
+stopped line.
 
 Breakpoints live in a column left of the line numbers, kept per project (they survive restarts and reach a running
 session at once). Click the column to add or remove one, shift-click for a logpoint (a message printed instead of

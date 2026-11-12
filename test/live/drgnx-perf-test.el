@@ -10,7 +10,7 @@
 (ert-deftest drgnx-live/latency-includes-redisplay-work ()
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-perf-live" t)))
          (process-environment (cons (concat "DRGNX_UI_STATE=" root "ui") process-environment))
-         (s (drgnx-ui-start "drgnx" "1400x800" 30)) (sess (drgnx-ui-own-session (plist-get s :name))))
+         (s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)) (sess (drgnx-ui-own-session (plist-get s :name))))
     (unwind-protect
         (progn
           (drgnx-ui-call sess (format "(progn (require 'drgnx-perf) (find-file %S)
