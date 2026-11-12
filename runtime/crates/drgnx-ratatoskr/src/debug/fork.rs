@@ -70,6 +70,14 @@ pub struct Target {
     pub steps: Vec<String>,
     /// The run's event order of the point: its hits before it are the ones compared.
     pub seq: Option<u64>,
+    /// How many probe hits the run had before it reached the line's pass (when it stopped there): where the adapter
+    /// counts the passes, the fork's landing must have had as many.
+    pub before: Option<usize>,
+}
+
+/// RUN's probe hits before its event INDEX.
+fn hits_before(run: &RunInfo, index: u64) -> usize {
+    run.hits.iter().filter(|h| h.seq < index).count()
 }
 
 /// Why a fork is not made, or what it asks first.
@@ -136,6 +144,7 @@ pub fn check(run: &RunInfo, at: &At, linux: bool, confirmed: bool) -> Result<Tar
                     hit: *hit,
                     steps: vec![],
                     seq: stop.map(|s| s.index),
+                    before: stop.map(|s| hits_before(run, s.index)),
                 },
                 stop.map(|s| s.t_ms),
             )
@@ -162,6 +171,7 @@ pub fn check(run: &RunInfo, at: &At, linux: bool, confirmed: bool) -> Result<Tar
                     hit: from.bp_hit.unwrap_or(1),
                     steps: stop.steps.clone(),
                     seq: Some(stop.index),
+                    before: Some(hits_before(run, from.index)),
                 },
                 Some(stop.t_ms),
             )
@@ -453,6 +463,54 @@ async fn next_of(
 
 impl Drive {
     /// Every configured session gets PATH's breakpoints BPS.
+    /// Whether a probe sits on the fork line (read at each pass, so the fork stops at each).
+    fn probe_on_line(&self) -> bool {
+        self.probes
+            .iter()
+            .any(|p| p.path == self.target.path && p.line == self.target.line)
+    }
+
+    /// The breakpoint field that stops at the target's pass, and its text. js-debug counts a `hitCondition` by
+    /// pausing at every pass (about 30 ms each in a fork); a condition with a counter runs inside V8 without a pause.
+    fn pass_condition(&self) -> (&'static str, String) {
+        let n = self.target.hit;
+        if super::probes::lang(&self.start.adapter_id) == super::probes::Lang::Js {
+            (
+                "condition",
+                format!(
+                    "(globalThis.__drgnxForkPass = (globalThis.__drgnxForkPass || 0) + 1) === {n}"
+                ),
+            )
+        } else {
+            ("hitCondition", n.to_string())
+        }
+    }
+
+    /// Whether the adapter with CAPS counts the fork line's passes (the field of [`Self::pass_condition`]).
+    fn adapter_counts(&self, caps: &Value) -> bool {
+        let cap = match self.pass_condition().0 {
+            "condition" => "supportsConditionalBreakpoints",
+            _ => "supportsHitConditionalBreakpoints",
+        };
+        self.target.hit > 1
+            && !self.probe_on_line()
+            && caps.get(cap).and_then(Value::as_bool).unwrap_or(false)
+    }
+
+    /// The adapter's count landed the fork: it must have had the run's probe hits before that pass.
+    fn landed(&self, t: &Tree) -> Result<(), String> {
+        match self.target.before {
+            Some(want) if t.hits.len() != want => Err(format!(
+                "the adapter stopped at pass {} of line {} by its own count, but that is not the run's pass: the run \
+                 had {want} probe hits before it, the fork {}",
+                self.target.hit,
+                self.target.line,
+                t.hits.len()
+            )),
+            _ => Ok(()),
+        }
+    }
+
     async fn set_bps(&self, t: &mut Tree, all: &[SourceBps]) {
         t.bps = all.to_vec();
         for s in t.sessions.iter().filter(|s| !s.ended && !s.caps.is_null()) {
@@ -618,6 +676,22 @@ pub async fn drive(d: Drive) -> Result<Outcome, String> {
         Some((&d.target.path, d.target.line)),
         &[],
     );
+    // the adapter counts the passes where it can and no probe needs reading at each (fit drops the field where the
+    // adapter cannot; the fork then counts)
+    if d.target.hit > 1 && !d.probe_on_line() {
+        let (field, text) = d.pass_condition();
+        for s in start
+            .breakpoints
+            .iter_mut()
+            .filter(|s| s.path == d.target.path)
+        {
+            for b in s.breakpoints.iter_mut() {
+                if b.get("line") == Some(&json!(d.target.line)) && b.get("logMessage").is_none() {
+                    b[field] = json!(text);
+                }
+            }
+        }
+    }
     t.bps = start.breakpoints.clone();
     let c = d.launcher.connect().await?;
     t.add(start, c);
@@ -641,6 +715,10 @@ async fn reach_and_run(d: &Drive, t: &mut Tree) -> Result<Outcome, String> {
             Next::Stopped(i, s) => {
                 let (path, line) = top(&s);
                 if path == d.target.path && line == d.target.line {
+                    if d.adapter_counts(&t.sessions[i].caps) {
+                        d.landed(t)?;
+                        break (i, s);
+                    }
                     count += 1;
                     d.read_probe(t, i, &s, &path, line).await;
                     if count >= d.target.hit {
