@@ -136,11 +136,12 @@ module symbol: its current run token, `:gone' when it has no run.  A buffer or a
           (t (eq (drgnx-timer--entry-token entry) (alist-get owner drgnx-modules--runs))))))
 
 (defun drgnx-timer--drop (entry)
-  "Cancel ENTRY's timers and take it out of the table, if it is still its key's entry."
+  "Cancel ENTRY's timers and take it out of the table, if it is still its key's entry.
+A timer that is a test's stub (not a timer: the test runs its function itself) has nothing to cancel."
   (let ((timer (drgnx-timer--entry-timer entry)) (chain (drgnx-timer--entry-chain entry))
         (key (drgnx-timer--entry-key entry)))
-    (when timer (cancel-timer timer))
-    (when chain (cancel-timer chain))
+    (when (timerp timer) (cancel-timer timer))
+    (when (timerp chain) (cancel-timer chain))
     (when (eq (gethash key drgnx-timer--table) entry) (remhash key drgnx-timer--table))))
 
 (defun drgnx-timer--buffer-killed ()
