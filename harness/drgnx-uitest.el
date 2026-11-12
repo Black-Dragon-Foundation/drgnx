@@ -358,6 +358,23 @@ does not move."
 
 (advice-add 'mouse-absolute-pixel-position :around #'drgnx-uitest--pointer-advice)
 
+(defun drgnx-uitest--hub-callers (orig &rest args)
+  "`drgnx-hub--connect-socket' in a harness session: when it refuses (\"…/drgnx does not exist (no hub)\": the GUI
+rows run no hub), its error names the functions that called it, so a row that fails on it says which caller asked
+the hub (the debug timeline's `find-file-hook' did, about one row in seven at scale 2, before it learned not to)."
+  (condition-case err
+      (apply orig args)
+    (error
+     (signal (car err)
+             (list (format "%s (called from: %s)" (error-message-string err)
+                           (mapconcat (lambda (frame) (format "%S" (cadr frame)))
+                                      (seq-filter (lambda (frame) (symbolp (cadr frame)))
+                                                  (seq-take (backtrace-frames) 40))
+                                      " <- ")))))))
+
+(with-eval-after-load 'drgnx-hub-client
+  (advice-add 'drgnx-hub--connect-socket :around #'drgnx-uitest--hub-callers))
+
 (defun drgnx-uitest--note-pointer (ev)
   "Remember where the mouse event EV puts the pointer (`drgnx-uitest--pointer'); other events leave it."
   (when (and (consp ev) (symbolp (car ev)) (string-match-p "mouse" (symbol-name (car ev))))
