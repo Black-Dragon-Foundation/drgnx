@@ -552,15 +552,26 @@ async fn a_recorded_python_run_is_forked_end_to_end() {
         })
         .unwrap()
     });
+    // the project's breakpoint store: sessions start from it
+    dbg.breakpoints(
+        &root_s,
+        Some(super::breakpoints::Op::Add {
+            path: path.clone(),
+            line: 24,
+            enabled: true,
+            condition: None,
+            hit: None,
+            log: None,
+        }),
+        None,
+    )
+    .await;
     let start = super::session::Start {
         name: "Stock".into(),
         adapter_id: "debugpy".into(),
         request: super::session::Request::Launch,
         arguments: resolved.clone(),
-        breakpoints: vec![super::session::SourceBps {
-            path: path.clone(),
-            breakpoints: vec![json!({"line": 24})],
-        }],
+        breakpoints: vec![],
         functions: vec![],
         exception_filters: None,
     };
@@ -581,7 +592,23 @@ async fn a_recorded_python_run_is_forked_end_to_end() {
         }
         crate::clock::sleep(Duration::from_millis(100)).await;
     }
-    let stop = stop.expect("the run stops at the end");
+    let stop = stop.unwrap_or_else(|| {
+        let seen: Vec<String> =
+            ev.0.lock()
+                .unwrap()
+                .iter()
+                .map(|(e, d)| {
+                    format!(
+                        "{e} {}",
+                        d.to_string().chars().take(400).collect::<String>()
+                    )
+                })
+                .collect();
+        panic!(
+            "the run never stopped at the end; events:\n{}",
+            seen.join("\n")
+        )
+    });
     dbg.control(
         &id,
         super::Op::Continue {
