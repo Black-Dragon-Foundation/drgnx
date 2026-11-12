@@ -1471,16 +1471,41 @@ impl PlanHooks {
     }
 }
 
-/// The job's own tree, where its branch is checked out (made beside the task trees when absent).
+/// The job's own tree, where its branch is checked out (made beside the task trees when absent).  One at a time: two
+/// merges making it at once had the losing `worktree add` remove the winner's folder on its way out, leaving the tree
+/// registered but missing, which every later add refused.  A tree registered but missing is pruned and made again.
 async fn job_tree(repo: &Path, job: &str, tree: &TaskTree) -> Result<PathBuf, Error> {
     let path = tree.path.with_file_name("_job");
-    if !path.exists() {
-        let p = path.to_string_lossy().into_owned();
-        tick::git(repo, &["worktree", "add", "-q", &p, &format!("job/{job}")])
-            .await
-            .map_err(git_error)?;
-    }
+    branch_tree(repo, &format!("job/{job}"), &path)
+        .await
+        .map_err(git_error)?;
     Ok(path)
+}
+
+/// BRANCH of REPO checked out at PATH, made when absent (the job's tree; the manager's merges use it too), one
+/// making at a time, a tree registered but missing pruned and made again (see [`job_tree`]).
+pub(crate) async fn branch_tree(
+    repo: &Path,
+    branch: &str,
+    path: &Path,
+) -> Result<(), super::GitError> {
+    static MAKING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    if path.exists() {
+        return Ok(());
+    }
+    let _one = MAKING.lock().await;
+    if path.exists() {
+        return Ok(());
+    }
+    let p = path.to_string_lossy().into_owned();
+    let add = ["worktree", "add", "-q", p.as_str(), branch];
+    match tick::git(repo, &add).await {
+        Err(e) if e.stderr.contains("missing but already registered") => {
+            tick::git(repo, &["worktree", "prune"]).await?;
+            tick::git(repo, &add).await.map(|_| ())
+        }
+        r => r.map(|_| ()),
+    }
 }
 
 /// Merge DATA into card ID's data.
@@ -2315,5 +2340,55 @@ mod tests {
             Some((None, "ask the user".into()))
         );
         assert_eq!(recommendation("I recommend A"), None);
+    }
+
+    fn sh(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// [D] The job's tree is made once whoever asks: two merges of the run asking at once both get it (a second
+    /// `worktree add` failing removed the first one's tree and left it registered, macOS CI), and a tree registered
+    /// but missing is made again rather than refused at every merge.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_jobs_tree_is_made_once_and_made_again_when_missing() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        sh(&repo, &["init", "-q", "-b", "main"]);
+        sh(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+        for i in 0..8 {
+            let job = format!("J{i}");
+            sh(&repo, &["branch", &format!("job/{job}")]);
+            let tree = |n: &str| TaskTree {
+                path: d.path().join("runs").join(&job).join(n),
+                branch: String::new(),
+                base: String::new(),
+                mode: crate::runner::TreeMode::Snapshot,
+            };
+            let (t1, t2) = (tree("1"), tree("2"));
+            let (a, b) = tokio::join!(job_tree(&repo, &job, &t1), job_tree(&repo, &job, &t2));
+            let (a, b) = (a.unwrap(), b.unwrap());
+            assert_eq!(a, b);
+            assert!(a.join(".git").exists(), "{job}: the tree is there");
+            // its folder gone while git still lists it: made again
+            std::fs::remove_dir_all(&a).unwrap();
+            assert!(
+                job_tree(&repo, &job, &t1)
+                    .await
+                    .unwrap()
+                    .join(".git")
+                    .exists()
+            );
+        }
     }
 }

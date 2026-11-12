@@ -12,6 +12,9 @@ use vordr::pack::Pack;
 /// The pack drgnx ships: the one a plan run meets unless its plan names another (`**Pack:** FILE`).
 pub const DEFAULT_PACK: &str = include_str!("../../../../../etc/orch/drgnx-default.eld");
 
+/// The most a procedure's text may hold (it rides in the pack's record and in briefs).
+pub const PROCEDURE_CAP: usize = 8 * 1024;
+
 /// One row of `test/frozen.eld`: a test file and its tests switched off.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Frozen {

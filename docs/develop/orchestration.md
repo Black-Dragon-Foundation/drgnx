@@ -59,7 +59,19 @@ merge, `routing` and `advice` don't), `:test-globs` (test files; `*` matches acr
 languages whose build reds count when they name a symbol the task adds), `:batch-size`, the `:author-check`,
 `:rule-tests` and `:push-tiers` commands (`(:name N :dir D :run (ARG …))`), `:groups` (the command that lists the
 groups a range affects; `%r` is the range), `:no-cache`, `:shared-paths` (clean merges there still need intent
-notes) and `:context-share`.
+notes), `:context-share`, `:procedures` (`(:name N :path P :roles (ROLE …))`, P relative to the pack's file) and
+`:models` (`(:role R :paths (GLOB …) :profiles (PROFILE …))`).
+
+**Procedures.** A procedure is a short provider-neutral write-up (executing a plan, red first, debugging, merging by
+intent). Its text is read beside the pack when the plan is proposed (at most 8 KiB; a missing file refuses the
+proposal) and frozen with the pack. Every agent has the tool `procedure_get {name?}` (norn `tools::procedure`): the
+job's procedure by name, or their names. A brief's Gates part names them and carries in full those whose `:roles` hold
+the task's role. drgnx-default has none.
+
+**Routing by role.** A task runs on the first profile its job's pack routes its role to; a route with `:paths` wins for a
+task whose body names a matching path (a backticked word with a `/`). A plan line `**Profile:** NAME` (or a graph
+plan's task profile) narrows that: one outside the role's profiles refuses the proposal. A role the pack doesn't route
+runs on the settings' route (`drgnx-agents-routes`), as before; a reassignment (`job/reassign`) still wins.
 
 drgnx ships `etc/orch/drgnx-default.eld`: red first, the author check and affected groups, with no project's
 commands (any project's: its author check is the task's own tests at the tip). The push gate needs a project's own
@@ -197,6 +209,16 @@ Any hub job counts (the evidence records, "Evidence"). A task whose body, as the
 `**Red:** none (reason)` passes on it; the reason is required. A job approved without a rule pack, or one whose pack
 doesn't name `red-first`, passes.
 
+## Advice before the gate
+
+An agent whose provider has a `before-tool` hook (our ACP forks' `_drgnx/before_tool`; Codex's managed hook, offered
+when the session's hooks subscribe, which fails open on a timeout) gets a soft deny when it commits in its task's tree
+while the task has no red evidence and the commit changes code: tracked changes against `HEAD` outside the pack's
+test globs, under a pack that gates on `red-first` (`orch::advice`). The deny's words say the merge will hold it and to
+commit and run the failing tests first; a commit of tests alone, a task with a red, or a pack without the rule pass.
+It runs before the hooks, and anything it can't read lets the step through. It is advice that saves wasted work: the
+gate at the merge is the same for every provider, and a provider without hooks meets it there.
+
 ## Policy from the base
 
 The gates' policy files, `test/affected.eld`, `test/frozen.eld` and `test/flaky.eld` (`vordr::pack::POLICY_PATHS`),
@@ -210,17 +232,23 @@ judged by. A tip that edits one is a `code.ci-config` change at its merge (`runn
 else the newest running job), its tasks and their evidence, its rule pack, its merge queue (ready and batch) and its
 open `gate` cards, and builds the model and the rows (`work::trail::flow`, pure):
 
+- the run's line: its title, the plan run, the job and its pack, then chips: how many agents it runs at once ("one
+  agent", with "· in order" when the user ordered its tasks), the tasks done, and its base (short). The job's first
+  task start records `agents` and `base` in the job's data (`runner::tick::run_facts`; the base is that task's tree's);
+  before then the run shows neither;
 - a row per task, a column per gate: Brief, Red first, Build, Author check, Merge batch, Review, each heading with its
   Lucide icon. Each cell is a chip in its state's face (`drgnx-work-flow-chip-ok` passed, `-run` running, `-held`
   held, with a lock, `-err` failed, `-wait` waiting; drgnx-work-flow.el, the UI font over the theme's chips), an empty
   ring where a gate has nothing yet, and the label face where the pack has no such gate or a gate waits on another
   ("waits red"). Red first is the oldest red run's failing rows ("N failed · base"; "no red · held" at review
   without one), Build the newest run, the author check its checks green at their newest runs (a check when all are),
-  the merge column the queue's place or the open `gate` card's words. Text is in `drgnx-work-flow-text`, ids and
+  the merge column the queue's place or the open `gate` card's words, Review "at plan end" when the pack has a
+  `review` rule that gates or routes (an `advice` one shows none). Text is in `drgnx-work-flow-text`, ids and
   agents in `-label`, headings in `-heading`;
-- the columns fit the window: each gate column is as wide as its widest cell or heading in the UI font (the hub
-  measures with the env's fonts), the agent's as its widest agent, and the task column takes the rest (at least 96
-  px), so cells are never cut and long titles give way;
+- the columns fit the window, titles before chips: each gate column wants its widest cell or heading in the UI font
+  (the hub measures with the env's fonts), the agent's is its widest agent, and the task column wants its widest
+  title, up to a third of the window. When both don't fit, the widest gate columns give way first (their cells and
+  headings cut with an ellipsis, down to 44 px a column), and only then the titles (down to 96 px);
 - under them the batch being checked: its heading with an "affected groups g/n" chip (the groups the groups gate
   listed at the combined tree, green of them, red in the error face), a row per member (its title, its tip, what the
   queue said to it last: "trial merge clean", or why it waits, the job's tasks named by their labels; then what the
@@ -234,14 +262,15 @@ open `gate` cards, and builds the model and the rows (`work::trail::flow`, pure)
   (the batch's across the table without a push gate), each row of a card filled to its edge in
   `drgnx-work-flow-card`. The rings and the rows' rules are Glitnir blocks (Nidhogg's `glitnir-blocks`): the hub
   marks them on the rows with the text property `drgnx-work-flow-block` (`["ring" ID X0 X1]` on a card's span of each
-  of its rows, `["rule" KEY X0 X1]` on the headings and each task row, device px), and drgnx-work-flow.el turns the
+  of its rows, `["rule" KEY X0 X1]` on the headings and each task row, device px; on a GUI the column heads are 24
+  logical px high and each task row 30, as in the mockup, by a 1 px space that high first on the row), and drgnx-work-flow.el turns the
   marks into the window parameter after each patch, only when they changed (ring radius 8 in `drgnx-border` over
   `default`, rules in `drgnx-border-subtle`; faces, so a theme change recolours them). A killed Flow takes its
   blocks off every window;
 - the model: a `task` node per task with the `flow` form's links up and down and the gates' states as fields, the
   lists `tasks` and `held` (the needs-you chips; `Tab` walks them).
 
-A held task is also a needs-you chip on the row under the run's line ("⚑ T5 held: …", carrying the task's id), and
+A held task is also a needs-you chip on the strip, the first row, above the run's line ("⚑ T5 held: …", carrying the task's id), and
 its row carries its `gate` card's id (`drgnx-work-card`).
 
 `e` asks `orch/evidence` for the selected task and lists each record (kind, job, tree, command, its failing rows or
@@ -254,8 +283,11 @@ a lock, checked and routing in the accent) and how the hub holds it.
 **The detail tile.** `work/flow/subscribe` with `detail: TASK` makes its view (the Flow's `VIEW/detail`) that task's
 detail tile: rows alone, no model, read again after every write like the Flow. The Flow subscribes it again each
 time its selection moves (`drgnx-view-selected-functions`, the Flow's own). It says what the task is and who works on
-it; for a held task why it is held (the card's words and each held gate) and what clears it; the evidence so far, one
-line per record; and the actions with their keys. `r` (**Run the red** for a red-first hold, else **Check again**:
+it; for a held task why it is held (the card's words and each held gate) and what clears it; the commits the merge
+checks (base .. tip, then each commit with its short sha, `tests` for red first's test commit or `code`, and its
+subject: the job data's `commits`, which `orch::gates::before_merge` records each time it looks, and `bases`); the
+evidence so far as a table, a label column (`brief`, `tests`, `green`, `red`, then any `waiver`) and each newest
+record's job, machine and counts, "none recorded" in the attention face where there is none; and the actions as buttons, each with its key as a keycap badge inside it (`drgnx-work-flow-key`). `r` (**Run the red** for a red-first hold, else **Check again**:
 the card's `merge`), `s` (**Tell the agent**: `retry`) and `w` (**Waive once**: `waive`, asking for the reason) answer
 the card with `job/card` as the user; the hub takes the waiver only from the user's connection. The tile shows in the
 right dock where the map's side panel was, and the panel comes back when the lens leaves the Flow.
