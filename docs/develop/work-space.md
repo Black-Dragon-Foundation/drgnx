@@ -598,7 +598,7 @@ chain, the edge selection, the item that finished) and the commands are in `drgn
   `O` sets the model's form, so up and down walk `outline`. Back and forward follow Sjá's reserved links `back` and `forward` (the instance's
   history; Nidhogg's `nidhogg/sja/README.md`, "History"): in the map through `drgnx-work-map--nav`, in a view of it
   through `drgnx-view-nav`. Open reads the label once; a file opens at the team's
-  agents on its chain. Motion capture's card rects (`drgnx-work-map--rect`) are the model's fields `x y w h`. The trailing notice is `work/map/set {view, selected}` (or `{view, clear}`). Tests:
+  agents on its chain. Motion capture's card rects (`drgnx-work-map--item-rects`) take x and w from the model's fields. The trailing notice is `work/map/set {view, selected}` (or `{view, clear}`). Tests:
   `test/unit/work-map-nav-test.el`.
 - **The switch.** A map opened when `drgnx-work-map-rows-p` holds (not `drgnx-view-old-path`, and this Emacs has
   Sjá) goes on the hub's rows: `drgnx-work-map-rows-attach VIEW` makes the buffer the hub-fed view of the map view's id
@@ -649,45 +649,46 @@ timer pass (`drgnx-view-hurry`), not after the view's 0.1 s throttle: that throt
 
 1. **Capture.** `drgnx-work-map--send-filters` calls `drgnx-work-map--motion-begin` before it sends. Each window
    showing the map gets a new value of the window parameter `glitnir-layout-capture` (a fresh list, so not `eq` to the
-   last) and the map keeps, in `drgnx-work-map--motion`, the frame it shows and its cards' rectangles in that window.
-   The redisplay after the key hands the capture to the presenter, which copies the window's text area while it still
-   shows the old layout.
-2. **Acknowledgement.** When the hub's frame comes with a new layout (`:layout` in the marks) and a capture waits,
-   `drgnx-work-map--changed` calls `drgnx-work-map--motion-frame` instead of touching the view. If
+   last) and the map keeps, in `drgnx-work-map--motion`, the cards the buffer draws (`drgnx-work-map--drawn-ids`)
+   and their rectangles in that window. The redisplay after the key hands the capture to the presenter, which copies
+   the window's text area while it still shows the old layout.
+2. **Acknowledgement.** The hub's patches for the new layout come before its answer to `work/map/set`, on the same
+   connection. When the answer comes and a capture waits, `drgnx-work-map--answered` calls
+   `drgnx-work-map--motion-frame` instead of hurrying the view (live patches never reach it). If
    `glitnir-layout-captured-p` holds for every window, the new layout is drawn at once; otherwise a `drgnx-timer-poll`
    keyed `(work-motion . VIEW)`, owned by the buffer, gives it one period (1/60 s) and then draws anyway.
 3. **Draw and move.** `drgnx-work-map--motion-draw` draws the whole view now (`drgnx-view-draw-now`) and, before the
    redisplay that shows it, sets `glitnir-layout-motion` on each window whose picture is held: `:moves` `(ID OLD NEW)`,
-   `:enters` `(ID NEW)` (items new in the frame), `:exits` `(ID OLD)` (items the frame dropped), `:background 'default`,
+   `:enters` `(ID NEW)` (cards the buffer did not draw before), `:exits` `(ID OLD)` (cards it no longer draws), `:background 'default`,
    `:duration` 0.16, `:curve 'ease-out`. A window whose picture is not held drops its capture, and the layout jumps
    there; `drgnx-work-map-motion-stats` counts it under `:skipped` (`:legs` counts the layouts that moved).
 4. **End.** A `drgnx-timer-start` keyed `(work-motion-end . VIEW)` takes both parameters off 0.1 s after the leg's
    duration, so the window is an ordinary one again (Glitnir demotes a window while it holds a capture). A capture whose
-   frame never comes (no hub, nothing changed) goes after a second (`(work-motion-expire . VIEW)`). A new layout during
+   answer never comes (no hub) goes after a second (`(work-motion-expire . VIEW)`). A new layout during
    a leg cancels the end and asks for a new capture: Glitnir retargets from the sampled rectangles.
 
 The rectangles are `(X Y W H)` in pixels of the window's text area (`drgnx-work-map--item-rects`): x and w from the
-layout (the margin plus the item's units, as the cards' `:align-to`), y and h from the rows as the display engine lays
-them out. `drgnx-work-map--drawn-rows` measures each row from the one the window starts at with
-`window-text-pixel-size`, which needs no redisplay, so the new layout's rows are measured right after they are drawn
-into the buffer and before the redisplay that shows them. (The drawn rows are not the layout's heights: a card line is
-as tall as its text, and an emoji or a larger fallback font makes a row taller.) At capture time
-`drgnx-work-map--checked-rows` checks the old layout's measured tops against `window-line-height`; from a row that
-differs, cards are left out of the old rectangles and cross-fade with the rest. A window that starts inside a row,
-scrolls sideways or was not drawn yet asks for no capture.
+model's fields `x` and `w` (the margin plus the item's units, as the cards' `:align-to`), y and h from the card's lines
+as the display engine lays them out: y the top of its first line (`pos-visible-in-window-p`), h its lines' height
+(`window-text-pixel-size`). Neither needs a redisplay (both lay the window out from its start), so the new layout is
+measured right after its patches are drawn into the buffer and before the redisplay that shows it. (The drawn lines are not the layout's heights: a card line is as
+tall as its text, and an emoji or a larger fallback font makes a line taller.) Only the hub's card rows (keys `row:…`)
+count: the outline has no rectangles, so it asks for no capture, and neither does a window that scrolls sideways.
 
 **No motion** where `drgnx-work-map--motion-p` is nil: a terminal, a frame Glitnir does not draw, a Nidhogg without the
 layout leg (macOS for now), reduced motion (`glitnir--reduced-motion-p`, the desktop's setting through Glitnir, or
-`drgnx-look-motion` `reduced`). There the frame is drawn as before and nothing is said or counted. Live deltas never
-move the map: only a frame with a new layout while a capture waits does. The teardown and a map buffer's
+`drgnx-look-motion` `reduced`). There the new layout is drawn as before and nothing is said or counted. Live patches
+never move the map (an agent arriving adds its card with no capture): only the hub's answer to a layout the user asked
+for, while a capture waits, does. The teardown and a map buffer's
 `kill-buffer-hook` call `drgnx-work-map-motion-clear`, which stops the timers and takes the parameters off every
 window the map set them on (`drgnx-work-map--motion-windows`).
 
 Tests: `test/ui/work-space-gui-test.el`, the rows `drgnx-work-gui/relayout-moves-with-motion` (dark and light, with
 screenshots), `-no-ack-is-a-jump` (the text area moves after the capture, so the presenter drops it),
 `-reduced-motion-sends-no-capture`, `-a-live-arrival-never-moves-the-map`, and the timing row
-`-keys-stay-fast-during-a-leg` (40 keys during a 3 s leg, p95 under 16 ms). They need a Nidhogg with the layout leg;
-on one without it the first two and the timing row skip.
+`-keys-stay-fast-during-a-leg` (40 keys during a 3 s leg, p95 under 16 ms), on the 30-agent map of a real hub with
+mock agents streaming (`test/fixtures/work-space-thirty-fixture.el`). They need Sjá, and the first two and the timing
+row a Nidhogg with the layout leg. Unit: `drgnx-work-map-nav/motion-reads-the-card-rows`.
 - Search is a local class: `drgnx-work-map--class` dims what the text does not match, with the same text properties
   the selection uses.
 - A conclusion that differs from the frame before (`:old` in the marks) puts its id in `drgnx-work-map--new`; one

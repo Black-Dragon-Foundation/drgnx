@@ -44,8 +44,8 @@
   "The hub's map model, small: an ask over two agents, b touching a file; b and the ask need you.")
 
 (defun drgnx-work-map-nav-test--row ()
-  "One row holding every card: \"QQ AA BB FF\"."
-  (list :key "r" :text "QQ AA BB FF"
+  "One card row (a key as the hub's, `row:…') holding every card: \"QQ AA BB FF\"."
+  (list :key "row:3:0:0:0" :text "QQ AA BB FF"
         :props (list (list 0 2 "drgnx-work-id" "ask:1") (list 3 5 "drgnx-work-id" "agent:a")
                      (list 6 8 "drgnx-work-id" "agent:b") (list 9 11 "drgnx-work-id" "file:r/x.el"))))
 
@@ -167,12 +167,17 @@ clears it."
     (should-not drgnx-work-map--search)
     (should-not (memq 'drgnx-view-match (drgnx-work-map-nav-test--faces 3)))))
 
-(ert-deftest drgnx-work-map-nav/motion-rects-come-from-the-model ()
-  "Pattern D: on the rows path a card's rect for motion capture is the model's fields x y w h; a card without them
-has none."
+(ert-deftest drgnx-work-map-nav/motion-reads-the-card-rows ()
+  "Pattern D: the cards motion compares before and after are the ids on the hub's card rows (keys `row:…'); a row of
+another kind (the strip, a band, the outline) holds none.  The rectangles' geometry needs a display: the GUI rows in
+test/ui/work-space-gui-test.el check it."
   (drgnx-work-map-nav-test--with
-    (should (equal '(:x 0 :y 10 :w 20 :h 6) (drgnx-work-map--rect nil "agent:a")))
-    (should-not (drgnx-work-map--rect nil "agent:b"))))
+    (should (equal '("agent:a" "agent:b" "ask:1" "file:r/x.el")
+                   (sort (hash-table-keys (drgnx-work-map--drawn-ids)) #'string<)))
+    (should (drgnx-work-map--card-row-p "row:3:0:0:0"))
+    (should-not (drgnx-work-map--card-row-p "strip"))
+    (should-not (drgnx-work-map--card-row-p "band:3:0:0"))
+    (should-not (drgnx-work-map--card-row-p "outline:agent:a:0"))))
 
 (ert-deftest drgnx-work-detail/rows-follow-the-selection ()
   "Pattern D: beside a map on the rows path the Detail panel is the hub's view VIEW/detail in the map's class: its

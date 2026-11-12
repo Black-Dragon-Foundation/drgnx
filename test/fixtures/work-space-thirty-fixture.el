@@ -160,9 +160,10 @@ Sets `drgnx-work-thirty--roots'."
 (declare-function drgnx-agent-session-remote "drgnx-agents")
 (defvar drgnx-agents--sessions)
 
-(defun drgnx-work-thirty-start (bin)
+(defun drgnx-work-thirty-start (bin &optional count)
   "Build the fixture, start a hub of BIN (a test-hooks ratatoskr with `ratatoskr-mock' beside it) with one profile per
-agent, start the 30 agents and send each its ask; wait until all 30 are busy.  Returns the mirrors."
+agent, start the 30 agents (COUNT: only the description's first COUNT, a map small enough to lay out at scale 2) and
+send each its ask; wait until all are busy.  Returns the mirrors."
   (require 'drgnx-agents-mirror)
   (require 'drgnx-hub-client)
   (let* ((mock (and bin (expand-file-name "ratatoskr-mock" (file-name-directory bin)))))
@@ -170,7 +171,8 @@ agent, start the 30 agents and send each its ask; wait until all 30 are busy.  R
       (error "The 30-agent fixture needs DRGNX_RATATOSKR_BIN (a test-hooks ratatoskr) with ratatoskr-mock beside it"))
     (setq drgnx-work-thirty--dir (make-temp-file "drgnx-work-thirty" t))
     (let* ((dir drgnx-work-thirty--dir) (desc (drgnx-work-thirty--desc))
-           (agents (drgnx-work-thirty-build dir)) (config (expand-file-name "config" dir)) profiles)
+           (agents (let ((all (drgnx-work-thirty-build dir))) (if count (seq-take all count) all)))
+           (config (expand-file-name "config" dir)) profiles)
       (setq drgnx-work-thirty--agents agents)
       (make-directory config t)
       (dolist (a agents)
@@ -200,7 +202,7 @@ agent, start the 30 agents and send each its ask; wait until all 30 are busy.  R
       (setq drgnx-work-thirty--mirrors (nreverse drgnx-work-thirty--mirrors))
       (unless (drgnx-work-thirty--wait 60 (lambda () (seq-every-p (lambda (s) (eq (drgnx-agent-session-status s) 'busy))
                                                                   drgnx-work-thirty--mirrors)))
-        (error "Not all 30 agents are streaming: %d busy"
+        (error "Not all %d agents are streaming: %d busy" (length drgnx-work-thirty--mirrors)
                (seq-count (lambda (s) (eq (drgnx-agent-session-status s) 'busy)) drgnx-work-thirty--mirrors)))
       (setq drgnx-work-thirty--started (float-time))
       drgnx-work-thirty--mirrors)))
@@ -253,7 +255,8 @@ agent, start the 30 agents and send each its ask; wait until all 30 are busy.  R
 
 (defun drgnx-work-thirty-map (shown)
   "The map of the fixture's workspace: in a window beside the selected one when SHOWN, else open and shown nowhere
-(the hub told).  Waits for the frame with 30 agents.  The selected window is the one selected before.  The buffer."
+(the hub told).  Waits for the map with every agent started.  The selected window is the one selected before.  The
+buffer."
   (unless (eq 'ok (plist-get (cdr (assq 'tools/work-space (drgnx-modules-report))) :status))
     (error "The module tools/work-space is not running"))
   (setq drgnx-work-space-roots drgnx-work-thirty--roots)
@@ -266,8 +269,9 @@ agent, start the 30 agents and send each its ask; wait until all 30 are busy.  R
     (redisplay t)
     (unless (drgnx-work-thirty--wait 60 (lambda ()
                                           (drgnx-work-space-sync-shown) ; tells the hub what the windows show
-                                          (>= (drgnx-work-thirty-agent-items buffer) 30)))
-      (error "The map holds %d agents, not 30" (drgnx-work-thirty-agent-items buffer)))
+                                          (>= (drgnx-work-thirty-agent-items buffer)
+                                              (length drgnx-work-thirty--mirrors))))
+      (error "The map holds %d agents, not %d" (drgnx-work-thirty-agent-items buffer) (length drgnx-work-thirty--mirrors)))
     buffer))
 
 (defun drgnx-work-thirty-premise (&optional buffer shown)
