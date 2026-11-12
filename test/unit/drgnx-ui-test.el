@@ -916,6 +916,38 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should (member "DRGNX_TEST_SELECTOR=\"^drgnx-scn/\"" env))
       (should (member "DRGNX_SCENARIO_CONFIG=minimal" env)))))
 
+(ert-deftest drgnx-ui/the-gui-suite-gets-the-hub-and-requires-it ()
+  ;; a hub row in the session never skips: it gets the hub (the inherited one, else the checkout's build) and
+  ;; DRGNX_TEST_HUB_REQUIRED=1, under which a hub fixture that finds none fails
+  (drgnx-ui-test--with-state
+    (let* ((repo (make-temp-file "duir" t)) (bin (expand-file-name "runtime/target/debug/ratatoskr" repo)) env)
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-ui-run-ert-session)
+                     (lambda (_dir &optional _timeout _config extra-env) (setq env extra-env) (list 1 nil root))))
+            (let ((drgnx-ui-repo-dir repo) (standard-output #'ignore)
+                  (process-environment (cons "DRGNX_RATATOSKR_BIN" process-environment)))
+              (drgnx-ui-run-ui-session-tests)
+              (should (member "DRGNX_TEST_HUB_REQUIRED=1" env))
+              (should-not (drgnx-ui-test--env-value env "DRGNX_RATATOSKR_BIN"))
+              (make-directory (file-name-directory bin) t)
+              (write-region "" nil bin nil 'silent)
+              (set-file-modes bin #o755)
+              (drgnx-ui-run-ui-session-tests)
+              (should (equal (drgnx-ui-test--env-value env "DRGNX_RATATOSKR_BIN") bin))
+              (let ((process-environment (cons "DRGNX_RATATOSKR_BIN=/opt/hub/ratatoskr" process-environment)))
+                (drgnx-ui-run-ui-session-tests)
+                (should (equal (drgnx-ui-test--env-value env "DRGNX_RATATOSKR_BIN") "/opt/hub/ratatoskr")))))
+        (delete-directory repo t)))))
+
+(ert-deftest drgnx-ui/a-hub-row-with-no-hub-fails-when-the-hub-is-required ()
+  (load (expand-file-name "test/fixtures/ratatoskr-fixture" drgnx-dir) nil t)
+  (load (expand-file-name "test/fixtures/hub-client-fixture" drgnx-dir) nil t)
+  (let ((process-environment (append '("DRGNX_RATATOSKR_BIN" "DRGNX_TEST_HUB_REQUIRED=1") process-environment)))
+    (should-error (eval '(drgnx-test-with-ratatoskr (make-temp-file "duih" t) t) t) :type 'ert-test-failed)
+    (should-error (eval '(drgnx-hub-client-test--with-ratatoskr t) t) :type 'ert-test-failed))
+  (let ((process-environment (append '("DRGNX_RATATOSKR_BIN" "DRGNX_TEST_HUB_REQUIRED") process-environment)))
+    (should-error (eval '(drgnx-test-with-ratatoskr (make-temp-file "duih" t) t) t) :type 'ert-test-skipped)))
+
 (defun drgnx-ui-test--env-value (env name)
   "The value of NAME in ENV (\"K=V\" strings) as `env -i' sees it: the last entry wins."
   (let (v) (dolist (kv env v) (when (string-prefix-p (concat name "=") kv) (setq v (substring kv (1+ (length name))))))))

@@ -108,14 +108,16 @@ Returns the state."
   "How a key bound in MAPSYM is described next to its command: \"\" for the leader map (the keys are
 shown plain), \"panels\" for the panel map, \"normal state\" and so on for the engine's state maps, nil for
 any other keymap.  MAPSYM is a keymap symbol or (FEATURE . KEYMAP-SYMBOL).  With VERBOSE the leader map is
-described by where it works, as the profile's `:modal' `:maps' says: \"normal, visual, motion state and panels\"."
-  (pcase (if (consp mapsym) (cdr mapsym) mapsym)
-    ('drgnx-modal-leader-map (if verbose (drgnx-modal--places 'drgnx-modal-leader-map) ""))
-    ('drgnx-modal-panel-map "panels")
-    ('evil-normal-state-map "normal state")
-    ('evil-visual-state-map "visual state")
-    ('evil-motion-state-map "motion state")
-    ('evil-insert-state-map "insert state")))
+described by where it works, as the profile's `:modal' `:maps' says: \"normal, visual, motion state and panels\".
+A view's own keymap for one state is named for it, `…-STATE-state-map' (`drgnx-replace-normal-state-map', the
+Search view's keys in normal state): \"STATE state\" too."
+  (let ((sym (if (consp mapsym) (cdr mapsym) mapsym)))
+    (pcase sym
+      ('drgnx-modal-leader-map (if verbose (drgnx-modal--places 'drgnx-modal-leader-map) ""))
+      ('drgnx-modal-panel-map "panels")
+      ((and (pred symbolp)
+            (guard (string-match "-\\(normal\\|visual\\|motion\\|insert\\)-state-map\\'" (symbol-name sym))))
+       (format "%s state" (match-string 1 (symbol-name sym)))))))
 
 (defun drgnx-modal--places (mapsym)
   "The places MAPSYM works in as words (\"normal, visual, motion state and panels\"), from the first loaded

@@ -30,6 +30,10 @@ pub struct Runner<'a> {
     /// The root a `root` step made: later `run` and `start` steps with no hub use it, and what `ensure` starts there
     /// is stopped with the scenario.
     active_root: Option<Arc<Root>>,
+    /// When the scenario's `bound_s` runs out: checked before each step and each `measure` repeat (a step itself
+    /// stops at its own `within_ms`).
+    deadline: Instant,
+    bound_s: u64,
 }
 
 type R<T = ()> = Result<T, String>;
@@ -67,12 +71,14 @@ pub fn run_scenario(cfg: &Config, s: &Scenario, perf: &mut Vec<(String, Vec<f64>
         perf,
         started: 0,
         active_root: None,
+        deadline: Instant::now() + Duration::from_secs(s.bound_s),
+        bound_s: s.bound_s,
     };
     let start = Instant::now();
     let mut timing = Vec::new();
     for (i, step) in s.steps.iter().enumerate() {
         let at = start.elapsed();
-        let ran = r.step(step);
+        let ran = r.within_bound("").and_then(|()| r.step(step));
         timing.push(format!(
             "  {:>3} {:<16} at {:>7} ms, took {:>6} ms",
             i + 1,
@@ -95,6 +101,17 @@ pub fn run_scenario(cfg: &Config, s: &Scenario, perf: &mut Vec<(String, Vec<f64>
 const FAILURE_LOG_LINES: usize = 60;
 
 impl Runner<'_> {
+    /// An error once the scenario's bound has run out, saying so with WHAT it had done.
+    fn within_bound(&self, what: &str) -> R {
+        if Instant::now() < self.deadline {
+            return Ok(());
+        }
+        Err(format!(
+            "the scenario's bound of {} s ran out{what} (\"bound_s\" in its header)",
+            self.bound_s
+        ))
+    }
+
     /// The steps' TIMING and the end of each hub's logs (its stderr and its own `hub-*.jsonl`), for a failure.
     fn failure_notes(&self, timing: &[String]) -> String {
         let mut notes = format!(
@@ -2188,8 +2205,15 @@ impl Runner<'_> {
                 obj,
             });
         }
-        let mut samples = Vec::new();
+        let mut samples: Vec<f64> = Vec::new();
         for _ in 0..repeat {
+            if !samples.is_empty() {
+                let mean = samples.iter().sum::<f64>() / samples.len() as f64;
+                self.within_bound(&format!(
+                    " in {name} after {} of {repeat} repeats, {mean:.1} ms each on average",
+                    samples.len()
+                ))?;
+            }
             let t = Instant::now();
             for s in &inner {
                 self.step(s)
@@ -2241,6 +2265,37 @@ fn agent_socket(hub: &Hub, sid: &str) -> R<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_row_past_its_bound_fails_alone_with_what_it_had_done() {
+        let s = crate::scenario::parse(
+            "{\"scenario\": \"t/slow\", \"bound_s\": 1}\n\
+             {\"do\": \"root\"}\n\
+             {\"do\": \"measure\", \"name\": \"m\", \"repeat\": 1000, \"steps\": [\
+               {\"do\": \"run\", \"bin\": \"/bin/sh\", \"args\": [\"-c\", \"sleep 0.2\"], \"expect_code\": 0}]}\n",
+        )
+        .unwrap();
+        let cfg = Config {
+            hub_bin: PathBuf::from("/nonexistent"),
+            scenarios: PathBuf::from("/nonexistent"),
+        };
+        let mut perf = Vec::new();
+        let e = run_scenario(&cfg, &s, &mut perf).unwrap_err();
+        assert!(
+            e.contains("step 2 (measure)")
+                && e.contains("bound of 1 s ran out in m after ")
+                && e.contains(" of 1000 repeats, ")
+                && e.contains(" ms each on average"),
+            "{e}"
+        );
+        assert!(perf.is_empty(), "a measure cut short records nothing");
+    }
+
+    #[test]
+    fn the_root_is_its_own_true_name() {
+        let r = Root::new().unwrap();
+        assert_eq!(std::fs::canonicalize(r.path()).unwrap(), r.path());
+    }
 
     #[test]
     fn procargs2_splits_argv_from_the_environment() {

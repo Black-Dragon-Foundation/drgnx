@@ -20,7 +20,9 @@ One API runs a command in every backend (`gleipnir::backend`, re-exported at the
      root-owned rule.
    - Linux, reduced: the inner helper alone. Both Linux tiers also need a seccomp filter for this architecture.
    - macOS: Seatbelt (a root-owned `/usr/bin/sandbox-exec`), whatever the tier. `Sandbox::with_mac(MacContext)`
-     gives it the developer dir; gleipnir reads none itself.
+     gives it the developer dir; gleipnir reads none itself. The hub gives the active one
+     (`draugr::git::developer_dir()`: xcode-select's root-owned link, by its true name), an Xcode's too, though
+     draugr refuses that one's git.
    - Anything else (Android among them): refused (`BackendKind::None`).
 
    `helper` is an `InnerCommand`: the helper binary's path outside, its `inner_args` (`sandbox-inner`), its
@@ -822,8 +824,12 @@ the program may touch is the profile's allow list.
   SharedFrameworks); the account's per-user folder (`getconf DARWIN_USER_DIR`'s parent, by true name) read and written
   (clang's module cache, the compilers' temporary files); `/dev/autofs_nowait` read; `/dev/dtracehelper` and
   `/dev/tty` written (`file-write-data` only, never created or unlinked); the metadata of `/private/tmp` and
-  `/private/var/tmp`; and the mach services `com.apple.system.opendirectoryd.membership` (the xcrun shims' group check)
-  and `com.apple.bsd.dirhelper`. A per-user folder that is `/` or meets `users_dir` is refused.
+  `/private/var/tmp`; the mach services `com.apple.system.opendirectoryd.membership` (the xcrun shims' group check)
+  and `com.apple.bsd.dirhelper`; and `/bin/sh`'s here-documents (`BUILD_HEREDOCS`): read and write of
+  `^/private/tmp/sh-thd[^/]*$` and `^/private/var/tmp/sh-thd[^/]*$`, bash 3.2 making them there whatever `TMPDIR` says,
+  and `file-write-data` on the two folders themselves (`BUILD_HEREDOC_DIRS`: bash takes a folder only if `access(W_OK)`
+  passes; no data can be written to a folder, and making, removing or renaming in it stays denied); nothing else of
+  either folder (the user's ruling, 2026-11-11). A per-user folder that is `/` or meets `users_dir` is refused.
 
 ### The profile, in order
 
@@ -838,7 +844,7 @@ policy:
 (allow file-read-metadata (literal …))          ;    directory above an allowed path (stat, never list)
 (allow file-read* (subpath …))                  ; 5. system roots, developer dir, read, write, home, run, tmp
 (allow file-read* (literal "/dev/null") …)      ; 6. the devices, each by name
-(allow sysctl-read) …                           ;    a build's addition: sysctls, its devices, services
+(allow sysctl-read) …                           ;    a build's addition: sysctls, its devices, services, sh-thd*
 (deny file-read* (subpath "/opt/homebrew/var") (regex …) …)          ; 7. Homebrew's data
 (allow file-write* (subpath …))                 ; 8. write, home (rw), tmp
 (allow file-read* (subpath B)) (allow file-write* (subpath B))       ; 9. each bind, in order: rw…
@@ -898,7 +904,11 @@ policy:
   network namespace, so the ports are what isolates, and there is no relay. A debug session's spec (`loopback`) adds
   its own ports (`mac_loopback_ports`: bound, accepted, connected to; never `localhost:*`, which would be every
   service on the Mac's loopback), Unix sockets bound and accepted under its `tmp` (node's inspector), and, when the
-  developer dir is an Xcode's `Contents/Developer`, its `Contents/SharedFrameworks` read (LLDB.framework). The
+  developer dir is an Xcode's `Contents/Developer`, its `Contents/SharedFrameworks` read (LLDB.framework; the Command
+  Line Tools keep theirs inside the developer dir, read anyway, so nothing is added). The row
+  `mac-loopback-developer-dir-read-only` lists `${LLDB_FRAMEWORKS}` and fails to write there and in the developer dir
+  on either kind of Mac; that an Xcode's `SharedFrameworks` stays shut without the flag is held by the profile's unit
+  tests, as a Mac with only the Command Line Tools has none. The
   task port stays closed, so native debuggers run unsandboxed only. The mach services and the resolver come
   with shared only, as in Codex: `trustd` and `ocspd` fetch a certificate's AIA, OCSP and CRL URLs outside the sandbox,
   a way past `(deny network*)`. So tools that verify TLS through Apple's frameworks (`curl` and `git` from the Command
@@ -1304,8 +1314,11 @@ ${TASK2} ${W} ${DATA} ${CANARY_DIR} ${FIXTURE} ${TMP} ${MARKER}`, and on macOS `
 non-loopback address), `${UPSTREAM}` (`upstream.test:PORT`, pinned in the proxy), `${PROXY_TCP}`; for the web proxy
 `${HOST_LAN}` (an address alone, `192.168.77.7`, which its policy counts as the host's own), `${GATEWAY_PORT}` (a hub
 TCP port on the loopback, in its `NeverSet`) and `${TCP_LO_PORT}` (`${TCP_LO}`'s port alone); `${FREE_PORT}` (a
-loopback port found free at the start: a `"net": "loopback"` row's own port) and `${DEVELOPER_DIR}` (macOS: `${GIT}`'s
-developer dir). Others:
+loopback port found free at the start: a `"net": "loopback"` row's own port), `${DEVELOPER_DIR}` (macOS: the active
+developer dir, xcode-select's link by its true name, as the hub's profile has it: `draugr::git::developer_dir()`, an
+Xcode too, whose git draugr refuses) and `${LLDB_FRAMEWORKS}` (where its LLDB.framework is: an Xcode's
+`../SharedFrameworks`, the Command Line Tools' own `Library/PrivateFrameworks`, else the developer dir, so the
+loopback rows hold on a Mac with only the Command Line Tools). Others:
 `${HARNESS_PID}`, `${SLEEP_PID}` (the `start-sleep` step), `${FAKE_BWRAP}` (the `fake-bwrap` step), `${GIT}` (the
 git draugr runs: `draugr::git::git_program()`, so on macOS the developer dir's, not the `/usr/bin/git` shim), and in
 `layer` rows only `${PARENT}` (the stand-in agent's pid, which only the processes inside know: the fixture writes

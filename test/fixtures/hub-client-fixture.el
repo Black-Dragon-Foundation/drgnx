@@ -12,6 +12,7 @@
 (require 'drgnx-registry)               ; the notice tests register a command
 (require 'drgnx-agents-mirror)
 (load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/ratatoskr-fixture" drgnx-dir) nil t)   ; `drgnx-test-no-hub'
 (load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)   ; seeding as the hub's stand-in
 (require 'drgnx-ai)
 (require 'drgnx-settings-prov)
@@ -76,11 +77,11 @@ disconnected at the end."
 
 (defmacro drgnx-hub-client-test--with-ratatoskr (&rest body)
   "BODY with Ratatoskr serving ROOT (`drgnx-hub-client-test--with'), this Emacs not yet connected; skipped without the
-binary.  For the tests of other files that drive a real agent through the hub and wait on conditions of their own (the
+binary (failed where the hub is required: `drgnx-test-no-hub').  For the tests of other files that drive a real agent through the hub and wait on conditions of their own (the
 agents mirror's): their order is the agent's, not the gate's."
   (declare (indent 0))
   `(drgnx-hub-client-test--with
-     (skip-unless (drgnx-hub-client-test--bin))
+     (unless (drgnx-hub-client-test--bin) (drgnx-test-no-hub))
      (let* ((process-environment (append (list (concat "DRGNX_DIR=" (directory-file-name drgnx-dir)) "RATATOSKR_SUPERVISOR=none"
                                                (concat "DRGNX_EMACS=" (expand-file-name invocation-name invocation-directory)))
                                          process-environment))

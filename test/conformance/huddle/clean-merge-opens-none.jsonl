@@ -1,7 +1,7 @@
 {"scenario": "huddle/clean-merge-opens-none", "requires": ["v1", "test-hooks"], "doc": "Gated (B). B's tree changes the first line of a ten-line src/a.rs (uncommitted), A's edit appends at its end: the two merge cleanly, so after __test_barrier settles the prediction there is no clash card (and no huddle). Then B's tree also appends a line; 31 s of hub time later (the check runs at most once per pair and file per 30 s) A's next edit conflicts with it: one card, so the first check did run. Pattern B on the sequencer's clock: work/files gates each edit, __test_barrier settles the prediction job."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
-{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/src && cd $ROOT/work && git init -q -b main && seq 1 10 | sed 's/^/line /' > src/a.rs && git add src && git -c user.name=t -c user.email=t@t commit -q -m init && git worktree add -q -b b $ROOT/wt-b && sed -i 's/^line 1$/line one by b/' $ROOT/wt-b/src/a.rs"], "expect_code": 0}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/src && cd $ROOT/work && git init -q -b main && seq 1 10 | sed 's/^/line /' > src/a.rs && git add src && git -c user.name=t -c user.email=t@t commit -q -m init && git worktree add -q -b b $ROOT/wt-b && sed 's/^line 1$/line one by b/' $ROOT/wt-b/src/a.rs > $ROOT/a.rs.new && mv $ROOT/a.rs.new $ROOT/wt-b/src/a.rs"], "expect_code": 0}
 {"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
 {"do": "start", "hub": "h", "args": ["--test-sequencer"]}
 {"do": "connect", "conn": "c", "hub": "h"}

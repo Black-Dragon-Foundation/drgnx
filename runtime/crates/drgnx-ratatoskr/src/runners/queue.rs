@@ -414,7 +414,7 @@ struct Remote {
     ready: Option<ReadyNow>,
     /// The input keys its attempts synced, newest last (at most [`SYNCED_KEPT`]): their bytes are there.
     synced: Vec<String>,
-    /// The features its last probe offered (`probe-result`): what a Mac candidate has.
+    /// The features its last probe offered (`probe-result`): what it has as a candidate (none before its first probe).
     features: Vec<String>,
 }
 
@@ -431,6 +431,8 @@ const SYNCED_KEPT: usize = 64;
 /// A runner's last `ready`.
 struct ReadyNow {
     budget: forseti::Budget,
+    /// The memory the runner had available, MiB.
+    available_mib: u64,
     slots: Vec<String>,
     images: Vec<String>,
     on_battery: bool,
@@ -1310,6 +1312,12 @@ impl Queue {
             .count() as u32
     }
 
+    /// The memory runner NAME had available at its last ready, MiB: what the runner list counts its room for jobs from.
+    pub fn available_mib(&self, name: &str) -> Option<u64> {
+        let st = self.lock();
+        Some(st.runners.get(name)?.ready.as_ref()?.available_mib)
+    }
+
     /// Runner NAME forgotten (its session ends). Refused, with the reason, while a job is on it.
     pub fn remove_runner(&self, name: &str) -> Result<(), String> {
         let mut st = self.lock();
@@ -1994,13 +2002,9 @@ impl Queue {
                 trust: r.r.trust,
                 keys_allowed: vec![],
                 os: r.r.os,
-                // a Mac's packages and tools are its probe's (a missing one waits with its install line); Linux
-                // runners don't report theirs to placement yet
-                features: if r.r.os == Os::Macos {
-                    r.features.clone()
-                } else {
-                    job.spec.features.clone()
-                },
+                // the runner's features are its probe's: a Mac's packages and tools (a missing one waits with its
+                // install line), a Linux runner's podman, gpu and kvm
+                features: r.features.clone(),
                 state: r.state.clone(),
                 accept: r.r.accept,
                 link_bps: None,
@@ -2518,6 +2522,8 @@ impl Queue {
                 missing,
                 limits,
                 features,
+                // the runner's readies carry it too, every 2 s
+                mem_available_mib: _,
             } => {
                 if let Some(r) = st.runners.get_mut(runner) {
                     r.features = features;
@@ -2563,6 +2569,7 @@ impl Queue {
             }
             Frame::Ready {
                 free_mib,
+                mem_available_mib,
                 free_cpu,
                 slots,
                 images,
@@ -2575,6 +2582,7 @@ impl Queue {
                             mem_mib: free_mib,
                             cpu: free_cpu,
                         },
+                        available_mib: mem_available_mib,
                         slots,
                         images,
                         on_battery,
@@ -3757,6 +3765,7 @@ mod tests {
     fn ready(q: &Queue, runner: &str, free_mib: i64, slots: &[String], images: &[&str], now: u64) {
         let f = Frame::Ready {
             free_mib,
+            mem_available_mib: 7000,
             free_cpu: 8.0,
             psi: Default::default(),
             running: vec![],
@@ -3924,6 +3933,7 @@ mod tests {
         hello(&q, "m1", true, 100);
         let f = Frame::Ready {
             free_mib: 8192,
+            mem_available_mib: 8192,
             free_cpu: 8.0,
             psi: Default::default(),
             running: vec![],
@@ -3958,7 +3968,10 @@ mod tests {
             Session::start("m1", idle(), q.route(), q.link_events()),
         );
         hello(&q, "m1", true, 100);
+        assert_eq!(q.available_mib("m1"), None);
         ready(&q, "m1", 8192, &[], &[], 100);
+        // what the runner list counts the room for jobs from
+        assert_eq!(q.available_mib("m1"), Some(7000));
         let mut s = job("x1", Priority::P3, 64);
         s.spec.os = Os::Macos;
         s.spec.features = vec!["brew:cmake@3.31".into(), "tool:rust@1.95".into()];
@@ -3973,6 +3986,36 @@ mod tests {
             why.contains("`drgnx runner check` on the Mac installs the toolchains"),
             "{why}"
         );
+    }
+
+    // [D] pure: a Linux runner has the features its probe offered, not the job's: a `gpu` job (then a `kvm` one) is
+    // not placed on a runner whose probe lacks it, and is once its probe offers it
+    #[tokio::test]
+    async fn a_linux_runner_has_only_its_probes_features() {
+        for feature in ["gpu", "kvm"] {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            add(&q, "r1", 600);
+            hello(&q, "r1", true, 100);
+            let probe = |features: &[&str]| Frame::ProbeResult {
+                facts: None,
+                missing: vec![],
+                limits: None,
+                features: features.iter().map(|f| f.to_string()).collect(),
+                mem_available_mib: 16_384,
+            };
+            frame(&q, "r1", probe(&["podman"]), 100);
+            let mut s = job("x1", Priority::P3, 64);
+            s.spec.features = vec![feature.into()];
+            q.submit(s, 100);
+            q.tick(100);
+            let row = q.row("x1").unwrap();
+            assert_eq!(row.machine, None, "{feature}: {row:?}");
+            frame(&q, "r1", probe(&["podman", feature]), 101);
+            q.tick(101);
+            let row = q.row("x1").unwrap();
+            assert_eq!(row.machine.as_deref(), Some("r1"), "{feature}: {row:?}");
+        }
     }
 
     // [D] pure: a Mac whose last `ready` said it ran on battery is `sleeping` when it goes quiet (a lid closed), not

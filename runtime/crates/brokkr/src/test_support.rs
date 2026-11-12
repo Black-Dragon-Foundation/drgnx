@@ -84,13 +84,24 @@ fn install_fixtures(out: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Installs FROM at TO by a rename of a full copy, never by rewriting TO in place, and not at all when TO already holds
+/// the same bytes: every test process installs the fixtures again (its first `fixture` call), while tests of other
+/// processes read them (`scan` hashes the files, `load` reads them again and compares), and a copy over the file
+/// truncated it under them (an empty `plugin.wasm`: "unexpected end-of-file"; or "changed on disk since it was
+/// approved").
 fn copy(from: &Path, to: &Path) -> Result<(), String> {
-    if let Some(dir) = to.parent() {
-        fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let new = fs::read(from).map_err(|e| format!("{}: {e}", from.display()))?;
+    if fs::read(to).is_ok_and(|old| old == new) {
+        return Ok(());
     }
-    fs::copy(from, to)
-        .map(drop)
-        .map_err(|e| format!("copy {}: {e}", from.display()))
+    let dir = to
+        .parent()
+        .ok_or_else(|| format!("{}: no folder", to.display()))?;
+    fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let name = to.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    fs::write(&tmp, &new).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    fs::rename(&tmp, to).map_err(|e| format!("{}: {e}", to.display()))
 }
 
 /// Builds the crate at `crate_dir` into `<out>/<label>`, then runs `install` on that folder, all under the lock.

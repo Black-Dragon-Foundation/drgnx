@@ -57,5 +57,16 @@ stands exactly while the last list says so."
     (should seen-key)
     (should seen-none)))
 
+(ert-deftest drgnx-runners-orders/no-room-is-a-card ()
+  "Pattern D: a runner whose floor and reserve leave no room for jobs is a card with the hub's words (the numbers and the
+ways out); the card goes once a list says there is room."
+  (let* ((why "mac has no room for jobs: 5376 MiB available")
+         (st (drgnx-runners-step (drgnx-runners-state)
+                                 (list 'runners (list (list :name "mac" :state "ready" :no_room why))))))
+    (should (equal (runners-orders-test--texts st) (list why)))
+    (should (equal (plist-get (car (drgnx-runners-cards st)) :id) '(no-room "mac")))
+    (setq st (drgnx-runners-step st (list 'runners (list (list :name "mac" :state "ready")))))
+    (should-not (runners-orders-test--texts st))))
+
 (provide 'runners-orders-test)
 ;;; runners-orders-test.el ends here

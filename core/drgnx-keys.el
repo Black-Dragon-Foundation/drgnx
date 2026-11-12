@@ -52,8 +52,21 @@ cannot be read (never an error or a prompt)."
   (or (and (symbolp m) m (not (keywordp m)))
       (and (consp m) (symbolp (car m)) (car m) (symbolp (cdr m)) (cdr m))))
 
+(defun drgnx-keys--key-map-error (key-map keys)
+  "Why KEY-MAP is not a list of (KEY MAP), each KEY one of KEYS and MAP a keymap spec; nil if it is."
+  (if (not (proper-list-p key-map))
+      (format ":key-map %S is not a list of (KEY MAP)" key-map)
+    (seq-some (lambda (km)
+                (cond ((not (and (proper-list-p km) (= (length km) 2) (stringp (car km))
+                                 (drgnx-keys--map-spec-p (cadr km))))
+                       (format ":key-map entry %S is not (KEY MAP)" km))
+                      ((not (member (car km) keys))
+                       (format ":key-map names %s, which is not one of the entry's keys" (car km)))))
+              key-map)))
+
 (defun drgnx-keys--entry-error (entry)
-  "Why ENTRY is not (ID KEY… [:map M] [:mac K…] [:everywhere K…]) or (ID :none [REASON] [:mac K…]); nil if it is."
+  "Why ENTRY is not (ID KEY… [:map M] [:key-map ((KEY M)…)] [:mac K…] [:everywhere K…]) or (ID :none [REASON] [:mac
+K…]); nil if it is."
   (cond ((not (and (consp entry) (symbolp (car entry)) (proper-list-p entry))) "not a list (ID KEY…)")
         ((eq (cadr entry) :none)
          (let ((rest (if (stringp (nth 2 entry)) (nthcdr 3 entry) (nthcdr 2 entry))))
@@ -65,8 +78,12 @@ cannot be read (never an error or a prompt)."
              (cond ((and (eq rest (cdr entry)) (not (plist-member rest :everywhere)))
                     "no keys (write (ID :none \"reason\") for none)")
                    ((or (cl-oddp (length rest))
-                        (not (seq-every-p (lambda (k) (memq k '(:map :mac :everywhere))) (cl-loop for k in rest by #'cddr collect k))))
-                    (format "%S is not a key (keys are strings; only :map, :mac and :everywhere may follow them)" (car rest)))
+                        (not (seq-every-p (lambda (k) (memq k '(:map :key-map :mac :everywhere)))
+                                          (cl-loop for k in rest by #'cddr collect k))))
+                    (format "%S is not a key (keys are strings; only :map, :key-map, :mac and :everywhere may follow them)"
+                            (car rest)))
+                   ((and (plist-member rest :key-map)
+                         (drgnx-keys--key-map-error (plist-get rest :key-map) (seq-take-while #'stringp (cdr entry)))))
                    ((and (plist-member rest :everywhere)
                          (not (seq-every-p (lambda (k) (and (stringp k) (= 1 (length (ignore-errors (key-parse k))))))
                                            (ensure-list (plist-get rest :everywhere)))))
@@ -163,12 +180,15 @@ in (A-C-H-M-S-s): C-M-b is M-s-b, C-M-S-c is M-s-C."
                (split-string key " ") " ")))
 
 (defun drgnx-keys--entry (entry spec platform)
-  "ENTRY (ID KEY… [:map M] [:mac K…] [:everywhere K…]) or (ID :none [REASON] [:mac K…]) of SPEC → plist
-(:keys [:everywhere] :map :profile-map [:modal]).  :modal is the profile's (absent for a profile without one),
-which `drgnx-keys-modal-key-map' reads to place each key.  :everywhere's keys are also in :keys; they also go in
-the override keymap (`drgnx-keys--set-everywhere').  On macOS, :mac's keys replace the others, :everywhere's too
-(`:mac ()': none there); without it a :mac-cmd profile's C- becomes s-.  Every macOS key has Cmd+Shift+letter
-as macOS sends it (`S-s-w' is s-W).  The keymap used is the entry's, else the command's, else the profile's."
+  "ENTRY (ID KEY… [:map M] [:key-map ((KEY M)…)] [:mac K…] [:everywhere K…]) or (ID :none [REASON] [:mac K…]) of
+SPEC → plist (:keys [:everywhere] :map :profile-map [:key-maps] [:modal]).  :key-maps, an alist KEY → keymap spec
+from the entry's `:key-map', gives a key its own keymap in place of :map (a key that works in two places: the
+view's M-p and the Find field's C-p); `drgnx-keys-entry-map' reads it.  :modal is the profile's (absent for a profile
+without one), which `drgnx-keys-modal-key-map' reads to place each key.  :everywhere's keys are also in :keys;
+they also go in the override keymap (`drgnx-keys--set-everywhere').  On macOS, :mac's keys replace the others,
+:everywhere's too (`:mac ()': none there); without it a :mac-cmd profile's C- becomes s-.  Every macOS key has
+Cmd+Shift+letter as macOS sends it (`S-s-w' is s-W).  The keymap used is the entry's, else the command's, else the
+profile's."
   (let ((rest (cdr entry)) keys)
     (cl-flet ((mac (opts) (mapcar (lambda (k) (drgnx-keys--mac-cmd k t)) (ensure-list (plist-get opts :mac)))))
       (if (eq (car rest) :none)
@@ -177,16 +197,23 @@ as macOS sends it (`S-s-w' is s-W).  The keymap used is the entry's, else the co
                     (and (plist-get spec :modal) (list :modal (plist-get spec :modal)))))
         (while (stringp (car rest)) (push (pop rest) keys))
         (setq keys (nreverse keys))
-        (let ((everywhere (ensure-list (plist-get rest :everywhere))))
+        (let ((everywhere (ensure-list (plist-get rest :everywhere)))
+              (key-maps (mapcar (lambda (km) (cons (car km) (cadr km))) (plist-get rest :key-map))))
           (when (eq platform 'macos)
             (if (plist-member rest :mac)
-                (setq keys (mac rest) everywhere nil)
+                (setq keys (mac rest) everywhere nil key-maps nil)
               (let ((f (if (plist-get spec :mac-cmd) #'drgnx-keys--mac-cmd (lambda (k) (drgnx-keys--mac-cmd k t)))))
-                (setq keys (mapcar f keys) everywhere (mapcar f everywhere)))))
+                (setq keys (mapcar f keys) everywhere (mapcar f everywhere)
+                      key-maps (mapcar (lambda (km) (cons (funcall f (car km)) (cdr km))) key-maps)))))
           (append (list :keys (append keys everywhere))
                   (and everywhere (list :everywhere everywhere))
                   (list :map (plist-get rest :map) :profile-map (plist-get spec :map))
+                  (and key-maps (list :key-maps key-maps))
                   (and (plist-get spec :modal) (list :modal (plist-get spec :modal)))))))))
+
+(defun drgnx-keys-entry-map (a key)
+  "The keymap spec entry A (`drgnx-keys--entry') names for KEY: its `:key-maps' one, else its :map (nil: none)."
+  (or (cdr (assoc key (plist-get a :key-maps))) (plist-get a :map)))
 
 (defun drgnx-keys--lookup (map key)
   "KEY in MAP, ignoring command remapping (which depends on the current buffer)."
@@ -255,7 +282,7 @@ panel keys it beats are dropped."
                          (modal (plist-get a :modal))
                          (keys (seq-filter (lambda (k)
                                              (drgnx-keys-modal-states
-                                              (drgnx-keys-modal-key-map k modal (plist-get a :map) (drgnx-cmd-map c)
+                                              (drgnx-keys-modal-key-map k modal (drgnx-keys-entry-map a k) (drgnx-cmd-map c)
                                                                         (plist-get a :profile-map))
                                               modal))
                                            (plist-get a :keys))))
@@ -314,10 +341,10 @@ panel keys it beats are dropped."
             (if (key-valid-p k)
                 (let* ((map (if-let* (((eq (plist-get a :layer) 'user)) (m (plist-get stack :modal)))
                                 ;; keys.eld in a modal stack: a leader key goes in the leader map, the rest as before
-                                (drgnx-keys-modal-key-map k (list :leader (plist-get m :leader)) (plist-get a :map)
+                                (drgnx-keys-modal-key-map k (list :leader (plist-get m :leader)) (drgnx-keys-entry-map a k)
                                                           (drgnx-cmd-map c)
                                                           (and (drgnx-keys-modal-leader-p k m) (plist-get stack :map)))
-                              (drgnx-keys-modal-key-map k (plist-get a :modal) (plist-get a :map) (drgnx-cmd-map c)
+                              (drgnx-keys-modal-key-map k (plist-get a :modal) (drgnx-keys-entry-map a k) (drgnx-cmd-map c)
                                                         (plist-get a :profile-map))))
                        (everywhere (and (member k (plist-get a :everywhere))
                                         (or (eq (cdr (drgnx-commands--keymap-spec map)) 'global-map)

@@ -21,6 +21,7 @@ pub mod rank;
 pub mod refs;
 pub mod schema;
 pub mod store;
+pub mod structural;
 pub mod symbols;
 pub mod tree;
 pub mod watch;

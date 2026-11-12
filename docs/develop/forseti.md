@@ -39,7 +39,7 @@ total, power, the last start, the running jobs, features, and `others`, the othe
 | | `Limits::for_profile(Dedicated, …)` | `Limits::for_profile(Workstation, …)` |
 |---|---|---|
 | floor | 2 GiB | 1.5 GiB |
-| the user's reserve | none | 4 GiB and 4 threads (out of `cores_usable`) |
+| the user's reserve | none | 4 GiB (`with_reserve`: the user's own, at least `MIN_RESERVE_MIB` = 1 GiB) and 4 threads (out of `cores_usable`) |
 | PSI limits (`avg10`) | memory `some` 10 %, CPU 40 %, IO `full` 10 % | memory 2 %, the user's apps 1 %, CPU 20 %, IO 5 % |
 | CPU overcommit | up to 1.5 × while the jobs are mostly idle | none |
 | on battery | runs | no jobs |
@@ -242,7 +242,8 @@ job, in queue order, the hub builds a `Candidate` per machine (the local one wit
   or `on` naming another machine), the OS (`JobSpec.os`, default `linux`, must equal the candidate's `os`: a
   container job never places on a Mac runner, a `macos` job waits "needs a Mac runner"; the hub's own machine is
   `linux`, since a hub on a Mac runs its container jobs in podman's Linux machine; and a keyed job is refused on a
-  Mac, `Trust` with the reason), features (a Mac candidate offers its probe's `brew:`/`tool:` features; a refusal for
+  Mac, `Trust` with the reason), features (a runner candidate offers its last probe's features, none before one: a
+  Linux runner's `podman`, `gpu` and `kvm`, a Mac's `brew:`/`tool:` ones; the hub's own machine offers the job's; a refusal for
   the OS ranks before one for a missing feature, so a Mac job that a Mac lacks a package for waits on the package, and
   the hub's text adds "on the Mac, brew install NAME", and for a `tool:` feature that `drgnx runner check` installs
   it), the runner's state (benched, needs login, needs keys, awaiting the

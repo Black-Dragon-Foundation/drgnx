@@ -538,8 +538,16 @@ pub async fn serve(
 }
 
 /// A TCP connection to ADDR, waiting up to [`LISTEN_WITHIN`] for the adapter to listen.
-async fn connect_tcp(addr: SocketAddr) -> Result<tokio::net::TcpStream, String> {
-    let deadline = crate::clock::now() + LISTEN_WITHIN;
+pub(super) async fn connect_tcp(addr: SocketAddr) -> Result<tokio::net::TcpStream, String> {
+    connect_tcp_within(addr, LISTEN_WITHIN).await
+}
+
+/// A TCP connection to ADDR, waiting up to WITHIN for something to listen.
+pub(super) async fn connect_tcp_within(
+    addr: SocketAddr,
+    within: Duration,
+) -> Result<tokio::net::TcpStream, String> {
+    let deadline = crate::clock::now() + within;
     loop {
         match tokio::net::TcpStream::connect(addr).await {
             Ok(s) => return Ok(s),
@@ -551,7 +559,7 @@ async fn connect_tcp(addr: SocketAddr) -> Result<tokio::net::TcpStream, String> 
     }
 }
 
-fn over_tcp(s: tokio::net::TcpStream, proc: Box<dyn super::session::Proc>) -> Connected {
+pub(super) fn over_tcp(s: tokio::net::TcpStream, proc: Box<dyn super::session::Proc>) -> Connected {
     let (r, w) = s.into_split();
     let (client, incoming) = vor::Client::new(r, w);
     Connected {

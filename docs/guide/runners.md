@@ -43,12 +43,28 @@ drgnx runner add desktop --trust mine            # a host as your ssh knows it
 drgnx runner list                                # every runner, in 60 columns; one out of rotation says why
 drgnx runner check desktop | bench desktop | unbench desktop
 drgnx runner trust desktop shared                # mine, my-cloud or shared
+drgnx runner profile mac workstation --reserve-mib 2048   # a new profile or reserve, applied at once
 drgnx runner remove desktop --yes                # stops our units and containers there, untags its image, deletes its folder
 ```
 
 `add` options: `--name` (default: the host's first label), `--profile dedicated|workstation` (default dedicated: nobody
 sits at the machine), `--accept all|heavy`, `--root DIR` (the one folder drgnx keeps there, an absolute path on the runner: no `~`; default `.drgnx-runner` in its home)
-and `--prefix` (what its units and containers are named after, default `drgnx`).
+and `--prefix` (what its units and containers are named after, default `drgnx`). A workstation keeps 4096 MiB for you
+and a floor of 1536 MiB that jobs never get; `--reserve-mib N` sets a smaller or larger reserve (at least 1024; refused on
+a dedicated runner, which keeps none). `drgnx runner profile NAME dedicated|workstation [--reserve-mib N]` changes either
+later; the runner reconnects with it at once, and a new profile without `--reserve-mib` takes its own. Two more widen which account a
+runner may run as, each your own yes (**Add Runner…** asks for them with a prefix argument):
+
+- `--allow-admin`: an administrator's account on a Mac (one in the `admin` group), which is refused without it. The
+  account can gain root through `sudo` with its password, and on a Mac through admin authorisation prompts; the
+  sandbox (Seatbelt on a Mac, Gleipnir's containers on Linux) still applies to every job. Linux takes an
+  administrator's login (in `wheel` or `sudo`) without the flag, so the flag changes nothing there; either way the
+  runner list shows `admin account: sudo can reach root` under its row.
+- `--allow-own-account`: a Mac account other than `drgnx-runner` (below), such as your own. That account's home,
+  keychain and privacy (TCC) grants are reachable by file permissions; the sandbox still applies to every job. Its row
+  says `own account: home, keychain, TCC open`.
+
+Root is never a runner, on either system, whatever is allowed.
 
 What `add` does, in order, and stops at the first thing that is wrong:
 
@@ -74,7 +90,21 @@ refuses while a job is on it.
 60 columns. A runner is a dot (full while it takes jobs, empty while it is out of rotation), its name, trust, profile and
 what it accepts; the second line is its size, the jobs running there, its free disk and when it was last checked (UTC),
 with the numbers in the code face. A runner out of rotation says why on lines of its own, for example
-`benched: image pull failed twice (14:02, 14:20)`. A runner of trust `my-cloud` carries a cloud mark. The list follows the
+`benched: image pull failed twice (14:02, 14:20)`. A workstation with its own reserve shows it after its profile
+(`workstation 2048M`). A runner of trust `my-cloud` carries a cloud mark.
+
+A runner whose floor and reserve leave no room for jobs in the memory it has says so under its row, in a card in the
+editor, and after `add` or `profile` (on stderr), instead of only waiting with a queue line. An 8 GB MacBook added as a
+workstation is the common case:
+
+```
+mac has no room for jobs: 5376 MiB available, less the floor of 1536 MiB and your reserve of 4096 MiB, leaves -256 MiB.
+If nobody works at it, make it dedicated (drgnx runner profile mac dedicated: floor 2048 MiB, no reserve, leaves
+3328 MiB); or keep a smaller reserve (drgnx runner profile mac workstation --reserve-mib 1024 leaves 2816 MiB).
+```
+
+The memory available is the runner's own reading, renewed every 2 s, so the line comes and goes with what the machine
+has free; it is shown only while no job of ours runs there. The list follows the
 hub: a change shows at once, and **g** reads it again.
 
 The commands for the row at point (all in the palette; none has a key of its own):
@@ -120,10 +150,26 @@ palette's **Add Mac Runner…** shows these steps, then asks for the host:
    (`brew install tailscale`), or any VPN your ssh can use.
 
 Then `drgnx runner add drgnx-runner@your-mac --profile workstation` (or the palette). The runner refuses a Mac that
-lacks something and names the fix. In the runner list a Mac's row says `macOS` after its name and has a line of its
+lacks something and names the fix: an account other than `drgnx-runner`, or an administrator's, is refused unless
+you add it with `--allow-own-account` or `--allow-admin` (above, with what each exposes; **Add Mac Runner…** asks
+when the host's user isn't `drgnx-runner`). In the runner list a Mac's row says `macOS` after its name and has a line of its
 own: `memory: watched` (the runner watches each job's memory itself, as a Mac has no cgroups), the account it runs as,
 and whether the Command Line Tools answer. A Mac that went quiet while on battery (its lid closed) is `sleeping`, not
 `unreachable`: its jobs wait for it, and it is no strike.
+
+**What a Mac job can reach.** Each job runs under the macOS sandbox (Seatbelt) as `drgnx-runner`: it reads its source,
+the system, Xcode or the Command Line Tools, Homebrew and its toolchains, and writes only its own home and temporary
+folder, the account's cache folder the compilers use (macOS's per-user folder), and its tree when the job writes it. The account's home, your home and the other users' are out of reach, and so is the
+network: a job allowed some hosts reaches those only, through a proxy on a local port of the Mac that lives as long
+as the job (other programs on the Mac could use that port to reach the same hosts meanwhile, nothing else). A job
+that can't be sandboxed doesn't run. Homebrew is read-only there: a build that asks `brew --prefix
+NAME` (as Emacs's configure does for libgccjit) gets the answer from a small `brew` the runner puts first on the job's
+`PATH`, and `brew install` or `brew update` inside a job fails with a message saying so: install what your jobs
+need in your own account (step 3). `/tmp` is not the job's: its temporary folder is `$TMPDIR`. The one exception is
+`/bin/sh`'s here-documents (`cat <<EOF`): macOS's `/bin/sh` (bash 3.2) ignores `TMPDIR` for them and makes a file named
+`sh-thd…` directly in `/tmp` or `/var/tmp`, so a job may read and write files of that name there, and nothing else in
+either folder. Those files are bash's own (made only if new, readable by the runner account alone), but other jobs of
+the runner run as the same account and could read one while it exists.
 
 ## Runners on the Work map
 
@@ -202,7 +248,9 @@ started is stopped and ends as "disk", not as a failure.
 built and signed on a Mac: `drgnx build runner-bundle --target aarch64-apple-darwin`. A Mac job that needs a
 Homebrew package the Mac lacks waits, and its row shows the line to run in your own account (for example "on the Mac,
 brew install cmake"); the runner account never installs into Homebrew. A Mac job that needs a toolchain the Mac
-doesn't have yet waits too, and its row says that `drgnx runner check` on the Mac installs it.
+doesn't have yet waits too, and its row says that `drgnx runner check` on the Mac installs it. A job that needs a GPU
+or KVM goes only to a Linux runner whose check found one the runner account can use (a GPU render node, NVIDIA's
+devices, `/dev/kvm`); for now that only picks the machine: the job's container doesn't get the device yet.
 
 ## Which jobs go where
 

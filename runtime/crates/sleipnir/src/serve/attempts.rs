@@ -4,7 +4,8 @@
 //!   job-exec runs from, its unit;
 //! - `job.json`, `log`, `result.json`, `kill_reason`: job-exec's (`linux::jobexec`);
 //! - `src/`, `target/`: the job's source (when the hub synced none: an empty folder) and its target dir; a synced
-//!   attempt reads its slot (`<root>/slots/<id>/`), or its private copy `tree/` when it writes the tree;
+//!   attempt reads its slot (`<root>/slots/<id>/`), named with its input key in `slot-hold` for job-exec's read lock
+//!   (`sync::slot::hold_for_job`), or its private copy `tree/` when it writes the tree;
 //! - `cancelled`: the hub cancelled it; `collected`: the hub has its result, so the folder may go.
 //!
 //! The folders are the runner's whole memory of its attempts: a new `serve` lists them at `hello`.

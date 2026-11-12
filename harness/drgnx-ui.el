@@ -1832,6 +1832,15 @@ With a selector a half may select no test (the selector names tests of the other
          (insert-file-contents log)
          (seq-filter (lambda (l) (string-prefix-p "drgnx harness: " l)) (split-string (buffer-string) "\n" t)))))
 
+(defun drgnx-ui--hub-env ()
+  "The GUI suite's hub, as \"K=V\" strings: DRGNX_TEST_HUB_REQUIRED=1, so a hub row that finds no Ratatoskr fails
+instead of skipping (`drgnx-test-no-hub'), and DRGNX_RATATOSKR_BIN, which a session does not inherit: the caller's,
+else the checkout's debug build when there is one."
+  (let ((bin (or (getenv "DRGNX_RATATOSKR_BIN")
+                 (let ((b (expand-file-name "runtime/target/debug/ratatoskr" drgnx-ui-repo-dir)))
+                   (and (file-executable-p b) b)))))
+    (cons "DRGNX_TEST_HUB_REQUIRED=1" (and bin (list (concat "DRGNX_RATATOSKR_BIN=" bin))))))
+
 (defun drgnx-ui-run-ui-session-tests ()
   "The GUI suite (test/ui) in a session — the first half of `drgnx test --ui', alone for bin/drgnx check (which
 runs the live suite in shards).  Return an exit code."
@@ -1845,7 +1854,8 @@ runs the live suite in shards).  Return an exit code."
                                        selector (error-message-string err))))))
          ;; a narrowed run stays narrow in the session too
          (res (drgnx-ui-run-ert-session (expand-file-name "test/ui" drgnx-ui-repo-dir) timeout nil
-                                        (append (and selector (list (concat "DRGNX_TEST_SELECTOR=" selector)))
+                                        (append (drgnx-ui--hub-env)
+                                                (and selector (list (concat "DRGNX_TEST_SELECTOR=" selector)))
                                                 (and (equal (getenv "DRGNX_TEST_EMPTY_OK") "1") (list "DRGNX_TEST_EMPTY_OK=1")))))
          (rc (nth 0 res)) (results (nth 1 res)) (run (nth 2 res))
          (ok (and (eq rc 0) results (eq (plist-get results :failed) 0))))

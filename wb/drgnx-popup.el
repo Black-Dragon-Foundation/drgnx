@@ -75,14 +75,21 @@ Built when the popup shows, set as a window parameter."
   (drgnx-wb-header-with-close (concat " " (string-trim (buffer-name buffer) "[ *]+" "[ *]+"))
                               #'drgnx-popup--close-click "Close (Esc, q)"))
 
+(defvar-local drgnx-popup-width nil
+  "A floating popup's width in logical pixels (a card of the mockups' width: Ask an Agent's 460), its long lines
+wrapped there; nil fits the width to the text.")
+
 (defun drgnx-popup--float-fit (window &optional fraction)
   "Fit the floating lane's frame to its buffer (at most 0.9 of the root's width and FRACTION, default 0.33, of its
 height) and put it bottom-centre, above the echo area.  The width counts the lines below the height too (up to three
-heights), so scrolling to them never scrolls sideways."
+heights), so scrolling to them never scrolls sideways.  A buffer with `drgnx-popup-width' is that wide."
   ;; The size is computed from the text and set, then the position from that size: a frame's size is answered by the
   ;; compositor later, so `frame-outer-width' right after a resize still says the old one.
   (let* ((child (window-frame window)) (root (frame-parent child))
-         (max-w (floor (* 0.9 (frame-pixel-width root)))) (max-h (floor (* (or fraction 0.33) (frame-pixel-height root))))
+         (fixed (buffer-local-value 'drgnx-popup-width (window-buffer window)))
+         (max-w (min (floor (* 0.9 (frame-pixel-width root)))
+                     (if fixed (drgnx-px fixed root) most-positive-fixnum)))
+         (max-h (floor (* (or fraction 0.33) (frame-pixel-height root))))
          (frame-resize-pixelwise t)
          ;; measured in a window as large as the lane may be, or a long line would wrap at a small one's width
          (_ (set-frame-size child max-w max-h t))
@@ -91,10 +98,10 @@ heights), so scrolling to them never scrolls sideways."
          (text (window-text-pixel-size window nil nil (- max-w extra-w) (* 3 (- max-h extra-h))))
          ;; with no right fringe the window's last column holds the truncation glyph (`$', in the buffer's font): a line
          ;; as wide as the text area would be cut, so room for the glyph too
-         (w (min max-w (+ (car text) extra-w
-                          (if (zerop (or (cadr (window-fringes window)) 0))
-                              (max (frame-char-width child) (string-pixel-width "$" (window-buffer window)))
-                            0))))
+         (w (if fixed max-w (min max-w (+ (car text) extra-w
+                                          (if (zerop (or (cadr (window-fringes window)) 0))
+                                              (max (frame-char-width child) (string-pixel-width "$" (window-buffer window)))
+                                            0)))))
          (h (min max-h (+ (cdr text) extra-h)))
          (border-w (- (frame-outer-width child) (frame-text-width child)))
          (border-h (- (frame-outer-height child) (frame-text-height child))))

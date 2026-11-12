@@ -429,7 +429,7 @@ fn parse_form(n: &Node) -> Result<(String, SearchSpec), String> {
     }
     let mut seen: Vec<&str> = Vec::new();
     let (mut name, mut mode, mut query) = (None, "text".to_owned(), None);
-    let (mut case, mut word, mut regexp) = (None, None, None);
+    let (mut case, mut word, mut regexp, mut lang) = (None, None, None, None);
     let mut spec = SearchSpec {
         query: FindQuery::Meaning {
             question: String::new(),
@@ -457,6 +457,7 @@ fn parse_form(n: &Node) -> Result<(String, SearchSpec), String> {
             ":case" => case = Some(flag(key, v)?),
             ":word" => word = Some(flag(key, v)?),
             ":regexp" => regexp = Some(flag(key, v)?),
+            ":lang" => lang = Some(symbol(key, v)?.to_owned()),
             ":replace" => spec.replace = Some(string(key, v)?),
             ":scope" => {
                 kind = Some(match symbol(key, v)? {
@@ -477,6 +478,9 @@ fn parse_form(n: &Node) -> Result<(String, SearchSpec), String> {
         }
     }
     let name = name.ok_or("no :name")?;
+    if lang.is_some() && mode != "pattern" {
+        return Err(":lang is a pattern search's".into());
+    }
     let query = query.ok_or("no :query")?;
     spec.query = match mode.as_str() {
         "text" => FindQuery::Text {
@@ -493,7 +497,13 @@ fn parse_form(n: &Node) -> Result<(String, SearchSpec), String> {
         "meaning" if case.is_none() && word.is_none() && regexp.is_none() => {
             FindQuery::Meaning { question: query }
         }
-        "symbol" | "meaning" => return Err(format!("a {mode} search takes no such toggle")),
+        "pattern" if case.is_none() && word.is_none() && regexp.is_none() => FindQuery::Pattern {
+            pattern: query,
+            lang: lang.take(),
+        },
+        "symbol" | "meaning" | "pattern" => {
+            return Err(format!("a {mode} search takes no such toggle"));
+        }
         other => return Err(format!("no mode {other}")),
     };
     if kind.is_some() || base.is_some() || changed_lines.is_some() {
@@ -548,6 +558,12 @@ pub fn print_form(name: &str, spec: &SearchSpec) -> String {
         }
         FindQuery::Meaning { question } => {
             out.push_str(&format!(" :mode meaning :query {}", quoted(question)));
+        }
+        FindQuery::Pattern { pattern, lang } => {
+            out.push_str(&format!(" :mode pattern :query {}", quoted(pattern)));
+            if let Some(l) = lang {
+                out.push_str(&format!(" :lang {l}"));
+            }
         }
     }
     if let Some(r) = &spec.replace {

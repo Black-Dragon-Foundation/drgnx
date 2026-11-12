@@ -377,6 +377,57 @@ pub struct RunParams {
     /// the user did not type: a pinned saved search's live count. Default false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub count: Option<bool>,
+    /// How the rows are grouped (`search/group` changes it without searching again). Default `file`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<GrepGroup>,
+    /// The order of the groups. Default: files as the search completes them (Files), by path (Folders, Symbols).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<GrepSort>,
+}
+
+/// How a search's rows are grouped: by file (a header and its matches); in a tree of folders (one-child chains joined,
+/// `d:` nodes, each with its matches' count); or by file, then the definition each match is in (`s:` nodes, the
+/// matches outside any under "(top level)").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum GrepGroup {
+    #[default]
+    File,
+    Tree,
+    Symbol,
+}
+
+/// The order of a search's groups: by path; by match count (most first, then by path); or by the file's rank in
+/// Hrafn's map (most central first, then by path; a folder by its files' ranks together), which only `search/group`
+/// takes (it waits for the project's index; `search/run` refuses it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum GrepSort {
+    Path,
+    Count,
+    Rank,
+}
+
+/// `search/group`: VIEW's search grouped as GROUP (in the order SORT) without searching again: its rows and model
+/// again, the same match ids (ticks stay); folded folders open again.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GroupParams {
+    pub view: String,
+    pub group: GrepGroup,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<GrepSort>,
+}
+
+/// `search/fold`: in VIEW's search grouped by Folders, fold the folder NODE (`d:PATH`: its rows go, its count
+/// stays) or open it (OPEN). Only the rows change: the model keeps every node, so ticks and Next Match still reach a
+/// folded match (going to it opens the folders above it).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FoldParams {
+    pub view: String,
+    pub node: String,
+    pub open: bool,
 }
 
 /// `search/run`'s answer: RUN numbers the search (its match ids are `m:RUN:N`; the event `search-run-done` names it).
@@ -520,7 +571,8 @@ pub enum EditLineKind {
 }
 
 /// One source line of an Edit Results buffer, once however many matches or context windows name it: its id, its file,
-/// its line (from 1), its text (no newline), what it is, and whether a newline ends it in the file.
+/// its line (from 1), its text (no newline), what it is, and whether a newline ends it in the file; HELD when an agent
+/// editing this checkout (a pair's hand-off of this view, not yet done) holds it: the editor keeps it read-only.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EditLine {
@@ -530,6 +582,8 @@ pub struct EditLine {
     pub text: String,
     pub kind: EditLineKind,
     pub eol: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub held: bool,
 }
 
 /// `search/edit-doc`'s answer: the lines by file and line, how many there are, OVER when they are more than the max
@@ -550,8 +604,16 @@ pub struct EditDocAnswer {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase", deny_unknown_fields)]
 pub enum HandoffTo {
-    New { profile: String },
-    Session { id: Id },
+    New {
+        profile: String,
+    },
+    /// A new chat of PROFILE in the view's checkout, paired: it edits the user's buffers.
+    Pair {
+        profile: String,
+    },
+    Session {
+        id: Id,
+    },
 }
 
 /// `search/handoff`: hand VIEW's matches to an agent with INSTRUCTION: the matches IDS names (else all but OFF), to TO.
@@ -574,12 +636,13 @@ pub struct HandoffParams {
 }
 
 /// The mark the handed-off rows show: the agent's colour (a face name) and its glyph (one column), as the editor gives
-/// them (the agents' identity scheme).
+/// them (the agents' identity scheme), and the name their groups' chip shows (`Ada · editing 9/14`).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HandoffMark {
     pub face: String,
     pub glyph: String,
+    pub name: String,
 }
 
 /// `search/handoff`'s answer: the hand-off's id, the session it went to (and the worktree of a new worker), the match
@@ -597,6 +660,53 @@ pub struct HandoffAnswer {
     pub more: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden: Vec<String>,
+}
+
+/// `search/handoff-context`: what Ask an Agent's card shows of the brief before it is sent: the matches IDS (else
+/// all but OFF; hidden paths only when HIDDEN) of VIEW's search.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffContextParams {
+    pub view: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ids: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub off: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+}
+
+/// One place of the card's context box: its file (relative to the search's folder), line (from 1), the definition
+/// it is in and its line's text, trimmed.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffContextRow {
+    pub path: String,
+    pub line: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ctx: Option<String>,
+    pub text: String,
+}
+
+/// `search/handoff-context`'s answer: the first places, how many there are in all, the brief's size in tokens
+/// (about four characters a token, without the instruction) and the hidden paths left out.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffContext {
+    pub rows: Vec<HandoffContextRow>,
+    pub total: u32,
+    pub tokens: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden: Vec<String>,
+}
+
+/// `search/handoff-mark`: hand-off HANDOFF's rows show MARK (a new worker's mark, known from its first snapshot,
+/// after `search/handoff` answered).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffMarkParams {
+    pub handoff: String,
+    pub mark: HandoffMark,
 }
 
 /// `search/handoff-state`: where hand-off HANDOFF is.
@@ -1222,6 +1332,14 @@ pub enum FindQuery {
     },
     /// A question about what the code does (Hrafn's hybrid query).
     Meaning { question: String },
+    /// A code pattern with metavariables (`$A` one node, `$$$A` any number, `$_` one unnamed; ast-grep's syntax),
+    /// matched in each file's syntax tree (`hrafn::structural`). LANG (Hrafn's name: `rust`, `elisp`, …) narrows to
+    /// one language's files; none is every language the pattern parses in.
+    Pattern {
+        pattern: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lang: Option<String>,
+    },
 }
 
 impl FindQuery {
@@ -1231,6 +1349,7 @@ impl FindQuery {
             FindQuery::Text { text, .. } => text,
             FindQuery::Symbol { name, .. } => name,
             FindQuery::Meaning { question } => question,
+            FindQuery::Pattern { pattern, .. } => pattern,
         }
     }
 }
@@ -1430,6 +1549,16 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "the replacement a view's grep rows preview changed: the rows are patched, nothing is searched again; false when the view has no search",
         ),
         method!(
+            "search/group", SearchGroup(GroupParams) -> bool,
+            classes: [User], writes: false,
+            doc: "regroup a view's search (by file, folder tree or definition; by path, count or the files' rank in the map) without searching again: its rows and model again, the match ids and ticks kept; false when the view has no search",
+        ),
+        method!(
+            "search/fold", SearchFold(FoldParams) -> bool,
+            classes: [User], writes: false,
+            doc: "fold or open a folder of a view's search grouped by Folders: only its rows change (the model keeps every node); false when the view has no search or no such folder",
+        ),
+        method!(
             "search/grep-skipped", SearchGrepSkipped(GrepSkippedParams) -> bool,
             classes: [User], writes: false,
             doc: "a view's grep rows after Replace All: only the matches it skipped, each with why; the search stops; false when the view has no search",
@@ -1448,6 +1577,16 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/handoff", SearchHandoff(HandoffParams) -> HandoffAnswer,
             classes: [User], writes: true,
             doc: "hand a view's ticked matches to an agent: a brief (the instruction, the query, the matches grouped by file, at most 300 lines, the rest through the drgnx-search tool search_results) to a new worker in its own worktree or to a live session; hidden paths left out unless asked; its progress is search-handoff-state",
+        ),
+        method!(
+            "search/handoff-context", SearchHandoffContext(HandoffContextParams) -> HandoffContext,
+            classes: [User], writes: false,
+            doc: "what Ask an Agent's card shows before Send: the first places of the matches it would hand off, how many in all, the brief's size in tokens and the hidden paths left out",
+        ),
+        method!(
+            "search/handoff-mark", SearchHandoffMark(HandoffMarkParams) -> bool,
+            classes: [User], writes: false,
+            doc: "a hand-off's rows show the agent's mark from now on: a new worker's, known once its first snapshot comes (after search/handoff answered); the asking window's own hand-offs only",
         ),
         method!(
             "search/handoff-state", SearchHandoffState(HandoffStateParams) -> HandoffState,

@@ -289,6 +289,56 @@ impl Probe {
         has(&self.runtime_dir, "wayland-") || has(Path::new("/tmp/.X11-unix"), "X")
     }
 
+    /// The devices this user can open read-write, as placement features: `kvm` for `/dev/kvm`, `gpu` for a DRM
+    /// render node (`/dev/dri/renderD*`) of a real driver (not `vgem` or `vkms`, which only share buffers or draw
+    /// in memory) or NVIDIA's `nvidiactl` with a `nvidiaN`. Names and permissions only: nothing is opened, so the probe
+    /// stays cheap and offline. Jobs don't get the devices yet: sleipnir passes none into their containers.
+    pub fn devices(&self, dev: &Path) -> Vec<String> {
+        let usable = |p: &Path| {
+            rustix::fs::access(
+                p,
+                rustix::fs::Access::READ_OK | rustix::fs::Access::WRITE_OK,
+            )
+            .is_ok()
+        };
+        let named = |dir: &Path, prefix: &str| -> Vec<String> {
+            let mut v: Vec<String> = fs::read_dir(dir)
+                .map(|d| {
+                    d.flatten()
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .filter(|n| n.starts_with(prefix))
+                        .collect()
+                })
+                .unwrap_or_default();
+            v.sort();
+            v
+        };
+        let shares_only = |node: &str| {
+            fs::read_link(
+                self.sys_root
+                    .join("class/drm")
+                    .join(node)
+                    .join("device/driver"),
+            )
+            .is_ok_and(|d| d.file_name().is_some_and(|n| n == "vgem" || n == "vkms"))
+        };
+        let render = named(&dev.join("dri"), "renderD")
+            .into_iter()
+            .any(|n| !shares_only(&n) && usable(&dev.join("dri").join(&n)));
+        let nvidia = usable(&dev.join("nvidiactl"))
+            && named(dev, "nvidia")
+                .into_iter()
+                .any(|n| n[6..].parse::<u32>().is_ok() && usable(&dev.join(&n)));
+        let mut features = vec![];
+        if render || nvidia {
+            features.push("gpu".to_string());
+        }
+        if usable(&dev.join("kvm")) {
+            features.push("kvm".to_string());
+        }
+        features
+    }
+
     /// Whether a unit of ours can be given `memory.swap.max` (swap accounting on the user manager's tree).
     pub fn swap_max_settable(&self) -> bool {
         self.manager.join("memory.swap.max").exists()
@@ -667,12 +717,31 @@ pub struct Observed {
     pub files: FileFacts,
     /// The login's SELinux context (`/proc/self/attr/current`), none without SELinux.
     pub selinux: Option<String>,
+    /// The login's uid: root is never a runner.
+    pub uid: u32,
 }
 
 /// The controllers the caps need delegated: `--memory`, `--pids-limit`, `--cpus`.
 pub const CONTROLLERS: [&str; 3] = ["memory", "pids", "cpu"];
 
 /// The contract on what a host answered: its facts, or every item it lacks with the fix for each.
+/// Whether GROUPS (`id -Gn`: the login's group names) make it an administrator: wheel, sudo or admin, whose members
+/// reach root through sudo with their password.
+pub fn is_admin(groups: &str) -> bool {
+    groups
+        .split_whitespace()
+        .any(|g| matches!(g, "wheel" | "sudo" | "admin"))
+}
+
+/// The login's group names (`id -Gn`), empty when `id` fails.
+pub fn own_groups() -> String {
+    run::limited(Path::new("id"), &["-Gn"], &[], TOOL_LIMIT)
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+
 pub fn judge(o: &Observed) -> Result<Facts, Vec<Missing>> {
     let mut missing = vec![];
     let mut miss = |what: String, fix: &str| {
@@ -681,6 +750,12 @@ pub fn judge(o: &Observed) -> Result<Facts, Vec<Missing>> {
             fix: fix.to_string(),
         })
     };
+    if o.uid == 0 {
+        miss(
+            "a login other than root for the runner".into(),
+            "add the runner as an ordinary user (`user@host`): jobs never run as root",
+        );
+    }
     if let Some(ctx) = &o.selinux
         && super::confined::is_user_t(ctx)
     {
@@ -833,6 +908,7 @@ pub fn contract(probe: &Probe, podman: &Path) -> Result<Facts, Vec<Missing>> {
     .is_ok_and(|s| s == "yes");
     let cpuset_by_systemd = systemd_user.is_ok() && probe.cpuset_by_systemd().unwrap_or(false);
     judge(&Observed {
+        uid: rustix::process::getuid().as_raw(),
         systemd_user,
         podman_info,
         git,
@@ -869,6 +945,7 @@ mod tests {
             linger: true,
             cpuset_by_systemd: true,
             selinux: None,
+            uid: 1000,
             files: FileFacts {
                 arch: "x86_64".into(),
                 os: "fedora 45".into(),
@@ -876,6 +953,24 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    /// [D] Root is refused (no allowance takes it); an administrator's login (wheel, sudo) is taken as any other, and
+    /// says so in its features.
+    #[test]
+    fn root_is_refused_and_an_admin_is_taken() {
+        let good = info("5.6.1", true, "v2", "systemd", &["cpu", "memory", "pids"]);
+        let mut o = observed(Ok(good));
+        assert!(judge(&o).is_ok());
+        o.uid = 0;
+        let m = judge(&o).unwrap_err();
+        assert_eq!(m.len(), 1, "{m:?}");
+        assert!(m[0].what.contains("root"), "{m:?}");
+        assert!(!m[0].fix.contains("--allow"), "{m:?}");
+        assert!(is_admin("dev wheel docker"));
+        assert!(is_admin("u sudo"));
+        assert!(!is_admin("u users docker"));
+        assert!(!is_admin(""));
     }
 
     /// [D] A login confined as SELinux user_u (user_t) is refused by the contract with the cause and an admin's fix,
@@ -1157,5 +1252,56 @@ mod tests {
             .unwrap();
         assert_eq!(m.psi.app_mem_some10, Some(7.0));
         assert!(m.others.is_empty() && m.running.is_empty());
+    }
+
+    // [D] pure (a fixture /dev and /sys): `kvm` for /dev/kvm, `gpu` for a render node of a real driver or NVIDIA's
+    // control device with a card; a vgem or vkms node, NVIDIA's control device alone, or nothing gives none
+    #[test]
+    fn devices_are_the_gpu_and_kvm_this_user_can_open() {
+        let d = tempfile::tempdir().unwrap();
+        let (dev, sys) = (d.path().join("dev"), d.path().join("sys"));
+        fs::create_dir_all(dev.join("dri")).unwrap();
+        let p = Probe {
+            name: "m".into(),
+            proc_root: d.path().join("proc"),
+            sys_root: sys.clone(),
+            manager: d.path().join("mgr"),
+            runtime_dir: d.path().join("run"),
+            folder: d.path().to_path_buf(),
+            slice_root: "t".into(),
+            scheduler: "me".into(),
+            profile: Profile::Dedicated,
+        };
+        let node = |path: &Path| fs::write(path, b"").unwrap();
+        let driver = |n: &str, name: &str| {
+            let at = sys.join("class/drm").join(n).join("device");
+            fs::create_dir_all(&at).unwrap();
+            std::os::unix::fs::symlink(format!("../../../bus/drivers/{name}"), at.join("driver"))
+                .unwrap();
+        };
+        assert!(p.devices(&dev).is_empty());
+        assert!(p.devices(&d.path().join("missing")).is_empty());
+        node(&dev.join("dri/card0"));
+        node(&dev.join("dri/renderD128"));
+        driver("renderD128", "vgem");
+        node(&dev.join("nvidiactl"));
+        assert!(
+            p.devices(&dev).is_empty(),
+            "vgem, a card node, nvidiactl alone"
+        );
+        node(&dev.join("nvidia-uvm"));
+        assert!(p.devices(&dev).is_empty(), "nvidia-uvm is no card");
+        node(&dev.join("nvidia0"));
+        assert_eq!(p.devices(&dev), ["gpu"]);
+        fs::remove_file(dev.join("nvidia0")).unwrap();
+        node(&dev.join("dri/renderD129"));
+        driver("renderD129", "amdgpu");
+        assert_eq!(p.devices(&dev), ["gpu"]);
+        node(&dev.join("kvm"));
+        assert_eq!(p.devices(&dev), ["gpu", "kvm"]);
+        for n in ["dri/renderD129", "nvidiactl"] {
+            fs::remove_file(dev.join(n)).unwrap();
+        }
+        assert_eq!(p.devices(&dev), ["kvm"]);
     }
 }

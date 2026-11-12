@@ -56,6 +56,11 @@ const REFUSED: &[&str] = &[
     "create",
     "extract",
     "analytics",
+    // brew's aliases of the above
+    "up",
+    "instal",
+    "uninstal",
+    "post_install",
 ];
 
 /// The shim's name in its messages.
@@ -66,9 +71,13 @@ pub fn answer(args: &[String], prefix: &Path) -> Answer {
     let Some(first) = args.first() else {
         return Answer::Brew;
     };
-    if REFUSED.contains(&first.as_str()) {
+    // the command: the first word that isn't an option (`brew -v install` installs)
+    if let Some(cmd) = args.iter().find(|a| !a.starts_with('-'))
+        && REFUSED.contains(&cmd.as_str())
+        && !matches!(first.as_str(), "--prefix" | "--cellar")
+    {
         return Answer::Fail(format!(
-            "{SHIM}: `brew {first}` needs the network or writes Homebrew; run it in your own account"
+            "{SHIM}: `brew {cmd}` needs the network or writes Homebrew; run it in your own account"
         ));
     }
     let (opt, folder) = match first.as_str() {
@@ -222,10 +231,17 @@ mod tests {
             "fetch gmp",
             "link gmp",
             "cleanup",
+            // brew's aliases, and options before the command
+            "up",
+            "instal gmp",
+            "uninstal gmp",
+            "post_install gmp",
+            "-v install gmp",
+            "--debug upgrade",
         ] {
             match answer(&args(c), d.path()) {
                 Answer::Fail(m) => {
-                    let cmd = c.split_whitespace().next().unwrap();
+                    let cmd = c.split_whitespace().find(|w| !w.starts_with('-')).unwrap();
                     assert!(
                         m.contains("brew shim") && m.contains(&format!("brew {cmd}")),
                         "{m}"

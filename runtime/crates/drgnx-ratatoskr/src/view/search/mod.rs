@@ -13,8 +13,10 @@
 
 mod apply;
 mod edits;
+mod group;
 mod handoff;
 mod modes;
+mod pattern;
 mod rows;
 mod run;
 mod scoped;
@@ -28,31 +30,43 @@ use drgnx_rows::{Op, Patch, Row};
 use hrafn::grep::{self, Match, Query};
 use modes::Mode;
 use rows::{
-    MODEL_WINDOW, entries_of, gap_row, grep_doc, row_index, rows_in, rows_total, rows_upto,
-    window_of,
+    FIRST_MODEL_WINDOW, MODEL_WINDOW, gap_row, grep_doc, row_index, rows_in, rows_total, rows_upto,
+    run_doc, run_entries, run_window,
 };
 use run::{Buffer, Found, Read};
 use runstav::methods::search::{
     AppliedParams, ApplyParams, BufferParams, ChangeOrigin, EditDocAnswer, EditDocParams,
-    EditsAnswer, EditsParams, FileEdits, FindQuery, GrepLookParams, GrepReplaceParams,
-    GrepSkippedParams, HandoffAnswer, HandoffParams, HandoffState, HandoffStateParams, HandoffTo,
-    PreviewAnswer, PreviewParams, RunDone, RunParams, RunStarted, ScopeDone, ScopeKind, UndoParams,
+    EditsAnswer, EditsParams, FileEdits, FindQuery, FoldParams, GrepGroup, GrepLookParams,
+    GrepReplaceParams, GrepSkippedParams, GrepSort, GroupParams, HandoffAnswer, HandoffContext,
+    HandoffContextParams, HandoffContextRow, HandoffMark, HandoffMarkParams, HandoffParams,
+    HandoffPhase, HandoffState, HandoffStateParams, HandoffTo, PreviewAnswer, PreviewParams,
+    RunDone, RunParams, RunStarted, ScopeDone, ScopeKind, UndoParams,
 };
 use runstav::methods::view::ViewModel;
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::Instant;
 
-/// The mark of the agent a match was handed to, as the editor gives it: the face of its colour and its glyph.
+/// The mark of the agent a match was handed to, as the editor gives it: the face of its colour, its glyph and its
+/// name; and the hand-off (`h:N`) it came with.
 #[derive(Clone, Debug)]
 pub(super) struct AgentMark {
     pub face: String,
     pub glyph: String,
+    pub name: String,
+    pub handoff: String,
+}
+
+/// Where a hand-off is, as its group chips show it: its phase and the handed-off matches its agent's edits took out.
+#[derive(Clone, Debug)]
+pub(super) struct Progress {
+    pub phase: HandoffPhase,
+    pub done: BTreeSet<String>,
 }
 
 /// The rows a search sends a view: the first this many, and as many again each time the editor asks (the panel's shape,
@@ -85,6 +99,8 @@ pub(super) struct Run {
     reasons: BTreeMap<String, String>,
     /// Match id → the mark of the agent it was handed to (`search/handoff`): its row shows it.
     handed: BTreeMap<String, AgentMark>,
+    /// Hand-off id → where it is (`search-handoff-state`); none yet: sent, nothing done.
+    progress: BTreeMap<String, Progress>,
     /// The remap keys of the matches the user unticked in the runs before (`run.rs`): resolved at the run's end, or
     /// handed to the next run when a newer one stops this one first.
     carry: HashSet<u64>,
@@ -100,6 +116,18 @@ pub(super) struct Run {
     kinds: Option<BTreeMap<String, u64>>,
     /// Only the totals go out (`count`): no model, no rows.
     count: bool,
+    /// How the rows are grouped, in what order (`search/group`), and their layout when not by file in the order found,
+    /// built when first asked after the files change ([`Run::layout`]).
+    group: GrepGroup,
+    sort: Option<GrepSort>,
+    layout: std::cell::OnceCell<group::Layout>,
+    /// The files' ranks in Hrafn's map, for the sort by rank (`search/group` asks the index for them once per run).
+    ranks: Option<Arc<HashMap<String, f64>>>,
+    /// The folded folders' ids (`search/fold`; a regroup opens them all).
+    folded: HashSet<String>,
+    /// A grouped search's files changed since its rows and model went out (they go at most once per `model_every`, and
+    /// at the end).
+    stale: bool,
     /// The entries (files and matches) the model last sent held. Up to [`MODEL_WINDOW`] the batches' nodes and ids
     /// are appended, at most one send per `model_every`; past it the model grows when the search has doubled it, when
     /// rows go out, and at the end.
@@ -166,6 +194,7 @@ impl Greps {
             block: None,
             reasons: BTreeMap::new(),
             handed: BTreeMap::new(),
+            progress: BTreeMap::new(),
             carry,
             done: false,
             context: true,
@@ -173,6 +202,12 @@ impl Greps {
             scope: None,
             kinds: None,
             count: false,
+            group: GrepGroup::File,
+            sort: None,
+            layout: std::cell::OnceCell::new(),
+            ranks: None,
+            folded: HashSet::new(),
+            stale: false,
             model_sent: 0,
             model_every: MODEL_EVERY,
             model_at: None,
@@ -334,7 +369,25 @@ fn put_file(run: &mut Run, file: &str, put: Put) -> bool {
             }
         }
     }
+    run.files_changed();
     true
+}
+
+/// RUN's model in the window CONN's editor asked for (`view/window`; after a regroup, the whole window): the same
+/// entries in another window are the move alone (the nodes held stay as they are), else the model's diff.
+fn window_model(store: &mut Store, conn: u64, view: &str, run: &Run) -> Option<ViewModel> {
+    let from = store.window_from(conn, view, "order");
+    let w = run_window(run, MODEL_WINDOW, from);
+    let m = super::model::WindowMove {
+        name: "order",
+        window: (w.total, w.from),
+        held: &w.held,
+        order: w.order.clone(),
+    };
+    match store.move_model(conn, view, m, |i| w.node(i)) {
+        Some(m) => Some(m),
+        None => store.publish_model(conn, view, run_doc(run, from)),
+    }
 }
 
 /// RUN's whole model, and its rows, as diffs for each class (files changed somewhere in them).
@@ -344,15 +397,23 @@ fn whole_patches(
     view: &str,
     run: &mut Run,
 ) -> (Option<ViewModel>, Vec<Patch>) {
+    whole_patches_of(store, conn, view, run, MODEL_WINDOW)
+}
+
+/// [`whole_patches`] with a model window of at most WINDOW entries.
+fn whole_patches_of(
+    store: &mut Store,
+    conn: u64,
+    view: &str,
+    run: &mut Run,
+    window: usize,
+) -> (Option<ViewModel>, Vec<Patch>) {
     run.waiting = (Vec::new(), Vec::new());
-    run.model_sent = entries_of(&run.files);
+    // a first window holds fewer: a batch then publishes the whole, never extends what the editor does not hold
+    run.model_sent = run_entries(run).min(window);
     run.model_at = Some(crate::clock::now());
     let from = store.window_from(conn, view, "order");
-    let model = store.publish_model(
-        conn,
-        view,
-        grep_doc(&run.query.root, run.id, &run.files, from),
-    );
+    let model = store.publish_model(conn, view, rows::run_doc_of(run, window, from));
     let rows = view_rows(run);
     let patches = keys(store, conn, view)
         .iter()
@@ -362,6 +423,25 @@ fn whole_patches(
 }
 
 impl Run {
+    /// The rows' layout when they are grouped ([`group::grouped`]); none by file in the order found.
+    fn layout(&self) -> Option<&group::Layout> {
+        group::grouped(self.group, self.sort).then(|| {
+            self.layout.get_or_init(|| {
+                let order = group::Order {
+                    sort: self.sort,
+                    ranks: self.ranks.as_deref(),
+                    folded: Some(&self.folded),
+                };
+                group::Layout::build(&self.query.root, &self.files, self.group, &order)
+            })
+        })
+    }
+
+    /// The run's files changed: a grouped layout is built again when next asked.
+    fn files_changed(&mut self) {
+        self.layout.take();
+    }
+
     /// The matches the carried unticks name in this run, which has ended: each key held by one match alone; the
     /// carry is spent (a key two matches hold, or none, is dropped: those come back ticked).
     fn off(&mut self) -> Vec<String> {
@@ -373,7 +453,7 @@ impl Run {
 /// The rows the views have: the first `sent` (as many as the window has room for and the search found), then, after
 /// a gap row, the block.  A block the first rows reach is theirs: the gap goes.
 fn view_rows(run: &mut Run) -> Vec<Row> {
-    let total = rows_total(&run.files);
+    let total = rows_total(run);
     run.sent = run.limit.min(total);
     if let Some(b) = run.block.clone()
         && run.sent >= b.start
@@ -441,7 +521,7 @@ fn start_patches(store: &mut Store, conn: u64, view: &str) -> Vec<Patch> {
 /// RUN's model as the editor should hold it now, when it holds less: the batches waiting appended to what it holds
 /// when that is this run's model up to them (never the whole rebuilt and diffed per send), else the whole.
 fn flush_model(store: &mut Store, conn: u64, view: &str, run: &mut Run) -> Option<ViewModel> {
-    let entries = entries_of(&run.files);
+    let entries = run_entries(run);
     if run.model_sent >= entries {
         return None;
     }
@@ -455,11 +535,7 @@ fn flush_model(store: &mut Store, conn: u64, view: &str, run: &mut Run) -> Optio
         .flatten()
         .or_else(|| {
             let from = store.window_from(conn, view, "order");
-            store.publish_model(
-                conn,
-                view,
-                grep_doc(&run.query.root, run.id, &run.files, from),
-            )
+            store.publish_model(conn, view, run_doc(run, from))
         })
 }
 
@@ -481,9 +557,23 @@ fn batch_patches(
     let (nodes, ids) = rows::batch_nodes(&run.query.root, run.id, &found);
     let n = found.rows();
     run.files.push(found);
+    run.files_changed();
+    if run.layout().is_some() {
+        // grouped: a new file may go anywhere in the rows, so the rows and the model go whole (diffs), at most once
+        // per throttle window, and at the end
+        let due = run
+            .model_at
+            .is_none_or(|t| crate::clock::now().duration_since(t) >= run.model_every);
+        if !due {
+            run.stale = true;
+            return (None, Vec::new());
+        }
+        run.stale = false;
+        return whole_patches(store, conn, view, run);
+    }
     // the file's rows (its header, its labels and its matches), only what the window still has room for
-    let entries = entries_of(&run.files);
-    let at = rows_total(&run.files) - n;
+    let entries = run_entries(run);
+    let at = rows_total(run) - n;
     let room = run.limit.saturating_sub(run.sent).min(n);
     let rows = if room > 0 {
         rows_in(run, at..at + room)
@@ -509,11 +599,7 @@ fn batch_patches(
         run.waiting = (Vec::new(), Vec::new());
         run.model_sent = entries;
         let from = store.window_from(conn, view, "order");
-        store.publish_model(
-            conn,
-            view,
-            grep_doc(&run.query.root, run.id, &run.files, from),
-        )
+        store.publish_model(conn, view, run_doc(run, from))
     } else {
         None
     };
@@ -566,11 +652,29 @@ fn look_patches(store: &mut Store, conn: u64, view: &str, run: &mut Run, look: L
             run.limit = run.sent + WINDOW;
         }
         Look::Upto(key) => {
+            // a row under a folded folder: the folders above it open
+            let above = run.layout().and_then(|l| {
+                rows::ent_index(run, l, key)
+                    .filter(|at| l.shown_at[*at].is_none())
+                    .map(|at| l.folded_above(at))
+            });
+            let opened = above.is_some();
+            for d in above.into_iter().flatten() {
+                run.folded.remove(&d);
+            }
+            if opened {
+                run.files_changed();
+            }
             let Some(i) = row_index(run, key) else {
                 return Vec::new();
             };
-            if i < run.limit || run.block.as_ref().is_some_and(|b| b.contains(&i)) {
+            let sent = i < run.limit || run.block.as_ref().is_some_and(|b| b.contains(&i));
+            if sent && !opened {
                 return Vec::new();
+            }
+            if sent {
+                // the folders opened: the rows again, the window as it is
+                return rebuild_patches(store, conn, view, run);
             }
             let want = i + 1 + MARGIN;
             if want <= run.sent + FAR {
@@ -587,7 +691,7 @@ fn look_patches(store: &mut Store, conn: u64, view: &str, run: &mut Run, look: L
             }
         }
     }
-    let total = rows_total(&run.files);
+    let total = rows_total(run);
     if let Some(b) = &mut run.block {
         b.end = b.end.min(total);
     }
@@ -644,18 +748,15 @@ fn skip_patches(
             })
         })
         .collect();
+    run.files_changed();
     run.reasons = why;
     run.carry.clear();
     run.waiting = (Vec::new(), Vec::new());
-    run.model_sent = entries_of(&run.files);
+    run.model_sent = run_entries(run);
     run.limit = WINDOW;
     run.block = None;
     store.forget_windows(conn, view);
-    let model = store.publish_model(
-        conn,
-        view,
-        grep_doc(&run.query.root, run.id, &run.files, None),
-    );
+    let model = store.publish_model(conn, view, run_doc(run, None));
     let rows = view_rows(run);
     let patches = keys(store, conn, view)
         .iter()
@@ -679,12 +780,7 @@ impl Views {
         self.greps
             .current(key.0, &key.1, |run| {
                 let from = self.window_from(key.0, &key.1, "order");
-                self.publish_model(
-                    f,
-                    key.0,
-                    &key.1,
-                    grep_doc(&run.query.root, run.id, &run.files, from),
-                );
+                self.publish_model(f, key.0, &key.1, run_doc(run, from));
                 let rows = view_rows(run);
                 if let Some(p) = lock(&self.store).publish(key, rows, &[]) {
                     f.send_to(key.0, "view-patch", json!(p));
@@ -699,28 +795,8 @@ impl Views {
     pub(super) fn grep_window(&self, f: &Front, conn: u64, view: &str) -> bool {
         self.greps
             .current(conn, view, |run| {
-                let from = self.window_from(conn, view, "order");
-                // the same entries in another window: the move alone (the nodes held stay as they are)
-                let w = window_of(&run.query.root, run.id, &run.files, MODEL_WINDOW, from);
-                let m = super::model::WindowMove {
-                    name: "order",
-                    window: (w.total, w.from),
-                    held: &w.held,
-                    order: w.order.clone(),
-                };
-                let moved = lock(&self.store).move_model(conn, view, m, |i| w.node(i));
-                match moved {
-                    Some(m) => {
-                        f.send_to(conn, "view-model", super::Store::model_data(m));
-                    }
-                    None => {
-                        self.publish_model(
-                            f,
-                            conn,
-                            view,
-                            grep_doc(&run.query.root, run.id, &run.files, from),
-                        );
-                    }
+                if let Some(m) = window_model(&mut lock(&self.store), conn, view, run) {
+                    f.send_to(conn, "view-model", super::Store::model_data(m));
                 }
             })
             .is_some()
@@ -796,6 +872,18 @@ impl Views {
 
     fn grep_done(&self, f: &Front, conn: u64, view: &str, id: u64, error: Option<String>) {
         self.greps.with(conn, view, id, |run| {
+            if run.stale && !run.count {
+                run.stale = false;
+                let mut store = lock(&self.store);
+                let (model, patches) = whole_patches(&mut store, conn, view, run);
+                drop(store);
+                if let Some(m) = model {
+                    f.send_to(conn, "view-model", super::Store::model_data(m));
+                }
+                for p in patches {
+                    f.send_to(conn, "view-patch", json!(p));
+                }
+            }
             // the model is whole before the search is done: what waits goes now
             if let (Some(m), false) = (
                 flush_model(&mut lock(&self.store), conn, view, run),
@@ -844,13 +932,32 @@ fn query_of(f: &Front, p: &RunParams) -> Result<(Query, Mode, Option<GitScope>),
     if !root.is_dir() {
         return Err(invalid("root", "an existing folder"));
     }
-    let (text, case, word, regexp) = match &p.search.query {
+    let (text, case, word, regexp, mode) = match &p.search.query {
         FindQuery::Text {
             text,
             case,
             word,
             regexp,
-        } => (text, case, word, regexp),
+        } => (text, case, word, regexp, Mode::Text),
+        // Text's files; its rewrite templates come with their write path
+        FindQuery::Pattern { pattern, lang } => {
+            if p.search.replace.as_deref().is_some_and(|r| !r.is_empty()) {
+                return Err(invalid(
+                    "search.replace",
+                    "a Pattern search is read-only for now",
+                ));
+            }
+            let lang = lang
+                .as_deref()
+                .map(pattern::lang_of)
+                .transpose()
+                .map_err(|e| invalid("search.query.lang", &e))?;
+            let find = pattern::Find {
+                pattern: pattern.clone(),
+                lang,
+            };
+            (pattern, &None, &None, &None, Mode::Pattern(find))
+        }
         other => {
             if p.search.replace.as_deref().is_some_and(|r| !r.is_empty()) {
                 return Err(invalid(
@@ -919,8 +1026,9 @@ fn query_of(f: &Front, p: &RunParams) -> Result<(Query, Mode, Option<GitScope>),
         include: p.search.include.clone().unwrap_or_default(),
         exclude: p.search.exclude.clone().unwrap_or_default(),
         ignore: super::files::ignore_for(f, p.ignore),
+        first: false,
     };
-    Ok((q, Mode::Text, git))
+    Ok((q, mode, git))
 }
 
 /// `search/run`: stop VIEW's search, send its classes a reset, and search on a thread of its own (Text), or ask the
@@ -930,6 +1038,12 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
     let views = &f.core.views;
     if p.view.is_empty() || p.view.len() > runstav::methods::view::VIEW_MAX {
         return Err(invalid("view", "a view id of 1 to 64 bytes"));
+    }
+    if p.sort == Some(GrepSort::Rank) {
+        return Err(invalid(
+            "sort",
+            "path or count: the sort by rank waits for the index, so search/group takes it",
+        ));
     }
     let (query, mode, git) = query_of(f, &p)?;
     // a count is not a search the user typed: it is not recent, and it sends only its totals (no labels to read)
@@ -946,6 +1060,8 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
     views.greps.with(conn, &view, id, |r| {
         r.context = context;
         r.count = count;
+        r.group = p.group.unwrap_or_default();
+        r.sort = p.sort;
     });
     if !count {
         // a new search's model: no files yet, and its window from the start
@@ -958,7 +1074,7 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
     let Some(front) = views.front.get().cloned() else {
         return Err(invalid("view", "the hub is starting"));
     };
-    if !matches!(mode, Mode::Text) {
+    if !matches!(mode, Mode::Text | Mode::Pattern(_)) {
         let root = p.root.clone();
         crate::clock::spawn("search:modes", async move {
             let Some(f) = front.upgrade() else { return };
@@ -1046,6 +1162,31 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
                     cancel.store(true, Ordering::Relaxed);
                 }
             };
+            // a Pattern search reads and parses each file itself (`pattern`), its marks kept with the matches a
+            // `±` scope leaves; the editor's unsaved buffers are not searched (their files neither)
+            if let Mode::Pattern(find) = &mode {
+                let result = pattern::run(&query, find, &cancel, |batch| {
+                    let marks: std::collections::HashMap<(u32, u32), run::Mark> = batch
+                        .iter()
+                        .map(|(m, k)| ((m.line, m.col), k.clone()))
+                        .collect();
+                    let ms = batch.into_iter().map(|(m, _)| m).collect();
+                    if let Some((file, ms, read)) = read_file(ms) {
+                        let read = read.map(|mut r| {
+                            r.marks = ms
+                                .iter()
+                                .map(|m| marks.get(&(m.line, m.col)).cloned())
+                                .collect();
+                            r
+                        });
+                        send((file, ms, read));
+                    }
+                });
+                if let Some(f) = front.upgrade() {
+                    f.core.views.grep_done(&f, conn, &view, id, result.err());
+                }
+                return;
+            }
             // with context, a file's read parses it: a few readers take the files as grep finds them (its order is
             // already unordered) and hand them to this thread
             let result = if context {
@@ -1168,6 +1309,115 @@ pub fn look(f: &Front, c: &Caller, p: GrepLookParams) -> Result<bool, Error> {
             }
         })
         .is_some())
+}
+
+/// RUN grouped as GROUP in the order SORT: its model from its start and its rows from the first window, whole (diffs);
+/// nothing when it is grouped so already.
+fn regroup_patches(
+    store: &mut Store,
+    conn: u64,
+    view: &str,
+    run: &mut Run,
+    group: GrepGroup,
+    sort: Option<GrepSort>,
+) -> (Option<ViewModel>, Vec<Patch>) {
+    if run.group == group && run.sort == sort {
+        return (None, Vec::new());
+    }
+    run.group = group;
+    run.sort = sort;
+    run.folded.clear();
+    run.files_changed();
+    run.stale = false;
+    run.limit = WINDOW;
+    run.block = None;
+    store.forget_windows(conn, view);
+    // the first window's model; the editor asks for the whole window once its rows are drawn
+    whole_patches_of(store, conn, view, run, FIRST_MODEL_WINDOW)
+}
+
+/// `search/group`: VIEW's search grouped as asked, without searching again: its model (from its start) and rows whole,
+/// as diffs; the match ids stay, so the ticks do.
+pub async fn group(f: &Front, c: &Caller, p: GroupParams) -> Result<bool, Error> {
+    let views = &f.core.views;
+    if p.sort == Some(GrepSort::Rank) {
+        // the ranks once per run, from the project's index (waiting for it): a project without one says why
+        let Some((root, has)) = views.greps.current(c.conn_id, &p.view, |run| {
+            (run.query.root.clone(), run.ranks.is_some())
+        }) else {
+            return Ok(false);
+        };
+        if !has {
+            let ranks = Arc::new(f.search.file_ranks(f, &root).await?);
+            views.greps.current(c.conn_id, &p.view, |run| {
+                if run.query.root == root {
+                    run.ranks = Some(ranks);
+                    run.files_changed();
+                }
+            });
+        }
+    }
+    Ok(views
+        .greps
+        .current(c.conn_id, &p.view, |run| {
+            let mut store = lock(&views.store);
+            let (model, patches) =
+                regroup_patches(&mut store, c.conn_id, &p.view, run, p.group, p.sort);
+            drop(store);
+            if let Some(m) = model {
+                f.send_to(c.conn_id, "view-model", super::Store::model_data(m));
+            }
+            for patch in patches {
+                f.send_to(c.conn_id, "view-patch", json!(patch));
+            }
+        })
+        .is_some())
+}
+
+/// `search/fold`: a folder of VIEW's search (grouped by Folders) folded or opened: only the rows change, as diffs.
+pub fn fold(f: &Front, c: &Caller, p: FoldParams) -> Result<bool, Error> {
+    let views = &f.core.views;
+    Ok(views
+        .greps
+        .current(c.conn_id, &p.view, |run| {
+            let mut store = lock(&views.store);
+            let patches = fold_patches(&mut store, c.conn_id, &p.view, run, &p.node, p.open)?;
+            drop(store);
+            for patch in patches {
+                f.send_to(c.conn_id, "view-patch", json!(patch));
+            }
+            Some(())
+        })
+        .flatten()
+        .is_some())
+}
+
+/// RUN's folder NODE folded (or opened when OPEN): its rows again, as diffs; none when RUN is not grouped by Folders
+/// or has no such folder.
+fn fold_patches(
+    store: &mut Store,
+    conn: u64,
+    view: &str,
+    run: &mut Run,
+    node: &str,
+    open: bool,
+) -> Option<Vec<Patch>> {
+    if run.group != GrepGroup::Tree
+        || !node.starts_with("d:")
+        || !run.layout()?.at_node.contains_key(node)
+    {
+        return None;
+    }
+    let changed = if open {
+        run.folded.remove(node)
+    } else {
+        run.folded.insert(node.to_owned())
+    };
+    if !changed {
+        return Some(Vec::new());
+    }
+    run.files_changed();
+    Some(rebuild_patches(store, conn, view, run))
 }
 
 /// `search/grep-skipped`: VIEW lists only the matches Replace All skipped, each with its reason.
@@ -1410,10 +1660,27 @@ pub async fn edit_doc(f: &Front, c: &Caller, p: EditDocParams) -> Result<EditDoc
     let context = p.context.unwrap_or(0).min(3);
     let max = u64::from(p.max.unwrap_or(EDIT_DOC_MAX));
     let bufs = texts_of(views, conn, &p.view);
-    let plans = views
+    let (plans, root) = views
         .greps
-        .current(conn, &p.view, |run| doc_plans(run, &bufs))
+        .current(conn, &p.view, |run| {
+            (doc_plans(run, &bufs), run.query.root.clone())
+        })
         .ok_or_else(|| invalid("view", "the view has no search"))?;
+    // a pair's hand-off holds its lines until it is done (sent, or its agent still at work), as the chip says
+    let held = views
+        .greps
+        .handoffs
+        .held_lines(conn, &p.view, &root, |session, edited| {
+            f.core.agents.find(session).is_ok_and(|s| {
+                !edited
+                    || matches!(
+                        s.status(),
+                        runstav::methods::agents::SessionStatus::Busy
+                            | runstav::methods::agents::SessionStatus::Starting
+                            | runstav::methods::agents::SessionStatus::Waiting
+                    )
+            })
+        });
     let over = |total: u64, skipped| EditDocAnswer {
         lines: Vec::new(),
         total,
@@ -1428,7 +1695,10 @@ pub async fn edit_doc(f: &Front, c: &Caller, p: EditDocParams) -> Result<EditDoc
         let (mut next, mut lines, mut skipped) = (0, Vec::new(), Vec::new());
         for d in plans {
             match edits::doc_lines(d, context, &mut next) {
-                Ok(ls) => lines.extend(ls),
+                Ok(ls) => lines.extend(ls.into_iter().map(|mut l| {
+                    l.held = held.contains(&(l.path.clone(), l.line));
+                    l
+                })),
                 Err(s) => skipped.push(s),
             }
         }
@@ -1549,20 +1819,23 @@ pub fn undo_change(f: &Front, c: &Caller, p: UndoParams) -> Result<bool, Error> 
     Ok(apply::undo(&front, c.conn_id, p.change, p.open))
 }
 
-/// RUN's matches P hands off (P.ids, else all but P.off), by file in the run's order: (handed, hidden paths left out).
-fn handed_of(run: &Run, p: &HandoffParams) -> (Vec<handoff::Handed>, Vec<String>) {
-    let ids: Option<HashSet<&str>> = p
-        .ids
-        .as_ref()
-        .map(|v| v.iter().map(String::as_str).collect());
-    let off: HashSet<&str> = p.off.iter().flatten().map(String::as_str).collect();
+/// RUN's matches a hand-off takes (IDS, else all but OFF; hidden paths only when HIDDEN), by file in the run's order:
+/// (handed, hidden paths left out).
+fn handed_of(
+    run: &Run,
+    ids: Option<&Vec<String>>,
+    off: Option<&Vec<String>>,
+    hidden_too: bool,
+) -> (Vec<handoff::Handed>, Vec<String>) {
+    let ids: Option<HashSet<&str>> = ids.map(|v| v.iter().map(String::as_str).collect());
+    let off: HashSet<&str> = off.into_iter().flatten().map(String::as_str).collect();
     let (mut handed, mut hidden) = (Vec::new(), Vec::new());
     for f in &run.files {
         let rel = Path::new(&f.file)
             .strip_prefix(&run.query.root)
             .map(|r| r.to_string_lossy().into_owned())
             .unwrap_or_else(|_| f.file.clone());
-        let shown = p.hidden || grep::searched(grep::Ignore::Index, &rel);
+        let shown = hidden_too || grep::searched(grep::Ignore::Index, &rel);
         for (i, (m, n)) in f.ms.iter().zip(&f.ns).enumerate() {
             let id = run::match_id(run.id, *n);
             let take = match &ids {
@@ -1619,6 +1892,38 @@ fn query_line(q: &Query) -> String {
 
 /// A new worker of PROFILE for ROOT's hand-off, in a worktree of its own from ROOT's HEAD, registered as a worker so
 /// the Work space's review lists it: its session id and worktree.
+/// A new chat of PROFILE in ROOT (the view's checkout), paired: it edits the user's buffers through the editor.  The
+/// matrix decides as for any pair (`agents/pair`: `chat.project-edit` not never); a refusal ends the chat.
+async fn handoff_pair(f: &Front, c: &Caller, root: &Path, profile: &str) -> Result<String, Error> {
+    let started = f
+        .core
+        .agents
+        .start(
+            f,
+            runstav::methods::agents::StartParams {
+                profile: runstav::types::Bounded(profile.to_owned()),
+                cwd: runstav::types::AbsPath::new(root.to_string_lossy().into_owned()).ok(),
+                task: None,
+                job: None,
+                role: Some(runstav::methods::matrix::Role::Chat),
+                about: None,
+                document: None,
+                env: None,
+            },
+            c,
+        )
+        .await?;
+    let paired = match f.core.agents.find(started.id.as_str()) {
+        Ok(s) => s.pair_toggle(true).await,
+        Err(e) => Err(e),
+    };
+    if let Err(e) = paired {
+        let _ = f.core.agents.kill(started.id.as_str()).await;
+        return Err(e);
+    }
+    Ok(started.id)
+}
+
 async fn handoff_worker(
     f: &Front,
     c: &Caller,
@@ -1702,7 +2007,7 @@ pub async fn handoff(f: &Front, c: &Caller, p: HandoffParams) -> Result<HandoffA
                 run.query.root.clone(),
                 query_line(&run.query),
                 run.replace.clone(),
-                handed_of(run, &p),
+                handed_of(run, p.ids.as_ref(), p.off.as_ref(), p.hidden),
             )
         })
         .ok_or_else(|| invalid("view", "the view has no search"))?;
@@ -1727,6 +2032,11 @@ pub async fn handoff(f: &Front, c: &Caller, p: HandoffParams) -> Result<HandoffA
             let (sid, tree) = handoff_worker(f, c, &root, profile).await?;
             (sid, tree, true)
         }
+        HandoffTo::Pair { profile } => (
+            handoff_pair(f, c, &root, profile).await?,
+            root.clone(),
+            false,
+        ),
     };
     let rows: Vec<String> = handed.iter().map(handoff::row).collect();
     let changed = {
@@ -1760,20 +2070,9 @@ pub async fn handoff(f: &Front, c: &Caller, p: HandoffParams) -> Result<HandoffA
         views.greps.handoffs.forget(&id);
         return Err(e);
     }
-    // the handed-off rows show the agent's mark
+    // the handed-off rows show the agent's mark (a new worker's comes later: `search/handoff-mark`)
     if let Some(mark) = &p.mark {
-        let mark = AgentMark {
-            face: mark.face.clone(),
-            glyph: mark.glyph.clone(),
-        };
-        views.greps.current(c.conn_id, &p.view, |run| {
-            for i in &ids {
-                run.handed.insert(i.clone(), mark.clone());
-            }
-            for patch in rebuild_patches(&mut lock(&views.store), c.conn_id, &p.view, run) {
-                f.send_to(c.conn_id, "view-patch", json!(patch));
-            }
-        });
+        mark_handed(f, c, &p.view, &id, &ids, mark);
     }
     if let Some(front) = views.front.get().and_then(std::sync::Weak::upgrade) {
         handoff::watch(front, c.clone(), id.clone(), session.clone());
@@ -1787,6 +2086,111 @@ pub async fn handoff(f: &Front, c: &Caller, p: HandoffParams) -> Result<HandoffA
         more,
         hidden,
     })
+}
+
+/// How many places the card's context box shows.
+const CONTEXT_ROWS: usize = 2;
+
+/// `search/handoff-context`: the card's context box for the matches P would hand off: the first places, the total,
+/// the brief's tokens (its text without the instruction, four characters a token) and the hidden paths left out.
+pub fn handoff_context(
+    f: &Front,
+    c: &Caller,
+    p: HandoffContextParams,
+) -> Result<HandoffContext, Error> {
+    let (query, replace, (handed, hidden)) = f
+        .core
+        .views
+        .greps
+        .current(c.conn_id, &p.view, |run| {
+            (
+                query_line(&run.query),
+                run.replace.clone(),
+                handed_of(run, p.ids.as_ref(), p.off.as_ref(), p.hidden),
+            )
+        })
+        .ok_or_else(|| invalid("view", "the view has no search"))?;
+    let rows: Vec<String> = handed.iter().map(handoff::row).collect();
+    let replace = (!replace.is_empty()).then_some(replace.as_str());
+    let (text, _, _) = handoff::brief("h:0", "", &query, replace, &rows, &[]);
+    Ok(HandoffContext {
+        rows: handed
+            .iter()
+            .take(CONTEXT_ROWS)
+            .map(|m| HandoffContextRow {
+                path: m.rel.clone(),
+                line: m.line,
+                ctx: m.ctx.clone(),
+                text: m.text.trim().to_owned(),
+            })
+            .collect(),
+        total: u32::try_from(handed.len()).unwrap_or(u32::MAX),
+        tokens: u32::try_from(text.chars().count().div_ceil(4)).unwrap_or(u32::MAX),
+        hidden,
+    })
+}
+
+/// VIEW's rows of match IDS show MARK, redrawn.
+fn mark_handed(
+    f: &Front,
+    c: &Caller,
+    view: &str,
+    handoff: &str,
+    ids: &[String],
+    mark: &HandoffMark,
+) {
+    let views = &f.core.views;
+    let mark = AgentMark {
+        face: mark.face.clone(),
+        glyph: mark.glyph.clone(),
+        name: mark.name.clone(),
+        handoff: handoff.to_owned(),
+    };
+    views.greps.current(c.conn_id, view, |run| {
+        for i in ids {
+            run.handed.insert(i.clone(), mark.clone());
+        }
+        for patch in rebuild_patches(&mut lock(&views.store), c.conn_id, view, run) {
+            f.send_to(c.conn_id, "view-patch", json!(patch));
+        }
+    });
+}
+
+/// Hand-off STATE (of connection CONN) moved: its groups' chips in its view show it, redrawn.
+pub(super) fn handoff_progress(f: &Front, conn: u64, state: &HandoffState) {
+    let views = &f.core.views;
+    views.greps.current(conn, &state.view, |run| {
+        run.progress.insert(
+            state.handoff.clone(),
+            Progress {
+                phase: state.phase,
+                done: state.done.iter().cloned().collect(),
+            },
+        );
+        for patch in rebuild_patches(&mut lock(&views.store), conn, &state.view, run) {
+            f.send_to(conn, "view-patch", json!(patch));
+        }
+    });
+}
+
+/// `search/handoff-mark`: hand-off P.handoff's rows show P.mark; the asking connection's own hand-offs only.
+pub fn handoff_mark(f: &Front, c: &Caller, p: HandoffMarkParams) -> Result<bool, Error> {
+    let found = f.core.views.greps.handoffs.with(&p.handoff, |h| {
+        (h.conn == c.conn_id).then(|| {
+            (
+                h.view.clone(),
+                h.matches.iter().map(|m| m.id.clone()).collect::<Vec<_>>(),
+            )
+        })
+    });
+    let Some(Some((view, ids))) = found else {
+        return Err(invalid(
+            "handoff",
+            "no such hand-off (ended, older than 24 h, or another window's)",
+        ));
+    };
+    mark_handed(f, c, &view, &p.handoff, &ids, &p.mark);
+    Ok(true)
 }
 
 /// `search/handoff-state`: where hand-off P.handoff is (`handoff.rs`); the asking connection's own only.

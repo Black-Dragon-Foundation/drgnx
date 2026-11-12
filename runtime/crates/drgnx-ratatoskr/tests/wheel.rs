@@ -1,4 +1,7 @@
 //! Take the wheel across a hub restart (docs/develop/coordination.md, "Take the wheel"), against the real binary.
+//! The row starts `ratatoskr-mock` as its agent, which only a `test-hooks` hub launches (unsandboxed): a shipped build's
+//! sandbox does not show a program in the checkout's `target/`, and refuses the start.
+#![cfg(feature = "test-hooks")]
 
 mod support;
 

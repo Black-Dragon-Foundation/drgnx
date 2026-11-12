@@ -2,6 +2,7 @@
 //!
 //! ```text
 //! sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation
+//!                [--watchdog DIR] [--allow-own-account] [--allow-admin]
 //!                                             the hub's control channel, on stdin and stdout
 //! sleipnir job-exec <attempt folder>          runs the folder's job.json, writes its result.json
 //! sleipnir job-helper --dir D [--hub-allow F] the attempt's keys, proxy and disk watch, until stdin ends
@@ -16,7 +17,7 @@
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation \
-                     [--watchdog DIR]\n       \
+                     [--watchdog DIR] [--allow-own-account] [--allow-admin]\n       \
                      sleipnir job-exec <attempt folder>\n       \
                      sleipnir watchdog --provider aws|gcp --idle S --lifetime S --unattended S --root DIR --dir DIR\n       \
                      sleipnir job-helper --dir D [--hub-allow FILE]\n       \
@@ -36,7 +37,16 @@ fn main() -> ExitCode {
         return ExitCode::from(sleipnir::darwin::brew::run(&args).clamp(0, 255) as u8);
     }
     match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
-        ["job-exec", dir] => job_exec(std::path::Path::new(dir)),
+        ["job-exec", dir] => {
+            let dir = std::path::Path::new(dir);
+            // the slot the job reads stays at its inputs until job-exec ends (sync::slot::Locks)
+            #[cfg(feature = "sync")]
+            let _slot = match sleipnir::sync::slot::hold_for_job(dir) {
+                Ok(held) => held,
+                Err(why) => return job_setup_failed(dir, &why),
+            };
+            job_exec(dir)
+        }
         ["job-helper", ref rest @ ..] => job_helper(rest),
         ["serve", ref rest @ ..] => serve(rest),
         ["watchdog", ref rest @ ..] => watchdog(rest),
@@ -178,6 +188,43 @@ fn tools(_root: &str, _pins: &[&str]) -> ExitCode {
     ExitCode::from(2)
 }
 
+/// An attempt that must not run (WHY: its slot can't be held at its inputs): `infra: setup`, WHY in its log.
+#[cfg(feature = "sync")]
+fn job_setup_failed(dir: &std::path::Path, why: &str) -> ExitCode {
+    use forseti::Verdict;
+    use forseti::classify::infra;
+    use sleipnir::linux::{jobexec::JobExec, result::ResultJson};
+    use std::io::Write;
+    eprintln!("sleipnir job-exec: {}: {why}", dir.display());
+    let Ok(spec) = JobExec::read(dir) else {
+        return ExitCode::from(2);
+    };
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&spec.log)
+        .and_then(|mut f| writeln!(f, "sleipnir job-exec: the attempt can't start: {why}"));
+    let r = ResultJson {
+        verdict: Verdict::Infra(infra::SETUP.into()),
+        infra: Some(format!("infra: {}", infra::SETUP)),
+        counts: Default::default(),
+        rows: vec![],
+        failing: vec![],
+        machine: spec.machine,
+        grant: spec.grant,
+        wall_s: 0.0,
+        cpu_s: 0.0,
+        mem_peak_mib: 0,
+        mem_overshoot_mib: None,
+        disturbed: false,
+        log: spec.log.display().to_string(),
+    };
+    match r.write(dir) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_) => ExitCode::from(2),
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn job_exec(dir: &std::path::Path) -> ExitCode {
     match sleipnir::linux::jobexec::JobExec::read(dir) {
@@ -192,12 +239,32 @@ fn job_exec(dir: &std::path::Path) -> ExitCode {
     }
 }
 
-/// A Mac's job-exec: the command under `sandbox-exec` (`darwin::jobexec`; anything else is refused).
+/// A Mac's job-exec: the command under `sandbox-exec` (`darwin::jobexec`; anything else is refused), and a networked
+/// job's proxy (`darwin::proxy`) for its life; a proxy that can't start fails the job's setup.
 #[cfg(target_os = "macos")]
 fn job_exec(dir: &std::path::Path) -> ExitCode {
     match sleipnir::linux::jobexec::JobExec::read(dir) {
         Ok(spec) => {
-            sleipnir::darwin::jobexec::run(dir, &spec);
+            let wants = spec
+                .helper
+                .as_ref()
+                .and_then(|h| Some((h.proxy_fd?, h.proxy_port?)))
+                .filter(|_| sleipnir::darwin::jobexec::refusal(&spec).is_none());
+            #[cfg(feature = "runner")]
+            let proxy = wants
+                .map(|(fd, port)| sleipnir::darwin::proxy::take(fd, port, dir))
+                .transpose();
+            #[cfg(not(feature = "runner"))]
+            let proxy: Result<Option<()>, String> = match wants {
+                Some(_) => Err("this build has no proxy".into()),
+                None => Ok(None),
+            };
+            let setup = proxy
+                .as_ref()
+                .err()
+                .map(|e| format!("the job's proxy: {e}"));
+            sleipnir::darwin::jobexec::run_with(dir, &spec, setup);
+            drop(proxy);
             ExitCode::SUCCESS
         }
         Err(e) => {

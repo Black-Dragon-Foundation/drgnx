@@ -62,8 +62,11 @@ empty scope says why ("nothing staged"); a folder outside git says so. Symbol an
 
 Every search that stood for the typing pause is kept, per project, the last 50: its mode, words, toggles,
 replacement, scope and globs. **Previous Search** and **Next Search** (`Up` and `Down` in Find in the VS Code profile;
-`M-p` and `M-n` in the view in the Emacs and Vim profiles) walk them, each restored whole and run; Next Search past the
-newest gives back what you had.
+`M-p` and `M-n` in the view in the Emacs and Vim profiles, and `C-p` and `C-n` in Find in Vim's insert state) walk
+them, each restored whole and run; Next Search past the newest gives back what you had.
+
+With Vim keys the Search view starts in Emacs state, so its fields take typing; press `C-z` in the view to reach
+normal state, where `i` opens Edit Results, and insert state, where Find's `C-p` and `C-n` walk the history.
 
 With Find empty, the view lists the project's **Saved** searches, then its last 8 **Recent** ones; a click runs one.
 **Save This Search** (the ☆ button; `C-k C-b`; `C-c C-w`) keeps the view's search under a name, the words by default.
@@ -94,7 +97,27 @@ and Vim profiles), goes Text → Symbol → Meaning → Text and searches again.
   with a score bar (how close it is, against the best one; hover for the score), its symbol and its first line; a
   piece that moved since it was indexed is found where it is now and says `(moved)`. Nothing but the words applies.
 
-Symbol and Meaning only find: Replace All and Replace This say so. A Text search that finds nothing offers **Try
+### Pattern: structural search
+
+The **{}** toggle beside .\* (the two exclude each other; **Search: Toggle Pattern Search** in the palette) makes
+Find a code pattern, matched in each file's syntax tree rather than its text. It uses ast-grep's syntax: `$NAME`
+matches one node, `$$$NAME` any number of them (`foo($$$ARGS)` matches `foo()` and `foo(a, b)`), `$_` one node it
+does not name, and the same name twice must match the same text (`(eq $A $A)` finds `(eq x x)`, not `(eq x y)`).
+The mode chip says `Pattern` while it is on.
+
+- **Language.** A line over the status line names the pattern's language: the one of the file the view was opened
+  from, else `any` (each file is parsed in its own language). Click it, or **Search: Pattern Language…**, to choose.
+  The languages are Hrafn's grammars: Emacs Lisp, Rust, C, shell, Python, JavaScript, TypeScript, TSX, Go and Java.
+- **Rows.** A match over several lines shows its first line with `+N lines` after it, dim; hover a row for its
+  metavariables (`$K = …`).
+- **A pattern that does not parse** in the language says so on the status line with the column
+  (`pattern is not valid Rust at col 14`), and those files are skipped, never searched as text.
+- **Speed.** The files holding the pattern's longest name that is not a metavariable are the only ones parsed; a
+  pattern made of metavariables only parses every file of its language.
+- **Not yet:** Replace (a rewrite template using the same names; Hrafn expands them already) and the editor's unsaved
+  buffers (their files are skipped). Aa, ab and Replace are greyed out; the scopes and the globs apply.
+
+Symbol, Meaning and Pattern only find: Replace All and Replace This say so. A Text search that finds nothing offers **Try
 Meaning** on the status line; the view never changes mode by itself. Symbol and Meaning need the index: before it is
 built the status line says why.
 
@@ -167,7 +190,8 @@ tab named `Search: <query>`: each line with a match, once however many matches i
 its file's header. The headers and numbers are read-only; the lines are ordinary text: every editing command works,
 multiple cursors, `query-replace`, macros, evil. Each line shows in its file's major mode's colours. The setting
 `drgnx-search-edit-context` (0 to 3, default 0) adds that many lines of context around each match line, dim and
-editable too. A search of more than `drgnx-search-edit-max-lines` lines (default 20,000) opens nothing and says how
+editable too. A line handed to an agent that edits this checkout (a pair, through Ask an Agent) is dim and read-only
+until the agent is done ("An agent holds this line"). A search of more than `drgnx-search-edit-max-lines` lines (default 20,000) opens nothing and says how
 many: narrow it first.
 
 **Save** (the profile's save, or Save Edited Results) writes the lines you changed, and only those, through the same
@@ -182,15 +206,26 @@ Saves** puts the files back, newest save first (a file edited since is left alon
 undoes typing, not files. **Discard Edited Results** drops the unsaved edits and closes it; closing it with unsaved
 edits asks first, and only when you closed it.
 
+With Vim keys Edit Results is in normal state: `d d` is Delete This Line, `Z Q` discards, `:w` saves (every save of
+the buffer does: it never asks for a file). The other keys under `d` and `Z` stay Vim's (`d w`, `Z Z`).
+
 ### Ask an Agent
 
 **Ask an Agent** (`M-a` in the Search view; `C-c C-a` in the Emacs and Vim profiles; the palette) hands the ticked
 matches to an agent, or the selected row's (a match, or a file's matches) when none is ticked. A small card opens in
-the middle of the window: its text is what the agent is to do, prefilled with a replacement ("Replace `pending` with
-`queued` in these places, keeping behaviour"); its header line says who it goes to. **Next Agent** (`C-c C-w`) goes
-round a **new worker** of your default agent profile, in a worktree of its own (the default), and each live session;
-a session working in this checkout is a **pair**, which edits your buffers directly. **Send** (`C-<return>`; `C-c C-c`)
-hands it off, **Cancel** (`<escape>`; `C-c C-k`) does not.
+the middle of the window: under its title (how many results, the search) a box in the focus colour holds what the
+agent is to do, prefilled with a replacement ("Replace `pending` with `queued` in these places, keeping behaviour"),
+the only text you edit. Under it, who it goes to, as chips (the chosen one in the accent; click one, or **Next Agent**,
+`C-c C-w`, goes round a **new worker** of your default agent profile, in a worktree of its own (the default), a **new pair** (a chat
+of that profile in this checkout, in pair mode: it edits your buffers directly, as your rules for a chat's project edits
+allow), and each live session with its state; a session working in this checkout is marked as a pair). The line under
+them says where the chosen agent sends its requests: a vendor's agent to its own service, a gateway profile to its providers
+(remote or local), keeping only the remote steps of the project's routes (`.drgnx/ai.eld`) you allowed; opening the
+card asks about those routes once, as every AI command does. An agent the routes leave no provider is said in red, and
+Send refuses it. A box shows the context the agent gets: the first places, by file, then how many more and the
+brief's size in tokens (about four characters a token), and the hidden files left out. The foot says where the edits
+come back (a worker's hunks to Review, a pair's to your buffers); **Send** (`C-<return>`; `C-c C-c`) hands it off,
+**Cancel** (`<escape>`; `C-c C-k`) does not.
 
 The agent gets a brief: what to do, the search and its replacement, and the places, grouped by file, as
 `path:line:col  in <definition>  <line>`; at most 300 places, or about 8,000 tokens' worth, go in the brief, and the
@@ -199,7 +234,9 @@ places and to say which it skipped and why, and which files changed since the se
 secret-looking files (`.env`, keys) stay out of the brief unless you switch **hidden files** in on the card
 (`C-c C-h`); the echo area names the ones left out.
 
-The handed-off rows show the agent's mark (its colour and shape), and the view's status line a chip: `sent`, then
+The handed-off rows show a bar in the agent's colour at their start (its name on hover), and each file or definition
+holding them a chip in that colour with its mark, name, state and how many of its handed-off matches are done
+(`◆ Ada · editing 9/14`); a new worker's as soon as it has started. The view's status line has a chip too: `sent`, then
 `editing, 12 done`, then `done 47 / 2 skipped` (a match whose line moved where it cannot be found again counts as
 unknown, never as done). A worker's edits wait for your review in the Work space; a pair's are in your buffers.
 **Re-run in Worktree** (the palette) runs the same search in the worker's worktree to show what is left.
@@ -222,6 +259,23 @@ previous one, `C-RET` replaces all of them (one undo step; the buffer is left un
 the current one, `ESC` closes the bar. **Show all in sidebar** moves the search, with its toggles, to the Search
 view, scope This file.
 
+## Grouping
+
+Under the status line, **Files · Folders · Symbols** groups the results; changing it regroups at once, without
+searching again, and every tick stays.
+
+- **Files** lists each file with its matches, in the order the search finds them.
+- **Folders** is a tree of the folders holding matches, each with its count; a chain of folders with one child each
+  is one row (`runtime/crates/hrafn/src/`). A click on a folder's `▾` folds it (**Fold or Open This Folder** in the
+  palette); going to a match inside it opens it again.
+- **Symbols** puts each file's matches under the definition they are in (`ƒ name` and its count); the matches outside
+  any are under "(top level)".
+
+A folder's or a definition's box ticks everything under it, like a file's. Next File and Previous File move between
+files, or between definitions in Symbols. **Group Results By…** with `C-u` also sorts the groups: by path, by
+match count (most first), or by rank, the files most central in the project's map first (it needs the project's
+index, and waits for it). A new search keeps the grouping and the sort.
+
 ## Keys
 
 | Command | VS Code | Emacs | Vim |
@@ -234,25 +288,29 @@ view, scope This file.
 | Undo Replace | the Undo button | `C-c C-u` | `C-c C-u` |
 | Next Match | `<f4>` (anywhere) | `C-c C-n` | `C-c C-n` |
 | Previous Match | `S-<f4>`, `S-<return>` | `C-c C-p`, `S-<return>` | `C-c C-p`, `S-<return>` |
-| Next File | `C-M-<down>` (the Search view) | `C-c M-n` | `C-c M-n` |
-| Previous File | `C-M-<up>` (the Search view) | `C-c M-p` | `C-c M-p` |
+| Next File (Next Group: a definition in Symbols) | `C-M-<down>` (the Search view) | `C-c M-n` | `C-c M-n` |
+| Previous File (Previous Group) | `C-M-<up>` (the Search view) | `C-c M-p` | `C-c M-p` |
+| Next Grouping (Files → Folders → Symbols) | `M-g` (the Search view) | `C-c C-g` | `C-c C-g` |
+| Group Results By… (`C-u`: and sort) | palette | palette | palette |
+| Fold or Open This Folder | a click on `▾` | a click on `▾` | a click on `▾` |
 | Close Find Bar | `<escape>` | `<escape>` | `<escape>` |
 | Next Mode (the Search view) | `M-m` | `C-c C-m` | `C-c C-m` |
 | Text / Symbol / Meaning Mode | palette | palette | palette |
+| Toggle Pattern Search, Pattern Language… | the `{}` toggle, the language chip; palette | the same | the same |
 | Next Scope (the Search view) | `M-s` | `C-c C-o` | `C-c C-o` |
 | In Changed Files | `C-k C-g` (anywhere) | `C-c s g` | `SPC s g` |
 | In Files Changed on This Branch | palette | `C-c s b` | `SPC s b` |
-| Previous / Next Search | `<up>` / `<down>` in Find | `M-p` / `M-n` | `M-p` / `M-n` |
+| Previous / Next Search | `<up>` / `<down>` in Find | `M-p` / `M-n` | `M-p` / `M-n`; `C-p` / `C-n` in Find (insert state) |
 | Save This Search | `C-k C-b` | `C-c C-w` | `C-c C-w` |
 | Run Saved Search… | palette | `C-c s S` | `SPC s S` |
 | Preview This File's Changes (the Search view) | `C-k C-v` | `C-c C-v` | `C-c C-v` |
 | Keep / Drop This Hunk (a preview tile) | `a` / `D` | `a` / `D` | `a` / `D` |
 | Replace / Cancel (the Replace All sheet) | `C-<return>` / `<escape>` | `C-c C-c` / `C-c C-k` | `C-c C-c` / `C-c C-k` |
 | Next / Previous File (the sheet) | `<down>` / `<up>` | `n` / `p`, `<down>` / `<up>` | `n` / `p`, `<down>` / `<up>` |
-| Edit Results (the Search view) | `M-e` | `C-c C-e` | `C-c C-e` |
-| Save Edited Results (Edit Results; the profile's save too) | `C-s` | `C-c C-c`, `C-x C-s` | `C-c C-c` |
-| Discard Edited Results (Edit Results) | palette (closing the tab asks) | `C-c C-k` | `C-c C-k` |
-| Delete This Line (on save) (Edit Results) | `C-S-k` | `C-c C-d` | `C-c C-d` |
+| Edit Results (the Search view) | `M-e` | `C-c C-e` | `C-c C-e`, `i` (normal state) |
+| Save Edited Results (Edit Results; the profile's save too) | `C-s` | `C-c C-c`, `C-x C-s` | `C-c C-c`, `:w` |
+| Discard Edited Results (Edit Results) | palette (closing the tab asks) | `C-c C-k` | `C-c C-k`, `Z Q` (normal state) |
+| Delete This Line (on save) (Edit Results) | `C-S-k` | `C-c C-d` | `C-c C-d`, `d d` (normal state) |
 | Take the File's Line (Edit Results) | palette | `C-c C-r` | `C-c C-r` |
 | Undo All Saves of Edited Results | palette | palette | palette |
 | Filter Symbol Results by Kind… | palette (the chips) | palette | palette |
@@ -273,7 +331,11 @@ palette, category Search.
 `test/unit/mod-replace-engine-test.el` (the editor's half of a write: edits into an open buffer, stale ones skipped,
 symbol edits, undo), `test/conformance/search/write.jsonl` (the hub's: the edit set, writes on disk, a file changed
 since, undo), `test/unit/search-edit-test.el` and `test/conformance/search/edit-results.jsonl` (Edit Results: the
-document, read-only headers, saves of changed, split and deleted lines, conflicts, undo),
+document, read-only headers, saves of changed, split and deleted lines, conflicts, undo; `:w` and `save-buffer`),
+`test/unit/search-pattern-test.el` and `test/conformance/search/run-pattern.jsonl` (Pattern: the `{}` toggle and
+.\* excluding each other, the language chip, the spec sent, a saved pattern search restored; the hub's rows with
+`+N lines`, a refused pattern, a refused replacement), `test/unit/isolated/search-vim-isolated.el` (the Vim keys with real evil, in an Emacs of its own: `i`, `C-p` / `C-n`
+in Find, `d d`, `Z Q`, `:w`, and `d w` / `Z Z` still evil's; the module turned off takes its state maps out),
 `test/unit/search-handoff-test.el` and `test/conformance/search/handoff.jsonl` (Ask an Agent: the card, who, Send by
 ids or by the unticked, the chip, a hand-off to a mock session and its state) and
 `test/unit/mod-replace-view-test.el` (the view, the find bar; on the virtual clock, the view's own rows Symbol mode

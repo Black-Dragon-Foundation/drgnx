@@ -52,6 +52,7 @@ that lacks any item is refused with the whole list, each with its fix:
 
 | Item | Fix shown |
 |---|---|
+| a login other than root (uid 0) | add the runner as an ordinary user |
 | a login not confined as SELinux `user_u` (`user_t`, read from `/proc/self/attr/current`: `linux::confined`) | map the login to another SELinux user (`semanage login -m -s staff_u LOGIN`), or a subuid range plus a local policy module letting `user_t` run `newuidmap` |
 | a systemd user manager | log in, or `loginctl enable-linger` |
 | rootless podman ≥ 5 | install or upgrade podman; connect as an ordinary user |
@@ -94,15 +95,18 @@ containers, no keys. Its probe (`darwin::probe`) reads the machine once into a `
 fixtures on Linux.
 
 **The Mac contract** (`contract`), refused with the whole list: macOS 15 or newer; Apple silicon
-(`hw.optional.arm64`, so a Rosetta shell passes); a root-owned `sandbox-exec`; a standard (non-admin) account; the
+(`hw.optional.arm64`, so a Rosetta shell passes); a root-owned `sandbox-exec`; the standard (non-admin) account `drgnx-runner` (`id -un`, `dseditgroup`): another
+account only with `--allow-own-account`, an administrator only with `--allow-admin` (each refusal names its flag and
+what it exposes), root never; the
 Command Line Tools answering, with a full Xcode's licence accepted (`clang`'s refusal names it, its own item); `mise`
 from Homebrew; 40 GB free on the runner root's volume. **Facts**: `os` `macos 15.6`, `arch` `aarch64`, cores (`hw.ncpu`), memory, disk,
 battery; the Linux-only fields false. **Features**: `arch:aarch64`, `host-jobs`, `xcode-clt`, and `brew:<name>@<major>.<minor>`
-for each Homebrew package at its newest installed version (and `brew:<name>` alone), and `tool:<name>@<version>` for
-each toolchain record under the root. The boot id is `kern.bootsessionuuid`.
+for each Homebrew package at its newest installed version (and `brew:<name>` alone), `tool:<name>@<version>` for
+each toolchain record under the root, and `account:admin` / `account:own` for an account taken by an allowance (the
+runner list shows what it exposes; a Linux runner's `account:admin` is a login in `wheel` or `sudo`). The boot id is `kern.bootsessionuuid`.
 
 **Toolchains** (`darwin::tools`, `sleipnir tools --root DIR PIN...`). The hub runs it at `runner add` and
-`runner check`, as the runner account and outside any job (a job has no network; mise downloads). For each pin
+`runner check`, as the runner account and outside any job (mise downloads from hosts a job isn't granted). For each pin
 (`rust@1.95`) the user's Homebrew `mise` runs `install` and then `env --json` in the root, with mise's data, state,
 config and cache folders and Rust's `RUSTUP_HOME`/`CARGO_HOME` all under the root, so nothing lands in the account's
 home; the record `<root>/tools/env/<pin>.json` keeps the folders mise put on `PATH` and its other variables (never
@@ -116,20 +120,38 @@ takes no job from an ssh login (its Background session refuses `launchctl bootst
 which every process of the job inherits: Linux's CPU and IO weights of 20), and writes
 `job-exec.pid` (`<pid> <start time>`, atomically); its own early errors go to `job-exec.log`. The attempt is active
 while that pid has that start time (a reused pid is not), and `kill` is SIGKILL to its process group (job-exec and
-whatever stayed in it); a process that left the group is the watchdog's to find, by session and marker. job-exec
-runs the command only as `/usr/bin/sandbox-exec -f job.sb …` and refuses anything else (a keyed job, a helper, a
-bare command) as `infra: setup`, so a job never runs unconfined. `job.sb` is Gleipnir's profile of the attempt's
-spec (`darwin::sandbox::spec`): it reads the source, writes the attempt folder (and the source when the job writes its
-tree) and the runner's programs (`<root>/bin`), `HOME` and `TMPDIR` inside the folder, `PATH` the brew shim's folder,
+whatever stayed in it); a process that left the group is the watchdog's to find, by session and marker. However a
+job ends (by itself, its timeout, a kill reason), job-exec kills what is left of it once the result is written: the
+session and the marked processes the watchdog's scan finds, then its own group. job-exec
+runs the command only as `/usr/bin/sandbox-exec -f job.sb …` and refuses anything else (a keyed job, a helper other
+than its proxy, a bare command) as `infra: setup`, so a job never runs unconfined. `job.sb` is Gleipnir's profile of the attempt's
+spec (`darwin::sandbox::spec`): it reads the source and the runner's programs (`<root>/bin`), writes only `HOME` and
+`TMPDIR`, both inside the attempt folder (and the source when the job writes its tree; never the attempt folder
+itself, whose `job-exec.pid`, `kill_reason` and `result.json` are job-exec's), `PATH` the brew shim's folder,
 then Homebrew's and the system's (after its toolchains'), the marker
 `DRGNX_RUNNER_ATTEMPT`, Homebrew read-only (`HOMEBREW_NO_AUTO_UPDATE` and the like; `HOMEBREW_NO_INSTALL_FROM_API`, so formulae load from the
 installed kegs instead of a JSON API fetch, which needs the network and a lock in Homebrew's var; its cache, logs and temporary
-files in the attempt's tmp: a configure asks `brew` where a package is), and no network. Every job a Mac runner takes is a
+files in the attempt's tmp: a configure asks `brew` where a package is), and no network but its proxy's (below). Every job a Mac runner takes is a
 build or a test, so its profile has Gleipnir's build addition (`darwin::sandbox::mac_context`: the developer dir and
 the account's per-user folder, `getconf DARWIN_USER_DIR`'s parent, by true name; docs/develop/gleipnir.md, "The build
 addition"); a per-user folder that can't be resolved refuses the launch. The timeout is read on `CLOCK_MONOTONIC`, `caffeinate -i -w` keeps the Mac
 awake while the job runs, and the verdict comes from `forseti::classify` like Linux's. A Mac has no pause, live
 resize, CPU weights or keys: those methods answer none or refuse.
+
+**A Mac job's network** (`darwin::proxy`). A job the hub grants hosts (its `net_hosts`) gets Gleipnir's CONNECT proxy
+with that allow-list (`crate::net`, shared with Linux's job helper: no metadata service, no address that isn't public,
+connections only to public addresses), served by its own job-exec on a loopback port for the job's life; a Mac has no
+network namespace and no relay sidecar. `launch` checks the list, writes it to the attempt's `net.allow`, binds
+`127.0.0.1:0` and starts job-exec with that listener kept open (every other descriptor is close-on-exec), naming the
+descriptor and port in `job.json`'s helper. The port is in the job's profile as its only network (outbound to
+`localhost:<port>`) and in its `HTTP(S)_PROXY` variables, `NO_PROXY` the loopback names. job-exec takes the listener
+only if it is on `127.0.0.1:<port>`, makes it close-on-exec again so the job never holds it, and serves it on a thread
+of its own. Seatbelt's `localhost` is both loopbacks, so job-exec also listens on `[::1]:<port>` (never accepting) for
+the job's life: no other process can listen there for the job to reach. `launch` picks a port free on both, and a
+`::1` port taken by then refuses the job; a proxy that can't start fails the job `infra: setup`, and a refused request is logged in
+`job-exec.log`. Binding in `serve` means no other process can take the port between the profile and the proxy. The
+loopback is the whole Mac's: while the job runs, another local process could reach the job's allow-listed hosts
+through the port, and nothing else.
 
 **Homebrew in a job** (`darwin::brew`): offline and read-only, Homebrew can't name a package's prefix. `brew --prefix
 --installed NAME`, which Emacs's configure asks for libgccjit, loads the formula from the JSON API (a download, under a
@@ -151,7 +173,7 @@ their `ri_phys_footprint` (`proc_pid_rusage`; the resident set on Linux, where t
 grant less 192 MiB (the overshoot the spike measured at this tick, rounded up; never under half the grant), it
 SIGKILLs every one: the verdict is `oom` (the kill counts as the job's own OOM, never `red` and never `infra`), and
 `result.json`'s `mem_overshoot_mib` records the peak past the grant for every Mac job (none on Linux, where the kernel
-caps it). A Mac has no job helper (no keys, no network yet), so job-exec also runs the disk watch (`linux::disk`,
+caps it). A Mac has no job helper (no keys; job-exec serves the proxy), so job-exec also runs the disk watch (`linux::disk`,
 every 10 s, `disk-start` written before the command): below the floor, the running job that grew most is stopped
 `infra: disk`. **The sweep**: setsid loses launchd's group cleanup, so a Mac's `cleanup` (at start and after each job)
 first SIGKILLs the runner user's processes whose marker names this hub and an attempt that no longer runs
@@ -496,10 +518,19 @@ links are copied as links, and `dest` must not exist.
 dies:
 
 - `read` is shared and marks the slot used;
-- `update` waits for every reader;
-- `target` is exclusive, for a job that builds into the target dir.
+- `try_update` (a move, `gc`, the disk guard's prune) is exclusive, `None` at once while anyone reads;
+- `target` is exclusive, for a job that builds into the target dir (`try_target`: `None` instead of waiting).
 
-`try_update` and `try_target` return `None` instead of waiting. A lock belongs to its open file description, which a
+`hold(paths, inputs, move_to)` is a job's read lock on its slot at its input key: the slot's git dir records the key
+it holds (`inputs`, written under the update lock after `move_to`, removed before it); a slot at other inputs is
+moved only when `try_update` gets it, so a slot any job reads (a job of another hub on the same root too) is never
+moved under it, and the answer is `None`. A lock can't turn from exclusive to shared in one step on Linux, so after a
+move the slot is read and checked again. `serve` holds its job's lock from the checkout until the result is there;
+the job's job-exec takes its own at its start (`hold_for_job`, on the slot the attempt's `slot-hold` names:
+`write_job_hold`), and refuses to run, `infra: setup`, when the slot moved meanwhile (its `serve` gone before
+job-exec started). A job that writes the tree reads its own copy, so its hold ends after the copies.
+
+Locks can't be handed to job-exec: a systemd-run unit inherits no file descriptor. A lock belongs to its open file description, which a
 child forked by another thread shares until it execs: a `try_*` can see a lock held a moment after its holder let it
 go. So the locks' test (`tests/slot_locks.rs`) runs alone in its own binary, where no other thread spawns git.
 
@@ -647,8 +678,8 @@ does not parse.
 | Frame | Direction | Fields |
 |---|---|---|
 | `hello` / `hello-ok` | hub → runner / back | the version, the hub id; the bundle version, the runner id, the boot id, linger, the attempts in the runner's folder (`{r, state, log_offset}`, state `running`, `finished` or `lost`), what the contract finds missing (re-probed at every hello) |
-| `probe` / `probe-result` | hub → runner / back | the facts (`linux::probe::Facts`), what is missing, why container caps don't hold (`check_limits`), the features |
-| `ready` | runner → hub | free memory and CPU, PSI, running attempts, slots and images present, `on_battery` |
+| `probe` / `probe-result` | hub → runner / back | the facts (`linux::probe::Facts`), what is missing, why container caps don't hold (`check_limits`), the features, the memory available now |
+| `ready` | runner → hub | free memory and CPU, PSI, running attempts, slots and images present, `on_battery`, the memory available it was counted from |
 | `offer` / `admit` / `refuse` | hub → runner / back | the job spec, its priority, the frozen input key, the grant hint and expected time; the grant; why not (text, and `forseti`'s `WaitReason`) |
 | `head` | hub → runner | the queue's head is reserved here: its start (`at`, 0 when no longer) and its memory and CPU need, which a grow here leaves |
 | `sync-have` / `sync-need` / `blob` / `bundle` / `origin-fetch` | both | the repository's mirror id, the commit, tree and overlay manifest (paths as raw bytes); the missing blobs and commit, and the mirror's ref tips; a blob's chunk at its offset of its total; a bundle chunk at its offset, each with the bundle's hash; a fetch from the project's origin (with `cred`: through the key of that name, sent before it) |
@@ -674,10 +705,14 @@ and the value is zeroed when the frame drops.
 
 ```
 sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation [--watchdog DIR]
+               [--allow-own-account] [--allow-admin] [--reserve-mib N]
 ```
 
 The runner's end of the hub's control channel. On a cloud machine `--watchdog DIR` names the watchdog's folder ("The
-watchdog"). It lives on stdin and stdout and exits at their end, at `bye`, or
+watchdog"). `--allow-own-account` and `--allow-admin` are what the user allowed at `runner add` (kept in the runner's
+record): the Mac contract reads them; Linux takes an administrator's login without them. `--reserve-mib N` is a
+workstation's reserve for its user (`forseti::Limits::with_reserve`; `serve` refuses to start below 1024 or on a dedicated
+runner). It lives on stdin and stdout and exits at their end, at `bye`, or
 after 45 s without a frame (the hub pings every 10 s, and so does `serve`). Nothing is installed or enabled: between
 connections the runner has its folder and, with linger, the attempts still running in their own units. It is blocking
 and threaded (one thread reads frames, the main loop handles them and ticks every 100 ms); no async runtime.
@@ -690,7 +725,7 @@ cgroups and PSI); `DarwinPlatform` is a Mac's ("A Mac runner", above). What a pl
 
 | Area | Methods | Linux |
 |---|---|---|
-| probe and contract | `machine`, `limits`, `boot_id`, `contract`, `survives_link`, `job_runner` | `linux::probe`, linger, podman's caps check (`podman` feature) |
+| probe and contract | `machine`, `limits`, `boot_id`, `contract`, `survives_link`, `job_runner` | `linux::probe`, linger, podman's caps check (`podman` feature), `Probe::devices` (`gpu`: a DRM render node of a real driver, not `vgem`/`vkms`, or NVIDIA's `nvidiactl` with a `nvidiaN`; `kvm`: `/dev/kvm`; each only when this user may open it read-write, by permissions alone: nothing is opened). Jobs don't get these devices yet: no `--device` goes into a job's container |
 | reservations between schedulers | `reservations`, `start_time` | `linux::reserve` (`$XDG_RUNTIME_DIR`, `/proc` start times) |
 | attempts | `launch`, `active`, `kill` | `job.json`, `sleipnir job-exec` in a transient unit; `podman kill` |
 | caps | `current_mib`, `pause`, `unpause`, `grow_candidate`, `resize`, `weight_unit`, `set_weight` | the job slice's cgroup, `linux::resize` |
@@ -730,7 +765,8 @@ it when it is the same placement (hub and nonce), and refused otherwise. While t
 offer is admitted. `forseti`'s 10 s gap between starts counts from this hub's latest start in the folder, so it
 holds across `serve` processes. An offer whose slot (`SlotKey` of its project, the hub's worktree and its trust) a
 running job reads at another input key is refused: a slot moves only between jobs (a job that writes the tree reads
-its own copy).
+its own copy). This check sees this hub's jobs only; the slot's read locks (`slot::hold`, at `start`) are what keep a
+slot still under every job.
 
 **Sync.** Between `admit` and `start` the hub sends `sync-have`: the repository's mirror id, the commit and the overlay
 the runner's trust may get. `serve` answers `sync-need` with the overlay's blobs the store lacks, whether the mirror
@@ -744,8 +780,9 @@ for that fetch only (`Live::origin_cred`), never handed to the job, and goes to 
 for an `http(s)://` origin or `OriginCred::SshKey` otherwise; a fetch naming a key that didn't come fails the sync. A sync that fails (a bad repository id, a bundle that doesn't check, a
 fetch that fails) ends the attempt `infra: setup`, with why in its log.
 
-**`start`** of a synced attempt first moves its slot to the inputs (`slot::update` under the slot's update lock: the
-mirror's commit, then the overlay from the blob store) and runs the job on the slot, or on `slot::private_copy` in
+**`start`** of a synced attempt first holds its slot at the inputs (`slot::hold`, moving it with `slot::update` under
+the slot's update lock: the mirror's commit, then the overlay from the blob store; a slot another job reads at other
+inputs ends the attempt `infra: setup`) and runs the job on the slot, or on `slot::private_copy` in
 `tree/` when it writes the tree; it records the slot's id in `attempt.json`. Then it writes `job.json` (the shared
 podman argv, `RunnerArgs::runner(prefix, hub id, slice)`, in the job's
 slice `drgnx-runner-work-<id>.slice`) and starts the unit `<prefix>-<id>-<attempt>` running `sleipnir job-exec` with

@@ -3066,6 +3066,13 @@
               "name": {
                 "type": "string"
               },
+              "no_room": {
+                "description": "Why the runner gets no job: its floor and reserve leave no room in the memory it has, with the numbers and the\nways out.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "os": {
                 "type": "string"
               },
@@ -3077,6 +3084,15 @@
               },
               "profile": {
                 "$ref": "#/$defs/Profile"
+              },
+              "reserve_mib": {
+                "description": "A workstation's reserve for its user, MiB, when the user set one.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "root": {
                 "type": "string"
@@ -26748,6 +26764,14 @@
             ],
             "description": "Default `all`."
           },
+          "allow_admin": {
+            "description": "A Mac: run as an administrator (`--allow-admin`; Linux takes one without it). The account can gain root through\nsudo with its password, and on a Mac through admin authorisation prompts; the sandbox still applies to every job.",
+            "type": "boolean"
+          },
+          "allow_own_account": {
+            "description": "A Mac: run as an account other than `drgnx-runner` (`--allow-own-account`). Its home, keychain and privacy (TCC)\ngrants are reachable by file permissions; the sandbox still applies to every job.",
+            "type": "boolean"
+          },
           "host": {
             "description": "The host as the user's ssh knows it (`ssh <host>`).",
             "maxLength": 255,
@@ -26782,6 +26806,15 @@
               }
             ],
             "description": "Default `dedicated`."
+          },
+          "reserve_mib": {
+            "description": "A workstation's reserve for its user, MiB (`--reserve-mib`, at least 1024; default the profile's 4096).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "root": {
             "anyOf": [
@@ -26911,6 +26944,13 @@
           "name": {
             "type": "string"
           },
+          "no_room": {
+            "description": "Why the runner gets no job: its floor and reserve leave no room in the memory it has, with the numbers and the\nways out.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "os": {
             "type": "string"
           },
@@ -26922,6 +26962,15 @@
           },
           "profile": {
             "$ref": "#/$defs/Profile"
+          },
+          "reserve_mib": {
+            "description": "A workstation's reserve for its user, MiB, when the user set one.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "root": {
             "type": "string"
@@ -27240,6 +27289,13 @@
           "name": {
             "type": "string"
           },
+          "no_room": {
+            "description": "Why the runner gets no job: its floor and reserve leave no room in the memory it has, with the numbers and the\nways out.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "os": {
             "type": "string"
           },
@@ -27251,6 +27307,15 @@
           },
           "profile": {
             "$ref": "#/$defs/Profile"
+          },
+          "reserve_mib": {
+            "description": "A workstation's reserve for its user, MiB, when the user set one.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "root": {
             "type": "string"
@@ -27436,6 +27501,13 @@
           "name": {
             "type": "string"
           },
+          "no_room": {
+            "description": "Why the runner gets no job: its floor and reserve leave no room in the memory it has, with the numbers and the\nways out.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "os": {
             "type": "string"
           },
@@ -27447,6 +27519,15 @@
           },
           "profile": {
             "$ref": "#/$defs/Profile"
+          },
+          "reserve_mib": {
+            "description": "A workstation's reserve for its user, MiB, when the user set one.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "root": {
             "type": "string"
@@ -27680,6 +27761,13 @@
               "name": {
                 "type": "string"
               },
+              "no_room": {
+                "description": "Why the runner gets no job: its floor and reserve leave no room in the memory it has, with the numbers and the\nways out.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "os": {
                 "type": "string"
               },
@@ -27691,6 +27779,15 @@
               },
               "profile": {
                 "$ref": "#/$defs/Profile"
+              },
+              "reserve_mib": {
+                "description": "A workstation's reserve for its user, MiB, when the user set one.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "root": {
                 "type": "string"
@@ -28058,6 +28155,15 @@
               }
             ]
           },
+          "reserve_mib": {
+            "description": "A workstation's reserve for its user, MiB (at least 1024). A new profile without it takes the profile's; a\nprofile or reserve change reconnects the runner, so it applies at once.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "trust": {
             "anyOf": [
               {
@@ -28181,6 +28287,13 @@
           "name": {
             "type": "string"
           },
+          "no_room": {
+            "description": "Why the runner gets no job: its floor and reserve leave no room in the memory it has, with the numbers and the\nways out.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "os": {
             "type": "string"
           },
@@ -28192,6 +28305,15 @@
           },
           "profile": {
             "$ref": "#/$defs/Profile"
+          },
+          "reserve_mib": {
+            "description": "A workstation's reserve for its user, MiB, when the user set one.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "root": {
             "type": "string"
@@ -28377,6 +28499,13 @@
           "name": {
             "type": "string"
           },
+          "no_room": {
+            "description": "Why the runner gets no job: its floor and reserve leave no room in the memory it has, with the numbers and the\nways out.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "os": {
             "type": "string"
           },
@@ -28388,6 +28517,15 @@
           },
           "profile": {
             "$ref": "#/$defs/Profile"
+          },
+          "reserve_mib": {
+            "description": "A workstation's reserve for its user, MiB, when the user set one.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "root": {
             "type": "string"
@@ -28886,9 +29024,12 @@
         "$defs": {
           "EditLine": {
             "additionalProperties": false,
-            "description": "One source line of an Edit Results buffer, once however many matches or context windows name it: its id, its file,\nits line (from 1), its text (no newline), what it is, and whether a newline ends it in the file.",
+            "description": "One source line of an Edit Results buffer, once however many matches or context windows name it: its id, its file,\nits line (from 1), its text (no newline), what it is, and whether a newline ends it in the file; HELD when an agent\nediting this checkout (a pair's hand-off of this view, not yet done) holds it: the editor keeps it read-only.",
             "properties": {
               "eol": {
+                "type": "boolean"
+              },
+              "held": {
                 "type": "boolean"
               },
               "kind": {
@@ -29548,6 +29689,42 @@
       "classes": [
         "user"
       ],
+      "doc": "fold or open a folder of a view's search grouped by Folders: only its rows change (the model keeps every node); false when the view has no search or no such folder",
+      "name": "search/fold",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/fold`: in VIEW's search grouped by Folders, fold the folder NODE (`d:PATH`: its rows go, its count\nstays) or open it (OPEN). Only the rows change: the model keeps every node, so ticks and Next Match still reach a\nfolded match (going to it opens the folders above it).",
+        "properties": {
+          "node": {
+            "type": "string"
+          },
+          "open": {
+            "type": "boolean"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "node",
+          "open"
+        ],
+        "title": "FoldParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a view's grep rows go on: one more window of rows (more), or the rows up to a match beyond them and a margin (upto); false when the view has no search; a search sends only its first 200 rows until asked",
       "name": "search/grep-look",
       "params": {
@@ -29683,24 +29860,90 @@
       "classes": [
         "user"
       ],
+      "doc": "regroup a view's search (by file, folder tree or definition; by path, count or the files' rank in the map) without searching again: its rows and model again, the match ids and ticks kept; false when the view has no search",
+      "name": "search/group",
+      "params": {
+        "$defs": {
+          "GrepGroup": {
+            "description": "How a search's rows are grouped: by file (a header and its matches); in a tree of folders (one-child chains joined,\n`d:` nodes, each with its matches' count); or by file, then the definition each match is in (`s:` nodes, the\nmatches outside any under \"(top level)\").",
+            "enum": [
+              "file",
+              "tree",
+              "symbol"
+            ],
+            "type": "string"
+          },
+          "GrepSort": {
+            "description": "The order of a search's groups: by path; by match count (most first, then by path); or by the file's rank in\nHrafn's map (most central first, then by path; a folder by its files' ranks together), which only `search/group`\ntakes (it waits for the project's index; `search/run` refuses it).",
+            "enum": [
+              "path",
+              "count",
+              "rank"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/group`: VIEW's search grouped as GROUP (in the order SORT) without searching again: its rows and model\nagain, the same match ids (ticks stay); folded folders open again.",
+        "properties": {
+          "group": {
+            "$ref": "#/$defs/GrepGroup"
+          },
+          "sort": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GrepSort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "group"
+        ],
+        "title": "GroupParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "hand a view's ticked matches to an agent: a brief (the instruction, the query, the matches grouped by file, at most 300 lines, the rest through the drgnx-search tool search_results) to a new worker in its own worktree or to a live session; hidden paths left out unless asked; its progress is search-handoff-state",
       "name": "search/handoff",
       "params": {
         "$defs": {
           "HandoffMark": {
             "additionalProperties": false,
-            "description": "The mark the handed-off rows show: the agent's colour (a face name) and its glyph (one column), as the editor gives\nthem (the agents' identity scheme).",
+            "description": "The mark the handed-off rows show: the agent's colour (a face name) and its glyph (one column), as the editor gives\nthem (the agents' identity scheme), and the name their groups' chip shows (`Ada · editing 9/14`).",
             "properties": {
               "face": {
                 "type": "string"
               },
               "glyph": {
                 "type": "string"
+              },
+              "name": {
+                "type": "string"
               }
             },
             "required": [
               "face",
-              "glyph"
+              "glyph",
+              "name"
             ],
             "type": "object"
           },
@@ -29725,6 +29968,28 @@
                 },
                 "required": [
                   "new"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A new chat of PROFILE in the view's checkout, paired: it edits the user's buffers.",
+                "properties": {
+                  "pair": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "profile": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "profile"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "pair"
                 ],
                 "type": "object"
               },
@@ -29867,6 +30132,172 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "what Ask an Agent's card shows before Send: the first places of the matches it would hand off, how many in all, the brief's size in tokens and the hidden paths left out",
+      "name": "search/handoff-context",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/handoff-context`: what Ask an Agent's card shows of the brief before it is sent: the matches IDS (else\nall but OFF; hidden paths only when HIDDEN) of VIEW's search.",
+        "properties": {
+          "hidden": {
+            "type": "boolean"
+          },
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "off": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "HandoffContextParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "HandoffContextRow": {
+            "additionalProperties": false,
+            "description": "One place of the card's context box: its file (relative to the search's folder), line (from 1), the definition\nit is in and its line's text, trimmed.",
+            "properties": {
+              "ctx": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "line",
+              "text"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/handoff-context`'s answer: the first places, how many there are in all, the brief's size in tokens\n(about four characters a token, without the instruction) and the hidden paths left out.",
+        "properties": {
+          "hidden": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/$defs/HandoffContextRow"
+            },
+            "type": "array"
+          },
+          "tokens": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rows",
+          "total",
+          "tokens"
+        ],
+        "title": "HandoffContext",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a hand-off's rows show the agent's mark from now on: a new worker's, known once its first snapshot comes (after search/handoff answered); the asking window's own hand-offs only",
+      "name": "search/handoff-mark",
+      "params": {
+        "$defs": {
+          "HandoffMark": {
+            "additionalProperties": false,
+            "description": "The mark the handed-off rows show: the agent's colour (a face name) and its glyph (one column), as the editor gives\nthem (the agents' identity scheme), and the name their groups' chip shows (`Ada · editing 9/14`).",
+            "properties": {
+              "face": {
+                "type": "string"
+              },
+              "glyph": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "face",
+              "glyph",
+              "name"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/handoff-mark`: hand-off HANDOFF's rows show MARK (a new worker's mark, known from its first snapshot,\nafter `search/handoff` answered).",
+        "properties": {
+          "handoff": {
+            "type": "string"
+          },
+          "mark": {
+            "$ref": "#/$defs/HandoffMark"
+          }
+        },
+        "required": [
+          "handoff",
+          "mark"
+        ],
+        "title": "HandoffMarkParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -31068,6 +31499,30 @@
                   "question"
                 ],
                 "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A code pattern with metavariables (`$A` one node, `$$$A` any number, `$_` one unnamed; ast-grep's syntax),\nmatched in each file's syntax tree (`hrafn::structural`). LANG (Hrafn's name: `rust`, `elisp`, …) narrows to\none language's files; none is every language the pattern parses in.",
+                "properties": {
+                  "lang": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "const": "pattern",
+                    "type": "string"
+                  },
+                  "pattern": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "pattern"
+                ],
+                "type": "object"
               }
             ]
           },
@@ -31312,8 +31767,41 @@
                   "question"
                 ],
                 "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A code pattern with metavariables (`$A` one node, `$$$A` any number, `$_` one unnamed; ast-grep's syntax),\nmatched in each file's syntax tree (`hrafn::structural`). LANG (Hrafn's name: `rust`, `elisp`, …) narrows to\none language's files; none is every language the pattern parses in.",
+                "properties": {
+                  "lang": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "const": "pattern",
+                    "type": "string"
+                  },
+                  "pattern": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "pattern"
+                ],
+                "type": "object"
               }
             ]
+          },
+          "GrepGroup": {
+            "description": "How a search's rows are grouped: by file (a header and its matches); in a tree of folders (one-child chains joined,\n`d:` nodes, each with its matches' count); or by file, then the definition each match is in (`s:` nodes, the\nmatches outside any under \"(top level)\").",
+            "enum": [
+              "file",
+              "tree",
+              "symbol"
+            ],
+            "type": "string"
           },
           "GrepIgnore": {
             "description": "Which files a text search and the ranked file query look in (the setting `drgnx-search-ignore-rules`).",
@@ -31329,6 +31817,15 @@
                 "type": "string"
               }
             ]
+          },
+          "GrepSort": {
+            "description": "The order of a search's groups: by path; by match count (most first, then by path); or by the file's rank in\nHrafn's map (most central first, then by path; a folder by its files' ranks together), which only `search/group`\ntakes (it waits for the project's index; `search/run` refuses it).",
+            "enum": [
+              "path",
+              "count",
+              "rank"
+            ],
+            "type": "string"
           },
           "ScopeKind": {
             "description": "Which files a search looks in.",
@@ -31466,6 +31963,17 @@
               "null"
             ]
           },
+          "group": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GrepGroup"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How the rows are grouped (`search/group` changes it without searching again). Default `file`."
+          },
           "ignore": {
             "anyOf": [
               {
@@ -31492,6 +32000,17 @@
           },
           "search": {
             "$ref": "#/$defs/SearchSpec"
+          },
+          "sort": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GrepSort"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The order of the groups. Default: files as the search completes them (Files), by path (Folders, Symbols)."
           },
           "view": {
             "description": "The hub-fed view that shows the rows (`view/env`).",
@@ -31688,6 +32207,30 @@
                 "required": [
                   "mode",
                   "question"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A code pattern with metavariables (`$A` one node, `$$$A` any number, `$_` one unnamed; ast-grep's syntax),\nmatched in each file's syntax tree (`hrafn::structural`). LANG (Hrafn's name: `rust`, `elisp`, …) narrows to\none language's files; none is every language the pattern parses in.",
+                "properties": {
+                  "lang": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "const": "pattern",
+                    "type": "string"
+                  },
+                  "pattern": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "pattern"
                 ],
                 "type": "object"
               }
@@ -31967,6 +32510,30 @@
                 "required": [
                   "mode",
                   "question"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A code pattern with metavariables (`$A` one node, `$$$A` any number, `$_` one unnamed; ast-grep's syntax),\nmatched in each file's syntax tree (`hrafn::structural`). LANG (Hrafn's name: `rust`, `elisp`, …) narrows to\none language's files; none is every language the pattern parses in.",
+                "properties": {
+                  "lang": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "const": "pattern",
+                    "type": "string"
+                  },
+                  "pattern": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "pattern"
                 ],
                 "type": "object"
               }

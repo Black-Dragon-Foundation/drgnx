@@ -174,7 +174,7 @@ branch gateway-queue, staged file and history come with the Magit adapter (look 
     (explorer-focused-hc "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
     (debugging "no session runs: no stopped line (arrow and band on 24), toolbar, inline values, Run and Debug view or
 Debug Console (graphical debugging's later tasks); compare the breakpoint column"
-               "no hover dot on 32: the margin's mouse-face needs Nidhogg's margin patch"
+               "the hover dot on 32 only on a Nidhogg with the margin's mouse-face (glitnir-margin-mouse-face)"
                "no change bars: the scene's inventory.py is new, not a changed file"))
   "What the line cannot show of each scene's mockup yet, written to the scene's facts (:limits).  A scene is never
 changed to hide a gap: the gap is named here instead.")
@@ -574,6 +574,14 @@ sections' with the inactive selection."
 (defvar drgnx-replace--hub-counts)
 (defvar drgnx-replace--preview)
 (defvar drgnx-replace--sheet)
+(defvar drgnx-replace--kind-counts)
+(defvar drgnx-replace--kinds-on)
+(defvar drgnx-replace-view)
+(defvar drgnx-hub--events)
+(declare-function drgnx-replace--open "drgnx-replace")
+(declare-function drgnx-replace-kind-toggle "drgnx-replace")
+(declare-function drgnx-hub--call-on "drgnx-hub-client")
+(declare-function drgnx-settings-file-put "drgnx-settings-file")
 (declare-function drgnx-replace-in-files "drgnx-replace")
 (declare-function drgnx-replace--opt "drgnx-replace")
 (declare-function drgnx-replace--toggle "drgnx-replace")
@@ -674,6 +682,62 @@ match on line 209 (the `puthash' line) unticked; the view's buffer, or nil."
                                                        (plist-get (buffer-local-value 'drgnx-replace--sheet b) :hunk)))))
     (drgnx-look-scene--answer)))
 
+(declare-function drgnx-search-to-agent "drgnx-search-handoff")
+(defvar drgnx-search-handoff-buffer-name)
+(defvar drgnx-search-handoff--ask)
+
+(defun drgnx-look-scene-search-kinds ()
+  "Symbol mode with its kind chips (search-view.html's \"Symbol with kind chips\"): `drgnx-gateway--queue' in the
+project, the fn chip on."
+  (when-let* ((view (drgnx-look-scene--search)))
+    (drgnx-look-scene--try "symbol"
+      (with-current-buffer view
+        (drgnx-replace--open :text "drgnx-gateway--queue" :mode 'symbol)
+        (when (drgnx-look-scene--until 30 "kinds" (lambda () drgnx-replace--kind-counts))
+          (unless (memq 'fn drgnx-replace--kinds-on) (drgnx-replace-kind-toggle 'fn))
+          (drgnx-look-scene--until 15 "symbol rows"
+                                   (lambda () (and drgnx-replace--hub-counts
+                                                   (not (save-excursion (goto-char (point-min))
+                                                                        (search-forward "--pending" nil t)))))))))
+    (drgnx-look-scene--answer)))
+
+(defun drgnx-look-scene-search-handed ()
+  "The Search view with four matches handed to an agent (search-view.html's results, `Ada 9/14'): a pair of a
+mock profile (the scenes' ratatoskr-mock, written into the settings before the hub starts) in the project; its rows'
+colour bar and the file's chip."
+  (unless (drgnx-hub-running-p)
+    (drgnx-look-scene--try "profile"
+      (drgnx-settings-file-put (expand-file-name "settings.el" (drgnx-user-dir)) 'drgnx-settings nil
+                               'drgnx-agents-profiles
+                               `(("mock-claude" :provider claude
+                                  :command (,(expand-file-name "ratatoskr-mock"
+                                                               (file-name-directory (getenv "DRGNX_RATATOSKR_BIN")))
+                                            "acp" "--as" "claude"))))))
+  (when-let* ((view (drgnx-look-scene--search)))
+    (drgnx-look-scene--try "hand off"
+      (with-current-buffer view
+        (let ((ids (seq-take (drgnx-look-scene--row-ids "m:") 4)))
+          (drgnx-hub--call-on drgnx-hub--events "search/handoff"
+                              (list :view drgnx-replace-view :instruction "Rename it." :ids (vconcat ids)
+                                    :to '(:pair (:profile "mock-claude"))
+                                    :mark '(:face "drgnx-agent-2" :glyph "◆" :name "Ada"))
+                              (lambda (_ err) (when err (push (format "hand off: %S" err) drgnx-look-scene--errors))))))
+      (drgnx-look-scene--until 20 "chip" (lambda () (with-current-buffer view
+                                                      (text-property-not-all (point-min) (point-max)
+                                                                             'drgnx-search-agent nil)))))
+    (drgnx-look-scene--answer)))
+
+(defun drgnx-look-scene-search-ask ()
+  "Ask an Agent's card over the editor (search-view.html's \"Ask an Agent (light, modal)\"), its context read."
+  (when-let* ((view (drgnx-look-scene--search)))
+    (drgnx-look-scene--theme 'drgnx-light)
+    (drgnx-look-scene--try "ask"
+      (with-current-buffer view (drgnx-search-to-agent))
+      (drgnx-look-scene--until 10 "context"
+                               (lambda () (when-let* ((b (get-buffer drgnx-search-handoff-buffer-name)))
+                                            (plist-get (buffer-local-value 'drgnx-search-handoff--ask b) :context)))))
+    (drgnx-look-scene--answer)))
+
 ;; The debugging mockup's file (the-look/debugging.html): its lines 13-33, after twelve lines of header.
 (defconst drgnx-look-scene--inventory
   (concat "\"\"\"Stock levels and the weekly order.\"\"\"\n\nimport logging\nfrom dataclasses import dataclass\n\n"
@@ -690,12 +754,14 @@ match on line 209 (the `puthash' line) unticked; the view's buffer, or nil."
 
 (declare-function drgnx-debug-gutter-mode "drgnx-debug-gutter")
 (declare-function drgnx-debug-gutter--apply "drgnx-debug-gutter")
+(declare-function drgnx-debug-gutter--columns "drgnx-debug-gutter")
+(declare-function drgnx-margins-offset "drgnx-margins")
 
 (defun drgnx-look-scene-debugging ()
   "The debugging mockup's editor: inventory.py from line 13, with its breakpoints in the column (18 verified, 22 a
 condition, 24 verified, 25 a logpoint, 30 disabled).  No session runs yet, so there is no stopped line, toolbar or
-views: the scene is the column's (the mockup's stop arrow on 24 is a plain breakpoint here, its hover dot on 32 is not
-drawn)."
+views: the scene is the column's (the mockup's stop arrow on 24 is a plain breakpoint here).  The pointer is noted on
+line 32's hover dot, as the mockup shows it, where Nidhogg lights a margin's mouse face."
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--try "debugging"
     (drgnx-wb-focus-editor)
@@ -713,7 +779,19 @@ drawn)."
                    (list :id 2 :line 22 :enabled t :verified t :condition "shortfall > 20")
                    (list :id 3 :line 24 :enabled t :verified t)
                    (list :id 4 :line 25 :enabled t :verified t :log "order {item.sku}")
-                   (list :id 5 :line 30 :enabled nil :verified t))))))
+                   (list :id 5 :line 30 :enabled nil :verified t))))
+      (when (and (featurep 'glitnir-margin-mouse-face) (fboundp 'nidhogg--note-mouse))
+        (redisplay t)
+        ;; line 32's dot: the column's middle character, after the claim's pad, left of the fringe
+        (save-excursion
+          (goto-char (point-min)) (forward-line 31)
+          (pcase-let* ((`(,_ . ,y) (posn-x-y (posn-at-point (point))))
+                       (`(,left ,top . ,_) (window-inside-pixel-edges))
+                       (cw (frame-char-width))
+                       (l (- left (if (nth 2 (window-fringes)) 0 (car (window-fringes))) (* (car (window-margins)) cw))))
+            (nidhogg--note-mouse nil (+ l (* cw (+ (drgnx-margins-offset 'debug) (/ (1- (drgnx-debug-gutter--columns)) 2)))
+                                        (/ cw 2))
+                                 (+ top y (/ (line-pixel-height) 2))))))))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-start-page ()
