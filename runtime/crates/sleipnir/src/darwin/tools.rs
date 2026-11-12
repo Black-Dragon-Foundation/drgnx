@@ -527,8 +527,15 @@ mod tests {
                 ),
             )
         };
-        let (ok, said) = sh("cat <<EOF\nfrom a here-document\nEOF");
-        assert!(ok && said == "from a here-document\n", "{said}");
+        // from `/`, which nobody writes: this row's root is in the account's per-user folder, which a build writes, so
+        // bash's last resort (the working directory) would hide a /tmp that doesn't work
+        let (_, dirs) = sh("for d in /tmp /var/tmp /private/tmp /private/var/tmp; do \
+                            if [ -w $d ]; then echo \"$d w\"; else echo \"$d not-w\"; fi; done");
+        let (ok, said) = sh("cd / && cat <<EOF\nfrom a here-document\nEOF");
+        assert!(
+            ok && said == "from a here-document\n",
+            "{said} (access: {dirs})"
+        );
         let tag = std::process::id();
         for path in [
             format!("/private/tmp/drgnx-job-{tag}"),

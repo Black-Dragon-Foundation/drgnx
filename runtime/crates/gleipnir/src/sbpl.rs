@@ -98,6 +98,11 @@ pub const BUILD_HEREDOCS: &[&str] = &[
     "^/private/var/tmp/sh-thd[^/]*$",
 ];
 
+/// The folders [`BUILD_HEREDOCS`] are in, `file-write-data` on the folder itself only: bash takes a folder for its
+/// here-documents only if `access(W_OK)` says it is writable (macOS CI round 21: without it bash fell back to the
+/// read-only working directory). No data is written to a folder; making, removing or renaming in it stays denied.
+pub const BUILD_HEREDOC_DIRS: &[&str] = &["/private/tmp", "/private/var/tmp"];
+
 /// The mach services a build asks: the group membership the xcrun shims check, and the per-user folder's helper.
 pub const BUILD_SERVICES: &[&str] = &[
     "com.apple.system.opendirectoryd.membership",
@@ -375,6 +380,12 @@ fn out_build(push: &mut impl FnMut(Option<String>)) -> Result<(), Refusal> {
         "file-read* file-write*",
         "regex",
         BUILD_HEREDOCS,
+    )?);
+    push(rule(
+        "allow",
+        "file-write-data",
+        "literal",
+        BUILD_HEREDOC_DIRS,
     )?);
     Ok(())
 }
@@ -925,7 +936,7 @@ mod tests {
             is(r, "allow", &["file-read*"]) && args(r, "literal") == BUILD_DEVICES
         });
         let dw = one(&rs, "device writes", |r| {
-            is(r, "allow", &["file-write-data"])
+            is(r, "allow", &["file-write-data"]) && args(r, "literal") == BUILD_DEVICE_WRITES
         });
         assert_eq!(args(&rs[dw], "literal"), BUILD_DEVICE_WRITES);
         let svc = one(&rs, "the build's services", |r| {
@@ -999,6 +1010,10 @@ mod tests {
         ] {
             assert!(!any(no), "{no}");
         }
+        // the folders themselves only `file-write-data` (bash's access check), by name
+        let dirs = one(&rs, "the here-documents' folders", |r| {
+            is(r, "allow", &["file-write-data"]) && args(r, "literal") == BUILD_HEREDOC_DIRS
+        });
         // the rest of /tmp stays out: no other rule names either folder for writing
         for r in &rs {
             if is(r, "allow", &["file-write*"]) {
@@ -1012,7 +1027,7 @@ mod tests {
             }
         }
         let net = one(&rs, "no network", |r| is(r, "deny", &["network*"]));
-        assert!(hd < net);
+        assert!(hd < net && dirs < net);
         assert!(!prof(spec(isolated())).contains("sh-thd"));
     }
 

@@ -73,6 +73,9 @@ expression: "&p[BASE.len()..]"
 (allow file-read* file-write*
   (regex "^/private/tmp/sh-thd[^/]*$")
   (regex "^/private/var/tmp/sh-thd[^/]*$"))
+(allow file-write-data
+  (literal "/private/tmp")
+  (literal "/private/var/tmp"))
 (deny file-read*
   (subpath "/opt/homebrew/var")
   (regex "^/[Oo][Pp][Tt]/[Hh][Oo][Mm][Ee][Bb][Rr][Ee][Ww]/[Vv][Aa][Rr](/.*)?$")

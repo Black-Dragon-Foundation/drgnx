@@ -825,7 +825,9 @@ the program may touch is the profile's allow list.
   `/private/var/tmp`; the mach services `com.apple.system.opendirectoryd.membership` (the xcrun shims' group check)
   and `com.apple.bsd.dirhelper`; and `/bin/sh`'s here-documents (`BUILD_HEREDOCS`): read and write of
   `^/private/tmp/sh-thd[^/]*$` and `^/private/var/tmp/sh-thd[^/]*$`, bash 3.2 making them there whatever `TMPDIR` says,
-  and nothing else of either folder (the user's ruling, 2026-11-11). A per-user folder that is `/` or meets `users_dir` is refused.
+  and `file-write-data` on the two folders themselves (`BUILD_HEREDOC_DIRS`: bash takes a folder only if `access(W_OK)`
+  passes; no data can be written to a folder, and making, removing or renaming in it stays denied); nothing else of
+  either folder (the user's ruling, 2026-11-11). A per-user folder that is `/` or meets `users_dir` is refused.
 
 ### The profile, in order
 
