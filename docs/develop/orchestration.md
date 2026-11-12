@@ -35,9 +35,20 @@ At submit the hub records what a job runs on in its folder's `facts.json` (`vord
   the job sets them.
 
 A job on this machine runs on its tree as it is while it runs, so at its end the hub reads the tree's key again: when
-its commit's tree moved since the submit (a commit while the job waited or ran; files left uncommitted in the
-tree while it ran are no move), the facts go (`facts.moved.json`) and the job is no
-one's evidence and never reused (unit test `a_job_whose_tree_moved_under_it_keeps_no_facts`). A runner's job ran on
+it moved since the submit (a commit while the job waited or ran, or a file changed and left uncommitted), the facts go
+(`facts.moved.json`) and the job is no one's evidence and never reused (unit tests
+`a_job_whose_tree_moved_under_it_keeps_no_facts`, `an_edit_left_uncommitted_while_a_job_ran_moves_its_tree`). A run's
+own new files count as well: in a session's tree the agent may write files while the job runs, and the two can't be
+told apart. So the move is shown: the job keeps its tree as read at submit (`snap.json`), and its end names the files
+that changed (`moved`, the first five and how many more) in its result, "its tree moved while it ran (FILES): no facts
+kept; a file a run writes belongs in .gitignore" (unit test `a_moved_job_names_the_files_that_changed`). A gate's run
+whose tree moved is recorded as a run without a test result (its `(job)` row, class `error`) on its submit facts, with
+that line as its note, so the gate holds at once with it instead of starting the same run again
+(`orch::evidence::moved_run`; row `runner/a-gate-run-that-moves-its-tree-holds-and-names-the-files`). The
+hub's own writes are no move: a sandboxed job's launch makes the missing protected files (`.envrc`, `mise.toml`, the
+agents' folders) empty to pin them read-only, notes them in the job's folder (`stubs`) first, and removes them at the
+job's end, before the key is read, when still empty and not in git (`sandbox::note_missing`, `remove_made`; unit test
+`a_job_removes_the_stubs_its_launch_made`; scenario `runner/a-gate-run-keeps-the-agents-sandbox`). A runner's job ran on
 the inputs frozen at its submit. A job outside a git tree, and a user's server, has no facts and is never evidence. `Runner::start_or_reuse` answers the
 newest **green** job with equal facts instead of running again (exit 0, no failed row, not on a `shared` runner); a red
 is never reused, and a selector holding one of the rule pack's `no-cache` words (`Runner::set_no_cache`) always runs.

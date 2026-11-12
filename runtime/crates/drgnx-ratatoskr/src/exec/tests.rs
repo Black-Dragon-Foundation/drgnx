@@ -1872,6 +1872,60 @@ async fn a_job_whose_tree_moved_under_it_keeps_no_facts() {
     ended(&r, &b).await;
 }
 
+#[tokio::test]
+async fn an_edit_left_uncommitted_while_a_job_ran_moves_its_tree() {
+    let d = tempfile::tempdir().unwrap();
+    let w = d.path().join("w");
+    repo_with_a_commit(&w);
+    let r = open(d.path());
+    let edited = spec(
+        Starter::User,
+        &w,
+        "echo 'test a ... ok'; echo changed > a.txt",
+        Duration::from_secs(30),
+    );
+    let (a, _) = r.start_or_reuse(edited).await.unwrap();
+    let row = ended(&r, &a).await;
+    assert_eq!(row.status, ExecStatus::Done);
+    assert_eq!(
+        r.facts(&a),
+        None,
+        "a tracked file changed while it ran: no facts"
+    );
+}
+
+/// A job whose run writes files git doesn't ignore keeps no facts, and its result names them, so the user sees what
+/// belongs in .gitignore; the facts it had at submit stay for the gate's note.
+#[tokio::test]
+async fn a_moved_job_names_the_files_that_changed() {
+    let d = tempfile::tempdir().unwrap();
+    let w = d.path().join("w");
+    repo_with_a_commit(&w);
+    std::fs::write(w.join("a.txt"), "uncommitted\n").unwrap();
+    let r = open(d.path());
+    let writes = spec(
+        Starter::User,
+        &w,
+        "echo 'test a ... ok'; for n in 1 2 3 4 5 6; do echo x > out$n.log; done; rm a.txt",
+        Duration::from_secs(30),
+    );
+    let (a, _) = r.start_or_reuse(writes).await.unwrap();
+    ended(&r, &a).await;
+    assert_eq!(r.facts(&a), None);
+    let (files, facts) = r.moved(&a).expect("its tree moved");
+    assert_eq!(
+        files,
+        [
+            "a.txt", "out1.log", "out2.log", "out3.log", "out4.log", "out5.log", "out6.log"
+        ]
+    );
+    assert!(facts.tree_key.contains('+'), "{}", facts.tree_key);
+    let line = "its tree moved while it ran (a.txt, out1.log, out2.log, out3.log, out4.log and 2 more): no facts \
+                kept; a file a run writes belongs in .gitignore";
+    let lines = r.done(&a).expect("ended").summary.lines;
+    assert!(lines.iter().any(|l| l == line), "{lines:?}");
+}
+
 /// A git repository at DIR with one commit; answers its tree id.
 fn repo_with_a_commit(dir: &Path) -> String {
     let git = |args: &[&str]| {
