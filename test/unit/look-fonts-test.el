@@ -42,6 +42,10 @@
     (with-temp-file f (insert text))
     f))
 
+(defun drgnx-look-fonts-test--height (px)
+  "PX logical pixels as this host's `:height': 101 for the code size on Linux, 135 on Naglfar (macOS's points)."
+  (drgnx-look-fonts-px-to-height px))
+
 (defun drgnx-look-fonts-test--keys (spec)
   "Every keyword that appears in SPEC, a face spec."
   (cl-remove-if-not #'keywordp (flatten-tree spec)))
@@ -50,7 +54,7 @@
   "Pattern D: each role's default resolves to the design's table, and each type face's spec says the same."
   (drgnx-look-fonts-test--clean
     (pcase-dolist (`(,role ,family ,height ,weight)
-                   '((code "JetBrains Mono" 101 regular) (ui "Adwaita Sans" 0.963 regular)
+                   `((code "JetBrains Mono" ,(drgnx-look-fonts-test--height 13.5) regular) (ui "Adwaita Sans" 0.963 regular)
                      (ui-heading "Adwaita Sans" 0.963 semibold) (ui-caption "Adwaita Sans" 0.889 regular)
                      (title "Adwaita Sans" 1.259 semibold) (code-small "JetBrains Mono" 0.889 regular)
                      (agent "Adwaita Sans" 0.963 regular) (terminal "JetBrains Mono" 1.0 regular)))
@@ -81,7 +85,8 @@
 
 (ert-deftest drgnx-look-fonts/px-to-height ()
   "Pattern D: 13.5 px is :height 101 (tenths of a point at 1 pt = 4/3 px); 13 px is the ratio 0.963 of the code size."
-  (should (= 101 (drgnx-look-fonts-px-to-height 13.5)))
+  (cl-letf (((symbol-function 'drgnx-look-fonts--points-p) (lambda () nil)))   ; Linux's; Naglfar's is the next row
+    (should (= 101 (drgnx-look-fonts-px-to-height 13.5))))
   (should (= 0.963 (drgnx-look-fonts-px-to-ratio 13)))
   (should (= 1.0 (drgnx-look-fonts-px-to-ratio 13.5)))
   (should (= 0.889 (drgnx-look-fonts-px-to-ratio 12))))
@@ -273,14 +278,14 @@ a font spec at every face run of the bars and the dock rows."
   (drgnx-look-fonts-test--clean
     (drgnx-look-fonts-test--default-kept
       (drgnx-look-fonts-apply)
-      (drgnx-look-fonts-test--chrome-heights 101)
+      (drgnx-look-fonts-test--chrome-heights (drgnx-look-fonts-test--height 13.5))
       (should (equal 0.963 (face-attribute 'drgnx-agent-prose :height)))
       (let ((drgnx-look-font-code '(:family "JetBrains Mono" :size 1.25)))   ; the debounced end of a live change
         (drgnx-look-fonts-apply)
-        (should (= 127 (plist-get (drgnx-look-fonts-resolve 'code) :height)))
-        (drgnx-look-fonts-test--chrome-heights 127))
+        (should (= (drgnx-look-fonts-test--height (* 13.5 1.25)) (plist-get (drgnx-look-fonts-resolve 'code) :height)))
+        (drgnx-look-fonts-test--chrome-heights (drgnx-look-fonts-test--height (* 13.5 1.25))))
       (drgnx-look-fonts-apply)
-      (drgnx-look-fonts-test--chrome-heights 101)
+      (drgnx-look-fonts-test--chrome-heights (drgnx-look-fonts-test--height 13.5))
       (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t)))
         (set-face-attribute 'default (selected-frame) :height 130)   ; what `global-text-scale-adjust' does
         (drgnx-look-fonts--zoomed)
@@ -293,7 +298,8 @@ its ratio gives on the scaled `default', and the remap goes when the scale is ba
     (drgnx-look-fonts-on)
     (with-temp-buffer
       (text-scale-set 2)
-      (let ((want (merge-face-attribute :height 0.889 (merge-face-attribute :height (expt text-scale-mode-step 2) 101)))
+      (let ((want (merge-face-attribute :height 0.889 (merge-face-attribute :height (expt text-scale-mode-step 2)
+                                                                            (drgnx-look-fonts-test--height 13.5))))
             (spec (cadr (assq 'drgnx-ui-caption face-remapping-alist))))
         (should spec)
         (should (= want (merge-face-attribute :height (plist-get spec :height)
