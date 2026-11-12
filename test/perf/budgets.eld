@@ -231,8 +231,7 @@
  ;; quick-open-typing-old (the stream and completion over every name: alloc 8003808, cpu 273.3) is retired with the path.
  (agents-line-motion (:alloc :p50) 6869 :report-only ot5) (agents-line-motion (:cpu_ms :p90) 4.5 :report-only ot5)
  (agents-line-motion (:rows) 0 :report-only ot5)
- (agents-line-motion-old (:alloc :p50) 7298 :report-only ot5)
- (agents-line-motion-old (:cpu_ms :p90) 5.2 :report-only ot5) (agents-line-motion-old (:rows) 0 :report-only ot5)
+ ;; agents-line-motion-old (the name computed every frame: alloc 7298, cpu 5.2) is retired with the path.
  ;; presence-burst, 2026-11-08, pinned to 4 CPUs, 30 agents over 90 files, one change per key.  Before (-old: every
  ;; `agent-presence' event rebuilds the badges, who is here and the status from the cached presence): alloc p50 160832
  ;; objects per key, cpu p90 3.61.  After (the hub's view model, read node by node as the rows name them): alloc p50
@@ -240,8 +239,7 @@
  ;; budget is a tenth of before; cpu the rows' 1.11 x 1.25.
  (presence-burst (:alloc :p50) 16084 :report-only ot5) (presence-burst (:cpu_ms :p90) 1.4 :report-only ot5)
  (presence-burst (:rows) 0 :report-only ot5)
- (presence-burst-old (:alloc :p50) 201040 :report-only ot5)
- (presence-burst-old (:cpu_ms :p90) 4.6 :report-only ot5) (presence-burst-old (:rows) 0 :report-only ot5)
+ ;; presence-burst-old (the cached presence rebuilt per event: alloc 201040, cpu 4.6) is retired with the path.
  ;; panel-replay, 2026-11-08, pinned to 4 CPUs.  Before (the panel drawing every row in Lisp, the mirror copying its
  ;; transcript per update): alloc p50 20292 (p90 24118) per update, a draw 14.75 kB p50 (63.03 p90), 305 updates over
  ;; 2024 entries, 2560 lines.  After (the hub's rows, the mirror patched in place): alloc p50 98 (p90 323) per update

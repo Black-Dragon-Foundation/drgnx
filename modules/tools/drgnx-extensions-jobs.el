@@ -575,10 +575,13 @@ are deleted, the done hook runs, and a click left in the queue gets a job."
                               (append result (list :kind (plist-get job :kind) :plan (concat file ".plan.json"))))
         (drgnx-extensions-jobs--changed (append ids (drgnx-extensions-jobs--reconcile)))))))
 
+(defvar drgnx-extensions-jobs--read-files nil
+  "Non-nil: the steps come from the progress files (a seam the job tests drive; nothing sets it in a session).  Nil:
+the hub sends them as `exec-progress' events and no progress file is read while a job runs.")
+
 (defun drgnx-extensions-jobs--files-p ()
-  "Non-nil when the steps come from the progress files (`drgnx-view-old-path'); else the hub sends them as
-`exec-progress' events and no progress file is read while a job runs."
-  (bound-and-true-p drgnx-view-old-path))
+  "Non-nil when the steps come from the progress files (`drgnx-extensions-jobs--read-files')."
+  drgnx-extensions-jobs--read-files)
 
 (defvar drgnx-extensions-jobs--others (make-hash-table :test #'equal)
   "Job id → the plan file its `exec-progress' named, for the jobs of other sessions: their end says the plan went.
@@ -598,7 +601,7 @@ any job."
 
 (defun drgnx-extensions-jobs--event (event data)
   "An event from the hub (`drgnx-hub-event-functions'): an Extensions job this session follows ended, or (off
-`drgnx-view-old-path') a job's progress."
+`drgnx-extensions-jobs--read-files') a job's progress."
   (when drgnx-extensions-jobs--on
     (pcase event
       ("exec-done"

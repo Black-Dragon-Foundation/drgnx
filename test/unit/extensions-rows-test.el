@@ -9,7 +9,7 @@
 (require 'drgnx-timer)
 (require 'drgnx-view)
 (require 'drgnx-view-nav)
-(defvar drgnx-view-old-path)
+(defvar drgnx-extensions-list--lisp-rows)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-extensions-list" drgnx-dir) nil t)
@@ -43,7 +43,7 @@
 section; the hub's rows are inserted as they come, with no key list built and no `drgnx-view-sync-rows'; a row's data
 and point's row come from the model; the answer's totals give the Updates count."
   (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
-  (let ((drgnx-view-old-path nil) (drgnx-view-patch--buffers (make-hash-table :test #'equal))
+  (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
         (drgnx-view-model--views (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
         (calls nil) (keys 0) (syncs 0))
     (unwind-protect
@@ -83,10 +83,10 @@ and point's row come from the model; the answer's totals give the Updates count.
       (drgnx-extensions-list--reset))))
 
 (ert-deftest drgnx-extensions-jobs/progress-from-events-reads-no-file ()
-  "Off the old path a job's steps and plans come as `exec-progress' events: the job takes the step, the plan hook
+  "A job's steps and plans come as `exec-progress' events: the job takes the step, the plan hook
 runs once per plan with the plan file's name, another session's plan goes with its job's `exec-done', and no
 progress or plan file is read (none exists)."
-  (let ((drgnx-view-old-path nil) (drgnx-extensions-jobs--on t) (reads 0) (plans nil) (gone nil)
+  (let ((drgnx-extensions-jobs--on t) (reads 0) (plans nil) (gone nil)
         (drgnx-extensions-jobs-plan-functions nil) (drgnx-extensions-jobs-plan-gone-functions nil)
         (drgnx-extensions-jobs-changed-functions nil)
         (file (expand-file-name "t1.json" (drgnx-extensions-jobs-dir))))
@@ -119,7 +119,7 @@ progress or plan file is read (none exists)."
 (ert-deftest drgnx-extensions-jobs/details-and-trust-still-normalise ()
   "A page whose row the list does not hold takes the hub's answer through `drgnx-extensions-list--normalize' (kept as
 the one row normaliser): its kind, state and signed become symbols."
-  (let ((drgnx-view-old-path t) (n 0))
+  (let ((drgnx-extensions-list--lisp-rows t) (n 0))
     (drgnx-extensions-list--reset)
     (advice-add 'drgnx-extensions-list--normalize :before (lambda (&rest _) (cl-incf n)) '((name . rows-test)))
     (unwind-protect

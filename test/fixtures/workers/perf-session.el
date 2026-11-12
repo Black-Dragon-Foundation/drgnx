@@ -782,7 +782,6 @@ key seen %s, written %s, stats %S"
 (defvar drgnx-perf-w--qot-log nil "What the run saw, newest first (at most 40): opened, errors, each command.")
 (defvar drgnx-quick-open--state)
 (defvar drgnx-quick-open--current)
-(defvar drgnx-view-old-path)
 (declare-function drgnx-quick-open "drgnx-quick-open")
 (declare-function drgnx-quick-open--candidates "drgnx-quick-open")
 (declare-function drgnx-quick-open--s-input "drgnx-quick-open")
@@ -859,7 +858,7 @@ streams %S, hub %S, C-p %S, saw %S, messages %S"
   (drgnx-perf-w--clean)
   t)
 
-;;;; agents-line-motion(-old): an agent frame per command while point moves, three agents in a Lisp file
+;;;; agents-line-motion: an agent frame per command while point moves, three agents in a Lisp file
 
 (defvar drgnx-perf-w--al-buf nil "The file the agents are in.")
 (defvar drgnx-perf-w--al-frames 0 "The agent frames applied since the run began.")
@@ -884,18 +883,15 @@ streams %S, hub %S, C-p %S, saw %S, messages %S"
   (copy-file (expand-file-name "wb/drgnx-view.el" drgnx-dir) (expand-file-name "view.el" (drgnx-perf-w--tmpdir)) t)
   t)
 
-(defun drgnx-perf-w--al-each (old)
-  "The file shown, point in it, no names kept; OLD: the old path (the name computed every frame)."
-  (setq drgnx-view-old-path old drgnx-perf-w--al-frames 0
+(defun drgnx-perf-w-agents-line-each ()
+  "The file shown, point in it, no names kept."
+  (setq drgnx-perf-w--al-frames 0
         drgnx-perf-w--al-buf (find-file-noselect (expand-file-name "view.el" drgnx-perf-w--tmp)))
   (switch-to-buffer drgnx-perf-w--al-buf)
   (setq drgnx-agents-editor-line--names nil)
   (goto-char (point-min)) (forward-line 100)
   (add-hook 'post-command-hook #'drgnx-perf-w--al-frame)
   t)
-
-(defun drgnx-perf-w-agents-line-each () (drgnx-perf-w--al-each nil))
-(defun drgnx-perf-w-agents-line-old-each () (drgnx-perf-w--al-each t))
 
 (defun drgnx-perf-w-agents-line-done ()
   "Twenty frames applied, each naming its three agents."
@@ -910,11 +906,11 @@ streams %S, hub %S, C-p %S, saw %S, messages %S"
 (defun drgnx-perf-w-agents-line-teardown ()
   (remove-hook 'post-command-hook #'drgnx-perf-w--al-frame)
   (when (buffer-live-p drgnx-perf-w--al-buf) (kill-buffer drgnx-perf-w--al-buf))
-  (setq drgnx-perf-w--al-buf nil drgnx-view-old-path nil)
+  (setq drgnx-perf-w--al-buf nil)
   (drgnx-perf-w--clean)
   t)
 
-;;;; presence-burst(-old): who is here while 30 agents move over 90 files, one presence change per command
+;;;; presence-burst: who is here while 30 agents move over 90 files, one presence change per command
 
 (defvar drgnx-perf-w--pb-n 0 "The presence changes applied since the run began.")
 (defvar drgnx-perf-w--pb-version 0 "The version of the last rows patch applied.")
@@ -922,13 +918,10 @@ streams %S, hub %S, C-p %S, saw %S, messages %S"
 (defvar drgnx-agents-editor-here--badges)
 (defvar drgnx-agents-editor-here--rows)
 (defvar drgnx-agents-editor-here-ordinal-function)
-(declare-function drgnx-agents-editor-here--event "drgnx-agents-editor-here")
 (declare-function drgnx-agents-editor-here--rows-buffer "drgnx-agents-editor-here")
 (declare-function drgnx-agents-editor-here--take "drgnx-agents-editor-here")
 (declare-function drgnx-view-apply-patch "drgnx-view")
 (declare-function drgnx-view-model-event "drgnx-view")
-
-(defun drgnx-perf-w--pb-roots () (list (file-name-as-directory (drgnx-perf-w--tmpdir))))
 
 (defun drgnx-perf-w--pb-file (i)
   "File I of the 90, six folders of fifteen."
@@ -970,32 +963,27 @@ streams %S, hub %S, C-p %S, saw %S, messages %S"
                                                             (drgnx-perf-w--pb-path-node file (list (1+ (% n 30))) nil))))))))
 
 (defun drgnx-perf-w--pb-apply (n)
-  "Presence change N: agent N mod 30 edits file N mod 90, as the old event or as the hub's model and rows patch."
+  "Presence change N: agent N mod 30 edits file N mod 90, as the hub's model and rows patch."
   (let ((sid (format "s%d" (1+ (% n 30)))) (file (drgnx-perf-w--pb-file (% n 90))))
-    (if drgnx-view-old-path
-        (drgnx-agents-editor-here--event
-         "agent-presence" (list :file file :entries (list (list :session sid :mode "edit" :line n :at (float n)))))
-      (drgnx-perf-w--pb-send (or (gethash n drgnx-perf-w--pb-models) (drgnx-perf-w--pb-change-model n))
-                             (list (list :replace (list (drgnx-perf-w--pb-agent sid file n)
-                                                        (drgnx-perf-w--pb-path file (list (1+ (% n 30))) nil))))))))
+    (drgnx-perf-w--pb-send (or (gethash n drgnx-perf-w--pb-models) (drgnx-perf-w--pb-change-model n))
+                           (list (list :replace (list (drgnx-perf-w--pb-agent sid file n)
+                                                      (drgnx-perf-w--pb-path file (list (1+ (% n 30))) nil)))))))
 
 (defun drgnx-perf-w--pb-change ()
   "Post-command: the next presence change."
   (drgnx-perf-w--pb-apply (cl-incf drgnx-perf-w--pb-n)))
 
 (defun drgnx-perf-w-presence-burst-setup ()
-  "Who is here on: the module's hooks, its roots the workload's folder, ordinals from the session ids."
+  "Who is here on: the module's hooks, ordinals from the session ids."
   (require 'drgnx-agents-editor-here)
-  (advice-add 'drgnx-agents-editor-here--roots :override #'drgnx-perf-w--pb-roots)
   (setq drgnx-agents-editor-here-ordinal-function (lambda (s) (string-to-number (substring s 1))))
   t)
 
-(defun drgnx-perf-w--pb-each (old)
-  "The 90 files held, each with its agent; OLD: the old path (the cached presence rebuilt per event)."
-  (setq drgnx-view-old-path old drgnx-perf-w--pb-n 0 drgnx-perf-w--pb-version 0)
+(defun drgnx-perf-w-presence-burst-each ()
+  "The 90 files held, each with its agent."
+  (setq drgnx-perf-w--pb-n 0 drgnx-perf-w--pb-version 0)
   (clrhash drgnx-agents-editor-here--badges)
-  (if old
-      (dotimes (i 90) (drgnx-perf-w--pb-apply i))
+  (progn
     (when-let* ((b (get-buffer " *drgnx agents here rows*"))) (kill-buffer b))
     (drgnx-agents-editor-here--rows-buffer)
     (setq drgnx-perf-w--pb-models (make-hash-table))
@@ -1022,9 +1010,6 @@ streams %S, hub %S, C-p %S, saw %S, messages %S"
   (add-hook 'post-command-hook #'drgnx-perf-w--pb-change)
   t)
 
-(defun drgnx-perf-w-presence-burst-each () (drgnx-perf-w--pb-each nil))
-(defun drgnx-perf-w-presence-burst-old-each () (drgnx-perf-w--pb-each t))
-
 (defun drgnx-perf-w-presence-burst-done ()
   "Twenty changes applied, 30 agents here and the 90 files' badges held."
   (and (>= drgnx-perf-w--pb-n 20) (= (length drgnx-agents-editor-here--rows) 30)
@@ -1035,9 +1020,8 @@ streams %S, hub %S, C-p %S, saw %S, messages %S"
 
 (defun drgnx-perf-w-presence-burst-teardown ()
   (remove-hook 'post-command-hook #'drgnx-perf-w--pb-change)
-  (advice-remove 'drgnx-agents-editor-here--roots #'drgnx-perf-w--pb-roots)
   (when-let* ((b (get-buffer " *drgnx agents here rows*"))) (kill-buffer b))
-  (setq drgnx-view-old-path nil drgnx-agents-editor-here-ordinal-function nil)
+  (setq drgnx-agents-editor-here-ordinal-function nil)
   (drgnx-perf-w--clean)
   t)
 

@@ -4,7 +4,7 @@
 ;; The list and a changed plugin's page are drawn from fixture state (no hub) in the selected window and captured under
 ;; a dark and a light theme.  The evidence folder (DRGNX_UI_EVIDENCE) keeps the PNGs.
 (require 'ert)
-(defvar drgnx-view-old-path)
+(defvar drgnx-extensions-list--lisp-rows)
 (require 'cl-lib)
 (require 'drgnx-uitest)
 
@@ -69,7 +69,7 @@
             (drgnx-extensions-list--reset)
             (drgnx-extensions-list--receive
              'plugins (mapcar (lambda (p) (drgnx-ext-plugins-shots--list-row p default-value-on)) plugins) 4 0)
-            (let* ((drgnx-view-old-path t) (buf (drgnx-extensions-list--buffer)))
+            (let* ((drgnx-extensions-list--lisp-rows t) (buf (drgnx-extensions-list--buffer)))
               (switch-to-buffer buf)
               (delete-other-windows)
               (drgnx-view-draw-now drgnx-view)

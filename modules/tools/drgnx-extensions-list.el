@@ -557,7 +557,7 @@ ticket (an integer) has no row, nil."
   (drgnx-extensions-list--reset))
 
 ;;;; On the rows path: the hub builds the list, its model holds the rows (Sjá)
-;; Off `drgnx-view-old-path' in an Emacs with Sjá, the list is the hub-fed view `extensions': `extensions/list' names
+;; In an Emacs with Sjá, the list is the hub-fed view `extensions': `extensions/list' names
 ;; the sections (each a search, as `drgnx-extensions-list--section-params' makes it) and the hub sends the model (a
 ;; `tree': a node per header and per row, the row's name, kind, state, signed, source, version and latest as fields)
 ;; and the rows, headers and lines included.  The answer is each section's total.  A row's data is read from the model
@@ -569,9 +569,13 @@ ticket (an integer) has no row, nil."
 
 (defconst drgnx-extensions-list-view "extensions" "The hub's view id of the list.")
 
+(defvar drgnx-extensions-list--lisp-rows nil
+  "Non-nil: the list draws its own rows even in an Emacs with Sjá (a seam the list tests drive; nothing sets it in a
+session).")
+
 (defun drgnx-extensions-list-rows-p ()
-  "Non-nil when the list goes on the hub's rows: not `drgnx-view-old-path', and this Emacs has Sjá."
-  (and (not drgnx-view-old-path) (fboundp 'nidhogg-view--call)))
+  "Non-nil when the list goes on the hub's rows: this Emacs has Sjá."
+  (and (not drgnx-extensions-list--lisp-rows) (fboundp 'nidhogg-view--call)))
 
 (defun drgnx-extensions-list--hub-fed-p ()
   "Non-nil when the list's buffer is the hub-fed view."

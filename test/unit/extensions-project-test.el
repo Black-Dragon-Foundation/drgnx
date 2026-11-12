@@ -4,7 +4,7 @@
 ;; modes index is built from fixture autoloads files (read as data) in a temp packages folder; fixture major and minor
 ;; modes stand for the packages' own.  No process, no timer.  See docs/guide/extensions.md, "In one project".
 (require 'ert)
-(defvar drgnx-view-old-path)
+(defvar drgnx-extensions-list--lisp-rows)
 (require 'cl-lib)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
@@ -246,7 +246,7 @@ pages closed after."
   `(progn
      (load (expand-file-name "modules/tools/drgnx-extensions-list" drgnx-dir) nil t)
      (load (expand-file-name "modules/tools/drgnx-extensions-details" drgnx-dir) nil t)
-     (let ((drgnx-view-old-path t) (drgnx-extensions-list--root nil) (drgnx-extensions-check-updates 'manual))
+     (let ((drgnx-extensions-list--lisp-rows t) (drgnx-extensions-list--root nil) (drgnx-extensions-check-updates 'manual))
        (unwind-protect
            (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore)
                      ((symbol-function 'drgnx-extensions-jobs-run) #'ignore))

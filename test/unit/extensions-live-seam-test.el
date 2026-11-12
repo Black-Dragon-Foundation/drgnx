@@ -6,7 +6,8 @@
 ;; empty folders (or a descriptor and an autoloads file) under a temp data directory.  See docs/guide/extensions.md,
 ;; "When a restart is needed".
 (require 'ert)
-(defvar drgnx-view-old-path)
+(defvar drgnx-extensions-jobs--read-files)
+(defvar drgnx-extensions-list--lisp-rows)
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-paths)
@@ -36,7 +37,7 @@
   "BODY with every drgnx location a temp directory (ROOT names it), the hub stubbed, the job layer and the live
 layer's hooks set up (torn down after), on the virtual clock; `--settle' and `--point-back' record that they ran."
   (declare (indent 0) (debug t))
-  `(let* ((drgnx-view-old-path t) (root (file-name-as-directory (make-temp-file "drgnx-ext-seam" t)))
+  `(let* ((drgnx-extensions-jobs--read-files t) (drgnx-extensions-list--lisp-rows t) (root (file-name-as-directory (make-temp-file "drgnx-ext-seam" t)))
           (process-environment (append (list (concat "XDG_STATE_HOME=" root "state") (concat "DRGNX_DATA_DIR=" root "data")
                                              (concat "DRGNX_CONFIG_DIR=" root "config") (concat "XDG_CACHE_HOME=" root "cache"))
                                        process-environment))
