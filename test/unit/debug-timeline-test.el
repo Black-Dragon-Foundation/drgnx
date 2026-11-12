@@ -183,6 +183,22 @@
       (drgnx-debug-timeline-open-at-point))
     (should (eql drgnx-debug-timeline--current 4))))
 
+(ert-deftest drgnx-debug-timeline/a-file-opens-when-no-hub-runs ()
+  "The timeline's `find-file-hook' asks the hub for the file's probes: with no hub (its socket's directory is not
+there) the file still opens, without probes; a hook never signals (the GUI rows' find-file failed \"no hub\")."
+  (let* ((run (make-temp-file "dt-run" t)) (dir (make-temp-file "dt" t)) (file (expand-file-name "a.py" dir))
+         (process-environment (cons (concat "XDG_RUNTIME_DIR=" run) process-environment))
+         buf)
+    (write-region "x = 1\n" nil file nil 'silent)
+    (unwind-protect
+        (progn (drgnx-debug-timeline-mode 1)
+               (setq buf (find-file-noselect file))
+               (should (buffer-live-p buf))
+               (should (buffer-local-value 'drgnx-debug-probes-mode buf)))
+      (drgnx-debug-timeline-mode -1)
+      (when (buffer-live-p buf) (kill-buffer buf))
+      (delete-directory dir t) (delete-directory run t))))
+
 (ert-deftest drgnx-debug-timeline/off-leaves-nothing ()
   (debug-timeline-test--with
     (drgnx-debug-probe-add "x")

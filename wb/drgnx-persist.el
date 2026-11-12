@@ -100,13 +100,16 @@ size in pixels (width for the docks, height for the panel); nil when there is ne
   "FRAME's workbench as a plist (see the commentary).  A frame that rebuilds itself — its parameter
 `drgnx-persist-restore' is (FUNCTION . ARGS), e.g. a job window — is saved as (:role custom :restore …),
 with `:geometry' (pixel left top, then the text area's width and height — what `set-frame-size' sets, so the
-size does not grow at every restart) when it is graphical."
+size does not grow at every restart) and, when it has one, `:fullscreen' (its `fullscreen' parameter: `maximized', …)
+when it is graphical."
   (if-let* ((restore (frame-parameter frame 'drgnx-persist-restore)))
       (append (list :role 'custom :restore restore)
               (and (display-graphic-p frame)
                    (let ((edges (frame-edges frame 'outer-edges)))
-                     (list :geometry (list (nth 0 edges) (nth 1 edges)
-                                           (frame-text-width frame) (frame-text-height frame))))))
+                     (append (list :geometry (list (nth 0 edges) (nth 1 edges)
+                                                   (frame-text-width frame) (frame-text-height frame)))
+                             (and (frame-parameter frame 'fullscreen)
+                                  (list :fullscreen (frame-parameter frame 'fullscreen)))))))
     (drgnx-persist--workbench-state frame)))
 
 (defun drgnx-persist--place-frame (frame geometry)
@@ -381,7 +384,8 @@ input focus back after the other windows are made, unless KEEP-FOCUS (a restore 
                               (let ((frame (with-selected-frame host (apply (car restore) (cdr restore))))
                                     (g (drgnx-persist--geometry st)))
                                 (when (and g (frame-live-p frame) (display-graphic-p frame))
-                                  (drgnx-persist--place-frame frame g)))
+                                  (drgnx-persist--place-frame frame g)
+                                  (drgnx-persist--keep-state frame g (plist-get st :fullscreen))))
                             (error (drgnx-notify 'wb 'warn (format "a window was not restored: %s" (error-message-string err))
                                                  :id 'window-restore)))
                         (drgnx-notify 'wb 'warn "a window was not restored: no graphical display" :id 'window-restore)))
@@ -466,9 +470,37 @@ restore) is passed over."
           (ignore-errors (window-resize w (- px (window-pixel-width w)) t nil t)))
         (drgnx-persist--fit-groups (cddr at))))))
 
+(defvar drgnx-persist--unmaximize (make-hash-table :test #'eq :weakness 'key)
+  "Restored window → (GEOMETRY . TRIES): its saved geometry, while the window manager may still maximize it unasked.")
+
+(defun drgnx-persist--keep-state (frame geometry fullscreen)
+  "A window restored at GEOMETRY with the saved `fullscreen' FULLSCREEN: a maximized or full-screen one is made so
+again; one saved as neither is watched (`drgnx-persist--unmaximize'): mutter maximizes a new window whose size comes
+close to the work area's, so a window you sized that big came back maximized, its size lost."
+  (if (memq fullscreen '(maximized fullboth fullwidth fullheight))
+      (set-frame-parameter frame 'fullscreen fullscreen)
+    (puthash frame (cons geometry 0) drgnx-persist--unmaximize)
+    (add-hook 'window-size-change-functions #'drgnx-persist--unmaximize)
+    (add-hook 'pre-command-hook #'drgnx-persist--refit-done)))
+
+(defun drgnx-persist--unmaximize (frame)
+  "FRAME, restored as neither maximized nor full screen, was maximized by the window manager: it is given back its
+`fullscreen' nil, then, once the window manager has unmaximized it (to a size of its own choosing, which can come
+after ours), its saved geometry (`drgnx-persist--place-frame'), again whenever a later answer takes it away.  Until the
+first command; three tries at most."
+  (when-let* ((at (gethash frame drgnx-persist--unmaximize)))
+    (let ((g (car at)) (tries (cdr at)))
+      (cond ((frame-parameter frame 'fullscreen) (set-frame-parameter frame 'fullscreen nil))
+            ((and (= (frame-text-width frame) (nth 2 g)) (= (frame-text-height frame) (nth 3 g))))
+            ((>= tries 3) (remhash frame drgnx-persist--unmaximize))
+            (t (puthash frame (cons g (1+ tries)) drgnx-persist--unmaximize)
+               (drgnx-persist--place-frame frame g))))))
+
 (defun drgnx-persist--refit-done ()
   "The first command after a restore: the window's sizes are yours from now on, nothing is put back any more."
   (clrhash drgnx-persist--refit)
+  (clrhash drgnx-persist--unmaximize)
+  (remove-hook 'window-size-change-functions #'drgnx-persist--unmaximize)
   (remove-hook 'window-size-change-functions #'drgnx-persist--refit)
   (remove-hook 'pre-command-hook #'drgnx-persist--refit-done))
 
