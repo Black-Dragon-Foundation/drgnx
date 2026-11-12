@@ -610,6 +610,18 @@ What a test does instead:
 Exempt: `#[ignore = "timing…"]` tests and `tests/timing.rs`, `skuld/src/wait.rs` (where these functions live) and the
 hub clock's module (`drgnx-ratatoskr/src/clock*`).
 
+## Files the hub writes and runs
+
+On Linux, running a file that any process holds open for writing fails with ETXTBSY ("Text file busy"). A child that
+another thread forks copies the whole file table, the write descriptor included, and holds it until its own `exec`; so
+a script written and then run at once fails now and then while other threads fork (the lib's tests always do). A
+rename keeps the same file and does not help. The hub's code and tests write such a file with
+`crate::exe::write_executable(path, contents)`, or do the writing inside `crate::exe::private_fds(|| …)`: a thread of
+its own with its own file table (`unshare(CLONE_FILES)`), which no other fork copies. That table starts as a copy, so
+the thread closes every descriptor but 0, 1 and 2 first (a pipe another thread closes meanwhile still ends at once); the
+closure opens what it uses itself. The hub uses it for the browser it
+unpacks and the `drgnx-key` it copies into a container job's folder.
+
 ## The conformance harness
 
 `domr` runs **scenarios** (data) against a hub binary: a process that answers the hub protocol on its socket.
@@ -1518,10 +1530,14 @@ Users get the binary from install.sh and `drgnx update`; both call `drgnx runtim
   `<cache>/cargo` unless the record sets it, `DRGNX_BUILD_COMMIT` is the checkout's HEAD (plus `-dirty`) and
   `DRGNX_CHECKOUT` the checkout, so `ratatoskr version --json` says what it was built from. On Linux with a user systemd
   the build runs in `systemd-run --user --scope` with `MemoryMax` min(jobs x 1536 MiB + 1 GiB, available - 1 GiB) and
-  `MemorySwapMax=0`; without one, `-j` alone and a note. macOS has no cap.
+  `MemorySwapMax=0`; without one, `-j` alone and a note. macOS has no cap. It then builds `drgnx-key` the same way
+  (`-p sleipnir --no-default-features --bin drgnx-key`; a failure fails the build), and the relay sidecar and a static
+  `drgnx-key` for `<arch>-unknown-linux-musl` into `<cache>/ratatoskr-px-target` (a failure there only warns).
 - `drgnx runtime install [--prefix DIR]`: refuses a binary whose `version --json` says `"test_hooks": true` (or says
   nothing), copies it to `<data>/bin/ratatoskr.new` and renames it to `ratatoskr` (a running hub sees a new inode at
-  its resolved path); with `--prefix` links `DIR/bin/ratatoskr` and `DIR/bin/rtsk`.
+  its resolved path); with `--prefix` links `DIR/bin/ratatoskr` and `DIR/bin/rtsk`. Beside it, the same way: `drgnx-key`
+  (a keyed command job here runs behind it), `drgnx-px-<arch>-linux-musl` and `drgnx-key-<arch>-linux-musl` (a
+  container job's relay sidecar and a keyed one's entrypoint); one not built is named and skipped.
 - `drgnx update` runs `runtime build --install` as its third step; a failure rolls the update back
   (`DRGNX_UPDATE_RUNTIME_CMD` replaces the step in tests). The doctor's `ratatoskr` check (group Agents) reads
   `ratatoskr doctor --json`: no binary, test hooks or a bad socket directory fail; a failed runtime update, a binary or

@@ -1,7 +1,7 @@
 //! Debugging (docs/develop/debugging.md, spec §11): the editor lists a project's launch configurations
 //! (`debug/configs`), starts one (`debug/start`, which may first need inputs or trust), controls a session
 //! (`debug/control`, `debug/select`), tells the hub a project's trust (`debug/trust`) and installs an adapter
-//! (`debug/install`). The hub's events:
+//! (`debug/install`) and reads a source with no file (`debug/source`). The hub's events:
 //! `debug-state` (every session), `debug-frame` (a stop's line), `debug-terminal` (`runInTerminal`'s terminal),
 //! `debug-ended`.
 
@@ -153,6 +153,22 @@ pub struct DebugSelect {
 pub struct DebugTrust {
     pub root: String,
     pub trusted: bool,
+}
+
+/// `debug/source`: the text of SESSION's source REF (a frame whose source has no file: `sourceReference`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugSource {
+    pub session: String,
+    #[serde(rename = "ref")]
+    pub reference: i64,
+}
+
+/// `debug/source`'s answer: the TEXT and its MIME type when the adapter gave one.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugSourceText {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
 }
 
 /// `debug/install`: ADAPTER's `:install` entry carried out (Debug: Install Adapter): a pinned archive checked and
@@ -331,6 +347,14 @@ fn check_select(p: &DebugSelect) -> Result<(), Error> {
     check_text("session", &p.session)
 }
 
+fn check_source(p: &DebugSource) -> Result<(), Error> {
+    check_text("session", &p.session)?;
+    if p.reference <= 0 {
+        return Err(invalid("ref", "a positive sourceReference"));
+    }
+    Ok(())
+}
+
 fn check_install(p: &DebugInstall) -> Result<(), Error> {
     check_text("adapter", &p.adapter)
 }
@@ -441,6 +465,12 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "a project's trust changed: a project never told trusted runs no configuration, and revoking trust stops its sessions",
             check: check_trust,
+        ),
+        method!(
+            "debug/source", DebugSource(DebugSource) -> DebugSourceText,
+            classes: [User], writes: false,
+            doc: "the text of a frame's source that has no file (its sourceReference), from the adapter, for a read-only buffer",
+            check: check_source,
         ),
         method!(
             "debug/install", DebugInstall(DebugInstall) -> String,

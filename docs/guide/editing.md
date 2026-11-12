@@ -61,6 +61,9 @@ you to trust it (**Trust This Folder**): an untrusted folder's configurations ne
 pins, or puts debugpy into drgnx's own Python, and names the system package to install for the others (`drgnx doctor`
 lists which are found).
 
+A stop opens its file at the line, marked by an amber arrow and band; a caller frame you pick is marked green, and a
+stop on an exception is red, with a card under the line saying what was raised (code with no file, such as an
+`eval`, opens read-only from the debugger). Set `drgnx-debug-focus-on-stop` to bring Emacs to the front on a stop.
 While the session is stopped the same command continues; **Toggle Breakpoint**, **Step Over**, **Step Into**,
 **Step Out** and **Stop Debugging** do what they say. If you used dape, **Convert dape Configurations…** (the palette)
 turns your `dape-configs` into launch configurations once (dape itself is no longer needed).
@@ -90,6 +93,19 @@ Recorded runs hold your program's values, so they stay yours: agents cannot read
 run, or one for an open task, longer), at most 2 GB per project, oldest first. Probes need an adapter with logpoints
 (debugpy and the JavaScript debugger take 2000 values a second, the rest 200, and delve and codelldb stop and resume
 the program for each one; values past the rate are thinned and counted).
+
+**What-if forks** (Linux): from a stop of a recorded run, **Fork from Here…** replays the run in a sealed copy of the
+project as it was when the run started, up to that point (the same stop, or the same pass of that line), and then
+changes what you choose: a value (`item.reserve` → `0`), the code, or nothing (a replay). It runs on to the next
+stop, the end, or a probe's next hit, and the **What-if** tab shows it beside the run: "matched on N of M hits" (how
+far the copy did what the run did before the point, and the first value that differed if one did), each probe's
+values after the point, then and now, and how each side went on. For a code what-if the fork's copy opens first
+(**Open Fork** finds this file there); edit it and **Run Fork**; **Take Fork's Change…** shows each file it changed
+as a diff and puts the fork's text into your buffer (undoable, not saved). **Drop Fork** removes one.
+The copy cannot reach the network or write outside itself; your `.env` files are read in place, never copied. Python
+(debugpy) and JavaScript (js-debug) only: Go and native programs need `ptrace`, which the sandbox never allows, and
+macOS forks wait for a sandbox rule of their own. A run whose configuration resolves differently now (an input, a
+setting, launch.json) is refused, and a point the run took over a minute to reach asks first.
 
 **Find the Change That Broke It…** (the palette) answers "which change broke it?". Pick a state where it worked (a
 commit, a recorded run's start, one of your saves or an agent's step) and a command that fails now, such as a test

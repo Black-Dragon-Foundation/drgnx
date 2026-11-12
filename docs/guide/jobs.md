@@ -313,8 +313,8 @@ why. Details in [agents.md](agents.md#jobs-and-your-claude-settings).
 - **Worktrees:** the job's branch `job/ID` (from your HEAD when you approved) in `.claude/worktrees/ID`; each task
   on `job/ID-N` in `.claude/worktrees/ID-N`, branched from the job's branch — so a task starts from the work of the
   tasks it depends on. At most `drgnx-job-max-agents` (3) agents work at once. A slow checkout (a big repository, a
-  hook) does not hold drgnx up: the task says `starting` until its worktree is there, and `merging` while its branch
-  is merged; a worktree that cannot be made is a card, and so is a git that takes more than `drgnx-job-git-timeout`
+  hook) does not hold drgnx up: the task says `starting` until its worktree is there, `checking` while the gates
+  look at it before a merge, and `merging` while its branch is merged; a worktree that cannot be made is a card, and so is a git that takes more than `drgnx-job-git-timeout`
   seconds (300; git is ended, the card has its last output). Stopping the job ends its git processes too.
 - **Permissions:** a role's policy (`drgnx-job-policies`) allows routine tool calls inside the task's worktree —
   reading, editing, running commands; a reviewer only reads (and runs `git diff`, `log`, `show`, `status`). Anything else waits for you as a **card** (a message

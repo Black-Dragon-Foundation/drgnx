@@ -228,7 +228,8 @@ pub enum Net {
     /// The host's network (bwrap `--share-net`; Seatbelt allows any remote address).
     Shared,
     /// No network of its own. Linux: a new network namespace, and the relay forwards loopback ports inside to Unix
-    /// sockets outside (`relay` must not be empty). macOS: only `localhost` on `mac_tcp_ports`.
+    /// sockets outside (`relay` must not be empty, except with `loopback`: a sealed debug fork has no way out).
+    /// macOS: only `localhost` on `mac_tcp_ports`.
     Isolated {
         #[serde(default)]
         relay: Vec<RelayPort>,

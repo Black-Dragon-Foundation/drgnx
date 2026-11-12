@@ -13,6 +13,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-debug-gutter (expand-file-name "drgnx-debug-gutter" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-debug-fork (expand-file-name "drgnx-debug-fork" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-timeline (expand-file-name "drgnx-debug-timeline" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-bisect (expand-file-name "drgnx-debug-bisect" (file-name-directory (macroexp-file-name))))
 (declare-function drgnx-hub-call "drgnx-hub-client")
@@ -29,10 +30,15 @@
   "The debug sessions as the hub's `debug-state' last said: plists (:id :name :parent :root :state …).")
 
 (defun drgnx-debug--event (event data)
-  "`drgnx-hub-event-functions': `debug-state' gives the sessions, and the session keys follow them."
-  (when (equal event "debug-state")
-    (setq drgnx-debug--sessions (append (plist-get data :sessions) nil))
-    (drgnx-debug-session-mode (if drgnx-debug--sessions 1 -1))))
+  "`drgnx-hub-event-functions': `debug-state' gives the sessions (the session keys follow them, a running session's
+stop marks go), `debug-frame' marks and opens a stop's line, `debug-ended' takes its marks away."
+  (pcase event
+    ("debug-state"
+     (setq drgnx-debug--sessions (append (plist-get data :sessions) nil))
+     (drgnx-debug-session-mode (if drgnx-debug--sessions 1 -1))
+     (drgnx-debug-gutter-stop-sessions drgnx-debug--sessions))
+    ("debug-frame" (drgnx-debug-gutter-show-frame data))
+    ("debug-ended" (drgnx-debug-gutter-stop-clear (plist-get data :session)))))
 
 (defun drgnx-debug--session (&optional state)
   "This project's session in STATE, or (STATE nil) its stopped one, else its first; nil when it has none."
@@ -71,6 +77,7 @@ loaded gud's own `C-x C-a' in `global-map' loses to them.")
              (add-hook 'drgnx-hub-event-functions #'drgnx-debug--event))
     (remove-hook 'find-file-hook #'drgnx-debug--gutter-on)
     (remove-hook 'drgnx-hub-event-functions #'drgnx-debug--event)
+    (drgnx-debug-gutter-stop-clear-all)
     (setq drgnx-debug--sessions nil))
   (dolist (b (buffer-list))
     (with-current-buffer b
@@ -121,6 +128,7 @@ loaded gud's own `C-x C-a' in `global-map' loses to them.")
                      :teardown #'drgnx-debug--teardown
                      :setup (lambda ()
                               (drgnx-debug-mode 1)
+                              (add-hook 'drgnx-hub-event-functions #'drgnx-debug-fork--event)
                               (pcase-dolist (`(,id ,title ,fn ,doc)
                                              '((debug-start "Start Debugging…" drgnx-debug-start-or-continue "Start a session, or continue the stopped one")
                                                (debug-breakpoint "Toggle Breakpoint" drgnx-debug-gutter-toggle "A breakpoint on this line, or none")
@@ -133,6 +141,12 @@ loaded gud's own `C-x C-a' in `global-map' loses to them.")
                                                (debug-step-out "Step Out" drgnx-debug-step-out "Out of this function")
                                                (debug-stop "Stop Debugging" drgnx-debug-stop "End the session")
                                                (debug-install-adapter "Install Adapter…" drgnx-debug-install-adapter "Download and install a debug adapter, checked against its pinned hash")
+                                               (debug-fork "Fork from Here…" drgnx-debug-fork "Replay the recorded run in a sealed copy to this point, change a value or the code, and run on")
+                                               (debug-fork-show "Show What-if" drgnx-debug-fork-show "A fork beside its run: matched hits, the first difference, the values after")
+                                               (debug-fork-open "Open Fork" drgnx-debug-fork-open "This file as the fork has it, to edit a code what-if")
+                                               (debug-fork-run "Run Fork" drgnx-debug-fork-run "Run a code what-if once its tree is edited")
+                                               (debug-fork-take "Take Fork's Change…" drgnx-debug-fork-take "Each file the fork changed as a review card: Apply puts it in your buffer")
+                                               (debug-fork-drop "Drop Fork" drgnx-debug-fork-drop "The fork goes, with its tree")
                                                (debug-convert-dape "Convert dape Configurations…" drgnx-debug-convert-dape-configs "Turn your dape configurations into launch configurations, once")))
                                 (drgnx-command-define id :category "Debug" :title title :command fn :doc doc))
                               ;; recorded runs: probes, the stop timeline, past stops (drgnx-debug-timeline.el)

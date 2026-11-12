@@ -33,6 +33,7 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | debug-gutter-scroll | as code-scrolling (without sticky scroll and guides), hunks' margin claimed (a file that shows hunks), with the breakpoint column on and 300 breakpoints of every kind and the hover pool laid out (the hub answered by a store in the session) | input latency; p50 at most the larger of 5 % and 0.3 ms over debug-gutter-baseline in the same run (`drgnx-perf-run--relative-fails`, judged when both ran) |
 | debug-gutter-baseline | the same file and keys with hunks' margin and the breakpoint column claimed and empty, the column off: what a user sees when a session starts in a file that shows hunks (see "The breakpoint column's margin" below) | — (the 5 % rule's base) |
 | debug-breakpoint-click | F9 then `<down>`, 20 times: each a `debug/breakpoints` add answered at once and the column redrawn | input latency |
+| debug-step-line | the 12k-line fixture, then F10 120 times: each one `debug-frame` (a step's stop, sent to the starting editor) for the next line, the arrow and band moved, point placed, the window scrolled only when the line left it | input latency; within 16 ms p95 (spec §5) |
 | debug-probe-flood | ten probes on the fixture (recorded runs), then `<f8>` 40 times: each one batch of probe hits as the hub sends them at 2,000 hits a second (100 hits every 50 ms), the line ends' sparklines drawn (the hub answered in the session) | input latency; the batch to the sparklines within 100 ms (spec §19.9) |
 | debug-bisect-typing | `<f7>` 40 times beside a bisect's card: each a character typed and a `debug-bisect` event (the card's rows: a head, nine dots, the result and its actions) drawn, as a 3-way bisect's slots end | input latency; keystroke p95 under 16 ms while a bisect runs (spec §19.9) |
 | debug-scrub | the stop timeline of a 60-stop run, then `Alt ←` 30 times: each a past stop opened from the hub's answer (its capture and a 2,000-line file as it ran) and drawn with its banner, line and variables | input latency; within 50 ms (spec §19.9) |
@@ -1058,6 +1059,11 @@ Recorded runs' hub rows are the bench `runtime/crates/drgnx-ratatoskr/benches/de
 `debug-capture` (a stop's capture cut to 64 KB, appended to the run file and flushed, at most 1 ms at the 95th
 percentile). It is `#[ignore]`d and measures and prints; run it optimized and alone on a pinned host:
 `perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench debug_record -- --ignored --nocapture --test-threads 1`.
+
+`debug-fork-start` (a what-if fork's tree restored, its Gleipnir sandbox and adapter started and its program run to
+its first stop: at most 2 s at the 95th percentile on Linux) is the live row `debug::tests_fork_live::debug_fork_start`,
+ten Python traces in a row. It needs the adapter image with bwrap (`ctr.sh --sandbox`), is `#[ignore]`d as a timing
+test, and measures and prints.
 
 Tests: `test/unit/perf-extensions-test.el` (every row has a budget and a fixture, the comparison measures both sides).
 

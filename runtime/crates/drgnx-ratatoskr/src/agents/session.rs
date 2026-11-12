@@ -4559,11 +4559,22 @@ impl Session {
                 return;
             }
             let (action, facts) = classify(req.get("toolCall"));
-            // the push gate: a job's push waits for one full run on the exact commit (the matrix still decides after)
+            // the push gate: a job's push waits for one full run on each commit it sends (the matrix still decides
+            // after)
             if matches!(action, Action::PushCi | Action::PushMain)
                 && let Some(job) = s.job_id()
                 && let Some(front) = s.tool_hub.front()
-                && let Some(why) = crate::orch::push::refusal(&front, job, &s.cwd).await
+                && let Some(why) = crate::orch::push::refusal(
+                    &front,
+                    job,
+                    &s.cwd,
+                    // the command as sent (the facts' copy is bounded); a push without one is not read as none
+                    req.get("toolCall")
+                        .and_then(|t| t.pointer("/rawInput/command").or_else(|| t.get("title")))
+                        .and_then(Value::as_str)
+                        .unwrap_or("git push --all"),
+                )
+                .await
             {
                 s.refused(req.get("toolCall"), &why);
                 reply(resp, pick_reject(&options));
@@ -6289,7 +6300,8 @@ fn classify(tool: Option<&Value>) -> (Action, runstav::methods::matrix::Facts) {
         "fetch" => Action::Network,
         "execute" => {
             let c = command.as_deref().unwrap_or("");
-            if c.contains("git push") {
+            // every spelling of a push (`git -C . push`, a list of commands, one the gate can't read)
+            if crate::orch::push::parse(c) != crate::orch::push::Parsed::NotPush {
                 if c.contains("main") || c.contains("master") {
                     Action::PushMain
                 } else {

@@ -692,6 +692,36 @@ pub fn remove_stubs_since(scratch: &Path, worktree: &Path, mark: usize) {
     };
 }
 
+/// The protected paths of PROTECTED missing now, which a launch pinning them in WORKTREE ([`pin_protected`]) would make
+/// empty: a job's sandbox writes them to LIST (WORKTREE first, then a path a line) before its launch, and its end
+/// removes them ([`remove_made`]), so a job leaves its tree as it found it.
+pub fn note_missing(list: &Path, worktree: &Path, protected: &[PathBuf]) -> std::io::Result<()> {
+    let missing: Vec<String> = protected
+        .iter()
+        .filter(|p| p.symlink_metadata().is_err() && p.parent().is_some_and(Path::is_dir))
+        .map(|p| format!("{}\n", p.display()))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    std::fs::write(
+        list,
+        format!("{}\n{}", worktree.display(), missing.concat()),
+    )
+}
+
+/// Remove what LIST ([`note_missing`]) names, as [`remove_stubs`] does (still empty, not in the git index), and LIST.
+pub fn remove_made(list: &Path) {
+    let Ok(text) = std::fs::read_to_string(list) else {
+        return;
+    };
+    let mut lines = text.lines();
+    if let Some(worktree) = lines.next() {
+        remove_listed(lines, Path::new(worktree));
+    }
+    let _ = std::fs::remove_file(list);
+}
+
 /// The stubs LINES name in WORKTREE removed, when still empty and not in the git index.
 fn remove_listed<'a>(lines: impl Iterator<Item = &'a str>, worktree: &Path) {
     let index = git_dirs(worktree)

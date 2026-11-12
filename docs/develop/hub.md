@@ -1379,8 +1379,12 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/bisect/narrow` | user | `{bisect: string}` | `boolean` | no |
 | `debug/bisect/states` | user | `{good?: {id: string, kind: string}, root: string}` | `{states: [any]}` | no |
 | `debug/breakpoints` | user | `{op?: {condition?: string, enabled?: boolean, hit?: string, id?: natnum, line?: natnum, log?: string, name?: string, op: string, path?: string}, path?: string, root: string}` | `DebugBreakpointsView` | no |
+| `debug/compare` | user | `{fork: string, run: string}` | `DebugForkView` | no |
 | `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
 | `debug/control` | user | `{op: string, session: string, thread?: integer}` | `boolean` | no |
+| `debug/fork` | user | `{at: {hit?: natnum, line?: natnum, path?: string, stop?: natnum}, change?: {code?: boolean, value?: {path: [string], text: string}}, confirm?: boolean, inputs?: [{id: string, value: string}], run: string, until?: DebugForkUntil}` | `{ask?: string, fork?: string, needs?: any}` | no |
+| `debug/fork/drop` | user | `{fork: string}` | `boolean` | no |
+| `debug/fork/run` | user | `{fork: string}` | `boolean` | no |
 | `debug/install` | user | `{adapter: string, adapters?: [JsonObject]}` | `string` | no |
 | `debug/probe/op` | user | `{op?: {enabled?: boolean, expr?: string, id?: string, language?: string, line?: natnum, op: string, path?: string, text?: string}, root: string}` | `{added?: string, path?: string, probes: [any], root: string}` | no |
 | `debug/run-to-cursor` | user | `{line: natnum, path: string, session: string}` | `boolean` | no |
@@ -1389,6 +1393,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/run/stop` | user | `{file?: string, run: string, stop: natnum}` | `{capture: any, run: string, snapshot?: string, source: any, stop: any}` | no |
 | `debug/runs/list` | user | `{root: string}` | `{runs: [any]}` | no |
 | `debug/select` | user | `{frame: integer, session: string, thread?: integer}` | `boolean` | no |
+| `debug/source` | user | `{ref: integer, session: string}` | `{mime?: string, text: string}` | no |
 | `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, root: string, selection?: string, unsaved?: [string], user?: [JsonObject]}` | `{needs?: any, session?: string}` | no |
 | `debug/trust` | user | `{root: string, trusted: boolean}` | `boolean` | no |
 | `decisions/effects` | user | `{decision: string}` | `{commits?: [string], decision: string, label: string, later_hunks?: [Hunk]}` | no |
@@ -3830,7 +3835,11 @@ and a log line naming it, then answers `timeout`. The job's output never goes th
 wrapper (`unit::wrap_to_hub`) leaves stdout and stderr on the pipe the hub reads, and `keys::pump` appends each chunk
 to the log through the redactor (the held-back end at EOF; `watch` waits up to 5 s for it before the result is
 written). `Meta::keyed` marks it: a restarted hub kills such a job and ends it `infra` rather than adopting it. A keyed
-container job is refused here for now (it runs on a runner).
+container job (`Runner::container_keys`) has no socket: the static `drgnx-key-<arch>-linux-musl` next to the hub
+(`keys::static_key_name`; missing: refused) is copied into its folder and mounted read-only as its entrypoint
+(`ContainerReq::keys`, the names only in its argv), and its relay starts even without a network grant (no host
+allowed): `net::prepare_net` gives the sidecar `--keys drgnx-key` and runs `owner::run_keyed` with `keys::Source`, so
+the same `JobKeys` answers its key streams, redacts its output and records `key_sent`.
 
 **The handover.** `runners/keys {keys: {NAME: value}}` (user only; refused while `Gate::protects_keys` fails, as
 `gateway/keys` is) puts the values in `Keys` (`SecretString`s in memory; `RunnerKeys` refuses a NUL, an over-64-KiB
@@ -4375,7 +4384,8 @@ It answers `{"ev":"started","pid":N}`. A program that cannot be exec'd gets `{"e
 **The relay.** A CDP frame from the hub goes to the pipe with its NUL. Each NUL-ended message from the pipe goes back as
 one CDP frame; one over the limit is dropped up to its NUL. A CDP frame while no browser runs is dropped.
 
-**Stop and exit.** `{"op":"stop","why":W}` closes the pipe, sends SIGTERM to Chromium's process group, and SIGKILL after
+**Stop and exit.** `{"op":"stop","why":W}` sends SIGTERM to Chromium's process group, then closes the pipe (in that order: with
+the pipe closed first, a browser that ends at the pipe's end could exit 0 before the signal came), and SIGKILL after
 2 s. However Chromium ends (stopped, crashed, or on its own), the host waits for the main process without reaping it,
 kills what is left of its group (the group's id is still held by the unreaped leader), tells the pipe's reader how many
 bytes the pipe holds then (`FIONREAD`: all the group wrote), reaps it, and sends `{"ev":"exited","code":N|null,

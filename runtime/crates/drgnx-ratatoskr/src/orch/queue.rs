@@ -51,7 +51,8 @@ pub enum Turn {
 impl Queue {
     /// TASK of JOB is ready at TIP (now AT; a task ready at another tip before is ready anew), with LIVE the job's
     /// tasks that may merge (the rest leave the queue).  The batch it is in, formed now when none is open (CLASH
-    /// says two tips conflict).
+    /// says two tips conflict: git, run outside the queue's lock).  Empty when the queue changed while it formed (the
+    /// next turn forms it again).
     pub(crate) fn place(
         &self,
         job: &str,
@@ -60,22 +61,31 @@ impl Queue {
         size: usize,
         clash: impl Fn(&Ready, &Ready) -> bool,
     ) -> Vec<Ready> {
+        let ready = {
+            let mut jobs = self.jobs.lock().unwrap();
+            let line = jobs.entry(job.to_owned()).or_default();
+            line.ready.retain(|x| live.contains(&x.task));
+            match line.ready.iter_mut().find(|x| x.task == r.task) {
+                Some(x) if x.tip == r.tip => {}
+                Some(x) => *x = r,
+                None => line.ready.push(r),
+            }
+            // a member that left, or is ready at another tip now, leaves its batch
+            line.batch.retain(|x| {
+                line.ready
+                    .iter()
+                    .any(|y| y.task == x.task && y.tip == x.tip)
+            });
+            if !line.batch.is_empty() {
+                return line.batch.clone();
+            }
+            line.ready.clone()
+        };
+        let formed = form(&ready, size, clash);
         let mut jobs = self.jobs.lock().unwrap();
         let line = jobs.entry(job.to_owned()).or_default();
-        line.ready.retain(|x| live.contains(&x.task));
-        match line.ready.iter_mut().find(|x| x.task == r.task) {
-            Some(x) if x.tip == r.tip => {}
-            Some(x) => *x = r,
-            None => line.ready.push(r),
-        }
-        // a member that left, or is ready at another tip now, leaves its batch
-        line.batch.retain(|x| {
-            line.ready
-                .iter()
-                .any(|y| y.task == x.task && y.tip == x.tip)
-        });
-        if line.batch.is_empty() {
-            line.batch = form(&line.ready, size, clash);
+        if line.batch.is_empty() && line.ready == ready {
+            line.batch = formed;
         }
         line.batch.clone()
     }
@@ -262,6 +272,28 @@ mod tests {
             tip: format!("tip-{task}"),
             at,
         }
+    }
+
+    /// The clash check runs git (`merge-tree` per pair): never under the queue's lock, which every turn of every job
+    /// takes.
+    #[test]
+    fn a_batch_forms_without_holding_the_queues_lock() {
+        let q = Queue::default();
+        let live: Vec<String> = ["a", "b", "c"].map(String::from).to_vec();
+        // b's batch, a and c ready behind it; b merges: the next batch forms over a and c
+        q.place("j", r("b", 1.0), &live, 2, |_, _| false);
+        q.place("j", r("a", 2.0), &live, 2, |_, _| false);
+        q.place("j", r("c", 3.0), &live, 2, |_, _| false);
+        q.forget("j", "b");
+        let (asked, free) = (std::cell::Cell::new(0), std::cell::Cell::new(true));
+        let batch = q.place("j", r("c", 3.0), &live, 2, |_, _| {
+            asked.set(asked.get() + 1);
+            free.set(free.get() && q.jobs.try_lock().is_ok());
+            false
+        });
+        assert_eq!(batch.len(), 2);
+        assert!(asked.get() > 0, "the clash check ran");
+        assert!(free.get(), "the clash check ran under the queue's lock");
     }
 
     #[test]

@@ -13,7 +13,7 @@ use runstav::methods::Params;
 use runstav::methods::debug::{
     DebugBreakpointOp, DebugBreakpoints, DebugBreakpointsView, DebugConfig, DebugConfigList,
     DebugConfigs, DebugControl, DebugFileError, DebugInstall, DebugRunToCursor, DebugSelect,
-    DebugStart, DebugStarted, DebugTrust,
+    DebugSource, DebugSourceText, DebugStart, DebugStarted, DebugTrust,
 };
 use runstav::types::JsonObject;
 use runstav::wire::{Error, ErrorCode};
@@ -36,6 +36,8 @@ pub struct Hub {
     debug: OnceLock<Debug>,
     trusted: Mutex<BTreeSet<String>>,
     last: Mutex<HashMap<String, String>>,
+    /// The what-if forks (`fork_wire`), made on first use.
+    pub(super) forks: OnceLock<super::fork_hub::Forks>,
     /// The bisects over the edit history (`debug/bisect*`).
     pub(super) bisects: super::bisect_wire::Bisects,
 }
@@ -65,7 +67,7 @@ impl Hub {
         self.bisects.bind(front);
     }
 
-    fn is_trusted(&self, root: &str) -> bool {
+    pub(super) fn is_trusted(&self, root: &str) -> bool {
         self.trusted.lock().expect("debug trust").contains(root)
     }
 
@@ -140,7 +142,7 @@ fn read_launch(root: &str) -> (Option<LaunchFile>, Option<DebugFileError>) {
 }
 
 /// The user's adapters (ADAPTERS, in the table's fields), then drgnx's.
-fn table(user: &[JsonObject]) -> Result<Table, Error> {
+pub(super) fn table(user: &[JsonObject]) -> Result<Table, Error> {
     let mut all = Vec::with_capacity(user.len());
     for (i, a) in user.iter().enumerate() {
         let a: Adapter = serde_json::from_value(Value::Object(a.clone().into_inner()))
@@ -208,7 +210,7 @@ async fn configs(front: &Front, p: DebugConfigs) -> Result<DebugConfigList, Erro
 }
 
 /// The configuration ID names, and the inputs it may use.
-fn config_of(p: &DebugStart, table: &Table) -> Result<(Value, Vec<Value>), Error> {
+pub(super) fn config_of(p: &DebugStart, table: &Table) -> Result<(Value, Vec<Value>), Error> {
     let (kind, n) = p
         .config
         .split_once(':')
@@ -248,7 +250,7 @@ fn config_of(p: &DebugStart, table: &Table) -> Result<(Value, Vec<Value>), Error
     }
 }
 
-fn need_json(n: &Need) -> Value {
+pub(super) fn need_json(n: &Need) -> Value {
     match n {
         Need::Input {
             id,
@@ -265,7 +267,7 @@ fn need_json(n: &Need) -> Value {
     }
 }
 
-fn vars(front: &Front, p: &DebugStart) -> Vars {
+pub(super) fn vars(front: &Front, p: &DebugStart) -> Vars {
     let root = PathBuf::from(&p.root);
     let name = root
         .file_name()
@@ -305,7 +307,7 @@ fn vars(front: &Front, p: &DebugStart) -> Vars {
 }
 
 /// Where the adapters drgnx installs live: `<data>/debug-adapters` (its Python venv is `venv/`).
-fn tools_dir(front: &Front) -> PathBuf {
+pub(super) fn tools_dir(front: &Front) -> PathBuf {
     runstav::paths::data_dir(&front.shell_env.paths_env()).join("debug-adapters")
 }
 
@@ -566,6 +568,17 @@ async fn run_to_cursor(front: &Front, p: DebugRunToCursor) -> Result<bool, Error
     Ok(true)
 }
 
+/// A frame's source with no file: its text from the adapter.
+async fn source(front: &Front, p: DebugSource) -> Result<DebugSourceText, Error> {
+    let v = front
+        .debug
+        .debug(front)
+        .source(&p.session, p.reference)
+        .await
+        .map_err(err)?;
+    serde_json::from_value(v).map_err(|e| err(e.to_string()))
+}
+
 /// Debug: Install Adapter: P's adapter from its `:install` entry, into the tools folder.
 async fn install_adapter(front: &Front, p: DebugInstall) -> Result<String, Error> {
     let table = table(&p.adapters)?;
@@ -606,6 +619,7 @@ pub async fn serve(
         Params::DebugSelect(p) => answer(select(front, p).await),
         Params::DebugTrust(p) => answer(trust(front, p).await),
         Params::DebugInstall(p) => answer(install_adapter(front, p).await),
+        Params::DebugSource(p) => answer(source(front, p).await),
         Params::DebugBreakpoints(p) => answer(breakpoints(front, p).await),
         Params::DebugRunToCursor(p) => answer(run_to_cursor(front, p).await),
         other => return Err(Box::new(other)),

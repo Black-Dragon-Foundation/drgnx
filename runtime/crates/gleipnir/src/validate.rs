@@ -635,7 +635,8 @@ fn malformed(spec: &Spec, target: Target) -> Result<(), Refusal> {
         ));
     }
     let linux = target != Target::Macos;
-    if linux && matches!(spec.net, Net::Isolated { .. }) && relay.is_empty() {
+    // a debug fork with its own loopback needs no way out (the reduced tier's loopback is refused below)
+    if linux && matches!(spec.net, Net::Isolated { .. }) && relay.is_empty() && !loopback {
         return bad("net: isolated without a relay on Linux".into());
     }
     if linux && !mac_ports.is_empty() {
@@ -1692,6 +1693,36 @@ mod tests {
         flag(&mut s, true, vec![]);
         validate(s, &fx.ctx(), Target::LinuxBwrap)
             .expect("the full tier keeps loopback in its namespace");
+        // a sealed debug fork: its own loopback and no way out at all (no relay), the full tier only
+        let no_relay = |s: &mut Spec| {
+            if let Net::Isolated { relay, .. } = &mut s.net {
+                relay.clear();
+            }
+        };
+        let mut s = fx.spec(Target::LinuxBwrap);
+        flag(&mut s, true, vec![]);
+        no_relay(&mut s);
+        validate(s, &fx.ctx(), Target::LinuxBwrap)
+            .expect("loopback in the namespace with no relay: a sealed fork");
+        let mut s = fx.spec(Target::LinuxBwrap);
+        no_relay(&mut s);
+        refused(
+            &fx,
+            "no relay without the loopback flag",
+            Target::LinuxBwrap,
+            s,
+            Rule::Malformed,
+        );
+        let mut s = fx.spec(Target::LinuxReduced);
+        flag(&mut s, true, vec![]);
+        no_relay(&mut s);
+        refused(
+            &fx,
+            "no relay with loopback in the reduced tier",
+            Target::LinuxReduced,
+            s,
+            Rule::Malformed,
+        );
         let mut s = fx.spec(Target::LinuxBwrap);
         flag(&mut s, true, vec![47001]);
         refused(

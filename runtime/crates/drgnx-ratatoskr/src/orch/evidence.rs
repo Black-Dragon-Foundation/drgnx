@@ -65,7 +65,17 @@ pub async fn run(front: Arc<Front>, mut rx: tokio::sync::broadcast::Receiver<Job
     loop {
         let done = match rx.recv().await {
             Ok(JobEvent::Done(d)) => d,
-            Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Ok(_) => continue,
+            // events were dropped: the gates' runs whose jobs ended meanwhile are settled now (a session's own job
+            // missed here is no one's evidence; its next run is)
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                tracing::warn!("the evidence watcher missed {n} job events");
+                let ended = |id: &str| front.core.exec.done(id).is_some();
+                for (id, run) in front.orch.take_ended(ended) {
+                    settle(&front, &id, run).await;
+                }
+                continue;
+            }
             Err(_) => return,
         };
         // a run a gate started is its task's
@@ -84,9 +94,33 @@ pub async fn run(front: Arc<Front>, mut rx: tokio::sync::broadcast::Receiver<Job
     }
 }
 
-/// Gate run RUN (job ID) ended: its evidence for its task, then its detached worktree goes.
+/// Gate run ID whose tree moved while it ran, as TASK's run without a test result (`error`, so the gate holds at once
+/// rather than starting it again: the same command moves the same tree), on the facts it had at submit, its note
+/// naming the files that changed.  None for a run whose tree stayed.
+pub fn moved_run(runner: &Runner, id: &str, task: &str) -> Option<Evidence> {
+    let (files, facts) = runner.moved(id)?;
+    Some(Evidence {
+        kind: "red".into(),
+        task: task.to_string(),
+        job: id.to_string(),
+        facts,
+        rows: vec![vordr::rows::Row {
+            name: vordr::rows::JOB_ROW.into(),
+            verdict: Verdict::Fail,
+            class: Some(vordr::rows::Class::Error),
+            symbols: Vec::new(),
+        }],
+        truncated: false,
+        at: crate::clock::wall_secs(),
+        note: Some(crate::exec::moved_line(&files)),
+    })
+}
+
+/// Gate run RUN (job ID) ended: its evidence for its task (or, when its tree moved, the run that holds the gate), then
+/// its detached worktree goes.
 pub async fn settle(front: &Front, id: &str, run: crate::orch::gates::Run) {
     if let Some(e) = of_job(&front.core.exec, id, &run.task)
+        .or_else(|| moved_run(&front.core.exec, id, &run.task))
         && let Err(err) = record(front, e).await
     {
         tracing::warn!("job {id}: evidence not recorded: {}", err.message);

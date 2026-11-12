@@ -7,7 +7,7 @@
 //! - `{"op":"start"}` starts Chromium with the fixed flags, the CDP pipe at its fds 3 and 4, and only `HOME`,
 //!   `XDG_CACHE_HOME` and `TMPDIR` (all `DIR`) in its environment; the host answers `{"ev":"started","pid":N}`;
 //! - a CDP frame goes to Chromium's pipe, and each NUL-ended message from the pipe comes back as one;
-//! - `{"op":"stop","why":W}` closes the pipe, sends SIGTERM to Chromium's process group, and SIGKILL after 2 s;
+//! - `{"op":"stop","why":W}` sends SIGTERM to Chromium's process group, closes the pipe, and SIGKILL after 2 s;
 //! - Chromium's end, stopped or not, is `{"ev":"exited","code":N|null,"signal":N|null}`, after its process group is
 //!   killed, so nothing of it is left;
 //! - EOF on the hub's end (the hub is gone) stops Chromium, and the host exits 0.
@@ -605,11 +605,13 @@ impl Browser {
         }
     }
 
-    /// Close the pipe, SIGTERM, SIGKILL after [`STOP_GRACE`]; returns once `exited` is sent.
+    /// SIGTERM, close the pipe, SIGKILL after [`STOP_GRACE`]; returns once `exited` is sent.  The signal goes first:
+    /// with the pipe closed first, a browser that ends at the pipe's end (as Chromium does) could exit 0 before the
+    /// signal came, and a stop read as the browser leaving by itself.
     fn stop(mut self, why: &str) {
         eprintln!("ratatoskr browser-host: stopping the browser ({why})");
-        drop(self.to_chrome.take());
         self.signal(libc::SIGTERM);
+        drop(self.to_chrome.take());
         if let Err(RecvTimeoutError::Timeout) = self.done.recv_timeout(STOP_GRACE) {
             self.signal(libc::SIGKILL);
             let _ = self.done.recv_timeout(Duration::from_secs(5));
@@ -904,10 +906,13 @@ mod tests {
                             self.backlog.push(f);
                         }
                     }
+                    // a signal to this thread (another test's child ending) interrupts the read: read again
                     Err(e)
                         if matches!(
                             e.kind(),
-                            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                            io::ErrorKind::WouldBlock
+                                | io::ErrorKind::TimedOut
+                                | io::ErrorKind::Interrupted
                         ) => {}
                     Err(e) => panic!("{e}"),
                 }
