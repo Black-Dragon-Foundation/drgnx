@@ -11479,7 +11479,7 @@
             "type": "object"
           },
           "DebugPredicate": {
-            "description": "What makes a state bad: `test` (ARGV fails: exit 0 good, 125 skip, 1–127 bad, as `git bisect run`), `exit` (ARGV\nexits with CODE: bad; 0 or another code: good; 125 skip).  BUILD, when given, runs first: its failure skips the\nstate.  `exception` and `probe` (Python and JS) replay the run in a what-if fork (spec §19.3).",
+            "description": "What makes a state bad: `test` (ARGV fails: exit 0 good, 125 skip, 1–127 bad, as `git bisect run`), `exit` (ARGV\nexits with CODE: bad; 0 or another code: good; 125 skip).  BUILD, when given, runs first: its failure skips the\nstate.  `exception` and `probe` (Python and JS) run RUN's configuration in each state (spec §19.3's plain run in a\nslot): `exception` is bad when it raises at AT (`path:line`, relative to the project), `probe` when CONDITION is true\nat AT at least once; a run the time box cut, or a probe line that never ran, skips the state.",
             "properties": {
               "argv": {
                 "items": {
@@ -11516,7 +11516,7 @@
                 "type": "string"
               },
               "run": {
-                "description": "`exception` and `probe`: the recorded run to replay, and what to watch for (a place `path:line`, or a probe's\ncondition).",
+                "description": "`exception` and `probe`: the recorded run whose configuration runs, the place (`path:line`) and a probe's\ncondition.",
                 "type": [
                   "string",
                   "null"

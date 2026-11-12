@@ -518,12 +518,15 @@ What-if tab shows it beside the run. Linux only for now; other hosts refuse with
 - **Slots**: each slot keeps one folder (`slot-N`), moved from state to state by delta
   (`timeline::snapshot::restore_into`: only the files that differ are written, a file the state lacks is removed).
   The slots go when the bisect ends; the repository stays for narrowing until the project's next bisect, and nothing
-  outlives the hub (the folder is cleared at the first bisect of a hub).
+  outlives the hub (the forks' sweep at the hub's start clears the slots root).
 - **The predicate** (`bisect_wire::Jobs`): `test` (ARGV's exit code) or `exit` (ARGV exits with CODE: bad), with an
   optional BUILD run first (its failure skips the state), each run a sealed job in the slot's folder
   (`exec::start_sealed`, label `bisect-<id>`: an agent's sandbox with the slot its only writable folder, since the
-  states may be an agent's writing; the time box `timebox_s`, default 600 s). `exception` and `probe` (replay the recorded run in a what-if
-  fork, spec §19.3) are accepted by the schema and wait for the fork's replay seam.
+  states may be an agent's writing; the time box `timebox_s`, default 600 s). `exception` and `probe` (Python and
+  JS) run the recorded run RUN's configuration in the slot, sealed as a fork is (`fork_wire::run_in`, spec §19.3),
+  watching AT (`path:line`, relative to the project): `exception` is bad when it raises there; `probe` is bad when
+  CONDITION is true there once (`bisect_wire::outcome_of`). A run the time box cut, or a probe line that never ran
+  in that state, skips it.
 - **Narrowing** (`bisect::narrow`): the hunks from the last good tree to the first bad one (`git diff -U0`), then delta
   debugging (ddmin) over them: each set tried is the good tree with those hunks applied (`git apply --cached
   --unidiff-zero` into a temporary index), run in its own `narrow` folder.
@@ -561,9 +564,10 @@ as trees, a slot moved between them, hunks, the card), `verdandi`'s `tests/mater
 - **Python older than 3.12** (the records file names the version and holds nothing else): the static candidates, the
   assignments to the name in the files of the stop and its stack as they ran (the launch snapshot), found with
   Hrafn's grammar (`$O.attr = $V`, `name = $V` and the augmented forms), labelled "candidates, not traced".
-- **The replay** is the `origin::Replay` trait, set once by the forks (`Origins::set_replay`): D2's sealed fork of the
-  run, ended at the stop, with the tracer's files and environment. Until it is set, `debug/origin` answers that the
-  hub cannot make the fork yet.
+- **The replay** is the `origin::Replay` trait, set when the hub binds (`origin_wire::ForkReplay`): a sealed trace
+  of the run (`fork_wire::trace`, spec §19.3), ended at the stop, with the tracer's files written into the trace's
+  tree (`origin::trace_files`) and its environment (`origin::trace_env`); the records are read back with their files
+  named as the project's (`origin::read_trace`), and the tree goes. One replay per level.
 
 Method (runstav `methods::debug_origin`, the user class only): `debug/origin {run, stop, expr, depth?}` →
 `{origin}`; EXPR is a name or a dotted path. Event: `debug-origin {origin, run, stop, expr, n, state, level?, links,
@@ -574,4 +578,6 @@ The editor's half, `drgnx-debug-origin.el`: **Where Did This Come From?** (`debu
 past stop's buffer) asks for the name at point, the card inserts the hub's rows, and `RET` on a link
 (`debug-origin-open`) opens it as a past stop. Tests: `debug::tests_origin` (golden trails on
 `tests/fixtures/origin/stock.py` run by python3 under the tracer: three levels with attribute stores, a change inside
-`list.append`, the 3.11 candidates, lenient parsing, the card), `test/unit/debug-origin-test.el`.
+`list.append`, the 3.11 candidates, lenient parsing, the card), `debug::tests_fork_live`'s
+`a_python_trail_is_traced_in_sealed_replays` (live: debugpy in Gleipnir, three levels through real traces),
+`test/unit/debug-origin-test.el`.
