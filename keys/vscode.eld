@@ -112,6 +112,7 @@
         (debug-step-in "<f11>" :map drgnx-debug-session-map)
         (debug-step-out "S-<f11>")
         (debug-stop "S-<f5>")
+        (debug-convert-dape :none "the palette")
         (toggle-indent-guides :none "the palette")
         (toggle-smooth-scrolling :none "the palette")
         (toggle-sticky-scroll :none "the palette")

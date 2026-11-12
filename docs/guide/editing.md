@@ -53,6 +53,8 @@ re-indented on save. A formatter that is not installed, or fails, leaves the fil
 Code uses — debugpy for Python, the JavaScript/TypeScript debugger, delve for Go, codelldb for C, C++ and Rust — work
 here once installed (dape's documentation lists how to get each). While the session is stopped the same command
 continues; **Toggle Breakpoint**, **Step Over**, **Step Into**, **Step Out** and **Stop Debugging** do what they say.
+If you used dape, **Convert dape Configurations…** (the palette) turns your `dape-configs` into launch configurations
+once.
 In the VS Code key profile: F5, F9, F10, F11 (Step Into while a session runs — Zen Mode otherwise), S-F11, S-F5; the
 Emacs and Vim profiles reach them in the palette. dape's windows (scopes, stack, breakpoints, the REPL) open on the
 right, so the panel stays the workbench's. Module `extra/debug`, package `dape`.

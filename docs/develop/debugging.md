@@ -217,7 +217,8 @@ which shows the view. At the hub's end every session stops, children first, befo
   taking trust back stops the folder's sessions.
 - `drgnx-debug-convert-dape-configs`: once, with dape installed, each of `dape-configs` is evaluated here (a function
   value is called once), dape's own keys (`command`, `port`, `modes`, `fn` …) are dropped, and the plain result is
-  added to `drgnx-debug-configurations` in settings.el; one without `:type` is named and left out.
+  added to `drgnx-debug-configurations` in settings.el; one without `:type` is named and left out. It is the
+  palette's **Convert dape Configurations…** (`debug-convert-dape`), on no key in any profile.
 
 `drgnx doctor`'s `debug-adapters` line (group Tools) reads `etc/debug-adapters.eld` as data and says which built-in
 adapters are found (`:path` on `PATH`, `:python-module` importable by `python3`, `:tools` under
