@@ -646,7 +646,7 @@ refuses in a path and resolves in what it reports) holding `home run state data 
 `DRGNX_CONFIG_DIR` and `TMPDIR` point there. A hub is started with `--parent-pid` of the harness, so it ends with the
 test, and `RATATOSKR_SUPERVISOR=none` keeps a supervisor out of it. Only `PATH`, `DRGNX_EMACS` (for the rows that
 run the editor's own CLIs, such as the personal-notes canary) and `DBUS_SESSION_BUS_ADDRESS` are inherited, and
-`DRGNX_RATATOSKR_LOG` when set. Without it the hub logs `info` with a session's turn stages at `debug` (`HUB_LOG`:
+`DRGNX_RATATOSKR_LOG` and `DRGNX_RATATOSKR_STALL_FILE` (the stall watchdog's reports, hub.md) when set. Without it the hub logs `info` with a session's turn stages at `debug` (`HUB_LOG`:
 sending, the snapshot before the prompt, the prompt written, each update read and applied), so a failure's log tail
 (below) names the stage a session stopped at.
 `DRGNX_CONFORMANCE_ROOTS=DIR/PREFIX` makes the roots `DIR/PREFIXXXXXXX/` instead. Keep DIR short: the socket path

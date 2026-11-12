@@ -73,6 +73,13 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   the newest 7 kept, written by tracing-appender's non-blocking worker). Warnings and errors also go to stderr, behind
   `<4>` / `<3>` when `JOURNAL_STREAM` is set (the journal under systemd). `DRGNX_RATATOSKR_LOG` takes a `Targets`
   string (`info`, the default; `warn,drgnx_ratatoskr::conn=debug`). The cap, keys and params are never logged. The
+  stall watchdog (`stall.rs`) watches the runtime's two async workers: a task beats every 50 ms, and a plain thread
+  warns `the runtime stalled` when a beat is later than the threshold or a named task's poll has run that long, with
+  every poll in progress (thread, task name, how long) and, on Linux, each worker's kernel state, wait channel and
+  syscall from `/proc`. `DRGNX_RATATOSKR_STALL_MS` sets the threshold; without it the watchdog runs at 250 ms in a
+  `test-hooks` build (conformance, the perf and UI runs) and is off in the installed hub, whose idle wakeups it would
+  multiply; it is always off on the virtual clock. `DRGNX_RATATOSKR_STALL_FILE` also appends each report to that
+  file. The
   cargo feature `test-hooks` (off in the binary install.sh builds) holds the test-only surfaces: the `__test_flood`
   method, `__test_matrix_ask {action, who, session?, plan?, facts?}` (the matrix gate asked as the hub's own callers
   ask it, answered `{gate, card?, why?}`: the browser card rows raise their cards with it), `--idle-tick-ms N` (the

@@ -157,8 +157,13 @@ const RAW_SPAWNS: &[(&str, usize, &str)] = &[
     ),
     (
         "server.rs",
+        1,
+        "the accept loop: a connection's writes are serving steps (its spawn is stall.rs's)",
+    ),
+    (
+        "stall.rs",
         3,
-        "the accept loops and the connections: a connection's writes are serving steps",
+        "the watchdog's heartbeat, and stall::spawn: the connections and a session's run and turns, named for it",
     ),
     ("agents/mod.rs", 1, "the hub's shutdown"),
     (
@@ -172,8 +177,8 @@ const RAW_SPAWNS: &[(&str, usize, &str)] = &[
     ("agents/wake.rs", 1, "a job end's wake"),
     (
         "agents/session.rs",
-        5,
-        "a session's run, turns and permission asks",
+        2,
+        "a session's permission asks (its run and turns: stall::spawn)",
     ),
     ("runner/tick.rs", 2, "a plan task's start and fallback"),
     ("runner/review.rs", 1, "a plan review's work"),

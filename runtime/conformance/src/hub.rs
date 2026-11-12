@@ -101,7 +101,12 @@ impl Root {
     pub fn base_env(&self, extra: Vec<(String, String)>) -> BTreeMap<String, String> {
         let dir = |s: &str| self.path().join(s).to_string_lossy().into_owned();
         let mut vars: BTreeMap<String, String> = BTreeMap::new();
-        for k in ["PATH", "DRGNX_EMACS", "DBUS_SESSION_BUS_ADDRESS"] {
+        for k in [
+            "PATH",
+            "DRGNX_EMACS",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "DRGNX_RATATOSKR_STALL_FILE",
+        ] {
             if let Ok(v) = std::env::var(k) {
                 vars.insert(k.into(), v);
             }
