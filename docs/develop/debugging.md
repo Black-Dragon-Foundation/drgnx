@@ -619,7 +619,8 @@ What-if tab shows it beside the run. Linux only for now; other hosts refuse with
 
 ## Debugging with an agent (spec §19.5)
 
-A partner agent debugs beside the user through six norn tools (`norn/src/tools/debug.rs`), which every session gets;
+A partner agent debugs beside the user through six norn tools (`norn/src/tools/debug.rs`), which a session gets once its project debugs (a launch
+configuration, a live session or a recorded run; [coordination.md](coordination.md)), mid-session too;
 each is a thin `CoordTool` whose call reaches the hub as `Hub::debug(sid, op, args)` with the caller's session (an
 outside agent is refused: "the debugger's tools are for agents drgnx runs"). The hub's half is
 `drgnx-ratatoskr/src/debug/agent.rs`: `tool` finds the session, maps the op to its matrix row (`action_of`), gates it

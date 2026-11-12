@@ -840,13 +840,13 @@ fn find(
 
 #[derive(Deserialize, JsonSchema)]
 struct TaskWriteArgs {
-    /// create, update, claim, heartbeat, release, handoff, reassign, split, complete, link, unlink, label or tools
+    /// An op named above, or tools (the user's)
     op: String,
-    /// The task (every op but create, link and unlink)
+    /// The task (all but create, link, unlink)
     id: Option<String>,
-    /// The task's version you read (update, reassign, split)
+    /// Version you read (update, reassign, split)
     ver: Option<i64>,
-    /// The lease number claim gave you (heartbeat, release, handoff, complete)
+    /// From claim (heartbeat, release, handoff, complete)
     lease: Option<i64>,
     /// create, update: one line
     title: Option<String>,
@@ -858,13 +858,13 @@ struct TaskWriteArgs {
     acceptance: Option<String>,
     /// update: open, running, needs-input, in-review, blocked, done or dropped
     status: Option<String>,
-    /// create: labels; label: use add and remove
+    /// create; label uses add, remove
     labels: Option<Vec<String>>,
     /// create: the parent task
     parent: Option<String>,
     /// handoff, reassign: an agent's id, or user
     to: Option<String>,
-    /// release, handoff, reassign, complete: what was done and what is left
+    /// release, handoff, reassign, complete: done and left
     note: Option<String>,
     /// split: the titles of the parts
     parts: Option<Vec<String>>,
@@ -876,13 +876,13 @@ struct TaskWriteArgs {
     kind: Option<String>,
     /// link, unlink: the target
     dst: Option<String>,
-    /// label: labels to add
+    /// label: to add
     add: Option<Vec<String>>,
-    /// label: labels to remove
+    /// label: to remove
     remove: Option<Vec<String>>,
-    /// tools (the user's): the task's tracker tools on or off
+    /// tools: the task's tracker tools on or off
     tracker: Option<bool>,
-    /// A request key (1-64 of A-Za-z0-9._-): retrying with the same key returns the first answer
+    /// Request key (1-64 of A-Za-z0-9._-); a retry with it gets the first answer
     req: Option<String>,
 }
 
@@ -983,7 +983,7 @@ struct TaskWrite;
 impl RichTool for TaskWrite {
     type Args = TaskWriteArgs;
     const NAME: &'static str = "task_write";
-    const DESCRIPTION: &'static str = "Change tasks in your project: create, update (with ver), claim (lease), heartbeat, release, handoff, reassign, split, complete, link, unlink, label. Answers {id, title, ver, lease?}, a conflict (re-read, retry) or a refusal that says what to do next";
+    const DESCRIPTION: &'static str = "Change your project's tasks: create, update (ver), claim (lease), heartbeat, release, handoff, reassign, split, complete, link, unlink, label. Answers {id, title, ver, lease?}, a conflict (re-read, retry) or a refusal saying what next";
 
     fn run<'a>(
         &'a self,

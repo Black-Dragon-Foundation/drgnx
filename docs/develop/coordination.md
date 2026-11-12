@@ -550,8 +550,12 @@ same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 21 tools, or th
   `start` event (the Lisp made two).
 
 **The debugger's tools** (`tools/debug.rs`): `debug_read`, `debug_probe`, `debug_fork`, `debug_live`,
-`debug_hypothesis` and `debug_fix` are in every session's list. They take no identity: the session's is passed to the
-hub's `Hub::debug`, which gates each call by the matrix's `debug.*` rows ([debugging.md](debugging.md#debugging-with-an-agent-spec-195)).
+`debug_hypothesis` and `debug_fix` are in the list of a session whose project debugs (`ToolSets { debug }`): its folder
+or one above has `.vscode/launch.json`, or the hub has a live debug session or a recorded run there. A project that
+starts debugging gives them to its running sessions at once (`Debug::on_state` → `Sessions::debug_seen`, which
+re-lists them through `mimir::serve_live`: the agent gets `notifications/tools/list_changed`); they stay until the
+session ends, so an agent mid-investigation never loses one between two calls. They take no identity: the session's
+is passed to the hub's `Hub::debug`, which gates each call by the matrix's `debug.*` rows ([debugging.md](debugging.md#debugging-with-an-agent-spec-195)).
 
 ### Plugin abilities (`drgnx-ratatoskr/src/abilities.rs`)
 

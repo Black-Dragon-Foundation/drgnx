@@ -102,7 +102,8 @@ const BUDGET_EXTENSIONS: usize = 800;
 const BUDGET_HUDDLE: usize = 800;
 /// `procedure_get`, which every agent has (the job's pack's procedures).
 const BUDGET_PROCEDURE: usize = 600;
-/// The six debugger tools every agent has (graphical debugging D4; the matrix's `debug.*` rows decide each call).
+/// The six debugger tools a session gets once its project debugs (graphical debugging D4; the matrix's `debug.*` rows
+/// decide each call).
 const BUDGET_DEBUG: usize = 5_000;
 const _: () = assert!(
     BUDGET_BYTES

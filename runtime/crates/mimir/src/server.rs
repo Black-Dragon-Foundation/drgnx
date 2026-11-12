@@ -92,11 +92,14 @@ where
     serve_with(ctx, tools, None, info, r, w, limits).await
 }
 
+/// The tools a live server holds, as they change.
+type Live<Ctx> = watch::Receiver<Arc<[Box<dyn Tool<Ctx>>]>>;
+
 /// [`serve`] and [`serve_live`]: TOOLS, changed as LIVE says when there is one.
 async fn serve_with<Ctx, R, W>(
     ctx: Arc<Ctx>,
     tools: Arc<[Box<dyn Tool<Ctx>>]>,
-    live: Option<watch::Receiver<Arc<[Box<dyn Tool<Ctx>>]>>>,
+    live: Option<Live<Ctx>>,
     info: ServerInfo,
     r: R,
     w: W,
@@ -273,7 +276,7 @@ impl<Ctx: Send + Sync + 'static> Conn<Ctx> {
     async fn work<W: AsyncWrite + Unpin>(
         mut self,
         mut rx: mpsc::Receiver<Option<String>>,
-        mut live: Option<watch::Receiver<Arc<[Box<dyn Tool<Ctx>>]>>>,
+        mut live: Option<Live<Ctx>>,
         mut w: W,
         max_out: usize,
     ) -> Result<(), ErrorKind> {
@@ -753,7 +756,8 @@ mod tests {
                 .contains("Unknown tool"),
             "{a}"
         );
-        drop(cw);
+        // a write half dropped leaves the duplex open (the read half holds it): end it as a client does
+        cw.shutdown().await.unwrap();
         assert_eq!(serving.await.unwrap(), End::ClientClosed);
     }
 

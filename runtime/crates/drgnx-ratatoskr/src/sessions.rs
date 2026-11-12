@@ -580,11 +580,13 @@ async fn accept<C, F, Fut>(
                 match live {
                     // the session's list as it is now, and each change after it, told to the agent
                     Some(rx) => {
-                        mimir::serve_live(ctx, rx, ServerInfo::default(), r, w, Limits::default()).await
+                        mimir::serve_live(ctx, rx, ServerInfo::default(), r, w, Limits::default())
+                            .await
                     }
                     None => {
                         let tools = list().await;
-                        mimir::serve(ctx, tools, ServerInfo::default(), r, w, Limits::default()).await
+                        mimir::serve(ctx, tools, ServerInfo::default(), r, w, Limits::default())
+                            .await
                     }
                 }
             };
@@ -874,27 +876,29 @@ impl Sessions {
     /// debugger's tools get them, told to their agents at once (no restart). Tools are never taken back mid-session.
     pub async fn debug_seen(&self, roots: Vec<String>) {
         let _one = self.serial.lock().await;
-        let rows: Vec<Row> = self
-            .live
-            .lock()
-            .expect("sessions")
-            .values()
-            .filter(|l| {
-                !l.debug
-                    && l.row
-                        .cwd
-                        .as_deref()
-                        .is_some_and(|c| roots.iter().any(|r| related(Path::new(c), Path::new(r))))
-            })
-            .map(|l| l.row.clone())
-            .collect();
+        let rows: Vec<Row> =
+            self.live
+                .lock()
+                .expect("sessions")
+                .values()
+                .filter(|l| {
+                    !l.debug
+                        && l.row.cwd.as_deref().is_some_and(|c| {
+                            roots.iter().any(|r| related(Path::new(c), Path::new(r)))
+                        })
+                })
+                .map(|l| l.row.clone())
+                .collect();
         for row in rows {
             let list = self.list_for(&row, true).await;
             if let Some(l) = self.live.lock().expect("sessions").get_mut(&row.sid) {
                 l.debug = true;
                 l.tools = list.len();
                 l.tools_tx.send_replace(list);
-                tracing::info!(sid = row.sid, "the debugger's tools came to a running session");
+                tracing::info!(
+                    sid = row.sid,
+                    "the debugger's tools came to a running session"
+                );
             }
         }
     }

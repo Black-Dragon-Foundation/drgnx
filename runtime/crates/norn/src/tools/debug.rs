@@ -19,8 +19,7 @@ use super::{Coord, Ctx, Identity};
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ReadArgs {
-    /// sessions (the live ones and their stops), runs (ROOT's recorded runs), run (RUN's stops and probe hits), stop
-    /// (RUN's stop STOP: frames and values), fork (FORK's view)
+    /// sessions, runs (ROOT's), run (RUN's stops, hits), stop (RUN's STOP: frames, values), fork (FORK)
     pub what: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<String>,
@@ -37,8 +36,7 @@ pub struct ReadArgs {
 #[serde(deny_unknown_fields)]
 pub struct ProbeArgs {
     pub root: String,
-    /// probe (EXPR's value each time PATH:LINE runs), breakpoint (stop at PATH:LINE), remove (your probe or
-    /// breakpoint ID)
+    /// probe (EXPR each time PATH:LINE runs), breakpoint (at PATH:LINE), remove (your ID)
     pub op: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -57,10 +55,10 @@ pub struct ForkArgs {
     pub run: String,
     /// {stop: N} or {path, line, hit}
     pub at: Value,
-    /// {value: {path: [names], text}} to set a value at the point; none replays
+    /// {value: {path: [names], text}}; none replays
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub change: Option<Value>,
-    /// stop, exit, or {probe: ID}
+    /// stop, exit or {probe: ID}
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until: Option<Value>,
 }
@@ -69,11 +67,11 @@ pub struct ForkArgs {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LiveArgs {
-    /// The debug session (debug_read sessions)
+    /// From debug_read sessions
     pub debug_session: String,
-    /// evaluate (EXPR in the stopped frame), continue, next, step-in, step-out
+    /// evaluate (EXPR), continue, next, step-in, step-out
     pub op: String,
-    /// The stop's epoch you read (debug_read sessions): if the user moved on since, it is refused
+    /// The epoch you read; refused if the user moved on
     pub epoch: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expr: Option<String>,
@@ -84,13 +82,13 @@ pub struct LiveArgs {
 #[serde(deny_unknown_fields)]
 pub struct HypothesisArgs {
     pub root: String,
-    /// Its id, to change one you recorded
+    /// To change one you recorded
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     pub title: String,
     /// open, confirmed, rejected
     pub state: String,
-    /// What it rests on: "run R stop N", "run R probe P hit N", "fork F"
+    /// run R stop N, run R probe P hit N, fork F
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<String>,
 }
@@ -101,10 +99,9 @@ pub struct HypothesisArgs {
 pub struct FixArgs {
     pub hypothesis: String,
     pub run: String,
-    /// The changed files: {path (in the project), text}
+    /// Changed files
     pub files: Vec<FixFile>,
-    /// What passing means: {exception: "path:line"} (it is not raised there) or {probe: "path:line", expr, not}
-    /// (EXPR there never shows NOT); the program must also exit 0
+    /// {exception: PATH:LINE} (not raised there) or {probe: PATH:LINE, expr, not} (EXPR never NOT); and exit 0
     pub predicate: Value,
 }
 
@@ -144,37 +141,37 @@ debug_tool!(
     DebugRead,
     ReadArgs,
     "debug_read",
-    "Read the user's debug sessions, recorded runs, a run's stops and probe hits, a past stop's values, or a fork's view."
+    "Read debug sessions, recorded runs, their stops and values, or a fork."
 );
 debug_tool!(
     DebugProbe,
     ProbeArgs,
     "debug_probe",
-    "Add a probe or a breakpoint of yours to the user's debug session (shown as yours), or remove one of yours."
+    "Add or remove your probe or breakpoint in the user's debug session."
 );
 debug_tool!(
     DebugFork,
     ForkArgs,
     "debug_fork",
-    "Fork a recorded run in a sealed copy to a point, change a value there or nothing, and run on; read its view later."
+    "Fork a recorded run (sealed) at a point, maybe change a value, and run on."
 );
 debug_tool!(
     DebugLive,
     LiveArgs,
     "debug_live",
-    "Evaluate in or step the user's live debug session, if the user's matrix allows it; a moved-on session refuses."
+    "Evaluate in or step the user's live session, if allowed."
 );
 debug_tool!(
     DebugHypothesis,
     HypothesisArgs,
     "debug_hypothesis",
-    "Record or update a hypothesis of your investigation (open, confirmed, rejected) with its evidence."
+    "Record or update a hypothesis with its evidence."
 );
 debug_tool!(
     DebugFix,
     FixArgs,
     "debug_fix",
-    "Check a fix in a fresh fork against its predicate; only a fix that passes is offered to the user, as a card."
+    "Check a fix in a fresh fork; only a passing fix is offered to the user."
 );
 
 /// This file's tools.
