@@ -206,8 +206,10 @@ the toolbar's cards go too."
                                                           (append (butlast drgnx-statusbar-left (length tail)) '(debug) tail)
                                                         (cons 'debug drgnx-statusbar-left))))))
                               ;; the Debug Console tab of the panel (drgnx-debug-console.el); its input's keys in its
-                              ;; own map
-                              (drgnx-wb-define-tab 'panel 'debug-console :title "Debug Console")
+                              ;; own map.  The panel is the workbench's: without it (a bare Emacs) there is no tab
+                              ;; to define, as for Review's
+                              (when (fboundp 'drgnx-wb-define-tab)
+                                (drgnx-wb-define-tab 'panel 'debug-console :title "Debug Console"))
                               (let ((in-console (lambda () (derived-mode-p 'drgnx-debug-console-mode))))
                                 (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-console-commands)
                                   (if (memq id '(debug-console debug-console-clear))
