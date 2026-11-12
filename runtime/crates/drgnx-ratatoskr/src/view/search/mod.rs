@@ -802,6 +802,25 @@ impl Views {
             .is_some()
     }
 
+    /// VIEW's search ID begins in the editor: its model with no files, its window from the start, its rows reset;
+    /// false when VIEW's search is not search ID any more.
+    fn grep_start(&self, f: &Front, conn: u64, view: &str, id: u64) -> bool {
+        self.greps
+            .with(conn, view, id, |_| {
+                let mut store = lock(&self.store);
+                store.forget_windows(conn, view);
+                if let Some(m) =
+                    store.publish_model(conn, view, grep_doc(Path::new("/"), id, &[], None))
+                {
+                    f.send_to(conn, "view-model", super::Store::model_data(m));
+                }
+                for patch in start_patches(&mut store, conn, view) {
+                    f.send_to(conn, "view-patch", json!(patch));
+                }
+            })
+            .is_some()
+    }
+
     /// The thread's hand-over of one file's matches and the file as it read it (dropped when VIEW's search is not
     /// search ID any more).
     #[allow(clippy::too_many_arguments)]
@@ -1063,40 +1082,53 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
         r.group = p.group.unwrap_or_default();
         r.sort = p.sort;
     });
-    if !count {
-        // a new search's model: no files yet, and its window from the start
-        lock(&views.store).forget_windows(conn, &view);
-        views.publish_model(f, conn, &view, grep_doc(Path::new("/"), id, &[], None));
-        for patch in start_patches(&mut lock(&views.store), conn, &view) {
-            f.send_to(conn, "view-patch", json!(patch));
-        }
+    // a new search's model (no files yet, its window from the start) and its rows' reset. An index mode's go with its
+    // first rows: sent now, the reset would be drawn alone one frame on, and the rows that came after it would wait
+    // for the view's throttle (`drgnx-view-delay`) rather than share its frame, as Text's first file does
+    let index = !matches!(mode, Mode::Text | Mode::Pattern(_));
+    if !count && !index {
+        views.grep_start(f, conn, &view, id);
     }
     let Some(front) = views.front.get().cloned() else {
         return Err(invalid("view", "the hub is starting"));
     };
-    if !matches!(mode, Mode::Text | Mode::Pattern(_)) {
+    if index {
         let root = p.root.clone();
         crate::clock::spawn("search:modes", async move {
             let Some(f) = front.upgrade() else { return };
-            let found = modes::found(&f, &root, &mode, context).await;
-            let error = match found {
-                Ok((files, kinds)) => {
+            let views = &f.core.views;
+            let mut started = count;
+            // each file as it is read, in the order shown: the first rows wait for the first file only
+            let found = modes::found(
+                &f,
+                &root,
+                &mode,
+                context,
+                |kinds| {
                     if kinds.is_some() {
-                        f.core
-                            .views
-                            .greps
-                            .with(conn, &view, id, |r| r.kinds = kinds);
+                        views.greps.with(conn, &view, id, |r| r.kinds = kinds);
                     }
-                    for (file, ms, read) in files {
-                        if !f.core.views.grep_batch(&f, conn, &view, id, file, ms, read) {
-                            return;
+                },
+                |file, ms, read| {
+                    if !started {
+                        started = true;
+                        if !views.grep_start(&f, conn, &view, id) {
+                            return false;
                         }
                     }
-                    None
-                }
+                    views.grep_batch(&f, conn, &view, id, file, ms, read)
+                },
+            )
+            .await;
+            let error = match found {
+                Ok(true) => None,
+                Ok(false) => return,
                 Err(e) => Some(e),
             };
-            f.core.views.grep_done(&f, conn, &view, id, error);
+            if !started && !views.grep_start(&f, conn, &view, id) {
+                return;
+            }
+            views.grep_done(&f, conn, &view, id, error);
         });
         return Ok(RunStarted { run: id });
     }

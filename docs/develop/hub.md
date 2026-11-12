@@ -2409,7 +2409,7 @@ snapshots; the search itself is `hrafn::grep`).
   (Open, a git scope) is searched alone, the globs narrowing it (`hrafn::grep`: a name glob names any part of the path,
   one with a slash the path from the root; a list goes to the searcher a thousand files at a time; files outside the
   root are not searched). It stops the view's earlier search, records the search as recent,
-  sends every class of `view` a `reset` of no rows at once, and answers `{run}`, the run's number. A thread then runs
+  sends every class of `view` a `reset` of no rows at once (Text and Pattern; Symbol's and Meaning's go with their first rows, below), and answers `{run}`, the run's number. A thread then runs
   ripgrep (else `git grep` in a repository, else `grep`) and sends, as each file's lines are complete, one `insert`
   after the last row: the file's header row `f:<file>` and one row `m:<run>:<n>` per match (`n` from 0 in the run's
   order; the id is opaque, the row's props name the match). `<file>` is the path relative to `root` when it is under
@@ -2420,8 +2420,12 @@ snapshots; the search itself is `hrafn::grep`).
   the view (and the editor drops one by `base` as well). `count: true` sends only that event: no model, no rows, no
   context labels, and the search is not recorded as recent (a pinned saved search's live count, on a view id of its
   own, `<view>~pin<N>`).
-- **Symbol and Meaning** (`view/search/modes.rs`) ask the index on a task of their own and send all their files when
-  it answers, then `search-run-done` (its `error` is the index's refusal, e.g. no index yet). Symbol (`{mode:
+- **Symbol and Meaning** (`view/search/modes.rs`) ask the index on a task of their own and, once it answers, send
+  each file as it is read (off the runtime, in the order shown), then `search-run-done` (its `error` is the index's
+  refusal, e.g. no index yet). Their `reset` (and the run's empty model) goes with the first file's rows, or with the
+  end when none came, after `{run}`: sent at once, it was drawn alone one frame on, and the rows that followed the
+  index's answer waited for the view's throttle (`drgnx-view-delay`, 100 ms) instead of sharing the reset's frame, as
+  Text's first file does. The view keeps the previous search's rows until then. Symbol (`{mode:
   "symbol", name, case?}`, case on by default) is `search/usages`' answer: the files that define the name first, each
   definition's line and then the file's uses in line order, then the files that use it in the index's rank (at most
   100), each line's whole-word occurrences of the name a match (the line read from disk; a definition whose line lacks
