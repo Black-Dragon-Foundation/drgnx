@@ -720,8 +720,11 @@ error, or when it does not answer."
   (let* ((done nil) result error
          (limit (+ (float-time (time-convert nil t)) (or timeout 5) 1))
          (id (drgnx-hub-call method params (lambda (r e) (setq done t result r error e)) :deadline (or timeout 5))))
-    ;; the deadline ends the wait; the real clock is only a backstop (a test's virtual clock never fires the deadline)
-    (while (and (not done) (< (float-time (time-convert nil t)) limit)) (accept-process-output nil 0.02))
+    ;; the deadline ends the wait; the real clock is only a backstop (a test's virtual clock never fires the deadline).
+    ;; The wait is on the call connection: it returns as soon as that connection is read.  On no process it would
+    ;; return only once no process had written for 10 ms (Emacs's read delay), whatever ended the wait
+    (while (and (not done) (< (float-time (time-convert nil t)) limit))
+      (accept-process-output (and (process-live-p drgnx-hub--client) drgnx-hub--client) 0.02))
     (unless done (drgnx-hub--settle id nil "gave up"))
     (cond ((not done) (error "The drgnx hub did not answer %s" method))
           (error (error "drgnx hub: %s" error))

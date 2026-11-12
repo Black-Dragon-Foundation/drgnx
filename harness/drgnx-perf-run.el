@@ -1600,7 +1600,7 @@ rows patch arrived, in ms from the search's start."
             (list (* 1000 (- (aref r 2) (aref r 0))) (* 1000 (- (or (aref r 4) (aref r 2)) (aref r 0)))))))
       (defun drgnx-perf--sm-call (method params)
         "METHOD's round trip in ms, to the answer's arrival, and its result: (MS . RESULT).  Timed in the answer's
-callback, as the views get answers: `drgnx-hub-call-sync' returns only at the end of one of its 20 ms polls."
+callback, as the views get answers."
         (let* ((start (float-time)) (r (vector nil nil nil)))
           (drgnx-hub-call method params (lambda (res err) (aset r 0 (float-time)) (aset r 1 res) (aset r 2 err)) :deadline 30)
           (unless (drgnx-perf--wait 30 (lambda () (aref r 0))) (error "Premise: %s did not answer" method))
@@ -1617,20 +1617,25 @@ callback, as the views get answers: `drgnx-hub-call-sync' returns only at the en
       (defun drgnx-perf--sm-measure ()
         "Symbol: 100 searches of the names Hrafn's usages row asks (`fn_name((r * r * 31) % 200, r % 10)', its budget's
 names): :symbol_first_ms (to the first rows drawn; the budget), :symbol_patch_ms (to the hub's first rows patch) and
-:usages_ms (`search/usages' of each, the hub's lookup); and 20 of `parse_request_0_0', the most called function (tens
+:usages_ms (`search/usages' of each, the hub's lookup), :usages_sync_ms (the same through
+`drgnx-hub-call-sync', as a command waits for it); and 20 of `parse_request_0_0', the most called function (tens
 of thousands of uses), :symbol_hot_first_ms, reported.  Meaning: 100 searches each paired with a `search/query' of
 its question: :meaning_first_ms, :meaning_patch_ms, :query_ms, and :meaning_over_ms (the pair's difference, whose
 p95 is the budget).  One of each first, to warm."
         (let ((questions ["where do we retry a failed request" "how is the session token verified"
                           "parse the header of a frame" "flush the buffer before the socket closes"
                           "release the queue of a project" "encode the record for the channel"])
-              sym sym-patch hot meaning meaning-patch query over usages)
+              sym sym-patch hot meaning meaning-patch query over usages sync)
           (drgnx-perf--sm-once 'symbol (drgnx-perf--sm-name 0 0))
           (dotimes (r 100)
             (let* ((name (drgnx-perf--sm-name (% (* r r 31) 200) (% r 10))) (o (drgnx-perf--sm-once 'symbol name)))
               (push (car o) sym)
               (push (cadr o) sym-patch)
-              (push (drgnx-perf--sm-usages name) usages)))
+              (push (drgnx-perf--sm-usages name) usages)
+              (push (let ((t0 (float-time)))   ; the same call as a command waits for it
+                      (drgnx-hub-call-sync "search/usages" (list :root drgnx-perf--sm-root :name name :k 100) 30)
+                      (* 1000 (- (float-time) t0)))
+                    sync)))
           (dotimes (_ 20) (push (car (drgnx-perf--sm-once 'symbol "parse_request_0_0")) hot))
           (drgnx-perf--sm-once 'meaning (aref questions 0))
           (drgnx-perf--sm-query (aref questions 0))
@@ -1645,7 +1650,7 @@ p95 is the budget).  One of each first, to warm."
               (push (caddr pair) meaning-patch)
               (push (- (cadr pair) (car pair)) over)))
           (let ((st (lambda (xs) (mapcar #'drgnx-perf--round (drgnx-perf-stats xs)))))
-            (list :symbol_first_ms (funcall st sym) :symbol_patch_ms (funcall st sym-patch) :usages_ms (funcall st usages)
+            (list :symbol_first_ms (funcall st sym) :symbol_patch_ms (funcall st sym-patch) :usages_ms (funcall st usages) :usages_sync_ms (funcall st sync)
                   :symbol_hot_first_ms (funcall st hot)
                   :meaning_first_ms (funcall st meaning) :meaning_patch_ms (funcall st meaning-patch)
                   :query_ms (funcall st query) :meaning_over_ms (funcall st over)))))
