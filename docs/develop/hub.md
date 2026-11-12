@@ -4126,8 +4126,11 @@ since the last write, and the writer keeps that one. The writer holds the step's
 write is served meanwhile; with no edit step waiting, a write costs a lock and nothing more. A step whose row cannot be
 written closes its cell (`EditCell::close`), so no later write takes a tree nobody would keep; a tree taken for it
 already stays held until the session's refs are pruned, since the steps closed before one write share it. Each
-session has its own persistent index file in the shadow repository, so a snapshot only hashes what changed. The
-sandbox's secret file names (`.env`, `.npmrc`, `credentials*`, keys, …) are never in a tree. Over
+session has its own persistent index file in the shadow repository, so a snapshot only hashes what changed. A missing
+shadow repository is made by `git init` in a folder of its own beside it, then renamed into place: a session's first
+two snapshots (its turn's and its base's) are taken at once, and two inits in one folder failed on each other's
+template files, which left the turn without its checkpoint (a revert to its first step then went back to a later
+tree). The sandbox's secret file names (`.env`, `.npmrc`, `credentials*`, keys, …) are never in a tree. Over
 `drgnx-agents-checkpoint-cap` (summed over the shadow repositories), the refs of finished sessions go oldest first and
 the repositories are collected (`git gc --prune=now`); with nothing finished left, snapshots stop and the editors get
 one `notice` (a running task's refs are never removed). Restore and fork are part 4's.
