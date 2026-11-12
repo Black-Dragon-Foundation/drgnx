@@ -850,8 +850,7 @@ impl Views {
     }
 
     /// One file's matches (and the file as read) kept in VIEW's search ID with nothing sent: an index mode's first
-    /// window goes whole ([`Views::grep_first`]). The run's rows so far, or none when VIEW's search is not search ID
-    /// any more.
+    /// file goes with the run's reset ([`Views::grep_first`]). False when VIEW's search is not search ID any more.
     fn grep_hold(
         &self,
         conn: u64,
@@ -860,19 +859,20 @@ impl Views {
         file: String,
         ms: Vec<Match>,
         read: Option<Read>,
-    ) -> Option<usize> {
-        self.greps.with(conn, view, id, |run| {
-            let ns: Vec<u32> = (run.next..).take(ms.len()).collect();
-            run.next += ms.len() as u32;
-            run.files.push(Found::new(file, ms, ns, read));
-            run.files_changed();
-            rows_total(run)
-        })
+    ) -> bool {
+        self.greps
+            .with(conn, view, id, |run| {
+                let ns: Vec<u32> = (run.next..).take(ms.len()).collect();
+                run.next += ms.len() as u32;
+                run.files.push(Found::new(file, ms, ns, read));
+                run.files_changed();
+            })
+            .is_some()
     }
 
-    /// VIEW's search ID begins in the editor with the files held ([`Views::grep_hold`]): its model and its first
-    /// window in one reset, which the view draws at once (a reset alone would be drawn empty, and rows after it would
-    /// wait for the view's throttle); false when VIEW's search is not search ID any more.
+    /// VIEW's search ID begins in the editor with the file held ([`Views::grep_hold`]): its model and its first rows
+    /// in one reset, which the view draws at once (a reset alone would be drawn empty, and rows after it would wait for
+    /// the view's throttle); false when VIEW's search is not search ID any more.
     fn grep_first(&self, f: &Front, conn: u64, view: &str, id: u64) -> bool {
         self.greps
             .with(conn, view, id, |run| {
@@ -1154,7 +1154,7 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
         r.sort = p.sort;
     });
     // a new search's model (no files yet, its window from the start) and its rows' reset. An index mode's go with its
-    // first window, in one reset the view draws at once ([`Views::grep_first`])
+    // first file, in one reset the view draws at once ([`Views::grep_first`])
     let index = !matches!(mode, Mode::Text | Mode::Pattern(_));
     views.greps.with(conn, &view, id, |r| r.sorted = !index);
     if !count && !index {
@@ -1168,8 +1168,7 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
         crate::clock::spawn("search:modes", async move {
             let Some(f) = front.upgrade() else { return };
             let views = &f.core.views;
-            // each file as it is read, in the order shown: held until the first window is full (or the files end),
-            // then each as it comes
+            // each file as it is read, in the order shown: the first goes with the run's reset, the others as they come
             let mut holding = !count;
             let found = modes::found(
                 &f,
@@ -1185,14 +1184,9 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
                     if !holding {
                         return views.grep_batch(&f, conn, &view, id, file, ms, read);
                     }
-                    match views.grep_hold(conn, &view, id, file, ms, read) {
-                        None => false,
-                        Some(rows) if rows >= WINDOW => {
-                            holding = false;
-                            views.grep_first(&f, conn, &view, id)
-                        }
-                        Some(_) => true,
-                    }
+                    holding = false;
+                    views.grep_hold(conn, &view, id, file, ms, read)
+                        && views.grep_first(&f, conn, &view, id)
                 },
             )
             .await;

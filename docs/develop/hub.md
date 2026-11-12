@@ -2451,8 +2451,9 @@ snapshots; the search itself is `hrafn::grep`).
   own, `<view>~pin<N>`).
 - **Symbol and Meaning** (`view/search/modes.rs`) ask the index on a task of their own and, once it answers, send
   each file as it is read (off the runtime, in the order shown), then `search-run-done` (its `error` is the index's
-  refusal, e.g. no index yet). The files are held until the first window (`WINDOW`, 200 rows) is full, or the end
-  when fewer came, and sent as one patch: the `reset` with those rows (and the run's empty model), after `{run}`. The
+  refusal, e.g. no index yet). The first file (or the end, when none came) goes as one patch: the `reset` with its
+  rows (and the run's model), after `{run}`. (Holding the whole first window instead put a Symbol search's first
+  rows at 55–70 ms, p50, against 26 ms: a name's files are read one by one.) The
   editor sets `drgnx-view-patch-hurry` for these runs, so that patch is drawn at the view's next pass rather than a
   frame later (`drgnx-view-first-delay` waits for the rest of a burst, and this one has none); the files after it go
   as Text's do. Sent at once, the reset was drawn alone one frame on, and the rows that followed waited for the view's
