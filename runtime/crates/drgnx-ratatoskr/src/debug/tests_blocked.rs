@@ -5,6 +5,7 @@ use super::blocked::{self, Plan};
 use super::session::Request;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 const PORTS: [u16; 8] = [47000, 47001, 47002, 47003, 47004, 47005, 47006, 47007];
 
@@ -257,5 +258,51 @@ async fn a_strangers_listener_on_the_adapters_port_ends_the_session_unconnected(
     assert_eq!(
         stranger.accept().map(|_| ()).unwrap_err().kind(),
         std::io::ErrorKind::WouldBlock
+    );
+}
+
+/// macOS: the adapter and the program each start through the session's seal (Seatbelt with the block's ports), never
+/// bare; the seal's refusal is the start's error.
+#[tokio::test]
+async fn the_adapter_and_the_program_start_through_the_seal() {
+    use super::Launcher;
+    let seen: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
+    let seal = |seen: Arc<Mutex<Vec<Vec<String>>>>| -> blocked::Seal {
+        Arc::new(move |spec: draugr::Spec| {
+            let seen = seen.clone();
+            Box::pin(async move {
+                let mut argv = vec![spec.program.display().to_string()];
+                argv.extend(spec.args.iter().map(|a| a.to_string_lossy().into_owned()));
+                seen.lock().unwrap().push(argv);
+                Err::<draugr::Spec, String>("sealed: refused here".into())
+            })
+        })
+    };
+    // debugpy's shape: the adapter first
+    let l = blocked::Blocked::new(sleeping(47990), vec![], std::env::temp_dir(), None)
+        .sealed(seal(seen.clone()));
+    let e = l
+        .connect()
+        .await
+        .err()
+        .expect("a refused seal starts nothing");
+    assert!(e.contains("sealed: refused here"), "{e}");
+    // js-debug's shape: the program first
+    let mut p = sleeping(47990);
+    p.debuggee.after_listen = None;
+    p.debuggee.argv = vec!["sleep".into(), "31".into()];
+    let l = blocked::Blocked::new(p, vec![], std::env::temp_dir(), None).sealed(seal(seen.clone()));
+    let e = l
+        .connect()
+        .await
+        .err()
+        .expect("a refused seal starts nothing");
+    assert!(e.contains("sealed: refused here"), "{e}");
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [
+            vec!["sleep".to_owned(), "30".into()],
+            vec!["sleep".to_owned(), "31".into()]
+        ]
     );
 }
