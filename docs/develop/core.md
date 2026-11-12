@@ -176,8 +176,10 @@ lock is released in `unwind-protect`.
 
 **The lock** is the directory `.NAME.lock/` beside the truename. `make-directory`, without parents, decides who holds
 it. Its `owner` file holds `(:pid :host :started :time)`. `(drgnx-file-lock-holder FILE)` reads it.
-- An attempt is made every `drgnx-file-lock-retry` (10 ms) up to TIMEOUT. With TIMEOUT 0 there is one attempt.
-  Then `drgnx-file-busy` names the holder. It never prompts.
+- An attempt is made every `drgnx-file-lock-retry` (10 ms) while one holder has had the lock less than TIMEOUT. With
+  TIMEOUT 0 there is one attempt. Then `drgnx-file-busy` names the holder. It never prompts. TIMEOUT counts per
+  holder: a lock that changes hands is in use, not stuck, so two writers at once (two Trust Folder commands, each with
+  many changes) both land, the later one waiting its turn behind the other's changes.
 - A lock is stale when its `:time` (or, with no owner file, the directory's mtime) is older than
   `drgnx-file-lock-stale` (10 s). It is also stale when it is on this host and its pid is gone or started at
   another time (`:started` compared within 1 s), so a reused pid is not taken for the holder. Where Emacs cannot
