@@ -49,8 +49,10 @@ pub const PLACEHOLDERS: &[&str] = &[
     "TCP_LO_PORT",
     // A debug session's own loopback port (`"net": "loopback"` rows).
     "FREE_PORT",
-    // macOS: the active developer dir (`xcode-select -p`, by its true name).
+    // macOS: the active developer dir (xcode-select's link, by its true name), and where its LLDB.framework is
+    // (an Xcode's `../SharedFrameworks`, the Command Line Tools' `Library/PrivateFrameworks`).
     "DEVELOPER_DIR",
+    "LLDB_FRAMEWORKS",
 ];
 
 /// The listeners a row may name in `listeners_silent`.

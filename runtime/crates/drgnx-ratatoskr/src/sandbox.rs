@@ -245,13 +245,13 @@ pub fn to_draugr(inv: Invocation) -> draugr::Spec {
     }
 }
 
-/// The macOS facts for the Seatbelt profile: the developer dir behind xcode-select's root-owned link, read the way
-/// draugr finds git (`<developer dir>/usr/bin/git`), or none.
+/// The macOS facts for the Seatbelt profile: the active developer dir behind xcode-select's root-owned link, by true
+/// name (an Xcode under `/Applications` too, though draugr refuses its git), or none.
 #[cfg(target_os = "macos")]
 pub fn mac_context() -> gleipnir::sbpl::MacContext {
-    let developer_dir = draugr::git::git_program()
+    let developer_dir = draugr::git::developer_dir()
         .ok()
-        .and_then(|g| g.path.ancestors().nth(3).map(Path::to_path_buf));
+        .and_then(|d| std::fs::canonicalize(d).ok());
     gleipnir::sbpl::MacContext {
         developer_dir,
         ..Default::default()
