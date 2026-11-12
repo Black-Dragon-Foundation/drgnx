@@ -285,7 +285,7 @@
  ;; 831 kB, Lisp drawing the frames); work-live-old (`drgnx-view-old-path`, the paired row) reports the same rows.  The
  ;; work-nav and work-relayout allocations are a tenth of as2-fix's (2026-11-07, b1: work-nav p50 11191 objects per key,
  ;; work-relayout p50 128420); their CPU (b1: p90 11.31 and 59.16 ms) and rows (0) are kept as measured.  Both
- ;; workloads still drive the old path (Sjá's keys are `work-nav-rows').
+ ;; workloads drive the map on the hub's rows (Sjá's keys) since 2026-11-12.
  (work-live (:draw_kb :p50) 40 :report-only ot5) (work-live-old (:draw_kb :p50) 40 :report-only ot5)
  (work-live-old (:slice_ms :max) 4 :report-only ot5) (work-live-old (:draw_ms_s) 40 :report-only ot5)
  (work-nav (:alloc :p50) 1119 :report-only ot5) (work-nav (:cpu_ms :p90) 11.31 :report-only ot5)

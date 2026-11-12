@@ -68,8 +68,9 @@ the map on the hub's rows (with Sjá); else on `drgnx-view-old-path', the frames
   (cl-loop for k in '("TAB" "<right>" "<left>" "<down>" "<up>") append (make-list 60 (list :keys k))))
 
 (defun drgnx-perf-work--relayout-keys ()
-  "320 layout commands: f, o and the layers 1 to 6, 40 times.  About one in six makes the hub send a frame with a
-layout, and the lab's p95 needs 100 samples; each command waits up to a second for the layout before it."
+  "320 layout commands: f, o and the layers 1 to 6, 40 times.  Most change rows of the map (one that changes none, its
+answer with no patch before it, counts as lost), and the lab's p95 needs 100 samples; each command waits up to a
+second for the layout before it to be drawn."
   (cl-loop repeat 40 append (mapcar (lambda (k) (list :keys k)) '("f" "o" "1" "2" "3" "4" "5" "6"))))
 
 (defconst drgnx-perf-work--relayout-form
@@ -90,7 +91,7 @@ layout, and the lab's p95 needs 100 samples; each command waits up to a second f
         (drgnx-perf--rl-note 'begin (and drgnx-perf--rl-t0 t) unread-command-events)
         (drgnx-perf--rl-idle 1)
         (drgnx-perf--rl-note 'waited (and drgnx-perf--rl-t0 t) unread-command-events)
-        (when drgnx-perf--rl-t0 ; no frame with a layout came for the one before: a command that draws nothing
+        (when drgnx-perf--rl-t0 ; the one before was not drawn within the second (or its set had no answer)
           (let ((c (assq drgnx-perf--rl-cmd drgnx-perf--rl-lost)))
             (if c (cl-incf (cdr c)) (push (cons drgnx-perf--rl-cmd 1) drgnx-perf--rl-lost))))
         (let ((c (assq this-command drgnx-perf--rl-asked)))
@@ -107,13 +108,15 @@ layout, and the lab's p95 needs 100 samples; each command waits up to a second f
             (push (* 1000 (- (float-time) drgnx-perf--rl-t0)) drgnx-perf--rl-ms)
             (setq drgnx-perf--rl-t0 nil))
           (setq drgnx-perf--rl-timer nil)))
-      (defun drgnx-perf--rl-changed (_view marks)
-        "A frame with a layout came: the view draws it; poll until it has."
-        (when (plist-get marks :layout) (drgnx-perf--rl-note 'layout-frame))
-        (push (list (and drgnx-perf--rl-t0 t) (and (plist-get marks :layout) t) (and drgnx-perf--rl-timer t)) drgnx-perf--rl-frames)
-        (when (and drgnx-perf--rl-t0 (plist-get marks :layout) (not drgnx-perf--rl-timer))
-          (push (* 1000 (- (float-time) drgnx-perf--rl-t0)) drgnx-perf--rl-frame-ms)
-          (setq drgnx-perf--rl-timer t)))
+      (defvar drgnx-perf--rl-sent nil "Non-nil from the layout's `work/map/set' until its answer.")
+      (defvar drgnx-perf--rl-patched nil "The ms from the command to the first patch applied since its set was sent.")
+      (defun drgnx-perf--rl-applied (orig patch)
+        "A patch came for the map.  The hub sends a layout's rows before it answers the set that asked for it (one
+connection, in order), so the first patch applied while the set waits for its answer is the layout's."
+        (prog1 (funcall orig patch)
+          (when (and drgnx-perf--rl-sent drgnx-perf--rl-t0 (not drgnx-perf--rl-patched))
+            (drgnx-perf--rl-note 'layout-patch)
+            (setq drgnx-perf--rl-patched (* 1000 (- (float-time) drgnx-perf--rl-t0))))))
       (defun drgnx-perf--rl-drawn (&rest _)
         "After each draw of the map's view (no timer of the lab's own to wake every millisecond): the layout is drawn
 when the view has nothing pending."
@@ -137,13 +140,28 @@ when the view has nothing pending."
       (defun drgnx-perf--rl-pre ()
         (drgnx-perf--rl-note 'cmd (key-description (this-command-keys)) (if (symbolp this-command) this-command 'closure)))
       (defun drgnx-perf--rl-answer (t0 callback result err)
-        (drgnx-perf--rl-note 'answer (plist-get result :version) (and err t))
-        (push (list (round (* 1000 (- (float-time) t0))) (and err t) (plist-get result :version)) drgnx-perf--rl-set)
+        "The layout's answer: with a patch applied since its set was sent, the view draws it (poll until it has); with
+none, the layout changed no row: it counts as lost and no command waits for it."
+        (let ((v (plist-get result :version)))
+          (drgnx-perf--rl-note 'answer v (and err t) drgnx-perf--rl-patched)
+          (push (list (round (* 1000 (- (float-time) t0))) (and err t) v) drgnx-perf--rl-set)
+          (setq drgnx-perf--rl-sent nil)
+          (when (and drgnx-perf--rl-t0 (not err))
+            (if drgnx-perf--rl-patched
+                (progn (push (list t t nil) drgnx-perf--rl-frames)
+                       (push drgnx-perf--rl-patched drgnx-perf--rl-frame-ms)
+                       (setq drgnx-perf--rl-timer t)
+                       (drgnx-perf--rl-poll))
+              (push (list t nil nil) drgnx-perf--rl-frames)
+              (let ((c (assq drgnx-perf--rl-cmd drgnx-perf--rl-lost)))
+                (if c (cl-incf (cdr c)) (push (cons drgnx-perf--rl-cmd 1) drgnx-perf--rl-lost)))
+              (setq drgnx-perf--rl-t0 nil))))
         (funcall callback result err))
       (defun drgnx-perf--rl-call (orig method params callback)
         "Diagnosis: time each `work/map/set' answer and count the subscriptions."
         (if (equal method "work/map/set")
             (progn (drgnx-perf--rl-note 'set (plist-get params :collapsed) (plist-get (plist-get params :filters) :overlaps))
+                   (setq drgnx-perf--rl-sent t drgnx-perf--rl-patched nil)
                    (funcall orig method params (apply-partially #'drgnx-perf--rl-answer (float-time) callback)))
           (when (equal method "work/map/subscribe") (cl-incf drgnx-perf--rl-subs))
           (funcall orig method params callback)))
@@ -159,7 +177,7 @@ when the view has nothing pending."
       (advice-add 'drgnx-work-client--call :around #'drgnx-perf--rl-call)
       (add-hook 'pre-command-hook #'drgnx-perf--rl-pre)
       (advice-add 'drgnx-work-map--send-filters :before #'drgnx-perf--rl-begin)
-      (add-hook 'drgnx-work-client-change-functions #'drgnx-perf--rl-changed)
+      (advice-add 'drgnx-view-apply-patch :around #'drgnx-perf--rl-applied)
       (advice-add 'drgnx-view--draw-buffer :after #'drgnx-perf--rl-drawn)
       (defun drgnx-perf--rl-measure ()
         (drgnx-perf--rl-idle)
@@ -175,9 +193,9 @@ when the view has nothing pending."
         (advice-remove 'drgnx-work-map--send-filters #'drgnx-perf--rl-begin)
         (advice-remove 'drgnx-work-client--call #'drgnx-perf--rl-call)
         (remove-hook 'pre-command-hook #'drgnx-perf--rl-pre)
-        (remove-hook 'drgnx-work-client-change-functions #'drgnx-perf--rl-changed)
+        (advice-remove 'drgnx-view-apply-patch #'drgnx-perf--rl-applied)
         (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--rl-drawn)
-        (setq drgnx-perf--rl-timer nil drgnx-perf--rl-t0 nil)
+        (setq drgnx-perf--rl-timer nil drgnx-perf--rl-t0 nil drgnx-perf--rl-sent nil)
         (when drgnx-perf--rl-bt (error "BT %s" (substring drgnx-perf--rl-bt 0 (min 3000 (length drgnx-perf--rl-bt))))))
       t))
   "The relayout workload's session side: the time from a layout command (`drgnx-work-map--send-filters') to the frame it
@@ -796,8 +814,8 @@ above applied.  An error when it is not on the rows path."
   "The Work space's workloads (specs like `drgnx-perf-run--workloads'): VISIT is the form that visits the typing
 fixture, KILL-FIXTURE the form that kills its buffer.  `work-nav', `work-raster', `work-relayout', `work-live',
 `work-live-old', `work-typing-shown', `work-typing-hidden', `view-patch', `work-nav-rows', `work-trail',
-`trail-long' and `work-board'.  `work-live' puts the map on the hub's rows, `work-board' the Board (on the rows path
-only); the others keep the map on `drgnx-view-old-path'."
+`trail-long' and `work-board'.  `work-nav', `work-relayout' and `work-live' put the map on the hub's rows,
+`work-board' the Board (on the rows path only); the others keep the map on `drgnx-view-old-path'."
   (let* ((lib (drgnx-perf-work--lib-form))
          (type (lambda (s) (list :type s)))
          (typing (make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) ")))
@@ -807,7 +825,7 @@ only); the others keep the map on `drgnx-view-old-path'."
          (typing-each (lambda (&optional extra)
                         (concat "(progn " visit " (drgnx-perf--work-premise) " extra " t)")))
          (typing-check "(and (drgnx-perf--work-premise) t)"))
-    `((work-nav :setup ,(funcall up t "")
+    `((work-nav :setup ,(funcall up t "" t)
                 :each "(progn (drgnx-perf--work-premise) (drgnx-perf--work-select-map) t)"
                 :actions ,(drgnx-perf-work--nav-keys)
                 :measure "(list :frame_kb (round (/ (memory-report-object-size (drgnx-perf--work-state)) 1024.0)))"
@@ -817,7 +835,7 @@ only); the others keep the map on `drgnx-view-old-path'."
                    :each "(progn (drgnx-perf--work-premise) t)"
                    :measure "(drgnx-perf--raster-measure)"
                    :teardown ,down)
-      (work-relayout :setup ,(funcall up t drgnx-perf-work--relayout-form)
+      (work-relayout :setup ,(funcall up t drgnx-perf-work--relayout-form t)
                      :each "(drgnx-perf--rl-guard (lambda () (drgnx-perf--rl-arm) (drgnx-perf--work-premise) (drgnx-perf--work-select-map) t))"
                      :actions ,(drgnx-perf-work--relayout-keys)
                      :measure "(drgnx-perf--rl-guard #'drgnx-perf--rl-measure)"

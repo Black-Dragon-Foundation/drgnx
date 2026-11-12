@@ -183,6 +183,28 @@ the selection with `work/map/set'."
     (drgnx-view-nav--notice buf)
     (should (equal (list :view view :selected "agent:a") (cdr (assoc "work/map/set" drgnx-work-map-rows-test--sent))))))
 
+(ert-deftest drgnx-work-map-rows/asked-layout-draws-at-the-answer ()
+  "Pattern D: a layout the user asks for (the filters) is drawn at the next timer pass once the hub answers (its rows
+came before the answer), not a throttle later; an answer with an error hurries nothing."
+  (drgnx-work-map-rows-test--with
+    (let ((drgnx-work-client--views (make-hash-table :test #'equal)) (callbacks nil) (hurried nil))
+      (cl-letf (((symbol-function 'drgnx-work-client--call)
+                 (lambda (method _params cb) (when (equal method "work/map/set") (push cb callbacks)) t))
+                ((symbol-function 'drgnx-view-hurry) (lambda (v) (push v hurried))))
+        (drgnx-work-client-open "wmr" (list :id "wmr" :roots '("/r/")) :rows t)
+        (setq-local drgnx-work-space--view "wmr")
+        (drgnx-work-map-overlaps)
+        (should (= 1 (length callbacks)))
+        (drgnx-view-apply-patch (drgnx-work-map-rows-test--patch
+                                 view 7 1 2 (list (list :replace (list (drgnx-work-map-rows-test--row "QQ AA"))))))
+        (should-not hurried)
+        (funcall (car callbacks) (list :version 2) nil)
+        (should (equal (list drgnx-view) hurried))
+        (setq hurried nil)
+        (drgnx-work-map-overlaps)
+        (funcall (car callbacks) nil "no view")
+        (should-not hurried)))))
+
 (ert-deftest drgnx-work-map-rows/old-path-switch-still-draws-the-map ()
   "Pattern D: with `drgnx-view-old-path' the map draws its own frames (its view type) and subscribes without `rows';
 off it, with Sjá, the map is hub-fed and subscribes with `rows'."

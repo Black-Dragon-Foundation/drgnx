@@ -325,6 +325,11 @@ sent a `view/env' for (the env's view is ID); no frame is kept here."
   "Tell the hub what changed in view ID: PARAMS are `work/map/set''s fields (:filters :collapsed :width_units
 :density :shown :selected).  A change of the saved parameters (:filters :collapsed :width_units :density :selected) is
 kept for the next subscription.  Never signals: a hub that is not there is the reconnecting view's matter."
+  (apply #'drgnx-work-client-set-then id #'ignore params))
+
+(defun drgnx-work-client-set-then (id callback &rest params)
+  "`drgnx-work-client-set' of view ID with PARAMS, and CALLBACK called with (RESULT ERR) when the hub answers.  The
+hub sends what the change makes (a rows view's patches) before its answer, on the same connection."
   (when-let* ((view (drgnx-work-client--get id)))
     (let ((saved (drgnx-work-client--view-params view)))
       (cl-loop for (k v) on params by #'cddr
@@ -332,7 +337,7 @@ kept for the next subscription.  Never signals: a hub that is not there is the r
       (setf (drgnx-work-client--view-params view) saved))
     (when (plist-member params :shown)
       (setf (drgnx-work-client--view-shown view) (not (memq (plist-get params :shown) '(nil :false)))))
-    (ignore-errors (drgnx-work-client--call "work/map/set" (append (list :view id) params) #'ignore))
+    (ignore-errors (drgnx-work-client--call "work/map/set" (append (list :view id) params) callback))
     id))
 
 (defun drgnx-work-client-close (id)

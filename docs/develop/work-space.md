@@ -633,7 +633,11 @@ chain, the edge selection, the item that finished) and the commands are in `drgn
   and `work-needs-you-next` is the global one.
 - Filters are buffer-local (`drgnx-work-map--filters`, `--collapsed`) and sent with `work/map/set` (`f`, `o`, `.`, `1`
   to `6`, `0`); the hub answers with a full frame. The selection and the arrow keys never send those fields. Sending
-  them is a layout the user asked for, which moves (next section).
+  them is a layout the user asked for, which moves (next section). On the rows path there is no frame: the hub sends the
+  layout's row patches, then answers the `work/map/set` (one connection, in order), and the answer
+  (`drgnx-work-client-set-then`'s callback, `drgnx-work-map--answered`) hurries the map's view, so the new layout is
+  drawn at the next timer pass instead of after the 0.1 s throttle the live patches keep it on (work-relayout: p95
+  229 ms to 22 ms). Test: `drgnx-work-map-rows/asked-layout-draws-at-the-answer`.
 
 ### Motion: the capture protocol
 

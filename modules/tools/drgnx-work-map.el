@@ -1004,11 +1004,20 @@ asks for moves (`drgnx-work-map--motion-begin')."
   (drgnx-work-map--motion-begin)
   (when drgnx-work-space--view
     (setq drgnx-work-map--asked t)
-    (drgnx-work-client-set drgnx-work-space--view
-                           :filters (list :focus (plist-get drgnx-work-map--filters :focus)
-                                          :overlaps (if (plist-get drgnx-work-map--filters :overlaps) t :false)
-                                          :finished (if (plist-get drgnx-work-map--filters :finished) t :false))
-                           :collapsed (vconcat drgnx-work-map--collapsed))))
+    (drgnx-work-client-set-then drgnx-work-space--view
+                                (apply-partially #'drgnx-work-map--answered (current-buffer))
+                                :filters (list :focus (plist-get drgnx-work-map--filters :focus)
+                                               :overlaps (if (plist-get drgnx-work-map--filters :overlaps) t :false)
+                                               :finished (if (plist-get drgnx-work-map--filters :finished) t :false))
+                                :collapsed (vconcat drgnx-work-map--collapsed))))
+
+(defun drgnx-work-map--answered (buffer _result err)
+  "The hub answered the filters BUFFER's map sent.  On the rows path the layout's patches came before the answer (one
+connection, in order): the view draws them at the next timer pass, not after its throttle (live patches keep the map
+drawing once per `drgnx-view-delay')."
+  (when (and (not err) (buffer-live-p buffer))
+    (with-current-buffer buffer
+      (when (and drgnx-view-patch (drgnx-view-p drgnx-view)) (drgnx-view-hurry drgnx-view)))))
 
 (defun drgnx-work-map-focus ()
   "Hide what is not on the selection's chain; again, or with nothing selected, show everything.  While focused, the
