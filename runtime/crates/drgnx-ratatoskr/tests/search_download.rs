@@ -10,7 +10,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -27,15 +27,7 @@ const FILES: [(&str, usize); 4] = [
 const CUT_AT: usize = 100_000;
 
 fn mock_bin() -> PathBuf {
-    if let Some(path) = std::env::var_os("RATATOSKR_MOCK") {
-        return path.into();
-    }
-    let exe = std::env::current_exe().unwrap();
-    let bin = exe
-        .parent()
-        .and_then(Path::parent)
-        .unwrap()
-        .join("ratatoskr-mock");
+    let bin = skuld::workspace_bin("ratatoskr-mock", None, Some("RATATOSKR_MOCK"));
     assert!(
         bin.exists(),
         "{} is missing: build it first (cargo build -p domr --bin ratatoskr-mock) or name it in RATATOSKR_MOCK",

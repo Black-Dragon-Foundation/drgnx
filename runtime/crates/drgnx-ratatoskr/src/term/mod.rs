@@ -127,18 +127,20 @@ fn new_id() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-/// The `drgnx-term` binary: `DRGNX_TERM_BIN`, else beside the hub's binary (or one folder up, for a test binary in
-/// `target/debug/deps`).
+/// The `drgnx-term` binary: `DRGNX_TERM_BIN`, else beside the hub's binary (in the hub's own unit tests, in the test
+/// build's profile folder: [`skuld::profile_dir`]).
 pub fn worker_bin() -> PathBuf {
     if let Some(p) = std::env::var_os("DRGNX_TERM_BIN") {
         return PathBuf::from(p);
     }
-    let exe = std::env::current_exe().unwrap_or_default();
-    let dir = exe.parent().map(Path::to_path_buf).unwrap_or_default();
-    [dir.join("drgnx-term"), dir.join("../drgnx-term")]
-        .into_iter()
-        .find(|p| p.is_file())
-        .unwrap_or_else(|| dir.join("drgnx-term"))
+    #[cfg(test)]
+    let dir = skuld::profile_dir();
+    #[cfg(not(test))]
+    let dir = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(Path::to_path_buf))
+        .unwrap_or_default();
+    dir.join("drgnx-term")
 }
 
 impl Terms {

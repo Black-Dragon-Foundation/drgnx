@@ -733,9 +733,8 @@ fn a_user_jobs_base_environment_has_no_keys() {
 #[ignore = "needs bwrap (the real sandbox): a host with bwrap or the GitHub CI lane"]
 async fn exec_runs_in_the_starters_sandbox() {
     // The sandbox's helper is the process's own binary, here the test harness: the hub binary the same build made
-    // (`<target>/<profile>/ratatoskr`, beside `deps/`) takes its place.
-    let exe = std::env::current_exe().unwrap();
-    let hub = exe.parent().unwrap().parent().unwrap().join("ratatoskr");
+    // (`<target>/<profile>/ratatoskr`, skuld::profile_dir) takes its place.
+    let hub = skuld::workspace_bin("ratatoskr", None, None);
     assert!(
         hub.is_file(),
         "{} is not built (cargo test builds it with the package's tests)",

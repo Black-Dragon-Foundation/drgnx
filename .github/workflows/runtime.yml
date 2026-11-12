@@ -441,7 +441,7 @@ jobs:
           uname -r
           sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone || true
           /usr/bin/bwrap --unshare-all --ro-bind / / true && echo "bwrap: user namespaces work" || echo "bwrap: refused (exit $?)"
-      - run: rustup toolchain install stable --profile minimal
+      - run: bash .github/ci/rust.sh
       # one cache for the job's builds (the escape suite's and the agent core's tests), saved at its end
       - id: rv
         run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
@@ -572,7 +572,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/sccache
       - run: podman --version
-      - run: rustup toolchain install stable --profile minimal
+      - run: bash .github/ci/rust.sh
       - id: rv
         run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
       - id: registry
@@ -679,7 +679,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/sccache
       - run: podman --version
-      - run: rustup toolchain install stable --profile minimal
+      - run: bash .github/ci/rust.sh
       - name: runners up
         run: bash test/runners/fleet.sh up --runners 2
       - name: the spike's checks in every runner
@@ -717,8 +717,7 @@ jobs:
         run: |
           sed 's/#.*//' nidhogg-src/nidhogg/deps/macos.build | grep -vx 'rust' | xargs brew install
           brew install mise
-          rustup toolchain install stable --profile minimal --component clippy,rustfmt,llvm-tools --no-self-update
-          rustup default stable
+          bash .github/ci/rust.sh --component clippy,rustfmt,llvm-tools
       - name: the Mac runner bundle (sleipnir, ad-hoc signed, codesign -v)
         run: |
           set -o pipefail
@@ -826,7 +825,7 @@ jobs:
           filter: blob:none       # without old file contents
           persist-credentials: false
       - uses: ./.github/actions/sccache
-      - run: rustup target add aarch64-linux-android
+      - run: bash .github/ci/rust.sh --target aarch64-linux-android
       - id: rv
         run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
       - id: registry
@@ -894,6 +893,7 @@ jobs:
           echo "$sha256  $RUNNER_TEMP/cargo-deny.tgz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/cargo-deny.tgz" -C "$RUNNER_TEMP" --strip-components=1 cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - run: bash .github/ci/rust.sh   # cargo-deny reads the workspace with cargo metadata
       - run: cargo-deny --manifest-path runtime/Cargo.toml check
 
   # libFuzzer targets on the pinned nightly (the ledger's: nightly-2026-10-15, cargo-fuzz 0.13.2). The ubuntu runner has

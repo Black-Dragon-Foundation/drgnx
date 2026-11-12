@@ -53,8 +53,7 @@ impl Runs for OneRun {
 
 /// The hub built beside the tests is the sandbox's helper (as `exec::tests` does).
 fn pin_hub() {
-    let exe = std::env::current_exe().unwrap();
-    let hub = exe.parent().unwrap().parent().unwrap().join("ratatoskr");
+    let hub = skuld::workspace_bin("ratatoskr", None, None);
     assert!(hub.is_file(), "{} is not built", hub.display());
     crate::idle::pin_exe_for_test(std::fs::canonicalize(&hub).unwrap());
 }
