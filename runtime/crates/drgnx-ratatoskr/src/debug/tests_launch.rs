@@ -3,6 +3,7 @@
 use super::launch::{self, Need, Os, Vars};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 const FILE: &str = r#"{
@@ -293,4 +294,44 @@ fn file_variables_without_a_file_are_an_error() {
     let e = launch::substitute(&json!({"a": "${file}"}), &v, &HashMap::new()).unwrap_err();
     assert!(e.contains("file"), "{e}");
     let _ = Value::Null;
+}
+
+/// A debugpy child (`startDebugging`) is an attach whose `connect` names the parent adapter's own client listener: the
+/// child session connects there, as VS Code's Python extension does; any other child, and debugpy's own `connect`
+/// outside a child, starts its adapter as usual.
+#[test]
+fn a_debugpy_child_connects_to_its_parent_adapter() {
+    let child = |request: &str, connect: Value| {
+        json!({"request": request,
+               "configuration": {"request": "launch", "subProcessId": 41, "connect": connect}})
+    };
+    let here = json!({"host": "127.0.0.1", "port": 5799});
+    assert_eq!(
+        launch::child_server("debugpy", &child("attach", here.clone())),
+        Some(SocketAddr::from(([127, 0, 0, 1], 5799)))
+    );
+    assert_eq!(
+        launch::child_server("python", &child("attach", json!({"port": 5799}))),
+        Some(SocketAddr::from(([127, 0, 0, 1], 5799)))
+    );
+    // another adapter's child, a launch, no port, another host
+    assert_eq!(
+        launch::child_server("pwa-node", &child("attach", here.clone())),
+        None
+    );
+    assert_eq!(
+        launch::child_server("debugpy", &child("launch", here)),
+        None
+    );
+    assert_eq!(
+        launch::child_server("debugpy", &child("attach", json!({"host": "127.0.0.1"}))),
+        None
+    );
+    assert_eq!(
+        launch::child_server(
+            "debugpy",
+            &child("attach", json!({"host": "10.0.0.2", "port": 5799}))
+        ),
+        None
+    );
 }

@@ -9,7 +9,6 @@
 ;; its reason.  A pure test is not a `cond' one: it is class `det'.
 (
  "test/live/daemon-test.el"
- "test/live/dape-live-test.el"
  "test/live/drgnx-ai-test.el"
  "test/live/drgnx-compositor-test.el"
  "test/live/drgnx-frames-test.el"

@@ -42,6 +42,12 @@ impl Grammar {
     }
 }
 
+/// LANG's tree-sitter language, for callers that walk the tree themselves (the debugger's inline values); none for
+/// Org, Markdown and text.
+pub fn language(lang: Lang) -> Option<tree_sitter::Language> {
+    Grammar::of(lang).map(|g| g.ts)
+}
+
 impl Language for Grammar {
     /// A metavariable's `$` (`$A`, `$$$A`, `$_`) as the expando character, one for one, so columns stay the user's.
     fn pre_process_pattern<'q>(&self, query: &'q str) -> Cow<'q, str> {

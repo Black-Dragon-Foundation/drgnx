@@ -798,3 +798,141 @@ async fn a_source_reference_is_fetched_from_the_adapter() {
     .unwrap();
     assert!(m.finish().await.into_iter().all(|r| r.is_ok()));
 }
+
+/// A stop publishes its inline values (`debug-inline`, spec §8) after its frame: the selected frame's file, its lines
+/// with values, changed against the session's previous stop; the session's end forgets them.
+#[tokio::test(start_paused = true)]
+async fn a_stop_publishes_its_inline_values() {
+    let dir = std::env::temp_dir().join(format!("drgnx-inline-hub-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("app.py");
+    std::fs::write(&path, "def f(n):\n    total = n * 2\n    return total\n").unwrap();
+    let stopped = |total: i64| {
+        vec![
+            json!({"event": "stopped", "body": {"reason": "step", "threadId": 1}}),
+            json!({"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}),
+            json!({"expect": "stackTrace", "ok": {"stackFrames": [{"id": 5, "name": "f", "line": 3, "column": 5,
+                                                                     "source": {"path": path}}]}}),
+            json!({"expect": "scopes", "ok": {"scopes": [{"name": "Locals", "variablesReference": 9}]}}),
+            json!({"expect": "variables", "ok": {"variables": [
+                {"name": "n", "value": "2", "variablesReference": 0},
+                {"name": "total", "value": total.to_string(), "variablesReference": 0}]}}),
+        ]
+    };
+    let mut steps = stopped(4);
+    steps.push(json!({"expect": "next", "ok": {}}));
+    steps.extend(stopped(5));
+    let mut s = launch(steps);
+    s.extend(end());
+    let (d, ev, m, _) = setup(vec![s]);
+    let id = d.start(7, "/p", start(), m.clone()).await.unwrap();
+    until(|| ev.named("debug-inline").len() == 1).await;
+    let (_, _, first) = &ev.named("debug-inline")[0];
+    assert_eq!(
+        *first,
+        json!({"session": id, "epoch": 1, "path": path,
+               "lines": [{"line": 2, "text": "n = 2", "changed": []},
+                         {"line": 3, "text": "total = 4", "changed": []}]})
+    );
+    d.control(&id, Op::Next { thread: None }).await.unwrap();
+    until(|| ev.named("debug-inline").len() == 2).await;
+    let (_, _, next) = &ev.named("debug-inline")[1];
+    assert_eq!(
+        next["lines"],
+        json!([{"line": 2, "text": "n = 2", "changed": []}, {"line": 3, "text": "total = 5", "changed": [[0, 9]]}])
+    );
+    d.control(
+        &id,
+        Op::Stop {
+            kill_debuggee: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(m.finish().await.into_iter().all(|r| r.is_ok()));
+}
+
+/// debugpy's child (`startDebugging`: an attach whose `connect` names the parent adapter's own client listener)
+/// connects there, as VS Code's Python extension does; no new adapter is started for it.
+#[tokio::test]
+async fn a_debugpy_child_connects_to_its_parent_adapters_listener() {
+    use tokio::io::AsyncReadExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut parent = launch(vec![json!({"reverse": "startDebugging",
+        "arguments": {"request": "attach", "configuration": {"name": "Subprocess 9", "request": "attach",
+                      "subProcessId": 9, "connect": {"host": "127.0.0.1", "port": port}}}})]);
+    parent.extend(end());
+    // one script: a new adapter for the child would find none
+    let (d, _, m, _) = setup(vec![parent]);
+    let mut s = start();
+    s.adapter_id = "debugpy".into();
+    let id = d.start(7, "/p", s, m.clone()).await.unwrap();
+    let (mut conn, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
+        .await
+        .expect("the child connected to the parent adapter's listener")
+        .unwrap();
+    let mut buf = vec![0u8; 4096];
+    let n = tokio::time::timeout(Duration::from_secs(10), conn.read(&mut buf))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&buf[..n]).contains("\"initialize\""));
+    drop(conn);
+    d.control(
+        &id,
+        Op::Stop {
+            kill_debuggee: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(m.finish().await.into_iter().all(|r| r.is_ok()));
+}
+
+/// An adapter that restarts in place (delve: `restart` answered, then `initialized` again) is configured again, with
+/// the project's breakpoints as they are now, and runs on; without it the restarted program waits for ever.
+#[tokio::test(start_paused = true)]
+async fn an_initialized_after_a_restart_configures_again_with_the_breakpoints_of_now() {
+    let both = json!({"source": {"path": "/p/a.js"}, "breakpoints": [{"line": 3}, {"line": 5}]});
+    let mut s = vec![
+        json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true, "supportsRestartRequest": true}}),
+        json!({"expect": "launch", "ok": {}}),
+        json!({"event": "initialized"}),
+        json!({"expect": "setBreakpoints", "args": {"source": {"path": "/p/a.js"}, "breakpoints": [{"line": 3}]},
+               "ok": {"breakpoints": [{"id": 1, "verified": true}]}}),
+        json!({"expect": "configurationDone"}),
+        // added while it runs
+        json!({"expect": "setBreakpoints", "args": both,
+               "ok": {"breakpoints": [{"id": 1, "verified": true}, {"id": 2, "verified": true}]}}),
+        json!({"expect": "restart", "ok": {}}),
+        json!({"event": "initialized"}),
+        json!({"expect": "setBreakpoints", "args": both,
+               "ok": {"breakpoints": [{"id": 3, "verified": true}, {"id": 4, "verified": true}]}}),
+        json!({"expect": "configurationDone"}),
+    ];
+    s.extend(end());
+    let (d, ev, m, _) = setup(vec![s]);
+    d.breakpoints("/p", Some(add_bp("/p/a.js", 3, None)), None)
+        .await;
+    let id = d.start(1, "/p", start(), m.clone()).await.unwrap();
+    until(|| last_bps(&ev, "/p/a.js").is_some_and(|v| v["breakpoints"][0]["verified"] == true))
+        .await;
+    d.breakpoints("/p", Some(add_bp("/p/a.js", 5, None)), None)
+        .await;
+    until(|| last_bps(&ev, "/p/a.js").is_some_and(|v| v["breakpoints"][1]["verified"] == true))
+        .await;
+    d.control(&id, Op::Restart).await.unwrap();
+    // the script checks the rest: both breakpoints sent again, then configurationDone, before the Stop's disconnect
+    crate::clock::sleep(Duration::from_millis(500)).await;
+    d.control(
+        &id,
+        Op::Stop {
+            kill_debuggee: None,
+        },
+    )
+    .await
+    .unwrap();
+    let logs = m.finish().await;
+    assert!(logs.iter().all(|r| r.is_ok()), "{logs:?}");
+}

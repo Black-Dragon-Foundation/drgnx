@@ -2149,6 +2149,28 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :check "(with-current-buffer (window-buffer) (and (= (line-number-at-pos) 220) (= 1 (length (drgnx-debug-gutter--stop-overlays \"perf\")))))"
        :teardown ,(concat "(progn (drgnx-debug-gutter-stop-clear-all) (drgnx-debug-gutter-mode -1) " kill-fixture
                           " (global-unset-key (kbd \"<f10>\")) (drgnx-perf--debug-stop) t)"))
+      ;; inline values (spec §8, §12): stopped at line 200, F10 is one `debug-inline' as the hub sends it for a step:
+      ;; twelve lines' values (two changed), the line that keeps values updated in place, the next added, the oldest gone
+      (debug-inline
+       :setup ,(concat "(progn " (drgnx-perf-run--debug-setup-form)
+                       (format " (load (expand-file-name \"modules/extra/drgnx-debug\" %S) nil t)" drgnx-ui-repo-dir)
+                       " (defvar drgnx-perf--inline-n 0)"
+                       " (defun drgnx-perf--inline () (interactive)"
+                       "   (let ((n (cl-incf drgnx-perf--inline-n)))"
+                       "     (drgnx-debug-gutter-inline (list :session \"perf\" :epoch n :path buffer-file-name"
+                       "       :lines (vconcat (mapcar (lambda (k) (list :line (+ 188 n k)"
+                       "                                     :text (format \"total = %d  i = %d  name = 'row %d'\" (* n k) k n)"
+                       "                                     :changed (if (< k 2) [[0 9]] [])))"
+                       "                              (number-sequence 0 11))))))))"
+                       " (global-set-key (kbd \"<f10>\") #'drgnx-perf--inline) t)")
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
+                      " (goto-char (point-min)) (forward-line 199) (setq drgnx-perf--inline-n 0)"
+                      " (drgnx-debug-gutter-show-frame (list :session \"perf\" :epoch 0 :thread 1 :path buffer-file-name"
+                      "   :line 200 :col 1 :top t :reason \"step\" :open t :name \"main\")) t)")
+       :actions ,(funcall keys "<f10>" 120)   ; p95 is judged from 100 samples
+       :check "(= 12 (length (drgnx-debug-gutter--stop-overlays \"perf\" 'inline)))"
+       :teardown ,(concat "(progn (drgnx-debug-gutter-stop-clear-all) " kill-fixture
+                          " (global-unset-key (kbd \"<f10>\")) (drgnx-perf--debug-stop) t)"))
       ;; the toolbar (spec §12): F8 alternates a stopped session and none, so each key shows or hides the card (the
       ;; child frame made once, then reused), the status segment and the Paused chip; within 5 ms each
       (debug-toolbar-show
@@ -2903,7 +2925,7 @@ version and the commit, as JSON in FILE."
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "graphical debugging: its allocation, CPU and rows are set from three pinned runs on the desktop island (the plan's perf step)"))
               '(debug-gutter-scroll debug-gutter-baseline debug-breakpoint-click debug-probe-flood debug-scrub
-                                    debug-step-line debug-toolbar-show debug-step-variables debug-expand-chunks
+                                    debug-step-line debug-inline debug-toolbar-show debug-step-variables debug-expand-chunks
                                     debug-bisect-typing))
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))

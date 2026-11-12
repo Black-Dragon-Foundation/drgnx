@@ -6,14 +6,14 @@
 # BASE is an image with Nidhogg as emacs, gcc and bubblewrap (the dev image of Nidhogg's integration line).
 # Runs need ptrace for delve and lldb-dap: `--cap-add=SYS_PTRACE` (podman's default seccomp profile then allows
 # ptrace); lldb-dap's launch turns off address randomisation, which that profile refuses, so its scenarios set
-# `disableASLR: false`.
+# `disableASLR: false`. gdb is there for debugpy's attach to a PID (it injects its server through gdb on Linux).
 # Nidhogg is BASE's (Containerfile ran nidhogg.sh); the ENV below names the same pinned build, so a pin bump changes
 # this file too.
 # on: drgnx-test
 ARG BASE=localhost/drgnx-test:f45
 FROM ${BASE}
 ENV DRGNX_EMACS=/opt/nidhogg/31.1-nidhogg.5/bin/nidhogg
-RUN dnf -y install python3 python3-pip golang nodejs lldb clang curl unzip strace \
+RUN dnf -y install python3 python3-pip golang nodejs lldb clang gdb curl unzip strace \
     && dnf clean all
 
 # debugpy (stdio adapter: python3 -m debugpy.adapter), from its wheel with the hash checked by pip.

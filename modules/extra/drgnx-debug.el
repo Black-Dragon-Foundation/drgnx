@@ -41,8 +41,8 @@ on it while it lives.")
 
 (defun drgnx-debug--event (event data)
   "`drgnx-hub-event-functions': `debug-state' gives the sessions (the session keys, the toolbar and the status bar
-follow them, a running session's stop marks go), `debug-frame' marks and opens a stop's line, `debug-ended' takes its
-marks away."
+follow them, a running session's stop marks go), `debug-frame' marks and opens a stop's line, `debug-inline' shows
+its values at line ends, `debug-ended' takes its marks away."
   (pcase event
     ("debug-state"
      (setq drgnx-debug--sessions (append (plist-get data :sessions) nil))
@@ -52,6 +52,7 @@ marks away."
      (drgnx-debug-gutter-stop-sessions drgnx-debug--sessions)
      (drgnx-debug-toolbar-sync))
     ("debug-frame" (drgnx-debug-gutter-show-frame data))
+    ("debug-inline" (drgnx-debug-gutter-inline data))
     ("debug-ended" (drgnx-debug-gutter-stop-clear (plist-get data :session)))))
 
 (defun drgnx-debug--session (&optional state)
