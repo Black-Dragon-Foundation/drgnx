@@ -241,6 +241,37 @@ async fn the_launch_sequence_sends_breakpoints_and_configuration_done_before_the
     assert!(pos("setExceptionBreakpoints") < pos("configurationDone"));
 }
 
+/// js-debug sends `initialized` at once after its `initialize` answer; on a loaded machine both are read before the
+/// session looks, and the event may even come first. It is kept for after the answer, never dropped: dropped, the
+/// session never configures and the adapter never answers the attach (DBG-JS-WATCHDOG-1's hang).
+#[tokio::test(start_paused = true)]
+async fn an_initialized_event_before_the_initialize_answer_still_configures() {
+    let steps = vec![
+        json!({"expect": INIT, "defer": true}),
+        json!({"event": "initialized"}),
+        json!({"answer": INIT, "ok": {"supportsConfigurationDoneRequest": true, "supportsTerminateRequest": true}}),
+        json!({"expect": "attach", "defer": true}),
+        json!({"expect": "configurationDone"}),
+        json!({"answer": "attach"}),
+        json!({"expect": "disconnect", "ok": {}}),
+        json!({"die": true}),
+    ];
+    let mut r = run(
+        start_of(Request::Attach, json!({"port": 9229})),
+        steps,
+        Exit::Itself,
+    );
+    crate::clock::timeout(Duration::from_secs(30), r.running())
+        .await
+        .expect("the session never configured: the initialized event was lost");
+    r.h.op(Op::Stop {
+        kill_debuggee: None,
+    })
+    .await
+    .unwrap();
+    r.finish().await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_failed_launch_ends_the_session_with_its_message() {
     let steps = vec![

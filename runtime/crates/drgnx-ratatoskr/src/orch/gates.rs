@@ -235,7 +235,12 @@ async fn start_claimed(
         .await
         .map_err(|e| e.to_string())?;
     if let Some((class, job)) = vordr::evidence::no_rerun(&evidence, key, &rerun.selector) {
-        let said = front.core.exec.log_slice(&job, 0, 3).join(" / ");
+        // a gate's own words on the run (its tree moved) before what the job said
+        let said = evidence
+            .iter()
+            .find(|e| e.job == job)
+            .and_then(|e| e.note.clone())
+            .unwrap_or_else(|| front.core.exec.log_slice(&job, 0, 3).join(" / "));
         let cmd = rerun.argv.join(" ");
         return Ok(Some(match class {
             vordr::rows::Class::Error => {

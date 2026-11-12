@@ -4,6 +4,7 @@
 (require 'ert)
 (require 'drgnx)
 (require 'drgnx-pixels)
+(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-pixels-test--scales (list 1.0 1.25 (/ 160 120.0) 2.0)
   "The scales every sizing row checks: 1, 1.25, 4/3 (the wire's 160/120) and 2.")
@@ -38,6 +39,7 @@ a native shell can't be made here; the Naglfar case can."
 (ert-deftest drgnx-pixels/the-scale-conses-nothing ()
   "A budget: `drgnx-pixels-scale' runs on every bar build and row, so reading the scale conses nothing, with a UI
 scale or without one (`frame-parameter' of a parameter of drgnx's own copies the frame's whole parameter list)."
+  (drgnx-test-compile "drgnx-pixels-")         ; measured as users run it, not interpreted from source
   (let ((f (selected-frame))
         ;; compiled, so the loop itself conses nothing; the difference to an empty loop is the calls' own
         (conses (byte-compile (lambda (n) (let ((c (car (memory-use-counts))))

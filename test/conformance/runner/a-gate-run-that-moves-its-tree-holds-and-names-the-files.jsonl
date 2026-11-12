@@ -1,0 +1,18 @@
+{"scenario": "runner/a-gate-run-that-moves-its-tree-holds-and-names-the-files", "requires": ["v1", "test-hooks"], "doc": "A run that writes a file git doesn't ignore moves its tree, so its facts go and it is no one's evidence.  When the run is a gate's (red first repeats the agent's command at the test commit, in a detached tree) and the command writes out.log there, the gate does not start it again: the hub records it as a run without a test result whose note names the file, so the user sees what belongs in .gitignore (docs/develop/orchestration.md, \"Facts\")."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && mkdir test && touch test/.keep && git add test && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w1.txt\" \"--log\" \"$ROOT/w1.log\")) (\"mock-gemini\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--script\" \"$ROOT/r.txt\" \"--log\" \"$ROOT/r.log\")))) (drgnx-agents-routes ((implement \"mock-claude\") (review \"mock-gemini\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Plan\n\n**Repo:** $ROOT/repo\n\n### Task 1: Add the check\n\n**Role:** implement\n\nAdd test/check.txt, then check.txt.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 10000}
+{"do": "write_file", "path": "$ROOT/w1.txt", "text": "tool:edit test/check.txt\\ncommit test\\ntool:edit check.txt\\ncommit change\\ncall:job_start {\"argv\": [\"sh\", \"-c\", \"pwd | grep -q gate- && echo x > out.log; exit 1\"]}\ncall:complete_task {\"task\": \"$job#1\", \"seen_version\": 0}\n"}
+{"do": "write_file", "path": "$ROOT/r.txt", "text": "say VERDICT: pass\n"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/approve", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job"}}, "within_ms": 10000}
+{"do": "poll", "conn": "c", "json": {"id": 9, "method": "orch/evidence", "params": {"task": "$job#1"}}, "expect": {"id": 9, "result": {"evidence": {"$contains": [{"job": "$string", "note": "its tree moved while it ran (out.log): no facts kept; a file a run writes belongs in .gitignore"}]}}}, "within_ms": 180000, "every_ms": 500}

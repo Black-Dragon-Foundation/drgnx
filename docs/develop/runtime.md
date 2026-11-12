@@ -610,6 +610,18 @@ What a test does instead:
 Exempt: `#[ignore = "timing…"]` tests and `tests/timing.rs`, `skuld/src/wait.rs` (where these functions live) and the
 hub clock's module (`drgnx-ratatoskr/src/clock*`).
 
+## Files the hub writes and runs
+
+On Linux, running a file that any process holds open for writing fails with ETXTBSY ("Text file busy"). A child that
+another thread forks copies the whole file table, the write descriptor included, and holds it until its own `exec`; so
+a script written and then run at once fails now and then while other threads fork (the lib's tests always do). A
+rename keeps the same file and does not help. The hub's code and tests write such a file with
+`crate::exe::write_executable(path, contents)`, or do the writing inside `crate::exe::private_fds(|| …)`: a thread of
+its own with its own file table (`unshare(CLONE_FILES)`), which no other fork copies. That table starts as a copy, so
+the thread closes every descriptor but 0, 1 and 2 first (a pipe another thread closes meanwhile still ends at once); the
+closure opens what it uses itself. The hub uses it for the browser it
+unpacks and the `drgnx-key` it copies into a container job's folder.
+
 ## The conformance harness
 
 `domr` runs **scenarios** (data) against a hub binary: a process that answers the hub protocol on its socket.

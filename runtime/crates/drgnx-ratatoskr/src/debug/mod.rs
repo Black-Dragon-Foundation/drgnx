@@ -14,6 +14,12 @@ pub mod bisect_card;
 pub mod bisect_wire;
 pub mod blocked;
 pub mod breakpoints;
+pub mod compare;
+pub mod fork;
+pub mod fork_hub;
+pub mod fork_mux;
+pub mod fork_seal;
+pub mod fork_wire;
 pub mod install;
 pub mod launch;
 pub mod ports;
@@ -38,6 +44,14 @@ mod tests_blocked;
 mod tests_blocked_live;
 #[cfg(test)]
 mod tests_breakpoints;
+#[cfg(test)]
+mod tests_fork;
+#[cfg(test)]
+mod tests_fork_hub;
+#[cfg(test)]
+mod tests_fork_live;
+#[cfg(test)]
+mod tests_fork_seal;
 #[cfg(test)]
 mod tests_install;
 #[cfg(test)]
@@ -634,6 +648,24 @@ impl Debug {
     }
 
     /// OP on session ID. A stop or disconnect stops its children first and resolves once all have ended.
+    /// The text of SESSION's source REFERENCE (a frame with no file): `{text, mime?}`.
+    pub async fn source(&self, id: &str, reference: i64) -> Result<Value, String> {
+        let h = self
+            .handle(id)
+            .ok_or_else(|| format!("no debug session {id}"))?;
+        let b = h
+            .request(
+                "source",
+                json!({"sourceReference": reference, "source": {"sourceReference": reference}}),
+            )
+            .await?;
+        let mut out = json!({"text": b.get("content").and_then(Value::as_str).unwrap_or("")});
+        if let Some(m) = b.get("mimeType").filter(|m| m.is_string()) {
+            out["mime"] = m.clone();
+        }
+        Ok(out)
+    }
+
     pub async fn control(&self, id: &str, op: Op) -> Result<(), String> {
         let h = self
             .handle(id)
@@ -712,6 +744,8 @@ impl Debug {
                     "state": e.phase.name(),
                     "reason": e.reason,
                     "caps": e.caps,
+                    // the toolbar's Disconnect in place of Stop
+                    "attach": e.start.request == session::Request::Attach,
                 })
             })
             .collect();
@@ -929,11 +963,13 @@ impl Debug {
             "thread": stop.thread,
             "path": source.get("path"),
             "ref": source.get("sourceReference").filter(|r| r.as_i64().unwrap_or(0) > 0),
+            "name": frame.get("name"),
+            "source_name": source.get("name"),
             "line": frame.get("line"),
             "col": frame.get("column"),
             "top": top,
             "reason": stop.reason,
-            "exception": (stop.reason == "exception").then(|| stop.description.clone()).flatten(),
+            "exception": (stop.reason == "exception").then(|| exception_card(stop)),
             "open": false,
         });
         // the editor that started the session opens the file; the others draw it where it is already shown
@@ -943,6 +979,29 @@ impl Debug {
         data["open"] = json!(true);
         self.inner.sink.send(conn, "debug-frame", data);
     }
+}
+
+/// An exception stop's card: `exceptionInfo`'s id, message, break mode, type and trace, else the stop's description.
+fn exception_card(stop: &Stop) -> Value {
+    let Some(info) = &stop.exception else {
+        return json!({"message": stop.description});
+    };
+    let mut card = serde_json::Map::new();
+    for (to, v) in [
+        ("id", info.get("exceptionId")),
+        ("message", info.get("description")),
+        ("break_mode", info.get("breakMode")),
+        ("type", info.pointer("/details/typeName")),
+        ("trace", info.pointer("/details/stackTrace")),
+    ] {
+        if let Some(v) = v.filter(|v| !v.is_null()) {
+            card.insert(to.into(), v.clone());
+        }
+    }
+    if !card.contains_key("message") {
+        card.insert("message".into(), json!(stop.description));
+    }
+    Value::Object(card)
 }
 
 /// `runInTerminal`'s cwd, args and env (null values unset nothing here: they are left out).

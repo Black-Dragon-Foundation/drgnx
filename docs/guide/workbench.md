@@ -265,9 +265,12 @@ the entry is back.
 
 ### Chrome
 
-Every window's chrome is decided by its **role**, never by its buffer: an **editor** window has a tab line, a
-breadcrumb header and a mode line; a **dock** section has its title only; the **panel** and the **right dock** have
-their tab row only; a popup has none. The chrome lives in window parameters, so a mode that sets its own header or
+Every window's chrome is decided by its **role**, never by its buffer: an **editor** window has a tab line and a
+breadcrumb header (and a mode line only when `drgnx-statusbar-place` is `editors`; by default the status bar is one
+window across the frame's foot, which stays there when a dock or the panel opens); a **dock** section has its title
+only; the **panel** and the **right dock** have their tab row only, from the moment they are made; a popup has none.
+While a prompt is in the echo box, the workbench is still the frame the box belongs to: a buffer shown from the
+prompt (help on a command) goes to that frame's editor or panel. The chrome lives in window parameters, so a mode that sets its own header or
 mode line (ibuffer, Info) cannot change a window's height — text never jumps (invariant I3). A terminal window
 needs at least 30 frame lines for the breadcrumb row, which is 31 terminal rows with the menu bar on (the menu bar
 is not a frame line); with fewer, the frame parameter `drgnx-chrome-breadcrumb` is `off` (set by the terminal layout)
@@ -335,7 +338,8 @@ the other windows are opened again at start (your window manager places them; th
 into the frame you start in, the others follow in order): the left dock (and the sidebar view it shows, Explorer or
 Search), the panel and its tab, the right dock — each with its pixel size — the layout you were in
 ([layouts.md](layouts.md#after-a-restart)), the editor groups with their sizes, tabs and shown files, and the
-Explorer's folders. A window that rebuilds itself comes back where and how big it was (only where a monitor still is; never bigger than its screen).
+Explorer's folders (the status bar across the frame's foot is not part of the saved tree: it never comes back as an
+editor group). A window that rebuilds itself comes back where and how big it was (only where a monitor still is; never bigger than its screen).
 A job window saved before M12f comes back as the Work space: no frame of its own, and the
 restored panes, sizes and focus stay as they were ([jobs.md](jobs.md#a-job-in-the-work-space)).
 

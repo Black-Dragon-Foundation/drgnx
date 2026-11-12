@@ -218,7 +218,7 @@ seen inside.
 | `run` | bind or absent | the session's dir: one session's socket dir, always `ro` |
 | `env` | `[[name, value], …]` | the program's whole environment; it travels in the inner spec over a sealed memfd, never in argv |
 | `chdir` | path | the working directory, as a path inside |
-| `net` | `"shared"` or `{"isolated": {"relay": [{port, socket}], "mac_tcp_ports": [port], "loopback": false, "mac_loopback_ports": [port]}}` | Linux isolation is a new network namespace plus the relay (loopback port inside → Unix socket); macOS allows only `localhost` on `mac_tcp_ports`. `loopback` (a debug session's, set by nothing else): the program's own loopback traffic. Linux full tier: no Landlock TCP port rule, the namespace alone isolates; macOS: `localhost` bound, accepted and connected to on `mac_loopback_ports` only (the hub picks them free), Unix sockets bound, accepted and connected to under `tmp` (nothing outside it), and an Xcode developer dir's `../SharedFrameworks` read (LLDB.framework). Refused: `loopback` in the reduced tier, `mac_loopback_ports` on Linux or without `loopback` |
+| `net` | `"shared"` or `{"isolated": {"relay": [{port, socket}], "mac_tcp_ports": [port], "loopback": false, "mac_loopback_ports": [port]}}` | Linux isolation is a new network namespace plus the relay (loopback port inside → Unix socket); macOS allows only `localhost` on `mac_tcp_ports`. `loopback` (a debug session's, set by nothing else): the program's own loopback traffic. Linux full tier: no Landlock TCP port rule, the namespace alone isolates; macOS: `localhost` bound, accepted and connected to on `mac_loopback_ports` only (the hub picks them free), Unix sockets bound, accepted and connected to under `tmp` (nothing outside it), and an Xcode developer dir's `../SharedFrameworks` read (LLDB.framework). With `loopback`, a Linux isolated net may have no relay at all (a sealed debug fork: no way out). Refused: `loopback` in the reduced tier, `mac_loopback_ports` on Linux or without `loopback`, an isolated Linux net with neither a relay nor `loopback` |
 | `tmp` | path or absent | the temporary directory; required by the reduced tier, which has no private `/tmp` |
 | `layers` | `{landlock_min_abi}` | the lowest Landlock ABI the run accepts; seccomp is not a field (always on) |
 | `extra_tcp_ports` | ports | TCP ports besides the relay's (Landlock's port rule, never counted as isolation); the full tier only, the reduced tier grants none |
@@ -906,8 +906,9 @@ policy:
   service on the Mac's loopback), Unix sockets bound and accepted under its `tmp` (node's inspector), and, when the
   developer dir is an Xcode's `Contents/Developer`, its `Contents/SharedFrameworks` read (LLDB.framework; the Command
   Line Tools keep theirs inside the developer dir, read anyway, so nothing is added). The row
-  `mac-loopback-developer-dir-read-only` lists `${LLDB_FRAMEWORKS}` and fails to write there and in the developer dir
-  on either kind of Mac; that an Xcode's `SharedFrameworks` stays shut without the flag is held by the profile's unit
+  `mac-loopback-developer-dir-read-only` lists `${LLDB_FRAMEWORKS}` and fails to create a file there and in the
+  developer dir on either kind of Mac: EPERM under the sandbox, EACCES (the root-owned directory) in the unsandboxed
+  control, so the errno says the sandbox refused (opening a file that is not there would fail with ENOENT first); that an Xcode's `SharedFrameworks` stays shut without the flag is held by the profile's unit
   tests, as a Mac with only the Command Line Tools has none. The
   task port stays closed, so native debuggers run unsandboxed only. The mach services and the resolver come
   with shared only, as in Codex: `trustd` and `ocspd` fetch a certificate's AIA, OCSP and CRL URLs outside the sandbox,
