@@ -285,7 +285,10 @@ fn vars(front: &Front, p: &DebugStart) -> Vars {
         selection: p.selection.clone(),
         home,
         exec_path: std::env::current_exe().unwrap_or_default(),
-        default_build_task: None,
+        default_build_task: std::fs::read_to_string(Path::new(&p.root).join(".vscode/tasks.json"))
+            .ok()
+            .and_then(|t| super::tasks::parse(&t).ok())
+            .and_then(|t| super::tasks::default_build_task(&t)),
         env,
         config,
     }
@@ -359,9 +362,22 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
         });
     }
     launch::check_answers(&config, &inputs, &answers).map_err(|e| bad("inputs", e))?;
-    let config = launch::substitute(&config, &vars(front, &p), &answers).map_err(err)?;
+    let vars = vars(front, &p);
+    let config = launch::substitute(&config, &vars, &answers).map_err(err)?;
     let ty = text(&config, "type");
     let adapter = table.for_type(&ty).map_err(err)?;
+    // preLaunchTask: its steps run to the end first; a failure is the start's error
+    let steps = super::tasks::before_launch(Path::new(&p.root), &config, Os::this(), &|s| {
+        match launch::substitute(&Value::String(s.to_owned()), &vars, &answers)? {
+            Value::String(s) => Ok(s),
+            _ => Ok(s.to_owned()),
+        }
+    })
+    .map_err(err)?;
+    super::tasks::run(&steps, &front.shell_env.vars_os())
+        .await
+        .map_err(err)?;
+    // after the tasks: a TCP adapter's free port is picked just before it starts
     let launcher = launcher(front, &p.root, &config, adapter).map_err(err)?;
     let start = Start {
         name: text(&config, "name"),

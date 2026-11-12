@@ -14,6 +14,7 @@ pub mod breakpoints;
 pub mod launch;
 pub mod ports;
 pub mod session;
+pub mod tasks;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -30,6 +31,8 @@ mod tests_launch;
 mod tests_ports;
 #[cfg(test)]
 mod tests_registry;
+#[cfg(test)]
+mod tests_tasks;
 pub mod wire;
 
 use breakpoints::Store;

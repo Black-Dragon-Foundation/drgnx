@@ -125,6 +125,19 @@ names (symlinks resolved). An unknown variable, setting or folder is an error th
 (`presentation`, `preLaunchTask`, `postDebugTask`, `debugServer`, `internalConsoleOptions`, `serverReadyAction`) are
 not passed to the adapter; every other field is.
 
+### Tasks (`debug/tasks.rs`)
+
+A configuration's `preLaunchTask` names a task in the root's `.vscode/tasks.json`, read as JSONC like launch.json, each
+task with its platform section merged over it and its strings through the same variables. The task's `dependsOn` (a
+label or a list) runs first, depth first in the order given, each task once; a cycle (`a → b → a`) or an unknown
+label is an error that names it. A `shell` task (also one without a `type`) runs its command line in `/bin/sh -c`,
+each `args` item quoted for the shell; a `process` task runs `command` and `args` as they are, never split.
+`options.cwd` (relative: under the root) and `options.env` apply. `isBackground` tasks (watchers that never end) are
+refused. The steps run one at a time before the adapter starts (so a TCP adapter's free port is picked after the
+build); the first that fails stops the rest and the start, and the error gives its exit status and the end of its
+output (2,000 bytes of stdout, then stderr's tail). `${defaultBuildTask}` is the label of the task whose `group` is
+`{"kind": "build", "isDefault": true}`. `postDebugTask` is not run yet.
+
 ## Adapters
 
 `etc/debug-adapters.eld` is the adapter table, read by the hub with huginn's reader as data only (strings, numbers,
