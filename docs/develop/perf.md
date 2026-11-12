@@ -144,8 +144,8 @@ transcript ends near 2,000 entries. The panel shows the session and the mirror h
 `:alloc` (objects the update's event handlers made: the mirror's and the panel's), `:draw_kb` (kB each draw of the panel
 made), `:updates` (`:patches` of them the panel's row patches), `:entries`, `:rows` (the panel's lines) and
 `:hub_rows` (the hub's rows the panel holds). With the hub's rows an update is either the entries
-event (the mirror and the panel's own state) or the panel's `view-patch` (the rows inserted); `panel-replay-old` runs the
-same on `drgnx-view-old-path` (the panel draws every row, the mirror copies its transcript per update): the paired row.
+event (the mirror and the panel's own state) or the panel's `view-patch` (the rows inserted). The paired old-path row
+(`panel-replay-old`) is retired with the path.
 Report-only until the render offload's combined pass.
 
 The conformance rows `editor/cursor-latency` (the hub's virtual clock: a move reaches the watcher within 100 ms) and

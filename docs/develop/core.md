@@ -2065,8 +2065,7 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
   its look (`agents/panel/look`: the step types open, the rows opened or folded by hand, `older` for the window before;
   `docs/develop/hub.md`). Navigation and fold state move to the native view model later.
 - **The agent mirror** (`core/drgnx-agents-mirror.el`) patches its transcript in place: an entry's cell takes the
-  patched entry (`--complete-blocks`), a new index extends the list; behind `drgnx-view-old-path` it copies the whole
-  transcript per event as before.
+  patched entry (`--complete-blocks`), a new index extends the list.
 - **One buffer per class:** a view shown in two classes (two monitors at two scales) gets an env and a reset per class
   from the hub. When its buffer sets `drgnx-view-patch-twin-function` (the Explorer does), `drgnx-view-env` gives each
   class but the buffer's own a twin: a buffer the function makes, set up as the view's (mode, keys, the handlers

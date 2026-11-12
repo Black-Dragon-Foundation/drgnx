@@ -248,10 +248,9 @@
  ;; 2024 entries, 2560 lines.  After (the hub's rows, the mirror patched in place): alloc p50 98 (p90 323) per update
  ;; over 410 updates (272 of them row patches), 1956 entries, 1956 hub rows, 2152 lines.  The alloc budget is a tenth of
  ;; before.  draw_kb stays at before's: after, the draws ran as 5 slice chains of about 76 kB (only a chain's first slice
- ;; is counted), so it is read in the combined pass.  panel-replay-old (`drgnx-view-old-path`, the paired row): alloc p50
- ;; 20293 (p90 24144), a draw 14.82 kB p50, 305 updates.
+ ;; is counted), so it is read in the combined pass.  The paired old-path row (alloc p50 20293, a draw 14.82 kB p50) is
+ ;; retired with the path.
  (panel-replay (:alloc :p50) 2030 :report-only ot5) (panel-replay (:draw_kb :p50) 18.5 :report-only ot5)
- (panel-replay-old (:alloc :p50) 25367 :report-only ot5) (panel-replay-old (:draw_kb :p50) 18.5 :report-only ot5)
  (quick-open-large (:complete-ms) 100 :report-only ot5)        ; first candidates within 100 ms
  (quick-open-large (:stalls-ge16) 0 :report-only ot5)
  (autosave-typing (:input :max) 50 :report-only ot8) (autosave-typing (:complete-ms) 1000 :report-only ot8)
