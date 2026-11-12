@@ -461,7 +461,7 @@ Returns (EXIT . OUTPUT)."
   ;; "CI gate (partial)", which branch protection never takes for the full one
   (dolist (spec '(("ci.yml" "${{ needs.changes.outputs.partial == 'true' && 'CI gate (partial)' || 'CI gate' }}" nil
                    "[main, \"ci/**\"]")
-                  ("macos.yml" "macOS gate" ("install" "launch-agent") "[main, \"ci/**\", \"!ci/joint/**\"]")
+                  ("macos.yml" "macOS gate" ("install" "launch-agent" "metal-parity") "[main, \"ci/**\", \"!ci/joint/**\"]")
                   ("gui.yml" "GUI tier gate" nil "[main, \"ci/**\", \"!ci/joint/**\"]")))
     (let ((yml (drgnx-ci-test--yml (car spec))))
       (skip-unless yml)
