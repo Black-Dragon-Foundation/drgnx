@@ -1853,6 +1853,7 @@ async fn privacy(
 pub fn tool_sets(task: Option<bool>, profile: Option<bool>) -> ToolSets {
     ToolSets {
         tracker: task.or(profile).unwrap_or(true),
+        debug: false,
     }
 }
 
@@ -3314,7 +3315,10 @@ mod tests {
         ] {
             assert_eq!(
                 tool_sets(task, profile),
-                ToolSets { tracker: on },
+                ToolSets {
+                    tracker: on,
+                    debug: false
+                },
                 "{task:?} {profile:?}"
             );
         }

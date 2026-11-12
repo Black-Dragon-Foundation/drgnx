@@ -377,7 +377,9 @@ Ratatoskr gives it a connection.
 - **Two protocol eras** (`version`):
   - **`initialize`** (2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25): `negotiate` echoes the client's version when
     it is one of these, else answers `2025-11-25`. The answer is `{protocolVersion, capabilities: {tools:
-    {listChanged: false}}, serverInfo}`. Before `initialize`, a request other than `initialize`, `ping` or
+    {listChanged: false}}, serverInfo}`; `serve_live` (a list that changes) answers `listChanged: true`, takes a
+    change between two answers, never during one, and then sends `notifications/tools/list_changed` once the client
+    has been answered anything. Before `initialize`, a request other than `initialize`, `ping` or
     `server/discover` is `-32600` "initialize first": an error, never silence, since a client's discovery probe falls
     back only after an error or a timeout.
   - **Stateless 2026-07-28**: a request whose `params._meta["io.modelcontextprotocol/protocolVersion"]` is set is

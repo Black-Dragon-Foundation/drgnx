@@ -242,6 +242,9 @@ struct Inner {
     store_dir: Option<PathBuf>,
     /// The recorded runs and the probes (none: nothing is recorded).
     rec: OnceLock<Arc<record::Records>>,
+    /// Told the roots of the live sessions each time they change (a session starts or ends; a recording starts with
+    /// its session): the hub gives the agents there the debugger's tools.
+    on_state: OnceLock<StateHook>,
     /// The inline values' parse cache and each session's last values.
     inline: inline::Inline,
     /// Told of every change of a session's state or stop, or of breakpoints (the Run and Debug views).
@@ -261,6 +264,9 @@ pub struct Snap {
     pub caps: Value,
     pub adapter: String,
 }
+
+/// What [`Debug::on_state`] calls.
+pub type StateHook = Arc<dyn Fn(Vec<String>) + Send + Sync>;
 
 /// The hub's debug sessions.
 #[derive(Clone)]
@@ -291,10 +297,31 @@ impl Debug {
                 stores: Mutex::new(BTreeMap::new()),
                 store_dir,
                 rec: OnceLock::new(),
+                on_state: OnceLock::new(),
                 inline: inline::Inline::new(),
                 listeners: Mutex::new(Vec::new()),
             }),
         }
+    }
+
+    /// Call HOOK with the live sessions' roots whenever they change (once; a later hook is ignored).
+    pub fn on_state(&self, hook: StateHook) {
+        let _ = self.inner.on_state.set(hook);
+    }
+
+    /// The roots that debug: a live session's, or a recorded run's.
+    pub fn debugged_roots(&self) -> Vec<String> {
+        let mut roots: Vec<String> = lock(&self.inner.state)
+            .sessions
+            .values()
+            .map(|e| e.root.clone())
+            .collect();
+        if let Some(rec) = self.records() {
+            roots.extend(rec.list("").into_iter().map(|m| m.root));
+        }
+        roots.sort();
+        roots.dedup();
+        roots
     }
 
     /// Record every session from now on, as OPTS says (once; later calls answer the first records).
@@ -958,6 +985,14 @@ impl Debug {
                 })
             })
             .collect();
+        if let Some(hook) = self.inner.on_state.get() {
+            let mut roots: Vec<String> = sessions
+                .iter()
+                .filter_map(|s| s["root"].as_str().map(str::to_owned))
+                .collect();
+            roots.dedup();
+            hook(roots);
+        }
         self.inner
             .sink
             .broadcast("debug-state", json!({ "sessions": sessions }), None);

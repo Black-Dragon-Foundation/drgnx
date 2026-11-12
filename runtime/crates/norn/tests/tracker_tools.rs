@@ -815,7 +815,10 @@ mod tools {
         let a = w.agent("a1", &h);
         let id = id_of(&create(&w, &a, "ready one").await);
         let on = w.call(&a, "hello", json!({})).await;
-        let off_tools = tools_for(ToolSets { tracker: false });
+        let off_tools = tools_for(ToolSets {
+            tracker: false,
+            debug: false,
+        });
         let off = call_in(&off_tools, &w.coord, &a, "hello", json!({})).await;
         assert!(!on.err && !off.err, "{} / {}", on.text, off.text);
         assert_eq!(on.text, off.text, "the first item is the same");
@@ -1084,15 +1087,45 @@ mod tools {
     #[test]
     fn default_session_lists_23() {
         // the 23, the four job tools (Task 15), `report_submit` and the two plan tools (Task 21), `extensions_suggest`,
-        // `huddle_reply`, `procedure_get`, the six debugger tools
-        assert_eq!(tools_for(ToolSets::default()).len(), 39);
+        // `huddle_reply`, `procedure_get`
+        assert_eq!(tools_for(ToolSets::default()).len(), 33);
         assert_eq!(tools().len(), 23);
+    }
+
+    /// The six debugger tools come only with the debug set (a session whose project debugs).
+    #[test]
+    fn debug_tools_only_with_the_debug_set() {
+        let debug = |sets: ToolSets| {
+            tools_for(sets)
+                .iter()
+                .filter(|t| t.name().starts_with("debug_"))
+                .count()
+        };
+        assert_eq!(debug(ToolSets::default()), 0);
+        assert_eq!(
+            debug(ToolSets {
+                debug: true,
+                ..ToolSets::default()
+            }),
+            6
+        );
+        assert_eq!(
+            tools_for(ToolSets {
+                debug: true,
+                ..ToolSets::default()
+            })
+            .len(),
+            39
+        );
     }
 
     /// The 16 of before and the two settings tools, which every agent has (unified-settings call 10).
     #[test]
     fn tracker_off_lists_18() {
-        let off = tools_for(ToolSets { tracker: false });
+        let off = tools_for(ToolSets {
+            tracker: false,
+            debug: true,
+        });
         assert_eq!(off.len(), 34);
         for name in [
             "settings_get",

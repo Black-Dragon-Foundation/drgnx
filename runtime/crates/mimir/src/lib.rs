@@ -14,5 +14,5 @@ pub mod server;
 pub mod tool;
 pub mod version;
 
-pub use server::{End, Limits, ServerInfo, serve};
+pub use server::{End, Limits, ServerInfo, serve, serve_live};
 pub use tool::{ArgsError, BoxFuture, Tool, ToolResult, Typed, typed};

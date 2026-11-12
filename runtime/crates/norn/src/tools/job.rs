@@ -253,11 +253,11 @@ struct RecordDecisionArgs {
     reason: String,
     /// The decision it replaces
     replaces: Option<i64>,
-    /// The decision-log version you last read (read_decisions)
+    /// Log version from read_decisions
     seen_version: u64,
-    /// Entities it is about (ids): `about` links from the decision
+    /// Entity ids it is about
     about: Option<Vec<String>>,
-    /// Ignored: the hub records the step the call was made in itself
+    /// Ignored
     #[allow(dead_code)]
     step: Option<i64>,
     /// Where it came from: from-brief, own or needs-user
@@ -279,7 +279,7 @@ struct RecordDecision;
 impl CoordTool for RecordDecision {
     type Args = RecordDecisionArgs;
     const NAME: &'static str = "record_decision";
-    const DESCRIPTION: &'static str = "Record a decision: build, wait, wont-build or replaces.  Inside your own task it is current; about anything else it is proposed (the reviewer and the user decide)";
+    const DESCRIPTION: &'static str = "Record a decision: current inside your own task, else proposed (the reviewer and the user decide)";
 
     fn run<'a>(
         &'a self,
