@@ -322,6 +322,8 @@ pub struct Runs {
     /// under (`step.plan`, `step.project`).
     scopes: Scopes,
     wake: Notify,
+    /// A busy mark was cleared ([`Runs::settled`]).
+    idle: Notify,
     /// The hub is resuming the sessions it held (Task 24): a task whose agent is not back yet is not a dead one, so
     /// the tick waits.
     recovering: std::sync::atomic::AtomicBool,
@@ -410,7 +412,24 @@ impl Runs {
             }
             None => {
                 b.remove(task);
+                drop(b);
+                self.idle.notify_waiters();
             }
+        }
+    }
+
+    /// Once no task of JOB is busy: its work in flight (a start writing its tree, a merge) has ended, each clearing
+    /// its own mark.
+    pub async fn settled(&self, job: &str) {
+        let prefix = format!("{job}#");
+        loop {
+            let woke = self.idle.notified();
+            tokio::pin!(woke);
+            woke.as_mut().enable();
+            if !lock(&self.busy).keys().any(|k| k.starts_with(&prefix)) {
+                return;
+            }
+            woke.await;
         }
     }
 
@@ -1680,7 +1699,7 @@ pub async fn approve(front: &Front, caller: &Caller, p: WithBudget) -> Result<Jo
 /// Stop job ID: its agents end (their worktrees stay); `job/resume` starts its open tasks again.
 pub async fn stop(front: &Front, caller: &Caller, p: ById) -> Result<JobSummary, Error> {
     let id = p.id.as_str();
-    let l = load(front, id, false)
+    load(front, id, false)
         .await?
         .ok_or_else(|| invalid(format!("No job {id}")))?;
     // a proposal that is stopped was rejected: the job's data says it was never approved, so `job/resume` refuses it.
@@ -1706,9 +1725,9 @@ pub async fn stop(front: &Front, caller: &Caller, p: ById) -> Result<JobSummary,
         (c.kind.as_deref() == Some("hook")).then_some("stop")
     })
     .await?;
-    for t in &l.tasks {
-        front.core.runs.set_busy(&t.row.id, None);
-    }
+    // the job's work in flight sees it stopped and ends (a start writing its tree, a merge); nothing of it writes after
+    // the answer, and an agent such a start made is ended with the rest
+    front.core.runs.settled(id).await;
     end_sessions(front, id).await;
     if let Some(h) = front.core.runs.hooks() {
         // the hooks take the shared front; the handler has a reference, the server an Arc: 16b's merges end on the
@@ -2605,5 +2624,43 @@ mod resume_tests {
         assert_eq!(status_of(&f).await, "stopped");
         resume(&f, &c, with_budget()).await.unwrap();
         assert_eq!(status_of(&f).await, "running");
+    }
+
+    /// [D] A stop answers only once the job's work in flight ended: a task still starting (its tree being written)
+    /// keeps its mark until its own work clears it, and `job/stop` waits for that, so nothing of the job writes after
+    /// the answer (say-test's teardown removed a tree the start was still writing).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stop_waits_for_the_jobs_work_in_flight() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = Arc::new(front(dir.path()));
+        let c = user();
+        propose(&f, &c).await;
+        approve_job(&f, &c, JOB, None).await.unwrap();
+        let task = format!("{JOB}#1");
+        f.core.runs.set_busy(&task, Some("starting"));
+        let (f2, c2) = (f.clone(), c.clone());
+        let stopping = tokio::spawn(async move { stop(&f2, &c2, by_id()).await });
+        // the stop's write lands; then it has every chance to answer early (counted yields, no clock)
+        while status_of(&f).await != "stopped" {
+            tokio::task::yield_now().await;
+        }
+        for _ in 0..10_000 {
+            if stopping.is_finished() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            !stopping.is_finished(),
+            "the stop answered while the task was still starting"
+        );
+        assert_eq!(
+            f.core.runs.busy_of(&task),
+            Some("starting"),
+            "the start's own mark stays"
+        );
+        // the start ends: the stop answers
+        f.core.runs.set_busy(&task, None);
+        stopping.await.unwrap().unwrap();
     }
 }

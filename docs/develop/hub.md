@@ -4510,7 +4510,9 @@ own store write whether the job is still `proposed` (`norn::write::jobs::withdra
 the store's writes are one at a time, so of the two exactly one holds: an approval that lands between a status read
 and the withdrawal runs on, never stopped (every order tested). `job/stop` (the editor's and the card's reject)
 decides in its write the same way (`stop_job`): a proposal is withdrawn and marked never approved, any other job is
-stopped unmarked, so an approval that landed first can still be resumed; the budget pause (`pause_running`) and
+stopped unmarked, so an approval that landed first can still be resumed. It answers only once the job's work in
+flight ended (`Runs::settled`: a start still writing its task's tree, a merge, each clearing its own busy mark), so
+nothing of the job writes after the answer, and an agent such a start made is ended with the rest; the budget pause (`pause_running`) and
 `job/resume` (`resume_job`) read the status in their own write too (every order tested). A say has at
 most one live job: when its proposal starts (the Autonomous preset at once, or the user's `job/approve`, which the
 withdrawal finds), the planning is done: the session is stopped and forgotten, the latest 64 such sessions remember
