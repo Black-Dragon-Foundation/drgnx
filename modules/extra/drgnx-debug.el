@@ -6,7 +6,7 @@
 ;; Debugging through the hub's DAP client (docs/develop/debugging.md) — the Debug Adapter Protocol, so the same
 ;; adapters as VS Code (debugpy, the JS debugger, delve, CodeLLDB, …) — with VS Code's keys in that profile: F5 starts
 ;; (or continues), F9 toggles a breakpoint, F10 steps over, F11 steps into while a session runs (Zen Mode otherwise),
-;; S-F11 steps out, S-F5 stops.  The sessions are what the hub's `debug-state' last said.  See docs/guide/editing.md.
+;; S-F11 steps out, S-F5 stops.  The sessions are what the hub's `debug-state' last said.  See docs/guide/debugging.md.
 
 ;;; Code:
 (require 'seq)
