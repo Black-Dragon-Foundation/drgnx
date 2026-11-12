@@ -21,6 +21,7 @@ sha2.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+drgnx-exe = { path = "../drgnx-exe", version = "0.1.0" }  # stand-in scripts written and run, never busy (ETXTBSY)
 skuld = { path = "../skuld", version = "0.1.0" }
 tempfile.workspace = true
 

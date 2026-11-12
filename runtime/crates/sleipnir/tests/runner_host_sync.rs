@@ -13,7 +13,6 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -67,12 +66,11 @@ fn repo(dir: &Path) -> String {
 
 fn marker_script(at: &Path, marker: &Path, name: &str) {
     fs::create_dir_all(at.parent().unwrap()).unwrap();
-    fs::write(
+    drgnx_exe::write(
         at,
         format!("#!/bin/sh\necho {name} >> '{}'\n", marker.display()),
     )
     .unwrap();
-    fs::set_permissions(at, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 fn base64(bytes: &[u8]) -> String {
@@ -420,8 +418,7 @@ fn origin_fetch_with_a_deploy_key_leaves_no_file_and_no_agent() {
     assert!(!body.is_empty());
     let bin = w.join("bin");
     fs::create_dir_all(&bin).unwrap();
-    fs::write(bin.join("ssh"), FAKE_SSH).unwrap();
-    fs::set_permissions(bin.join("ssh"), fs::Permissions::from_mode(0o755)).unwrap();
+    drgnx_exe::write(&bin.join("ssh"), FAKE_SSH).unwrap();
     let path = format!(
         "{}:{}",
         bin.display(),

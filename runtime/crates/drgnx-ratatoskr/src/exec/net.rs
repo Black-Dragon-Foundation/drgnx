@@ -389,7 +389,7 @@ mod tests {
     async fn the_end_removes_the_job_at_once_and_lets_the_sidecar_exit() {
         let dir = tempfile::tempdir().unwrap();
         let (podman, rms) = (dir.path().join("podman"), dir.path().join("rm"));
-        crate::exe::write_executable(&podman,
+        drgnx_exe::write(&podman,
             format!(
                 "#!/bin/sh\ncase \"$1\" in\nrun) cat >/dev/null; exit 0 ;;\nrm) echo \"$*\" >> {} ;;\nesac\n",
                 rms.display()

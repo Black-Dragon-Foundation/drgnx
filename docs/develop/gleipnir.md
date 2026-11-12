@@ -906,8 +906,9 @@ policy:
   service on the Mac's loopback), Unix sockets bound and accepted under its `tmp` (node's inspector), and, when the
   developer dir is an Xcode's `Contents/Developer`, its `Contents/SharedFrameworks` read (LLDB.framework; the Command
   Line Tools keep theirs inside the developer dir, read anyway, so nothing is added). The row
-  `mac-loopback-developer-dir-read-only` lists `${LLDB_FRAMEWORKS}` and fails to write there and in the developer dir
-  on either kind of Mac; that an Xcode's `SharedFrameworks` stays shut without the flag is held by the profile's unit
+  `mac-loopback-developer-dir-read-only` lists `${LLDB_FRAMEWORKS}` and fails to create a file there and in the
+  developer dir on either kind of Mac: EPERM under the sandbox, EACCES (the root-owned directory) in the unsandboxed
+  control, so the errno says the sandbox refused (opening a file that is not there would fail with ENOENT first); that an Xcode's `SharedFrameworks` stays shut without the flag is held by the profile's unit
   tests, as a Mac with only the Command Line Tools has none. The
   task port stays closed, so native debuggers run unsandboxed only. The mach services and the resolver come
   with shared only, as in Codex: `trustd` and `ocspd` fetch a certificate's AIA, OCSP and CRL URLs outside the sandbox,

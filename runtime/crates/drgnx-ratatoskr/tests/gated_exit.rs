@@ -1,13 +1,12 @@
 //! A gated hub that ends writes what its sequencer still held first (docs/develop/hub.md, "The sequencer and the
-//! barrier").  Its own file: the hub runs from a copy of the binary written here, and a fork in another test's thread
-//! while the copy is open for writing would make its exec fail as busy (ETXTBSY).
+//! barrier").  The hub runs from a copy of the binary made here, through `drgnx_exe` so that no other thread's fork
+//! holds it open for writing (its exec would fail as busy, ETXTBSY).
 
 #![cfg(feature = "test-hooks")]
 
 mod support;
 
 use serde_json::json;
-use std::os::unix::fs::PermissionsExt;
 use std::sync::{Arc, atomic::AtomicU64};
 use support::{BIN, Client, Hub, Root};
 
@@ -18,7 +17,7 @@ fn a_hub_that_ends_writes_what_it_held_first() {
     let root = Root::new();
     let socket = root.socket();
     let live = root.dir.path().join("live");
-    std::fs::copy(BIN, &live).unwrap();
+    drgnx_exe::copy(BIN.as_ref(), &live).unwrap();
     let mut hub = Hub::start_from(
         &live,
         &root,
@@ -33,8 +32,7 @@ fn a_hub_that_ends_writes_what_it_held_first() {
     editor.answer(1);
     // the update: another build at the path the hub runs from
     let other = root.dir.path().join("other");
-    std::fs::write(&other, "#!/bin/sh\necho '{\"commit\":\"another\"}'\n").unwrap();
-    std::fs::set_permissions(&other, std::fs::Permissions::from_mode(0o755)).unwrap();
+    drgnx_exe::write(&other, "#!/bin/sh\necho '{\"commit\":\"another\"}'\n").unwrap();
     std::fs::rename(&other, &live).unwrap();
     let mut control = Client::gated(&socket, &seq);
     assert_eq!(control.line().unwrap()["event"], "challenge");

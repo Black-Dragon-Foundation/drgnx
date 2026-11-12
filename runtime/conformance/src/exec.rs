@@ -683,7 +683,8 @@ impl Runner<'_> {
         if let Some(parent) = to.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
         }
-        std::fs::copy(&self.cfg.hub_bin, &to).map_err(|e| format!("{}: {e}", to.display()))?;
+        // run by the scenario: copied through drgnx-exe, never held open for writing by another thread's fork
+        drgnx_exe::copy(&self.cfg.hub_bin, &to).map_err(|e| format!("{}: {e}", to.display()))?;
         std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| e.to_string())
     }

@@ -96,6 +96,32 @@ fn two_hubs_sharing_the_lock_directory_never_share_a_block() {
 }
 
 #[test]
+fn a_dropped_block_is_free_while_a_forked_child_still_holds_its_descriptor() {
+    // A child forked by another thread holds a copy of every descriptor until it execs (the copy shares the lock):
+    // the block is free when the session lets it go, not when the last copy closes.
+    let t = tempfile::tempdir().unwrap();
+    let one = Blocks::with(46700..46716, 8, |_| true, &locks(&t));
+    let two = Blocks::with(46700..46716, 8, |_| true, &locks(&t));
+    let a = one.claim().unwrap();
+    // SAFETY: the child only waits for its kill (pause(2) is async-signal-safe) and never returns into the harness.
+    let pid = unsafe { libc::fork() };
+    if pid == 0 {
+        loop {
+            unsafe { libc::pause() };
+        }
+    }
+    assert!(pid > 0);
+    drop(a);
+    let got = two.claim().map(|b| b.ports()[0]);
+    // SAFETY: the child forked above; reaped so it leaves no zombie.
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+        libc::waitpid(pid, std::ptr::null_mut(), 0);
+    }
+    assert_eq!(got, Ok(46700));
+}
+
+#[test]
 fn a_lock_directory_others_could_empty_is_refused() {
     // not sticky: another account could delete a held lock file and lock a new one of the same name
     let t = tempfile::tempdir().unwrap();

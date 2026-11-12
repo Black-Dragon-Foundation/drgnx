@@ -1028,6 +1028,8 @@ The commands of modules that need no installed package are in it, the later stag
                               debug-breakpoint-enable debug-run-to-cursor debug-step-over debug-step-in debug-step-out
                               debug-stop debug-timeline-back debug-timeline-forward debug-timeline-open ; recorded runs' maps
                               debug-bisect-act ; the bisect card's RET
+                              debug-origin-open ; the origin card's RET
+                              debug-restart debug-pause ; the toolbar's
                               terminal-toggle))   ; C-` is Toggle Terminal, as in VS Code (the panel keeps M-j)
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))

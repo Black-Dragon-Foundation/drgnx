@@ -67,8 +67,17 @@ stop on an exception is red, with a card under the line saying what was raised (
 While the session is stopped the same command continues; **Toggle Breakpoint**, **Step Over**, **Step Into**,
 **Step Out** and **Stop Debugging** do what they say. If you used dape, **Convert dape Configurations…** (the palette)
 turns your `dape-configs` into launch configurations once (dape itself is no longer needed).
-In the VS Code key profile: F5, F9, F10, F11 (Step Into while a session runs — Zen Mode otherwise), S-F11, S-F5; the
-Emacs and Vim profiles reach them in the palette. Module `extra/debug`; it needs no package.
+In the VS Code key profile: F5, F9, F10, F11 (Step Into while a session runs — Zen Mode otherwise), S-F11, S-F5,
+C-S-F5 (**Restart**); the Emacs and Vim profiles reach them in the palette. **Pause** is on the toolbar and in the
+palette in every profile: VS Code's F6 stays free as the terminal's chord key ([Legacy terminals](terminal.md#legacy-terminals-altshift-and-f6)).
+Module `extra/debug`; it needs no package.
+
+While a session runs, a toolbar floats over the editor: Continue (Pause while the program runs), the three steps,
+Restart and Stop (Disconnect when you attached to a running program). Drag it sideways by its grip; it stays where
+you put it in that frame. With two sessions or more, its chip picks the one the controls and keys act on. The setting
+`drgnx-debug-toolbar` docks it in the editor's tab row (`docked`) or hides it (`hidden`); a terminal frame has no
+toolbar. The status bar names the session and its state, and a **Paused** chip in the title row takes you back to the
+stopped line.
 
 Breakpoints live in a column left of the line numbers, kept per project (they survive restarts and reach a running
 session at once). Click the column to add or remove one, shift-click for a logpoint (a message printed instead of
@@ -115,6 +124,13 @@ what it was, who made it (you, an agent with its step and decision, or a commit'
 gave different answers twice (flaky) or could not be judged. **Show Step** opens the change as a diff; for an agent's
 step, **Revert Step** opens the revert card (nothing changes until you apply it) and **Ask the Agent** tells that
 agent what broke; **Narrow** finds the hunks of the change that make it fail. `RET` on an action runs it.
+
+**Where Did This Come From?** (Alt-click a name at a recorded stop, or the palette) shows, for a Python program, the
+chain that gave a value: the line that last set it, with the values of what it was computed from, then where each of
+those came from, up to three levels. The hub replays the recorded run to that stop with a small tracer on, one replay
+a level, so the chain is exact; a change made inside a call (`items.append(x)`) shows as "changed inside
+`list.append`". `RET` on a link opens it as a past stop. Python older than 3.12 has no tracing hook: the card then
+lists the assignments to the name in the files that ran, labelled "candidates, not traced".
 
 ## Indent guides
 

@@ -17,7 +17,7 @@ sync = ["dep:forseti", "dep:sha2", "dep:sha1", "dep:similar", "dep:rustix", "dep
 # facts are the protocol's
 linux = ["proto", "dep:forseti", "dep:serde_json", "dep:rustix", "dep:libc"]
 # the binary's modes; the job helper's proxy is Gleipnir's, on tokio
-runner = ["proto", "sync", "linux", "dep:gleipnir", "dep:tokio", "dep:drgnx-px"]
+runner = ["proto", "sync", "linux", "dep:gleipnir", "dep:tokio", "dep:drgnx-px", "dep:drgnx-exe"]
 # test-only entry points; compiled away otherwise
 test-hooks = []
 
@@ -34,6 +34,7 @@ secrecy = { workspace = true, features = ["serde"], optional = true }
 zeroize = { workspace = true, optional = true }
 gleipnir = { path = "../gleipnir", version = "0.1.0", optional = true }
 drgnx-px = { path = "../drgnx-px", version = "0.1.0", optional = true }  # the job helper's relay sidecar
+drgnx-exe = { path = "../drgnx-exe", version = "0.1.0", optional = true }  # a job's own drgnx-key copy, never busy (ETXTBSY)
 tokio = { workspace = true, features = ["io-std"], optional = true }  # the relay's log goes to stderr
 
 # job-exec, the mode a job's unit runs; the runner's other modes join it
@@ -79,6 +80,7 @@ name = "fleet_sync"
 required-features = ["sync"]
 
 [dev-dependencies]
+drgnx-exe = { path = "../drgnx-exe", version = "0.1.0" }  # stand-in scripts written and run, never busy (ETXTBSY)
 skuld = { path = "../skuld", version = "0.1.0" }
 tempfile.workspace = true
 proptest.workspace = true

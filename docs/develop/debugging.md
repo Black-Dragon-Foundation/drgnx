@@ -92,7 +92,7 @@ The hub's sessions (`debug::Debug`, in `debug/mod.rs`) start each through a `Lau
 or on a port, or a `debugServer` connected to) and route its updates:
 
 - `debug-state` to every editor whenever a session starts, runs, stops or ends: `{sessions: [{id, name, parent, root,
-  state, reason, caps}]}`; `debug-ended` once per session, with its reason and exit code.
+  state, reason, caps, attach}]}` (`attach`: an attach session, whose toolbar shows Disconnect); `debug-ended` once per session, with its reason and exit code.
 - `debug-frame` on a stop: the selected frame's `path` (or `ref` for a `sourceReference`), `line`, `col`, `top`,
   `reason`, its `name` and its source's `source_name`, and on an exception stop `exception`: `exceptionInfo`'s `{id,
   message, break_mode, type, trace}` (asked in the same stop when the adapter has `supportsExceptionInfoRequest`), else
@@ -345,6 +345,29 @@ The module's handler (`drgnx-debug--event`) gives each `debug-frame` to `drgnx-d
 Tests: `test/unit/debug-stop-test.el`; perf row `debug-step-line` (120 steps through the fixture, p95 ≤ 16 ms; 3.4 ms
 measured on the desktop).
 
+## The toolbar: `drgnx-debug-toolbar.el` (spec §6)
+
+The session's controls, drawn from `drgnx-debug--sessions` at each `debug-state` (`drgnx-debug-toolbar-sync`):
+
+- **Where** (`drgnx-debug-toolbar`): `floating` puts a card in a child frame over each graphical root frame, centred at
+  the top of its editor window under the tab row (over the breadcrumb). The card is made once per root frame
+  (`drgnx-debug-toolbar--children`, weak) and hidden between sessions, never deleted; its text is drawn again only
+  when what it shows changed. It never takes the focus: a click runs the command in the parent's editor window, the
+  registry's way. The grip drags it sideways (the mouse is tracked only while the button is down); the offset is kept
+  per frame and the card stays inside the window. `docked` gives the same buttons to the editor window's tab row,
+  before the split and more buttons, through `drgnx-chrome-tab-row-function`. `hidden`, and every terminal frame,
+  have the keys, the palette and the status bar's segment only.
+- **Buttons**: Continue while stopped, Pause while running (disabled while starting), Step Over / Into / Out only while
+  stopped, Restart always (the hub stops and starts again when the adapter has no `restart`), and Stop, or Disconnect
+  for an attach session (`debug-state`'s `attach`). Their colours are the roles: accent, muted, ok, error. Hover shows
+  the registry title with the active profile's key. With two or more sessions a chip names the session the controls
+  act on; picking another (Select Debug Session) sets `drgnx-debug--focus`, which every debug command then follows.
+- **Status bar**: the segment `debug` (after `branch`), `<bug> NAME · STATE` in the warn colour while a session runs
+  ("paused on breakpoint", "running"); a click opens Run and Debug. **Title row**: the Paused chip (the warn pill)
+  while the session is stopped, through `drgnx-topline-paused-function`; a click goes to the stopped line.
+
+Tests: `test/unit/debug-toolbar-test.el`; perf row `debug-toolbar-show` (120 shows and hides, p95 ≤ 5 ms).
+
 ## Live adapters: the image
 
 The tests that run real adapters (debugpy, js-debug, delve, lldb-dap) use `drgnx-debug-adapters:f45`, built from
@@ -370,7 +393,9 @@ session gets a block of ports and its launch configuration becomes an attach the
   `block-FIRST` in `/private/tmp/drgnx-debug-ports/` (`/tmp/…` on Linux; made 1777, each file 0666, so every hub on
   the machine, another account's or a test hub, sees it; an existing directory that is not sticky is refused, since
   a held lock file could be deleted and its name locked again). The lock is held for the session's life and goes
-  with the process. Under it each port is bound once on 127.0.0.1, ::1 and 0.0.0.0 and let go; a block locked
+  with the process. A child forked by another thread shares the locked file until it execs, so the block's drop
+  unlocks it (`LOCK_UN`, which frees it for every copy) before closing: a block is free as soon as its session lets it
+  go. Under it each port is bound once on 127.0.0.1, ::1 and 0.0.0.0 and let go; a block locked
   elsewhere or with a port another process holds is passed over (the macOS runner had 47610 taken now and then), and
   when none is free the session is refused, naming the range. The block goes back when the session's launcher is
   dropped. Linux's reduced tier has no loopback flag, so no blocks.
@@ -470,8 +495,11 @@ What-if tab shows it beside the run. Linux only for now; other hosts refuse with
   beyond the run's. A point the run took more than 60 s to reach asks first. `drive` sets a breakpoint on the point's
   line and the probes' logpoints (a plain breakpoint wins on a shared line, and the probe there is read by
   `evaluate`), reaches the line's pass (the adapter counts where it can and no probe sits on the line: debugpy's
-  `hitCondition`, for js-debug a condition with a counter that V8 runs, since its `hitCondition` pauses at every pass;
-  the landing must have had the run's probe hits before it, else the fork fails naming both counts; otherwise the
+  `hitCondition`, for js-debug a condition with a counter that V8 runs (under `Symbol.for('drgnx.forkPass')`, a key no program
+  name can clash with), since its `hitCondition` pauses at every pass;
+  the landing must have had the run's probe hits before it and the stack the run recorded at that stop (names and
+  lines), and, where no probe hit tells the passes apart, the run's plain locals there (values without children),
+  else the fork fails naming both sides; otherwise the
   hub counts, stopping and continuing at each pass), repeats the steps, reads the thread's id
   expression, applies the change (`setExpression` when the adapter has it and the variable an `evaluateName`, else
   `setVariable`), takes the point's breakpoint away and runs until the next stop, the end, or a probe's next hit.
@@ -536,7 +564,8 @@ What-if tab shows it beside the run. Linux only for now; other hosts refuse with
   the folder as it is (`take_kept`, ref `refs/drgnx/bisect/<id>` until the next bisect of the project). At most 512
   (the newest).
 - **Their trees** (`bisect_wire::materialise`): each state is a tree in the bisect's own shadow repository
-  (`<state>/debug/bisect/<id>/`), which borrows the objects of the project's repository and of the snapshots'
+  (`<state>/hub/runs/debug-forks/slots/<id>/`, the forks' slots root: the one place in the state folder a sealed
+  job's tree may be), which borrows the objects of the project's repository and of the snapshots'
   through `objects/info/alternates`, so a commit's or a launch's tree is used as it is and nothing is copied. A record
   is the history branch's base commit with every document as it was after it (`History::texts_after`) written over
   it (blobs by `hash-object`, the base's file modes kept). A state whose tree equals the one before it is dropped.
@@ -549,11 +578,15 @@ What-if tab shows it beside the run. Linux only for now; other hosts refuse with
 - **Slots**: each slot keeps one folder (`slot-N`), moved from state to state by delta
   (`timeline::snapshot::restore_into`: only the files that differ are written, a file the state lacks is removed).
   The slots go when the bisect ends; the repository stays for narrowing until the project's next bisect, and nothing
-  outlives the hub (the folder is cleared at the first bisect of a hub).
+  outlives the hub (the forks' sweep at the hub's start clears the slots root).
 - **The predicate** (`bisect_wire::Jobs`): `test` (ARGV's exit code) or `exit` (ARGV exits with CODE: bad), with an
-  optional BUILD run first (its failure skips the state), each run a user job (`exec`, the user's rights, the time
-  box `timebox_s`, default 600 s) in the slot's folder. `exception` and `probe` (replay the recorded run in a what-if
-  fork, spec §19.3) are accepted by the schema and wait for the fork's replay seam.
+  optional BUILD run first (its failure skips the state), each run a sealed job in the slot's folder
+  (`exec::start_sealed`, label `bisect-<id>`: an agent's sandbox with the slot its only writable folder, since the
+  states may be an agent's writing; the time box `timebox_s`, default 600 s). `exception` and `probe` (Python and
+  JS) run the recorded run RUN's configuration in the slot, sealed as a fork is (`fork_wire::run_in`, spec §19.3),
+  watching AT (`path:line`, relative to the project): `exception` is bad when it raises there; `probe` is bad when
+  CONDITION is true there once (`bisect_wire::outcome_of`). A run the time box cut, or a probe line that never ran
+  in that state, skips it.
 - **Narrowing** (`bisect::narrow`): the hunks from the last good tree to the first bad one (`git diff -U0`), then delta
   debugging (ddmin) over them: each set tried is the good tree with those hunks applied (`git apply --cached
   --unidiff-zero` into a temporary index), run in its own `narrow` folder.
@@ -572,3 +605,39 @@ the step before, for an agent's step), Ask the Agent (`agents/send` to the sessi
 Tests: `debug::tests_bisect` (the search, ddmin, slots, flaky, cancel), `debug::tests_bisect_wire` (commits and records
 as trees, a slot moved between them, hunks, the card), `verdandi`'s `tests/materialise.rs`,
 `test/unit/debug-bisect-test.el`.
+
+## Where did this come from: the origin trail (spec §19.4)
+
+`debug/origin.rs` is the trail, `debug/origin_wire.rs` the method, `etc/debug-origin.py` the tracer.
+
+- **The tracer** runs inside the replayed program, so it is Python (≥ 3.12, `sys.monitoring`, PEP 669; tool id 4,
+  else 3 or 1). It is written into the replay's tree (`.drgnx-origin/drgnx_origin.py` with a `sitecustomize.py`,
+  first on `PYTHONPATH`) and turned on by `DRGNX_ORIGIN={"out", "root", "watch"}`: only code under ROOT is watched.
+  For each code object it reads the bytecode once (`dis`): each line's stores (names, attributes, subscripts), the
+  names it loads, and method calls on names. On LINE events it records the previous line's stores to the watched
+  targets (a dotted question matches that attribute on any object), with the line's operand values, as JSON lines in
+  `.drgnx-origin/records.jsonl`; the first line is `{"python": version}`. A method call on a watched value is a record
+  of kind `call` ("changed inside `list.append`").
+- **The trail** (`origin::trail`): level 1 replays to the stop watching the question; its link is the last record
+  about it (`origin::link`). The link's operands that hold data (not functions, classes or modules) are the next
+  level's questions (`origin::follow`, at most 6), one replay per level, at most 3 levels (`depth`).
+- **Python older than 3.12** (the records file names the version and holds nothing else): the static candidates, the
+  assignments to the name in the files of the stop and its stack as they ran (the launch snapshot), found with
+  Hrafn's grammar (`$O.attr = $V`, `name = $V` and the augmented forms), labelled "candidates, not traced".
+- **The replay** is the `origin::Replay` trait, set when the hub binds (`origin_wire::ForkReplay`): a sealed trace
+  of the run (`fork_wire::trace`, spec §19.3), ended at the stop, with the tracer's files written into the trace's
+  tree (`origin::trace_files`) and its environment (`origin::trace_env`); the records are read back with their files
+  named as the project's (`origin::read_trace`), and the tree goes. One replay per level.
+
+Method (runstav `methods::debug_origin`, the user class only): `debug/origin {run, stop, expr, depth?}` →
+`{origin}`; EXPR is a name or a dotted path. Event: `debug-origin {origin, run, stop, expr, n, state, level?, links,
+note?, why?, rows}`, `state` one of `tracing`, `done`, `failed`; a link is `{level, question, target, value?, path,
+line, func, operands, inside?, traced}`. `rows` is the card (`origin::rows`).
+
+The editor's half, `drgnx-debug-origin.el`: **Where Did This Come From?** (`debug-origin`, Alt-click on a name in a
+past stop's buffer) asks for the name at point, the card inserts the hub's rows, and `RET` on a link
+(`debug-origin-open`) opens it as a past stop. Tests: `debug::tests_origin` (golden trails on
+`tests/fixtures/origin/stock.py` run by python3 under the tracer: three levels with attribute stores, a change inside
+`list.append`, the 3.11 candidates, lenient parsing, the card), `debug::tests_fork_live`'s
+`a_python_trail_is_traced_in_sealed_replays` (live: debugpy in Gleipnir, three levels through real traces),
+`test/unit/debug-origin-test.el`.
