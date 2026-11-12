@@ -469,7 +469,10 @@ What-if tab shows it beside the run. Linux only for now; other hosts refuse with
   run, an adapter that needs `ptrace` (delve, lldb-dap: Gleipnir allows none), a run with no launch snapshot, a hit
   beyond the run's. A point the run took more than 60 s to reach asks first. `drive` sets a breakpoint on the point's
   line and the probes' logpoints (a plain breakpoint wins on a shared line, and the probe there is read by
-  `evaluate`), counts the line's hits itself (continuing the others), repeats the steps, reads the thread's id
+  `evaluate`), reaches the line's pass (the adapter counts where it can and no probe sits on the line: debugpy's
+  `hitCondition`, for js-debug a condition with a counter that V8 runs, since its `hitCondition` pauses at every pass;
+  the landing must have had the run's probe hits before it, else the fork fails naming both counts; otherwise the
+  hub counts, stopping and continuing at each pass), repeats the steps, reads the thread's id
   expression, applies the change (`setExpression` when the adapter has it and the variable an `evaluateName`, else
   `setVariable`), takes the point's breakpoint away and runs until the next stop, the end, or a probe's next hit.
   Child sessions (`startDebugging`) are second connections to the same sandbox. It stops every session at the end,

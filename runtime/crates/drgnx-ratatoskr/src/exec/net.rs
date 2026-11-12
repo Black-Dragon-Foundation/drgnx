@@ -387,18 +387,14 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn the_end_removes_the_job_at_once_and_lets_the_sidecar_exit() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let (podman, rms) = (dir.path().join("podman"), dir.path().join("rm"));
-        std::fs::write(
-            &podman,
+        crate::exe::write_executable(&podman,
             format!(
                 "#!/bin/sh\ncase \"$1\" in\nrun) cat >/dev/null; exit 0 ;;\nrm) echo \"$*\" >> {} ;;\nesac\n",
                 rms.display()
             ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o755)).unwrap();
+        ).unwrap();
         let mut sidecar = Sidecar::start(&podman, vec!["run".into()], &[])
             .await
             .expect("the stand-in starts");

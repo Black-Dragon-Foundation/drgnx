@@ -184,6 +184,8 @@ fn a_step_stop_is_its_breakpoint_stop_then_the_recorded_steps() {
             hit: 2,
             steps: vec!["next".into(), "next".into()],
             seq: Some(9),
+            // the run's probe hits before its breakpoint stop (none here)
+            before: Some(0),
         }
     );
     let t = fork::check(&run(), &At::Stop(12), true, false).unwrap();
@@ -303,6 +305,7 @@ fn target(hit: u32, steps: &[&str]) -> Target {
         hit,
         steps: steps.iter().map(|s| s.to_string()).collect(),
         seq: None,
+        before: None,
     }
 }
 
@@ -374,6 +377,115 @@ async fn hit_three_is_counted_by_the_hub_and_the_value_set_before_it_runs_on() {
     assert_eq!(
         log.commands().iter().filter(|c| **c == "continue").count(),
         3
+    );
+}
+
+/// The adapter's script for a fork to hit 3 of line 20 that the adapter counts (`hitCondition`): the probe's two hits,
+/// then the stop.
+fn counted_by_the_adapter() -> Vec<Value> {
+    let mut caps = caps();
+    caps["supportsHitConditionalBreakpoints"] = json!(true);
+    let mut s = launch(
+        caps,
+        vec![
+            json!({"expect": "setBreakpoints", "args": {"source": {"path": PY},
+                      "breakpoints": [{"line": 20, "hitCondition": "3"}, {"line": 22}]},
+                      "ok": {"breakpoints": [{"verified": true}, {"verified": true}]}}),
+        ],
+    );
+    s.push(probe_out("shortfall", "16"));
+    s.push(probe_out("shortfall", "12"));
+    s.extend(stopped_at(20, "breakpoint", json!([])));
+    s
+}
+
+fn counted_drive(m: Arc<Mocks>, before: usize) -> Drive {
+    let mut t = target(3, &[]);
+    t.before = Some(before);
+    Drive {
+        launcher: m,
+        start: start(),
+        adapter: "debugpy".into(),
+        target: t,
+        probes: probes(),
+        change: Change::Nothing,
+        until: Until::Exit,
+        later: vec![],
+    }
+}
+
+/// Pass 3 counted by the adapter: one stop, no continue before the point, the landing checked against the run.
+#[tokio::test(start_paused = true)]
+async fn an_adapter_with_hit_conditions_counts_the_passes() {
+    let mut s = counted_by_the_adapter();
+    s.push(json!({"expect": "evaluate", "args": {"expression": THREAD}, "ok": {"result": "140"}}));
+    s.push(json!({"expect": "setBreakpoints", "args": {"source": {"path": PY}, "breakpoints": [{"line": 22}]}, "ok": {"breakpoints": [{"verified": true}]}}));
+    s.push(cont());
+    s.push(probe_out("shortfall", "1"));
+    s.extend(exited(0));
+    let m = Mocks::with(vec![s]);
+    let out = fork::drive(counted_drive(m.clone(), 2)).await.unwrap();
+    assert_eq!(
+        hits(&out.before),
+        [hit("shortfall", "16"), hit("shortfall", "12")]
+    );
+    assert_eq!(out.end, End::Exit { code: Some(0) });
+    let log = &m.logs().await[0];
+    assert_eq!(
+        log.commands().iter().filter(|c| **c == "continue").count(),
+        1
+    );
+}
+
+/// js-debug counts with a condition V8 runs (its `hitCondition` pauses at every pass).
+#[tokio::test(start_paused = true)]
+async fn js_debug_counts_the_passes_in_a_condition() {
+    let mut caps = caps();
+    caps["supportsConditionalBreakpoints"] = json!(true);
+    caps["supportsHitConditionalBreakpoints"] = json!(true);
+    let cond = "(globalThis.__drgnxForkPass = (globalThis.__drgnxForkPass || 0) + 1) === 3";
+    let mut s = launch(
+        caps,
+        vec![
+            json!({"expect": "setBreakpoints", "args": {"source": {"path": PY},
+                      "breakpoints": [{"line": 20, "condition": cond}]},
+                      "ok": {"breakpoints": [{"verified": true}]}}),
+        ],
+    );
+    s.extend(stopped_at(20, "breakpoint", json!([])));
+    s.push(json!({"expect": "setBreakpoints", "args": {"source": {"path": PY}, "breakpoints": []}, "ok": {"breakpoints": []}}));
+    s.push(cont());
+    s.extend(exited(0));
+    let m = Mocks::with(vec![s]);
+    let mut st = start();
+    st.adapter_id = "pwa-node".into();
+    let mut d = counted_drive(m.clone(), 0);
+    d.start = st;
+    d.adapter = "js-debug".into();
+    d.probes = vec![];
+    let out = fork::drive(d).await.unwrap();
+    assert_eq!(out.end, End::Exit { code: Some(0) });
+    let log = &m.logs().await[0];
+    assert!(!log.requests[3].1.to_string().contains("hitCondition"));
+    assert_eq!(
+        log.commands().iter().filter(|c| **c == "continue").count(),
+        1
+    );
+}
+
+/// The adapter's count landed somewhere the run was not: the fork fails, naming both counts.
+#[tokio::test(start_paused = true)]
+async fn a_landing_that_is_not_the_runs_pass_fails_loudly() {
+    let mut s = counted_by_the_adapter();
+    s.push(json!({"expect": "terminate", "ok": {}}));
+    s.push(json!({"event": "terminated"}));
+    s.push(json!({"expect": "disconnect", "ok": {}}));
+    s.push(json!({"die": true}));
+    let m = Mocks::with(vec![s]);
+    let e = fork::drive(counted_drive(m, 5)).await.unwrap_err();
+    assert!(
+        e.contains("not the run's pass") && e.contains("the run had 5") && e.contains("the fork 2"),
+        "{e}"
     );
 }
 
@@ -599,6 +711,7 @@ async fn js_debugs_child_session_is_where_it_stops() {
             hit: 1,
             steps: vec![],
             seq: None,
+            before: None,
         },
         probes: vec![],
         change: Change::Nothing,
