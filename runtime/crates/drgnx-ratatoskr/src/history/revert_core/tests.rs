@@ -175,6 +175,7 @@ impl World {
                     }
                     let sent = self.turn.step(TurnEvent::Sending { turn });
                     if sent.contains(&TurnEffect::Prompt { turn }) {
+                        self.turn.step(TurnEvent::Written { turn });
                         self.started.push((item.text.clone(), self.acp.clone()));
                         self.running = Some(turn);
                     }

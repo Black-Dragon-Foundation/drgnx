@@ -1865,7 +1865,8 @@ event and performs what it answers; the entries, steps and transcript stay with 
   `PromptFailed` (closed or not), `Stop` (or the pause after a tool call), `Kill` (`agents/kill`, the hub ending, or
   a Stop's deadline for its turn), `PermissionAsked` (with the turn it came in), `PermissionAnswered`,
   `ToolCompleted`, `EmitTick`, `QueueEdited` (deliver, unqueue, requeue, the freshness gate's notice), `Changed`,
-  `Exited`, `Sending` (the turn's task is about to hand its prompt to the agent), and `Detach` / `Reattach` (a rewind
+  `Exited`, `Sending` (the turn's task is about to hand its prompt to the agent), `Written` (the prompt's line is on
+  its way to the agent), and `Detach` / `Reattach` (a rewind
   swaps the conversation: [Rewind and fork](#rewind-and-fork)). `PromptDone` and `PromptFailed` name their turn.
 - Effects: start a turn with the next prompt, send its prompt now (`Prompt`) or put it back (`PutBack`, the hub's
   end), name what a user's kill drops (`Discard`), end it (waiting on a job, or held), tell the agent to cancel, arm a
@@ -1889,7 +1890,10 @@ What the core keeps:
   a Stop comes or the agent's process exits between a turn's start and that step, the turn is put back: its prompt
   goes back to the front of the queue, on disk too (held, after a Stop; for the next start or resume, after an exit),
   and the shell drops the turn's entries (the transcript file holds a turn's entries
-  only once its prompt was sent). When the
+  only once its prompt was sent). Between `Sending` and `Written` the turn's task still awaits (the tree's snapshot,
+  the transcript): a Stop then sends its `session/cancel` at `Written`, after the prompt's line, and its 2 s deadline
+  runs from there (an agent reads its input in order; a cancel ahead of the prompt would be lost, and the deadline
+  would end a turn the agent was never told to stop). When the
   user's kill comes there instead, the prompt is dropped with the queue, and `Discard` names both, so a peer's
   message among them goes back to `queued` in the store.
 - A turn ends once, at its agent's answer. A second Stop of a stopped turn changes nothing; a Stop's deadline ends
