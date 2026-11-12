@@ -1023,6 +1023,10 @@ The commands of modules that need no installed package are in it, the later stag
                               agents-panel-start agents-panel-move agents-panel-compact agents-panel-mode agents-panel-model
                               agents-here-mark agents-here-huddle agents-huddle agents-huddle-send agents-huddle-open
                               work-huddle agents-view agents-open   ; part 3: the agent panel (its list) and H on a map overlap
+                              ;; extra/debug needs no package now (the hub is its client), so it sets up here too
+                              debug-start debug-breakpoint debug-breakpoint-conditional debug-logpoint
+                              debug-breakpoint-enable debug-run-to-cursor debug-step-over debug-step-in debug-step-out
+                              debug-stop
                               terminal-toggle))   ; C-` is Toggle Terminal, as in VS Code (the panel keeps M-j)
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))

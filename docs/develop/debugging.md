@@ -229,6 +229,16 @@ An adapter that goes on its own ends its session with the end of its stderr in t
 shell's environment and the adapter's `env` over it; `debug-terminal {session, term, view}` tells the starting editor,
 which shows the view. At the hub's end every session stops, children first, before the store closes.
 
+## The module: `drgnx-debug.el`
+
+`extra/debug` needs no package (dape is no longer its client). `drgnx-debug-mode` (its setup; off in its teardown)
+puts the breakpoint column in every file's buffer and `drgnx-debug--event` on `drgnx-hub-event-functions`: each
+`debug-state` replaces `drgnx-debug--sessions` and turns `drgnx-debug-session-mode` (the session keys, such as F11 for
+Step Into) on while there is a session. A command acts on the project's session (its root is the project's), the
+stopped one first, so a stopped child comes before its running parent: Start Debugging continues it (`debug/control
+continue`) or, with none stopped, picks a configuration and starts it; Step Over / Into / Out and Stop send `next`,
+`step-in`, `step-out` and `stop`. Tests: `test/unit/debug-module-test.el`.
+
 ## The editor's half: `drgnx-debug-launch.el`
 
 `modules/extra/drgnx-debug-launch.el` holds what a start needs in the editor, all from commands you invoke:

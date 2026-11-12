@@ -1,7 +1,7 @@
 ;;; mod-extras-teardown-test.el --- batch tests: the package-backed extras turn off and leave what the user had -*- lexical-binding: t -*-
 ;; The 15 `extra/' modules (teardown batch): what a setup sets in another package's options comes back, a mode a
-;; module turned on in live buffers goes off.  A module whose package is missing here
-;; (`extra/debug': dape) is covered by its teardown function alone.
+;; module turned on in live buffers goes off.  `extra/debug' (no package) is covered by its teardown function here
+;; and by test/unit/debug-module-test.el.
 ;; test-class: det
 (require 'ert)
 (require 'ert-x)

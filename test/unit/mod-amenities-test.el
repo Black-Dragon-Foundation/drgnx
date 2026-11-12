@@ -8,9 +8,6 @@
 (defconst drgnx-amenities-test--modules
   '(("extra/drgnx-booster" extra/booster (eglot-booster) ())
     ("extra/drgnx-format" extra/format (apheleia) (format-on-save))
-    ("extra/drgnx-debug" extra/debug (dape) (debug-start debug-breakpoint debug-step-over debug-step-in debug-step-out debug-stop
-                                                         debug-breakpoint-conditional debug-logpoint debug-breakpoint-enable
-                                                         debug-run-to-cursor))
     ("extra/drgnx-guides" extra/guides (indent-bars) (toggle-indent-guides))
     ("lang/drgnx-markdown" lang/markdown (markdown-mode) (markdown-preview)))
   "FILE MODULE PACKAGES COMMANDS.")
@@ -93,66 +90,6 @@
                                      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "x  =  1\ny  =  2\n"))
                                      (set-buffer-modified-p nil) (kill-buffer))))
       (delete-file file))))
-
-(ert-deftest drgnx-debug/start-or-continue ()
-  (load (expand-file-name "modules/extra/drgnx-debug" drgnx-dir) nil t)
-  (let ((called nil))
-    (cl-letf (((symbol-function 'call-interactively) (lambda (f &rest _) (push f called)))
-              ((symbol-function 'dape--live-connection) (lambda (&rest _) nil)))
-      (drgnx-debug-start-or-continue))
-    (cl-letf (((symbol-function 'call-interactively) (lambda (f &rest _) (push f called)))
-              ((symbol-function 'dape--live-connection) (lambda (&rest _) 'a-stopped-session)))
-      (drgnx-debug-start-or-continue))
-    (should (equal called '(dape-continue dape)))))
-
-(defvar dape-active-mode)                               ; dape's: special, as in the module
-
-(ert-deftest drgnx-debug/session-keys-only-while-debugging ()
-  ;; F11 is Zen Mode in the VS Code profile, Step Into while a session runs (as in VS Code)
-  (load (expand-file-name "modules/extra/drgnx-debug" drgnx-dir) nil t)
-  (unwind-protect
-      (let ((dape-active-mode t))
-        (drgnx-debug--follow-session)
-        (should drgnx-debug-session-mode)
-        (setq dape-active-mode nil)
-        (drgnx-debug--follow-session)
-        (should-not drgnx-debug-session-mode))
-    (drgnx-debug-session-mode -1)))
-
-(ert-deftest drgnx-debug/keys-in-every-profile ()
-  (dolist (profile '("vscode" "emacs" "vim"))
-    (let ((text (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir)) (buffer-string))))
-      (dolist (c '(debug-start debug-breakpoint debug-step-over debug-step-in debug-step-out debug-stop
-                               debug-breakpoint-conditional debug-logpoint debug-breakpoint-enable debug-run-to-cursor))
-        (should (string-search (format "(%s " c) text)))))
-  (let ((vs (with-temp-buffer (insert-file-contents (expand-file-name "keys/vscode.eld" drgnx-dir)) (buffer-string)))
-        (em (with-temp-buffer (insert-file-contents (expand-file-name "keys/emacs.eld" drgnx-dir)) (buffer-string))))
-    (should (string-search "(debug-start \"<f5>\")" vs))
-    (should (string-search "(debug-step-in \"<f11>\" :map drgnx-debug-session-map)" vs))
-    (should (string-search "(debug-run-to-cursor \"C-<f10>\")" vs))
-    ;; GUD's prefix, in the module's own map so a loaded gud's global C-x C-a loses to it (spec §14)
-    (should (string-search "(debug-breakpoint \"C-x C-a C-b\" :map drgnx-debug-mode-map)" em))))
-
-(ert-deftest drgnx-debug/the-mode-gives-file-buffers-the-column ()
-  (load (expand-file-name "modules/extra/drgnx-debug" drgnx-dir) nil t)
-  (let* ((dir (make-temp-file "dm" t)) (f (expand-file-name "a.py" dir)) b)
-    (with-temp-file f (insert "x = 1\n"))
-    (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore)
-              ((symbol-function 'drgnx-debug-launch-root) (lambda () dir)))
-      (unwind-protect
-          (progn
-            (setq b (find-file-noselect f))
-            (drgnx-debug-mode 1)
-            (should (buffer-local-value 'drgnx-debug-gutter-mode b))
-            (with-temp-buffer (should-not drgnx-debug-gutter-mode))   ; no file, no column
-            (let ((c (find-file-noselect (expand-file-name "b.py" dir))))
-              (should (buffer-local-value 'drgnx-debug-gutter-mode c))
-              (kill-buffer c))
-            (drgnx-debug-mode -1)
-            (should-not (buffer-local-value 'drgnx-debug-gutter-mode b)))
-        (drgnx-debug-mode -1)
-        (when (buffer-live-p b) (kill-buffer b))
-        (delete-directory dir t)))))
 
 (ert-deftest drgnx-guides/off-until-chosen ()
   "The approved look's code has no indent guides (the mockups): the module is off until you choose it."
