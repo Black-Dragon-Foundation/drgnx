@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use drgnx_ratatoskr::debug::session::{ScopeVars, Stop};
 use drgnx_ratatoskr::view::debug::model::{
-    Bps, Input, Opened, SessionView, Tree, Var, chunks, doc, lines,
+    Bps, Input, Opened, PAGE_CAP, SessionView, Tree, Var, chunks, doc, lines,
 };
 use drgnx_ratatoskr::view::debug::rows::rows;
 use drgnx_ratatoskr::view::explorer::RowLook;
@@ -178,7 +178,9 @@ fn held(pages: usize) -> (f64, [f64; 4], usize) {
             }
             left -= 1;
             let leaf = format!("{outer}/[{b}..{}]", b + bc - 1);
-            opened.set(&leaf, true);
+            // as `debug/expand` does: one page past the cap closes the oldest and lets its elements go
+            let gone = opened.set(&leaf, true);
+            s.tree.forget(&gone);
             let vars = (b..b + bc)
                 .map(|i| Var::of(&json!({"name": format!("{i}"), "value": format!("{}", i * 3), "type": "int",
                                           "evaluateName": format!("arr[{i}]"), "variablesReference": 0})))
@@ -200,7 +202,7 @@ fn held(pages: usize) -> (f64, [f64; 4], usize) {
     };
     let (rs, _images) = rows(&ls, &gui);
     let after = live();
-    assert!(rs.len() == ls.len() && cur.len() >= pages * 100);
+    assert!(rs.len() == ls.len() && cur.len() >= pages.min(PAGE_CAP) * 100);
     let n = ls.len();
     drop((sessions, ls, d, rs, cur));
     (
@@ -224,10 +226,11 @@ fn debug_hub_memory() {
         "debug-hub-memory: 100000-element list at two chunk levels, {n} lines: +{total:.1} MB heap (budget 64); values {:.1}, lines {:.1}, model {:.1}, rows {:.1}",
         parts[0], parts[1], parts[2], parts[3]
     );
-    // reported: a stop's whole fetch cap of pages open (200 × 100 elements)
-    let (total, parts, n) = held(200);
+    // every page of the list opened in turn: the view keeps the last PAGE_CAP open and lets the rest go
+    let (total, parts, n) = held(1000);
     println!(
-        "debug-hub-memory (reported): the same with 200 pages fetched, {n} lines: +{total:.1} MB; values {:.1}, lines {:.1}, model {:.1}, rows {:.1}",
+        "debug-hub-memory-pages: the same with all 1000 pages opened in turn ({PAGE_CAP} kept), {n} lines: +{total:.1} MB heap (budget 64); values {:.1}, lines {:.1}, model {:.1}, rows {:.1}",
         parts[0], parts[1], parts[2], parts[3]
     );
+    assert!(total <= 64.0, "+{total:.1} MB past the budget");
 }

@@ -490,6 +490,19 @@
       (should-not drgnx-hub--ensuring)
       (should-not (string-search "--batch" (or (car (drgnx-hub-client-test--lines log)) ""))))))
 
+(ert-deftest drgnx-hub-client/a-hub-slow-to-answer-runs-where-starting-is-off ()
+  ;; keys-stay-fast's "no hub": a hub busy past the probe's second (thirty agents streaming) was read as none, and with
+  ;; starting off (DRGNX_NO_HUB_START, every test session) `drgnx-hub-ensure' failed on a hub that was there.  A
+  ;; private socket that takes the connection is a hub, slow or not; with nothing there it still fails at once
+  (drgnx-hub-client-test--with-fake (:silent '("ping"))
+    (let ((process-environment (cons "DRGNX_NO_HUB_START=1" process-environment)) (done 'waiting))
+      (should-not (drgnx-hub-running-p))  ; the probe hears nothing within its second
+      (should-not (drgnx-hub--ensure-running (lambda (err) (setq done err))))
+      (should-not done)
+      (drgnx-fake-hub-stop hub)
+      (should (string-search "starting one is off"
+                             (error-message-string (should-error (drgnx-hub--ensure-running #'ignore))))))))
+
 (ert-deftest drgnx-hub-client/ensure-says-why-it-failed ()
   (drgnx-hub-client-test--with
     (let* ((process-environment

@@ -383,6 +383,35 @@ pub struct DebugEvaluated {
     pub ty: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference: Option<i64>,
+    /// The stop the answer is of: its children are there while that stop lasts (`debug/children`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<u64>,
+}
+
+/// `debug/children`: the children of REFERENCE (a console value's) in SESSION's stop EPOCH (none: the current one).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugChildren {
+    pub session: String,
+    pub reference: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<u64>,
+}
+
+/// `debug/children`' answer: the VARIABLES.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugChildList {
+    pub variables: Vec<DebugChild>,
+}
+
+/// A child: its NAME, VALUE, TYPE, and its own children's REFERENCE when it has some.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugChild {
+    pub name: String,
+    pub value: String,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub ty: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<i64>,
 }
 
 /// A file's breakpoints (`debug/breakpoints`' answer, and the event `debug-breakpoints`): PATH's VERSION and its
@@ -586,6 +615,14 @@ fn check_set_value(p: &DebugSetValue) -> Result<(), Error> {
     Ok(())
 }
 
+fn check_children(p: &DebugChildren) -> Result<(), Error> {
+    check_text("session", &p.session)?;
+    if p.reference <= 0 {
+        return Err(invalid("reference", "a positive variablesReference"));
+    }
+    Ok(())
+}
+
 fn check_evaluate(p: &DebugEvaluate) -> Result<(), Error> {
     check_text("session", &p.session)?;
     check_text("expr", &p.expr)?;
@@ -662,6 +699,12 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "evaluate an expression in a stopped session's frame (the value to copy, a hover, the console)",
             check: check_evaluate,
+        ),
+        method!(
+            "debug/children", DebugChildren(DebugChildren) -> DebugChildList,
+            classes: [User], writes: false,
+            doc: "the children of a value the debug console shows, while the stop it is of lasts (after a resume: an error, the value is stale)",
+            check: check_children,
         ),
         method!(
             "debug/trust", DebugTrust(DebugTrust) -> bool,

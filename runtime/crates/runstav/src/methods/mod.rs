@@ -315,6 +315,7 @@ params! {
     DebugWatch(debug::DebugWatch),
     DebugSetValue(debug::DebugSetValue),
     DebugEvaluate(debug::DebugEvaluate),
+    DebugChildren(debug::DebugChildren),
     DebugFork(debug_fork::DebugFork),
     DebugForkRun(debug_fork::DebugForkId),
     DebugForkDrop(debug_fork::DebugForkId),

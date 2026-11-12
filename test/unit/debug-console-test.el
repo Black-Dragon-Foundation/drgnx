@@ -1,0 +1,144 @@
+;;; debug-console-test.el --- batch tests: the debug console inserts the hub's lines and evaluates -*- lexical-binding: t -*-
+;; test-class: det
+;; test-pattern: pure
+;; The hub's `debug-output' events are fed to the module's handler as the hub client parses them (arrays as lists); what the console asks of the
+;; hub is recorded and answered here.
+(require 'ert)
+(require 'cl-lib)
+(require 'drgnx)
+(load (expand-file-name "modules/extra/drgnx-debug" drgnx-dir) nil t)
+
+(defmacro debug-console-test--with (&rest body)
+  "BODY with one stopped session `s1' (\"Python: app\") in /p and a fresh console; CALLS holds what was asked of the hub
+\(newest first) as (METHOD PARAMS CALLBACK)."
+  (declare (indent 0))
+  `(let ((drgnx-debug--sessions nil) (drgnx-debug--focus nil) (drgnx-debug-console--names nil) (calls nil))
+     (when (get-buffer drgnx-debug-console-buffer-name) (kill-buffer drgnx-debug-console-buffer-name))
+     (cl-letf (((symbol-function 'drgnx-debug-launch-root) (lambda () "/p"))
+               ((symbol-function 'drgnx-debug-toolbar-sync) #'ignore)
+               ((symbol-function 'drgnx-hub-call) (lambda (method params cb &rest _) (push (list method params cb) calls))))
+       (unwind-protect
+           (progn (drgnx-debug--event "debug-state" (list :sessions (vector (list :id "s1" :name "Python: app" :root "/p"
+                                                                                  :state "stopped"))))
+                  ,@body)
+         (drgnx-debug-session-mode -1)
+         (when (get-buffer drgnx-debug-console-buffer-name)
+           (let ((kill-buffer-query-functions nil)) (kill-buffer drgnx-debug-console-buffer-name)))))))
+
+(defun debug-console-test--output (&rest lines)
+  (drgnx-debug--event "debug-output" (list :session "s1" :lines lines)))
+
+(defun debug-console-test--text ()
+  "The console's output, without its input line."
+  (with-current-buffer drgnx-debug-console-buffer-name
+    (buffer-substring-no-properties (point-min) drgnx-debug-console--end)))
+
+(ert-deftest drgnx-debug-console/inserts-the-hubs-lines ()
+  "Lines are inserted as they come: the hub's face runs, the category's face, the group's indent, the count, a
+logpoint's source, a structured value's chevron; a line that continues the last one adds to its count."
+  (debug-console-test--with
+    (debug-console-test--output (list :text "plain" :category "stdout" :count 1)
+                                (list :text "red bold" :category "stdout" :count 1
+                                      :runs '((0 3 "drgnx-debug-console-red")))
+                                (list :text "oops" :category "stderr" :count 3)
+                                (list :text "inside" :category "stdout" :count 1 :depth 1)
+                                (list :text "hit 3" :category "console" :count 1 :source (list :path "/p/a.py" :line 12))
+                                (list :text "obj" :category "stdout" :count 1 :node (list :reference 9)))
+    (should (equal (debug-console-test--text) "plain\nred bold\noops ×3\n  inside\nhit 3  a.py:12\n▸ obj\n"))
+    (with-current-buffer drgnx-debug-console-buffer-name
+      (goto-char (point-min))
+      (search-forward "red")
+      (should (memq 'drgnx-debug-console-red (ensure-list (get-text-property (1- (point)) 'face))))
+      (search-forward "oops")
+      (should (memq 'drgnx-debug-console-stderr (ensure-list (get-text-property (1- (point)) 'face))))
+      (search-forward "▸ obj")
+      (should (equal "s1" (plist-get (get-text-property (1- (point)) 'drgnx-debug-console-node) :session))))
+    (debug-console-test--output (list :text "obj" :category "stdout" :count 1 :node (list :reference 9))
+                                (list :text "tick" :category "stdout" :count 1))
+    (debug-console-test--output (list :text "tick" :category "stdout" :count 2 :more t))
+    (should (string-suffix-p "▸ obj\ntick ×3\n" (debug-console-test--text)))))
+
+(ert-deftest drgnx-debug-console/keeps-the-last-lines ()
+  "Past `drgnx-debug-console-max-lines' the oldest lines go; skipped lines are said."
+  (debug-console-test--with
+    (let ((drgnx-debug-console-max-lines 100))
+      (dotimes (b 3)
+        (apply #'debug-console-test--output
+               (mapcar (lambda (i) (list :text (format "line %d" (+ (* b 50) i)) :category "stdout" :count 1))
+                       (number-sequence 0 49))))
+      (drgnx-debug--event "debug-output" (list :session "s1" :skipped 7 :lines nil))
+      (let ((text (debug-console-test--text)))
+        (should (= 100 (with-current-buffer drgnx-debug-console-buffer-name drgnx-debug-console--lines)))
+        (should (= 100 (cl-count ?\n text)))
+        (should (string-prefix-p "line 51\n" text))
+        (should (string-suffix-p "line 149\n7 lines skipped\n" text))))))
+
+(ert-deftest drgnx-debug-console/evaluates-and-opens-in-place ()
+  "RET evaluates the input in the session's selected frame (`repl'); S-RET adds a line; the result's chevron opens
+its children below it (`debug/children' of its stop) and closes them; a value of a stop that is over turns stale."
+  (debug-console-test--with
+    (with-current-buffer (drgnx-debug-console--buffer)
+      (goto-char (point-max))
+      (insert "len(")
+      (drgnx-debug-console-newline)
+      (insert "xs)")
+      (drgnx-debug-console-send)
+      (pcase-let ((`(,method ,params ,cb) (car calls)))
+        (should (equal method "debug/evaluate"))
+        (should (equal params (list :session "s1" :expr "len(\nxs)" :context "repl")))
+        (funcall cb (list :result "[1, 2]" :reference 5 :epoch 4) nil))
+      (should (equal (debug-console-test--text) "len(\nxs)\n▸ [1, 2]\n"))
+      (should (equal "" (drgnx-debug-console--input)))
+      (goto-char (point-min))
+      (search-forward "[1, 2")
+      (drgnx-debug-console-toggle)
+      (pcase-let ((`(,method ,params ,cb) (car calls)))
+        (should (equal method "debug/children"))
+        (should (equal params (list :session "s1" :reference 5 :epoch 4)))
+        (funcall cb (list :variables (vector (list :name "0" :value "1") (list :name "1" :value "2" :reference 6))) nil))
+      (should (equal (debug-console-test--text) "len(\nxs)\n▾ [1, 2]\n  0: 1\n  ▸ 1: 2\n"))
+      (goto-char (point-min))
+      (search-forward "[1, 2")
+      (drgnx-debug-console-toggle)
+      (should (equal (debug-console-test--text) "len(\nxs)\n▸ [1, 2]\n"))
+      (drgnx-debug-console-toggle)
+      (funcall (nth 2 (car calls)) nil "stop 4 is over; its variables are gone")
+      (should-not (get-text-property (point) 'drgnx-debug-console-node))
+      (should (memq 'drgnx-debug-console-stale (ensure-list (get-text-property (point) 'face)))))))
+
+(ert-deftest drgnx-debug-console/history-per-profile ()
+  "The input's history: back and forth through what was evaluated; the keys in the three profiles."
+  (debug-console-test--with
+    (with-current-buffer (drgnx-debug-console--buffer)
+      (dolist (e '("a" "b"))
+        (goto-char (point-max)) (insert e) (drgnx-debug-console-send))
+      (drgnx-debug-console-history-previous)
+      (should (equal "b" (drgnx-debug-console--input)))
+      (drgnx-debug-console-history-previous)
+      (should (equal "a" (drgnx-debug-console--input)))
+      (drgnx-debug-console-history-next)
+      (drgnx-debug-console-history-next)
+      (should (equal "" (drgnx-debug-console--input)))))
+  (dolist (f '("keys/vscode.eld" "keys/emacs.eld" "keys/vim.eld"))
+    (let ((text (with-temp-buffer (insert-file-contents (expand-file-name f drgnx-dir)) (buffer-string))))
+      (should (string-match-p "(debug-console-history-previous \"" text))
+      (should (string-match-p "(debug-console-history-next \"" text)))))
+
+(ert-deftest drgnx-debug-console/kept-after-the-end-and-cleared-at-the-next-start ()
+  "The output stays when the session ends; the next start of the same configuration clears it (the setting)."
+  (debug-console-test--with
+    (debug-console-test--output (list :text "first run" :category "stdout" :count 1))
+    (drgnx-debug--event "debug-state" (list :sessions []))
+    (should (equal (debug-console-test--text) "first run\n"))
+    (drgnx-debug--event "debug-state" (list :sessions (vector (list :id "s2" :name "Other" :root "/p" :state "running"))))
+    (should (equal (debug-console-test--text) "first run\n"))
+    (drgnx-debug--event "debug-state" (list :sessions []))
+    (drgnx-debug--event "debug-state" (list :sessions (vector (list :id "s3" :name "Python: app" :root "/p"
+                                                                    :state "running"))))
+    (should (equal (debug-console-test--text) ""))
+    (let ((drgnx-debug-console-clear-on-restart nil))
+      (debug-console-test--output (list :text "second run" :category "stdout" :count 1))
+      (drgnx-debug--event "debug-state" (list :sessions []))
+      (drgnx-debug--event "debug-state" (list :sessions (vector (list :id "s4" :name "Python: app" :root "/p"
+                                                                      :state "running"))))
+      (should (equal (debug-console-test--text) "second run\n")))))

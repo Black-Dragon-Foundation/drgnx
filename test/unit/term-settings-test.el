@@ -72,7 +72,9 @@
 (ert-deftest drgnx-term-settings/spawn-setting-only-affects-new-terminals ()
   ;; `drgnx-term-env' and the scope's limits go with `term/open'; an open terminal is not told
   (let ((opens nil))
+    ;; a hub runs, its subscription up: `drgnx-term--up-p', and the start a command asks for has nothing to do
     (cl-letf (((symbol-function 'drgnx-term--up-p) (lambda () t))
+              ((symbol-function 'drgnx-hub-start-for-command) #'ignore)
               ((symbol-function 'drgnx-hub--call-on) (lambda (_c m p _f) (when (equal m "term/open") (push p opens))))
               ((symbol-function 'drgnx-term-send-string) #'ignore)
               ((symbol-function 'pop-to-buffer) #'ignore))

@@ -11,12 +11,28 @@
 
 use crate::debug::session::Stop;
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 /// A node with more indexed children than this shows them in chunks of this many (VS Code's chunk size).
 pub const CHUNK: i64 = 100;
 /// The most `variables` (and `stackTrace`) calls a stop makes to fetch the expanded paths again.
 pub const FETCH_CAP: usize = 200;
+/// The most pages (a chunk of at most [`CHUNK`] elements) a view keeps open: opening one more closes the one opened
+/// longest ago and lets its elements go, so a long look through a big list holds what 64 pages hold (spec §12).
+pub const PAGE_CAP: usize = 64;
+
+/// Whether ID is a page: a chunk (`…/[A..B]`) of at most [`CHUNK`] elements.
+pub fn is_page(id: &str) -> bool {
+    let last = id.rsplit('/').next().unwrap_or("");
+    let Some((a, b)) = last
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .and_then(|s| s.split_once(".."))
+    else {
+        return false;
+    };
+    matches!((a.parse::<i64>(), b.parse::<i64>()), (Ok(a), Ok(b)) if a <= b && b - a < CHUNK)
+}
 
 /// A DAP `Variable`, `Scope` or `evaluate` answer, as the view reads it.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -95,6 +111,22 @@ pub struct Tree {
 }
 
 impl Tree {
+    /// Let the elements of the pages GONE go, and all under them.
+    pub fn forget(&mut self, gone: &[String]) {
+        if gone.is_empty() {
+            return;
+        }
+        let under = |k: &String| {
+            gone.iter().any(|g| {
+                k.strip_prefix(g.as_str())
+                    .is_some_and(|r| r.is_empty() || r.starts_with('/'))
+            })
+        };
+        self.kids.retain(|k, _| !under(k));
+        self.capped.retain(|k| !under(k));
+        self.failed.retain(|k, _| !under(k));
+    }
+
     /// SESSION's STOP: its scopes, with the variables the stop fetched (an expensive scope's are not).
     pub fn of_stop(session: &str, stop: &Stop) -> Tree {
         let mut t = Tree {
@@ -142,6 +174,8 @@ fn unique(prefix: &str, name: &str, seen: &mut HashMap<String, u32>) -> String {
 pub struct Opened {
     pub open: BTreeSet<String>,
     pub shut: BTreeSet<String>,
+    /// The open pages, the one opened longest ago first (at most [`PAGE_CAP`]).
+    pub pages: VecDeque<String>,
 }
 
 impl Opened {
@@ -153,8 +187,10 @@ impl Opened {
         }
     }
 
-    /// ID opened (OPEN) or closed by the user.
-    pub fn set(&mut self, id: &str, open: bool) {
+    /// ID opened (OPEN) or closed by the user. Returns the pages that closed: ID itself when it is a page closed, or
+    /// the one opened longest ago when ID is one page past [`PAGE_CAP`]; their elements are to go
+    /// ([`Tree::forget`]).
+    pub fn set(&mut self, id: &str, open: bool) -> Vec<String> {
         if open {
             self.shut.remove(id);
             self.open.insert(id.to_owned());
@@ -162,6 +198,21 @@ impl Opened {
             self.open.remove(id);
             self.shut.insert(id.to_owned());
         }
+        let mut gone = vec![];
+        if is_page(id) {
+            self.pages.retain(|p| p != id);
+            if open {
+                self.pages.push_back(id.to_owned());
+                while self.pages.len() > PAGE_CAP {
+                    let old = self.pages.pop_front().unwrap_or_default();
+                    self.open.remove(&old);
+                    gone.push(old);
+                }
+            } else {
+                gone.push(id.to_owned());
+            }
+        }
+        gone
     }
 }
 

@@ -21,7 +21,8 @@ use crate::front::Front;
 use model::{Bps, FETCH_CAP, Filter, Input, Line, Opened, SessionView, Tree, Var};
 use runstav::methods::Params;
 use runstav::methods::debug::{
-    DebugEvaluate, DebugEvaluated, DebugExpand, DebugSetValue, DebugValue, DebugView, DebugWatch,
+    DebugChild, DebugChildList, DebugChildren, DebugEvaluate, DebugEvaluated, DebugExpand,
+    DebugSetValue, DebugValue, DebugView, DebugWatch,
 };
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
@@ -430,7 +431,10 @@ async fn expand(f: &Front, c: &Caller, p: DebugExpand) -> Result<bool, Error> {
         let st = views
             .get_mut(&key)
             .ok_or_else(|| err(format!("no Run and Debug view {}", p.view)))?;
-        st.opened.set(&p.node, p.open);
+        let gone = st.opened.set(&p.node, p.open);
+        for c in st.trees.values_mut() {
+            c.view.tree.forget(&gone);
+        }
         if p.open {
             // the user asks for it: a capped or failed node is fetched again, past this stop's cap
             for c in st.trees.values_mut() {
@@ -554,6 +558,37 @@ async fn evaluate(f: &Front, p: DebugEvaluate) -> Result<DebugEvaluated, Error> 
         result: v.value,
         ty: v.ty,
         reference: (v.reference > 0).then_some(v.reference),
+        epoch: d.stop_of(&p.session).map(|s| s.epoch),
+    })
+}
+
+/// `debug/children`: a console value's children while its stop lasts.
+async fn children(f: &Front, p: DebugChildren) -> Result<DebugChildList, Error> {
+    let d = f.debug.debug(f).clone();
+    let h = d
+        .session(&p.session)
+        .ok_or_else(|| err(format!("no debug session {}", p.session)))?;
+    let epoch = p
+        .epoch
+        .or_else(|| d.stop_of(&p.session).map(|s| s.epoch))
+        .ok_or_else(|| err("the session runs: its values are gone"))?;
+    let vs = h
+        .variables_with(epoch, json!({"variablesReference": p.reference}))
+        .await
+        .map_err(err)?;
+    Ok(DebugChildList {
+        variables: vs
+            .iter()
+            .map(|v| {
+                let v = Var::of(v);
+                DebugChild {
+                    name: v.name,
+                    value: v.value,
+                    ty: v.ty,
+                    reference: (v.reference > 0).then_some(v.reference),
+                }
+            })
+            .collect(),
     })
 }
 
@@ -573,6 +608,7 @@ pub async fn serve(
         Params::DebugWatch(p) => answer(watch(front, p)),
         Params::DebugSetValue(p) => answer(set_value(front, caller, p).await),
         Params::DebugEvaluate(p) => answer(evaluate(front, p).await),
+        Params::DebugChildren(p) => answer(children(front, p).await),
         other => return Err(Box::new(other)),
     })
 }
