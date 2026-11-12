@@ -81,11 +81,24 @@ pub enum Action {
     ChatProjectEdit,
     #[serde(rename = "huddles")]
     Huddles,
+    // the debugger's rows (graphical debugging spec §19.5): reading the user's sessions and runs, probes and
+    // breakpoints of the agent's own there, sealed forks, and, in the user's live process, evaluating or setting
+    // values and stepping
+    #[serde(rename = "debug.read")]
+    DebugRead,
+    #[serde(rename = "debug.probe")]
+    DebugProbe,
+    #[serde(rename = "debug.fork")]
+    DebugFork,
+    #[serde(rename = "debug.live-eval")]
+    DebugLiveEval,
+    #[serde(rename = "debug.drive")]
+    DebugDrive,
 }
 
 impl Action {
     /// Every action, in the matrix's row order.
-    pub const ALL: [Action; 29] = [
+    pub const ALL: [Action; 34] = [
         Action::AgentsStart,
         Action::AgentsModel,
         Action::AgentsControl,
@@ -115,6 +128,11 @@ impl Action {
         Action::PluginAbilities,
         Action::ChatProjectEdit,
         Action::Huddles,
+        Action::DebugRead,
+        Action::DebugProbe,
+        Action::DebugFork,
+        Action::DebugLiveEval,
+        Action::DebugDrive,
     ];
 
     /// The action's id, as the wire and the `agents-matrix` setting spell it.
@@ -149,6 +167,11 @@ impl Action {
             Action::PluginAbilities => "plugin.abilities",
             Action::ChatProjectEdit => "chat.project-edit",
             Action::Huddles => "huddles",
+            Action::DebugRead => "debug.read",
+            Action::DebugProbe => "debug.probe",
+            Action::DebugFork => "debug.fork",
+            Action::DebugLiveEval => "debug.live-eval",
+            Action::DebugDrive => "debug.drive",
         }
     }
 

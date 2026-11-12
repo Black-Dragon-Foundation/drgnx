@@ -25,7 +25,8 @@
   '(agents.start agents.model agents.control graph.change task.done spend spend.over code.read code.edit commit
                  merge.integration push.ci push.main code.ci-config machines job.container job.keys network browser
                  browser.web browser.private unsandboxed settings.change user.private user.emacs chat.project-read
-                 plugin.abilities chat.project-edit huddles)
+                 plugin.abilities chat.project-edit huddles debug.read debug.probe debug.fork debug.live-eval
+                 debug.drive)
   "The matrix's rows, as the hub spells them (`Action::id' in runstav::methods::matrix).")
 
 (defconst drgnx-agents-matrix-schema

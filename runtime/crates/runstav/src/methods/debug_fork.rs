@@ -62,6 +62,10 @@ pub struct DebugFork {
     pub until: Option<DebugForkUntil>,
     #[serde(default)]
     pub confirm: bool,
+    /// Fork at this pass even though a local differed from the run's that may come from a source the fork does not
+    /// replay (the clock, random numbers): what a failed fork's `anyway` offers.
+    #[serde(default)]
+    pub anyway: bool,
     #[serde(default)]
     pub inputs: Vec<DebugAnswer>,
 }

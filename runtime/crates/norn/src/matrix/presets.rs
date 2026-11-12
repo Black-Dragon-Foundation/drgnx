@@ -91,6 +91,15 @@ fn row(a: Action, p: Preset) -> [Cell; 3] {
         // two agents state their positions in a huddle for the user to decide: a card first under Cautious
         (Huddles, Cautious) => [ASK, ASK, ASK],
         (Huddles, _) => [ALLOW, ALLOW, ALLOW],
+        // the debugger (graphical debugging spec §19.5): everything asks under Cautious except the user's live
+        // process, which it never touches; a chat asks before its probes under Balanced; a live evaluate always asks
+        (DebugRead | DebugProbe | DebugFork, Cautious) => [ASK, ASK, ASK],
+        (DebugRead | DebugFork, _) => [ALLOW, ALLOW, ALLOW],
+        (DebugProbe, Balanced) => [ALLOW, ALLOW, ASK],
+        (DebugProbe, Autonomous) => [ALLOW, ALLOW, ALLOW],
+        (DebugLiveEval | DebugDrive, Cautious) => [NEVER, NEVER, NEVER],
+        (DebugLiveEval, _) | (DebugDrive, Balanced) => [ASK, ASK, ASK],
+        (DebugDrive, Autonomous) => [ALLOW, ALLOW, ALLOW],
     }
 }
 

@@ -218,6 +218,7 @@ impl Fixture {
             change: Change::Nothing,
             until,
             confirm: false,
+            anyway: false,
             resolved,
         }
     }
@@ -677,6 +678,7 @@ async fn a_recorded_python_run_is_forked_end_to_end() {
             change: Change::Nothing,
             until: Until::Exit,
             confirm: false,
+            anyway: false,
             resolved,
         })
         .unwrap()

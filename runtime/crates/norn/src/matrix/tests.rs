@@ -24,7 +24,7 @@ fn balanced_is_the_mockups_table() {
     use Action::*;
     use Verdict::*;
     let p = preset(Preset::Balanced);
-    let rows: [(Action, [Verdict; 3]); 29] = [
+    let rows: [(Action, [Verdict; 3]); 34] = [
         (AgentsStart, [Allow, Never, Never]),
         (AgentsModel, [Allow, Never, Never]),
         (AgentsControl, [Allow, Never, Never]),
@@ -54,8 +54,13 @@ fn balanced_is_the_mockups_table() {
         (PluginAbilities, [Allow, Allow, Ask]),
         (ChatProjectEdit, [Never, Never, Ask]),
         (Huddles, [Allow, Allow, Allow]),
+        (DebugRead, [Allow, Allow, Allow]),
+        (DebugProbe, [Allow, Allow, Ask]),
+        (DebugFork, [Allow, Allow, Allow]),
+        (DebugLiveEval, [Ask, Ask, Ask]),
+        (DebugDrive, [Ask, Ask, Ask]),
     ];
-    assert_eq!(p.cells.len(), 29 * 3);
+    assert_eq!(p.cells.len(), 34 * 3);
     for (a, vs) in rows {
         for (r, want) in [Role::Manager, Role::Worker, Role::Chat]
             .into_iter()
@@ -105,7 +110,7 @@ fn browser_rows_per_preset() {
             assert_eq!(decide(&eff(&[&m], &who(r)), a, None), want);
         }
     }
-    assert_eq!(Action::ALL.len(), 29);
+    assert_eq!(Action::ALL.len(), 34);
     let at = |a| Action::ALL.iter().position(|x| *x == a).unwrap();
     assert_eq!(
         (at(Browser), at(BrowserWeb), at(BrowserPrivate)),
@@ -610,4 +615,51 @@ fn huddles_per_preset() {
         }
     }
     assert_eq!(Action::from_id("huddles"), Some(Action::Huddles));
+}
+
+/// [D4] The debugger's rows (graphical debugging spec §19.5) per preset, in the manager, worker and chat columns: a
+/// Cautious live evaluate is refused, a Balanced one asks (a card), and so does an Autonomous one; Balanced asks a
+/// chat before it adds probes.
+#[test]
+fn debug_rows_per_preset() {
+    use Action::*;
+    use Preset::*;
+    use Verdict::*;
+    let table: [(Action, Preset, [Verdict; 3]); 15] = [
+        (DebugRead, Cautious, [Ask, Ask, Ask]),
+        (DebugRead, Balanced, [Allow, Allow, Allow]),
+        (DebugRead, Autonomous, [Allow, Allow, Allow]),
+        (DebugProbe, Cautious, [Ask, Ask, Ask]),
+        (DebugProbe, Balanced, [Allow, Allow, Ask]),
+        (DebugProbe, Autonomous, [Allow, Allow, Allow]),
+        (DebugFork, Cautious, [Ask, Ask, Ask]),
+        (DebugFork, Balanced, [Allow, Allow, Allow]),
+        (DebugFork, Autonomous, [Allow, Allow, Allow]),
+        (DebugLiveEval, Cautious, [Never, Never, Never]),
+        (DebugLiveEval, Balanced, [Ask, Ask, Ask]),
+        (DebugLiveEval, Autonomous, [Ask, Ask, Ask]),
+        (DebugDrive, Cautious, [Never, Never, Never]),
+        (DebugDrive, Balanced, [Ask, Ask, Ask]),
+        (DebugDrive, Autonomous, [Allow, Allow, Allow]),
+    ];
+    for (a, p, vs) in table {
+        let m = preset(p);
+        for (r, want) in [Role::Manager, Role::Worker, Role::Chat]
+            .into_iter()
+            .zip(vs)
+        {
+            let c = m.cells[&(a, Column::Role(r))];
+            assert_eq!((c.verdict, c.limit), (want, None), "{} {p:?} {r:?}", a.id());
+            assert_eq!(decide(&eff(&[&m], &who(r)), a, None), want);
+        }
+    }
+    for (a, id) in [
+        (DebugRead, "debug.read"),
+        (DebugProbe, "debug.probe"),
+        (DebugFork, "debug.fork"),
+        (DebugLiveEval, "debug.live-eval"),
+        (DebugDrive, "debug.drive"),
+    ] {
+        assert_eq!(Action::from_id(id), Some(a));
+    }
 }

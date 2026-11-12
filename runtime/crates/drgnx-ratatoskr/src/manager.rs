@@ -720,7 +720,7 @@ fn owned(f: &Front, manager: &str, id: &str) -> Result<Arc<Session>, String> {
 
 /// The facts of manager tool OP called with ARGS, as the hub parsed them: the card shows them and the user's answer
 /// counts for this call only (another call of the same kind is another question).
-fn call_facts(op: &str, args: &Value) -> Facts {
+pub(crate) fn call_facts(op: &str, args: &Value) -> Facts {
     let all = format!("{op} {args}");
     let mut command = all.clone();
     if command.len() > 4096 {
@@ -742,7 +742,7 @@ fn call_facts(op: &str, args: &Value) -> Facts {
 /// The gate for MANAGER doing A with FACTS: allowed, or the refusal (a card to wait on, or never).  An action that
 /// asked is asked again only through its card (the user's answer, nothing said in a message), and only for a call
 /// with the same facts.
-async fn gate(
+pub(crate) async fn gate(
     f: &Front,
     manager: &str,
     who: &Who,

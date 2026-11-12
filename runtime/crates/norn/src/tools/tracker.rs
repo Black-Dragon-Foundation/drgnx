@@ -78,6 +78,7 @@ pub fn tools_for(sets: ToolSets) -> Vec<Box<dyn Tool<Ctx>>> {
     all.extend(super::settings::tools());
     all.extend(super::extensions::tools());
     all.extend(super::huddle::tools());
+    all.extend(super::debug::tools());
     all
 }
 

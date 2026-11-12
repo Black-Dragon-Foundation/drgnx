@@ -74,6 +74,9 @@ struct Bp {
     hit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     log: Option<String>,
+    /// The agent session that set it (D4: the editor rings it); none for the user's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent: Option<String>,
 }
 
 fn yes() -> bool {
@@ -247,6 +250,20 @@ impl Store {
         }
     }
 
+    /// Breakpoint ID is agent session AGENT's (D4): its path, when there is one.
+    pub fn mark(&mut self, id: u64, agent: &str) -> Option<String> {
+        let (path, i) = self.find(id)?;
+        self.data.files.get_mut(&path)?.bps[i].agent = Some(agent.to_owned());
+        self.save();
+        Some(path)
+    }
+
+    /// The agent session breakpoint ID is of (none: the user's, or no such breakpoint).
+    pub fn owner(&self, id: u64) -> Option<String> {
+        let (path, i) = self.find(id)?;
+        self.data.files.get(&path)?.bps[i].agent.clone()
+    }
+
     fn find(&self, id: u64) -> Option<(String, usize)> {
         self.data.files.iter().find_map(|(p, f)| {
             f.bps
@@ -293,6 +310,7 @@ impl Store {
                     condition: none(condition),
                     hit: none(hit),
                     log: none(log),
+                    agent: None,
                 });
                 self.bump(&path, Some(id))
             }
