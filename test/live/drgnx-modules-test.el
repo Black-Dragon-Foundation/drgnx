@@ -4,6 +4,7 @@
 (require 'ert)
 (require 'drgnx-ui)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
+(load (expand-file-name "../fixtures/ratatoskr-fixture" (file-name-directory (macroexp-file-name))) nil t)
 
 (defmacro drgnx-live-mod--with (sess &rest body)
   "BODY with SESS a session editing an elisp file (VS Code key profile)."
@@ -42,8 +43,32 @@
       (drgnx-ui-measure sess (list (list :keys "C-k z")))
       (should (equal before (drgnx-live-mod--q sess "(sort (mapcar #'window-pixel-edges (window-list nil 'nomini)) (lambda (a b) (or (< (car a) (car b)) (and (= (car a) (car b)) (< (cadr a) (cadr b))))))"))))))
 
+(defun drgnx-live-mod--found (also)
+  "A form for the session: the hub-fed Search view (the rows path) drew f.el's file row and ALSO (a form) holds."
+  (format "(with-current-buffer (get-buffer drgnx-replace-buffer-name)
+             (and %s (drgnx-replace--rows-p) (> (or (car drgnx-replace--hub-counts) 0) 0)
+                  (save-excursion (goto-char (or drgnx-replace--results (point-min))) (re-search-forward \"\\\\_<f\\\\.el\\\\_>\" nil t))
+                  t))" also))
+
+(defun drgnx-live-mod--hub (sess)
+  "Start Ratatoskr in SESS (it ends with the session) and connect SESS to it: a session starts no hub of its own."
+  (let ((bin (or (drgnx-test-ratatoskr-bin) (drgnx-test-no-hub))))
+    (drgnx-live-mod--q sess (format "(let ((process-environment (append (list \"RATATOSKR_SUPERVISOR=none\"
+                                                                            (concat \"DRGNX_DIR=\" (directory-file-name drgnx-dir)))
+                                                                      process-environment)))
+                                       (make-process :name \"ratatoskr\" :noquery t :connection-type 'pipe
+                                                     :buffer (generate-new-buffer \" *ratatoskr*\")
+                                                     :command (list %S \"serve\" \"--foreground\" \"--parent-pid\"
+                                                                    (number-to-string (emacs-pid))))
+                                       t)" bin))
+    (drgnx-test-wait (lambda () (drgnx-live-mod--q sess "(drgnx-hub-running-p)")) :secs 30 :what "the session's hub")
+    (drgnx-live-mod--q sess "(progn (drgnx-hub-connect) t)")
+    (drgnx-test-wait (lambda () (drgnx-live-mod--q sess "(process-live-p drgnx-hub--events)"))
+                     :secs 30 :what "the session subscribed to its hub")))
+
 (ert-deftest drgnx-live/new-terminal-and-project-search-by-keys ()
   (drgnx-live-mod--with sess
+    (drgnx-live-mod--hub sess)
     (drgnx-ui-measure sess (list (list :keys "C-S-`")))
     (should (equal (drgnx-live-mod--q sess "(list (eq (selected-window) (drgnx-wb-area-window 'panel)) (drgnx-wb-area-tab 'panel) (with-current-buffer (window-buffer (selected-window)) major-mode))")
                    '(t terminal drgnx-term-mode)))   ; drgnx's own terminal, on the session's hub
@@ -53,17 +78,11 @@
     ;; Its module sets up at startup, so the view exists when keys are sent back to back.
     (drgnx-ui-measure sess (list (list :keys "C-S-f") (list :type "list") (list :keys "RET")))
     (should (eq (drgnx-live-mod--q sess "(drgnx-wb-sidebar-view)") 'search))
-    ;; the search runs in the session: its matches are asked for until they are in
-    (drgnx-test-wait (lambda ()
-                       (drgnx-live-mod--q sess "(with-current-buffer (get-buffer drgnx-replace-buffer-name)
-                                                  (and (not (drgnx-replace--busy-p))
-                                                       (seq-some (lambda (m) (string-suffix-p \"/f.el\" (plist-get m :file))) drgnx-replace--matches)
-                                                       t))"))
-                     :secs 10 :what "the search's matches")
-    (should (drgnx-live-mod--q sess "(with-current-buffer (get-buffer drgnx-replace-buffer-name)
-                                       (and (equal (drgnx-replace--text 'find) \"list\")
-                                            (seq-some (lambda (m) (string-suffix-p \"/f.el\" (plist-get m :file))) drgnx-replace--matches)
-                                            t))"))
+    ;; the search runs on the session's hub: its results are asked for until f.el's are in.  The hub-fed view keeps no
+    ;; match list (its rows are the hub's), so f.el's file row is looked for in the drawn rows.
+    (drgnx-test-wait (lambda () (drgnx-live-mod--q sess (drgnx-live-mod--found "(not (drgnx-replace--busy-p))")))
+                     :secs 10 :what "the search's results")
+    (should (drgnx-live-mod--q sess (drgnx-live-mod--found "(equal (drgnx-replace--text 'find) \"list\")")))
     (should (equal (drgnx-live-mod--q sess "drgnx-wb-unrouted") nil))))
 
 (defun drgnx-live-mod--elpa ()
