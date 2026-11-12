@@ -661,7 +661,9 @@ reviewer is left alone); a reached budget pauses the job and makes its `budget` 
 
 `complete_task` from an agent of a job puts the task `in-review`, not `done`, and `update_task` there takes only
 `running`, `needs-input` and `in-review`; the reviewer's verdict decides. The merge is a git process of its own and the
-task shows `merging` meanwhile; one merge at a time in a job's worktree (two at once fail on its HEAD, `cannot lock
+task shows `checking` while the gates look, then `merging`. The mark is set before the merge's task starts, so a
+`job/stop` from then on waits for it and the merge reads the job's status after it; a `BusyMark` clears it however
+the task ends, a panic too (unit test `a_mark_whose_work_panicked_is_cleared`). One merge at a time in a job's worktree (two at once fail on its HEAD, `cannot lock
 ref`), so a task whose review passes while another merges waits, `queued` (stopping the job empties the queue); a merge
 that fails with no unmerged files is no conflict: it goes once more after what merges then, and fails again into a
 `merge-failed` card titled `merge failed: <git output>` (Merge again, Drop, Open — no agent is sent to resolve a

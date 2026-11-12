@@ -1023,6 +1023,7 @@ impl PlanHooks {
         if l.tasks
             .iter()
             .any(|o| runs.busy_of(&o.row.id) == Some("merging"))
+            || runs.busy_of(&t.row.id).is_some()
         {
             return Ok(());
         }
@@ -1032,11 +1033,16 @@ impl PlanHooks {
             t.row.id.clone(),
             self.clone(),
         );
+        // marked before the merge's own task starts: a `job/stop` from here on waits for it, and the merge reads the
+        // job's status after the mark (`merge` loads it first); the mark goes however the task ends
+        // (`checking` while the gates look, `merging` from the merge itself: one merge at a time in a job)
+        let mark = super::BusyMark::set(front, &tid, "checking");
         self.spawn(t.row.id.clone(), async move {
+            let _mark = mark;
             if let Err(e) = me.merge(&f, &job2, &tid).await {
                 tracing::warn!("plan run {job2}: merge of {tid}: {}", e.message);
             }
-            f.core.runs.set_busy(&tid, None);
+            drop(_mark);
             changed(&f, &job2).await;
         });
         Ok(())

@@ -438,6 +438,29 @@ impl Runs {
     }
 }
 
+/// A task's busy mark ([`Runs::set_busy`]) held by the work it marks: cleared when dropped, so a start or merge
+/// that returns early or panics never leaves `job/stop` waiting on it.
+pub struct BusyMark {
+    front: Arc<Front>,
+    task: String,
+}
+
+impl BusyMark {
+    pub fn set(front: &Arc<Front>, task: &str, what: &'static str) -> BusyMark {
+        front.core.runs.set_busy(task, Some(what));
+        BusyMark {
+            front: front.clone(),
+            task: task.to_owned(),
+        }
+    }
+}
+
+impl Drop for BusyMark {
+    fn drop(&mut self) {
+        self.front.core.runs.set_busy(&self.task, None);
+    }
+}
+
 /// What a [`RunGit`] call answers.
 pub type GitFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, GitError>> + std::marker::Send + 'a>>;
@@ -2667,5 +2690,24 @@ mod resume_tests {
         // the start ends: the stop answers
         f.core.runs.set_busy(&task, None);
         stopping.await.unwrap().unwrap();
+    }
+
+    /// A start or merge that panics still clears its mark (`BusyMark` drops on the unwind), so `job/stop` answers
+    /// instead of waiting for a mark no one will clear.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_mark_whose_work_panicked_is_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = Arc::new(front(dir.path()));
+        let task = format!("{JOB}#1");
+        let mark = BusyMark::set(&f, &task, "merging");
+        assert_eq!(f.core.runs.busy_of(&task), Some("merging"));
+        let died = tokio::spawn(async move {
+            let _mark = mark;
+            panic!("a merge that panics");
+        })
+        .await;
+        assert!(died.is_err());
+        assert_eq!(f.core.runs.busy_of(&task), None);
+        f.core.runs.settled(JOB).await;
     }
 }
