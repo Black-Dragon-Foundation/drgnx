@@ -51,7 +51,9 @@ re-indented on save. A formatter that is not installed, or fails, leaves the fil
 
 **Start Debugging…** runs a debug session through dape, which speaks the Debug Adapter Protocol: the adapters VS
 Code uses — debugpy for Python, the JavaScript/TypeScript debugger, delve for Go, codelldb for C, C++ and Rust — work
-here once installed (dape's documentation lists how to get each). While the session is stopped the same command
+here once installed: **Install Adapter…** (the palette) downloads the JavaScript debugger or CodeLLDB, checked
+against the version drgnx pins, or puts debugpy into drgnx's own Python, and names the system package to install for
+the others (`drgnx doctor` lists which are found). While the session is stopped the same command
 continues; **Toggle Breakpoint**, **Step Over**, **Step Into**, **Step Out** and **Stop Debugging** do what they say.
 If you used dape, **Convert dape Configurations…** (the palette) turns your `dape-configs` into launch configurations
 once.

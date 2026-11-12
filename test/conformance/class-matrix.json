@@ -58,6 +58,7 @@
   "debug/breakpoints": ["user"],
   "debug/configs": ["user"],
   "debug/control": ["user"],
+  "debug/install": ["user"],
   "debug/run-to-cursor": ["user"],
   "debug/select": ["user"],
   "debug/start": ["user"],

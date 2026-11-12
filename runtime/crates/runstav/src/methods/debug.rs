@@ -1,6 +1,7 @@
 //! Debugging (docs/develop/debugging.md, spec §11): the editor lists a project's launch configurations
 //! (`debug/configs`), starts one (`debug/start`, which may first need inputs or trust), controls a session
-//! (`debug/control`, `debug/select`) and tells the hub a project's trust (`debug/trust`). The hub's events:
+//! (`debug/control`, `debug/select`), tells the hub a project's trust (`debug/trust`) and installs an adapter
+//! (`debug/install`). The hub's events:
 //! `debug-state` (every session), `debug-frame` (a stop's line), `debug-terminal` (`runInTerminal`'s terminal),
 //! `debug-ended`.
 
@@ -149,6 +150,15 @@ pub struct DebugSelect {
 pub struct DebugTrust {
     pub root: String,
     pub trusted: bool,
+}
+
+/// `debug/install`: ADAPTER's `:install` entry carried out (Debug: Install Adapter): a pinned archive checked and
+/// unpacked into drgnx's tools folder, debugpy into the tools venv; ADAPTERS are the user's own, as for `debug/start`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugInstall {
+    pub adapter: String,
+    #[serde(default)]
+    pub adapters: Vec<JsonObject>,
 }
 
 /// `debug-state`: every session (`{id, name, parent, root, state, reason, caps}`), whenever one starts, runs, stops
@@ -315,6 +325,10 @@ fn check_select(p: &DebugSelect) -> Result<(), Error> {
     check_text("session", &p.session)
 }
 
+fn check_install(p: &DebugInstall) -> Result<(), Error> {
+    check_text("adapter", &p.adapter)
+}
+
 fn check_trust(p: &DebugTrust) -> Result<(), Error> {
     check_root(&p.root)
 }
@@ -421,6 +435,12 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "a project's trust changed: a project never told trusted runs no configuration, and revoking trust stops its sessions",
             check: check_trust,
+        ),
+        method!(
+            "debug/install", DebugInstall(DebugInstall) -> String,
+            classes: [User], writes: false,
+            doc: "install an adapter from its pinned download (checked against its sha256) or into the tools venv with its hash required; a system package's command is named, never run: what was installed",
+            check: check_install,
         ),
     ]
 }

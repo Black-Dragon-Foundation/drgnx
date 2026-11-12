@@ -12,8 +12,8 @@ use crate::front::Front;
 use runstav::methods::Params;
 use runstav::methods::debug::{
     DebugBreakpointOp, DebugBreakpoints, DebugBreakpointsView, DebugConfig, DebugConfigList,
-    DebugConfigs, DebugControl, DebugFileError, DebugRunToCursor, DebugSelect, DebugStart,
-    DebugStarted, DebugTrust,
+    DebugConfigs, DebugControl, DebugFileError, DebugInstall, DebugRunToCursor, DebugSelect,
+    DebugStart, DebugStarted, DebugTrust,
 };
 use runstav::types::JsonObject;
 use runstav::wire::{Error, ErrorCode};
@@ -543,6 +543,29 @@ async fn run_to_cursor(front: &Front, p: DebugRunToCursor) -> Result<bool, Error
     Ok(true)
 }
 
+/// Debug: Install Adapter: P's adapter from its `:install` entry, into the tools folder.
+async fn install_adapter(front: &Front, p: DebugInstall) -> Result<String, Error> {
+    let table = table(&p.adapters)?;
+    let a = table
+        .by_id(&p.adapter)
+        .ok_or_else(|| bad("adapter", format!("no adapter {}", p.adapter)))?;
+    let entry = a.install.as_ref().ok_or_else(|| {
+        err(format!(
+            "drgnx cannot install {}: add it yourself (the setting debug.adapters)",
+            a.name
+        ))
+    })?;
+    let plan = super::install::plan(entry, &super::install::platform_key()).map_err(err)?;
+    super::install::install(
+        &plan,
+        &tools_dir(front),
+        &super::install::Source::Https,
+        &front.shell_env.vars_os(),
+    )
+    .await
+    .map_err(err)
+}
+
 fn answer<T: serde::Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
     r.map(|v| json!(v))
 }
@@ -559,6 +582,7 @@ pub async fn serve(
         Params::DebugControl(p) => answer(control(front, p).await),
         Params::DebugSelect(p) => answer(select(front, p).await),
         Params::DebugTrust(p) => answer(trust(front, p).await),
+        Params::DebugInstall(p) => answer(install_adapter(front, p).await),
         Params::DebugBreakpoints(p) => answer(breakpoints(front, p).await),
         Params::DebugRunToCursor(p) => answer(run_to_cursor(front, p).await),
         other => return Err(Box::new(other)),

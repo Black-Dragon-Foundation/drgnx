@@ -1413,6 +1413,7 @@ dependencies = [
  "drgnx-term",
  "eitri",
  "fastwebsockets",
+ "flate2",
  "forseti",
  "getrandom 0.4.3",
  "gleipnir",
@@ -1452,6 +1453,7 @@ dependencies = [
  "skuld",
  "sleipnir",
  "subtle",
+ "tar",
  "tempfile",
  "tokio",
  "tokio-rustls",
@@ -6187,6 +6189,16 @@ name = "tap"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+]
 
 [[package]]
 name = "target-lexicon"

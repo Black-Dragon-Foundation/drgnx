@@ -302,6 +302,7 @@ params! {
     DebugControl(debug::DebugControl),
     DebugSelect(debug::DebugSelect),
     DebugTrust(debug::DebugTrust),
+    DebugInstall(debug::DebugInstall),
     DebugBreakpoints(debug::DebugBreakpoints),
     DebugRunToCursor(debug::DebugRunToCursor),
     SearchQuery(search::QueryParams),

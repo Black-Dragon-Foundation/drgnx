@@ -103,6 +103,7 @@ loaded gud's own `C-x C-a' in `global-map' loses to them.")
                                                (debug-step-in "Step Into" dape-step-in "Into the call on this line")
                                                (debug-step-out "Step Out" dape-step-out "Out of this function")
                                                (debug-stop "Stop Debugging" dape-kill "End the session")
+                                               (debug-install-adapter "Install Adapter…" drgnx-debug-install-adapter "Download and install a debug adapter, checked against its pinned hash")
                                                (debug-convert-dape "Convert dape Configurations…" drgnx-debug-convert-dape-configs "Turn your dape configurations into launch configurations, once")))
                                 (drgnx-command-define id :category "Debug" :title title :command fn :doc doc))))
 

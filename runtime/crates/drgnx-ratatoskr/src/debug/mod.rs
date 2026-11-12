@@ -11,6 +11,7 @@
 pub mod adapters;
 pub mod blocked;
 pub mod breakpoints;
+pub mod install;
 pub mod launch;
 pub mod ports;
 pub mod session;
@@ -25,6 +26,8 @@ mod tests_blocked;
 mod tests_blocked_live;
 #[cfg(test)]
 mod tests_breakpoints;
+#[cfg(test)]
+mod tests_install;
 #[cfg(test)]
 mod tests_launch;
 #[cfg(test)]

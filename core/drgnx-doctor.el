@@ -1716,8 +1716,7 @@ state dir): a list of (:file NAME :stopped PLISTS :time WRITTEN), one per file t
                                      (how (lambda (r)
                                             (let ((i (plist-get r :install)))
                                               (cond ((plist-get i :system) (format "%s (%s)" (plist-get r :id) (plist-get i :system)))
-                                                    ((plist-get i :pip) (format "%s (pip install %s)" (plist-get r :id) (plist-get i :pip)))
-                                                    ((plist-get i :url) (format "%s (Install from the picker)" (plist-get r :id)))
+                                                    (i (format "%s (Debug: Install Adapter)" (plist-get r :id)))
                                                     (t (plist-get r :id))))))
                                      (text (string-join
                                             (delq nil (list (and found (concat "found: " (mapconcat (lambda (r) (plist-get r :id)) found ", ")))

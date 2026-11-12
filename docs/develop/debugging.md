@@ -153,6 +153,17 @@ js-debug, delve, lldb-dap), how to find it and how to start it:
   TCP adapter gets a free port on 127.0.0.1 picked by the hub (`adapters::free_port`; another local process could take
   it first, and DAP has no authentication: spec §9.5).
 
+- `:install` (Debug: Install Adapter, `debug/install`, `debug/install.rs`): `(:url U :sha256 H :into DIR [:root R])`
+  or `(:into DIR :platforms ((:platform "linux-x64" :url U :sha256 H) …))` (the platform keys are `linux-x64`,
+  `linux-arm64`, `darwin-x64`, `darwin-arm64`), `(:pip "debugpy==V" :hash "sha256:…")` or `(:system "dnf install …")`.
+  An archive is downloaded over https through the browser installer's client (`browser::install::fetch`, its proxy and
+  certificate settings), checked against the pin, and unpacked (a tar.gz, or a zip such as CodeLLDB's `.vsix`) with
+  only regular files and folders allowed: an absolute, climbing or linking entry fails the whole install. The result
+  (only its `:root` folder, when given) replaces `<data>/debug-adapters/DIR` whole through `DIR.partial` and `DIR.old`,
+  so any failure leaves the folder as it was. debugpy goes into the tools venv (made first if missing) with `pip
+  install --require-hashes --no-deps`. A system package is never run: the error names its command. js-debug and
+  CodeLLDB are pinned archives (CodeLLDB is built in, untested, started from its `extension/adapter/codelldb`).
+
 The untested entries' command lines come from dape's recipes (credited in the file). Adapters drgnx cannot start are
 listed with `:not-built-in t`, so their type says to add them in the setting `debug.adapters`; an unknown type lists
 the known ones.
@@ -204,6 +215,9 @@ roots `debug/trust` called trusted and each root's last started configuration.
 - `debug/control {session, thread?, op}` (`continue`, `pause`, `next`, `step-in`, `step-out`, `restart`, `stop`,
   `stop-and-kill`, `disconnect`), `debug/select {session, thread?, frame}`, and `debug/trust {root, trusted}`, whose
   revocation stops the root's sessions.
+- `debug/install {adapter, adapters?}`: the adapter's `:install` entry carried out (see Adapters); the answer says what
+  was installed. A system package's, an adapter without an entry and an unknown id are errors (conformance
+  `debug/install-refusals`; the downloads are the unit tests' `debug::tests_install`, from local files).
 
 Adapters start in the root with the shell's environment (`env/set`), each in its own process group: a stdio adapter
 over pipes; a TCP adapter with stdin on `/dev/null`, on a free port of 127.0.0.1 that the hub connects to within 5 s
@@ -237,7 +251,11 @@ which shows the view. At the hub's end every session stops, children first, befo
 
 `drgnx doctor`'s `debug-adapters` line (group Tools) reads `etc/debug-adapters.eld` as data and says which built-in
 adapters are found (`:path` on `PATH`, `:python-module` importable by `python3`, `:tools` under
-`<data>/debug-adapters/`) and how to get the others.
+`<data>/debug-adapters/`) and how to get the others (a system package's command, else Debug: Install Adapter).
+
+`drgnx-debug-install-adapter` is the palette's **Install Adapter…** (`debug-install-adapter`, on no key in any
+profile): it offers the table's built-in adapters with an `:install` entry and calls `debug/install` with your
+`drgnx-debug-adapters`; the answer or the error is shown in the echo area.
 
 Its tests (`test/unit/debug-launch-test.el`) script the hub's answers.
 
