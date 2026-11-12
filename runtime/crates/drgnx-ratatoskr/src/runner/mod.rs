@@ -1299,6 +1299,8 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
         gate,
         only,
     } = p;
+    // each stage's end on the hub's clock, for the debug line at the end (a slow proposal names its stage)
+    let mut stages = Stages::start();
     let (file, mut read) = match plan {
         PlanRef::File(p) => {
             let file = PathBuf::from(p.as_str());
@@ -1310,6 +1312,7 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
         }
         PlanRef::Entity(id) => effects::plan_for_job(front, id.as_str()).await?,
     };
+    stages.mark("plan");
     let tasks = match only {
         Some(n) => {
             read.title = format!("{} — Task {n}", read.title);
@@ -1391,7 +1394,9 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
         .ok_or_else(|| {
             invalid("No repository for this job: give one, or a **Repo:** line in the plan")
         })?;
+    stages.mark("pack");
     let id = new_id(front).await?;
+    stages.mark("id");
     let mut roles: Vec<&str> = Vec::new();
     for t in &tasks {
         if !roles.contains(&t.role.as_str()) {
@@ -1461,6 +1466,7 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
         .await
         .map_err(internal)?
         .map(|p| p.id);
+    stages.mark("project");
     if let Some(p) = &project {
         data["project"] = json!(p);
     }
@@ -1475,6 +1481,7 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
             (None, Vec::new())
         }
     };
+    stages.mark("forecast");
     let mut warnings: Vec<String> = forecast
         .as_ref()
         .map_or_else(Vec::new, |f| f.warnings.clone());
@@ -1505,6 +1512,7 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
     } else {
         false
     };
+    stages.mark("say");
     let title = match &forecast {
         Some(f) => card_title(tasks.len(), f),
         None => format!("{} tasks, no forecast: approve to start", tasks.len()),
@@ -1532,6 +1540,12 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
         })
         .await
         .map_err(fail)?;
+    stages.mark("write");
+    // the write's whole wait (its queue, its batch's run and COMMIT) beside the last batch's COMMIT alone
+    let commit_ms = front
+        .tools
+        .graph()
+        .and_then(|g| g.writer.status().last_commit_ms);
     for subject in read.wont_build {
         let d = Decide {
             kind: "wont-build".into(),
@@ -1579,7 +1593,48 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
         raise_card(front, caller, &created, None, "proposal", &title, json!({})).await?;
     }
     changed(front, &created).await;
-    summary(front, &created, false).await
+    let out = summary(front, &created, false).await;
+    stages.mark("after");
+    tracing::debug!(
+        target: "drgnx_ratatoskr::runner::propose",
+        job = %created,
+        stages = %stages.said(),
+        commit_ms = ?commit_ms,
+        "job proposed"
+    );
+    out
+}
+
+/// The ends of a call's stages on the hub's clock (`clock::now`: virtual under a test clock), as milliseconds each.
+struct Stages {
+    last: tokio::time::Instant,
+    took: Vec<(&'static str, f64)>,
+}
+
+impl Stages {
+    fn start() -> Self {
+        Stages {
+            last: crate::clock::now(),
+            took: Vec::new(),
+        }
+    }
+
+    /// Stage NAME ended now.
+    fn mark(&mut self, name: &'static str) {
+        let now = crate::clock::now();
+        self.took
+            .push((name, (now - self.last).as_secs_f64() * 1000.0));
+        self.last = now;
+    }
+
+    /// `plan=1.2 pack=0.3 …` (milliseconds).
+    fn said(&self) -> String {
+        self.took
+            .iter()
+            .map(|(n, ms)| format!("{n}={ms:.1}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
 }
 
 pub async fn propose(
