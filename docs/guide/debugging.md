@@ -85,7 +85,10 @@ logpoint (a message printed instead of a stop; `{expression}` is replaced by its
 menu: a condition, a hit count, a log message, enable or disable, and Run to Cursor while a session runs. The dot is
 red when an adapter bound it, grey before, hollow when disabled; a dot with two bars has a condition, a diamond is a
 logpoint. A line you move by editing keeps its breakpoint, which takes the new line when you save.
-`drgnx-debug-gutter-show` chooses when the column shows (`auto`: while the file has breakpoints or a session runs).
+`drgnx-debug-gutter-show` chooses when the column shows (`auto`: while the file has breakpoints or a session runs). The
+**overview ruler** at the editor's right edge shows the whole file's breakpoints (red, grey when disabled or not
+bound yet) and the stopped line (amber, across it), scaled to the window's height, with the lines on screen as a
+soft band; click it to go there. It shows while the file has a breakpoint or a stop.
 Keys: VS Code F9 and C-F10 (Run to Cursor); Emacs `C-x C-a` and `C-b` (toggle), `C-c` (condition), `C-l` (logpoint),
 `C-e` (enable), `C-u` (Run to Cursor), as GUD has them; Vim `SPC d` and `b`, `B`, `l`, `e`, `c`.
 

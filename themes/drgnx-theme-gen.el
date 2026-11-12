@@ -269,6 +269,11 @@ taller (Nidhogg's compositor).  Asked once: a face that sets it is refused where
          (drgnx-debug-stopped-line :background ,(c 'stop-band) :extend t)
          (drgnx-debug-frame-line :background ,(c 'ok-tint) :extend t)
          (drgnx-debug-exception-line :background ,(c 'error-tint) :extend t)
+         ;; the overview ruler (debugging-extras.html): the shown lines a soft band, marks in their role colours
+         (drgnx-ruler-view :inherit highlight :background ,(c 'hover))
+         (drgnx-debug-ruler-breakpoint :inherit drgnx-debug-breakpoint :background ,(c 'error))
+         (drgnx-debug-ruler-unverified :inherit drgnx-debug-unverified :background ,(c 'disabled))
+         (drgnx-debug-ruler-stop :inherit drgnx-debug-stopped :background ,(c 'warn))
          ;; the exception card: the raised surface ringed in the error colour (`.exw')
          (drgnx-debug-exception-card :inherit (drgnx-ui-text drgnx-surface-raised) :background ,(c 'raised)
                                      :box (:line-width (-1 . -1) :color ,(c 'error)

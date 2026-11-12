@@ -20,6 +20,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-margins)
+(require 'drgnx-ruler)
 (require 'drgnx-pixels)
 (require 'drgnx-ui-kit)
 (require 'drgnx-faces)
@@ -65,6 +66,12 @@
 
 (defface drgnx-debug-breakpoint-inline '((t :inherit drgnx-debug-breakpoint))
   "An inline breakpoint's dot, before its column's character." :group 'drgnx)
+(defface drgnx-debug-ruler-breakpoint '((t :inherit drgnx-debug-breakpoint :inverse-video t))
+  "A breakpoint's mark in the overview ruler (its background)." :group 'drgnx)
+(defface drgnx-debug-ruler-unverified '((t :inherit drgnx-debug-unverified :inverse-video t))
+  "A disabled or unbound breakpoint's mark in the overview ruler (its background)." :group 'drgnx)
+(defface drgnx-debug-ruler-stop '((t :inherit drgnx-debug-stopped :inverse-video t))
+  "The stopped line's mark in the overview ruler (its background)." :group 'drgnx)
 (defface drgnx-debug-breakpoint-candidate '((t :inherit drgnx-text-disabled))
   "A faint dot where an inline breakpoint can go, while stopped." :group 'drgnx)
 
@@ -448,6 +455,7 @@ changes (drafts); otherwise each sits on the store's line."
           (setq drgnx-debug-gutter--overlays (assq-delete-all (plist-get bp :id) drgnx-debug-gutter--overlays))
           (setq o nil))
         (drgnx-debug-gutter--dress (or o (drgnx-debug-gutter--place bp)) bp))))
+  (drgnx-debug-gutter--ruler-later)
   (drgnx-debug-gutter--candidates-refresh))
 
 (defun drgnx-debug-gutter--restring (buffer)
@@ -561,6 +569,29 @@ changes (drafts); otherwise each sits on the store's line."
   (let ((root (drgnx-debug-launch-root)))
     (seq-find (lambda (s) (and (equal (plist-get s :state) "stopped") (equal (plist-get s :root) root)))
               drgnx-debug-gutter--sessions)))
+
+(defvar drgnx-debug-gutter--stops)      ; the stop marks, below
+
+(defun drgnx-debug-gutter--ruler-marks ()
+  "The overview ruler's marks of this file (`drgnx-ruler-source'): each breakpoint in the middle lane (grey when
+disabled or not yet bound), the stopped line across the ruler."
+  (let (marks)
+    (pcase-dolist (`(,_ . ,o) drgnx-debug-gutter--overlays)
+      (when (overlay-buffer o)
+        (push (list (line-number-at-pos (overlay-start o) t) 'middle
+                    (if (memq (overlay-get o 'drgnx-debug-kind) '(off unverified))
+                        'drgnx-debug-ruler-unverified 'drgnx-debug-ruler-breakpoint)
+                    (if (memq (overlay-get o 'drgnx-debug-kind) '(off unverified)) 1 2))
+              marks)))
+    (dolist (stop drgnx-debug-gutter--stops)
+      (dolist (o (cdr stop))
+        (when (and (eq (overlay-buffer o) (current-buffer)) (eq (overlay-get o 'drgnx-debug-stop) 'top))
+          (push (list (line-number-at-pos (overlay-start o) t) 'full 'drgnx-debug-ruler-stop 3) marks))))
+    marks))
+
+(defun drgnx-debug-gutter--ruler-later ()
+  "The marks changed (a hub answer, a stop): the ruler asks again."
+  (when (bound-and-true-p drgnx-ruler-mode) (drgnx-ruler-refresh)))
 
 (defun drgnx-debug-gutter--candidates-clear ()
   (mapc #'delete-overlay drgnx-debug-gutter--candidates)
@@ -777,6 +808,11 @@ the next row."
 
 (defun drgnx-debug-gutter--unmark (overlays)
   "Delete the stop OVERLAYS, and show again the breakpoint glyphs they hid."
+  (let ((buffers (delete-dups (delq nil (mapcar #'overlay-buffer overlays)))))
+    (drgnx-debug-gutter--unmark-1 overlays)
+    (dolist (b buffers) (with-current-buffer b (drgnx-debug-gutter--ruler-later)))))
+
+(defun drgnx-debug-gutter--unmark-1 (overlays)
   (dolist (o overlays)
     (when-let* ((b (overlay-buffer o)) (mark (overlay-get o 'drgnx-debug-hides)))
       (when (overlay-buffer mark)
@@ -827,7 +863,8 @@ after the line when given."
         (overlay-put band 'before-string
                      (drgnx-debug-gutter--margin-string kind (if (eq role 'top) "Paused here" "The selected frame"))))
       (when card (overlay-put band 'after-string card))
-      (push band (alist-get session drgnx-debug-gutter--stops nil nil #'equal)))))
+      (push band (alist-get session drgnx-debug-gutter--stops nil nil #'equal))
+      (drgnx-debug-gutter--ruler-later))))
 
 (defvar-local drgnx-debug-gutter--source-ref nil "(SESSION . REF): the debugger source this buffer shows.")
 
@@ -1046,7 +1083,8 @@ the last column, the global hooks; after a new major mode the module's `find-fil
         ;; asked from `find-file-hook' (`drgnx-debug--gutter-on'): with no hub to answer, the file has no breakpoints
         ;; to show; it never fails the visit (`drgnx-hub-call' signals when no hub serves).  The commands still say why
         (when buffer-file-name (condition-case nil (drgnx-debug-gutter--ask nil) (error nil)))
-        (drgnx-debug-gutter--claim))
+        (drgnx-debug-gutter--claim)
+        (drgnx-ruler-source 'debug #'drgnx-debug-gutter--ruler-marks))
     (remove-hook 'after-save-hook #'drgnx-debug-gutter--saved t)
     (remove-hook 'after-revert-hook #'drgnx-debug-gutter--reverted t)
     (remove-hook 'change-major-mode-hook #'drgnx-debug-gutter--off t)
@@ -1058,6 +1096,7 @@ the last column, the global hooks; after a new major mode the module's `find-fil
     (drgnx-debug-gutter--clear)
     (setq drgnx-debug-gutter--bps nil drgnx-debug-gutter--version 0)
     (drgnx-margins-claim 'debug nil)
+    (drgnx-ruler-source 'debug nil)
     (unless (drgnx-debug-gutter--in-use-p)
       (remove-hook 'drgnx-margins-changed-functions #'drgnx-debug-gutter--restring)
       (remove-hook 'drgnx-hub-event-functions #'drgnx-debug-gutter--event))))

@@ -1518,6 +1518,26 @@ An owner starts each margin string with `(drgnx-margins-pad OWNER)`: blanks up t
 buffer's first window. `drgnx-margins-changed-functions` runs with the buffer when places may have moved. Tests:
 `test/unit/margins-test.el`.
 
+## The overview ruler (`drgnx-ruler.el`)
+
+A file's marks scaled to the window's height, at its right edge (the mockup's `debugging-extras.html`). One owner
+draws; producers hand it marks: `(drgnx-ruler-source OWNER FUNCTION)` in a buffer, FUNCTION returning
+`(LINE LANE FACE PRIORITY)` marks, LANE `left`, `middle`, `right` or `full`; nil takes OWNER's away, and with no
+producer left the mode goes off. The ruler asks again on `drgnx-ruler-refresh` (a producer's marks changed) and,
+debounced 0.3 s, after an edit. It claims the right margin (order 100: the outermost, at the window's edge) for as many
+columns as 12 logical pixels take, while there is a mark.
+
+Each window's shown lines are its rows: row R stands for lines R·N/H to (R+1)·N/H (N lines, H rows; one row a line
+when the file is shorter). A row is an overlay with a margin `before-string` on its line, one per row and window:
+three lanes of 3, 6 and 3 logical pixels (stretch glyphs, the faces' backgrounds), each its best mark (highest
+PRIORITY), else `drgnx-ruler-view` for the rows of the lines shown. A terminal row is one character. The rows' lanes
+are cached on (lines, rows, marks), and the strings by (lanes, band, line), so a scroll (`window-scroll-functions`)
+moves the overlays and re-puts only the rows whose string changed; nothing is computed in redisplay. A click on a
+row (`drgnx-ruler-click`) centres the row's first line. Rows are lines, not screen lines: wrapped lines make fewer
+rows. The ruler turns off before a new major mode or a kill drops its locals. Producers today: the debug column
+(breakpoints, the stopped line). Perf: `debug-ruler-scroll` (10,000 lines, 200 marks) against
+`debug-gutter-baseline`.
+
 ## Epochs, memos and caches (`drgnx-memo.el`)
 
 Code that runs on redisplay or per keystroke only reads what is cached. Three tools keep the cache honest and

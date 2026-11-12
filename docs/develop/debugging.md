@@ -347,6 +347,10 @@ only).
   leaves it where the text put it; on save each moved mark sends `move` (the store's line plus how far it moved), each
   mark whose line was deleted sends `remove`; a revert puts the marks back on the store's lines. A breakpoint the
   adapter bound elsewhere (`bound_line`) sits on that line.
+- The overview ruler (`core/drgnx-ruler.el`, docs/develop/core.md): the column is a producer
+  (`drgnx-debug-gutter--ruler-marks`): each mark's line from its overlay (so a draft move shows), breakpoints in the
+  middle lane (`drgnx-debug-ruler-breakpoint`, `-unverified` when disabled or unbound), the top stop across
+  (`drgnx-debug-ruler-stop`); it asks the ruler again after each draw and each stop mark or clear.
 - `drgnx-debug-gutter-show`: `auto` (while the file has breakpoints or a session runs in its project, from
   `debug-state`), `always` or `never`.
 - A new major mode (`normal-mode` in a revert that does not keep the modes), or killing the buffer, would drop the

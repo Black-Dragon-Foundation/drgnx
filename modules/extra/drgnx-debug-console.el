@@ -21,8 +21,6 @@
   "The most lines the debug console keeps; older ones go (VS Code's `debug.console.maximumLines')."
   :type 'natnum :group 'drgnx-debug-console)
 
-(declare-function drgnx-debug-console--restamp "drgnx-debug-console" ())
-
 (defcustom drgnx-debug-console-timestamps nil
   "Non-nil: each console line shows the time its output reached the hub, in a column before it.  Changing it re-shows
 the lines already there."

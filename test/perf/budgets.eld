@@ -19,6 +19,7 @@
  (diff-scrolling (:input :p95) 16) (diff-scrolling (:input :max) 50)
  ;; graphical debugging's breakpoint column (300 marks while scrolling; F9 on 20 lines): input within a frame
  (debug-gutter-scroll (:input :p95) 16) (debug-gutter-scroll (:input :max) 50)
+ (debug-ruler-scroll (:input :p95) 16) (debug-ruler-scroll (:input :max) 50)
  (debug-breakpoint-click (:input :p95) 16) (debug-breakpoint-click (:input :max) 50)
  ;; a step's stop drawn (spec §5): the arrow, band and point moved within a frame (16 ms p95, from the event)
  (debug-step-line (:input :p95) 16) (debug-step-line (:input :max) 50)
