@@ -650,3 +650,40 @@ fn a_one_shot_run_removes_only_the_stubs_it_made() {
     remove_stubs(&scratch, &wt);
     assert!(!wt.join(".envrc").exists());
 }
+
+/// A job's sandbox notes the protected paths missing before its launch, and its end removes the stubs the launch
+/// made for them: the tree is as the job found it, so its key is too.  A file that was there stays, and so does a
+/// noted one written meanwhile.
+#[test]
+fn a_job_removes_the_stubs_its_launch_made() {
+    let fx = Fx::new();
+    let wt = fx.p("wt");
+    fs::create_dir_all(&wt).unwrap();
+    fs::write(wt.join(".envrc"), "export A=1\n").unwrap();
+    let protected: Vec<PathBuf> = [".envrc", "mise.toml", ".claude", ".codex"]
+        .iter()
+        .map(|p| wt.join(p))
+        .collect();
+    let list = fx.p("stubs");
+    note_missing(&list, &wt, &protected).unwrap();
+    let (_, made) = pin_protected(&wt, &protected).unwrap();
+    assert_eq!(
+        made,
+        [wt.join("mise.toml"), wt.join(".claude"), wt.join(".codex")]
+    );
+    fs::write(wt.join(".codex").join("x"), "").unwrap();
+    remove_made(&list);
+    assert!(!wt.join("mise.toml").exists() && !wt.join(".claude").exists());
+    assert!(
+        wt.join(".codex").join("x").exists(),
+        "a folder written meanwhile stays"
+    );
+    assert_eq!(
+        fs::read_to_string(wt.join(".envrc")).unwrap(),
+        "export A=1\n"
+    );
+    assert!(!list.exists());
+    // nothing missing: no list
+    note_missing(&list, &wt, &protected[..1]).unwrap();
+    assert!(!list.exists());
+}
