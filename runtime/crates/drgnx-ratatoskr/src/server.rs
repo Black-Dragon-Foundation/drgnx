@@ -279,7 +279,9 @@ pub async fn run(args: ServeArgs) -> Exit {
         "wake:run",
         crate::agents::wake::run(front.clone(), front.core.exec.subscribe()),
     );
-    // a task's session's job is that task's evidence once it ends
+    // a task's session's job is that task's evidence once it ends; until the watcher has taken an end, the job is
+    // still busy in its tree for the gates (exec's `settling`)
+    front.core.exec.settling();
     crate::clock::spawn(
         "orch:evidence",
         crate::orch::evidence::run(front.clone(), front.core.exec.subscribe()),

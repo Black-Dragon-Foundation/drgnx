@@ -101,8 +101,8 @@ there, so what a job does includes them (and theirs)."
     (drgnx-ci-test--has (drgnx-ci-test--action "build-test-bins") "-p drgnx-term --bins")
     (drgnx-ci-test--has (drgnx-ci-test--action "fetch-test-bins") "\"$t/drgnx-term\"")
     (drgnx-ci-test--has (drgnx-ci-test--job tiers "macos") "uses: ./drgnx/.github/actions/build-test-bins"
-                        "brew install ripgrep\n" "rustup toolchain install stable --profile minimal"
-                        "test/container/nidhogg.sh macos")
+                        "run: brew install ripgrep\n" "test/container/nidhogg.sh macos")
+    (drgnx-ci-test--has (drgnx-ci-test--action "build-test-bins") "run: bash \"$DIR/.github/ci/rust.sh\"\n")
     ;; neither macOS job installs Homebrew's rust (the image's rustup is quicker)
     (should-not (string-search "brew install ripgrep rust" tiers))
     (should-not (string-search "brew install rust" (drgnx-ci-test--yml "runtime.yml")))
@@ -296,6 +296,39 @@ Returns (EXIT . OUTPUT)."
     (should (string-search "\nRUST_MIN=1.95\n" install))
     (should private)
     (should (version<= "1.95" private))))
+
+(ert-deftest drgnx-ci/the-rust-toolchain-is-one-pinned-version ()
+  ;; 2026-11-12: the runners' `stable' moved to 1.100, whose build-dir layout moved test binaries out of deps/ and broke
+  ;; every lookup of a sibling binary in one round.  CI never floats: test/container/rust-version names the version,
+  ;; and every job that builds Rust gets it through .github/ci/rust.sh (rustup, directly or in an action) or
+  ;; rust-packages.sh (Fedora's packages of that version, the Linux job's image); the MSRV's and the fuzz nightly's
+  ;; installs name their own pinned versions.  Moving to a newer Rust is an edit of rust-version.
+  (let* ((ver (drgnx-ci-test--file "test/container/rust-version"))
+         (script (drgnx-ci-test--file ".github/ci/rust.sh"))
+         (packages (drgnx-ci-test--file "test/container/rust-packages.sh"))
+         (dir (expand-file-name ".github/workflows" drgnx-ci-test--root))
+         (workflows (and (file-directory-p dir) (directory-files dir nil "\\.yml\\'"))))
+    (skip-unless (and ver script packages workflows))
+    (should (string-match-p "\\`[0-9]+\\.[0-9]+\\.[0-9]+\n\\'" ver))
+    (drgnx-ci-test--has script "test/container/rust-version" "rustup toolchain install \"$ver\""
+                        "rustup default \"$ver\"" "RUSTUP_TOOLCHAIN=$ver")
+    (drgnx-ci-test--has packages "/rust-version\")" "\"rust-$rust\"" "\"cargo-$rust\"" "grep -q \"^rustc $rust \"")
+    (should (string-search "COPY rust-packages.sh rust-version "
+                           (drgnx-ci-test--file "test/container/Containerfile.rust")))
+    (dolist (yml (drgnx-ci-test--workflows-and-actions workflows))
+      (when yml
+        (should-not (string-match-p (concat "\\(?:rustup\\(?: toolchain install\\| default\\| override set\\)\\|toolchain:\\)"
+                                            " +\"?stable\\|+stable\\b\\|rust-toolchain@\\|dtolnay/")
+                                    yml))
+        (dolist (v (drgnx-ci-test--matches "rustup toolchain install \\([^ \n]+\\)" yml))
+          (should (member v '("1.95.0" "\"$NIGHTLY\""))))))
+    ;; each runtime.yml job that runs cargo or rustup has the pinned Rust first (the Fedora job: its image's)
+    (let ((rt (drgnx-ci-test--yml "runtime.yml")))
+      (dolist (id (drgnx-ci-test--job-ids rt))
+        (let ((job (drgnx-ci-test--job-run rt id)))
+          (when (string-match-p "^ *\\(?:- \\)?\\(?:run: \\)?\\(?:cargo\\|rustup\\) " job)
+            (should (or (string-search "rust.sh" job) (string-search "rust-packages.sh" job)
+                        (string-search "RUSTUP_TOOLCHAIN: 1.95.0" job) (string-search "$NIGHTLY" job)))))))))
 
 (ert-deftest drgnx-ci/the-rust-test-jobs-have-the-models-and-linux-has-llvmpipe ()
   ;; the tests that run the built-in model fail without DRGNX_TEST_MODELS, the GPU tests without DRGNX_TEST_ADAPTER

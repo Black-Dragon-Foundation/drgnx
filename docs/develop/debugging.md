@@ -277,6 +277,17 @@ roots `debug/trust` called trusted and each root's last started configuration.
 - `debug/breakpoint-locations {session, path, line}`: the adapter's `breakpointLocations` for the line, answered
   `{locations: [{line, column, end_line?, end_column?}]}` with columns turned back into characters from the file's
   lines (`breakpoints::chars_of`); empty when the adapter lacks `supportsBreakpointLocationsRequest`.
+- `debug/completions {session, frame?, text, column}`: the Debug Console's completions. `column` is point's 0-based
+  character offset in `text`, sent as the adapter's 1-based UTF-16 column, in `frame` or the stopped one; answered
+  `{targets: [{label, text?, type?, start?, length?}]}` with the replaced span in 0-based characters; empty without
+  `supportsCompletionsRequest`.
+- `debug/read-memory {session, reference, offset?, count}` and `debug/write-memory {session, reference, offset?,
+  data, allow_partial?}`: the memory view's `readMemory` / `writeMemory` at a variable's `memoryReference`, data in
+  base64. A read is at most 64 KiB (`READ_MEMORY_MAX`; more is `invalid-params` before the adapter) and answers
+  `{address, data, unreadable?}`; a write answers `{offset?, written?}`. Refused with words when the adapter lacks
+  `supportsReadMemoryRequest` / `supportsWriteMemoryRequest`.
+- These and `debug/breakpoint-locations` read the session's capabilities: asked before the adapter has given them
+  (the session is starting) they are refused, so the editors offer them once `debug-state` shows the capability.
 - `debug/install {adapter, adapters?}`: the adapter's `:install` entry carried out (see Adapters); the answer says what
   was installed. A system package's, an adapter without an entry and an unknown id are errors (conformance
   `debug/install-refusals`; the downloads are the unit tests' `debug::tests_install`, from local files).
@@ -568,9 +579,11 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
   batch before says `more`), `group` start / end indenting the lines between (`depth`), the line that opens one naming it (`group`, numbered per
   session; `collapsed` for `startCollapsed`) and every line the groups around it, outermost first (`within`), so the
   editor folds a group with one invisible list per line (an `end` with no group open changes nothing),
+  each line's `time` (ms since the epoch, from the hub's clock when its output event arrived; a counted repeat keeps
+  the first's, a `more` line has none),
   a logpoint's `source {path, line}` and an output's structured value (`node {reference}`) kept, `telemetry` left
   out. The lines wait in a batch the session's loop sends 50 ms after the first (`BATCH`) or at once past 64 KiB
-  (`BATCH_BYTES`), as the event `debug-output {session, lines: [{text, category, count, runs?, depth?, group?, collapsed?, within?, source?,
+  (`BATCH_BYTES`), as the event `debug-output {session, lines: [{text, category, count, time?, runs?, depth?, group?, collapsed?, within?, source?,
   node?, more?}], skipped?}` to every editor. A batch keeps at most 4 MB (`QUEUE_CAP`); past it the oldest lines
   go and `skipped` counts them. At a session's end its last batch goes with it.
 - A `postDebugTask` that fails says so in the console (`important`), after the session's own lines.

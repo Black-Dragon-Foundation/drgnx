@@ -466,6 +466,7 @@ impl Debug {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let con = c.entry(id.to_owned()).or_default();
+            con.set_time(wall_ms());
             con.output(body, ansi);
             con.full()
         };
@@ -517,6 +518,7 @@ impl Debug {
     pub fn console_say(&self, id: &str, text: &str, category: &str) {
         let batch = {
             let mut con = console::Console::default();
+            con.set_time(wall_ms());
             con.say(text, category, None);
             con.take(true)
         };
@@ -1114,6 +1116,20 @@ impl Debug {
 
     /// OP on session ID. A stop or disconnect stops its children first and resolves once all have ended.
     /// The text of SESSION's source REFERENCE (a frame with no file): `{text, mime?}`.
+    /// Session ID's handle and its adapter's capabilities; refused while the adapter has not given them (the
+    /// session is starting: the editors offer what needs them once `debug-state` shows them).
+    pub fn handle_caps(&self, id: &str) -> Result<(Handle, Value), String> {
+        let (h, caps) = lock(&self.inner.state)
+            .sessions
+            .get(id)
+            .map(|e| (e.handle.clone(), e.caps.clone()))
+            .ok_or_else(|| format!("no debug session {id}"))?;
+        if caps.is_null() {
+            return Err(format!("debug session {id} is still starting"));
+        }
+        Ok((h, caps))
+    }
+
     /// Where on PATH's LINE session ID's adapter can stop, as `breakpointLocations` gives it (UTF-16 columns); none
     /// when the adapter cannot say.
     pub async fn breakpoint_locations(
@@ -1122,11 +1138,7 @@ impl Debug {
         path: &str,
         line: u32,
     ) -> Result<Vec<Value>, String> {
-        let (h, caps) = lock(&self.inner.state)
-            .sessions
-            .get(id)
-            .map(|e| (e.handle.clone(), e.caps.clone()))
-            .ok_or_else(|| format!("no debug session {id}"))?;
+        let (h, caps) = self.handle_caps(id)?;
         if caps
             .get("supportsBreakpointLocationsRequest")
             .and_then(Value::as_bool)
@@ -1571,4 +1583,11 @@ fn terminal_args(a: &Value) -> (String, Vec<String>, Vec<(String, String)>) {
         })
         .unwrap_or_default();
     (cwd, args, env)
+}
+
+/// The hub's time of day in ms since the epoch (the console lines' `time`).
+fn wall_ms() -> u64 {
+    crate::clock::wall()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
 }

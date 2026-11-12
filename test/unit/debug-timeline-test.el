@@ -230,5 +230,24 @@ once for the same reason; nothing asks."
     (should-not (get-buffer drgnx-debug-timeline-past-buffer))
     (should (zerop (hash-table-count drgnx-debug-timeline--probes)))))
 
+;; regression: a buffer killed (or its major mode changed) with the mode on left the margins hook behind
+(ert-deftest drgnx-debug-timeline/a-probed-buffer-killed-or-remoded-takes-its-hook-along ()
+  "Killing a buffer with `drgnx-debug-probes-mode' on, or changing its major mode, turns the mode off, so the
+margins hook goes with the last such buffer."
+  (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) (error "No hub"))))
+    (let ((a (generate-new-buffer "probed-a")) (b (generate-new-buffer "probed-b")))
+      (unwind-protect
+          (progn
+            (with-current-buffer a (drgnx-debug-probes-mode 1))
+            (with-current-buffer b (drgnx-debug-probes-mode 1))
+            (should (memq #'drgnx-debug-timeline--restring drgnx-margins-changed-functions))
+            (kill-buffer a)
+            (should (memq #'drgnx-debug-timeline--restring drgnx-margins-changed-functions))
+            (with-current-buffer b (fundamental-mode))
+            (should-not (buffer-local-value 'drgnx-debug-probes-mode b))
+            (should-not (memq #'drgnx-debug-timeline--restring drgnx-margins-changed-functions)))
+        (when (buffer-live-p a) (kill-buffer a))
+        (when (buffer-live-p b) (kill-buffer b))))))
+
 (provide 'debug-timeline-test)
 ;;; debug-timeline-test.el ends here

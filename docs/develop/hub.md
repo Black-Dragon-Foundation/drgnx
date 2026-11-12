@@ -1400,6 +1400,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/breakpoints` | user | `{op?: {adapter?: string, column?: natnum, condition?: string, enabled?: boolean, hit?: string, id?: natnum, line?: natnum, log?: string, name?: string, op: string, path?: string, triggered_by?: natnum}, path?: string, root: string}` | `DebugBreakpointsView` | no |
 | `debug/children` | user | `{epoch?: natnum, reference: integer, session: string}` | `{variables: [DebugChild]}` | no |
 | `debug/compare` | user | `{fork: string, run: string}` | `DebugForkView` | no |
+| `debug/completions` | user | `{column: natnum, frame?: integer, session: string, text: string}` | `{targets: [CompletionTarget]}` | no |
 | `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
 | `debug/control` | user | `{op: string, session: string, thread?: integer}` | `boolean` | no |
 | `debug/data-breakpoint` | user | `{access_type?: string, data_id?: string, name?: string, node?: string, op: string, reference?: integer, session?: string, view?: string}` | `{breakpoints: [any], session: string}` | no |
@@ -1411,6 +1412,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/install` | user | `{adapter: string, adapters?: [JsonObject]}` | `string` | no |
 | `debug/origin` | user | `{depth?: natnum, expr: string, run: string, stop: natnum}` | `{origin: string}` | no |
 | `debug/probe/op` | user | `{op?: {enabled?: boolean, expr?: string, id?: string, language?: string, line?: natnum, op: string, path?: string, text?: string}, root: string}` | `{added?: string, path?: string, probes: [any], root: string}` | no |
+| `debug/read-memory` | user | `{count: natnum, offset?: integer, reference: string, session: string}` | `{address: string, data: string, unreadable?: natnum}` | no |
 | `debug/run-to-cursor` | user | `{line: natnum, path: string, session: string}` | `boolean` | no |
 | `debug/run/get` | user | `{count?: natnum, current?: natnum, from?: natnum, run: string}` | `DebugRunView` | no |
 | `debug/run/pin` | user | `{pinned: boolean, run: string}` | `boolean` | no |
@@ -1423,6 +1425,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/trust` | user | `{root: string, trusted: boolean}` | `boolean` | no |
 | `debug/view` | user | `{filter?: string, indent?: natnum, root: string, session?: string, view: string}` | `boolean` | no |
 | `debug/watch` | user | `{expr?: string, index?: natnum, op: string, root: string, to?: natnum}` | `[string]` | no |
+| `debug/write-memory` | user | `{allow_partial?: boolean, data: string, offset?: integer, reference: string, session: string}` | `{offset?: integer, written?: natnum}` | no |
 | `decisions/effects` | user | `{decision: string}` | `{commits?: [string], decision: string, label: string, later_hunks?: [Hunk]}` | no |
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no |
 | `events/add` | user | `{agent?: AgentName, best_effort?: boolean, data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text, task?: TaskRef}` | `{id?: natnum}` | yes |

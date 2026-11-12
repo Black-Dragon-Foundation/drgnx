@@ -157,8 +157,12 @@ async fn a_line_the_hub_says_goes_at_once() {
     let o = ev.outputs();
     assert_eq!(o.len(), 1);
     assert_eq!(o[0]["session"], "s9");
+    let mut line = o[0]["lines"][0].clone();
+    // stamped with the hub's time of day
+    assert!(line["time"].as_u64().is_some_and(|t| t > 0));
+    line.as_object_mut().unwrap().remove("time");
     assert_eq!(
-        o[0]["lines"][0],
+        line,
         json!({"text": "postDebugTask failed: exit 2", "category": "important", "count": 1})
     );
 }

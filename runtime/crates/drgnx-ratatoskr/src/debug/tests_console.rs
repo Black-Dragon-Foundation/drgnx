@@ -214,3 +214,30 @@ fn identical_lines_in_different_groups_are_not_counted_together() {
     assert_eq!(texts(&b), ["x", "x", "x"]);
     assert_eq!(b["lines"][1]["group"], 1);
 }
+
+/// Each line has the time its output reached the hub (ms since the epoch); a counted repeat keeps the first one's,
+/// and a line that only adds to the last batch's count has none.
+#[test]
+fn lines_carry_the_time_their_output_came() {
+    let mut c = Console::default();
+    c.set_time(1_000);
+    c.output(&out("stdout", "a\n"), false);
+    c.set_time(2_000);
+    c.output(&out("stdout", "a\n"), false);
+    c.set_time(3_000);
+    c.output(&out("stdout", "b\n"), false);
+    c.say("said", "console", None);
+    let b = c.take(false).unwrap();
+    let l = &b["lines"];
+    assert_eq!(
+        (l[0]["count"].clone(), l[0]["time"].clone()),
+        (json!(2), json!(1_000))
+    );
+    assert_eq!(l[1]["time"], 3_000);
+    assert_eq!(l[2]["time"], 3_000);
+    c.set_time(4_000);
+    c.say("said", "console", None);
+    let b = c.take(false).unwrap();
+    assert_eq!(b["lines"][0]["more"], true);
+    assert!(b["lines"][0].get("time").is_none());
+}

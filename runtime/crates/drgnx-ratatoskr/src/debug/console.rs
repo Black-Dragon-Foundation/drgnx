@@ -31,6 +31,8 @@ pub struct Line {
     pub collapsed: bool,
     /// The groups around it, outermost first.
     pub within: Vec<u64>,
+    /// When its output reached the hub, in ms since the epoch (0: not known).
+    pub time: u64,
     /// How many identical lines in a row it stands for.
     pub count: u32,
     /// Where a logpoint's message came from: `{path, line}`.
@@ -75,6 +77,8 @@ impl Line {
         }
         if self.more {
             o["more"] = json!(true);
+        } else if self.time > 0 {
+            o["time"] = json!(self.time);
         }
         o
     }
@@ -249,12 +253,19 @@ pub struct Console {
     /// The groups open now, outermost first, and the last group's number.
     open: Vec<u64>,
     groups: u64,
+    /// The time the output being read reached the hub ([`Console::set_time`]).
+    time: u64,
     style: Style,
     /// The last line sent, to count an identical one that comes in a later batch.
     last: Option<Line>,
 }
 
 impl Console {
+    /// The output read from now on reached the hub at MS since the epoch.
+    pub fn set_time(&mut self, ms: u64) {
+        self.time = ms;
+    }
+
     /// An `output` event's BODY into lines; ANSI is read when the adapter said `supportsANSIStyling` or for a
     /// program's own `stdout` / `stderr`.
     pub fn output(&mut self, body: &Value, ansi: bool) {
@@ -352,6 +363,7 @@ impl Console {
             group: opens.map(|o| o.0),
             collapsed: opens.is_some_and(|o| o.1),
             within: self.open.clone(),
+            time: self.time,
             count: 1,
             source,
             node,

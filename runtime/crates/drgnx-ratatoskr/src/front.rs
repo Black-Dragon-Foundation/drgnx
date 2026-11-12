@@ -944,6 +944,9 @@ impl Front {
             | Params::DebugInstall(_)
             | Params::DebugSource(_)
             | Params::DebugBreakpointLocations(_)
+            | Params::DebugCompletions(_)
+            | Params::DebugReadMemory(_)
+            | Params::DebugWriteMemory(_)
             | Params::DebugBreakpoints(_)
             | Params::DebugRunToCursor(_)) => crate::debug::wire::serve(self, &caller, p)
                 .await

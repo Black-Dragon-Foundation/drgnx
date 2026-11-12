@@ -11,10 +11,12 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::Params;
 use runstav::methods::debug::{
-    BreakpointLocation, DebugBreakpointLocations, DebugBreakpointLocationsList, DebugBreakpointOp,
-    DebugBreakpoints, DebugBreakpointsView, DebugConfig, DebugConfigList, DebugConfigs,
-    DebugControl, DebugFileError, DebugInstall, DebugMissing, DebugRunToCursor, DebugSelect,
-    DebugSource, DebugSourceText, DebugStart, DebugStarted, DebugTrust,
+    BreakpointLocation, CompletionTarget, DebugBreakpointLocations, DebugBreakpointLocationsList,
+    DebugBreakpointOp, DebugBreakpoints, DebugBreakpointsView, DebugCompletionList,
+    DebugCompletions, DebugConfig, DebugConfigList, DebugConfigs, DebugControl, DebugFileError,
+    DebugInstall, DebugMemory, DebugMemoryWritten, DebugMissing, DebugReadMemory, DebugRunToCursor,
+    DebugSelect, DebugSource, DebugSourceText, DebugStart, DebugStarted, DebugTrust,
+    DebugWriteMemory,
 };
 use runstav::types::JsonObject;
 use runstav::wire::{Error, ErrorCode};
@@ -848,6 +850,106 @@ async fn line_text(path: String, line: u32) -> Option<String> {
     .flatten()
 }
 
+/// The Debug Console's completions: the column turned into the adapter's UTF-16 one (1-based), the targets' spans
+/// back into 0-based characters.
+async fn completions(front: &Front, p: DebugCompletions) -> Result<DebugCompletionList, Error> {
+    let d = front.debug.debug(front);
+    let (h, caps) = d.handle_caps(&p.session).map_err(err)?;
+    if caps
+        .get("supportsCompletionsRequest")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Ok(DebugCompletionList { targets: vec![] });
+    }
+    let text = Some(p.text.as_str());
+    let mut args = json!({"text": p.text, "column": col_of(text, p.column + 1).utf16});
+    if let Some(fr) = p.frame.or_else(|| d.stop_of(&p.session).map(|s| s.frame)) {
+        args["frameId"] = json!(fr);
+    }
+    let b = h.request("completions", args).await.map_err(err)?;
+    let targets = b
+        .get("targets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|t| {
+            let num = |k: &str| t.get(k).and_then(Value::as_u64).map(|n| n as u32);
+            let s = |k: &str| t.get(k).and_then(Value::as_str).map(str::to_owned);
+            let start = num("start").map(|st| chars_of(text, st));
+            Some(CompletionTarget {
+                label: s("label")?,
+                text: s("text"),
+                ty: s("type"),
+                start: start.map(|c| c - 1),
+                length: num("length")
+                    .zip(num("start"))
+                    .map(|(len, st)| chars_of(text, st + len) - chars_of(text, st)),
+            })
+        })
+        .collect();
+    Ok(DebugCompletionList { targets })
+}
+
+/// The memory view's read: the adapter's `readMemory`, refused when it has none.
+async fn read_memory(front: &Front, p: DebugReadMemory) -> Result<DebugMemory, Error> {
+    let d = front.debug.debug(front);
+    let (h, caps) = d.handle_caps(&p.session).map_err(err)?;
+    if caps
+        .get("supportsReadMemoryRequest")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err(err("this adapter cannot read memory"));
+    }
+    let b = h
+        .request(
+            "readMemory",
+            json!({"memoryReference": p.reference, "offset": p.offset.unwrap_or(0), "count": p.count}),
+        )
+        .await
+        .map_err(err)?;
+    Ok(DebugMemory {
+        address: b
+            .get("address")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        data: b
+            .get("data")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        unreadable: b
+            .get("unreadableBytes")
+            .and_then(Value::as_u64)
+            .filter(|n| *n > 0),
+    })
+}
+
+/// The memory view's write: the adapter's `writeMemory`, refused when it has none.
+async fn write_memory(front: &Front, p: DebugWriteMemory) -> Result<DebugMemoryWritten, Error> {
+    let d = front.debug.debug(front);
+    let (h, caps) = d.handle_caps(&p.session).map_err(err)?;
+    if caps
+        .get("supportsWriteMemoryRequest")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err(err("this adapter cannot write memory"));
+    }
+    let mut args =
+        json!({"memoryReference": p.reference, "offset": p.offset.unwrap_or(0), "data": p.data});
+    if let Some(a) = p.allow_partial {
+        args["allowPartial"] = json!(a);
+    }
+    let b = h.request("writeMemory", args).await.map_err(err)?;
+    Ok(DebugMemoryWritten {
+        offset: b.get("offset").and_then(Value::as_i64),
+        written: b.get("bytesWritten").and_then(Value::as_u64),
+    })
+}
+
 /// Inline breakpoints: where on PATH's LINE SESSION's adapter can stop (`breakpointLocations`), in characters.
 async fn breakpoint_locations(
     front: &Front,
@@ -943,6 +1045,9 @@ pub async fn serve(
         Params::DebugInstall(p) => answer(install_adapter(front, p).await),
         Params::DebugSource(p) => answer(source(front, p).await),
         Params::DebugBreakpointLocations(p) => answer(breakpoint_locations(front, p).await),
+        Params::DebugCompletions(p) => answer(completions(front, p).await),
+        Params::DebugReadMemory(p) => answer(read_memory(front, p).await),
+        Params::DebugWriteMemory(p) => answer(write_memory(front, p).await),
         Params::DebugBreakpoints(p) => answer(breakpoints(front, p).await),
         Params::DebugRunToCursor(p) => answer(run_to_cursor(front, p).await),
         other => return Err(Box::new(other)),
