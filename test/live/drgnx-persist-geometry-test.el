@@ -32,11 +32,13 @@
                                              (funcall q (format "(and (eql (frame-text-width drgnx-geometry-frame) %d)
                                                                       (eql (frame-text-height drgnx-geometry-frame) %d))" w h)))
                                            :secs 30 :what "the frame to have the size asked for")))
-                 ;; the size under test, whole character cells (75 x 22, 600 x 396 at scale 1): a window takes
-                 ;; `default's font while it is made and keeps its lines and columns, so a size between cells is cut
-                 ;; to them (ui/look's code font names one)
+                 ;; the size under test, whole character cells (75 x 14): a window takes `default's font while it is
+                 ;; made and keeps its lines and columns, so a size between cells is cut to them (ui/look's code font
+                 ;; names one).  Well inside the monitor (450 logical px high at scale 2): 22 lines (814 px at scale 2)
+                 ;; and the window's bars came to the work area's height, and mutter maximized the window when its
+                 ;; size reached it before it was shown (1560 x 736 text, nothing resized it after; under load)
                  (asked (funcall q "(with-selected-frame (seq-find (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list))
-                                      (list (* 75 (frame-char-width)) (* 22 (frame-char-height))))"))
+                                      (list (* 75 (frame-char-width)) (* 14 (frame-char-height))))"))
                  (sizes
                   (progn
                     ;; born at the size under test: a resize asked of a window that has just been made is undone by

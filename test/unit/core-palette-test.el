@@ -2,6 +2,9 @@
 ;; test-class: det
 (require 'ert)
 (require 'drgnx-palette)
+;; `project-vc-extra-root-markers' is special before a test binds it: bound lexically, the project.el that
+;; `project-current' autoloads inside the binding signals (Emacs 31)
+(require 'project)
 
 (defvar drgnx-test--palette-ran nil)
 (defun drgnx-test--palette-cmd () (interactive) (setq drgnx-test--palette-ran t))
