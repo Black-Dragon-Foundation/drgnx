@@ -3346,6 +3346,10 @@ timed out (`timeout`), was lost or ended `infra` (`infra`), was stopped, or fail
 summary's `failing` names the failed rows (at most 50, `(job)` left out); `Runner::rows` reads them. The gates read
 rows only (`docs/develop/orchestration.md`).
 
+An `exec/start` that takes over a second of real time logs its phases (`exec/start took N ms: matrix …, keys …,
+network …, placement …, start …`): a slow start lets a task's review overtake the run it should judge, as macOS's
+did once.
+
 The editor's own jobs are the user's `exec/start` with four more fields (`StartParams`: `name`, `env`, `memory_max`,
 `nice`; `StartParams::user_only_field` names the first one a request sets). `exec::start` refuses them from a session
 (`user_job`: `invalid-params`), `env` and `memory_max` from a container job, and `memory_max` on macOS; the decode check

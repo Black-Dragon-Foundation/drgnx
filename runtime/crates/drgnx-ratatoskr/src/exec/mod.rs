@@ -3018,11 +3018,16 @@ async fn start_as(
         Some(wt) => confined(&cwd, wt)?,
         None => cwd,
     };
+    // each phase's real time, logged when the start took over a second (macOS round 5: an agent's start took ~15 s,
+    // and the review overtook it)
+    let mut phases = Phases::new();
     if let Some(sid) = &c.sid {
         let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
         gate_session_job(f, sid, &cwd, &argv, action).await?;
+        phases.end("matrix");
     }
     job_keys(f, c, &p, &cwd).await?;
+    phases.end("keys");
     // a confined user_u login can't run rootless podman: refused here, with the cause and an admin's fix
     if kind == CheckKind::Container
         && let Some(why) = sleipnir::linux::confined::refusal()
@@ -3066,7 +3071,9 @@ async fn start_as(
         }
         _ => None,
     };
+    phases.end("network");
     let place = placement(f, c, &p, machine, runners).await?;
+    phases.end("placement");
     // a Mac job runs on a Mac runner as a host job: never in a container, never on this machine
     if place.os == forseti::Os::Macos && (container.is_some() || place.local_only) {
         return Err(error(
@@ -3092,6 +3099,8 @@ async fn start_as(
         .start(spec)
         .await
         .map_err(|r| error(ErrorCode::InvalidParams, r.message))?;
+    phases.end("start");
+    phases.log_if_slow(&id);
     let text = if r.is_queued(&id) {
         let why = r
             .get(&id)
@@ -3107,6 +3116,48 @@ async fn start_as(
         format!("job {id} runs: end your turn; you will be woken with the result")
     };
     Ok(Started { text, id })
+}
+
+/// An `exec/start`'s phases in real time: each [`Phases::end`] closes one; [`Phases::log_if_slow`] logs them all when
+/// the whole start took over a second (a slow start lets a review overtake the run it should see).
+struct Phases {
+    began: std::time::Instant,
+    last: std::time::Instant,
+    done: Vec<(&'static str, Duration)>,
+}
+
+impl Phases {
+    fn new() -> Self {
+        let now = crate::clock::real_now();
+        Phases {
+            began: now,
+            last: now,
+            done: Vec::new(),
+        }
+    }
+
+    fn end(&mut self, phase: &'static str) {
+        let now = crate::clock::real_now();
+        self.done.push((phase, now - self.last));
+        self.last = now;
+    }
+
+    fn log_if_slow(&self, id: &str) {
+        let total = self.last - self.began;
+        if total > Duration::from_secs(1) {
+            let each: Vec<String> = self
+                .done
+                .iter()
+                .map(|(p, d)| format!("{p} {} ms", d.as_millis()))
+                .collect();
+            tracing::info!(
+                job = id,
+                "exec/start took {} ms: {}",
+                total.as_millis(),
+                each.join(", ")
+            );
+        }
+    }
 }
 
 /// The time box a request asks for: its `timebox_s`, else an hour (a job that asked for none ignores it).
