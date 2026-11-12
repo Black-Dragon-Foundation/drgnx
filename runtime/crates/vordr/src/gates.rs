@@ -77,11 +77,11 @@ pub enum State {
 
 /// The state of the check with SELECTOR at the tree KEY, by its newest run in EVIDENCE (oldest first).
 pub fn state(evidence: &[Evidence], key: &str, selector: &str) -> State {
-    let Some(e) = evidence
-        .iter()
-        .rev()
-        .find(|e| e.facts.tree_key == key && e.facts.selector == selector)
-    else {
+    let Some(e) = evidence.iter().rev().find(|e| {
+        e.facts.tree_key == key
+            && e.facts.selector == selector
+            && crate::evidence::no_result(e).is_none()
+    }) else {
         return State::Missing;
     };
     let red: Vec<String> = failing(&e.rows).map(str::to_owned).collect();

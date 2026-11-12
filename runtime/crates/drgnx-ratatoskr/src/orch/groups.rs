@@ -190,7 +190,9 @@ pub async fn gate(
         }
         Outcome::Missing(missing) => {
             for g in &missing {
-                start(front, &key, dir, &commit, &tree, &run_of(g)).await?;
+                if let Some(why) = start(front, &key, dir, &commit, &tree, &run_of(g)).await? {
+                    return Ok(Gate::Hold(format!("the group {}: {why}", g.name), tree));
+                }
             }
             let names: Vec<&str> = missing.iter().map(|g| g.name.as_str()).collect();
             Ok(Gate::Wait(format!(
@@ -278,7 +280,12 @@ async fn reruns(
                     }
                 }
                 State::Missing => {
-                    start(front, &keys[i], dir, commit, t, &run_of(g)).await?;
+                    if let Some(why) = start(front, &keys[i], dir, commit, t, &run_of(g)).await? {
+                        return Ok(Gate::Hold(
+                            format!("the group {}: {why}", g.name),
+                            t.clone(),
+                        ));
+                    }
                     failed = None;
                 }
             }

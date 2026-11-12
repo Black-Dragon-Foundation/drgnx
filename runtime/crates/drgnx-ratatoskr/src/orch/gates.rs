@@ -2,7 +2,8 @@
 //!
 //! [`before_merge`] runs them in order once the merge gate allows a task: trailers, red first (`orch::red_first`),
 //! the author check.  A run a gate needs and the hub can make (the task's own test command at its test commit or its
-//! tip, an author check at the tip) is started through the queue as the user's job, and the gate waits for it
+//! tip, an author check at the tip) is started through the queue in an agent's sandbox (`exec::start_gate`), and the
+//! gate waits for it
 //! ([`Runs`]); its end is the task's evidence like any other job's.
 
 use std::collections::HashMap;
@@ -136,8 +137,6 @@ fn trailers_in(dir: &Path, base: &str, tip: &str) -> Result<Vec<String>, String>
     Ok(out)
 }
 
-/// Start RERUN for TASK at COMMIT (whose tree key is KEY) of the task's tree TOP, through the queue as the user's
-/// job, once: in a detached worktree beside TOP, removed when the job ends.
 /// A pack's CHECK (an author check, a rule test, a group) as a run.
 pub(crate) fn run_of(c: &vordr::pack::Check) -> Rerun {
     let kind = if c.run.first().map(String::as_str) == Some("cargo") {
@@ -155,6 +154,9 @@ pub(crate) fn run_of(c: &vordr::pack::Check) -> Rerun {
     }
 }
 
+/// Start RERUN for TASK at COMMIT (whose tree key is KEY) of the task's tree TOP, through the queue in an agent's
+/// sandbox, once: in a detached worktree beside TOP, removed when the job ends.  Some(why) when the gate holds instead:
+/// the run already ended there without a test result (`vordr::evidence::no_rerun`).
 pub(crate) async fn start(
     front: &Front,
     task: &str,
@@ -162,10 +164,30 @@ pub(crate) async fn start(
     commit: &str,
     key: &str,
     rerun: &Rerun,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let ended = |id: &str| front.core.exec.done(id).is_some();
     if front.orch.pending(task, key, &rerun.selector, ended) {
-        return Ok(());
+        return Ok(None);
+    }
+    let t = task.to_owned();
+    let evidence = front
+        .writer
+        .db
+        .read(move |c| norn::read::evidence::of_task(c, &t))
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Some((class, job)) = vordr::evidence::no_rerun(&evidence, key, &rerun.selector) {
+        let said = front.core.exec.log_slice(&job, 0, 3).join(" / ");
+        let cmd = rerun.argv.join(" ");
+        return Ok(Some(match class {
+            vordr::rows::Class::Error => {
+                format!("{cmd} failed without a test result (error): {said}")
+            }
+            c => format!(
+                "{cmd} ran twice without a test result ({}): {said}",
+                vordr::redfirst::class_word(Some(c))
+            ),
+        }));
     }
     let (from, c, sel) = (top.to_owned(), commit.to_owned(), rerun.selector.clone());
     let dir = crate::clock::blocking(move || detached(&from, &c, &sel))
@@ -182,7 +204,13 @@ pub(crate) async fn start(
         p["image"] = json!(i);
     }
     let params = serde_json::from_value(p).map_err(|e| e.to_string())?;
-    let started = match crate::exec::start(front, &crate::runner::user(), params).await {
+    // the agent's command (or the pack's, over the agent's tree): in an agent's sandbox, the detached tree its only
+    // writable folder
+    let gate = crate::exec::GateRun {
+        sid: gate_sid(task, &dir),
+        tree: dir.clone(),
+    };
+    let started = match crate::exec::start_gate(front, &gate, params).await {
         Ok(s) => s,
         Err(e) => {
             let run = Run {
@@ -209,7 +237,22 @@ pub(crate) async fn start(
     {
         crate::orch::evidence::settle(front, &id, run).await;
     }
-    Ok(())
+    Ok(None)
+}
+
+/// The sandbox id of TASK's gate run in the detached tree DIR: `gate-` and the tree's folder name, kept to the letters a
+/// session id may hold (no session holds it: the run wakes no one).
+fn gate_sid(task: &str, dir: &Path) -> String {
+    let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or(task);
+    let mut sid = String::from("gate-");
+    sid.extend(name.chars().map(|c| {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            c
+        } else {
+            '-'
+        }
+    }));
+    sid
 }
 
 /// A detached worktree of the tree TOP at COMMIT, beside it, for the run with SELECTOR (one per run: each goes when
@@ -341,7 +384,9 @@ pub async fn before_merge(
                      or say **Red:** none (reason) in the plan"
                 )));
             };
-            start(front, tid, top, commit, key, &r).await?;
+            if let Some(why) = start(front, tid, top, commit, key, &r).await? {
+                return Ok(Decision::Hold(why));
+            }
             return Ok(Decision::Wait(format!(
                 "{why}: the hub runs {}",
                 r.argv.join(" ")
@@ -361,7 +406,12 @@ pub async fn before_merge(
             }
             State::Missing => {
                 let r = run_of(&c);
-                start(front, tid, top, &tip_commit, &inputs.tip_key, &r).await?;
+                if let Some(why) = start(front, tid, top, &tip_commit, &inputs.tip_key, &r).await? {
+                    return Ok(Decision::Hold(format!(
+                        "the author check {}: {why}",
+                        c.name
+                    )));
+                }
                 return Ok(Decision::Wait(format!(
                     "the author check {} runs at the tip",
                     c.name

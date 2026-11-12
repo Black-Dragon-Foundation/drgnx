@@ -38,6 +38,7 @@ pub fn judge(pack: &Pack, evidence: &[Evidence], key: &str, stamp: &str) -> Push
                 && e.facts.selector == sel
                 && e.facts.env_stamp == stamp
                 && e.facts.platform.starts_with("linux-")
+                && crate::evidence::no_result(e).is_none()
         });
         match newest {
             None => missing.push(tier.clone()),
@@ -153,6 +154,18 @@ mod tests {
         assert_eq!(
             judge(&p, &[green(&unit), green(&ui)], "T", "e1"),
             Push::Ready
+        );
+        // a tier's run that ended with no test result (its own row only: error, timeout, infra) is no run
+        let alone = run(
+            &ui,
+            "T",
+            "e1",
+            lin,
+            vec![Row::fail(crate::rows::JOB_ROW, Class::Infra, vec![])],
+        );
+        assert_eq!(
+            judge(&p, &[green(&unit), alone], "T", "e1"),
+            Push::Missing(vec![ui.clone()])
         );
     }
 

@@ -48,6 +48,14 @@ exit, or none), and the gates' own `author-check`, `group`, `full-run`, `review`
 The hub task `orch::evidence::run` records every job that ends whose session works on a task (the session's
 snapshot names it) as that task's `red` or `green`. A job without facts, or one a `shared` runner ran, is never
 evidence. Any matching job counts: a gate never asks for a second run of a tree it has a record for.
+
+**A run without a test result** (its only failing row is `(job)`: a non-zero exit with no failing test is `error`,
+out of time `timeout`, the machine's `infra`) is neither red nor green to any gate (`vordr::evidence::no_result`):
+red first, the author check, the groups and the push gate read it as no run. A gate that would start that run again
+(`vordr::evidence::no_rerun`) holds instead on an `error` (the same command on the same tree fails the same way): "CMD
+failed without a test result (error): the first lines of its output"; an `infra` or `timeout` end it starts once more,
+and holds after the second ("ran twice without a test result"). A run with failing tests and a `timeout` `(job)` row
+is a red. Row `vordr::redfirst::a_run_that_failed_without_a_test_result_is_no_run_anywhere`.
 `orch/evidence {task}` (the user's connections) answers a task's records, oldest first.
 
 ## The rule pack
@@ -92,11 +100,16 @@ pack and the task's evidence and runs, in order:
   tests alone when only `rule-tests` is on) passed at the tip's tree; its run is the newest job at the tip's tree key
   with the command's selector (`vordr::gates::state`).
 
-A run a gate needs that the hub can make, it starts through the queue as the user's job and waits for
-(`orch::gates::Runs`): an author check at the tip; for red first, the task's own test command (the newest job the
-task ran inside its tree: its folder, command and image) at the test commit, or the red's command at the tip. Each
-runs in a detached worktree of its commit beside the task's tree (uncommitted files in the task's tree are never part
-of it), which goes when the job ends. The job's end is the task's
+A run a gate needs that the hub can make, it starts through the queue and waits for (`orch::gates::Runs`): an author
+check at the tip; for red first, the task's own test command (the newest job the task ran inside its tree: its folder,
+command and image) at the test commit, or the red's command at the tip. Each runs in a detached worktree of its commit
+beside the task's tree (uncommitted files in the task's tree are never part of it), which goes when the job ends.
+
+**Runs the gates start** are an agent's command, or the pack's over the tree an agent wrote, so they run as an agent's
+job does (`exec::start_gate`): in the session's launch shape, with the detached tree the only folder they can write,
+the network a session's job has (the provider proxy, nothing else) and an agent's package rule; never with the user's
+environment. Their sandbox id is `gate-` and the tree's folder name: no session holds it, so the run wakes no one and
+asks no matrix cell (the gate's run is the hub's decision). Row `runner/a-gate-run-keeps-the-agents-sandbox`. The job's end is the task's
 evidence like any other; the next tick looks again. A hold is a `gate` card on the task (key `gates`, `tip` its tree
 key) saying what is wrong; a red-first wait with no run of the task's tests to repeat is a hold too. Its actions:
 **Check again**, **Tell the agent** (the task goes back to its agent with the card's words), **Waive once…** (with a
@@ -199,8 +212,8 @@ every push of a job recorded with one.
 2. A hub job at the test commit's tree (its tree key) failed rows of class `assert`. A `build` row counts only when
    the pack's `:compile-fail-reds` has its language (cargo's `build` rows are Rust, an ERT row Emacs Lisp) and it
    names a symbol the task's non-test change adds (an item or field of a Rust file above its `#[cfg(test)]`, an Emacs
-   Lisp definition). A `timeout`, `error` or `infra` row is not a red. A test commit whose tests pass at it (the
-   implementation came with them) is held.
+   Lisp definition). A `timeout`, `error` or `infra` row is not a red, and a run with no other failing row is no run
+   ("Evidence"). A test commit whose tests pass at it (the implementation came with them) is held.
 3. A job with the same selector and env stamp at the tip passed the same rows (for a build red: failed none).
 4. The test commit's test lines (a test path's added lines, a Rust file's below its `#[cfg(test)]`) are still at the
    tip: a deleted one that isn't added back holds the task.

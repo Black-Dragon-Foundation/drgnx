@@ -66,9 +66,12 @@ pub async fn refusal(front: &Front, job: &str, dir: &Path) -> Option<String> {
         }
         Push::Missing(tiers) => {
             for t in &tiers {
-                if let Err(e) = start(front, &key, Path::new(&top), &head, &tree, &run_of(t)).await
-                {
-                    return Some(format!("the push gate could not start {}: {e}", t.name));
+                match start(front, &key, Path::new(&top), &head, &tree, &run_of(t)).await {
+                    Ok(None) => {}
+                    Ok(Some(why)) => return Some(format!("the push gate's {}: {why}", t.name)),
+                    Err(e) => {
+                        return Some(format!("the push gate could not start {}: {e}", t.name));
+                    }
                 }
             }
             let names: Vec<&str> = tiers.iter().map(|t| t.name.as_str()).collect();

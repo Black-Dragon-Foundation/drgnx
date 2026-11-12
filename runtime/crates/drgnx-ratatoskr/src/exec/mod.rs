@@ -2539,6 +2539,28 @@ async fn decide_session_job(
 }
 
 pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Error> {
+    start_as(f, c, p, None).await
+}
+
+/// A run a gate starts (`orch::gates`): the command an agent ran, or the pack's, over a tree the agent wrote.  It runs
+/// in an agent's sandbox (the Session launch shape), with the detached tree TREE its only writable folder, under the
+/// sandbox id SID (no session holds it, so no one is woken); the hub's own decision, so no matrix cell is asked.
+pub struct GateRun {
+    pub sid: String,
+    pub tree: PathBuf,
+}
+
+/// `exec/start` of a gate's run G, made by the hub (P names no priority, keys or network).
+pub async fn start_gate(f: &Front, g: &GateRun, p: StartParams) -> Result<Started, Error> {
+    start_as(f, &crate::runner::user(), p, Some(g)).await
+}
+
+async fn start_as(
+    f: &Front,
+    c: &Caller,
+    p: StartParams,
+    gate: Option<&GateRun>,
+) -> Result<Started, Error> {
     // the hub sets an agent's job's priority; only the user's connections choose one
     if c.sid.is_some() && p.priority.is_some() {
         return Err(crate::agents::session::invalid(
@@ -2546,8 +2568,9 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
             "only the user's connections set a job's priority (background lowers it)",
         ));
     }
-    // an agent's job never changes the user's packages: the hub's rule, whatever the sandbox would let through
-    if c.sid.is_some() {
+    // an agent's job never changes the user's packages: the hub's rule, whatever the sandbox would let through (a
+    // gate's run is an agent's command)
+    if c.sid.is_some() || gate.is_some() {
         let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
         if let Some(why) = packages::changes_packages(&argv) {
             return Err(error(
@@ -2596,14 +2619,16 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         .map(|c| PathBuf::from(c.as_str()))
         .ok_or_else(|| error(ErrorCode::InvalidParams, "cwd: the folder the job runs in"))?;
     // A session's job works in the session's own worktree (or a folder inside it), whatever folder the request names.
-    let worktree = match &c.sid {
-        Some(sid) => Some(f.core.agents.worktree(sid).ok_or_else(|| {
+    // A gate's run works in its detached tree.
+    let worktree = match (gate, &c.sid) {
+        (Some(g), _) => Some(g.tree.clone()),
+        (None, Some(sid)) => Some(f.core.agents.worktree(sid).ok_or_else(|| {
             error(
                 ErrorCode::NotAllowed,
                 format!("session {sid} is not held by this hub"),
             )
         })?),
-        None => None,
+        (None, None) => None,
     };
     let cwd = match &worktree {
         Some(wt) => confined(&cwd, wt)?,
@@ -2671,7 +2696,10 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         return Err(error(ErrorCode::InvalidParams, why));
     }
     let spec = ExecSpec {
-        starter: c.sid.clone().map_or(Starter::User, Starter::Session),
+        starter: match gate {
+            Some(g) => Starter::Session(g.sid.clone()),
+            None => c.sid.clone().map_or(Starter::User, Starter::Session),
+        },
         cwd,
         worktree,
         argv: p.argv.iter().map(|a| a.to_string()).collect(),
