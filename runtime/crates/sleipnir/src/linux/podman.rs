@@ -985,9 +985,10 @@ mod tests {
         assert!(a.contains(&"--network=none".to_string()));
     }
 
-    /// [D] lint: nothing makes or mounts a key socket any more (keys go over the sidecar's `@drgnx-key`): no
-    /// write to the thread's socket-create attribute and no key socket file in the sources of the runner, the hub, the
-    /// relay or the sandbox.
+    /// [D] lint: no container job's keys go through a key socket file (they go over the sidecar's `@drgnx-key`): no
+    /// write to the thread's socket-create attribute anywhere, and no key socket file in the sources of the runner, the
+    /// hub, the relay or the sandbox but the hub's own key server for command jobs on its machine (`exec/keys.rs` and
+    /// its rows), which no container mounts.
     #[test]
     fn no_source_makes_or_mounts_a_key_socket() {
         fn walk(d: &Path, out: &mut Vec<PathBuf>) {
@@ -1008,11 +1009,19 @@ mod tests {
             walk(&crates.join(c).join("tests"), &mut files);
         }
         assert!(files.len() > 20, "the sources: {}", files.len());
+        let local_key_server = [
+            "drgnx-ratatoskr/src/exec/keys.rs",
+            "drgnx-ratatoskr/src/exec/tests.rs",
+        ];
         let mut hits = vec![];
         for f in files {
             let text = std::fs::read_to_string(&f).unwrap();
+            let local = local_key_server.iter().any(|s| f.ends_with(s));
             for (i, l) in text.lines().enumerate() {
-                if needles.iter().any(|n| l.contains(n)) {
+                if needles
+                    .iter()
+                    .any(|n| l.contains(n) && !(local && *n == needles[1]))
+                {
                     hits.push(format!("{}:{}: {}", f.display(), i + 1, l.trim()));
                 }
             }
