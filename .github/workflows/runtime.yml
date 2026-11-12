@@ -1080,25 +1080,30 @@ jobs:
       # failed, the lib runs again one test at a time, which names the test running when the process dies (libtest
       # prints a test's name before it runs it with one thread), and that name goes to the job's summary. Diagnostic:
       # the step fails as the lib does, and is dropped once the lib passes on macOS. An abort libsystem raises says why
-      # only in its crash report (os_log, not stderr), so the newest report of the lib's binary is printed, and the named
-      # test runs once more alone with its output shown
+      # only in its crash report (os_log, not stderr), so the report of this run's binary, written after the run
+      # started, is printed (never an earlier run's), and the named test runs once more alone with its output shown.
+      # --nocapture: a library thread a test started (wasmtime's) prints why it aborts to stderr, which libtest would
+      # otherwise keep in that test's captured output
       - name: the hub's lib, one test at a time (names the one that aborts)
         if: ${{ !cancelled() && steps.test.outcome == 'failure' }}
         run: |
           set +e
-          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --lib -- --test-threads 1 > lib-serial.log 2>&1
+          : > lib-serial.start
+          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --lib -- --test-threads 1 --nocapture > lib-serial.log 2>&1
           rc=$?
           tail -n 40 lib-serial.log
           last=$(grep -E '^test .* \.\.\. ' lib-serial.log | tail -n 1)
           echo "- the hub's lib one at a time: exit $rc; last line: \`${last:-none}\`" >> "$GITHUB_STEP_SUMMARY"
           if [ "$rc" -ne 0 ]; then
-            # ReportCrash writes the report a few seconds after the process dies
+            bin=$(sed -nE 's/.*process didn.t exit successfully: `([^` ]+).*/\1/p' lib-serial.log | tail -n 1)
+            bin=${bin##*/}
+            # ReportCrash writes the report a few seconds after the process dies; its name is the binary's and the time
             for _ in $(seq 30); do
-              ips=$(ls -t "$HOME"/Library/Logs/DiagnosticReports/drgnx_ratatoskr*.ips 2>/dev/null | head -n 1)
+              ips=$(find "$HOME/Library/Logs/DiagnosticReports" -name "${bin:-none}-*.ips" -newer lib-serial.start 2>/dev/null | sort | tail -n 1)
               [ -n "$ips" ] && break
               sleep 1
             done
-            echo "--- the newest crash report: ${ips:-none}"
+            echo "--- the crash report of ${bin:-no binary named} in this run: ${ips:-none}"
             [ -n "$ips" ] && head -c 60000 "$ips"
             name=$(printf '%s\n' "$last" | sed -E 's/^test (.*) \.\.\. .*$/\1/')
             if [ -n "$name" ]; then
