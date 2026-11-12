@@ -182,6 +182,8 @@ pub struct Stop {
     /// The selected frame's id.
     pub frame: i64,
     pub scopes: Vec<ScopeVars>,
+    /// An exception stop's `exceptionInfo` body (when the adapter has the request).
+    pub exception: Option<Value>,
 }
 
 /// How a session ended.
@@ -666,9 +668,25 @@ impl Session {
                     total_frames: None,
                     frame: 0,
                     scopes: vec![],
+                    exception: None,
                 };
+                let exception = stop.reason == "exception"
+                    && self
+                        .caps
+                        .get("supportsExceptionInfoRequest")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
                 self.stop = Some(stop);
                 self.fetch(true, true, true).await;
+                if exception
+                    && let Ok(b) = self
+                        .client
+                        .request("exceptionInfo", json!({"threadId": thread}))
+                        .await
+                    && let Some(s) = self.stop.as_mut()
+                {
+                    s.exception = Some(b);
+                }
                 self.publish();
             }
             "continued" => {

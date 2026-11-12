@@ -306,6 +306,7 @@ params! {
     DebugSelect(debug::DebugSelect),
     DebugTrust(debug::DebugTrust),
     DebugInstall(debug::DebugInstall),
+    DebugSource(debug::DebugSource),
     DebugBreakpoints(debug::DebugBreakpoints),
     DebugRunToCursor(debug::DebugRunToCursor),
     DebugFork(debug_fork::DebugFork),

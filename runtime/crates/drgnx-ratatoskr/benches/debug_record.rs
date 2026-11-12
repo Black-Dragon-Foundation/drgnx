@@ -66,6 +66,7 @@ fn a_stop(epoch: u64) -> Stop {
             .map(|f| json!({"id": 1000 + f, "name": format!("fn_{f}"), "line": 10 + f, "column": 1, "source": {"path": "/p/app/m.py"}}))
             .collect(),
         total_frames: Some(20),
+        exception: None,
         frame: 1000,
         scopes: vec![
             ScopeVars {

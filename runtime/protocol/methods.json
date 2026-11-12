@@ -12822,6 +12822,53 @@
       "classes": [
         "user"
       ],
+      "doc": "the text of a frame's source that has no file (its sourceReference), from the adapter, for a read-only buffer",
+      "name": "debug/source",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/source`: the text of SESSION's source REF (a frame whose source has no file: `sourceReference`).",
+        "properties": {
+          "ref": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "ref"
+        ],
+        "title": "DebugSource",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/source`'s answer: the TEXT and its MIME type when the adapter gave one.",
+        "properties": {
+          "mime": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "DebugSourceText",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "start a configuration: the session's id, or what must come first (trust, or the inputs and process picker the editor asks for in the palette)",
       "name": "debug/start",
       "params": {

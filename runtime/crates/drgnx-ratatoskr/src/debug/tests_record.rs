@@ -50,6 +50,7 @@ fn a_stop(vars: Vec<Vec<Value>>, frames: usize) -> Stop {
             .map(|i| json!({"id": i + 1, "name": format!("f{i}"), "line": 10 + i, "source": {"path": "/p/a.py"}}))
             .collect(),
         total_frames: Some(frames as i64),
+        exception: None,
         frame: 1,
         scopes: vars
             .into_iter()
