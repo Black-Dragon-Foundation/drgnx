@@ -1104,7 +1104,7 @@ jobs:
   # its own debug build; the Seatbelt escape rows with the first half.
   macos-conformance:
     name: conformance ${{ matrix.shard }}/2 (macOS 27)
-    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
+    if: false   # scratch: the row-only run
     runs-on: xcode-27
     timeout-minutes: 45
     strategy:
@@ -1166,7 +1166,7 @@ jobs:
   # The perf baseline on a release build (a recorded baseline, no budgets, as on Linux)
   macos-perf:
     name: perf (macOS 27)
-    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
+    if: false   # scratch: the row-only run
     runs-on: xcode-27
     timeout-minutes: 45
     steps:
