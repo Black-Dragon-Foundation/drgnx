@@ -317,8 +317,9 @@ session gets a block of ports and its launch configuration becomes an attach the
   runs by then (holding `configurationDone` for the answer deadlocks): a child started before the bootloader is there
   would run without a debugger. So `etc/debug-node-preload.js`, first in `NODE_OPTIONS`, makes `child_process`'s
   spawn, fork and exec functions wait for it first (`DRGNX_DEBUG_WAIT_BOOTLOADER`, set unless
-  `autoAttachChildProcesses` is off), in 5 ms sleeps between which V8 runs the inspector's messages, at most 30 s (a
-  5 s cap ran out once on a loaded machine); past it the child starts without the debugger and stderr says so.
+  `autoAttachChildProcesses` is off), in 5 ms sleeps between which V8 runs the inspector's messages, at most 5 s
+  (measured: 128–165 ms on the macOS runner, at most 52 ms on a desktop under full CPU load); past it the child
+  starts without the debugger and stderr says so.
   Children (`startDebugging`) are second connections to A. A child's `inspector.open(0)` goes through the preload
   too: it takes the block's next port, claimed with an O_EXCL file under `TMP/drgnx-debug-ports/`, and drops an
   inherited `--inspect-brk` from forked children's `execArgv`. The preload is written into each session's tmp.
