@@ -404,6 +404,88 @@ async fn a_python_trace_sees_its_injected_env_and_file() {
     assert!(!tree.exists(), "{} is still there", tree.display());
 }
 
+/// D3's replay through these forks: the trace's tree gets the tracer, its records are read back as the project's.
+struct Traces {
+    forks: Forks,
+    resolved: Value,
+    root: PathBuf,
+}
+
+impl super::origin::Replay for Traces {
+    fn trace(
+        &self,
+        run: &str,
+        stop: u64,
+        watch: Vec<String>,
+    ) -> BoxFut<'static, Result<super::origin::Traced, String>> {
+        let (forks, resolved, root, run) = (
+            self.forks.clone(),
+            self.resolved.clone(),
+            self.root.clone(),
+            run.to_owned(),
+        );
+        Box::pin(async move {
+            let t = forks
+                .trace(
+                    &run,
+                    stop,
+                    resolved,
+                    move |tree: &Path| super::origin::trace_env(tree, &watch),
+                    super::origin::trace_files(),
+                )
+                .await?;
+            super::origin::read_trace(&t.path, &root)
+        })
+    }
+}
+
+#[tokio::test]
+#[ignore = "live: the adapter image with bwrap"]
+async fn a_python_trail_is_traced_in_sealed_replays() {
+    // the origin fixture, stopped at its first pass of `return shortfall` (line 16)
+    let text = include_str!("../../tests/fixtures/origin/stock.py");
+    let f = fixture_at(
+        "stock.py",
+        text,
+        py_config,
+        (15, 16, 23),
+        |_| "16".into(),
+        1,
+    );
+    let r = Traces {
+        forks: f.forks.clone(),
+        resolved: f.resolved.clone(),
+        root: f.root.clone(),
+    };
+    let t = super::origin::trail(&r, "r1", 100, "shortfall", 3, Vec::new, |_| {})
+        .await
+        .unwrap();
+    let got: Vec<(u32, &str, Option<&str>, u32)> = t
+        .links
+        .iter()
+        .map(|l| (l.level, l.target.as_str(), l.value.as_deref(), l.line))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (1, "shortfall", Some("16"), 15),
+            (2, "self.min", Some("10"), 4),
+            (2, "self.qty", Some("2"), 3),
+            (2, "item.reserve", Some("8"), 10),
+        ],
+        "{:#?}",
+        t.links
+    );
+    // the links name the project's file, not the trace's tree, and are traced
+    let file = f.root.join("stock.py").display().to_string();
+    assert!(
+        t.links.iter().all(|l| l.path == file && l.traced),
+        "{:#?}",
+        t.links
+    );
+    assert!(t.note.is_none());
+}
+
 #[tokio::test]
 #[ignore = "live: the adapter image with bwrap"]
 async fn python_runs_in_bisect_slots_report_a_probe_and_an_exception() {

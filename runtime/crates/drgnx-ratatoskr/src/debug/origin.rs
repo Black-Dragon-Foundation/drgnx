@@ -164,6 +164,34 @@ pub fn write_tracer(dir: &Path) -> std::io::Result<PathBuf> {
     Ok(dir.to_owned())
 }
 
+/// The tracer's files for a replay's tree (relative paths: `.drgnx-origin/…`).
+pub fn trace_files() -> Vec<(String, Vec<u8>)> {
+    vec![
+        (format!("{DIR}/drgnx_origin.py"), TRACER.as_bytes().to_vec()),
+        (
+            format!("{DIR}/sitecustomize.py"),
+            SITECUSTOMIZE.as_bytes().to_vec(),
+        ),
+    ]
+}
+
+/// The environment that turns the tracer on in the replay's TREE, watching WATCH in the code under it.
+pub fn trace_env(tree: &Path, watch: &[String]) -> Vec<(String, String)> {
+    env(&tree.join(DIR), tree, watch, None)
+}
+
+/// A replay's answer from its TREE: the tracer's records, their files named under ROOT (the project).
+pub fn read_trace(tree: &Path, root: &Path) -> Result<Traced, String> {
+    let text = std::fs::read_to_string(tree.join(DIR).join(OUT)).unwrap_or_default();
+    Ok(match traced(&text)? {
+        Traced::Records(mut r) => {
+            rebase(&mut r, tree, root);
+            Traced::Records(r)
+        }
+        old => old,
+    })
+}
+
 /// RECS' files as the project's: a file under TREE (the replay's copy, as named or as resolved) is named under ROOT.
 pub fn rebase(recs: &mut [Rec], tree: &Path, root: &Path) {
     let real = std::fs::canonicalize(tree).ok();

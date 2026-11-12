@@ -1,16 +1,19 @@
 //! `debug/origin` (runstav `methods::debug_origin`): a trail started on a task, its levels sent as `debug-origin`
-//! events with the card (`origin::rows`).  The replay is D2's sealed fork ([`Replay`], set by the forks once they
-//! exist); the static candidates read the files from the run's launch snapshot (the stop's file and its stack's).
+//! events with the card (`origin::rows`).  The replay is D2's sealed fork ([`ForkReplay`], set when the hub binds);
+//! the static candidates read the files from the run's launch snapshot (the stop's file and its stack's).
 
+use super::BoxFut;
 use super::origin::{self, Link, Replay};
+use super::record::Runs;
 use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::Params;
 use runstav::methods::debug_origin::{DebugOrigin, DebugOriginStarted};
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 
 /// The hub's trails: the replay they use.
 #[derive(Default)]
@@ -23,6 +26,47 @@ impl Origins {
     /// The replay trails use (D2's forks).
     pub fn set_replay(&self, r: Arc<dyn Replay>) {
         let _ = self.replay.set(r);
+    }
+}
+
+/// D2's sealed forks as the trails' replay: the run replayed to the stop in a trace's tree with the tracer in it
+/// (`fork_wire::trace`), its records read back as the project's; the tree goes with the guard.
+pub struct ForkReplay {
+    pub front: Weak<Front>,
+}
+
+impl Replay for ForkReplay {
+    fn trace(
+        &self,
+        run: &str,
+        stop: u64,
+        watch: Vec<String>,
+    ) -> BoxFut<'static, Result<origin::Traced, String>> {
+        let (front, run) = (self.front.upgrade(), run.to_owned());
+        Box::pin(async move {
+            let front = front.ok_or("the hub is stopping")?;
+            let root = front
+                .debug
+                .debug(&front)
+                .records()
+                .and_then(|r| r.run(&run))
+                .map(|i| PathBuf::from(i.root))
+                .ok_or_else(|| format!("no recorded run {run}"))?;
+            let tree = super::fork_wire::trace(
+                front,
+                run,
+                stop,
+                move |t: &Path| origin::trace_env(t, &watch),
+                origin::trace_files(),
+            )
+            .await?;
+            let (path, root2) = (tree.path.clone(), root);
+            let got = crate::clock::blocking(move || origin::read_trace(&path, &root2))
+                .await
+                .map_err(|e| e.to_string())?;
+            drop(tree);
+            got
+        })
     }
 }
 
@@ -77,7 +121,7 @@ async fn start(front: &Front, p: DebugOrigin) -> Result<DebugOriginStarted, Erro
     let replay = origins.replay.get().cloned().ok_or_else(|| {
         err(
             ErrorCode::Internal,
-            "where a value came from needs a what-if fork of the run, which this hub cannot make yet",
+            "the hub is not ready to replay a run yet",
         )
     })?;
     let id = format!("o{}", origins.next.fetch_add(1, Ordering::Relaxed) + 1);

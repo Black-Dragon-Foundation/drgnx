@@ -67,6 +67,10 @@ impl Hub {
     /// The front, once it is in its `Arc`: a bisect's jobs outlive the call that started it.
     pub fn bind(&self, front: &Arc<Front>) {
         self.bisects.bind(front);
+        self.origins
+            .set_replay(Arc::new(super::origin_wire::ForkReplay {
+                front: Arc::downgrade(front),
+            }));
     }
 
     pub(super) fn is_trusted(&self, root: &str) -> bool {
