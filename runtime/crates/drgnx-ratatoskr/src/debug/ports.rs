@@ -62,6 +62,12 @@ pub struct Block {
     lock: File,
 }
 
+/// The hub's one table of blocks (every session's, the machine-wide locks under it).
+pub fn machine() -> &'static Blocks {
+    static BLOCKS: std::sync::OnceLock<Blocks> = std::sync::OnceLock::new();
+    BLOCKS.get_or_init(Blocks::default)
+}
+
 impl Default for Blocks {
     fn default() -> Blocks {
         Blocks::new(RANGE, LEN)

@@ -277,8 +277,23 @@ pub fn plan(
 pub const PRELOAD: &str = include_str!("../../../../../etc/debug-node-preload.js");
 /// Its name in the session's tmp.
 pub const PRELOAD_NAME: &str = "drgnx-debug-preload.js";
+/// The process groups of every session's adapter and program, as they start: the macOS fork row's lsof sweep reads
+/// them (`tests_fork_live`).
+#[cfg(feature = "test-hooks")]
+pub static GROUPS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+
+fn started(group: i32) {
+    #[cfg(feature = "test-hooks")]
+    GROUPS.lock().unwrap_or_else(|e| e.into_inner()).push(group);
+    let _ = group;
+}
+
 /// How long the hub waits for debugpy's listener before it gives up and stops the adapter.
 pub const DEBUGGEE_LISTEN_WITHIN: Duration = Duration::from_secs(30);
+
+/// What starts a process of the session inside its sandbox (macOS: Seatbelt with the block's ports): the bare
+/// command in, the sandboxed one out.
+pub type Seal = Arc<dyn Fn(Spec) -> BoxFut<'static, Result<Spec, String>> + Send + Sync>;
 
 /// A session's adapter and program inside its block. The block is held for the launcher's life (the session's).
 pub struct Blocked {
@@ -289,6 +304,8 @@ pub struct Blocked {
     _block: Option<Block>,
     /// The adapter's process group, once it runs: a child's connection checks the port's listener against it.
     adapter_group: Mutex<Option<i32>>,
+    /// What starts each process (macOS: Seatbelt); none: bare.
+    seal: Option<Seal>,
 }
 
 impl Blocked {
@@ -305,6 +322,21 @@ impl Blocked {
             cwd,
             _block: block,
             adapter_group: Mutex::new(None),
+            seal: None,
+        }
+    }
+
+    /// Every process of the session starts through SEAL.
+    pub fn sealed(mut self, seal: Seal) -> Blocked {
+        self.seal = Some(seal);
+        self
+    }
+
+    /// SPEC through the seal, if there is one.
+    async fn seal(&self, spec: Spec) -> Result<Spec, String> {
+        match &self.seal {
+            Some(seal) => seal(spec).await,
+            None => Ok(spec),
         }
     }
 
@@ -345,6 +377,7 @@ async fn start_debuggee(spec: Spec) -> Result<draugr::Child, String> {
     let mut child = draugr::spawn(spec)
         .await
         .map_err(|e| format!("{shown}: {e}"))?;
+    started(child.id());
     if let Some(mut out) = child.take_stdout() {
         crate::clock::spawn("debug:debuggee-stdout", async move {
             let _ = tokio::io::copy(&mut out, &mut tokio::io::sink()).await;
@@ -435,7 +468,7 @@ impl Launcher for Blocked {
             let slot: Arc<Mutex<Option<draugr::Child>>> = Arc::default();
             // js-debug's program waits at its first line for the attach: it starts first
             if self.plan.debuggee.after_listen.is_none() {
-                let mut d = start_debuggee(self.debuggee_spec()?).await?;
+                let mut d = start_debuggee(self.seal(self.debuggee_spec()?).await?).await?;
                 // its inspector's port, which the adapter attaches to
                 if let Some(b) = self.plan.arguments.get("port").and_then(Value::as_u64)
                     && let Err(e) = wait_owned(b as u16, d.id(), DEBUGGEE_LISTEN_WITHIN).await
@@ -446,10 +479,14 @@ impl Launcher for Blocked {
                 }
                 *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(d);
             }
-            let adapter = draugr::spawn(self.spec(&self.plan.adapter, &[], &self.cwd)?)
-                .await
-                .map_err(|e| format!("{}: {e}", self.plan.adapter[0]))?;
+            let adapter = draugr::spawn(
+                self.seal(self.spec(&self.plan.adapter, &[], &self.cwd)?)
+                    .await?,
+            )
+            .await
+            .map_err(|e| format!("{}: {e}", self.plan.adapter[0]))?;
             let adapter_pid = adapter.id();
+            started(adapter_pid);
             *self.adapter_group.lock().unwrap_or_else(|e| e.into_inner()) = Some(adapter_pid);
             let mut pair = Pair {
                 adapter,
@@ -472,7 +509,14 @@ impl Launcher for Blocked {
             // debugpy's program connects once, without retrying: it starts when the adapter listens for it (after
             // the attach), the listener checked to be the adapter's
             if let Some(port) = self.plan.debuggee.after_listen {
-                let spec = self.debuggee_spec()?;
+                let spec = match self.seal(self.debuggee_spec()?).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        pair.signal(Sig::Kill);
+                        pair.wait().await;
+                        return Err(e);
+                    }
+                };
                 let slot = slot.clone();
                 pair.starter = Some(crate::clock::spawn("debug:debuggee-start", async move {
                     match wait_owned(port, adapter_pid, DEBUGGEE_LISTEN_WITHIN).await {

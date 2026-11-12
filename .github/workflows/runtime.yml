@@ -1156,6 +1156,28 @@ jobs:
           skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == "drgnx-ratatoskr" { printf " --skip %s", $3 }')
           # --workspace and the workspace's features (tests/macos.rs is the only `macos` test target): the build above
           cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks --test macos -- --ignored $skips
+      # Debug forks on a Mac (spec §21): each fork's adapter and program in Seatbelt with only their block of loopback
+      # ports. lsof sweeps their sockets while the Python and the JS fork run (tests_fork_live's mac row). debugpy and
+      # js-debug at the hub's pins (etc/debug-adapters.eld), installed as Debug: Install Adapter does; the lib's test
+      # binary from the build above, the hub beside it as the sandbox's helper
+      - name: debug forks keep to their port block (Seatbelt, lsof)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          a="$RUNNER_TEMP/debug-adapters"
+          mkdir -p "$a"
+          python3 -m venv "$a/venv"
+          printf 'debugpy==1.8.22 --hash=sha256:a9e9d3550e15ca479c59333e90845029190531f0cacfedab3b815a57bd913947\n' > "$a/req.txt"
+          "$a/venv/bin/pip" install --quiet --require-hashes -r "$a/req.txt"
+          curl -sSfL -o "$a/js.tgz" https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.1/js-debug-dap-v1.140.1.tar.gz
+          echo "c72fab31bcbfdce6ad1f42adfd28eff8d4681dd3b03b5e2e6f9e72e6f9927faf  $a/js.tgz" | shasum -a 256 -c -
+          tar -xzf "$a/js.tgz" -C "$a"
+          bin=$(jq -r 'select(.profile.test == true and .target.name == "drgnx_ratatoskr" and (.target.kind | index("lib"))) | .executable' \
+            "$RUNNER_TEMP/test-bins.json" | tail -n 1)
+          [ -x "$bin" ] || { echo "::error::no test binary for the hub's lib"; exit 1; }
+          cd runtime/crates/drgnx-ratatoskr
+          DRGNX_DEBUG_LIVE_PYTHON="$a/venv/bin/python3" DRGNX_DEBUG_LIVE_JS_DEBUG="$a/js-debug/src/dapDebugServer.js" \
+            "$bin" --ignored --exact debug::tests_fork_live::mac_forks_keep_to_their_port_block --nocapture --test-threads 1
       # the relay sidecar of a networked container job (and a keyed one's drgnx-key) is a Linux binary: build-only here
       # (no podman machine to run it in).
       # Apple Silicon builds aarch64 musl with Rust's self-contained musl and rust-lld, as `drgnx runtime build` does

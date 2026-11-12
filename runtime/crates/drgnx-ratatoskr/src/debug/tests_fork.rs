@@ -137,9 +137,12 @@ fn attach_runs_and_ptrace_adapters_are_refused_with_the_reason() {
         assert!(m.contains("ptrace"), "{m}");
     }
     let Err(Refused::No(m)) = fork::check(&run(), &At::Stop(3), false, false) else {
-        panic!("forked off Linux");
+        panic!("forked where nothing seals it");
     };
-    assert!(m.contains("Linux"), "{m}");
+    assert_eq!(
+        m,
+        "forks run sealed on Linux (Gleipnir's full tier) and macOS (Seatbelt) only"
+    );
     let mut r = run();
     r.snapshot = None;
     assert!(

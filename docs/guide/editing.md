@@ -139,8 +139,8 @@ run passed the line only once, any value that differs stops the fork, since it m
 (the fork replays Python's hash seed, nothing else); the tab says which value, and **Fork Anyway** forks at that pass
 regardless.
 The copy cannot reach the network or write outside itself; your `.env` files are read in place, never copied. Python
-(debugpy) and JavaScript (js-debug) only: Go and native programs need `ptrace`, which the sandbox never allows, and
-macOS forks wait for a sandbox rule of their own. A run whose configuration resolves differently now (an input, a
+(debugpy) and JavaScript (js-debug) only: Go and native programs need `ptrace`, which the sandbox never allows. On
+macOS the copy runs in the system's sandbox with a small block of local ports of its own, nothing else. A run whose configuration resolves differently now (an input, a
 setting, launch.json) is refused, and a point the run took over a minute to reach asks first.
 
 **Debugging with an agent.** Ask an agent to debug this with you and it works beside you, under the permissions

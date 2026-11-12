@@ -611,6 +611,13 @@ session gets a block of ports and its launch configuration becomes an attach the
   adapters send what it prints as output events (debugpy with `redirectOutput`; js-debug the console's calls).
 - The hub owns both processes: they get the session's signals, and once the adapter is gone the program is killed.
 - lldb-dap runs outside the sandbox on macOS (no task port) and delve needs `ptrace`: both are refused here.
+- **Sealed (what-if forks on macOS):** `fork_seal::Sealed` claims a block from the hub's table (`ports::machine`)
+  and gives `Blocked` a seal (`Blocked::sealed`) that starts the adapter and the program each through Seatbelt
+  under `fork_seal::mac_spec`: the fork's spec with the block as its only `mac_loopback_ports` and each `.env` pinned
+  read-only at its own place, a link to it in the tree (`link_env_files`; no mount namespace, never copied). Each
+  process's environment and folder go into the spec, then `sandbox-exec` runs it. The macOS fork row of the runtime
+  workflow (`debug::tests_fork_live::mac_forks_keep_to_their_port_block`) runs a Python and a JS fork while lsof
+  sweeps their process groups every 50 ms: every socket has an end in one block.
 
 The live tests (`debug/tests_blocked_live.rs`, ignored by default) run both adapters through the hub's sessions in
 the adapter image: each program starts a child at once (js-debug forks on its first line), the breakpoint is in the
@@ -667,7 +674,8 @@ buffer). Tests: `debug::tests_probes`, `debug::tests_record`, `test/unit/debug-t
 ## What-if forks (spec §19.3)
 
 A fork replays a recorded run in a sealed copy up to a point, changes a value or the code there, and runs on; the
-What-if tab shows it beside the run. Linux only for now; other hosts refuse with the reason.
+What-if tab shows it beside the run. Linux (Gleipnir's full tier: the shim over stdio, its own loopback) and macOS
+(Seatbelt with a port block, below); other hosts refuse with the reason (`fork::SEALS_HERE`).
 
 - **The engine** (`debug/fork.rs`): `check` maps the point onto the run: a stop of the run (a stop reached by
   stepping maps to the breakpoint stop before it plus the steps since), or a line's N-th pass. Refused: an attach

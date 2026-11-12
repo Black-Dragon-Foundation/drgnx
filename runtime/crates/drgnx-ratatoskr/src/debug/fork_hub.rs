@@ -144,7 +144,7 @@ struct Inner {
     runs: Arc<dyn Runs>,
     trees: Arc<dyn Trees>,
     sealer: Arc<dyn Sealer>,
-    linux: bool,
+    sealed: bool,
     forks: Mutex<BTreeMap<String, Entry>>,
     next: Mutex<u64>,
 }
@@ -160,13 +160,14 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl Forks {
-    /// Forks of RUNS' runs, trees from TREES, sessions sealed by SEALER; LINUX: this host runs them.
+    /// Forks of RUNS' runs, trees from TREES, sessions sealed by SEALER; SEALED: this host runs them
+    /// ([`fork::SEALS_HERE`]).
     pub fn new(
         sink: Arc<dyn Sink>,
         runs: Arc<dyn Runs>,
         trees: Arc<dyn Trees>,
         sealer: Arc<dyn Sealer>,
-        linux: bool,
+        sealed: bool,
     ) -> Forks {
         Forks {
             inner: Arc::new(Inner {
@@ -174,7 +175,7 @@ impl Forks {
                 runs,
                 trees,
                 sealer,
-                linux,
+                sealed,
                 forks: Mutex::new(BTreeMap::new()),
                 next: Mutex::new(0),
             }),
@@ -193,7 +194,7 @@ impl Forks {
             .runs
             .run(&ask.run)
             .ok_or_else(|| format!("no recorded run {}", ask.run))?;
-        match fork::check(&run, &ask.at, self.inner.linux, ask.confirm) {
+        match fork::check(&run, &ask.at, self.inner.sealed, ask.confirm) {
             Ok(_) => {}
             Err(Refused::No(why)) => return Err(why),
             Err(Refused::Ask(q)) => return Ok(Made::Ask(q)),
@@ -244,7 +245,7 @@ impl Forks {
                 .runs
                 .run(&run_id)
                 .ok_or_else(|| format!("no recorded run {run_id}"))?;
-            match fork::check(&run, &At::Stop(stop), me.inner.linux, true) {
+            match fork::check(&run, &At::Stop(stop), me.inner.sealed, true) {
                 Ok(_) => {}
                 Err(Refused::No(w) | Refused::Ask(w)) => return Err(w),
             }
@@ -303,8 +304,8 @@ impl Forks {
                 .runs
                 .run(&run_id)
                 .ok_or_else(|| format!("no recorded run {run_id}"))?;
-            if !me.inner.linux {
-                return Err("runs in a sealed tree are Linux only for now".into());
+            if !me.inner.sealed {
+                return Err("runs in a sealed tree are Linux and macOS only".into());
             }
             if run.request == "attach" {
                 return Err(
@@ -570,7 +571,7 @@ impl Forks {
         tree: &Path,
         extra_env: &[(String, String)],
     ) -> Result<Value, String> {
-        let target = match fork::check(run, &ask.at, self.inner.linux, true) {
+        let target = match fork::check(run, &ask.at, self.inner.sealed, true) {
             Ok(t) => t,
             Err(Refused::No(w) | Refused::Ask(w)) => return Err(w),
         };
