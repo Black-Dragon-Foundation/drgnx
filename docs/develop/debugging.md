@@ -146,8 +146,16 @@ task with its platform section merged over it and its strings through the same v
 label or a list) runs first, depth first in the order given, each task once; a cycle (`a → b → a`) or an unknown
 label is an error that names it. A `shell` task (also one without a `type`) runs its command line in `/bin/sh -c`,
 each `args` item quoted for the shell; a `process` task runs `command` and `args` as they are, never split.
-`options.cwd` (relative: under the root) and `options.env` apply. `isBackground` tasks (watchers that never end) are
-refused. The steps run one at a time before the adapter starts (so a TCP adapter's free port is picked after the
+`options.cwd` (relative: under the root) and `options.env` apply. An `isBackground` task (a watcher that never ends)
+runs until a line of its output (stdout and stderr merged through `sh -c 'exec "$@" 2>&1'`, terminal escapes removed)
+matches its problem matcher's `background.endsPattern`, after its `beginsPattern` unless `activeBegin`; the matcher is
+the task's own object (string or `{regexp}` patterns, Rust `regex` syntax) or `$tsc-watch`, the one named matcher
+drgnx carries. Without an end pattern it is refused, naming the task (and any matcher drgnx does not know); a
+background `postDebugTask` is refused too. `tasks::run` answers the background steps' `Watch`es: `wire::keep_watches`
+sends their later lines to the sessions' Debug Console and drops them when every session they started for has ended,
+which sends SIGTERM to the task's process group (SIGKILL 2 s later). Background steps always run in the hub, never in
+a tab, even from a frame: the hub must read their output, and a terminal tab's output reaches it only as drawn
+screens. The steps run one at a time before the adapter starts (so a TCP adapter's free port is picked after the
 build); the first that fails stops the rest and the start, and the error gives its exit status and the end of its
 output (2,000 bytes of stdout, then stderr's tail). `${defaultBuildTask}` is the label of the task whose `group` is
 `{"kind": "build", "isDefault": true}`.

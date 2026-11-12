@@ -56,7 +56,11 @@ comments, `${…}` variables, `inputs` and platform sections included), your own
 and a default for the file's language when there is neither. A launch.json `compounds` entry starts its
 configurations together (its own `preLaunchTask` first; with `stopAll`, stopping one stops them all). A configuration's `preLaunchTask` (and `postDebugTask`)
 runs from `.vscode/tasks.json` first, in a terminal tab where you watch it; a failing task stops the start, says
-why, and leaves its tab open (Enter closes it). The first start in a folder asks
+why, and leaves its tab open (Enter closes it). A background task (`isBackground`, such as `tsc -w`) is different:
+the session starts once its output matches its problem matcher's `endsPattern` (the task's own, or `$tsc-watch`), and
+the task keeps running until its session ends. Its output goes to the Debug Console, not a tab, because drgnx has to
+read every line to see the end pattern, which a terminal tab does not give it. A background task with no end
+pattern is refused, because drgnx could not tell when it is ready. The first start in a folder asks
 you to trust it (**Trust This Folder**): an untrusted folder's configurations never run.
 
 **Install Adapter…** (the palette) downloads the JavaScript debugger or CodeLLDB, checked against the version drgnx

@@ -66,6 +66,8 @@ required-features = ["fleet", "test-hooks"]
 
 [dependencies]
 runstav = { path = "../runstav", version = "0.1.0" }
+# background tasks' problem-matcher patterns (already in the tree)
+regex.workspace = true
 # hub-built view rows (view): the row and patch types and their diff
 drgnx-rows = { path = "../drgnx-rows", version = "0.1.0" }
 # the terminals (term): the worker's wire, records and scopes, without the engine

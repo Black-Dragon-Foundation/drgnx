@@ -468,12 +468,12 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
         Value::String(s) => Ok(s),
         _ => Ok(s.to_owned()),
     };
-    // preLaunchTask: its steps run to the end first; a failure is the start's error. postDebugTask's are checked now,
-    // so a wrong name stops the start too
+    // preLaunchTask: its steps run to the end (a background one to its end pattern) first; a failure is the start's
+    // error. postDebugTask's are checked now, so a wrong name stops the start too
     let root = Path::new(&p.root);
     let steps = super::tasks::before_launch(root, &config, Os::this(), &subst).map_err(err)?;
     let after = super::tasks::after_debug(root, &config, Os::this(), &subst).map_err(err)?;
-    run_tasks(front, caller.conn_id, p.terminal, &steps)
+    let watches = run_tasks(front, caller.conn_id, p.terminal, &steps)
         .await
         .map_err(err)?;
     // after the tasks: a TCP adapter's free port is picked just before it starts
@@ -509,6 +509,7 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
         .start_with(caller.conn_id, &p.root, start, launcher, rec)
         .await
         .map_err(err)?;
+    keep_watches(front, vec![id.clone()], watches);
     if !after.is_empty() {
         let d = front.debug.debug(front).clone();
         let env = front.shell_env.vars_os();
@@ -582,7 +583,7 @@ async fn start_compound(
     };
     let steps = super::tasks::before_launch(Path::new(&p.root), &compound, Os::this(), &subst)
         .map_err(err)?;
-    run_tasks(front, caller.conn_id, p.terminal, &steps)
+    let watches = run_tasks(front, caller.conn_id, p.terminal, &steps)
         .await
         .map_err(err)?;
     let d = front.debug.debug(front).clone();
@@ -618,6 +619,7 @@ async fn start_compound(
             }
         }
     }
+    keep_watches(front, ids.clone(), watches);
     if launch::stop_all(&compound) && ids.len() > 1 {
         let ids = ids.clone();
         crate::clock::spawn("debug:compound-stop-all", async move {
@@ -1051,26 +1053,57 @@ impl Terminals for TermDoor {
 
 /// A start's task STEPS: with a frame (TAB) each in a terminal tab of connection CONN's editor, shown to it
 /// (`debug-terminal`); else captured.  Either runs with the user's rights and the shell's environment, as before.
+/// Background steps are always captured (the hub reads their output for the end pattern): their watches are the
+/// answer.
 async fn run_tasks(
     front: &Front,
     conn: u64,
     tab: bool,
     steps: &[super::tasks::Step],
-) -> Result<(), String> {
-    if !tab || steps.is_empty() {
-        return super::tasks::run(steps, &front.shell_env.vars_os()).await;
+) -> Result<Vec<super::tasks::Watch>, String> {
+    let env = front.shell_env.vars_os();
+    let mut watches = vec![];
+    for chunk in steps.chunk_by(|a, b| a.background.is_some() == b.background.is_some()) {
+        if !tab || chunk[0].background.is_some() {
+            watches.extend(super::tasks::run(chunk, &env).await?);
+            continue;
+        }
+        let door = TermDoor {
+            terms: front.core.terms.clone(),
+            base: env.clone(),
+        };
+        let editors = front.editors.clone();
+        super::tasks::run_in(chunk, &door, conn, &move |s, o| {
+            super::show_terminal(
+                &*editors,
+                conn,
+                json!({"term": o.term, "view": o.view, "task": s.label, "editor": o.editor}),
+            );
+        })
+        .await?;
     }
-    let door = TermDoor {
-        terms: front.core.terms.clone(),
-        base: front.shell_env.vars_os(),
-    };
-    let editors = front.editors.clone();
-    super::tasks::run_in(steps, &door, conn, &move |s, o| {
-        super::show_terminal(
-            &*editors,
-            conn,
-            json!({"term": o.term, "view": o.view, "task": s.label, "editor": o.editor}),
-        );
-    })
-    .await
+    Ok(watches)
+}
+
+/// Background tasks WATCHES run while sessions IDS do: their output goes to the sessions' Debug Console, and they
+/// end once every one of those sessions has.
+fn keep_watches(front: &Front, ids: Vec<String>, watches: Vec<super::tasks::Watch>) {
+    if watches.is_empty() {
+        return;
+    }
+    let d = front.debug.debug(front).clone();
+    for w in &watches {
+        let (d, ids) = (d.clone(), ids.clone());
+        w.listen(Box::new(move |line: &str| {
+            for id in &ids {
+                d.console_say(id, line, "console");
+            }
+        }));
+    }
+    crate::clock::spawn("debug:background-tasks", async move {
+        for id in &ids {
+            d.wait_end(id).await;
+        }
+        drop(watches);
+    });
 }
