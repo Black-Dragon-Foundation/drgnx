@@ -1163,6 +1163,11 @@ starts; allocates nothing."
   (let ((i (gethash key (drgnx-view--index view))))
     (and i (+ (marker-position (drgnx-view--start view)) (drgnx-view--at view i)))))
 
+(defun drgnx-view-row-end (view key)
+  "The buffer position where KEY's drawn row ends in VIEW (the next row's start), or nil."
+  (let ((i (gethash key (drgnx-view--index view))))
+    (and i (+ (marker-position (drgnx-view--start view)) (drgnx-view--at view (1+ i))))))
+
 (defun drgnx-view-row-count (view)
   "The number of rows in VIEW's buffer (between the slices of a draw, rows still to delete count too)."
   (- (drgnx-view--n view) (drgnx-view--empty view)))
@@ -1442,7 +1447,9 @@ older epoch, held.  RESYNC: non-nil while a `view/resync' is outstanding.  STALE
   (ids (make-hash-table :test #'equal))         ; node id → the keys of the rendered rows that hold its span
   (keys (make-hash-table :test #'equal))        ; row key → the node ids drawn in it (the class step's index)
   (spans (make-hash-table :test #'equal))       ; node id → the overlays of its class (drgnx-view-nav.el)
+  (dims (make-hash-table :test #'equal))        ; node id → t while its class is `dim' (drawn by runs: drgnx-view-nav.el)
   class-faces                                   ; the faces by class index, made by the class step; nil: again
+  dim-class                                     ; the index of the class `dim' when it has a face, made with CLASS-FACES
   (resyncs 0) (refits 0) (measures 0)           ; counters, for tests and the perf lab
   (classed 0))                                  ; the class step's overlays made and deleted (the perf lab's)
 
@@ -1597,6 +1604,7 @@ for the class's scale, so Emacs scales it no further (`:scale' 1, not `image-sca
           (clrhash table)
           (clrhash (drgnx-view-patch-ids state))
           (clrhash (drgnx-view-patch-keys state))
+          (clrhash (drgnx-view-patch-dims state))
           (dolist (r rows) (puthash (plist-get r :key) r table))
           (drgnx-view-reset view (drgnx-view-patch--keys rows))
           ;; a reset deletes every row, point with it: the draw's class step puts point back on the selection
@@ -2129,6 +2137,10 @@ Returns the view."
                                                            :ack (drgnx-view-type-ack ty)
                                                            :epoch-reset (drgnx-view-type-epoch-reset ty)))
       (drgnx-view-model--open drgnx-view-patch)
+      ;; rows are lines with no blank line between them: with the paragraph's direction left to Emacs, each redisplay
+      ;; after an edit above the window searches back to the buffer's start for the paragraph and scans its display
+      ;; properties through every overlay (650 ms at 6,800 rows).  Each line still reorders right-to-left text.
+      (setq-local bidi-paragraph-direction 'left-to-right)
       (puthash (cons view class) (current-buffer) drgnx-view-patch--buffers)
       (add-hook 'kill-buffer-hook #'drgnx-view-patch--killed nil t)
       (drgnx-view-patch--hooks)

@@ -38,7 +38,8 @@ sending captured, the notice method \"t/set\".  `h' is the buffer's instance in 
                (drgnx-timer-cancel (cons 'drgnx-view-model view)))))))))
 
 (defconst drgnx-view-nav-test--model
-  (concat "{\"ops\":[{\"reset\":{\"descriptor\":{\"scheme\":\"links\",\"chain_kinds\":[],\"match_fields\":[\"label\"],"
+  ;; a chain kind no edge has: the chain is the selection, every other card is dim
+  (concat "{\"ops\":[{\"reset\":{\"descriptor\":{\"scheme\":\"links\",\"chain_kinds\":[\"link\"],\"match_fields\":[\"label\"],"
           "\"lists\":[\"team\"],\"classes\":[\"selected\",\"match\",\"dim\"],\"start\":\"team\"},"
           "\"nodes\":[{\"id\":\"a\",\"kind\":\"card\",\"nav\":{\"right\":\"b\"},\"fields\":[[\"label\",\"alpha\"]]},"
           "{\"id\":\"b\",\"kind\":\"card\",\"nav\":{\"left\":\"a\"},\"fields\":[[\"label\",\"beta\"]]}],\"edges\":[],"
@@ -73,6 +74,49 @@ sending captured, the notice method \"t/set\".  `h' is the buffer's instance in 
     (should (equal '(shadow) (drgnx-view-nav-test--face-at (point-min))))
     (should (equal '(drgnx-view-selected) (drgnx-view-nav-test--face-at (+ (point-min) 4))))
     (should (= (point) (+ (point-min) 4)))))
+
+;; a search dims its non-matches over runs of whole rows: one overlay for consecutive dim rows, never one per row (a
+;; Run and Debug view of 6,400 rows had 6,400; the perf row `view-select-dim')
+(ert-deftest drgnx-view-nav/search-dims-non-matches-in-runs ()
+  "Pattern D: ten one-node rows, a search that matches the fifth: rows 1-4 and 6-10 are dim, each stretch one overlay,
+the match its own; the search cleared, nothing is dim."
+  (drgnx-view-nav-test--with
+    (let ((ids (mapcar (lambda (i) (format "n%d" i)) (number-sequence 1 10))))
+      (drgnx-view-model-event
+       (list :view view :hub 7 :base 1 :version 2 :reset t
+             :model (json-serialize
+                     (list :ops (vector (list :reset
+                                              (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"]
+                                                                      :lists ["order"] :classes ["selected" "match" "dim"]
+                                                                      :start "order")
+                                                    :nodes (vconcat (mapcar (lambda (id) (list :id id :kind "var"
+                                                                                               :fields (vector (vector "label" id))))
+                                                                            ids))
+                                                    :edges []
+                                                    :lists (vector (list :name "order" :ids (vconcat ids))))))))))
+      (drgnx-view-apply-patch
+       (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 1 :model 2
+             :ops (list (list :reset (mapcar (lambda (id) (list :key id :text (concat "row " id)
+                                                                :props (list (list 0 (+ 4 (length id)) "drgnx-work-id" id))))
+                                             ids)))))
+      (drgnx-view-draw-now drgnx-view)
+      (let ((at (lambda (n) (save-excursion (goto-char (point-min)) (forward-line (1- n)) (+ (point) 1))))
+            (runs (lambda () (cl-count-if (lambda (o) (overlay-get o 'drgnx-view-dim-run))
+                                          (overlays-in (point-min) (point-max))))))
+        (nidhogg-view-set h 'search "n5")
+        (drgnx-view-nav-class-step drgnx-view)
+        (should (equal '(drgnx-view-match) (drgnx-view-nav-test--face-at (funcall at 5))))
+        (dolist (n '(1 4 6 10)) (should (equal '(shadow) (drgnx-view-nav-test--face-at (funcall at n)))))
+        (should (= 2 (funcall runs)))
+        (should (= 3 (length (overlays-in (point-min) (point-max)))))
+        ;; the match moves: the two runs become one around it, then two again
+        (nidhogg-view-set h 'search "n10")
+        (drgnx-view-nav-class-step drgnx-view)
+        (should (equal '(shadow) (drgnx-view-nav-test--face-at (funcall at 5))))
+        (should (= 1 (funcall runs)))
+        (nidhogg-view-set h 'search nil)
+        (drgnx-view-nav-class-step drgnx-view)
+        (should-not (overlays-in (point-min) (point-max)))))))
 
 (defun drgnx-view-nav-test--drawn ()
   "What a redisplay of this buffer would show: its text ticks and its overlays with their properties."
@@ -187,8 +231,8 @@ was 100 kB a draw, and a walk of them all 8.7 % of work-live's samples)."
                     (puthash (format "k%d" i) (list (format "x%d" i)) keys))
                   (setq visited nil)
                   (let ((v0 (nth 2 (memory-use-counts))))
-                    (cl-letf (((symbol-function 'drgnx-view-nav--put-class) (lambda (_v id _c) (push id visited))))
-                      (drgnx-view-nav-class-step view '("r")))
+                    (cl-letf (((symbol-function 'drgnx-view-nav--put-class) (lambda (_v id _c _rows) (push id visited))))
+                      (drgnx-view-nav-class-step drgnx-view '("r")))
                     (- (nth 2 (memory-use-counts)) v0))))
         (let* ((few (cells 10)) (few-visited visited) (many (cells 1000)))
           (should (< (- many few) 100))

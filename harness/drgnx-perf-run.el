@@ -249,15 +249,26 @@ drawn in the command.  `drgnx-perf--dvh-stop' ends the session and the hub."
                             (list :expect "variables" :args (list :variablesReference 7) :ok (list :variables vars)))
                       pages
                       (list (list :expect "disconnect") (list :die t))))))))
+      (defvar drgnx-perf--dvh-prefix nil "The start the ids of the view's rows share, once a row was found.")
       (defun drgnx-perf--dvh-goto (suffix)
-        "Point to the row whose node's id ends in SUFFIX in the view's buffer; nil when there is none."
+        "Point to the row whose node's id ends in SUFFIX in the view's buffer; nil when there is none.  Once a row was
+found by a walk of the lines, the ids' common start is known and the next ones are looked up in the view's index of
+the rows that hold a node: the keys' own cost is the view's, not this lookup's (a user's Expand is at point)."
         (with-current-buffer drgnx-perf--dv-buf
-          (goto-char (point-min))
-          (let (found)
-            (while (and (not found) (not (eobp)))
-              (let ((id (get-text-property (point) drgnx-view-patch-id-prop)))
-                (if (and id (string-suffix-p suffix id)) (setq found (point)) (forward-line 1))))
-            found)))
+          (or (when-let* ((prefix drgnx-perf--dvh-prefix)
+                          (key (car (gethash (concat prefix suffix) (drgnx-view-patch-ids drgnx-view-patch))))
+                          (pos (drgnx-view-row-start drgnx-view key)))
+                (goto-char pos))
+              (progn
+                (goto-char (point-min))
+                (let (found)
+                  (while (and (not found) (not (eobp)))
+                    (let ((id (get-text-property (point) drgnx-view-patch-id-prop)))
+                      (if (and id (string-suffix-p suffix id))
+                          (setq found (point)
+                                drgnx-perf--dvh-prefix (substring id 0 (- (length id) (length suffix))))
+                        (forward-line 1))))
+                  found)))))
       (defun drgnx-perf--dvh-text ()
         (with-current-buffer drgnx-perf--dv-buf
           (buffer-substring-no-properties (point-min) (min (point-max) 300))))
@@ -271,6 +282,7 @@ drawn in the command.  `drgnx-perf--dvh-stop' ends the session and the hub."
       (defun drgnx-perf--dvh-start ()
         "A hub, the mock's session stopped, the view with `arr' open on its chunks; F8 bound."
         (when drgnx-perf--hub (drgnx-perf--dvh-stop))
+        (setq drgnx-perf--dvh-prefix nil)
         ;; `drgnx-perf--hub-start' without its agent profile (no `ratatoskr-mock' here: the adapter is the hub's own)
         (let ((dir (make-temp-file "drgnx-perf-hub" t)))
           (unless (and drgnx-perf--hub-bin (file-executable-p drgnx-perf--hub-bin))
@@ -337,6 +349,129 @@ drawn in the command.  `drgnx-perf--dvh-stop' ends the session and the hub."
               t
             (error "Premise: chunks %d, %d rows; %S" drgnx-perf--dv-chunk (count-lines (point-min) (point-max))
                    (drgnx-perf--dvh-text)))))
+      t)))
+
+(defun drgnx-perf-run--view-remove-above-form ()
+  "`view-remove-above' and `view-select-dim', as a form string after `drgnx-perf-run--debug-view-setup-form': the Run
+and Debug view's stand-in grown to 6,000 more rows (60 pages of 100 under `big', with their model nodes, each row with
+two align stops as the hub's rows have), a row named in Hebrew above them, a frame of the call stack selected and
+the side window at the end.  In `view-remove-above' F8 is what a view gets when a page far above the window closes
+and one below opens: the hub's patch removes the first page's 100 rows and inserts 100 at the end (and the model
+drops and adds their nodes), drawn.  In `view-select-dim' F8 selects the frame and searches for it (every other row
+dim), or clears both.  Any
+hub-fed view whose rows go above its window, or whose selection moves, takes these paths."
+  (prin1-to-string
+   '(progn
+      (defvar drgnx-perf--ra-first 0 "The first page still drawn.")
+      (defvar drgnx-perf--ra-next 0 "The next page to add.")
+      (defvar drgnx-perf--ra-keys 0 "The F8s run.")
+      (defconst drgnx-perf--ra-rtl "שלום-עולם.txt" "The row named right to left.")
+      (defun drgnx-perf--ra-row (id depth text)
+        "A row of the stand-in with two align stops, as the hub's rows have."
+        (nconc (drgnx-perf--dv-row id depth text) (list :stops '((2 40) (4 120)))))
+      (defun drgnx-perf--ra-page (p)
+        "Page P's nodes and rows."
+        (let (nodes rows)
+          (dotimes (k 100)
+            (let* ((i (+ (* p 100) k)) (id (format "v:p:Locals/big/%d" i)) (v (format "%d" (* i 3))))
+              (push (drgnx-perf--dv-node id "var" "v:p:Locals/big" (format "%d" i) v) nodes)
+              (push (drgnx-perf--ra-row id 3 (format "  %d: %s" i v)) rows)))
+          (list (nreverse nodes) (nreverse rows))))
+      (defun drgnx-perf--ra-ids (p)
+        (cl-loop for k below 100 collect (format "v:p:Locals/big/%d" (+ (* p 100) k))))
+      (defun drgnx-perf--ra-last-key ()
+        (if (= drgnx-perf--ra-next 0) "v:p:Locals/big"
+          (format "v:p:Locals/big/%d" (1- (* drgnx-perf--ra-next 100)))))
+      (defun drgnx-perf--ra-add ()
+        "One more page at the end."
+        (pcase-let ((`(,nodes ,rows) (drgnx-perf--ra-page drgnx-perf--ra-next)))
+          (let ((after (drgnx-perf--ra-last-key)))
+            (drgnx-perf--dv-model-send (list (list :nodes (vconcat nodes))))
+            (drgnx-perf--dv-rows-send (list (list :insert (list :after after :rows rows))))))
+        (cl-incf drgnx-perf--ra-next))
+      (defun drgnx-perf--ra-select ()
+        "Select the call stack's last frame (a node of the view's list), in the view's buffer."
+        (drgnx-view-nav 'select "f:p:1:19"))
+      (defun drgnx-perf--ra-start (key)
+        "The grown view; F8 runs KEY (`drgnx-perf--ra-shift' or `drgnx-perf--ra-toggle')."
+        (drgnx-perf--dv-start)
+        (setq drgnx-perf--ra-first 0 drgnx-perf--ra-next 0 drgnx-perf--ra-keys 0)
+        ;; a row named right to left, then `big': after the call stack, the last rows of the view
+        (drgnx-perf--dv-model-send
+         (list (list :nodes (vector (drgnx-perf--dv-node "v:p:Locals/rtl" "var" "v:p:Locals" drgnx-perf--ra-rtl "1")
+                                    (drgnx-perf--dv-node "v:p:Locals/big" "var" "v:p:Locals" "big" "list[6000]" t)))))
+        (drgnx-perf--dv-rows-send
+         (list (list :insert (list :after "f:p:1:19"
+                                   :rows (list (drgnx-perf--ra-row "v:p:Locals/rtl" 2 (concat drgnx-perf--ra-rtl ": 1"))
+                                               (drgnx-perf--ra-row "v:p:Locals/big" 2 "▾ big: list[6000]"))))))
+        (dotimes (_ 60) (drgnx-perf--ra-add))
+        (with-current-buffer drgnx-perf--dv-buf
+          (drgnx-view-draw-now drgnx-view)
+          ;; a frame selected: the view's classes drawn as in use; point and the window at the end
+          (drgnx-perf--ra-select)
+          (let ((w (get-buffer-window (current-buffer) t)))
+            (set-window-start w (save-excursion (goto-char (point-max)) (forward-line -40) (point)))
+            (set-window-point w (point-max))))
+        (global-set-key (kbd "<f8>") key)
+        t)
+      (defun drgnx-perf--ra-shift ()
+        "F8 of `view-remove-above': the first page's rows and nodes go, a page comes at the end, drawn."
+        (interactive)
+        (let ((gone (drgnx-perf--ra-ids drgnx-perf--ra-first)))
+          (drgnx-perf--dv-model-send (list (list :remove (vconcat gone))))
+          (drgnx-perf--dv-rows-send (list (list :remove gone)))
+          (cl-incf drgnx-perf--ra-first))
+        (drgnx-perf--ra-add)
+        (with-current-buffer drgnx-perf--dv-buf (drgnx-view-draw-now drgnx-view))
+        (cl-incf drgnx-perf--ra-keys))
+      (defun drgnx-perf--ra-toggle ()
+        "F8 of `view-select-dim': the frame selected and searched for (6,400 rows dim), or neither."
+        (interactive)
+        (with-current-buffer drgnx-perf--dv-buf
+          (let ((h (drgnx-view-patch-handle drgnx-view-patch)))
+            (if (drgnx-view-nav-selection)
+                (progn (nidhogg-view-set h 'search nil) (drgnx-view-nav 'select nil))
+              (nidhogg-view-set h 'search "fn_19")
+              (drgnx-perf--ra-select))))
+        (cl-incf drgnx-perf--ra-keys))
+      (defun drgnx-perf--ra-check (shifts)
+        "t when 100 keys ran (SHIFTS: each moved a page) and the view holds the last page; in `view-select-dim' the
+100th key left the frame searched for (every other row dim) and its overlays are bounded by the dim runs, not the rows; its paragraphs
+run left to right and the Hebrew row still reads right to left.  Else an error saying which."
+        (with-current-buffer drgnx-perf--dv-buf
+          (let ((last (format "  %d: " (1- (* drgnx-perf--ra-next 100))))
+                (w (get-buffer-window (current-buffer) t)))
+            (unless (and (= drgnx-perf--ra-keys 100)
+                         (save-excursion (goto-char (point-min)) (search-forward last nil t))
+                         (eq (and shifts t)
+                             (not (save-excursion (goto-char (point-min)) (search-forward "  0: 0\n" nil t)))))
+              (error "Premise: %d keys, %d lines, last %S" drgnx-perf--ra-keys (count-lines (point-min) (point-max)) last))
+            (let* ((all (overlays-in (point-min) (point-max)))
+                   (runs (cl-count-if (lambda (o) (overlay-get o 'drgnx-view-dim-run)) all))
+                   (levels (save-excursion
+                             (goto-char (point-min))
+                             (when (search-forward drgnx-perf--ra-rtl nil t)
+                               (set-window-start w (pos-bol))
+                               (redisplay t)
+                               ;; the levels of the screen lines shown: only the Hebrew row has right-to-left ones
+                               (with-selected-window w
+                                 (apply #'append (mapcar #'bidi-resolved-levels
+                                                         (number-sequence 0 (1- (window-body-height))))))))))
+              (cond ((and (not shifts) (= runs 0)) (error "Premise: the search dims no row"))
+                    ;; the class step's budget: the selection's and the match's overlays and a few dim runs
+                    ((> (length all) 16)
+                     (error "%d overlays (%d dim runs) over %d rows: the class step put one on every row" (length all)
+                            runs (count-lines (point-min) (point-max))))
+                    ((not (eq bidi-paragraph-direction 'left-to-right))
+                     (error "Paragraph direction %S: redisplay searches back for each paragraph's start"
+                            bidi-paragraph-direction))
+                    ((not (and bidi-display-reordering (cl-some #'cl-oddp levels)))
+                     (error "The Hebrew row is not reordered: levels %S" levels))
+                    (t t))))))
+      (defun drgnx-perf--ra-stop ()
+        (drgnx-perf--dv-stop)
+        (global-unset-key (kbd "<f8>"))
+        t)
       t)))
 
 (defun drgnx-perf-run--debug-console-setup-form ()
@@ -2316,6 +2451,22 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :actions ,(funcall keys "<f8>" 100)   ; p95 is judged from 100 samples
        :check "(drgnx-perf--dvh-check)"
        :teardown "(drgnx-perf--dvh-stop)")
+      ;; any hub-fed view: rows removed above the window (a page far above closes, one below opens) in a view of
+      ;; 6,000 rows, drawn within a frame: the redisplay after such a patch must not walk the buffer
+      (view-remove-above
+       :setup ,(concat "(progn " (drgnx-perf-run--debug-view-setup-form) " " (drgnx-perf-run--view-remove-above-form) " t)")
+       :each "(drgnx-perf--ra-start #'drgnx-perf--ra-shift)"
+       :actions ,(funcall keys "<f8>" 100)   ; p95 is judged from 100 samples
+       :check "(drgnx-perf--ra-check t)"
+       :teardown "(drgnx-perf--ra-stop)")
+      ;; any hub-fed view: its selection set and cleared in a view of 6,000 rows: the classes it draws are the
+      ;; selection's, not an overlay on every other row
+      (view-select-dim
+       :setup ,(concat "(progn " (drgnx-perf-run--debug-view-setup-form) " " (drgnx-perf-run--view-remove-above-form) " t)")
+       :each "(drgnx-perf--ra-start #'drgnx-perf--ra-toggle)"
+       :actions ,(funcall keys "<f8>" 100)
+       :check "(drgnx-perf--ra-check nil)"
+       :teardown "(drgnx-perf--ra-stop)")
       ;; the debug console (spec §10): a program's 10 MB of output as the hub batches it (64 KiB each), inserted with
       ;; the 10,000-line cap; no batch keeps the editor more than a frame
       (debug-console-flood
@@ -3049,7 +3200,7 @@ version and the commit, as JSON in FILE."
     ,@(mapcar (lambda (w) (cons w "graphical debugging: its allocation, CPU and rows are set from three pinned runs on the desktop island (the plan's perf step)"))
               '(debug-gutter-scroll debug-gutter-baseline debug-breakpoint-click debug-probe-flood debug-scrub
                                     debug-step-line debug-toolbar-show debug-step-variables debug-expand-chunks debug-console-flood
-                                    debug-bisect-typing))
+                                    debug-bisect-typing view-remove-above view-select-dim))
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))
     ,@(mapcar (lambda (w) (cons w "the Work space's rows are time budgets on the desktop island (typing p95 and the relative +1 ms rules); allocation, CPU and rows follow once the first runs set them"))
