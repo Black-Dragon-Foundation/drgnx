@@ -390,7 +390,9 @@ session gets a block of ports and its launch configuration becomes an attach the
   `block-FIRST` in `/private/tmp/drgnx-debug-ports/` (`/tmp/…` on Linux; made 1777, each file 0666, so every hub on
   the machine, another account's or a test hub, sees it; an existing directory that is not sticky is refused, since
   a held lock file could be deleted and its name locked again). The lock is held for the session's life and goes
-  with the process. Under it each port is bound once on 127.0.0.1, ::1 and 0.0.0.0 and let go; a block locked
+  with the process. A child forked by another thread shares the locked file until it execs, so the block's drop
+  unlocks it (`LOCK_UN`, which frees it for every copy) before closing: a block is free as soon as its session lets it
+  go. Under it each port is bound once on 127.0.0.1, ::1 and 0.0.0.0 and let go; a block locked
   elsewhere or with a port another process holds is passed over (the macOS runner had 47610 taken now and then), and
   when none is free the session is refused, naming the range. The block goes back when the session's launcher is
   dropped. Linux's reduced tier has no loopback flag, so no blocks.
