@@ -1353,7 +1353,9 @@ Every layer timer's Emacs function is `drgnx-timer--fire` with the entry as its 
 2. An owner that is gone (a module turned off, rolled back or run again; a dead buffer or process) drops the entry:
    FN is never called for it. A buffer made with `inhibit-buffer-hooks` runs no `kill-buffer-hook`, so its timers
    go here, at their next firing.
-3. A one-shot leaves the table before FN runs, so FN may start its key again.
+3. A one-shot leaves the table before FN runs, so FN may start its key again. It takes its own Emacs timer with it
+   (`drgnx-timer--drop`): an entry fired before its time, as the perf lab's settle does, leaves nothing pending
+   (test `drgnx-timer-prim/an-entry-fired-early-cancels-its-own-timer`).
 4. FN runs in `save-match-data`, with a buffer owner current. A one-shot `drgnx-timer-start` owned by a module runs
    as the module's code (`drgnx-modules--record-call`, as `drgnx-modules-with-owner` work does): what it changes is
    undone when the module is turned off. A repeating timer and every firing of the primitives (debounce, soon,

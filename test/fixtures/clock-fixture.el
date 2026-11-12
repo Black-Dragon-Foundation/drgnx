@@ -312,8 +312,14 @@ The whole list on every clock, so what a run leaves in its eln directory does no
     (drgnx-test--drop-emacs-timers)))
 
 (defun drgnx-test--call-with-clock (body allow-pending &optional auto)
-  "Run BODY (a function) on the virtual clock; see `drgnx-test-with-clock'."
+  "Run BODY (a function) on the virtual clock; see `drgnx-test-with-clock'.  The layer's reset runs once the real
+timer lists are back: an entry started before BODY has its Emacs timer there, which goes with the entry."
   (when drgnx-test--active (error "drgnx-test-with-clock: already inside one"))
+  (unwind-protect (drgnx-test--run-on-clock body allow-pending auto)
+    (when (fboundp 'drgnx-timer-reset) (ignore-errors (drgnx-timer-reset)))))
+
+(defun drgnx-test--run-on-clock (body allow-pending auto)
+  "`drgnx-test--call-with-clock' inside the virtual clock's own timer lists."
   (unless (or (drgnx-test--core-p) (drgnx-test--advice-clock-p))
     (error "drgnx-test-with-clock: here it runs on Nidhogg's test clock, in a batch Emacs with NIDHOGG_TEST_CLOCK=1"))
   (drgnx-test--warm-trampolines)
@@ -340,8 +346,7 @@ The whole list on every clock, so what a run leaves in its eln directory does no
                  (setq names (drgnx-test--pending-names))))
       (dolist (a advice) (advice-remove (nth 0 a) (nth 2 a)))
       (when drgnx-test--core (nidhogg-test-clock-stop))
-      (mapc #'cancel-timer (append timer-list timer-idle-list))
-      (when (fboundp 'drgnx-timer-reset) (ignore-errors (drgnx-timer-reset))))
+      (mapc #'cancel-timer (append timer-list timer-idle-list)))
     (when names
       (ert-fail (list "timers still pending at the end of drgnx-test-with-clock" names)))))
 

@@ -28,7 +28,7 @@ with ARGS), attached at `point-min', and an empty model."
   (declare (indent 1))
   `(let ((drgnx-view-test--model (make-hash-table :test #'equal)) (drgnx-view-test--order nil))
      (drgnx-view-test-with-type ('drgnx-view-test-t ,@(cdr spec))
-       (with-temp-buffer
+       (drgnx-view-test-with-buffer
          (let ((,(car spec) (drgnx-view-attach 'drgnx-view-test-t)))
            ,@body)))))
 
@@ -399,7 +399,7 @@ view drawn in the same pass gets no slice of its own: it draws its first 8 rows 
 fresh slice."
   (drgnx-view-test--with (v :render #'drgnx-view-test--slow-render :slice 0.004 :key-test 'eq)
     (drgnx-view-append v (number-sequence 1 100))
-    (with-temp-buffer
+    (drgnx-view-test-with-buffer
       (let ((w (drgnx-view-attach 'drgnx-view-test-t)) (drgnx-view-test--clock 0.0) (drgnx-view--deadline nil))
         (drgnx-view-append w (number-sequence 1 100))
         (unwind-protect
@@ -481,7 +481,7 @@ fresh slice."
 (ert-deftest drgnx-view/rows-are-read-only-but-text-above-start-is-not ()
   (drgnx-view-test-with-type ('drgnx-view-test-t :render #'drgnx-view-test--render)
     (let ((drgnx-view-test--model (make-hash-table)))
-      (with-temp-buffer
+      (drgnx-view-test-with-buffer
         (insert "header\n")
         (let ((v (drgnx-view-attach 'drgnx-view-test-t :start (point-max))))
           (should-not buffer-read-only)
@@ -499,7 +499,7 @@ fresh slice."
           (insert "z")                          ; just above START
           (should (equal "hexaderz\na: \nb: \n" (buffer-string)))
           (should-not (drgnx-view--check v))))
-      (with-temp-buffer
+      (drgnx-view-test-with-buffer
         (drgnx-view-attach 'drgnx-view-test-t)
         (should buffer-read-only)))))
 
@@ -575,7 +575,7 @@ fresh slice."
     (drgnx-view-test--with (v1 :render #'drgnx-view-test--render)
       (drgnx-view-append v1 '(a b c))
       (drgnx-view-draw-now v1)
-      (with-temp-buffer
+      (drgnx-view-test-with-buffer
         (let ((v2 (drgnx-view-attach 'drgnx-view-test-t)))
           (drgnx-view-append v2 '(a b c d))
           (drgnx-view-draw-now v2)
