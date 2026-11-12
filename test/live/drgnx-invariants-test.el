@@ -165,12 +165,12 @@ settled within 250 ms."
                           (drgnx-ui-call sess "(progn (when (drgnx-popup-active-p) (delete-window (drgnx-popup--window)))
                                                       (drgnx-uitest--json (list :ok t)))")
                           (drgnx-inv--probe sess))))
-            (unless (and (equal (plist-get after :geometry) (plist-get first :geometry))
+            (unless (and (equal (plist-get after :outer) (plist-get first :outer))   ; the Open section fits its rows
                          (= (plist-get after :frames) (plist-get first :frames))
                          (= (plist-get after :editors) 1)
                          (eq (plist-get after :editor-ok) t)        ; only files and their kind in the editor
                          (= 0 (plist-get r :guard_violations)))
-              (push (list form :geometry (plist-get after :geometry) :editor (plist-get after :editor-ok)
+              (push (list form :geometry (plist-get after :outer) :frames (plist-get after :frames) :editor (plist-get after :editor-ok)
                           :guard (plist-get r :guard))
                     bad))))
         (should-not bad)
@@ -187,7 +187,8 @@ settled within 250 ms."
                  (list :editor (vector (window-tab-line-height e) (window-header-line-height e) (window-mode-line-height e))
                        :panel (vector (window-tab-line-height p) (window-header-line-height p) (window-mode-line-height p)))))")
            (first (drgnx-ui-call sess q)))
-      (should (seq-every-p #'cl-plusp (plist-get first :editor)))
+      ;; a tab line and a breadcrumb; no mode line: the status bar is one window across the frame
+      (should (equal (seq-map #'cl-plusp (plist-get first :editor)) '(t t nil)))
       (should (= 0 (aref (plist-get first :panel) 2)))                  ; no mode line in the panel
       (dolist (form '("(ibuffer)" "(switch-to-buffer \"*scratch*\")"))
         (drgnx-ui-call sess (format "(progn (select-window (drgnx-wb-editor-window)) %s (drgnx-uitest--json (list :ok t)))" form))
@@ -248,7 +249,7 @@ settled within 250 ms."
                          (list :editor (vector (window-tab-line-height e) (window-header-line-height e) (window-mode-line-height e))
                                :dock (if d (window-pixel-width d) 0))))")
                    (first (drgnx-ui-call sess q)))
-              (should (seq-every-p #'cl-plusp (plist-get first :editor)))
+              (should (equal (seq-map #'cl-plusp (plist-get first :editor)) '(t t nil)))   ; the status bar is the frame's
               (should (> (plist-get first :dock) 0))
               (dotimes (_ 5) (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-b"))))
               (should (equal (drgnx-ui-call sess q) first))

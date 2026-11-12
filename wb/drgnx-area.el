@@ -203,8 +203,10 @@ and no other tab left one."
                buffer `((side . ,side) (slot . 0)
                         (,(if horizontal 'window-width 'window-height) . ,(plist-get spec :size))
                         (dedicated . drgnx)
+                        ;; no mode line from birth, as the chrome gives an area: the size Emacs preserves below is
+                        ;; the body without one, else the bar's own root-level window takes the difference
                         (window-parameters . ((drgnx-role . ,area) (no-delete-other-windows . t)
-                                              (no-other-window . t)
+                                              (no-other-window . t) (mode-line-format . none)
                                               (delete-window . drgnx-area--delete-window))))))))
     (when-let* ((px (frame-parameter nil (drgnx-area--px-param area))))
       (let ((window-resize-pixelwise t))             ; or the size is rounded to whole lines
