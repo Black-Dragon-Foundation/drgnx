@@ -84,6 +84,168 @@ would be bypassed by native code; the cost timed is the Lisp's, the C lights not
      (global-set-key (kbd \"<f9>\") #'drgnx-debug-gutter-toggle) t)"
           drgnx-ui-repo-dir))
 
+(defun drgnx-perf-run--debug-view-setup-form ()
+  "The Run and Debug view's workloads' setup, as a form string: the view's buffer attached as the hub-fed view `debug'
+in a side window, with no hub (`drgnx-view-patch-send-function' ignored): what the hub would send comes from here.
+The model and rows are the hub's shapes (view/debug/model.rs): VARIABLES, Locals with 300 variables (v0 to v299)
+and `arr', a 10,000-element list open in its 100 chunks, then CALL STACK with 20 frames.  `drgnx-perf--dv-step' is
+F10: a step's model diff (ten values changed) and its rows patch (those ten rows replaced), drawn.  F8 opens the next
+closed chunk: `debug/expand', answered here as the hub answers it (the chunk's 100 rows inserted, their nodes added),
+drawn before the command returns (the view's await finds them).  `drgnx-perf--dv-stop' undoes it."
+  (concat
+   (format "(progn (load (expand-file-name \"modules/extra/drgnx-debug\" %S) nil t) " drgnx-ui-repo-dir)
+   (prin1-to-string
+    '(progn
+       (require 'drgnx-view)
+       (require 'drgnx-view-nav)
+       (defvar drgnx-perf--dv-version 0)
+       (defvar drgnx-perf--dv-model 0)
+       (defvar drgnx-perf--dv-epoch 0)
+       (defvar drgnx-perf--dv-chunk 0)
+       (defvar drgnx-perf--dv-send nil)
+       (defvar drgnx-perf--dv-why nil "What the first F8 that sent nothing saw.")
+       (defvar drgnx-perf--dv-buf nil "The buffer the view's window shows (a twin of its display class).")
+       (defvar drgnx-perf--dv-class "unshown" "That buffer's display class: the rows patches name it.")
+       (defun drgnx-perf--dv-node (id kind parent label &optional value open)
+         (nconc (list :id id :kind kind :flags (if open 1 0))
+                (and parent (list :parent parent)) ; (nil would go out as {})
+                (list :fields (vconcat (delq nil (list (vector "label" label) (and value (vector "value" value))
+                                                       (and (member kind '("section" "scope" "chunk")) (vector "openable" 1))))))))
+       (defun drgnx-perf--dv-row (id depth text)
+         (let ((text (concat (make-string (* 2 depth) ?\s) text)))
+           (list :key id :text text :props (list (list 0 (length text) "drgnx-work-id" id)))))
+       (defun drgnx-perf--dv-value (i) (format "%d" (if (< i 10) (+ (* i 7) drgnx-perf--dv-epoch) (* i 7))))
+       (defun drgnx-perf--dv-model-send (ops &optional reset)
+         (drgnx-view-model-event (list :view "debug" :hub 7 :base drgnx-perf--dv-model
+                                       :version (cl-incf drgnx-perf--dv-model) :reset reset
+                                       :model (json-serialize (list :ops (vconcat ops))))))
+       (defun drgnx-perf--dv-rows-send (ops)
+         (drgnx-view-apply-patch (list :view "debug" :class drgnx-perf--dv-class :hub 7 :base drgnx-perf--dv-version
+                                       :version (cl-incf drgnx-perf--dv-version)
+                                       ;; the env epoch the window's class is at (an env sent holds older patches)
+                                       :env_epoch (or (drgnx-view-patch-epoch (buffer-local-value 'drgnx-view-patch drgnx-perf--dv-buf)) 0)
+                                       :model drgnx-perf--dv-model :ops ops)))
+       (defun drgnx-perf--dv-reset ()
+         "The view's first model and rows: Locals' 300 variables and the 100 closed chunks of `arr', the call stack."
+         (let (nodes order rows)
+           (cl-flet ((add (id kind parent label depth text &optional value open)
+                       (push (drgnx-perf--dv-node id kind parent label value open) nodes)
+                       (push id order)
+                       (push (drgnx-perf--dv-row id depth text) rows)))
+             (add "section:variables" "section" nil "VARIABLES" 0 "▾ VARIABLES" nil t)
+             (add "v:p:Locals" "scope" "section:variables" "Locals" 1 "▾ Locals" nil t)
+             (dotimes (i 300)
+               (let ((v (drgnx-perf--dv-value i)))
+                 (add (format "v:p:Locals/v%d" i) "var" "v:p:Locals" (format "v%d" i) 2 (format "  v%d: %s" i v) v)))
+             (add "v:p:Locals/arr" "var" "v:p:Locals" "arr" 2 "▾ arr: list[10000]" "list[10000]" t)
+             (dotimes (c 100)
+               (let ((id (format "v:p:Locals/arr/[%d..%d]" (* c 100) (+ (* c 100) 99))))
+                 (add id "chunk" "v:p:Locals/arr" (format "[%d … %d]" (* c 100) (+ (* c 100) 99)) 3
+                      (format "▸ [%d … %d]" (* c 100) (+ (* c 100) 99)))))
+             (add "section:callstack" "section" nil "CALL STACK" 0 "▾ CALL STACK" nil t)
+             (dotimes (f 20)
+               (add (format "f:p:1:%d" f) "frame" "section:callstack" (format "fn_%d" f) 1
+                    (format "  fn_%d  m.py %d:1" f (+ 10 f)))))
+           (drgnx-perf--dv-model-send
+            (list (list :reset (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"]
+                                                       :lists ["order"] :classes ["selected" "match" "dim" "ticked"]
+                                                       :flags ["expanded"] :forms [] :start "order")
+                                     :nodes (vconcat (nreverse nodes)) :edges []
+                                     :lists (vector (list :name "order" :ids (vconcat (nreverse order)))))))
+            t)
+           (drgnx-perf--dv-rows-send (list (list :reset (nreverse rows))))))
+       (defun drgnx-perf--dv-step ()
+         "F10: a step's stop, ten values changed (the hub's model diff and rows patch), drawn."
+         (interactive)
+         (cl-incf drgnx-perf--dv-epoch)
+         (let (nodes rows)
+           (dotimes (i 10)
+             (let ((id (format "v:p:Locals/v%d" i)) (v (drgnx-perf--dv-value i)))
+               (push (drgnx-perf--dv-node id "var" "v:p:Locals" (format "v%d" i) v) nodes)
+               (push (drgnx-perf--dv-row id 2 (format "  v%d: %s" i v)) rows)))
+           (drgnx-perf--dv-model-send (list (list :nodes (vconcat nodes))))
+           (drgnx-perf--dv-rows-send (list (list :replace rows))))
+         (with-current-buffer drgnx-perf--dv-buf (drgnx-view-draw-now drgnx-view)))
+       (defun drgnx-perf--dv-call (method params &optional _callback)
+         "`debug/expand' answered as the hub answers it: the chunk's model node open, its 100 elements' nodes and rows
+after it."
+         (when (equal method "debug/expand")
+           (let* ((chunk (plist-get params :node)) (start (* 100 drgnx-perf--dv-chunk)) nodes rows)
+             (dotimes (k 100)
+               (let* ((i (+ start k)) (id (format "%s/%d" chunk i)) (v (format "%d" (* i 3))))
+                 (push (drgnx-perf--dv-node id "var" chunk (format "%d" i) v) nodes)
+                 (push (drgnx-perf--dv-row id 4 (format "  %d: %s" i v)) rows)))
+             (setq nodes (nreverse nodes) rows (nreverse rows))
+             (drgnx-perf--dv-model-send
+              (list (list :nodes (vconcat (list (drgnx-perf--dv-node chunk "chunk" "v:p:Locals/arr"
+                                                                     (format "[%d … %d]" start (+ start 99)) nil t))
+                                          nodes))))
+             (drgnx-perf--dv-rows-send
+              (list (list :replace (list (drgnx-perf--dv-row chunk 3 (format "▾ [%d … %d]" start (+ start 99)))))
+                    (list :insert (list :after chunk :rows rows))))
+             (with-current-buffer drgnx-perf--dv-buf (drgnx-view-draw-now drgnx-view)))))
+       (defun drgnx-perf--dv-open ()
+         "F8: the next closed chunk of `arr' opened from its row, as the view's Expand does."
+         (interactive)
+         (with-current-buffer drgnx-perf--dv-buf
+           (let ((id (format "v:p:Locals/arr/[%d..%d]" (* 100 drgnx-perf--dv-chunk) (+ (* 100 drgnx-perf--dv-chunk) 99))))
+             (goto-char (point-min))
+             (while (and (not (eobp)) (not (equal id (get-text-property (point) drgnx-view-patch-id-prop))))
+               (forward-line 1))
+             (let ((before drgnx-perf--dv-version))
+               (drgnx-debug-view-expand)
+               (when (and (= before drgnx-perf--dv-version) (null drgnx-perf--dv-why))
+                 (setq drgnx-perf--dv-why
+                       (list :id id :at (get-text-property (pos-bol) drgnx-view-patch-id-prop)
+                             :selection (drgnx-view-nav-selection) :openable (drgnx-view-nav-field "openable" id)
+                             :kind (drgnx-debug-view--kind id) :open (drgnx-debug-view--open-p id)
+                             :model-last (ignore-errors (drgnx-view-model-last (gethash "debug" drgnx-view-model--views)))))))
+             (cl-incf drgnx-perf--dv-chunk))))
+       (defun drgnx-perf--dv-check (epoch chunk text)
+         "t when the keys made EPOCH steps and opened CHUNK chunks and the view shows TEXT; else an error saying what
+it holds."
+         (with-current-buffer drgnx-perf--dv-buf
+           (if (and (= drgnx-perf--dv-epoch epoch) (= drgnx-perf--dv-chunk chunk)
+                    (save-excursion (goto-char (point-min)) (search-forward text nil t)))
+               t
+             (error "Premise: steps %d, chunks %d, %d rows, model %d, rows %d; %S; %S … %S" drgnx-perf--dv-epoch
+                    drgnx-perf--dv-chunk (count-lines (point-min) (point-max)) drgnx-perf--dv-model
+                    drgnx-perf--dv-version drgnx-perf--dv-why (buffer-substring-no-properties (point-min) (min (point-max) 100))
+                    (key-binding (kbd "<f10>"))))))
+       (defun drgnx-perf--dv-start ()
+         (setq drgnx-perf--dv-send drgnx-view-patch-send-function drgnx-view-patch-send-function #'ignore
+               ;; the model's versions go on across workloads: Sjá keeps the view's model while the session lives
+               drgnx-perf--dv-version 0 drgnx-perf--dv-epoch 0 drgnx-perf--dv-chunk 0
+               drgnx-perf--dv-why nil)
+         (advice-add 'drgnx-debug-view--call :override #'drgnx-perf--dv-call)
+         (when (get-buffer drgnx-debug-view-buffer-name) (kill-buffer drgnx-debug-view-buffer-name))
+         (let ((w (cl-letf (((symbol-function 'drgnx-debug-launch-root) (lambda () "/nowhere")))
+                    (display-buffer (drgnx-debug-view--buffer)
+                                    '(display-buffer-in-side-window (side . left) (window-width . 48))))))
+           ;; the window's display class gets its own buffer (a twin) as its env goes out, as the sidebar's does
+           (drgnx-view-env-update "debug")
+           (setq drgnx-perf--dv-buf (window-buffer w))
+           (with-current-buffer drgnx-perf--dv-buf
+             (unless (and drgnx-view drgnx-view-patch)
+               (error "Premise: the Run and Debug view is not hub-fed (Sjá %s, attached %S): %S"
+                      (fboundp 'nidhogg-view--call) drgnx-view-patch
+                      (buffer-substring-no-properties (point-min) (min (point-max) 200))))
+             (setq drgnx-perf--dv-class (drgnx-view-patch-class drgnx-view-patch))))
+         (drgnx-perf--dv-reset)
+         (with-current-buffer drgnx-perf--dv-buf (drgnx-view-draw-now drgnx-view))
+         t)
+       (defun drgnx-perf--dv-stop ()
+         (advice-remove 'drgnx-debug-view--call #'drgnx-perf--dv-call)
+         (setq drgnx-view-patch-send-function drgnx-perf--dv-send)
+         (when-let* ((b (get-buffer drgnx-debug-view-buffer-name))) (kill-buffer b))
+         (when (buffer-live-p drgnx-perf--dv-buf) (kill-buffer drgnx-perf--dv-buf))
+         (global-unset-key (kbd "<f10>")) (global-unset-key (kbd "<f8>"))
+         t)
+       (global-set-key (kbd "<f10>") #'drgnx-perf--dv-step)
+       (global-set-key (kbd "<f8>") #'drgnx-perf--dv-open)
+       t))
+   ")"))
+
 (defun drgnx-perf-run--debug-timeline-setup-form ()
   "Recorded runs' workloads' setup: the timeline's files and `drgnx-hub-call' answered in the session: ten probes on
 the fixture (`debug/probe/op'), a run of 60 stops (`debug/run/get', with its strip rows) and each stop as it ran
@@ -1997,6 +2159,21 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :check "(and (= drgnx-perf--toolbar-n 120) (null drgnx-debug--sessions))"
        :teardown ,(concat "(progn (drgnx-debug-toolbar-delete-all) (drgnx-debug-session-mode -1)"
                           " (global-unset-key (kbd \"<f8>\")) (drgnx-perf--debug-stop) t)"))
+      ;; the Run and Debug view (spec §7): a step's model diff and rows patch, ten of 300 variables changed, drawn
+      ;; within 30 ms with the hub's half (the bench `debug_view'); a chunk of a 10,000-element list opened (100 rows
+      ;; inserted from the hub's answer) within 15 ms
+      (debug-step-variables
+       :setup ,(drgnx-perf-run--debug-view-setup-form)
+       :each "(drgnx-perf--dv-start)"
+       :actions ,(funcall keys "<f10>" 120)   ; p95 is judged from 100 samples
+       :check "(drgnx-perf--dv-check 120 0 \"v0: 120\")"
+       :teardown "(drgnx-perf--dv-stop)")
+      (debug-expand-chunks
+       :setup ,(drgnx-perf-run--debug-view-setup-form)
+       :each "(drgnx-perf--dv-start)"
+       :actions ,(funcall keys "<f8>" 100)   ; p95 is judged from 100 samples
+       :check "(drgnx-perf--dv-check 0 100 \"9999: 29997\")"
+       :teardown "(drgnx-perf--dv-stop)")
       ;; recorded runs (spec §19.9): a batch of probe hits (100, ten probes, at the hub's 20 batches a second: 2,000 hits a
       ;; second) to the sparklines at the lines' ends, 40 batches, within 100 ms each
       (debug-probe-flood
@@ -2721,7 +2898,7 @@ version and the commit, as JSON in FILE."
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "graphical debugging: its allocation, CPU and rows are set from three pinned runs on the desktop island (the plan's perf step)"))
               '(debug-gutter-scroll debug-gutter-baseline debug-breakpoint-click debug-probe-flood debug-scrub
-                                    debug-step-line debug-toolbar-show
+                                    debug-step-line debug-toolbar-show debug-step-variables debug-expand-chunks
                                     debug-bisect-typing))
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))

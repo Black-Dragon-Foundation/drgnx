@@ -107,6 +107,9 @@ struct Data {
     /// The exception filters chosen, per adapter type.
     #[serde(default)]
     filters: BTreeMap<String, Vec<String>>,
+    /// The Run and Debug view's watch expressions, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    watches: Vec<String>,
 }
 
 /// What one session's adapter made of a breakpoint.
@@ -602,6 +605,17 @@ impl Store {
             .filter(|(s, _)| s == session)
             .map(|(_, p)| p.clone())
             .collect()
+    }
+
+    /// The watch expressions, in order.
+    pub fn watches(&self) -> Vec<String> {
+        self.data.watches.clone()
+    }
+
+    /// The watch expressions are now LIST.
+    pub fn set_watches(&mut self, list: Vec<String>) {
+        self.data.watches = list;
+        self.save();
     }
 
     /// The exception filters chosen for adapters of type TY.

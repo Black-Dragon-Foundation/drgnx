@@ -368,6 +368,66 @@ The session's controls, drawn from `drgnx-debug--sessions` at each `debug-state`
 
 Tests: `test/unit/debug-toolbar-test.el`; perf row `debug-toolbar-show` (120 shows and hides, p95 ≤ 5 ms).
 
+## The Run and Debug view (spec §7)
+
+A sidebar view the hub builds, as the Explorer is (Sjá: the hub sends the model and the rows; keys answer from the
+replica in the key's own frame). Hub: `view/debug.rs` keeps each (connection, view)'s state and builds it; the pure
+parts are `view/debug/model.rs` (the lines, the model, the requests that fill it) and `view/debug/rows.rs` (the rows).
+Editor: `modules/extra/drgnx-debug-view.el`, the section `run-and-debug` of the sidebar view `debug`
+(`drgnx-debug-view`, also the status bar's debug segment's click).
+
+- **Sections:** VARIABLES (the selected session's scopes: a cheap scope open with the variables its stop fetched, an
+  `expensive` one closed and fetched when opened), WATCH, CALL STACK (sessions only when two or more → threads →
+  frames), BREAKPOINTS (each adapter type's exception filters as tick boxes, function breakpoints, each file's source
+  breakpoints: tick = enabled, dim = unverified, the adapter's message as a field). Each header opens and closes.
+- **Node ids are paths, stable across stops:** `v:SESSION:SCOPE/NAME/…`, chunks `…/[100..199]`, watches `w:EXPR`,
+  threads `t:SESSION:THREAD`, frames `f:SESSION:THREAD:N` (their place in the stack), hidden runs `h:…:N`, more frames
+  `m:SESSION:THREAD`, filters `x:TYPE:FILTER`, `fn:NAME`, `b:ID`. A `/` or `%` in a name is escaped; a name seen twice
+  under a parent gets `#2`. So a step's model diff (`Doc::diff`) and row patch carry only what changed, and the
+  editor's selection survives it.
+- **Open nodes** are kept per view (each node has a default: sections, cheap scopes, the stopped thread and sessions
+  open; the user's opening or closing wins). At each stop the hub fetches the open paths again, breadth first
+  (`model::wants`), at most `FETCH_CAP` = 200 calls (`variables`, or `stackTrace` for another thread's frames); past
+  it a node is shown closed with "expand again", and opening it fetches it past the cap. A fetch that fails is kept
+  with its message and not asked again in that stop.
+- **Paging:** a node with more than 100 `indexedVariables` lists its named children (`filter: named`, unless
+  `namedVariables` is 0), then chunks; past 100 chunks the chunk size grows by 100 (100,000 is ten chunks of 10,000,
+  each a hundred of 100). Only an opened leaf chunk is fetched (`filter: indexed`, `start`, `count`).
+- **Lazy values** (`presentationHint.lazy`) show `(…)`; opened, the one child's value shows in their place (its own
+  children then come from `PATH/(…)`).
+- **Changed values:** the selected session's values at its last stop are kept by `evaluateName` (else path); a value
+  that differs now is drawn in `drgnx-debug-view-changed`. A new value is not marked.
+- **Running again:** the last stop's nodes stay, dim, and fetch nothing (`Line::dim`; the editor refuses to open them)
+  until the next stop.
+- **Watch:** the project's expressions, saved with its breakpoints (`Store::watches`), evaluated in the selected
+  frame (`context: watch`) once per stop and frame and after every change of the list; an error is kept as its
+  message (`drgnx-debug-view-error`).
+- **Call Stack:** a thread's chip says why it stopped (`PAUSED ON BREAKPOINT`, `… EXCEPTION`, `… STEP`, `… ENTRY`)
+  or `PAUSED` / `RUNNING`; a run of two or more `subtle` (or `deemphasize`d) frames folds into "N frames hidden";
+  `label` frames are dim separators; "Load more frames" (`debug/expand` on the `m:` node) fetches the next page
+  (`Handle::more_frames`), kept with the view.
+- **Filter on typing:** `debug/view`'s `filter` keeps the rows whose label or value contains it (any case), the rows
+  above them and the section headers (`model::filter`).
+- **Rebuilds:** `Debug::on_change` listeners are told at every `debug-state` and breakpoint change; the views build
+  again, one at a time (a change meanwhile builds once more), and a class that sends its env gets the last lines.
+
+Methods (runstav `methods::debug`, the user class; served by `view::debug::serve`):
+
+- `debug/view {view, root, session?, indent?, filter?}` → bool: show ROOT's view (the open nodes are kept while the
+  root is the same).
+- `debug/expand {view, node, open}` → bool.
+- `debug/watch {root, op: add | edit | remove | move, index?, expr?, to?}` → the list.
+- `debug/set-value {view, node, value}` → `{value}`: `setExpression` when the adapter has it and the node an
+  `evaluateName`, else `setVariable` on the parent's reference; the view's fetched values are then fetched again.
+- `debug/evaluate {session, frame?, expr, context: repl | hover | clipboard | watch}` → `{result, type?, reference?}`
+  (Copy Value uses `clipboard` when the adapter has `supportsClipboardContext`).
+- `debug/breakpoints`' ops `filter {adapter, name, enabled}` (kept per adapter type and sent to its sessions at once),
+  `enable-all {enabled}` and `remove-all` (function breakpoints too).
+
+The editor's half asks on the connection the rows come on (`drgnx-hub--events`): the hub keeps the view per
+connection. A key that opens or closes a node waits up to `drgnx-debug-view-await-limit` (12 ms) for the rows, so
+they show in the key's own frame. The header line holds Start (▶) and the configuration picker.
+
 ## Live adapters: the image
 
 The tests that run real adapters (debugpy, js-debug, delve, lldb-dap) use `drgnx-debug-adapters:f45`, built from

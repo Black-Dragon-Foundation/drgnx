@@ -79,6 +79,14 @@ you put it in that frame. With two sessions or more, its chip picks the one the 
 toolbar. The status bar names the session and its state, and a **Paused** chip in the title row takes you back to the
 stopped line.
 
+**Run and Debug** (C-S-d in VS Code keys; the status bar's debug segment) is a sidebar view with four sections:
+**Variables** (the stopped frame's scopes; values that changed since the last stop are highlighted, big arrays open in
+pages of 100), **Watch** (expressions kept per project, evaluated at every stop), **Call Stack** (threads and frames;
+pick a frame to move the editor and the variables to it) and **Breakpoints** (exception filters and every breakpoint,
+each with a tick box). Arrow keys move and open, RET acts on the row, typing after `C-M-f` (`/` in the Emacs and Vim
+profiles) filters it, F2 (`e`, `c`) sets a value; Copy Value, Copy as Expression and Add to Watch are in the
+palette. Its header starts the configuration picked there. While the program runs, the last stop's values stay, dimmed.
+
 Breakpoints live in a column left of the line numbers, kept per project (they survive restarts and reach a running
 session at once). Click the column to add or remove one, shift-click for a logpoint (a message printed instead of
 a stop; `{expression}` is replaced by its value), right-click for the line's menu: a condition, a hit count, a log

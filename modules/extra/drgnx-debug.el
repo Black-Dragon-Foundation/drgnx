@@ -18,6 +18,7 @@
 (require 'drgnx-debug-bisect (expand-file-name "drgnx-debug-bisect" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-origin (expand-file-name "drgnx-debug-origin" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-toolbar (expand-file-name "drgnx-debug-toolbar" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-debug-view (expand-file-name "drgnx-debug-view" (file-name-directory (macroexp-file-name))))
 (defvar drgnx-statusbar-left)
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (defvar drgnx-hub-event-functions)
@@ -107,6 +108,7 @@ the toolbar's cards go too."
 
 (defun drgnx-debug--teardown ()
   "The session keys go with the module (a running session turned them on, not the setup), and the column."
+  (drgnx-debug-view--teardown)
   (drgnx-debug-session-mode -1)
   (drgnx-debug-timeline-mode -1)
   (drgnx-debug-bisect-events-mode -1)
@@ -194,6 +196,16 @@ the toolbar's cards go too."
                                                       (if (memq 'branch drgnx-statusbar-left)
                                                           (append (butlast drgnx-statusbar-left (length tail)) '(debug) tail)
                                                         (cons 'debug drgnx-statusbar-left))))))
+                              ;; Run and Debug: the sidebar view the hub builds (drgnx-debug-view.el); its row keys in
+                              ;; its own map
+                              (drgnx-wb-define-section 'run-and-debug :view 'debug :slot 0 :title " RUN AND DEBUG"
+                                                       :buffer #'drgnx-debug-view--buffer)
+                              (let ((in-view (lambda () (derived-mode-p 'drgnx-debug-view-mode))))
+                                (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-view-commands)
+                                  (if (memq id drgnx-debug-view-global-commands)
+                                      (drgnx-command-define id :category "Debug" :title title :command fn :doc doc)
+                                    (drgnx-command-define id :category "Debug" :title title :command fn :doc doc
+                                                          :map 'drgnx-debug-view-mode-map :when in-view))))
                               ;; recorded runs: probes, the stop timeline, past stops (drgnx-debug-timeline.el)
                               (drgnx-debug-timeline-mode 1)
                               (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-timeline-commands)
