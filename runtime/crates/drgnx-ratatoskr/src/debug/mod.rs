@@ -1114,6 +1114,20 @@ impl Debug {
 
     /// OP on session ID. A stop or disconnect stops its children first and resolves once all have ended.
     /// The text of SESSION's source REFERENCE (a frame with no file): `{text, mime?}`.
+    /// Session ID's handle and its adapter's capabilities; refused while the adapter has not given them (the
+    /// session is starting: the editors offer what needs them once `debug-state` shows them).
+    pub fn handle_caps(&self, id: &str) -> Result<(Handle, Value), String> {
+        let (h, caps) = lock(&self.inner.state)
+            .sessions
+            .get(id)
+            .map(|e| (e.handle.clone(), e.caps.clone()))
+            .ok_or_else(|| format!("no debug session {id}"))?;
+        if caps.is_null() {
+            return Err(format!("debug session {id} is still starting"));
+        }
+        Ok((h, caps))
+    }
+
     /// Where on PATH's LINE session ID's adapter can stop, as `breakpointLocations` gives it (UTF-16 columns); none
     /// when the adapter cannot say.
     pub async fn breakpoint_locations(
@@ -1122,11 +1136,7 @@ impl Debug {
         path: &str,
         line: u32,
     ) -> Result<Vec<Value>, String> {
-        let (h, caps) = lock(&self.inner.state)
-            .sessions
-            .get(id)
-            .map(|e| (e.handle.clone(), e.caps.clone()))
-            .ok_or_else(|| format!("no debug session {id}"))?;
+        let (h, caps) = self.handle_caps(id)?;
         if caps
             .get("supportsBreakpointLocationsRequest")
             .and_then(Value::as_bool)

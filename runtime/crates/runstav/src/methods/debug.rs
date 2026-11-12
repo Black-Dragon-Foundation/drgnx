@@ -208,6 +208,86 @@ pub struct DebugBreakpointLocationsList {
     pub locations: Vec<BreakpointLocation>,
 }
 
+/// `debug/completions`: the Debug Console's completions for TEXT with point at COLUMN (0-based, in characters), in
+/// FRAME (the stopped one when none).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugCompletions {
+    pub session: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<i64>,
+    pub text: String,
+    pub column: u32,
+}
+
+/// One completion: LABEL, the TEXT it inserts when not the label, its TYPE, and the span of the text it replaces
+/// (START and LENGTH, 0-based characters) when the adapter gave one.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct CompletionTarget {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub ty: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<u32>,
+}
+
+/// `debug/completions`' answer: the TARGETS in the adapter's order; none when it has no completions
+/// (`supportsCompletionsRequest`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugCompletionList {
+    pub targets: Vec<CompletionTarget>,
+}
+
+/// `debug/read-memory`: COUNT bytes (at most [`READ_MEMORY_MAX`]) at OFFSET from SESSION's memory REFERENCE (a
+/// variable's `memoryReference`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugReadMemory {
+    pub session: String,
+    pub reference: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<i64>,
+    pub count: u32,
+}
+
+/// The most bytes one `debug/read-memory` reads.
+pub const READ_MEMORY_MAX: u32 = 64 * 1024;
+
+/// `debug/read-memory`'s answer: the first byte's ADDRESS, the DATA read (base64; empty when none could be), and how
+/// many bytes after it could not be read.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugMemory {
+    pub address: String,
+    pub data: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreadable: Option<u64>,
+}
+
+/// `debug/write-memory`: DATA (base64) written at OFFSET from SESSION's memory REFERENCE; ALLOW_PARTIAL lets the
+/// adapter write what it can.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugWriteMemory {
+    pub session: String,
+    pub reference: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<i64>,
+    pub data: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_partial: Option<bool>,
+}
+
+/// `debug/write-memory`'s answer, as the adapter gave it: where the write began (OFFSET from the reference) and how
+/// many bytes it WROTE.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugMemoryWritten {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub written: Option<u64>,
+}
+
 /// `debug/source`: the text of SESSION's source REF (a frame whose source has no file: `sourceReference`).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct DebugSource {
@@ -617,6 +697,33 @@ fn check_breakpoint_locations(p: &DebugBreakpointLocations) -> Result<(), Error>
     Ok(())
 }
 
+fn check_completions(p: &DebugCompletions) -> Result<(), Error> {
+    check_text("session", &p.session)?;
+    if p.column as usize > p.text.chars().count() {
+        return Err(invalid("column", "a position in text"));
+    }
+    Ok(())
+}
+
+fn check_read_memory(p: &DebugReadMemory) -> Result<(), Error> {
+    check_text("session", &p.session)?;
+    check_text("reference", &p.reference)?;
+    if p.count == 0 || p.count > READ_MEMORY_MAX {
+        return Err(invalid("count", "1 to 65536 bytes"));
+    }
+    Ok(())
+}
+
+fn check_write_memory(p: &DebugWriteMemory) -> Result<(), Error> {
+    check_text("session", &p.session)?;
+    check_text("reference", &p.reference)?;
+    let b64 = |c: char| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=');
+    if p.data.is_empty() || !p.data.len().is_multiple_of(4) || !p.data.chars().all(b64) {
+        return Err(invalid("data", "base64 bytes"));
+    }
+    Ok(())
+}
+
 fn check_install(p: &DebugInstall) -> Result<(), Error> {
     check_text("adapter", &p.adapter)
 }
@@ -839,6 +946,24 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "a project's trust changed: a project never told trusted runs no configuration, and revoking trust stops its sessions",
             check: check_trust,
+        ),
+        method!(
+            "debug/completions", DebugCompletions(DebugCompletions) -> DebugCompletionList,
+            classes: [User], writes: false,
+            doc: "the Debug Console's completions for its text at point, from the adapter; none when it has none",
+            check: check_completions,
+        ),
+        method!(
+            "debug/read-memory", DebugReadMemory(DebugReadMemory) -> DebugMemory,
+            classes: [User], writes: false,
+            doc: "bytes of the debugged program's memory at a variable's memory reference (at most 64 KiB), for the memory view",
+            check: check_read_memory,
+        ),
+        method!(
+            "debug/write-memory", DebugWriteMemory(DebugWriteMemory) -> DebugMemoryWritten,
+            classes: [User], writes: false,
+            doc: "write bytes into the debugged program's memory at a variable's memory reference, from the memory view",
+            check: check_write_memory,
         ),
         method!(
             "debug/breakpoint-locations", DebugBreakpointLocations(DebugBreakpointLocations) -> DebugBreakpointLocationsList,

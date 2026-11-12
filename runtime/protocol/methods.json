@@ -12047,6 +12047,104 @@
       "classes": [
         "user"
       ],
+      "doc": "the Debug Console's completions for its text at point, from the adapter; none when it has none",
+      "name": "debug/completions",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/completions`: the Debug Console's completions for TEXT with point at COLUMN (0-based, in characters), in\nFRAME (the stopped one when none).",
+        "properties": {
+          "column": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "frame": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "session": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "text",
+          "column"
+        ],
+        "title": "DebugCompletions",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "CompletionTarget": {
+            "description": "One completion: LABEL, the TEXT it inserts when not the label, its TYPE, and the span of the text it replaces\n(START and LENGTH, 0-based characters) when the adapter gave one.",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "length": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "label"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/completions`' answer: the TARGETS in the adapter's order; none when it has no completions\n(`supportsCompletionsRequest`).",
+        "properties": {
+          "targets": {
+            "items": {
+              "$ref": "#/$defs/CompletionTarget"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "targets"
+        ],
+        "title": "DebugCompletionList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the launch configurations the Start picker shows for a project: launch.json's (a syntax error with its line and column), the user's own, and the adapters' defaults for the file's language once the project is trusted",
       "name": "debug/configs",
       "params": {
@@ -12931,6 +13029,71 @@
       "classes": [
         "user"
       ],
+      "doc": "bytes of the debugged program's memory at a variable's memory reference (at most 64 KiB), for the memory view",
+      "name": "debug/read-memory",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/read-memory`: COUNT bytes (at most [`READ_MEMORY_MAX`]) at OFFSET from SESSION's memory REFERENCE (a\nvariable's `memoryReference`).",
+        "properties": {
+          "count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "offset": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reference": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "reference",
+          "count"
+        ],
+        "title": "DebugReadMemory",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/read-memory`'s answer: the first byte's ADDRESS, the DATA read (base64; empty when none could be), and how\nmany bytes after it could not be read.",
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "data": {
+            "type": "string"
+          },
+          "unreadable": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "address",
+          "data"
+        ],
+        "title": "DebugMemory",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "Run to Cursor: a session stops once at a line (a breakpoint for it alone, gone at its next stop), continuing if it is stopped",
       "name": "debug/run-to-cursor",
       "params": {
@@ -13576,6 +13739,72 @@
         },
         "title": "Array_of_string",
         "type": "array"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "write bytes into the debugged program's memory at a variable's memory reference, from the memory view",
+      "name": "debug/write-memory",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/write-memory`: DATA (base64) written at OFFSET from SESSION's memory REFERENCE; ALLOW_PARTIAL lets the\nadapter write what it can.",
+        "properties": {
+          "allow_partial": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "string"
+          },
+          "offset": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reference": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "reference",
+          "data"
+        ],
+        "title": "DebugWriteMemory",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/write-memory`'s answer, as the adapter gave it: where the write began (OFFSET from the reference) and how\nmany bytes it WROTE.",
+        "properties": {
+          "offset": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "written": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "DebugMemoryWritten",
+        "type": "object"
       },
       "writes": false
     },
