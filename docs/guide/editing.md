@@ -114,7 +114,7 @@ Every session is recorded, against a snapshot of the files as they were when it 
 expression each time its line runs, without stopping the program and without printing anything; **Probe the
 Result…** records what the line assigns, on the next line that runs (a probe runs before its line). A probe is a
 ring with a dot in its own column, and its newest values show at the line's end as a sparkline and the last value.
-A file opened while no hub runs opens without its probes.
+A file opened while no hub runs opens without its probes and breakpoints.
 **Show Stop Timeline** opens a strip at the top: the run's stops, numbered (a dot for a breakpoint, a small dot for a
 step, a triangle for an exception), and one lane per probe. Click a stop (or `RET` on it), or press `Alt ←` / `Alt →` in the strip or
 a past stop, to open it read-only: the file as it ran under a banner (it says "not what ran" when

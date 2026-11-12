@@ -40,10 +40,9 @@
 (declare-function drgnx-extensions-recommend-ids "drgnx-extensions-recommend")
 (defvar drgnx-extensions-review)
 (declare-function drgnx-extensions-details-open "drgnx-extensions-details")
-(declare-function drgnx-extensions-details-generation-keys "drgnx-extensions-details")
-(declare-function drgnx-extensions-details-generation-row "drgnx-extensions-details")
-(declare-function drgnx-extensions-details-generations "drgnx-extensions-details")
 (declare-function drgnx-extensions-details-forget-generations "drgnx-extensions-details")
+(declare-function drgnx-extensions-details-generations "drgnx-extensions-details")
+(declare-function drgnx-extensions-details-copies-note "drgnx-extensions-details")
 (defvar drgnx-extensions-jobs-changed-functions)
 (defvar drgnx-extensions-recommended)
 (defvar drgnx-packages-off)
@@ -110,11 +109,9 @@ word that starts with @ and is none of these is listed under :unknown, never an 
 
 ;;;; The model: rows by id, the sections that hold them, what the job layer says
 
-(defvar drgnx-extensions-list--rows (make-hash-table :test 'equal)
-  "Row id → its row plist, as the hub sent it (:state, :kind and :signed as symbols).  Emptied by the reset.")
-
 (defvar drgnx-extensions-list--sections nil
-  "Alist SECTION → (:ids IDS :total N): the rows loaded for each section.  `search' holds the typed query's.")
+  "Alist SECTION → (:total N :loaded N): what the hub matched for each section and how many of its rows the list holds.
+`search' is the typed query's.")
 
 (defvar drgnx-extensions-list--jobs (make-hash-table :test 'equal)
   "Row id → the job layer's state for it (`drgnx-extensions-jobs-state'), kept by its changed-functions.")
@@ -128,9 +125,6 @@ word that starts with @ and is none of these is listed under :unknown, never an 
 (defvar drgnx-extensions-list--error nil "The text of the last search the hub could not answer, or nil.")
 (defvar drgnx-extensions-list--restart nil "The ids that wait for a restart (a cached copy of the live layer's answer).")
 (defvar drgnx-extensions-list--updates 0 "How many updates the last unfiltered search found: the status bar's number.")
-(defvar drgnx-extensions-list--installed-ids nil
-  "Installed's ids without the rows that wait in Updates, made once per answer: emptied by the reset and by each
-answer the hub sends (which may change a row's state).")
 (defvar drgnx-extensions-list--root nil
   "The root of the project the list or a page was last opened from (a file buffer's), or nil: where `p' and a page's
 toggle turn a package off, and what @this-project reads.")
@@ -142,12 +136,11 @@ toggle turn a package off, and what @this-project reads.")
 
 (defun drgnx-extensions-list--reset ()
   "Forget every row, section, job state and query."
-  (clrhash drgnx-extensions-list--rows)
   (clrhash drgnx-extensions-list--jobs)
   (clrhash drgnx-extensions-list--asked)
   (maphash (lambda (_ ov) (delete-overlay ov)) drgnx-extensions-list--chips)
   (clrhash drgnx-extensions-list--chips)
-  (setq drgnx-extensions-list--sections nil drgnx-extensions-list--installed-ids nil drgnx-extensions-list--limits nil
+  (setq drgnx-extensions-list--sections nil drgnx-extensions-list--limits nil
         drgnx-extensions-list--query "" drgnx-extensions-list--parsed nil
         drgnx-extensions-list--error nil drgnx-extensions-list--restart nil drgnx-extensions-list--updates 0
         drgnx-extensions-list--epoch (1+ drgnx-extensions-list--epoch)))
@@ -174,47 +167,6 @@ toggle turn a package off, and what @this-project reads.")
   '((installed . "Installed") (updates . "Updates") (recommended . "Recommended") (plugins . "Plugins")
     (builtin . "Built-in") (search . "Search results") (generations . "Generations"))
   "SECTION → the header's text.")
-
-(defun drgnx-extensions-list--section-ids (section)
-  "The ids SECTION shows: a row with an update waits in Updates, not in Installed."
-  (let ((ids (plist-get (cdr (assq section drgnx-extensions-list--sections)) :ids)))
-    (if (eq section 'installed)
-        (or drgnx-extensions-list--installed-ids
-            (setq drgnx-extensions-list--installed-ids
-                  (cl-remove-if (lambda (id) (eq (plist-get (gethash id drgnx-extensions-list--rows) :state) 'update)) ids)))
-      ids)))
-
-(defun drgnx-extensions-list--keys ()
-  "The keys of the rows the view shows now, in order: a header (`(section . NAME)') then its row ids, one row once.
-While a query is typed: the search results alone, or with @generations the generations."
-  (cond ((memq 'generations (plist-get (drgnx-extensions-list--parsed) :local))
-         (and (fboundp 'drgnx-extensions-details-generation-keys) (drgnx-extensions-details-generation-keys)))
-        ((drgnx-extensions-list--typed-p)
-         (cons (cons 'section 'search) (drgnx-extensions-list--section-ids 'search)))
-        (t
-         (let ((seen (make-hash-table :test 'equal)) (out nil))
-           (dolist (s drgnx-extensions-list--sections-order)
-             (let ((ids (cl-remove-if (lambda (id) (gethash id seen)) (drgnx-extensions-list--section-ids s))))
-               (when ids
-                 (push (cons 'section s) out)
-                 (dolist (id ids) (puthash id t seen) (push id out)))))
-           (nconc (nreverse out)
-                  (and (fboundp 'drgnx-extensions-details-generation-keys) (drgnx-extensions-details-generation-keys)))))))
-
-(defun drgnx-extensions-list--receive (section rows total offset)
-  "The hub answered a search for SECTION with ROWS (TOTAL matched), starting at OFFSET: keep them and show them."
-  (let ((ids (mapcar (lambda (r)
-                       (let ((n (drgnx-extensions-list--normalize r)))
-                         (puthash (plist-get n :id) n drgnx-extensions-list--rows)
-                         (plist-get n :id)))
-                     rows))
-        (old (plist-get (cdr (assq section drgnx-extensions-list--sections)) :ids)))
-    (setq drgnx-extensions-list--sections
-          (cons (cons section (list :ids (if (> offset 0) (append old ids) ids) :total total))
-                (assq-delete-all section drgnx-extensions-list--sections))
-          drgnx-extensions-list--installed-ids nil)
-    (when (eq section 'updates) (setq drgnx-extensions-list--updates total))
-    (drgnx-extensions-list--changed)))
 
 ;;;; Asking the hub
 
@@ -268,25 +220,11 @@ global `drgnx-extensions-recommended'."
                (list :offset (or offset 0) :limit drgnx-extensions-list--page)))))
 
 (defun drgnx-extensions-list--fetch (section offset)
-  "Ask the hub, without waiting, for SECTION's rows from OFFSET.  The answer goes to `drgnx-extensions-list--receive'
-\(on the rows path: the whole list again, a page more of SECTION when OFFSET is past 0)."
-  (unless (fboundp 'drgnx-hub-call) (require 'drgnx-hub-client))
-  (let ((epoch drgnx-extensions-list--epoch))
-    (puthash (cons section offset) t drgnx-extensions-list--asked)
-    (if (drgnx-extensions-list--hub-fed-p)
-        (if (> offset 0) (drgnx-extensions-list--rows-more section offset) (drgnx-extensions-list--ask))
-      (condition-case err
-          (drgnx-hub-call "extensions/search" (drgnx-extensions-list--section-params section offset)
-                          (lambda (result error)
-                            (when (eql epoch drgnx-extensions-list--epoch)
-                              (if error
-                                  (progn (setq drgnx-extensions-list--error (format "%s" error))
-                                         (drgnx-extensions-list--changed))
-                                (setq drgnx-extensions-list--error nil)
-                                (drgnx-extensions-list--receive section (append (plist-get result :rows) nil)
-                                                                (or (plist-get result :total) 0) offset)))))
-        (error (setq drgnx-extensions-list--error (error-message-string err))
-               (drgnx-extensions-list--changed))))))
+  "Ask the hub, without waiting, for the list again: a page more of SECTION when OFFSET is past 0.  The list's buffer
+must be the hub-fed view (a Emacs without Sjá shows the notice and asks nothing)."
+  (puthash (cons section offset) t drgnx-extensions-list--asked)
+  (when (drgnx-extensions-list--hub-fed-p)
+    (if (> offset 0) (drgnx-extensions-list--rows-more section offset) (drgnx-extensions-list--ask))))
 
 (defun drgnx-extensions-list-refresh ()
   "Ask for every section again (or the search results while a query is typed)."
@@ -295,25 +233,13 @@ global `drgnx-extensions-recommended'."
   (clrhash drgnx-extensions-list--asked)
   (drgnx-extensions-list--note-restart)
   (when (fboundp 'drgnx-extensions-details-forget-generations) (drgnx-extensions-details-forget-generations))
-  (if (drgnx-extensions-list--hub-fed-p)
-      (drgnx-extensions-list--ask)
-    (dolist (s (if (drgnx-extensions-list--typed-p) '(search) drgnx-extensions-list--sections-order))
-      (drgnx-extensions-list--fetch s 0))))
-
-(defun drgnx-extensions-list--last-section ()
-  "The section whose rows end the list, with rows still to load: (SECTION . LOADED), or nil."
-  (let ((s (if (drgnx-extensions-list--typed-p) 'search
-             (car (last (cl-remove-if-not (lambda (s) (drgnx-extensions-list--section-ids s))
-                                          drgnx-extensions-list--sections-order))))))
-    (when s
-      (let* ((data (cdr (assq s drgnx-extensions-list--sections))) (loaded (length (plist-get data :ids))))
-        (when (< loaded (or (plist-get data :total) 0)) (cons s loaded))))))
+  (when (drgnx-extensions-list--hub-fed-p)
+    (drgnx-extensions-list--ask)))
 
 (defun drgnx-extensions-list--post-command ()
   "`post-command-hook' of the list: near the end of the rows, ask for the next page, once.  Reads cached numbers."
-  (when (> (+ (point) 3000) (point-max))
-    (when-let* ((last (if (drgnx-extensions-list--hub-fed-p) (drgnx-extensions-list--rows-last)
-                        (drgnx-extensions-list--last-section)))
+  (when (and (> (+ (point) 3000) (point-max)) (drgnx-extensions-list--hub-fed-p))
+    (when-let* ((last (drgnx-extensions-list--rows-last))
                 ((not (gethash last drgnx-extensions-list--asked))))
       (drgnx-extensions-list--fetch (car last) (cdr last)))))
 
@@ -348,10 +274,10 @@ global `drgnx-extensions-recommended'."
 
 (defun drgnx-extensions-list--tick ()
   "The one-second timer: draw the busy rows again (their elapsed time); stop when none is busy."
-  (let ((view (drgnx-extensions-list--view)) (busy (drgnx-extensions-list--busy-ids)))
-    (cond ((not (and view busy)) (drgnx-timer-cancel 'extensions-list-tick))
-          ((drgnx-extensions-list--hub-fed-p) (drgnx-extensions-list--rows-chips busy))
-          (t (drgnx-view-dirty view busy)))))
+  (let ((busy (drgnx-extensions-list--busy-ids)))
+    (if (and busy (drgnx-extensions-list--hub-fed-p))
+        (drgnx-extensions-list--rows-chips busy)
+      (drgnx-timer-cancel 'extensions-list-tick))))
 
 (defun drgnx-extensions-list--tick-update ()
   "Run the one-second timer while a row is busy, and not otherwise."
@@ -387,17 +313,14 @@ ticket (an integer) has no row, nil."
           (when (drgnx-extensions-list-row id) (push id shown)))))
     (let ((restart drgnx-extensions-list--restart))
       (drgnx-extensions-list--note-restart)
-      (when-let* ((view (drgnx-extensions-list--view)))
-        (cond ((not (drgnx-extensions-list--hub-fed-p)) (when shown (drgnx-view-dirty view shown)))
-              ((equal restart drgnx-extensions-list--restart) (drgnx-extensions-list--rows-chips shown))
-              (t (drgnx-extensions-list--rows-chips shown) (drgnx-extensions-list--ask)))   ; "restart to use" is the hub's
+      (when (drgnx-extensions-list--hub-fed-p)
+        (drgnx-extensions-list--rows-chips shown)
+        (unless (equal restart drgnx-extensions-list--restart)
+          (drgnx-extensions-list--ask))                  ; "restart to use" is the hub's
         (drgnx-extensions-list--header)))
     (drgnx-extensions-list--tick-update)))
 
 ;;;; Drawing
-
-(defun drgnx-extensions-list--glyph (row)
-  (drgnx-face-glyph (pcase (plist-get row :kind) ('plugin 'plugin) ('module 'module) (_ 'package))))
 
 (defun drgnx-extensions-list--trust (row)
   "The trust word of ROW's source, or nil."
@@ -428,75 +351,6 @@ ticket (an integer) has no row, nil."
   "The face of what needs you: the look's attention face when it exists, else the kit's needs-you face."
   (if (facep 'drgnx-status-attention) 'drgnx-status-attention 'drgnx-status-needs-you))
 
-(defun drgnx-extensions-list--state-chip (row)
-  "The chip the hub's state of ROW gives it, or nil."
-  (pcase (plist-get row :state)
-    ('unapproved (propertize "not approved: it does not run" 'face (drgnx-extensions-list--attention)))
-    ('changed (propertize "changed: approve it again" 'face (drgnx-extensions-list--attention)))
-    ('disabled (propertize "disabled" 'face 'shadow))
-    ('broken (propertize "broken" 'face 'drgnx-status-fail))
-    ('update (propertize (if (plist-get row :latest) (format "update to %s" (plist-get row :latest)) "update")
-                         'face 'drgnx-status-warn))
-    ('held (propertize "held" 'face 'drgnx-status-warn))
-    ('incompat (propertize "needs a newer Emacs" 'face 'drgnx-status-warn))
-    ('missing (propertize "missing: no archive you use has it" 'face 'drgnx-status-fail))
-    ('failed (propertize "failed" 'face 'drgnx-status-fail))
-    ('needs-package (propertize "waits for a package" 'face 'drgnx-status-warn))
-    ('dependency (propertize "dependency" 'face 'drgnx-status-info))
-    ('on (propertize "on" 'face 'drgnx-status-ok))
-    ('off (propertize "off" 'face 'shadow))
-    (_ nil)))
-
-(defun drgnx-extensions-list--render-row (id)
-  "The text of row ID: two lines (one when dense)."
-  (let* ((row (gethash id drgnx-extensions-list--rows))
-         (st (gethash id drgnx-extensions-list--jobs))
-         (chip (or (and st (drgnx-extensions-list--job-chip st)) (drgnx-extensions-list--state-chip row)))
-         (restart (and (member id drgnx-extensions-list--restart) (propertize "restart to use" 'face 'drgnx-status-warn))))
-    (propertize
-     (if (null row)
-         (concat id "\n")
-       (concat (drgnx-extensions-list--glyph row) " " (propertize (plist-get row :name) 'face 'bold)
-               (if (plist-get row :version) (propertize (concat " " (plist-get row :version)) 'face 'shadow) "")
-               (if chip (concat "  " chip) "")
-               (if restart (concat "  " restart) "")
-               "\n"
-               (if (eq drgnx-extensions-list-density 'dense) ""
-                 (concat "    " (propertize (string-join (delq nil (list (plist-get row :summary) (plist-get row :source)
-                                                                         (drgnx-extensions-list--trust row)))
-                                                         " · ")
-                                            'face 'shadow)
-                         "\n"))))
-     'drgnx-extensions-id id)))
-
-(defun drgnx-extensions-list--render (key)
-  "The view's RENDER: KEY is a header `(section . NAME)' or a row id."
-  (cond ((eq (car-safe key) 'gen) (drgnx-extensions-details-generation-row (cdr key)))
-        ((equal key '(section . generations)) (propertize "Generations\n" 'face 'bold))
-        ((consp key)
-         (let ((data (cdr (assq (cdr key) drgnx-extensions-list--sections))))
-           (propertize (format "%s (%d)\n" (cdr (assq (cdr key) drgnx-extensions-list--titles))
-                               (if (eq (cdr key) 'search) (or (plist-get data :total) 0)
-                                 (length (drgnx-extensions-list--section-ids (cdr key)))))
-                       'face 'bold)))
-        (t (drgnx-extensions-list--render-row key))))
-
-(defun drgnx-extensions-list--sig (key)
-  "The signature of KEY's row: what makes it draw again when it changes (headers: their count)."
-  (cond ((eq (car-safe key) 'gen) (drgnx-extensions-details-generations))
-        ((consp key)
-         (vector (plist-get (cdr (assq (cdr key) drgnx-extensions-list--sections)) :total)
-                 (length (drgnx-extensions-list--section-ids (cdr key)))))
-        (t (gethash key drgnx-extensions-list--rows key))))
-
-(defun drgnx-extensions-list--sync (_view)
-  (drgnx-view-sync-rows drgnx-view (drgnx-extensions-list--keys) #'drgnx-extensions-list--sig))
-
-(defun drgnx-extensions-list--define-view ()
-  "Define the view type `extensions' (its undo goes with the module that calls this in its setup)."
-  (drgnx-view-define 'extensions :render #'drgnx-extensions-list--render :sync #'drgnx-extensions-list--sync :delay 0
-                     :slice drgnx-view-slice))
-
 (defun drgnx-extensions-list--header ()
   "Set the header line of the list: the query and its chips, an error, and the restart note.  Cached values only."
   (when-let* ((b (get-buffer drgnx-extensions-list-buffer-name)))
@@ -517,9 +371,7 @@ ticket (an integer) has no row, nil."
                                                        :help "Restart drgnx to use what changed"))))))))
 
 (defun drgnx-extensions-list--changed ()
-  "The model changed: the view takes the new rows, the header and the status bar are drawn again."
-  (unless (drgnx-extensions-list--hub-fed-p)       ; the hub's rows come as patches
-    (when-let* ((view (drgnx-extensions-list--view))) (drgnx-view-touch view)))
+  "The model changed (the hub's rows come as patches): the header and the status bar are drawn again."
   (drgnx-extensions-list--header)
   (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh t)))
 
@@ -539,12 +391,12 @@ ticket (an integer) has no row, nil."
   "The list's buffer: made with its view when it does not exist yet."
   (or (get-buffer drgnx-extensions-list-buffer-name)
       (with-current-buffer (get-buffer-create drgnx-extensions-list-buffer-name)
-        (unless (drgnx-view-type-p 'extensions) (drgnx-extensions-list--define-view))
         (drgnx-extensions-mode)
         (if (drgnx-extensions-list-rows-p)
             (drgnx-extensions-list--rows-attach)
-          (drgnx-view-attach 'extensions)
-          (drgnx-view-touch drgnx-view))
+          (let ((inhibit-read-only t))
+            (insert "The Extensions list needs Sjá, Nidhogg's view model: it is drawn from the hub's rows, and this Emacs"
+                    " has no Sjá.\n")))
         (drgnx-extensions-list--header)
         (drgnx-extensions-list--tick-update)
         (current-buffer))))
@@ -557,7 +409,7 @@ ticket (an integer) has no row, nil."
   (drgnx-extensions-list--reset))
 
 ;;;; On the rows path: the hub builds the list, its model holds the rows (Sjá)
-;; Off `drgnx-view-old-path' in an Emacs with Sjá, the list is the hub-fed view `extensions': `extensions/list' names
+;; The list is the hub-fed view `extensions' (an Emacs without Sjá shows a notice): `extensions/list' names
 ;; the sections (each a search, as `drgnx-extensions-list--section-params' makes it) and the hub sends the model (a
 ;; `tree': a node per header and per row, the row's name, kind, state, signed, source, version and latest as fields)
 ;; and the rows, headers and lines included.  The answer is each section's total.  A row's data is read from the model
@@ -570,18 +422,17 @@ ticket (an integer) has no row, nil."
 (defconst drgnx-extensions-list-view "extensions" "The hub's view id of the list.")
 
 (defun drgnx-extensions-list-rows-p ()
-  "Non-nil when the list goes on the hub's rows: not `drgnx-view-old-path', and this Emacs has Sjá."
-  (and (not drgnx-view-old-path) (fboundp 'nidhogg-view--call)))
+  "Non-nil when the list goes on the hub's rows: this Emacs has Sjá."
+  (fboundp 'nidhogg-view--call))
 
 (defun drgnx-extensions-list--hub-fed-p ()
   "Non-nil when the list's buffer is the hub-fed view."
   (when-let* ((b (get-buffer drgnx-extensions-list-buffer-name))) (buffer-local-value 'drgnx-view-patch b)))
 
 (defun drgnx-extensions-list-row (id)
-  "Row ID as the list knows it (:id :name :kind :state :signed :source :version :latest, the symbols interned), or
-nil: the hub's answer kept off the rows path, the model's fields on it."
-  (if (not (drgnx-extensions-list--hub-fed-p))
-      (gethash id drgnx-extensions-list--rows)
+  "Row ID as the list's model has it (:id :name :kind :state :signed :source :version :latest, the symbols interned),
+or nil when the list is not the hub-fed view or the model has no such row."
+  (when (drgnx-extensions-list--hub-fed-p)
     (with-current-buffer drgnx-extensions-list-buffer-name
       (when-let* ((h (drgnx-view-patch-handle drgnx-view-patch)) (kind (nidhogg-view-get h 'kind id))
                   ((not (equal kind "section"))))
@@ -590,10 +441,31 @@ nil: the hub's answer kept off the rows path, the model's fields on it."
                 :signed (intern (funcall f "signed")) :source (funcall f "source")
                 :version (funcall f "version") :latest (funcall f "latest")))))))
 
+(defun drgnx-extensions-list--generation-params ()
+  "The generations as `extensions/list' sends them, newest first (`drgnx-extensions-details-generations'); the
+newest carries the copies note."
+  (when (fboundp 'drgnx-extensions-details-generations)
+    (let ((first t))
+      (vconcat
+       (mapcar (lambda (g)
+                 (prog1 (append (list :n (plist-get g :n) :time (or (plist-get g :time) "")
+                                      :differs (vconcat (plist-get g :differs))
+                                      :in_use (if (plist-get g :in-use) t :false)
+                                      :current (if (plist-get g :current) t :false))
+                                (and (plist-get g :note) (list :note (plist-get g :note)))
+                                (and (plist-get g :size) (list :size (file-size-human-readable (plist-get g :size))))
+                                (let ((c (and first (drgnx-extensions-details-copies-note)))) (and c (list :copies c))))
+                   (setq first nil)))
+               (drgnx-extensions-details-generations))))))
+
 (defun drgnx-extensions-list--list-params ()
-  "The params of `extensions/list': the sections shown now, each with the rows loaded of it, the density, the glyphs
-and the rows that wait for a restart."
-  (let ((sections (if (drgnx-extensions-list--typed-p) '(search) drgnx-extensions-list--sections-order)))
+  "The params of `extensions/list': the sections shown now, each with the rows loaded of it, the density, the glyphs,
+the rows that wait for a restart and the generations, which end the list when nothing is typed (with `@generations'
+typed, they are the list)."
+  (let* ((gens-only (memq 'generations (plist-get (drgnx-extensions-list--parsed) :local)))
+         (sections (cond (gens-only nil)
+                         ((drgnx-extensions-list--typed-p) '(search))
+                         (t drgnx-extensions-list--sections-order))))
     (list :view drgnx-extensions-list-view
           :sections (vconcat
                      (mapcar (lambda (s)
@@ -607,7 +479,10 @@ and the rows that wait for a restart."
           :glyphs (vconcat (mapcar (lambda (k) (list :kind (symbol-name k) :gui (or (drgnx-face-glyph k) "")
                                                      :tty (or (cdr (alist-get k (append drgnx-face-glyphs drgnx-ui--default-glyphs))) "")))
                                    '(package plugin module)))
-          :restart (vconcat drgnx-extensions-list--restart))))
+          :restart (vconcat drgnx-extensions-list--restart)
+          :generations (if (or gens-only (not (drgnx-extensions-list--typed-p)))
+                           (or (drgnx-extensions-list--generation-params) [])
+                         []))))
 
 (defun drgnx-extensions-list--ask (&optional _view)
   "Ask the hub for the list's rows, without waiting; the answer's totals go to `drgnx-extensions-list--listed'.  Also
@@ -635,9 +510,8 @@ the env's resubscribe."
     (setq drgnx-extensions-list--updates (plist-get (cdr u) :total))))
 
 (defun drgnx-extensions-list--update-ids ()
-  "The ids Updates lists: its answer's off the rows path, the model's rows of the section `updates' on it."
-  (if (not (drgnx-extensions-list--hub-fed-p))
-      (plist-get (cdr (assq 'updates drgnx-extensions-list--sections)) :ids)
+  "The ids Updates lists: the model's rows of the section `updates'; none when the list is not the hub-fed view."
+  (when (drgnx-extensions-list--hub-fed-p)
     (with-current-buffer drgnx-extensions-list-buffer-name
       (let ((h (drgnx-view-patch-handle drgnx-view-patch)))
         (seq-filter (lambda (id) (and (equal (nidhogg-view-get h 'field "section" id) "updates")
@@ -698,6 +572,16 @@ the env's resubscribe."
     (when (and drgnx-view-patch (drgnx-view-patch-handle drgnx-view-patch) (not (equal id (drgnx-view-nav-selection))))
       (drgnx-view-nav 'select id))
     id))
+
+(defun drgnx-extensions-list-gen-at-point ()
+  "The generation of the row at point in the hub-fed list: the model's `gen' field of that row, made the selection;
+nil off a generation's row or outside the list."
+  (when-let* ((drgnx-view-patch) (h (drgnx-view-patch-handle drgnx-view-patch))
+              (id (or (get-text-property (point) 'drgnx-work-id)
+                      (and (> (point) (point-min)) (get-text-property (1- (point)) 'drgnx-work-id))))
+              (n (nidhogg-view-get h 'field "gen" id)))
+    (unless (equal id (drgnx-view-nav-selection)) (drgnx-view-nav 'select id))
+    (if (stringp n) (string-to-number n) n)))
 
 (defun drgnx-extensions-list--name (id)
   "The name part of the row id ID (`pkg:magit' → \"magit\")."

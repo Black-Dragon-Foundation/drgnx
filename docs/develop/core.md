@@ -1331,9 +1331,8 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   the local AI runner) and a finished check's 0.1 s `(agent-check-finish . PROC)`, whose process is already dead. The status bar's debounced refresh is a fourth, `statusbar-refresh`, cancelled when the bar's mode turns off."
 
 The Work space's views keep no timer of their own while hidden: a map tells the hub it is hidden and gets nothing
-(`work/map/set {shown: false}`), the Board, the Timeline and the trail ask the hub only on events, through
-`drgnx-timer-soon` keys owned by their buffers (`(work-board . VIEW)`, `(work-timeline . LANE)`,
-`(work-trail-conclusions . NAME)`), and the module's `:teardown` kills the buffers.
+(`work/map/set {shown: false}`), the Board, the Timeline and the trail are hub-fed views the hub keeps current (they
+keep no timer), the map's motion timers are owned by its buffer, and the module's `:teardown` kills the buffers.
 
 The Explorer's three timers are owned by its buffer, so killing it ends them (and with no Explorer none starts):
 `explorer-file-events` (`drgnx-timer-soon`, a wall timer `drgnx-explorer-event-delay` after a burst's first file event;
@@ -1355,7 +1354,9 @@ Every layer timer's Emacs function is `drgnx-timer--fire` with the entry as its 
 2. An owner that is gone (a module turned off, rolled back or run again; a dead buffer or process) drops the entry:
    FN is never called for it. A buffer made with `inhibit-buffer-hooks` runs no `kill-buffer-hook`, so its timers
    go here, at their next firing.
-3. A one-shot leaves the table before FN runs, so FN may start its key again.
+3. A one-shot leaves the table before FN runs, so FN may start its key again. It takes its own Emacs timer with it
+   (`drgnx-timer--drop`): an entry fired before its time, as the perf lab's settle does, leaves nothing pending
+   (test `drgnx-timer-prim/an-entry-fired-early-cancels-its-own-timer`).
 4. FN runs in `save-match-data`, with a buffer owner current. A one-shot `drgnx-timer-start` owned by a module runs
    as the module's code (`drgnx-modules--record-call`, as `drgnx-modules-with-owner` work does): what it changes is
    undone when the module is turned off. A repeating timer and every firing of the primitives (debounce, soon,
@@ -1955,10 +1956,10 @@ work. Without VIEW it sums every live view (`:max-slice-rows`: the largest).
   `drgnx-outline-delay`, owned by the Outline's buffer once it exists). Tests: `test/unit/wb-outline-test.el`,
   `test/unit/wb-outline-edge-test.el` (prefix `drgnx-outline`).
 
-- **The Work space's views** (`work-map`, `work-detail`, `work-board`, `work-timeline`, `work-trail`, `work-review`,
-  `modules/tools/drgnx-work-*.el`): the map's rows are the layout's, the Board's are cards across columns, the trail's
-  follow the tail and take older steps with `drgnx-view-insert`; [work-space.md](work-space.md) has the rest. (The
-  old Work graph and feed views are gone.)
+- **The Work space's views** (`modules/tools/drgnx-work-*.el`): the map, its side panel, the Board, the trail and the
+  Timeline are hub-fed views (the hub draws their rows; `work-map` is left as the view type of a map with no rows, which
+  shows a notice), and `work-review` draws its own; [work-space.md](work-space.md) has the rest. (The old Work graph
+  and feed views are gone.)
 
 ### The invariant
 
@@ -2051,12 +2052,10 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
   font), face remaps and images at their picture's width. A segment wider than the stop is cut again by the same
   measure (`drgnx-view-patch--fit-faced`, padded, so later positions keep their place), dressed again and reported by
   `view/measured`, after which the hub fits that string by the editor's width. A row that fits costs one measure.
-- **`drgnx-view-fit TEXT PX`** cuts TEXT with an ellipsis to PX pixels (memoised in `drgnx-view--fit-memo`, emptied
-  at 4000). The Work map, the Board and the timeline's lane labels use it too.
 - **The stale shade** is the view's own state, put back by PATCHED after every draw; the classes (selected, match,
   lit, dim) come from the model, on each node's span ("Keys through the model" below).
-- `drgnx-view-old-path` (test-only) makes a view moved onto hub-built rows take its old Lisp path, for the combined
-  pass that compares the two.
+- A view moved onto hub-built rows has no Lisp path left to fall back to (render offload Task 34 removed the switch,
+  `drgnx-view-old-path`, and what it guarded); in an Emacs without Sjá a view whose keys need the model says so.
 - **A view of its own around the hub's rows** (the agent panel): `drgnx-view-patch-attach … :keep t` keeps the
   buffer's view; its type renders a string key with `drgnx-view-patch-render` and its own keys itself, and the buffer
   sets `drgnx-view-patch-apply-function` to place the rows. The panel's (`drgnx-agent-panel--apply-rows`) rewrites a
@@ -2067,8 +2066,7 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
   its look (`agents/panel/look`: the step types open, the rows opened or folded by hand, `older` for the window before;
   `docs/develop/hub.md`). Navigation and fold state move to the native view model later.
 - **The agent mirror** (`core/drgnx-agents-mirror.el`) patches its transcript in place: an entry's cell takes the
-  patched entry (`--complete-blocks`), a new index extends the list; behind `drgnx-view-old-path` it copies the whole
-  transcript per event as before.
+  patched entry (`--complete-blocks`), a new index extends the list.
 - **One buffer per class:** a view shown in two classes (two monitors at two scales) gets an env and a reset per class
   from the hub. When its buffer sets `drgnx-view-patch-twin-function` (the Explorer does), `drgnx-view-env` gives each
   class but the buffer's own a twin: a buffer the function makes, set up as the view's (mode, keys, the handlers
@@ -3330,7 +3328,9 @@ minibuffer-only frame is no workbench frame).
 on the first redraw, `C-x o` between two windows of one buffer included, in every frame. `drgnx-statusbar--mru-editor-p`
 is `(eq W (drgnx-state-editor-window (window-frame W)))` and `drgnx-statusbar-source-window` falls back to
 `drgnx-state-editor-window`; the bar keeps no window of its own and posts nothing to the bus. Its post-command check
-compares the buffer, point, change tick and mark only. Its git read stays on the bus's idle `editor-changed`. Its
+compares the buffer, its major mode, point, change tick and mark only, and point only where the buffer's bar shows the
+position (`drgnx-statusbar--wanted-p`, worked out once per buffer and mode): a move in the Work map, Magit or help asks
+for no redraw, which laid out the bar again for nothing (about 800 objects a map key, 2026-11-12). Its git read stays on the bus's idle `editor-changed`. Its
 debounced refresh is the layer timer `statusbar-refresh` (`drgnx-timer-soon`, owner `:core`, cancelled when the mode
 turns off); a slow entry of another package is refreshed by `statusbar-misc-slow` (owner `ui/face`; "Memo clients"
 above). Each window's bar is the memo `statusbar-bar` on six epochs, which `drgnx-statusbar-setup` activates. Tests: `drgnx-statusbar/` in `test/unit/mod-statusbar-test.el`; `drgnx-statusbar-ui/` in

@@ -1240,19 +1240,26 @@ An error shows nothing and is recorded once."
       (dolist (w (window-list f 'nomini))
         (when (drgnx-statusbar--frame-window-p w) (drgnx-statusbar--frame-fit w))))))
 
-(defvar drgnx-statusbar--last (make-vector 4 nil) "[BUFFER POINT TICK MARK-ACTIVE] as of the last command.")
+(defvar drgnx-statusbar--last (make-vector 6 nil)
+  "[BUFFER POINT TICK MARK-ACTIVE MODE POSITION-P] as of the last command.  POSITION-P: BUFFER's bar (in major mode
+MODE) shows the position (`drgnx-statusbar--wanted-p'), worked out when the buffer or its mode changes; POINT is nil
+when it does not.")
 
 (defun drgnx-statusbar--post-command ()
   "A mode line made by `:eval' does not know it shows the point: ask for a redraw when what it shows changed.
+A move in a buffer whose bar shows no position (the Work map, Magit, help: the quiet and other bars) asks for
+nothing: the redraw would lay out the bar again for no change.
 While Show Keys As I Type (keycast) is on, every command changes the bar: every bar is redrawn (the editor's too
 when you type in a side pane)."
   (when (bound-and-true-p keycast-mode-line-mode) (force-mode-line-update t))
-  (let ((l drgnx-statusbar--last) (b (current-buffer)))
-    (let ((pt (window-point)) (tick (buffer-chars-modified-tick)))
-      (unless (and (eq (aref l 0) b) (eql (aref l 1) pt) (eql (aref l 2) tick) (eq (aref l 3) mark-active))
-        (aset l 0 b) (aset l 1 pt) (aset l 2 tick) (aset l 3 mark-active)
-        (force-mode-line-update)                 ; this buffer's mode line only
-        (drgnx-statusbar--frame-redraw)))))      ; and the bar across the frame
+  (let* ((l drgnx-statusbar--last) (b (current-buffer))
+         (known (and (eq (aref l 0) b) (eq (aref l 4) major-mode)))
+         (position-p (if known (aref l 5) (drgnx-statusbar--wanted-p)))
+         (pt (and position-p (window-point))) (tick (buffer-chars-modified-tick)))
+    (unless (and known (eql (aref l 1) pt) (eql (aref l 2) tick) (eq (aref l 3) mark-active))
+      (aset l 0 b) (aset l 1 pt) (aset l 2 tick) (aset l 3 mark-active) (aset l 4 major-mode) (aset l 5 position-p)
+      (force-mode-line-update)                   ; this buffer's mode line only
+      (drgnx-statusbar--frame-redraw))))         ; and the bar across the frame
 
 (defun drgnx-statusbar--editor-changed (&rest _)
   "On the store's `editor-changed' (the `now' lane, before the frame is drawn): the most recently used editor

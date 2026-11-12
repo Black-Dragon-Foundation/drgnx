@@ -906,7 +906,9 @@ buffer, replacing the session's last ones in place."
         (add-hook 'drgnx-hub-event-functions #'drgnx-debug-gutter--event)
         (add-hook 'pre-redisplay-functions #'drgnx-debug-gutter--pool-update nil t)
         (add-hook 'window-scroll-functions #'drgnx-debug-gutter--pool-scrolled nil t)
-        (when buffer-file-name (drgnx-debug-gutter--ask nil))
+        ;; asked from `find-file-hook' (`drgnx-debug--gutter-on'): with no hub to answer, the file has no breakpoints
+        ;; to show; it never fails the visit (`drgnx-hub-call' signals when no hub serves).  The commands still say why
+        (when buffer-file-name (condition-case nil (drgnx-debug-gutter--ask nil) (error nil)))
         (drgnx-debug-gutter--claim))
     (remove-hook 'after-save-hook #'drgnx-debug-gutter--saved t)
     (remove-hook 'after-revert-hook #'drgnx-debug-gutter--reverted t)

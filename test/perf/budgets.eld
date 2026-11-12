@@ -247,12 +247,10 @@
  (search-window (:page_nogc_ms :p95) 37 :report-only ot5) (search-window (:list_max) 20000 :report-only ot5)
  (quick-open-typing (:alloc :p50) 4905 :report-only ot5) (quick-open-typing (:cpu_ms :p90) 1.4 :report-only ot5)
  (quick-open-typing (:rows) 0 :report-only ot5)
- (quick-open-typing-old (:alloc :p50) 8003808 :report-only ot5)
- (quick-open-typing-old (:cpu_ms :p90) 273.3 :report-only ot5) (quick-open-typing-old (:rows) 0 :report-only ot5)
+ ;; quick-open-typing-old (the stream and completion over every name: alloc 8003808, cpu 273.3) is retired with the path.
  (agents-line-motion (:alloc :p50) 6869 :report-only ot5) (agents-line-motion (:cpu_ms :p90) 4.5 :report-only ot5)
  (agents-line-motion (:rows) 0 :report-only ot5)
- (agents-line-motion-old (:alloc :p50) 7298 :report-only ot5)
- (agents-line-motion-old (:cpu_ms :p90) 5.2 :report-only ot5) (agents-line-motion-old (:rows) 0 :report-only ot5)
+ ;; agents-line-motion-old (the name computed every frame: alloc 7298, cpu 5.2) is retired with the path.
  ;; presence-burst, 2026-11-08, pinned to 4 CPUs, 30 agents over 90 files, one change per key.  Before (-old: every
  ;; `agent-presence' event rebuilds the badges, who is here and the status from the cached presence): alloc p50 160832
  ;; objects per key, cpu p90 3.61.  After (the hub's view model, read node by node as the rows name them): alloc p50
@@ -260,35 +258,29 @@
  ;; budget is a tenth of before; cpu the rows' 1.11 x 1.25.
  (presence-burst (:alloc :p50) 16084 :report-only ot5) (presence-burst (:cpu_ms :p90) 1.4 :report-only ot5)
  (presence-burst (:rows) 0 :report-only ot5)
- (presence-burst-old (:alloc :p50) 201040 :report-only ot5)
- (presence-burst-old (:cpu_ms :p90) 4.6 :report-only ot5) (presence-burst-old (:rows) 0 :report-only ot5)
+ ;; presence-burst-old (the cached presence rebuilt per event: alloc 201040, cpu 4.6) is retired with the path.
  ;; panel-replay, 2026-11-08, pinned to 4 CPUs.  Before (the panel drawing every row in Lisp, the mirror copying its
  ;; transcript per update): alloc p50 20292 (p90 24118) per update, a draw 14.75 kB p50 (63.03 p90), 305 updates over
  ;; 2024 entries, 2560 lines.  After (the hub's rows, the mirror patched in place): alloc p50 98 (p90 323) per update
  ;; over 410 updates (272 of them row patches), 1956 entries, 1956 hub rows, 2152 lines.  The alloc budget is a tenth of
  ;; before.  draw_kb stays at before's: after, the draws ran as 5 slice chains of about 76 kB (only a chain's first slice
- ;; is counted), so it is read in the combined pass.  panel-replay-old (`drgnx-view-old-path`, the paired row): alloc p50
- ;; 20293 (p90 24144), a draw 14.82 kB p50, 305 updates.
+ ;; is counted), so it is read in the combined pass.  The paired old-path row (alloc p50 20293, a draw 14.82 kB p50) is
+ ;; retired with the path.
  (panel-replay (:alloc :p50) 2030 :report-only ot5) (panel-replay (:draw_kb :p50) 18.5 :report-only ot5)
- (panel-replay-old (:alloc :p50) 25367 :report-only ot5) (panel-replay-old (:draw_kb :p50) 18.5 :report-only ot5)
  (quick-open-large (:complete-ms) 100 :report-only ot5)        ; first candidates within 100 ms
  (quick-open-large (:stalls-ge16) 0 :report-only ot5)
  (autosave-typing (:input :max) 50 :report-only ot8) (autosave-typing (:complete-ms) 1000 :report-only ot8)
  ;; The Extensions view (design §13; harness/drgnx-perf-extensions.el): open 100 ms with no process, a search key 16 ms
- ;; worst and 8 ms p50 over 7,150 rows, the details page 50 ms, the progress reads at most 4 a second (no two under
- ;; 240 ms apart, the last write always read) with typing's p95 within 1 ms of idle, live activation 20 ms, install overhead 3 s.  PROVISIONAL: reported, never failed, until
- ;; $DRGNX_PERF_LANDED names `ext-pass' (the combined gate pass judges them).  The scroll key's 16 ms is the input rule's;
- ;; the 1 ms of typing is a first guess.  refresh-job and list-packages-compare report with no budget (the view must beat
+ ;; worst and 8 ms p50 over 7,150 rows, the details page 50 ms, live activation 20 ms, install overhead 3 s.  PROVISIONAL:
+ ;; reported, never failed, until $DRGNX_PERF_LANDED names `ext-pass' (the combined gate pass judges them).  The scroll
+ ;; key's 16 ms is the input rule's.  refresh-job and list-packages-compare report with no budget (the view must beat
  ;; the package menu on each of its numbers: the :beats_* flags).  The hub's catalog-load and search are the Rust bench.
  (extensions-open (:open_ms) 100 :report-only ext-pass) (extensions-open (:processes) 0 :report-only ext-pass)
  (extensions-search (:key_p50_ms) 8 :report-only ext-pass) (extensions-search (:key_max_ms) 16 :report-only ext-pass)
  (extensions-scroll (:key_max_ms) 16 :report-only ext-pass)
  (extensions-details (:open_ms) 50 :report-only ext-pass)
- (extensions-progress (:reads_too_close) 0 :report-only ext-pass) (extensions-progress (:last_unread) 0 :report-only ext-pass)
- (extensions-progress (:typing_delta_ms) 1 :report-only ext-pass)
- ;; The list on the rows path (the hub's rows and model), 2026-11-08, pinned to 4 CPUs: a tenth of the old path's
- ;; objects on open (167507 for 200 rows) and per job step (the file read's 2624; on the rows path the event's).
- ;; Measured on the rows path: 119930 on open (404 lines: the rows and their summaries), 2073 per step.
+ ;; The list on the rows path (the hub's rows and model), 2026-11-08, pinned to 4 CPUs.
+ ;; Measured: 119930 objects on open (404 lines: the rows and their summaries), 2073 per job step (the event's).
  (extensions-open (:alloc) 16751 :report-only ext-pass) (extensions-progress (:alloc_event_step) 262 :report-only ext-pass)
  (activate-live (:activate_ms) 20 :report-only ext-pass)   ; the plan step's repoint of 40 packages
  (activate-live-new (:activate_ms) 20 :report-only ext-pass)   ; a job's end that added a package: it is activated
@@ -296,24 +288,27 @@
  ;; The Work space (design §13; docs/develop/perf.md, "The Work space's workloads"): 30 streaming mock agents in a real
  ;; hub.  The rules between workloads (the map shown at most 1 ms over hidden; the mirror at most 1 ms over `typing')
  ;; are `drgnx-perf-run--relative-fails'.  The Rust rows (vegvisir layout, shell parse, trace) are their crates' tests.
- (work-nav (:input :p95) 16) (work-nav (:frame_kb) 2048) (work-nav (:stalls) 0)
- (work-raster (:raster_ms :p95) 1.5) (work-raster (:chain_ms :max) 6)
+ ;; work-nav is the map's keys with the 30 agents streaming at the frame budget, on the pinned island (the GUI tier's
+ ;; keys-during-a-leg row compares with its own run).  The map's frame and its edge tiles drawn in Lisp went with render
+ ;; offload Task 34 (their rows work-nav :frame_kb and work-raster with them): the hub draws the rows and the edges.
+ (work-nav (:input :p95) 16) (work-nav (:stalls) 0)
  (work-relayout (:relayout :p95) 50) (work-relayout (:stalls) 0)
  (work-live (:draw_ms_s) 40) (work-live (:slice_ms :max) 4) (work-live (:stalls) 0)
  ;; The map on the hub's rows (render offload; read in the combined pass).  work-live's draw is at most 40 kB p50 (it was
- ;; 831 kB, Lisp drawing the frames); work-live-old (`drgnx-view-old-path`, the paired row) reports the same rows.  The
- ;; work-nav and work-relayout allocations are a tenth of as2-fix's (2026-11-07, b1: work-nav p50 11191 objects per key,
+ ;; 831 kB, Lisp drawing the frames; that path and its paired row, work-live-old, went with Task 34).  The work-nav and
+ ;; work-relayout allocations are a tenth of as2-fix's (2026-11-07, b1: work-nav p50 11191 objects per key,
  ;; work-relayout p50 128420); their CPU (b1: p90 11.31 and 59.16 ms) and rows (0) are kept as measured.  Both
- ;; workloads still drive the old path (Sjá's keys are `work-nav-rows').
- (work-live (:draw_kb :p50) 40 :report-only ot5) (work-live-old (:draw_kb :p50) 40 :report-only ot5)
- (work-live-old (:slice_ms :max) 4 :report-only ot5) (work-live-old (:draw_ms_s) 40 :report-only ot5)
+ ;; workloads drive the map on the hub's rows (Sjá's keys) since 2026-11-12.
+ (work-live (:draw_kb :p50) 40 :report-only ot5)
  (work-nav (:alloc :p50) 1119 :report-only ot5) (work-nav (:cpu_ms :p90) 11.31 :report-only ot5)
  (work-nav (:rows) 0 :report-only ot5)
  (work-relayout (:alloc :p50) 12842 :report-only ot5) (work-relayout (:cpu_ms :p90) 59.16 :report-only ot5)
  (work-relayout (:rows) 0 :report-only ot5)
  (work-typing-shown (:input :p95) 16) (work-typing-shown (:stalls) 0)
  (work-typing-hidden (:input :p95) 16) (work-typing-hidden (:stalls) 0)
- (work-trail (:draw_ms) 100) (work-trail (:append_ms :max) 1)
+ ;; a 10,000-step trail opened on the hub's rows until its first rows are drawn; a new step is the hub's patch (its
+ ;; Lisp append and its row, :append_ms, went with Task 34: view-patch and work-live measure a patch's insert)
+ (work-trail (:draw_ms) 100)
  ;; the agents in the editor, the panel and pair mode (agent system part 3, "Budget rows"): typing p95 within a frame and no
  ;; freeze over 100 ms; the +1 ms against `agents-typing-none' and the pair writes applied >= 0.80 are `drgnx-perf-run--relative-fails'
  (agents-typing (:input :p95) 16) (agents-typing (:stalls) 0)

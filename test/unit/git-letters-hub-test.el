@@ -22,7 +22,7 @@
        (drgnx-agents-mirror-test--with '()
          (drgnx-hub-connect)
          (drgnx-agents-mirror-test--settle (lambda () (process-live-p drgnx-hub--events)) "the subscribed connection")
-         (let ((,root (file-name-as-directory (make-temp-file "drgnx-git-hub" t))) (drgnx-view-old-path nil))
+         (let ((,root (file-name-as-directory (make-temp-file "drgnx-git-hub" t))))
            (unwind-protect
                (progn
                  (make-directory (expand-file-name "src" ,root))

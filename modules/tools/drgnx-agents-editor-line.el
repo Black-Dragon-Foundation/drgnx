@@ -32,7 +32,6 @@
 (defvar drgnx-agents-editor-followed)
 (defvar drgnx-chrome-short-breadcrumb-functions)
 (defvar drgnx-agents-editor-draw--modes)
-(defvar drgnx-view-old-path)
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function project-root "project")
 
@@ -98,10 +97,9 @@ when the buffer's modification tick moves, so it holds at most one entry per lin
 
 (defun drgnx-agents-editor-line--symbol (buffer pos)
   "The symbol at POS in BUFFER, or nil.  Asked once per frame, never in redisplay; the name is kept per line
-\(`drgnx-agents-editor-line--named'), and only the old path computes it every frame."
+\(`drgnx-agents-editor-line--named')."
   (condition-case nil
       (cond (drgnx-agents-editor-line-symbol-function (funcall drgnx-agents-editor-line-symbol-function buffer pos))
-            ((bound-and-true-p drgnx-view-old-path) (drgnx-agents-editor-line--defun buffer pos))
             (t (drgnx-agents-editor-line--named buffer pos)))
     (error nil)))
 

@@ -15,14 +15,13 @@
 
 (declare-function drgnx-agents-editor-line--symbol "drgnx-agents-editor-line")
 (defvar drgnx-agents-editor-line-ask-function)
-(defvar drgnx-view-old-path)
 
 (defmacro editor-line-name-test--with (&rest body)
   "BODY with `buf' visiting a saved file of five lines, `asks' the outline questions asked as (FILE LINE CALLBACK),
 and `defuns' the number of `add-log-current-defun' calls (each answers \"local\")."
   (declare (indent 0))
   `(let* ((dir (make-temp-file "editor-line-name" t)) (file (expand-file-name "p.el" dir))
-          (asks nil) (defuns 0) (drgnx-view-old-path nil))
+          (asks nil) (defuns 0))
      (with-temp-file file (insert "a\nb\nc\nd\ne\n"))
      (let ((buf (find-file-noselect file)))
        (unwind-protect
@@ -64,14 +63,16 @@ and `defuns' the number of `add-log-current-defun' calls (each answers \"local\"
       (should-not asks))))
 
 (ert-deftest drgnx-agents-editor-line/no-add-log-current-defun-per-frame ()
-  "Twenty frames on a saved buffer's line call `add-log-current-defun' never; only the old path does, every frame."
+  "Twenty frames on a saved buffer's line call `add-log-current-defun' never; a buffer the hub cannot name (modified,
+remote, no hub) is named locally once per line."
   (editor-line-name-test--with
     (let ((drgnx-agents-editor-line-ask-function (lambda (_root _file _line cb) (funcall cb "h") t))
           (l2 (editor-line-name-test--pos buf 2)))
       (dotimes (_ 20) (should (equal (drgnx-agents-editor-line--symbol buf l2) "h")))
       (should (= defuns 0))
-      (let ((drgnx-view-old-path t))
-        (dotimes (_ 20) (drgnx-agents-editor-line--symbol buf l2)))
-      (should (= defuns 20)))))
+      ;; no hub: the local name, found once for the line, whatever the frames after
+      (let ((drgnx-agents-editor-line-ask-function (lambda (&rest _) nil)) (l3 (editor-line-name-test--pos buf 3)))
+        (dotimes (_ 20) (should (equal (drgnx-agents-editor-line--symbol buf l3) "local")))
+        (should (= defuns 1))))))
 
 ;;; editor-line-name-test.el ends here

@@ -1426,7 +1426,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `explorer/subscribe` | user | `{around?: AbsPath, compact?: boolean, exclude?: [string], expanded?: [AbsPath], indent?: natnum, only?: [AbsPath], roots: [AbsPath], view: string, window?: natnum}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
-| `extensions/list` | user | `{dense?: boolean, glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
+| `extensions/list` | user | `{dense?: boolean, generations?: [{copies?: string, current?: boolean, differs?: [string], in_use?: boolean, n: natnum, note?: string, size?: string, time?: string}], glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
 | `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
 | `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
 | `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
@@ -1615,8 +1615,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `work/flow/subscribe` | user | `{detail?: string, job?: string, map: string, rules?: boolean, view: string}` | `{hub: natnum}` | no |
 | `work/hunks` | user | `{path: string, session: Id}` | `{diff: string}` | no |
 | `work/map/close` | user | `{view: string}` | `boolean` | no |
-| `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
-| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, rows?: boolean, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `MapFrame \| MapRows` | no |
+| `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, outline?: string, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
+| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, outline?: string, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `{hub: natnum, version: natnum}` | no |
 | `work/trail/close` | user | `{view: string}` | `boolean` | no |
 | `work/trail/subscribe` | user | `{lanes?: [{label: string, session: string}], session?: string, view: string}` | `{hub: natnum}` | no |
 <!-- hub-methods:end -->
@@ -1710,7 +1710,6 @@ result is (`event(NAME).check`):
 | `machines-changed` | machines (the front) | `{machines: [{machine, slots: [{id, holder?, kind}], local}]}`: the whole list, sent when a report, an expiry or the local slots changed it |
 | `agent-presence` | the presence model (to the connections that asked) | `{file, rel?, repo?, entries: [{session, file, mode, line?, line_end?, col?, source, step, at, live?, tool_call?}]}`: who is in the file now (running tool calls included), at most once per file per 100 ms ("The presence model") |
 | `agent-buffer` | the buffer views (to the view's connection only) | `{view, version, base, doc_version?, approximate?, agents: [{session, ordinal?, handle?, mode, line?, line_end?, col?, source, live?, projected?, step_title?, plan_entry?}], gutter: [{session, kind, start, end, projected?, help}]}`: a watched buffer's frame, at most once per view per 50 ms ("The buffer view") |
-| `work-map` | the Work map (to the view's connection only) | `{view, version, base, full?, changed: [Item], removed: [Id], entered: [Id], places?, edges?, layout?, needs_you?, chips?, stale?}`: what changed in one map view since version `base` ("The Work map") |
 | `agent-follow` | the follow feed (to the view's connection only) | `{view, session, file?, worktree, line?, col?, mode: listed \| read \| pending \| write \| edit, step_title?, plan_entry?, why_source: plan_entry \| step_title, changed?}`: where the followed session is now, at most once per 200 ms ("The follow feed") |
 | `supervisor` | the supervisor | `{rule, session?, exec?, task?, card?, text}` |
 | `view-written` | records | `{path, kind, hash}`: a view file written (never committed) |
@@ -2146,39 +2145,36 @@ overlays from it):
 
 ### The Work map
 
-The Work space's map (`work::map`): the hub feeds the pure map core `vegvisir` from its sources and sends each map
-view only what changed, to the connection that shows it.
+The Work space's map (`work::map`): the hub feeds the pure map core `vegvisir` from its sources, lays each map view
+out, and sends the connection that shows it the view's model and rows.
 
 - **Methods** (user connections). `work/map/subscribe {view, workspace: {id, roots}, width_units, density?, filters?,
-  collapsed?, selected?}` opens one view of the connection (again, if it is open) and answers its full frame `{version,
-  items, edges, layout, needs_you, chips}`. `view` is the editor's id for it: one editor can show two workspaces, or one
-  at two widths, so the hub keeps state per (connection, view). `work/map/set {view, filters? | collapsed? |
-  width_units? | density? | shown? | selected?}` answers `{version}`; an unknown view is `invalid-params`.
-  `work/map/close {view}` ends one; a connection's views end with it. A workspace no view shows is dropped.
-- **Rows** (`work/map/subscribe`'s `rows: true`; "Rows" below). The view's rows are built in the hub
-  (`vegvisir::render`, `docs/develop/work-space.md`, "The rows") and go to each display class the editor sent a
-  `view/env` for (the env's `view` is the map view's id) as `view-patch`, the first per class a reset; the answer is
-  `{hub, version}` and no `work-map` event comes for that view (nor a stale mark when it is hidden: its editor hid it).
-  Its width is its narrowest GUI class's window (`(width_px / scale - 96) / 4` units; `width_units` until one sent an
-  env, and a terminal class alone keeps it): an env whose width moves the units lays the view out again at once, as the
-  user's change; any other env, a delta, a full frame or a new `selected` (the chain's edges) draws the classes again,
-  and each gets only what changed (a resize: `replace`s of the rows whose fit changed). The coalescing, the quiet
-  reflow and the held chain are the frames' own. The first row is `strip` (the needs-you strip and the machines'
-  load). Without `rows` the view keeps its frames and `work-map` events, unchanged.
-- **The event** `work-map` goes by `Front::send_to` to the view's connection only. `version` counts the view's events
-  from the frame's 1, and `base` names the version it applies to: an editor drops an older one and subscribes again on
-  a gap. A full frame (`full`) carries every item shown in `changed` and the new `layout`; a delta carries the items
-  new or changed (whole), `removed` ids, and `edges` (all, among the items shown) when the edge set changed.
+  collapsed?, selected?, outline?}` opens one view of the connection (again, if it is open) and answers `{hub,
+  version}`. `view` is the editor's id for it: one editor can show two workspaces, or one at two widths, so the hub
+  keeps state per (connection, view). `work/map/set {view, filters? | collapsed? | width_units? | density? | shown? |
+  selected? | clear? | outline?}` answers `{version}`; an unknown view is `invalid-params`. `work/map/close {view}`
+  ends one; a connection's views end with it. A workspace no view shows is dropped. `version` counts the view's
+  layouts and changes from the subscription's 1.
+- **Model and rows** ("The native view model" and "Rows" below). The subscription sends the view's model as
+  `view-model` (a reset first: the items shown as nodes with their links, the edges among them, the lists the keys
+  walk), then its rows, built in the hub (`vegvisir::render`, `docs/develop/work-space.md`, "The rows"), to each
+  display class the editor sent a `view/env` for (the env's `view` is the map view's id) as `view-patch`, the first per
+  class a reset, each naming the model's version. Both go by `Front::send_to` to the view's connection only. Its width
+  is its narrowest GUI class's window (`(width_px / scale - 96) / 4` units; `width_units` until one sent an env, and a
+  terminal class alone keeps it): an env whose width moves the units lays the view out again at once, as the user's
+  change; any other env, a delta, a relayout or a new `selected` (the chain's edges) draws the classes again, and each
+  gets only what changed (a resize: `replace`s of the rows whose fit changed). The first row is `strip` (the needs-you
+  strip and the machines' load). Task 34 of the render offload removed the editor's own drawing and with it the
+  hub's frames (`work-map`).
 - **Coalescing** (design §11.3 step 5; `work::map::Coalescer`, pure, tested in every order). Field changes go out at
   most once per 100 ms per view: the first change arms a flush 100 ms later on the hub's clock. A live arrival takes a
-  free place at the end of its layer's last row (or a row of its own at the bottom) and fades in (`entered`, with its
-  rectangle and form in `places`); a departure fades out and leaves its place empty; nothing else moves
-  (`vegvisir::layout::place_live`). What arrived and went reflows after a quiet second (no change and no
-  `work/map/set` with `selected` for 1 s) as one full frame, unless that would move an item of the selection's chain:
-  then it waits for the user. The user's own change (filters, collapsed layers, width, density, shown again)
-  relayouts at once. The clock's minute is one delta (time fields are minutes).
-- **Hidden:** `shown: false` gets no deltas: one `work-map` with `stale: true` at the next change, then nothing;
-  `shown: true` sends one full frame.
+  free place at the end of its layer's last row (or a row of its own at the bottom); a departure leaves its place
+  empty; nothing else moves (`vegvisir::layout::place_live`). What arrived and went reflows after a quiet second (no
+  change and no `work/map/set` with `selected` for 1 s) as one relayout, unless that would move an item of the
+  selection's chain: then it waits for the user. The user's own change (filters, collapsed layers, width, density,
+  shown again) relayouts at once. The clock's minute is one delta (time fields are minutes).
+- **Hidden:** `shown: false` (its editor hid it) gets nothing however much changes: no model, no rows; `shown: true`
+  lays it out and draws it anew, its model a reset.
 - **Sources.** Each session's snapshot and subagents at its `agent` emit (state, spend, context; its branch and tree
   read from its folder's `.git` at first sight: `branch:REPO/NAME`, REPO being the main tree's folder name, so a linked
   worktree is a branch of its repository); each closed step (the card's activity); the presence model's changed files
@@ -2189,8 +2185,8 @@ view only what changed, to the connection that shows it.
   workspace when its folder, its tree or its repository is under one of the roots. Overlaps are the core's: two live
   agents on two branches changing one file, from their edits in flight and from their worktrees' changed sets, so a
   finished edit still overlaps.
-- **Restart:** nothing is kept. The editor's re-subscription after a restart gets a full frame from the new hub's
-  sessions and store.
+- **Restart:** nothing is kept. The editor's re-subscription after a restart gets a model reset and its rows from the
+  new hub's sessions and store, under the new hub's id.
 
 ### The trail and the Timeline
 
@@ -2396,11 +2392,24 @@ and version it last sent (`view::Store`'s models, `view::model`), and sends what
   {selected}` moves it, `{clear: true}` drops it; neither changes the model.
 
 The Work map's model (`work::map::model`): scheme `links`; the chain kinds `came-from`, `edits`, `reads`, `runs-on`;
-search over `label` and `task`; the lists `team`, `needs-you`, `outline` (`vegvisir::nav`); classes `selected`,
-`match`, `chain`, `dim` (the editor's faces by index); flags `needs-you`, `warn`, `live`; forms `graph` and `outline`
-(up and down walk the outline). Each node is an item the view shows, with its `nav` links, `then`, `parent`, and the
-fields `label`, `state`, `task` and its card's rect `x y w h` in layout units. Rows: `test/conformance/view-model/`,
-`work/map-set-clear-drops-selected`.
+search over `label` and `task`; the lists `team`, `needs-you`, `outline` (`vegvisir::nav`) and `plans` (the plans
+the view shows: the Board's scope is those on the selection's chain); classes `selected`, `match`, `chain`, `dim` (the
+editor's faces by index); flags `needs-you`, `warn`, `live`; forms `graph` and `outline` (up and down walk the outline).
+Each node is an item the view shows, with its `nav` links, `then`, `parent`, and the fields `label`, `state`, `task`,
+its card's rect `x y w h` in layout units, what the review panel's summary reads (`done` of `steps`, `edit_files`
+`edit_plus` `edit_minus`, `reads`, `conclusion`, `spend`, `minutes`; each when known, `work::map::model::card_fields`)
+and `overlaps`, the agents it overlaps (ids, space-separated: the huddle key). Rows: `test/conformance/view-model/`,
+`work/map-set-clear-drops-selected`; unit: `work::map::tests::map_model_carries_review_fields_overlaps_and_plans`.
+
+A rows view is drawn in the form `work/map/set {outline}` asks (or `work/map/subscribe {outline}`: the editor keeps
+the word and sends it again; row `work/map-subscribe-keeps-the-outline-asked-for`): `on` the outline, `off` the cards, `auto` (until one is
+asked) the outline only where the cards do not fit or in a terminal; a new form is drawn at once, laid out as it is.
+An open huddle (`runner::huddle`, waiting for the user or going on) is a needs-you card of every map, `huddle: CLASH`
+about its two agents (`work::map::huddle_card`, kind `huddle`): on the strip and in the `needs-you` list, marking
+neither agent. A conclusion that changed since the view was last drawn marks its card `new` for 4 s of the hub's
+clock (`NewMarks`; an item seen for the first time marks nothing); one wake per view draws it again when the oldest
+mark leaves. Unit: `outline_follows_the_users_choice`, `open_huddle_is_on_the_strip_and_the_needs_you_list`,
+`a_new_conclusion_is_marked_for_four_seconds`.
 
 ### Fitting: text to a pixel width
 
@@ -4055,7 +4064,12 @@ and never reaches the network here: the refresh job (`drgnx extensions refresh`)
   `dense` a shadowed `ID/2` line with summary, source and trust) and the model (a tree: section nodes with `label`,
   `section`, `count`; row nodes with `label`, `name`, `state`, `signed`, `source`, `section`, `version`, `latest`),
   publishes both to the `extensions` view of that connection, and answers each section's `{name, total, loaded}`. The
-  last list per connection is kept to rebuild on a resync, dropped when the connection goes.
+  editor also sends the package generations it reads from disk (`generations`, newest first, at most 256: `n`, `time`,
+  `note`, `differs`, `in_use`, `current`, `size`, `copies`); they end the list as a Generations section (header
+  `section:generations`, a row `gen:N` with glyph, number, time, note, "in use" or "current" and size, then `gen:N/2`
+  for what differs and `gen:N/3` for the copies note; model nodes of kind `generation` with `label` and `gen`).
+  Roll Back Packages reads the selected row's `gen`. With `@generations` typed the editor sends no sections and the
+  generations alone. The last list per connection is kept to rebuild on a resync, dropped when the connection goes.
 - **Classes:** `extensions/search` and `extensions/details` are open to agents; `extensions/rows`,
   `extensions/list` and `extensions/modules` are the user's.
 

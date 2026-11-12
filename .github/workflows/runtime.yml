@@ -1130,6 +1130,17 @@ jobs:
           echo "--- the crash report of ${bin##*/} in this run: ${ips:-none}"
           [ -n "$ips" ] && head -c 60000 "$ips"
           exit 1
+      # Diagnostic, report-only (round 5): clock::tests::a_task_still_running_after_the_settle_is_named_busy failed on
+      # macOS only in a run of the whole lib one test at a time (round 4; its message was not kept), and passes so on
+      # Linux. The clock's tests one at a time, every line shown (seconds); the step goes once that is explained
+      - name: the clock's tests one at a time (diagnostic)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          bin=$(jq -r 'select(.profile.test == true and .target.name == "drgnx_ratatoskr" and (.target.kind | index("lib"))) | .executable' \
+            "$RUNNER_TEMP/test-bins.json" | tail -n 1)
+          set +e
+          cd runtime/crates/drgnx-ratatoskr && "$bin" --test-threads 1 --nocapture clock::
+          echo "the clock's tests one at a time: exit $?"
       # The terminal worker's peer check on a Mac (getpeereid): the workspace run above checks that this user's
       # connection is served; another uid's needs root, so the same test runs again under sudo (the runner's user has
       # passwordless sudo), and a run that did not check (no root) fails. The worker's log goes to the job's log.

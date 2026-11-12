@@ -6,7 +6,7 @@
 {"do": "connect", "conn": "e", "hub": "h"}
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
 {"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
-{"do": "send", "conn": "e", "json": {"id": 2, "method": "work/map/subscribe", "params": {"view": "m", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250, "rows": true}}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "work/map/subscribe", "params": {"view": "m", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250}}}
 {"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "m", "hub": "$capture:hub", "base": 0, "version": 1, "model": "$capture:first"}}, "within_ms": 10000}
 {"do": "expect", "conn": "e", "json": {"id": 2, "result": {"hub": "$hub", "version": "$number"}}, "within_ms": 10000}
 {"do": "send", "conn": "e", "json": {"id": 3, "method": "view/resync", "params": {"view": "m", "model": true}}}

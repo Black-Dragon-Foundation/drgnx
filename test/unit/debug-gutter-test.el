@@ -32,6 +32,23 @@
            (kill-buffer buf)
            (delete-directory dir t))))))
 
+(ert-deftest drgnx-debug-gutter/a-file-opens-when-no-hub-runs ()
+  "The column's start asks the hub for the file's breakpoints (from `find-file-hook', `drgnx-debug--gutter-on'): with no
+hub (its socket's directory is not there) the column comes up empty and never fails the visit (the GUI rows' find-file
+failed \"no hub\" through it).  The hub is not stubbed."
+  (let* ((run (make-temp-file "dg-run" t)) (dir (make-temp-file "dg" t)) (file (expand-file-name "a.py" dir))
+         (process-environment (cons (concat "XDG_RUNTIME_DIR=" run) process-environment))
+         buf)
+    (write-region "x = 1\n" nil file nil 'silent)
+    (unwind-protect
+        (progn (setq buf (find-file-noselect file))
+               (with-current-buffer buf
+                 (drgnx-debug-gutter-mode 1)
+                 (should drgnx-debug-gutter-mode)
+                 (should-not drgnx-debug-gutter--bps)))
+      (when (buffer-live-p buf) (with-current-buffer buf (drgnx-debug-gutter-mode -1)) (kill-buffer buf))
+      (delete-directory dir t) (delete-directory run t))))
+
 (defvar debug-gutter-test--store nil "The scripted store: (ID . PLIST) of the file's breakpoints.")
 (defvar debug-gutter-test--next 0)
 (defvar debug-gutter-test--version 0 "The scripted store's version: up on every answer, as the hub's never goes back.")

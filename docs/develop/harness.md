@@ -476,6 +476,11 @@ no syntax-cache flush or jit-lock notice) — set up buffers through requests if
 under test with input events. A live test
 installs a gryphn-shaped follower and checks that `measure` reports its snap-back.
 
+The GUI rows run no hub, so code that asks one from a hook or a timer fails there with "Not connecting to the drgnx
+hub: …/drgnx does not exist (no hub)". In a session that error also names the functions that called
+`drgnx-hub--connect-socket` (`drgnx-uitest--hub-callers`, advice on it), so a row that fails on it says which caller
+asked: the debug timeline's `find-file-hook` did, about one row in seven at scale 2, until it learned not to.
+
 ## Guard
 
 `harness/drgnx-jank-guard.el` is on in every session. It records (never blocks) calls to `select-window`,

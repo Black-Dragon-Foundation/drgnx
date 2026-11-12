@@ -1,5 +1,5 @@
-//! The Work map's rows built in the hub (`vegvisir::render`), against the editor's own rows of the fixture frame
-//! (`test/fixtures/work-space/rows-golden.eld`, drawn by `drgnx-work-map-row-text` at scale 1 with 8 px a column).
+//! The Work map's rows built in the hub (`vegvisir::render`), against the editor's former rows of the fixture frame
+//! (`test/fixtures/work-space/rows-golden.eld`, recorded from its Lisp drawing at scale 1 with 8 px a column).
 //! Pure: a fixed-advance measure, no fonts, no clock ([D]).
 
 use std::collections::{BTreeMap, BTreeSet};

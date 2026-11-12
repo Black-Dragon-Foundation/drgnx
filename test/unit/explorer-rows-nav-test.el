@@ -61,7 +61,6 @@ hub sends the view), tagged :call-connection or :other-connection elsewhere.  No
      (let* ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
             (drgnx-view-model--views (make-hash-table :test #'equal))
             (drgnx-view-patch--hooked nil)
-            (drgnx-view-old-path nil)
             (drgnx-view-patch-send-function #'ignore)
             (drgnx-hub--events (make-pipe-process :name "drgnx-test-events" :noquery t))   ; the subscribed connection
             (drgnx-explorer--hub-view nil)

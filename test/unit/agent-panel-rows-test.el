@@ -118,9 +118,9 @@
             (kill-buffer buf)))))
     (should (equal (car bindings) (cadr bindings)))))
 
-(ert-deftest drgnx-agent-panel-rows/old-path-switch-still-draws-the-panel ()
-  (drgnx-agent-panel-rows-test--with t
-    (let* ((drgnx-view-old-path t) (buf (drgnx-agent-panel-rows-test--fresh)))
+(ert-deftest drgnx-agent-panel-rows/hub-down-panel-draws-every-row-itself ()
+  (drgnx-agent-panel-rows-test--with nil
+    (let* ((buf (drgnx-agent-panel-rows-test--fresh)))
       (unwind-protect
           (with-current-buffer buf
             (should-not drgnx-view-patch)
@@ -191,9 +191,9 @@ change asked for in the twin reaches the panel; not a panel of its own (no subsc
   (list :block n :kind "paragraph" :spans (vector (list :text text :style "text"))))
 
 (defun drgnx-agent-panel-rows-test--mirror-step (s ev)
-  "EV on both mirrors of S: :m patched in place, :r behind `drgnx-view-old-path' (the reference).  `entries' as the
-hub sends them; `restart': both fetch the hub's whole transcript (`:hub', its entries complete) again."
-  (let ((m (plist-get s :m)) (r (plist-get s :r)))
+  "EV on the mirror :m of S, patched in place.  `entries' as the hub sends them; `restart': it fetches the hub's whole
+transcript (`:hub', its entries complete) again."
+  (let ((m (plist-get s :m)))
     (pcase (car ev)
       ('entries
        (let* ((pairs (cadr ev)) (before (drgnx-agent-session-entries m))
@@ -203,15 +203,12 @@ hub sends them; `restart': both fetch the hub's whole transcript (`:hub', its en
                  (let ((e (drgnx-agents-mirror--complete-blocks (alist-get (car p) (plist-get s :hub)) (cadr p))))
                    (if (plist-get e :blocks) (plist-put e :blocks (vconcat (plist-get e :blocks))) e))))
          (setq s (plist-put s :stops-m (+ (plist-get s :stops-m) (drgnx-agents-mirror--apply-entries m pairs))))
-         (let ((drgnx-view-old-path t))
-           (setq s (plist-put s :stops-r (+ (plist-get s :stops-r) (drgnx-agents-mirror--apply-entries r pairs)))))
          (when (and before (not grows) (not (eq before (drgnx-agent-session-entries m))))
            (setq s (plist-put s :copied t)))))
       ('restart
        (let ((all (sort (mapcar (lambda (c) (list (car c) (cdr c))) (plist-get s :hub)) (lambda (a b) (< (car a) (car b))))))
-         (setf (drgnx-agent-session-entries m) nil (drgnx-agent-session-entries r) nil)
-         (drgnx-agents-mirror--apply-entries m all)
-         (let ((drgnx-view-old-path t)) (drgnx-agents-mirror--apply-entries r all)))))
+         (setf (drgnx-agent-session-entries m) nil)
+         (drgnx-agents-mirror--apply-entries m all))))
     (cons s nil)))
 
 (ert-deftest drgnx-agent-panel-rows/mirror-commits-a-patch-once ()
@@ -225,15 +222,12 @@ hub sends them; `restart': both fetch the hub's whole transcript (`:hub', its en
                                      :patch ,(vector (drgnx-agent-panel-rows-test--block 1 "two!"))))
                            (2 (:type "stop" :text "end_turn")))))
                 ("hub restart" (restart)))
-     :init (lambda () (list :m (drgnx-agents--make :remote "s-p" :id "s-p") :r (drgnx-agents--make :remote "s-p" :id "s-p")
-                            :hub nil :stops-m 0 :stops-r 0 :copied nil))
+     :init (lambda () (list :m (drgnx-agents--make :remote "s-p" :id "s-p") :hub nil :stops-m 0 :copied nil))
      :step #'drgnx-agent-panel-rows-test--mirror-step
      :check (lambda (s _)
-              (let ((m (drgnx-agent-session-entries (plist-get s :m)))
-                    (r (drgnx-agent-session-entries (plist-get s :r))))
-                (cond ((not (equal m r)) (format "in place %S, copied %S" m r))
-                      ((not (= (plist-get s :stops-m) (plist-get s :stops-r) 1))
-                       (format "the turn ended %d times in place, %d copied" (plist-get s :stops-m) (plist-get s :stops-r)))
+              (let ((m (drgnx-agent-session-entries (plist-get s :m))))
+                (cond ((not (= (plist-get s :stops-m) 1))
+                       (format "the turn ended %d times" (plist-get s :stops-m)))
                       ((plist-get s :copied) "a patch of entries it held copied the transcript")
                       ((not (equal (mapcar (lambda (b) (plist-get (elt (plist-get b :spans) 0) :text))
                                            (plist-get (nth 1 m) :blocks))
