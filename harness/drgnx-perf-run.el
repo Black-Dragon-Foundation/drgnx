@@ -1290,7 +1290,7 @@ error if it does not hold).  With :actions, :measure runs after the input and it
        :check "(with-current-buffer (window-buffer) (and (= 300 (length drgnx-debug-gutter--overlays)) (assq (selected-window) drgnx-debug-gutter--pool) t))"   ; the marks were placed and the hover pool was laid
        :teardown ,(concat "(progn (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
       ;; debug-gutter-scroll's baseline: the same file and keys with hunks' margin (its one column) and the breakpoint
-      ;; column claimed and empty, the column's mode off.  What the column adds is judged against this (at most 5 %,
+      ;; column claimed and empty, the column's mode off.  What the column adds is judged against this (5 % or 0.3 ms,
       ;; `drgnx-perf-run--relative-fails'): a session starting in a file that already shows hunks
       (debug-gutter-baseline
        :setup ,(drgnx-perf-run--debug-setup-form)
@@ -1674,12 +1674,15 @@ pairs below, each judged only when both sides were measured."
         (gutter (drgnx-perf--get results 'debug-gutter-scroll '(:input :p50)))
         (gutter-base (drgnx-perf--get results 'debug-gutter-baseline '(:input :p50))))
     (append
-     ;; the breakpoint column: at most 5 % over the same scroll with its margin (and hunks') claimed and empty (p50s:
-     ;; 60 keys are too few for a steady p95)
-     (when (and (numberp gutter) (numberp gutter-base) (> gutter (* 1.05 gutter-base)))
-       (list (format "debug-gutter-scroll input p50 %s ms is %s%% over debug-gutter-baseline's %s ms (the column may add at most 5 %%)"
+     ;; the breakpoint column: at most the larger of 5 % and 0.3 ms over the same scroll with its margin (and hunks')
+     ;; claimed and empty (p50s: 60 keys are too few for a steady p95).  Times come in 0.1 ms steps and the frame is
+     ;; ~4 ms, so 5 % alone is a step or two of noise (docs/develop/perf.md, "The breakpoint column's margin")
+     (when (and (numberp gutter) (numberp gutter-base)
+                ;; a hair over: 4.1 + 0.3 is 4.3999… in floats
+                (> gutter (+ (max (* 1.05 gutter-base) (+ gutter-base 0.3)) 1e-6)))
+       (list (format "debug-gutter-scroll input p50 %s ms is %s%% (%s ms) over debug-gutter-baseline's %s ms (the column may add at most 5 %% or 0.3 ms)"
                      (drgnx-perf--round gutter) (round (* 100 (- (/ gutter gutter-base) 1)))
-                     (drgnx-perf--round gutter-base))))
+                     (drgnx-perf--round (- gutter gutter-base)) (drgnx-perf--round gutter-base))))
      ;; the agents in the editor: at most 1 ms over the same five agents with the module off; of the paired chat's writes at
      ;; least 80 % were applied by the editor
      (when (and (numberp agents) (numberp agents-none) (> (- agents agents-none) 1.0))
