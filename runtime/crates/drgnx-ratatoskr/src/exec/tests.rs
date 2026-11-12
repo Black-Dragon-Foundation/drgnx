@@ -2269,3 +2269,58 @@ async fn a_job_admitted_at_once_is_launched_before_start_answers() {
         );
     }
 }
+
+/// Job SCRIPT run in CWD to its `Done` event (subscribed before the start, so the event is never missed).
+async fn run_to_done(r: &Runner, cwd: &Path, script: &str) -> String {
+    let mut events = r.subscribe();
+    let id = r
+        .start(spec(Starter::User, cwd, script, Duration::from_secs(30)))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            match events.recv().await {
+                Ok(JobEvent::Done(d)) if d.id == id => return,
+                Ok(_) => {}
+                Err(e) => panic!("the runner's events: {e}"),
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("job {id} never ended"));
+    id
+}
+
+/// A job that ended is still busy in its tree until the reader of the ends (the gates' evidence) has taken its end: a
+/// gate that looked between the end and its evidence saw no run and held the merge (round 7, macOS: the evidence
+/// landed 0.5 ms after the gate's look).
+#[tokio::test]
+async fn an_ended_job_is_busy_in_its_tree_until_its_end_is_taken() {
+    let d = tempfile::tempdir().unwrap();
+    let r = open(d.path());
+    r.settling();
+    let tree = d.path().join("tree");
+    std::fs::create_dir_all(tree.join("sub")).unwrap();
+    let id = run_to_done(&r, &tree.join("sub"), "exit 1").await;
+    assert!(r.busy_in(&tree), "its end not taken yet: still busy");
+    assert!(
+        !r.busy_in(&d.path().join("other")),
+        "busy only in its own tree"
+    );
+    r.settled(&id);
+    assert!(!r.busy_in(&tree), "its end taken");
+    // ends dropped (the reader lagged) are all taken at once
+    run_to_done(&r, &tree, "exit 0").await;
+    assert!(r.busy_in(&tree));
+    r.settled_all();
+    assert!(!r.busy_in(&tree));
+}
+
+/// Without a reader of the ends ([`Runner::settling`] never called) an ended job is busy nowhere.
+#[tokio::test]
+async fn without_a_reader_an_ended_job_is_busy_nowhere() {
+    let d = tempfile::tempdir().unwrap();
+    let r = open(d.path());
+    run_to_done(&r, d.path(), "exit 0").await;
+    assert!(!r.busy_in(d.path()));
+}
