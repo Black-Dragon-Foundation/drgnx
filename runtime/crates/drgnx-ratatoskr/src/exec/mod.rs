@@ -1004,8 +1004,10 @@ impl Inner {
             let _ = std::fs::remove_dir_all(&dir);
             return Err(e);
         }
-        // admitted at once: started here, so a refused launch is the start's answer
+        // admitted at once: started here, so a refused launch is the start's answer (the queue's tick, woken only
+        // now, finds it taken; one that waits is its)
         let t = self.queue.tick(now() as u64);
+        self.queue.wake_tick();
         let mut mine = None;
         for s in t.starts {
             if s == id {
@@ -1057,7 +1059,8 @@ impl Inner {
             keyed: false,
         })?;
         self.live.add(id, session);
-        self.queue.submit(self.submit_of(id, spec), started as u64);
+        // the tick wakes after start's own: a job admitted at once is start's to launch
+        self.queue.enter(self.submit_of(id, spec), started as u64);
         Ok(())
     }
 

@@ -2154,3 +2154,28 @@ async fn a_keyed_container_job_reads_its_keys_through_its_sidecar() {
     assert!(r.inner.get().unwrap().meta(&id).unwrap().keyed);
     r.stop(&id).await.unwrap();
 }
+
+/// A job this machine admits at once is launched before `start` answers: the queue's own tick (woken by the job
+/// entering it) never takes it first.  It did, now and then: `start` answered while the launch ran on another task,
+/// so a refused launch was not the start's answer, and a hub stopped at that moment left the job queued.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_job_admitted_at_once_is_launched_before_start_answers() {
+    for i in 0..2000 {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        let id = r
+            .start(spec(
+                Starter::User,
+                d.path(),
+                "true",
+                Duration::from_secs(30),
+            ))
+            .await
+            .unwrap();
+        let m = r.inner.get().unwrap().meta(&id).unwrap();
+        assert!(
+            !m.queued && m.pid.is_some(),
+            "start {i} answered before its launch: {m:?}"
+        );
+    }
+}
