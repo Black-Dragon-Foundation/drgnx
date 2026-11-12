@@ -16,6 +16,8 @@ pub mod blocked;
 pub mod breakpoints;
 pub mod install;
 pub mod launch;
+pub mod origin;
+pub mod origin_wire;
 pub mod ports;
 pub mod probes;
 pub mod record;
@@ -42,6 +44,8 @@ mod tests_breakpoints;
 mod tests_install;
 #[cfg(test)]
 mod tests_launch;
+#[cfg(test)]
+mod tests_origin;
 #[cfg(test)]
 mod tests_ports;
 #[cfg(test)]

@@ -38,6 +38,8 @@ pub struct Hub {
     last: Mutex<HashMap<String, String>>,
     /// The bisects over the edit history (`debug/bisect*`).
     pub(super) bisects: super::bisect_wire::Bisects,
+    /// The origin trails (`debug/origin`).
+    pub(super) origins: super::origin_wire::Origins,
 }
 
 impl Hub {
