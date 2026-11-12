@@ -154,9 +154,9 @@ and `KEY_MARK`; it is carried like any other stream and counts against the 64.
 - Every buffer a stream's bytes pass through on either side (the reader's and decoder's, a frame's payload once
   encoded, the writer's, the copy loops') is zeroed (`zeroize`) before it is freed or reused.
 
-Who owns the channel: the job helper, for every job with keys on a runner; the hub's `JobNetwork` for its own networked
-exec jobs, which run `owner::run` (a keyed command job on the hub's machine has a path socket of its own instead,
-docs/develop/hub.md "Keyed jobs here"; a keyed container job runs on a runner only).
+Who owns the channel: the job helper, for every job with keys on a runner; the hub's `JobNetwork` for its own container
+jobs with a network or keys, which run `owner::run`, or `owner::run_keyed` answered from the hub's keys (a keyed
+command job on the hub's machine has a path socket of its own instead, docs/develop/hub.md "Keyed jobs here").
 
 ## The owner (`owner`)
 

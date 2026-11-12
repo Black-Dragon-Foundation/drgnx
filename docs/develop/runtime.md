@@ -1518,10 +1518,14 @@ Users get the binary from install.sh and `drgnx update`; both call `drgnx runtim
   `<cache>/cargo` unless the record sets it, `DRGNX_BUILD_COMMIT` is the checkout's HEAD (plus `-dirty`) and
   `DRGNX_CHECKOUT` the checkout, so `ratatoskr version --json` says what it was built from. On Linux with a user systemd
   the build runs in `systemd-run --user --scope` with `MemoryMax` min(jobs x 1536 MiB + 1 GiB, available - 1 GiB) and
-  `MemorySwapMax=0`; without one, `-j` alone and a note. macOS has no cap.
+  `MemorySwapMax=0`; without one, `-j` alone and a note. macOS has no cap. It then builds `drgnx-key` the same way
+  (`-p sleipnir --no-default-features --bin drgnx-key`; a failure fails the build), and the relay sidecar and a static
+  `drgnx-key` for `<arch>-unknown-linux-musl` into `<cache>/ratatoskr-px-target` (a failure there only warns).
 - `drgnx runtime install [--prefix DIR]`: refuses a binary whose `version --json` says `"test_hooks": true` (or says
   nothing), copies it to `<data>/bin/ratatoskr.new` and renames it to `ratatoskr` (a running hub sees a new inode at
-  its resolved path); with `--prefix` links `DIR/bin/ratatoskr` and `DIR/bin/rtsk`.
+  its resolved path); with `--prefix` links `DIR/bin/ratatoskr` and `DIR/bin/rtsk`. Beside it, the same way: `drgnx-key`
+  (a keyed command job here runs behind it), `drgnx-px-<arch>-linux-musl` and `drgnx-key-<arch>-linux-musl` (a
+  container job's relay sidecar and a keyed one's entrypoint); one not built is named and skipped.
 - `drgnx update` runs `runtime build --install` as its third step; a failure rolls the update back
   (`DRGNX_UPDATE_RUNTIME_CMD` replaces the step in tests). The doctor's `ratatoskr` check (group Agents) reads
   `ratatoskr doctor --json`: no binary, test hooks or a bad socket directory fail; a failed runtime update, a binary or
