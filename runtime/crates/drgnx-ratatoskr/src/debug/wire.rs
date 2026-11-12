@@ -36,6 +36,8 @@ pub struct Hub {
     debug: OnceLock<Debug>,
     trusted: Mutex<BTreeSet<String>>,
     last: Mutex<HashMap<String, String>>,
+    /// The bisects over the edit history (`debug/bisect*`).
+    pub(super) bisects: super::bisect_wire::Bisects,
 }
 
 impl Hub {
@@ -56,6 +58,11 @@ impl Hub {
             d.record_into(super::runs_wire::opts(front));
             d
         })
+    }
+
+    /// The front, once it is in its `Arc`: a bisect's jobs outlive the call that started it.
+    pub fn bind(&self, front: &Arc<Front>) {
+        self.bisects.bind(front);
     }
 
     fn is_trusted(&self, root: &str) -> bool {

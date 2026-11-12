@@ -426,3 +426,51 @@ the breakpoint column; an SVG ring with a dot, `◉` or `o` on a terminal), the 
 a second), the strip buffer (it only inserts the hub's rows: a face or property the editor does not know is dropped),
 and past stops (`drgnx-debug-past-mode`'s keys, the past buffer with the snapshot's text and the banner, the variables
 buffer). Tests: `debug::tests_probes`, `debug::tests_record`, `test/unit/debug-timeline-test.el`.
+
+## Which change broke it: bisect over the edit history (spec §19.6)
+
+`debug/bisect.rs` is the search, `debug/bisect_wire.rs` the states and the methods, `debug/bisect_card.rs` the card.
+
+- **The states** (`bisect_wire::gather`): the good state the user picked (a commit, a recorded run's launch snapshot, or
+  a save or agent step of the edit history), then everything after it, ordered by time: the commits on HEAD's
+  first-parent line (`git log good..HEAD`), the saves and agent steps of the worktree's history branch
+  (`verdandi::History::records_on`; typing is never a state), the launch snapshots of recorded runs; and last "now",
+  the folder as it is (`take_kept`, ref `refs/drgnx/bisect/<id>` until the next bisect of the project). At most 512
+  (the newest).
+- **Their trees** (`bisect_wire::materialise`): each state is a tree in the bisect's own shadow repository
+  (`<state>/debug/bisect/<id>/`), which borrows the objects of the project's repository and of the snapshots'
+  through `objects/info/alternates`, so a commit's or a launch's tree is used as it is and nothing is copied. A record
+  is the history branch's base commit with every document as it was after it (`History::texts_after`) written over
+  it (blobs by `hash-object`, the base's file modes kept). A state whose tree equals the one before it is dropped.
+- **The search** (`bisect::Search`): `git bisect run`'s meanings (exit 0 good, 125 skip, 1–127 bad; a signal, a time
+  box or a code past 127 skips). The good state runs first; when it fails too the bisect ends with `needs-good`. Then
+  each round runs the states that cut the range between the last good and the first bad into equal parts, one per
+  free slot (default 3, at most 8); a skipped state's neighbour is asked instead. The first bad state and the last
+  good one run once more: a run that disagrees is reported as flaky. Only skipped states between them: the answer is a
+  range (`skipped`).
+- **Slots**: each slot keeps one folder (`slot-N`), moved from state to state by delta
+  (`timeline::snapshot::restore_into`: only the files that differ are written, a file the state lacks is removed).
+  The slots go when the bisect ends; the repository stays for narrowing until the project's next bisect, and nothing
+  outlives the hub (the folder is cleared at the first bisect of a hub).
+- **The predicate** (`bisect_wire::Jobs`): `test` (ARGV's exit code) or `exit` (ARGV exits with CODE: bad), with an
+  optional BUILD run first (its failure skips the state), each run a user job (`exec`, the user's rights, the time
+  box `timebox_s`, default 600 s) in the slot's folder. `exception` and `probe` (replay the recorded run in a what-if
+  fork, spec §19.3) are accepted by the schema and wait for the fork's replay seam.
+- **Narrowing** (`bisect::narrow`): the hunks from the last good tree to the first bad one (`git diff -U0`), then delta
+  debugging (ddmin) over them: each set tried is the good tree with those hunks applied (`git apply --cached
+  --unidiff-zero` into a temporary index), run in its own `narrow` folder.
+
+Methods (runstav `methods::debug_bisect`, the user class only): `debug/bisect/states {root, good?}` → the states
+after GOOD (`{id, kind, at, label, author?, session?, step?, decision?, record?}`); `debug/bisect {root, good,
+predicate, parallel?}` → `{bisect, states, estimate: {runs, slots, states}}`; `debug/bisect/cancel {bisect}` (the runs
+are stopped); `debug/bisect/narrow {bisect}`. Event: `debug-bisect {bisect, state, dots, estimate, result?, why?,
+hunks?, rows}`, `state` one of `checking-good`, `running`, `found`, `needs-good`, `cancelled`, `failed`, `narrowing`,
+`narrowed`, `narrow-failed`; `result` is `{first_bad, last_good, skipped, flaky, runs, diff}` (the diff at most 256
+KB). `rows` is the card (`bisect_card::rows` over the bisect's events merged).
+
+The editor's half, `drgnx-debug-bisect.el`: **Find the Change That Broke It…** reads a good state and a command,
+the card inserts the hub's rows, and its actions are Show Step (the diff), Revert Step (`history/revert`'s card of
+the step before, for an agent's step), Ask the Agent (`agents/send` to the session that made it), Narrow and Cancel.
+Tests: `debug::tests_bisect` (the search, ddmin, slots, flaky, cancel), `debug::tests_bisect_wire` (commits and records
+as trees, a slot moved between them, hunks, the card), `verdandi`'s `tests/materialise.rs`,
+`test/unit/debug-bisect-test.el`.

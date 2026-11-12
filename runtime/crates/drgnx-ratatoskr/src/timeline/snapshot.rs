@@ -54,6 +54,18 @@ fn git(
     Ok(String::from_utf8_lossy(&out).trim().to_string())
 }
 
+/// GIT ARGS in the repository REPO (a shadow repository, or a project's git directory read through a temporary INDEX
+/// with WORKTREE as its work tree), with the same environment as the snapshots' own: its output, trimmed.  For the
+/// debug bisect's trees (`debug::bisect`).
+pub fn run_git(
+    repo: &Path,
+    worktree: Option<&Path>,
+    index: Option<&Path>,
+    args: &[&str],
+) -> Result<String, String> {
+    git(repo, worktree, index, args)
+}
+
 /// [`git`]'s output as it is: not trimmed, not decoded.
 fn git_bytes(
     repo: &Path,

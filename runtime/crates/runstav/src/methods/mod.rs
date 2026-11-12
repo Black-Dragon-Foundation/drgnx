@@ -9,6 +9,7 @@ pub mod agents;
 pub mod config;
 pub mod coord;
 pub mod debug;
+pub mod debug_bisect;
 pub mod debug_runs;
 pub mod editor;
 pub mod exec;
@@ -311,6 +312,10 @@ params! {
     DebugRunGet(debug_runs::DebugRunGet),
     DebugRunStop(debug_runs::DebugRunStop),
     DebugRunPin(debug_runs::DebugRunPin),
+    DebugBisect(debug_bisect::DebugBisect),
+    DebugBisectCancel(debug_bisect::DebugBisectId),
+    DebugBisectNarrow(debug_bisect::DebugBisectId),
+    DebugBisectStates(debug_bisect::DebugBisectStates),
     SearchQuery(search::QueryParams),
     SearchStatus(search::RootParams),
     SearchIndex(search::IndexParams),
@@ -431,6 +436,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(pair::methods());
     v.extend(debug::methods());
     v.extend(debug_runs::methods());
+    v.extend(debug_bisect::methods());
     v
 }
 
