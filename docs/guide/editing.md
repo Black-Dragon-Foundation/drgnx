@@ -69,6 +69,20 @@ column shows (`auto`: while the file has breakpoints or a session runs). Keys: V
 Emacs `C-x C-a` and `C-b` (toggle), `C-c` (condition), `C-l` (logpoint), `C-e` (enable), `C-u` (Run to Cursor), as
 GUD has them; Vim `SPC d` and `b`, `B`, `l`, `e`, `c`.
 
+Every session is recorded, against a snapshot of the files as they were when it started. **Add Probe…** records an
+expression each time its line runs, without stopping the program and without printing anything; **Probe the
+Result…** records what the line assigns, on the next line that runs (a probe runs before its line). A probe is a
+ring with a dot in its own column, and its newest values show at the line's end as a sparkline and the last value.
+**Show Stop Timeline** opens a strip at the top: the run's stops, numbered (a dot for a breakpoint, a small dot for a
+step, a triangle for an exception), and one lane per probe. Click a stop (or `RET` on it), or press `Alt ←` / `Alt →` in the strip or
+a past stop, to open it read-only: the file as it ran under a banner (it says "not what ran" when
+the file was unsaved at the start), the stop's line marked with its variables, and the stack and variables as they
+were in a window beside it. `Alt →` past the newest stop, **Back to Live** (the palette) or the banner's button returns.
+Recorded runs hold your program's values, so they stay yours: agents cannot read them. They are kept 14 days (a pinned
+run, or one for an open task, longer), at most 2 GB per project, oldest first. Probes need an adapter with logpoints
+(debugpy and the JavaScript debugger take 2000 values a second, the rest 200, and delve and codelldb stop and resume
+the program for each one; values past the rate are thinned and counted).
+
 ## Indent guides
 
 Thin vertical guides at each indentation level of code and YAML, on graphical frames, drawn by indent-bars (stipples,

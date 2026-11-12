@@ -337,3 +337,48 @@ child, and while it is stopped every TCP listener in the container is one of the
 js-debug program a block of three ports, so its second child runs without the debugger and says so. The block's own
 tests (`debug/tests_ports.rs`) include two processes claiming in one lock directory (the test binary runs itself as
 the second) and a stranger's listener on the adapter's port (`debug/tests_blocked.rs`).
+
+## Recorded runs: probes, the stop timeline (spec §19.2)
+
+Every session the hub starts is recorded (`debug/record.rs`, `Records`; the hub's records are made in
+`debug/runs_wire.rs` from `<state>`):
+
+- **The launch snapshot**: `begin` writes the root's tree into the checkpoints' shadow repository
+  (`timeline::snapshot::take_kept`, the files as on disk, with the editor's unsaved list kept beside it) and keeps it
+  as `refs/drgnx/debug/<run>`, so a past stop shows the file that ran. A Python launch gets `PYTHONHASHSEED` (the
+  run's, kept in the record) so a replay hashes the same.
+- **Probes** (`debug/probes.rs`): logpoints whose message is `"\u{1e}drgnx:<probe>:{<thread>}:{<expr>}"`. Python's
+  thread is `threading.get_ident()` and its value `repr(expr)`; the others send no thread. Output events carry no
+  thread, so it rides in the marker. `Records::output` takes those lines out of the console text and records them as
+  hits. Probes are appended after the user's breakpoints in every `setBreakpoints` (a line with a user breakpoint gets
+  no probe), and `breakpoints::fit` drops them for an adapter without `supportsLogPoints`, so a probe never becomes a
+  stop. Caps per second (`probes::cap`): 2000 for debugpy and js-debug, 200 for the rest (which stop to probe, and
+  the run says so); the rest are thinned and counted; a fork's run keeps every hit. "Probe the Result"
+  (`probes::next_line`) places the probe on the next line that runs, past continuation lines, blanks and comments. A
+  project's probes are kept in `<state>/debug-probes/<xxh3 of root>.json`.
+- **The run file** (`debug/runfile.rs`): `<state>/debug/runs/<run>.drun`, `DRUN1\n`, then blocks (u32 raw length, u32
+  compressed length, zstd) of JSON-lines frames, 64 KB raw each; `<run>.drun.idx` indexes blocks, stops and each
+  probe's hits. Each stop's capture (threads, the stack, the selected frame's scopes and variables) is cut to 64 KB:
+  the last scope's variables first, then frames past the selected one, then threads. A file holds 64 MB: past that
+  the oldest hits go (rewritten to three quarters), never a stop.
+- **The record** (`<run>.json`, `RunMeta`) is also an Urdr entity of kind `debug_run` (`norn::write::debug`), written
+  in order on one task, `recording` then `ended`.
+- **Retention** (`Records::prune`, after every run's end): 14 days, except pinned runs and runs whose task is open,
+  then 2 GB per project, oldest first; a pruned run's file, snapshot ref and entity go.
+- **Ordering**: `RunHit.seq` and `RunStop.index` come from one counter, so "the hits before stop k" is
+  `seq < index`. `bp_hit` counts the stops at that line, this one included; `steps` are the step ops since the last
+  breakpoint stop. `RunInfo` and `trait Runs` are what a fork (spec §19.3) reads.
+
+Methods (runstav `methods::debug_runs`, the user class only: agents are refused, which is `debug.read`'s gate):
+`debug/probe/op {root, op?}` (add, result, remove, edit) → the project's probes; `debug/runs/list {root}`;
+`debug/run/get {run, from?, count?, current?}` → a page of stops, each probe's lane (at most 2000 hits) and `strip`,
+the timeline's rows (`debug/strip.rs`, the hub's rows: a head, the stops, a lane per probe with a sparkline);
+`debug/run/stop {run, stop, file?}` → the capture and the file's text from the snapshot (`not_what_ran` when it was
+unsaved at the start); `debug/run/pin {run, pinned}`. Events: `debug-run {run, n, root, session, name, state, stops, hits,
+thinned, dropped, stops_to_probe, outcome, stop}` at the start, each stop and the end; `debug-probe-hits {run, hits}`, batched every 50 ms.
+
+The editor's half, `drgnx-debug-timeline.el`: the probe column (`drgnx-margins-claim 'debug-probe … :order 1`, after
+the breakpoint column; an SVG ring with a dot, `◉` or `o` on a terminal), the values at a line's end (throttled to 10
+a second), the strip buffer (it only inserts the hub's rows: a face or property the editor does not know is dropped),
+and past stops (`drgnx-debug-past-mode`'s keys, the past buffer with the snapshot's text and the banner, the variables
+buffer). Tests: `debug::tests_probes`, `debug::tests_record`, `test/unit/debug-timeline-test.el`.
