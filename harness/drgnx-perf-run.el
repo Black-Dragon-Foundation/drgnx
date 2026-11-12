@@ -152,6 +152,40 @@ undoes it."
               (define-key drgnx-debug-past-mode-map (kbd "M-<left>") #'drgnx-debug-timeline-back)
               t))))
 
+(defun drgnx-perf-run--debug-bisect-setup-form ()
+  "The bisect's workload's setup: its file loaded and `<f7>' bound to a keystroke that types a character and, as a
+3-way bisect's slots end, takes a `debug-bisect' event (the card's rows: a head, nine dots, the result, the actions)
+and draws the card, as the throttle's timer would.  `drgnx-perf--bisect-stop' undoes it."
+  (format "(progn (load (expand-file-name \"modules/extra/drgnx-debug-bisect\" %S) nil t) %s)"
+          drgnx-ui-repo-dir
+          (prin1-to-string
+           '(progn
+              (defvar drgnx-perf--bisect-n 0)
+              (defun drgnx-perf--bisect-key ()
+                "A character typed, and the bisect's next event drawn."
+                (interactive)
+                (insert "x")
+                (let* ((n (setq drgnx-perf--bisect-n (1+ drgnx-perf--bisect-n)))
+                       (dots (mapconcat (lambda (i) (cond ((< i (% n 9)) "●") ((= i (% n 9)) "✕") (t "·")))
+                                        (number-sequence 0 8) " ")))
+                  (drgnx-debug-bisect--event
+                   "debug-bisect"
+                   (list :bisect "perf" :state "running"
+                         :rows (vector (list :key "head" :text (format "Bisect · 9 states · about 6 runs in 3 slots · running %d" n)
+                                             :runs (vector (vector 0 6 "drgnx-debug-timeline-head")))
+                                       (list :key "dots" :text dots
+                                             :runs (vector (vector 0 1 "drgnx-debug-bisect-good")))
+                                       (list :key "first-bad" :text "First bad: Tighten the stock check · claude")
+                                       (list :key "actions" :text "Show Step  Revert Step  Ask the Agent  Narrow"
+                                             :props (vector (vector 0 9 "drgnx-debug-bisect-action" "show")))))))
+                (drgnx-timer-cancel 'debug-bisect)
+                (drgnx-debug-bisect--render))
+              (defun drgnx-perf--bisect-stop ()
+                (drgnx-debug-bisect-events-mode -1)
+                (global-unset-key (kbd "<f7>")) t)
+              (global-set-key (kbd "<f7>") #'drgnx-perf--bisect-key)
+              t))))
+
 (defun drgnx-perf-run--visit-fixture-form ()
   "The form that visits the fixture and puts point where the keys go: the line under `drgnx-perf-run--fixture-mark'."
   (format "(let ((f %S)) (when-let* ((b (find-buffer-visiting f))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
@@ -1948,6 +1982,18 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :actions ,(funcall keys "M-<left>" 30)
        :check "(eql drgnx-debug-timeline--current (* 3 31))"   ; from live, 30 back: stop 31 of 60
        :teardown ,(concat "(progn (drgnx-debug-timeline-live) (drgnx-perf--timeline-stop) " kill-fixture ")"))
+      ;; bisect (spec §19.9): typing while a 3-way bisect's slots end, each keystroke a character and an event
+      ;; drawn on the card beside the file; the keystroke p95 stays under 16 ms
+      (debug-bisect-typing
+       :setup ,(drgnx-perf-run--debug-bisect-setup-form)
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
+                      " (drgnx-debug-bisect-events-mode 1) (setq drgnx-debug-bisect--id \"perf\" drgnx-perf--bisect-n 0)"
+                      " (drgnx-debug-bisect--render)"
+                      " (let ((b (current-buffer))) (display-buffer drgnx-debug-bisect-buffer '(nil (inhibit-same-window . t)))"
+                      " (switch-to-buffer b)) t)")
+       :actions ,(funcall keys "<f7>" 40)
+       :check "(and (= drgnx-perf--bisect-n 40) (with-current-buffer drgnx-debug-bisect-buffer (string-match-p \"running 40\" (buffer-string))) t)"
+       :teardown ,(concat "(progn (drgnx-perf--bisect-stop) " kill-fixture ")"))
       ;; the diff view, split, on a 10k-line diff (built in the session: no git needed)
       (diff-scrolling
        :setup ,(format "(progn (load (expand-file-name \"modules/tools/drgnx-diff\" %S) nil t) t)" drgnx-ui-repo-dir)
@@ -2641,7 +2687,8 @@ version and the commit, as JSON in FILE."
                                 terminal-backfill terminal-flood))
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "graphical debugging: its allocation, CPU and rows are set from three pinned runs on the desktop island (the plan's perf step)"))
-              '(debug-gutter-scroll debug-gutter-baseline debug-breakpoint-click debug-probe-flood debug-scrub))
+              '(debug-gutter-scroll debug-gutter-baseline debug-breakpoint-click debug-probe-flood debug-scrub
+                                    debug-bisect-typing))
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))
     ,@(mapcar (lambda (w) (cons w "the Work space's rows are time budgets on the desktop island (typing p95 and the relative +1 ms rules); allocation, CPU and rows follow once the first runs set them"))
