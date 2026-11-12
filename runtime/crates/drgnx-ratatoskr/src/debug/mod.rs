@@ -813,8 +813,8 @@ impl Debug {
         v
     }
 
-    /// Session ID watches variable NAME of container REFERENCE (Break on Value Change), for ACCESS (the adapter's
-    /// default when none): the adapter names it (`dataBreakpointInfo`), and the session's whole list is sent
+    /// Session ID watches variable NAME of container REFERENCE (Break on Value Change), for ACCESS (`write` when
+    /// none, as VS Code sends it: an adapter's own default may stop on reads too): the adapter names it (`dataBreakpointInfo`), and the session's whole list is sent
     /// (`setDataBreakpoints`). The list as the view shows it.
     pub async fn add_data_breakpoint(
         &self,
@@ -834,16 +834,16 @@ impl Debug {
         let Some(data_id) = info["dataId"].as_str().map(str::to_owned) else {
             return Err(description);
         };
-        if let Some(a) = &access
-            && let Some(types) = info["accessTypes"].as_array()
-            && !types.iter().any(|t| t == a)
+        let a = access.unwrap_or_else(|| "write".to_owned());
+        if let Some(types) = info["accessTypes"].as_array()
+            && !types.iter().any(|t| *t == a)
         {
             return Err(format!("{description} cannot be watched for {a}"));
         }
         let bp = breakpoints::DataBp {
             data_id,
             description,
-            access_type: access,
+            access_type: Some(a),
         };
         self.store(&root, |s| s.data_add(id, bp));
         self.send_data(id, &h, &root, &caps).await;

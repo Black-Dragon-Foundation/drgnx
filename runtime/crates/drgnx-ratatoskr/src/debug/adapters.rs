@@ -209,7 +209,7 @@ pub fn command(
 }
 
 /// A free port on 127.0.0.1 (the hub's pick for a TCP adapter; another local process could take it before the
-/// adapter does, which the debugging guide documents).
+/// adapter does: the hub connects only to the adapter's own listener, `wire::Spawned`).
 pub fn free_port() -> std::io::Result<u16> {
     Ok(std::net::TcpListener::bind(("127.0.0.1", 0))?
         .local_addr()?

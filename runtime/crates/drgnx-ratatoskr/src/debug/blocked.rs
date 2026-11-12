@@ -443,7 +443,7 @@ fn local(port: u16) -> SocketAddr {
 /// Waits (at most WITHIN) until PORT listens with every listener in GROUP (a process the hub started leads its own):
 /// the hub connects to it, or starts a program that will, only then. A stranger's listener (the probe and the bind
 /// are apart) is an error at once, never connected to.
-async fn wait_owned(port: u16, group: i32, within: Duration) -> Result<(), String> {
+pub(super) async fn wait_owned(port: u16, group: i32, within: Duration) -> Result<(), String> {
     let deadline = crate::clock::now() + within;
     loop {
         let owned = crate::clock::blocking(move || super::ports::owned(port, &[group]))
@@ -454,7 +454,7 @@ async fn wait_owned(port: u16, group: i32, within: Duration) -> Result<(), Strin
         }
         if crate::clock::now() >= deadline {
             return Err(format!(
-                "nothing listened on port {port} of the session's block within {} s",
+                "nothing listened on port {port} within {} s",
                 within.as_secs()
             ));
         }
