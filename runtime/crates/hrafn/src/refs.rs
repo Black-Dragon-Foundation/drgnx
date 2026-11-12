@@ -24,6 +24,35 @@ pub const REFS_SQL: &str = concat!(
     " where r.name = ?1 and f.blob = r.blob order by r.path"
 );
 
+/// A name's `(path, blob, n)` in every pair, the view not applied: on `ref_name` alone (schema v6 carries `n`), for the
+/// usages, which filter the pairs by the view's graph (`map::usages`).
+pub const COUNTS_SQL: &str = "select path, blob, n from ref where name = ?1";
+
+/// One pair's first lines of a name, on the primary key.
+const LINES_SQL: &str = "select lines from ref where path = ?1 and blob = ?2 and name = ?3";
+
+/// The first lines of NAME in the pair `(path, blob)`.
+pub(crate) fn lines(
+    c: &Connection,
+    path: &str,
+    blob: &str,
+    name: &str,
+) -> rusqlite::Result<Vec<u32>> {
+    let lines: Option<String> = c
+        .prepare(LINES_SQL)?
+        .query_row(params![path, blob, name], |r| r.get(0))
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            e => Err(e),
+        })?;
+    Ok(lines
+        .unwrap_or_default()
+        .split(' ')
+        .filter_map(|l| l.parse().ok())
+        .collect())
+}
+
 /// NAME's references in VIEW, by path, inside a read on the store thread.
 pub(crate) fn rows(c: &Connection, view: View, name: &str) -> rusqlite::Result<Vec<RefRow>> {
     c.prepare(REFS_SQL)?

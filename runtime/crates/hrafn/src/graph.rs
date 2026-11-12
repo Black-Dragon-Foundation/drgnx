@@ -10,6 +10,7 @@
 //! - **Cache:** the graph and its unpersonalised ranks per view live in the memo (`memo.rs`) until the store changes:
 //!   at most [`CACHE_BYTES`] of them (by [`Graph::bytes`]' estimate), the least recently used going first.
 
+use crate::files::Class;
 use crate::memo;
 use crate::store::{CodeStore, StoreError};
 use crate::tree::View;
@@ -39,6 +40,8 @@ pub(crate) struct Graph {
     pub blobs: Vec<String>,
     /// Whether each file is code (not a test or docs).
     pub code: Vec<bool>,
+    /// Each file's class.
+    pub class: Vec<Class>,
     pub names: Vec<String>,
     by_path: HashMap<String, u32>,
     /// The out-edges of file `i` are `edges[start[i]..start[i + 1]]`.
@@ -81,6 +84,7 @@ impl Graph {
         let mut paths = Vec::new();
         let mut blobs = Vec::new();
         let mut code = Vec::new();
+        let mut class = Vec::new();
         let mut by_path = HashMap::new();
         {
             let mut q = c.prepare(FILES_SQL)?;
@@ -90,7 +94,13 @@ impl Graph {
                 by_path.insert(path.clone(), paths.len() as u32);
                 paths.push(path);
                 blobs.push(r.get::<_, String>(1)?);
-                code.push(r.get_ref(2)?.as_str()? == "code");
+                let c = match r.get_ref(2)?.as_str()? {
+                    "test" => Class::Test,
+                    "docs" => Class::Docs,
+                    _ => Class::Code,
+                };
+                code.push(c == Class::Code);
+                class.push(c);
             }
         }
         // the node of a (path, blob) the view sees
@@ -156,6 +166,7 @@ impl Graph {
             paths,
             blobs,
             code,
+            class,
             names,
             by_path,
             start,
@@ -316,7 +327,7 @@ impl Graph {
     }
 
     /// An estimate of the memory the graph holds: its strings (the paths twice, with the index's), the edges, and per
-    /// file the offsets, the class flag and both cached ranks.
+    /// file the offsets, the class and its flag and both cached ranks.
     pub fn bytes(&self) -> usize {
         let strings: usize = self
             .paths
@@ -326,7 +337,9 @@ impl Graph {
             .chain(&self.names)
             .map(|s| s.len() + 24)
             .sum();
-        strings + self.edges.len() * std::mem::size_of::<Edge>() + self.len() * (4 + 1 + 8 + 8 + 8)
+        strings
+            + self.edges.len() * std::mem::size_of::<Edge>()
+            + self.len() * (4 + 1 + 1 + 8 + 8 + 8)
     }
 }
 
@@ -443,6 +456,7 @@ mod tests {
             by_path: HashMap::new(),
             blobs: paths.clone(),
             code: vec![true; n],
+            class: vec![Class::Code; n],
             names: Vec::new(),
             start: vec![0; n + 1],
             edges: Vec::new(),

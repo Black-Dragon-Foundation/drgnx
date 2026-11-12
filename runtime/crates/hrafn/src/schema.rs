@@ -85,7 +85,14 @@ create index vec_used on vec(model, last_used);
 ";
 
 /// The migrations for `urdr::StoreSpec`.
-pub const MIGRATIONS: &[(u32, &str)] = &[(1, V1), (2, V2), (3, V3), (4, V4), (5, V5)];
+pub const MIGRATIONS: &[(u32, &str)] = &[(1, V1), (2, V2), (3, V3), (4, V4), (5, V5), (6, V6)];
+
+/// Schema v6: `ref_name` carries the count, so a name's usages are ranked on the index alone (`refs::COUNTS_SQL`):
+/// at 22,000 files using one name, the table's rows were most of the answer's time.
+const V6: &str = "
+drop index ref_name;
+create index ref_name on ref(name, path, blob, n);
+";
 
 /// Schema v5: the names a file's content uses (`chunk::refs`), counted, with their first lines (up to 8, space
 /// separated). Keyed by `(path, blob)` like chunks and symbols, so a view sees them through its `file` rows and the
