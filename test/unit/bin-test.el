@@ -656,16 +656,18 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
   (string-search "--bg-daemon=" (or (ignore-errors (drgnx-bin-test--slurp (expand-file-name "emacs.log" dir))) "")))
 
 (ert-deftest drgnx-bin/open-waits-count-seconds-not-polls ()
-  :tags '(:timing)                                      ; wall-clock budget: the :timing group runs alone
-  ;; Each poll costs its sleep and a client call (0.3 s here): 20 polls would be 8 s, not the 2 s asked for.
+  ;; Each poll costs its sleep and a client call (0.3 s here, more on a loaded machine): a loop that counted polls
+  ;; would make 2 s / 0.1 s = 20 of them; one that counts seconds stops after 2-3 s, at most 3 s / 0.4 s of them.
+  ;; Counted, not timed: a slow machine makes fewer polls, never more.
   (drgnx-bin-test--with-open
     (write-region "never" nil (expand-file-name "delay" dir))
     (drgnx-bin-test--touch dir "slow-probe")
-    (let* ((start (float-time))
-           (r (drgnx-bin-test--call drgnx-bin-test--bin (cons "DRGNX_OPEN_WAIT=2" env) "open")))
+    (let* ((r (drgnx-bin-test--call drgnx-bin-test--bin (cons "DRGNX_OPEN_WAIT=2" env) "open"))
+           (probes (seq-count (lambda (call) (equal (car (last call)) "t"))
+                              (drgnx-bin-test--client-calls dir))))
       (should (eql 1 (car r)))
       (should (string-search "did not start within 2 s" (cdr r)))
-      (should (< (- (float-time) start) 4.5)))))
+      (should (< 0 probes 12)))))
 
 (ert-deftest drgnx-bin/open-wait-is-decimal-and-a-bad-value-is-refused ()
   (drgnx-bin-test--with-open
@@ -1761,6 +1763,21 @@ while :; do wait; done" job job job job job)))
       (delete-directory dir t)
       (delete-directory tmp t))))
 
+(defun drgnx-bin-test--bootstrap-tree (dir)
+  "A checkout in DIR/src with only what `drgnx test --bootstrap' reads before its first container: its bin/drgnx.
+The run snapshots its whole checkout first (tar, a commit, a bundle); this one's is a few files, not the tree's
+thousands, and nothing else writes into it meanwhile."
+  (let ((src (expand-file-name "src" dir)))
+    (make-directory (expand-file-name "bin" src) t)
+    (make-directory (expand-file-name "etc" src) t)
+    (make-directory (expand-file-name "test/fixtures/bootstrap" src) t)
+    (dolist (f '("bin/drgnx" "bin/drgnx-paths.sh" "etc/drgnx.lock.eld"))
+      (copy-file (expand-file-name f drgnx-bin-test--root) (expand-file-name f src)))
+    (copy-directory (expand-file-name "test/fixtures/bootstrap/config" drgnx-bin-test--root)
+                    (expand-file-name "test/fixtures/bootstrap/" src))
+    (call-process "git" nil nil nil "-C" src "init" "-q")
+    (expand-file-name "bin/drgnx" src)))
+
 (ert-deftest drgnx-bin/test-bootstrap-removes-its-container-when-stopped ()
   ;; TERM (a CI cancel; Ctrl-C is the same path) while a container runs: bin/drgnx exits at once and removes the
   ;; container by name — the container's bash (PID 1) ignores the TERM podman forwards, so nothing else would stop it.
@@ -1781,10 +1798,12 @@ while :; do wait; done" job job job job job)))
         (progn
           (setq proc (make-process :name "drgnx-bin-stop" :buffer nil :noquery t :connection-type 'pipe
                                    :sentinel (lambda (p _e) (process-put p :done t))
-                                   :command (list drgnx-bin-test--bin "test" "--bootstrap")))
-          (drgnx-test-wait (lambda () (and (string-match-p "^run " (or (ignore-errors (drgnx-bin-test--slurp log)) ""))
-                                           (string-match-p "[0-9]" (or (ignore-errors (drgnx-bin-test--slurp (concat log ".runpid"))) ""))))
+                                   :command (list (drgnx-bin-test--bootstrap-tree dir) "test" "--bootstrap")))
+          (drgnx-test-wait (lambda () (or (process-get proc :done)   ; it gave up before any container: say so below
+                                          (and (string-match-p "^run " (or (ignore-errors (drgnx-bin-test--slurp log)) ""))
+                                               (string-match-p "[0-9]" (or (ignore-errors (drgnx-bin-test--slurp (concat log ".runpid"))) "")))))
                            :secs 60 :what "the container's run")
+          (should-not (and (process-get proc :done) (list 'exited (process-exit-status proc))))
           (should (string-match-p "^run .*--name drgnx-bootstrap-[0-9]+-keys " (drgnx-bin-test--slurp log)))
           (signal-process proc 'term)
           (should (drgnx-test-wait (lambda () (process-get proc :done)) :what "bin/drgnx's exit"))
