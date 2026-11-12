@@ -243,6 +243,10 @@ async fn only_the_starting_editor_is_told_to_open_the_file() {
         (&mine["path"], &mine["line"], &mine["top"]),
         (&json!("/p/app.js"), &json!(7), &json!(true))
     );
+    assert_eq!(
+        (&mine["name"], &mine["source_name"]),
+        (&json!("f"), &Value::Null)
+    );
     assert_eq!(last_states(&ev), [format!("{id}:stopped")]);
     d.control(
         &id,
@@ -646,4 +650,104 @@ async fn the_store_is_kept_per_project_in_the_state_directory() {
         again.breakpoints("/p", None, Some("/q/b.js")).await["breakpoints"],
         json!([])
     );
+}
+
+/// An exception stop: `exceptionInfo` (when the adapter has it) is asked in the same stop and goes in `debug-frame`'s
+/// `exception` (its id, message, break mode and details), for the editor's exception card.
+#[tokio::test(start_paused = true)]
+async fn an_exception_stop_carries_exception_info() {
+    let mut s = vec![
+        json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true, "supportsExceptionInfoRequest": true}}),
+        json!({"expect": "launch", "ok": {}}),
+        json!({"event": "initialized"}),
+        json!({"expect": "configurationDone"}),
+        json!({"event": "stopped", "body": {"reason": "exception", "threadId": 1, "description": "Paused on exception"}}),
+        json!({"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}),
+        json!({"expect": "stackTrace", "ok": {"stackFrames": [{"id": 5, "name": "f", "line": 7, "column": 3, "source": {"path": "/p/app.py"}}]}}),
+        json!({"expect": "scopes", "ok": {"scopes": []}}),
+        json!({"expect": "exceptionInfo", "args": {"threadId": 1},
+               "ok": {"exceptionId": "ZeroDivisionError", "description": "division by zero", "breakMode": "unhandled",
+                      "details": {"typeName": "ZeroDivisionError", "stackTrace": "Traceback …"}}}),
+    ];
+    s.extend(end());
+    let (d, ev, m, _) = setup(vec![s]);
+    let id = d.start(7, "/p", start(), m.clone()).await.unwrap();
+    until(|| ev.named("debug-frame").len() == 2).await;
+    let (_, _, mine) = &ev.named("debug-frame")[1];
+    assert_eq!(mine["reason"], json!("exception"));
+    assert_eq!(
+        mine["exception"],
+        json!({"id": "ZeroDivisionError", "message": "division by zero", "break_mode": "unhandled",
+               "type": "ZeroDivisionError", "trace": "Traceback …"})
+    );
+    d.control(
+        &id,
+        Op::Stop {
+            kill_debuggee: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(m.finish().await.into_iter().all(|r| r.is_ok()));
+}
+
+/// Without `exceptionInfo`, the stop's own description is the card's message; a stop that is not an exception has none.
+#[tokio::test(start_paused = true)]
+async fn without_exception_info_the_description_is_the_message() {
+    let mut s = launch(vec![
+        json!({"event": "stopped", "body": {"reason": "exception", "threadId": 1, "description": "Uncaught TypeError"}}),
+        json!({"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}),
+        json!({"expect": "stackTrace", "ok": {"stackFrames": [{"id": 5, "name": "f", "line": 7, "column": 3, "source": {"path": "/p/app.js"}}]}}),
+        json!({"expect": "scopes", "ok": {"scopes": []}}),
+    ]);
+    s.extend(end());
+    let (d, ev, m, _) = setup(vec![s]);
+    let id = d.start(7, "/p", start(), m.clone()).await.unwrap();
+    until(|| ev.named("debug-frame").len() == 2).await;
+    let (_, _, mine) = &ev.named("debug-frame")[1];
+    assert_eq!(mine["exception"], json!({"message": "Uncaught TypeError"}));
+    d.control(
+        &id,
+        Op::Stop {
+            kill_debuggee: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(m.finish().await.into_iter().all(|r| r.is_ok()));
+}
+
+/// A frame whose source has no file (`sourceReference`): `debug/source` asks the adapter for its text.
+#[tokio::test(start_paused = true)]
+async fn a_source_reference_is_fetched_from_the_adapter() {
+    let mut s = launch(vec![
+        json!({"expect": "source", "args": {"sourceReference": 42, "source": {"sourceReference": 42}},
+               "ok": {"content": "function f() {}\n", "mimeType": "text/javascript"}}),
+        json!({"expect": "source", "args": {"sourceReference": 9, "source": {"sourceReference": 9}},
+               "fail": "no such source"}),
+    ]);
+    s.extend(end());
+    let (d, ev, m, _) = setup(vec![s]);
+    let id = d.start(7, "/p", start(), m.clone()).await.unwrap();
+    until(|| last_states(&ev) == [format!("{id}:running")]).await;
+    assert_eq!(
+        d.source(&id, 42).await.unwrap(),
+        json!({"text": "function f() {}\n", "mime": "text/javascript"})
+    );
+    assert!(
+        d.source(&id, 9)
+            .await
+            .unwrap_err()
+            .contains("no such source")
+    );
+    assert!(d.source("nope", 42).await.is_err());
+    d.control(
+        &id,
+        Op::Stop {
+            kill_debuggee: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(m.finish().await.into_iter().all(|r| r.is_ok()));
 }

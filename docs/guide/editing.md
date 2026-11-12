@@ -61,6 +61,9 @@ you to trust it (**Trust This Folder**): an untrusted folder's configurations ne
 pins, or puts debugpy into drgnx's own Python, and names the system package to install for the others (`drgnx doctor`
 lists which are found).
 
+A stop opens its file at the line, marked by an amber arrow and band; a caller frame you pick is marked green, and a
+stop on an exception is red, with a card under the line saying what was raised (code with no file, such as an
+`eval`, opens read-only from the debugger). Set `drgnx-debug-focus-on-stop` to bring Emacs to the front on a stop.
 While the session is stopped the same command continues; **Toggle Breakpoint**, **Step Over**, **Step Into**,
 **Step Out** and **Stop Debugging** do what they say. If you used dape, **Convert dape Configurations…** (the palette)
 turns your `dape-configs` into launch configurations once (dape itself is no longer needed).

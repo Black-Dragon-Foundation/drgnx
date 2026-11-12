@@ -66,6 +66,7 @@
   "debug/run/stop": ["user"],
   "debug/runs/list": ["user"],
   "debug/select": ["user"],
+  "debug/source": ["user"],
   "debug/start": ["user"],
   "debug/trust": ["user"],
   "decisions/effects": ["user"],

@@ -1930,6 +1930,24 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :actions ,(apply #'append (make-list 20 (list (list :keys "<f9>") (list :keys "<down>"))))
        :check "(= 20 (length drgnx-perf--debug-store))"
        :teardown ,(concat "(progn (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
+      ;; a step (spec §5): F10 is one `debug-frame' for the next line of the fixture, as the hub sends a step's stop to
+      ;; the editor that started the session (`open'): the arrow and band moved, point placed, the window scrolled
+      ;; only when the line left it
+      (debug-step-line
+       :setup ,(concat "(progn " (drgnx-perf-run--debug-setup-form)
+                       (format " (load (expand-file-name \"modules/extra/drgnx-debug\" %S) nil t)" drgnx-ui-repo-dir)
+                       " (defvar drgnx-perf--step-line 0)"
+                       " (defun drgnx-perf--step () (interactive)"
+                       "   (drgnx-debug-gutter-show-frame (list :session \"perf\" :epoch (cl-incf drgnx-perf--step-line)"
+                       "     :thread 1 :path buffer-file-name :line (+ 100 drgnx-perf--step-line) :col 5 :top t"
+                       "     :reason \"step\" :open t :name \"main\")))"
+                       " (global-set-key (kbd \"<f10>\") #'drgnx-perf--step) t)")
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
+                      " (goto-char (point-min)) (setq drgnx-perf--step-line 0) (drgnx-debug-gutter-mode 1) t)")
+       :actions ,(funcall keys "<f10>" 120)   ; p95 is judged from 100 samples
+       :check "(with-current-buffer (window-buffer) (and (= (line-number-at-pos) 220) (= 1 (length (drgnx-debug-gutter--stop-overlays \"perf\")))))"
+       :teardown ,(concat "(progn (drgnx-debug-gutter-stop-clear-all) (drgnx-debug-gutter-mode -1) " kill-fixture
+                          " (global-unset-key (kbd \"<f10>\")) (drgnx-perf--debug-stop) t)"))
       ;; recorded runs (spec §19.9): a batch of probe hits (100, ten probes, at the hub's 20 batches a second: 2,000 hits a
       ;; second) to the sparklines at the lines' ends, 40 batches, within 100 ms each
       (debug-probe-flood
@@ -2641,7 +2659,8 @@ version and the commit, as JSON in FILE."
                                 terminal-backfill terminal-flood))
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "graphical debugging: its allocation, CPU and rows are set from three pinned runs on the desktop island (the plan's perf step)"))
-              '(debug-gutter-scroll debug-gutter-baseline debug-breakpoint-click debug-probe-flood debug-scrub))
+              '(debug-gutter-scroll debug-gutter-baseline debug-breakpoint-click debug-probe-flood debug-scrub
+                                    debug-step-line))
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))
     ,@(mapcar (lambda (w) (cons w "the Work space's rows are time budgets on the desktop island (typing p95 and the relative +1 ms rules); allocation, CPU and rows follow once the first runs set them"))

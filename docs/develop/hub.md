@@ -1385,6 +1385,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/run/stop` | user | `{file?: string, run: string, stop: natnum}` | `{capture: any, run: string, snapshot?: string, source: any, stop: any}` | no |
 | `debug/runs/list` | user | `{root: string}` | `{runs: [any]}` | no |
 | `debug/select` | user | `{frame: integer, session: string, thread?: integer}` | `boolean` | no |
+| `debug/source` | user | `{ref: integer, session: string}` | `{mime?: string, text: string}` | no |
 | `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, root: string, selection?: string, unsaved?: [string], user?: [JsonObject]}` | `{needs?: any, session?: string}` | no |
 | `debug/trust` | user | `{root: string, trusted: boolean}` | `boolean` | no |
 | `decisions/effects` | user | `{decision: string}` | `{commits?: [string], decision: string, label: string, later_hunks?: [Hunk]}` | no |

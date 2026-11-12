@@ -28,10 +28,15 @@
   "The debug sessions as the hub's `debug-state' last said: plists (:id :name :parent :root :state …).")
 
 (defun drgnx-debug--event (event data)
-  "`drgnx-hub-event-functions': `debug-state' gives the sessions, and the session keys follow them."
-  (when (equal event "debug-state")
-    (setq drgnx-debug--sessions (append (plist-get data :sessions) nil))
-    (drgnx-debug-session-mode (if drgnx-debug--sessions 1 -1))))
+  "`drgnx-hub-event-functions': `debug-state' gives the sessions (the session keys follow them, a running session's
+stop marks go), `debug-frame' marks and opens a stop's line, `debug-ended' takes its marks away."
+  (pcase event
+    ("debug-state"
+     (setq drgnx-debug--sessions (append (plist-get data :sessions) nil))
+     (drgnx-debug-session-mode (if drgnx-debug--sessions 1 -1))
+     (drgnx-debug-gutter-stop-sessions drgnx-debug--sessions))
+    ("debug-frame" (drgnx-debug-gutter-show-frame data))
+    ("debug-ended" (drgnx-debug-gutter-stop-clear (plist-get data :session)))))
 
 (defun drgnx-debug--session (&optional state)
   "This project's session in STATE, or (STATE nil) its stopped one, else its first; nil when it has none."
@@ -70,6 +75,7 @@ loaded gud's own `C-x C-a' in `global-map' loses to them.")
              (add-hook 'drgnx-hub-event-functions #'drgnx-debug--event))
     (remove-hook 'find-file-hook #'drgnx-debug--gutter-on)
     (remove-hook 'drgnx-hub-event-functions #'drgnx-debug--event)
+    (drgnx-debug-gutter-stop-clear-all)
     (setq drgnx-debug--sessions nil))
   (dolist (b (buffer-list))
     (with-current-buffer b

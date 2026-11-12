@@ -39,4 +39,5 @@
  (:file "modules/extra/drgnx-debug-timeline.el" :in drgnx-debug-timeline--render :what erase-buffer :kind document :why "the stop timeline (a head, the stops, a lane per probe: a handful of rows the hub built) is drawn when the user opens it and again, at most four times a second, when its run changes")
  (:file "modules/extra/drgnx-debug-timeline.el" :in drgnx-debug-timeline--show-past :what erase-buffer :kind document :why "a past stop's file, as it ran, is drawn when the user opens that stop")
  (:file "modules/extra/drgnx-debug-timeline.el" :in drgnx-debug-timeline--show-vars :what erase-buffer :kind document :why "a past stop's stack and variables are drawn when the user opens that stop")
+ (:file "modules/extra/drgnx-debug-gutter.el" :in drgnx-debug-gutter--fill-source :what erase-buffer :kind document :why "a frame's source with no file (sourceReference) is filled once from the debugger when a stop opens it")
  (:file "modules/tools/drgnx-search-edit.el" :in drgnx-search-edit--faces :what erase-buffer :kind document :why "a hidden buffer holding one line to fontify, never shown"))
