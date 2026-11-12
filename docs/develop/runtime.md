@@ -254,6 +254,16 @@ cap }`, `Escapes`, `Untrusted { path, why }`, `Unsupported` or `Io`.
   Not every system program is one (Ubuntu 26.04's `coreutils-from-uutils` makes `/usr/bin/env` a link into
   `/usr/lib/cargo/bin/coreutils/`), so the tests that need a trusted program take `/usr/bin/env`'s resolved path.
 
+**True names of the hub's own roots.** A link above a folder the hub owns is the system's (macOS's `/etc`, `/var` and
+`/tmp` are links into `/private`; a home moved behind a link), so those roots are taken by their true name once and
+everything below them is then checked with no link followed: the hub's state folder at start, the plugins folder at
+install, a fork's system read roots (`/usr`, `/etc`, `/opt`), and a project's git common folder, which names its
+history (git writes a linked worktree's `gitdir:` resolved, so the main tree and its worktrees are one project).
+Links inside an agent's tree or a plugin's source stay refused. The explorer's watcher may report a watched folder
+by its true name (macOS's FSEvents), so a reported path is put back under the folder's listed name. On macOS the
+runners' ssh socket folder goes under `/tmp` when `$TMPDIR` (`/var/folders/…/T/`) is too long for a socket path.
+`TMPDIR` set to a folder behind a link reproduces the class on Linux.
+
 `cargo test -p eitri` runs the unit tests (links in every component, `..` refused with no syscall made, a FIFO
 refused within 100 ms, the cap, a write over a link, no temporary file left, `ENOSYS`/`EINVAL` from `openat2`
 injected through a test seam, each `Untrusted.why`) and the proptest `tests/tree.rs`: random trees with links to

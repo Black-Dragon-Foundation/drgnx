@@ -853,16 +853,21 @@ pub fn install(root: &Path, src: &Path, replace: bool) -> Result<Installation, S
     let wasm = read("plugin.wasm", MAX_WASM_BYTES)?;
     let manifest = brokkr::parse(&manifest_bytes).map_err(|e| format!("plugin.json: {e}"))?;
     let name = manifest.name.as_str().to_owned();
-    let dest = root.join(&name);
-    if dest.symlink_metadata().is_ok() && !replace {
+    if root.join(&name).symlink_metadata().is_ok() && !replace {
         return Err(format!(
             "{name} is installed already: install it with --replace to put these files in its place"
         ));
     }
+    private_dir(root)?;
+    // ROOT by its true name, as SRC: a link above it (macOS's /var, a moved home) is the system's; the files below
+    // it are written with none followed
+    let root = &root
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", root.display()))?;
+    let dest = root.join(&name);
     let parent = root
         .parent()
         .ok_or_else(|| format!("{}: has no parent folder", root.display()))?;
-    private_dir(root)?;
     let stage = parent.join(format!(".plugin-new-{name}-{}", std::process::id()));
     let old = parent.join(format!(".plugin-old-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&stage);
