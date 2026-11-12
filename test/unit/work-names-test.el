@@ -13,8 +13,6 @@
 (require 'drgnx-paths)
 (require 'drgnx-modules)
 (require 'drgnx-agents)
-(require 'drgnx-work-client)
-(load (expand-file-name "test/fixtures/work-space-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
 (drgnx-test-modules-preload '(tools/work-space))
@@ -88,8 +86,7 @@ of the params, set in BODY); `calls' holds (METHOD . PARAMS), newest first.  The
             ("work/files" . ,(lambda (_) (list :files (list (list :path "README" :plus 1 :minus 0)))))))
     (let ((before (buffer-list)) (searched nil) (map (generate-new-buffer " *work-names-map*")))
       (cl-letf (((symbol-function 'project-find-regexp) (lambda (&rest _) (push default-directory searched)))
-                ((symbol-function 'drgnx-work-map-buffers) (lambda () (list map)))
-                ((symbol-function 'drgnx-work-map--state) #'ignore))
+                ((symbol-function 'drgnx-work-map-buffers) (lambda () (list map))))
         (drgnx-test-with-handler-trap
           ;; Enter on a file the far agent edits; one the map names by a remote path of its own
           (drgnx-work-code-open-file'(file . "file:drgnx/README") :agents '("a2"))
@@ -139,7 +136,7 @@ of the params, set in BODY); `calls' holds (METHOD . PARAMS), newest first.  The
         (dolist (path (list "key" "../secret.txt" "zero" (concat root "secret.txt")))
           (drgnx-work-trail-open-step (list :session "a1" :seq 1 :detail (list :kind "read" :path path :line_start 1))))
         ;; a document of the map: its key is the hub's, relative to a root of the workspace
-        (drgnx-work-map--open-item (drgnx-work-client-init (drgnx-work-fixture-frame)) '(spec . "spec:../secret.txt") nil))
+        (drgnx-work-map--open-item '(spec . "spec:../secret.txt") nil "secret"))
       (should-not special)
       (should-not (drgnx-work-names-test--visited before)))))
 
@@ -158,8 +155,7 @@ of the params, set in BODY); `calls' holds (METHOD . PARAMS), newest first.  The
                                   :entries (list (list :session "a1" :file (plist-get p :file) :line 1 :at 1.0)))))
             ("work/files" . ,(lambda (_) (list :files (list (list :path "up-ssh/y") (list :path "n.gz")))))))
     (let ((before (buffer-list)) (map (generate-new-buffer " *work-names-map*")))
-      (cl-letf (((symbol-function 'drgnx-work-map-buffers) (lambda () (list map)))
-                ((symbol-function 'drgnx-work-map--state) #'ignore))
+      (cl-letf (((symbol-function 'drgnx-work-map-buffers) (lambda () (list map))))
         (drgnx-test-with-handler-trap
           (dolist (name '("abs-ssh/y" "abs-sudo/y" "up-ssh/y" "up-sudo/y" "gz" "gpg" "n.gz" "a.zip/y"))
             (drgnx-work-code-open-file(cons 'file (concat "file:drgnx/" name)) :agents '("a1")))

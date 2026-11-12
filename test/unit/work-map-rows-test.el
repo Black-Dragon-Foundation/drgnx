@@ -1,7 +1,7 @@
 ;;; work-map-rows-test.el --- batch tests: the Work map inserts the rows the hub builds -*- lexical-binding: t -*-
 ;; test-class: det
 ;; test-pattern: orders
-;; Needs Sjá (a Nidhogg with `nidhogg-view--call') for the rows path; skipped elsewhere, except the old path's test.
+;; Needs Sjá (a Nidhogg with `nidhogg-view--call'); skipped elsewhere, except the test of a map without it.
 ;; No hub: the map buffer gets the hub's patches and model by hand, what it sends is recorded.  Each test names its
 ;; pattern (A: every order, orders-fixture.el; D: pure).
 (require 'ert)
@@ -72,7 +72,6 @@ apart.")
      (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
            (drgnx-view-model--views (make-hash-table :test #'equal))
            (drgnx-view-patch--hooked nil)
-           (drgnx-view-old-path nil)
            (drgnx-work-map-rows-test--sent nil)
            (drgnx-view-patch-send-function (lambda (m p) (push (cons m p) drgnx-work-map-rows-test--sent)))
            (drgnx-work-map-select-functions nil)
@@ -175,15 +174,14 @@ hub's row, keeps the selection's face on it, and no old patch lands after the re
   ;; the client's half: a rows view subscribes again with `rows' when the hub is back
   (let ((drgnx-work-client--views (make-hash-table :test #'equal)) (asked nil))
     (cl-letf (((symbol-function 'drgnx-work-client--call) (lambda (method params _cb) (push (cons method params) asked) t)))
-      (drgnx-work-client-open "w1" (list :id "w1" :roots '("/r/")) :rows t)
+      (drgnx-work-client-open "w1" (list :id "w1" :roots '("/r/")))
       (setq asked nil)
       (drgnx-work-client-connected)
       (should (equal "work/map/subscribe" (car (car asked))))
       (should (eq t (plist-get (cdr (car asked)) :rows)))
-      ;; its answer is the hub's id, not a frame: the view is live and keeps none
+      ;; its answer is the hub's id: the view is live
       (drgnx-work-client--subscribed "w1" (drgnx-work-client--view-gen (drgnx-work-client--get "w1")) (list :hub 9 :version 1) nil)
-      (should (equal "live" (drgnx-work-client-status "w1")))
-      (should-not (drgnx-work-client-view-state "w1")))))
+      (should (equal "live" (drgnx-work-client-status "w1"))))))
 
 (ert-deftest drgnx-work-map-rows/selected-is-sent-without-waiting ()
   "Pattern D: a key moves the selection at once, with no answer from the hub; the trailing notice then tells the hub
@@ -203,7 +201,7 @@ came before the answer), not a throttle later; an answer with an error hurries n
       (cl-letf (((symbol-function 'drgnx-work-client--call)
                  (lambda (method _params cb) (when (equal method "work/map/set") (push cb callbacks)) t))
                 ((symbol-function 'drgnx-view-hurry) (lambda (v) (push v hurried))))
-        (drgnx-work-client-open "wmr" (list :id "wmr" :roots '("/r/")) :rows t)
+        (drgnx-work-client-open "wmr" (list :id "wmr" :roots '("/r/")))
         (setq-local drgnx-work-space--view "wmr")
         (drgnx-work-map-overlaps)
         (should (= 1 (length callbacks)))
@@ -223,6 +221,9 @@ came before the answer), not a throttle later; an answer with an error hurries n
 (declare-function drgnx-work-board-plans-for "drgnx-work-board")
 (declare-function drgnx-work-review--summary "drgnx-work-review")
 (declare-function drgnx-work-huddle-overlap "drgnx-work-detail")
+(declare-function drgnx-work-detail-buffer "drgnx-work-detail")
+(declare-function drgnx-work-board-open "drgnx-work-board")
+(declare-function drgnx-work-flow-open "drgnx-work-flow")
 
 (ert-deftest drgnx-work-map-rows/files-and-diffs-take-the-selection ()
   "Pattern D: on the rows path the files picker and the diffs ask the hub for the session the model's selection stands
@@ -300,29 +301,64 @@ conclusion and spend; an agent the model has no card for says so."
         (drgnx-work-map--nav 'select "ask:1")
         (should-error (drgnx-work-huddle-overlap) :type 'user-error)))))
 
-(ert-deftest drgnx-work-map-rows/old-path-switch-still-draws-the-map ()
-  "Pattern D: with `drgnx-view-old-path' the map draws its own frames (its view type) and subscribes without `rows';
-off it, with Sjá, the map is hub-fed and subscribes with `rows'."
+(ert-deftest drgnx-work-map-rows/esc-clears-the-search-then-the-filters-then-closes ()
+  "Pattern D: Esc clears the search first (the model's search too), then the filters and the collapsed layers (sent to
+the hub), then closes the pane."
+  (drgnx-work-map-rows-test--with
+    (let ((closed 0) (set nil) (drgnx-work-space--view "wsv"))
+      (cl-letf (((symbol-function 'drgnx-close-pane) (lambda () (cl-incf closed)))
+                ((symbol-function 'drgnx-work-client-set-then) (lambda (_id _cb &rest params) (push params set))))
+        (drgnx-work-map-overlaps)
+        (drgnx-work-map-search "alpha")
+        (should (equal '(agent . "agent:a") drgnx-work-map--selection))   ; the first match is selected
+        (drgnx-work-map-escape)                                           ; the search first
+        (should-not drgnx-work-map--search)
+        (should (plist-get drgnx-work-map--filters :overlaps))
+        (drgnx-work-map-escape)                                           ; then the filters
+        (should-not drgnx-work-map--filters)
+        (should (eq :false (plist-get (plist-get (car set) :filters) :overlaps)))
+        (should (= 0 closed))
+        (drgnx-work-map-escape)                                           ; then the pane
+        (should (= 1 closed))))))
+
+(ert-deftest drgnx-work-map-rows/the-map-is-hub-fed-with-its-lens ()
+  "Pattern D: a map opened with Sjá is the hub-fed view of its workspace, subscribes with `rows' and has the lens on
+its tab line, the map marked."
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view--call) "nidhogg-view--call")
   (let ((asked nil))
     (drgnx-test-with-modules '(tools/work-space)
       (cl-letf (((symbol-function 'drgnx-work-client--call) (lambda (method params _cb) (push (cons method params) asked) t)))
-        (let* ((drgnx-view-old-path t) (ws (list :id "old-ws" :roots (list temporary-file-directory)))
+        (let* ((ws (list :id "rows-ws" :roots (list temporary-file-directory)))
                (buf (drgnx-work-space--buffer ws)))
           (unwind-protect
               (with-current-buffer buf
-                (should-not drgnx-view-patch)
-                (should (eq 'work-map (drgnx-view-type-name (drgnx-view--type drgnx-view))))
-                (should-not (plist-get (cdr (assoc "work/map/subscribe" asked)) :rows)))
-            (kill-buffer buf)))
-        (when (fboundp 'nidhogg-view--call)
-          (setq asked nil)
-          (let* ((drgnx-view-old-path nil) (ws (list :id "rows-ws" :roots (list temporary-file-directory)))
-                 (buf (drgnx-work-space--buffer ws)))
-            (unwind-protect
+                (should drgnx-view-patch)
+                (should (equal "rows-ws" (drgnx-view-patch-view drgnx-view-patch)))
+                (should (eq t (plist-get (cdr (assoc "work/map/subscribe" asked)) :rows)))
+                (should (string-search "Map" (substring-no-properties drgnx-work-map--lens))))
+            (kill-buffer buf)))))))
+
+(ert-deftest drgnx-work-map-rows/without-sja-the-map-says-so ()
+  "Pattern D: in an Emacs without Sjá the map, its side panel, its Board and its Flow say the map needs Sjá; the map
+asks the hub nothing and its keys say the same."
+  (let ((asked nil))
+    (drgnx-test-with-modules '(tools/work-space)
+      (cl-letf (((symbol-function 'drgnx-work-client--call) (lambda (method params _cb) (push (cons method params) asked) t))
+                ((symbol-function 'drgnx-work-map-rows-p) #'ignore))
+        (let* ((ws (list :id "no-sja-ws" :roots (list temporary-file-directory)))
+               (buf (drgnx-work-space--buffer ws)) (others nil))
+          (unwind-protect
+              (progn
                 (with-current-buffer buf
-                  (should drgnx-view-patch)
-                  (should (equal "rows-ws" (drgnx-view-patch-view drgnx-view-patch)))
-                  (should (eq t (plist-get (cdr (assoc "work/map/subscribe" asked)) :rows))))
-              (kill-buffer buf))))))))
+                  (should-not drgnx-view-patch)
+                  (drgnx-view-draw-now drgnx-view)
+                  (should (string-search "needs Sjá" (buffer-string)))
+                  (should-error (drgnx-work-map-right) :type 'user-error)
+                  (should-error (drgnx-work-map-needs-you-here-next) :type 'user-error))
+                (setq others (list (drgnx-work-detail-buffer buf) (drgnx-work-board-open buf) (drgnx-work-flow-open buf)))
+                (dolist (b others)
+                  (should (string-search "needs Sjá" (with-current-buffer b (buffer-string)))))
+                (should-not asked))
+            (dolist (b (cons buf others)) (when (buffer-live-p b) (kill-buffer b)))))))))
 
 ;;; work-map-rows-test.el ends here

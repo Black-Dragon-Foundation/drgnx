@@ -200,7 +200,9 @@ layer's first row, each layer's count); `render::rows` only reads it. One row pe
   that need you with no card), the first nine and `+N`, then a stop that puts the machines' load at the view's right
   edge.
 
-Edge strokes follow `drgnx-work-edges.el`'s table (a width or a dash per kind, never colour alone); the selection's
+Edge strokes are a width or a dash per kind, never colour alone (design §5.2 as amended): came from 1 px solid; edits
+2 px solid, neutral off the chain; reads 1.5 px dotted in the agent's colour; runs on 1 px dash-dot; based on 1 px short
+dashes; overlap 2 px dashed in the warning colour; read versus edit 1 px dotted. The selection's
 chain (`Scene::chain`) draws in the accent, an edit on it in its agent's colour, one px wider and on top. The SVG comes
 from `drgnx_rows::svg` in palette roles only (`edge`, `edit`, `accent`, `warn`, `chip-bg`, `chip-fg`, `agent-1..6`);
 an image's id is its content hash and the env epoch, so the same strokes are the same image across draws (sent once)
@@ -209,9 +211,9 @@ and a theme change draws them all again.
   `outline:ID:LINE` per agent in plan order (its line, why, touches and conclusion, each within the columns), or
   `outline-none`.
 
-The card text is the editor's (`drgnx-work-map-row-text`), so the rows of the fixture frame equal
-`test/fixtures/work-space/rows-golden.eld` under a fixed 8 px advance (`tests/render.rs`). Selection, dimming and
-search stay the editor's: the inserter puts them over the rows by `drgnx-work-id`. The runner icons are the default
+The rows of the fixture frame equal `test/fixtures/work-space/rows-golden.eld` under a fixed 8 px advance
+(`tests/render.rs`), recorded from the editor's own drawing before the hub took it over. Selection, dimming and search
+are the model's classes in Sjá, put over the rows by `drgnx-work-id`. The runner icons are the default
 glyphs of `drgnx-face-glyphs`.
 
 ### Keys and the native view model (`vegvisir::nav`)
@@ -481,118 +483,58 @@ Layer 2 (the files a command's processes opened; labelled "seen open") is Gleipn
 
 ## The editor's side
 
-Module `tools/work-space` (`modules/tools/drgnx-work-space.el`; the buffer's mode, view type and rows are in
+Module `tools/work-space` (`modules/tools/drgnx-work-space.el`; the map buffer's mode, keys and motion are in
 `drgnx-work-map.el`, a library of the module; the map client is `core/drgnx-work-client.el`).
 
 ### The map client
 
-`core/drgnx-work-client.el` has a pure core and a shell.
+`core/drgnx-work-client.el` keeps the map views this Emacs subscribed to and calls the hub for them; it draws nothing
+and keeps no copy of the map. The map's rows come as `view-patch` events and its model goes to Sjá (the hub builds both:
+"The rows (`vegvisir::render`)", above).
 
-- **The core.** `drgnx-work-client-init FRAME` makes a state from `work/map/subscribe`'s answer (items by id, edges,
-  the layout with `:at` and `:form` as hash tables by item id, the needs-you strip, the chips).
-  `drgnx-work-client-step STATE EVENT` takes one `work-map` event and returns `(NEW-STATE . MARKS)`:
-  - an event whose version is not newer than the frame's is dropped, and so is every event while the state is not live
-    (before a frame, after `drgnx-work-client-lost`);
-  - a full event replaces the frame (every row, the layout, the edges and the strip are marked);
-  - an event whose `base` is the frame's version is applied: changed items put, removed ones taken out, the places the
-    arrivals took put (a place no row holds gets a row of its own, block line 1000 and up), edges, layout, strip and
-    chips replaced when the event carries them; then any held event it unblocks;
-  - any other event is held, and the marks say `:resync t`: the shell subscribes again, and the full frame it gets
-    replaces the state and drops what was held.
-  The marks are a plist: `:rows` (row keys `(:row LAYER BLOCK-LINE SUB)` to draw again, or `t`), `:items`, `:removed`,
-  `:keys` (the list of rows changed), `:edges`, `:layout`, `:strip`, `:resync`; each only when it applies. The core
-  calls no process, timer or clock, so its tests run it in every order its events can arrive in.
-- **The shell.** One view per map buffer, keyed by the workspace id. `drgnx-work-client-open` subscribes;
-  `-set` sends `work/map/set` (hidden or shown, filters, collapsed layers, width, density, the selection); `-close`
-  sends `work/map/close`. Events come from `drgnx-hub-event-functions`; a view re-subscribes from
-  `drgnx-hub-connected-functions` (the hub client core's own reconnection), and `drgnx-hub-disconnect-functions` makes
-  every view keep its frame and say "reconnecting". Each view counts its events, deltas and frames
-  (`drgnx-work-client-counter`), which the hidden-map test reads: a hidden map receives one stale mark and nothing else.
-  The change and status hooks (`drgnx-work-client-change-functions`, `-status-functions`) are how the buffer hears.
-- **Tests.** `test/unit/work-client-test.el` (class `det`, every order), `test/unit/work-space-test.el` (class
-  `cond`, gated: a real hub, real mock agents), `test/unit/work-rows-test.el` (`det`). The frame in
-  `test/fixtures/work-space/frame.json` is what the wire decodes to.
+- One view per map buffer, keyed by the map view's id. `drgnx-work-client-open` subscribes with `rows: true`;
+  `-set` sends `work/map/set` (hidden or shown, filters, collapsed layers, width, density, the selection, the outline)
+  and keeps every field but `shown` for the next subscription; `-set-then` takes a callback for the hub's answer, which
+  comes after the patches the change made (one connection, in order); `-close` sends `work/map/close`. Every call goes on
+  the subscribed connection (`drgnx-work-client--call`): the hub sends a view's patches to the connection that
+  subscribed it.
+- A view subscribes again from `drgnx-hub-connected-functions`; `drgnx-hub-disconnect-functions` makes it keep what it
+  shows and say "reconnecting". An answer counts only for the subscription it was asked in (a later one, or a close,
+  makes it stale). `drgnx-work-client-status-functions` is how the buffer hears.
+- Tests: `test/unit/work-client-test.el` (class `det`).
 
 ### The rows
 
-`modules/tools/drgnx-work-map.el`. A view row is a sub-row of the layout, keyed `(:row LAYER BLOCK-LINE SUB)`, or the
-band above it, `(:band LAYER BLOCK-LINE SUB)`, in the order of their y. A row's text is `drgnx-work-map-row-text
-STATE KEY`, a function of the cached frame and the display scale (`drgnx-work-map-scale`, the frame's by default).
+`modules/tools/drgnx-work-map.el` holds the map's buffer, its keys and its motion; it draws nothing of the map. The hub
+lays the map out and draws every row, the strip, the bands' edge tiles, the lanes and the outline ("The rows
+(`vegvisir::render`)", above), and sends the map's model to Sjá. The buffer is the hub-fed view of the map view's id
+(`drgnx-work-map-rows-attach`: `drgnx-view-patch-attach`, its env registered while a window shows it); the rows name
+faces only, so the editor keeps defining them: `drgnx-work-band`, the decoration faces (`drgnx-card-top`, `-mid`,
+`-bottom`, `-single`, loaded from `modules/ui/drgnx-decor.el`), `drgnx-runners-*`, `drgnx-work-seg-*`,
+`drgnx-work-agent-1` to `-6` and `drgnx-work-chain`, `-chip`, `-dim`, `-label`, `-needs-you`, `-new` and `-overlap`.
 
-- **Geometry.** The layout's units are 4 logical pixels; a row's pixel height is its units × 4 × scale, split evenly
-  over its lines (five for a rich agent row, two for a compact one, else one). Each line ends in a newline carrying
-  `line-height` `(N)` (the spike showed `(N)` gives N+1 pixels, never `(N . t)`), so a row's height is the layout's whatever
-  its text holds. A band is a blank line in a small face (`drgnx-work-band`) of its height; the edge tiles draw into it.
-- **Cards.** A card's line is placed by pixel `:align-to` from the layout's x, in the decoration faces
-  (`drgnx-card-top`, `-mid`, `-bottom`, `-single`: PD's open boxes under Glitnir), its text cut to the card's width by
-  `string-pixel-width` (`drgnx-view-fit`, memoised in `drgnx-view--fit-memo`, bounded). Every card character carries the text
-  property `drgnx-work-id`. The layer label stands in the 84 px margin on a layer's first row.
-- **Index.** `drgnx-work-map--index` (weak on the layout) maps a row key to its items left to right and to its layout
-  row, built once per frame.
-- **Outline.** `drgnx-work-map-outline STATE COLUMNS` and the rows `(:outline AGENT-ID)`; used in a terminal frame,
-  when the layout's `fits` is false (with a `(:notice)` row first) and when `O` asks. Blocks are ordered by plan, then
-  start order; each line is cut to the window's width.
-- **Redraws.** The client's marks reach the view in `drgnx-work-map--changed`: a changed item dirties its rows
-  (`drgnx-view-dirty`), a relayout or a changed list of rows touches the view (SYNC diffs the keys with a signature of
-  each row's items and rectangles), so a field change draws one row.
-
-### The edges
-
-`modules/tools/drgnx-work-edges.el`, pure: a function of the layout's geometry, the chain and the colours. The
-fixture's bands carry real curves, so the screenshot set shows them.
-
-- **Tiles.** A band is cut into tiles 192 logical pixels wide (device pixels at the display scale: an SVG stays the size
-  it is written at on the native shell). `drgnx-work-edges-tile BAND I GEOMETRY COLOURS` is the image of tile I, or nil
-  when no curve and no port crosses it. `drgnx-work-edges-tile-svg` is its text, built as a string (no DOM): a cubic
-  from the band's top to its bottom for a straight segment, an arch rising from the bottom for a same-row arc, the
-  chain's curves last so they draw on top. The image cache is keyed on the SVG text and the alternative text, so a tile
-  whose strokes did not change is the very same object, a theme change makes new tiles by itself, and the cache holds
-  600 entries at most. The alternative text names the tile's edges ("hub rows → rp-df-hub (came from)").
-- **Strokes** (design §5.2 as amended): came from 1 px solid; edits 2 px solid, neutral off the chain; reads 1.5 px
-  dotted in the agent's colour; runs on 1 px dash-dot; based on 1 px short dashes; overlap 2 px dashed in the warning
-  colour; read versus edit 1 px dotted. No two kinds share a width and a dash. On the selection's chain an edge takes the
-  accent colour (an edit: its agent's colour) and is 1 px wider.
-- **Colours** come from the `drgnx-work-*` faces whenever a tile is made (`drgnx-work-edges-colours`); the module holds
-  none. A theme change draws every map again (`drgnx-work-map-theme-changed`).
-- **A chain change** (`drgnx-work-map--edges-update`, on `drgnx-work-map-edges-functions`, one frame after the
-  selection): the edges that joined or left the chain name the bands and lanes to draw again; the images the redraw
-  replaces are flushed (`image-flush`), the unchanged tiles are not touched.
-- **Lanes.** An edge that skips a card row is a 2 px wide image at the lane's x in each text line of that row, as high as
-  the text, with the row's ascent in percent (`drgnx-work-edges-row-metrics`: the font's ascent over ascent plus
-  descent), so the row keeps its height. Edges that share a lane (a trunk) are one image at that x: the widest stroke
-  (the chain's, when one of them is on it), its alt naming every edge there. Images are text, so lanes drawn one per
-  edge would sit side by side, fill the gap and push the next card right. A row's line is its cards and lanes sorted
-  by column into a new list each time: the lanes are shared by every line of the row.
-- **Ports.** Edges bundled for want of lanes end in a chip "↑ N" on the bottom edge of the band above their target,
-  drawn into the tile that holds its column.
+- **Without Sjá** (`drgnx-work-map-rows-p` is false: an Emacs that is not Nidhogg) there is nothing to draw the map
+  with: the map shows `drgnx-work-map-no-sja` through the minimal view type `work-map` and subscribes to nothing; its
+  side panel, Board, Flow, trails and Timeline show the same notice, and a key that needs the model says it
+  (`drgnx-work-map--require-sja`). The old Lisp drawing of the map, its edge tiles and its client-side frame went with
+  render offload Task 34; there is no switch back to it.
+- **A hub restart:** the patches dim the view, the client subscribes again on the new connection, and the new hub's
+  reset redraws it.
+- Tests: `test/unit/work-map-rows-test.el`, `test/unit/work-space-test.el`; the view rules on the 30-agent map and a
+  trail (a new class after `text-scale`, a second frame at twice the font, a theme change mid-stream, a face override)
+  in `test/ui/work-map-rows-gui-test.el`, and the map in a terminal class in `test/tty/work-map-test.el`.
 
 ### Selection, the chain and the side panel
 
-`modules/tools/drgnx-work-detail.el` holds the pure part; the buffer's state (`drgnx-work-map--selection`, the cached
-chain, the edge selection, the item that finished) and the commands are in `drgnx-work-map.el`.
+The selection, the keys and the commands are in `drgnx-work-map.el`; the side panel's buffer is in
+`drgnx-work-detail.el`.
 
-- A selection is `(KIND . ID)`. `drgnx-work-nav-chain STATE SEL` is `(UP DOWN EDGES)`: UP is every item reachable
-  backwards over the edges the chain follows (came from, edits, reads, runs on), DOWN forwards, EDGES the ones between
-  them. Overlap and based-on edges are not on the chain. The edge lists' adjacency is cached per frame (weak on the
-  list).
-- `drgnx-work-nav-move STATE SEL DIR`: `left` and `right` walk the layer in reading order and stop at its ends; `up`
-  and `down` take the nearest direct neighbour over the chain's edges (least vertical, then horizontal, distance), and
-  `up` falls back to the nearest ancestor on the lowest layer above when a level is missing. `drgnx-work-nav-agent`
-  walks the team order, wrapping. `drgnx-work-nav-resolve OLD NEW SEL` gives `(SELECTION . FINISHED-ID)` when the frame
-  changed.
-- **Dimming is text properties.** `drgnx-work-map--class` reads the cached selection (and the search text) when a card
-  line is drawn and prepends `drgnx-work-selected` or `drgnx-work-dim` to its faces, so a row that is deleted and
-  inserted again has them; there are no overlays.
-- **A selection move** (`drgnx-work-map-select`) works out which items changed class, draws the visible rows among
-  them in the command's own redisplay (`drgnx-view-draw-now VIEW KEYS`), puts point on the card, runs
-  `drgnx-work-map-select-functions` (the side panel) and arms `drgnx-timer-soon` keyed `(work-edges . VIEW)`: one frame
-  later it runs `drgnx-work-map-edges-functions` with the final selection, so a held arrow key never pays for tiles it
-  has left.
-- **On the rows path** (a map whose rows the hub builds: `drgnx-view-patch` with an instance in Sjá, and not
-  `drgnx-view-old-path`) every key is one line through `drgnx-view-nav` (docs/develop/core.md, "Keys through the
-  model"), and the frame's functions above are the frozen path. `drgnx-work-map--nav` keeps `drgnx-work-map--selection`
-  as `(KIND . ID)` (the kind read from the model with the selection) and runs `drgnx-work-map-select-functions` when it
-  moved. Left, right, why and touches follow the `left` `right` `up` `down` links (from nothing, the team's first);
+- **Keys answer from the model in Sjá.** Every key is one line through `drgnx-view-nav` (docs/develop/core.md, "Keys
+  through the model"): the hub sends, with each item, where each arrow goes from it (`vegvisir::nav`, above), and the
+  model's classes (`selected`, `match`, `chain`, `dim`) restyle the rows by their `drgnx-work-id` spans.
+  `drgnx-work-map--nav` keeps `drgnx-work-map--selection` as `(KIND . ID)` (the kind read from the model with the
+  selection) and runs `drgnx-work-map-select-functions` when it moved. Left, right, why and touches follow the `left`
+  `right` `up` `down` links (from nothing, the team's first);
   next and previous agent walk `team`; `g N` walks to entry N of `needs-you` and `n`/`N` cycle it; search sets the
   model's search (non-matches dim on their spans) and selects the first matching agent of `outline`; Esc clears it;
   `O` sets the model's form, so up and down walk `outline`, and asks the hub to draw that form (`work/map/set
@@ -601,41 +543,28 @@ chain, the edge selection, the item that finished) and the commands are in `drgn
   through `drgnx-view-nav`. Open reads the label once; a file opens at the team's
   agents on its chain. Motion capture's card rects (`drgnx-work-map--item-rects`) take x and w from the model's fields. The trailing notice is `work/map/set {view, selected}` (or `{view, clear}`). Tests:
   `test/unit/work-map-nav-test.el`.
-- **The switch.** A map opened when `drgnx-work-map-rows-p` holds (not `drgnx-view-old-path`, and this Emacs has
-  Sjá) goes on the hub's rows: `drgnx-work-map-rows-attach VIEW` makes the buffer the hub-fed view of the map view's id
-  (`drgnx-view-patch-attach`, its env registered while a window shows it), and `drgnx-work-client-open … :rows t`
-  subscribes with `rows: true`. The hub lays the map out, draws its rows (the strip the first) and sends its model; the
-  client keeps no frame for it (its answer is `{hub, version}`: the view is live), so the frame's functions, the edge
-  tiles and the header strip draw nothing. A hub restart: the patches dim the view, the client subscribes again on
-  the new connection (with `rows`), and the new hub's reset redraws it. Otherwise the map keeps its frames and draws
-  them, unchanged. Tests: `test/unit/work-map-rows-test.el`; the view rules on the 30-agent map and a trail (a new
-  class after `text-scale`, a second frame at twice the font, a theme change mid-stream, a face override) in
-  `test/ui/work-map-rows-gui-test.el`, and the map in a terminal class in `test/tty/work-map-test.el`.
-- **The side panel** is the buffer `*drgnx work detail: NAME*` in `drgnx-work-detail-mode`, a `drgnx-view` of type
-  `work-detail` with one row per section (`:head :why :touches :conclusions :actions`); its text is
-  `drgnx-work-detail-sections`. The pane kind `work-detail` (home right) shows it.
-  - On the rows path (Sjá) the panel is the hub's: `drgnx-work-detail-buffer` attaches it as the hub-fed view
-    `VIEW/detail` in the map view's class and registers its env. The hub (`work/map/detail.rs`) builds its rows from
-    the map's model and the view's selection (head, why, touches, conclusions, a machine's queue, actions; one row
-    per line, keyed `SECTION/N`, a job's line carrying `drgnx-work-job` for `l`) whenever it publishes the map, and
-    when the panel's env arrives. `drgnx-work-detail-update` draws nothing here for such a panel: the selection
-    reaches the hub as the map's `work/map/set`. Tests: `detail_rows_say_the_edges` (Rust),
-    `drgnx-work-detail/rows-follow-the-selection`.
+- **The side panel** is the buffer `*drgnx work detail: NAME*` in `drgnx-work-detail-mode`; the pane kind
+  `work-detail` (home right) shows it. `drgnx-work-detail-buffer` attaches it as the hub-fed view `VIEW/detail` in the
+  map view's class and registers its env. The hub (`work/map/detail.rs`) builds its rows from the map's model and the
+  view's selection (head, why, touches, conclusions, a machine's queue, actions; one row per line, keyed `SECTION/N`, a
+  job's line carrying `drgnx-work-job` for `l`) whenever it publishes the map, and when the panel's env arrives; the
+  selection reaches the hub as the map's `work/map/set`. Without Sjá the panel shows the map's notice. Tests:
+  `detail_rows_say_the_edges` (Rust), `drgnx-work-detail/rows-follow-the-selection`.
 
 ### The strip, the lens, the filters, search and Esc
 
-- `header-line-format` is `("" drgnx-work-map--strip)` and `tab-line-format` `("" drgnx-work-map--lens)`: variables
-  holding strings, made by `drgnx-work-map--refresh-strip` when the client marks the strip (a frame or a delta with
-  `needs_you` or `chips`). There is no `:eval` and so no work in redisplay. The entries are the hub's needs-you cards
-  and the agents in the needs-you state that no card is about.
-- `g 1` to `g 9`, `n`, `N` and the global `work-needs-you-next` select the item a chip is about
-  (`drgnx-work-map-needs-you`); the module calls no method that settles a card (a test records the client's calls).
+- The strip is the hub's first row (`render::strip`): a chip per needs-you entry (the cards, then the agents that need
+  you with no card), the open huddles, and the machines' load at the right. `tab-line-format` is `(""
+  drgnx-work-map--lens)`, a variable holding a string, so nothing runs in redisplay.
+- `g 1` to `g 9`, `n`, `N` and the global `work-needs-you-next` select the item a chip is about, entry N of the model's
+  list `needs-you` (`drgnx-work-map-needs-you`); the module calls no method that settles a card (a test records the
+  client's calls).
   The mode-local `n`/`N` are the commands `work-needs-you-here-next` and `-previous`, because a command has one keymap
   and `work-needs-you-next` is the global one.
 - Filters are buffer-local (`drgnx-work-map--filters`, `--collapsed`) and sent with `work/map/set` (`f`, `o`, `.`, `1`
-  to `6`, `0`); the hub answers with a full frame. The selection and the arrow keys never send those fields. Sending
-  them is a layout the user asked for, which moves (next section). On the rows path there is no frame: the hub sends the
-  layout's row patches, then answers the `work/map/set` (one connection, in order), and the answer
+  to `6`, `0`). The selection and the arrow keys never send those fields. Sending them is a layout the user asked for,
+  which moves (next section). The hub sends the layout's row patches, then answers the `work/map/set` (one connection,
+  in order), and the answer
   (`drgnx-work-client-set-then`'s callback, `drgnx-work-map--answered`) hurries the map's view, so the new layout is
   drawn at the next timer pass instead of after the 0.1 s throttle the live patches keep it on (work-relayout: p95
   229 ms to 22 ms). Test: `drgnx-work-map-rows/asked-layout-draws-at-the-answer`.
@@ -693,12 +622,8 @@ redisplays, so the absolute key budget is the pinned island's, `harness/drgnx-pe
 mock agents streaming (`test/fixtures/work-space-thirty-fixture.el`): all 30 below scale 2, the first four at scale
 2, where 30 do not fit (that map is the outline, which never moves). They need Sjá, and the first two and the timing
 row a Nidhogg with the layout leg. Unit: `drgnx-work-map-nav/motion-reads-the-card-rows`.
-- Search is a local class: `drgnx-work-map--class` dims what the text does not match, with the same text properties
-  the selection uses.
-- A conclusion that differs from the frame before (`:old` in the marks) puts its id in `drgnx-work-map--new`; one
-  `drgnx-timer-start` keyed `(work-new . VIEW)` clears it after 4 s and draws those cards again.
-- The client calls the hub on the subscribed connection (`drgnx-work-client--call`): the hub sends a view's events to
-  the connection that subscribed it, and only that connection's events reach `drgnx-hub-event-functions`.
+- Search is the model's: `drgnx-work-map-search` sets Sjá's search, which dims the non-matches on their spans.
+- A conclusion that changes marks its card new for 4 s of the hub's clock (the hub's set, drawn in `drgnx-work-new`).
 
 ### The lens, and the Board
 
@@ -711,13 +636,13 @@ act through `drgnx-work-lens-nav` (buffer-local): a view that is not the map set
 `modules/tools/drgnx-work-board.el` is the Board, drawn only from the hub's rows. Beside a map that is a hub-fed view
 `VIEW` it is the hub-fed view `VIEW/board` in the map's class: `drgnx-work-board-refresh` asks
 `work/board/subscribe {view, map, plans}` (docs/develop/hub.md, "The Board") on the subscribed connection, as the map does
-(`drgnx-work-client--call`: the hub sends a view's rows to the connection that asked and finds the map there), again 0.3 s after the map's frame
-changes (`drgnx-timer-soon` keyed `(work-board . VIEW)`), and the hub sends its model and rows (the columns, three rows
-a card, the bar a row `spaces` entry). `drgnx-work-board-plans-for` is the design's table 8.2 from the map to the
+(`drgnx-work-client--call`: the hub sends a view's rows to the connection that asked and finds the map there), and the
+hub sends its model and rows (the columns, three rows a card, the bar a row `spaces` entry) and reads it again after
+each write. `drgnx-work-board-plans-for` is the design's table 8.2 from the map to the
 Board, read from the map's model in Sjá: a plan scopes it to itself, a spec or an ask to the plans of the model's list
 `plans` on its chain (class `chain`); anything else to every task (row
-`drgnx-work-map-rows/the-board-is-scoped-by-the-models-plans`). Beside a map that is not on the rows path (no Sjá, or
-`drgnx-view-old-path`) the Board says so and draws nothing; its old Lisp drawing went in plan sja-complete B2. Its keys
+`drgnx-work-map-rows/the-board-is-scoped-by-the-models-plans`). Beside a map without Sjá the Board shows the map's
+notice and asks for nothing; its old Lisp drawing went in plan sja-complete B2. Its keys
 answer from its own model (`drgnx-work-board--nav`: the `board` form's links, `team` for the agent keys, the card's
 `agent` field to open). Its selection is its own: it
 neither follows the map's nor moves it, and switching back to the map selects nothing there (a decision of 2026-11-08:
@@ -725,42 +650,36 @@ the map's model holds no tracker tasks, so the Board is not an instance in the m
 
 ### The Timeline and the trail
 
-`modules/tools/drgnx-work-trail.el` holds both, and the steering commands. A step is the hub's `timeline/get` row;
-`drgnx-work-trail-kind` takes its kind from its class and `detail.kind` (never its prose), `drgnx-work-trail-title` its
-title, and `drgnx-work-trail-row-text` its row (the gap before the time is a `display` space, `(- right 14)`).
+`modules/tools/drgnx-work-trail.el` holds both, and the steering commands. The hub builds both (`work::trail`): their
+rows, and a model of their own in Sjá. A step's kind (`drgnx-work-trail-kind`) comes from its class and `detail.kind`,
+never its prose.
 
-- **The trail** is a `work-trail` view (`:follow-tail`, DELAY 0: the first page and each new step are drawn at the next
-  timer pass; the default 0.1 s throttle was the whole of its first-rows and append times): row keys `(:step ID)`, `(:conc N)` (a conclusion card, after
-  the step the hub stamped it on, else at the end) and `(:note N)` ("paused by you", "resumed by you", added when the
-  command ran). It opens with `timeline/get {limit drgnx-work-trail-first-page}`, asks `work/conclusions`, and a
-  `post-command-hook` function asks `{before SEQ, limit drgnx-work-trail-page}` when point is within about 30 rows of
-  the top (`drgnx-work-trail-page-back`; `drgnx-work-trail--more` falls when a page comes back short). Older steps go in
-  with `drgnx-view-insert :after nil`, new ones with `drgnx-view-append`; no step is held twice (a hash by id). Live
-  steps come from `agent-step` events (`drgnx-work-trail-event`): the trail asks `{since LAST-SEQ}` rather than trusting
-  the event's body, and asks the conclusions again half a second later (`drgnx-timer-soon`).
-- **Conclusions** link to steps through the hub's `links` (named, since the last one); `drgnx-work-trail-conclusion-steps`
-  and `-step-conclusions` are the two directions, `drgnx-work-trail-lit-steps` lights them (`drgnx-work-trail--lit`).
+- **A trail** is the hub-fed view `trail/SESSION` (`drgnx-work-trail-open`), with or without a map beside it; **the
+  Timeline** of a map is `timeline/MAP-VIEW` (`drgnx-work-timeline-open`), whose lanes are the map model's agents of
+  `team` with their `label`, so it needs its map on the hub's rows. Each is asked for with `work/trail/subscribe`
+  (`{view, session}`; `{view, lanes}`), again after a reconnect (its env's RESUBSCRIBE), and ended with
+  `work/trail/close` when its buffer goes. Without Sjá both show the map's notice and ask for nothing. The segments of
+  the Timeline's lanes are in the faces `drgnx-work-seg-*` (`:inverse-video` over the stock colour faces, so a
+  segment's colour is the face's foreground). The trail's Lisp drawing, paging, live steps and the "paused by you" and
+  "resumed by you" notes went with render offload Task 34: resume says "Work: Resumed".
+- **Conclusions** rest on steps (the model's chain kind `rests-on`): a selected conclusion lights the steps it rests on
+  and a selected step the conclusions resting on it, in the class `chain`. `l` (`drgnx-work-trail-show-steps`, on a
+  conclusion) moves point through the lit steps, cycling; `L` (`drgnx-work-trail-show-conclusions`, on a step) selects
+  the first lit conclusion.
 - **Opening a step** (`drgnx-work-trail-open-step`): a read opens the file at its lines (relative paths against the
   mirrored session's `cwd`; only a plain local file inside that folder, by its true name: `drgnx-work-code-local-file`);
   AS-READ calls `work/file-at {session path seq}` (the mode is chosen from the path with no file name handler); a search
   runs `project-find-regexp` again in the agent's folder (not when that folder is remote); a page `browse-url`; an edit
   shows `work/hunks` in `drgnx-work-hunk-mode`; a thought opens the agent's transcript (the step has no text of its own).
-- **The Timeline** is a `work-timeline` view (rows `(:axis)` and `(:lane AGENT-ID)`), a lane per agent in team order,
-  `timeline/get {limit 200}` each, asked again 0.3 s after an `agent-step` of its session. `drgnx-work-timeline-spans`
-  (pure) puts steps at their time on the lane's pixel width, at least 2 px; faces `drgnx-work-seg-*` use
-  `:inverse-video` over the stock colour faces, so a segment's colour is the face's foreground.
-- **On the rows path** (a hub-fed view with Sjá's model, `drgnx-work-trail--rows-p`) a trail or Timeline of a map on
-  the hub's rows is the hub-fed view `trail/SESSION` or `timeline/MAP-VIEW`, asked for with `work/trail/subscribe`
-  (`{view, session}`; `{view, lanes}`, the map model's agents of `team` with their `label`) again after a reconnect
-  (its env's RESUBSCRIBE), and ended with `work/trail/close` when its buffer goes. The keys go through the replica
-  (`drgnx-work-trail--rows-nav`): a move follows the selection's link of that name (`next-agent`/`previous-agent` are
-  `down`/`up`; the trail ignores them), open reads the selected node's fields once (`drgnx-work-trail--model-step`:
-  a step as `drgnx-work-trail-open-step` takes it; a conclusion's `n`, `conclusion-kind` and `label`). A selected
-  conclusion lights the steps it rests on through the model's chain class. `drgnx-work-timeline-rows-attached` makes
+- **Keys** go through the replica (`drgnx-work-trail--rows-nav`): a move follows the selection's link of that name
+  (`next-agent`/`previous-agent` are `down`/`up`; the trail ignores them), open reads the selected node's fields once
+  (`drgnx-work-trail--model-step`: a step as `drgnx-work-trail-open-step` takes it; a conclusion's `n`,
+  `conclusion-kind` and `label`). `drgnx-work-timeline-rows-attached` makes
   the Timeline's lit lanes the model's list `near` (in `drgnx-work-chain`); the hub sends that list again when the map's
   selection moves, and the queue's timer applies it and runs the class step (`drgnx-view-model--reclass`). Steering
-  reads the selected step's `session`. Paging a trail back past its 500-step window (the model's `steps` list answers
-  `more`) waits for `view/window` (deferred). Tests: `test/unit/work-trail-nav-test.el`, Rust
+  reads the selected step's `session`. A key past the trail's 500-step window (the model's `steps` list answers `more`)
+  asks the hub for the window half a window further with `view/window` and runs when it comes (row
+  `drgnx-work-trail-nav/a-long-trail-pages-at-its-edge`). Tests: `test/unit/work-trail-nav-test.el`, Rust
   `trail_model_windows_past_500`, `timeline_model_links_lanes`, `near_is_the_selections_agents`.
 - **Steering** (`drgnx-work-trail-steer`, `-pause`, `-resume`, `-stop`) lives on the lens map and finds its agent per
   view (`drgnx-work-trail--agent-sid`): the trail's session, the Timeline's lane, the Board's card, the map's selection.

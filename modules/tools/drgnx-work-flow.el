@@ -7,7 +7,7 @@
 ;; task and a column per gate (Brief, Red first, Build, Author check, Merge batch, Review), each cell a chip of the
 ;; gate's state; under them the merge batch and the rule pack.  The hub builds it (`work/flow/subscribe'): its rows,
 ;; and a model of its own (Sjá) whose selection is the Flow's alone, with the held tasks in its list `held'.  `e' shows
-;; the selected task's evidence (`orch/evidence'), `R' the rule pack's rows.  Off the rows path it says so.
+;; the selected task's evidence (`orch/evidence'), `R' the rule pack's rows.  Without Sjá it says so.
 ;; Loaded by tools/work-space (drgnx-work-space.el); defines no module.  See docs/develop/orchestration.md.
 
 ;;; Code:
@@ -32,6 +32,7 @@
 (defvar drgnx-work-lens-nav)
 (defvar drgnx-work-lens-map)
 (defvar drgnx-work-map--lens)
+(defvar drgnx-work-map-no-sja)
 
 ;;;; The faces the hub's Flow rows name: the UI font, the theme's chips and text
 
@@ -111,11 +112,11 @@ rows or its pass count; a waiver says its reason."
               (buffer-list)))
 
 (defun drgnx-work-flow--rows-p ()
-  "Whether this Flow is a hub-fed view with its model in Sjá (the rows path)."
-  (and (not drgnx-view-old-path) drgnx-view-patch (drgnx-view-patch-handle drgnx-view-patch) t))
+  "Whether this Flow is a hub-fed view with its model in Sjá."
+  (and drgnx-view-patch (drgnx-view-patch-handle drgnx-view-patch) t))
 
 (defun drgnx-work-flow-refresh (&optional buffer)
-  "Ask the hub for BUFFER's Flow (default: the current one) again; off the rows path nothing is asked."
+  "Ask the hub for BUFFER's Flow (default: the current one) again; without Sjá nothing is asked."
   (with-current-buffer (or buffer (current-buffer))
     (when (and (drgnx-work-flow--rows-p) (buffer-live-p drgnx-work-flow--map))
       (ignore-errors
@@ -125,7 +126,7 @@ rows or its pass count; a waiver says its reason."
 
 (defun drgnx-work-flow--nav (dir)
   "A key of the lens in the Flow: DIR `up' or `down' follows the `flow' form's link, `next-agent' and
-`previous-agent' walk the held tasks; the others move nothing.  Off the rows path the keys move nothing."
+`previous-agent' walk the held tasks; the others move nothing.  Without Sjá the keys move nothing."
   (when (drgnx-work-flow--rows-p)
     (pcase dir
       ((or 'up 'down) (drgnx-view-nav 'follow (symbol-name dir)))
@@ -211,11 +212,11 @@ their markers back: the window parameter stays the same object."
 
 (defun drgnx-work-flow-open (map-buffer)
   "The Flow of MAP-BUFFER, made when there is none; it asks the hub for the Flow and does not show itself.  Beside a
-map that is not on the rows path it says so instead."
+map without Sjá it says so instead."
   (let ((buffer (get-buffer-create (drgnx-work-flow--name map-buffer)))
         (rows (with-current-buffer map-buffer
-                (when-let* ((state (and (not drgnx-view-old-path) drgnx-view-patch)))
-                  (cons (concat (drgnx-view-patch-view state) "/flow") (drgnx-view-patch-class state))))))
+                (when drgnx-view-patch
+                  (cons (concat (drgnx-view-patch-view drgnx-view-patch) "/flow") (drgnx-view-patch-class drgnx-view-patch))))))
     (with-current-buffer buffer
       (unless (derived-mode-p 'drgnx-work-flow-mode)
         (drgnx-work-flow-mode)
@@ -231,9 +232,7 @@ map that is not on the rows path it says so instead."
                    ;; the cards' rings and the rows' rules follow every patch
                    (add-hook 'drgnx-view-patch-patched-functions #'drgnx-work-flow--patched nil t)
                    (add-hook 'kill-buffer-hook #'drgnx-work-flow--unblock nil t))
-          (let ((inhibit-read-only t))
-            (insert "The Flow needs Sjá, Nidhogg's view model: it is drawn from the hub's rows, and this Emacs has"
-                    " no Sjá (or `drgnx-view-old-path' is set).\n"))))
+          (let ((inhibit-read-only t)) (insert drgnx-work-map-no-sja "\n"))))
       (setq drgnx-work-flow--map map-buffer drgnx-work-lens--map map-buffer
             drgnx-work-map--lens (drgnx-work-lens-string 'flow (drgnx-work-lens-name map-buffer)
                                                          '(("evidence" . "e") ("rules" . "R"))))
@@ -349,7 +348,7 @@ path."
 
 (defun drgnx-work-flow-detail-buffer (flow)
   "FLOW's detail tile, made when there is none: the hub's rows of the view VIEW/detail beside the Flow's VIEW.  Nil
-off the rows path."
+without Sjá."
   (with-current-buffer flow
     (when (drgnx-work-flow--rows-p)
       (unless (buffer-live-p drgnx-work-flow--detail)

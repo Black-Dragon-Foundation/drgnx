@@ -1231,37 +1231,12 @@ fault."
             (throw 'fault (format "the region is %d long, the rows %d" (- (point-max) s) (drgnx-view--at view n))))
           nil)))))
 
-;;;; Fitting a label to a width
+;;;; A text's width
 
 (defun drgnx-view-text-width (s)
   "The width of S in pixels in the current buffer, with its faces and images and the buffer's face remaps (in a
 terminal, 8 per column)."
   (if (display-graphic-p) (string-pixel-width s (current-buffer)) (* 8 (string-width s))))
-
-(defvar drgnx-view--text-width-function #'drgnx-view-text-width
-  "Called with a string for its width in pixels, by `drgnx-view-fit'; tests set a fixed one.")
-
-(defvar drgnx-view--fit-memo (make-hash-table :test #'equal)
-  "(TEXT . PIXELS) → TEXT cut to PIXELS, so a label is measured once.  Emptied when it holds 4000 entries (a theme,
-font or scale change makes the rows draw again anyway).")
-
-(defun drgnx-view-fit (text px)
-  "TEXT cut at the end, with an ellipsis, to be at most PX pixels wide.  Memoised by text and width."
-  (let ((key (cons text px)))
-    (or (gethash key drgnx-view--fit-memo)
-        (progn
-          (when (> (hash-table-count drgnx-view--fit-memo) 4000) (clrhash drgnx-view--fit-memo))
-          (puthash key
-                   (if (<= (funcall drgnx-view--text-width-function text) px)
-                       text
-                     (let ((lo 0) (hi (length text)))
-                       (while (< lo hi)
-                         (let ((mid (/ (+ lo hi 1) 2)))
-                           (if (<= (funcall drgnx-view--text-width-function (concat (substring text 0 mid) "…")) px)
-                               (setq lo mid)
-                             (setq hi (1- mid)))))
-                       (concat (substring text 0 lo) "…")))
-                   drgnx-view--fit-memo)))))
 
 ;;;; Hub-fed views: the hub's row patches, inserted
 
@@ -1294,10 +1269,6 @@ font or scale change makes the rows draw again anyway).")
 
 (defvar drgnx-hub--events)
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
-
-(defvar drgnx-view-old-path nil
-  "Test-only: non-nil makes the views moved onto hub-built rows take their old Lisp path (kept, frozen, until the
-render offload's combined pass compares the two).  Never a user option.")
 
 (defface drgnx-view-stale '((t :inherit shadow))
   "A hub-fed view whose rows may be out of date: the hub went away, or its rows are for an older look."

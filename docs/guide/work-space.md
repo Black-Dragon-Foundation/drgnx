@@ -18,6 +18,10 @@ it is drawn again when you show it.
 
 Outside a project (a scratch buffer, a folder that is not in git) the map is empty and says so.
 
+The map and every Work view (its side panel, the Board, the Flow, a trail and the Timeline) need drgnx's own Emacs
+(Nidhogg, with its view model, Sjá): the hub draws them and Sjá answers their keys. In another Emacs each says so
+instead of drawing.
+
 ### What the cards show
 
 - An **agent** is a card of five lines: its state dot, a badge (the model's initial in the agent's colour), the model
@@ -149,7 +153,7 @@ The steering keys work in every Work view, on the agent selected there:
 |---|---|
 | `s` | message the agent (queued or steering as its mode says, never a cancel) |
 | `p` | pause it after its current tool call ("Pausing after the current tool call · u resume") |
-| `u` | resume it with a plain "Continue.", labelled "resumed by you" in the trail |
+| `u` | resume it with a plain "Continue." ("Work: Resumed") |
 | `x` | stop it, after a confirmation line |
 | `?` | this view's keys |
 

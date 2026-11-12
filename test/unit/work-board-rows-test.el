@@ -76,7 +76,6 @@ sent."
      (let* ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
             (drgnx-view-model--views (make-hash-table :test #'equal))
             (drgnx-view-patch--hooked nil)
-            (drgnx-view-old-path nil)
             (drgnx-view-patch-send-function #'ignore)
             (drgnx-hub--events (make-pipe-process :name "drgnx-test-events" :noquery t))   ; the subscribed connection
             (mview (format "wbr-test-%d" (cl-incf drgnx-work-board-rows-test--n)))
@@ -131,8 +130,8 @@ asks `work/board/subscribe' for it (the map view whose agents go on the cards) a
       (should (= 2 (length calls))))))
 
 (ert-deftest drgnx-work-board/off-the-rows-path-it-says-so ()
-  "Pattern D: the Board is drawn only from the hub's rows.  Beside a map that is not on the rows path (no Sjá, or
-`drgnx-view-old-path') it says so instead of drawing, asks the hub for nothing, and its keys move nothing."
+  "Pattern D: the Board is drawn only from the hub's rows.  Beside a map without them (no Sjá) it says so instead of
+drawing, asks the hub for nothing, and its keys move nothing."
   (let ((calls nil)
         (map (generate-new-buffer "*drgnx work: wbr-off*"))
         (board nil))

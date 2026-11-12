@@ -7,7 +7,7 @@
 ;; (queued, running, waiting, needs you, review, done), one flat card each with a 4 px progress bar.  It is scoped to
 ;; the plan the map's selection stands in (or plans, for a spec or an ask), else it shows every task.  The hub builds
 ;; it (`work/board/subscribe'): its rows, and a model of its own (Sjá) whose selection is the Board's alone.  It is
-;; drawn only from those rows: beside a map that is not on the rows path (no Sjá) it says so.
+;; drawn only from those rows: beside a map without Sjá it says so.
 ;; Loaded by tools/work-space (drgnx-work-space.el); defines no module.  See docs/develop/work-space.md.
 
 ;;; Code:
@@ -28,9 +28,7 @@
 (declare-function drgnx-work-timeline-buffers "drgnx-work-trail")
 (declare-function drgnx-work--open-agent "drgnx-work-map")
 (declare-function drgnx-work-map-select "drgnx-work-map")
-(declare-function drgnx-work-map-buffer "drgnx-work-map")
 (declare-function drgnx-work-lens-string "drgnx-work-map")
-(declare-function drgnx-work-nav-chain "drgnx-work-detail")
 (declare-function drgnx-work-map--sja "drgnx-work-map")
 (declare-function drgnx-work-map--class-index "drgnx-work-map" (h name))
 (declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
@@ -41,15 +39,9 @@
 (defvar drgnx-chrome-own-tab-line)
 (declare-function drgnx-work-lens-name "drgnx-work-map")
 (defvar drgnx-work-map--selection)
-(defvar drgnx-work-timeline--sel)
+(defvar drgnx-work-map-no-sja)
 
-;;;; What the map's selection scopes the Board to (design 8.2): pure
-
-(defun drgnx-work-board--agents-near (state sel)
-  "The agents SEL leads to or comes from in STATE: those on its chain, in the chain's order."
-  (let ((chain (drgnx-work-nav-chain state sel)))
-    (seq-filter (lambda (id) (equal (plist-get (drgnx-work-client-item state id) :kind) "agent"))
-                (append (nth 0 chain) (nth 1 chain)))))
+;;;; What the map's selection scopes the Board to (design 8.2)
 
 (defun drgnx-work-board-plans-for (map-buffer)
   "The plans the Board is scoped to for MAP-BUFFER's selection, from the map's model (Sjá): a plan itself, or the plans
@@ -95,7 +87,7 @@ before each command there."
 
 (defun drgnx-work-board-refresh (&optional buffer)
   "Ask the hub for BUFFER's Board (default: the current board) again (`drgnx-work-board--subscribe'); the hub reads
-the tasks and sends the Board's model and rows.  Off the rows path nothing is asked."
+the tasks and sends the Board's model and rows.  Without Sjá nothing is asked."
   (with-current-buffer (or buffer (current-buffer))
     (when (drgnx-work-board--rows-p) (drgnx-work-board--subscribe))))
 
@@ -106,14 +98,14 @@ the tasks and sends the Board's model and rows.  Off the rows path nothing is as
 ;; the map's nor moves it (the map's model holds no tracker tasks).
 
 (defun drgnx-work-board--rows-p ()
-  "Whether this board is a hub-fed view with its model in Sjá (the rows path)."
-  (and (not drgnx-view-old-path) drgnx-view-patch (drgnx-view-patch-handle drgnx-view-patch) t))
+  "Whether this board is a hub-fed view with its model in Sjá."
+  (and drgnx-view-patch (drgnx-view-patch-handle drgnx-view-patch) t))
 
 (defun drgnx-work-board--rows-view (map-buffer)
-  "The hub's Board view beside MAP-BUFFER's map view, (VIEW . CLASS), when the map is on the rows path, else nil."
+  "The hub's Board view beside MAP-BUFFER's map view, (VIEW . CLASS), when the map is on the hub's rows, else nil."
   (with-current-buffer map-buffer
-    (when-let* ((state (and (not drgnx-view-old-path) drgnx-view-patch)))
-      (cons (concat (drgnx-view-patch-view state) "/board") (drgnx-view-patch-class state)))))
+    (when drgnx-view-patch
+      (cons (concat (drgnx-view-patch-view drgnx-view-patch) "/board") (drgnx-view-patch-class drgnx-view-patch)))))
 
 (defun drgnx-work-board--subscribe ()
   "Ask the hub for this board's view: the tasks of its plans (else every task), with its map's agents on them.  On the
@@ -134,7 +126,7 @@ subscribed connection, as its map: the hub sends a view's rows to the connection
 (defun drgnx-work-board--nav (dir)
   "A key of the lens in the board: DIR is `left' `right' `up' `down' `next-agent' `previous-agent' `open' or
 `open-beside', answered from the Board's model: a move follows the `board' form's link, the agent keys walk the list
-`team', open opens the selected card's agent.  Off the rows path the keys move nothing."
+`team', open opens the selected card's agent.  Without Sjá the keys move nothing."
   (when (drgnx-work-board--rows-p)
     (pcase dir
       ((or 'left 'right 'up 'down) (drgnx-view-nav 'follow (symbol-name dir)))
@@ -152,15 +144,13 @@ subscribed connection, as its map: the hub sends a view's rows to the connection
   (format "*drgnx work board: %s*" (string-trim (buffer-name map-buffer) "\\*drgnx work: " "\\*")))
 
 (defun drgnx-work-board--no-rows ()
-  "Say in this board's new buffer that the Board is drawn only from the hub's rows, which this Emacs cannot show."
-  (let ((inhibit-read-only t))
-    (insert "The Board needs Sjá, Nidhogg's view model: it is drawn from the hub's rows, and this Emacs has no Sjá"
-            " (or `drgnx-view-old-path' is set).\n")))
+  "Say in this board's new buffer that its map needs Sjá."
+  (let ((inhibit-read-only t)) (insert drgnx-work-map-no-sja "\n")))
 
 (defun drgnx-work-board-open (map-buffer)
   "The board of MAP-BUFFER, made when there is none, scoped to the plans the map's selection stands for (design 8.2).
-Returns the buffer; it asks the hub for the Board and does not show itself.  Beside a map that is not on the rows path
-the board says so instead."
+Returns the buffer; it asks the hub for the Board and does not show itself.  Beside a map without Sjá the board says
+so instead."
   (let ((buffer (get-buffer-create (drgnx-work-board--name map-buffer)))
         (rows (drgnx-work-board--rows-view map-buffer)))
     (with-current-buffer buffer
@@ -180,13 +170,6 @@ the board says so instead."
       (drgnx-work-board-refresh buffer))
     buffer))
 
-(defun drgnx-work-board--changed (view-id _marks)
-  "`drgnx-work-client-change-functions': the map of VIEW-ID changed; its board asks for its tasks again, once a moment."
-  (when-let* ((map (drgnx-work-map-buffer view-id)))
-    (dolist (b (drgnx-work-board-buffers))
-      (when (eq (buffer-local-value 'drgnx-work-board--map b) map)
-        (drgnx-timer-soon (cons 'work-board view-id) 0.3 #'drgnx-work-board-refresh :args (list b) :owner b)))))
-
 ;;;; Switching between the lens's views, keeping the selection
 
 (defun drgnx-work-lens-map-buffer ()
@@ -197,11 +180,13 @@ the board says so instead."
 
 (defun drgnx-work-lens-switch (lens)
   "Show LENS (`map', `board' or `timeline') in this window, with the selection of the view that was shown.  The
-Timeline's lane becomes the map's selection; the Board's selection is its own (`drgnx-work-board--rows-p')."
+agent of the Timeline's selected step becomes the map's selection; the Board's selection is its own
+\(`drgnx-work-board--rows-p')."
   (let ((map (drgnx-work-lens-map-buffer)))
-    (when-let* ((sel (and (derived-mode-p 'drgnx-work-timeline-mode)
-                          (when-let* ((lane (car drgnx-work-timeline--sel))) (cons 'agent lane)))))
-      (with-current-buffer map (drgnx-work-map-select sel)))
+    (when-let* ((sid (and (derived-mode-p 'drgnx-work-timeline-mode) (drgnx-work-board--rows-p) (drgnx-view-nav-selection)
+                          (drgnx-view-nav-field "session")))
+                ((with-current-buffer map (drgnx-work-map--sja))))
+      (with-current-buffer map (drgnx-work-map-select (cons 'agent (concat "agent:" sid)))))
     (pop-to-buffer-same-window
      (pcase lens
        ('map map)

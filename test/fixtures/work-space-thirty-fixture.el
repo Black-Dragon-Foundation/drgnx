@@ -231,27 +231,19 @@ send each its ask; wait until all are busy.  Returns the mirrors."
 (declare-function drgnx-work-space-open "drgnx-work-space")
 (declare-function drgnx-work-space-workspace "drgnx-work-space")
 (declare-function drgnx-work-space-sync-shown "drgnx-work-space")
-(declare-function drgnx-work-client-view-state "drgnx-work-client")
-(declare-function drgnx-work-client-live-p "drgnx-work-client")
-(declare-function drgnx-work-client-ids "drgnx-work-client")
 (declare-function drgnx-work-client-shown-p "drgnx-work-client")
-(declare-function drgnx-work-client-counter "drgnx-work-client")
 (declare-function drgnx-view-shown-p "drgnx-view")
 (declare-function drgnx-modules-report "drgnx-modules")
 (defvar drgnx-work-space--view)
 (defvar drgnx-view)
 
 (defun drgnx-work-thirty-agent-items (buffer)
-  "How many agent items BUFFER's map holds: in its frame, or on the hub's rows in its model's team."
-  (let ((state (drgnx-work-client-view-state (buffer-local-value 'drgnx-work-space--view buffer)))
-        (patch (buffer-local-value 'drgnx-view-patch buffer)))
-    (cond
-     ((and patch (drgnx-view-patch-handle patch))
-      (seq-count (lambda (id) (string-prefix-p "agent:" id))
-                 (append (nidhogg-view-get (drgnx-view-patch-handle patch) 'list "team") nil)))
-     ((and state (drgnx-work-client-live-p state))
-      (seq-count (lambda (id) (string-prefix-p "agent:" id)) (drgnx-work-client-ids state)))
-     (t 0))))
+  "How many agent items BUFFER's map holds: the agents of its model's team (0 without Sjá's model)."
+  (let ((patch (buffer-local-value 'drgnx-view-patch buffer)))
+    (if (and patch (drgnx-view-patch-handle patch))
+        (seq-count (lambda (id) (string-prefix-p "agent:" id))
+                   (append (nidhogg-view-get (drgnx-view-patch-handle patch) 'list "team") nil))
+      0)))
 
 (defun drgnx-work-thirty-map (shown)
   "The map of the fixture's workspace: in a window beside the selected one when SHOWN, else open and shown nowhere

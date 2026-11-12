@@ -37,8 +37,7 @@ marked, then the lens's own keys as chips with their key badges."
     (should (equal tab-line-format '("" drgnx-work-map--lens)))
     (should-not header-line-format)
     ;; a mode line drops the faces of a variable's string unless the variable is risky
-    (should (get 'drgnx-work-map--lens 'risky-local-variable))
-    (should (get 'drgnx-work-map--strip 'risky-local-variable))))
+    (should (get 'drgnx-work-map--lens 'risky-local-variable))))
 
 (ert-deftest drgnx-work-flow/it-asks-the-hub-for-the-job-s-flow ()
   "The Flow asks `work/flow/subscribe' with its view, its map's view and the job (none: the hub picks the newest

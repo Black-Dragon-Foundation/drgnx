@@ -57,7 +57,6 @@
      (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
            (drgnx-view-model--views (make-hash-table :test #'equal))
            (drgnx-view-patch--hooked nil)
-           (drgnx-view-old-path nil)
            (drgnx-view-patch-send-function #'ignore)
            (drgnx-work-map-select-functions nil)
            (view (format "wmn-test-%d" (cl-incf drgnx-work-map-nav-test--n))))
@@ -181,8 +180,7 @@ test/ui/work-space-gui-test.el check it."
 
 (ert-deftest drgnx-work-detail/rows-follow-the-selection ()
   "Pattern D: beside a map on the rows path the Detail panel is the hub's view VIEW/detail in the map's class: its
-rows are what the hub sends there, and a selection move redraws nothing here (the hub follows the selection, which
-the map sends as work/map/set)."
+rows are what the hub sends there (the hub follows the selection, which the map sends as work/map/set)."
   (drgnx-work-map-nav-test--with
     (load (expand-file-name "modules/tools/drgnx-work-detail" drgnx-dir) nil t)
     (let* ((map-view (drgnx-view-patch-view drgnx-view-patch))
@@ -195,11 +193,7 @@ the map sends as work/map/set)."
                                           :env_epoch 0
                                           :ops (list (list :reset (list (list :key "head/0" :text "beta · agent"))))))
             (drgnx-view-draw-now drgnx-view)
-            (should (equal "beta · agent" (string-trim (buffer-string))))
-            (let ((touched 0))
-              (cl-letf (((symbol-function 'drgnx-view-touch) (lambda (&rest _) (cl-incf touched))))
-                (drgnx-work-detail-update (buffer-local-value 'drgnx-work-detail--map detail)))
-              (should (= 0 touched))))
+            (should (equal "beta · agent" (string-trim (buffer-string)))))
         (kill-buffer detail)))))
 
 ;;; work-map-nav-test.el ends here

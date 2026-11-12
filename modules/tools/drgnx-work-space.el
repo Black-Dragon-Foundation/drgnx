@@ -4,10 +4,11 @@
 
 ;;; Commentary:
 ;; The Work space shows a workspace's agent work in six layers (you asked, specs, plans, agents, branches, files and
-;; machines) and the edges between them.  The hub keeps the map and sends a frame and then deltas for each view; this
-;; module owns the editor's side: the faces, the workspace of a frame, the map buffer (drgnx-work-map.el), the map
-;; client's wiring to the hub client (core/drgnx-work-client.el) and the commands.  A map no window shows is told to
-;; the hub as hidden and draws nothing.  Turned off, it closes its views and kills its buffers.
+;; machines) and the edges between them.  The hub keeps the map, lays it out and sends each view's rows as patches,
+;; with its model for Sjá; this module owns the editor's side: the faces, the workspace of a frame, the map buffer
+;; (drgnx-work-map.el), the map client's wiring to the hub client (core/drgnx-work-client.el) and the commands.  A map
+;; no window shows is told to the hub as hidden and gets nothing.  Turned off, it closes its views and kills its
+;; buffers.
 ;; See docs/guide/work-space.md and docs/develop/work-space.md.
 
 ;;; Code:
@@ -54,7 +55,6 @@
 (declare-function drgnx-work-review-reject "drgnx-work-review")
 (declare-function drgnx-work-trail-buffers "drgnx-work-trail")
 (declare-function drgnx-work-timeline-buffers "drgnx-work-trail")
-(declare-function drgnx-work-trail-event "drgnx-work-trail")
 (declare-function drgnx-work-trail-show "drgnx-work-trail")
 (declare-function drgnx-work-trail-steer "drgnx-work-trail")
 (declare-function drgnx-work-trail-pause "drgnx-work-trail")
@@ -65,7 +65,6 @@
 (declare-function drgnx-work-keys-sheet "drgnx-work-trail")
 (declare-function drgnx-work-lens-show-timeline "drgnx-work-board")
 (declare-function drgnx-work-board-buffers "drgnx-work-board")
-(declare-function drgnx-work-board--changed "drgnx-work-board")
 (declare-function drgnx-work-lens-show-map "drgnx-work-board")
 (declare-function drgnx-work-lens-show-board "drgnx-work-board")
 (declare-function drgnx-work-lens-show-flow "drgnx-work-flow")
@@ -80,11 +79,9 @@
 (declare-function drgnx-work-flow-waive "drgnx-work-flow")
 (declare-function drgnx-work-flow-held "drgnx-work-flow" (n))
 (declare-function drgnx-work-detail-buffer "drgnx-work-detail")
-(declare-function drgnx-work-detail-update "drgnx-work-detail")
 (declare-function drgnx-work-detail-buffers "drgnx-work-detail")
 (declare-function drgnx-work-job-log "drgnx-work-detail")
 (declare-function drgnx-work-huddle-overlap "drgnx-work-detail")
-(declare-function drgnx-work-map--huddles-changed "drgnx-work-map")
 (declare-function drgnx-pane-define-kind "drgnx-panes")
 (declare-function drgnx-pane-show "drgnx-panes")
 
@@ -99,17 +96,14 @@
 (declare-function drgnx-work-map-needs-you "drgnx-work-map")
 (declare-function drgnx-work-map-needs-you-here-next "drgnx-work-map")
 (declare-function drgnx-work-map-collapse-layer "drgnx-work-map")
-(declare-function drgnx-work-map--changed "drgnx-work-map")
-(declare-function drgnx-work-map--edges-update "drgnx-work-map")
-(declare-function drgnx-work-map-theme-changed "drgnx-work-map")
 (declare-function drgnx-work-map-motion-clear "drgnx-work-map")
 (defvar drgnx-work-space--view)
 (defvar drgnx-work-space--message)
+(defvar drgnx-work-map-no-sja)
 (defvar drgnx-hub--events)
 (declare-function drgnx-hub-running-p "drgnx-hub-client")
 (declare-function drgnx-hub-connect "drgnx-hub-client")
 (declare-function drgnx-hub-call "drgnx-hub-client")
-(defvar drgnx-hub-event-functions)
 (defvar drgnx-hub-connected-functions)
 (defvar drgnx-hub-disconnect-functions)
 
@@ -256,14 +250,15 @@ labels' margin (84 px) and 12 px of padding, in logical pixels.  A terminal fram
           (setq default-directory (car (plist-get workspace :roots))
                 drgnx-work-space--view (plist-get workspace :id) drgnx-work-space--message nil)
           (add-hook 'kill-buffer-hook #'drgnx-work-space--killed nil t)
-          (let ((rows (drgnx-work-map-rows-p)))
-            ;; on the hub's rows the hub lays the map out and draws it; else this Emacs draws the frames it gets
-            (if rows (drgnx-work-map-rows-attach (plist-get workspace :id))
-              (drgnx-view-attach 'work-map)
-              (drgnx-view-touch drgnx-view))
-            (drgnx-work-client-open (plist-get workspace :id) workspace
-                                    :width (drgnx-work-space--width-units)
-                                    :density (symbol-name drgnx-work-space-density) :rows rows))))
+          ;; the hub lays the map out and draws it; an Emacs without Sjá cannot show its rows, and says so
+          (if (drgnx-work-map-rows-p)
+              (progn (drgnx-work-map-rows-attach (plist-get workspace :id))
+                     (drgnx-work-client-open (plist-get workspace :id) workspace
+                                             :width (drgnx-work-space--width-units)
+                                             :density (symbol-name drgnx-work-space-density)))
+            (setq drgnx-work-space--message drgnx-work-map-no-sja)
+            (drgnx-view-attach 'work-map)
+            (drgnx-view-touch drgnx-view))))
       buffer)))
 
 ;;;###autoload
@@ -411,23 +406,14 @@ which the hub's wheel protocol drives.  It has no key of its own."
 ;;;; The module
 
 (defun drgnx-work-space--setup ()
-  "tools/work-space's setup: the hub client's events, connection and disconnection reach the map client; the map
-follows the windows; the commands."
-  (drgnx-module-hook 'drgnx-hub-event-functions event (event data) (drgnx-work-client-event event data))
+  "tools/work-space's setup: the hub client's connection and disconnection reach the map client; the map follows the
+windows; the commands."
   (drgnx-module-hook 'drgnx-hub-connected-functions connected () (drgnx-work-client-connected))
   (drgnx-module-hook 'drgnx-hub-disconnect-functions disconnected () (drgnx-work-client-disconnected))
-  (drgnx-module-hook 'drgnx-work-client-change-functions changed (view marks) (drgnx-work-map--changed view marks))
   (drgnx-module-hook 'drgnx-frame-replaced-functions frame-replaced (old new)
     (drgnx-work-map--frame-replaced old new)
     (drgnx-work-code--frame-replaced old new))
-  (drgnx-module-hook 'drgnx-work-client-change-functions board-changed (view marks) (drgnx-work-board--changed view marks))
-  (drgnx-module-hook 'drgnx-agent-panel-huddle-changed-hook huddles () (drgnx-work-map--huddles-changed))
-  (drgnx-module-hook 'drgnx-hub-event-functions trail-event (event data) (drgnx-work-trail-event event data))
   (drgnx-module-hook 'drgnx-work-client-status-functions status (view status) (drgnx-work-space--show-status view status))
-  (drgnx-module-hook 'drgnx-work-map-select-functions selected (buffer) (drgnx-work-detail-update buffer))
-  (drgnx-module-hook 'drgnx-work-map-edges-functions edges (view selection) (drgnx-work-map--edges-update view selection))
-  (drgnx-module-hook 'enable-theme-functions edge-colours (_theme) (drgnx-work-map-theme-changed))
-  (drgnx-module-hook 'disable-theme-functions edge-colours-off (_theme) (drgnx-work-map-theme-changed))
   (drgnx-module-hook 'find-file-hook live-file () (drgnx-work-live-file--maybe))
   (drgnx-command-define 'work-take-wheel :category "Work" :title "Take the Wheel from the Agent"
                         :command #'drgnx-work-take-wheel :map 'drgnx-work-live-file-mode-map

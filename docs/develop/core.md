@@ -1329,9 +1329,8 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   the local AI runner) and a finished check's 0.1 s `(agent-check-finish . PROC)`, whose process is already dead. The status bar's debounced refresh is a fourth, `statusbar-refresh`, cancelled when the bar's mode turns off."
 
 The Work space's views keep no timer of their own while hidden: a map tells the hub it is hidden and gets nothing
-(`work/map/set {shown: false}`), the Board, the Timeline and the trail ask the hub only on events, through
-`drgnx-timer-soon` keys owned by their buffers (`(work-board . VIEW)`, `(work-timeline . LANE)`,
-`(work-trail-conclusions . NAME)`), and the module's `:teardown` kills the buffers.
+(`work/map/set {shown: false}`), the Board, the Timeline and the trail are hub-fed views the hub keeps current (they
+keep no timer), the map's motion timers are owned by its buffer, and the module's `:teardown` kills the buffers.
 
 The Explorer's three timers are owned by its buffer, so killing it ends them (and with no Explorer none starts):
 `explorer-file-events` (`drgnx-timer-soon`, a wall timer `drgnx-explorer-event-delay` after a burst's first file event;
@@ -1955,10 +1954,10 @@ work. Without VIEW it sums every live view (`:max-slice-rows`: the largest).
   `drgnx-outline-delay`, owned by the Outline's buffer once it exists). Tests: `test/unit/wb-outline-test.el`,
   `test/unit/wb-outline-edge-test.el` (prefix `drgnx-outline`).
 
-- **The Work space's views** (`work-map`, `work-detail`, `work-board`, `work-timeline`, `work-trail`, `work-review`,
-  `modules/tools/drgnx-work-*.el`): the map's rows are the layout's, the Board's are cards across columns, the trail's
-  follow the tail and take older steps with `drgnx-view-insert`; [work-space.md](work-space.md) has the rest. (The
-  old Work graph and feed views are gone.)
+- **The Work space's views** (`modules/tools/drgnx-work-*.el`): the map, its side panel, the Board, the trail and the
+  Timeline are hub-fed views (the hub draws their rows; `work-map` is left as the view type of a map with no rows, which
+  shows a notice), and `work-review` draws its own; [work-space.md](work-space.md) has the rest. (The old Work graph
+  and feed views are gone.)
 
 ### The invariant
 
@@ -2051,12 +2050,10 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
   font), face remaps and images at their picture's width. A segment wider than the stop is cut again by the same
   measure (`drgnx-view-patch--fit-faced`, padded, so later positions keep their place), dressed again and reported by
   `view/measured`, after which the hub fits that string by the editor's width. A row that fits costs one measure.
-- **`drgnx-view-fit TEXT PX`** cuts TEXT with an ellipsis to PX pixels (memoised in `drgnx-view--fit-memo`, emptied
-  at 4000). The Work map, the Board and the timeline's lane labels use it too.
 - **The stale shade** is the view's own state, put back by PATCHED after every draw; the classes (selected, match,
   lit, dim) come from the model, on each node's span ("Keys through the model" below).
-- `drgnx-view-old-path` (test-only) makes a view moved onto hub-built rows take its old Lisp path, for the combined
-  pass that compares the two.
+- A view moved onto hub-built rows has no Lisp path left to fall back to (render offload Task 34 removed the switch,
+  `drgnx-view-old-path`, and what it guarded); in an Emacs without Sjá a view whose keys need the model says so.
 - **A view of its own around the hub's rows** (the agent panel): `drgnx-view-patch-attach … :keep t` keeps the
   buffer's view; its type renders a string key with `drgnx-view-patch-render` and its own keys itself, and the buffer
   sets `drgnx-view-patch-apply-function` to place the rows. The panel's (`drgnx-agent-panel--apply-rows`) rewrites a
