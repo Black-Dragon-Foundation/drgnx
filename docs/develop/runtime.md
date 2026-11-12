@@ -681,7 +681,11 @@ short: it stops at its own `within_ms`.
 diagnostics left out), each request is sent on its connection (default `c`, captures substituted) and its answer, the
 line with its id within 3 s, is added to the failure (6000 characters of it at most). A row whose red comes only on
 another machine (the macOS lane) names there what the next run must show; the gate-run rows ask `job/status`,
-`exec/list` and `orch/evidence`. Unit test `scenario::tests::on_failure_is_requests_with_ids`.
+`exec/list` and `orch/evidence`; `runner/verdict-parsed` asks `status` (the writer's batches and last COMMIT) and
+`job/status`, and starts its hub with `DRGNX_RATATOSKR_LOG=info,drgnx_ratatoskr::runner::propose=debug`, so its log
+tail holds `job proposed`: each stage of `job/propose` (plan, pack, id, project, forecast, say, write, after) in
+milliseconds of the hub's clock and `commit_ms`, the last batch's COMMIT, beside the write's whole wait. Unit test
+`scenario::tests::on_failure_is_requests_with_ids`.
 
 **Tags** (`requires`): `v1` (hello v1: every row), `sudo` (euid 0, or `sudo -n true` succeeds), `test-hooks` (the
 binary's `version --json` says `"test_hooks": true`), `linux`, `macos`, `perf`, `agent-locks`, `podman` (`podman` is on
