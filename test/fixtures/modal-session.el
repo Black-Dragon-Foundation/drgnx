@@ -9,6 +9,7 @@
 (require 'cl-lib)
 (require 'drgnx-ui)
 (require 'drgnx-wait-fixture (expand-file-name "wait-fixture" (file-name-directory (macroexp-file-name))))
+(load (expand-file-name "ratatoskr-fixture" (file-name-directory (macroexp-file-name))) nil t)
 
 (defconst drgnx-modal-session-skip "evil not installed: see docs/develop/harness.md \"Modal tests\""
   "Why a modal session test skips.")
@@ -45,6 +46,17 @@
                           (list (drgnx-modal-engine-start-now 'evil)
                                 (progn (drgnx-keys-use ',layers) drgnx-modal-running))))
                  '(t evil))))
+
+(defun drgnx-modal-session-hub (sess)
+  "In SESS, the hub its views and terminal need, as an install has it: the test's Ratatoskr ($DRGNX_RATATOSKR_BIN)
+started (a session has starting off, DRGNX_NO_HUB_START) and subscribed to; it ends with the session.  Without the
+binary the test skips, or fails where the hub is required (`drgnx-test-no-hub')."
+  (let ((bin (or (drgnx-test-ratatoskr-bin) (drgnx-test-no-hub))))
+    (drgnx-modal-session-eval sess `(progn (setenv "DRGNX_NO_HUB_START") (setenv "DRGNX_RATATOSKR_BIN" ,bin)
+                                           (setenv "DRGNX_HUB_PARENT_PID" (number-to-string (emacs-pid)))
+                                           (drgnx-hub-start-for-command #'ignore)
+                                           t))
+    (drgnx-modal-session-until sess '(process-live-p drgnx-hub--events) 30)))
 
 (defun drgnx-modal-session-act (sess &rest actions)
   "Deliver ACTIONS in SESS — strings are keys (`kbd' syntax), (:type TEXT) typed text — and wait until it settles.
@@ -83,11 +95,11 @@ The jank report is kept for `drgnx-modal-session-jank'."
              (cl-count-if (lambda (r) (eq (plist-get r :settled) :false)) rs))))
 
 (defmacro drgnx-modal-session-with (spec &rest body)
-  "SPEC is (SESS &key DAEMON LAYERS): BODY with SESS a fresh drgnx session (a daemon when DAEMON) in a temp state
-root, evil running and the key stack LAYERS (default Vim) applied.  Skips without evil; the session is stopped and
-its root removed after."
+  "SPEC is (SESS &key DAEMON LAYERS HUB): BODY with SESS a fresh drgnx session (a daemon when DAEMON) in a temp state
+root, evil running and the key stack LAYERS (default Vim) applied, and with HUB the test's hub running
+\(`drgnx-modal-session-hub').  Skips without evil; the session is stopped and its root removed after."
   (declare (indent 1))
-  (let ((sess (car spec)) (daemon (plist-get (cdr spec) :daemon))
+  (let ((sess (car spec)) (daemon (plist-get (cdr spec) :daemon)) (hub (plist-get (cdr spec) :hub))
         (layers (or (plist-get (cdr spec) :layers) ''((vim app editing window)))))
     `(progn
        (unless (drgnx-modal-session-elpa) (ert-skip drgnx-modal-session-skip))
@@ -98,6 +110,7 @@ its root removed after."
               (,sess (drgnx-ui-own-session name)))
          (unwind-protect
              (progn (drgnx-modal-session-start ,sess ,layers)
+                    ,@(and hub `((drgnx-modal-session-hub ,sess)))
                     ,@body
                     (drgnx-modal-session-jank (ert-test-name (ert-running-test))))
            (drgnx-ui-stop name)
