@@ -54,6 +54,12 @@ impl PartialEq for Background {
 const TSC_BEGINS: &str = r"^\s*(?:message TS6032:|\[?\D*.{1,2}[:.].{1,2}[:.].{1,2}\D*(├\D*\d{1,2}\D+┤)?(?:\]| -)) (Starting compilation in watch mode|File change detected\. Starting incremental compilation)\.\.\.";
 const TSC_ENDS: &str = r"^\s*(?:message TS6042:|\[?\D*.{1,2}[:.].{1,2}[:.].{1,2}\D*(├\D*\d{1,2}\D+┤)?(?:\]| -)) (?:Compilation complete\.|Found \d+ errors?\.) Watching for file changes\.";
 
+static TSC_WATCH: std::sync::LazyLock<Background> = std::sync::LazyLock::new(|| Background {
+    active_begin: false,
+    begins: Some(Regex::new(TSC_BEGINS).expect("tsc begins")),
+    ends: Regex::new(TSC_ENDS).expect("tsc ends"),
+});
+
 /// Task NAME's (T's) background patterns, from its `problemMatcher` (a name, an object or a list of them).
 fn background(t: &Value, name: &str) -> Result<Background, String> {
     let list = match t.get("problemMatcher") {
@@ -77,13 +83,7 @@ fn background(t: &Value, name: &str) -> Result<Background, String> {
     let mut unknown = vec![];
     for m in &list {
         match m {
-            Value::String(s) if s == "$tsc-watch" => {
-                return Ok(Background {
-                    active_begin: false,
-                    begins: Some(Regex::new(TSC_BEGINS).expect("tsc begins")),
-                    ends: Regex::new(TSC_ENDS).expect("tsc ends"),
-                });
-            }
+            Value::String(s) if s == "$tsc-watch" => return Ok(TSC_WATCH.clone()),
             Value::String(s) => unknown.push(s.clone()),
             o => {
                 let Some(bg) = o.get("background") else {
