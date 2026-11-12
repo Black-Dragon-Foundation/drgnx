@@ -12,6 +12,7 @@
 
 pub mod container;
 pub(crate) mod hostgrants;
+pub mod keys;
 pub mod net;
 pub mod packages;
 pub mod progress;
@@ -202,6 +203,9 @@ pub struct Hooks {
     /// The folder of the relay's binaries (`drgnx-px-<arch>-linux-musl`, next to the hub): the sidecar a container job
     /// granted network runs is imported from there ([`net::prepare_net`]).
     pub px_dir: Option<PathBuf>,
+    /// `drgnx-key`, next to the hub: what a keyed command job here runs in front of its command ([`keys`]); none or
+    /// missing: such a job is refused (`drgnx doctor` says so).
+    pub key_bin: Option<PathBuf>,
     /// How this machine admits the queue's jobs (`runners::local`): live on Linux, else by count.  The user's servers
     /// (no time box) never queue.
     pub admission: Admission,
@@ -236,6 +240,9 @@ impl Default for Hooks {
             px_dir: std::env::current_exe()
                 .ok()
                 .and_then(|e| e.parent().map(Path::to_path_buf)),
+            key_bin: std::env::current_exe()
+                .ok()
+                .and_then(|e| e.parent().map(|d| d.join("drgnx-key"))),
             // tests and the conformance lane admit by count, never by the machine they happen to run on
             admission: if cfg!(any(test, feature = "test-hooks")) {
                 Admission::Fixed(crate::runners::local::FIXED_SLOTS)
@@ -304,6 +311,26 @@ impl Net {
         }
     }
 }
+
+/// The end of a keyed job a restarted hub found running.
+const KEYED_RESTART: &str =
+    "infra: the hub restarted (a keyed job's key socket and log went with it)";
+
+/// A keyed job's key socket and the `drgnx-key` that asks it, made before its launch.
+struct KeySocket {
+    socket: keys::Socket,
+    keys: Arc<keys::JobKeys>,
+    bin: PathBuf,
+}
+
+/// A running keyed job's key socket (removed when the job ends) and the task that redacts its output into its log.
+struct Keyed {
+    _socket: keys::Socket,
+    pump: tokio::task::JoinHandle<()>,
+}
+
+/// How long a keyed job's log may take to drain once its process has ended (a child it left may hold the pipe).
+const DRAIN: Duration = Duration::from_secs(5);
 
 /// Ends job DIR `infra: proxy` for REASON: the reason line goes to its log, and `why` says so (before the job's
 /// process is ended, so its result reads it).
@@ -1026,6 +1053,7 @@ impl Inner {
             machine: None,
             priority: Some(spec.priority().number()),
             relay: None,
+            keyed: false,
         })?;
         self.live.add(id, session);
         self.queue.submit(self.submit_of(id, spec), started as u64);
@@ -1426,6 +1454,43 @@ impl Inner {
         ))
     }
 
+    /// Job ID's key socket (in DIR, or its session's folder), answered from the hub's keys, and `drgnx-key`.
+    fn key_socket(&self, id: &str, dir: &Path, spec: &ExecSpec) -> Result<KeySocket, Refusal> {
+        let bin = self
+            .hooks
+            .key_bin
+            .clone()
+            .filter(|b| b.is_file())
+            .ok_or_else(|| {
+                setup("drgnx-key was not found next to the hub: a keyed job can't get its keys")
+            })?;
+        let env = self.hooks.shell_env.paths_env();
+        let session = match &spec.starter {
+            Starter::Session(s) => Some(s.as_str()),
+            Starter::User => None,
+        };
+        let path = keys::socket_path(&env, session, dir, id)
+            .ok_or_else(|| setup("the job's key socket has no path within a socket's length"))?;
+        if let Some(sid) = session {
+            runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), sid)
+                .map_err(|e| setup(format!("the session's folder: {e}")))?;
+        }
+        let jk = keys::JobKeys::new(
+            id,
+            spec.place.keys.clone(),
+            self.queue.keys().clone(),
+            dir,
+            sleipnir::keyline::KEY_WAIT,
+        );
+        let socket = keys::serve(&path, jk.clone())
+            .map_err(|e| setup(format!("the job's key socket {}: {e}", path.display())))?;
+        Ok(KeySocket {
+            socket,
+            keys: jk,
+            bin,
+        })
+    }
+
     async fn launch(
         self: Arc<Self>,
         id: &str,
@@ -1437,6 +1502,25 @@ impl Inner {
         spec.argv = local_argv(&spec.argv, spec.place.suite.as_ref());
         let name = self.hooks.systemd.then(|| unit::unit_name(id));
         let mut relay = None;
+        // a keyed command job asks the hub for its keys on a socket of its own, through drgnx-key in front of it
+        if !spec.place.keys.is_empty() && spec.container.is_some() {
+            return Err(setup(
+                "a keyed container job runs on a runner only, for now: its relay's key streams come next",
+            ));
+        }
+        let keyed = if spec.place.keys.is_empty() {
+            None
+        } else {
+            let k = self.key_socket(id, dir, &spec)?;
+            spec.argv = keys::wrapped_argv(&k.bin, &spec.place.keys, &spec.argv);
+            Some(k)
+        };
+        let key_env = keyed.as_ref().map(|k| {
+            (
+                "DRGNX_KEY_SOCK".to_string(),
+                k.socket.path().to_string_lossy().into_owned(),
+            )
+        });
         let (inner, status) = match &spec.starter {
             _ if spec.container.is_some() => {
                 let (s, r) = self.container_spec(id, dir, &spec).await?;
@@ -1454,9 +1538,11 @@ impl Inner {
                     .clone()
                     .ok_or_else(|| refusal("a session's job needs its worktree"))?;
                 // the lock's protected files stay read-only for a job as for the session itself
+                let mut env = tool_env(&self.hooks.shell_env);
+                env.extend(key_env.clone());
                 let plan = LaunchPlan {
                     argv: spec.argv.iter().map(OsString::from).collect(),
-                    env: tool_env(&self.hooks.shell_env),
+                    env,
                     session_meta: None,
                     protected_ro: crate::agents::lock::PROTECTED_RO
                         .iter()
@@ -1469,12 +1555,17 @@ impl Inner {
                     ro_files: Vec::new(),
                     gateway_url_env: Vec::new(),
                 };
+                // a keyed job reads drgnx-key (the file alone) and reaches its key socket (the path alone)
                 let shape = SessionShape {
                     sid: sid.clone(),
                     cwd: spec.cwd.clone(),
                     write: vec![worktree],
-                    read: vec![],
+                    read: keyed.iter().map(|k| k.bin.clone()).collect(),
                     net: NetCell::ProviderAndPackages,
+                    sockets: keyed
+                        .iter()
+                        .map(|k| k.socket.path().to_path_buf())
+                        .collect(),
                     browser: None,
                 };
                 let l = launch::launch(&self.hooks.shell_env.paths_env(), &plan, &shape).await?;
@@ -1493,19 +1584,30 @@ impl Inner {
             inner.env.retain(|(n, _)| n != k.as_str());
             inner.env.push((k.into(), v.into()));
         }
+        // a sandboxed session's job got it in its plan; the others' environment is this one
+        if status.is_none()
+            && let Some((k, v)) = &key_env
+        {
+            inner.env.push((k.into(), v.into()));
+        }
         let memory = spec
             .user
             .memory_max
             .as_deref()
             .unwrap_or(self.hooks.memory.as_str());
-        let wrapped = unit::wrap(
+        let wrap = if keyed.is_some() {
+            unit::wrap_to_hub
+        } else {
+            unit::wrap
+        };
+        let wrapped = wrap(
             inner,
             dir,
             name.as_deref().map(|n| (n, memory)),
             spec.user.nice,
             &self.hooks.shell_env,
         );
-        let child = match draugr::spawn_pinned(wrapped).await {
+        let mut child = match draugr::spawn_pinned(wrapped).await {
             Ok(c) => c,
             Err(e) => {
                 if let Some(r) = relay {
@@ -1515,6 +1617,18 @@ impl Inner {
             }
         };
         let pid = child.id();
+        // a keyed job's output reaches its log only through the hub's redactor
+        let keyed = keyed.map(|k| {
+            let out = child.take_stdout().expect("the job's stdout");
+            let pump = crate::clock::spawn(
+                "exec:key-log",
+                keys::pump(out, dir.join("log"), k.keys.redactor()),
+            );
+            Keyed {
+                _socket: k.socket,
+                pump,
+            }
+        });
         // The sandbox helper reports on a pipe; a launch whose status is not read hangs (Task 10).
         if let Some(fd) = status {
             let log = dir.join("log");
@@ -1560,6 +1674,7 @@ impl Inner {
             machine: Some(queue::LOCAL.into()),
             priority: Some(spec.priority().number()),
             relay: relay.as_ref().map(|r| r.sidecar_name().to_string()),
+            keyed: keyed.is_some(),
         };
         self.save_meta(&meta)?;
         meta.entity = self.record_start(&meta).await;
@@ -1578,7 +1693,7 @@ impl Inner {
         crate::clock::spawn("exec:watch", async move {
             // a real wait (the child's end): a test's barrier waits for a job that ends, and names one that does not;
             // an advance does not wait for it (the job's time box may be what ends it)
-            crate::clock::real_long(me.clone().watch(&id, Some(child), relay)).await;
+            crate::clock::real_long(me.clone().watch(&id, Some(child), relay, keyed)).await;
             drop(permit);
             me.pump();
         });
@@ -1666,7 +1781,13 @@ impl Inner {
     /// Wait for the job to end (or its time box, or its relay), then record the end.  CHILD is the process this hub
     /// started; none: a job re-attached after a restart, watched by polling.  RELAY is a networked job's: when its
     /// channel ends first (or a graceful hub stop asks), the job ends `infra: proxy`.
-    async fn watch(self: Arc<Self>, id: &str, child: Option<draugr::Child>, relay: Option<Net>) {
+    async fn watch(
+        self: Arc<Self>,
+        id: &str,
+        child: Option<draugr::Child>,
+        relay: Option<Net>,
+        keyed: Option<Keyed>,
+    ) {
         let mut relay = relay;
         let mut acks = Vec::new();
         let Some(meta) = self.meta(id) else { return };
@@ -1743,6 +1864,13 @@ impl Inner {
         if let Some(r) = relay {
             r.net.end().await;
         }
+        // the log is whole before the result reads it; the key socket goes with the job
+        if let Some(k) = keyed {
+            let mut pump = k.pump;
+            if crate::clock::real_timeout(DRAIN, &mut pump).await.is_err() {
+                pump.abort();
+            }
+        }
         self.nets.lock().unwrap().remove(id);
         self.finish(id).await;
         for ack in acks {
@@ -1762,7 +1890,7 @@ impl Inner {
         let status = match std::fs::read_to_string(dir.join("why")).as_deref() {
             Ok("stopped") => ExecStatus::Stopped,
             Ok("timed-out") => ExecStatus::TimedOut,
-            Ok(w) if w.starts_with(net::INFRA) => ExecStatus::Infra,
+            Ok(w) if w.starts_with("infra:") => ExecStatus::Infra,
             _ if exit.is_some() => ExecStatus::Done,
             _ => ExecStatus::Lost,
         };
@@ -1997,6 +2125,27 @@ impl Inner {
                     });
                     continue;
                 }
+                // a keyed job's key socket and log went with the last hub: it is ended, not adopted
+                if m.keyed {
+                    let me = self.clone();
+                    crate::clock::spawn("exec:end-keyed", async move {
+                        if let Some(p) = m.pid
+                            && m.start_time.is_some()
+                            && m.start_time == draugr::start_time(p).ok()
+                        {
+                            let _ = crate::clock::real(draugr::kill_group(
+                                p,
+                                Duration::from_secs(2),
+                                &draugr::RealSignaller,
+                            ))
+                            .await;
+                        }
+                        let dir = me.dir(&id);
+                        let _ = std::fs::write(dir.join("why"), KEYED_RESTART);
+                        me.finish(&id).await;
+                    });
+                    continue;
+                }
                 running.insert(id.clone());
                 // it still takes its room here
                 if m.timebox_s.is_some() {
@@ -2005,7 +2154,7 @@ impl Inner {
                 }
                 let me = self.clone();
                 crate::clock::spawn("exec:watch", async move {
-                    crate::clock::real_long(me.watch(&id, None, None)).await;
+                    crate::clock::real_long(me.watch(&id, None, None, None)).await;
                 });
             }
         }
@@ -2412,24 +2561,6 @@ fn net_hosts_of(c: Option<&ContainerJob>) -> Vec<String> {
     .unwrap_or_default()
 }
 
-/// Why a job with KEYS that reaches HOSTS can't run anywhere, given PINS: a keyed job runs only on a runner (its keys
-/// reach a runner's job only), and one that reaches a pinned name only here (a runner gets no pins).
-fn keyed_and_pinned(
-    keys: &[String],
-    hosts: &[String],
-    pins: &[(String, std::net::IpAddr)],
-) -> Option<String> {
-    if keys.is_empty() {
-        return None;
-    }
-    pinned_host(hosts, pins).map(|h| {
-        format!(
-            "this job has keys, so it runs only on a runner, but it reaches {h}, a pinned name on this machine's \
-             network that no runner reaches"
-        )
-    })
-}
-
 /// The first of HOSTS (`host:port`) whose name PINS pins (names compared as hosts are: case and a trailing dot aside).
 fn pinned_host(hosts: &[String], pins: &[(String, std::net::IpAddr)]) -> Option<String> {
     let norm = |n: &str| n.trim_end_matches('.').to_ascii_lowercase();
@@ -2664,11 +2795,6 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
             ErrorCode::InvalidParams,
             "os: a macos job runs on a Mac runner, never in a container or on this machine only",
         ));
-    }
-    if let Some(c) = &container
-        && let Some(why) = keyed_and_pinned(&place.keys, &net_hosts_of(Some(c)), &c.caps.pins)
-    {
-        return Err(error(ErrorCode::InvalidParams, why));
     }
     let spec = ExecSpec {
         starter: c.sid.clone().map_or(Starter::User, Starter::Session),

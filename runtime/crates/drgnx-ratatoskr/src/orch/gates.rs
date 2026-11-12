@@ -277,7 +277,7 @@ pub async fn before_merge(
     let (top, base, tip) = (tree.path.clone(), tree.base.clone(), tree.branch.clone());
     let body = crate::orch::red_first::body_of(data, n);
     let p = pack.clone();
-    let (tip_commit, found, unnoted, inputs) = crate::clock::blocking(move || {
+    let (tip_commit, found, unnoted, inputs, commits) = crate::clock::blocking(move || {
         let tip_commit = git(&top, &["rev-parse", &tip])?.trim().to_owned();
         let found = if p.on("trailers") {
             trailers_in(&top, &base, &tip)?
@@ -290,10 +290,18 @@ pub async fn before_merge(
             Vec::new()
         };
         let inputs = crate::orch::red_first::inputs(&top, &base, &tip, &p, &body)?;
-        Ok::<_, String>((tip_commit, found, unnoted, inputs))
+        let commits = crate::orch::red_first::commits(&top, &base, &tip, &p)?;
+        Ok::<_, String>((tip_commit, found, unnoted, inputs, commits))
     })
     .await
     .map_err(|e| e.to_string())??;
+    // what the gate checked, for the Flow's detail (base .. tip and each commit)
+    let key = tid.to_owned();
+    crate::runner::update_data(front, &crate::runner::service(), job, move |d| {
+        crate::runner::put_in(d, "commits", &key, Some(commits));
+    })
+    .await
+    .map_err(|e| e.message)?;
     if !found.is_empty() {
         return Ok(Decision::Hold(format!(
             "attribution trailers: {}",

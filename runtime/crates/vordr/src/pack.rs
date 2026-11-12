@@ -45,6 +45,28 @@ pub struct Check {
     pub run: Vec<String>,
 }
 
+/// A procedure the pack names (a provider-neutral write-up: executing a plan, red first, …): PATH is relative to the
+/// pack's file; TEXT is read from it when the plan is proposed and frozen with the pack, so a job never rereads it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Procedure {
+    pub name: String,
+    pub path: String,
+    /// The task roles whose brief carries it (`implement`, `merge`, …); empty: none, only `procedure_get`.
+    pub roles: Vec<String>,
+    pub text: String,
+}
+
+/// Routing by role: a task of ROLE (and, when PATHS is not empty, whose body names a path matching one) runs on one
+/// of PROFILES, the first preferred.  A plan line's profile narrows it, never widens it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModelRoute {
+    pub role: String,
+    pub paths: Vec<String>,
+    pub profiles: Vec<String>,
+}
+
 /// A rule pack.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -72,6 +94,10 @@ pub struct Pack {
     pub shared_paths: Vec<String>,
     /// Tokens past which a workflow task's agent is rotated.
     pub context_share: i64,
+    /// The procedures it serves (`procedure_get`) and places in briefs.
+    pub procedures: Vec<Procedure>,
+    /// The profiles each role runs on.
+    pub models: Vec<ModelRoute>,
 }
 
 impl Pack {
@@ -98,6 +124,26 @@ impl Pack {
     /// Whether a `build` red counts for LANG (`rust`, `elisp`).
     pub fn build_reds(&self, lang: &str) -> bool {
         self.compile_fail_reds.iter().any(|l| l == lang)
+    }
+
+    /// The profiles a task of ROLE whose body names PATHS may run on, the first preferred: a route of the role with
+    /// paths that match one of PATHS wins over the role's route without paths; none: the pack does not route ROLE.
+    pub fn profiles_for(&self, role: &str, paths: &[&str]) -> Option<&[String]> {
+        let of_role = || self.models.iter().filter(move |m| m.role == role);
+        of_role()
+            .find(|m| {
+                !m.paths.is_empty()
+                    && paths
+                        .iter()
+                        .any(|p| m.paths.iter().any(|g| glob_match(g, p)))
+            })
+            .or_else(|| of_role().find(|m| m.paths.is_empty()))
+            .map(|m| m.profiles.as_slice())
+    }
+
+    /// The procedure NAME.
+    pub fn procedure(&self, name: &str) -> Option<&Procedure> {
+        self.procedures.iter().find(|p| p.name == name)
     }
 
     /// What is wrong with the pack, each said once; empty when it can be used.
@@ -130,6 +176,22 @@ impl Pack {
         }
         if self.on("push-gate") && self.push_tiers.is_empty() {
             out.push("the push gate is on but the pack names no :push-tiers".to_string());
+        }
+        for m in &self.models {
+            if m.profiles.is_empty() {
+                out.push(format!("the {} route names no :profiles", m.role));
+            }
+        }
+        for p in &self.procedures {
+            if p.name.is_empty() {
+                out.push(format!("procedure {} has no :name", p.path));
+            }
+            if p.path.starts_with('/') || p.path.split('/').any(|s| s == "..") {
+                out.push(format!(
+                    "procedure {}: {} is not in the pack's folder",
+                    p.name, p.path
+                ));
+            }
         }
         out
     }
@@ -203,5 +265,69 @@ mod tests {
             ..Pack::default()
         };
         assert_eq!(bad.problems().len(), 3);
+    }
+
+    /// [D] Routing by role: a route with paths wins for a task naming a matching path; the role's plain route
+    /// otherwise; an unrouted role has none.  Procedures by name.  A route with no profiles, or a procedure with no
+    /// name or a path out of the pack's folder, is a problem.
+    #[test]
+    fn models_and_procedures() {
+        let route = |role: &str, paths: &[&str], profiles: &[&str]| ModelRoute {
+            role: role.into(),
+            paths: paths.iter().map(|s| (*s).into()).collect(),
+            profiles: profiles.iter().map(|s| (*s).into()).collect(),
+        };
+        let p = Pack {
+            name: "p".into(),
+            models: vec![
+                route("implement", &[], &["sonnet", "opus"]),
+                route("implement", &["runtime/*"], &["opus"]),
+                route("review", &[], &["opus"]),
+            ],
+            procedures: vec![Procedure {
+                name: "red-first".into(),
+                path: "procedures/red-first.md".into(),
+                roles: vec!["implement".into()],
+                text: "Write the test.".into(),
+            }],
+            ..Pack::default()
+        };
+        assert_eq!(
+            p.profiles_for("implement", &["wb/a.el"]),
+            Some(&["sonnet".to_string(), "opus".to_string()][..])
+        );
+        assert_eq!(
+            p.profiles_for("implement", &["runtime/crates/a.rs"]),
+            Some(&["opus".to_string()][..])
+        );
+        assert_eq!(p.profiles_for("merge", &[]), None);
+        assert_eq!(
+            p.procedure("red-first").map(|x| x.text.as_str()),
+            Some("Write the test.")
+        );
+        assert!(p.procedure("nope").is_none());
+        assert!(p.problems().is_empty());
+        let bad = Pack {
+            name: "b".into(),
+            models: vec![route("implement", &[], &[])],
+            procedures: vec![
+                Procedure {
+                    path: "a.md".into(),
+                    ..Procedure::default()
+                },
+                Procedure {
+                    name: "x".into(),
+                    path: "../x.md".into(),
+                    ..Procedure::default()
+                },
+                Procedure {
+                    name: "y".into(),
+                    path: "/abs.md".into(),
+                    ..Procedure::default()
+                },
+            ],
+            ..Pack::default()
+        };
+        assert_eq!(bad.problems().len(), 4, "{:?}", bad.problems());
     }
 }

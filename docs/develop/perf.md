@@ -33,6 +33,8 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | debug-gutter-scroll | as code-scrolling (without sticky scroll and guides), hunks' margin claimed (a file that shows hunks), with the breakpoint column on and 300 breakpoints of every kind and the hover pool laid out (the hub answered by a store in the session) | input latency; p50 at most the larger of 5 % and 0.3 ms over debug-gutter-baseline in the same run (`drgnx-perf-run--relative-fails`, judged when both ran) |
 | debug-gutter-baseline | the same file and keys with hunks' margin and the breakpoint column claimed and empty, the column off: what a user sees when a session starts in a file that shows hunks (see "The breakpoint column's margin" below) | — (the 5 % rule's base) |
 | debug-breakpoint-click | F9 then `<down>`, 20 times: each a `debug/breakpoints` add answered at once and the column redrawn | input latency |
+| debug-probe-flood | ten probes on the fixture (recorded runs), then `<f8>` 40 times: each one batch of probe hits as the hub sends them at 2,000 hits a second (100 hits every 50 ms), the line ends' sparklines drawn (the hub answered in the session) | input latency; the batch to the sparklines within 100 ms (spec §19.9) |
+| debug-scrub | the stop timeline of a 60-stop run, then `Alt ←` 30 times: each a past stop opened from the hub's answer (its capture and a 2,000-line file as it ran) and drawn with its banner, line and variables | input latency; within 50 ms (spec §19.9) |
 | diff-scrolling | `<next>`×30 then `<prior>`×30 through a 10k-line diff in the split layout | input latency |
 | typing-with-ghost | the typing workload with ghost text on: a mock model answers every pause at once, the pause shortened to 10 ms so each key asks and the next cancels (checked: it asked) | input latency |
 | replace-typing-rows | 22 characters into the fixture while the Search view lists 10k matches in 100 files, the hub searching and streaming the matches as rows (a hub of the workload); the first key starts the search (checked: all 10k found, from `search-grep-done`; the hub sends a window of 200 rows, so the check asks for no minimum of keys typed while it streams) | **Whole operation** (`:complete-kb`, `:complete-cpu_ms`, report-only until the combined pass; measured with `replace-typing` in one session, pinned, on the line image; budgets 16800 kB, 400 ms after the model's lists went out as splices and the line height was read once per pass: 15249-15410 kB, 330-337 ms with `+nidhogg-workers-framing`, 26910 kB, 448 ms without it): old path 76189 kB, 391 ms; hub path 200012 kB, 2887 ms while the hub sent every row and a model per file, 17771 kB, 353 ms with the window (`search/grep-look`) and the model sent as it doubles, then 15.3 MB, 334 ms once a changed list is sent as a splice (the model on the wire is 6.45 MB in 9 sends, from 7.63 MB; a send per file batch was 24 MB and 1735 ms, the editor redisplaying on each; the hub then rebuilt and diffed the whole
@@ -1049,6 +1051,12 @@ the hub's cache keeps (the parsed file and the index): live bytes counted by the
 resident memory, which a warm process's arenas hide. It is `#[ignore]`d;
 run it once, optimized and alone on a pinned host:
 `perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench extensions -- --ignored --nocapture --test-threads 1`.
+
+Recorded runs' hub rows are the bench `runtime/crates/drgnx-ratatoskr/benches/debug_record.rs`: `debug-launch-snapshot`
+(the launch snapshot of a 5,000-file project with nothing changed, at most 150 ms at the 95th percentile) and
+`debug-capture` (a stop's capture cut to 64 KB, appended to the run file and flushed, at most 1 ms at the 95th
+percentile). It is `#[ignore]`d and measures and prints; run it optimized and alone on a pinned host:
+`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench debug_record -- --ignored --nocapture --test-threads 1`.
 
 Tests: `test/unit/perf-extensions-test.el` (every row has a budget and a fixture, the comparison measures both sides).
 

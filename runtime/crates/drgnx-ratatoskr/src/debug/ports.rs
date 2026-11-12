@@ -3,13 +3,22 @@
 //! the adapter's port, the program's, and one per child process. Blocks sit below macOS's ephemeral range, so the
 //! system never hands one out for an outgoing connection.
 //!
-//! Before a block is given out each of its ports is bound once on 127.0.0.1, ::1 and 0.0.0.0 and let go: a block
-//! with a port another process holds is passed over (the macOS runner's spike found 47610 taken now and then), and
-//! when every block is taken the session is refused, naming the range.
+//! A block is claimed machine-wide: an exclusive `flock` on its file in [`LOCK_DIR`] (sticky and open to every
+//! account, so two hubs, a test hub or another user's, never hand out the same block), held for the session's life
+//! and gone with the process. Under the lock each port is bound once on 127.0.0.1, ::1 and 0.0.0.0 and let go: a
+//! block locked elsewhere or with a port another process holds is passed over (the macOS runner's spike found 47610
+//! taken now and then), and when every block is taken the session is refused, naming the range.
+//!
+//! The probe and the adapter's own bind are apart, so before the hub connects to a block port (or starts a program
+//! that will) it checks that every listener there is the session's ([`owned`]): a stranger's ends the session.
 
 use std::collections::BTreeSet;
+use std::fs::File;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
 use std::ops::Range;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// The first port of macOS's ephemeral range: blocks stay below it.
@@ -18,6 +27,12 @@ pub const MAC_EPHEMERAL: u16 = 49152;
 pub const RANGE: Range<u16> = 47000..49000;
 /// Ports per block: the adapter, the program and up to six children.
 pub const LEN: u16 = 8;
+/// Where blocks are locked, for every hub on the machine.
+#[cfg(target_os = "macos")]
+pub const LOCK_DIR: &str = "/private/tmp/drgnx-debug-ports";
+/// Where blocks are locked, for every hub on the machine.
+#[cfg(not(target_os = "macos"))]
+pub const LOCK_DIR: &str = "/tmp/drgnx-debug-ports";
 
 /// The blocks in use, by first port.
 type Taken = Arc<Mutex<BTreeSet<u16>>>;
@@ -30,6 +45,8 @@ pub struct Blocks {
     taken: Taken,
     /// Whether a port is free ([`free`]; the tests' own, as other tests' outgoing connections take real ports).
     probe: fn(u16) -> bool,
+    /// [`LOCK_DIR`], or a test's.
+    dir: PathBuf,
 }
 
 /// One session's block; its ports go back when it is dropped.
@@ -38,12 +55,50 @@ pub struct Block {
     first: u16,
     len: u16,
     taken: Taken,
+    /// The block's lock file, locked; closing it lets go.
+    _lock: File,
 }
 
 impl Default for Blocks {
     fn default() -> Blocks {
         Blocks::new(RANGE, LEN)
     }
+}
+
+/// DIR, made shared and sticky when missing: every account may add a lock file and none may delete another's (or a
+/// held lock could be deleted and its name locked again). An existing one that is not a sticky directory is refused.
+fn lock_dir(dir: &Path) -> Result<(), String> {
+    match std::fs::create_dir(dir) {
+        Ok(()) => std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o1777))
+            .map_err(|e| format!("{}: {e}", dir.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(format!("{}: {e}", dir.display())),
+    }
+    let m = std::fs::symlink_metadata(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    if !m.is_dir() || m.permissions().mode() & 0o1000 == 0 {
+        return Err(format!(
+            "{} is not a sticky shared directory: debug port blocks cannot be locked there",
+            dir.display()
+        ));
+    }
+    Ok(())
+}
+
+/// PATH (created open to every account, never through a link), locked exclusively without waiting; none when another
+/// process holds it or the file is not ours to open (another account's, made private: that block is passed over).
+fn lock(path: &Path) -> Option<File> {
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o666)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .ok()?;
+    // the umask narrowed the mode: widen it (only ours can be changed, and only ours needs it)
+    let _ = f.set_permissions(std::fs::Permissions::from_mode(0o666));
+    // SAFETY: flock(2) on a descriptor this function owns.
+    (unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0).then_some(f)
 }
 
 /// Whether PORT is free on every loopback and the wildcard address (an address this machine lacks, ::1 without
@@ -63,16 +118,17 @@ pub fn free(port: u16) -> bool {
 impl Blocks {
     /// Blocks of LEN ports cut from RANGE.
     pub fn new(range: Range<u16>, len: u16) -> Blocks {
-        Blocks::with_probe(range, len, free)
+        Blocks::with(range, len, free, Path::new(LOCK_DIR))
     }
 
-    /// Blocks whose ports PROBE says are free.
-    pub fn with_probe(range: Range<u16>, len: u16, probe: fn(u16) -> bool) -> Blocks {
+    /// Blocks whose ports PROBE says are free, locked in DIR.
+    pub fn with(range: Range<u16>, len: u16, probe: fn(u16) -> bool, dir: &Path) -> Blocks {
         Blocks {
             range,
             len,
             taken: Arc::default(),
             probe,
+            dir: dir.to_path_buf(),
         }
     }
 
@@ -86,15 +142,20 @@ impl Blocks {
 
     /// The first block no session holds whose ports are all free; an error naming the range when there is none.
     pub fn claim(&self) -> Result<Block, String> {
+        lock_dir(&self.dir)?;
         let mut taken = self.taken.lock().unwrap_or_else(|e| e.into_inner());
         let mut first = self.range.start;
         while first.saturating_add(self.len) <= self.range.end {
-            if !taken.contains(&first) && (first..first + self.len).all(self.probe) {
+            if !taken.contains(&first)
+                && let Some(lock) = lock(&self.dir.join(format!("block-{first}")))
+                && (first..first + self.len).all(self.probe)
+            {
                 taken.insert(first);
                 return Ok(Block {
                     first,
                     len: self.len,
                     taken: self.taken.clone(),
+                    _lock: lock,
                 });
             }
             first += self.len;
@@ -122,4 +183,97 @@ impl Drop for Block {
             .unwrap_or_else(|e| e.into_inner())
             .remove(&self.first);
     }
+}
+
+/// Whether the listeners on PORT (127.0.0.1, ::1 or any address) are the session's: none yet (`Ok(false)`), every one
+/// of them in one of the process GROUPS (`Ok(true)`), or one that is not (an error naming the port, and the process
+/// when it can be seen). macOS: `lsof`, which sees this account's processes only (another account's listener makes the
+/// adapter's own bind fail instead). Linux: `/proc/net/tcp*` and each listener's socket among this account's
+/// processes' descriptors.
+pub fn owned(port: u16, groups: &[i32]) -> Result<bool, String> {
+    let pids = listener_pids(port)?;
+    if pids.is_empty() {
+        return Ok(false);
+    }
+    for pid in pids {
+        let ours = pid.is_some_and(|pid| {
+            // SAFETY: getpgid(2) reads a process's group; an error (it is gone) is -1, never a group of ours.
+            let g = unsafe { libc::getpgid(pid) };
+            g > 0 && groups.contains(&g)
+        });
+        if !ours {
+            return Err(match pid {
+                Some(pid) => format!(
+                    "port {port} of the session's block is held by process {pid}, not the session's: the session ends"
+                ),
+                None => format!(
+                    "port {port} of the session's block is held by a process that is not the session's: the session ends"
+                ),
+            });
+        }
+    }
+    Ok(true)
+}
+
+/// The process of each listener on PORT; `None` where it cannot be seen.
+#[cfg(target_os = "macos")]
+fn listener_pids(port: u16) -> Result<Vec<Option<i32>>, String> {
+    let out = std::process::Command::new("/usr/sbin/lsof")
+        .args(["-nP", "-a", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-Fp"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("lsof: {e}"))?;
+    // exit 1 with no output: nothing listens
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.strip_prefix('p'))
+        .map(|p| p.parse().ok())
+        .collect())
+}
+
+/// The process of each listener on PORT; `None` where it cannot be seen.
+#[cfg(not(target_os = "macos"))]
+fn listener_pids(port: u16) -> Result<Vec<Option<i32>>, String> {
+    let mut inodes = vec![];
+    for f in ["/proc/net/tcp", "/proc/net/tcp6"] {
+        let Ok(t) = std::fs::read_to_string(f) else {
+            continue;
+        };
+        for line in t.lines().skip(1) {
+            let c: Vec<&str> = line.split_whitespace().collect();
+            // columns: sl local remote st … inode (the tenth); st 0A is LISTEN
+            let local = c
+                .get(1)
+                .and_then(|a| a.rsplit(':').next())
+                .and_then(|p| u16::from_str_radix(p, 16).ok());
+            if c.get(3) == Some(&"0A")
+                && local == Some(port)
+                && let Some(i) = c.get(9)
+            {
+                inodes.push(format!("socket:[{i}]"));
+            }
+        }
+    }
+    if inodes.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut found: Vec<Option<i32>> = vec![None; inodes.len()];
+    let procs = std::fs::read_dir("/proc").map_err(|e| format!("/proc: {e}"))?;
+    for p in procs.flatten() {
+        let Some(pid) = p.file_name().to_str().and_then(|n| n.parse::<i32>().ok()) else {
+            continue;
+        };
+        let Ok(fds) = std::fs::read_dir(p.path().join("fd")) else {
+            continue;
+        };
+        for fd in fds.flatten() {
+            if let Ok(l) = std::fs::read_link(fd.path())
+                && let Some(i) = inodes.iter().position(|s| l.as_os_str() == s.as_str())
+            {
+                found[i] = Some(pid);
+            }
+        }
+    }
+    Ok(found)
 }

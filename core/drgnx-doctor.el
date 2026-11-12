@@ -940,9 +940,16 @@ the issues it backports a fix for are left out."
       (when (process-live-p p) (delete-process p))
       (kill-buffer buf))))
 
+(defun drgnx-doctor--key-missing (binary)
+  "The `drgnx-key' path next to BINARY (a link to it resolved) when it is not there, else nil.
+The hub runs a keyed job's command behind it and refuses such a job without it."
+  (when binary
+    (let ((key (expand-file-name "drgnx-key" (file-name-directory (file-truename binary)))))
+      (unless (file-executable-p key) key))))
+
 (defun drgnx-doctor--ratatoskr ()
   "The facts of the `ratatoskr' check:
-\(:binary FILE-or-nil :report PLIST-or-nil :head SHA :update-run LINE :emacs-sqlite V)."
+\(:binary FILE-or-nil :report PLIST-or-nil :head SHA :update-run LINE :emacs-sqlite V :key-missing FILE-or-nil)."
   (condition-case err
       (let* ((bin (progn (require 'drgnx-hub-client) (drgnx-hub-client-binary)))
              (head (ignore-errors
@@ -951,7 +958,8 @@ the issues it backports a fix for are left out."
                     (drgnx-file-read-bounded (expand-file-name "update/last-run" (drgnx-state-dir)) :max-bytes 4096))))
         (list :binary bin :report (and bin (drgnx-doctor--ratatoskr-report bin)) :head head
               :update-run (and run (string-trim run))
-              :emacs-sqlite (and (fboundp 'sqlite-version) (ignore-errors (sqlite-version)))))
+              :emacs-sqlite (and (fboundp 'sqlite-version) (ignore-errors (sqlite-version)))
+              :key-missing (drgnx-doctor--key-missing bin)))
     (error (list :error (error-message-string err)))))
 
 (defun drgnx-doctor--sqlite-wal-bug-p (v)
@@ -1006,6 +1014,9 @@ section's `pins_note' (the reduced tier cannot pin your settings files in a job'
             "run drgnx runtime build --install"))
      ((and running (plist-get running :commit) commit (not (equal (plist-get running :commit) commit)))
       (list 'warn (format "the running hub is %s, the binary %s" (plist-get running :commit) commit) "Hub: Restart Now"))
+     ((plist-get f :key-missing)
+      (list 'warn (format "%s is missing: a keyed job on this machine is refused" (abbreviate-file-name (plist-get f :key-missing)))
+            "drgnx runtime build --install"))
      ((drgnx-doctor--sqlite-wal-bug-p esql)
       (list 'warn (format "this Emacs's SQLite %s has a bug in its write-ahead log (3.7.0 to 3.51.2)" esql)
             "use an Emacs built with SQLite 3.51.3 or newer (Nidhogg); Ratatoskr's own SQLite is not affected"))
@@ -1016,7 +1027,7 @@ section's `pins_note' (the reduced tier cannot pin your settings files in a job'
               nil)))))
 
 (drgnx-doctor-define 'ratatoskr :group "Agents"
-                     :doc "Ratatoskr, the agent runtime: built, current, no test hooks, a private socket directory"
+                     :doc "Ratatoskr, the agent runtime: built, current, no test hooks, a private socket directory, drgnx-key beside it"
                      :check (lambda (f) (drgnx-doctor--ratatoskr-check (plist-get f :ratatoskr))))
 
 ;; The old Lisp agent runtime is gone: the `legacy' section of `ratatoskr doctor --json' (what its first start moved
@@ -1716,8 +1727,7 @@ state dir): a list of (:file NAME :stopped PLISTS :time WRITTEN), one per file t
                                      (how (lambda (r)
                                             (let ((i (plist-get r :install)))
                                               (cond ((plist-get i :system) (format "%s (%s)" (plist-get r :id) (plist-get i :system)))
-                                                    ((plist-get i :pip) (format "%s (pip install %s)" (plist-get r :id) (plist-get i :pip)))
-                                                    ((plist-get i :url) (format "%s (Install from the picker)" (plist-get r :id)))
+                                                    (i (format "%s (Debug: Install Adapter)" (plist-get r :id)))
                                                     (t (plist-get r :id))))))
                                      (text (string-join
                                             (delq nil (list (and found (concat "found: " (mapconcat (lambda (r) (plist-get r :id)) found ", ")))

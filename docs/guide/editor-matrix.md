@@ -10,7 +10,7 @@ profile's; every command is also in the palette.
 | Language support (tree-sitter grammars, installed when asked) | `lang/*` modules | [editing.md](editing.md) | — (batch: `mod-grammars-test.el`) | — |
 | Faster language servers | `extra/booster` (eglot through emacs-lsp-booster) | [editing.md](editing.md) | — (batch: `mod-amenities-test.el`) | — |
 | Format on save | `extra/format` (apheleia) | [editing.md](editing.md) | — (batch: `mod-amenities-test.el`) | — |
-| Debugging | `extra/debug` (dape) | [editing.md](editing.md) | — (batch: `mod-amenities-test.el`) | — |
+| Debugging | `extra/debug` | [editing.md](editing.md) | — (batch: `debug-module-test.el`, `debug-launch-test.el`, `debug-gutter-test.el`) | — |
 | Sticky scroll | `editor/sticky` | [editing.md](editing.md) | `drgnx-ui-code/sticky-guides-smooth` | code-scrolling |
 | Indent guides | `extra/guides` | [editing.md](editing.md) | `drgnx-ui-code/sticky-guides-smooth` | code-scrolling |
 | Smooth scrolling | `ui/smooth` | [editing.md](editing.md) | `drgnx-ui-code/sticky-guides-smooth` | code-scrolling |

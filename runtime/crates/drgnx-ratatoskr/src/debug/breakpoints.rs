@@ -135,10 +135,17 @@ pub struct Store {
     caps: BTreeMap<String, Value>,
 }
 
-/// BPS (`SourceBreakpoint`s) as an adapter with CAPS takes them: without the fields it does not support.
+/// BPS (`SourceBreakpoint`s) as an adapter with CAPS takes them: without the fields it does not support. A probe
+/// (`super::probes`) is left out where there are no logpoints: it would stop the program.
 pub fn fit(bps: &[Value], caps: &Value) -> Vec<Value> {
     let has = |k: &str| caps.get(k).and_then(Value::as_bool).unwrap_or(false);
+    let probe = |b: &Value| {
+        b.get("logMessage")
+            .and_then(Value::as_str)
+            .is_some_and(|m| m.starts_with(super::probes::MARK))
+    };
     bps.iter()
+        .filter(|b| has("supportsLogPoints") || !probe(b))
         .map(|b| {
             let mut b = b.clone();
             if let Some(o) = b.as_object_mut() {

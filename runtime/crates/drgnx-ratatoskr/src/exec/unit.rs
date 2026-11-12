@@ -49,10 +49,18 @@ pub struct Meta {
     /// rather than adopting it (it can't keep its relay).
     #[serde(default)]
     pub relay: Option<String>,
+    /// A keyed job here: its key socket and its log's redactor are this hub's, so a restarted hub ends it rather than
+    /// adopting it.
+    #[serde(default)]
+    pub keyed: bool,
 }
 
 /// The shell that wraps the command: `sh -c SCRIPT sh DIR PROGRAM ARGS…`.
 const SCRIPT: &str = r#"d=$1; shift; exec >"$d/log" 2>&1; "$@"; c=$?; echo "$c" > "$d/exit.tmp"; mv "$d/exit.tmp" "$d/exit"; exit "$c""#;
+
+/// [`SCRIPT`] for a keyed job: its output stays on the stdout pipe the hub reads, redacted into the log by the hub
+/// (`exec::keys`), never written by the shell.
+const SCRIPT_TO_HUB: &str = r#"d=$1; shift; exec 2>&1; "$@"; c=$?; echo "$c" > "$d/exit.tmp"; mv "$d/exit.tmp" "$d/exit"; exit "$c""#;
 
 /// Whether a user systemd answers here: its runtime dir exists and `systemd-run` is on the PATH.
 pub fn systemd_user() -> bool {
@@ -87,6 +95,29 @@ pub fn wrap(
     nice: Option<i8>,
     shell: &crate::shell_env::ShellEnv,
 ) -> Spec {
+    wrap_with(SCRIPT, inner, dir, unit, nice, shell)
+}
+
+/// [`wrap`] for a keyed job: the command's output (stderr joined to stdout) goes to the child's stdout, for the hub to
+/// redact into the log; the exit file is written as [`wrap`]'s is.
+pub fn wrap_to_hub(
+    inner: Spec,
+    dir: &Path,
+    unit: Option<(&str, &str)>,
+    nice: Option<i8>,
+    shell: &crate::shell_env::ShellEnv,
+) -> Spec {
+    wrap_with(SCRIPT_TO_HUB, inner, dir, unit, nice, shell)
+}
+
+fn wrap_with(
+    script: &str,
+    inner: Spec,
+    dir: &Path,
+    unit: Option<(&str, &str)>,
+    nice: Option<i8>,
+    shell: &crate::shell_env::ShellEnv,
+) -> Spec {
     let mut args: Vec<OsString> = Vec::new();
     let program = match unit {
         Some((name, memory)) => {
@@ -109,7 +140,7 @@ pub fn wrap(
         None => PathBuf::from("sh"),
     };
     args.push("-c".into());
-    args.push(SCRIPT.into());
+    args.push(script.into());
     args.push("sh".into());
     args.push(dir.into());
     if let Some(n) = nice {

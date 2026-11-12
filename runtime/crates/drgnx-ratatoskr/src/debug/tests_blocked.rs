@@ -214,3 +214,48 @@ fn what_a_block_cannot_run_says_why() {
     .unwrap_err();
     assert!(lldb.contains("lldb-dap"), "{lldb}");
 }
+
+/// A plan whose adapter and program never listen (`sleep`), on PORT and the next.
+fn sleeping(port: u16) -> Plan {
+    let idle = |s: &str| vec!["sleep".to_owned(), s.to_owned()];
+    Plan {
+        adapter: idle("30"),
+        port,
+        request: Request::Attach,
+        arguments: json!({}),
+        debuggee: blocked::Debuggee {
+            argv: idle("30"),
+            env: vec![],
+            cwd: PathBuf::new(),
+            after_listen: Some(port + 1),
+        },
+    }
+}
+
+#[tokio::test]
+async fn a_strangers_listener_on_the_adapters_port_ends_the_session_unconnected() {
+    use super::Launcher;
+    // the test process listens where the adapter should: another process group than the adapter's
+    let stranger = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    stranger.set_nonblocking(true).unwrap();
+    let port = stranger.local_addr().unwrap().port();
+    let l = blocked::Blocked::new(
+        sleeping(port),
+        std::env::vars_os().collect(),
+        std::env::temp_dir(),
+        None,
+    );
+    let e = match l.connect().await {
+        Ok(_) => panic!("connected to a stranger's listener"),
+        Err(e) => e,
+    };
+    assert!(
+        e.contains(&port.to_string()) && e.contains("not the session's"),
+        "{e}"
+    );
+    // never connected to it
+    assert_eq!(
+        stranger.accept().map(|_| ()).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}

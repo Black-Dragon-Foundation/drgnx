@@ -49,15 +49,23 @@ re-indented on save. A formatter that is not installed, or fails, leaves the fil
 
 ## Debugging
 
-**Start Debugging…** runs a debug session through dape, which speaks the Debug Adapter Protocol: the adapters VS
-Code uses — debugpy for Python, the JavaScript/TypeScript debugger, delve for Go, codelldb for C, C++ and Rust — work
-here once installed (dape's documentation lists how to get each). While the session is stopped the same command
-continues; **Toggle Breakpoint**, **Step Over**, **Step Into**, **Step Out** and **Stop Debugging** do what they say.
-If you used dape, **Convert dape Configurations…** (the palette) turns your `dape-configs` into launch configurations
-once.
+**Start Debugging…** runs a debug session through drgnx's own client of the Debug Adapter Protocol, so the adapters
+VS Code uses work here: debugpy for Python, the JavaScript/TypeScript debugger, delve for Go, CodeLLDB or lldb-dap for
+C, C++ and Rust. It offers the project's configurations: those of `.vscode/launch.json` (read as VS Code reads it,
+comments, `${…}` variables, `inputs` and platform sections included), your own in the setting `debug.configurations`,
+and a default for the file's language when there is neither. A configuration's `preLaunchTask` (and `postDebugTask`)
+runs from `.vscode/tasks.json` first; a failing task stops the start and says why. The first start in a folder asks
+you to trust it (**Trust This Folder**): an untrusted folder's configurations never run.
+
+**Install Adapter…** (the palette) downloads the JavaScript debugger or CodeLLDB, checked against the version drgnx
+pins, or puts debugpy into drgnx's own Python, and names the system package to install for the others (`drgnx doctor`
+lists which are found).
+
+While the session is stopped the same command continues; **Toggle Breakpoint**, **Step Over**, **Step Into**,
+**Step Out** and **Stop Debugging** do what they say. If you used dape, **Convert dape Configurations…** (the palette)
+turns your `dape-configs` into launch configurations once (dape itself is no longer needed).
 In the VS Code key profile: F5, F9, F10, F11 (Step Into while a session runs — Zen Mode otherwise), S-F11, S-F5; the
-Emacs and Vim profiles reach them in the palette. dape's windows (scopes, stack, breakpoints, the REPL) open on the
-right, so the panel stays the workbench's. Module `extra/debug`, package `dape`.
+Emacs and Vim profiles reach them in the palette. Module `extra/debug`; it needs no package.
 
 Breakpoints live in a column left of the line numbers, kept per project (they survive restarts and reach a running
 session at once). Click the column to add or remove one, shift-click for a logpoint (a message printed instead of
@@ -68,6 +76,20 @@ editing keeps its breakpoint, which takes the new line when you save. `drgnx-deb
 column shows (`auto`: while the file has breakpoints or a session runs). Keys: VS Code F9 and C-F10 (Run to Cursor);
 Emacs `C-x C-a` and `C-b` (toggle), `C-c` (condition), `C-l` (logpoint), `C-e` (enable), `C-u` (Run to Cursor), as
 GUD has them; Vim `SPC d` and `b`, `B`, `l`, `e`, `c`.
+
+Every session is recorded, against a snapshot of the files as they were when it started. **Add Probe…** records an
+expression each time its line runs, without stopping the program and without printing anything; **Probe the
+Result…** records what the line assigns, on the next line that runs (a probe runs before its line). A probe is a
+ring with a dot in its own column, and its newest values show at the line's end as a sparkline and the last value.
+**Show Stop Timeline** opens a strip at the top: the run's stops, numbered (a dot for a breakpoint, a small dot for a
+step, a triangle for an exception), and one lane per probe. Click a stop (or `RET` on it), or press `Alt ←` / `Alt →` in the strip or
+a past stop, to open it read-only: the file as it ran under a banner (it says "not what ran" when
+the file was unsaved at the start), the stop's line marked with its variables, and the stack and variables as they
+were in a window beside it. `Alt →` past the newest stop, **Back to Live** (the palette) or the banner's button returns.
+Recorded runs hold your program's values, so they stay yours: agents cannot read them. They are kept 14 days (a pinned
+run, or one for an open task, longer), at most 2 GB per project, oldest first. Probes need an adapter with logpoints
+(debugpy and the JavaScript debugger take 2000 values a second, the rest 200, and delve and codelldb stop and resume
+the program for each one; values past the rate are thinned and counted).
 
 ## Indent guides
 
