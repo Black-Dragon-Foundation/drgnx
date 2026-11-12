@@ -75,7 +75,8 @@ run by SHELL with its script cut before the `cd' and printing the folder instead
       (should (= 2 (cl-count ?' line)))
       (should-not (string-search "!" line))
       (should-not (string-search "\n" line))
-      (dolist (shell '("sh" "bash" "zsh" "fish"))
+      ;; sh, bash and zsh must be here; fish may be (the Linux test image has it, a macOS runner does not)
+      (dolist (shell (if (executable-find "fish") '("sh" "bash" "zsh" "fish") '("sh" "bash" "zsh")))
         (should (equal (decode-coding-string (drgnx-term-remote-test--decoded shell line) 'utf-8) dir))))))
 
 (ert-deftest drgnx-term-remote/the-ssh-gets-no-local-only-environment ()

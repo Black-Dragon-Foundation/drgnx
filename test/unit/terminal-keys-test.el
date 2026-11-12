@@ -9,8 +9,19 @@
 (defvar drgnx-term--queue)
 (declare-function drgnx-term-mode "drgnx-term")
 
+(defvar drgnx-terminal-keys-test--platform 'linux
+  "The platform the keys are resolved for: the rows spell Linux's keys, whatever the host (macOS's own row binds
+this to `macos': there VS Code's C- keys are Cmd's, s-).")
+
 (defmacro drgnx-terminal-keys-test--live (layers &rest body)
-  "BODY with LAYERS (evaluated) applied and the startup modules (the terminal among them) set up; keys restored after."
+  "BODY with LAYERS (evaluated) applied and the startup modules (the terminal among them) set up; keys restored after.
+The keys are resolved for `drgnx-terminal-keys-test--platform'."
+  (declare (indent 1))
+  `(let ((platform drgnx-terminal-keys-test--platform))
+     (cl-letf (((symbol-function 'drgnx-platform) (lambda () platform)))
+       (drgnx-terminal-keys-test--live-1 ,layers ,@body))))
+
+(defmacro drgnx-terminal-keys-test--live-1 (layers &rest body)
   (declare (indent 1))
   `(let* ((dir (make-temp-file "drgnx-tkeys" t))
           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
@@ -72,11 +83,12 @@
     (drgnx-term-apply-keys)))
 
 (ert-deftest drgnx-terminal-keys/the-skip-list-leaves-the-emacs-and-vim-profiles-alone ()
-  (dolist (layers '(((emacs app editing window)) ((vim app editing window))))
-    (drgnx-terminal-keys-test--live layers
-      (drgnx-terminal-keys-test--term-buffer
-       (dolist (k '("C-p" "C-b" "C-k" "C-f"))
-         (should (eq (drgnx-terminal-keys-test--bound-to k) #'drgnx-term-send-event)))))))
+  (dolist (drgnx-terminal-keys-test--platform '(linux macos))
+    (dolist (layers '(((emacs app editing window)) ((vim app editing window))))
+      (drgnx-terminal-keys-test--live layers
+        (drgnx-terminal-keys-test--term-buffer
+         (dolist (k '("C-p" "C-b" "C-k" "C-f"))
+           (should (eq (drgnx-terminal-keys-test--bound-to k) #'drgnx-term-send-event))))))))
 
 (ert-deftest drgnx-terminal-keys/app-keys-work-in-a-terminal-buffer ()
   (drgnx-terminal-keys-test--live '((vscode app editing window))
@@ -102,13 +114,14 @@
        (should (eq (drgnx-terminal-keys-test--bound-to "C-p") #'drgnx-term-send-event))))))
 
 (ert-deftest drgnx-terminal-keys/emacs-profile-sends-control-keys-but-the-reserved ()
-  (drgnx-terminal-keys-test--live '((emacs app editing window))
-    (drgnx-terminal-keys-test--term-buffer
-     (should (eq (drgnx-terminal-keys-test--bound-to "C-a") #'drgnx-term-send-event))
-     (should (eq (drgnx-terminal-keys-test--bound-to "C-p") #'drgnx-term-send-event))
-     (should (eq (drgnx-terminal-keys-test--bound-to "M-f") #'drgnx-term-send-event))
-     (dolist (k '("C-x" "C-g" "C-h" "C-u" "M-x" "C-c"))
-       (should-not (eq (drgnx-terminal-keys-test--bound-to k) #'drgnx-term-send-event))))))
+  (dolist (drgnx-terminal-keys-test--platform '(linux macos))
+    (drgnx-terminal-keys-test--live '((emacs app editing window))
+      (drgnx-terminal-keys-test--term-buffer
+       (should (eq (drgnx-terminal-keys-test--bound-to "C-a") #'drgnx-term-send-event))
+       (should (eq (drgnx-terminal-keys-test--bound-to "C-p") #'drgnx-term-send-event))
+       (should (eq (drgnx-terminal-keys-test--bound-to "M-f") #'drgnx-term-send-event))
+       (dolist (k '("C-x" "C-g" "C-h" "C-u" "M-x" "C-c"))
+         (should-not (eq (drgnx-terminal-keys-test--bound-to k) #'drgnx-term-send-event)))))))
 
 (ert-deftest drgnx-terminal-keys/a-profile-switch-recomputes ()
   (drgnx-terminal-keys-test--live '((vscode app editing window))
@@ -178,3 +191,102 @@
   (let ((bind (plist-get (alist-get 'emacs (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir))) :bind)))
     (should (equal (assq 'terminal-paste bind) '(terminal-paste "C-y" :map (drgnx-term . drgnx-term-mode-map))))
     (should (equal (assq 'terminal-copy bind) '(terminal-copy :none "Copy Mode (C-c C-e), then M-w")))))
+
+;;;; macOS: VS Code's keys are Cmd's there (C- turned into s-, Cmd+Shift+p is s-P), so the rows above, which spell
+;;;; Linux's keys, each have one here
+
+(defmacro drgnx-terminal-keys-test--mac (layers &rest body)
+  "`drgnx-terminal-keys-test--live' with the keys resolved for macOS."
+  (declare (indent 1))
+  `(let ((drgnx-terminal-keys-test--platform 'macos)) (drgnx-terminal-keys-test--live ,layers ,@body)))
+
+(ert-deftest drgnx-terminal-keys/vscode-split-on-macos ()
+  ;; the Cmd keys never reach the shell (no terminal sends them); C-p, C-b, C-k and C-f are no app key there, so
+  ;; readline keeps them
+  (drgnx-terminal-keys-test--mac '((vscode app editing window))
+    (let* ((split (drgnx-terminal-key-split)) (to-drgnx (plist-get split :to-drgnx)) (to-shell (plist-get split :to-shell)))
+      (dolist (k '("s-P" "<f1>" "s-p" "s-b" "s-k s-r" "s-k s-o")) (should (member k to-drgnx)))
+      (dolist (k '("C-S-p" "C-p" "C-b" "C-k C-r" "C-f")) (should-not (member k to-drgnx)))
+      (dolist (k to-shell)
+        (let ((ev (aref (key-parse k) 0)))
+          (should (integerp ev))
+          (should (<= 0 (logand ev (lognot #x8000000)) 127))))
+      (dolist (k to-drgnx) (should-not (member k to-shell))))))
+
+(ert-deftest drgnx-terminal-keys/app-keys-work-in-a-terminal-buffer-on-macos ()
+  (drgnx-terminal-keys-test--mac '((vscode app editing window))
+    (drgnx-terminal-keys-test--term-buffer
+     (should (eq (drgnx-terminal-keys-test--bound-to "s-P") #'drgnx-palette))
+     (dolist (k '("C-a" "C-w" "C-p" "C-b" "C-f"))
+       (should (equal (list k (drgnx-terminal-keys-test--bound-to k)) (list k #'drgnx-term-send-event))))
+     (should (eq (drgnx-terminal-keys-test--bound-to "s-b") (drgnx-cmd-command (drgnx-commands-get 'toggle-sidebar))))
+     (should (eq (drgnx-terminal-keys-test--bound-to "s-f") (drgnx-cmd-command (drgnx-commands-get 'terminal-find))))
+     (should (eq (drgnx-terminal-keys-test--bound-to "s-c") (drgnx-cmd-command (drgnx-commands-get 'terminal-copy))))
+     (should (eq (drgnx-terminal-keys-test--bound-to "s-v") (drgnx-cmd-command (drgnx-commands-get 'terminal-paste)))))))
+
+(ert-deftest drgnx-terminal-keys/quick-open-follows-the-profile-on-macos ()
+  (drgnx-terminal-keys-test--mac '((vscode app editing window))
+    (drgnx-terminal-keys-test--term-buffer
+     (should (eq (drgnx-terminal-keys-test--bound-to "s-p") (drgnx-cmd-command (drgnx-commands-get 'go-quick-open))))))
+  (dolist (layers '(((emacs app editing window)) ((vim app editing window))))
+    (drgnx-terminal-keys-test--mac layers
+      (should-not (member "s-p" (plist-get (drgnx-terminal-key-split) :to-drgnx)))
+      (drgnx-terminal-keys-test--term-buffer
+       (should (eq (drgnx-terminal-keys-test--bound-to "C-p") #'drgnx-term-send-event))))))
+
+(ert-deftest drgnx-terminal-keys/the-skip-list-does-not-touch-cmd-keys-on-macos ()
+  ;; the skip list names control keys; without it a Cmd key still reaches drgnx
+  (drgnx-terminal-keys-test--mac '((vscode app editing window))
+    (let ((drgnx-terminal-skip-shell-keys nil))
+      (drgnx-term-apply-keys)
+      (should (member "s-p" (plist-get (drgnx-terminal-key-split) :to-drgnx)))
+      (drgnx-terminal-keys-test--term-buffer
+       (should (eq (drgnx-terminal-keys-test--bound-to "s-p") (drgnx-cmd-command (drgnx-commands-get 'go-quick-open))))
+       (should (eq (drgnx-terminal-keys-test--bound-to "C-p") #'drgnx-term-send-event))))
+    (drgnx-term-apply-keys)))
+
+(ert-deftest drgnx-terminal-keys/a-profile-switch-recomputes-on-macos ()
+  (drgnx-terminal-keys-test--mac '((vscode app editing window))
+    (should (member "s-p" (plist-get (drgnx-terminal-key-split) :to-drgnx)))
+    (drgnx-keys-use '((emacs app editing window)))
+    (should-not (member "s-p" (plist-get (drgnx-terminal-key-split) :to-drgnx)))
+    (drgnx-terminal-keys-test--term-buffer
+     (should-not (eq (drgnx-terminal-keys-test--bound-to "s-p") (drgnx-cmd-command (drgnx-commands-get 'go-quick-open)))))
+    (drgnx-keys-use '((vscode app editing window)))
+    (drgnx-terminal-keys-test--term-buffer
+     (should (eq (drgnx-terminal-keys-test--bound-to "s-p") (drgnx-cmd-command (drgnx-commands-get 'go-quick-open)))))))
+
+(defconst drgnx-terminal-keys-test--reach-s-p "Reach drgnx: \\(?:.*, \\)?s-p\\(?:,\\|$\\)"
+  "The sheet's line of keys that reach drgnx, with s-p one of them (not a key that starts so, as s-pause).")
+
+(ert-deftest drgnx-terminal-keys/the-sheet-says-where-keys-go-on-macos ()
+  (drgnx-terminal-keys-test--mac '((vscode app editing window))
+    (unwind-protect
+        (progn
+          (drgnx-surfaces-cheatsheet)
+          (with-current-buffer "*drgnx keys*"
+            (let ((text (buffer-string)))
+              (should (string-match-p "^In the terminal$" text))
+              (should (string-match-p drgnx-terminal-keys-test--reach-s-p text))
+              (should (string-match-p "Reach drgnx: .*s-k chords" text))
+              (should-not (string-match-p "^  s-p goes to the shell" text))))
+          (drgnx-keys-use '((emacs app editing window)))
+          (drgnx-surfaces-cheatsheet)
+          (with-current-buffer "*drgnx keys*"
+            (should (string-match-p "^In the terminal$" (buffer-string)))
+            (should-not (string-match-p drgnx-terminal-keys-test--reach-s-p (buffer-string)))))
+      (when (get-buffer "*drgnx keys*") (kill-buffer "*drgnx keys*")))))
+
+(ert-deftest drgnx-terminal-keys/copy-and-paste-on-macos ()
+  (drgnx-terminal-keys-test--mac '((vscode app editing window))
+    (let ((kill-ring nil))
+      (drgnx-terminal-keys-test--term-buffer
+       (let ((inhibit-read-only t)) (insert "say hello there"))
+       (set-mark 5) (goto-char 10) (activate-mark)
+       ;; with text selected s-c is also the editor's Copy (its region map wins): it is the terminal's here
+       (should (eq (key-binding (kbd "s-c")) #'drgnx-terminal-copy))
+       (call-interactively (key-binding (kbd "s-c")))
+       (should (equal (car kill-ring) "hello"))
+       (should-not (region-active-p))
+       (call-interactively (key-binding (kbd "s-v")))
+       (should (equal (car drgnx-term--queue) '("term/paste" :text "hello")))))))

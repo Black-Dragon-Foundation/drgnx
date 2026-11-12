@@ -52,6 +52,7 @@ fn tool_names_are_the_lisp_names() {
                     | "huddle_reply"
                     | "procedure_get"
             ) && !n.starts_with("job_")
+                && !n.starts_with("debug_")
         })
         .collect();
     lisp.sort();
@@ -98,8 +99,16 @@ const BUDGET_EXTENSIONS: usize = 800;
 const BUDGET_HUDDLE: usize = 800;
 /// `procedure_get`, which every agent has (the job's pack's procedures).
 const BUDGET_PROCEDURE: usize = 600;
+/// The six debugger tools every agent has (graphical debugging D4; the matrix's `debug.*` rows decide each call).
+const BUDGET_DEBUG: usize = 5_000;
 const _: () = assert!(
-    BUDGET_BYTES + BUDGET_JOBS + BUDGET_EXTENSIONS + BUDGET_HUDDLE + BUDGET_PROCEDURE <= 40_000
+    BUDGET_BYTES
+        + BUDGET_JOBS
+        + BUDGET_EXTENSIONS
+        + BUDGET_HUDDLE
+        + BUDGET_PROCEDURE
+        + BUDGET_DEBUG
+        <= 40_000
 );
 
 const PART1_TOOLS: [&str; 3] = ["report_submit", "plan_read", "plan_write"];
@@ -122,6 +131,14 @@ fn the_tool_list_fits_the_budget() {
     )})
     .to_string()
     .len();
+    let debug = json!({"tools": listing(norn::tools::debug::tools())})
+        .to_string()
+        .len();
+    eprintln!("the debugger tools: {debug} bytes (budget {BUDGET_DEBUG})");
+    assert!(
+        debug <= BUDGET_DEBUG,
+        "the debugger tools are {debug} bytes, over {BUDGET_DEBUG}"
+    );
     let ext = json!({"tools": listing(norn::tools::extensions::tools())})
         .to_string()
         .len();
@@ -160,7 +177,7 @@ fn the_tool_list_fits_the_budget() {
         "tools/list is {bytes} bytes, over the {BUDGET_BYTES} budget: trim the descriptions"
     );
     // the 18 alone: what the list weighs without the job tools, part 1's three and extensions_suggest
-    let base = bytes16 - jobs - part1 - ext - huddle - procedure;
+    let base = bytes16 - jobs - part1 - ext - huddle - procedure - debug;
     assert!(
         base <= BUDGET_BYTES_16,
         "tools/list without the tracker, job and part-1 tools is {base} bytes, over {BUDGET_BYTES_16}"

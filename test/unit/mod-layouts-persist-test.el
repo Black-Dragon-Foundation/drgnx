@@ -298,7 +298,13 @@ window, and the persist hooks as the layouts module wires them.  Prompts signal 
 
 (ert-deftest drgnx-layouts/the-persist-fixture-keeps-the-frame-size ()
   ;; The fixture gives the frame back its size: a frame one line shorter after each test left later docks no room.
+  ;; The batch Emacs's first frame is first given its own size again: its 25 lines leave out the menu bar's line,
+  ;; which a size set on it counts, in a terminal of 25 rows, so any first resize leaves it 24 (Emacs 31; alone,
+  ;; this test read that as the fixture's).
+  (set-frame-size nil (frame-width) (frame-height))
+  (read-event nil nil 0.01)                             ; a terminal frame takes its new size at the next wait
   (let ((size (cons (frame-width) (frame-height))))
-    (drgnx-layouts-persist-test--with (ignore))
-    (read-event nil nil 0.01)                           ; a terminal frame takes its new size at the next wait
-    (should (equal (cons (frame-width) (frame-height)) size))))
+    (dotimes (_ 2)
+      (drgnx-layouts-persist-test--with (ignore))
+      (read-event nil nil 0.01)
+      (should (equal (cons (frame-width) (frame-height)) size)))))

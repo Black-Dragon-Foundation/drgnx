@@ -593,8 +593,12 @@ What-if tab shows it beside the run. Linux only for now; other hosts refuse with
   `hitCondition`, for js-debug a condition with a counter that V8 runs (under `Symbol.for('drgnx.forkPass')`, a key no program
   name can clash with), since its `hitCondition` pauses at every pass;
   the landing must have had the run's probe hits before it and the stack the run recorded at that stop (names and
-  lines), and, where no probe hit tells the passes apart, the run's plain locals there (values without children),
-  else the fork fails naming both sides; otherwise the
+  lines), and, where no probe hit tells the passes apart, the run's plain locals there (values without children):
+  when the run recorded two or more passes of the line, only the locals that change between them (`fork::varying`:
+  loop counters, accumulators), and a difference fails naming both sides; without that record any plain local, and a
+  difference fails saying it may come from a source the fork does not replay, with `anyway` in the failed view (the
+  editor's Fork Anyway sends `debug/fork` again with `anyway`). Only `PYTHONHASHSEED` is replayed: the clock, random
+  numbers and the environment's other values are the program's own; otherwise the
   hub counts, stopping and continuing at each pass), repeats the steps, reads the thread's id
   expression, applies the change (`setExpression` when the adapter has it and the variable an `evaluateName`, else
   `setVariable`), takes the point's breakpoint away and runs until the next stop, the end, or a probe's next hit.
@@ -647,6 +651,48 @@ What-if tab shows it beside the run. Linux only for now; other hosts refuse with
   that match 20 of 20, a clock fixture whose first difference is found, a program that cannot connect out or write
   outside its tree, a `.env` the program reads that is never in the tree, a trace whose program sees its injected
   value and file, plain runs in bisect slots, and a run recorded live and then forked.
+
+## Debugging with an agent (spec §19.5)
+
+A partner agent debugs beside the user through six norn tools (`norn/src/tools/debug.rs`), which every session gets;
+each is a thin `CoordTool` whose call reaches the hub as `Hub::debug(sid, op, args)` with the caller's session (an
+outside agent is refused: "the debugger's tools are for agents drgnx runs"). The hub's half is
+`drgnx-ratatoskr/src/debug/agent.rs`: `tool` finds the session, maps the op to its matrix row (`action_of`), gates it
+with the manager's `gate` (an Ask makes a card and the call answers "X needs the user's yes (card N)"; Never answers
+its reason), then dispatches:
+
+- `debug_read` (`debug.read`): the sessions, a session's stop, a recorded run's summary or one stop (`Runs::capture`),
+  a fork's view. `history/*` stays the user's: no tool reads the edit history.
+- `debug_probe` (`debug.probe`): adds a probe or breakpoint marked with the agent's session (`Probe.agent`,
+  `Bp.agent`; `Probes::mark`, `Debug::mark_breakpoint`) and removes only its own. `debug-probes` tells the editors.
+- `debug_fork` (`debug.fork`): a value or replay what-if, marked as the agent's (`Forks::mark`, the view's `agent`).
+  A code what-if is refused here: code goes through `debug_fix`.
+- `debug_live` (`debug.live-eval` for `evaluate`, `debug.drive` for steps): carries the `epoch` of the stop the agent
+  read. `still_at` checks it before and again right before the control op, so a step the user took first wins.
+- `debug_hypothesis`: an Urdr record of kind `debug_hypothesis` (`norn::write::debug::hypothesis`; open, confirmed or
+  rejected, with evidence), written as `agent:SID` and changed only by the agent that made it; `debug-investigation`
+  `{root, hypothesis}` tells the editors.
+- `debug_fix` (`debug.fork`): `Forks::check_fix` makes a fresh tree from the run's launch snapshot, writes the files
+  (relative paths inside the tree only), runs the run's configuration in it (`run_in`, `FIX_LIMIT` 120 s) and drops the
+  tree. The fix is offered (`debug-investigation` `{root, fix}`) only when the predicate passes: a clean exit with no
+  stop on the failure's `watch` text (`Predicate`).
+
+The editor's half is `drgnx-debug-investigation.el`: it keeps the hypotheses (200) and fixes (20) the events bring,
+draws the **Investigation** buffer, asks the agent to explain itself (`agents/send`), shows a fix as diffs against the
+user's buffers and accepts it through `drgnx-history-with-origin "agent:SID#fix-H"`, so the history and undo record it
+as the agent's step. The gutter and the probe column ring an agent's marks in `drgnx-debug-agent-ring` (inheriting
+`drgnx-agent-1`) and name the agent in the tooltip.
+
+Tests: `debug::tests_agent` (each row gates its tool, the user's step wins, an agent removes only its own marks
+(`may_remove`), a fix passes only a clean exit without the failure, and one that still fails is not offered
+(`offer`)), the fork hub's `a_fix_is_run_in_a_fresh_tree_with_its_files` and `a_forks_view_names_the_agent_that_made_it`,
+norn's `each_debugger_tool_reaches_the_hub_as_its_session`, `a_hypothesis_is_recorded_changed_by_its_agent_only` and
+`debug_rows_per_preset`, `test/unit/debug-investigation-test.el`, and the conformance scenarios
+`debug/partner-agent-under-cautious` (Never: a reason, no card), `debug/partner-agent-under-balanced` (Ask: a card)
+and `debug/partner-agent-investigates` (the mock adapter, Autonomous: the agent reads the stop, cannot remove the
+user's breakpoint, sets its own, which the editors get with its agent, and its step read before the user's step is
+refused while its step at the new stop runs). The tools' schemas are held to `BUDGET_DEBUG` (5,000 bytes; 3,791 when
+it was set) in `tools_schema`.
 
 ## Which change broke it: bisect over the edit history (spec §19.6)
 

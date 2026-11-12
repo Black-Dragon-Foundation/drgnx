@@ -9,6 +9,7 @@
 //!   stopping (children before their parent; every session at the hub's end).
 
 pub mod adapters;
+pub mod agent;
 pub mod bisect;
 pub mod bisect_card;
 pub mod bisect_wire;
@@ -37,6 +38,8 @@ pub mod tasks;
 mod tests;
 #[cfg(test)]
 mod tests_adapters;
+#[cfg(test)]
+mod tests_agent;
 #[cfg(test)]
 mod tests_bisect;
 #[cfg(test)]
@@ -342,6 +345,18 @@ impl Debug {
         }
     }
 
+    /// ROOT's breakpoint ID is agent session AGENT's (D4): the editors see it ringed.
+    pub fn mark_breakpoint(&self, root: &str, id: u64, agent: &str) {
+        if let Some(path) = self.store(root, |s| s.mark(id, agent)) {
+            self.publish_bps(root, &path);
+        }
+    }
+
+    /// The agent session ROOT's breakpoint ID is of (none: the user's, or no such breakpoint).
+    pub fn breakpoint_owner(&self, root: &str, id: u64) -> Option<String> {
+        self.store(root, |s| s.owner(id))
+    }
+
     /// F on ROOT's breakpoint store.
     fn store<R>(&self, root: &str, f: impl FnOnce(&mut Store) -> R) -> R {
         let mut stores = self
@@ -361,7 +376,8 @@ impl Debug {
         f(s)
     }
 
-    fn root_of(&self, id: &str) -> Option<String> {
+    /// The project session ID debugs.
+    pub fn root_of(&self, id: &str) -> Option<String> {
         lock(&self.inner.state)
             .sessions
             .get(id)

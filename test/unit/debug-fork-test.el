@@ -11,6 +11,7 @@
   "BODY with the hub answering each call from ANSWERS (METHOD → results in turn); `calls' holds (METHOD . PARAMS)."
   (declare (indent 1))
   `(let ((calls nil) (answers (copy-tree ,answers)) (drgnx-debug-fork--views (make-hash-table :test #'equal))
+         (drgnx-debug-fork--asks (make-hash-table :test #'equal))
          (drgnx-debug-fork-last nil))
      (cl-letf (((symbol-function 'drgnx-hub-call-sync)
                 (lambda (method params &optional _timeout)
@@ -87,6 +88,23 @@
     (drgnx-debug-fork--event "debug-fork" '(:fork "f2" :run "r1" :state "failed" :error "no value item"))
     (with-current-buffer "*What if: f2*"
       (should (string-match-p "The fork failed: no value item" (buffer-string))))))
+
+(ert-deftest drgnx-debug-fork/a-landing-that-may-be-unreplayed-can-fork-anyway ()
+  "A fork that failed over a value it may not replay says so and offers Fork Anyway, which sends the same fork with
+anyway; a failure without the offer refuses it."
+  (debug-fork-test--with-hub '(("debug/fork" (:fork "f1") (:fork "f2")))
+    (drgnx-debug-fork "r1" '(:path "/p/a.py" :line 20 :hit 3) nil "exit")
+    (drgnx-debug-fork--event "debug-fork" '(:fork "f1" :run "r1" :state "failed" :anyway t
+                                                  :error "t was 1.0 in the run there, 9.5 in the fork"))
+    (with-current-buffer "*What if: f1*"
+      (should (string-match-p "Fork Anyway" (buffer-string))))
+    (should (equal (drgnx-debug-fork-anyway "f1") "f2"))
+    (let ((again (cdr (nth 1 calls))))
+      (should (eq (plist-get again :anyway) t))
+      (should (equal (plist-get again :at) '(:path "/p/a.py" :line 20 :hit 3)))
+      (should (equal (plist-get again :until) "exit")))
+    (drgnx-debug-fork--event "debug-fork" '(:fork "f2" :run "r1" :state "failed" :anyway :false :error "no"))
+    (should-error (drgnx-debug-fork-anyway "f2") :type 'user-error)))
 
 (ert-deftest drgnx-debug-fork/code-what-if-open-run-take ()
   "A code what-if: Open Fork finds this file in the tree, Run Fork runs it, Take puts the fork's text in the buffer

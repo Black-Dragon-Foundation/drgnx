@@ -176,11 +176,15 @@ if [[ -n ${DRGNX_TERMINAL-} ]]; then
     TERM=$_drgnx_term command ssh "$@"
   }
   function _drgnx_ssh_terminfo { # sets _drgnx_term for this ssh's host
-    local k v user= host= port= key rec=$HOME/.local/state/drgnx/terminal-ssh-hosts
+    local k v user= host= port= key rec=$HOME/.local/state/drgnx/terminal-ssh-hosts g=${TMPDIR:-/tmp}/drgnx-ssh-G.$$
     [[ ${XDG_STATE_HOME-} == /* ]] && rec=$XDG_STATE_HOME/drgnx/terminal-ssh-hosts
+    # ssh -G's answer through a file of this shell's own: not < <(…), which macOS's bash 3.2 cannot parse in POSIX
+    # mode, and no command substitution in this file (test/unit/shell-files-test.el)
+    (umask 077; command ssh -G "$@" 2>/dev/null > "$g")
     while read -r k v; do
       case $k in user) user=$v ;; hostname) host=$v ;; port) port=$v ;; esac
-    done < <(command ssh -G "$@" 2>/dev/null)
+    done < "$g"
+    command rm -f -- "$g"
     [[ -n $host ]] || return 0
     key=$user@$host:$port
     if [[ -r $rec ]]; then

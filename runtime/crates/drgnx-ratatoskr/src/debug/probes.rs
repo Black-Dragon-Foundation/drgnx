@@ -243,6 +243,9 @@ pub struct Probe {
     pub expr: String,
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// The agent session that added it (D4: the editor rings it); none for the user's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 fn yes() -> bool {
@@ -364,8 +367,17 @@ impl Probes {
             line,
             expr,
             enabled: true,
+            agent: None,
         });
         (path, Some(id))
+    }
+
+    /// Probe ID is agent session AGENT's (D4).
+    pub fn mark(&mut self, id: &str, agent: &str) -> Result<(), String> {
+        let i = self.index(id)?;
+        self.data.probes[i].agent = Some(agent.to_owned());
+        self.save();
+        Ok(())
     }
 
     fn index(&self, id: &str) -> Result<usize, String> {

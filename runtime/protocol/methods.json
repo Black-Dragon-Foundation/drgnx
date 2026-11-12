@@ -12449,6 +12449,11 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "`debug/fork`: fork RUN at AT with CHANGE, running UNTIL `stop` (the next stop, the default), `exit`, or\n`{\"probe\": ID}` (that probe's next hit). CONFIRM: the user said yes to a slow replay. INPUTS answer an earlier\n`needs` (an input the run's configuration asks, whose value was not kept).",
         "properties": {
+          "anyway": {
+            "default": false,
+            "description": "Fork at this pass even though a local differed from the run's that may come from a source the fork does not\nreplay (the clock, random numbers): what a failed fork's `anyway` offers.",
+            "type": "boolean"
+          },
           "at": {
             "$ref": "#/$defs/DebugForkAt"
           },
@@ -24610,7 +24615,12 @@
               "chat.project-read",
               "plugin.abilities",
               "chat.project-edit",
-              "huddles"
+              "huddles",
+              "debug.read",
+              "debug.probe",
+              "debug.fork",
+              "debug.live-eval",
+              "debug.drive"
             ],
             "type": "string"
           },
@@ -24842,7 +24852,12 @@
               "chat.project-read",
               "plugin.abilities",
               "chat.project-edit",
-              "huddles"
+              "huddles",
+              "debug.read",
+              "debug.probe",
+              "debug.fork",
+              "debug.live-eval",
+              "debug.drive"
             ],
             "type": "string"
           },

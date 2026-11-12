@@ -82,14 +82,21 @@ with the probes: a key whose probe is gone is removed.")
 
 ;;;; Probes in a file
 
-(defun drgnx-debug-timeline--svg (h w colour &optional pad)
-  "The probe glyph (a ring with a dot) as SVG text, H by W pixels after PAD pixels of nothing, in COLOUR."
+(defun drgnx-debug-timeline--svg (h w colour &optional pad ring)
+  "The probe glyph (a ring with a dot) as SVG text, H by W pixels after PAD pixels of nothing, in COLOUR; its ring in
+RING when given (an agent's probe)."
   (let* ((pad (or pad 0)) (vw (/ (* 16.0 (+ w pad)) h)) (x0 (- (/ (- 16 (/ (* 16.0 w) h)) 2) (/ (* 16.0 pad) h))))
     (format "<svg xmlns='http://www.w3.org/2000/svg' width='%d' height='%d' viewBox='%.3f 0 %.3f 16'><circle cx='8' cy='8' r='5' fill='none' stroke='%s' stroke-width='1.6'/><circle cx='8' cy='8' r='2' fill='%s'/></svg>"
-            (+ w pad) h x0 vw colour colour)))
+            (+ w pad) h x0 vw (or ring colour) colour)))
 
-(defun drgnx-debug-timeline--glyph (help)
-  "The probe glyph's `before-string', HELP its tooltip: an image on a graphical frame with SVG, else a character."
+(defun drgnx-debug-timeline--probe-help (probe)
+  "PROBE's tooltip: its expression, and the agent that set it."
+  (concat (format "Probe: %s" (plist-get probe :expr))
+          (when-let* ((a (plist-get probe :agent))) (format " · set by agent %s" a))))
+
+(defun drgnx-debug-timeline--glyph (help &optional agent)
+  "The probe glyph's `before-string', HELP its tooltip: an image on a graphical frame with SVG, else a character.  An
+AGENT's probe has its ring in the agent ring's colour (a terminal: the character wears the ring's face)."
   (propertize " " 'display
               (list '(margin left-margin)
                     (if (and (display-graphic-p) (image-type-available-p 'svg))
@@ -97,10 +104,12 @@ with the probes: a key whose probe is gone is removed.")
                               (h (min (drgnx-px 16) (frame-char-height))))
                           (create-image (drgnx-debug-timeline--svg
                                          h w (drgnx-debug-gutter--colour 'drgnx-debug-probe)
-                                         (* (or (drgnx-margins-offset 'debug-probe) 0) (frame-char-width)))
+                                         (* (or (drgnx-margins-offset 'debug-probe) 0) (frame-char-width))
+                                         (and agent (drgnx-debug-gutter--colour 'drgnx-debug-agent-ring)))
                                         'svg t :ascent 'center :scale 1))
                       (concat (drgnx-margins-pad 'debug-probe)
-                              (propertize (if (drgnx-ui-ascii-frame-p) "o" "◉") 'face 'drgnx-debug-probe))))
+                              (propertize (if (drgnx-ui-ascii-frame-p) "o" "◉")
+                                          'face (if agent 'drgnx-debug-agent-ring 'drgnx-debug-probe)))))
               'help-echo help))
 
 (defun drgnx-debug-timeline--root ()
@@ -135,7 +144,8 @@ replaces that one's."
           (let ((g (make-overlay (point) (point) nil t nil))
                 (v (make-overlay (line-end-position) (line-end-position) nil t nil)))
             (overlay-put g 'drgnx-debug-probe (plist-get p :id))
-            (overlay-put g 'before-string (drgnx-debug-timeline--glyph (format "Probe: %s" (plist-get p :expr))))
+            (overlay-put g 'before-string (drgnx-debug-timeline--glyph (drgnx-debug-timeline--probe-help p)
+                                                                       (plist-get p :agent)))
             (overlay-put v 'drgnx-debug-probe-values (plist-get p :id))
             (overlay-put v 'after-string (drgnx-debug-timeline--values-text root (plist-get p :id)))
             (push g drgnx-debug-timeline--overlays)

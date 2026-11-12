@@ -1385,7 +1385,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/control` | user | `{op: string, session: string, thread?: integer}` | `boolean` | no |
 | `debug/evaluate` | user | `{context: string, expr: string, frame?: integer, session: string}` | `{epoch?: natnum, reference?: integer, result: string, type?: string}` | no |
 | `debug/expand` | user | `{node: string, open: boolean, view: string}` | `boolean` | no |
-| `debug/fork` | user | `{at: {hit?: natnum, line?: natnum, path?: string, stop?: natnum}, change?: {code?: boolean, value?: {path: [string], text: string}}, confirm?: boolean, inputs?: [{id: string, value: string}], run: string, until?: DebugForkUntil}` | `{ask?: string, fork?: string, needs?: any}` | no |
+| `debug/fork` | user | `{anyway?: boolean, at: {hit?: natnum, line?: natnum, path?: string, stop?: natnum}, change?: {code?: boolean, value?: {path: [string], text: string}}, confirm?: boolean, inputs?: [{id: string, value: string}], run: string, until?: DebugForkUntil}` | `{ask?: string, fork?: string, needs?: any}` | no |
 | `debug/fork/drop` | user | `{fork: string}` | `boolean` | no |
 | `debug/fork/run` | user | `{fork: string}` | `boolean` | no |
 | `debug/install` | user | `{adapter: string, adapters?: [JsonObject]}` | `string` | no |
@@ -1481,7 +1481,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes |
 | `machines/list` | user | `{}` | `{machines?: [Machine]}` | no |
 | `machines/report` | user | `{machine: string, slots?: [{holder?: string, id: string, kind: string}], ttl: number}` | `{local: boolean, machine: string, slots?: [Slot]}` | no |
-| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "job.keys" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read" \| "plugin.abilities" \| "chat.project-edit" \| "huddles", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
+| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "job.keys" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read" \| "plugin.abilities" \| "chat.project-edit" \| "huddles" \| "debug.read" \| "debug.probe" \| "debug.fork" \| "debug.live-eval" \| "debug.drive", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
 | `matrix/get` | user | `{plan?: string, project?: string, who?: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `MatrixView` | no |
 | `mcp/attach` | service | `{kind: AgentKind}` | `{identity: string}` | no |
 | `mcp/session` | user | `{agent: AgentName, cwd?: AbsPath, job?: Id, owner: natnum, profile?: Id, sid?: SessionId, task?: TaskRef, tools?: {tracker: boolean}}` | `{sid: string, socket: string}` | no |
@@ -4401,7 +4401,9 @@ there: a copy of its write end outside the group (any fork beside the host holds
 tests, every thread of the test binary forks) would hold that back, and what such a copy writes is never read as the
 browser. A Chromium without a group of its own (a filter refused `setpgid`) is waited for by the pipe's end, for up to
 1 s. The next `start` is a fresh
-Chromium through the same host.
+Chromium through the same host. The host counts the browser as ended in the same hold of its stream as it writes
+`exited`, so a `start` the hub sends once it has read `exited` always gets a fresh Chromium: never the dead one's
+`started` (whose CDP would then be dropped), however late the waiting thread runs on a loaded machine.
 
 **The hub goes.** EOF on fd 3 (the hub ended, or restarted: an inherited fd cannot be handed over again), or a reset
 (the hub closed its end with the host's last lines unread), stops Chromium as

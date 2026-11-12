@@ -70,7 +70,8 @@ first answer all the same, and the follower switches to Light on it."
 (ert-deftest drgnx-look-follow/the-desktop-is-read-through-the-public-store ()
   "Pattern D: what the follower reads comes from `nhwl-settings-get' and `nhwl-settings-answered-p' (the store's own
 variables are Nidhogg's business), and it adds nothing to the store's functions."
-  (let ((values '((color-scheme . 0) (contrast . 0) (accent-color . (0.2 0.4 0.9)))) (answered nil))
+  (let ((values '((color-scheme . 0) (contrast . 0) (accent-color . (0.2 0.4 0.9)))) (answered nil)
+        (system-type 'gnu/linux))                        ; the Wayland store's; macOS's is the next row
     (cl-letf (((symbol-function 'nhwl-settings-get) (lambda (key) (alist-get key values)))
               ((symbol-function 'nhwl-settings-answered-p) (lambda (key) (memq key answered))))
       (should (equal '(:scheme 0 :contrast 0 :accent (0.2 0.4 0.9) :answered nil) (drgnx-look-follow--read)))
@@ -81,6 +82,16 @@ variables are Nidhogg's business), and it adds nothing to the store's functions.
         (drgnx-look-follow-on)
         (should-not (and (fboundp 'nhwl-settings--set) (advice--p (advice--symbol-function 'nhwl-settings--set)))))
     (drgnx-look-follow-off)))
+
+(defvar ns-system-appearance)
+
+(ert-deftest drgnx-look-follow/macos-reads-the-system-appearance ()
+  "Pattern D: on macOS the desktop is `ns-system-appearance' (Naglfar keeps it current): dark is 1, light 2, always
+answered, no accent."
+  (let ((system-type 'darwin))
+    (dolist (c '((dark . 1) (light . 2)))
+      (let ((ns-system-appearance (car c)))
+        (should (equal (list :scheme (cdr c) :contrast 0 :accent nil :answered t) (drgnx-look-follow--read)))))))
 
 (ert-deftest drgnx-look-follow/an-explicit-theme-is-left-alone ()
   "Pattern D: with a theme symbol, or nil, as `drgnx-look-theme', a portal change loads nothing."

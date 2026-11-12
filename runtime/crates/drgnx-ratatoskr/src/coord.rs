@@ -733,6 +733,20 @@ impl Hub for ToolHub {
         })
     }
 
+    /// A debugger tool (D4): the hub's side checks the matrix's `debug.*` rows and acts.
+    fn debug(
+        &self,
+        sid: &str,
+        op: &'static str,
+        args: Value,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        let (front, sid) = (self.front(), sid.to_owned());
+        Box::pin(async move {
+            let f = front.ok_or("the hub is starting")?;
+            crate::debug::agent::tool(&f, &sid, op, args).await
+        })
+    }
+
     /// A session's tool call ended: its graph writes link to its current ask before it answers.
     fn after_tool(&self, _sid: &str, _tool: &str) -> BoxFuture<'_, ()> {
         let front = self.front.get().and_then(std::sync::Weak::upgrade);

@@ -74,13 +74,21 @@ drgnx would leave: ssh features and a bin dir.")
                         drgnx-term-shell-test--inside))
                 (_ (drgnx-term-shell-test--run
                     shell '("-i") drgnx-term-shell-test--inside
-                    (format "source '%s'\n%s\ncd /tmp\necho hi\nexit\n" file show)))))
-           (out (nth 1 r)))
+                    (format "source '%s'\n%s\ncd /tmp\necho hi\n%sexit\n" file show
+                            (if (eq shell 'bash) "trap -p DEBUG\n" ""))))))
+           (out (nth 1 r))
+           ;; bash before 4.4 (macOS's 3.2) has no PS0: Ghostty marks output from bash-preexec's DEBUG trap, which
+           ;; by design stays quiet while stdout is no terminal (here, a pipe); the trap is what is checked there
+           (old-bash (and (eq shell 'bash)
+                          (version< (car (process-lines "bash" "-c" "echo ${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"))
+                                    "4.4"))))
+      (when old-bash
+        (should (string-search "__bp_preexec_invoke_exec" out)))
       (should (equal (list shell (nth 0 r)) (list shell 0)))
       (should (string-search (format "f=cursor,title,sudo r=%s/ghostty b=%s" drgnx-term-shell-test--dir
                                      (if (eq shell 'fish) "" "unset"))
                              out))
-      (dolist (mark '("\e]133;A" "\e]133;C" "\e]133;D;0"))
+      (dolist (mark (if old-bash '("\e]133;A" "\e]133;D;0") '("\e]133;A" "\e]133;C" "\e]133;D;0")))
         (should (equal (list shell mark (and (string-search mark out) t)) (list shell mark t))))
       (should (equal (list shell 'cwd (and (string-match-p "\e]7;[a-z-]+://[^/\a]*/tmp\a" out) t)) (list shell 'cwd t)))
       (unless (eq shell 'fish)                 ; fish sets its own title, from its prompt loop, not from these events
@@ -175,6 +183,11 @@ case \"$*\" in *tic*) printf 'stdin=%%s\\n' \"$(cat)\" >> '%s' ;; esac" log log)
                            "TERM=xterm-ghostty args=host\n")))
         (delete-directory stubs t)))))
 
+(defun drgnx-term-shell-test--entry-p (dir)
+  "Non-nil when DIR holds the compiled xterm-ghostty: tic files it under x/, or 78/ (the letter's hex code) where the
+file system ignores case, as on macOS."
+  (or (file-exists-p (expand-file-name "x/xterm-ghostty" dir)) (file-exists-p (expand-file-name "78/xterm-ghostty" dir))))
+
 (ert-deftest drgnx-term-shell/terminfo-entry-resolves ()
   ;; `drgnx build terminfo' compiles Ghostty's entry into <data>/terminfo; the terminal then says TERM=xterm-ghostty
   ;; with TERMINFO there, and xterm-256color while it is missing
@@ -190,7 +203,7 @@ case \"$*\" in *tic*) printf 'stdin=%%s\\n' \"$(cat)\" >> '%s' ;; esac" log log)
             (should (equal (funcall get e "TERM") "xterm-256color"))
             (should-not (funcall get e "TERMINFO")))
           (should (eql 0 (call-process (expand-file-name "bin/drgnx" drgnx-dir) nil nil nil "build" "terminfo")))
-          (should (file-exists-p (expand-file-name "x/xterm-ghostty" dir)))
+          (should (drgnx-term-shell-test--entry-p dir))
           (with-temp-buffer
             (should (eql 0 (call-process "infocmp" nil t nil "-x" "-A" dir "xterm-ghostty")))
             (should (string-search "Smulx=" (buffer-string)))
@@ -200,7 +213,7 @@ case \"$*\" in *tic*) printf 'stdin=%%s\\n' \"$(cat)\" >> '%s' ;; esac" log log)
             (should (equal (funcall get e "TERMINFO") (directory-file-name dir))))
           ;; a second build is quiet and leaves it
           (should (eql 0 (call-process (expand-file-name "bin/drgnx" drgnx-dir) nil nil nil "build" "terminfo")))
-          (should (file-exists-p (expand-file-name "x/xterm-ghostty" dir))))
+          (should (drgnx-term-shell-test--entry-p dir)))
       (delete-directory data t))))
 
 (ert-deftest drgnx-term-shell/environment-names-the-terminal ()

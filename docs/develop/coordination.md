@@ -549,6 +549,10 @@ same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 21 tools, or th
 - `ask_user`'s message and its task's `needs-input` commit in one transaction, and so do `hello`'s registration and its
   `start` event (the Lisp made two).
 
+**The debugger's tools** (`tools/debug.rs`): `debug_read`, `debug_probe`, `debug_fork`, `debug_live`,
+`debug_hypothesis` and `debug_fix` are in every session's list. They take no identity: the session's is passed to the
+hub's `Hub::debug`, which gates each call by the matrix's `debug.*` rows ([debugging.md](debugging.md#debugging-with-an-agent-spec-195)).
+
 ### Plugin abilities (`drgnx-ratatoskr/src/abilities.rs`)
 
 Abilities are served apart from the hub's own tools: `Sessions` binds `plugins.sock` (`SESSION_PLUGINS_SOCKET`) in the
