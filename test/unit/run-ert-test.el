@@ -820,7 +820,8 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
     (unwind-protect
         (progn
           (drgnx-run-ert-test--suite suite '(("one-test.el" . "(ert-deftest iso-one/a () (should t))")))
-          (dolist (extra '(nil ("DRGNX_TEST_ONE_PROCESS=1")))
+          ;; CI's runs list the :timing and one-writer tests the selector picks as skipped: that listing selects too
+          (dolist (extra '(nil ("DRGNX_TEST_ONE_PROCESS=1") ("DRGNX_TEST_NO_TIMING=1" "DRGNX_WORK_DB_GATE=1")))
             (ignore-errors (delete-file results))
             (should (equal (apply #'drgnx-run-ert-test--batch suite results "DRGNX_TEST_SELECTOR=iso-none/a" extra) 1))
             (ert-info ((drgnx-run-ert-test--log results) :prefix "its output: ")   ; macOS: a file's Emacs exited 255
