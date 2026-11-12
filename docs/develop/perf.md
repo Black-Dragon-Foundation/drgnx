@@ -15,6 +15,9 @@ DRGNX_PERF_WORKLOADS='A B'  only those workloads (space-separated names from the
                             A partial run is judged against its own budgets and writes no history line
 DRGNX_PERF_RESULTS=FILE     write the results as JSON: every metric (wall clock included), each workload's calibration,
                             the Emacs version and the commit
+DRGNX_RATATOSKR_STALL_FILE=FILE  the workloads' hubs append their stall reports to FILE (hub.md, the stall watchdog);
+                            `--container` mounts its folder at /stall; DRGNX_RATATOSKR_STALL_MS=MS their threshold
+                            (a test-hooks hub's default: 250)
 DRGNX_UI_SIZE=WxH           the perf sessions' monitor size (default 1400x800); DRGNX_UI_SCALE=S their scale (a session
                             that cannot apply it fails to start: exit 1, nothing measured)
 DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the three evil workloads
