@@ -468,7 +468,9 @@ the CLI only — it waits), `drgnx-hub-call` (asynchronous, with a deadline), `d
 again before the hub answers — up to `drgnx-hub-subscribe-deadline`, 5 s, after which an unanswered one is given up
 and the next call subscribes again; each new one hands over the keys this Emacs holds) + `drgnx-hub-event-functions`. The unit
 runner sets `DRGNX_NO_HUB_START=1`: a test never starts a hub that would outlive the suite unless it unsets it (the
-hub's own tests do, and stop what they start). It also sets `DRGNX_HUB_PARENT_PID` to its own pid, which a hub
+hub's own tests do, and stop what they start). With starting off, a hub that takes the connection but does not answer
+the ping probe within its second (a busy one: thirty agents streaming) still counts as running (`drgnx-hub--accepts-p`),
+so `drgnx-hub-ensure` does not fail on a hub that is there. It also sets `DRGNX_HUB_PARENT_PID` to its own pid, which a hub
 inherits: a hub whose parent is gone exits (checked each second), so an interrupted run leaves none behind.
 
 **Ratatoskr's socket** (`runtime/crates/drgnx-ratatoskr`: `lock.rs`, `conn.rs`, `server.rs`) keeps the same path,
