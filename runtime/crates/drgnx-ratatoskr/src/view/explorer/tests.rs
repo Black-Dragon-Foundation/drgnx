@@ -329,6 +329,63 @@ fn next_listing(got: &std::sync::mpsc::Receiver<Vec<Entry>>, secs: f32) -> Optio
         .map(|es| es.into_iter().map(|e| e.path).collect())
 }
 
+/// A watched folder reported by its true name (macOS's FSEvents: /private/var/… for /var/…) is put back under the
+/// name the listing reads it by, and so is a name in it; a path in no aliased folder stays as it is.
+#[test]
+fn a_change_reported_by_the_true_name_is_put_back_under_the_listed_one() {
+    let aliases = HashMap::from([(
+        PathBuf::from("/private/var/t/w/open"),
+        PathBuf::from("/var/t/w/open"),
+    )]);
+    let back = |p: &str| as_listed(&aliases, PathBuf::from(p));
+    assert_eq!(
+        back("/private/var/t/w/open"),
+        PathBuf::from("/var/t/w/open")
+    );
+    assert_eq!(
+        back("/private/var/t/w/open/new.txt"),
+        PathBuf::from("/var/t/w/open/new.txt")
+    );
+    assert_eq!(back("/r/a/x.rs"), PathBuf::from("/r/a/x.rs"));
+}
+
+/// The watch with its folders under a link (as macOS's temporary folder is): a file made in an open folder relists.
+#[test]
+fn a_watched_folder_under_a_link_relists() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("real");
+    std::fs::create_dir_all(real.join("open")).unwrap();
+    std::os::unix::fs::symlink(&real, dir.path().join("link")).unwrap();
+    let root = dir.path().join("link");
+    let open = root.join("open");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (out, got) = std::sync::mpsc::channel();
+    let stop = tx.clone();
+    let first = Listing {
+        id: 1,
+        roots: vec![root.clone()],
+        expanded: [open.to_string_lossy().into_owned()].into(),
+        compact: false,
+        exclude: Exclude::default(),
+    };
+    let thread = std::thread::spawn(move || {
+        let cancel = AtomicBool::new(false);
+        list_and_watch(first, &cancel, (tx, rx), &mut |_, es, _| {
+            out.send(es).is_ok()
+        });
+    });
+    next_listing(&got, 10.0).expect("the first listing");
+    let new = open.join("new.txt");
+    std::fs::write(&new, "x").unwrap();
+    let after = next_listing(&got, 5.0).expect("a relisting after the file was made");
+    assert!(
+        after.contains(&new.to_string_lossy().into_owned()),
+        "{after:?}"
+    );
+    stop.send(Heard::Stop).unwrap();
+    thread.join().unwrap();
+}
+
 /// Pattern C (a gate on the first listing, then on each relisting): a listing's thread watches the folders it read.
 /// A file made in an open folder, then removed, each relists (the new listing holds it, then does not) with no new
 /// subscribe; a change in a closed folder sends nothing; `Heard::Stop` ends the thread, which drops the watcher.

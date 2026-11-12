@@ -88,6 +88,9 @@ pub async fn run(args: ServeArgs) -> Exit {
             return Exit::CannotStart;
         }
     }
+    // the hub's folder by its true name, found once: what it makes under it (forks' trees, plugins) is then named
+    // without a link, as the sandbox and the no-link file layer require (a link above it: macOS's /var, a moved home)
+    let hub_dir = std::fs::canonicalize(&hub_dir).unwrap_or(hub_dir);
     let _log = match log::init(&log_dir) {
         Ok(g) => g,
         Err(e) => {
