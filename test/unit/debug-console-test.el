@@ -139,6 +139,35 @@ collapsed one (`:collapsed') starts folded; TAB or RET on it opens or closes it;
       (drgnx-debug-console-toggle)
       (should (equal (debug-console-test--shown) "▾ Group A\n  child\n  ▾ inner\n    deep\nout\n")))))
 
+(defun debug-console-test--prefixes ()
+  "Each output line's `line-prefix' (the timestamp), or nil."
+  (with-current-buffer drgnx-debug-console-buffer-name
+    (let (out)
+      (save-excursion
+        (goto-char (point-min))
+        (while (< (point) drgnx-debug-console--end)
+          (push (let ((p (get-text-property (point) 'line-prefix))) (and p (substring-no-properties p))) out)
+          (forward-line 1)))
+      (nreverse out))))
+
+(ert-deftest drgnx-debug-console/timestamps ()
+  "With `drgnx-debug-console-timestamps', each line shows the hub's time (`:time', ms) in a 12-character column
+before it, a line without one an empty column; the text itself stays the output.  Turning it off or on re-shows the
+lines already there."
+  (debug-console-test--with
+    (let ((drgnx-debug-console-timestamps nil)
+          (t0 (+ (* 1000 (float-time (encode-time (list 11 2 14 13 11 2026 nil -1 nil)))) 204)))
+      (debug-console-test--output (list :text "first" :category "stdout" :count 1 :time t0)
+                                  (list :text "later" :category "stdout" :count 1 :time (+ t0 1176)))
+      (should (equal (debug-console-test--prefixes) '(nil nil)))
+      (customize-set-variable 'drgnx-debug-console-timestamps t)
+      (should (equal (debug-console-test--prefixes) '("14:02:11.204 " "14:02:12.380 ")))
+      (drgnx-debug-console--insert (list (list :text "no time" :category "console" :count 1)))
+      (should (equal (car (last (debug-console-test--prefixes))) "             "))
+      (should (equal (debug-console-test--text) "first\nlater\nno time\n"))
+      (customize-set-variable 'drgnx-debug-console-timestamps nil)
+      (should (equal (debug-console-test--prefixes) '(nil nil nil))))))
+
 (ert-deftest drgnx-debug-console/evaluates-from-the-editor ()
   "`drgnx-debug-console-evaluate': EXPR evaluated as if typed (echoed, in the history, `repl'), what the input held
 kept; the tab shown without the focus, or selected with SELECT."

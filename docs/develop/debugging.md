@@ -584,6 +584,11 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
   editor keys them (SESSION . N), keeps the folded ones in `drgnx-debug-console--closed` (emptied with the output),
   draws a chevron on the opening line and hides a line (`invisible`) while any group it is in is folded, also as
   lines arrive. TAB or RET on the opening line folds or opens it; a group inside stays as it was.
+- Timestamps: the hub stamps each line with `time` (ms since the epoch, from its clock, when the output event came;
+  a counted repeat keeps the first, `more` lines have none). The editor keeps it as the line's
+  `drgnx-debug-console-time` property and, with `drgnx-debug-console-timestamps`, shows it as the line's
+  `line-prefix` (`HH:MM:SS.mmm`, face `drgnx-debug-console-time`; a blank column for a line without one), so the
+  text stays the output and the setting's `:set` re-shows the lines in place without asking the hub.
 - The console stays after its session ends; starting a configuration of the same name again clears it once no
   session of the last run is left (`drgnx-debug-console-clear-on-restart`, on by default).
 - Completion in the input: `drgnx-debug-console-complete-at-point` is the console's only `completion-at-point`

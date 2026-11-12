@@ -74,7 +74,8 @@ Console** sends the selection or the expression at point there from the editor. 
 place (RET or TAB on it); once the program runs on, it dims and no longer opens. Groups the program prints
 (`console.group` in JavaScript, for one) fold the same way, on their first line. The output stays after the session
 ends and is cleared when the same configuration starts again (`drgnx-debug-console-clear-on-restart`). A
-`postDebugTask` that fails says so there.
+`postDebugTask` that fails says so there. Turn on `drgnx-debug-console-timestamps` to see, before each line, the
+time its output came in (to the millisecond); turning it off or on re-shows the lines already there.
 
 ## Breakpoints
 
