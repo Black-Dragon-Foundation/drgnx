@@ -534,7 +534,9 @@ The selection, the keys and the commands are in `drgnx-work-map.el`; the side pa
   `drgnx-work-map--nav` keeps `drgnx-work-map--selection` as `(KIND . ID)` (the kind read from the model with the
   selection) and runs `drgnx-work-map-select-functions` when it moved. Left, right, why and touches follow the `left`
   `right` `up` `down` links (from nothing, the team's first);
-  next and previous agent walk `team`; `g N` walks to entry N of `needs-you` and `n`/`N` cycle it; search sets the
+  next and previous agent walk `team`; `g N` walks to entry N of `needs-you` and `n`/`N` cycle it (the list is the
+  strip's chips in order, `vegvisir::nav::strip_entries`: the cards, the agents that need you with no card, the open
+  huddles; an entry about nothing shown holds its card's id, no node, and `g N` there says nothing needs you); search sets the
   model's search (non-matches dim on their spans) and selects the first matching agent of `outline`; Esc clears it;
   `O` sets the model's form, so up and down walk `outline`, and asks the hub to draw that form (`work/map/set
   {outline: on|off}`, kept for the next subscription; row `drgnx-work-map-rows/the-outline-key-asks-the-hub-for-its-form`). Back and forward follow Sjá's reserved links `back` and `forward` (the instance's
@@ -659,8 +661,9 @@ never its prose.
   (`{view, session}`; `{view, lanes}`), again after a reconnect (its env's RESUBSCRIBE), and ended with
   `work/trail/close` when its buffer goes. Without Sjá both show the map's notice and ask for nothing. The segments of
   the Timeline's lanes are in the faces `drgnx-work-seg-*` (`:inverse-video` over the stock colour faces, so a
-  segment's colour is the face's foreground). The trail's Lisp drawing, paging, live steps and the "paused by you" and
-  "resumed by you" notes went with render offload Task 34: resume says "Work: Resumed".
+  segment's colour is the face's foreground). A pause is in the trail as the hub saw it: the step `paused` at the time
+  the turn ended paused (`agents/pause`, a Stop, the budget or the supervisor), and, once it ended, a note row
+  `resumed` at that time (`vegvisir::trail::trail_rows`; no node); resume also says "Work: Resumed".
 - **Conclusions** rest on steps (the model's chain kind `rests-on`): a selected conclusion lights the steps it rests on
   and a selected step the conclusions resting on it, in the class `chain`. `l` (`drgnx-work-trail-show-steps`, on a
   conclusion) moves point through the lit steps, cycling; `L` (`drgnx-work-trail-show-conclusions`, on a step) selects
