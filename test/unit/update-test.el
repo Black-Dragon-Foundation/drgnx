@@ -547,13 +547,11 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
           (should (string-search "-j 4 --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key RUSTUP_HOME=" log))
           (should (string-search (format "--target %s-unknown-linux-musl --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key" arch) log))
           (should (file-executable-p (expand-file-name "data/bin/drgnx-key" dir)))
-          (should (file-executable-p (expand-file-name (format "data/bin/drgnx-key-%s-linux-musl" arch) dir))))
+          (should (file-executable-p (expand-file-name (format "data/bin/drgnx-key-%s-linux-musl" arch) dir)))
+          (should (string-search (format "rustup target add %s-unknown-linux-musl" arch) log)))
         (should (string-search (format "RUSTUP_HOME=%s/rh CARGO_HOME=%s/ch" dir dir) log))
         (should (string-search (format "TARGET=%s/cache/drgnx/ratatoskr-target COMMIT=%s CHECKOUT=%s/install" dir head dir) log))
         (should-not (string-search "WRONG" log))
-        (should (string-search (format "rustup target add %s-unknown-linux-musl"
-                                       (string-trim (shell-command-to-string "uname -m")))
-                               log))
         (should (string-search "--user --scope -q -p MemoryMax=7168M -p MemorySwapMax=0"
                                (drgnx-update-test--slurp (expand-file-name "sd.log" dir))))
         ;; installed: the built file under the data dir, by rename, no .new left, no links without --prefix
