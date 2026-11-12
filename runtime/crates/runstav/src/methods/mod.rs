@@ -310,6 +310,7 @@ params! {
     DebugSource(debug::DebugSource),
     DebugBreakpoints(debug::DebugBreakpoints),
     DebugRunToCursor(debug::DebugRunToCursor),
+    DebugDataBreakpoint(debug::DebugDataBreakpoint),
     DebugView(debug::DebugView),
     DebugExpand(debug::DebugExpand),
     DebugWatch(debug::DebugWatch),

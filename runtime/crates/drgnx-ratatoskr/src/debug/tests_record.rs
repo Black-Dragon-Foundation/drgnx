@@ -51,6 +51,7 @@ fn a_stop(vars: Vec<Vec<Value>>, frames: usize) -> Stop {
             .collect(),
         total_frames: Some(frames as i64),
         exception: None,
+        hit: vec![],
         frame: 1,
         scopes: vars
             .into_iter()

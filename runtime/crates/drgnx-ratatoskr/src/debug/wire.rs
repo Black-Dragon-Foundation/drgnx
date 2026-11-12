@@ -755,6 +755,10 @@ fn bp_op(o: DebugBreakpointOp) -> Result<BpOp, Error> {
         "remove-function" => BpOp::RemoveFunction {
             name: o.name.unwrap_or_default(),
         },
+        "trigger" => BpOp::Trigger {
+            id: id(&o)?,
+            by: o.triggered_by,
+        },
         other => return Err(bad("op.op", format!("no breakpoint operation {other}"))),
     })
 }

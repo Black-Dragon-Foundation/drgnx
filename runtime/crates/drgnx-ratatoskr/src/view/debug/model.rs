@@ -255,6 +255,8 @@ pub struct Bps {
     pub filters: Vec<Filter>,
     pub functions: Vec<Value>,
     pub files: Vec<(String, Vec<Value>)>,
+    /// Each session's data breakpoints: (session, the store's view of one).
+    pub data: Vec<(String, Value)>,
 }
 
 /// Everything one view is built from.
@@ -1033,13 +1035,23 @@ impl<'a> Cx<'a> {
                 if let Some(m) = text("message") {
                     fields.push(("message", json!(m)));
                 }
+                let trigger = b.get("triggered_by").and_then(Value::as_u64);
+                let waits =
+                    trigger.filter(|_| b.get("waiting").and_then(Value::as_bool) == Some(true));
+                if let Some(t) = trigger {
+                    fields.push(("triggered_by", json!(t)));
+                }
                 self.push(Line {
                     id: format!("b:{bid}"),
                     parent: parent.clone(),
                     depth: 1,
                     kind: "breakpoint",
                     label: format!("{}:{line}", basename(path)),
-                    detail: text("condition").or(text("log")).or(text("hit")),
+                    detail: waits
+                        .map(|t| format!("waits for {}", bp_name(&bps.files, t)))
+                        .or(text("condition"))
+                        .or(text("log"))
+                        .or(text("hit")),
                     ticked: Some(b.get("enabled").and_then(Value::as_bool) != Some(false)),
                     dim: !verified,
                     fields,
@@ -1047,5 +1059,50 @@ impl<'a> Cx<'a> {
                 });
             }
         }
+        for (session, d) in &bps.data {
+            let text = |k: &str| d.get(k).and_then(Value::as_str).unwrap_or_default();
+            let verified = d.get("verified").and_then(Value::as_bool) == Some(true);
+            let mut fields = vec![
+                ("session", json!(session)),
+                ("data_id", json!(text("data_id"))),
+                ("verified", json!(i64::from(verified))),
+            ];
+            if !text("message").is_empty() {
+                fields.push(("message", json!(text("message"))));
+            }
+            self.push(Line {
+                id: format!("d:{session}:{}", text("data_id")),
+                parent: parent.clone(),
+                depth: 1,
+                kind: "data",
+                label: text("description").to_owned(),
+                detail: Some(
+                    match text("access_type") {
+                        "read" => "read",
+                        "readWrite" => "read or write",
+                        _ => "write",
+                    }
+                    .to_owned(),
+                ),
+                dim: !verified,
+                fields,
+                ..Line::default()
+            });
+        }
     }
+}
+
+/// Breakpoint ID as the view names it (`file:line`), from FILES.
+fn bp_name(files: &[(String, Vec<Value>)], id: u64) -> String {
+    files
+        .iter()
+        .find_map(|(path, list)| {
+            list.iter()
+                .find(|b| b.get("id").and_then(Value::as_u64) == Some(id))
+                .map(|b| {
+                    let line = b.get("line").and_then(Value::as_u64).unwrap_or(0);
+                    format!("{}:{line}", basename(path))
+                })
+        })
+        .unwrap_or_else(|| format!("breakpoint {id}"))
 }

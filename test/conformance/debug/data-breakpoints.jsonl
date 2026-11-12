@@ -1,0 +1,25 @@
+{"scenario": "debug/data-breakpoints", "requires": ["v1", "test-hooks"], "doc": "Data breakpoints (Break on Value Change): `debug/data-breakpoint` asks the adapter's `dataBreakpointInfo` for the variable and sends the session's whole list in `setDataBreakpoints`; a variable it cannot watch is refused with the adapter's words; the program stops on the change; a removal sends the list again."}
+{"do": "start", "hub": "h"}
+{"do": "write_file", "path": "$ROOT/proj/.vscode/launch.json", "json": {"version": "0.2.0", "configurations": [{"type": "mocka", "request": "launch", "name": "App", "program": "p"}]}}
+{"do": "write_file", "path": "$ROOT/proj/app.py", "text": "a = 1\nb = 2\nc = 3\nd = 4\n"}
+{"do": "write_file", "path": "$ROOT/a.json", "json": [{"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true, "supportsDataBreakpoints": true}}, {"expect": "launch", "ok": {}}, {"event": "initialized"}, {"expect": "configurationDone"}, {"event": "stopped", "body": {"reason": "pause", "threadId": 1, "allThreadsStopped": true}}, {"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}, {"expect": "stackTrace", "ok": {"stackFrames": [{"id": 5, "name": "f", "line": 2, "column": 1, "source": {"path": "$ROOT/proj/app.py"}}], "totalFrames": 1}}, {"expect": "scopes", "ok": {"scopes": [{"name": "Locals", "variablesReference": 9}]}}, {"expect": "variables", "ok": {"variables": [{"name": "count", "value": "3", "variablesReference": 0}]}}, {"expect": "dataBreakpointInfo", "args": {"variablesReference": 9, "name": "count"}, "ok": {"dataId": "x1", "description": "count", "accessTypes": ["write"], "canPersist": false}}, {"expect": "setDataBreakpoints", "args": {"breakpoints": [{"dataId": "x1"}]}, "ok": {"breakpoints": [{"verified": true}]}}, {"expect": "dataBreakpointInfo", "args": {"variablesReference": 9, "name": "tmp"}, "ok": {"dataId": null, "description": "tmp cannot be watched"}}, {"expect": "continue", "ok": {"allThreadsContinued": true}}, {"event": "stopped", "body": {"reason": "data breakpoint", "threadId": 1, "allThreadsStopped": true}}, {"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}, {"expect": "stackTrace", "ok": {"stackFrames": [{"id": 5, "name": "f", "line": 2, "column": 1, "source": {"path": "$ROOT/proj/app.py"}}], "totalFrames": 1}}, {"expect": "scopes", "ok": {"scopes": [{"name": "Locals", "variablesReference": 9}]}}, {"expect": "variables", "ok": {"variables": [{"name": "count", "value": "3", "variablesReference": 0}]}}, {"expect": "setDataBreakpoints", "args": {"breakpoints": []}, "ok": {"breakpoints": []}}, {"expect": "disconnect", "ok": {}}, {"die": true}]}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "debug/trust", "params": {"root": "$ROOT/proj", "trusted": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "debug/start", "params": {"root": "$ROOT/proj", "config": "launch:0", "adapters": [{"id": "mocka", "name": "Mock A", "types": ["mocka"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/a.json"]}}]}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"session": "$capture:s"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-state", "data": {"sessions": [{"id": "$s", "state": "stopped"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "debug/data-breakpoint", "params": {"op": "add", "session": "$s", "reference": 9, "name": "count"}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": {"session": "$s", "breakpoints": [{"data_id": "x1", "description": "count", "verified": true}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "debug/data-breakpoint", "params": {"op": "add", "session": "$s", "reference": 9, "name": "tmp"}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "error": {"message": "tmp cannot be watched"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "debug/control", "params": {"session": "$s", "op": "continue"}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": true}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-state", "data": {"sessions": [{"id": "$s", "state": "stopped", "reason": "data breakpoint"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "debug/data-breakpoint", "params": {"op": "remove", "session": "$s", "data_id": "x1"}}}
+{"do": "expect", "conn": "e", "json": {"id": 7, "result": {"session": "$s", "breakpoints": []}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 8, "method": "debug/control", "params": {"session": "$s", "op": "stop"}}}
+{"do": "expect", "conn": "e", "json": {"id": 8, "result": true}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-ended", "data": {"session": "$s"}}, "within_ms": 10000}

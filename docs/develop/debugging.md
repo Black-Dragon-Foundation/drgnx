@@ -219,6 +219,16 @@ root>.json`, written atomically. If the file is damaged, it is moved aside to `â
 - **Exception filters:** the ones chosen are remembered per adapter type; otherwise the adapter's defaults.
 - **Run to Cursor:** a breakpoint for one session only. It is never shown or saved, and goes at that session's next
   stop or end. The registry then sends the file again.
+- **Triggered breakpoints** (`Op::Trigger {id, by}`, `triggered_by` in the saved store): left out of a session's
+  `send_list` until that session stops on the trigger. `Store::hit(session, hitBreakpointIds)` maps the adapter's
+  ids back through `bound` and arms what they trigger for that session alone; the registry sends those files again at
+  the stop. A session's arming goes when it ends; the view's `waiting` is true while no session has armed it.
+  Removing a trigger makes what it held plain again (`drain_touched` names those files to send).
+- **Data breakpoints** (`debug/data-breakpoint {op: add|remove|list, session, reference, name | view, node,
+  access_type?, data_id?}`): `dataBreakpointInfo` names the variable (no `dataId`: refused with the adapter's
+  `description`), then the session's whole list goes in `setDataBreakpoints`. They live in the store per session
+  (`data_add`, `data_answer`, `data_view`), never saved, and go when it ends; the Run and Debug view lists them under
+  Breakpoints (`kind: "data"`). Adapters without `supportsDataBreakpoints` are refused.
 
 The registry starts each session with the store's breakpoints, and sends a changed file to every session of the
 root at once. It tells the editors with the `debug-breakpoints` event: the file's view, with its root. The editors use `debug/breakpoints` (`{root, path?, op?}`: an operation by id, answered with the file's view) and

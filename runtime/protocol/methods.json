@@ -11628,7 +11628,7 @@
       "params": {
         "$defs": {
           "DebugBreakpointOp": {
-            "description": "One change to the breakpoint store, by id: `add` (PATH, LINE; the breakpoint already on that line if any),\n`remove` (ID), `edit` (ID and the fields given; an empty text clears one), `move` (ID, LINE: the saved line),\n`add-function` (NAME, CONDITION) and `remove-function` (NAME).",
+            "description": "One change to the breakpoint store, by id: `add` (PATH, LINE; the breakpoint already on that line if any),\n`remove` (ID), `edit` (ID and the fields given; an empty text clears one), `move` (ID, LINE: the saved line),\n`add-function` (NAME, CONDITION), `remove-function` (NAME) and `trigger` (ID is triggered by TRIGGERED_BY: sent to\na session only once it has stopped on that breakpoint; none: a plain breakpoint again).",
             "properties": {
               "adapter": {
                 "description": "`filter`'s adapter type.",
@@ -11689,6 +11689,15 @@
               "path": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "triggered_by": {
+                "description": "`trigger`'s triggering breakpoint.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               }
@@ -12163,6 +12172,90 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "boolean",
         "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a session's data breakpoints (Break on Value Change): watch a variable as the adapter's dataBreakpointInfo names it, or drop one; they last as long as the session",
+      "name": "debug/data-breakpoint",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/data-breakpoint`: a session's data breakpoints (Break on Value Change). `add` watches variable NAME of the\ncontainer REFERENCE in SESSION (or the variable NODE of the Run and Debug view VIEW), for ACCESS_TYPE (`write`\nby default; `read`, `readWrite` where the adapter has them); `remove` drops DATA_ID; `list` changes nothing. They\nlast as long as the session.",
+        "properties": {
+          "access_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "node": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "op": {
+            "type": "string"
+          },
+          "reference": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "op"
+        ],
+        "title": "DebugDataBreakpoint",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/data-breakpoint`'s answer: SESSION's data breakpoints, `{data_id, description, access_type?, verified,\nmessage?}` in order.",
+        "properties": {
+          "breakpoints": {
+            "items": true,
+            "type": "array"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "breakpoints"
+        ],
+        "title": "DebugDataBreakpoints",
+        "type": "object"
       },
       "writes": false
     },

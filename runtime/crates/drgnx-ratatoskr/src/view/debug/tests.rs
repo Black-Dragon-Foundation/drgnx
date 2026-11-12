@@ -37,6 +37,7 @@ fn stop(epoch: u64, locals: Vec<Value>) -> Stop {
             },
         ],
         exception: None,
+        hit: vec![],
     }
 }
 
@@ -394,7 +395,13 @@ fn breakpoints_section() {
                 json!({"id": 3, "line": 12, "enabled": true, "verified": true}),
                 json!({"id": 4, "line": 20, "enabled": false, "verified": false,
                        "message": "no code here", "condition": "y"}),
+                json!({"id": 5, "line": 30, "enabled": true, "verified": false,
+                       "triggered_by": 3, "waiting": true}),
             ],
+        )],
+        data: vec![(
+            "s1".into(),
+            json!({"data_id": "x1", "description": "count", "verified": true, "access_type": "readWrite"}),
         )],
     };
     let ls = lines(&Input {
@@ -426,7 +433,23 @@ fn breakpoints_section() {
         .filter(|l| l.parent.as_deref() == Some("section:breakpoints"))
         .map(|l| l.id.as_str())
         .collect();
-    assert_eq!(order, ["x:python:raised", "fn:main", "b:3", "b:4"]);
+    assert_eq!(
+        order,
+        ["x:python:raised", "fn:main", "b:3", "b:4", "b:5", "d:s1:x1"]
+    );
+    // a triggered breakpoint says what it waits for
+    let b5 = line(&ls, "b:5");
+    assert_eq!(b5.detail.as_deref(), Some("waits for app.py:12"));
+    assert!(b5.fields.contains(&("triggered_by", json!(3))));
+    // a data breakpoint: its session's, removed by id
+    let d = line(&ls, "d:s1:x1");
+    assert_eq!(
+        (d.kind, d.label.as_str(), d.detail.as_deref()),
+        ("data", "count", Some("read or write"))
+    );
+    assert!(d.fields.contains(&("session", json!("s1"))));
+    assert!(d.fields.contains(&("data_id", json!("x1"))));
+    assert!(!d.dim);
 }
 
 /// A closed section shows its header alone; the model has a node per line, `expanded` when open, with its parent and

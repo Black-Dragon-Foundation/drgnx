@@ -151,6 +151,8 @@
         (debug-set-value "<f2>")
         (debug-copy-value "C-c")
         (debug-copy-expression :none "a variable's right-click menu; the palette")
+        (debug-break-on-value-change :none "a variable's right-click menu; the palette")
+        (debug-breakpoint-trigger :none "a breakpoint's right-click menu; the palette")
         (debug-add-to-watch :none "a variable's right-click menu; the palette")
         (debug-watch-add :none "the Watch header's +; the palette")
         (debug-watch-edit :none "a watch's right-click menu; the palette")

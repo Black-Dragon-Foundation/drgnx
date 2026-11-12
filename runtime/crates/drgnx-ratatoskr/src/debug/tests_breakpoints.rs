@@ -1,6 +1,6 @@
 //! The breakpoint store, without sessions: operations by id, what the adapters made of them, persistence.
 
-use super::breakpoints::{Change, Op, Store, fit};
+use super::breakpoints::{Change, DataBp, Op, Store, fit};
 use serde_json::{Value, json};
 
 fn add(path: &str, line: u32) -> Op {
@@ -304,4 +304,115 @@ fn function_breakpoints_by_name() {
         name: "main".into(),
     });
     assert_eq!(s.functions(), vec![json!({"name": "run"})]);
+}
+
+#[test]
+fn a_triggered_breakpoint_waits_for_its_trigger_in_each_session() {
+    let mut s = Store::open(None);
+    let a = s.apply(add("/p/a.py", 2)).unwrap().id.unwrap();
+    let b = s.apply(add("/p/a.py", 4)).unwrap().id.unwrap();
+    let c = s.apply(add("/p/b.py", 7)).unwrap().id.unwrap();
+    assert!(s.apply(Op::Trigger { id: b, by: Some(a) }).is_some());
+    assert!(s.apply(Op::Trigger { id: c, by: Some(a) }).is_some());
+    // not by itself, nor by a breakpoint that is not there
+    assert!(s.apply(Op::Trigger { id: a, by: Some(a) }).is_none());
+    assert!(
+        s.apply(Op::Trigger {
+            id: a,
+            by: Some(99)
+        })
+        .is_none()
+    );
+    assert_eq!(s.send_list("d1", "/p/a.py"), vec![json!({"line": 2})]);
+    assert!(s.send_list("d1", "/p/b.py").is_empty());
+    assert_eq!(bp(&s, "/p/a.py", b)["triggered_by"], a);
+    assert_eq!(bp(&s, "/p/a.py", b)["waiting"], true);
+    assert_eq!(bp(&s, "/p/a.py", a)["waiting"], false);
+    // d1's adapter knows A as its breakpoint 11, and d1 stops on it
+    s.answer("d1", "/p/a.py", &[json!({"id": 11, "verified": true})]);
+    let mut paths = s.hit("d1", &[11]);
+    paths.sort();
+    assert_eq!(paths, ["/p/a.py", "/p/b.py"]);
+    assert_eq!(
+        s.send_list("d1", "/p/a.py"),
+        vec![json!({"line": 2}), json!({"line": 4})]
+    );
+    assert_eq!(s.send_list("d1", "/p/b.py"), vec![json!({"line": 7})]);
+    assert_eq!(bp(&s, "/p/a.py", b)["waiting"], false);
+    // another session still waits for its own stop there
+    assert_eq!(s.send_list("d2", "/p/a.py"), vec![json!({"line": 2})]);
+    assert!(s.hit("d1", &[11]).is_empty(), "armed once");
+    assert!(
+        s.hit("d1", &[42]).is_empty(),
+        "not a breakpoint of the store"
+    );
+    // the session ends: the next one waits again
+    s.ended("d1");
+    assert_eq!(s.send_list("d1", "/p/a.py"), vec![json!({"line": 2})]);
+    // cleared: a plain breakpoint again
+    assert!(s.apply(Op::Trigger { id: b, by: None }).is_some());
+    assert_eq!(
+        s.send_list("d3", "/p/a.py"),
+        vec![json!({"line": 2}), json!({"line": 4})]
+    );
+    // the trigger removed: what it held waits for nothing, and its file is touched to be sent again
+    s.drain_touched();
+    s.apply(Op::Remove { id: a });
+    assert!(bp(&s, "/p/b.py", c).get("triggered_by").is_none());
+    assert_eq!(s.send_list("d3", "/p/b.py"), vec![json!({"line": 7})]);
+    let mut touched = s.drain_touched();
+    touched.sort();
+    assert_eq!(touched, ["/p/a.py", "/p/b.py"]);
+}
+
+#[test]
+fn data_breakpoints_are_one_sessions_and_go_with_it() {
+    let mut s = Store::open(None);
+    let x = DataBp {
+        data_id: "x1".into(),
+        description: "count".into(),
+        access_type: None,
+    };
+    assert!(s.data_add("d1", x.clone()));
+    assert!(!s.data_add("d1", x.clone()), "once");
+    assert!(s.data_add(
+        "d1",
+        DataBp {
+            data_id: "x2".into(),
+            description: "total".into(),
+            access_type: Some("readWrite".into()),
+        }
+    ));
+    assert_eq!(
+        s.data_list("d1"),
+        vec![
+            json!({"dataId": "x1"}),
+            json!({"dataId": "x2", "accessType": "readWrite"})
+        ]
+    );
+    assert!(s.data_list("d2").is_empty());
+    s.data_answer(
+        "d1",
+        &[
+            json!({"verified": true}),
+            json!({"verified": false, "message": "no room"}),
+        ],
+    );
+    let shown = s.data_view();
+    assert_eq!(shown.len(), 2);
+    assert_eq!(
+        shown[0],
+        (
+            "d1".to_owned(),
+            json!({"data_id": "x1", "description": "count", "verified": true})
+        )
+    );
+    assert_eq!(shown[1].1["message"], "no room");
+    assert_eq!(shown[1].1["access_type"], "readWrite");
+    assert!(s.data_remove("d1", "x1"));
+    assert!(!s.data_remove("d1", "x1"));
+    assert_eq!(s.data_list("d1").len(), 1);
+    s.ended("d1");
+    assert!(s.data_list("d1").is_empty());
+    assert!(s.data_view().is_empty());
 }

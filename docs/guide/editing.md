@@ -110,6 +110,13 @@ column shows (`auto`: while the file has breakpoints or a session runs). Keys: V
 Emacs `C-x C-a` and `C-b` (toggle), `C-c` (condition), `C-l` (logpoint), `C-e` (enable), `C-u` (Run to Cursor), as
 GUD has them; Vim `SPC d` and `b`, `B`, `l`, `e`, `c`.
 
+In the Run and Debug view's Breakpoints, **Triggered By…** (on a breakpoint) makes it wait for another: a session
+does not stop on it until it has stopped on the one you picked ("waits for app.py:12" until then; "(none)" makes it a
+plain breakpoint again). **Break on Value Change** (on a variable, while stopped) stops the program when that
+variable changes, where the adapter can watch it (CodeLLDB and lldb-dap can; debugpy and the JavaScript debugger
+cannot, and the command says so; when the adapter cannot watch one variable, its own reason is shown). It is listed under Breakpoints with what it watches, lasts as long
+as its session, and `RET` on it removes it. Both are in the palette.
+
 Every session is recorded, against a snapshot of the files as they were when it started. **Add Probe…** records an
 expression each time its line runs, without stopping the program and without printing anything; **Probe the
 Result…** records what the line assigns, on the next line that runs (a probe runs before its line). A probe is a

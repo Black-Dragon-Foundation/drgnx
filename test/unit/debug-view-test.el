@@ -40,12 +40,16 @@
                                                 '("session" . "d1") '("thread" . 1) '("frame" . 1000))
                                        (funcall node "section:breakpoints" "section" 1 nil '("label" . "BREAKPOINTS") '("openable" . 1))
                                        (funcall node "b:3" "breakpoint" 0 "section:breakpoints" '("label" . "a.py:3")
-                                                '("ticked" . 1) '("id" . 3)))
+                                                '("ticked" . 1) '("id" . 3))
+                                       (funcall node "b:4" "breakpoint" 0 "section:breakpoints" '("label" . "a.py:9")
+                                                '("ticked" . 1) '("id" . 4))
+                                       (funcall node "d:d1:x1" "data" 0 "section:breakpoints" '("label" . "count")
+                                                '("session" . "d1") '("data_id" . "x1")))
                         :edges []
                         :lists (vector (list :name "order"
                                              :ids ["section:variables" "v:d1:Locals" "v:d1:Locals/n" "v:d1:Locals/obj"
                                                    "v:d1:Locals/old" "section:callstack" "f:d1:1:0"
-                                                   "section:breakpoints" "b:3"])))))))))
+                                                   "section:breakpoints" "b:3" "b:4" "d:d1:x1"])))))))))
 
 (defun debug-view-test--rows ()
   "The hub's rows of that model, each row's id over all of it."
@@ -53,7 +57,8 @@
                             :props (list (list 0 (length (cadr r)) "drgnx-work-id" (car r)))))
           '(("section:variables" "▾ VARIABLES") ("v:d1:Locals" "  ▾ Locals") ("v:d1:Locals/n" "      n: 5")
             ("v:d1:Locals/obj" "    ▸ obj: Obj") ("v:d1:Locals/old" "    ▸ old: 1") ("section:callstack" "▾ CALL STACK")
-            ("f:d1:1:0" "    main") ("section:breakpoints" "▾ BREAKPOINTS") ("b:3" "    [x] ● a.py:3"))))
+            ("f:d1:1:0" "    main") ("section:breakpoints" "▾ BREAKPOINTS") ("b:3" "    [x] ● a.py:3")
+            ("b:4" "    [x] ● a.py:9") ("d:d1:x1" "    ◆ count"))))
 
 (defmacro debug-view-test--with (&rest body)
   "BODY in the view's buffer attached as the hub-fed view `debug' of /p, the model and rows applied.  CALLS holds what
@@ -137,6 +142,40 @@ node it goes to the first child; an old stop's node does not open."
     (debug-view-test--goto "b:3")
     (drgnx-debug-view-activate)
     (should (equal (list :call "debug/breakpoints" (list :root "/p" :op (list :op "edit" :id 3 :enabled :false)))
+                   (car calls)))))
+
+(ert-deftest drgnx-debug-view/break-on-value-change-and-remove-it ()
+  "Break on Value Change asks the hub for a data breakpoint on the variable at point; a data breakpoint's row removes
+it."
+  (debug-view-test--with
+    (debug-view-test--goto "v:d1:Locals/n")
+    (setq calls nil)
+    (drgnx-debug-break-on-value-change)
+    (should (equal (cons "debug/data-breakpoint" (list :op "add" :view drgnx-debug-view-id :node "v:d1:Locals/n"))
+                   (car calls)))
+    (debug-view-test--goto "b:3")
+    (should-error (drgnx-debug-break-on-value-change) :type 'user-error)
+    (debug-view-test--goto "d:d1:x1")
+    (setq calls nil)
+    (drgnx-debug-view-activate)
+    (should (equal (list :call "debug/data-breakpoint" (list :op "remove" :session "d1" :data_id "x1"))
+                   (car calls)))))
+
+(ert-deftest drgnx-debug-view/a-breakpoint-triggered-by-another ()
+  "Triggered By… picks the breakpoint that arms this one, from the others in the view; \"none\" makes it plain again."
+  (debug-view-test--with
+    (debug-view-test--goto "b:4")
+    (setq calls nil)
+    (let ((offered nil))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt coll &rest _) (setq offered (all-completions "" coll)) "a.py:3")))
+        (drgnx-debug-breakpoint-trigger))
+      (should (equal offered '("(none)" "a.py:3"))))
+    (should (equal (list :call "debug/breakpoints" (list :root "/p" :op (list :op "trigger" :id 4 :triggered_by 3)))
+                   (car calls)))
+    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "(none)")))
+      (drgnx-debug-breakpoint-trigger))
+    (should (equal (list :call "debug/breakpoints" (list :root "/p" :op (list :op "trigger" :id 4)))
                    (car calls)))))
 
 (ert-deftest drgnx-debug-view/filter-on-typing ()

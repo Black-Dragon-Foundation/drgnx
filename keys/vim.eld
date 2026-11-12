@@ -165,6 +165,8 @@
         (debug-set-value "c")
         (debug-copy-value "y")
         (debug-copy-expression "Y")
+        (debug-break-on-value-change :none "a variable's right-click menu; the palette")
+        (debug-breakpoint-trigger :none "a breakpoint's right-click menu; the palette")
         (debug-add-to-watch "a")
         (debug-watch-add "SPC d w")
         (debug-watch-edit :none "the palette")
