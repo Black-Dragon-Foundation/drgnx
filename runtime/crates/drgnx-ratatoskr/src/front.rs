@@ -947,6 +947,11 @@ impl Front {
             | Params::DebugRunToCursor(_)) => crate::debug::wire::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
+            // what-if forks (`debug/fork*`, `debug/compare`)
+            p @ (Params::DebugFork(_)
+            | Params::DebugForkRun(_)
+            | Params::DebugForkDrop(_)
+            | Params::DebugCompare(_)) => crate::debug::fork_wire::serve(self, p).await,
             // recorded runs and probes (`debug/run*`, `debug/probe/op`)
             p @ (Params::DebugProbeOp(_)
             | Params::DebugRunsList(_)

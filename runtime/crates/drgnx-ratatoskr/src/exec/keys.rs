@@ -157,6 +157,17 @@ impl drgnx_px::owner::KeySource for Source {
     }
 }
 
+/// The static `drgnx-key` for a podman architecture (`amd64`, `arm64`), as `drgnx runtime install` names it next to
+/// the hub: `drgnx-key-<arch>-linux-musl`.
+pub fn static_key_name(podman_arch: &str) -> String {
+    let arch = if podman_arch == "arm64" {
+        "aarch64"
+    } else {
+        "x86_64"
+    };
+    format!("drgnx-key-{arch}-linux-musl")
+}
+
 /// A job's key socket: removed, and its answers stopped, when dropped.
 pub struct Socket {
     path: PathBuf,

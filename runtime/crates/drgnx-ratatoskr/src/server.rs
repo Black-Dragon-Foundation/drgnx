@@ -287,6 +287,10 @@ pub async fn run(args: ServeArgs) -> Exit {
             crate::forecast::sweep(&f).await;
         });
     }
+    // an earlier hub's what-if forks, traces and bisect slots (none outlives the hub that made it)
+    crate::debug::fork_seal::sweep(&crate::debug::fork_seal::forks_root(
+        &front.shell_env.paths_env(),
+    ));
     // the Work map follows the store's records and the clock's minutes while a map is open
     crate::clock::spawn("map:run", crate::work::map::run(front.clone()));
     crate::clock::spawn("trail:run", crate::work::trail::run(front.clone()));

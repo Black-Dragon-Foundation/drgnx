@@ -330,16 +330,17 @@ impl Net {
 const KEYED_RESTART: &str =
     "infra: the hub restarted (a keyed job's key socket and log went with it)";
 
-/// A keyed job's key socket and the `drgnx-key` that asks it, made before its launch.
+/// A keyed job's keys and the `drgnx-key` that asks for them, made before its launch: a command job's own key socket
+/// and the hub's `drgnx-key`; a container job's copy of the static one in its folder (it asks its sidecar, no socket).
 struct KeySocket {
-    socket: keys::Socket,
+    socket: Option<keys::Socket>,
     keys: Arc<keys::JobKeys>,
     bin: PathBuf,
 }
 
 /// A running keyed job's key socket (removed when the job ends) and the task that redacts its output into its log.
 struct Keyed {
-    _socket: keys::Socket,
+    _socket: Option<keys::Socket>,
     pump: tokio::task::JoinHandle<()>,
 }
 
@@ -1037,8 +1038,10 @@ impl Inner {
             let _ = std::fs::remove_dir_all(&dir);
             return Err(e);
         }
-        // admitted at once: started here, so a refused launch is the start's answer
+        // admitted at once: started here, so a refused launch is the start's answer (the queue's tick, woken only
+        // now, finds it taken; one that waits is its)
         let t = self.queue.tick(now() as u64);
+        self.queue.wake_tick();
         let mut mine = None;
         for s in t.starts {
             if s == id {
@@ -1087,7 +1090,8 @@ impl Inner {
             keyed: false,
         })?;
         self.live.add(id, session);
-        self.queue.submit(self.submit_of(id, spec), started as u64);
+        // the tick wakes after start's own: a job admitted at once is start's to launch
+        self.queue.enter(self.submit_of(id, spec), started as u64);
         Ok(())
     }
 
@@ -1387,6 +1391,7 @@ impl Inner {
         id: &str,
         dir: &Path,
         spec: &ExecSpec,
+        keyed: Option<&KeySocket>,
     ) -> Result<(draugr::Spec, Option<net::JobNetwork>), Refusal> {
         let job = spec.container.as_ref().expect("a container job");
         let podman = self
@@ -1410,6 +1415,16 @@ impl Inner {
             subdir,
             job: id.to_string(),
             net: job.net.is_some(),
+            // each key in the variable of its name, as for a command job
+            keys: keyed.map(|k| container::KeyMounts {
+                helper: k.bin.clone(),
+                vars: spec
+                    .place
+                    .keys
+                    .iter()
+                    .map(|n| (n.clone(), n.clone()))
+                    .collect(),
+            }),
             runner: None,
         };
         let (p, reference) = (
@@ -1417,10 +1432,12 @@ impl Inner {
             container::resolve(&caps, &job.image)?.to_string(),
         );
         let shell = self.hooks.shell_env.clone();
-        // A granted network is this job's relay: its sidecar (joined with the host checks and the image pull) and its
-        // proxy, started before the job.  One that cannot be given refuses the job.
+        // A granted network, or keys, is this job's relay: its sidecar (joined with the host checks and the image pull)
+        // and its proxy (for keys alone, with no host allowed), started before the job; a keyed job's key streams are
+        // answered from the hub's keys.  One that cannot be given refuses the job.
         let mut relay = None;
-        if let Some(n) = job.net {
+        if job.net.is_some() || keyed.is_some() {
+            let n = job.net;
             let px_dir = self
                 .hooks
                 .px_dir
@@ -1438,12 +1455,15 @@ impl Inner {
                 &reference,
                 &dir.join("log"),
                 net::job_web(self.hooks.nevers.as_ref()),
+                keyed.map(|k| {
+                    Arc::new(keys::Source(k.keys.clone())) as Arc<dyn drgnx_px::owner::KeySource>
+                }),
             )
             .await?;
             caps.proxy = Some(job_net);
             // a session's job asks for a host port on a card; the session's grants apply live
-            if let (Starter::Session(sid), Some(cards), Some(events)) =
-                (&spec.starter, &self.hooks.cards, jn.take_events())
+            if let (Some(_), Starter::Session(sid), Some(cards), Some(events)) =
+                (n, &spec.starter, &self.hooks.cards, jn.take_events())
             {
                 let (task, _) =
                     hostgrants::start(cards.clone(), id, sid, jn.web().clone(), events).await;
@@ -1514,8 +1534,36 @@ impl Inner {
         let socket = keys::serve(&path, jk.clone())
             .map_err(|e| setup(format!("the job's key socket {}: {e}", path.display())))?;
         Ok(KeySocket {
-            socket,
+            socket: Some(socket),
             keys: jk,
+            bin,
+        })
+    }
+
+    /// Container job ID's keys, answered through its sidecar, and its own copy (in DIR: the container relabels what it
+    /// mounts) of the static `drgnx-key` next to the hub.
+    fn container_keys(&self, id: &str, dir: &Path, spec: &ExecSpec) -> Result<KeySocket, Refusal> {
+        let from = self
+            .hooks
+            .px_dir
+            .as_deref()
+            .map(|d| d.join(keys::static_key_name(net::podman_arch())))
+            .filter(|b| b.is_file())
+            .ok_or_else(|| {
+                setup("the static drgnx-key was not found next to the hub: a keyed container job can't get its keys")
+            })?;
+        let bin = dir.join("drgnx-key");
+        std::fs::copy(&from, &bin)
+            .map_err(|e| setup(format!("drgnx-key for the job ({}): {e}", from.display())))?;
+        Ok(KeySocket {
+            socket: None,
+            keys: keys::JobKeys::new(
+                id,
+                spec.place.keys.clone(),
+                self.queue.keys().clone(),
+                dir,
+                sleipnir::keyline::KEY_WAIT,
+            ),
             bin,
         })
     }
@@ -1531,28 +1579,26 @@ impl Inner {
         spec.argv = local_argv(&spec.argv, spec.place.suite.as_ref());
         let name = self.hooks.systemd.then(|| unit::unit_name(id));
         let mut relay = None;
-        // a keyed command job asks the hub for its keys on a socket of its own, through drgnx-key in front of it
-        if !spec.place.keys.is_empty() && spec.container.is_some() {
-            return Err(setup(
-                "a keyed container job runs on a runner only, for now: its relay's key streams come next",
-            ));
-        }
+        // a keyed command job asks the hub for its keys on a socket of its own, through drgnx-key in front of it; a
+        // keyed container job asks its sidecar, through its copy of drgnx-key as the entrypoint
         let keyed = if spec.place.keys.is_empty() {
             None
+        } else if spec.container.is_some() {
+            Some(self.container_keys(id, dir, &spec)?)
         } else {
             let k = self.key_socket(id, dir, &spec)?;
             spec.argv = keys::wrapped_argv(&k.bin, &spec.place.keys, &spec.argv);
             Some(k)
         };
-        let key_env = keyed.as_ref().map(|k| {
+        let key_env = keyed.as_ref().and_then(|k| k.socket.as_ref()).map(|s| {
             (
                 "DRGNX_KEY_SOCK".to_string(),
-                k.socket.path().to_string_lossy().into_owned(),
+                s.path().to_string_lossy().into_owned(),
             )
         });
         let (inner, status) = match &spec.starter {
             _ if spec.container.is_some() => {
-                let (s, r) = self.container_spec(id, dir, &spec).await?;
+                let (s, r) = self.container_spec(id, dir, &spec, keyed.as_ref()).await?;
                 relay = r;
                 (s, None)
             }
@@ -1597,7 +1643,8 @@ impl Inner {
                     net: NetCell::ProviderAndPackages,
                     sockets: keyed
                         .iter()
-                        .map(|k| k.socket.path().to_path_buf())
+                        .filter_map(|k| k.socket.as_ref())
+                        .map(|s| s.path().to_path_buf())
                         .collect(),
                     browser: None,
                 };

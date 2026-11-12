@@ -220,7 +220,8 @@ keys it needs (names only); drgnx gets them to the job on the runner without wri
   within 60 s ends the job `infra: key not delivered`, never red. Nothing of the keys is written to disk: the job's
   output reaches its log only through the hub, which masks every key it handed out (as below), so the log, the
   result and every reply hold only the mask. A hub that restarts ends a keyed job of its own (its socket and log went
-  with it) rather than adopting it. A container job with keys still runs on a runner only, for now.
+  with it) rather than adopting it. A container job with keys runs here too: its own relay sidecar
+  (started even with no network granted) answers a copy of the static `drgnx-key` inside it, its entrypoint.
 - **What went where is recorded.** Each key sent is a `key_sent` record (the job, attempt, key name, runner and time);
   each read by the job, as the runner reports it, is a `key_use` record marked runner-reported. `runners/audit` lists
   them (by job or by key), and so does `drgnx runner audit [--key K] [--job J]` from a terminal (JSON, oldest first);

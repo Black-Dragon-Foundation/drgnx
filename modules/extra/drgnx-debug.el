@@ -13,6 +13,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-debug-gutter (expand-file-name "drgnx-debug-gutter" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-debug-fork (expand-file-name "drgnx-debug-fork" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-timeline (expand-file-name "drgnx-debug-timeline" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-bisect (expand-file-name "drgnx-debug-bisect" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-toolbar (expand-file-name "drgnx-debug-toolbar" (file-name-directory (macroexp-file-name))))
@@ -147,6 +148,7 @@ the toolbar's cards go too."
                      :teardown #'drgnx-debug--teardown
                      :setup (lambda ()
                               (drgnx-debug-mode 1)
+                              (add-hook 'drgnx-hub-event-functions #'drgnx-debug-fork--event)
                               (pcase-dolist (`(,id ,title ,fn ,doc)
                                              '((debug-start "Start Debugging…" drgnx-debug-start-or-continue "Start a session, or continue the stopped one")
                                                (debug-breakpoint "Toggle Breakpoint" drgnx-debug-gutter-toggle "A breakpoint on this line, or none")
@@ -164,6 +166,12 @@ the toolbar's cards go too."
                                                (debug-show-stop "Go to the Stopped Line" drgnx-debug-toolbar-show-stop "Show the line the session stopped at")
                                                (debug-pick-session "Select Debug Session…" drgnx-debug-toolbar-pick-session "Choose the session the controls act on")
                                                (debug-install-adapter "Install Adapter…" drgnx-debug-install-adapter "Download and install a debug adapter, checked against its pinned hash")
+                                               (debug-fork "Fork from Here…" drgnx-debug-fork "Replay the recorded run in a sealed copy to this point, change a value or the code, and run on")
+                                               (debug-fork-show "Show What-if" drgnx-debug-fork-show "A fork beside its run: matched hits, the first difference, the values after")
+                                               (debug-fork-open "Open Fork" drgnx-debug-fork-open "This file as the fork has it, to edit a code what-if")
+                                               (debug-fork-run "Run Fork" drgnx-debug-fork-run "Run a code what-if once its tree is edited")
+                                               (debug-fork-take "Take Fork's Change…" drgnx-debug-fork-take "Each file the fork changed as a review card: Apply puts it in your buffer")
+                                               (debug-fork-drop "Drop Fork" drgnx-debug-fork-drop "The fork goes, with its tree")
                                                (debug-convert-dape "Convert dape Configurations…" drgnx-debug-convert-dape-configs "Turn your dape configurations into launch configurations, once")))
                                 (drgnx-command-define id :category "Debug" :title title :command fn :doc doc))
                               ;; the toolbar (drgnx-debug-toolbar.el): docked in the tab row, the status bar's segment

@@ -14,6 +14,12 @@ pub mod bisect_card;
 pub mod bisect_wire;
 pub mod blocked;
 pub mod breakpoints;
+pub mod compare;
+pub mod fork;
+pub mod fork_hub;
+pub mod fork_mux;
+pub mod fork_seal;
+pub mod fork_wire;
 pub mod install;
 pub mod launch;
 pub mod ports;
@@ -38,6 +44,14 @@ mod tests_blocked;
 mod tests_blocked_live;
 #[cfg(test)]
 mod tests_breakpoints;
+#[cfg(test)]
+mod tests_fork;
+#[cfg(test)]
+mod tests_fork_hub;
+#[cfg(test)]
+mod tests_fork_live;
+#[cfg(test)]
+mod tests_fork_seal;
 #[cfg(test)]
 mod tests_install;
 #[cfg(test)]

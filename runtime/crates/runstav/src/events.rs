@@ -378,6 +378,11 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "a debug session ended, with why and its program's exit code"
         ),
         event!(
+            "debug-fork",
+            crate::methods::debug_fork::DebugForkView,
+            "a what-if fork as it goes (preparing, editing, running, done, failed, dropped), to every editor: when done, matched on N of M hits, the first difference, each probe's values then and now, how each side went on"
+        ),
+        event!(
             "view-model",
             crate::methods::view::ViewModel,
             "what changed in one hub-fed view's model, to its connection only: the model as an object, {\"ops\": [...]}, in a line that starts {\"event\":\"view-model\" so the editor hands it whole and unparsed to its replica (a reset first, after a hidden view is shown again and on view/resync with model), written before the rows built from it, which name its version"
@@ -576,6 +581,7 @@ mod tests {
                     "debug-frame",
                     "debug-terminal",
                     "debug-ended",
+                    "debug-fork",
                 ]
                 .contains(&n.as_str())
             })
@@ -590,7 +596,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 60);
+        assert_eq!(events().len(), 61);
         // names only: a value-shaped name is no key name, and nothing but `names` is taken
         let need = event("runners/need-keys").unwrap();
         assert_eq!(

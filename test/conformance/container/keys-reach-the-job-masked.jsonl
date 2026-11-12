@@ -1,0 +1,21 @@
+{"scenario": "container/keys-reach-the-job-masked", "requires": ["v1", "test-hooks", "podman", "linux"], "doc": "[B] A container job naming a listed key runs on this machine with no network granted: its own sidecar answers drgnx-key (its copy, the entrypoint) from the keys the hub holds, and the command prints the key raw, base64'd and on stderr. Its exec-done, its exec/get and its log hold only the mask; runners/audit has its key_sent on runner local; no canary value in an event or a file under the root. Needs podman and the network to pull busybox."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "set -e; podman pull -q --policy=missing docker.io/library/busybox:1.36 >/dev/null; d=$(podman image inspect --format '{{.Digest}}' docker.io/library/busybox:1.36); mkdir -p $ROOT/work; printf '(drgnx-settings :version 1 (drgnx-agents-container-images ((\"busybox\" . \"docker.io/library/busybox@%s\"))))\\n' \"$d\" > $CONFIG/settings.el; chmod 600 $CONFIG/settings.el"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "w", "hub": "h"}
+{"do": "send", "conn": "w", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "w", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "runners/keys", "params": {"keys": {"CANARY_TOKEN": "canary-ctr-key-5Wd9"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-runners-job-keys", "source": "row", "value": ["CANARY_TOKEN"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "exec/start", "params": {"argv": ["sh", "-c", "echo \"tok=$CANARY_TOKEN.\"; echo \"err=$CANARY_TOKEN.\" >&2; printf %s \"$CANARY_TOKEN\" | base64; echo end"], "cwd": "$ROOT/work", "kind": "container", "image": "busybox", "keys": ["CANARY_TOKEN"]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:keyed", "text": "$string"}}, "within_ms": 120000}
+{"do": "expect", "conn": "w", "json": {"event": "exec-done", "data": {"id": "$keyed", "status": "done", "summary": {"exit": 0, "lines": {"$contains": ["tok=*******************.", "err=*******************.", "end"]}}}}, "within_ms": 60000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "exec/get", "params": {"id": "$keyed"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$keyed", "status": "done", "summary": {"exit": 0, "lines": {"$contains": ["tok=*******************."]}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "runners/audit", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"rows": [{"kind": "sent", "job": "$keyed", "key": "CANARY_TOKEN", "runner": "local"}]}}, "within_ms": 10000}
+{"do": "count_events", "conn": "w", "for_ms": 300, "lacks": "canary-ctr-key"}
+{"do": "file_grep", "paths": ["$ROOT/**"], "absent": "canary-ctr-key"}
