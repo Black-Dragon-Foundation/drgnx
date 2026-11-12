@@ -70,6 +70,17 @@ holds (METHOD . PARAMS) of every call, in order."
         (should-error (drgnx-debug-launch-start "/p" "launch:0") :type 'user-error)))
     (should (equal (mapcar #'car calls) '("debug/start")))))
 
+;; Run Without Debugging: the start says no_debug
+(ert-deftest drgnx-debug-launch/a-start-without-debugging-says-so ()
+  (debug-launch-test--with-hub '(("debug/start" (:session "d1") (:session "d2")))
+    (cl-letf (((symbol-function 'drgnx-debug-launch-trusted-p) #'always))
+      (with-temp-buffer
+        (drgnx-debug-launch-start "/p" "launch:0" t)
+        (drgnx-debug-launch-start "/p" "launch:0")))
+    (should (equal (mapcar (lambda (c) (plist-get (cdr c) :no_debug))
+                           (seq-filter (lambda (c) (equal (car c) "debug/start")) calls))
+                   '(t nil)))))
+
 (ert-deftest drgnx-debug-launch/pick-process-sends-the-pid ()
   (debug-launch-test--with-hub '(("debug/start" (:needs ["pickProcess"]) (:session "d2")))
     (cl-letf (((symbol-function 'drgnx-debug-launch-trusted-p) #'always)

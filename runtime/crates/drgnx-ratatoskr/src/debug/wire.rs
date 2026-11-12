@@ -452,7 +452,10 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
     }
     launch::check_answers(&config, &inputs, &answers).map_err(|e| bad("inputs", e))?;
     let vars = vars(front, &p);
-    let config = launch::substitute(&config, &vars, &answers).map_err(err)?;
+    let mut config = launch::substitute(&config, &vars, &answers).map_err(err)?;
+    if p.no_debug {
+        config["noDebug"] = Value::Bool(true);
+    }
     let config_hash = super::record::config_hash(&config);
     let ty = text(&config, "type");
     let adapter = table.for_type(&ty).map_err(err)?;
@@ -768,6 +771,10 @@ async fn breakpoints(
         Some("enable-all") => {
             let on = p.op.take().and_then(|o| o.enabled).unwrap_or(true);
             d.all_breakpoints(&p.root, false, on).await;
+        }
+        Some("toggle-all") => {
+            p.op = None;
+            d.toggle_all_breakpoints(&p.root).await;
         }
         Some("remove-all") => {
             p.op = None;

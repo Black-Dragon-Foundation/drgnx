@@ -482,7 +482,9 @@ Methods (runstav `methods::debug`, the user class; served by `view::debug::serve
   children while its stop (EPOCH, default the current one) lasts; after it, the error says the stop is over.
   (Copy Value uses `clipboard` when the adapter has `supportsClipboardContext`).
 - `debug/breakpoints`' ops `filter {adapter, name, enabled}` (kept per adapter type and sent to its sessions at once),
-  `enable-all {enabled}` and `remove-all` (function breakpoints too).
+  `enable-all {enabled}`, `toggle-all` (all off when any is on, else all on: Toggle All Breakpoints) and `remove-all`
+  (function breakpoints too).
+- `debug/start`'s `no_debug` (Run Without Debugging) launches the configuration with `noDebug: true`, as VS Code does.
 
 The editor's half asks on the connection the rows come on (`drgnx-hub--events`): the hub keeps the view per
 connection. A key that opens or closes a node waits up to `drgnx-debug-view-await-limit` (12 ms) for the rows, so

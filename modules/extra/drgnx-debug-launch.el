@@ -228,8 +228,9 @@ the panel when it is this Emacs's (`:editor')."
        (list :id (plist-get data :term) :place "panel" :command ["sh"]
              :title (if-let* ((task (plist-get data :task))) (format "Task: %s" task) "Debugged program"))))))
 
-(defun drgnx-debug-launch-start (root config)
-  "Start CONFIG (an id of `debug/configs') in ROOT: trust first, then the inputs it needs; the session's id."
+(defun drgnx-debug-launch-start (root config &optional no-debug)
+  "Start CONFIG (an id of `debug/configs') in ROOT: trust first, then the inputs it needs; the session's id.
+NO-DEBUG: Run Without Debugging (the adapter launches it with `noDebug')."
   (drgnx-debug-launch--tell-trust root)
   (let ((place (append (and buffer-file-name (list :file (expand-file-name buffer-file-name)))
                        (list :line (line-number-at-pos) :col (1+ (current-column)))
@@ -239,7 +240,8 @@ the panel when it is this Emacs's (`:editor')."
     (while (not session)
       (let* ((r (drgnx-debug-launch--call-start
                  (apply #'drgnx-debug-launch--params root
-                        (append (list :config config :inputs (vconcat answers)) place))))
+                        (append (list :config config :inputs (vconcat answers))
+                                (and no-debug (list :no_debug t)) place))))
              (needs (plist-get r :needs)))
         (cond ((plist-get r :session) (setq session (plist-get r :session)))
               ((equal needs "trust")

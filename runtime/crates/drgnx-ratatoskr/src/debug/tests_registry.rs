@@ -937,3 +937,30 @@ async fn an_initialized_after_a_restart_configures_again_with_the_breakpoints_of
     let logs = m.finish().await;
     assert!(logs.iter().all(|r| r.is_ok()), "{logs:?}");
 }
+
+#[tokio::test(start_paused = true)]
+async fn toggle_all_turns_every_breakpoint_off_then_on_again() {
+    let (d, _ev, _m, _) = setup(vec![]);
+    d.breakpoints("/p", Some(add_bp("/p/a.py", 3, None)), None)
+        .await;
+    d.breakpoints("/p", Some(add_bp("/p/b.py", 7, None)), None)
+        .await;
+    // one on is enough for "on": all go off
+    assert!(!d.toggle_all_breakpoints("/p").await);
+    for path in ["/p/a.py", "/p/b.py"] {
+        assert_eq!(
+            d.breakpoints("/p", None, Some(path)).await["breakpoints"][0]["enabled"],
+            false,
+            "{path}"
+        );
+    }
+    // none on: all come on
+    assert!(d.toggle_all_breakpoints("/p").await);
+    for path in ["/p/a.py", "/p/b.py"] {
+        assert_eq!(
+            d.breakpoints("/p", None, Some(path)).await["breakpoints"][0]["enabled"],
+            true,
+            "{path}"
+        );
+    }
+}

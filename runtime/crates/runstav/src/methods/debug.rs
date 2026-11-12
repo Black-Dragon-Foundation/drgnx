@@ -117,6 +117,9 @@ pub struct DebugStart {
     /// each to exit 0.  Without it (a headless or daemon start) they run captured, as before.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub terminal: bool,
+    /// Run Without Debugging: the configuration launches with `noDebug: true` (its breakpoints do not stop it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_debug: bool,
 }
 
 /// One answer to `debug/start`'s `needs`: the input ID (`pickProcess` for the process picker) and its VALUE.
@@ -291,8 +294,8 @@ pub struct DebugBreakpointOp {
 }
 
 /// The operations `debug/breakpoints` knows; `filter` turns exception filter NAME of adapters of type ADAPTER on or
-/// off (ENABLED), `enable-all` sets every source breakpoint's ENABLED, `remove-all` removes them and the function
-/// breakpoints.
+/// off (ENABLED), `enable-all` sets every source breakpoint's ENABLED, `toggle-all` turns them all off when any is on,
+/// else all on, `remove-all` removes them and the function breakpoints.
 pub const BP_OPS: &[&str] = &[
     "add",
     "remove",
@@ -302,6 +305,7 @@ pub const BP_OPS: &[&str] = &[
     "remove-function",
     "filter",
     "enable-all",
+    "toggle-all",
     "remove-all",
 ];
 
@@ -520,7 +524,7 @@ fn check_breakpoints(p: &DebugBreakpoints) -> Result<(), Error> {
     if !BP_OPS.contains(&op.op.as_str()) {
         return Err(invalid(
             "op.op",
-            "one of add, remove, edit, move, add-function, remove-function, filter, enable-all, remove-all",
+            "one of add, remove, edit, move, add-function, remove-function, filter, enable-all, toggle-all, remove-all",
         ));
     }
     for (k, v) in [
@@ -551,7 +555,7 @@ fn check_breakpoints(p: &DebugBreakpoints) -> Result<(), Error> {
             need("op.enabled", op.enabled.is_some())
         }
         "enable-all" => need("op.enabled", op.enabled.is_some()),
-        "remove-all" => Ok(()),
+        "remove-all" | "toggle-all" => Ok(()),
         "move" => {
             need("op.id", op.id.is_some())?;
             need("op.line", op.line.is_some_and(|l| l > 0))

@@ -621,6 +621,19 @@ impl Debug {
 
     /// Every breakpoint of ROOT removed (REMOVE), or enabled or disabled (ENABLED): each file changed is published
     /// and sent to ROOT's sessions.
+    /// Toggle All Breakpoints: every breakpoint of ROOT off when any is on, else all on; the state it leaves.
+    pub async fn toggle_all_breakpoints(&self, root: &str) -> bool {
+        let any_on = self.store(root, |s| {
+            s.paths().iter().any(|p| {
+                s.view(p)["breakpoints"]
+                    .as_array()
+                    .is_some_and(|bs| bs.iter().any(|b| b["enabled"] == true))
+            })
+        });
+        self.all_breakpoints(root, false, !any_on).await;
+        !any_on
+    }
+
     pub async fn all_breakpoints(&self, root: &str, remove: bool, enabled: bool) {
         let ops: Vec<breakpoints::Op> = self.store(root, |s| {
             let mut ops = vec![];
