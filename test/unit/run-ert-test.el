@@ -24,10 +24,12 @@ RESULTS.log (`drgnx-run-ert-test--log')."
                   "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" dir)))
 
 (defun drgnx-run-ert-test--log (results)
-  "The last 4000 characters of what the run of `drgnx-run-ert-test--batch' writing RESULTS printed."
+  "The last 80 lines of what the run of `drgnx-run-ert-test--batch' writing RESULTS printed, each cut at 240
+characters: a backtrace's frames print whole forms, which would push its error line out of a character count."
   (let ((f (concat results ".log")))
     (if (file-exists-p f)
-        (with-temp-buffer (insert-file-contents f) (buffer-substring (max (point-min) (- (point-max) 4000)) (point-max)))
+        (let ((lines (with-temp-buffer (insert-file-contents f) (split-string (buffer-string) "\n"))))
+          (mapconcat (lambda (l) (truncate-string-to-width l 240)) (last lines 80) "\n"))
       "no output")))
 
 (defun drgnx-run-ert-test--json (file)
