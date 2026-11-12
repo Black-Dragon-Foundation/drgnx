@@ -318,6 +318,10 @@ only).
   adapter bound elsewhere (`bound_line`) sits on that line.
 - `drgnx-debug-gutter-show`: `auto` (while the file has breakpoints or a session runs in its project, from
   `debug-state`), `always` or `never`.
+- A new major mode (`normal-mode` in a revert that does not keep the modes) would kill the column's locals and
+  leave its margin claim's window hooks behind: `change-major-mode-hook` turns the column off first, and the
+  module's `find-file-hook` (which a revert runs) turns it on again. The tests visit `a.py` with no mode lookup, so
+  python-mode's first use does not leave `after-load` forms in the leak census.
 - Mouse: `mouse-1` in the column toggles (`drgnx-debug-gutter-toggle`), a drag from a mark moves it
   (`drgnx-debug-gutter-drag`: `move` to its saved line plus the lines dragged; `down-mouse-1` there selects no
   text), `S-mouse-1` adds a logpoint, `mouse-3`

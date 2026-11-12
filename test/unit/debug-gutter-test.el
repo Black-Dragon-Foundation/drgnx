@@ -28,7 +28,10 @@
                   1))
                ((symbol-function 'drgnx-hub-running-p) (lambda () t))
                ((symbol-function 'drgnx-debug-launch-root) (lambda () dir)))
-       (let ((buf (find-file-noselect file)))
+       ;; the column needs a file, not Python: python-mode's first use would install `after-load' forms for grep and
+       ;; ffap for the rest of the process
+       (let* ((auto-mode-alist nil) (magic-mode-alist nil) (interpreter-mode-alist nil)
+              (buf (find-file-noselect file)))
          (unwind-protect
              (progn (set-window-buffer (selected-window) buf)
                     (with-current-buffer buf (drgnx-debug-gutter-mode 1) ,@body))
@@ -46,7 +49,7 @@ failed \"no hub\" through it).  The hub is not stubbed."
          buf)
     (write-region "x = 1\n" nil file nil 'silent)
     (unwind-protect
-        (progn (setq buf (find-file-noselect file))
+        (progn (setq buf (let ((auto-mode-alist nil) (magic-mode-alist nil)) (find-file-noselect file)))
                (with-current-buffer buf
                  (drgnx-debug-gutter-mode 1)
                  (should drgnx-debug-gutter-mode)
@@ -256,7 +259,25 @@ inline breakpoint there.  None with the setting off, or once the session runs."
       (goto-char (point-min))
       (insert "new\n")
       (should (equal (debug-gutter-test--marks) '((6 . bp))))
+      (revert-buffer t t t)                 ; auto-revert's way: the modes stay
+      (should (equal (debug-gutter-test--marks) '((5 . bp)))))))
+
+(ert-deftest drgnx-debug-gutter/a-new-major-mode-turns-the-column-off-cleanly ()
+  "A revert that sets the major mode again (`normal-mode') kills the buffer's locals: the column turns off first, its
+claim on the margin and the margin's window hooks released; the module's `find-file-hook' (here, the fixture's) turns
+it on again with the store's lines."
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0))
+    (debug-gutter-test--with 10
+      (drgnx-debug-gutter-toggle 5)
+      (goto-char (point-min))
+      (insert "new\n")
       (revert-buffer t t)
+      (should-not drgnx-debug-gutter-mode)
+      (should-not (debug-gutter-test--marks))
+      (should-not (memq #'drgnx-margins--window-buffer-changed window-buffer-change-functions))
+      (let ((find-file-hook (list (lambda () (drgnx-debug-gutter-mode 1)))))
+        (revert-buffer t t))
+      (should drgnx-debug-gutter-mode)
       (should (equal (debug-gutter-test--marks) '((5 . bp)))))))
 
 (ert-deftest drgnx-debug-gutter/a-moved-line-from-the-hub-moves-the-mark ()

@@ -1021,6 +1021,11 @@ opens its menu.")
   "Whether some buffer has the column."
   (seq-some (lambda (b) (buffer-local-value 'drgnx-debug-gutter-mode b)) (buffer-list)))
 
+(defun drgnx-debug-gutter--major-mode-change ()
+  "`change-major-mode-hook': the buffer's locals are about to go (a new major mode, `normal-mode' in a revert), so the
+column turns off first, releasing its margin claim and the hooks; the module's `find-file-hook' turns it on again."
+  (drgnx-debug-gutter-mode -1))
+
 (define-minor-mode drgnx-debug-gutter-mode
   "The breakpoint column in this file's left margin (`drgnx-debug-gutter-show')."
   :group 'drgnx :keymap drgnx-debug-gutter-mode-map
@@ -1028,6 +1033,7 @@ opens its menu.")
       (progn
         (add-hook 'after-save-hook #'drgnx-debug-gutter--saved nil t)
         (add-hook 'after-revert-hook #'drgnx-debug-gutter--reverted nil t)
+        (add-hook 'change-major-mode-hook #'drgnx-debug-gutter--major-mode-change nil t)
         (add-hook 'drgnx-margins-changed-functions #'drgnx-debug-gutter--restring)
         (add-hook 'drgnx-hub-event-functions #'drgnx-debug-gutter--event)
         (add-hook 'pre-redisplay-functions #'drgnx-debug-gutter--pool-update nil t)
@@ -1038,6 +1044,7 @@ opens its menu.")
         (drgnx-debug-gutter--claim))
     (remove-hook 'after-save-hook #'drgnx-debug-gutter--saved t)
     (remove-hook 'after-revert-hook #'drgnx-debug-gutter--reverted t)
+    (remove-hook 'change-major-mode-hook #'drgnx-debug-gutter--major-mode-change t)
     (remove-hook 'pre-redisplay-functions #'drgnx-debug-gutter--pool-update t)
     (remove-hook 'window-scroll-functions #'drgnx-debug-gutter--pool-scrolled t)
     (drgnx-debug-gutter--pool-clear)
