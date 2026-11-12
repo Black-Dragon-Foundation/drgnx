@@ -676,6 +676,13 @@ its next step, or the next repeat of a `measure`, fails the row with "the scenar
 `measure`, how many repeats it did and their mean), and the run goes on with the next row. A step in flight is not cut
 short: it stops at its own `within_ms`.
 
+**What a failure asks** (`"on_failure": [{"conn": NAME, "json": REQUEST}, …]` in the header, each request with an
+`id`): when a row that is not `pending` fails, after the steps' timing and the hubs' log tails (loro's block
+diagnostics left out), each request is sent on its connection (default `c`, captures substituted) and its answer, the
+line with its id within 3 s, is added to the failure (6000 characters of it at most). A row whose red comes only on
+another machine (the macOS lane) names there what the next run must show; the gate-run rows ask `job/status`,
+`exec/list` and `orch/evidence`. Unit test `scenario::tests::on_failure_is_requests_with_ids`.
+
 **Tags** (`requires`): `v1` (hello v1: every row), `sudo` (euid 0, or `sudo -n true` succeeds), `test-hooks` (the
 binary's `version --json` says `"test_hooks": true`), `linux`, `macos`, `perf`, `agent-locks`, `podman` (`podman` is on
 the PATH; an excused skip otherwise), `rootless` (`podman info` says the podman is rootless, as the networked container
