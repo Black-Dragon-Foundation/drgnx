@@ -142,6 +142,8 @@
         (debug-bisect-ask-agent :none "the card's Ask the Agent")
         (debug-bisect-narrow :none "the card's Narrow")
         (debug-bisect-cancel :none "the card's Cancel")
+        (debug-origin :none "the palette; Alt-click a name at a recorded stop")
+        (debug-origin-open "RET" :map drgnx-debug-origin-card-mode-map)
         (debug-install-adapter :none "the palette")
         (toggle-indent-guides :none "the palette")
         (toggle-smooth-scrolling :none "the palette")
