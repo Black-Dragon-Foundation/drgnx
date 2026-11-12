@@ -300,6 +300,16 @@ struct Inner {
     nets: Mutex<std::collections::HashMap<String, NetStop>>,
     /// The running jobs that write a progress file (`--progress FILE`): the file and what the editors were sent of it.
     progress: Mutex<std::collections::HashMap<String, (PathBuf, progress::Watch)>>,
+    unsettled: Arc<Unsettled>,
+}
+
+/// The ended jobs whose end the reader of the ends (the gates' evidence, [`Runner::settling`]) has not taken yet, by
+/// id and folder: such a job is still busy in its tree ([`Runner::busy_in`]), so a gate never judges between a run's
+/// end and its evidence.  Kept only once a reader said it takes them.
+#[derive(Default)]
+struct Unsettled {
+    on: std::sync::atomic::AtomicBool,
+    jobs: Mutex<Vec<(String, PathBuf)>>,
 }
 
 /// What ends a networked job from outside its watch: the reason, and who to tell once its end is recorded.
@@ -505,6 +515,7 @@ pub struct Runner {
     no_cache: Mutex<Vec<String>>,
     /// The worktrees of the sessions whose `exec/start` is on its way (one entry per start; [`Runner::starting`]).
     starting: Mutex<Vec<PathBuf>>,
+    unsettled: Arc<Unsettled>,
 }
 
 impl Default for Runner {
@@ -515,6 +526,7 @@ impl Default for Runner {
             events: tokio::sync::broadcast::channel(256).0,
             no_cache: Mutex::default(),
             starting: Mutex::default(),
+            unsettled: Arc::default(),
         }
     }
 }
@@ -747,6 +759,7 @@ impl Runner {
                 progress: Mutex::default(),
                 live: self.live.clone(),
                 events: self.events.clone(),
+                unsettled: self.unsettled.clone(),
             });
             fresh = Some(links);
             inner
@@ -925,14 +938,37 @@ impl Runner {
         }
     }
 
-    /// Whether a run in TOP (or a folder inside it) has no result yet: a session's `exec/start` there on its way, or a
-    /// job there queued or running.
+    /// The caller takes every job's end from the events and says when it has ([`Runner::settled`]): from now on a job
+    /// that ended is busy in its tree until then.
+    pub fn settling(&self) {
+        self.unsettled.on.store(true, Ordering::SeqCst);
+    }
+
+    /// The end of job ID was taken (its evidence recorded, or it is no one's).
+    pub fn settled(&self, id: &str) {
+        self.unsettled.jobs.lock().unwrap().retain(|(j, _)| j != id);
+    }
+
+    /// Every end so far was taken (the reader missed some: they are no one's evidence).
+    pub fn settled_all(&self) {
+        self.unsettled.jobs.lock().unwrap().clear();
+    }
+
+    /// Whether a run in TOP (or a folder inside it) has no result yet: a session's `exec/start` there on its way, a
+    /// job there queued or running, or one that ended whose end the reader of the ends has not taken yet.
     pub fn busy_in(&self, top: &Path) -> bool {
         self.starting
             .lock()
             .unwrap()
             .iter()
             .any(|w| w.starts_with(top))
+            || self
+                .unsettled
+                .jobs
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(_, cwd)| cwd.starts_with(top))
             || self
                 .list(None, true)
                 .iter()
@@ -2120,6 +2156,10 @@ impl Inner {
             return;
         }
         let Some(meta) = self.meta(id) else { return };
+        // busy in its tree from before its result shows until the reader of the ends has taken it ([`Unsettled`])
+        if self.unsettled.on.load(Ordering::SeqCst) {
+            (self.unsettled.jobs.lock().unwrap()).push((id.to_string(), PathBuf::from(&meta.cwd)));
+        }
         let dir = self.dir(id);
         crate::sandbox::remove_made(&dir.join(STUBS));
         // a job here ran on its tree as it was while it ran (a runner's ran on the inputs frozen at its submit): when
