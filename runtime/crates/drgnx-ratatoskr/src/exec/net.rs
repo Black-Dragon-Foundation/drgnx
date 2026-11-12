@@ -107,7 +107,7 @@ pub fn rootless_connection(list: &serde_json::Value) -> Result<String, String> {
 }
 
 /// This host's podman architecture name.
-fn podman_arch() -> &'static str {
+pub fn podman_arch() -> &'static str {
     if std::env::consts::ARCH == "aarch64" {
         "arm64"
     } else {
@@ -218,15 +218,18 @@ pub async fn prepare_net(
     podman: &Path,
     px_dir: &Path,
     owner_tag: &str,
-    net: NetCell,
+    net: Option<NetCell>,
     hosts: &[(String, Vec<String>)],
     pins: &[(String, IpAddr)],
     reference: &str,
     log: &Path,
     web: std::sync::Arc<gleipnir::net::proxy::WebState>,
+    keys: Option<std::sync::Arc<dyn owner::KeySource>>,
 ) -> Result<(JobNetwork, container::JobNet), Refusal> {
     use gleipnir::net::{host, proxy};
-    let allow = crate::sandbox::allowed_hosts(net, hosts)
+    let allow = net
+        .map(|n| crate::sandbox::allowed_hosts(n, hosts))
+        .unwrap_or_default()
         .iter()
         .map(|h| host::parse_target(h))
         .collect::<Result<Vec<_>, _>>()
@@ -249,7 +252,8 @@ pub async fn prepare_net(
     .await
     .map_err(|e| setup(format!("the proxy image: {e}")))?
     .map_err(setup)?;
-    let argv = podman::sidecar_argv(&names, &ra, &image, false).map_err(|r| setup(r.message))?;
+    let argv =
+        podman::sidecar_argv(&names, &ra, &image, keys.is_some()).map_err(|r| setup(r.message))?;
     let (p, reference) = (podman.to_path_buf(), reference.to_string());
     let checks_shell = shell.clone();
     let (started, checked) = tokio::join!(
@@ -312,15 +316,29 @@ pub async fn prepare_net(
             drained.drain_to(f).await;
         }
     });
-    let channel = tokio::spawn(owner::run(
-        out,
-        inp,
-        streams_tx,
-        events_tx,
-        owner::BEAT,
-        drgnx_px::shell::STALL,
-        px_log,
-    ));
+    // a keyed job's channel also answers its key streams
+    let carried: std::pin::Pin<Box<dyn std::future::Future<Output = End> + Send>> = match keys {
+        Some(k) => Box::pin(owner::run_keyed(
+            out,
+            inp,
+            streams_tx,
+            k,
+            events_tx,
+            owner::BEAT,
+            drgnx_px::shell::STALL,
+            px_log,
+        )),
+        None => Box::pin(owner::run(
+            out,
+            inp,
+            streams_tx,
+            events_tx,
+            owner::BEAT,
+            drgnx_px::shell::STALL,
+            px_log,
+        )),
+    };
+    let channel = tokio::spawn(carried);
     let job_net = container::JobNet {
         sidecar: names.sidecar.clone(),
     };

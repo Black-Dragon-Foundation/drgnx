@@ -452,14 +452,14 @@ mod relay_keys {
             subdir: PathBuf::new(),
             job: id.into(),
             net: false,
+            keys: Some(KeyMounts {
+                helper: key_copy,
+                vars: vec![("TOKEN".into(), "JOB_TOKEN".into())],
+            }),
             runner: Some(RunnerMounts {
                 writes_tree: false,
                 target: dir.join("target"),
                 caches: vec![],
-                keys: Some(KeyMounts {
-                    helper: key_copy,
-                    vars: vec![("TOKEN".into(), "JOB_TOKEN".into())],
-                }),
             }),
         };
         podman::argv(&req, &caps(id), &ra())

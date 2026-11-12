@@ -94,7 +94,9 @@ or on a port, or a `debugServer` connected to) and route its updates:
 - `debug-state` to every editor whenever a session starts, runs, stops or ends: `{sessions: [{id, name, parent, root,
   state, reason, caps}]}`; `debug-ended` once per session, with its reason and exit code.
 - `debug-frame` on a stop: the selected frame's `path` (or `ref` for a `sourceReference`), `line`, `col`, `top`,
-  `reason` and `exception`. The editor that started the session gets it with `open: true` (it opens the file); the
+  `reason`, its `name` and its source's `source_name`, and on an exception stop `exception`: `exceptionInfo`'s `{id,
+  message, break_mode, type, trace}` (asked in the same stop when the adapter has `supportsExceptionInfoRequest`), else
+  `{message}` from the stop's description. The editor that started the session gets it with `open: true` (it opens the file); the
   others get `open: false` and draw it only in windows already showing the file (spec §3.3 step 12).
 - `runInTerminal` opens a drgnx terminal for the starting editor (`Terminals`), answers the program's pid and sends
   that editor `debug-terminal {session, term}`.
@@ -218,6 +220,7 @@ roots `debug/trust` called trusted and each root's last started configuration.
 - `debug/control {session, thread?, op}` (`continue`, `pause`, `next`, `step-in`, `step-out`, `restart`, `stop`,
   `stop-and-kill`, `disconnect`), `debug/select {session, thread?, frame}`, and `debug/trust {root, trusted}`, whose
   revocation stops the root's sessions.
+- `debug/source {session, ref}`: the adapter's `source` request for a frame with no file, answered `{text, mime?}`.
 - `debug/install {adapter, adapters?}`: the adapter's `:install` entry carried out (see Adapters); the answer says what
   was installed. A system package's, an adapter without an entry and an unknown id are errors (conformance
   `debug/install-refusals`; the downloads are the unit tests' `debug::tests_install`, from local files).
@@ -315,6 +318,32 @@ point's line through the column.
 Its tests (`test/unit/debug-gutter-test.el`) script the hub with a small store of their own;
 `test/ui/debug-gutter-gui-test.el` reads the margin's pixels: no dot at rest on a plain, current (hl-line), region or
 banded line, and the pointer noted on a dot lights it.
+
+### The stopped line (spec §5)
+
+The module's handler (`drgnx-debug--event`) gives each `debug-frame` to `drgnx-debug-gutter-show-frame`:
+
+- A top frame is a new stop (or the top picked again): the session's marks go, then its line gets the arrow (`stop`;
+  `stop-bp` over a breakpoint, whose own glyph is hidden until the stop goes; `exception` on an exception) and a band
+  (`drgnx-debug-stopped-line`, or `drgnx-debug-exception-line`). A caller frame (`top: false`) replaces only the
+  session's caller mark: the outline arrow and `drgnx-debug-frame-line`. The marks are overlays tagged
+  `drgnx-debug-stop` (`top` / `frame`), kept per session in `drgnx-debug-gutter--stops`; the band ends after the
+  line's newline, so its `:extend` reaches the window's edge and the exception card (its `after-string`: the type,
+  break mode and place, the message, and the active profile's keys for Stop and Continue) starts the next row.
+- `open: true` (the starting editor) visits the file, shows it in the window the session's last stop used (else the
+  selected one), puts point at the line and column (the window scrolls only when the line left it) and, with
+  `drgnx-debug-focus-on-stop`, raises the frame. Without `open` only a buffer already visiting the file is marked.
+- A `ref` (no file) opens the read-only buffer `<source_name> (from the debugger)`, filled by `debug/source`; a frame
+  with neither says `No source: <name>`.
+- `debug-state` with the session running starts a 150 ms timer (`drgnx-debug-gutter-stop-linger`, keyed
+  `(debug-stop . ID)`, owned by the marked buffer) that clears its marks unless a stop comes first, so a step does not
+  flicker; a session gone from `debug-state`, or `debug-ended`, clears them at once.
+- The bands' colours are theme tokens: `stop-band` (warn at 15 % in dark, the warn tint in light), `ok-tint`,
+  `error-tint`; high contrast has no tints, so there the arrow alone marks the line. The card is the raised surface
+  ringed in the error colour.
+
+Tests: `test/unit/debug-stop-test.el`; perf row `debug-step-line` (120 steps through the fixture, p95 ≤ 16 ms; 3.4 ms
+measured on the desktop).
 
 ## Live adapters: the image
 
