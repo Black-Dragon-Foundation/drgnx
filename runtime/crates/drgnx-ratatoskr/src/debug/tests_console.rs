@@ -153,3 +153,64 @@ fn the_queue_is_capped() {
             .ends_with(&format!("{}", QUEUE_CAP / 1000 + 499))
     );
 }
+
+/// Groups fold in the editor: the line that opens one names it (`group`, `collapsed` for `startCollapsed`), every
+/// line names the groups around it, outermost first (`within`), and an `end` closes the innermost.
+#[test]
+fn group_lines_name_their_group_and_the_ones_around_them() {
+    let mut c = Console::default();
+    let group =
+        |text: &str, kind: &str| json!({"category": "console", "output": text, "group": kind});
+    c.output(&group("Outer\n", "start"), false);
+    c.output(&out("stdout", "a\n"), false);
+    c.output(&group("Inner\n", "startCollapsed"), false);
+    c.output(&out("stdout", "b\n"), false);
+    c.output(&group("", "end"), false);
+    c.output(&out("stdout", "c\n"), false);
+    c.output(&group("", "end"), false);
+    // an end with no group open changes nothing
+    c.output(&group("", "end"), false);
+    c.output(&out("stdout", "d\n"), false);
+    c.output(&group("Again\n", "start"), false);
+    c.output(&out("stdout", "e\n"), false);
+    let b = c.take(false).unwrap();
+    assert_eq!(
+        texts(&b),
+        ["Outer", "a", "Inner", "b", "c", "d", "Again", "e"]
+    );
+    let l = &b["lines"];
+    let key = |i: usize, k: &str| l[i].get(k).cloned();
+    assert_eq!(
+        (key(0, "group"), key(0, "collapsed"), key(0, "within")),
+        (Some(json!(1)), None, None)
+    );
+    assert_eq!(key(1, "within"), Some(json!([1])));
+    assert_eq!(
+        (key(2, "group"), key(2, "collapsed"), key(2, "within")),
+        (Some(json!(2)), Some(json!(true)), Some(json!([1])))
+    );
+    assert_eq!(
+        (key(3, "within"), key(3, "depth")),
+        (Some(json!([1, 2])), Some(json!(2)))
+    );
+    assert_eq!(key(4, "within"), Some(json!([1])));
+    assert_eq!((key(5, "within"), key(5, "group")), (None, None));
+    // the counter is the session's: a later group gets a new number
+    assert_eq!(key(6, "group"), Some(json!(3)));
+    assert_eq!(key(7, "within"), Some(json!([3])));
+}
+
+/// Identical lines in two groups are two lines, not one counted twice.
+#[test]
+fn identical_lines_in_different_groups_are_not_counted_together() {
+    let mut c = Console::default();
+    c.output(&out("stdout", "x\n"), false);
+    c.output(
+        &json!({"category": "stdout", "output": "x\n", "group": "start"}),
+        false,
+    );
+    c.output(&out("stdout", "x\n"), false);
+    let b = c.take(false).unwrap();
+    assert_eq!(texts(&b), ["x", "x", "x"]);
+    assert_eq!(b["lines"][1]["group"], 1);
+}
