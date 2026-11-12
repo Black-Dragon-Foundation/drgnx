@@ -1524,7 +1524,9 @@ impl Inner {
                 setup("the static drgnx-key was not found next to the hub: a keyed container job can't get its keys")
             })?;
         let bin = dir.join("drgnx-key");
-        std::fs::copy(&from, &bin)
+        // the container runs this copy: its write descriptor kept out of the hub's other forks (crate::exe)
+        crate::exe::private_fds(|| std::fs::copy(&from, &bin))
+            .and_then(|r| r)
             .map_err(|e| setup(format!("drgnx-key for the job ({}): {e}", from.display())))?;
         Ok(KeySocket {
             socket: None,
