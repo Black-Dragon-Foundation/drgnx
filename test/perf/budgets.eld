@@ -228,8 +228,7 @@
  (search-window (:page_nogc_ms :p95) 37 :report-only ot5) (search-window (:list_max) 20000 :report-only ot5)
  (quick-open-typing (:alloc :p50) 4905 :report-only ot5) (quick-open-typing (:cpu_ms :p90) 1.4 :report-only ot5)
  (quick-open-typing (:rows) 0 :report-only ot5)
- (quick-open-typing-old (:alloc :p50) 8003808 :report-only ot5)
- (quick-open-typing-old (:cpu_ms :p90) 273.3 :report-only ot5) (quick-open-typing-old (:rows) 0 :report-only ot5)
+ ;; quick-open-typing-old (the stream and completion over every name: alloc 8003808, cpu 273.3) is retired with the path.
  (agents-line-motion (:alloc :p50) 6869 :report-only ot5) (agents-line-motion (:cpu_ms :p90) 4.5 :report-only ot5)
  (agents-line-motion (:rows) 0 :report-only ot5)
  (agents-line-motion-old (:alloc :p50) 7298 :report-only ot5)

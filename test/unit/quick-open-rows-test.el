@@ -9,7 +9,9 @@
 (require 'drgnx-explorer)
 (require 'drgnx-view-env)                ; loaded now, so the stubs below are not replaced by a later `require'
 
-(defun quick-open-rows-test--patch (view base version ops &optional hub)
+(defvar drgnx-hub--events)
+
+(defun quick-open-rows-test--patch(view base version ops &optional hub)
   (list :view view :class "gui-1" :hub (or hub 7) :base base :version version :env_epoch 0 :ops ops))
 
 (defun quick-open-rows-test--row (path) (list :key path :text path))
@@ -92,6 +94,34 @@ already.  No file is opened."
         (drgnx-quick-open)))
     (should (eq called #'project-find-file))
     (should-not sent)))
+
+(ert-deftest drgnx-quick-open/hub-down-lists-the-folder-by-stream ()
+  "With no hub connection a local folder is listed by the stream, and the hub is never asked."
+  (let ((sent nil) started (drgnx-hub--events nil) (dir (file-name-as-directory (make-temp-file "drgnx-qo" t))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-quick-open--root) (lambda () dir))
+                  ((symbol-function 'drgnx-file-stream-start)
+                   (lambda (root &rest _) (setq started root) nil))   ; no stream: falls on `project-find-file'
+                  ((symbol-function 'call-interactively) #'ignore))
+          (should-not (drgnx-quick-open--hub-p dir))
+          (let ((drgnx-quick-open-send-function (lambda (m p) (push (list m p) sent))))
+            (drgnx-quick-open))
+          (should (equal started dir))
+          (should-not sent))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-explorer-find/hub-down-and-remote-roots-are-listed-in-lisp ()
+  "Find on a remote root, or a local one with no hub connection, is listed here (`--root-files'), not by search/files."
+  (let ((sent nil) (drgnx-hub--events nil) (drgnx-explorer--find-gen 0) (drgnx-explorer--find-streams nil)
+        listed)
+    (cl-letf (((symbol-function 'drgnx-file-stream-available-p) (lambda (_) nil))
+              ((symbol-function 'drgnx-explorer--root-files) (lambda (root) (push root listed) (list (concat root "x.el")))))
+      (let ((drgnx-quick-open-send-function (lambda (m p) (push (list m p) sent)))
+            (drgnx-explorer--roots (list "/ssh:host:/srv/x/" "/local/r/")))
+        (should-not (drgnx-quick-open--hub-p "/ssh:host:/srv/x/"))
+        (should (equal (drgnx-explorer--find-load) '("/ssh:host:/srv/x/x.el" "/local/r/x.el")))
+        (should (equal (nreverse listed) '("/ssh:host:/srv/x/" "/local/r/")))
+        (should-not sent)))))
 
 (ert-deftest drgnx-quick-open/rows-mark-the-words ()
   "A row's runs in `drgnx-quick-open-match' mark the candidate; the candidate is the path."

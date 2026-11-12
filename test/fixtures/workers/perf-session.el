@@ -779,7 +779,6 @@ key seen %s, written %s, stats %S"
 
 (defvar drgnx-perf-w--qot-seen nil "(INPUT COUNT FIRST) of Quick Open after the last key, while it was open.")
 (defvar drgnx-perf-w--qot-listed nil "Non-nil once Quick Open had its first list before the first key.")
-(defvar drgnx-perf-w--qot-old nil "Non-nil: Quick Open's old path (the streamed listing), else the hub's rows.")
 (defvar drgnx-perf-w--qot-log nil "What the run saw, newest first (at most 40): opened, errors, each command.")
 (defvar drgnx-quick-open--state)
 (defvar drgnx-quick-open--current)
@@ -795,7 +794,7 @@ key seen %s, written %s, stats %S"
   (push item drgnx-perf-w--qot-log)
   (when (nthcdr 40 drgnx-perf-w--qot-log) (setcdr (nthcdr 39 drgnx-perf-w--qot-log) nil)))
 
-(defvar drgnx-perf-w--qot-path nil "Which path the keys reached: `hub' (the hub's rows) or `stream' (the old path).")
+(defvar drgnx-perf-w--qot-path nil "Which path the keys reached: `hub' (the hub's rows) or `stream' (the listing, no hub).")
 
 (defun drgnx-perf-w--qot-note ()
   "Post-command: what Quick Open shows after the key (its state is bound only while it reads), on either path."
@@ -816,13 +815,11 @@ key seen %s, written %s, stats %S"
 (defconst drgnx-perf-w--qot-query "d012/f001.txt"
   "What the workload types: no space (a plain `completing-read' takes SPC as `minibuffer-complete-word').")
 
-(defun drgnx-perf-w--qot-each (old)
+(defun drgnx-perf-w-quick-open-typing-each ()
   "Show a file of the repository and queue Quick Open's key: the command loop runs it as the user's command (drgnx
-refuses a prompt from a timer or this call), and the lab's settle lets the first list come before the typed keys;
-OLD: on the old path."
+refuses a prompt from a timer or this call), and the lab's settle lets the first list come before the typed keys."
   (require 'drgnx-quick-open)
-  (setq drgnx-perf-w--qot-seen nil drgnx-perf-w--qot-listed nil drgnx-perf-w--qot-path nil drgnx-perf-w--qot-old old
-        drgnx-perf-w--qot-log nil drgnx-view-old-path old)
+  (setq drgnx-perf-w--qot-seen nil drgnx-perf-w--qot-listed nil drgnx-perf-w--qot-path nil drgnx-perf-w--qot-log nil)
   (switch-to-buffer (find-file-noselect (expand-file-name "big/d000/f000.txt" drgnx-perf-w--tmp)))
   (add-hook 'post-command-hook #'drgnx-perf-w--qot-note)
   (drgnx-perf-w--qot-say 'each (drgnx-file-stream-available-p (expand-file-name "big" drgnx-perf-w--tmp))
@@ -831,14 +828,11 @@ OLD: on the old path."
   (setq unread-command-events (append unread-command-events (listify-key-sequence (kbd "C-p"))))
   t)
 
-(defun drgnx-perf-w-quick-open-typing-each () (drgnx-perf-w--qot-each nil))
-(defun drgnx-perf-w-quick-open-typing-old-each () (drgnx-perf-w--qot-each t))
-
 (defun drgnx-perf-w-quick-open-typing-done ()
   "Every key reached Quick Open on the workload's path, whose first list was there before the first key, and it has
 closed."
   (and drgnx-perf-w--qot-seen drgnx-perf-w--qot-listed (equal (car drgnx-perf-w--qot-seen) drgnx-perf-w--qot-query)
-       (eq drgnx-perf-w--qot-path (if drgnx-perf-w--qot-old 'stream 'hub))
+       (eq drgnx-perf-w--qot-path 'hub)
        (not (active-minibuffer-window))))
 
 (defun drgnx-perf-w-quick-open-typing-check ()
@@ -860,7 +854,7 @@ streams %S, hub %S, C-p %S, saw %S, messages %S"
 
 (defun drgnx-perf-w-quick-open-typing-teardown ()
   (remove-hook 'post-command-hook #'drgnx-perf-w--qot-note)
-  (setq drgnx-perf-w--qot-seen nil drgnx-perf-w--qot-listed nil drgnx-perf-w--qot-log nil drgnx-view-old-path nil)
+  (setq drgnx-perf-w--qot-seen nil drgnx-perf-w--qot-listed nil drgnx-perf-w--qot-log nil)
   (drgnx-perf-w--kill-visiting (expand-file-name "big" drgnx-perf-w--tmp))
   (drgnx-perf-w--clean)
   t)
