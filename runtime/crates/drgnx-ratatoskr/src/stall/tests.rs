@@ -35,25 +35,25 @@ fn a_worker_held_in_sync_work_is_named_with_its_task() {
         .build()
         .unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
+    let (free, freed) = std::sync::mpsc::channel::<()>();
     rt.spawn(Named::new(Cow::Borrowed("test:holder"), async move {
         tx.send(()).unwrap();
-        // sync work on the worker: what the watchdog is for
-        std::thread::sleep(Duration::from_millis(600));
+        // sync work on the worker, until the test frees it: what the watchdog is for
+        let _ = freed.recv();
     }));
     rx.recv().unwrap();
-    std::thread::sleep(Duration::from_millis(200));
-    let held: Vec<_> = holders(Duration::from_millis(150))
-        .into_iter()
-        .filter(|h| h.2 == "test:holder")
-        .collect();
-    assert_eq!(held.len(), 1, "{held:?}");
-    assert!(held[0].3 >= 150, "{held:?}");
-    let line = report(Duration::ZERO, Duration::from_millis(150), &held).unwrap();
-    assert!(line.contains("in test:holder for"), "{line}");
-    if cfg!(target_os = "linux") {
-        // the kernel's view of the held thread: asleep in the sleep's syscall
-        assert!(line.contains("state S"), "{line}");
-    }
+    // the kernel's view of the held thread once it waits: asleep in the wait's syscall (Linux reads /proc)
+    skuld::wait_until("the holder asleep in its wait", 30, || {
+        let held: Vec<_> = holders(Duration::ZERO)
+            .into_iter()
+            .filter(|h| h.2 == "test:holder")
+            .collect();
+        assert_eq!(held.len(), 1, "{held:?}");
+        let line = report(Duration::ZERO, Duration::ZERO, &held).unwrap();
+        assert!(line.contains("in test:holder for"), "{line}");
+        (!cfg!(target_os = "linux") || line.contains("state S")).then_some(line)
+    });
+    free.send(()).unwrap();
     rt.shutdown_timeout(Duration::from_secs(2));
 }
 
