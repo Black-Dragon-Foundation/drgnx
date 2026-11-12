@@ -23,6 +23,7 @@
 (require 'drgnx-debug-toolbar (expand-file-name "drgnx-debug-toolbar" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-view (expand-file-name "drgnx-debug-view" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-console (expand-file-name "drgnx-debug-console" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-debug-memory (expand-file-name "drgnx-debug-memory" (file-name-directory (macroexp-file-name))))
 (defvar drgnx-statusbar-left)
 (declare-function drgnx-wb-define-tab "drgnx-area")
 (declare-function drgnx-hub-call "drgnx-hub-client")
@@ -120,6 +121,7 @@ the toolbar's cards go too."
   "The session keys go with the module (a running session turned them on, not the setup), and the column."
   (drgnx-debug-view--teardown)
   (drgnx-debug-console--teardown)
+  (drgnx-debug-memory--teardown)
   (drgnx-debug-session-mode -1)
   (drgnx-debug-timeline-mode -1)
   (drgnx-debug-bisect-events-mode -1)
@@ -342,6 +344,11 @@ console's tab shows without taking the focus."
                                       (drgnx-command-define id :category "Debug" :title title :command fn :doc doc)
                                     (drgnx-command-define id :category "Debug" :title title :command fn :doc doc
                                                           :map 'drgnx-debug-view-mode-map :when in-view))))
+                              ;; the memory view (drgnx-debug-memory.el): its keys in its own map
+                              (let ((in-memory (lambda () (derived-mode-p 'drgnx-debug-memory-mode))))
+                                (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-memory-commands)
+                                  (drgnx-command-define id :category "Debug" :title title :command fn :doc doc
+                                                        :map 'drgnx-debug-memory-mode-map :when in-memory)))
                               ;; recorded runs: probes, the stop timeline, past stops (drgnx-debug-timeline.el)
                               (drgnx-debug-timeline-mode 1)
                               (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-timeline-commands)

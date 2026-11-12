@@ -395,6 +395,7 @@ they come within `drgnx-debug-view-await-limit'.  An old stop's node does not op
     (debug-copy-value "Copy Value" drgnx-debug-copy-value "Copy the variable's value")
     (debug-copy-expression "Copy as Expression" drgnx-debug-copy-expression "Copy the expression that reads the variable")
     (debug-add-to-watch "Add to Watch" drgnx-debug-add-to-watch "Watch the variable's expression")
+    (debug-view-memory "View Binary Data" drgnx-debug-view-memory "Show the variable's bytes in memory, and write them")
     (debug-watch-add "Add Watch Expression…" drgnx-debug-watch-add "Watch an expression at every stop")
     (debug-watch-edit "Edit Watch Expression…" drgnx-debug-watch-edit "Change the watched expression")
     (debug-watch-remove "Remove Watch Expression" drgnx-debug-watch-remove "Stop watching the expression")

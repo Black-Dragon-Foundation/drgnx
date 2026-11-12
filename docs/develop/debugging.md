@@ -545,6 +545,18 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
   evaluates as if typed (echoed, in the history) while keeping what the input holds; the tab shows without the
   focus, or selected with SELECT.
 
+## The memory view: `drgnx-debug-memory.el`
+
+- A variable or watch whose adapter gives a `memoryReference` carries it as the field `memory_reference`
+  (view/debug/model.rs). **View Binary Data** (`debug-view-memory`, `m` in the Emacs and Vim profiles) on its row
+  opens `*Memory: NAME*` in the row's session (the `v:SESSION:` of its id; a watch's, the stopped one).
+- `debug/read-memory {session, reference, offset, count}` → `{address, data (base64), unreadable?}` reads a page of
+  `drgnx-debug-memory-page-bytes` (256; the hub refuses more than 64 KiB), drawn 16 bytes a line: the address
+  (`%08x` from `address` when it is hex, else the offset), the bytes in hex (`??` for unreadable ones), the text
+  (`.` for the unprintable). A redraw replaces only the lines that changed.
+- Its keys: next and previous page (never before the reference), refresh, and write: hex typed at the byte under
+  point goes as `debug/write-memory {session, reference, offset, data (base64)}`, then the page is read again.
+
 ## Live adapters: the image
 
 The tests that run real adapters (debugpy, js-debug, delve, lldb-dap) use `drgnx-debug-adapters:f45`, built from

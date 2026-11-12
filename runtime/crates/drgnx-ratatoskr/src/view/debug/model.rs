@@ -44,6 +44,8 @@ pub struct Var {
     pub named: Option<i64>,
     pub indexed: Option<i64>,
     pub evaluate_name: Option<String>,
+    /// `memoryReference`: its bytes can be read (the memory view).
+    pub memory: Option<String>,
     /// `presentationHint.lazy`: the value is fetched on a click.
     pub lazy: bool,
     /// A scope marked `expensive`: collapsed until opened.
@@ -62,6 +64,7 @@ impl Var {
             named: i("namedVariables"),
             indexed: i("indexedVariables"),
             evaluate_name: s("evaluateName").filter(|e| !e.is_empty()),
+            memory: s("memoryReference").filter(|m| !m.is_empty()),
             lazy: v.pointer("/presentationHint/lazy").and_then(Value::as_bool) == Some(true),
             expensive: v.get("expensive").and_then(Value::as_bool) == Some(true),
         }
@@ -677,6 +680,9 @@ impl<'a> Cx<'a> {
         }
         if eff.reference > 0 {
             fields.push(("reference", json!(eff.reference)));
+        }
+        if let Some(m) = &eff.memory {
+            fields.push(("memory_reference", json!(m)));
         }
         if kind == "scope" && var.expensive {
             fields.push(("expensive", json!(1)));

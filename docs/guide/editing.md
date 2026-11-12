@@ -93,7 +93,9 @@ pages of 100), **Watch** (expressions kept per project, evaluated at every stop)
 pick a frame to move the editor and the variables to it) and **Breakpoints** (exception filters and every breakpoint,
 each with a tick box). Arrow keys move and open, RET acts on the row, typing after `C-M-f` (`/` in the Emacs and Vim
 profiles) filters it, F2 (`e`, `c`) sets a value; Copy Value, Copy as Expression and Add to Watch are in the
-palette. Its header starts the configuration picked there. While the program runs, the last stop's values stay, dimmed.
+palette. **View Binary Data** (`m` in the Emacs and Vim profiles) shows a variable's bytes when its debugger can read
+memory (C, C++, Rust, Go): 16 to a line with the address and the text, PageDown / PageUp (`n` / `p`, C-f / C-b) for
+the next page, F2 (`e`, `c`) to write bytes typed in hex at point. Its header starts the configuration picked there. While the program runs, the last stop's values stay, dimmed.
 A big list keeps its last 64 opened pages open; opening another closes the oldest.
 
 The **Debug Console** (the panel's tab; C-S-y in VS Code keys) shows the program's output, colours included, with
