@@ -186,18 +186,28 @@ replaces that one's."
                     (if error (message "Probe: %s" (or (plist-get error :message) error))
                       (drgnx-debug-timeline--take result)))))
 
+(defun drgnx-debug-timeline--probes-off ()
+  "Turn `drgnx-debug-probes-mode' off in this buffer (it is killed, or gets another major mode)."
+  (drgnx-debug-probes-mode -1))
+
 (define-minor-mode drgnx-debug-probes-mode
   "This file's probes: their column in the left margin and their values at each line's end."
   :group 'drgnx
   (if drgnx-debug-probes-mode
       (progn
         (add-hook 'drgnx-margins-changed-functions #'drgnx-debug-timeline--restring)
+        ;; a buffer killed or given another major mode with the mode on turns it off first, so the global hook goes
+        ;; with the last such buffer
+        (add-hook 'kill-buffer-hook #'drgnx-debug-timeline--probes-off nil t)
+        (add-hook 'change-major-mode-hook #'drgnx-debug-timeline--probes-off nil t)
         (let ((root (drgnx-debug-timeline--root)))
           (if (gethash root drgnx-debug-timeline--probes)
               (drgnx-debug-timeline--draw)
             ;; asked from `find-file-hook' (and the mode's start): with no hub to answer, the file has no probes to
             ;; show; it never fails the visit (`drgnx-hub-call' signals when no hub serves)
             (condition-case nil (drgnx-debug-timeline--probe-op nil) (error nil)))))
+    (remove-hook 'kill-buffer-hook #'drgnx-debug-timeline--probes-off t)
+    (remove-hook 'change-major-mode-hook #'drgnx-debug-timeline--probes-off t)
     (mapc #'delete-overlay drgnx-debug-timeline--overlays)
     (setq drgnx-debug-timeline--overlays nil)
     (drgnx-margins-claim 'debug-probe nil)
