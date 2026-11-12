@@ -68,7 +68,8 @@ While the session is stopped the same command continues; **Toggle Breakpoint**, 
 **Step Out** and **Stop Debugging** do what they say. If you used dape, **Convert dape Configurations…** (the palette)
 turns your `dape-configs` into launch configurations once (dape itself is no longer needed).
 In the VS Code key profile: F5, F9, F10, F11 (Step Into while a session runs — Zen Mode otherwise), S-F11, S-F5,
-C-S-F5 (**Restart**), F6 (**Pause**, while a session runs); the Emacs and Vim profiles reach them in the palette.
+C-S-F5 (**Restart**); the Emacs and Vim profiles reach them in the palette. **Pause** is on the toolbar and in the
+palette in every profile: VS Code's F6 stays free as the terminal's chord key ([Legacy terminals](terminal.md#legacy-terminals-altshift-and-f6)).
 Module `extra/debug`; it needs no package.
 
 While a session runs, a toolbar floats over the editor: Continue (Pause while the program runs), the three steps,
