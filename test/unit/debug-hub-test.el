@@ -149,4 +149,93 @@ SCRIPT (a list of steps, serialized to JSON), and the module set up.  `debug-hub
           (with-current-buffer buf (set-buffer-modified-p nil))
           (kill-buffer buf))))))
 
+(defun debug-hub-test--stop (&rest after)
+  "The script's stop on line 2 of PATH's file, then AFTER: the adapter's answers to the stop's own requests."
+  (append (list (list :event "stopped" :body (list :reason "breakpoint" :threadId 1 :allThreadsStopped t))
+                (list :expect "threads" :ok (list :threads (vector (list :id 1 :name "main"))))
+                (list :any (vector (list :expect "stackTrace"
+                                         :ok (list :stackFrames (vector (list :id 1000 :name "main" :line 2 :column 1
+                                                                              :source (list :path "/nowhere/app.py")))
+                                                   :totalFrames 1))
+                                   (list :expect "scopes" :ok (list :scopes [])))))
+          after))
+
+(defun debug-hub-test--stopped (session &rest caps)
+  "Wait until SESSION is stopped in the editor's `debug-state', with CAPS among its adapter's capabilities."
+  (drgnx-test-wait (lambda () (when-let* ((s (seq-find (lambda (s) (equal (plist-get s :id) session))
+                                                       drgnx-debug--sessions)))
+                                (and (equal (plist-get s :state) "stopped")
+                                     (seq-every-p (lambda (c) (drgnx-debug-can-p s c)) caps))))
+                   :what "the session stopped, its capabilities known"))
+
+(ert-deftest drgnx-debug-hub/console-completes-from-the-adapter ()
+  "Completion in the Debug Console's input goes through `debug/completions' to the adapter's `completions' (the
+column 1-based), once `debug-state' says the adapter completes; the targets complete the word before point."
+  (debug-hub-test--with
+      (append (debug-hub-test--initialized :supportsCompletionsRequest t)
+              (list (list :expect "configurationDone"))
+              (debug-hub-test--stop
+               (list :expect "completions" :args (list :text "len(it" :column 7)
+                     :ok (list :targets (vector (list :label "items" :type "variable")
+                                                (list :label "iter" :type "function"))))
+               (list :expect "disconnect") (list :die t)))
+    (let ((session (debug-hub-test--start proj)))
+      (debug-hub-test--stopped session :supportsCompletionsRequest)
+      (let ((default-directory (file-name-as-directory proj))) (drgnx-debug-console--buffer))
+      (with-current-buffer drgnx-debug-console-buffer-name
+        (goto-char (point-max))
+        (insert "len(it")
+        (pcase-let ((`(,beg ,end ,table . ,_) (run-hook-with-args-until-success 'completion-at-point-functions)))
+          (should (equal (buffer-substring-no-properties beg end) "it"))
+          (should (equal (all-completions "it" table) '("items" "iter"))))))))
+
+(ert-deftest drgnx-debug-hub/memory-view-reads-and-writes ()
+  "The memory view reads a page through `debug/read-memory' (the adapter's `readMemory') and writes the bytes typed
+through `debug/write-memory', then reads the page again; `debug-state' says the adapter can do both."
+  (debug-hub-test--with
+      (append (debug-hub-test--initialized :supportsReadMemoryRequest t :supportsWriteMemoryRequest t)
+              (list (list :expect "configurationDone"))
+              (debug-hub-test--stop
+               (list :expect "readMemory" :args (list :memoryReference "0x1000" :offset 0 :count 256)
+                     :ok (list :address "0x1000" :data (base64-encode-string "abcdef")))
+               (list :expect "writeMemory" :args (list :memoryReference "0x1000" :offset 2 :data "QUI=")
+                     :ok (list :bytesWritten 2))
+               (list :expect "readMemory" :args (list :memoryReference "0x1000" :offset 0 :count 256)
+                     :ok (list :address "0x1000" :data (base64-encode-string "abABef")))
+               (list :expect "disconnect") (list :die t)))
+    (let ((session (debug-hub-test--start proj)))
+      (debug-hub-test--stopped session :supportsReadMemoryRequest :supportsWriteMemoryRequest)
+      (unwind-protect
+          (progn
+            (save-window-excursion (drgnx-debug-memory-open session "0x1000" "buf"))
+            (with-current-buffer "*Memory: buf*"
+              (drgnx-test-wait (lambda () (string-search "abcdef" (buffer-string))) :what "the page")
+              (should (string-prefix-p "00001000  61 62 63 64 65 66" (buffer-string)))
+              (goto-char (point-min))
+              (search-forward "63")
+              (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "41 42")))
+                (drgnx-debug-memory-write))
+              (drgnx-test-wait (lambda () (string-search "abABef" (buffer-string))) :what "the page read again")))
+        (when (get-buffer "*Memory: buf*") (kill-buffer "*Memory: buf*"))))))
+
+(ert-deftest drgnx-debug-hub/console-timestamps-are-the-hubs ()
+  "With timestamps on, each console line shows the time the hub stamped it (`time'), not the editor's."
+  (debug-hub-test--with
+      (append (debug-hub-test--initialized)
+              (list (list :expect "configurationDone")
+                    (list :event "output" :body (list :category "stdout" :output "hello\n"))
+                    (list :expect "disconnect") (list :die t)))
+    (let ((drgnx-debug-console-timestamps t))
+      (debug-hub-test--start proj)
+      (drgnx-test-wait (lambda () (when-let* ((b (get-buffer drgnx-debug-console-buffer-name)))
+                                    (with-current-buffer b (string-search "hello" (buffer-string)))))
+                       :what "the line")
+      (with-current-buffer drgnx-debug-console-buffer-name
+        (goto-char (point-min))
+        (search-forward "hello")
+        (let ((ms (get-text-property (line-beginning-position) 'drgnx-debug-console-time)))
+          (should (natnump ms))
+          (should (equal (get-text-property (line-beginning-position) 'line-prefix)
+                         (drgnx-debug-console--stamp ms))))))))
+
 ;;; debug-hub-test.el ends here

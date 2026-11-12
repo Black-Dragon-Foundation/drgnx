@@ -13,6 +13,7 @@
 (declare-function drgnx-hub-call-sync "drgnx-hub-client" (method params &optional timeout))
 (declare-function drgnx-wb-area-show "drgnx-area" (area &optional tab buffer))
 (declare-function drgnx-debug--session "drgnx-debug" (&optional state))
+(declare-function drgnx-debug-can-p "drgnx-debug-launch" (session cap))
 (defvar drgnx-debug--sessions)
 
 (defgroup drgnx-debug-console nil "The debug console." :group 'drgnx)
@@ -308,9 +309,10 @@ taking the focus, or selected with SELECT."
 
 (defun drgnx-debug-console-complete-at-point ()
   "Completion in the input from the session's adapter (`debug/completions'): the span a target names, else the
-word before point; nil outside the input, with no session, or when the adapter has none."
+word before point; nil outside the input, with no session, or when the adapter has none (or has not said yet)."
   (when-let* (((>= (point) (drgnx-debug-console--input-start)))
               (s (drgnx-debug--session))
+              ((drgnx-debug-can-p s :supportsCompletionsRequest))
               (start (drgnx-debug-console--input-start))
               (r (condition-case nil
                      (drgnx-hub-call-sync "debug/completions"

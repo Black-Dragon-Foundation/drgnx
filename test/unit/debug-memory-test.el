@@ -11,7 +11,10 @@
   "BODY with the hub's calls recorded in CALLS (newest first) as (METHOD PARAMS CALLBACK), the view's buffer killed
 after."
   (declare (indent 0))
-  `(let ((calls nil))
+  `(let ((calls nil)
+         (drgnx-debug--sessions (list (list :id "s1" :state "stopped" :caps (list :supportsReadMemoryRequest t
+                                                                                  :supportsWriteMemoryRequest t))
+                                      (list :id "s7" :state "stopped" :caps (list :supportsReadMemoryRequest t)))))
      (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (method params cb &rest _) (push (list method params cb) calls))))
        (unwind-protect (progn ,@body)
          (dolist (b (buffer-list))
@@ -60,11 +63,15 @@ in hex (`debug/write-memory', base64) and reads the page again."
       (should (equal (cadr (car calls)) (list :session "s1" :reference "0x1000" :offset 2 :data "QUI=")))
       (funcall (nth 2 (car calls)) (list :written 2) nil)
       (should (equal (car (car calls)) "debug/read-memory"))
+      ;; an adapter that cannot write (or has not said yet) is not asked
+      (let ((drgnx-debug--sessions (list (list :id "s1" :state "stopped" :caps (list :supportsReadMemoryRequest t)))))
+        (should-error (drgnx-debug-memory-write) :type 'user-error))
       (should-error (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "4"))) (drgnx-debug-memory-write))
                     :type 'user-error))))
 
 (ert-deftest drgnx-debug-memory/opened-from-a-variable-row ()
-  "View Binary Data on a Variables row opens its memory in its session; a row without a memory reference says so."
+  "View Binary Data on a Variables row opens its memory in its session; a row without a memory reference, or a
+session whose adapter cannot read memory (or has not said yet, `debug-state' caps), says so."
   (debug-memory-test--with
     (let ((fields '(("memory_reference" . "0x2000") ("label" . "data"))) (id "v:s7:Locals/data"))
       (cl-letf (((symbol-function 'drgnx-debug-view--value-node) (lambda () id))
@@ -74,6 +81,11 @@ in hex (`debug/write-memory', base64) and reads the page again."
                                                 :count drgnx-debug-memory-page-bytes)))
         (should (get-buffer "*Memory: data*"))
         (setq fields '(("label" . "n")))
-        (should-error (drgnx-debug-view-memory) :type 'user-error)))))
+        (should-error (drgnx-debug-view-memory) :type 'user-error)
+        ;; a session still starting, or an adapter that cannot read memory: said, not asked
+        (setq fields '(("memory_reference" . "0x2000") ("label" . "data")) id "v:s9:Locals/data")
+        (let ((n (length calls)) (drgnx-debug--sessions (list (list :id "s9" :state "stopped"))))
+          (should-error (drgnx-debug-view-memory) :type 'user-error)
+          (should (= n (length calls))))))))
 
 ;;; debug-memory-test.el ends here

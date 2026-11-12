@@ -19,7 +19,8 @@
                ((symbol-function 'drgnx-hub-call) (lambda (method params cb &rest _) (push (list method params cb) calls))))
        (unwind-protect
            (progn (drgnx-debug--event "debug-state" (list :sessions (vector (list :id "s1" :name "Python: app" :root "/p"
-                                                                                  :state "stopped"))))
+                                                                                  :state "stopped"
+                                                                                  :caps (list :supportsCompletionsRequest t)))))
                   ,@body)
          (drgnx-debug-session-mode -1)
          (when (get-buffer drgnx-debug-console-buffer-name)
@@ -199,7 +200,8 @@ kept; the tab shown without the focus, or selected with SELECT."
 
 (ert-deftest drgnx-debug-console/completes-from-the-adapter ()
   "TAB-less completion at point in the input: the adapter's targets for the input and point (`debug/completions'),
-the span a target names replaced, else the word before point; their types as annotations; none outside the input."
+the span a target names replaced, else the word before point; their types as annotations; none outside the input,
+nor when the adapter has not said it completes (`debug-state' caps)."
   (debug-console-test--with
     (let ((asked nil)
           (answer (list :targets (vector (list :label "items" :type "variable") (list :label "iter" :type "function")))))
@@ -218,7 +220,13 @@ the span a target names replaced, else the word before point; their types as ann
           (pcase-let ((`(,beg ,end . ,_) (run-hook-with-args-until-success 'completion-at-point-functions)))
             (should (equal (buffer-substring-no-properties beg end) "len(it")))
           (goto-char (point-min))
-          (should-not (run-hook-with-args-until-success 'completion-at-point-functions)))))))
+          (should-not (run-hook-with-args-until-success 'completion-at-point-functions))
+          ;; an adapter without completions (or not said yet) is not asked
+          (goto-char (point-max))
+          (setq asked nil)
+          (let ((drgnx-debug--sessions (list (list :id "s1" :name "Python: app" :root "/p" :state "stopped"))))
+            (should-not (run-hook-with-args-until-success 'completion-at-point-functions)))
+          (should-not asked))))))
 
 (ert-deftest drgnx-debug-console/history-per-profile ()
   "The input's history: back and forth through what was evaluated; the keys in the three profiles."

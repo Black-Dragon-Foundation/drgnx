@@ -45,6 +45,11 @@ project's settings never set this."
   (let ((stem (replace-regexp-in-string "\\(-ts\\)?-mode\\'" "" (symbol-name (or mode major-mode)))))
     (cdr (assoc stem drgnx-debug-launch--languages))))
 
+(defun drgnx-debug-can-p (session cap)
+  "Whether SESSION (a `debug-state' session plist) has the adapter capability CAP (a keyword such as
+`:supportsCompletionsRequest'): nil while the session starts, before the adapter has said what it can do."
+  (eq t (plist-get (plist-get session :caps) cap)))
+
 (defun drgnx-debug-launch-root ()
   "This buffer's project root (else its folder), absolute, without the trailing slash."
   (directory-file-name

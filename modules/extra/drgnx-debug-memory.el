@@ -11,6 +11,8 @@
 (declare-function drgnx-debug-view--value-node "drgnx-debug-view" ())
 (declare-function drgnx-debug-view--field "drgnx-debug-view" (name id))
 (declare-function drgnx-debug--session "drgnx-debug" (&optional state))
+(declare-function drgnx-debug-can-p "drgnx-debug-launch" (session cap))
+(defvar drgnx-debug--sessions)
 
 (defcustom drgnx-debug-memory-page-bytes 256
   "How many bytes the memory view reads at a time (the hub refuses more than 64 KiB)."
@@ -48,7 +50,13 @@
                   (user-error "The adapter gives no memory for this variable")))
          (session (if (string-match "\\`v:\\([^:]+\\):" id) (match-string 1 id)
                     (plist-get (or (drgnx-debug--session "stopped") (user-error "No stopped debug session")) :id))))
+    (unless (drgnx-debug-can-p (drgnx-debug-memory--state session) :supportsReadMemoryRequest)
+      (user-error "This debugger cannot read memory"))
     (drgnx-debug-memory-open session ref (drgnx-debug-view--field "label" id))))
+
+(defun drgnx-debug-memory--state (session)
+  "SESSION's plist in the last `debug-state'."
+  (seq-find (lambda (s) (equal (plist-get s :id) session)) drgnx-debug--sessions))
 
 (defun drgnx-debug-memory--read ()
   "Read the page at the offset and draw it when it comes."
@@ -118,6 +126,8 @@
 (defun drgnx-debug-memory-write ()
   "Write bytes, typed in hex, from the byte at point (`debug/write-memory'); the page is read again after."
   (interactive)
+  (unless (drgnx-debug-can-p (drgnx-debug-memory--state drgnx-debug-memory--session) :supportsWriteMemoryRequest)
+    (user-error "This debugger cannot write memory"))
   (let* ((at (or (get-text-property (point) 'drgnx-debug-memory-offset)
                  (get-text-property (max (point-min) (1- (point))) 'drgnx-debug-memory-offset)
                  (user-error "No byte here")))

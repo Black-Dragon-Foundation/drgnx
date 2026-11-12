@@ -288,6 +288,10 @@ roots `debug/trust` called trusted and each root's last started configuration.
   `supportsReadMemoryRequest` / `supportsWriteMemoryRequest`.
 - These and `debug/breakpoint-locations` read the session's capabilities: asked before the adapter has given them
   (the session is starting) they are refused, so the editors offer them once `debug-state` shows the capability.
+  In Lisp, `drgnx-debug-can-p (SESSION CAP)` (drgnx-debug-launch.el) reads a `debug-state` session's `caps`: the
+  console completes only on `:supportsCompletionsRequest`, inline candidates are asked only on
+  `:supportsBreakpointLocationsRequest`, and View Binary Data / Write Bytes say so instead of asking without
+  `:supportsReadMemoryRequest` / `:supportsWriteMemoryRequest`.
 - `debug/install {adapter, adapters?}`: the adapter's `:install` entry carried out (see Adapters); the answer says what
   was installed. A system package's, an adapter without an entry and an unknown id are errors (conformance
   `debug/install-refusals`; the downloads are the unit tests' `debug::tests_install`, from local files).
