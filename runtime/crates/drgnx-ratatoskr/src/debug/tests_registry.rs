@@ -200,6 +200,53 @@ fn last_states(ev: &Events) -> Vec<String> {
 }
 
 #[tokio::test(start_paused = true)]
+async fn the_state_event_says_which_sessions_attach() {
+    let mut a = vec![
+        json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true}}),
+        json!({"expect": "attach", "ok": {}}),
+        json!({"event": "initialized"}),
+        json!({"expect": "configurationDone"}),
+    ];
+    a.extend(end());
+    let mut l = launch(vec![]);
+    l.extend(end());
+    let (d, ev, m, _) = setup(vec![a, l]);
+    let attach = Start {
+        request: Request::Attach,
+        arguments: json!({"processId": 42}),
+        ..start()
+    };
+    let ia = d.start(7, "/p", attach, m.clone()).await.unwrap();
+    let il = d.start(7, "/p", start(), m.clone()).await.unwrap();
+    until(|| {
+        last_states(&ev).len() == 2 && last_states(&ev).iter().all(|s| s.ends_with(":running"))
+    })
+    .await;
+    let (_, _, data) = ev.named("debug-state").last().unwrap().clone();
+    let of = |id: &str| {
+        data["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == id)
+            .unwrap()["attach"]
+            .clone()
+    };
+    assert_eq!(of(&ia), json!(true));
+    assert_eq!(of(&il), json!(false));
+    d.control(&ia, Op::Disconnect).await.unwrap();
+    d.control(
+        &il,
+        Op::Stop {
+            kill_debuggee: None,
+        },
+    )
+    .await
+    .unwrap();
+    until(|| last_states(&ev).is_empty()).await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn the_state_event_follows_a_session_from_start_to_end() {
     let mut s = launch(vec![]);
     s.extend(end());

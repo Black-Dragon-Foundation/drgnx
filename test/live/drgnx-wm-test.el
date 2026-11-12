@@ -49,7 +49,7 @@
 
 (defun drgnx-wm-move--start (monitors saved)
   "Start a daemon session with MONITORS outputs, its layout file SAVED; return the session."
-  (let ((s (drgnx-ui-start "drgnx" "1280x800" 60 t monitors (drgnx-ui-default-compositor))))
+  (let ((s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1280x800") 60 t monitors (drgnx-ui-default-compositor))))
     ;; the callers' `unwind-protect' starts after this returns: a failure here stops the session itself
     (condition-case err
         (let ((sess (drgnx-ui-own-session (plist-get s :name))))

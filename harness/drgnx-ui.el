@@ -611,6 +611,16 @@ without its \"drgnx-ui-\" (the socket inside it has the whole NAME)."
 (defun drgnx-ui--save (sess)
   (drgnx-ui--write (expand-file-name "session.json" (plist-get sess :run)) (drgnx-ui--json sess)))
 
+(defun drgnx-ui-size-at-scale (size)
+  "SIZE (\"WxH\"), the monitor a row names at scale 1, in device pixels at the tier's scale: the same logical
+monitor at every scale.  The tier's scale is the largest of $DRGNX_UI_SCALES, else $DRGNX_UI_SCALE, else 1.
+Mutter has no scale 2 for a monitor that small in device pixels: 1400x800 at 2 is 700x400 logical, below its
+minimum (\"Scale 2.0 not supported by mode\"), and the session never starts."
+  (let* ((env (let ((l (getenv "DRGNX_UI_SCALES"))) (if (member l '(nil "")) (getenv "DRGNX_UI_SCALE") l)))
+         (s (apply #'max 1 (mapcar #'string-to-number (split-string (or env "") " " t))))
+         (wh (mapcar #'string-to-number (split-string size "x"))))
+    (format "%dx%d" (round (* s (car wh))) (round (* s (cadr wh))))))
+
 (defun drgnx-ui-prepare-run (name &optional config size root daemon monitors compositor scales)
   "Create the run directory for session NAME under ROOT; return the session plist.
 DAEMON non-nil: Emacs runs as a daemon (no frame until `drgnx-ui-new-frame').

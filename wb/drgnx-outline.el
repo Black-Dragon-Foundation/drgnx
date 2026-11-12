@@ -197,9 +197,11 @@ Outline's point and window are not touched, except by the first draw of a new fi
 scrolled sideways.  The selection of the rows it replaced would otherwise outlive them: an empty overlay whose fill
 stretches to the right edge before the notice, which pushes it off the window."
   (save-excursion (goto-char (point-min)) (drgnx-wb-selection-sync))
-  (dolist (w (get-buffer-window-list (current-buffer) nil t))
-    (set-window-point w (point-min))
-    (set-window-hscroll w 0)))
+  (let ((ws (get-buffer-window-list (current-buffer) nil t)))
+    (drgnx-wb-with-owned-windows ws               ; the Outline's own windows, moved by its draw (I9)
+      (dolist (w ws)
+        (set-window-point w (point-min))
+        (set-window-hscroll w 0)))))
 
 (defun drgnx-outline--reveal-row (window start)
   "Put WINDOW's point (and the buffer's) on the row at START; a row below the first screen gets a third of the

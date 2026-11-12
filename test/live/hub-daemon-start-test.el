@@ -44,7 +44,7 @@
          (s nil) (sess nil))
     (unwind-protect
         (progn
-          (setq s (drgnx-ui-start "drgnx" "1400x800" 30 t) sess (drgnx-ui-own-session (plist-get s :name)))
+          (setq s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30 t) sess (drgnx-ui-own-session (plist-get s :name)))
           (should (drgnx-live-hds--q sess (format "(progn (setenv \"DRGNX_NO_HUB_START\") (setenv \"TZ\" %S)
                                                     (setenv \"DRGNX_RATATOSKR_BIN\" %S)
                                                     (setenv \"DRGNX_HUB_PARENT_PID\" %S) (daemonp))"

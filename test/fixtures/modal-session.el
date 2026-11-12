@@ -94,7 +94,7 @@ its root removed after."
        (let* ((root (make-temp-file "drgnx-modal-live" t))
               (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
               (drgnx-modal-session--reports nil)
-              (name (plist-get (drgnx-ui-start "drgnx" "1400x800" 60 ,daemon) :name))
+              (name (plist-get (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 60 ,daemon) :name))
               (,sess (drgnx-ui-own-session name)))
          (unwind-protect
              (progn (drgnx-modal-session-start ,sess ,layers)

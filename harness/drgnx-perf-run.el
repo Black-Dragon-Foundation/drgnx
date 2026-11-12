@@ -1982,6 +1982,21 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :check "(with-current-buffer (window-buffer) (and (= (line-number-at-pos) 220) (= 1 (length (drgnx-debug-gutter--stop-overlays \"perf\")))))"
        :teardown ,(concat "(progn (drgnx-debug-gutter-stop-clear-all) (drgnx-debug-gutter-mode -1) " kill-fixture
                           " (global-unset-key (kbd \"<f10>\")) (drgnx-perf--debug-stop) t)"))
+      ;; the toolbar (spec §12): F8 alternates a stopped session and none, so each key shows or hides the card (the
+      ;; child frame made once, then reused), the status segment and the Paused chip; within 5 ms each
+      (debug-toolbar-show
+       :setup ,(concat "(progn " (drgnx-perf-run--debug-setup-form)
+                       (format " (load (expand-file-name \"modules/extra/drgnx-debug\" %S) nil t)" drgnx-ui-repo-dir)
+                       " (defvar drgnx-perf--toolbar-n 0)"
+                       " (defun drgnx-perf--toolbar () (interactive)"
+                       "   (drgnx-debug--event \"debug-state\" (list :sessions (if (cl-oddp (cl-incf drgnx-perf--toolbar-n))"
+                       "     (vector (list :id \"perf\" :name \"perf\" :root \"/nowhere\" :state \"stopped\" :reason \"breakpoint\")) []))))"
+                       " (global-set-key (kbd \"<f8>\") #'drgnx-perf--toolbar) t)")
+       :each "(progn (setq drgnx-perf--toolbar-n 0) t)"
+       :actions ,(funcall keys "<f8>" 120)   ; p95 is judged from 100 samples
+       :check "(and (= drgnx-perf--toolbar-n 120) (null drgnx-debug--sessions))"
+       :teardown ,(concat "(progn (drgnx-debug-toolbar-delete-all) (drgnx-debug-session-mode -1)"
+                          " (global-unset-key (kbd \"<f8>\")) (drgnx-perf--debug-stop) t)"))
       ;; recorded runs (spec §19.9): a batch of probe hits (100, ten probes, at the hub's 20 batches a second: 2,000 hits a
       ;; second) to the sparklines at the lines' ends, 40 batches, within 100 ms each
       (debug-probe-flood
@@ -2706,7 +2721,7 @@ version and the commit, as JSON in FILE."
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "graphical debugging: its allocation, CPU and rows are set from three pinned runs on the desktop island (the plan's perf step)"))
               '(debug-gutter-scroll debug-gutter-baseline debug-breakpoint-click debug-probe-flood debug-scrub
-                                    debug-step-line
+                                    debug-step-line debug-toolbar-show
                                     debug-bisect-typing))
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))

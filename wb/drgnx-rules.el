@@ -142,8 +142,21 @@ buffer itself calls this (*Completions* and *Process List* are filled by it)."
 (defvar drgnx-rules--placing nil
   "Non-nil while a place shows a buffer: its own `display-buffer-in-side-window' calls are meant.")
 
+(defun drgnx-wb-frame ()
+  "The frame the workbench works on: the selected one, or, when that is a minibuffer-only child frame (ui/look's echo
+box, selected while a prompt is in it), the frame it belongs to.  The box has no editor, dock or panel."
+  (let ((f (selected-frame)))
+    (if (and (eq (frame-parameter f 'minibuffer) 'only) (frame-parent f)) (frame-parent f) f)))
+
 (defun drgnx-rules--display (buffer alist)
-  "Our `display-buffer-alist' action: show BUFFER where its rule says (unmatched: the editor, logged)."
+  "Our `display-buffer-alist' action: show BUFFER where its rule says (unmatched: the editor, logged), on the frame
+`drgnx-wb-frame' names."
+  (if (not (eq (drgnx-wb-frame) (selected-frame)))
+      (with-selected-frame (drgnx-wb-frame) (drgnx-rules--display buffer alist))
+    (drgnx-rules--display-here buffer alist)))
+
+(defun drgnx-rules--display-here (buffer alist)
+  "`drgnx-rules--display' on the selected frame."
   (let ((rule (drgnx-wb-rule-for buffer (cons nil alist))))
     (unless rule (drgnx-rules--log buffer))
     (let ((place (or (car rule) 'editor)) (drgnx-rules--placing t))
