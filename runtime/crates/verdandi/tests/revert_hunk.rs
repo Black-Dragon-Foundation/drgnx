@@ -46,6 +46,11 @@ fn fx() -> Fx {
 impl Fx {
     /// PEER's CHANGES as one `edits` record.
     fn step(&mut self, peer: PeerId, changes: &[(usize, usize, &str)]) -> OpId {
+        self.step_as(Kind::Edits, peer, changes)
+    }
+
+    /// PEER's CHANGES as one record of KIND (an agent's write to disk is an `agent_step`).
+    fn step_as(&mut self, kind: Kind, peer: PeerId, changes: &[(usize, usize, &str)]) -> OpId {
         let mut spans = Vec::new();
         for (start, old_len, inserted) in changes {
             let s = self
@@ -65,7 +70,7 @@ impl Fx {
         }
         self.h
             .record(Record {
-                kind: Kind::Edits,
+                kind,
                 author: peer,
                 cause: Cause {
                     session: Some("s9".into()),
@@ -240,4 +245,18 @@ fn a_sessions_records_on_a_branch() {
     let b = f.step(f.agent, &[(0, 0, "z")]);
     assert_eq!(f.h.records_of(f.br, "s9").unwrap(), vec![a, b]);
     assert!(f.h.records_of(f.br, "s1").unwrap().is_empty());
+}
+
+/// An agent's writes to disk are `agent_step` records, its edits in a buffer `edits`: both are its records, oldest
+/// first, and each lists its hunks (a hand-off's state reads them); the user's records are not.
+#[test]
+fn a_sessions_disk_writes_are_its_records_too() {
+    let mut f = fx();
+    let a = f.step(f.agent, &[(0, 0, "x")]);
+    let w = f.step_as(Kind::AgentStep, f.agent, &[(5, 4, "TWO\n")]);
+    f.step_as(Kind::AgentStep, f.user, &[(0, 0, "y")]);
+    assert_eq!(f.h.records_of(f.br, "s9").unwrap(), vec![a, w]);
+    let h = f.h.op_hunks(f.br, w).unwrap();
+    assert_eq!(h.len(), 1, "{h:?}");
+    assert_eq!(h[0].state, HunkState::Live, "{h:?}");
 }

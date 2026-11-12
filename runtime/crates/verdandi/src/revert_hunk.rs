@@ -288,7 +288,8 @@ impl Read {
 }
 
 impl History {
-    /// The `edits` records of SESSION's agent on BRANCH (a paired chat's, on the user's branch), oldest first.
+    /// The records of SESSION's agent on BRANCH (a paired chat's, on the user's branch), oldest first: its edits in a
+    /// buffer (`edits`) and its writes to disk (`agent_step`).
     pub fn records_of(&self, branch: BranchId, session: &str) -> Result<Vec<OpId>> {
         let mut st = self
             .conn
@@ -306,9 +307,9 @@ impl History {
             .map(|(id, _)| id)
             .collect();
         let mut out = Vec::new();
-        let mut st = self
-            .conn
-            .prepare("select id from op where author = ?1 and kind = 'edits' order by id")?;
+        let mut st = self.conn.prepare(
+            "select id from op where author = ?1 and kind in ('edits', 'agent_step') order by id",
+        )?;
         for p in peers {
             for id in st.query_map([p], |r| r.get::<_, i64>(0))? {
                 out.push(OpId(id?));
