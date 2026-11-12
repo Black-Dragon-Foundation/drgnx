@@ -1374,6 +1374,10 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `coord/notify` | user, agent, service | `{}` | `boolean` | no |
 | `coord/prune` | user | `{}` | `{pruned: boolean}` | yes |
 | `coord/task-status` | user | `{agent?: AgentName, status: Status, task: TaskRef}` | `boolean` | yes |
+| `debug/bisect` | user | `{good: {id: string, kind: string}, parallel?: natnum, predicate: {argv?: [string], at?: string, build?: [string], code?: integer, condition?: string, kind: string, run?: string, timebox_s?: natnum}, root: string}` | `{bisect: string, estimate: any, states: [any]}` | no |
+| `debug/bisect/cancel` | user | `{bisect: string}` | `boolean` | no |
+| `debug/bisect/narrow` | user | `{bisect: string}` | `boolean` | no |
+| `debug/bisect/states` | user | `{good?: {id: string, kind: string}, root: string}` | `{states: [any]}` | no |
 | `debug/breakpoints` | user | `{op?: {condition?: string, enabled?: boolean, hit?: string, id?: natnum, line?: natnum, log?: string, name?: string, op: string, path?: string}, path?: string, root: string}` | `DebugBreakpointsView` | no |
 | `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
 | `debug/control` | user | `{op: string, session: string, thread?: integer}` | `boolean` | no |

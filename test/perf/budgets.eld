@@ -25,6 +25,7 @@
  ;; (150 ms p95, 5,000 files unchanged) and a stop's capture (1 ms), are the bench `debug_record' (docs/develop/perf.md)
  (debug-probe-flood (:input :p95) 100) (debug-probe-flood (:input :max) 200)
  (debug-scrub (:input :p95) 50) (debug-scrub (:input :max) 100)
+ (debug-bisect-typing (:input :p95) 16) (debug-bisect-typing (:input :max) 50)
  (live-view (:input :p95) 16) (live-view (:input :max) 50)
  (agent-settings-open (:draw_ms) 150) (agent-settings-open (:processes) 0)
  ;; the unified settings layer (design 16): read+apply of a 200-entry settings.el 2 ms; the page open 100 ms and a search

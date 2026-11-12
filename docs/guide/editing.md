@@ -91,6 +91,15 @@ run, or one for an open task, longer), at most 2 GB per project, oldest first. P
 (debugpy and the JavaScript debugger take 2000 values a second, the rest 200, and delve and codelldb stop and resume
 the program for each one; values past the rate are thinned and counted).
 
+**Find the Change That Broke It…** (the palette) answers "which change broke it?". Pick a state where it worked (a
+commit, a recorded run's start, one of your saves or an agent's step) and a command that fails now, such as a test
+(exit 0 passes, 125 skips the state, 1–127 fails). The hub runs it over the states in between, three at a time,
+each in a copy of the project moved from state to state, and a card shows a dot per state and then the first bad one:
+what it was, who made it (you, an agent with its step and decision, or a commit's author), and a warning when a state
+gave different answers twice (flaky) or could not be judged. **Show Step** opens the change as a diff; for an agent's
+step, **Revert Step** opens the revert card (nothing changes until you apply it) and **Ask the Agent** tells that
+agent what broke; **Narrow** finds the hunks of the change that make it fail. `RET` on an action runs it.
+
 ## Indent guides
 
 Thin vertical guides at each indentation level of code and YAML, on graphical frames, drawn by indent-bars (stipples,
