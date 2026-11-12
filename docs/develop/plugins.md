@@ -160,7 +160,9 @@ CI builds them first, in their own step (`.github/ci/wasm-target.sh`, in the Lin
 rustup it adds the target; the Fedora 45 job's packaged Rust has no `wasm32-wasip2` standard library and cannot use an
 upstream one (its crates are tagged with its own rustc), so the script installs the same rustc version with rustup-init
 (checked against its published SHA-256) for the fixtures alone. `DRGNX_WASM_CARGO` names the cargo the test support
-builds them with, when it is not the one running the tests.
+builds them with, when it is not the one running the tests. The script builds the fixtures and the template into the
+folders the test support builds into (`runtime/target/plugin-fixtures`), so the tests' own cargo run finds them built
+(a minute of brokkr's lib tests on a cold macOS runner).
 
 ## The template
 

@@ -1074,8 +1074,33 @@ jobs:
         uses: ./.github/actions/macos-runtime
       # --no-fail-fast: every crate's failures in one run (no Mac to try them on before CI). No GPU adapter is named: the
       # GPU tests are ignored on macOS (the runner has no GPU; Metal parity is a real Mac's)
+      # The build first, on its own: its time apart from the tests', and the list of test binaries (test-bins.json) the
+      # later steps run as they are. Every step after it reuses this build: another feature set (`-p` alone resolves
+      # one) or another profile would rebuild the hub, four minutes a step on a cold runner
+      - id: build
+        run: |
+          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks \
+            --no-run --message-format=json-render-diagnostics > "$RUNNER_TEMP/test-bins.json"
       - id: test
         run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
+      # Diagnostic, report-only: each test's time in the slowest binaries (hrafn's overlay, verdandi's and the hub's
+      # libs), for choosing what leaves this job. --report-time is unstable: RUSTC_BOOTSTRAP is given to the binaries
+      # alone, since cargo would rebuild everything for it (proc-macro2's build script watches it). The step goes once
+      # those times are read
+      - name: the slowest test binaries, each test's time
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 12
+        run: |
+          for t in hrafn/overlay verdandi/verdandi drgnx-ratatoskr/drgnx_ratatoskr; do
+            pkg=${t%/*} name=${t#*/}
+            bin=$(jq -r --arg p "$pkg" --arg n "$name" \
+              'select(.profile.test == true and .target.name == $n and (.package_id | test("/" + $p + "#"))) | .executable' \
+              "$RUNNER_TEMP/test-bins.json" | tail -n 1)
+            [ -x "$bin" ] || { echo "no test binary for $t"; continue; }
+            (cd "runtime/crates/$pkg" && RUSTC_BOOTSTRAP=1 "$bin" -Z unstable-options --report-time > "$RUNNER_TEMP/times.log" 2>&1)
+            echo "--- $t: exit $?, the 25 slowest tests"
+            sed -nE 's/^test (.*) \.\.\. [a-zA-Z]+ <([0-9.]+)s>$/\2 \1/p' "$RUNNER_TEMP/times.log" | sort -rn | head -n 25
+          done
       # The hub's lib tests ended in a SIGABRT on macOS with no message, so none of them ran there: when the run above
       # failed, the lib runs again one test at a time, which names the test running when the process dies (libtest
       # prints a test's name before it runs it with one thread), and that name goes to the job's summary. Diagnostic:
@@ -1089,26 +1114,28 @@ jobs:
         run: |
           set +e
           : > lib-serial.start
-          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --lib -- --test-threads 1 --nocapture > lib-serial.log 2>&1
+          # the lib's binary the workspace build made (test-bins.json), run from the crate's folder as cargo runs it
+          bin=$(jq -r 'select(.profile.test == true and .target.name == "drgnx_ratatoskr" and (.target.kind | index("lib"))) | .executable' \
+            "$RUNNER_TEMP/test-bins.json" | tail -n 1)
+          [ -x "$bin" ] || { echo "::error::no test binary for the hub's lib"; exit 1; }
+          (cd runtime/crates/drgnx-ratatoskr && "$bin" --test-threads 1 --nocapture) > lib-serial.log 2>&1
           rc=$?
           tail -n 40 lib-serial.log
           last=$(grep -E '^test .* \.\.\. ' lib-serial.log | tail -n 1)
           echo "- the hub's lib one at a time: exit $rc; last line: \`${last:-none}\`" >> "$GITHUB_STEP_SUMMARY"
           if [ "$rc" -ne 0 ]; then
-            bin=$(sed -nE 's/.*process didn.t exit successfully: `([^` ]+).*/\1/p' lib-serial.log | tail -n 1)
-            bin=${bin##*/}
             # ReportCrash writes the report a few seconds after the process dies; its name is the binary's and the time
             for _ in $(seq 30); do
-              ips=$(find "$HOME/Library/Logs/DiagnosticReports" -name "${bin:-none}-*.ips" -newer lib-serial.start 2>/dev/null | sort | tail -n 1)
+              ips=$(find "$HOME/Library/Logs/DiagnosticReports" -name "${bin##*/}-*.ips" -newer lib-serial.start 2>/dev/null | sort | tail -n 1)
               [ -n "$ips" ] && break
               sleep 1
             done
-            echo "--- the crash report of ${bin:-no binary named} in this run: ${ips:-none}"
+            echo "--- the crash report of ${bin##*/} in this run: ${ips:-none}"
             [ -n "$ips" ] && head -c 60000 "$ips"
             name=$(printf '%s\n' "$last" | sed -E 's/^test (.*) \.\.\. .*$/\1/')
             if [ -n "$name" ]; then
               echo "--- $name alone"
-              cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --lib -- --exact "$name" --nocapture --test-threads 1
+              (cd runtime/crates/drgnx-ratatoskr && "$bin" --exact "$name" --nocapture --test-threads 1)
               echo "- $name alone: exit $?" >> "$GITHUB_STEP_SUMMARY"
             fi
           fi
@@ -1119,8 +1146,7 @@ jobs:
       - name: a terminal worker drops another uid's connection (getpeereid, as root)
         if: ${{ !cancelled() }}
         run: |
-          bin=$(cargo test --locked --no-fail-fast --no-run --manifest-path runtime/Cargo.toml -p drgnx-term --test running --message-format=json |
-            jq -r 'select(.profile.test == true and .target.name == "running") | .executable' | tail -n 1)
+          bin=$(jq -r 'select(.profile.test == true and .target.name == "running") | .executable' "$RUNNER_TEMP/test-bins.json" | tail -n 1)
           [ -x "$bin" ] || { echo "::error::no test binary for drgnx-term's running tests"; exit 1; }
           out=$(sudo env RUST_LOG=debug "$bin" --exact the_socket_is_private_and_another_uid_is_dropped --nocapture 2>&1) || { echo "$out"; exit 1; }
           echo "$out"
@@ -1138,7 +1164,8 @@ jobs:
           export DRGNX_TEST_SSHD_HOST
           # the timing rows are #[ignore] too: a debug build on a shared runner would judge a release budget
           skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == "drgnx-ratatoskr" { printf " --skip %s", $3 }')
-          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --test macos -- --ignored $skips
+          # --workspace and the workspace's features (tests/macos.rs is the only `macos` test target): the build above
+          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks --test macos -- --ignored $skips
       # the relay sidecar of a networked container job (and a keyed one's drgnx-key) is a Linux binary: build-only here
       # (no podman machine to run it in).
       # Apple Silicon builds aarch64 musl with Rust's self-contained musl and rust-lld, as `drgnx runtime build` does
@@ -1267,3 +1294,9 @@ jobs:
           name: ratatoskr-perf-macos
           path: perf-macos.json
           if-no-files-found: error
+      # The CPU embedder against the reference vectors on Apple Silicon (its NEON path), in release: a debug build ignores
+      # these rows on macOS (an unoptimised run took over a minute of the tests job's budget), so they run here, beside
+      # the release build. The models come from the setup action (DRGNX_TEST_MODELS)
+      - name: the CPU embedder's parity (release)
+        if: ${{ !cancelled() }}
+        run: cargo test --locked --no-fail-fast --release --manifest-path runtime/Cargo.toml -p hrafn-embed --test parity_cpu
