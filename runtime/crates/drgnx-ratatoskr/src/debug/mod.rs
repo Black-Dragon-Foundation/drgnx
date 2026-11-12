@@ -1114,6 +1114,38 @@ impl Debug {
 
     /// OP on session ID. A stop or disconnect stops its children first and resolves once all have ended.
     /// The text of SESSION's source REFERENCE (a frame with no file): `{text, mime?}`.
+    /// Where on PATH's LINE session ID's adapter can stop, as `breakpointLocations` gives it (UTF-16 columns); none
+    /// when the adapter cannot say.
+    pub async fn breakpoint_locations(
+        &self,
+        id: &str,
+        path: &str,
+        line: u32,
+    ) -> Result<Vec<Value>, String> {
+        let (h, caps) = lock(&self.inner.state)
+            .sessions
+            .get(id)
+            .map(|e| (e.handle.clone(), e.caps.clone()))
+            .ok_or_else(|| format!("no debug session {id}"))?;
+        if caps
+            .get("supportsBreakpointLocationsRequest")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            return Ok(vec![]);
+        }
+        let b = h
+            .request(
+                "breakpointLocations",
+                json!({"source": {"path": path}, "line": line}),
+            )
+            .await?;
+        Ok(b.get("breakpoints")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default())
+    }
+
     pub async fn source(&self, id: &str, reference: i64) -> Result<Value, String> {
         let h = self
             .handle(id)

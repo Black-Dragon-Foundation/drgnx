@@ -268,6 +268,7 @@ async fn probe(f: &Front, sid: &str, args: &Value) -> Result<Value, String> {
                     Some(super::breakpoints::Op::Add {
                         path: arg(args, "path")?.to_owned(),
                         line: line()?,
+                        column: None,
                         enabled: true,
                         condition: None,
                         hit: None,

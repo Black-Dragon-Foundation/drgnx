@@ -59,6 +59,7 @@
   "debug/bisect/cancel": ["user"],
   "debug/bisect/narrow": ["user"],
   "debug/bisect/states": ["user"],
+  "debug/breakpoint-locations": ["user"],
   "debug/breakpoints": ["user"],
   "debug/children": ["user"],
   "debug/compare": ["user"],

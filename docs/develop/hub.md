@@ -1389,7 +1389,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/bisect/cancel` | user | `{bisect: string}` | `boolean` | no |
 | `debug/bisect/narrow` | user | `{bisect: string}` | `boolean` | no |
 | `debug/bisect/states` | user | `{good?: {id: string, kind: string}, root: string}` | `{states: [any]}` | no |
-| `debug/breakpoints` | user | `{op?: {adapter?: string, condition?: string, enabled?: boolean, hit?: string, id?: natnum, line?: natnum, log?: string, name?: string, op: string, path?: string, triggered_by?: natnum}, path?: string, root: string}` | `DebugBreakpointsView` | no |
+| `debug/breakpoint-locations` | user | `{line: natnum, path: string, session: string}` | `{locations: [BreakpointLocation]}` | no |
+| `debug/breakpoints` | user | `{op?: {adapter?: string, column?: natnum, condition?: string, enabled?: boolean, hit?: string, id?: natnum, line?: natnum, log?: string, name?: string, op: string, path?: string, triggered_by?: natnum}, path?: string, root: string}` | `DebugBreakpointsView` | no |
 | `debug/children` | user | `{epoch?: natnum, reference: integer, session: string}` | `{variables: [DebugChild]}` | no |
 | `debug/compare` | user | `{fork: string, run: string}` | `DebugForkView` | no |
 | `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
