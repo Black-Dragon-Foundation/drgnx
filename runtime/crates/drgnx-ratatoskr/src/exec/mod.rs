@@ -503,6 +503,8 @@ pub struct Runner {
     events: tokio::sync::broadcast::Sender<JobEvent>,
     /// The rule pack's `no-cache` words ([`Runner::set_no_cache`]).
     no_cache: Mutex<Vec<String>>,
+    /// The worktrees of the sessions whose `exec/start` is on its way (one entry per start; [`Runner::starting`]).
+    starting: Mutex<Vec<PathBuf>>,
 }
 
 impl Default for Runner {
@@ -512,6 +514,22 @@ impl Default for Runner {
             live: Arc::default(),
             events: tokio::sync::broadcast::channel(256).0,
             no_cache: Mutex::default(),
+            starting: Mutex::default(),
+        }
+    }
+}
+
+/// A session's `exec/start` on its way, in its worktree: dropped (answered or refused), it is not.
+pub(crate) struct Starting<'a> {
+    runner: &'a Runner,
+    worktree: PathBuf,
+}
+
+impl Drop for Starting<'_> {
+    fn drop(&mut self) {
+        let mut s = self.runner.starting.lock().unwrap();
+        if let Some(i) = s.iter().position(|w| *w == self.worktree) {
+            s.swap_remove(i);
         }
     }
 }
@@ -896,6 +914,29 @@ impl Runner {
             },
             None => true,
         }
+    }
+
+    /// A session's `exec/start` in WORKTREE is on its way until the answer drops.
+    pub(crate) fn starting(&self, worktree: PathBuf) -> Starting<'_> {
+        self.starting.lock().unwrap().push(worktree.clone());
+        Starting {
+            runner: self,
+            worktree,
+        }
+    }
+
+    /// Whether a run in TOP (or a folder inside it) has no result yet: a session's `exec/start` there on its way, or a
+    /// job there queued or running.
+    pub fn busy_in(&self, top: &Path) -> bool {
+        self.starting
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|w| w.starts_with(top))
+            || self
+                .list(None, true)
+                .iter()
+                .any(|r| Path::new(&r.cwd).starts_with(top))
     }
 
     /// The jobs, newest first; SESSION only that session's, RUNNING only those that run.
@@ -2938,6 +2979,29 @@ async fn start_as(
     p: StartParams,
     gate: Option<&Sealed>,
 ) -> Result<Started, Error> {
+    // a session's start is on its way until it answers: the merge gates wait for the run it brings (`orch::gates`)
+    let _starting = match (gate, &c.sid) {
+        (None, Some(sid)) => f
+            .core
+            .agents
+            .worktree(sid)
+            .map(|wt| f.core.exec.starting(wt)),
+        _ => None,
+    };
+    // `RATATOSKR_TEST_EXEC_START_DELAY_MS` (test-hooks): a session's start answers that late, as a slow machine's
+    #[cfg(feature = "test-hooks")]
+    if c.sid.is_some() && gate.is_none() {
+        static DELAY: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+        let ms = *DELAY.get_or_init(|| {
+            std::env::var("RATATOSKR_TEST_EXEC_START_DELAY_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0)
+        });
+        if ms > 0 {
+            crate::clock::sleep(std::time::Duration::from_millis(ms)).await;
+        }
+    }
     // the hub sets an agent's job's priority; only the user's connections choose one
     if c.sid.is_some() && p.priority.is_some() {
         return Err(crate::agents::session::invalid(

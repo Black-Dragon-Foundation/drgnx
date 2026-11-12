@@ -140,7 +140,11 @@ the tree's folder name; a sealed job names no session in its meta, queue record 
 asks no matrix cell (the gate's run is the hub's decision). Other hub runs of untrusted commands (a bisect's
 predicate) use the same starter. Unit test `a_sealed_job_names_no_session_and_stays_sealed_in_the_queue`. Row `runner/a-gate-run-keeps-the-agents-sandbox`. The job's end is the task's
 evidence like any other; the next tick looks again. A hold is a `gate` card on the task (key `gates`, `tip` its tree
-key) saying what is wrong; a red-first wait with no run of the task's tests to repeat is a hold too. Its actions:
+key) saying what is wrong; a red-first wait with no run of the task's tests to repeat is a hold too, but not while a
+run in the task's tree has no result yet (a session's `exec/start` on its way, `exec::Runner::busy_in`, or a job there
+queued or running): red first then waits, and the next tick judges it with that run (a start that answered later
+than the review came, as on the macOS lane; row `runner/a-gate-waits-for-a-run-still-starting`, whose hub answers
+`exec/start` 30 s late with the test hook `RATATOSKR_TEST_EXEC_START_DELAY_MS`). Its actions:
 **Check again**, **Tell the agent** (the task goes back to its agent with the card's words), **Waive once…** (with a
 reason) and **Drop the task**.
 
