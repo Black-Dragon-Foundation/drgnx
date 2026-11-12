@@ -2,7 +2,8 @@
 //! runs (`debug/runs/list`), one run's strip (`debug/run/get`), a past stop (`debug/run/stop`) and pinning a run
 //! (`debug/run/pin`). Run files hold the program's values unredacted, so these are the user's alone (an agent reads
 //! them only through the matrix's `debug.read`, spec §19.5). The hub's events: `debug-run` (a run started, stopped,
-//! ended) and `debug-probe-hits` (batched, at most 20 a second).
+//! ended), `debug-probe-hits` (batched, at most 20 a second) and `debug-recording-off` (a session not recorded: the
+//! keyring that holds the runs' key is locked or absent; `why`).
 
 use super::{invalid, method};
 use crate::registry::Method;

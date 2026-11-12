@@ -146,6 +146,19 @@ ring = { version = "0.17", default-features = false, features = ["alloc"] }
 [target.'cfg(all(unix, not(target_os = "android")))'.dependencies]
 openssh.workspace = true
 
+# debug run files' key in the user's keyring (debug::runkey): the Secret Service's calls made one by one over the session
+# bus, on the hub's tokio, so none is ever an Unlock or a Prompt (a client library runs the prompts it is handed)
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy"] }
+
+# the same key in the login Keychain, user interaction off (already in the tree through the TLS roots)
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7"
+
+# a Secret Service fake on a socket pair (debug::tests_runkey): it counts the prompts it was asked for
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service", "p2p"] }
+
 [dev-dependencies]
 # `test-hooks`: `urdr::graph::Tx::for_test` for the manager's unit tests (a `-p drgnx-ratatoskr` test build alone has no
 # other crate turning it on)

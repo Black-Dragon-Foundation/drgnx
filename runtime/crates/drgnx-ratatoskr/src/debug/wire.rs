@@ -58,8 +58,13 @@ impl Hub {
                         .join("debug-breakpoints"),
                 ),
             );
-            // every session is recorded (spec §19.2)
-            d.record_into(super::runs_wire::opts(front));
+            // every session is recorded (spec §19.2), sealed under the keyring's key: read now, never asked for
+            let rec = d.record_into(super::runs_wire::opts(front));
+            crate::clock::spawn("debug:runs-key", async move {
+                if let Err(u) = rec.unlock().await {
+                    tracing::info!(target: "drgnx::debug", "recorded runs: {}", u.why());
+                }
+            });
             d
         })
     }

@@ -54,6 +54,8 @@
 
 (defvar drgnx-debug-timeline--runs nil
   "The runs `debug-run' told of, newest first: plists (:run :n :root :state …); at most 16.")
+(defvar drgnx-debug-timeline--off-said nil
+  "Why the hub last said a session was not recorded (`debug-recording-off'): the same reason is said once.")
 (defvar drgnx-debug-timeline--probes (make-hash-table :test 'equal)
   "ROOT → its probes (plists :id :path :line :expr :enabled), as `debug/probe/op' last said.")
 (defvar drgnx-debug-timeline--values (make-hash-table :test 'equal)
@@ -482,8 +484,14 @@ the editor does not know is dropped, never interned."
 ;;;; The hub's events
 
 (defun drgnx-debug-timeline--event (event data)
-  "`drgnx-hub-event-functions': a run started, stopped or ended (`debug-run'); probe hits came (`debug-probe-hits')."
+  "`drgnx-hub-event-functions': a run started, stopped or ended (`debug-run'); probe hits came (`debug-probe-hits');
+a session was not recorded (`debug-recording-off': the keyring is locked or absent)."
   (pcase event
+    ("debug-recording-off"
+     (let ((why (plist-get data :why)))
+       (unless (equal why drgnx-debug-timeline--off-said)
+         (setq drgnx-debug-timeline--off-said why)
+         (message "Debug: this session is not recorded: %s" why))))
     ("debug-run"
      (let ((run (plist-get data :run)))
        (setq drgnx-debug-timeline--runs
@@ -544,7 +552,7 @@ the editor does not know is dropped, never interned."
     (clrhash drgnx-debug-timeline--probes)
     (clrhash drgnx-debug-timeline--values)
     (setq drgnx-debug-timeline--runs nil drgnx-debug-timeline--run nil drgnx-debug-timeline--stops nil
-          drgnx-debug-timeline--current nil drgnx-debug-timeline--root-shown nil)))
+          drgnx-debug-timeline--current nil drgnx-debug-timeline--root-shown nil drgnx-debug-timeline--off-said nil)))
 
 (defconst drgnx-debug-timeline-commands
   '((debug-probe "Add Probe…" drgnx-debug-probe-add "Record an expression each time this line runs, without stopping")
