@@ -172,19 +172,21 @@ pub fn fork_adapter(ty: &str) -> Result<&'static str, String> {
     }
 }
 
-/// RUN forked at AT on this machine (LINUX: forks run on Linux only for now); CONFIRMED: the user said yes to a slow
-/// replay.
-pub fn check(run: &RunInfo, at: &At, linux: bool, confirmed: bool) -> Result<Target, Refused> {
+/// Whether this system seals a fork: Linux (Gleipnir's full tier) and macOS (Seatbelt, the session's port block).
+pub const SEALS_HERE: bool = cfg!(any(target_os = "linux", target_os = "macos"));
+
+/// RUN forked at AT on this machine (SEALED: this system seals forks, [`SEALS_HERE`]); CONFIRMED: the user said yes
+/// to a slow replay.
+pub fn check(run: &RunInfo, at: &At, sealed: bool, confirmed: bool) -> Result<Target, Refused> {
     if run.request == "attach" {
         return Err(Refused::No(
             "an attach session cannot be replayed: the hub did not start its program".into(),
         ));
     }
     fork_adapter(&run.adapter_id).map_err(Refused::No)?;
-    if !linux {
+    if !sealed {
         return Err(Refused::No(
-            "forks run in Gleipnir's full tier on Linux; on macOS they wait for the adapters' port blocks in Seatbelt"
-                .into(),
+            "forks run sealed on Linux (Gleipnir's full tier) and macOS (Seatbelt) only".into(),
         ));
     }
     if run.snapshot.is_none() {

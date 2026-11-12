@@ -315,6 +315,91 @@ pub fn spec(s: &Shape<'_>, target: Target) -> Spec {
     }
 }
 
+/// A fork's Seatbelt spec on macOS (spec §21): as [`spec`], with PORTS (the session's block) its only loopback ports
+/// and each `.env` file pinned read-only where it is (no mount namespace: the tree has a link to it,
+/// [`link_env_files`]).
+pub fn mac_spec(s: &Shape<'_>, ports: &[u16]) -> Spec {
+    let mut out = spec(s, Target::Macos);
+    out.binds = s
+        .env_files
+        .iter()
+        .map(|(src, _)| Bind {
+            mode: Mode::Ro,
+            source: src.clone(),
+            dest: src.clone(),
+        })
+        .collect();
+    out.net = Net::Isolated {
+        relay: vec![],
+        mac_tcp_ports: vec![],
+        loopback: true,
+        mac_loopback_ports: ports.to_vec(),
+    };
+    out
+}
+
+/// Each `.env` file's place in the tree a link to it (macOS: read where it is, never copied). A link already there
+/// stays; anything else at that place in the tree is replaced by the link.
+pub fn link_env_files(files: &[(PathBuf, PathBuf)]) -> Result<(), String> {
+    for (src, dst) in files {
+        let shown = |e: std::io::Error| format!("{}: {e}", dst.display());
+        if let Ok(m) = std::fs::symlink_metadata(dst) {
+            if m.file_type().is_symlink() && std::fs::read_link(dst).is_ok_and(|t| &t == src) {
+                continue;
+            }
+            std::fs::remove_file(dst).map_err(shown)?;
+        }
+        if let Some(dir) = dst.parent() {
+            std::fs::create_dir_all(dir).map_err(shown)?;
+        }
+        std::os::unix::fs::symlink(src, dst).map_err(shown)?;
+    }
+    Ok(())
+}
+
+/// The seal of a fork's processes on macOS: each in Seatbelt under SPEC (its environment and folder the process's),
+/// checked against CTX.
+fn seatbelt(spec: Spec, ctx: gleipnir::Context) -> super::blocked::Seal {
+    let (spec, ctx) = (Arc::new(spec), Arc::new(ctx));
+    Arc::new(move |d: draugr::Spec| {
+        let (spec, ctx) = (spec.clone(), ctx.clone());
+        Box::pin(async move {
+            let sb = crate::agents::launch::detect()
+                .await
+                .map_err(|r| r.message)?;
+            let target = sb.target().ok_or("no sandbox here")?;
+            let mut s = (*spec).clone();
+            s.env = d
+                .env
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.to_string_lossy().into_owned(),
+                        v.to_string_lossy().into_owned(),
+                    )
+                })
+                .collect();
+            if let Some(cwd) = &d.cwd {
+                s.chdir = cwd.clone();
+            }
+            let valid = gleipnir::validate(s, &ctx, target)
+                .map_err(|r| format!("the fork's sandbox: {}", r.message))?;
+            let mut argv = vec![d.program.display().to_string()];
+            argv.extend(d.args.iter().map(|a| a.to_string_lossy().into_owned()));
+            let prepared = sb
+                .prepare(
+                    valid,
+                    argv,
+                    None,
+                    #[cfg(feature = "test-hooks")]
+                    gleipnir::TestHooks::default(),
+                )
+                .map_err(|r| format!("the fork's sandbox: {}", r.message))?;
+            Ok(crate::sandbox::to_draugr(prepared.invocation))
+        })
+    })
+}
+
 /// The hub's sealer: the adapters found as `debug/start` finds them (PATH, the tools folder).
 pub struct Sealed {
     pub env: runstav::paths::Env,
@@ -398,6 +483,24 @@ impl Sealer for Sealed {
             .and_then(|p| p.into_string().ok())
             .unwrap_or_else(|| "/usr/local/bin:/usr/bin:/bin".into());
         let env_files = env_files(Path::new(&run.root), tree, config);
+        if cfg!(target_os = "macos") {
+            // Seatbelt has no namespaces: the session keeps to a port block (spec §21), the .env files are read in
+            // place, each by its true name (Gleipnir takes no path through a link)
+            let env_files: Vec<(PathBuf, PathBuf)> = env_files
+                .into_iter()
+                .map(|(src, dst)| (std::fs::canonicalize(&src).unwrap_or(src), dst))
+                .collect();
+            link_env_files(&env_files)?;
+            let shape = Shape {
+                tree,
+                tmp,
+                read,
+                env_files,
+                path,
+                cwd,
+            };
+            return self.in_block(a, &found, config, &shape);
+        }
         // empty files for the binds to land on (the tree never holds their text)
         for (_, dst) in &env_files {
             if !dst.exists() {
@@ -421,6 +524,38 @@ impl Sealer for Sealed {
             argv,
             mux: Mutex::new(None),
         }))
+    }
+}
+
+impl Sealed {
+    /// macOS: ADAPTER's session for CONFIG in SHAPE inside a port block of its own (`debug::blocked`: debugpy
+    /// listening for its program, js-debug attached to `--inspect-brk`), the adapter and the program each in Seatbelt
+    /// with the block as their only loopback ports.
+    fn in_block(
+        &self,
+        adapter: &adapters::Adapter,
+        found: &Found,
+        config: &Value,
+        shape: &Shape<'_>,
+    ) -> Result<Arc<dyn Launcher>, String> {
+        let block = super::ports::machine().claim()?;
+        let ports = block.ports();
+        let preload = shape.tmp.join(super::blocked::PRELOAD_NAME);
+        std::fs::write(&preload, super::blocked::PRELOAD)
+            .map_err(|e| format!("{}: {e}", preload.display()))?;
+        let env = adapters::Env {
+            path: self.path.clone(),
+            tools: self.tools.clone(),
+        };
+        let plan = super::blocked::plan(adapter, found, &env, config, &ports, shape.tmp, &preload)?;
+        let spec = mac_spec(shape, &ports);
+        let base = spec.env.iter().map(|(k, v)| (k.into(), v.into())).collect();
+        let mut ctx = crate::sandbox::context(&self.env);
+        ctx.open_inside_closed.push(self.tools.clone());
+        Ok(Arc::new(
+            super::blocked::Blocked::new(plan, base, shape.cwd.clone(), Some(block))
+                .sealed(seatbelt(spec, ctx)),
+        ))
     }
 }
 

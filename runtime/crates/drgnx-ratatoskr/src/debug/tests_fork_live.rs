@@ -117,8 +117,10 @@ fn fixture_at(
 ) -> Fixture {
     pin_hub();
     let d = tempfile::tempdir_in("/tmp").unwrap();
-    let home = d.path().join("home");
-    let root = d.path().join("proj");
+    // by its true name: macOS's /tmp is a link to /private/tmp, and Gleipnir takes no path through a link
+    let base = d.path().canonicalize().unwrap();
+    let home = base.as_path().join("home");
+    let root = base.as_path().join("proj");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(
@@ -127,7 +129,7 @@ fn fixture_at(
     )
     .unwrap();
     std::fs::write(root.join(".env"), "API_TOKEN=s3cr3t-value\n").unwrap();
-    let checkpoints = d.path().join("checkpoints");
+    let checkpoints = base.as_path().join("checkpoints");
     let tree = crate::timeline::snapshot::tree_now(&checkpoints, &root, &root, &[]).unwrap();
     let resolved = config(&root);
     let path = root.join(file).display().to_string();
@@ -185,7 +187,10 @@ fn fixture_at(
         &[
             ("HOME", home.to_str().unwrap()),
             ("PATH", &path_env),
-            ("XDG_RUNTIME_DIR", d.path().join("run").to_str().unwrap()),
+            (
+                "XDG_RUNTIME_DIR",
+                base.as_path().join("run").to_str().unwrap(),
+            ),
         ],
         unsafe { libc::getuid() },
     );
@@ -193,11 +198,11 @@ fn fixture_at(
     let forks = Forks::new(
         events.clone(),
         Arc::new(OneRun(run)),
-        Arc::new(DirTrees::new(d.path().join("runs/debug-forks"))),
+        Arc::new(DirTrees::new(base.as_path().join("runs/debug-forks"))),
         Arc::new(Sealed {
             env,
             path: std::env::split_paths(&path_env).collect(),
-            tools: tools(d.path()),
+            tools: tools(base.as_path()),
         }),
         true,
     );
@@ -869,4 +874,104 @@ async fn a_python_fork_to_a_late_pass_is_quick() {
 async fn a_js_fork_to_a_late_pass_is_quick() {
     let text = JS.replace("i < 40", "i < 300");
     a_late_pass("stock.js", &text, js_config, (3, 7, 9)).await;
+}
+
+/// Every TCP socket of the process groups GROUPS as lsof sees them: (local port, remote port, if connected).
+#[cfg(target_os = "macos")]
+fn sockets_of(groups: &[i32]) -> Vec<(u16, Option<u16>)> {
+    let list = groups
+        .iter()
+        .map(i32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let out = std::process::Command::new("lsof")
+        .args(["-nP", "-a", "-iTCP", "-g", &list, "-Fn"])
+        .output()
+        .unwrap();
+    let port = |s: &str| s.rsplit(':').next().and_then(|p| p.parse::<u16>().ok());
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.strip_prefix('n'))
+        .filter_map(|n| {
+            let mut ends = n.split("->");
+            let local = port(ends.next()?)?;
+            Some((local, ends.next().and_then(port)))
+        })
+        .collect()
+}
+
+/// macOS (spec §21): a fork's adapter and program run in Seatbelt with only their block's ports. While each fork
+/// runs, lsof sweeps their process groups every 50 ms: every socket has an end in one block of the range, and the
+/// fork replays as on Linux (nothing gets out, nothing is written outside the tree, the .env is read in place).
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: macOS with debugpy and js-debug (the runtime workflow's mac fork row)"]
+async fn mac_forks_keep_to_their_port_block() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    for js in [false, true] {
+        let f = if js {
+            fixture("stock.js", JS, js_config, (3, 7, 9), |i| {
+                ((i * 7) % 13).to_string()
+            })
+        } else {
+            fixture("stock.py", PY, py_config, (5, 8, 24), |i| {
+                ((i * 7) % 13).to_string()
+            })
+        };
+        super::blocked::GROUPS.lock().unwrap().clear();
+        let done = Arc::new(AtomicBool::new(false));
+        let sweep = {
+            let done = done.clone();
+            crate::clock::spawn("test:lsof-sweep", async move {
+                let mut seen = vec![];
+                while !done.load(Ordering::Relaxed) {
+                    let groups = super::blocked::GROUPS.lock().unwrap().clone();
+                    if !groups.is_empty() {
+                        seen.extend(
+                            crate::clock::blocking(move || sockets_of(&groups))
+                                .await
+                                .unwrap(),
+                        );
+                    }
+                    crate::clock::sleep(Duration::from_millis(50)).await;
+                }
+                seen
+            })
+        };
+        let v = f.fork(f.ask(Until::NextStop, f.resolved.clone())).await;
+        done.store(true, Ordering::Relaxed);
+        let seen = sweep.await.unwrap();
+        assert_eq!(v["state"], json!("done"), "js {js}: {v}");
+        assert_eq!(
+            v["matched"],
+            json!({"matched": 20, "of": 20, "first": null}),
+            "js {js}: {v}"
+        );
+        if !js {
+            assert_eq!(local(&v, "net"), "'blocked'");
+            assert_eq!(local(&v, "wrote"), "'refused'");
+            assert_eq!(local(&v, "has_env"), "True");
+        }
+        let range = super::ports::RANGE;
+        let first =
+            |p: u16| range.start + (p - range.start) / super::ports::LEN * super::ports::LEN;
+        let ends: Vec<u16> = seen
+            .iter()
+            .map(|&(l, r)| {
+                if range.contains(&l) {
+                    l
+                } else {
+                    r.filter(|r| range.contains(r)).unwrap_or_else(|| {
+                        panic!("js {js}: a socket outside the block: {l} -> {r:?} in {seen:?}")
+                    })
+                }
+            })
+            .collect();
+        assert!(!ends.is_empty(), "js {js}: lsof saw no socket");
+        let block = first(ends[0]);
+        assert!(
+            ends.iter().all(|&p| first(p) == block),
+            "js {js}: sockets in more than one block: {seen:?}"
+        );
+    }
 }
