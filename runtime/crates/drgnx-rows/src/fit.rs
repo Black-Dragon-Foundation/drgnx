@@ -1,6 +1,6 @@
 //! Fitting text to a pixel width (docs/develop/hub.md, "Rows: fitting"): the advances of the font file Emacs uses,
-//! read with skrifa, summed and trimmed with an ellipsis to the width minus [`SLACK`]. The sum is an estimate (no
-//! shaping, kerning or hinting): the editor's fit guard measures each changed line once and reports a string it found
+//! read with skrifa, summed per grapheme cluster (its first char's) and trimmed with an ellipsis to the width minus
+//! [`SLACK`]. The sum is an estimate (no shaping, kerning or hinting): the editor's fit guard measures each changed line once and reports a string it found
 //! wider ([`FontSet::measured`]), and that measurement wins from then on. A glyph the font lacks, or a role with no
 //! font file, is asked of the editor once per (role, char) ([`FontSet::take_asks`]) and its answer cached.
 //!
@@ -11,6 +11,7 @@ use skrifa::instance::{Location, Size};
 use skrifa::{FontRef, MetadataProvider};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Pixels a fitted segment stays short of its width, for what the estimate misses.
 pub const SLACK: f32 = 10.0;
@@ -193,12 +194,19 @@ impl Measure for FontSet {
     }
 }
 
-/// TEXT's width in ROLE: the editor's measurement when it reported one, else the sum of the advances.
+/// TEXT's width in ROLE: the editor's measurement when it reported one, else the sum of its grapheme clusters'.
 pub fn width(m: &dyn Measure, role: &str, text: &str) -> f32 {
     if let Some(px) = m.measured(role, text) {
         return px;
     }
-    text.chars().map(|c| advance(m, role, c)).sum()
+    text.graphemes(true).map(|g| cluster(m, role, g)).sum()
+}
+
+/// A grapheme cluster's width: its first char's advance. The marks, joiners and joined emoji after it are drawn into
+/// that glyph, while measured alone (the editor's answers when there is no font file, as on macOS) each has a width
+/// of its own; a cluster the font does not join draws wider, and the editor's fit guard measures that.
+fn cluster(m: &dyn Measure, role: &str, g: &str) -> f32 {
+    g.chars().next().map_or(0.0, |c| advance(m, role, c))
 }
 
 fn advance(m: &dyn Measure, role: &str, c: char) -> f32 {
@@ -209,7 +217,8 @@ fn advance(m: &dyn Measure, role: &str, c: char) -> f32 {
     }
 }
 
-/// TEXT in ROLE fitted to WIDTH px minus [`SLACK`]: whole when it fits, else cut with an ellipsis.
+/// TEXT in ROLE fitted to WIDTH px minus [`SLACK`]: whole when it fits, else cut with an ellipsis between grapheme
+/// clusters.
 pub fn fit(m: &dyn Measure, role: &str, text: &str, width_px: f32) -> String {
     let budget = width_px - SLACK;
     if width(m, role, text) <= budget {
@@ -218,13 +227,13 @@ pub fn fit(m: &dyn Measure, role: &str, text: &str, width_px: f32) -> String {
     let room = budget - advance(m, role, ELLIPSIS);
     let mut used = 0.0;
     let mut out = String::new();
-    for c in text.chars() {
-        let a = advance(m, role, c);
+    for g in text.graphemes(true) {
+        let a = cluster(m, role, g);
         if used + a > room {
             break;
         }
         used += a;
-        out.push(c);
+        out.push_str(g);
     }
     out.push(ELLIPSIS);
     out
