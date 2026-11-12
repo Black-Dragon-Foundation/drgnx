@@ -9,7 +9,6 @@
 (require 'drgnx-timer)
 (require 'drgnx-view)
 (require 'drgnx-view-nav)
-(defvar drgnx-extensions-list--lisp-rows)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-extensions-list" drgnx-dir) nil t)
@@ -38,19 +37,17 @@
         :props (append (list (list 0 (length text) "drgnx-work-id" (or id key)))
                        (and id (list (list 0 (length text) "drgnx-extensions-id" id))))))
 
-(ert-deftest drgnx-extensions-list/rows-applied-without-keys-rebuild ()
-  "On the rows path the list asks `extensions/list' once (every section, each with its page), never a search per
-section; the hub's rows are inserted as they come, with no key list built and no `drgnx-view-sync-rows'; a row's data
-and point's row come from the model; the answer's totals give the Updates count."
+(ert-deftest drgnx-extensions-list/rows-applied-from-the-model ()
+  "The list asks `extensions/list' once (every section, each with its page), never a search per section; the hub's
+rows are inserted as they come; a row's data and point's row come from the model; the answer's totals give the
+Updates count."
   (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
   (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
         (drgnx-view-model--views (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
-        (calls nil) (keys 0) (syncs 0))
+        (calls nil))
     (unwind-protect
         (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (m p cb) (push (list m p cb) calls) 1))
-                  ((symbol-function 'drgnx-view-env-register) #'ignore)
-                  ((symbol-function 'drgnx-extensions-list--keys) (lambda () (cl-incf keys) nil))
-                  ((symbol-function 'drgnx-view-sync-rows) (lambda (&rest _) (cl-incf syncs))))
+                  ((symbol-function 'drgnx-view-env-register) #'ignore))
           (drgnx-extensions-list--reset)
           (with-current-buffer (drgnx-extensions-list--buffer)
             (drgnx-extensions-list-refresh)
@@ -76,27 +73,151 @@ and point's row come from the model; the answer's totals give the Updates count.
             (should (equal "pkg:a" (drgnx-view-nav-selection)))
             (funcall (nth 2 (car calls)) (list :sections (list (list :name "updates" :total 1 :loaded 1))) nil)
             (should (= 1 drgnx-extensions-list--updates))
-            (should (equal '("pkg:a") (drgnx-extensions-list--update-ids)))
-            (should (= 0 keys))
-            (should (= 0 syncs))))
+            (should (equal '("pkg:a") (drgnx-extensions-list--update-ids)))))
       (when (get-buffer drgnx-extensions-list-buffer-name) (kill-buffer drgnx-extensions-list-buffer-name))
       (drgnx-extensions-list--reset))))
 
-(ert-deftest drgnx-extensions-jobs/progress-from-events-reads-no-file ()
-  "A job's steps and plans come as `exec-progress' events: the job takes the step, the plan hook
-runs once per plan with the plan file's name, another session's plan goes with its job's `exec-done', and no
-progress or plan file is read (none exists)."
-  (let ((drgnx-extensions-jobs--on t) (reads 0) (plans nil) (gone nil)
+(defmacro drgnx-extensions-rows-test--with-list (calls &rest body)
+  "BODY in the list's buffer with row pkg:a drawn from the hub's model; CALLS holds the hub calls (newest first)."
+  (declare (indent 1) (debug t))
+  `(let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
+         (drgnx-view-model--views (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
+         (drgnx-extensions-jobs--state (make-hash-table))
+         (,calls nil))
+     (ignore ,calls)
+     (unwind-protect
+         (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (m p cb &rest _) (push (list m p cb) ,calls) 1))
+                   ((symbol-function 'drgnx-view-env-register) #'ignore))
+           (drgnx-extensions-list--reset)
+           (with-current-buffer (drgnx-extensions-list--buffer)
+             (drgnx-extensions-list-refresh)
+             (drgnx-view-model-event (list :view "extensions" :hub 7 :base 0 :version 1 :reset t
+                                           :model drgnx-extensions-rows-test--model))
+             (drgnx-view-apply-patch
+              (list :view "extensions" :class "unshown" :hub 7 :base 0 :version 1 :env_epoch 0 :model 1
+                    :ops (list (list :reset (list (drgnx-extensions-rows-test--row "section:updates" "Updates (1)")
+                                                  (drgnx-extensions-rows-test--row "pkg:a" "a 1.0  update to 1.1" "pkg:a"))))))
+             (drgnx-view-draw-now drgnx-view)
+             ,@body))
+       (drgnx-extensions-list--teardown))))
+
+(defun drgnx-extensions-rows-test--chips ()
+  "The text of every job chip the list's buffer shows now."
+  (mapconcat (lambda (ov) (substring-no-properties (or (overlay-get ov 'after-string) "")))
+             (overlays-in (point-min) (point-max)) ""))
+
+(ert-deftest drgnx-extensions-list/a-busy-row-shows-step-and-elapsed ()
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
+  (drgnx-extensions-rows-test--with-list calls
+    (drgnx-extensions-jobs--put '(a) (list :status 'busy :step 'native :i 14 :n 37 :since (- (float-time) 12)))
+    (drgnx-extensions-list--jobs-changed '(a))
+    (let ((text (drgnx-extensions-rows-test--chips)))
+      (should (string-match-p "native 14/37" text))
+      (should (string-match-p "12s" text)))))
+
+(ert-deftest drgnx-extensions-list/the-second-tick-moves-busy-chips-only ()
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
+  (drgnx-extensions-rows-test--with-list calls
+    (drgnx-test-with-clock (:allow-pending t)
+      (let (drawn)
+        (drgnx-extensions-jobs--put '(a) (list :status 'busy :step 'download :since (float-time)))
+        (cl-letf (((symbol-function 'drgnx-extensions-list--rows-chips) (lambda (ids) (push ids drawn))))
+          (drgnx-extensions-list--jobs-changed '(a))
+          (setq drawn nil)
+          (drgnx-test-advance 1.0)
+          (should (equal (car drawn) '("pkg:a")))
+          (should (drgnx-timer-active-p 'extensions-list-tick))
+          (remhash 'a drgnx-extensions-jobs--state)
+          (drgnx-extensions-list--jobs-changed '(a))
+          (should-not (drgnx-timer-active-p 'extensions-list-tick)))))))
+
+(ert-deftest drgnx-extensions-list/no-timer-without-a-busy-row ()
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
+  (drgnx-extensions-rows-test--with-list calls
+    (drgnx-test-with-clock (:allow-pending t)
+      (should-not (drgnx-timer-active-p 'extensions-list-tick))
+      (drgnx-extensions-jobs--put '(a) (list :status 'queued))
+      (drgnx-extensions-list--jobs-changed '(a))
+      (should-not (drgnx-timer-active-p 'extensions-list-tick))
+      (drgnx-extensions-jobs--put '(a) (list :status 'busy :since (float-time)))
+      (drgnx-extensions-list--jobs-changed '(a))
+      (should (drgnx-timer-active-p 'extensions-list-tick))
+      (drgnx-extensions-jobs--put '(a) (list :status 'done))
+      (drgnx-extensions-list--jobs-changed '(a))
+      (should-not (drgnx-timer-active-p 'extensions-list-tick)))))
+
+(ert-deftest drgnx-extensions-list/a-refused-click-says-try-again-and-is-not-busy ()
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
+  (drgnx-extensions-rows-test--with-list calls
+    (drgnx-test-with-clock (:allow-pending t)
+      ;; what the job layer says when another drgnx held the queue file
+      (drgnx-extensions-jobs--put '(a) (list :status 'refused :error "busy, try again" :since (float-time)))
+      (drgnx-extensions-list--jobs-changed '(a))
+      (let ((text (drgnx-extensions-rows-test--chips)))
+        (should (string-search "busy, try again" text))
+        (should-not (string-search "working" text)))
+      (should-not (drgnx-extensions-list--busy-ids))
+      (should-not (drgnx-timer-active-p 'extensions-list-tick)))))
+
+(ert-deftest drgnx-extensions-list/the-next-page-is-asked-near-the-end ()
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
+  (drgnx-extensions-rows-test--with-list calls
+    (drgnx-extensions-list--listed (list (list :name "installed" :total 450 :loaded 200)))
+    (setq calls nil)
+    (let ((inhibit-read-only t)) (erase-buffer) (insert (make-string 6000 ?x)))
+    (goto-char (point-max))
+    (drgnx-extensions-list--post-command)
+    (drgnx-extensions-list--post-command)
+    (should (= (length calls) 1))
+    (should (equal (caar calls) "extensions/list"))
+    (let ((section (aref (plist-get (nth 1 (car calls)) :sections) 0)))
+      (should (equal (plist-get section :name) "installed"))
+      (should (= (plist-get (plist-get section :search) :limit) 400)))))
+
+(ert-deftest drgnx-extensions-list/without-sja-the-list-shows-the-notice ()
+  "An Emacs without Sjá: the list's buffer says so, asks the hub nothing and has no model."
+  (let ((calls nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-extensions-list-rows-p) (lambda () nil))
+                  ((symbol-function 'drgnx-hub-call) (lambda (m &rest _) (push m calls) 1)))
+          (drgnx-extensions-list--reset)
+          (with-current-buffer (drgnx-extensions-list--buffer)
+            (should (string-match-p "needs Sjá" (buffer-string)))
+            (should-not (drgnx-extensions-list--hub-fed-p))
+            (drgnx-extensions-list-refresh)
+            (drgnx-extensions-list--fetch 'installed 200)
+            (should-not (drgnx-extensions-list-row "pkg:a"))
+            (should-not calls)))
+      (drgnx-extensions-list--teardown))))
+
+(ert-deftest drgnx-extensions-list/with-the-hub-down-the-header-says-so ()
+  "Sjá but no hub: asking fails at once, the list says why in its header, and nothing waits."
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
+  (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
+        (drgnx-view-model--views (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) (error "the hub is down")))
+                  ((symbol-function 'drgnx-view-env-register) #'ignore))
+          (drgnx-extensions-list--reset)
+          (with-current-buffer (drgnx-extensions-list--buffer)
+            (drgnx-extensions-list-refresh)
+            (should (equal drgnx-extensions-list--error "the hub is down"))
+            (should (string-search "the hub is down" (format "%s" (car header-line-format))))))
+      (drgnx-extensions-list--teardown))))
+
+(ert-deftest drgnx-extensions-jobs/progress-from-events ()
+  "A job's steps and plans come as `exec-progress' events: the job takes the step, the plan hook runs once per plan
+with the plan file's name, and another session's plan goes with its job's `exec-done'."
+  (let ((drgnx-extensions-jobs--on t) (plans nil) (gone nil)
         (drgnx-extensions-jobs-plan-functions nil) (drgnx-extensions-jobs-plan-gone-functions nil)
         (drgnx-extensions-jobs-changed-functions nil)
         (file (expand-file-name "t1.json" (drgnx-extensions-jobs-dir))))
     (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-extensions-jobs--json) (lambda (_f) (cl-incf reads) nil)))
+        (progn
           (add-hook 'drgnx-extensions-jobs-plan-functions (lambda (p) (push p plans)))
           (add-hook 'drgnx-extensions-jobs-plan-gone-functions (lambda (f) (push f gone)))
           (puthash "t1" (list :token "t1" :id "j1" :kind 'upgrade :status 'running :ids '(a)) drgnx-extensions-jobs--jobs)
           (puthash "j1" "t1" drgnx-extensions-jobs--ids)
-          (should-not (drgnx-extensions-jobs--files-p))
           (drgnx-extensions-jobs--event "exec-progress" (list :id "j1" :file file :step (list :step "download" :pkg "a" :i 1 :n 3)))
           (let ((job (gethash "t1" drgnx-extensions-jobs--jobs)))
             (should (eq 'download (plist-get job :step)))
@@ -110,8 +231,7 @@ progress or plan file is read (none exists)."
             (drgnx-extensions-jobs--event "exec-progress" (list :id "j9" :file other :plan (list :seq 1)))
             (should (= 2 (length plans)))
             (drgnx-extensions-jobs--event "exec-done" (list :id "j9" :status "done" :exit 0))
-            (should (equal (list (concat other ".plan.json")) gone)))
-          (should (= 0 reads)))
+            (should (equal (list (concat other ".plan.json")) gone))))
       (dolist (table (list drgnx-extensions-jobs--jobs drgnx-extensions-jobs--ids drgnx-extensions-jobs--plans
                            drgnx-extensions-jobs--others))
         (clrhash table)))))
@@ -119,7 +239,7 @@ progress or plan file is read (none exists)."
 (ert-deftest drgnx-extensions-jobs/details-and-trust-still-normalise ()
   "A page whose row the list does not hold takes the hub's answer through `drgnx-extensions-list--normalize' (kept as
 the one row normaliser): its kind, state and signed become symbols."
-  (let ((drgnx-extensions-list--lisp-rows t) (n 0))
+  (let ((n 0))
     (drgnx-extensions-list--reset)
     (advice-add 'drgnx-extensions-list--normalize :before (lambda (&rest _) (cl-incf n)) '((name . rows-test)))
     (unwind-protect

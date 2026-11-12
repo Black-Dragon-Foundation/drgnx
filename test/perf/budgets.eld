@@ -252,20 +252,16 @@
  (quick-open-large (:stalls-ge16) 0 :report-only ot5)
  (autosave-typing (:input :max) 50 :report-only ot8) (autosave-typing (:complete-ms) 1000 :report-only ot8)
  ;; The Extensions view (design §13; harness/drgnx-perf-extensions.el): open 100 ms with no process, a search key 16 ms
- ;; worst and 8 ms p50 over 7,150 rows, the details page 50 ms, the progress reads at most 4 a second (no two under
- ;; 240 ms apart, the last write always read) with typing's p95 within 1 ms of idle, live activation 20 ms, install overhead 3 s.  PROVISIONAL: reported, never failed, until
- ;; $DRGNX_PERF_LANDED names `ext-pass' (the combined gate pass judges them).  The scroll key's 16 ms is the input rule's;
- ;; the 1 ms of typing is a first guess.  refresh-job and list-packages-compare report with no budget (the view must beat
+ ;; worst and 8 ms p50 over 7,150 rows, the details page 50 ms, live activation 20 ms, install overhead 3 s.  PROVISIONAL:
+ ;; reported, never failed, until $DRGNX_PERF_LANDED names `ext-pass' (the combined gate pass judges them).  The scroll
+ ;; key's 16 ms is the input rule's.  refresh-job and list-packages-compare report with no budget (the view must beat
  ;; the package menu on each of its numbers: the :beats_* flags).  The hub's catalog-load and search are the Rust bench.
  (extensions-open (:open_ms) 100 :report-only ext-pass) (extensions-open (:processes) 0 :report-only ext-pass)
  (extensions-search (:key_p50_ms) 8 :report-only ext-pass) (extensions-search (:key_max_ms) 16 :report-only ext-pass)
  (extensions-scroll (:key_max_ms) 16 :report-only ext-pass)
  (extensions-details (:open_ms) 50 :report-only ext-pass)
- (extensions-progress (:reads_too_close) 0 :report-only ext-pass) (extensions-progress (:last_unread) 0 :report-only ext-pass)
- (extensions-progress (:typing_delta_ms) 1 :report-only ext-pass)
- ;; The list on the rows path (the hub's rows and model), 2026-11-08, pinned to 4 CPUs: a tenth of the old path's
- ;; objects on open (167507 for 200 rows) and per job step (the file read's 2624; on the rows path the event's).
- ;; Measured on the rows path: 119930 on open (404 lines: the rows and their summaries), 2073 per step.
+ ;; The list on the rows path (the hub's rows and model), 2026-11-08, pinned to 4 CPUs.
+ ;; Measured: 119930 objects on open (404 lines: the rows and their summaries), 2073 per job step (the event's).
  (extensions-open (:alloc) 16751 :report-only ext-pass) (extensions-progress (:alloc_event_step) 262 :report-only ext-pass)
  (activate-live (:activate_ms) 20 :report-only ext-pass)   ; the plan step's repoint of 40 packages
  (activate-live-new (:activate_ms) 20 :report-only ext-pass)   ; a job's end that added a package: it is activated

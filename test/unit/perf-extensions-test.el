@@ -20,7 +20,7 @@
 
 (defconst drgnx-perf-extensions-test--small
   '((gnu . 6) (nongnu . 6) (melpa . 40) (melpa-stable . 8) (installed . 6) (updates . 3) (builtin . 4) (plugins . 2)
-    (progress . 0.3) (live . 6) (scroll . 2))
+    (live . 6) (scroll . 2))
   "Fixture sizes for the tests.")
 
 (defun drgnx-perf-extensions-test--spec (name)
@@ -50,8 +50,7 @@
     (extensions-search :key_p50_ms 8) (extensions-search :key_max_ms 16)
     (extensions-scroll :key_max_ms 16)
     (extensions-details :open_ms 50)
-    (extensions-progress :reads_too_close 0) (extensions-progress :last_unread 0)
-    (extensions-progress :typing_delta_ms 1)
+    (extensions-progress :alloc_event_step 262)
     (activate-live :activate_ms 20) (activate-live-new :activate_ms 20)
     (install-overhead :overhead_ms 3000))
   "The budgeted numbers: (WORKLOAD KEY LIMIT).  refresh-job and list-packages-compare report, with no budget.")
@@ -87,6 +86,7 @@
       (delete-directory dir t))))
 
 (ert-deftest drgnx-perf-extensions/open-draws-the-sections-and-starts-nothing ()
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view--call) "nidhogg-view--call")
   (let ((r (drgnx-perf-extensions-test--run 'extensions-open)))
     (should (numberp (plist-get r :open_ms)))
     (should (eql (plist-get r :processes) 0))
@@ -95,6 +95,7 @@
     (should (> (plist-get r :rows_drawn) 10))))
 
 (ert-deftest drgnx-perf-extensions/search-and-scroll-time-every-key ()
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view--call) "nidhogg-view--call")
   (let ((s (drgnx-perf-extensions-test--run 'extensions-search)))
     (dolist (k '(:key_p50_ms :key_max_ms)) (should (numberp (plist-get s k))))
     (should (> (plist-get s :keys) 3))
@@ -112,12 +113,11 @@
     (dolist (k '(:open_ms :open_max_ms)) (should (numberp (plist-get r k))))
     (should (eql (plist-get r :rows_drawn) 4))))
 
-(ert-deftest drgnx-perf-extensions/progress-checks-the-gap-between-reads-and-compares-typing ()
+(ert-deftest drgnx-perf-extensions/progress-takes-twenty-event-steps ()
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view--call) "nidhogg-view--call")
   (let ((r (drgnx-perf-extensions-test--run 'extensions-progress)))
-    (dolist (k '(:read_gap_min_ms :reads :typing_p95_ms :typing_p95_idle_ms :typing_delta_ms))
-      (should (numberp (plist-get r k))))
-    (should (eql (plist-get r :reads_too_close) 0))
-    (should (eql (plist-get r :last_unread) 0))))
+    (should (numberp (plist-get r :alloc_event_step)))
+    (should (eql (plist-get r :steps) 20))))
 
 (ert-deftest drgnx-perf-extensions/activation-repoints-every-fixture-package ()
   (let ((r (drgnx-perf-extensions-test--run 'activate-live)))
@@ -135,6 +135,7 @@
     (should (> (plist-get r :packages) 30))))
 
 (ert-deftest drgnx-perf-extensions/the-comparison-measures-both-sides ()
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view--call) "nidhogg-view--call")
   (let ((r (drgnx-perf-extensions-test--run 'list-packages-compare)))
     (dolist (k '(:menu_first_ms :view_first_ms :menu_key_p50_ms :view_key_p50_ms :menu_scroll_max_ms :view_scroll_max_ms
                                 :menu_heap_kb :view_heap_kb))

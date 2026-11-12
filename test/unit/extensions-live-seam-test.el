@@ -1,13 +1,11 @@
 ;;; extensions-live-seam-test.el --- the job layer drives live activation: what a job's end passes, which jobs count -*- lexical-binding: t -*-
 ;; test-class: det
 ;; Pattern D: no process and no real clock.  The job layer runs as in extensions-jobs-test.el (the hub stubbed at the
-;; job client, the batch sync played by the test, the progress reads on the virtual clock) with the live layer's hooks
-;; on it, so the live layer sees what a real job's end gives it, never a hand-made object.  Package directories are
-;; empty folders (or a descriptor and an autoloads file) under a temp data directory.  See docs/guide/extensions.md,
-;; "When a restart is needed".
+;; job client, the batch sync played by the test: its steps and plans are the hub's `exec-progress' events) with the
+;; live layer's hooks on it, so the live layer sees what a real job's end gives it, never a hand-made object.  Package
+;; directories are empty folders (or a descriptor and an autoloads file) under a temp data directory.  See
+;; docs/guide/extensions.md, "When a restart is needed".
 (require 'ert)
-(defvar drgnx-extensions-jobs--read-files)
-(defvar drgnx-extensions-list--lisp-rows)
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-paths)
@@ -23,7 +21,6 @@
 
 (defvar drgnx-extensions-live-seam-test--starts nil "The jobs started, newest first: (:id ID :argv ARGV :load-path LP).")
 (defvar drgnx-extensions-live-seam-test--list nil "The callback of the last `exec/list' call.")
-(defvar drgnx-extensions-live-seam-test--notify nil "The progress watch's callback.")
 (defvar drgnx-extensions-live-seam-test--calls nil "What the live layer did when a job ended, newest first.")
 
 (defun drgnx-extensions-live-seam-test--start (name argv &rest keys)
@@ -37,7 +34,7 @@
   "BODY with every drgnx location a temp directory (ROOT names it), the hub stubbed, the job layer and the live
 layer's hooks set up (torn down after), on the virtual clock; `--settle' and `--point-back' record that they ran."
   (declare (indent 0) (debug t))
-  `(let* ((drgnx-extensions-jobs--read-files t) (drgnx-extensions-list--lisp-rows t) (root (file-name-as-directory (make-temp-file "drgnx-ext-seam" t)))
+  `(let* ((root (file-name-as-directory (make-temp-file "drgnx-ext-seam" t)))
           (process-environment (append (list (concat "XDG_STATE_HOME=" root "state") (concat "DRGNX_DATA_DIR=" root "data")
                                              (concat "DRGNX_CONFIG_DIR=" root "config") (concat "XDG_CACHE_HOME=" root "cache"))
                                        process-environment))
@@ -50,7 +47,7 @@ layer's hooks set up (torn down after), on the virtual clock; `--settle' and `--
           (drgnx-extensions-live--restart nil) (drgnx-extensions-live--moved nil) (drgnx-extensions-live--marked nil)
           (drgnx-extensions-live--removing nil) (drgnx-extensions-live--keys nil)
           (drgnx-extensions-live-seam-test--starts nil) (drgnx-extensions-live-seam-test--list nil)
-          (drgnx-extensions-live-seam-test--notify nil) (drgnx-extensions-live-seam-test--calls nil))
+          (drgnx-extensions-live-seam-test--calls nil))
      (make-directory (concat root "config") t)
      (unwind-protect
          (drgnx-test-with-clock ()
@@ -60,9 +57,6 @@ layer's hooks set up (torn down after), on the virtual clock; `--settle' and `--
                       (lambda (method _params callback &rest _)
                         (when (equal method "exec/list") (setq drgnx-extensions-live-seam-test--list callback))))
                      ((symbol-function 'drgnx-hub-connect) #'ignore)
-                     ((symbol-function 'file-notify-add-watch)
-                      (lambda (_dir _flags callback) (setq drgnx-extensions-live-seam-test--notify callback) 'watch))
-                     ((symbol-function 'file-notify-rm-watch) #'ignore)
                      ((symbol-function 'drgnx-modules-retry-waiting) #'ignore)
                      ((symbol-function 'drgnx-pkg-current-generation) (lambda () 1)))
              (unwind-protect
@@ -87,20 +81,15 @@ layer's hooks set up (torn down after), on the virtual clock; `--settle' and `--
 
 (defun drgnx-extensions-live-seam-test--file (job) (cadr (member "--progress" (plist-get job :argv))))
 
-(defun drgnx-extensions-live-seam-test--write (file object)
-  (make-directory (file-name-directory file) t)
-  (with-temp-file file (insert (json-serialize object))))
+(defun drgnx-extensions-live-seam-test--event (job &rest keys)
+  "The hub's `exec-progress' event for JOB: its :id and :file, and KEYS (:step or :plan)."
+  (run-hook-with-args 'drgnx-hub-event-functions "exec-progress"
+                      (append (list :id (plist-get job :id) :file (drgnx-extensions-live-seam-test--file job)) keys)))
 
 (defun drgnx-extensions-live-seam-test--take (job)
-  "What JOB's `drgnx sync --pending' does: take the queue, write its start step."
+  "What JOB's `drgnx sync --pending' does: take the queue, the hub sends its start step."
   (let ((tickets (mapcar (lambda (e) (plist-get e :ticket)) (drgnx-pkg-pending-take))))
-    (drgnx-extensions-live-seam-test--write (drgnx-extensions-live-seam-test--file job)
-                                            (list :step "start" :command "sync" :tickets (vconcat tickets)))))
-
-(defun drgnx-extensions-live-seam-test--seen (&optional file)
-  "The watch tells of a change to FILE (nil: an event that names no file), and the read it asks for runs."
-  (funcall drgnx-extensions-live-seam-test--notify (if file (list 'watch 'changed file) (list 'watch 'changed)))
-  (drgnx-test-advance 1))
+    (drgnx-extensions-live-seam-test--event job :step (list :step "start" :command "sync" :tickets tickets))))
 
 (defun drgnx-extensions-live-seam-test--done (job &optional exit)
   "The hub's exec-done event for JOB, EXIT (default 0)."
@@ -121,11 +110,10 @@ layer's hooks set up (torn down after), on the virtual clock; `--settle' and `--
       (dolist (exit '(0 1))
         (setq drgnx-extensions-live-seam-test--calls nil)
         (drgnx-extensions-jobs-queue '(:add fb))
-        (let* ((job (car drgnx-extensions-live-seam-test--starts)) (file (drgnx-extensions-live-seam-test--file job)))
+        (let ((job (car drgnx-extensions-live-seam-test--starts)))
           (drgnx-extensions-live-seam-test--take job)
-          (drgnx-extensions-live-seam-test--write (concat file ".plan.json")
-                                                  '(:step "plan" :seq 1 :generation 1 :replaces [] :removes [] :adds ["fb-1.0"]))
-          (drgnx-extensions-live-seam-test--seen (concat file ".plan.json"))
+          (drgnx-extensions-live-seam-test--event
+           job :plan '(:step "plan" :seq 1 :generation 1 :replaces nil :removes nil :adds ("fb-1.0")))
           (drgnx-extensions-live-seam-test--done job exit)
           (should (equal drgnx-extensions-live-seam-test--calls (if (= exit 0) '(settle) '(point-back)))))))))
 
@@ -151,10 +139,9 @@ layer's hooks set up (torn down after), on the virtual clock; `--settle' and `--
             (copy (drgnx-extensions-live-seam-test--package root "fa-1.0" 1)))
         (push now load-path)
         (drgnx-extensions-jobs-run 'upgrade '(fa))
-        (let* ((sync (car drgnx-extensions-live-seam-test--starts)) (file (drgnx-extensions-live-seam-test--file sync)))
-          (drgnx-extensions-live-seam-test--write (concat file ".plan.json")
-                                                  '(:step "plan" :seq 1 :generation 1 :replaces ["fa-1.0"] :removes [] :adds ["fa-1.1"]))
-          (drgnx-extensions-live-seam-test--seen (concat file ".plan.json"))
+        (let ((sync (car drgnx-extensions-live-seam-test--starts)))
+          (drgnx-extensions-live-seam-test--event
+           sync :plan '(:step "plan" :seq 1 :generation 1 :replaces ("fa-1.0") :removes nil :adds ("fa-1.1")))
           (should (member copy load-path))
           ;; a readme job ends while the update is between its plan and its end: nothing moves
           (drgnx-extensions-jobs-run 'fetch-readme "melpa" "fb")
@@ -170,15 +157,15 @@ layer's hooks set up (torn down after), on the virtual clock; `--settle' and `--
     (drgnx-extensions-live-seam-test--spying
       (let ((now (drgnx-extensions-live-seam-test--package root "fa-1.0"))
             (copy (drgnx-extensions-live-seam-test--package root "fa-1.0" 1))
-            (theirs (expand-file-name "4242-1-abcdef.json.plan.json" (drgnx-extensions-jobs-dir))))
+            (theirs (expand-file-name "4242-1-abcdef.json" (drgnx-extensions-jobs-dir))))
         (push now load-path)
-        (drgnx-extensions-live-seam-test--write theirs '(:step "plan" :seq 1 :generation 1 :replaces ["fa-1.0"] :removes [] :adds []))
-        (drgnx-extensions-live-seam-test--seen theirs)
+        (run-hook-with-args 'drgnx-hub-event-functions "exec-progress"
+                            (list :id "other-job" :file theirs
+                                  :plan '(:step "plan" :seq 1 :generation 1 :replaces ("fa-1.0") :removes nil :adds nil)))
         (should (member copy load-path))
         (should-not drgnx-extensions-live-seam-test--calls)
-        ;; its job ended in the other session, which deleted the plan file: this one settles
-        (delete-file theirs)
-        (drgnx-extensions-live-seam-test--seen theirs)
+        ;; its job ended in the other session: this one settles
+        (run-hook-with-args 'drgnx-hub-event-functions "exec-done" (list :id "other-job" :status "done" :exit 0))
         (should (equal drgnx-extensions-live-seam-test--calls '(settle)))))))
 
 (ert-deftest drgnx-extensions-live-seam/a-repoint-walks-load-path-once ()

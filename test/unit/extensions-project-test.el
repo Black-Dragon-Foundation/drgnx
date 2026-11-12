@@ -4,9 +4,10 @@
 ;; modes index is built from fixture autoloads files (read as data) in a temp packages folder; fixture major and minor
 ;; modes stand for the packages' own.  No process, no timer.  See docs/guide/extensions.md, "In one project".
 (require 'ert)
-(defvar drgnx-extensions-list--lisp-rows)
 (require 'cl-lib)
 (require 'drgnx-paths)
+(require 'drgnx-view)
+(require 'drgnx-view-nav)
 (load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (require 'drgnx-settings-workspace)
@@ -240,26 +241,61 @@ pick a mode for) and in no other: an unrelated buffer keeps its local state."
 ;;;; The view's doors: p in the list, the page's line and toggle, @this-project
 
 (defmacro drgnx-ext-project-test--with-list (&rest body)
-  "BODY with the Extensions list and pages loaded, the hub and the job layer answering nothing, and the list and its
-pages closed after."
+  "BODY with the Extensions list (the hub-fed view: needs Sjá) and pages loaded, the hub and the job layer answering
+nothing, and the list and its pages closed after."
   (declare (indent 0) (debug t))
   `(progn
+     (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
      (load (expand-file-name "modules/tools/drgnx-extensions-list" drgnx-dir) nil t)
      (load (expand-file-name "modules/tools/drgnx-extensions-details" drgnx-dir) nil t)
-     (let ((drgnx-extensions-list--lisp-rows t) (drgnx-extensions-list--root nil) (drgnx-extensions-check-updates 'manual))
+     (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
+           (drgnx-view-model--views (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
+           (drgnx-extensions-list--root nil) (drgnx-extensions-check-updates 'manual))
        (unwind-protect
            (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore)
+                     ((symbol-function 'drgnx-view-env-register) #'ignore)
                      ((symbol-function 'drgnx-extensions-jobs-run) #'ignore))
              (drgnx-extensions-list--reset)
              ,@body)
          (dolist (b (buffer-list))
            (when (string-prefix-p "*Extension" (buffer-name b)) (kill-buffer b)))
-         (drgnx-view--undefine 'extensions)
          (drgnx-view--undefine 'extension-details)
          (drgnx-extensions-list--reset)))))
 
-(defun drgnx-ext-project-test--row (name)
-  (list :id (concat "pkg:" name) :kind "package" :name name :state "installed" :source "melpa" :signed "unsigned-archive"))
+(defun drgnx-ext-project-test--feed (names)
+  "Show the installed packages NAMES in the current list buffer: the hub's model of one section holding a row each,
+and the rows as the hub sends them."
+  (let* ((ids (mapcar (lambda (n) (concat "pkg:" n)) names))
+         (nodes (cons (list :id "section:installed" :kind "section" :flags 1
+                            :fields (vector (vector "label" "Installed") (vector "section" "installed")
+                                            (vector "count" (length names))))
+                      (mapcar (lambda (n)
+                                (list :id (concat "pkg:" n) :kind "package" :flags 0 :parent "section:installed"
+                                      :fields (vector (vector "label" n) (vector "name" n) (vector "state" "installed")
+                                                      (vector "signed" "unsigned-archive") (vector "source" "melpa")
+                                                      (vector "section" "installed") (vector "version" "1.0"))))
+                              names)))
+         (row (lambda (key text id)
+                (list :key key :text text
+                      :props (append (list (list 0 (length text) "drgnx-work-id" key))
+                                     (and id (list (list 0 (length text) "drgnx-extensions-id" id))))))))
+    (drgnx-view-model-event
+     (list :view "extensions" :hub 7 :base 0 :version 1 :reset t
+           :model (json-serialize
+                   (list :ops
+                         (vector
+                          (list :reset
+                                (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"] :lists ["order"]
+                                                        :classes ["selected" "match" "dim"] :flags ["expanded"] :forms []
+                                                        :start "order")
+                                      :nodes (vconcat nodes) :edges []
+                                      :lists (vector (list :name "order" :ids (vconcat (cons "section:installed" ids)))))))))))
+    (drgnx-view-apply-patch
+     (list :view "extensions" :class "unshown" :hub 7 :base 0 :version 1 :env_epoch 0 :model 1
+           :ops (list (list :reset (cons (funcall row "section:installed" "Installed\n" nil)
+                                         (mapcar (lambda (n) (funcall row (concat "pkg:" n) (concat n " 1.0\n") (concat "pkg:" n)))
+                                                 names))))))
+    (drgnx-view-draw-now drgnx-view)))
 
 (ert-deftest drgnx-extensions-project/p-in-the-list-turns-it-off-in-the-project-it-came-from ()
   (drgnx-ext-project-test--with
@@ -270,9 +306,8 @@ pages closed after."
         (should (eq (drgnx-ext-project-test--mode b) 'drgnx-ext-fx-rust-mode))
         ;; Extensions opened from a file of P, then p on fx-rust's row
         (with-current-buffer b (drgnx-extensions-open))
-        (drgnx-extensions-list--receive 'installed (list (drgnx-ext-project-test--row "fx-rust")) 1 0)
         (with-current-buffer drgnx-extensions-list-buffer-name
-          (drgnx-view-draw-now drgnx-view)
+          (drgnx-ext-project-test--feed '("fx-rust"))
           (goto-char (drgnx-view-row-start drgnx-view "pkg:fx-rust"))
           (let ((this-command 'extensions-toggle-project)) (call-interactively #'drgnx-extensions-toggle-project)))
         (should (drgnx-extensions-project-off-p 'fx-rust drgnx-ext-project-test--p))
@@ -288,8 +323,7 @@ pages closed after."
       (drgnx-settings-workspace-file drgnx-ext-project-test--p t)
       (let ((b (drgnx-ext-project-test--open drgnx-ext-project-test--p "g.fxrs")))
         (with-current-buffer b (drgnx-extensions-open))
-        (dolist (n '("fx-rust" "fx-git"))
-          (puthash (concat "pkg:" n) (drgnx-extensions-list--normalize (drgnx-ext-project-test--row n)) drgnx-extensions-list--rows))
+        (with-current-buffer drgnx-extensions-list-buffer-name (drgnx-ext-project-test--feed '("fx-rust" "fx-git")))
         (let ((page (with-current-buffer drgnx-extensions-list-buffer-name (drgnx-extensions-details-open "pkg:fx-rust"))))
           (with-current-buffer page
             (let ((text (concat (drgnx-extensions-details--render-header) (drgnx-extensions-details--render-actions))))
