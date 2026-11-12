@@ -6002,7 +6002,13 @@ impl Session {
         }
         let block = json!({"type": "text", "text": item.origin.frame(&item.text)});
         let blocks = serde_json::from_value(json!([block])).unwrap_or_default();
-        let out = self.conn.prompt(&self.acp, blocks, None).await;
+        // a Stop since `Sending` waited for the prompt's line: its cancel goes after it (`Written`)
+        let sent = self.conn.send_prompt(&self.acp, blocks, None);
+        self.turn_event(TurnEvent::Written { turn });
+        let out = match sent {
+            Ok(answer) => answer.await,
+            Err(e) => Err(e),
+        };
         // the reader task ends the turn, after the updates the agent sent before its answer
         let _ = self.done.send(TurnEnd(turn, out));
     }

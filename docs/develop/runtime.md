@@ -624,13 +624,15 @@ must stay within 103 bytes.
 
 ```
 domr --hub-bin PATH --scenarios DIR
-     [--only GLOB] [--only-tag TAG] [--require-all] [--perf OUT.json]
+     [--only GLOB] [--only-tag TAG] [--require-all] [--perf OUT.json] [--shard K/N]
 domr connect-as --socket PATH
 ```
 
 - One target, Ratatoskr: every row runs against the one hub binary. There is no Lisp hub and no stand-in backend; a
   row that needs a second process (an agent, a provider, a proxy) starts one of `ratatoskr-mock`'s.
 - `--only GLOB` matches the scenario name (`*` and `?`); `--only-tag TAG` the rows that require the tag.
+- `--shard K/N` (1 <= K <= N): of the rows the other filters select, in path order, the Kth of every N, so N runs
+  (macOS CI's conformance jobs) split the suite evenly and together run every row once.
 - Output: one `PASS name`, `SKIP name (reason)` or `FAIL name: step N (VERB): what` line per scenario, then
   `N passed, N skipped, N failed`. A FAIL of a row that is not `pending` goes on with when each step ran and how long
   it took, and the last 60 lines of each hub's stderr and of its own log, kept before the root is removed: a red that

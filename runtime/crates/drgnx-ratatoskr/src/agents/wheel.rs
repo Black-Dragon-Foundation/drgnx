@@ -298,6 +298,8 @@ mod tests {
                         let turn = self.core.turn();
                         let more = self.core.step(TurnEvent::Sending { turn });
                         self.perform(more);
+                        let more = self.core.step(TurnEvent::Written { turn });
+                        self.perform(more);
                         self.running = true;
                         self.cancel_sent = false;
                         self.tool_done = false;
