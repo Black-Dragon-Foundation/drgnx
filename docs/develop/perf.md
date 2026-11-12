@@ -1059,6 +1059,11 @@ Recorded runs' hub rows are the bench `runtime/crates/drgnx-ratatoskr/benches/de
 percentile). It is `#[ignore]`d and measures and prints; run it optimized and alone on a pinned host:
 `perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench debug_record -- --ignored --nocapture --test-threads 1`.
 
+`debug-fork-start` (a what-if fork's tree restored, its Gleipnir sandbox and adapter started and its program run to
+its first stop: at most 2 s at the 95th percentile on Linux) is the live row `debug::tests_fork_live::debug_fork_start`,
+ten Python traces in a row. It needs the adapter image with bwrap (`ctr.sh --sandbox`), is `#[ignore]`d as a timing
+test, and measures and prints.
+
 Tests: `test/unit/perf-extensions-test.el` (every row has a budget and a fixture, the comparison measures both sides).
 
 ## What typing rebuilds

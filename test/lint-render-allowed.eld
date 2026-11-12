@@ -17,6 +17,7 @@
  (:file "modules/tools/drgnx-agent-settings.el" :in drgnx-agent-settings--render :what erase-buffer :kind document :why "the settings page is drawn on the user's action")
  (:file "modules/tools/drgnx-plugins-ui.el" :in drgnx-plugins--render :what erase-buffer :kind document :why "the plugins page is drawn on the user's action and when the hub says a plugin changed")
  (:file "modules/tools/drgnx-agents-editor-here.el" :in drgnx-agents-editor-here-show :what erase-buffer :kind document :why "the who-is-here list is drawn when the user asks for it, a handful of rows")
+ (:file "modules/extra/drgnx-debug-fork.el" :in drgnx-debug-fork--render :what erase-buffer :kind document :why "the What-if tab is drawn when a fork changes state (a handful of times a fork) or the user shows it")
  (:file "modules/tools/drgnx-ai-ui.el" :in drgnx-ai--answer-buffer :what erase-buffer :kind document :why "an answer is shown when the user asks")
  (:file "modules/tools/drgnx-browser.el" :in drgnx-browser--placeholder :what erase-buffer :kind document :why "the placeholder page is drawn once")
  (:file "modules/tools/drgnx-browser.el" :in drgnx-browser--show-screenshot :what erase-buffer :kind document :why "a screenshot is shown on the user's action")
