@@ -1195,7 +1195,8 @@ impl Debug {
             .handle(id)
             .ok_or_else(|| format!("no debug session {id}"))?;
         if let Some(rec) = self.records() {
-            rec.op(id, &op);
+            let (id, op) = (id.to_owned(), op.clone());
+            rec.later("run step", move |r| r.op(&id, &op));
         }
         if matches!(op, Op::Stop { .. } | Op::Disconnect) {
             for child in self.children(id) {
@@ -1332,7 +1333,8 @@ impl Debug {
                     };
                     self.publish_state();
                     if let Some(rec) = self.records() {
-                        rec.stop(&id, &stop);
+                        let (id, stop) = (id.clone(), stop.clone());
+                        rec.later("run stop", move |r| r.stop(&id, &stop));
                     }
                     if let Some(conn) = conn {
                         self.publish_frame(&id, conn, &stop);
@@ -1478,7 +1480,8 @@ impl Debug {
 
     async fn ended(&self, id: &str, end: End) {
         if let Some(rec) = self.records() {
-            rec.end(id, &end);
+            let (id, end) = (id.to_owned(), end.clone());
+            rec.later("run end", move |r| r.end(&id, &end));
         }
         self.inner.inline.forget(id);
         let e = lock(&self.inner.state).sessions.remove(id);

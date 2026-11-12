@@ -747,6 +747,10 @@ Every session the hub starts is recorded (`debug/record.rs`, `Records`; the hub'
   the run says so); the rest are thinned and counted; a fork's run keeps every hit. "Probe the Result"
   (`probes::next_line`) places the probe on the next line that runs, past continuation lines, blanks and comments. A
   project's probes are kept in `<state>/debug-probes/<xxh3 of root>.json`.
+- **Off the workers:** what a session's events record (its stops, steps, probe hits and end) runs on one
+  `crate::disk::Ordered` of the recorder, in the events' order on the blocking pool, since it writes the run files;
+  the session's own events (its frame, the views) never wait for it. What reads the runs (`debug/runs/list`,
+  `debug/run/*`, forks, bisect) first waits for what is queued (`Records::written`).
 - **The run file** (`debug/runfile.rs`): `<state>/debug/runs/<run>.drun`, `DRUN2\n` and a 32-byte salt, then blocks
   (u32 raw length, u32 sealed length, the sealed zstd bytes) of JSON-lines frames, 64 KB raw each; `<run>.drun.idx`
   (sealed JSON) indexes blocks, stops and each probe's hits. Each stop's capture (threads, the stack, the selected frame's scopes and variables) is cut to 64 KB:

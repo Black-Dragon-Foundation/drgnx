@@ -237,6 +237,8 @@ pub async fn serve(
     {
         // a keyring unlocked since the hub started: the runs read from now on
         let _ = r.unlock().await;
+        // what the sessions recorded so far is in the files read
+        r.written().await;
     }
     Ok(match p {
         Params::DebugProbeOp(p) => answer(probe_op(front, p).await),

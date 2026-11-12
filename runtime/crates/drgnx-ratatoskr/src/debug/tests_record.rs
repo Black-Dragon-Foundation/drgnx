@@ -541,6 +541,8 @@ async fn a_run_is_recorded_against_the_files_that_ran() {
     for m in running {
         m.finish().await.unwrap();
     }
+    // the session's events are recorded off the workers, in order: all of them now
+    rec.written().await;
 
     // the record: put at the start and at the end
     let metas = store.0.lock().unwrap().clone();
@@ -611,4 +613,100 @@ async fn an_unknown_run_is_refused() {
     assert!(rec.get("../../etc/passwd", 0, 10).is_err());
     assert!(rec.past_stop("r1", 1, None).is_err());
     assert!(rec.run("nope").is_none());
+}
+
+/// The FIFO's reader, at the end (or a failed assert): the write waiting on it goes on.
+struct ReadAtEnd(std::path::PathBuf);
+
+impl Drop for ReadAtEnd {
+    fn drop(&mut self) {
+        let p = self.0.clone();
+        std::thread::spawn(move || std::fs::read(p));
+    }
+}
+
+/// A stop's write that waits on the disk (here the run file swapped for a FIFO nobody reads) holds no async worker
+/// and no lock the session's events wait for: the step's frame is still published.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_run_write_that_waits_on_the_disk_holds_no_worker() {
+    let d = tempfile::tempdir().unwrap();
+    let project = d.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let file = project.join("app.py");
+    std::fs::write(&file, "a = 1\nb = 2\nc = 3\nd = 4\n").unwrap();
+    let root = project.to_string_lossy().into_owned();
+    let path = file.to_string_lossy().into_owned();
+    let ev = Arc::new(Events::default());
+    let dbg = Debug::new(ev.clone(), Arc::new(NoTerms));
+    let runs = d.path().join("runs");
+    let rec = dbg.record_into(Opts::new(runs.clone(), d.path().join("checkpoints")));
+    let mut script = vec![
+        json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true}}),
+        json!({"expect": "launch", "ok": {}}),
+        json!({"event": "initialized"}),
+        json!({"expect": "configurationDone"}),
+    ];
+    script.extend(stopped("breakpoint", 3, &path));
+    script.push(json!({"expect": "next", "ok": {}}));
+    script.extend(stopped("step", 4, &path));
+    script.extend([
+        json!({"expect": "disconnect", "ok": {}}),
+        json!({"die": true}),
+    ]);
+    let mocks = Arc::new(Mocks {
+        scripts: Mutex::new(vec![script].into()),
+        ..Mocks::default()
+    });
+    let start = Start {
+        name: "Python: app".into(),
+        adapter_id: "debugpy".into(),
+        request: Request::Launch,
+        arguments: json!({"program": path}),
+        breakpoints: vec![],
+        functions: vec![],
+        exception_filters: None,
+    };
+    let launch = Launch {
+        start: json!({"root": root, "config": "launch:0"}),
+        ..Launch::default()
+    };
+    let id = dbg
+        .start_with(7, &root, start, mocks.clone(), launch)
+        .await
+        .unwrap();
+    until("the first stop recorded", || {
+        ev.named("debug-run")
+            .iter()
+            .any(|e| e["stop"]["reason"] == "breakpoint")
+    })
+    .await;
+    let run = rec.list(&root)[0].id.clone();
+    let drun = runs.join(format!("{run}.drun"));
+    std::fs::remove_file(&drun).unwrap();
+    let made = std::process::Command::new("mkfifo")
+        .arg(&drun)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let _unblock = ReadAtEnd(drun.clone());
+    // the step's stop is written to the run file, which waits for a reader
+    dbg.control(&id, Op::Next { thread: None }).await.unwrap();
+    until(
+        "the step's frame published while its record waits on the disk",
+        || ev.named("debug-frame").iter().any(|f| f["line"] == 4),
+    )
+    .await;
+    drop(_unblock);
+    dbg.control(
+        &id,
+        Op::Stop {
+            kill_debuggee: None,
+        },
+    )
+    .await
+    .unwrap();
+    let running = std::mem::take(&mut *mocks.running.lock().unwrap());
+    for m in running {
+        m.finish().await.unwrap();
+    }
 }
