@@ -375,41 +375,12 @@ async fn fork_sends_the_jetbrains_meta() {
     assert_eq!(meta["claudeCode"]["options"]["x"], 1);
 }
 
-/// `ratatoskr-mock` (domr's binary): `RATATOSKR_MOCK`, else beside this test's binary (`target/<profile>/`), built
-/// there once when it is missing.
+/// `ratatoskr-mock` (domr's binary): `RATATOSKR_MOCK`, else in the test build's profile folder
+/// ([`skuld::profile_dir`]), built there once when it is missing.
 fn mock_bin() -> PathBuf {
     static BIN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    BIN.get_or_init(|| {
-        if let Some(p) = std::env::var_os("RATATOSKR_MOCK") {
-            return p.into();
-        }
-        let exe = std::env::current_exe().unwrap();
-        let dir = exe.parent().and_then(Path::parent).unwrap().to_path_buf();
-        let bin = dir.join("ratatoskr-mock");
-        if !bin.exists() {
-            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-            let profile = dir.file_name().unwrap().to_str().unwrap();
-            let profile = if profile == "debug" { "dev" } else { profile };
-            let ok = std::process::Command::new(cargo)
-                .args([
-                    "build",
-                    "-p",
-                    "domr",
-                    "--bin",
-                    "ratatoskr-mock",
-                    "--profile",
-                ])
-                .arg(profile)
-                .arg("--target-dir")
-                .arg(dir.parent().unwrap())
-                .status()
-                .unwrap()
-                .success();
-            assert!(ok && bin.exists(), "ratatoskr-mock is not built");
-        }
-        bin
-    })
-    .clone()
+    BIN.get_or_init(|| skuld::workspace_bin_built("domr", "ratatoskr-mock", Some("RATATOSKR_MOCK")))
+        .clone()
 }
 
 /// The mock agent's files, in a folder of the test's own under the temporary directory: its `--state` folder and its

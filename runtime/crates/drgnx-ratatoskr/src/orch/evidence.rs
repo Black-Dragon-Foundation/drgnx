@@ -73,7 +73,8 @@ fn task_of(front: &Front, session: &str) -> Option<String> {
 }
 
 /// Every job that ends whose session works on a task, or that a gate started for one, is that task's evidence (a hub
-/// task of its own; it ends with the runner's events).
+/// task of its own; it ends with the runner's events).  Each end, once taken, is settled with the runner: until then
+/// the job is busy in its tree, so a gate never judges between a run's end and its evidence.
 pub async fn run(front: Arc<Front>, mut rx: tokio::sync::broadcast::Receiver<JobEvent>) {
     loop {
         let done = match rx.recv().await {
@@ -87,23 +88,30 @@ pub async fn run(front: Arc<Front>, mut rx: tokio::sync::broadcast::Receiver<Job
                 for (id, run) in front.orch.take_ended(ended) {
                     settle(&front, &id, run).await;
                 }
+                front.core.exec.settled_all();
                 continue;
             }
             Err(_) => return,
         };
-        // a run a gate started is its task's
-        if let Some(run) = front.orch.take(&done.id) {
-            settle(&front, &done.id, run).await;
-            continue;
-        }
-        let Some(task) = done.session.as_deref().and_then(|s| task_of(&front, s)) else {
-            continue;
-        };
-        if let Some(e) = of_job(&front.core.exec, &done.id, &task)
-            && let Err(err) = record(&front, e).await
-        {
-            tracing::warn!("job {}: evidence not recorded: {}", done.id, err.message);
-        }
+        take(&front, &done).await;
+        front.core.exec.settled(&done.id);
+    }
+}
+
+/// Job DONE's end: a gate's run settled, a task's session's run recorded.
+async fn take(front: &Front, done: &runstav::methods::exec::ExecDone) {
+    // a run a gate started is its task's
+    if let Some(run) = front.orch.take(&done.id) {
+        settle(front, &done.id, run).await;
+        return;
+    }
+    let Some(task) = done.session.as_deref().and_then(|s| task_of(front, s)) else {
+        return;
+    };
+    if let Some(e) = of_job(&front.core.exec, &done.id, &task)
+        && let Err(err) = record(front, e).await
+    {
+        tracing::warn!("job {}: evidence not recorded: {}", done.id, err.message);
     }
 }
 

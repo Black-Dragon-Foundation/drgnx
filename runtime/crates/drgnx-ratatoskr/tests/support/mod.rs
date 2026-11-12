@@ -248,33 +248,9 @@ impl Client {
     }
 }
 
-/// `ratatoskr-mock`, beside this test's own directory (`<target dir>/<profile dir>`); built once when it is not there.
+/// `ratatoskr-mock`, in the test build's profile folder ([`skuld::profile_dir`]); built once when it is not there.
 pub fn mock_binary() -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    let dir = exe.parent().unwrap().parent().unwrap();
-    let bin = dir.join("ratatoskr-mock");
-    if !bin.exists() {
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let profile = dir.file_name().unwrap().to_str().unwrap();
-        let profile = if profile == "debug" { "dev" } else { profile };
-        let ok = Command::new(cargo)
-            .args([
-                "build",
-                "-p",
-                "domr",
-                "--bin",
-                "ratatoskr-mock",
-                "--profile",
-                profile,
-            ])
-            .arg("--target-dir")
-            .arg(dir.parent().unwrap())
-            .status()
-            .unwrap()
-            .success();
-        assert!(ok && bin.exists(), "ratatoskr-mock is not built");
-    }
-    bin
+    skuld::workspace_bin_built("domr", "ratatoskr-mock", None)
 }
 
 pub fn ping(socket: &Path) -> bool {

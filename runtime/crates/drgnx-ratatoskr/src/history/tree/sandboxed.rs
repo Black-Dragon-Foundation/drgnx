@@ -66,10 +66,9 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_owned()
 }
 
-/// The full tier, its helper this build's `ratatoskr` (beside the test binary's folder).
+/// The full tier, its helper this build's `ratatoskr` (in the test build's profile folder).
 fn sandbox() -> Sandbox {
-    let exe = std::env::current_exe().unwrap();
-    let bin = exe.parent().unwrap().parent().unwrap().join("ratatoskr");
+    let bin = skuld::workspace_bin("ratatoskr", None, None);
     assert!(
         bin.exists(),
         "build the ratatoskr binary first: {}",

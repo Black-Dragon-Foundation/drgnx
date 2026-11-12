@@ -129,6 +129,10 @@ and never leaves the window (nil: the caller shortens the card, or shows none). 
     (elisp-eldoc-funcall . elisp-eldoc-funcall-with-docstring))
   "Eldoc functions whose fuller sibling (with the docstring) the card asks instead, where this Emacs has it.")
 
+(defvar drgnx-quickhelp-fuller-functions nil
+  "Like `drgnx-quickhelp--fuller', for modules: they add their pairs with `drgnx-module-alist-put' (extra/debug: the
+echo area evaluates nothing, the card evaluates the expression under the mouse).")
+
 (defun drgnx-quickhelp--cancel ()
   "Drop the pending request: its answers and its timeout come to nothing."
   (cl-incf drgnx-quickhelp--request)
@@ -165,7 +169,8 @@ is first; a newer request drops this one (CALLBACK is then never called).  Retur
             (run-hook-wrapped
              'eldoc-documentation-functions
              (lambda (f)
-               (let* ((fuller (and (symbolp f) (alist-get f drgnx-quickhelp--fuller)))
+               (let* ((fuller (and (symbolp f) (or (alist-get f drgnx-quickhelp-fuller-functions)
+                                                   (alist-get f drgnx-quickhelp--fuller))))
                       (f (if (and fuller (fboundp fuller)) fuller f))
                       (cb (answer-fn (prog1 n (cl-incf n))))
                       ;; a backend that prints a value (a variable's, with its docstring) prints a short one:

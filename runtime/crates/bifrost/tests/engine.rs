@@ -2,12 +2,13 @@
 //! on its listener, and `ratatoskr-mock llm` as the provider (an outside service, so a mock: it is the one domr
 //! builds, `runtime/conformance/src/bin/ratatoskr-mock.rs`). The ledger and the registry are in memory.
 //!
-//! The mock is found at `RATATOSKR_MOCK`, else beside this test's binary (`target/debug/ratatoskr-mock`): build it
+//! The mock is found at `RATATOSKR_MOCK`, else in the test build's profile folder (`target/debug/ratatoskr-mock`,
+//! `skuld::profile_dir`): build it
 //! first (`cargo build -p domr --bin ratatoskr-mock`; a workspace `cargo test` builds it anyway).
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -43,16 +44,7 @@ const EDITOR: &str = "editor-token-0123456789abcdef0123456789abcdef0123456789abc
 // ------------------------------------------------------------------------------------------ the provider
 
 fn mock_bin() -> PathBuf {
-    if let Some(path) = std::env::var_os("RATATOSKR_MOCK") {
-        return path.into();
-    }
-    // target/debug/deps/engine-HASH -> target/debug/ratatoskr-mock
-    let exe = std::env::current_exe().unwrap();
-    let bin = exe
-        .parent()
-        .and_then(Path::parent)
-        .unwrap()
-        .join("ratatoskr-mock");
+    let bin = skuld::workspace_bin("ratatoskr-mock", None, Some("RATATOSKR_MOCK"));
     assert!(
         bin.exists(),
         "{} is missing: build it first (cargo build -p domr --bin ratatoskr-mock) or name it in RATATOSKR_MOCK",

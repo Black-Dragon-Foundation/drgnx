@@ -30,6 +30,11 @@ runs:
       env:
         DIR: ${{ inputs.dir }}
       run: echo "commit=$(git -C "$DIR" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+    # the pinned Rust, never the runner's moving `stable` (.github/ci/rust.sh)
+    - shell: bash
+      env:
+        DIR: ${{ inputs.dir }}
+      run: bash "$DIR/.github/ci/rust.sh"
     - id: rv
       shell: bash
       run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"

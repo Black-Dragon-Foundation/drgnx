@@ -360,10 +360,29 @@ only).
   adapter bound elsewhere (`bound_line`) sits on that line.
 - `drgnx-debug-gutter-show`: `auto` (while the file has breakpoints or a session runs in its project, from
   `debug-state`), `always` or `never`.
-- Mouse: `mouse-1` in the column toggles (`drgnx-debug-gutter-toggle`), `S-mouse-1` adds a logpoint, `mouse-3`
+- A new major mode (`normal-mode` in a revert that does not keep the modes), or killing the buffer, would drop the
+  column's locals and leave its margin claim's window hooks and its global hooks behind: `change-major-mode-hook`
+  and `kill-buffer-hook` turn the column off first, and the module's `find-file-hook` (which a revert runs) turns it
+  on again. The tests visit `a.py` with no mode lookup, so
+  python-mode's first use does not leave `after-load` forms in the leak census.
+- Mouse: `mouse-1` in the column toggles (`drgnx-debug-gutter-toggle`), a drag from a mark moves it
+  (`drgnx-debug-gutter-drag`: `move` to its saved line plus the lines dragged; `down-mouse-1` there selects no
+  text), `S-mouse-1` adds a logpoint, `mouse-3`
   opens the line's menu (`drgnx-debug-gutter--menu-items`): Add Breakpoint / Conditional / Logpoint on an empty line;
   Remove, Edit Condition / Hit Count / Log Message and Enable or Disable on a breakpoint; Run to Cursor while a session
   runs in the project (`debug/run-to-cursor`).
+- Inline breakpoints: a breakpoint with a `column` (1-based characters; the hub converts for the adapter) is its
+  own breakpoint beside the line's. `drgnx-debug-inline-breakpoint` (Shift+F9) adds or removes one at point's
+  column. Its mark is a zero-length overlay before that character (`drgnx-debug-column`) whose `before-string` is a
+  dot (`drgnx-debug-breakpoint-inline`), not a margin glyph; `--mark-at` (the line's toggle, the drag, the stop
+  arrow) skips it; a save that moved it sends `move` with its column. A click on the dot removes it.
+- Candidates (`drgnx-debug-inline-breakpoint-candidates`, on): while this project's session is stopped, each line
+  with a breakpoint asks `debug/breakpoint-locations {session, path, line}` → `{locations: [{line, column, …}]}`
+  (again at each `debug-state` and redraw; an older answer is dropped by a generation count) and, when there are two
+  or more, puts a faint `○` (`drgnx-debug-breakpoint-candidate`) at each column without an inline breakpoint, and
+  not at the first when the line has a line breakpoint (it stops at the line's first statement: the same place); a
+  click adds one there. `test/unit/debug-hub-test.el` runs this, and the console's groups, against the real hub and its
+  `debug-mock` adapter (a test-hooks build in `DRGNX_RATATOSKR_BIN`).
 - The prompt (`drgnx-debug-gutter-edit`) starts from the field's text; an empty answer clears it (an `edit` op with
   `""`), and on a line without a breakpoint a non-empty answer adds one with that field.
 - The hover dot: with the pointer over the column, a line without a mark shows a faint dot ("Click to add a
@@ -530,6 +549,11 @@ Methods (runstav `methods::debug`, the user class; served by `view::debug::serve
 - `debug/children {session, reference, epoch?}` → `{variables: [{name, value, type?, reference?}]}`: a value's
   children while its stop (EPOCH, default the current one) lasts; after it, the error says the stop is over.
   (Copy Value uses `clipboard` when the adapter has `supportsClipboardContext`).
+- Data tips (the mouse): quick help's hover already waits for the mouse to rest, drops an older request and gives
+  up after a second. extra/debug puts `drgnx-debug-hover-eldoc` on `eldoc-documentation-functions` (it never
+  answers: the echo area evaluates nothing) and pairs it in `drgnx-quickhelp-fuller-functions` with
+  `drgnx-debug-hover-doc`, which only the card asks: `debug/evaluate` (`hover`) of the expression there in the
+  project's stopped session, answered as `EXPR = VALUE  (TYPE)`.
 - `debug/breakpoints`' ops `filter {adapter, name, enabled}` (kept per adapter type and sent to its sessions at once),
   `enable-all {enabled}`, `toggle-all` (all off when any is on, else all on: Toggle All Breakpoints) and `remove-all`
   (function breakpoints too).
@@ -568,9 +592,33 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
   children shows a chevron: RET or TAB opens it in place (`debug/children {session, reference, epoch}` →
   `{variables: [{name, value, type?, reference?}]}`; `debug/evaluate`'s answer names its stop as `epoch`); after a
   resume the stop is over, the hub says so, and the value turns stale (dim, no longer opens).
+- Groups fold: the hub numbers each session's `group: start | startCollapsed` (`:group N` on the line that opens it,
+  `:collapsed` when it starts folded) and gives every line the groups it is in, outermost first (`:within`). The
+  editor keys them (SESSION . N), keeps the folded ones in `drgnx-debug-console--closed` (emptied with the output),
+  draws a chevron on the opening line and hides a line (`invisible`) while any group it is in is folded, also as
+  lines arrive. TAB or RET on the opening line folds or opens it; a group inside stays as it was.
 - The console stays after its session ends; starting a configuration of the same name again clears it once no
   session of the last run is left (`drgnx-debug-console-clear-on-restart`, on by default).
-- Completion in the input (`completions`) is tier 2 and not built yet.
+- Completion in the input: `drgnx-debug-console-complete-at-point` is the console's only `completion-at-point`
+  function (C-M-i, or a completion UI). It asks `debug/completions {session, frame?, text, column}` (characters,
+  0-based) → `{targets: [{label, text?, type?, start?, length?}]}` on the call connection (2 s); a target's
+  `start`/`length` name the span of the input it replaces, else the word before point; the type is the annotation.
+  Nothing outside the input, with no session, or when the adapter has no `completions`.
+- From the editor: `drgnx-debug-console-evaluate (EXPR &optional SELECT)` (Debug: Evaluate in Debug Console)
+  evaluates as if typed (echoed, in the history) while keeping what the input holds; the tab shows without the
+  focus, or selected with SELECT.
+
+## The memory view: `drgnx-debug-memory.el`
+
+- A variable or watch whose adapter gives a `memoryReference` carries it as the field `memory_reference`
+  (view/debug/model.rs). **View Binary Data** (`debug-view-memory`, `m` in the Emacs and Vim profiles) on its row
+  opens `*Memory: NAME*` in the row's session (the `v:SESSION:` of its id; a watch's, the stopped one).
+- `debug/read-memory {session, reference, offset, count}` → `{address, data (base64), unreadable?}` reads a page of
+  `drgnx-debug-memory-page-bytes` (256; the hub refuses more than 64 KiB), drawn 16 bytes a line: the address
+  (`%08x` from `address` when it is hex, else the offset), the bytes in hex (`??` for unreadable ones), the text
+  (`.` for the unprintable). A redraw replaces only the lines that changed.
+- Its keys: next and previous page (never before the reference), refresh, and write: hex typed at the byte under
+  point goes as `debug/write-memory {session, reference, offset, data (base64)}`, then the page is read again.
 
 ## Live adapters: the image
 

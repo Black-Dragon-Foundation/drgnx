@@ -193,6 +193,31 @@ it."
     (drgnx-debug-add-to-watch)
     (should (equal (list :call "debug/watch" (list :root "/p" :op "add" :expr "n")) (car calls)))))
 
+(ert-deftest drgnx-debug-view/watches-edited-removed-and-moved-by-place ()
+  "A watch row's commands send its place among the watches (`debug/watch' edit, remove, move); moving up from the
+first stays first; another row is not a watch."
+  (debug-view-test--with
+    (let ((here "w:b") (order ["section:watch" "w:a" "w:b" "section:callstack"]))
+      (cl-letf (((symbol-function 'drgnx-debug-view--node) (lambda () here))
+                ((symbol-function 'drgnx-debug-view--kind)
+                 (lambda (id) (if (string-prefix-p "w:" id) "watch" "section")))
+                ((symbol-function 'drgnx-debug-view--field) (lambda (_name id) (substring id 2)))
+                ((symbol-function 'nidhogg-view-get) (lambda (_h _what _name) order))
+                ((symbol-function 'read-string) (lambda (_prompt initial) (concat initial "+1"))))
+        (setq calls nil)
+        (drgnx-debug-watch-edit)
+        (drgnx-debug-watch-move-up)
+        (drgnx-debug-watch-remove)
+        (setq here "w:a")
+        (drgnx-debug-watch-move-up)
+        (drgnx-debug-watch-move-down)
+        (should (equal (mapcar #'caddr (reverse calls))
+                       '((:root "/p" :op "edit" :index 1 :expr "b+1") (:root "/p" :op "move" :index 1 :to 0)
+                         (:root "/p" :op "remove" :index 1) (:root "/p" :op "move" :index 0 :to 0)
+                         (:root "/p" :op "move" :index 0 :to 1))))
+        (setq here "section:callstack")
+        (should-error (drgnx-debug-watch-edit) :type 'user-error)))))
+
 (ert-deftest drgnx-debug-view/the-header-starts-the-picked-configuration ()
   "The header holds Start and the picker; Start with nothing picked picks first, then starts that configuration."
   (debug-view-test--with

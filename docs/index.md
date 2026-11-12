@@ -23,6 +23,8 @@ Using drgnx.
 - [Agent browser](guide/agent-browser.md): the browser a sandboxed agent session drives — which one drgnx finds, what it can reach and how to answer its cards, `drgnx browser install` (a pinned, checksum-verified download you run yourself), `drgnx browser list`, the doctor's line.
 - [Semantic Search](guide/search.md): find code by meaning — `#` in the palette, the index, what is never indexed, `.drgnx/search.eld`, privacy.
 - [Editing](guide/editing.md): language support (tree-sitter grammars), and the editor's amenities.
+- [Debugging](guide/debugging.md): breakpoints, stepping, Run and Debug, the Debug Console, recorded runs, what-if
+  forks, debugging with an agent, finding the change that broke it.
 - [Large files](guide/large-files.md): above 50 MiB a file opens in chunks, lean or raw — a file you open asks once, `drgnx open` and everything automatic never ask; the header line and the status bar say which, and switch; long lines turn on so-long.
 - [Git and review](guide/git.md): the diff view, inline blame, AI commit messages, Review Branch, Pull Requests.
 - [The Work space](guide/work-space.md): opening the map (`work-view`), its faces, the machines the hub lists, `ratatoskr machines report`; the Board, the Timeline and the research trail, the review view, the second reviewer and the steering keys. It replaces the Work space and the job window.

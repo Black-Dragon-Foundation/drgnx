@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; The editor's half of the origin trail (docs/guide/editing.md; docs/develop/debugging.md, "Where did this come
+;; The editor's half of the origin trail (docs/guide/debugging.md; docs/develop/debugging.md, "Where did this come
 ;; from?").  At a recorded stop, Alt-click a name (or `debug-origin') asks the hub where its value came from: the hub
 ;; replays the run to the stop under a tracer and sends the trail as `debug-origin' events, a level per replay.  The
 ;; card is the hub's rows; a link opens as a past stop: the file as it ran, the link's line marked, its operands' values.

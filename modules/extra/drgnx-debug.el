@@ -6,7 +6,7 @@
 ;; Debugging through the hub's DAP client (docs/develop/debugging.md) — the Debug Adapter Protocol, so the same
 ;; adapters as VS Code (debugpy, the JS debugger, delve, CodeLLDB, …) — with VS Code's keys in that profile: F5 starts
 ;; (or continues), F9 toggles a breakpoint, F10 steps over, F11 steps into while a session runs (Zen Mode otherwise),
-;; S-F11 steps out, S-F5 stops.  The sessions are what the hub's `debug-state' last said.  See docs/guide/editing.md.
+;; S-F11 steps out, S-F5 stops.  The sessions are what the hub's `debug-state' last said.  See docs/guide/debugging.md.
 
 ;;; Code:
 (require 'seq)
@@ -23,6 +23,7 @@
 (require 'drgnx-debug-toolbar (expand-file-name "drgnx-debug-toolbar" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-view (expand-file-name "drgnx-debug-view" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-console (expand-file-name "drgnx-debug-console" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-debug-memory (expand-file-name "drgnx-debug-memory" (file-name-directory (macroexp-file-name))))
 (defvar drgnx-statusbar-left)
 (declare-function drgnx-wb-define-tab "drgnx-area")
 (declare-function drgnx-hub-call "drgnx-hub-client")
@@ -120,6 +121,7 @@ the toolbar's cards go too."
   "The session keys go with the module (a running session turned them on, not the setup), and the column."
   (drgnx-debug-view--teardown)
   (drgnx-debug-console--teardown)
+  (drgnx-debug-memory--teardown)
   (drgnx-debug-session-mode -1)
   (drgnx-debug-timeline-mode -1)
   (drgnx-debug-bisect-events-mode -1)
@@ -210,6 +212,27 @@ as projects the user selected in, cleared by the module's teardown.")
                                             :op (list :op "add-function" :name (string-trim name)))
                   #'drgnx-debug--answered))
 
+(defun drgnx-debug-hover-eldoc (_callback)
+  "Nothing, for the echo area: an expression is evaluated only when the mouse rests on it (quick help's card asks
+`drgnx-debug-hover-doc' instead, `drgnx-quickhelp-fuller-functions')."
+  nil)
+
+(defun drgnx-debug-hover-doc (callback)
+  "The data tip of the expression at point (the selection when point is in it) for quick help's card: evaluated
+in the stopped session of this project (`hover'), CALLBACK given \"EXPR = VALUE  (TYPE)\" when it comes, or nil
+on an error.  Nil (nothing asked) without a stopped session or an expression."
+  (when-let* ((s (drgnx-debug--session "stopped"))
+              (expr (if (and (use-region-p) (<= (region-beginning) (point) (region-end)))
+                        (buffer-substring-no-properties (region-beginning) (region-end))
+                      (let ((mark-active nil)) (drgnx-debug--expression-at-point)))))
+    (drgnx-hub-call "debug/evaluate" (list :session (plist-get s :id) :expr expr :context "hover")
+                    (lambda (r error)
+                      (funcall callback
+                               (unless error
+                                 (format "%s = %s%s" expr (plist-get r :result)
+                                         (if-let* ((ty (plist-get r :type))) (format "  (%s)" ty) ""))))))
+    t))
+
 (defun drgnx-debug--expression-at-point ()
   "The active region's text, else the symbol at point with the member chain before it (`self.items'); nil if none."
   (if (use-region-p)
@@ -245,11 +268,16 @@ console's tab shows without taking the focus."
                      :setup (lambda ()
                               (drgnx-debug-mode 1)
                               (add-hook 'drgnx-hub-event-functions #'drgnx-debug-fork--event)
+                              ;; data tips: quick help's card asks the fuller one when the mouse rests on an expression
+                              (add-hook 'eldoc-documentation-functions #'drgnx-debug-hover-eldoc)
+                              (drgnx-module-alist-put 'drgnx-quickhelp-fuller-functions
+                                                      'drgnx-debug-hover-eldoc 'drgnx-debug-hover-doc)
                               (pcase-dolist (`(,id ,title ,fn ,doc)
                                              '((debug-start "Start Debugging…" drgnx-debug-start-or-continue "Start a session, or continue the stopped one")
                                                (debug-breakpoint "Toggle Breakpoint" drgnx-debug-gutter-toggle "A breakpoint on this line, or none")
                                                (debug-breakpoint-conditional "Add Conditional Breakpoint…" drgnx-debug-breakpoint-conditional "A breakpoint that stops only when its condition holds")
                                                (debug-logpoint "Add Logpoint…" drgnx-debug-logpoint "Print a message here instead of stopping")
+                                               (debug-inline-breakpoint "Inline Breakpoint" drgnx-debug-inline-breakpoint "A breakpoint at this column of the line, or none")
                                                (debug-breakpoint-enable "Enable / Disable Breakpoint" drgnx-debug-breakpoint-enable "Keep this line's breakpoint but stop or start using it")
                                                (debug-run-to-cursor "Run to Cursor" drgnx-debug-run-to-cursor "Continue until this line")
                                                (debug-step-over "Step Over" drgnx-debug-step-over "To the next line")
@@ -317,6 +345,11 @@ console's tab shows without taking the focus."
                                       (drgnx-command-define id :category "Debug" :title title :command fn :doc doc)
                                     (drgnx-command-define id :category "Debug" :title title :command fn :doc doc
                                                           :map 'drgnx-debug-view-mode-map :when in-view))))
+                              ;; the memory view (drgnx-debug-memory.el): its keys in its own map
+                              (let ((in-memory (lambda () (derived-mode-p 'drgnx-debug-memory-mode))))
+                                (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-memory-commands)
+                                  (drgnx-command-define id :category "Debug" :title title :command fn :doc doc
+                                                        :map 'drgnx-debug-memory-mode-map :when in-memory)))
                               ;; recorded runs: probes, the stop timeline, past stops (drgnx-debug-timeline.el)
                               (drgnx-debug-timeline-mode 1)
                               (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-timeline-commands)

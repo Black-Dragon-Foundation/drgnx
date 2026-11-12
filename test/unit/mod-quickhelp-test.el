@@ -152,6 +152,18 @@
         (drgnx-test-pause 1.2 "the older request's timeout may not fire its callback")
         (should (eq got1 :none))))))
 
+(defun drgnx-quickhelp-test--terse (_cb) "terse")
+(defun drgnx-quickhelp-test--full (_cb) "full")
+
+(ert-deftest drgnx-quickhelp/the-card-asks-a-modules-fuller-function ()
+  "A module's pair in `drgnx-quickhelp-fuller-functions': the card asks the fuller one, the echo area keeps its own."
+  (drgnx-quickhelp-test--with
+    (drgnx-quickhelp-test--elisp "(car x)\n"
+      (let ((got :none) (drgnx-quickhelp-fuller-functions '((drgnx-quickhelp-test--terse . drgnx-quickhelp-test--full))))
+        (setq-local eldoc-documentation-functions (list #'drgnx-quickhelp-test--terse))
+        (drgnx-quickhelp-collect 2 (selected-window) (lambda (docs) (setq got docs)))
+        (should (equal got '(("full"))))))))
+
 (ert-deftest drgnx-quickhelp/collect-never-waits ()
   :tags '(:timing)
   (drgnx-quickhelp-test--with

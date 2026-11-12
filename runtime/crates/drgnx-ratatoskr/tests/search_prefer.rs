@@ -28,15 +28,7 @@ const BUILTIN: &str = "granite-embedding-small-english-r2";
 const TASK: &str = "Given a question about code, retrieve the code that answers it";
 
 fn mock_bin() -> PathBuf {
-    if let Some(path) = std::env::var_os("RATATOSKR_MOCK") {
-        return path.into();
-    }
-    let exe = std::env::current_exe().unwrap();
-    let bin = exe
-        .parent()
-        .and_then(Path::parent)
-        .unwrap()
-        .join("ratatoskr-mock");
+    let bin = skuld::workspace_bin("ratatoskr-mock", None, Some("RATATOSKR_MOCK"));
     assert!(
         bin.exists(),
         "{} is missing: build it first (cargo build -p domr --bin ratatoskr-mock) or name it in RATATOSKR_MOCK",
