@@ -11,7 +11,6 @@
 
 #[cfg(test)]
 pub(crate) mod attach_tests;
-mod disk;
 pub(crate) mod panel;
 pub(crate) mod rows;
 pub(crate) mod turn_core;
@@ -1032,7 +1031,7 @@ pub struct Session {
     /// Transcripts and the held queue on disk (none in unit tests).
     store: Option<transcript::Store>,
     /// The writes to those files, in order, off the hub's workers.
-    disk: disk::Disk,
+    disk: crate::disk::Ordered,
     /// Step snapshots: a turn's tree is taken before its prompt goes, and the tree at a hold on its wheel (none: the
     /// hub has no state folder).
     snap: Option<crate::timeline::Snap>,
@@ -2014,7 +2013,10 @@ pub(crate) async fn open_with(
             .collect();
         let meta = json!({"about": s.about, "document": s.document, "env": env});
         let (store, sid) = (store.clone(), s.id.clone());
-        s.disk.push(move || store.save_meta(&sid, &meta));
+        s.disk.push("a session's meta", move || {
+            store.save_meta(&sid, &meta);
+            Ok(())
+        });
     }
     lock(&s.state).core.ready(false);
     hub.insert(s.clone());
@@ -2448,7 +2450,7 @@ fn assemble(
         gated: AtomicU64::new(0),
         state: Mutex::new(State::new()),
         store: front.dirs.get().map(|d| transcript::Store::new(&d.hub)),
-        disk: disk::Disk::default(),
+        disk: crate::disk::Ordered::new("session:disk"),
         snap: crate::timeline::Snap::of(front),
         steps,
         flow,
@@ -3811,7 +3813,7 @@ impl Session {
             .await;
     }
 
-    /// The entries not yet in the transcript file, written (redacted) next, off the hub's workers ([`disk`]); a turn
+    /// The entries not yet in the transcript file, written (redacted) next, off the hub's workers ([`crate::disk`]); a turn
     /// not yet sent to the agent waits.  Queued under the state's lock, so the ranges land in order.
     fn flush_transcript(&self) {
         let Some(store) = &self.store else { return };
@@ -3828,17 +3830,16 @@ impl Session {
             .map(|(i, e)| ((from + i) as u64, e.clone()))
             .collect();
         let (store, sid) = (store.clone(), self.id.clone());
-        self.disk.push(move || {
-            if let Err(e) = store.append(&sid, &fresh) {
-                tracing::warn!(sid, "transcript not written: {e}");
-            }
-        });
+        self.disk.push(
+            format!("session {sid}: transcript not written"),
+            move || store.append(&sid, &fresh),
+        );
     }
 
     /// The held queue and the pause, kept for a restart, with a turn's prompt that has not reached the agent at its
     /// front ([`TurnCore::kept`]).  Queued under the state's lock: two writes from different tasks (a turn's end, the
     /// hub's end) land in the order of the states they read, so the file ends as the last.  Written off the hub's
-    /// workers ([`disk`]).
+    /// workers ([`crate::disk`]).
     fn persist_queue(&self) {
         let Some(store) = &self.store else { return };
         let st = lock(&self.state);
@@ -3848,11 +3849,10 @@ impl Session {
             st.core.kept(),
             st.core.paused(),
         );
-        self.disk.push(move || {
-            if let Err(e) = store.save_queue(&sid, &kept, paused) {
-                tracing::warn!(sid, "queue not kept: {e}");
-            }
-        });
+        self.disk
+            .push(format!("session {sid}: queue not kept"), move || {
+                store.save_queue(&sid, &kept, paused)
+            });
     }
 
     fn schedule(self: &Arc<Self>) {
@@ -5116,11 +5116,10 @@ impl Session {
         let st = lock(&self.state);
         let held = st.wheel != Wheel::Free;
         let (store, sid, base) = (store.clone(), self.id.clone(), st.wheel_base.clone());
-        self.disk.push(move || {
-            if let Err(e) = store.save_wheel(&sid, held, base.as_deref()) {
-                tracing::warn!(sid, "the wheel's hold not kept: {e}");
-            }
-        });
+        self.disk.push(
+            format!("session {sid}: the wheel's hold not kept"),
+            move || store.save_wheel(&sid, held, base.as_deref()),
+        );
     }
 
     /// What the supervisor reads of this session.
