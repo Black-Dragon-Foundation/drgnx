@@ -183,7 +183,9 @@ replaces that one's."
         (let ((root (drgnx-debug-timeline--root)))
           (if (gethash root drgnx-debug-timeline--probes)
               (drgnx-debug-timeline--draw)
-            (drgnx-debug-timeline--probe-op nil))))
+            ;; asked from `find-file-hook' (and the mode's start): with no hub to answer, the file has no probes to
+            ;; show; it never fails the visit (`drgnx-hub-call' signals when no hub serves)
+            (condition-case nil (drgnx-debug-timeline--probe-op nil) (error nil)))))
     (mapc #'delete-overlay drgnx-debug-timeline--overlays)
     (setq drgnx-debug-timeline--overlays nil)
     (drgnx-margins-claim 'debug-probe nil)
