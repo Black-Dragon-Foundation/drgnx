@@ -64,6 +64,12 @@ dimmed. A big list keeps its last 64 opened pages open; opening another closes t
 (C, C++, Rust, Go): 16 to a line with the address and the text, PageDown / PageUp (`n` / `p`, C-f / C-b) for the next
 page, F2 (`e`, `c`) to write bytes typed in hex at point.
 
+**Open Disassembly View** (the palette) shows the machine instructions around the current frame when its debugger
+can disassemble (C, C++, Rust, Go). A stop in code with no source file opens it by itself. Each run of instructions
+has the source line it came from above it, in a quiet row. The arrow marks the current instruction. F9 (`b`) sets an
+instruction breakpoint on the instruction at point. While the view has focus, the step keys step one instruction,
+and the header shows an "instruction step" chip. `<` / `>` (`[` / `]` in Vim) read earlier or later instructions.
+
 ## The Debug Console
 
 The **Debug Console** (the panel's tab; C-S-y in VS Code keys) shows the program's output, colours included, with

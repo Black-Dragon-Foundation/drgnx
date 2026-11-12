@@ -1035,6 +1035,7 @@ The commands of modules that need no installed package are in it, the later stag
                               debug-watch-move-up debug-watch-move-down ; Run and Debug
                               debug-console debug-console-history-previous debug-console-history-next ; the console
                               debug-memory-next debug-memory-previous debug-memory-write ; the memory view
+                              debug-disassembly-toggle-breakpoint ; the disassembly view
                               debug-inline-breakpoint ; Shift+F9, as in VS Code
                               debug-run-no-debug ; Run Without Debugging's C-F5
                               terminal-toggle))   ; C-` is Toggle Terminal, as in VS Code (the panel keeps M-j)

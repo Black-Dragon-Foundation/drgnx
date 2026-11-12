@@ -28,6 +28,7 @@
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (require 'drgnx-debug-launch (expand-file-name "drgnx-debug-launch" (file-name-directory (macroexp-file-name))))
 (defvar drgnx-hub-event-functions)
+(declare-function drgnx-debug-disassembly-show "drgnx-debug-disassembly" (data))
 (defvar drgnx-debug-gutter-mode)
 
 (defcustom drgnx-debug-gutter-show 'auto
@@ -947,7 +948,9 @@ after the line when given."
                 (drgnx-debug-gutter--show-stop-in buf data)
               (drgnx-debug-gutter--fill-source buf session ref
                                                (lambda () (drgnx-debug-gutter--show-stop-in buf data))))))))
-     (open (message "No source: %s" (or (plist-get data :name) "this frame"))))))
+     ;; code with no file: its instructions, when the adapter disassembles
+     ((and open (not (drgnx-debug-disassembly-show data)))
+      (message "No source: %s" (or (plist-get data :name) "this frame"))))))
 
 (defun drgnx-debug-gutter-stop-sessions (sessions)
   "`debug-state' said SESSIONS: the marks of a session that is gone go now, a running one's after the linger."

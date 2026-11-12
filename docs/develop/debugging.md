@@ -635,6 +635,30 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
 - Its keys: next and previous page (never before the reference), refresh, and write: hex typed at the byte under
   point goes as `debug/write-memory {session, reference, offset, data (base64)}`, then the page is read again.
 
+## The disassembly view: `drgnx-debug-disassembly.el`
+
+- `debug-frame` events that carry `instruction_pointer` are remembered per session
+  (`drgnx-debug-disassembly--frames`). **Open Disassembly View** (`debug-open-disassembly`) opens `*Disassembly*` at
+  the stopped session's last frame. It is offered only when the session's `caps` has `supportsDisassembleRequest`
+  (`drgnx-debug-can-p`). A stop the editor opens with no path and no source reference opens the view instead of
+  "No source" (`drgnx-debug-disassembly-show`, from the gutter's `drgnx-debug-gutter-show-frame`).
+- `debug/disassemble {session, reference, instruction_offset, count}` →
+  `{instructions: [{address, bytes?, instruction, symbol?, path?, line?, end_line?}]}` reads
+  `drgnx-debug-disassembly-count` (200; the hub caps it at 500) around the instruction, a quarter of them before
+  it. A source row (the file's line, trimmed, and `file:line`) goes above each change of place. The instruction rows
+  carry their address as the text property `drgnx-debug-disassembly-address`. Earlier and later page by a whole count.
+  A page is redrawn only on open, paging, or a stop off the page. A stop on the page only moves the marks.
+- The debug column (`drgnx-margins` owner `debug`, the gutter's glyphs) marks the current instruction (the stop, or a
+  caller's frame) and the session's instruction breakpoints. The view asks
+  `debug/breakpoints {root, session, kind: "instruction"}`, which answers the session's instruction view
+  `{session, version, breakpoints: [{id: "i:S:N", n, instruction, offset?, verified, enabled, condition?, hit?}]}`.
+  The ops `add-instruction {session, instruction}` and `remove-instruction {session, id: N}` answer the same view. The
+  hub's `debug-breakpoints` event with a `session` and no `path` redraws it; a newer `version` wins. Toggling needs
+  `supportsInstructionBreakpoints`.
+- With the view focused, `drgnx-debug-control` sends `granularity: "instruction"` on `next`, `step-in` and `step-out`.
+  The header line shows an "instruction step" chip (`drgnx-debug-disassembly-step`) while the view's window is
+  selected.
+
 ## Live adapters: the image
 
 The tests that run real adapters (debugpy, js-debug, delve, lldb-dap) use `drgnx-debug-adapters:f45`, built from
