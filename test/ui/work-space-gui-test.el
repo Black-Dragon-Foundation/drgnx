@@ -12,8 +12,8 @@
 ;; holds the old picture (`glitnir-layout-captured-p'): a layout the user asks for moves, one whose picture is not
 ;; held jumps, reduced motion asks for nothing, a live arrival never moves the map, and keys stay fast during a leg.
 ;; They run on the hub's rows: the map of the 30-agent workspace (test/fixtures/work-space-thirty-fixture.el, a
-;; test-hooks ratatoskr with ratatoskr-mock beside it, every agent streaming), with its first eight agents so the layout
-;; fits at scale 2 too (a layout that does not fit is the outline, which never moves), so they need Sjá.
+;; test-hooks ratatoskr with ratatoskr-mock beside it, every agent streaming): all 30 below scale 2, its first four at
+;; scale 2, where 30 do not fit (a layout that does not fit is the outline, which never moves).  They need Sjá.
 
 (require 'ert)
 (require 'cl-lib)
@@ -345,14 +345,16 @@ this never waits for the hub to fall quiet."
                    :secs 30 :what "the hub's rows drawn")
   (with-current-buffer buffer (drgnx-view-draw-now drgnx-view)))
 
-(defvar drgnx-work-gui--agents 4
-  "How many of the 30-agent workspace's agents `drgnx-work-gui--with-map' starts: few enough that the layout, with
-every file they edit, fits at scale 2 (one that does not is the outline), and one more agent still fits.")
+(defun drgnx-work-gui--agents ()
+  "How many of the 30-agent workspace's agents `drgnx-work-gui--with-map' starts: all 30 below scale 2, where their
+layout fits (many cards move at once); at scale 2 four, as 30 (or 8) do not fit there once they have edited their files
+\(a layout that does not fit is the outline, which never moves), and one more agent still fits."
+  (if (< (frame-scale-factor) 2) 30 4))
 
 (defmacro drgnx-work-gui--with-map (&rest body)
   "BODY in the map of the 30-agent workspace's first `drgnx-work-gui--agents' agents (`drgnx-work-gui--with-map-of')."
   (declare (indent 0))
-  `(drgnx-work-gui--with-map-of drgnx-work-gui--agents ,@body))
+  `(drgnx-work-gui--with-map-of (drgnx-work-gui--agents) ,@body))
 
 (defmacro drgnx-work-gui--with-map-of (count &rest body)
   "BODY in the map of the 30-agent workspace's first COUNT agents on the hub's rows, alone in the root frame's selected
@@ -465,6 +467,13 @@ parameters go and a leg is counted.  Screenshots of the map before and after."
               (should moves)
               (should (= 0.16 (plist-get m :duration)))
               (should (eq 'ease-out (plist-get m :curve)))
+              ;; the redisplay that shows the new layout hands the leg to the shell, from the capture (read before the
+              ;; checks below, whose redisplays outlast a 0.16 s leg on 30 agents' cards)
+              (redisplay t)
+              (let ((sent (window-parameter win 'glitnir--leg-sent)))
+                (drgnx-work-gui--log "motion %s leg sent %S" tag (and sent (list (nth 2 sent) (nth 4 sent))))
+                (should (> (or (nth 2 sent) 0) 0))
+                (should (nth 4 sent)))
               ;; each move ends at its card's rectangle: x and w the model's, y where its first line is drawn
               (let ((off nil))
                 (pcase-dolist (`(,id ,_old ,new) moves)
@@ -478,12 +487,7 @@ parameters go and a leg is counted.  Screenshots of the map before and after."
                 (should-not off))
               ;; an exit is a card the new layout no longer draws
               (dolist (e (plist-get m :exits))
-                (should-not (drgnx-work-gui--card-pos (car e))))
-              ;; the redisplay that shows the new layout hands the leg to the shell, from the capture
-              (redisplay t)
-              (let ((sent (window-parameter win 'glitnir--leg-sent)))
-                (should (> (nth 2 sent) 0))
-                (should (nth 4 sent))))
+                (should-not (drgnx-work-gui--card-pos (car e)))))
             (drgnx-test-wait (lambda () (null (window-parameter win 'glitnir-layout-capture))) :secs 10
                              :what "the leg's end takes the capture off")
             (should-not (window-parameter win 'glitnir-layout-motion))
@@ -581,22 +585,35 @@ give it motion either."
         (push (drgnx-work-gui--ms t0) times)))
     times))
 
+(defconst drgnx-work-gui--leg-key-allowance 8.0
+  "Milliseconds a leg may add to the p95 of a map key: half a frame at 60 Hz, so a leg that cost the keys a visible
+share of a frame fails.  The noise it covers was measured on the desktop's GUI tier with 30 agents streaming: the p95
+during a leg came out up to 5.6 ms above the one without, and as often below it.")
+
 (ert-deftest drgnx-work-gui/keys-stay-fast-during-a-leg ()
-  "Measured on a long leg: a key on the map (the selection moves, rows are refaced) with its redisplay while the leg
-runs, 40 times: p95 under 16 ms."
+  "Measured on a long leg: a key on the map (the selection moves, rows are refaced) with its redisplay, 40 times
+before the leg, during it and after it: the leg adds no cost, its p95 within `drgnx-work-gui--leg-key-allowance' of
+the larger p95 without a leg.  The reference is this run's own, before and after, as the GUI tier shares a loaded
+machine and the live patches of the agents streaming land in the keys' redisplays; the absolute key budget is the
+pinned perf island's (harness/drgnx-perf-work.el)."
   :tags '(:timing)
   (skip-unless (and (drgnx-work-gui--rows-p) (drgnx-work-gui--leg-p)))
   (drgnx-work-gui--with-map
-    (let ((drgnx-work-map-motion-duration 3.0) (times nil) (base (drgnx-work-gui--key-times)))
+    (let ((drgnx-work-map-motion-duration 3.0) (times nil) (before (drgnx-work-gui--key-times)) (after nil))
       (should (drgnx-work-gui--relayout buf win))
       (redisplay t)
       (setq times (drgnx-work-gui--key-times))
       (let ((sent (window-parameter win 'glitnir--leg-sent)))
-        (drgnx-work-gui--log "motion keys: no leg med=%.2f p95=%.2f max=%.2f | during a leg med=%.2f p95=%.2f max=%.2f leg=%S"
-                             (drgnx-work-gui--med base) (drgnx-work-gui--p95 base) (apply #'max base)
-                             (drgnx-work-gui--med times) (drgnx-work-gui--p95 times) (apply #'max times) (nth 2 sent))
-        (should (> (nth 2 sent) 0))
-        (should (< (drgnx-work-gui--p95 times) 16))))))
+        (should (> (or (nth 2 sent) 0) 0))
+        (should (window-parameter win 'glitnir-layout-capture)) ; the leg still ran when the keys ended
+        (drgnx-test-wait (lambda () (null (window-parameter win 'glitnir-layout-capture))) :secs 10
+                         :what "the leg's end")
+        (setq after (drgnx-work-gui--key-times))
+        (let ((ref (max (drgnx-work-gui--p95 before) (drgnx-work-gui--p95 after))))
+          (drgnx-work-gui--log "motion keys: before p95=%.2f after p95=%.2f | during a leg med=%.2f p95=%.2f max=%.2f leg=%S"
+                               (drgnx-work-gui--p95 before) (drgnx-work-gui--p95 after)
+                               (drgnx-work-gui--med times) (drgnx-work-gui--p95 times) (apply #'max times) (nth 2 sent))
+          (should (<= (drgnx-work-gui--p95 times) (+ ref drgnx-work-gui--leg-key-allowance))))))))
 
 ;;;; Scenes: the 30-agent map, dark, light and high contrast
 
@@ -679,9 +696,9 @@ as (BAD . N)."
 (defun drgnx-work-gui--cards-inside (width)
   "The 30-agent map on the hub's rows in the drgnx dark theme, in a window WIDTH px wide (nil: the whole frame): once
 the hub has laid it out for that width, each card on screen is inside its rectangle; the shot of the frame is kept in
-the evidence folder.  Below scale 2 all 30 agents; at 2 the 30 do not fit (the hub draws the outline), so the first
-`drgnx-work-gui--agents'.  More cards are checked than there are agents."
-  (drgnx-work-gui--with-map-of (if (< (frame-scale-factor) 2) 30 drgnx-work-gui--agents)
+the evidence folder.  `drgnx-work-gui--agents' agents (all 30 below scale 2).  More cards are checked than there are
+agents."
+  (drgnx-work-gui--with-map
     (unwind-protect
         (let ((want (length drgnx-work-thirty--mirrors)) found)
           (when width (split-window win width 'right t))

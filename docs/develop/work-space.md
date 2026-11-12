@@ -686,8 +686,11 @@ window the map set them on (`drgnx-work-map--motion-windows`).
 Tests: `test/ui/work-space-gui-test.el`, the rows `drgnx-work-gui/relayout-moves-with-motion` (dark and light, with
 screenshots), `-no-ack-is-a-jump` (the text area moves after the capture, so the presenter drops it),
 `-reduced-motion-sends-no-capture`, `-a-live-arrival-never-moves-the-map`, and the timing row
-`-keys-stay-fast-during-a-leg` (40 keys during a 3 s leg, p95 under 16 ms), on the 30-agent map of a real hub with
-mock agents streaming (`test/fixtures/work-space-thirty-fixture.el`). They need Sjá, and the first two and the timing
+`-keys-stay-fast-during-a-leg` (40 keys before, during and after a 3 s leg: the leg's p95 within 8 ms, half a 60 Hz
+frame, of the larger p95 without it; the GUI tier is a loaded machine with live patches landing in the keys'
+redisplays, so the absolute key budget is the pinned island's, `harness/drgnx-perf-work.el`), on the 30-agent map of a real hub with
+mock agents streaming (`test/fixtures/work-space-thirty-fixture.el`): all 30 below scale 2, the first four at scale
+2, where 30 do not fit (that map is the outline, which never moves). They need Sjá, and the first two and the timing
 row a Nidhogg with the layout leg. Unit: `drgnx-work-map-nav/motion-reads-the-card-rows`.
 - Search is a local class: `drgnx-work-map--class` dims what the text does not match, with the same text properties
   the selection uses.
