@@ -39,9 +39,9 @@ pub struct Hub {
 }
 
 impl Hub {
-    fn debug(&self, front: &Front) -> &Debug {
+    pub(super) fn debug(&self, front: &Front) -> &Debug {
         self.debug.get_or_init(|| {
-            Debug::with_store(
+            let d = Debug::with_store(
                 front.editors.clone(),
                 Arc::new(TermDoor {
                     terms: front.core.terms.clone(),
@@ -51,7 +51,10 @@ impl Hub {
                     runstav::paths::state_dir(&front.shell_env.paths_env())
                         .join("debug-breakpoints"),
                 ),
-            )
+            );
+            // every session is recorded (spec §19.2)
+            d.record_into(super::runs_wire::opts(front));
+            d
         })
     }
 
@@ -360,6 +363,7 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
     }
     launch::check_answers(&config, &inputs, &answers).map_err(|e| bad("inputs", e))?;
     let config = launch::substitute(&config, &vars(front, &p), &answers).map_err(err)?;
+    let config_hash = super::record::config_hash(&config);
     let ty = text(&config, "type");
     let adapter = table.for_type(&ty).map_err(err)?;
     let launcher = launcher(front, &p.root, &config, adapter).map_err(err)?;
@@ -376,10 +380,22 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
         functions: vec![],
         exception_filters: None,
     };
+    // the run keeps the start as sent, without the answers to its inputs
+    let mut sent = json!(p);
+    if let Some(o) = sent.as_object_mut() {
+        o.remove("inputs");
+    }
+    let rec = super::record::Launch {
+        config_hash: Some(config_hash),
+        start: sent,
+        unsaved: p.unsaved.clone(),
+        task: super::runs_wire::task_of(front, &p.root),
+        ..super::record::Launch::default()
+    };
     let id = front
         .debug
         .debug(front)
-        .start(caller.conn_id, &p.root, start, launcher)
+        .start_with(caller.conn_id, &p.root, start, launcher, rec)
         .await
         .map_err(err)?;
     front

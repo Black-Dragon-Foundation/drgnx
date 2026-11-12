@@ -564,6 +564,25 @@ pub fn keep(root: &Path, worktree: &Path, name: &str, tree: &str) -> Result<(), 
     .map(drop)
 }
 
+/// A tree of WORKTREE written through the persistent index of KEY and kept as the ref NAME (`refs/drgnx/…`) of its
+/// shadow repository under ROOT, so it is never pruned (a debug run's launch snapshot); answers the tree id. Blocking.
+pub fn take_kept(root: &Path, worktree: &Path, key: &str, name: &str) -> Result<String, String> {
+    let (repo, tree) = write_tree(root, worktree, key, &[])?;
+    git(&repo, None, None, &["update-ref", name, &tree])?;
+    Ok(tree)
+}
+
+/// The ref NAME of WORKTREE's shadow repository under ROOT gone (its tree is collected with the next prune). Blocking.
+pub fn drop_kept(root: &Path, worktree: &Path, name: &str) -> Result<(), String> {
+    git(
+        &repo_of(root, worktree),
+        None,
+        None,
+        &["update-ref", "-d", name],
+    )
+    .map(drop)
+}
+
 /// TARGET made equal to tree TO of SOURCE's shadow repository under ROOT (ONLY: just those paths), by mode: a regular
 /// file through `eitri::write_regular` with its mode, a link (`120000`) through `eitri::symlink_beneath` with its
 /// target as bytes, a path TO lacks through `eitri::remove_beneath`; a gitlink (`160000`) is skipped and listed, and so
