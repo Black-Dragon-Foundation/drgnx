@@ -945,6 +945,11 @@ impl Front {
             | Params::DebugRunToCursor(_)) => crate::debug::wire::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
+            // what-if forks (`debug/fork*`, `debug/compare`)
+            p @ (Params::DebugFork(_)
+            | Params::DebugForkRun(_)
+            | Params::DebugForkDrop(_)
+            | Params::DebugCompare(_)) => crate::debug::fork_wire::serve(self, p).await,
             // the Extensions view's catalog (`extensions/*`)
             p @ (Params::ExtensionsSearch(_)
             | Params::ExtensionsDetails(_)

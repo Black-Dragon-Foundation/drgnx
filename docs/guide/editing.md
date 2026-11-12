@@ -69,6 +69,19 @@ column shows (`auto`: while the file has breakpoints or a session runs). Keys: V
 Emacs `C-x C-a` and `C-b` (toggle), `C-c` (condition), `C-l` (logpoint), `C-e` (enable), `C-u` (Run to Cursor), as
 GUD has them; Vim `SPC d` and `b`, `B`, `l`, `e`, `c`.
 
+**What-if forks** (Linux): from a stop of a recorded run, **Fork from Here…** replays the run in a sealed copy of the
+project as it was when the run started, up to that point (the same stop, or the same pass of that line), and then
+changes what you choose: a value (`item.reserve` → `0`), the code, or nothing (a replay). It runs on to the next
+stop, the end, or a probe's next hit, and the **What-if** tab shows it beside the run: "matched on N of M hits" (how
+far the copy did what the run did before the point, and the first value that differed if one did), each probe's
+values after the point, then and now, and how each side went on. For a code what-if the fork's copy opens first
+(**Open Fork** finds this file there); edit it and **Run Fork**; **Take Fork's Change…** shows each file it changed
+as a diff and puts the fork's text into your buffer (undoable, not saved). **Drop Fork** removes one.
+The copy cannot reach the network or write outside itself; your `.env` files are read in place, never copied. Python
+(debugpy) and JavaScript (js-debug) only: Go and native programs need `ptrace`, which the sandbox never allows, and
+macOS forks wait for a sandbox rule of their own. A run whose configuration resolves differently now (an input, a
+setting, launch.json) is refused, and a point the run took over a minute to reach asks first.
+
 ## Indent guides
 
 Thin vertical guides at each indentation level of code and YAML, on graphical frames, drawn by indent-bars (stipples,

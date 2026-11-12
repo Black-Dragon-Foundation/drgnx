@@ -9,6 +9,7 @@ pub mod agents;
 pub mod config;
 pub mod coord;
 pub mod debug;
+pub mod debug_fork;
 pub mod editor;
 pub mod exec;
 pub mod extensions;
@@ -304,6 +305,10 @@ params! {
     DebugTrust(debug::DebugTrust),
     DebugBreakpoints(debug::DebugBreakpoints),
     DebugRunToCursor(debug::DebugRunToCursor),
+    DebugFork(debug_fork::DebugFork),
+    DebugForkRun(debug_fork::DebugForkId),
+    DebugForkDrop(debug_fork::DebugForkId),
+    DebugCompare(debug_fork::DebugCompare),
     SearchQuery(search::QueryParams),
     SearchStatus(search::RootParams),
     SearchIndex(search::IndexParams),
@@ -423,6 +428,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(history::methods());
     v.extend(pair::methods());
     v.extend(debug::methods());
+    v.extend(debug_fork::methods());
     v
 }
 
