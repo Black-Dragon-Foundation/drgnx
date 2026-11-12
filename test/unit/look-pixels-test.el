@@ -40,6 +40,9 @@ a native shell can't be made here; the Naglfar case can."
   "A budget: `drgnx-pixels-scale' runs on every bar build and row, so reading the scale conses nothing, with a UI
 scale or without one (`frame-parameter' of a parameter of drgnx's own copies the frame's whole parameter list)."
   (drgnx-test-compile "drgnx-pixels-")         ; measured as users run it, not interpreted from source
+  ;; an interpreted function conses its argument bindings: compiled, or the budget below says nothing
+  (dolist (f '(drgnx-pixels-scale drgnx-pixels-ui-scale drgnx-pixels-device-p))
+    (should (equal (list f t) (list f (compiled-function-p (indirect-function f))))))
   (let ((f (selected-frame))
         ;; compiled, so the loop itself conses nothing; the difference to an empty loop is the calls' own
         (conses (byte-compile (lambda (n) (let ((c (car (memory-use-counts))))

@@ -61,6 +61,9 @@ only notes the frame in `drgnx-frames-test--synced' (the frames are symbols)."
 `server-delete-client'.  A client that made no frame closes no window, so the check before it conses nothing
 \(`frame-parameter' of `client' copies each frame's whole parameter list)."
   (drgnx-test-compile "drgnx-persist-")        ; measured as users run it, not interpreted from source
+  ;; an interpreted function conses its argument bindings: compiled, or the budget below says nothing
+  (dolist (f '(drgnx-persist--before-client-delete process-get))
+    (should (equal (list f t) (list f (compiled-function-p (indirect-function f))))))
   (let ((proc (make-pipe-process :name "drgnx-test-client" :noquery t))
         ;; compiled, so the loop itself conses nothing; the difference to an empty loop is the calls' own
         (conses (byte-compile (lambda (proc n) (let ((c (car (memory-use-counts))))

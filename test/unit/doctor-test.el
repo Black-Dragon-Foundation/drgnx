@@ -80,9 +80,12 @@
   (should-not (drgnx-doctor-check 'service-unit (drgnx-doctor-test--facts :service-unit nil)))
   (should (eq 'warn (drgnx-doctor-test--status 'service-unit (drgnx-doctor-test--facts
                                                               :service-unit '(:file "/u" :emacs "/old/emacs" :drgnx t) :running-emacs "/new/nidhogg"))))
-  (should (string-search "service-unit --refresh"
-                         (nth 2 (drgnx-doctor-check 'service-unit (drgnx-doctor-test--facts
-                                                                   :service-unit '(:file "/u" :emacs "/old/emacs" :drgnx t) :running-emacs "/new/nidhogg")))))
+  ;; the fix names each platform's service: the systemd unit's refresh, or the restart that refreshes the launch agent
+  (pcase-dolist (`(,platform ,fix) '((linux "service-unit --refresh") (macos "drgnx update --restart")))
+    (cl-letf (((symbol-function 'drgnx-platform) (lambda () platform)))
+      (should (string-search fix
+                             (nth 2 (drgnx-doctor-check 'service-unit (drgnx-doctor-test--facts
+                                                                       :service-unit '(:file "/u" :emacs "/old/emacs" :drgnx t) :running-emacs "/new/nidhogg")))))))
   (should (eq 'ok (drgnx-doctor-test--status 'service-unit (drgnx-doctor-test--facts
                                                             :service-unit (list :file "/u" :emacs (car command-line-args) :drgnx t) :running-emacs (car command-line-args)))))
   (should (eq 'info (drgnx-doctor-test--status 'service-unit (drgnx-doctor-test--facts

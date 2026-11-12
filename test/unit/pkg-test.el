@@ -780,7 +780,9 @@
 
 (defmacro drgnx-pkg-test--with-unit (vars unit-text &rest body)
   "BODY with XDG_CONFIG_HOME a temp dir (VARS: ROOT UNIT RELOADS), UNIT-TEXT written as its drgnx.service
-\(nil: no file), and the systemctl reload replaced by a counter: nothing reaches the real unit or systemd."
+\(nil: no file), and the systemctl reload replaced by a counter: nothing reaches the real unit or systemd.
+The platform is Linux, whatever the host: these rows are the systemd unit's (on macOS the service is the launch
+agent, whose rows are `drgnx-pkg/the-launch-agent-follows-the-emacs-drgnx-uses' and its neighbours)."
   (declare (indent 2))
   (pcase-let ((`(,root ,unit ,reloads) vars))
     `(drgnx-pkg-test--with ,root
@@ -790,7 +792,8 @@
          (when ,unit-text
            (make-directory (file-name-directory ,unit) t)
            (write-region ,unit-text nil ,unit nil 'silent))
-         (cl-letf (((symbol-function 'drgnx-pkg--systemctl-reload) (lambda () (cl-incf ,reloads) 'ok)))
+         (cl-letf (((symbol-function 'drgnx-pkg--systemctl-reload) (lambda () (cl-incf ,reloads) 'ok))
+                   ((symbol-function 'drgnx-platform) (lambda () 'linux)))
            ,@body)))))
 
 (defun drgnx-pkg-test--slurp (file)

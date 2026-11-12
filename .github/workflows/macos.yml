@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       only:
-        description: "Narrowed: launch-agent runs only the launch agent's job (empty: the real install and the tiers)"
+        description: "Narrowed: launch-agent, metal-parity run only those jobs (empty: the real install and the tiers)"
         type: string
         default: ""
 
@@ -125,6 +125,25 @@ jobs:
         run: /bin/bash test/container/nidhogg.sh macos
       - name: the launch agent on launchd
         run: /bin/bash .github/ci/macos-launch-agent.sh
+
+  # Hrafn's embedder on Metal: the GPU rows the workspace run ignores on macOS, run with --ignored on the first Metal
+  # adapter wgpu lists, the adapters printed first; no Metal adapter fails with that reason
+  # (.github/ci/macos-metal-parity.sh). On demand only (`only: metal-parity`), one macOS slot.
+  metal-parity:
+    name: Metal parity (macOS 27)
+    if: github.event_name == 'workflow_dispatch' && contains(format(' {0} ', inputs.only), ' metal-parity ')
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0          # the whole history, for commit-times.sh
+          filter: blob:none       # without old file contents
+          persist-credentials: false
+      - uses: ./.github/actions/macos-runtime
+      - name: the GPU rows on Metal
+        run: /bin/bash .github/ci/macos-metal-parity.sh
 
   # The one check branch protection requires of this workflow: the push jobs (tiers) succeeded, or were skipped because
   # the change cannot affect them. It always runs, and a failed, cancelled or other skipped job fails it; the weekly

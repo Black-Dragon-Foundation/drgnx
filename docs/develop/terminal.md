@@ -404,7 +404,7 @@ image) is drawn by the next Emacs pixel for pixel as before, the cursor's row as
 
 - **Open:** `term/open` goes on the subscribed connection, the one the rows come back on, with the window's size in
   cells, the program's whole environment (`drgnx-term-env`; `TERM` and `TERMINFO` from `drgnx-term--term-entries`:
-  `xterm-ghostty` only while `<data>/terminfo/x/xterm-ghostty` exists; `COLORTERM`, `INSIDE_EMACS`; the shell
+  `xterm-ghostty` only while `<data>/terminfo/x/xterm-ghostty` exists (`78/` on macOS, whose file system ignores case); `COLORTERM`, `INSIDE_EMACS`; the shell
   integration's `DRGNX_TERMINAL`, `TERM_PROGRAM`, `GHOSTTY_SHELL_FEATURES`, `DRGNX_TERMINAL_SHELL`,
   `DRGNX_TERMINAL_SSH`, with Ghostty's other variables unset; then `drgnx-terminal-environment`, then this Emacs's;
   the shell side is `etc/shell/drgnx.*`, docs/guide/shell.md) and the window `drgnx-term-scrollback-lines`. Its answer attaches the buffer to the view
