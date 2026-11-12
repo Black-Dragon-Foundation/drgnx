@@ -67,9 +67,40 @@ fn rule(_: &urdr::Connection, meta: &TxMeta, _: f64, t: Target<'_>) -> Result<()
     }
 }
 
-/// The evidence rule in GUARD.
+/// The guard's rule for kind `rule_pack`: written with the user's approval of a job, or by the hub; never by an
+/// agent (the pack is what the gates judge a job's work by).
+fn pack_rule(_: &urdr::Connection, meta: &TxMeta, _: f64, _: Target<'_>) -> Result<(), WriteError> {
+    if matches!(meta.class, Class::User | Class::System) {
+        Ok(())
+    } else {
+        Err(WriteError::Refused(
+            "a job's rule pack is recorded with the user's approval".into(),
+        ))
+    }
+}
+
+/// The guard's rule for kind `followup`: the gates' own record, made by the hub and closed by the user; never written
+/// by an agent.
+fn followup_rule(
+    _: &urdr::Connection,
+    meta: &TxMeta,
+    _: f64,
+    _: Target<'_>,
+) -> Result<(), WriteError> {
+    if matches!(meta.class, Class::User | Class::System) {
+        Ok(())
+    } else {
+        Err(WriteError::Refused(
+            "a followup is the gates' own record, closed by the user".into(),
+        ))
+    }
+}
+
+/// The evidence, rule pack and followup rules in GUARD.
 pub fn register(guard: &mut Guard) {
     guard::register_rule(guard, "evidence", rule);
+    guard::register_rule(guard, "rule_pack", pack_rule);
+    guard::register_rule(guard, "followup", followup_rule);
 }
 
 /// A followup the gates leave (a red line, a flake): an entity of kind `followup`, status `open`, its DATA what was
@@ -217,6 +248,35 @@ mod tests {
         );
         // and the user's connection records no other kind
         assert!(record(&mut tx, &ev("green", "task:J#1"), None).is_err());
+    }
+
+    /// The records the gates read besides evidence: a job's rule pack is written with the user's approval (or by the
+    /// hub), a followup by the hub (the user closes it); no agent writes either.
+    #[test]
+    fn no_agent_writes_a_rule_pack_or_a_followup() {
+        let mut c = db7();
+        let pack = Pack::default();
+        for (actor, class) in [("agent:m1", Class::Agent), ("ext:s1", Class::Agent)] {
+            let mut tx = tx_as(&mut c, TxMeta::new(actor, class, "mcp:x"));
+            assert!(
+                rule_pack(&mut tx, "J", &pack, None).is_err(),
+                "{actor}'s pack"
+            );
+            assert!(
+                followup(&mut tx, "t", serde_json::json!({}), None).is_err(),
+                "{actor}'s followup"
+            );
+        }
+        let mut tx = tx_as(
+            &mut c,
+            TxMeta::new("user", Class::User, "proto:job/approve"),
+        );
+        assert!(rule_pack(&mut tx, "J", &pack, None).is_ok());
+        assert!(followup(&mut tx, "t", serde_json::json!({}), None).is_ok());
+        drop(tx);
+        let mut tx = tx_as(&mut c, TxMeta::new("hub", Class::System, "orch/followup"));
+        assert!(rule_pack(&mut tx, "K", &pack, None).is_ok());
+        assert!(followup(&mut tx, "t", serde_json::json!({}), None).is_ok());
     }
 
     #[test]

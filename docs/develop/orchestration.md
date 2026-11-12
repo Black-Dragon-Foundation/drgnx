@@ -104,12 +104,17 @@ branch read again); the queue places that tip and the merge takes it only when i
 - **Red first** (below).
 - **The author check** (`author-check` on): each of the pack's `:author-check` commands and `:rule-tests` (the rule
   tests alone when only `rule-tests` is on) passed at the tip's tree; its run is the newest job at the tip's tree key
-  with the command's selector (`vordr::gates::state`).
+  with the command's selector, made with this machine's env stamp and platform now (`vordr::gates::current`: an old
+  green after a toolchain bump, or a runner's, is no run; unit test `only_runs_with_this_machines_stamp_and_platform_count`).
 
 A run a gate needs that the hub can make, it starts through the queue and waits for (`orch::gates::Runs`): an author
 check at the tip; for red first, the task's own test command (the newest job the task ran inside its tree: its folder,
-command and image) at the test commit, or the red's command at the tip. Each runs in a detached worktree of its commit
-beside the task's tree (uncommitted files in the task's tree are never part of it), which goes when the job ends.
+command and image, and the test selector variables its selector names, so the rerun's selector is the job's:
+`vordr::facts::selector_env`) at the test commit, or the red's command at the tip. Each runs in a detached worktree of
+its commit beside the task's tree (uncommitted files in the task's tree are never part of it), which goes when the job
+ends. A run is claimed in the same step as the check that none is in flight (`Runs::claim`), so two gates asking at
+once (two pushes) start it once (unit test `a_run_is_claimed_once_until_it_ends`). The watcher that settles them
+settles every ended run again when it falls behind the job events (`Runs::take_ended`).
 
 **Runs the gates start** are an agent's command, or the pack's over the tree an agent wrote, so they run as an agent's
 job does, as a **sealed job** (`exec::start_sealed`, starter `Starter::Sealed`): in the session's launch shape, on
@@ -127,7 +132,9 @@ reason) and **Drop the task**.
 reason; it passes red first and the author check for that tip only (a new tip needs a new waiver), never the
 trailers. Like the matrix's `always_never`, this is a hard rule below every grant: the store's guard for kind
 `evidence` (`norn::write::evidence::register`) takes a `waiver:` record only from the user's connection and every
-other record only from the hub, so no cell, preset, manager grant or agent tool can write one.
+other record only from the hub, so no cell, preset, manager grant or agent tool can write one. The same guard keeps
+the other records the gates read from agents: a job's `rule_pack` is written with the user's approval or by the hub,
+a `followup` by the hub (the user closes it) (unit test `no_agent_writes_a_rule_pack_or_a_followup`).
 
 **`gate-wait`.** While a task has a gate's run in flight (`Runs::waiting`) the supervisor's `silent` and `lease`
 rules don't hold for its session: the hub is working, not the agent. (The gates run while the task is `in-review`,
@@ -166,7 +173,8 @@ A task whose gates passed is **ready** (`orch::queue`, in memory: after a restar
 gates pass again). The next **batch** is the earliest ready tasks, up to the pack's `:batch-size`, leaving out a task
 whose tip conflicts with an earlier member's (`git merge-tree`): it waits for the next batch, after the earlier one
 merged. A batch stays until its members merged or left the job's review (dropped, sent back, a card); members merge
-one at a time in readiness order, each `--no-ff`. A member whose merge onto the line would cleanly join shared files
+one at a time in readiness order, each `--no-ff`. A batch forms outside the queue's lock (its conflict check is git
+per pair; unit test `a_batch_forms_without_holding_the_queues_lock`). A member whose merge onto the line would cleanly join shared files
 both sides changed since they parted goes back to its agent, told to merge the line in with a note per file. A job
 with no rule pack merges as before, each task as it passes.
 
@@ -188,7 +196,7 @@ green (`orch::groups`, `vordr::groups`):
   `the_groups_listing_is_a_time_boxed_run_whose_timeout_is_no_red`.
 - **Each group** runs at the combined commit as a gate run (a detached worktree that goes when the job ends); its end
   is evidence of `batch:JOB@TREE`.
-- **Green:** every group's newest run at the tree passed, or failed only rows the base's `test/frozen.eld` lists.
+- **Green:** every group's newest run at the tree (made with this machine's env stamp and platform now) passed, or failed only rows the base's `test/frozen.eld` lists.
   Any other red goes to the reruns (next section).
 
 ## Reruns, interaction reds, flakes

@@ -534,13 +534,18 @@ async fn facts_of(spec: &ExecSpec) -> Option<vordr::facts::Facts> {
         Some(vordr::facts::Facts {
             tree_key,
             env_stamp: stamp,
-            platform: format!("{}-{}/local", std::env::consts::OS, std::env::consts::ARCH),
+            platform: local_platform(),
             selector: vordr::facts::selector(&rel, &argv, &env),
         })
     })
     .await
     .ok()
     .flatten()
+}
+
+/// This machine's platform in a job's facts: `OS-ARCH/local`.
+pub(crate) fn local_platform() -> String {
+    format!("{}-{}/local", std::env::consts::OS, std::env::consts::ARCH)
 }
 
 /// The git tree holding CWD and its key now (the commit's tree, plus the overlay's input key when anything is
@@ -1478,9 +1483,12 @@ impl Inner {
                     .clone()
                     .ok_or_else(|| refusal("a session's job needs its worktree"))?;
                 // the lock's protected files stay read-only for a job as for the session itself
+                // the variables the start named (a sealed rerun's test selector; a session's job names none)
+                let mut env = tool_env(&self.hooks.shell_env);
+                env.extend(spec.user.env.iter().cloned());
                 let plan = LaunchPlan {
                     argv: spec.argv.iter().map(OsString::from).collect(),
-                    env: tool_env(&self.hooks.shell_env),
+                    env,
                     session_meta: None,
                     protected_ro: crate::agents::lock::PROTECTED_RO
                         .iter()

@@ -80,6 +80,15 @@ const LISTING_TIMEBOX_S: u64 = 300;
 /// The file in the listing's tree the groups command's output goes to (its log keeps its errors).
 const LISTING_OUT: &str = ".drgnx-groups.json";
 
+/// The runs in EVIDENCE made with this machine's env stamp, here (`vordr::gates::current`).
+fn here(evidence: &[vordr::evidence::Evidence]) -> Vec<vordr::evidence::Evidence> {
+    vordr::gates::current(
+        evidence,
+        crate::exec::env_stamp(),
+        &crate::exec::local_platform(),
+    )
+}
+
 /// The listing's tree for COMMIT beside the line's tree DIR.
 fn listing_tree(dir: &Path, commit: &str) -> PathBuf {
     dir.with_file_name(format!(
@@ -311,6 +320,8 @@ pub async fn gate(
         tracing::info!("batch {key}: waived by the user: {why}");
         return Ok(Gate::Pass);
     }
+    // a group counts a run made with this machine's toolchain, here
+    let evidence = here(&evidence);
     // a row that failed, then passed on the same tree holds the batch: flakes are fixed at the cause
     let flakes = vordr::gates::flake_holds(pack, &evidence);
     if !flakes.is_empty() {
@@ -420,6 +431,7 @@ async fn reruns(
         })
         .await
         .map_err(|e| e.to_string())?;
+    let evidence: Vec<_> = evidence.iter().map(|e| here(e)).collect();
     let mut rows: Vec<Option<Vec<String>>> = Vec::new();
     // a one-member batch's tip alone is the batch's tree: its red groups run there once more first (a pass then is a
     // flake, which holds at the next look; a second fail is the tip's red)

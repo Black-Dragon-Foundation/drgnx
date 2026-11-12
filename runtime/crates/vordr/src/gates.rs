@@ -92,6 +92,15 @@ pub fn state(evidence: &[Evidence], key: &str, selector: &str) -> State {
     }
 }
 
+/// The runs in EVIDENCE made with ENV_STAMP on PLATFORM (this machine's now): what an author check or a group counts.
+pub fn current(evidence: &[Evidence], env_stamp: &str, platform: &str) -> Vec<Evidence> {
+    evidence
+        .iter()
+        .filter(|e| e.facts.env_stamp == env_stamp && e.facts.platform == platform)
+        .cloned()
+        .collect()
+}
+
 /// [`state`] once the check with SELECTOR ran at least RUNS times at the tree KEY (runs with a test result); Missing
 /// before.
 pub fn state_after(evidence: &[Evidence], key: &str, selector: &str, runs: usize) -> State {
@@ -255,6 +264,32 @@ mod tests {
             "the newest run counts"
         );
         assert_eq!(state(&[red, green], "P", &sel), State::Green);
+    }
+
+    /// An author check's or a group's old green after a toolchain bump, or one from another machine, is no run here.
+    #[test]
+    fn only_runs_with_this_machines_stamp_and_platform_count() {
+        let green = |env: &str, platform: &str| {
+            let mut e = ev("P", "s", vec![Row::pass("a::t")]);
+            e.facts.env_stamp = env.into();
+            e.facts.platform = platform.into();
+            e
+        };
+        let all = [
+            green("rustc 1.95", "linux-x86_64/local"),
+            green("rustc 1.96", "linux-x86_64/local"),
+            green("rustc 1.96", "runner/box"),
+        ];
+        let now = current(&all, "rustc 1.96", "linux-x86_64/local");
+        assert_eq!(now, vec![all[1].clone()]);
+        assert_eq!(
+            state(
+                &current(&all[..1], "rustc 1.96", "linux-x86_64/local"),
+                "P",
+                "s"
+            ),
+            State::Missing
+        );
     }
 
     /// A one-member batch's tip alone is the batch's own tree: its red group runs once more there before the tip is

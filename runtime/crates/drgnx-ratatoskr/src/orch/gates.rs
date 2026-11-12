@@ -35,14 +35,43 @@ pub struct Runs {
 }
 
 impl Runs {
-    /// Whether TASK has a run of SELECTOR at the tree KEY in flight (one whose job ENDED, an end the watcher missed,
-    /// isn't).
-    fn pending(&self, task: &str, key: &str, selector: &str, ended: impl Fn(&str) -> bool) -> bool {
-        self.jobs
-            .lock()
-            .unwrap()
+    /// TASK's run of SELECTOR at the tree KEY, claimed in the same step as the check that none is in flight (one whose
+    /// job ENDED, an end the watcher missed, isn't): the claim's id until [`Self::started`] or [`Self::release`];
+    /// none when one is in flight.
+    fn claim(
+        &self,
+        task: &str,
+        key: &str,
+        selector: &str,
+        ended: impl Fn(&str) -> bool,
+    ) -> Option<String> {
+        let mut jobs = self.jobs.lock().unwrap();
+        if jobs
             .iter()
             .any(|(id, r)| r.task == task && r.key.0 == key && r.key.1 == selector && !ended(id))
+        {
+            return None;
+        }
+        let claim = format!("claim:{task}\n{key}\n{selector}");
+        let run = Run {
+            task: task.to_owned(),
+            key: (key.to_owned(), selector.to_owned()),
+            worktree: None,
+        };
+        jobs.insert(claim.clone(), run);
+        Some(claim)
+    }
+
+    /// The claim CLAIM started as job ID.
+    fn started(&self, claim: &str, id: String, run: Run) {
+        let mut jobs = self.jobs.lock().unwrap();
+        jobs.remove(claim);
+        jobs.insert(id, run);
+    }
+
+    /// The claim CLAIM started nothing (or started already: then nothing changes).
+    fn release(&self, claim: &str) {
+        self.jobs.lock().unwrap().remove(claim);
     }
 
     /// Whether TASK waits on a gate's run (`gate-wait`): one is in flight (one whose job ENDED isn't).
@@ -54,13 +83,22 @@ impl Runs {
             .any(|(id, r)| r.task == task && !ended(id))
     }
 
-    fn add(&self, id: String, run: Run) {
-        self.jobs.lock().unwrap().insert(id, run);
-    }
-
     /// Job ID's run, once it ended (taken out).
     pub fn take(&self, id: &str) -> Option<Run> {
         self.jobs.lock().unwrap().remove(id)
+    }
+
+    /// The runs whose jobs ENDED (never a claim), taken out: what a watcher that lagged behind the job events missed.
+    pub fn take_ended(&self, ended: impl Fn(&str) -> bool) -> Vec<(String, Run)> {
+        let mut jobs = self.jobs.lock().unwrap();
+        let ids: Vec<String> = jobs
+            .keys()
+            .filter(|id| !id.starts_with("claim:") && ended(id))
+            .cloned()
+            .collect();
+        ids.into_iter()
+            .filter_map(|id| jobs.remove(&id).map(|r| (id, r)))
+            .collect()
     }
 }
 
@@ -73,6 +111,8 @@ pub struct Rerun {
     pub kind: String,
     pub image: Option<String>,
     pub selector: String,
+    /// The test selector variables the job ran with (`vordr::facts::selector_env`): the rerun's selector is its own.
+    pub env: Vec<(String, String)>,
 }
 
 /// The task's test command to run again: the newest of its EVIDENCE at the tree PREFER, else the newest anywhere,
@@ -86,9 +126,11 @@ pub fn rerun_of(
     let of = |e: &Evidence| {
         let m = meta(&e.job)?;
         let rel = Path::new(&m.cwd).strip_prefix(top).ok()?;
+        let rel = rel.to_string_lossy().into_owned();
         Some(Rerun {
             job: e.job.clone(),
-            rel: rel.to_string_lossy().into_owned(),
+            env: vordr::facts::selector_env(&e.facts.selector, &rel, &m.argv),
+            rel,
             argv: m.argv,
             kind: m.kind,
             image: m.image,
@@ -151,6 +193,7 @@ pub(crate) fn run_of(c: &vordr::pack::Check) -> Rerun {
         kind: kind.into(),
         image: None,
         selector: selector_of(c),
+        env: Vec::new(),
     }
 }
 
@@ -166,9 +209,24 @@ pub(crate) async fn start(
     rerun: &Rerun,
 ) -> Result<Option<String>, String> {
     let ended = |id: &str| front.core.exec.done(id).is_some();
-    if front.orch.pending(task, key, &rerun.selector, ended) {
+    let Some(claim) = front.orch.claim(task, key, &rerun.selector, ended) else {
         return Ok(None);
-    }
+    };
+    let r = start_claimed(front, task, top, commit, key, rerun, &claim).await;
+    front.orch.release(&claim);
+    r
+}
+
+/// [`start`] once CLAIM holds the run's place.
+async fn start_claimed(
+    front: &Front,
+    task: &str,
+    top: &Path,
+    commit: &str,
+    key: &str,
+    rerun: &Rerun,
+    claim: &str,
+) -> Result<Option<String>, String> {
     let t = task.to_owned();
     let evidence = front
         .writer
@@ -203,6 +261,14 @@ pub(crate) async fn start(
     if let Some(i) = &rerun.image {
         p["image"] = json!(i);
     }
+    if !rerun.env.is_empty() {
+        let env: Vec<_> = rerun
+            .env
+            .iter()
+            .map(|(name, value)| json!({"name": name, "value": value}))
+            .collect();
+        p["env"] = json!(env);
+    }
     let params = serde_json::from_value(p).map_err(|e| e.to_string())?;
     // the agent's command (or the pack's, over the agent's tree): in an agent's sandbox, the detached tree its only
     // writable folder
@@ -223,7 +289,8 @@ pub(crate) async fn start(
         }
     };
     let id = started.id;
-    front.orch.add(
+    front.orch.started(
+        claim,
         id.clone(),
         Run {
             task: task.to_owned(),
@@ -395,9 +462,15 @@ pub async fn before_merge(
             )));
         }
     }
+    // an author check counts a run made with this machine's toolchain, here (an old green after a bump is no run)
+    let here = vordr::gates::current(
+        &evidence,
+        crate::exec::env_stamp(),
+        &crate::exec::local_platform(),
+    );
     for c in checks(&pack) {
         let sel = selector_of(&c);
-        match state(&evidence, &inputs.tip_key, &sel) {
+        match state(&here, &inputs.tip_key, &sel) {
             State::Green => {}
             State::Red(rows) => {
                 return Ok(Decision::Hold(format!(
@@ -460,6 +533,41 @@ mod tests {
         .unwrap()
     }
 
+    /// Two gates asking for the same run at once (two pushes) start it once: the check and the claim are one step.
+    #[test]
+    fn a_run_is_claimed_once_until_it_ends() {
+        let runs = Runs::default();
+        let none = |_: &str| false;
+        let c = runs
+            .claim("t", "K", "s", none)
+            .expect("the first claims it");
+        assert_eq!(runs.claim("t", "K", "s", none), None, "in flight");
+        assert!(runs.claim("t", "K", "other", none).is_some());
+        let run = Run {
+            task: "t".into(),
+            key: ("K".into(), "s".into()),
+            worktree: None,
+        };
+        runs.started(&c, "x1".into(), run);
+        assert_eq!(runs.claim("t", "K", "s", none), None, "started");
+        assert_eq!(
+            runs.claim("t", "K", "s", |id| id == "x1").map(|_| ()),
+            Some(())
+        );
+        // a claim that never started is let go
+        let d = runs.claim("u", "K", "s", none).unwrap();
+        runs.release(&d);
+        let e = runs.claim("u", "K", "s", none).unwrap();
+        // the watcher lagged: the runs whose jobs ended are taken out to settle; a claim and a running job stay
+        let ended = runs.take_ended(|id| id == "x1" || id == e);
+        assert_eq!(
+            ended.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            vec!["x1"]
+        );
+        assert!(runs.take("x1").is_none());
+        assert_eq!(runs.claim("u", "K", "s", none), None, "the claim stays");
+    }
+
     #[test]
     fn the_command_to_rerun_is_the_tasks_own_preferring_the_named_tree() {
         let top = Path::new("/runs/J/1");
@@ -495,5 +603,13 @@ mod tests {
             rerun_of(&e[2..], "P", top, metas).is_none(),
             "outside the tree, or gone"
         );
+        // the test selector the job ran with goes with the rerun, so its selector is the job's
+        let env = vec![("DRGNX_TEST_SELECTOR".to_string(), "^a/".to_string())];
+        let argv: Vec<String> = vec!["bin/drgnx".into(), "test".into()];
+        let mut sel = ev("b", "P", 5.0);
+        sel.facts.selector = vordr::facts::selector("", &argv, &env);
+        let r = rerun_of(&[sel], "P", top, metas).unwrap();
+        assert_eq!(r.env, env);
+        assert_eq!(vordr::facts::selector(&r.rel, &r.argv, &r.env), r.selector);
     }
 }
