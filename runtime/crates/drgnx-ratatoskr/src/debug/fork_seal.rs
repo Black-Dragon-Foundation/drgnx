@@ -256,14 +256,22 @@ pub struct Shape<'a> {
     pub cwd: PathBuf,
 }
 
+/// The system folders a fork reads, by their true names, found once: Gleipnir takes no path with a link in it, and a
+/// system may put one above them (macOS's `/etc` is `/private/etc`). One that is not there is left out.
+fn system_roots() -> &'static [PathBuf] {
+    static ROOTS: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+    ROOTS.get_or_init(|| {
+        ["/usr", "/etc", "/opt"]
+            .iter()
+            .filter_map(|p| std::fs::canonicalize(p).ok())
+            .collect()
+    })
+}
+
 /// A fork's Gleipnir spec: the system and S's roots read-only, the tree and the temp writable, the `.env` files bound
 /// read-only over empty files in the tree, an isolated network with its own loopback and no relay.
 pub fn spec(s: &Shape<'_>, target: Target) -> Spec {
-    let mut read: Vec<PathBuf> = ["/usr", "/etc", "/opt"]
-        .iter()
-        .map(PathBuf::from)
-        .filter(|p| p.exists())
-        .collect();
+    let mut read: Vec<PathBuf> = system_roots().to_vec();
     for r in &s.read {
         if !read.iter().any(|x| r.starts_with(x)) {
             read.push(r.clone());

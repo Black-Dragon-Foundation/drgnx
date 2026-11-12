@@ -61,9 +61,11 @@ fn env_files_are_bound_at_their_places_in_the_tree() {
 #[test]
 fn the_spec_is_sealed_and_validates() {
     let d = tempfile::tempdir().unwrap();
-    let tree = d.path().join("f1/w");
-    let tmp = d.path().join("f1/tmp");
-    let root = d.path().join("p");
+    // the hub's folders are named by their true names; a temporary folder may sit under a link (macOS's /var)
+    let base = d.path().canonicalize().unwrap();
+    let tree = base.join("f1/w");
+    let tmp = base.join("f1/tmp");
+    let root = base.join("p");
     for p in [&tree, &tmp, &root] {
         std::fs::create_dir_all(p).unwrap();
     }
