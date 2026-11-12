@@ -1158,15 +1158,24 @@ refusing a session the harness cannot own"
          (or legacy-ok (drgnx-ui--refuse "%s" drgnx-ui-legacy-message)))
         (t (drgnx-ui--refuse "%S is not a drgnx harness session (drgnx-ui-N-HEX)" name))))
 
+(defun drgnx-ui--group-live-p (pgid)
+  "Non-nil while process group PGID has a member."
+  (eq 0 (car (drgnx-ui--run "pgrep" "-g" pgid))))
+
 (defun drgnx-ui--stop-group (pgid run)
-  "TERM process group PGID if it is RUN's session, KILL it if it is still there after 2 s."
+  "TERM process group PGID if it is RUN's session, KILL it if it is still there after 2 s; return once it is gone
+\(at most 2 s more).  Every member is waited for, not only those whose command lines name RUN: Emacs under the
+compositor saves its state into RUN on TERM, and the caller deletes RUN next."
   (when (drgnx-ui--group-ours-p pgid run)
     (drgnx-ui--run "kill" "-TERM" "--" (concat "-" pgid))
     (let ((deadline (+ (float-time) 2)))
-      (while (and (drgnx-ui--group-ours-p pgid run) (< (float-time) deadline))
+      (while (and (drgnx-ui--group-live-p pgid) (< (float-time) deadline))
         (sleep-for 0.05)))
-    (when (drgnx-ui--group-ours-p pgid run)
-      (drgnx-ui--run "kill" "-KILL" "--" (concat "-" pgid)))))
+    (when (drgnx-ui--group-live-p pgid)
+      (drgnx-ui--run "kill" "-KILL" "--" (concat "-" pgid))
+      (let ((deadline (+ (float-time) 2)))
+        (while (and (drgnx-ui--group-live-p pgid) (< (float-time) deadline))
+          (sleep-for 0.05))))))
 
 (defun drgnx-ui--display-in-use-p (name)
   "Non-nil while some process serves Wayland display NAME."

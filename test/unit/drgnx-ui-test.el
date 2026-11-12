@@ -503,6 +503,34 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
   (should-not (drgnx-ui--group-ours-p nil "/any/run"))
   (should-not (drgnx-ui--group-ours-p (number-to-string (emacs-pid)) "/not/this/run/drgnx-ui-1-00000a")))
 
+(ert-deftest drgnx-ui/stopping-a-group-waits-for-every-member ()
+  "A session's group holds processes whose command lines do not name its run directory (Emacs under the compositor,
+saving its state into it on TERM).  Stopping the group waits for all of them, not only for those naming the run: the
+caller deletes the run directory next (latency-includes-redisplay-work failed \"Directory not empty\")."
+  (let* ((run (directory-file-name (make-temp-file "drgnx-ui-run" t))) (aside (make-temp-file "drgnx-ui-pgid" t))
+         (pgid-file (expand-file-name "pgid" aside)) pgid)
+    (unwind-protect
+        (progn
+          ;; the leader names RUN and ends at once on TERM; its other member does not, and ends half a second later
+          (call-process "setsid" nil 0 nil "-f" "sh" "-c"
+                        (format "echo $$ > %s; sh -c 'trap \"sleep 0.5; exit 0\" TERM; while :; do sleep 0.05; done' &
+                                 exec sh -c 'trap \"exit 0\" TERM; while :; do sleep 0.05; done' %s"
+                                (shell-quote-argument pgid-file) (shell-quote-argument (concat run "/leader"))))
+          (let ((deadline (+ (float-time) 5)))
+            (while (and (not (setq pgid (ignore-errors (string-trim (with-temp-buffer (insert-file-contents pgid-file)
+                                                                                      (buffer-string))))))
+                        (< (float-time) deadline))
+              (sleep-for 0.02)))
+          (should (stringp pgid))
+          (let ((deadline (+ (float-time) 5)))
+            (while (and (not (drgnx-ui--group-ours-p pgid run)) (< (float-time) deadline)) (sleep-for 0.02)))
+          (should (drgnx-ui--group-ours-p pgid run))
+          (sleep-for 0.2)                                   ; both members up, the trap set
+          (drgnx-ui--stop-group pgid run)
+          (should-not (eq 0 (call-process "pgrep" nil nil nil "-g" pgid))))
+      (when pgid (call-process "kill" nil nil nil "-KILL" "--" (concat "-" pgid)))
+      (delete-directory run t) (delete-directory aside t))))
+
 (ert-deftest drgnx-ui/stop-ends-the-group-of-a-partly-started-detached-session ()
   ;; DEFERRED M1-7: a run dir whose session.json has no :launcher yet (start failed before saving it)
   ;; but holds a pgid file is a detached session: stop ends its group, not a systemd unit
