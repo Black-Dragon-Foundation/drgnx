@@ -375,7 +375,7 @@ pub(crate) async fn follow(front: &Front, title: &str, data: serde_json::Value) 
 }
 
 /// The batch's RED groups run again at the line's HEAD and at each member's tip merged alone onto it (in parallel,
-/// one round: `vordr::reruns`).  Rows red at the line hold it (a followup); tips red alone go back; every tip green
+/// one round: `vordr::reruns`; a one-member batch's tip alone is its own tree, so a second run there).  Rows red at the line hold it (a followup); tips red alone go back; every tip green
 /// alone, the later one goes back (an interaction red).  KNOWN rows (frozen) never count.
 #[allow(clippy::too_many_arguments)]
 async fn reruns(
@@ -388,7 +388,7 @@ async fn reruns(
     tree: &str,
     known: &(dyn Fn(&str) -> bool + Sync),
 ) -> Result<Gate, String> {
-    use vordr::gates::{State, selector_of, state};
+    use vordr::gates::{State, selector_of, state_after};
     use vordr::reruns::{Verdict, verdict};
     // (task, commit, tree): the line's first ("" its task), then each tip alone
     let (d, h, b) = (dir.to_owned(), head.to_owned(), batch.to_vec());
@@ -421,10 +421,14 @@ async fn reruns(
         .await
         .map_err(|e| e.to_string())?;
     let mut rows: Vec<Option<Vec<String>>> = Vec::new();
+    // a one-member batch's tip alone is the batch's tree: its red groups run there once more first (a pass then is a
+    // flake, which holds at the next look; a second fail is the tip's red)
+    let alone_again = batch.len() == 1;
     for (i, (_, commit, t)) in runs.iter().enumerate() {
         let mut failed: Option<Vec<String>> = Some(Vec::new());
+        let need = if i > 0 && alone_again { 2 } else { 1 };
         for g in red {
-            match state(&evidence[i], t, &selector_of(g)) {
+            match state_after(&evidence[i], t, &selector_of(g), need) {
                 State::Green => {}
                 State::Red(r) => {
                     if let Some(f) = failed.as_mut() {

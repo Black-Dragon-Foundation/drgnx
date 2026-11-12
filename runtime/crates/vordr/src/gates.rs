@@ -92,6 +92,24 @@ pub fn state(evidence: &[Evidence], key: &str, selector: &str) -> State {
     }
 }
 
+/// [`state`] once the check with SELECTOR ran at least RUNS times at the tree KEY (runs with a test result); Missing
+/// before.
+pub fn state_after(evidence: &[Evidence], key: &str, selector: &str, runs: usize) -> State {
+    let ran = evidence
+        .iter()
+        .filter(|e| {
+            e.facts.tree_key == key
+                && e.facts.selector == selector
+                && crate::evidence::no_result(e).is_none()
+        })
+        .count();
+    if ran < runs {
+        State::Missing
+    } else {
+        state(evidence, key, selector)
+    }
+}
+
 /// The reason of the newest waiver given at the tree KEY (the user's `Waive once`; a new tip needs a new one).
 pub fn waived(evidence: &[Evidence], key: &str) -> Option<String> {
     evidence
@@ -237,6 +255,35 @@ mod tests {
             "the newest run counts"
         );
         assert_eq!(state(&[red, green], "P", &sel), State::Green);
+    }
+
+    /// A one-member batch's tip alone is the batch's own tree: its red group runs once more there before the tip is
+    /// judged; a pass then is a flake (`flaky`), a second fail is the tip's red.
+    #[test]
+    fn a_red_that_needs_a_second_run_waits_for_it() {
+        let fail = || ev("P", "s", vec![Row::fail("a::t", Class::Assert, vec![])]);
+        let pass = || ev("P", "s", vec![Row::pass("a::t")]);
+        let lost = || {
+            ev(
+                "P",
+                "s",
+                vec![Row::fail(crate::rows::JOB_ROW, Class::Infra, vec![])],
+            )
+        };
+        assert_eq!(state_after(&[fail()], "P", "s", 2), State::Missing);
+        // a run without a result is no run
+        assert_eq!(state_after(&[fail(), lost()], "P", "s", 2), State::Missing);
+        assert_eq!(
+            state_after(&[fail(), fail()], "P", "s", 2),
+            State::Red(vec!["a::t".into()])
+        );
+        assert_eq!(state_after(&[fail(), pass()], "P", "s", 2), State::Green);
+        assert_eq!(flaky(&[fail(), pass()]), vec!["a::t"]);
+        // one run needed: the newest
+        assert_eq!(
+            state_after(&[fail()], "P", "s", 1),
+            State::Red(vec!["a::t".into()])
+        );
     }
 
     #[test]

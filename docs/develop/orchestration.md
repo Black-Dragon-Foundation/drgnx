@@ -195,7 +195,10 @@ green (`orch::groups`, `vordr::groups`):
 
 When a batch's groups are red, the red groups run again in parallel, once (never a bisection), at the line's HEAD
 and at each member's tip merged alone onto it (`orch::groups`, judged by `vordr::reruns::verdict`). Each run is
-evidence of `batch:JOB@TREE` for its own tree. The gate waits until every rerun is in; then:
+evidence of `batch:JOB@TREE` for its own tree. A one-member batch's tip alone is the batch's own tree, so there its
+red groups run once more (`vordr::gates::state_after` with two runs): a pass then is a flake (below: a hold, a
+`followup` and the card), a second fail is the tip's red, so the tip goes back. The gate waits until every rerun is
+in; then:
 
 - **The line itself is red:** no tip is blamed. The batch is held on a `gate` card and a `followup` entity (one open
   per title) records the line's failing rows.
@@ -210,10 +213,17 @@ the cause, never listed. A held batch's card offers `Waive once…`, which the g
 ## The push gate
 
 Under a pack with `push-gate` on, a job's agent asking to push (the matrix's `push.ci` or `push.main`) is refused
-until each of the pack's `:push-tiers` has a green run on the exact commit's tree (the agent's `HEAD`) with the env
-stamp the hub has now, on Linux (`vordr::push::judge`, `orch::push`). Runs on another tree, env stamp or platform
-never count. The refusal names the missing tiers, which start through the queue as evidence of `push:JOB@TREE`, or the
-red tiers with their rows; the agent asks again once they are green. A push the gate lets through still meets the
+until each of the pack's `:push-tiers` has a green run on the tree of each commit the push sends, with the env stamp
+the hub has now, on Linux (`vordr::push::judge`, `orch::push`). Runs on another tree, env stamp or platform never
+count. The gate reads the command (`orch::push::parse`): `git` and its global options (`-C DIR`, `-c K=V`,
+`--no-pager`, …), each push in a list of commands (`;`, `&&`, `|`), and the source of each refspec (`+SRC:DST`; none
+named: `HEAD`). A command it can't read is refused, never let by: a shell or another program around the push (`sh -c`,
+`env`, `xargs`), a substitution or quote, another repository (`--git-dir`), every branch at once (`--all`,
+`--mirror`, `--tags`). The refusal names each ref with its commit and the missing tiers, which start through the
+queue as evidence of `push:JOB@TREE`, or the red tiers with their rows; the agent asks again once they are green. A
+job (`exec/start`, `job_start`) of a session, or a sealed job, never pushes: its start is refused (row
+`exec/an-agent-job-never-pushes`). Unit tests `a_push_is_read_with_its_global_options_and_the_refs_it_sends`,
+`the_refusal_names_the_refs_it_judged`. A push the gate lets through still meets the
 matrix, so the push itself stays the user's. A pack whose push gate names no tiers doesn't read, and the gate refuses
 every push of a job recorded with one.
 

@@ -2628,6 +2628,13 @@ async fn start_as(
     // gate's run is an agent's command)
     if c.sid.is_some() || gate.is_some() {
         let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
+        // nor pushes: a push goes through the session's shell tool, where the push gate and the matrix see it
+        if crate::orch::push::parse(&argv.join(" ")) != crate::orch::push::Parsed::NotPush {
+            return Err(error(
+                ErrorCode::NotAllowed,
+                "argv: a job never pushes; push from your shell tool, where the push gate judges each ref it sends",
+            ));
+        }
         if let Some(why) = packages::changes_packages(&argv) {
             return Err(error(
                 ErrorCode::NotAllowed,
