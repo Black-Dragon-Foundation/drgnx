@@ -450,14 +450,14 @@ async fn a_python_trail_is_traced_in_sealed_replays() {
         py_config,
         (15, 16, 23),
         |_| "16".into(),
-        1,
+        (1, 1),
     );
     let r = Traces {
         forks: f.forks.clone(),
         resolved: f.resolved.clone(),
         root: f.root.clone(),
     };
-    let t = super::origin::trail(&r, "r1", 100, "shortfall", 3, Vec::new, |_| {})
+    let t = super::origin::trail(&r, "r1", AT, "shortfall", 3, Vec::new, |_| {})
         .await
         .unwrap();
     let got: Vec<(u32, &str, Option<&str>, u32)> = t
