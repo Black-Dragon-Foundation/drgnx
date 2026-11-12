@@ -49,6 +49,20 @@ use unit::Meta;
 pub enum Starter {
     Session(String),
     User,
+    /// The hub, for a command it doesn't trust (a gate's rerun of an agent's command, a bisect's predicate): run in
+    /// the Session launch shape, sealed to its tree, under this label (`sealed-` and letters, digits, `-`, `_`), which
+    /// no session holds: its events name no session, so they reach no agent ([`start_sealed`]).
+    Sealed(String),
+}
+
+impl Starter {
+    /// The agent session the job belongs to (its events and wake go there); none for the user's or a sealed job.
+    pub fn session(&self) -> Option<String> {
+        match self {
+            Starter::Session(s) => Some(s.clone()),
+            Starter::User | Starter::Sealed(_) => None,
+        }
+    }
 }
 
 /// What a job's output is read as.
@@ -325,6 +339,9 @@ fn write_infra(dir: &Path, reason: &str) {
 #[derive(Serialize, Deserialize)]
 struct Pending {
     session: Option<String>,
+    /// A sealed job's label ([`Starter::Sealed`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sealed: Option<String>,
     cwd: PathBuf,
     worktree: Option<PathBuf>,
     argv: Vec<String>,
@@ -340,9 +357,10 @@ struct Pending {
 impl Pending {
     fn of(spec: &ExecSpec) -> Pending {
         Pending {
-            session: match &spec.starter {
-                Starter::Session(s) => Some(s.clone()),
-                Starter::User => None,
+            session: spec.starter.session(),
+            sealed: match &spec.starter {
+                Starter::Sealed(l) => Some(l.clone()),
+                _ => None,
             },
             cwd: spec.cwd.clone(),
             worktree: spec.worktree.clone(),
@@ -357,7 +375,10 @@ impl Pending {
 
     fn into_spec(self) -> ExecSpec {
         ExecSpec {
-            starter: self.session.map_or(Starter::User, Starter::Session),
+            starter: match (self.sealed, self.session) {
+                (Some(l), _) => Starter::Sealed(l),
+                (None, s) => s.map_or(Starter::User, Starter::Session),
+            },
             cwd: self.cwd,
             worktree: self.worktree,
             argv: self.argv,
@@ -917,7 +938,7 @@ impl Inner {
             .filter(|c| c.is_dir())
             .ok_or_else(|| refusal(format!("{} is not a folder", spec.cwd.display())))?;
         match (&spec.starter, spec.worktree.take()) {
-            (Starter::Session(_), Some(wt)) => {
+            (Starter::Session(_) | Starter::Sealed(_), Some(wt)) => {
                 let wt = std::fs::canonicalize(&wt)
                     .map_err(|_| refusal(format!("{} is not a folder", wt.display())))?;
                 if !cwd.starts_with(&wt) {
@@ -929,7 +950,7 @@ impl Inner {
                 }
                 spec.worktree = Some(wt);
             }
-            (Starter::Session(_), None) => {
+            (Starter::Session(_) | Starter::Sealed(_), None) => {
                 return Err(refusal("a session's job needs its worktree"));
             }
             (Starter::User, _) => spec.worktree = Some(cwd.clone()),
@@ -1003,10 +1024,7 @@ impl Inner {
     fn enqueue(&self, id: &str, dir: &Path, spec: &ExecSpec) -> Result<(), Refusal> {
         let _ = dir;
         let started = now();
-        let session = match &spec.starter {
-            Starter::Session(s) => Some(s.clone()),
-            Starter::User => None,
-        };
+        let session = spec.starter.session();
         self.save_meta(&Meta {
             id: id.to_string(),
             session: session.clone(),
@@ -1073,10 +1091,7 @@ impl Inner {
         }
         Submit {
             id: id.to_string(),
-            session: match &spec.starter {
-                Starter::Session(s) => Some(s.clone()),
-                Starter::User => None,
-            },
+            session: spec.starter.session(),
             own: spec.priority(),
             spec: fspec,
             place,
@@ -1444,11 +1459,12 @@ impl Inner {
                 (s, None)
             }
             // the conformance lane has no sandbox for a job: its jobs run as the user's do
-            Starter::Session(_) if unsandboxed_for_tests(&self.hooks) => (
+            Starter::Session(_) | Starter::Sealed(_) if unsandboxed_for_tests(&self.hooks) => (
                 plain_spec(&spec, agent_plain_env(&self.hooks.shell_env)),
                 None,
             ),
-            Starter::Session(sid) => {
+            // a sealed job's label keys its sandbox's folders as a session's id does
+            Starter::Session(sid) | Starter::Sealed(sid) => {
                 let worktree = spec
                     .worktree
                     .clone()
@@ -1540,10 +1556,7 @@ impl Inner {
         let started = now();
         let mut meta = Meta {
             id: id.to_string(),
-            session: match &spec.starter {
-                Starter::Session(s) => Some(s.clone()),
-                Starter::User => None,
-            },
+            session: spec.starter.session(),
             kind: spec.kind.name().to_string(),
             argv: spec.argv.clone(),
             cwd: spec.cwd.display().to_string(),
@@ -2542,24 +2555,39 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
     start_as(f, c, p, None).await
 }
 
-/// A run a gate starts (`orch::gates`): the command an agent ran, or the pack's, over a tree the agent wrote.  It runs
-/// in an agent's sandbox (the Session launch shape), with the detached tree TREE its only writable folder, under the
-/// sandbox id SID (no session holds it, so no one is woken); the hub's own decision, so no matrix cell is asked.
-pub struct GateRun {
-    pub sid: String,
+/// A job the hub starts for a command it doesn't trust (`orch::gates`' runs: the command an agent ran, or the pack's
+/// over a tree an agent wrote; a bisect's predicate).  It runs in an agent's sandbox (the Session launch shape) with
+/// the tree TREE its only writable folder, on this machine, as [`Starter::Sealed`] `sealed-LABEL`: no session holds
+/// it, so its events reach no agent; the hub's own decision, so no matrix cell is asked.
+pub struct Sealed {
+    /// Letters, digits, `-` and `_`: the job's sandbox folders are keyed by it.
+    pub label: String,
     pub tree: PathBuf,
 }
 
-/// `exec/start` of a gate's run G, made by the hub (P names no priority, keys or network).
-pub async fn start_gate(f: &Front, g: &GateRun, p: StartParams) -> Result<Started, Error> {
-    start_as(f, &crate::runner::user(), p, Some(g)).await
+/// `exec/start` of the sealed job S, made by the hub (P names no priority, keys or network).
+pub async fn start_sealed(f: &Front, s: &Sealed, mut p: StartParams) -> Result<Started, Error> {
+    if s.label.is_empty()
+        || !s
+            .label
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(crate::agents::session::invalid(
+            "label",
+            "a sealed job's label: letters, digits, - and _",
+        ));
+    }
+    // a runner elsewhere would not run it in this sandbox
+    p.local_only = Some(true);
+    start_as(f, &crate::runner::user(), p, Some(s)).await
 }
 
 async fn start_as(
     f: &Front,
     c: &Caller,
     p: StartParams,
-    gate: Option<&GateRun>,
+    gate: Option<&Sealed>,
 ) -> Result<Started, Error> {
     // the hub sets an agent's job's priority; only the user's connections choose one
     if c.sid.is_some() && p.priority.is_some() {
@@ -2697,7 +2725,7 @@ async fn start_as(
     }
     let spec = ExecSpec {
         starter: match gate {
-            Some(g) => Starter::Session(g.sid.clone()),
+            Some(g) => Starter::Sealed(format!("sealed-{}", g.label)),
             None => c.sid.clone().map_or(Starter::User, Starter::Session),
         },
         cwd,

@@ -106,10 +106,12 @@ command and image) at the test commit, or the red's command at the tip. Each run
 beside the task's tree (uncommitted files in the task's tree are never part of it), which goes when the job ends.
 
 **Runs the gates start** are an agent's command, or the pack's over the tree an agent wrote, so they run as an agent's
-job does (`exec::start_gate`): in the session's launch shape, with the detached tree the only folder they can write,
-the network a session's job has (the provider proxy, nothing else) and an agent's package rule; never with the user's
-environment. Their sandbox id is `gate-` and the tree's folder name: no session holds it, so the run wakes no one and
-asks no matrix cell (the gate's run is the hub's decision). Row `runner/a-gate-run-keeps-the-agents-sandbox`. The job's end is the task's
+job does, as a **sealed job** (`exec::start_sealed`, starter `Starter::Sealed`): in the session's launch shape, on
+this machine, with the detached tree the only folder they can write, the network a session's job has (the provider
+proxy, nothing else) and an agent's package rule; never with the user's environment. Its label is `sealed-gate-` and
+the tree's folder name; a sealed job names no session in its meta, queue record or events, so it wakes no agent and
+asks no matrix cell (the gate's run is the hub's decision). Other hub runs of untrusted commands (a bisect's
+predicate) use the same starter. Unit test `a_sealed_job_names_no_session_and_stays_sealed_in_the_queue`. Row `runner/a-gate-run-keeps-the-agents-sandbox`. The job's end is the task's
 evidence like any other; the next tick looks again. A hold is a `gate` card on the task (key `gates`, `tip` its tree
 key) saying what is wrong; a red-first wait with no run of the task's tests to repeat is a hold too. Its actions:
 **Check again**, **Tell the agent** (the task goes back to its agent with the card's words), **Waive once…** (with a
@@ -172,9 +174,14 @@ green (`orch::groups`, `vordr::groups`):
   commit-tree`: no worktree, no ref moves). Its tree key is the batch's: the same members in any order give the same
   tree, and so do the later members once the first merged, so their turn reuses the runs.
 - **The groups** come from the base's own tool: the command runs in a detached worktree of the line's HEAD with `%r`
-  = `HEAD..COMBINED` (its `test/affected.eld`, never the batch's); listed once per tree.
-- **Each group** runs at the combined commit through the queue as the user's job (a detached worktree that goes when
-  the job ends); its end is evidence of `batch:JOB@TREE`.
+  = `HEAD..COMBINED` (its `test/affected.eld`, never the batch's); listed once per tree. It runs as a gate run (an
+  agent's sandbox, on this machine) in a time box of 300 s, its output to `.drgnx-groups.json` in that tree; the gate
+  waits while it runs. A listing without groups is never red: a timeout or the machine's end (`timeout`, `infra`)
+  lists once more and holds the second time; a non-zero exit or output that isn't the JSON (`error`) holds at once,
+  with the run's first log lines. The user may waive the hold. Unit test
+  `the_groups_listing_is_a_time_boxed_run_whose_timeout_is_no_red`.
+- **Each group** runs at the combined commit as a gate run (a detached worktree that goes when the job ends); its end
+  is evidence of `batch:JOB@TREE`.
 - **Green:** every group's newest run at the tree passed, or failed only rows the base's `test/frozen.eld` lists.
   Any other red goes to the reruns (next section).
 

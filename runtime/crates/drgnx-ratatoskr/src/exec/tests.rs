@@ -11,7 +11,8 @@ fn hooks() -> Hooks {
 
 fn spec(starter: Starter, cwd: &Path, script: &str, timebox: Duration) -> ExecSpec {
     ExecSpec {
-        worktree: matches!(starter, Starter::Session(_)).then(|| cwd.to_path_buf()),
+        worktree: matches!(starter, Starter::Session(_) | Starter::Sealed(_))
+            .then(|| cwd.to_path_buf()),
         starter,
         cwd: cwd.to_path_buf(),
         argv: vec!["sh".into(), "-c".into(), script.into()],
@@ -21,6 +22,23 @@ fn spec(starter: Starter, cwd: &Path, script: &str, timebox: Duration) -> ExecSp
         user: UserJob::default(),
         place: Placement::default(),
     }
+}
+
+/// A sealed job (the hub's run of a command it doesn't trust) names no session: not in its meta, its queue record or
+/// its events, so it never reaches an agent; queued, it stays sealed (never the user's job, never a session's).
+#[test]
+fn a_sealed_job_names_no_session_and_stays_sealed_in_the_queue() {
+    let d = tempfile::tempdir().unwrap();
+    let sealed = Starter::Sealed("sealed-gate-x".into());
+    assert_eq!(sealed.session(), None);
+    assert_eq!(Starter::Session("s1".into()).session(), Some("s1".into()));
+    let s = spec(sealed.clone(), d.path(), "true", Duration::from_secs(30));
+    let pending = Pending::of(&s);
+    assert_eq!(pending.session, None);
+    let back: Pending = serde_json::from_value(serde_json::to_value(&pending).unwrap()).unwrap();
+    let back = back.into_spec();
+    assert_eq!(back.starter, sealed);
+    assert_eq!(back.worktree.as_deref(), Some(d.path()));
 }
 
 /// [D] A test job whose parser counts rows (`ert`, `cargo-test`) must run at least one: its spec expects a row, so a

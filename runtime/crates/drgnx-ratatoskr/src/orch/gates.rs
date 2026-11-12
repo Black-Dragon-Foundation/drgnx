@@ -2,7 +2,7 @@
 //!
 //! [`before_merge`] runs them in order once the merge gate allows a task: trailers, red first (`orch::red_first`),
 //! the author check.  A run a gate needs and the hub can make (the task's own test command at its test commit or its
-//! tip, an author check at the tip) is started through the queue in an agent's sandbox (`exec::start_gate`), and the
+//! tip, an author check at the tip) is started through the queue as a sealed job (`exec::start_sealed`), and the
 //! gate waits for it
 //! ([`Runs`]); its end is the task's evidence like any other job's.
 
@@ -206,11 +206,11 @@ pub(crate) async fn start(
     let params = serde_json::from_value(p).map_err(|e| e.to_string())?;
     // the agent's command (or the pack's, over the agent's tree): in an agent's sandbox, the detached tree its only
     // writable folder
-    let gate = crate::exec::GateRun {
-        sid: gate_sid(task, &dir),
+    let gate = crate::exec::Sealed {
+        label: gate_sid(task, &dir),
         tree: dir.clone(),
     };
-    let started = match crate::exec::start_gate(front, &gate, params).await {
+    let started = match crate::exec::start_sealed(front, &gate, params).await {
         Ok(s) => s,
         Err(e) => {
             let run = Run {
@@ -242,7 +242,7 @@ pub(crate) async fn start(
 
 /// The sandbox id of TASK's gate run in the detached tree DIR: `gate-` and the tree's folder name, kept to the letters a
 /// session id may hold (no session holds it: the run wakes no one).
-fn gate_sid(task: &str, dir: &Path) -> String {
+pub(crate) fn gate_sid(task: &str, dir: &Path) -> String {
     let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or(task);
     let mut sid = String::from("gate-");
     sid.extend(name.chars().map(|c| {
