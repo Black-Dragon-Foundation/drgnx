@@ -1087,6 +1087,19 @@ Ratatoskr is not built, or starting is off (DRGNX_NO_HUB_START)."
            (drgnx-timer-start 'hub-ensure drgnx-hub-ensure-deadline #'drgnx-hub--ensure-expired :owner :core)
            p))))
 
+(defun drgnx-hub-start-for-command (on-fail)
+  "A command the user invoked needs the hub's subscription (a terminal, a hub-fed view): start Ratatoskr when no hub
+runs (`drgnx-hub--ensure-running', not waited for) and connect once it answers; with one running, connect.  ON-FAIL
+gets the reason, a string, when no hub can be had.  Nothing while a subscription is up or being made.  In a daemon path
+\(`inhibit-interaction') it starts nothing and only connects to a hub already there: timers, hooks, sentinels and
+startup never start one."
+  (unless (or (process-live-p drgnx-hub--events) (process-live-p drgnx-hub--subscribing))
+    (if inhibit-interaction
+        (when (drgnx-hub-running-p) (drgnx-hub-connect))
+      (condition-case e
+          (drgnx-hub--ensure-running (lambda (err) (if err (funcall on-fail err) (drgnx-hub-connect))))
+        (error (funcall on-fail (error-message-string e)))))))
+
 (defun drgnx-hub--restart-legacy ()
   "End the Lisp hub of before this update (protocol 0 has `shutdown', not `restart'), wait up to 5 s for its lock
 directory to go, then start Ratatoskr."

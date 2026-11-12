@@ -847,6 +847,15 @@ never waits: CALLBACK gets nil when a hub answers, or the reason (the process's 
 path (`inhibit-interaction`) it returns at once and they go, or a `hub` notice `start` is posted, when the start ends. `DRGNX_NO_HUB_START` is honoured; with
 no binary every caller says "Ratatoskr is not built: run `drgnx runtime build`".
 
+**A command that needs the subscription.** `drgnx-hub-start-for-command ON-FAIL` is for commands the user invoked whose
+answer comes on the subscribed connection: New Terminal and Reconnect (`drgnx-term`), the Search view's key, `RET` and
+Search in Files, and the Work space. With no subscription up or being made it calls `drgnx-hub--ensure-running` (not
+waited for) and connects when the hub answers; ON-FAIL gets the reason when no hub can be had (the terminal fails and
+says it in the echo area, the Search view on its status line). In a daemon path (`inhibit-interaction`) it starts
+nothing and only connects to a hub already there: timers, hooks, sentinels and startup never start one. Before it,
+these only connected, so with no hub running they waited for good. The Extensions view and Debug's commands ask the hub
+by call, which signals "no hub" and shows the reason; they do not start it.
+
 **At daemon start.** The nightly graph backup (`backup_timer.rs`) runs inside the hub, so a daemon must not wait for AI
 to start one. `drgnx-hub-ask-at-daemon-start` (core, on `emacs-startup-hook`) schedules the layer timer
 `hub-daemon-start` (2 s, owner `:core`) in a daemon only: not in batch, not in a plain Emacs, not with

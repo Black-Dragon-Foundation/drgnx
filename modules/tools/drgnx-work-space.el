@@ -105,9 +105,7 @@
 (declare-function drgnx-work-map-motion-clear "drgnx-work-map")
 (defvar drgnx-work-space--view)
 (defvar drgnx-work-space--message)
-(defvar drgnx-hub--events)
-(declare-function drgnx-hub-running-p "drgnx-hub-client")
-(declare-function drgnx-hub-connect "drgnx-hub-client")
+(declare-function drgnx-hub-start-for-command "drgnx-hub-client" (on-fail))
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (defvar drgnx-hub-event-functions)
 (defvar drgnx-hub-connected-functions)
@@ -272,10 +270,9 @@ labels' margin (84 px) and 12 px of padding, in logical pixels.  A terminal fram
 an editor window unless NO-DISPLAY.  Returns the map buffer.  Outside a project it opens an empty map that says so
 and subscribes to nothing."
   (interactive)
-  ;; the map's events come back on the subscribed connection: dial it when this Emacs has none and a hub is there
-  (when (and (fboundp 'drgnx-hub-running-p) (not (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events)))
-             (drgnx-hub-running-p))
-    (ignore-errors (drgnx-hub-connect)))
+  ;; the map's events come back on the subscribed connection: the hub is started when none runs, and dialled
+  (require 'drgnx-hub-client)
+  (drgnx-hub-start-for-command (lambda (why) (message "The Work space has no hub: %s" why)))
   (let ((buffer (drgnx-work-space--buffer (or workspace (drgnx-work-space-workspace)))))
     (unless no-display
       (pop-to-buffer buffer)

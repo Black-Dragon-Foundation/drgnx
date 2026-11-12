@@ -171,7 +171,8 @@ run by SHELL with its script cut before the `cd' and printing the folder instead
 (ert-deftest drgnx-term-remote/a-lost-connection-keeps-the-buffer-with-reconnect ()
   (let ((drgnx-term--buffers (make-hash-table :test #'equal)) (opened nil)
         (b (generate-new-buffer "*terminal*")))
-    (cl-letf (((symbol-function 'drgnx-term--open) (lambda (buf) (push buf opened))))
+    (cl-letf (((symbol-function 'drgnx-term--open) (lambda (buf) (push buf opened)))
+              ((symbol-function 'drgnx-hub-start-for-command) #'ignore))   ; a hub runs
       (unwind-protect
           (with-current-buffer b
             (drgnx-term-mode)
@@ -183,6 +184,24 @@ run by SHELL with its script cut before the `cd' and printing the folder instead
             (drgnx-term-reconnect)
             (should (equal opened (list b)))
             (should-not header-line-format))
+        (with-current-buffer b (setq drgnx-term--state 'exited))
+        (kill-buffer b)))))
+
+(ert-deftest drgnx-term-remote/no-hub-for-a-reconnect-says-why ()
+  "Reconnect (a command) asks for the hub; when none can be had the terminal fails, says why, and asks no worker."
+  (let ((drgnx-term--buffers (make-hash-table :test #'equal)) (opened nil) (said nil)
+        (b (generate-new-buffer "*terminal*")))
+    (cl-letf (((symbol-function 'drgnx-term--open) (lambda (buf) (push buf opened)))
+              ((symbol-function 'drgnx-hub-start-for-command) (lambda (on-fail) (funcall on-fail "Ratatoskr is not built")))
+              ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+      (unwind-protect
+          (with-current-buffer b
+            (drgnx-term-mode)
+            (setq drgnx-term--remote "/ssh:box:" drgnx-term--shell t drgnx-term--state 'exited)
+            (drgnx-term-reconnect)
+            (should (eq drgnx-term--state 'failed))
+            (should-not opened)
+            (should (equal said '("The terminal could not start: Ratatoskr is not built"))))
         (with-current-buffer b (setq drgnx-term--state 'exited))
         (kill-buffer b)))))
 

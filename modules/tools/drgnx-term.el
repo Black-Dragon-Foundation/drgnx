@@ -974,6 +974,19 @@ hub is not up, connect, and the subscription opens it (`drgnx-term--connected').
                                   (list :tasks_max (number-to-string drgnx-term-linux-cgroup-processes-limit))))
                             (lambda (r e) (drgnx-term--opened buffer r e)))))))
 
+(defun drgnx-term--start-hub (buffer)
+  "A command opens BUFFER's terminal: the hub is started when none runs (`drgnx-hub-start-for-command'), and the
+subscription opens the terminal (`drgnx-term--connected').  When no hub can be had, the terminal fails and says why."
+  (drgnx-hub-start-for-command (lambda (why) (drgnx-term--no-hub buffer why))))
+
+(defun drgnx-term--no-hub (buffer why)
+  "No hub for BUFFER's terminal, for WHY (a string): it fails, and the echo area says why."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (memq drgnx-term--state '(nil opening))
+        (setq drgnx-term--state 'failed mode-line-process ":failed")
+        (message "The terminal could not start: %s" why)))))
+
 (defun drgnx-term--opened (buffer result error)
   "`term/open' answered RESULT (or ERROR) for BUFFER: it becomes the terminal's view; the queued input goes."
   (when (buffer-live-p buffer)
@@ -1370,7 +1383,8 @@ that host (`drgnx-term-remote-command'); a COMMAND runs in a local folder only."
             drgnx-term--shell (not command))
       (when remote (setq-local drgnx-chrome-tab-icon 'server) (drgnx-term--title "")))
     (pop-to-buffer buffer)
-    (drgnx-term--open buffer)
+    (drgnx-term--start-hub buffer)
+    (unless (eq (buffer-local-value 'drgnx-term--state buffer) 'failed) (drgnx-term--open buffer))
     (when (and drgnx-term-input (not command))
       (with-current-buffer buffer (drgnx-term-send-string drgnx-term-input)))
     buffer))
@@ -1609,7 +1623,8 @@ them all here, choose some, or close them.  A terminal another running drgnx sho
   (unless (and (derived-mode-p 'drgnx-term-mode) drgnx-term--remote (eq drgnx-term--state 'exited))
     (user-error "Not a remote terminal whose connection was lost"))
   (setq header-line-format nil mode-line-process nil drgnx-term--state nil)
-  (drgnx-term--open (current-buffer)))
+  (drgnx-term--start-hub (current-buffer))
+  (unless (eq drgnx-term--state 'failed) (drgnx-term--open (current-buffer))))
 
 (defun drgnx-term-usable-p (dir)
   "Non-nil when a terminal in DIR can be drgnx's own: not on Windows, a local DIR or a remote one a command reaches
