@@ -131,7 +131,8 @@ fn hit_frame(seq: u64, value: String) -> Frame {
 fn the_run_file_writes_zstd_blocks_with_an_index() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("r1.drun");
-    let mut f = RunFile::create(&p, 64 << 20).unwrap();
+    let k = super::runkey::random_key();
+    let mut f = RunFile::create(&p, 64 << 20, &k).unwrap();
     let mut seq = 0;
     for i in 0..3000u64 {
         seq += 1;
@@ -145,7 +146,7 @@ fn the_run_file_writes_zstd_blocks_with_an_index() {
         }
     }
     f.flush();
-    let r = Reader::open(&p).unwrap();
+    let r = Reader::open(&p, &k).unwrap();
     assert!(r.index.blocks.len() > 1, "{} blocks", r.index.blocks.len());
     // compressed: the file is much smaller than the frames
     let raw: u64 = r.index.blocks.iter().map(|b| u64::from(b.raw)).sum();
@@ -163,8 +164,9 @@ fn the_run_file_writes_zstd_blocks_with_an_index() {
 fn past_the_cap_the_oldest_hits_go_and_stops_stay() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("r1.drun");
+    let k = super::runkey::random_key();
     let cap = 600 * 1024;
-    let mut f = RunFile::create(&p, cap).unwrap();
+    let mut f = RunFile::create(&p, cap, &k).unwrap();
     let mut seq = 0;
     for i in 0..2000u64 {
         seq += 1;
@@ -176,7 +178,7 @@ fn past_the_cap_the_oldest_hits_go_and_stops_stay() {
     }
     f.flush();
     assert!(f.size() <= cap, "{} > {cap}", f.size());
-    let r = Reader::open(&p).unwrap();
+    let r = Reader::open(&p, &k).unwrap();
     let frames = r.frames();
     let stops = frames
         .iter()
@@ -205,7 +207,8 @@ fn past_the_cap_the_oldest_hits_go_and_stops_stay() {
 fn stops_and_hits_share_one_counter() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("r1.drun");
-    let mut f = RunFile::create(&p, 64 << 20).unwrap();
+    let k = super::runkey::random_key();
+    let mut f = RunFile::create(&p, 64 << 20, &k).unwrap();
     // hit, hit, stop, hit, stop, hit
     for (seq, is_stop) in [
         (1, false),
@@ -222,7 +225,7 @@ fn stops_and_hits_share_one_counter() {
         });
     }
     f.flush();
-    let r = Reader::open(&p).unwrap();
+    let r = Reader::open(&p, &k).unwrap();
     let hits: Vec<RunHit> = r
         .frames()
         .into_iter()
@@ -241,7 +244,7 @@ fn stops_and_hits_share_one_counter() {
 
 /// Every Urdr record put, and every one gone.
 #[derive(Default)]
-struct Store(Mutex<Vec<RunMeta>>, Mutex<Vec<String>>);
+pub(super) struct Store(pub(super) Mutex<Vec<RunMeta>>, Mutex<Vec<String>>);
 
 impl RunSink for Store {
     fn put(&self, meta: &RunMeta) {
@@ -253,7 +256,7 @@ impl RunSink for Store {
 }
 
 #[derive(Default)]
-struct Events(Mutex<Vec<(String, Value)>>);
+pub(super) struct Events(Mutex<Vec<(String, Value)>>);
 
 impl Sink for Events {
     fn broadcast(&self, event: &str, data: Value, _: Option<u64>) {
@@ -266,7 +269,7 @@ impl Sink for Events {
 }
 
 impl Events {
-    fn named(&self, name: &str) -> Vec<Value> {
+    pub(super) fn named(&self, name: &str) -> Vec<Value> {
         self.0
             .lock()
             .unwrap()
@@ -365,7 +368,7 @@ impl Proc for Exits {
     }
 }
 
-struct NoTerms;
+pub(super) struct NoTerms;
 
 impl Terminals for NoTerms {
     fn open(
@@ -380,9 +383,9 @@ impl Terminals for NoTerms {
 }
 
 #[derive(Default)]
-struct Mocks {
-    scripts: Mutex<VecDeque<Vec<Value>>>,
-    running: Mutex<Vec<Mock>>,
+pub(super) struct Mocks {
+    pub(super) scripts: Mutex<VecDeque<Vec<Value>>>,
+    pub(super) running: Mutex<Vec<Mock>>,
 }
 
 impl Launcher for Mocks {
@@ -412,7 +415,7 @@ impl Launcher for Mocks {
     }
 }
 
-async fn until(what: &str, mut cond: impl FnMut() -> bool) {
+pub(super) async fn until(what: &str, mut cond: impl FnMut() -> bool) {
     for _ in 0..2000 {
         if cond() {
             return;

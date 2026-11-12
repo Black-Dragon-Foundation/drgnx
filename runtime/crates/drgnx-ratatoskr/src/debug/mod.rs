@@ -31,6 +31,7 @@ pub mod ports;
 pub mod probes;
 pub mod record;
 pub mod runfile;
+pub mod runkey;
 pub mod runs_wire;
 pub mod session;
 pub mod strip;
@@ -67,6 +68,8 @@ mod tests_fork_seal;
 mod tests_inline;
 #[cfg(test)]
 mod tests_install;
+#[cfg(all(test, target_os = "macos"))]
+mod tests_keychain;
 #[cfg(test)]
 mod tests_launch;
 #[cfg(test)]
@@ -80,7 +83,11 @@ mod tests_probes;
 #[cfg(test)]
 mod tests_record;
 #[cfg(test)]
+mod tests_record_sealed;
+#[cfg(test)]
 mod tests_registry;
+#[cfg(all(test, target_os = "linux"))]
+mod tests_runkey;
 #[cfg(test)]
 mod tests_tasks;
 pub mod wire;

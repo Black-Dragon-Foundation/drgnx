@@ -122,7 +122,15 @@ the file was unsaved at the start), the stop's line marked with its variables, a
 were in a window beside it. `Alt →` past the newest stop, **Back to Live** (the palette) or the banner's button returns.
 Recorded runs hold your program's values: an agent reads them only as the matrix's `debug.read` row lets it (Cautious asks
 first). They are kept 14 days (a pinned
-run, or one for an open task, longer), at most 2 GB per project, oldest first. Probes need an adapter with logpoints
+run, or one for an open task, longer), at most 2 GB per project, oldest first.
+
+Recorded runs are encrypted on disk with a key kept in your keyring (the Secret Service on Linux: GNOME Keyring,
+KWallet or KeePassXC; the login keychain on macOS), made on the first recorded session. drgnx never asks for your
+keyring's password: when the keyring is locked or there is none, sessions are not recorded (the echo area says why),
+and runs already on disk cannot be read until you log in and the keyring unlocks. If the keyring loses that key (it
+is deleted, or the keyring is reset), the old runs cannot be read again: there is no copy of the key and no
+unencrypted copy of the runs. They are disposable, so this is fine: they are removed at their 14 days as usual, and new
+runs use a new key. Probes need an adapter with logpoints
 (debugpy and the JavaScript debugger take 2000 values a second, the rest 200, and delve and codelldb stop and resume
 the program for each one; values past the rate are thinned and counted).
 

@@ -20,6 +20,7 @@ use super::Sink;
 use super::probes::{self, Probes, Rate};
 use super::runfile::{self, Reader, RunFile};
 pub use super::runfile::{Frame, RunHit, RunStop};
+use super::runkey::{self, FileKey, SALT_LEN};
 use super::session::{End, Op, Stop};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -231,6 +232,9 @@ pub struct Opts {
     /// A run file's cap.
     pub file_cap: u64,
     pub project_cap: u64,
+    /// The runs' key (spec §19.2): the hub's is the user's keyring ([`super::runkey::os`]); by default one in
+    /// memory, made on the first run (tests).
+    pub key: Arc<dyn super::runkey::KeyStore>,
 }
 
 impl Opts {
@@ -244,6 +248,7 @@ impl Opts {
             task_open: Arc::new(|_| Box::pin(async { false })),
             file_cap: runfile::CAP,
             project_cap: PROJECT_CAP,
+            key: Arc::new(super::runkey::Memory::default()),
         }
     }
 }
@@ -370,6 +375,8 @@ pub struct Records {
     next: AtomicU64,
     /// One launch snapshot at a time (they share the shadow repository's index).
     snap: Arc<Mutex<()>>,
+    /// The keyring's key, once read (none: the runs on disk cannot be read and nothing is recorded).
+    key: Mutex<Option<runkey::Key>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -393,6 +400,7 @@ impl Records {
             sending: AtomicBool::new(false),
             next: AtomicU64::new(0),
             snap: Arc::new(Mutex::new(())),
+            key: Mutex::new(None),
         })
     }
 
@@ -425,6 +433,20 @@ impl Records {
     ) -> String {
         let ms = (crate::clock::wall_secs() * 1000.0) as u64;
         let id = format!("r{ms}-{}", self.next.fetch_add(1, Ordering::Relaxed) + 1);
+        // no key, no recording: nothing the program holds is written in the clear
+        let key = match self.key_to_record().await {
+            Ok(k) => k,
+            Err(u) => {
+                let why = u.why();
+                tracing::info!(target: "drgnx::debug", "session {session} not recorded: {why}");
+                self.sink.broadcast(
+                    "debug-recording-off",
+                    json!({"session": session, "root": root, "why": why}),
+                    None,
+                );
+                return id;
+            }
+        };
         let n = self.list(root).iter().map(|m| m.n).max().unwrap_or(0) + 1;
         let snapshot = self.snapshot(root, &id).await;
         let hash_seed = if probes::lang(&start.adapter_id) == probes::Lang::Python
@@ -470,7 +492,7 @@ impl Records {
             fork: launch.fork,
             ..RunMeta::default()
         };
-        let file = match RunFile::create(&self.file(&id, "drun"), self.opts.file_cap) {
+        let file = match RunFile::create(&self.file(&id, "drun"), self.opts.file_cap, &key) {
             Ok(f) => f,
             Err(e) => {
                 tracing::warn!(target: "drgnx::debug", "run {id} not recorded: {e}");
@@ -478,7 +500,7 @@ impl Records {
             }
         };
         self.write_meta(&meta);
-        self.opts.store.put(&meta);
+        self.put(&meta);
         let rate = Rate::new((!launch.fork).then(|| probes::cap(&start.adapter_id)));
         lock(&self.live).insert(
             id.clone(),
@@ -711,7 +733,7 @@ impl Records {
         l.meta.dropped += l.file.index().dropped;
         l.meta.size = l.file.size();
         self.write_meta(&l.meta);
-        self.opts.store.put(&l.meta);
+        self.put(&l.meta);
         self.sink
             .broadcast("debug-run", run_event(&l.meta, "ended", None), None);
         let me = self.clone();
@@ -729,12 +751,26 @@ impl Records {
         }
     }
 
-    fn write_meta(&self, meta: &RunMeta) {
+    /// META to the graph, without its start (the launch's values stay sealed in the run's files).
+    fn put(&self, meta: &RunMeta) {
+        let mut m = meta.clone();
+        m.start = Value::Null;
+        self.opts.store.put(&m);
+    }
+
+    /// META to its record on disk; false: no key to seal it with.
+    fn write_meta(&self, meta: &RunMeta) -> bool {
         let _ = std::fs::create_dir_all(&self.opts.runs);
-        let text = serde_json::to_string(meta).unwrap_or_default();
+        let Some(key) = lock(&self.key).clone() else {
+            return false;
+        };
+        let mut sealed = meta.clone();
+        sealed.start = seal_start(&key, &meta.start);
+        let text = serde_json::to_string(&sealed).unwrap_or_default();
         if let Err(e) = crate::records::write_atomic(&self.file(&meta.id, "json"), &text) {
             tracing::warn!(target: "drgnx::debug", "run {}: {e}", meta.id);
         }
+        true
     }
 
     fn read_meta(&self, id: &str) -> Option<RunMeta> {
@@ -745,7 +781,37 @@ impl Records {
             return Some(l.meta.clone());
         }
         let t = std::fs::read_to_string(self.file(id, "json")).ok()?;
-        serde_json::from_str(&t).ok()
+        serde_json::from_str(&t).ok().map(|m| self.opened(m))
+    }
+
+    /// META read from disk, its start opened (none: the key is not there).
+    fn opened(&self, mut meta: RunMeta) -> RunMeta {
+        meta.start = lock(&self.key)
+            .as_ref()
+            .and_then(|k| open_start(k, &meta.start))
+            .unwrap_or(Value::Null);
+        meta
+    }
+
+    /// Read the key for the runs on disk, never making one and never asking (none yet: nothing to read).
+    pub async fn unlock(&self) -> Result<(), runkey::Unavailable> {
+        if lock(&self.key).is_some() {
+            return Ok(());
+        }
+        let k = self.opts.key.key(false).await?;
+        *lock(&self.key) = Some(k);
+        Ok(())
+    }
+
+    /// The key to record with: the one read, else the keyring's (made there if it has none: an unlocked keyring
+    /// only).
+    async fn key_to_record(&self) -> Result<runkey::Key, runkey::Unavailable> {
+        if let Some(k) = lock(&self.key).clone() {
+            return Ok(k);
+        }
+        let k = self.opts.key.key(true).await?;
+        *lock(&self.key) = Some(k.clone());
+        Ok(k)
     }
 
     /// Every run's record (ROOT's only, unless empty), newest first.
@@ -759,32 +825,47 @@ impl Records {
             .filter_map(|e| std::fs::read_to_string(e.path()).ok())
             .filter_map(|t| serde_json::from_str::<RunMeta>(&t).ok())
             .filter(|m| root.is_empty() || m.root == root)
-            .map(|m| live.get(&m.id).map_or(m.clone(), |l| l.meta.clone()))
+            .map(|mut m| {
+                // the summary: its start stays sealed
+                m.start = Value::Null;
+                live.get(&m.id).map_or(m, |l| l.meta.clone())
+            })
             .collect();
         v.sort_by(|a, b| b.started.total_cmp(&a.started).then(b.n.cmp(&a.n)));
         v
     }
 
     /// Run ID's file read back (a live run's pending frames written first).
-    fn reader(&self, id: &str) -> Option<Reader> {
+    fn reader(&self, id: &str) -> Result<Reader, String> {
         if !safe(id) {
-            return None;
+            return Err(format!("no run {id}"));
         }
         if let Some(l) = lock(&self.live).get_mut(id) {
             l.file.flush();
         }
-        Reader::open(&self.file(id, "drun")).ok()
+        let Some(key) = lock(&self.key).clone() else {
+            return Err(format!("run {id} cannot be read until the keyring unlocks"));
+        };
+        Reader::open(&self.file(id, "drun"), &key).map_err(|e| match e {
+            runfile::Unread::Io(_) => format!("run {id} has no file"),
+            e @ runfile::Unread::Sealed => format!("run {id} {e}"),
+        })
     }
 
     /// Pin or unpin run ID (a pinned run is kept past the retention).
     pub fn pin(&self, id: &str, pinned: bool) -> Result<(), String> {
         let mut meta = self.read_meta(id).ok_or_else(|| format!("no run {id}"))?;
+        if lock(&self.key).is_none() {
+            return Err(format!(
+                "run {id} cannot be changed until the keyring unlocks"
+            ));
+        }
         meta.pinned = pinned;
         if let Some(l) = lock(&self.live).get_mut(id) {
             l.meta.pinned = pinned;
         }
         self.write_meta(&meta);
-        self.opts.store.put(&meta);
+        self.put(&meta);
         Ok(())
     }
 
@@ -794,9 +875,7 @@ impl Records {
     pub fn get(&self, id: &str, from: usize, count: usize) -> Result<Value, String> {
         const LANE_MAX: usize = 2000;
         let meta = self.read_meta(id).ok_or_else(|| format!("no run {id}"))?;
-        let r = self
-            .reader(id)
-            .ok_or_else(|| format!("run {id} has no file"))?;
+        let r = self.reader(id)?;
         let all = &r.index.stops;
         let page: Vec<&RunStop> = all.iter().skip(from).take(count).collect();
         let lo = if from == 0 {
@@ -851,9 +930,7 @@ impl Records {
     /// when none), marked when it was unsaved in the editor at the launch.
     pub fn past_stop(&self, id: &str, index: u64, file: Option<&str>) -> Result<Value, String> {
         let meta = self.read_meta(id).ok_or_else(|| format!("no run {id}"))?;
-        let r = self
-            .reader(id)
-            .ok_or_else(|| format!("run {id} has no file"))?;
+        let r = self.reader(id)?;
         let (stop, capture) = r
             .stop(index)
             .ok_or_else(|| format!("run {id} has no stop {index}"))?;
@@ -942,12 +1019,12 @@ impl Records {
 
 impl Runs for Records {
     fn capture(&self, id: &str, index: u64) -> Option<Value> {
-        self.reader(id)?.stop(index).map(|(_, c)| c)
+        self.reader(id).ok()?.stop(index).map(|(_, c)| c)
     }
 
     fn run(&self, id: &str) -> Option<RunInfo> {
+        let r = self.reader(id).ok()?;
         let meta = self.read_meta(id)?;
-        let r = self.reader(id)?;
         let hits = r
             .frames()
             .into_iter()
@@ -971,6 +1048,37 @@ impl Runs for Records {
             hits,
         })
     }
+}
+
+const START_AAD: &[u8] = b"drun start";
+
+/// A run's START sealed for its record on disk: `{"sealed": <hex of the salt, the nonce and the sealed JSON>}`.
+fn seal_start(key: &runkey::Key, start: &Value) -> Value {
+    let salt = runkey::new_salt();
+    let sealed =
+        FileKey::new(key, &salt).seal(START_AAD, &serde_json::to_vec(start).unwrap_or_default());
+    let mut bytes = salt.to_vec();
+    bytes.extend_from_slice(&sealed);
+    json!({ "sealed": hex(&bytes) })
+}
+
+/// The start [`seal_start`] sealed, opened with KEY.
+fn open_start(key: &runkey::Key, sealed: &Value) -> Option<Value> {
+    let bytes = unhex(sealed.get("sealed")?.as_str()?)?;
+    let (salt, rest) = bytes.split_at_checked(SALT_LEN)?;
+    let plain = FileKey::new(key, salt.try_into().ok()?).open(START_AAD, rest)?;
+    serde_json::from_slice(&plain).ok()
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn unhex(s: &str) -> Option<Vec<u8>> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .collect()
 }
 
 /// `debug-run`'s data for META in STATE, with the stop just recorded.

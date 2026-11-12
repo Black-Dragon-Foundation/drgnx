@@ -1189,6 +1189,34 @@ jobs:
           cd runtime/crates/drgnx-ratatoskr
           DRGNX_DEBUG_LIVE_PYTHON="$a/venv/bin/python3" DRGNX_DEBUG_LIVE_JS_DEBUG="$a/js-debug/src/dapDebugServer.js" \
             "$bin" --ignored --exact debug::tests_fork_live::mac_forks_keep_to_their_port_block --nocapture --test-threads 1
+      # recorded runs' key (spec §19.2): a throwaway keychain, the only one searched and the default, unlocked then
+      # locked; the runner's own keychains are put back after, whatever happened
+      - name: debug runs' key in the Keychain (made, read back, locked without a dialog)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          bin=$(jq -r 'select(.profile.test == true and .target.name == "drgnx_ratatoskr" and (.target.kind | index("lib"))) | .executable' \
+            "$RUNNER_TEMP/test-bins.json" | tail -n 1)
+          [ -x "$bin" ] || { echo "::error::no test binary for the hub's lib"; exit 1; }
+          kc="$RUNNER_TEMP/drgnx-runs.keychain-db"
+          pw=$(uuidgen)
+          old_default=$(security default-keychain -d user | tr -d ' "')
+          old_list=$(security list-keychains -d user | tr -d '"')
+          restore() {
+            # shellcheck disable=SC2086
+            security list-keychains -d user -s $old_list
+            security default-keychain -d user -s "$old_default"
+            security delete-keychain "$kc" || true
+          }
+          trap restore EXIT
+          security create-keychain -p "$pw" "$kc"
+          security set-keychain-settings "$kc"
+          security unlock-keychain -p "$pw" "$kc"
+          security list-keychains -d user -s "$kc"
+          security default-keychain -d user -s "$kc"
+          "$bin" --ignored --exact debug::tests_keychain::the_key_is_made_in_an_unlocked_keychain_and_reads_back --test-threads 1
+          security lock-keychain "$kc"
+          "$bin" --ignored --exact debug::tests_keychain::a_locked_keychain_answers_locked_without_a_dialog --test-threads 1
       # the relay sidecar of a networked container job (and a keyed one's drgnx-key) is a Linux binary: build-only here
       # (no podman machine to run it in).
       # Apple Silicon builds aarch64 musl with Rust's self-contained musl and rust-lld, as `drgnx runtime build` does

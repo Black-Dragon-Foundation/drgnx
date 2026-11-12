@@ -644,13 +644,34 @@ Every session the hub starts is recorded (`debug/record.rs`, `Records`; the hub'
   the run says so); the rest are thinned and counted; a fork's run keeps every hit. "Probe the Result"
   (`probes::next_line`) places the probe on the next line that runs, past continuation lines, blanks and comments. A
   project's probes are kept in `<state>/debug-probes/<xxh3 of root>.json`.
-- **The run file** (`debug/runfile.rs`): `<state>/debug/runs/<run>.drun`, `DRUN1\n`, then blocks (u32 raw length, u32
-  compressed length, zstd) of JSON-lines frames, 64 KB raw each; `<run>.drun.idx` indexes blocks, stops and each
-  probe's hits. Each stop's capture (threads, the stack, the selected frame's scopes and variables) is cut to 64 KB:
+- **The run file** (`debug/runfile.rs`): `<state>/debug/runs/<run>.drun`, `DRUN2\n` and a 32-byte salt, then blocks
+  (u32 raw length, u32 sealed length, the sealed zstd bytes) of JSON-lines frames, 64 KB raw each; `<run>.drun.idx`
+  (sealed JSON) indexes blocks, stops and each probe's hits. Each stop's capture (threads, the stack, the selected frame's scopes and variables) is cut to 64 KB:
   the last scope's variables first, then frames past the selected one, then threads. A file holds 64 MB: past that
   the oldest hits go (rewritten to three quarters), never a stop.
 - **The record** (`<run>.json`, `RunMeta`) is also an Urdr entity of kind `debug_run` (`norn::write::debug`), written
-  in order on one task, `recording` then `ended`.
+  in order on one task, `recording` then `ended`. Its `start` (the launch's resolved configuration and inputs) is
+  sealed on disk (`{"sealed": hex(salt, nonce, sealed JSON)}`) and left out of the entity; the rest (ids, root, times,
+  size, pinned, task) stays plain, which is what retention reads.
+- **Sealed at rest** (`debug/runkey.rs`, spec §19.2): one 32-byte key in the user's keyring; each file's key is
+  HKDF-SHA256 of it with the file's salt; every block, the index and the start are ChaCha20-Poly1305 (`ring`) with a
+  random nonce in front and the piece's name as associated data. A rewrite under the cap keeps the salt (new nonces).
+  `Records::unlock` reads the key at the hub's start and before each `debug/run*` call, never making one;
+  `begin` makes it on the first recording, in an unlocked keyring only. No key: `begin` records nothing and
+  broadcasts `debug-recording-off {session, root, why}` (the timeline says it once per reason); reads answer "cannot
+  be read until the keyring unlocks"; a file under another key (the keyring lost its key) answers "cannot be read";
+  `prune` needs no key. The key, derived keys, salts and nonces are never logged; key bytes are `Zeroizing`.
+  - **Linux**: the Secret Service's calls are made one by one over zbus 6 (tokio, `default-features = false`,
+    `proxy` only; the `service` and `p2p` features are for the tests' fake), not through a client crate: the
+    `secret-service` crate runs any Prompt it is handed (its `create_item`), and the hub never prompts. The calls are
+    `ReadAlias("default")` (`/`: no default collection, which counts as no keyring, since making one would prompt),
+    the collection's `Locked`, `OpenSession("plain")` (the session bus is the boundary), `SearchItems` / `GetSecret`,
+    `CreateItem`, and `Dismiss` on a prompt handed back. Never `Unlock`, `CreateCollection` or `Prompt`:
+    `debug::tests_runkey` serves a fake Secret Service on a socket pair that records every call and fails if one of
+    those three is made.
+  - **macOS**: the login keychain's generic password `drgnx` / `debug-runs` (`security-framework`), with
+    `SecKeychain::disable_user_interaction` held around each call: locked is `errSecInteractionNotAllowed`, never a
+    dialog. `debug::tests_keychain` runs on the macOS runners against a throwaway keychain (unlocked, then locked).
 - **Retention** (`Records::prune`, after every run's end): 14 days, except pinned runs and runs whose task is open,
   then 2 GB per project, oldest first; a pruned run's file, snapshot ref and entity go.
 - **Ordering**: `RunHit.seq` and `RunStop.index` come from one counter, so "the hits before stop k" is
