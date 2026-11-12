@@ -1732,7 +1732,10 @@ and cursor, inputs, the mixed stack) and `test/live/drgnx-modal-daemon-test.el` 
 `:qa` in a daemon that keeps running) each start a session of config `drgnx` per test. `test/fixtures/modal-session.el`
 loads evil there from `DRGNX_MODAL_ELPA` (a session inherits it), starts the engine with `drgnx-modal-engine-start-now`,
 applies the key stack, and presses keys through the harness queue (`drgnx-ui-measure`, one event per 40 ms tick); each
-test prints a line summing its jank reports. Screenshots (`modal-normal.png`, `modal-visual-line.png`,
+test prints a line summing its jank reports. A test whose views need the hub (the Explorer's rows, the terminal) says
+`:hub t`: the session starts the test's Ratatoskr (`DRGNX_RATATOSKR_BIN`, with `drgnx-term` built beside it) as an
+install does and subscribes; without the binary the test skips, or fails where the hub is required
+(`DRGNX_TEST_HUB_REQUIRED=1`). Screenshots (`modal-normal.png`, `modal-visual-line.png`,
 `modal-explorer.png`, `modal-explorer-leader.png`) go to `$DRGNX_TEST_SHOTS` when set — the UI evidence of a run —
 else to the run's temp directory. To run only these: `DRGNX_TEST_SELECTOR='"^drgnx-\\(ui\\|live\\)-modal/"'` with
 `bin/drgnx test --ui` (the GUI half still runs all of `test/ui`).
