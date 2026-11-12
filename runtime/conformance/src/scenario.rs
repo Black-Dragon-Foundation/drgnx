@@ -60,6 +60,9 @@ pub struct Scenario {
     /// `"bound_s": N`: the whole row's time, `DEFAULT_BOUND_S` without it.  Past it the row fails at its next step
     /// (or `measure` repeat) with what it had done, so one slow row does not hold up the run.
     pub bound_s: u64,
+    /// `"on_failure": [{"conn": NAME, "json": REQUEST}, …]`: what a failure asks the hub, its answers in the failure
+    /// (a row whose red comes only on another machine names what the next run must show).
+    pub on_failure: Vec<Map<String, Value>>,
     pub steps: Vec<Step>,
 }
 
@@ -154,6 +157,20 @@ pub fn parse(text: &str) -> Result<Scenario, ParseError> {
             .filter(|&n| n > 0)
             .ok_or_else(|| err(hl, "\"bound_s\" is a whole number of seconds above 0"))?,
     };
+    let on_failure = match h.get("on_failure") {
+        None => Vec::new(),
+        Some(Value::Array(asks)) => asks
+            .iter()
+            .map(|a| match a {
+                Value::Object(o) if o.get("json").and_then(|j| j.get("id")).is_some() => Ok(o.clone()),
+                _ => Err(err(
+                    hl,
+                    "\"on_failure\" is an array of {\"conn\": NAME, \"json\": REQUEST}, each request with an \"id\"",
+                )),
+            })
+            .collect::<Result<_, _>>()?,
+        Some(_) => return Err(err(hl, "\"on_failure\" is an array of requests")),
+    };
     let mut steps = Vec::new();
     for (line, text) in lines {
         let v: Value =
@@ -177,6 +194,7 @@ pub fn parse(text: &str) -> Result<Scenario, ParseError> {
         doc,
         pending,
         bound_s,
+        on_failure,
         steps,
     })
 }
@@ -526,6 +544,30 @@ mod tests {
             assert!(
                 parse(&format!("{{\"scenario\": \"t/p\", \"pending\": {bad}}}\n")).is_err(),
                 "pending {bad} is an error"
+            );
+        }
+    }
+
+    #[test]
+    fn on_failure_is_requests_with_ids() {
+        assert!(row("").on_failure.is_empty());
+        let s = parse(
+            "{\"scenario\": \"t/f\", \"on_failure\": [{\"conn\": \"c\", \"json\": {\"id\": 90, \"method\": \"exec/list\"}}]}\n",
+        )
+        .unwrap();
+        assert_eq!(s.on_failure.len(), 1);
+        assert_eq!(s.on_failure[0]["json"]["method"], "exec/list");
+        for bad in [
+            "true",
+            "[1]",
+            "[{\"conn\": \"c\", \"json\": {\"method\": \"x\"}}]",
+        ] {
+            assert!(
+                parse(&format!(
+                    "{{\"scenario\": \"t/f\", \"on_failure\": {bad}}}\n"
+                ))
+                .is_err(),
+                "on_failure {bad} is an error"
             );
         }
     }

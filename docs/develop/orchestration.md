@@ -127,6 +127,11 @@ ends. A run is claimed in the same step as the check that none is in flight (`Ru
 once (two pushes) start it once (unit test `a_run_is_claimed_once_until_it_ends`). The watcher that settles them
 settles every ended run again when it falls behind the job events (`Runs::take_ended`).
 
+**The hub's log** says what the gates decide of each task's merge, an info line each time it changes ("the gates
+wait: …", "the gates hold the merge: …", "the gates pass the merge: …"; a failure to judge is a warning), and of
+each run they start: "the gate runs CMD at COMMIT" with its job and tree (a start refused: a warning naming why),
+then "the gate's run ended: red|green", or a warning when it ended as no evidence and why (`orch::evidence::settle`).
+
 **Runs the gates start** are an agent's command, or the pack's over the tree an agent wrote, so they run as an agent's
 job does, as a **sealed job** (`exec::start_sealed`, starter `Starter::Sealed`): in the session's launch shape, on
 this machine, with the detached tree the only folder they can write, the network a session's job has (the provider
