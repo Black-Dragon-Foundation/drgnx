@@ -34,6 +34,7 @@ tower-service = "0.3"    # the connector trait (already in the tree through hype
 http = "1"                # request, response and header types (already in the tree through hyper)
 
 [dev-dependencies]
+skuld = { path = "../skuld", version = "0.1.0" }   # the workspace's binaries from a test (ratatoskr-mock)
 tempfile.workspace = true
 proptest.workspace = true
 # The TLS tests (tests/tls.rs, tests/common): certificates made at run time, an in-test TLS server.

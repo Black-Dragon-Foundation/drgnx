@@ -7,7 +7,11 @@
 # tests run the real shaders on; vttest for the terminal worker's vttest goldens (drgnx-term tests/vttest.rs).
 # Containerfile.rust runs it into the prebuilt image; a job without that image (a change to its inputs not yet on
 # main) runs it itself.  docs/develop/ci.md, "Prebuilt images"
+# Rust is the version in rust-version beside this script (the one place CI names it: .github/ci/rust.sh), never
+# Fedora's newest: a Fedora that no longer has it fails here, and moving on is an edit of that file.
 set -eu
-dnf -y install git cargo rust gcc clippy rustfmt tar zstd gzip procps-ng util-linux bubblewrap jq diffutils curl xz \
-  vulkan-loader mesa-vulkan-drivers vttest
+rust=$(tr -d '[:space:]' < "$(dirname "$0")/rust-version")
+dnf -y install git "cargo-$rust" "rust-$rust" gcc "clippy-$rust" "rustfmt-$rust" tar zstd gzip procps-ng util-linux \
+  bubblewrap jq diffutils curl xz vulkan-loader mesa-vulkan-drivers vttest
 dnf clean all
+rustc -V | grep -q "^rustc $rust " || { echo "rust-packages.sh: rustc is $(rustc -V), not $rust" >&2; exit 1; }

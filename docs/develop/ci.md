@@ -467,6 +467,22 @@ container works; the tests only read it.
 
 `DRGNX_CONTAINER=podman` names the container runtime without asking a host Emacs (CI has none).
 
+## The Rust toolchain
+
+CI builds with one pinned Rust, never the runners' moving `stable`: when the runners' `stable` moved to 1.100,
+whose build-dir layout puts test binaries in `target/<profile>/build/<package>/<hash>/out/` instead of `deps/`, every
+test that found a sibling binary two folders up failed in one round. `test/container/rust-version` names the version,
+the one place it is written. The rustup jobs install it with `.github/ci/rust.sh` (directly, or through the
+`macos-runtime` and `build-test-bins` actions), which makes it the default and sets `RUSTUP_TOOLCHAIN` for the job's
+later steps. The Fedora job's image installs Fedora's packages of that version (`rust-packages.sh`), and fails to
+build when Fedora no longer has them. The MSRV job (1.95.0) and the fuzz nightly name their own pinned versions.
+`drgnx-ci/the-rust-toolchain-is-one-pinned-version` (test/unit/ci-workflows-test.el) fails on a workflow that names
+`stable` or installs another toolchain. Moving to a newer Rust is an edit of `rust-version`, checked like any change.
+
+Tests find the workspace's binaries (the hub, `ratatoskr-mock`, `drgnx-term`) with `skuld::workspace_bin`: cargo's
+`CARGO_BIN_EXE_<name>` where it gives one, else the variable that names it, else the profile folder above the test's
+own binary, found by its `deps/` or `build/` child in either layout (`skuld::profile_dir`).
+
 ## Prebuilt images (the cache)
 
 Installing Emacs and the GUI stack into Fedora took about a minute per job, so the images are built once by

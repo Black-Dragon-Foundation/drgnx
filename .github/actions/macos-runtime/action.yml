@@ -24,7 +24,7 @@ runs:
     # the image's rustup (as the Linux runner jobs), not Homebrew's rust: no formula download and install per run
     - uses: ./.github/actions/sccache
     - shell: bash
-      run: rustup toolchain install stable --profile minimal --component clippy
+      run: bash .github/ci/rust.sh --component clippy
     - id: rv
       shell: bash
       run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
