@@ -160,8 +160,9 @@ out.
   it inserted has its line, each deletion the line of the point it left (after its nearest surviving left neighbour).
   Sorted by line, an unchanged line between two effects starts a new hunk, so the hunks are what `git diff -U0` shows
   for that record alone. Each `OpHunk` has its lines now, the record's text still there, the text it deleted, a state
-  (`Live`, `PartlyUndone`, `Undone`) and `undone_by`. `History::records_of(branch, session)` lists the `edits` records
-  of a session's agent on a branch (a paired chat's, on the user's).
+  (`Live`, `PartlyUndone`, `Undone`) and `undone_by`. `History::records_of(branch, session)` lists the records of a
+  session's agent on a branch (a paired chat's, on the user's): its buffer edits (`edits`) and its writes to disk
+  (`agent_step`), so a hand-off's state counts what a worker wrote.
 - **Reverting one** (`History::plan_hunk_revert(branch, op, doc, index)`) is keep mine on that hunk's part of the
   record's scope, run on a fork: its elements still there are deleted, the text it deleted goes back after its
   surviving neighbour, and the characters the user typed inside the agent's text are other elements, so they stay. The
