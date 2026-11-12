@@ -36,6 +36,19 @@ pub fn of_job(runner: &Runner, id: &str, task: &str) -> Option<Evidence> {
     })
 }
 
+/// Why job ID of RUNNER is no evidence (`of_job` gave none): the words for the log.
+fn no_evidence(runner: &Runner, id: &str) -> &'static str {
+    if !runner.counts_for_gates(id) {
+        "a shared runner's result, or no job"
+    } else if runner.facts(id).is_none() {
+        "no facts (its folder was outside a git tree)"
+    } else if runner.done(id).is_none() {
+        "it has not ended"
+    } else {
+        "no rows"
+    }
+}
+
 /// Record E in the graph.
 pub async fn record(front: &Front, e: Evidence) -> Result<(), Error> {
     let tx = urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "orch/evidence");
@@ -119,11 +132,22 @@ pub fn moved_run(runner: &Runner, id: &str, task: &str) -> Option<Evidence> {
 /// Gate run RUN (job ID) ended: its evidence for its task (or, when its tree moved, the run that holds the gate), then
 /// its detached worktree goes.
 pub async fn settle(front: &Front, id: &str, run: crate::orch::gates::Run) {
-    if let Some(e) = of_job(&front.core.exec, id, &run.task)
+    match of_job(&front.core.exec, id, &run.task)
         .or_else(|| moved_run(&front.core.exec, id, &run.task))
-        && let Err(err) = record(front, e).await
     {
-        tracing::warn!("job {id}: evidence not recorded: {}", err.message);
+        Some(e) => {
+            let kind = e.kind.clone();
+            match record(front, e).await {
+                Ok(()) => tracing::info!(task = run.task, job = id, "the gate's run ended: {kind}"),
+                Err(err) => tracing::warn!("job {id}: evidence not recorded: {}", err.message),
+            }
+        }
+        None => tracing::warn!(
+            task = run.task,
+            job = id,
+            "the gate's run ended with no evidence: {}",
+            no_evidence(&front.core.exec, id)
+        ),
     }
     let _ = crate::clock::blocking(move || crate::orch::gates::cleanup(&run)).await;
 }

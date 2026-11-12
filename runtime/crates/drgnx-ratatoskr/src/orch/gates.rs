@@ -284,6 +284,13 @@ async fn start_claimed(
     let started = match crate::exec::start_sealed(front, &gate, params).await {
         Ok(s) => s,
         Err(e) => {
+            tracing::warn!(
+                task,
+                tree = %dir.display(),
+                "the gate's run of {} did not start: {}",
+                rerun.argv.join(" "),
+                e.message
+            );
             let run = Run {
                 task: task.to_owned(),
                 key: (key.to_owned(), rerun.selector.clone()),
@@ -294,6 +301,13 @@ async fn start_claimed(
         }
     };
     let id = started.id;
+    tracing::info!(
+        task,
+        job = %id,
+        tree = %dir.display(),
+        "the gate runs {} at {commit}",
+        rerun.argv.join(" ")
+    );
     front.orch.started(
         claim,
         id.clone(),
