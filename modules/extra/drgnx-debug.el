@@ -16,6 +16,7 @@
 (require 'drgnx-debug-fork (expand-file-name "drgnx-debug-fork" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-timeline (expand-file-name "drgnx-debug-timeline" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-bisect (expand-file-name "drgnx-debug-bisect" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-debug-origin (expand-file-name "drgnx-debug-origin" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-toolbar (expand-file-name "drgnx-debug-toolbar" (file-name-directory (macroexp-file-name))))
 (defvar drgnx-statusbar-left)
 (declare-function drgnx-hub-call "drgnx-hub-client")
@@ -109,6 +110,7 @@ the toolbar's cards go too."
   (drgnx-debug-session-mode -1)
   (drgnx-debug-timeline-mode -1)
   (drgnx-debug-bisect-events-mode -1)
+  (drgnx-debug-origin-events-mode -1)
   (drgnx-debug-mode -1))
 
 (defun drgnx-debug-breakpoint-conditional ()
@@ -199,6 +201,10 @@ the toolbar's cards go too."
                               ;; which change broke it: bisect over the edit history (drgnx-debug-bisect.el)
                               (drgnx-debug-bisect-events-mode 1)
                               (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-bisect-commands)
+                                (drgnx-command-define id :category "Debug" :title title :command fn :doc doc))
+                              ;; where did this come from: the origin trail (drgnx-debug-origin.el)
+                              (drgnx-debug-origin-events-mode 1)
+                              (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-origin-commands)
                                 (drgnx-command-define id :category "Debug" :title title :command fn :doc doc))))
 
 (provide 'drgnx-debug)

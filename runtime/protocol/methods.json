@@ -11479,7 +11479,7 @@
             "type": "object"
           },
           "DebugPredicate": {
-            "description": "What makes a state bad: `test` (ARGV fails: exit 0 good, 125 skip, 1–127 bad, as `git bisect run`), `exit` (ARGV\nexits with CODE: bad; 0 or another code: good; 125 skip).  BUILD, when given, runs first: its failure skips the\nstate.  `exception` and `probe` (Python and JS) replay the run in a what-if fork (spec §19.3).",
+            "description": "What makes a state bad: `test` (ARGV fails: exit 0 good, 125 skip, 1–127 bad, as `git bisect run`), `exit` (ARGV\nexits with CODE: bad; 0 or another code: good; 125 skip).  BUILD, when given, runs first: its failure skips the\nstate.  `exception` and `probe` (Python and JS) run RUN's configuration in each state (spec §19.3's plain run in a\nslot): `exception` is bad when it raises at AT (`path:line`, relative to the project), `probe` when CONDITION is true\nat AT at least once; a run the time box cut, or a probe line that never ran, skips the state.",
             "properties": {
               "argv": {
                 "items": {
@@ -11516,7 +11516,7 @@
                 "type": "string"
               },
               "run": {
-                "description": "`exception` and `probe`: the recorded run to replay, and what to watch for (a place `path:line`, or a probe's\ncondition).",
+                "description": "`exception` and `probe`: the recorded run whose configuration runs, the place (`path:line`) and a probe's\ncondition.",
                 "type": [
                   "string",
                   "null"
@@ -12410,6 +12410,60 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "string",
         "type": "string"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "where did this come from: the recorded run replayed to the stop under a tracer (Python 3.12 and later) that records the stores to the value and their operands, a level per replay; older Pythons get the assignments as candidates, not traced; `debug-origin` events give the trail",
+      "name": "debug/origin",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/origin`: where EXPR (a name or a dotted path, `item.reserve`) came from at stop STOP of recorded run RUN,\nDEPTH levels deep (1 to 3, default 3).",
+        "properties": {
+          "depth": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "expr": {
+            "type": "string"
+          },
+          "run": {
+            "type": "string"
+          },
+          "stop": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run",
+          "stop",
+          "expr"
+        ],
+        "title": "DebugOrigin",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A trail started: its id (the `debug-origin` events name it).",
+        "properties": {
+          "origin": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin"
+        ],
+        "title": "DebugOriginStarted",
+        "type": "object"
       },
       "writes": false
     },

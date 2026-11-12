@@ -2,12 +2,13 @@
 //! launch snapshots (their kept trees) and the edit history's saves and agent steps (the branch's base commit with
 //! every document as it was after the record), each written as a tree into a bisect's own shadow repository, which
 //! borrows the objects of the project's repository and of its snapshots (`objects/info/alternates`): nothing is
-//! copied, and no state touches the disk until a slot runs it.  The predicate runs as the user's jobs (`exec`), one
-//! per state, in the slot's folder.
+//! copied, and no state touches the disk until a slot runs it.  The predicate runs as sealed jobs (`exec::start_sealed`:
+//! an agent's sandbox, the slot its only writable folder), one per state, in the slot's folder.
 
 use super::bisect::{self, Bisect, Canceller, Candidate, Ending, Found, Outcome, Prober, Stage};
+use super::fork::{RunEnd, Watch};
 use crate::dispatch::Caller;
-use crate::exec::{CheckKind, ExecSpec, JobEvent, Starter, UserJob};
+use crate::exec::JobEvent;
 use crate::front::Front;
 use crate::timeline::snapshot::{repo_of, run_git};
 use runstav::methods::Params;
@@ -20,7 +21,6 @@ use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
-use std::time::Duration;
 
 fn err(code: ErrorCode, message: impl Into<String>) -> Error {
     Error {
@@ -259,7 +259,6 @@ fn records(
 pub struct Bisects {
     front: OnceLock<Weak<Front>>,
     live: Mutex<HashMap<String, Live>>,
-    cleared: OnceLock<()>,
 }
 
 struct Live {
@@ -289,7 +288,7 @@ impl Bisects {
     }
 }
 
-/// The predicate as the user's jobs, one per state, in the state's folder.
+/// The predicate as sealed jobs, one per state, in the state's folder.
 #[derive(Clone)]
 struct Jobs {
     front: Weak<Front>,
@@ -302,26 +301,23 @@ impl Jobs {
     async fn job(&self, dir: &Path, argv: &[String]) -> Result<Option<i32>, String> {
         let front = self.front.upgrade().ok_or("the hub is stopping")?;
         let mut events = front.core.exec.subscribe();
-        let spec = ExecSpec {
-            starter: Starter::User,
-            cwd: dir.to_owned(),
-            worktree: None,
-            argv: argv.to_vec(),
-            timebox: Duration::from_secs(self.predicate.timebox_s.unwrap_or(600)),
-            kind: CheckKind::Other,
-            container: None,
-            user: UserJob {
-                name: Some(format!("bisect {}", self.bisect)),
-                ..UserJob::default()
-            },
-            place: Default::default(),
+        // the project's own command over states an agent may have written: an agent's sandbox, the slot its only
+        // writable folder (`exec::start_sealed`)
+        let params = serde_json::from_value(json!({
+            "argv": argv,
+            "cwd": dir.to_string_lossy(),
+            "timebox_s": self.predicate.timebox_s.unwrap_or(600),
+            "name": format!("bisect {}", self.bisect),
+        }))
+        .map_err(|e| e.to_string())?;
+        let sealed = crate::exec::Sealed {
+            label: format!("bisect-{}", self.bisect),
+            tree: dir.to_owned(),
         };
-        let id = front
-            .core
-            .exec
-            .start(spec)
+        let id = crate::exec::start_sealed(&front, &sealed, params)
             .await
-            .map_err(|r| r.to_string())?;
+            .map_err(|e| e.message)?
+            .id;
         drop(front);
         self.running.lock().expect("bisect jobs").insert(id.clone());
         let r = loop {
@@ -346,6 +342,67 @@ impl Jobs {
     }
 }
 
+impl Jobs {
+    /// An `exception` or `probe` predicate in the slot DIR: the recorded run's configuration run there to its end,
+    /// the place watched (`fork_wire::run_in`, sealed as a fork is).
+    async fn watched(&self, dir: &Path) -> Result<Outcome, String> {
+        let p = &self.predicate;
+        let front = self.front.upgrade().ok_or("the hub is stopping")?;
+        let run = p.run.clone().ok_or("no recorded run")?;
+        let watch = watch_of(p)?;
+        let limit = std::time::Duration::from_secs(p.timebox_s.unwrap_or(600));
+        let end = super::fork_wire::run_in(front, run, dir.to_owned(), watch, limit).await?;
+        Ok(outcome_of(&p.kind, &end))
+    }
+}
+
+/// The place a replayed predicate watches: AT (`path:line`, relative to the project), and a probe's CONDITION.
+pub fn watch_of(p: &DebugPredicate) -> Result<Watch, String> {
+    let (path, line) =
+        p.at.as_deref()
+            .and_then(|a| a.rsplit_once(':'))
+            .and_then(|(path, l)| Some((path.to_owned(), l.parse::<u32>().ok()?)))
+            .ok_or("the predicate's place is not PATH:LINE")?;
+    Ok(match (p.kind.as_str(), &p.condition) {
+        ("probe", Some(c)) => Watch::Probe {
+            path,
+            line,
+            expr: c.clone(),
+        },
+        ("probe", None) => return Err("a probe predicate needs its condition".into()),
+        _ => Watch::Exception { path, line },
+    })
+}
+
+/// A watched run's outcome for KIND: `exception` is bad when it raised at the place, good when the run ended without;
+/// `probe` is bad when the condition was true there once (Python's `True`, JS's `true`), good when it ran and never
+/// was.  A run the time box cut skips (unless the probe was already true), as does a probe line that never ran (the
+/// state moved it or never reaches it).
+pub fn outcome_of(kind: &str, end: &RunEnd) -> Outcome {
+    let cut = || Outcome::Skip("the time box ran out before the run ended".into());
+    if kind == "exception" {
+        return match (&end.exception_at, end.timed_out) {
+            (Some(_), _) => Outcome::Bad,
+            (None, true) => cut(),
+            (None, false) => Outcome::Good,
+        };
+    }
+    if end
+        .probe_values
+        .iter()
+        .any(|v| matches!(v.trim(), "True" | "true"))
+    {
+        return Outcome::Bad;
+    }
+    if end.timed_out {
+        return cut();
+    }
+    if end.probe_values.is_empty() {
+        return Outcome::Skip("the probe's line never ran in this state".into());
+    }
+    Outcome::Good
+}
+
 impl Prober for Jobs {
     fn run(&self, dir: &Path) -> super::BoxFut<'static, Outcome> {
         let me = self.clone();
@@ -358,6 +415,9 @@ impl Prober for Jobs {
                     Ok(c) => return Outcome::Skip(format!("it does not build (exit {c:?})")),
                     Err(e) => return Outcome::Skip(e),
                 }
+            }
+            if matches!(p.kind.as_str(), "exception" | "probe") {
+                return me.watched(&dir).await.unwrap_or_else(Outcome::Skip);
             }
             match (p.kind.as_str(), me.job(&dir, &p.argv).await) {
                 (_, Err(e)) => Outcome::Skip(e),
@@ -414,11 +474,10 @@ impl bisect::Sink for Events {
     }
 }
 
-/// Where a hub's bisects keep their folders: `<state>/debug/bisect`.
+/// Where a hub's bisects keep their folders: the forks' slots root (`<runs>/debug-forks/slots`), the one place in the
+/// state folder a sealed job's tree may be, and the only trees `fork_wire::run_in` takes.  The hub's start sweeps it.
 fn bisect_dir(front: &Front) -> PathBuf {
-    runstav::paths::state_dir(&front.shell_env.paths_env())
-        .join("debug")
-        .join("bisect")
+    super::fork_seal::slots_root(&front.shell_env.paths_env())
 }
 
 fn checkpoints(front: &Front) -> PathBuf {
@@ -624,10 +683,6 @@ async fn start(front: &Front, p: DebugBisect) -> Result<DebugBisectStarted, Erro
         return Err(invalid(format!("a bisect of {} is running", p.root)));
     }
     let dir = bisect_dir(front);
-    // no bisect outlives the hub: what an earlier one left goes
-    bisects.cleared.get_or_init(|| {
-        let _ = std::fs::remove_dir_all(&dir);
-    });
     // a project keeps its last bisect only (narrowing reads it)
     let old: Vec<(String, Live)> = {
         let mut live = bisects.live();
