@@ -103,7 +103,6 @@ a.txt, each file's matches under their definitions (`s:'), b.txt's under \"(top 
      (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
            (drgnx-view-model--views (make-hash-table :test #'equal))
            (drgnx-view-patch--hooked nil)
-           (drgnx-view-old-path nil)
            (drgnx-view-patch-send-function #'ignore)
            (view (format "rrn-test-%d" (cl-incf drgnx-replace-rows-nav-test--n)))
            (buf (get-buffer-create drgnx-replace-buffer-name)))
