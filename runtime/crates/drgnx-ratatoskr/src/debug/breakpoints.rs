@@ -51,6 +51,19 @@ pub enum Op {
     RemoveFunction {
         name: String,
     },
+    /// ID is triggered by breakpoint BY (none: a plain breakpoint again).
+    Trigger {
+        id: u64,
+        by: Option<u64>,
+    },
+}
+
+/// A data breakpoint (Break on Value Change): the adapter's DATA_ID for a variable, as `dataBreakpointInfo` gave it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DataBp {
+    pub data_id: String,
+    pub description: String,
+    pub access_type: Option<String>,
 }
 
 /// What an operation changed: PATH's new VERSION (an empty path for function breakpoints), and the breakpoint's ID
@@ -77,6 +90,9 @@ struct Bp {
     /// The agent session that set it (D4: the editor rings it); none for the user's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     agent: Option<String>,
+    /// A triggered breakpoint: sent to a session only once it has stopped on this breakpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    triggered_by: Option<u64>,
 }
 
 fn yes() -> bool {
@@ -139,6 +155,12 @@ pub struct Store {
     bound: BTreeMap<(String, u64), Bound>,
     temps: Vec<Temp>,
     caps: BTreeMap<String, Value>,
+    /// (session, triggered breakpoint) that session has stopped on the trigger of.
+    armed: BTreeSet<(String, u64)>,
+    /// Paths changed beyond the one an operation answers with ([`Store::drain_touched`]).
+    touched: BTreeSet<String>,
+    /// Each session's data breakpoints, in the order sent, with what its adapter made of them.
+    datas: BTreeMap<String, Vec<(DataBp, Bound)>>,
 }
 
 /// BPS (`SourceBreakpoint`s) as an adapter with CAPS takes them: without the fields it does not support. A probe
@@ -239,6 +261,9 @@ impl Store {
             bound: BTreeMap::new(),
             temps: Vec::new(),
             caps: BTreeMap::new(),
+            armed: BTreeSet::new(),
+            touched: BTreeSet::new(),
+            datas: BTreeMap::new(),
         }
     }
 
@@ -314,12 +339,34 @@ impl Store {
                     hit: none(hit),
                     log: none(log),
                     agent: None,
+                    triggered_by: None,
                 });
                 self.bump(&path, Some(id))
             }
             Op::Remove { id } => {
                 let (path, i) = self.find(id)?;
                 self.data.files.get_mut(&path)?.bps.remove(i);
+                // what it triggered waits for nothing now
+                let held: Vec<String> = self
+                    .data
+                    .files
+                    .iter_mut()
+                    .filter_map(|(p, f)| {
+                        let mut any = false;
+                        for b in f.bps.iter_mut().filter(|b| b.triggered_by == Some(id)) {
+                            b.triggered_by = None;
+                            any = true;
+                        }
+                        any.then(|| p.clone())
+                    })
+                    .collect();
+                self.armed.retain(|(_, b)| *b != id);
+                for p in held.iter().filter(|p| **p != path) {
+                    let f = self.data.files.entry(p.clone()).or_default();
+                    f.version += 1;
+                    self.touched.insert(p.clone());
+                }
+                self.touched.insert(path.clone());
                 self.bump(&path, None)
             }
             Op::Edit {
@@ -375,6 +422,21 @@ impl Store {
                     id: None,
                 })
             }
+            Op::Trigger { id, by } => {
+                if let Some(t) = by
+                    && (t == id || self.find(t).is_none())
+                {
+                    return None;
+                }
+                let (path, i) = self.find(id)?;
+                let b = &mut self.data.files.get_mut(&path)?.bps[i];
+                if b.triggered_by == by {
+                    return None;
+                }
+                b.triggered_by = by;
+                self.armed.retain(|(_, x)| *x != id);
+                self.bump(&path, None)
+            }
             Op::RemoveFunction { name } => {
                 let before = self.data.functions.len();
                 self.data.functions.retain(|g| g.name != name);
@@ -389,6 +451,102 @@ impl Store {
                 })
             }
         }
+    }
+
+    /// SESSION stopped on its adapter's breakpoints HIT (`hitBreakpointIds`): the breakpoints they trigger are armed
+    /// for SESSION; the paths to send it again.
+    pub fn hit(&mut self, session: &str, hit: &[i64]) -> Vec<String> {
+        let ids: BTreeSet<u64> = self
+            .bound
+            .iter()
+            .filter(|((s, _), v)| s == session && v.adapter_id.is_some_and(|a| hit.contains(&a)))
+            .map(|((_, id), _)| *id)
+            .collect();
+        let mut paths = BTreeSet::new();
+        for (p, f) in &self.data.files {
+            for b in &f.bps {
+                if b.triggered_by.is_some_and(|t| ids.contains(&t))
+                    && self.armed.insert((session.to_owned(), b.id))
+                {
+                    paths.insert(p.clone());
+                }
+            }
+        }
+        paths.into_iter().collect()
+    }
+
+    /// The paths changed since the last call, beyond the one each operation answered with (a removed trigger's).
+    pub fn drain_touched(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.touched).into_iter().collect()
+    }
+
+    /// SESSION's data breakpoint BP added (false: it has it).
+    pub fn data_add(&mut self, session: &str, bp: DataBp) -> bool {
+        let list = self.datas.entry(session.to_owned()).or_default();
+        if list.iter().any(|(d, _)| d.data_id == bp.data_id) {
+            return false;
+        }
+        list.push((bp, Bound::default()));
+        true
+    }
+
+    /// SESSION's data breakpoint DATA_ID removed (false: it had none).
+    pub fn data_remove(&mut self, session: &str, data_id: &str) -> bool {
+        let Some(list) = self.datas.get_mut(session) else {
+            return false;
+        };
+        let before = list.len();
+        list.retain(|(d, _)| d.data_id != data_id);
+        before != list.len()
+    }
+
+    /// What `setDataBreakpoints` sends SESSION, in order.
+    pub fn data_list(&self, session: &str) -> Vec<Value> {
+        self.datas
+            .get(session)
+            .into_iter()
+            .flatten()
+            .map(|(d, _)| {
+                let mut o = json!({"dataId": d.data_id});
+                if let Some(a) = &d.access_type {
+                    o["accessType"] = json!(a);
+                }
+                o
+            })
+            .collect()
+    }
+
+    /// SESSION's adapter answered `setDataBreakpoints` with BPS, in the order sent.
+    pub fn data_answer(&mut self, session: &str, bps: &[Value]) {
+        for ((_, bound), b) in self.datas.get_mut(session).into_iter().flatten().zip(bps) {
+            *bound = Bound::default();
+            bound.verified = b.get("verified").and_then(Value::as_bool).unwrap_or(false);
+            bound.message = b.get("message").and_then(Value::as_str).map(str::to_owned);
+        }
+    }
+
+    /// Every session's data breakpoints as the view shows them: (session, `{data_id, description, access_type?,
+    /// verified, message?}`).
+    pub fn data_view(&self) -> Vec<(String, Value)> {
+        self.datas
+            .iter()
+            .flat_map(|(s, list)| {
+                list.iter().map(move |(d, b)| {
+                    let mut o = json!({
+                        "data_id": d.data_id,
+                        "description": d.description,
+                        "verified": b.verified,
+                    });
+                    if let Some(a) = &d.access_type {
+                        o["access_type"] = json!(a);
+                    }
+                    if let Some(m) = &b.message {
+                        o["message"] = json!(m);
+                    }
+                    (s.clone(), o)
+                })
+            })
+            .collect()
     }
 
     /// PATH's version (0: never had a breakpoint).
@@ -434,6 +592,9 @@ impl Store {
                 f.bps
                     .iter()
                     .filter(|b| b.enabled)
+                    .filter(|b| {
+                        b.triggered_by.is_none() || self.armed.contains(&(session.to_owned(), b.id))
+                    })
                     .map(|b| (b.line, b.id, Some(b)))
                     .collect()
             })
@@ -538,6 +699,8 @@ impl Store {
         self.bound.retain(|(s, _), _| s != session);
         self.sent.retain(|(s, _), _| s != session);
         self.caps.remove(session);
+        self.armed.retain(|(s, _)| s != session);
+        self.datas.remove(session);
         self.drop_temps(session)
     }
 
@@ -577,6 +740,12 @@ impl Store {
                     }
                 }
                 if let Some(m) = o.as_object_mut() {
+                    m.insert(
+                        "waiting".into(),
+                        json!(
+                            b.triggered_by.is_some() && !self.armed.iter().any(|(_, x)| *x == b.id)
+                        ),
+                    );
                     m.insert("enabled".into(), json!(b.enabled));
                     m.insert("verified".into(), json!(verified.is_some()));
                     if let Some((_, v)) = shown_by {

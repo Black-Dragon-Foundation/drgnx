@@ -277,6 +277,7 @@ fn a_stop_gives_its_event_with_the_changes_since_the_last_stop() {
             },
         ],
         exception: None,
+        hit: vec![],
     };
     let i = Inline::new();
     let first = i.at_stop("d1", &stop(1, 3, "1"));

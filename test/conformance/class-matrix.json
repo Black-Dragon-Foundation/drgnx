@@ -64,6 +64,7 @@
   "debug/compare": ["user"],
   "debug/configs": ["user"],
   "debug/control": ["user"],
+  "debug/data-breakpoint": ["user"],
   "debug/evaluate": ["user"],
   "debug/expand": ["user"],
   "debug/origin": ["user"],

@@ -146,8 +146,16 @@ task with its platform section merged over it and its strings through the same v
 label or a list) runs first, depth first in the order given, each task once; a cycle (`a → b → a`) or an unknown
 label is an error that names it. A `shell` task (also one without a `type`) runs its command line in `/bin/sh -c`,
 each `args` item quoted for the shell; a `process` task runs `command` and `args` as they are, never split.
-`options.cwd` (relative: under the root) and `options.env` apply. `isBackground` tasks (watchers that never end) are
-refused. The steps run one at a time before the adapter starts (so a TCP adapter's free port is picked after the
+`options.cwd` (relative: under the root) and `options.env` apply. An `isBackground` task (a watcher that never ends)
+runs until a line of its output (stdout and stderr merged through `sh -c 'exec "$@" 2>&1'`, terminal escapes removed)
+matches its problem matcher's `background.endsPattern`, after its `beginsPattern` unless `activeBegin`; the matcher is
+the task's own object (string or `{regexp}` patterns, Rust `regex` syntax) or `$tsc-watch`, the one named matcher
+drgnx carries. Without an end pattern it is refused, naming the task (and any matcher drgnx does not know); a
+background `postDebugTask` is refused too. `tasks::run` answers the background steps' `Watch`es: `wire::keep_watches`
+sends their later lines to the sessions' Debug Console and drops them when every session they started for has ended,
+which sends SIGTERM to the task's process group (SIGKILL 2 s later). Background steps always run in the hub, never in
+a tab, even from a frame: the hub must read their output, and a terminal tab's output reaches it only as drawn
+screens. The steps run one at a time before the adapter starts (so a TCP adapter's free port is picked after the
 build); the first that fails stops the rest and the start, and the error gives its exit status and the end of its
 output (2,000 bytes of stdout, then stderr's tail). `${defaultBuildTask}` is the label of the task whose `group` is
 `{"kind": "build", "isDefault": true}`.
@@ -219,6 +227,16 @@ root>.json`, written atomically. If the file is damaged, it is moved aside to `�
 - **Exception filters:** the ones chosen are remembered per adapter type; otherwise the adapter's defaults.
 - **Run to Cursor:** a breakpoint for one session only. It is never shown or saved, and goes at that session's next
   stop or end. The registry then sends the file again.
+- **Triggered breakpoints** (`Op::Trigger {id, by}`, `triggered_by` in the saved store): left out of a session's
+  `send_list` until that session stops on the trigger. `Store::hit(session, hitBreakpointIds)` maps the adapter's
+  ids back through `bound` and arms what they trigger for that session alone; the registry sends those files again at
+  the stop. A session's arming goes when it ends; the view's `waiting` is true while no session has armed it.
+  Removing a trigger makes what it held plain again (`drain_touched` names those files to send).
+- **Data breakpoints** (`debug/data-breakpoint {op: add|remove|list, session, reference, name | view, node,
+  access_type?, data_id?}`): `dataBreakpointInfo` names the variable (no `dataId`: refused with the adapter's
+  `description`), then the session's whole list goes in `setDataBreakpoints`. They live in the store per session
+  (`data_add`, `data_answer`, `data_view`), never saved, and go when it ends; the Run and Debug view lists them under
+  Breakpoints (`kind: "data"`). Adapters without `supportsDataBreakpoints` are refused.
 
 The registry starts each session with the store's breakpoints, and sends a changed file to every session of the
 root at once. It tells the editors with the `debug-breakpoints` event: the file's view, with its root. The editors use `debug/breakpoints` (`{root, path?, op?}`: an operation by id, answered with the file's view) and
@@ -644,13 +662,34 @@ Every session the hub starts is recorded (`debug/record.rs`, `Records`; the hub'
   the run says so); the rest are thinned and counted; a fork's run keeps every hit. "Probe the Result"
   (`probes::next_line`) places the probe on the next line that runs, past continuation lines, blanks and comments. A
   project's probes are kept in `<state>/debug-probes/<xxh3 of root>.json`.
-- **The run file** (`debug/runfile.rs`): `<state>/debug/runs/<run>.drun`, `DRUN1\n`, then blocks (u32 raw length, u32
-  compressed length, zstd) of JSON-lines frames, 64 KB raw each; `<run>.drun.idx` indexes blocks, stops and each
-  probe's hits. Each stop's capture (threads, the stack, the selected frame's scopes and variables) is cut to 64 KB:
+- **The run file** (`debug/runfile.rs`): `<state>/debug/runs/<run>.drun`, `DRUN2\n` and a 32-byte salt, then blocks
+  (u32 raw length, u32 sealed length, the sealed zstd bytes) of JSON-lines frames, 64 KB raw each; `<run>.drun.idx`
+  (sealed JSON) indexes blocks, stops and each probe's hits. Each stop's capture (threads, the stack, the selected frame's scopes and variables) is cut to 64 KB:
   the last scope's variables first, then frames past the selected one, then threads. A file holds 64 MB: past that
   the oldest hits go (rewritten to three quarters), never a stop.
 - **The record** (`<run>.json`, `RunMeta`) is also an Urdr entity of kind `debug_run` (`norn::write::debug`), written
-  in order on one task, `recording` then `ended`.
+  in order on one task, `recording` then `ended`. Its `start` (the launch's resolved configuration and inputs) is
+  sealed on disk (`{"sealed": hex(salt, nonce, sealed JSON)}`) and left out of the entity; the rest (ids, root, times,
+  size, pinned, task) stays plain, which is what retention reads.
+- **Sealed at rest** (`debug/runkey.rs`, spec §19.2): one 32-byte key in the user's keyring; each file's key is
+  HKDF-SHA256 of it with the file's salt; every block, the index and the start are ChaCha20-Poly1305 (`ring`) with a
+  random nonce in front and the piece's name as associated data. A rewrite under the cap keeps the salt (new nonces).
+  `Records::unlock` reads the key at the hub's start and before each `debug/run*` call, never making one;
+  `begin` makes it on the first recording, in an unlocked keyring only. No key: `begin` records nothing and
+  broadcasts `debug-recording-off {session, root, why}` (the timeline says it once per reason); reads answer "cannot
+  be read until the keyring unlocks"; a file under another key (the keyring lost its key) answers "cannot be read";
+  `prune` needs no key. The key, derived keys, salts and nonces are never logged; key bytes are `Zeroizing`.
+  - **Linux**: the Secret Service's calls are made one by one over zbus 6 (tokio, `default-features = false`,
+    `proxy` only; the `service` and `p2p` features are for the tests' fake), not through a client crate: the
+    `secret-service` crate runs any Prompt it is handed (its `create_item`), and the hub never prompts. The calls are
+    `ReadAlias("default")` (`/`: no default collection, which counts as no keyring, since making one would prompt),
+    the collection's `Locked`, `OpenSession("plain")` (the session bus is the boundary), `SearchItems` / `GetSecret`,
+    `CreateItem`, and `Dismiss` on a prompt handed back. Never `Unlock`, `CreateCollection` or `Prompt`:
+    `debug::tests_runkey` serves a fake Secret Service on a socket pair that records every call and fails if one of
+    those three is made.
+  - **macOS**: the login keychain's generic password `drgnx` / `debug-runs` (`security-framework`), with
+    `SecKeychain::disable_user_interaction` held around each call: locked is `errSecInteractionNotAllowed`, never a
+    dialog. `debug::tests_keychain` runs on the macOS runners against a throwaway keychain (unlocked, then locked).
 - **Retention** (`Records::prune`, after every run's end): 14 days, except pinned runs and runs whose task is open,
   then 2 GB per project, oldest first; a pruned run's file, snapshot ref and entity go.
 - **Ordering**: `RunHit.seq` and `RunStop.index` come from one counter, so "the hits before stop k" is

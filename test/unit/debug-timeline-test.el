@@ -199,6 +199,23 @@ there) the file still opens, without probes; a hook never signals (the GUI rows'
       (when (buffer-live-p buf) (kill-buffer buf))
       (delete-directory dir t) (delete-directory run t))))
 
+(ert-deftest drgnx-debug-timeline/an-unrecorded-session-says-why-once ()
+  "A session the hub could not record (its keyring locked or absent: `debug-recording-off') is said in the echo area,
+once for the same reason; nothing asks."
+  (let ((said nil))
+    (cl-letf (((symbol-function 'message)
+               (lambda (fmt &rest args) (when fmt (push (apply #'format-message fmt args) said)))))
+      (unwind-protect
+          (progn
+            (drgnx-debug-timeline--event "debug-recording-off"
+                                         (list :session "d1" :root "/p" :why "the keyring is locked; it unlocks when you log in"))
+            (drgnx-debug-timeline--event "debug-recording-off"
+                                         (list :session "d2" :root "/p" :why "the keyring is locked; it unlocks when you log in"))
+            (should (equal said '("Debug: this session is not recorded: the keyring is locked; it unlocks when you log in")))
+            (drgnx-debug-timeline--event "debug-recording-off" (list :session "d3" :root "/p" :why "no keyring"))
+            (should (equal (car said) "Debug: this session is not recorded: no keyring")))
+        (setq drgnx-debug-timeline--off-said nil)))))
+
 (ert-deftest drgnx-debug-timeline/off-leaves-nothing ()
   (debug-timeline-test--with
     (drgnx-debug-probe-add "x")

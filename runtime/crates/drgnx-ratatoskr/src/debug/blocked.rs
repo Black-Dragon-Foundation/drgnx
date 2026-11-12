@@ -462,6 +462,20 @@ async fn wait_owned(port: u16, group: i32, within: Duration) -> Result<(), Strin
     }
 }
 
+/// E (the adapter's port never listened) with what says why: whether the adapter (process PID) still runs, and the
+/// end of its stderr (a sandbox's refusal shows there).
+pub(super) fn why_not_listening(e: String, pid: i32, stderr: &str) -> String {
+    // SAFETY: kill(2) with signal 0 only asks whether the process exists.
+    let alive = unsafe { libc::kill(pid, 0) } == 0;
+    let state = if alive { "still runs" } else { "had exited" };
+    let stderr = stderr.trim();
+    if stderr.is_empty() {
+        format!("{e} (the adapter {state}, nothing on its stderr)")
+    } else {
+        format!("{e} (the adapter {state}; its stderr ends:\n{stderr})")
+    }
+}
+
 impl Launcher for Blocked {
     fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
         Box::pin(async move {
@@ -496,7 +510,11 @@ impl Launcher for Blocked {
             let connected =
                 match wait_owned(self.plan.port, adapter_pid, DEBUGGEE_LISTEN_WITHIN).await {
                     Ok(()) => super::wire::connect_tcp(local(self.plan.port)).await,
-                    Err(e) => Err(e),
+                    Err(e) => Err(why_not_listening(
+                        e,
+                        adapter_pid,
+                        &pair.adapter.stderr_tail(),
+                    )),
                 };
             let s = match connected {
                 Ok(s) => s,

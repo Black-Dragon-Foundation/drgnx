@@ -31,6 +31,7 @@ pub mod ports;
 pub mod probes;
 pub mod record;
 pub mod runfile;
+pub mod runkey;
 pub mod runs_wire;
 pub mod session;
 pub mod strip;
@@ -67,6 +68,8 @@ mod tests_fork_seal;
 mod tests_inline;
 #[cfg(test)]
 mod tests_install;
+#[cfg(all(test, target_os = "macos"))]
+mod tests_keychain;
 #[cfg(test)]
 mod tests_launch;
 #[cfg(test)]
@@ -80,7 +83,11 @@ mod tests_probes;
 #[cfg(test)]
 mod tests_record;
 #[cfg(test)]
+mod tests_record_sealed;
+#[cfg(test)]
 mod tests_registry;
+#[cfg(all(test, target_os = "linux"))]
+mod tests_runkey;
 #[cfg(test)]
 mod tests_tasks;
 pub mod wire;
@@ -573,6 +580,11 @@ impl Debug {
         })
     }
 
+    /// ROOT's sessions' data breakpoints: (session, the store's view of one).
+    pub fn data_lists(&self, root: &str) -> Vec<(String, Value)> {
+        self.store(root, |s| s.data_view())
+    }
+
     /// The exception filters on for adapters of type ADAPTER with CAPS in ROOT.
     pub fn filters_on(&self, root: &str, adapter: &str, caps: &Value) -> Vec<String> {
         self.store(root, |s| s.filters(adapter, caps))
@@ -777,9 +789,18 @@ impl Debug {
                 }
                 self.changed();
             } else {
-                self.publish_bps(root, &c.path);
+                // a removed trigger touches the files of what it triggered too
+                let mut paths = self.store(root, |s| s.drain_touched());
+                if !paths.contains(&c.path) {
+                    paths.push(c.path.clone());
+                }
+                for p in &paths {
+                    self.publish_bps(root, p);
+                }
                 for id in self.sessions_in(root) {
-                    self.resend(&id, &c.path).await;
+                    for p in &paths {
+                        self.resend(&id, p).await;
+                    }
                 }
             }
         }
@@ -790,6 +811,99 @@ impl Debug {
             v["added"] = json!(id);
         }
         v
+    }
+
+    /// Session ID watches variable NAME of container REFERENCE (Break on Value Change), for ACCESS (the adapter's
+    /// default when none): the adapter names it (`dataBreakpointInfo`), and the session's whole list is sent
+    /// (`setDataBreakpoints`). The list as the view shows it.
+    pub async fn add_data_breakpoint(
+        &self,
+        id: &str,
+        reference: i64,
+        name: &str,
+        access: Option<String>,
+    ) -> Result<Vec<Value>, String> {
+        let (h, root, caps) = self.data_target(id)?;
+        let info = h
+            .request(
+                "dataBreakpointInfo",
+                json!({"variablesReference": reference, "name": name}),
+            )
+            .await?;
+        let description = info["description"].as_str().unwrap_or(name).to_owned();
+        let Some(data_id) = info["dataId"].as_str().map(str::to_owned) else {
+            return Err(description);
+        };
+        if let Some(a) = &access
+            && let Some(types) = info["accessTypes"].as_array()
+            && !types.iter().any(|t| t == a)
+        {
+            return Err(format!("{description} cannot be watched for {a}"));
+        }
+        let bp = breakpoints::DataBp {
+            data_id,
+            description,
+            access_type: access,
+        };
+        self.store(&root, |s| s.data_add(id, bp));
+        self.send_data(id, &h, &root, &caps).await;
+        Ok(self.data_of(&root, id))
+    }
+
+    /// Session ID's data breakpoint DATA_ID removed and the list sent again; the list.
+    pub async fn remove_data_breakpoint(
+        &self,
+        id: &str,
+        data_id: &str,
+    ) -> Result<Vec<Value>, String> {
+        let (h, root, caps) = self.data_target(id)?;
+        if self.store(&root, |s| s.data_remove(id, data_id)) {
+            self.send_data(id, &h, &root, &caps).await;
+        }
+        Ok(self.data_of(&root, id))
+    }
+
+    /// Session ID's data breakpoints as the view shows them.
+    pub fn data_breakpoints(&self, id: &str) -> Result<Vec<Value>, String> {
+        let root = self
+            .root_of(id)
+            .ok_or_else(|| format!("no debug session {id}"))?;
+        Ok(self.data_of(&root, id))
+    }
+
+    fn data_target(&self, id: &str) -> Result<(Handle, String, Value), String> {
+        let (h, root, caps) = lock(&self.inner.state)
+            .sessions
+            .get(id)
+            .map(|e| (e.handle.clone(), e.root.clone(), e.caps.clone()))
+            .ok_or_else(|| format!("no debug session {id}"))?;
+        if caps.get("supportsDataBreakpoints").and_then(Value::as_bool) != Some(true) {
+            return Err("this adapter has no data breakpoints".into());
+        }
+        Ok((h, root, caps))
+    }
+
+    async fn send_data(&self, id: &str, h: &Handle, root: &str, _caps: &Value) {
+        let list = self.store(root, |s| s.data_list(id));
+        match h
+            .request("setDataBreakpoints", json!({ "breakpoints": list }))
+            .await
+        {
+            Ok(body) => {
+                let got = body["breakpoints"].as_array().cloned().unwrap_or_default();
+                self.store(root, |s| s.data_answer(id, &got));
+            }
+            Err(e) => tracing::debug!(target: "drgnx::debug", "setDataBreakpoints: {e}"),
+        }
+        self.changed();
+    }
+
+    fn data_of(&self, root: &str, id: &str) -> Vec<Value> {
+        self.store(root, |s| s.data_view())
+            .into_iter()
+            .filter(|(s, _)| s == id)
+            .map(|(_, v)| v)
+            .collect()
     }
 
     /// Run to Cursor: session ID stops at PATH's LINE once (a breakpoint for it alone, gone at its next stop or end),
@@ -1166,9 +1280,18 @@ impl Debug {
                         let values = self.inner.inline.at_stop(&id, &stop);
                         self.inner.sink.broadcast("debug-inline", values, None);
                     }
-                    // Run to Cursor's breakpoint goes at the next stop
+                    // Run to Cursor's breakpoint goes at the next stop; the breakpoints the ones hit trigger are
+                    // sent from now on
                     if let Some(root) = self.root_of(&id) {
-                        let gone = self.store(&root, |s| s.stopped(&id));
+                        let gone = self.store(&root, |s| {
+                            let mut paths = s.stopped(&id);
+                            for p in s.hit(&id, &stop.hit) {
+                                if !paths.contains(&p) {
+                                    paths.push(p);
+                                }
+                            }
+                            paths
+                        });
                         if !gone.is_empty() {
                             let me = self.clone();
                             let sid = id.clone();

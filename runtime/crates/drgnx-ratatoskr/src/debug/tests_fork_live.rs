@@ -900,6 +900,33 @@ fn sockets_of(groups: &[i32]) -> Vec<(u16, Option<u16>)> {
         .collect()
 }
 
+/// The system log's Seatbelt refusals of the last 3 minutes (their last 60 lines), for a failed fork's report.
+#[cfg(target_os = "macos")]
+fn sandbox_denials() {
+    let out = std::process::Command::new("/usr/bin/log")
+        .args([
+            "show",
+            "--style",
+            "compact",
+            "--last",
+            "3m",
+            "--predicate",
+            r#"sender == "Sandbox" OR eventMessage CONTAINS "deny(""#,
+        ])
+        .output();
+    match out {
+        Ok(o) => {
+            let text = String::from_utf8_lossy(&o.stdout);
+            let lines: Vec<&str> = text.lines().collect();
+            println!("Seatbelt refusals (last 3 min, {} lines):", lines.len());
+            for l in &lines[lines.len().saturating_sub(60)..] {
+                println!("  {l}");
+            }
+        }
+        Err(e) => println!("log show: {e}"),
+    }
+}
+
 /// macOS (spec §21): a fork's adapter and program run in Seatbelt with only their block's ports. While each fork
 /// runs, lsof sweeps their process groups every 50 ms: every socket has an end in one block of the range, and the
 /// fork replays as on Linux (nothing gets out, nothing is written outside the tree, the .env is read in place).
@@ -941,6 +968,9 @@ async fn mac_forks_keep_to_their_port_block() {
         let v = f.fork(f.ask(Until::NextStop, f.resolved.clone())).await;
         done.store(true, Ordering::Relaxed);
         let seen = sweep.await.unwrap();
+        if v["state"] != json!("done") {
+            sandbox_denials();
+        }
         assert_eq!(v["state"], json!("done"), "js {js}: {v}");
         assert_eq!(
             v["matched"],

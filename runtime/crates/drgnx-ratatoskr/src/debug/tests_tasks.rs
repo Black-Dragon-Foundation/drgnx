@@ -1,5 +1,5 @@
 //! tasks.json (spec §9.2, tier 2): `shell` and `process` tasks, `dependsOn` in order, `${defaultBuildTask}`, a failing
-//! task stopping the start, `isBackground` refused.
+//! task stopping the start, `isBackground` tasks let the start go at their problem matcher's end pattern.
 use super::launch::Os;
 use super::tasks::{self, Step};
 use serde_json::json;
@@ -67,7 +67,7 @@ fn an_unknown_task_and_a_cycle_are_named() {
 }
 
 #[test]
-fn a_background_task_is_refused() {
+fn a_background_task_without_an_end_pattern_is_refused() {
     let t = file(r#"{"tasks": [{"label": "watch", "command": "tsc -w", "isBackground": true}]}"#);
     let e = tasks::order(&t, "watch", Os::Linux).unwrap_err();
     assert!(e.contains("watch") && e.contains("isBackground"), "{e}");
@@ -105,6 +105,7 @@ fn step(label: &str, script: &str, cwd: &Path) -> Step {
         argv: vec!["/bin/sh".into(), "-c".into(), script.into()],
         cwd: cwd.to_path_buf(),
         env: vec![("DRGNX_TASK_TEST".into(), "1".into())],
+        background: None,
     }
 }
 
@@ -186,6 +187,18 @@ fn a_post_debug_task_comes_from_the_same_file() {
     let config = json!({"preLaunchTask": "nope", "postDebugTask": "clean"});
     let steps = tasks::after_debug(d.path(), &config, Os::Linux, &|s| Ok(s.into())).unwrap();
     assert_eq!(steps[0].argv, ["rm", "-f", "out"]);
+    // a background postDebugTask would be ended at once: refused
+    std::fs::write(
+        d.path().join(".vscode/tasks.json"),
+        r#"{"tasks": [{"label": "clean", "command": "w", "isBackground": true,
+                       "problemMatcher": {"background": {"beginsPattern": "a", "endsPattern": "b"}}}]}"#,
+    )
+    .unwrap();
+    let e = tasks::after_debug(d.path(), &config, Os::Linux, &|s| Ok(s.into())).unwrap_err();
+    assert!(
+        e.contains("postDebugTask") && e.contains("isBackground"),
+        "{e}"
+    );
 }
 
 /// An opened tab: its connection, folder, argv and environment.
@@ -304,4 +317,123 @@ async fn a_tab_that_goes_without_a_status_fails_the_start() {
         .await
         .unwrap_err();
     assert!(e.contains("task b") && e.contains("closed"), "{e}");
+}
+
+/// A background task's problem matcher: its own `background` patterns, or a named one drgnx knows.
+#[test]
+fn a_background_task_needs_an_end_pattern_and_a_known_matcher() {
+    let t = file(
+        r#"{"tasks": [
+          {"label": "watch", "command": "w", "isBackground": true,
+           "problemMatcher": {"owner": "x", "pattern": {"regexp": "^e"},
+                              "background": {"activeBegin": true, "beginsPattern": "^start", "endsPattern": {"regexp": "^ready (\\d+)"}}}},
+          {"label": "tsc", "command": "tsc -w", "isBackground": true, "problemMatcher": ["$tsc-watch"]},
+          {"label": "plain", "command": "w", "isBackground": true, "problemMatcher": "$tsc"},
+          {"label": "other", "command": "w", "isBackground": true, "problemMatcher": "$esbuild-watch"},
+          {"label": "bad", "command": "w", "isBackground": true,
+           "problemMatcher": {"background": {"endsPattern": "(?<=x)y"}}}
+        ]}"#,
+    );
+    let w = tasks::order(&t, "watch", Os::Linux).unwrap();
+    let bg = w[0].background.as_ref().unwrap();
+    assert!(bg.active_begin);
+    assert!(bg.ends.is_match("ready 3"));
+    assert!(!bg.ends.is_match("start"));
+    let w = tasks::order(&t, "tsc", Os::Linux).unwrap();
+    let bg = w[0].background.as_ref().unwrap();
+    assert!(
+        bg.ends
+            .is_match("[12:00:01 PM] Found 0 errors. Watching for file changes.")
+    );
+    let e = tasks::order(&t, "plain", Os::Linux).unwrap_err();
+    assert!(e.contains("plain") && e.contains("endsPattern"), "{e}");
+    let e = tasks::order(&t, "other", Os::Linux).unwrap_err();
+    assert!(e.contains("$esbuild-watch"), "{e}");
+    let e = tasks::order(&t, "bad", Os::Linux).unwrap_err();
+    assert!(e.contains("bad") && e.contains("endsPattern"), "{e}");
+}
+
+fn watch(label: &str, script: &str, cwd: &Path, begins: Option<&str>, ends: &str) -> Step {
+    Step {
+        background: Some(tasks::Background {
+            active_begin: begins.is_none(),
+            begins: begins.map(|b| regex::Regex::new(b).unwrap()),
+            ends: regex::Regex::new(ends).unwrap(),
+        }),
+        ..step(label, script, cwd)
+    }
+}
+
+/// The start waits for the end pattern (after the begin pattern), then goes on while the task runs; the watch's
+/// later lines reach its listener, and dropping it ends the task's whole process group.
+#[tokio::test]
+async fn a_background_task_lets_the_start_go_at_its_end_pattern_and_ends_with_its_watch() {
+    let d = tempfile::tempdir().unwrap();
+    let env: Vec<(std::ffi::OsString, std::ffi::OsString)> =
+        vec![("PATH".into(), "/usr/bin:/bin".into())];
+    // the pid file is written after a pause, just before the end line: a start that went early finds none
+    let script = "echo 'done early'; echo 'starting'; echo 'oops' >&2; sleep 1; echo $$ > pid; echo 'done 1'; \
+                  sleep 1; echo 'later' ; exec sleep 600";
+    let steps = vec![
+        watch("w", script, d.path(), Some("^starting"), "^done"),
+        step("after", "test -s pid && echo after >> log", d.path()),
+    ];
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let watches =
+        crate::clock::timeout(std::time::Duration::from_secs(20), tasks::run(&steps, &env))
+            .await
+            .expect("the start went at the end pattern")
+            .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("log")).unwrap(),
+        "after\n"
+    );
+    assert_eq!(watches.len(), 1);
+    watches[0].listen(Box::new(move |line: &str| {
+        let _ = tx.send(line.to_owned());
+    }));
+    let line = crate::clock::timeout(std::time::Duration::from_secs(20), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(line, "later");
+    let pid: i32 = std::fs::read_to_string(d.path().join("pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    // SAFETY: kill(2) with signal 0 only asks whether the process exists.
+    assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+    drop(watches);
+    let gone = crate::clock::timeout(std::time::Duration::from_secs(20), async {
+        // SAFETY: as above.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            crate::clock::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(gone.is_ok(), "the task outlived its watch");
+}
+
+/// A background task that ends before its end pattern stops the start with its status and output (stderr too).
+#[tokio::test]
+async fn a_background_task_that_ends_first_fails_the_start() {
+    let d = tempfile::tempdir().unwrap();
+    let env: Vec<(std::ffi::OsString, std::ffi::OsString)> =
+        vec![("PATH".into(), "/usr/bin:/bin".into())];
+    let steps = vec![watch(
+        "w",
+        "echo 'cannot find tsconfig' >&2; exit 3",
+        d.path(),
+        None,
+        "^ready",
+    )];
+    let e = tasks::run(&steps, &env).await.unwrap_err();
+    assert!(
+        e.contains("w")
+            && e.contains("exit 3")
+            && e.contains("cannot find tsconfig")
+            && e.contains("ready"),
+        "{e}"
+    );
 }

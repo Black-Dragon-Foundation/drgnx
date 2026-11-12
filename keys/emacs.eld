@@ -150,6 +150,8 @@
         (debug-set-value "e")
         (debug-copy-value "w")
         (debug-copy-expression "W")
+        (debug-break-on-value-change :none "a variable's right-click menu; the palette")
+        (debug-breakpoint-trigger :none "a breakpoint's right-click menu; the palette")
         (debug-add-to-watch "a")
         (debug-watch-add "C-x C-a C-w" :map drgnx-debug-mode-map)
         (debug-watch-edit :none "the palette")

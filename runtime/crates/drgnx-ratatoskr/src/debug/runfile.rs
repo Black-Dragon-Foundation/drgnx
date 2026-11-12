@@ -1,22 +1,31 @@
 //! A run file (spec §19.2): `<state>/debug/runs/<run>.drun`, the bulk of a recorded run. Append-only frames (one JSON
 //! object a line: a stop with its capture, or a probe hit), gathered into blocks of at most [`BLOCK`] bytes, each
-//! compressed with zstd: `DRUN1\n`, then per block its raw length and its compressed length (u32, little-endian) and
-//! the compressed bytes. The index (`<run>.drun.idx`, JSON, written whole at each block) says where each block starts,
-//! the event numbers it holds and the stops in it, so a past stop is read from one block.
+//! compressed with zstd and sealed: `DRUN2\n` and the file's salt, then per block its raw length and its sealed length
+//! (u32, little-endian) and the sealed bytes. The index (`<run>.drun.idx`, JSON, sealed, written whole at each block)
+//! says where each block starts, the event numbers it holds and the stops in it, so a past stop is read from one block.
+//!
+//! Sealed: ChaCha20-Poly1305 under the file's key (the keyring's key and the salt, [`super::runkey`]); a file read
+//! with another key, or changed, reads as "cannot be read".
 //!
 //! The file is capped ([`CAP`], 64 MB): past it, the oldest probe hits go first, block by block (the file is written
 //! again without them). Stops are never dropped; with no hit left to drop, new hits are dropped instead.
 
+use super::runkey::{FileKey, Key, SALT_LEN};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// A block's raw size before it is written.
 pub const BLOCK: usize = 64 * 1024;
 /// The largest run file.
 pub const CAP: u64 = 64 * 1024 * 1024;
-const MAGIC: &[u8] = b"DRUN1\n";
+const MAGIC: &[u8] = b"DRUN2\n";
+/// The header: the magic and the salt.
+const HEAD: usize = MAGIC.len() + SALT_LEN;
+const BLOCK_AAD: &[u8] = b"drun block";
+const INDEX_AAD: &[u8] = b"drun index";
 const LEVEL: i32 = 3;
 
 /// One stop of a run: where the program stopped and how it got there.
@@ -132,23 +141,28 @@ pub struct RunFile {
     index: Index,
     /// No hit left to drop and still at the cap: new hits are dropped.
     full: bool,
+    key: Arc<FileKey>,
 }
 
 impl RunFile {
-    /// A new run file at PATH, capped at CAP bytes.
-    pub fn create(path: &Path, cap: u64) -> std::io::Result<RunFile> {
+    /// A new run file at PATH, capped at CAP bytes, sealed under KEY.
+    pub fn create(path: &Path, cap: u64, key: &Key) -> std::io::Result<RunFile> {
         if let Some(d) = path.parent() {
             std::fs::create_dir_all(d)?;
         }
-        std::fs::write(path, MAGIC)?;
+        let salt = super::runkey::new_salt();
+        let mut head = MAGIC.to_vec();
+        head.extend_from_slice(&salt);
+        std::fs::write(path, &head)?;
         let f = RunFile {
             path: path.to_owned(),
             cap,
-            size: MAGIC.len() as u64,
+            size: HEAD as u64,
             pending: vec![],
             pending_raw: 0,
             index: Index::default(),
             full: false,
+            key: Arc::new(FileKey::new(key, &salt)),
         };
         f.write_index();
         Ok(f)
@@ -194,7 +208,7 @@ impl RunFile {
         }
         let frames = std::mem::take(&mut self.pending);
         self.pending_raw = 0;
-        let (meta, bytes) = block(&frames, 0);
+        let (meta, bytes) = block(&self.key, &frames, 0);
         if self.size + bytes.len() as u64 > self.cap {
             self.make_room(bytes.len() as u64);
         }
@@ -218,8 +232,9 @@ impl RunFile {
     }
 
     fn write_index(&self) {
-        let text = serde_json::to_string(&self.index).unwrap_or_default();
-        if let Err(e) = crate::records::write_atomic(&idx_path(&self.path), &text) {
+        let text = serde_json::to_vec(&self.index).unwrap_or_default();
+        let sealed = self.key.seal(INDEX_AAD, &text);
+        if let Err(e) = write_atomic(&idx_path(&self.path), &sealed) {
             tracing::warn!(target: "drgnx::debug", "run index {}: {e}", self.path.display());
         }
     }
@@ -228,7 +243,7 @@ impl RunFile {
     /// three quarters of the cap with NEED added. With no hit left, new hits are dropped from now on.
     fn make_room(&mut self, need: u64) {
         let target = self.cap / 4 * 3;
-        let Ok(r) = Reader::open(&self.path) else {
+        let Ok(r) = Reader::with(&self.path, self.key.clone()) else {
             return;
         };
         let mut blocks: Vec<Vec<Frame>> = (0..self.index.blocks.len())
@@ -240,7 +255,7 @@ impl RunFile {
             .iter()
             .map(|b| u64::from(b.len) + 8)
             .collect();
-        let total = |s: &[u64]| MAGIC.len() as u64 + s.iter().sum::<u64>();
+        let total = |s: &[u64]| HEAD as u64 + s.iter().sum::<u64>();
         for i in 0..blocks.len() {
             if total(&sizes) + need <= target {
                 break;
@@ -252,16 +267,16 @@ impl RunFile {
                 continue;
             }
             self.index.dropped += gone as u64;
-            sizes[i] = block(&blocks[i], 0).1.len() as u64;
+            sizes[i] = block(&self.key, &blocks[i], 0).1.len() as u64;
         }
         if total(&sizes) + need > self.cap {
             self.full = true;
         }
-        // written again: the blocks that still hold frames
-        let mut out = MAGIC.to_vec();
+        // written again (the same salt; each block a new nonce): the blocks that still hold frames
+        let mut out = r.bytes[..HEAD].to_vec();
         let mut metas = vec![];
         for frames in blocks.iter().filter(|b| !b.is_empty()) {
-            let (mut meta, bytes) = block(frames, 0);
+            let (mut meta, bytes) = block(&self.key, frames, 0);
             meta.off = out.len() as u64;
             out.extend_from_slice(&bytes);
             metas.push(meta);
@@ -292,16 +307,29 @@ impl RunFile {
     /// Every frame, written or pending, in order.
     pub fn frames(&mut self) -> Vec<Frame> {
         self.flush();
-        Reader::open(&self.path)
+        Reader::with(&self.path, self.key.clone())
             .map(|r| r.frames())
             .unwrap_or_default()
     }
 }
 
-/// FRAMES as one block: its meta (offset OFF) and its bytes (the header and the compressed frames).
-fn block(frames: &[Frame], off: u64) -> (BlockMeta, Vec<u8>) {
+/// PATH's bytes written whole: a file beside it, renamed over it.
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".drgnx-tmp");
+    let tmp = PathBuf::from(tmp);
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)
+}
+
+/// FRAMES as one block sealed under KEY: its meta (offset OFF) and its bytes (the header and the sealed, compressed
+/// frames).
+fn block(key: &FileKey, frames: &[Frame], off: u64) -> (BlockMeta, Vec<u8>) {
     let raw = encode(frames);
-    let comp = zstd::bulk::compress(&raw, LEVEL).unwrap_or_default();
+    let comp = key.seal(
+        BLOCK_AAD,
+        &zstd::bulk::compress(&raw, LEVEL).unwrap_or_default(),
+    );
     let mut bytes = Vec::with_capacity(comp.len() + 8);
     bytes.extend_from_slice(&u32::try_from(raw.len()).unwrap_or(u32::MAX).to_le_bytes());
     bytes.extend_from_slice(&u32::try_from(comp.len()).unwrap_or(u32::MAX).to_le_bytes());
@@ -329,19 +357,58 @@ fn block(frames: &[Frame], off: u64) -> (BlockMeta, Vec<u8>) {
 pub struct Reader {
     bytes: Vec<u8>,
     pub index: Index,
+    key: Arc<FileKey>,
+}
+
+/// Why a run file was not read.
+#[derive(Debug)]
+pub enum Unread {
+    /// No file there, or it could not be read from disk.
+    Io(std::io::Error),
+    /// Not a run file this hub writes, or sealed under another key, or changed.
+    Sealed,
+}
+
+impl std::fmt::Display for Unread {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Unread::Io(e) => write!(f, "{e}"),
+            Unread::Sealed => {
+                f.write_str("cannot be read: it was sealed under another key, or changed")
+            }
+        }
+    }
 }
 
 impl Reader {
-    pub fn open(path: &Path) -> std::io::Result<Reader> {
-        let bytes = std::fs::read(path)?;
-        if !bytes.starts_with(MAGIC) {
-            return Err(std::io::Error::other("not a run file"));
+    /// The run file at PATH, its salt read from its header, opened with the keyring's KEY.
+    pub fn open(path: &Path, key: &Key) -> Result<Reader, Unread> {
+        let head = {
+            let mut h = [0u8; HEAD];
+            let mut f = std::fs::File::open(path).map_err(Unread::Io)?;
+            std::io::Read::read_exact(&mut f, &mut h).map_err(|_| Unread::Sealed)?;
+            h
+        };
+        if !head.starts_with(MAGIC) {
+            return Err(Unread::Sealed);
         }
-        let index: Index = std::fs::read_to_string(idx_path(path))
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default();
-        Ok(Reader { bytes, index })
+        let salt: [u8; SALT_LEN] = head[MAGIC.len()..].try_into().map_err(|_| Unread::Sealed)?;
+        Reader::with(path, Arc::new(FileKey::new(key, &salt)))
+    }
+
+    fn with(path: &Path, key: Arc<FileKey>) -> Result<Reader, Unread> {
+        let bytes = std::fs::read(path).map_err(Unread::Io)?;
+        if !bytes.starts_with(MAGIC) || bytes.len() < HEAD {
+            return Err(Unread::Sealed);
+        }
+        let index: Index = match std::fs::read(idx_path(path)) {
+            Ok(sealed) => {
+                let text = key.open(INDEX_AAD, &sealed).ok_or(Unread::Sealed)?;
+                serde_json::from_slice(&text).map_err(|_| Unread::Sealed)?
+            }
+            Err(_) => Index::default(),
+        };
+        Ok(Reader { bytes, index, key })
     }
 
     /// Block I's frames.
@@ -350,8 +417,8 @@ impl Reader {
         let off = usize::try_from(m.off).ok()?;
         let start = off + 8;
         let end = start + m.len as usize;
-        let comp = self.bytes.get(start..end)?;
-        let raw = zstd::bulk::decompress(comp, m.raw as usize).ok()?;
+        let comp = self.key.open(BLOCK_AAD, self.bytes.get(start..end)?)?;
+        let raw = zstd::bulk::decompress(&comp, m.raw as usize).ok()?;
         Some(decode(&raw))
     }
 

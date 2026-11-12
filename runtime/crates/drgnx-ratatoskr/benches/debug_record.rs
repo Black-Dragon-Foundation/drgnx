@@ -67,6 +67,7 @@ fn a_stop(epoch: u64) -> Stop {
             .collect(),
         total_frames: Some(20),
         exception: None,
+        hit: vec![],
         frame: 1000,
         scopes: vec![
             ScopeVars {
@@ -85,7 +86,9 @@ fn a_stop(epoch: u64) -> Stop {
 #[ignore]
 fn debug_capture() {
     let d = tempfile::tempdir().unwrap();
-    let mut file = RunFile::create(&d.path().join("r.drun"), CAP).unwrap();
+    // sealed as the hub writes it (the capture's budget includes the encryption)
+    let key = drgnx_ratatoskr::debug::runkey::random_key();
+    let mut file = RunFile::create(&d.path().join("r.drun"), CAP, &key).unwrap();
     let stops: Vec<Stop> = (0..200).map(a_stop).collect();
     let runs: Vec<Duration> = stops
         .iter()

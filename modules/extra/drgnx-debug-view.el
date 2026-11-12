@@ -236,6 +236,9 @@ they come within `drgnx-debug-view-await-limit'.  An old stop's node does not op
                                                :enabled (if (eql 1 (funcall f "ticked")) :false t))))
       ("breakpoint" (drgnx-debug-view--bp-op (list :op "edit" :id (funcall f "id")
                                                    :enabled (if (eql 1 (funcall f "ticked")) :false t))))
+      ("data" (drgnx-hub-call "debug/data-breakpoint" (list :op "remove" :session (funcall f "session")
+                                                            :data_id (funcall f "data_id"))
+                              #'ignore))
       ((or "session" "thread")
        (when (equal kind "session") (drgnx-debug-view-select-session (funcall f "session")))
        (when (eql 1 (funcall f "openable")) (drgnx-debug-view--toggle id (not (drgnx-debug-view--open-p id)))))
@@ -266,6 +269,37 @@ they come within `drgnx-debug-view-await-limit'.  An old stop's node does not op
                              (drgnx-debug-view--field "value" id))))
     (drgnx-debug-view--call "debug/set-value" (list :view drgnx-debug-view-id :node id :value value)
                             #'drgnx-debug-view--set-answered)))
+
+(defun drgnx-debug-break-on-value-change ()
+  "Stop when the variable at point changes: a data breakpoint, for as long as its session lasts."
+  (interactive)
+  (let ((id (drgnx-debug-view--node)))
+    (unless (equal (drgnx-debug-view--kind id) "var") (user-error "Not a variable"))
+    (drgnx-debug-view--call "debug/data-breakpoint" (list :op "add" :view drgnx-debug-view-id :node id)
+                            #'drgnx-debug-view--data-answered)))
+
+(defun drgnx-debug-view--data-answered (_result error)
+  "Break on Value Change's answer: its ERROR (the adapter's reason) in the echo area."
+  (when error (message "Break on Value Change: %s" error)))
+
+(defun drgnx-debug-view--breakpoints (except)
+  "The view's breakpoint rows other than node EXCEPT: (LABEL . BREAKPOINT-ID), in order."
+  (when-let* ((h (drgnx-view-patch-handle drgnx-view-patch)))
+    (delq nil (mapcar (lambda (n) (and (not (equal n except)) (equal (drgnx-debug-view--kind n) "breakpoint")
+                                       (cons (drgnx-debug-view--field "label" n) (drgnx-debug-view--field "id" n))))
+                      (append (nidhogg-view-get h 'list "order") nil)))))
+
+(defun drgnx-debug-breakpoint-trigger ()
+  "Make the breakpoint at point wait for another: it is sent to a session only once that session has stopped on the
+breakpoint picked.  \"(none)\" makes it a plain breakpoint again."
+  (interactive)
+  (let ((id (drgnx-debug-view--node)))
+    (unless (equal (drgnx-debug-view--kind id) "breakpoint") (user-error "Not a breakpoint"))
+    (let* ((others (drgnx-debug-view--breakpoints id))
+           (pick (completing-read "Triggered by: " (cons "(none)" (mapcar #'car others)) nil t))
+           (by (cdr (assoc pick others))))
+      (drgnx-debug-view--bp-op (append (list :op "trigger" :id (drgnx-debug-view--field "id" id))
+                                       (and by (list :triggered_by by)))))))
 
 (defun drgnx-debug-view--set-answered (_result error)
   "Set Value's answer: its ERROR in the echo area."
@@ -392,6 +426,8 @@ they come within `drgnx-debug-view-await-limit'.  An old stop's node does not op
     (debug-view-activate "Open" drgnx-debug-view-activate "Show the frame, tick the box, or open the node")
     (debug-view-filter "Filter…" drgnx-debug-view-filter "Show only the rows whose name or value contains the text")
     (debug-set-value "Set Value…" drgnx-debug-set-value "Give the variable a new value in the program")
+    (debug-break-on-value-change "Break on Value Change" drgnx-debug-break-on-value-change "Stop when the variable changes (for as long as the session lasts)")
+    (debug-breakpoint-trigger "Triggered By…" drgnx-debug-breakpoint-trigger "Make the breakpoint wait until another one is hit")
     (debug-copy-value "Copy Value" drgnx-debug-copy-value "Copy the variable's value")
     (debug-copy-expression "Copy as Expression" drgnx-debug-copy-expression "Copy the expression that reads the variable")
     (debug-add-to-watch "Add to Watch" drgnx-debug-add-to-watch "Watch the variable's expression")

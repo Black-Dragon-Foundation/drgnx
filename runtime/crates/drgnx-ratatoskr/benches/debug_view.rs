@@ -73,6 +73,7 @@ fn a_stop(epoch: u64, locals: Vec<Value>) -> Stop {
             .collect(),
         total_frames: Some(20),
         exception: None,
+        hit: vec![],
         frame: 1000,
         scopes: vec![
             ScopeVars {

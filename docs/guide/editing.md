@@ -56,7 +56,11 @@ comments, `${…}` variables, `inputs` and platform sections included), your own
 and a default for the file's language when there is neither. A launch.json `compounds` entry starts its
 configurations together (its own `preLaunchTask` first; with `stopAll`, stopping one stops them all). A configuration's `preLaunchTask` (and `postDebugTask`)
 runs from `.vscode/tasks.json` first, in a terminal tab where you watch it; a failing task stops the start, says
-why, and leaves its tab open (Enter closes it). The first start in a folder asks
+why, and leaves its tab open (Enter closes it). A background task (`isBackground`, such as `tsc -w`) is different:
+the session starts once its output matches its problem matcher's `endsPattern` (the task's own, or `$tsc-watch`), and
+the task keeps running until its session ends. Its output goes to the Debug Console, not a tab, because drgnx has to
+read every line to see the end pattern, which a terminal tab does not give it. A background task with no end
+pattern is refused, because drgnx could not tell when it is ready. The first start in a folder asks
 you to trust it (**Trust This Folder**): an untrusted folder's configurations never run.
 
 **Install Adapter…** (the palette) downloads the JavaScript debugger or CodeLLDB, checked against the version drgnx
@@ -110,6 +114,13 @@ column shows (`auto`: while the file has breakpoints or a session runs). Keys: V
 Emacs `C-x C-a` and `C-b` (toggle), `C-c` (condition), `C-l` (logpoint), `C-e` (enable), `C-u` (Run to Cursor), as
 GUD has them; Vim `SPC d` and `b`, `B`, `l`, `e`, `c`.
 
+In the Run and Debug view's Breakpoints, **Triggered By…** (on a breakpoint) makes it wait for another: a session
+does not stop on it until it has stopped on the one you picked ("waits for app.py:12" until then; "(none)" makes it a
+plain breakpoint again). **Break on Value Change** (on a variable, while stopped) stops the program when that
+variable changes, where the adapter can watch it (CodeLLDB and lldb-dap can; debugpy and the JavaScript debugger
+cannot, and the command says so; when the adapter cannot watch one variable, its own reason is shown). It is listed under Breakpoints with what it watches, lasts as long
+as its session, and `RET` on it removes it. Both are in the palette.
+
 Every session is recorded, against a snapshot of the files as they were when it started. **Add Probe…** records an
 expression each time its line runs, without stopping the program and without printing anything; **Probe the
 Result…** records what the line assigns, on the next line that runs (a probe runs before its line). A probe is a
@@ -122,7 +133,15 @@ the file was unsaved at the start), the stop's line marked with its variables, a
 were in a window beside it. `Alt →` past the newest stop, **Back to Live** (the palette) or the banner's button returns.
 Recorded runs hold your program's values: an agent reads them only as the matrix's `debug.read` row lets it (Cautious asks
 first). They are kept 14 days (a pinned
-run, or one for an open task, longer), at most 2 GB per project, oldest first. Probes need an adapter with logpoints
+run, or one for an open task, longer), at most 2 GB per project, oldest first.
+
+Recorded runs are encrypted on disk with a key kept in your keyring (the Secret Service on Linux: GNOME Keyring,
+KWallet or KeePassXC; the login keychain on macOS), made on the first recorded session. drgnx never asks for your
+keyring's password: when the keyring is locked or there is none, sessions are not recorded (the echo area says why),
+and runs already on disk cannot be read until you log in and the keyring unlocks. If the keyring loses that key (it
+is deleted, or the keyring is reset), the old runs cannot be read again: there is no copy of the key and no
+unencrypted copy of the runs. They are disposable, so this is fine: they are removed at their 14 days as usual, and new
+runs use a new key. Probes need an adapter with logpoints
 (debugpy and the JavaScript debugger take 2000 values a second, the rest 200, and delve and codelldb stop and resume
 the program for each one; values past the rate are thinned and counted).
 
