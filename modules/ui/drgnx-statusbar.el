@@ -1140,6 +1140,12 @@ and only one; take it away when it should have none.  A window elsewhere that sh
           (if (and wanted (not keep) (drgnx-statusbar--frame-window-p w)
                    (eq (window-parent w) root) (null (window-next-sibling w)))
               (setq keep w)
+            ;; Its row's other window stays one window: deleted alone, the bar would leave that window (the editor
+            ;; groups' own parent, say) to merge into a row of the same direction above it, the groups becoming
+            ;; siblings of a side window and the frame's main window one group (`window-main-window').
+            (dolist (s (list (window-prev-sibling w) (window-next-sibling w)))
+              (when (and s (not (window-live-p s)) (not (and (window-prev-sibling w) (window-next-sibling w))))
+                (set-window-combination-limit s t)))
             (let ((ignore-window-parameters t)) (ignore-errors (delete-window w))))))
       (when (and wanted (not keep))
         (setq keep (drgnx-statusbar--frame-make frame)))

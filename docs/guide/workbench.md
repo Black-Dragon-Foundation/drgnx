@@ -339,7 +339,8 @@ into the frame you start in, the others follow in order): the left dock (and the
 Search), the panel and its tab, the right dock — each with its pixel size — the layout you were in
 ([layouts.md](layouts.md#after-a-restart)), the editor groups with their sizes, tabs and shown files, and the
 Explorer's folders (the status bar across the frame's foot is not part of the saved tree: it never comes back as an
-editor group). A window that rebuilds itself comes back where and how big it was (only where a monitor still is; never bigger than its screen).
+editor group). The groups keep their saved pixel widths when the window manager gives the new window its size only
+after the restore (a client's window at scale 2 does). A window that rebuilds itself comes back where and how big it was (only where a monitor still is; never bigger than its screen).
 A job window saved before M12f comes back as the Work space: no frame of its own, and the
 restored panes, sizes and focus stay as they were ([jobs.md](jobs.md#a-job-in-the-work-space)).
 

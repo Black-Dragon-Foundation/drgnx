@@ -21,6 +21,10 @@
 (require 'drgnx-timer)
 (require 'drgnx-notice)
 (defvar drgnx-large-file-open)          ; core/drgnx-large-file.el: bound around the visits, read by editor/large-files
+(defvar drgnx-wb--owned)                ; wb/drgnx-wb.el: windows whose moves are their owner's (I9)
+(defvar drgnx-persist--refit (make-hash-table :test #'eq :weakness 'key)
+  "Frame → (WIDTH HEIGHT . GROUPS): its pixel size and the editor groups' states it was restored with, until the
+frame's size changes.")
 
 (defcustom drgnx-persist-restore-on-start t
   "Restore the last workbench layout at the first graphical frame."
@@ -436,8 +440,28 @@ input focus back after the other windows are made, unless KEEP-FOCUS (a restore 
       (when (plist-get panel :shown) (drgnx-wb-area-show 'panel (plist-get panel :tab)))
       (when (plist-get right :shown) (drgnx-wb-area-show 'right (plist-get right :tab))))
     (drgnx-persist--fit-groups (plist-get state :groups))
+    (when (plist-get state :groups)                     ; and once more at the frame's next size change (below)
+      (puthash (selected-frame) (cons (frame-pixel-width) (cons (frame-pixel-height) (plist-get state :groups)))
+               drgnx-persist--refit)
+      (add-hook 'window-size-change-functions #'drgnx-persist--refit))
     (drgnx-chrome-apply))
   t)
+
+(defun drgnx-persist--refit (frame)
+  "A restored FRAME changed size: a new window is restored at the size it was made with, and the window manager's
+answer (the size it gives the window) can come after, as it does for a client's window at scale 2.  Emacs shares
+the change out among the editor groups by their sizes at the restore, not the saved ones (a 536/528 split came back
+528/536), so the groups are put back to their saved pixel widths once more (`drgnx-persist--fit-groups': a
+correction of rounding only).  Once per restore, at the frame's first change of size: a change of its windows alone
+(the docks shown after the restore) is passed over.  The hook goes when no restored frame waits."
+  (when-let* ((at (gethash frame drgnx-persist--refit))
+              ((not (and (= (car at) (frame-pixel-width frame)) (= (cadr at) (frame-pixel-height frame))))))
+    (remhash frame drgnx-persist--refit)
+    (with-selected-frame frame
+      (let ((drgnx-wb--owned (append (drgnx-groups-list) drgnx-wb--owned)))   ; the restore's own windows (I9)
+        (drgnx-persist--fit-groups (cddr at)))))
+  (when (zerop (hash-table-count drgnx-persist--refit))
+    (remove-hook 'window-size-change-functions #'drgnx-persist--refit)))
 
 (defun drgnx-persist--fit-groups (specs)
   "Put the editor groups back to the pixel widths SPECS (the groups' states) hold.  `window-state-put' works in
@@ -541,6 +565,8 @@ graphical frame, and at each emacsclient window that opens when no other one is 
     (remove-hook 'kill-emacs-hook #'drgnx-persist--on-exit)
     (remove-hook 'delete-frame-functions #'drgnx-persist--on-delete-frame)
     (advice-remove 'server-delete-client #'drgnx-persist--before-client-delete)
+    (remove-hook 'window-size-change-functions #'drgnx-persist--refit)
+    (clrhash drgnx-persist--refit)
     (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-persist--on-start)
     (drgnx-timer-cancel 'persist-visit)))
 
