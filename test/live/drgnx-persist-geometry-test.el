@@ -100,8 +100,11 @@ monitor): the window comes back at that size, not maximized, and keeps it."
                                       asked))
                              :secs 30 :what "the restored window at its saved size")
             (should (equal (funcall q "(frame-parameter drgnx-geometry-frame 'fullscreen)") nil))
-            ;; and saved again, the same size
-            (let ((g (funcall q "(plist-get (drgnx-persist-state drgnx-geometry-frame) :geometry)")))
-              (should (equal (list (nth 2 g) (nth 3 g)) asked)))))
+            ;; and saved again, the same size: a later answer of the window manager's (its own size for the window it
+            ;; unmaximized) is put right
+            (drgnx-test-wait (lambda ()
+                               (let ((g (funcall q "(plist-get (drgnx-persist-state drgnx-geometry-frame) :geometry)")))
+                                 (equal (list (nth 2 g) (nth 3 g)) asked)))
+                             :secs 30 :what "the restored window saved at its size")))
       (drgnx-ui-stop name)
       (delete-directory root t))))

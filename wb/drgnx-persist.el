@@ -471,7 +471,7 @@ restore) is passed over."
         (drgnx-persist--fit-groups (cddr at))))))
 
 (defvar drgnx-persist--unmaximize (make-hash-table :test #'eq :weakness 'key)
-  "Restored window → its saved geometry, while the window manager may still maximize it unasked.")
+  "Restored window → (GEOMETRY . TRIES): its saved geometry, while the window manager may still maximize it unasked.")
 
 (defun drgnx-persist--keep-state (frame geometry fullscreen)
   "A window restored at GEOMETRY with the saved `fullscreen' FULLSCREEN: a maximized or full-screen one is made so
@@ -479,18 +479,22 @@ again; one saved as neither is watched (`drgnx-persist--unmaximize'): mutter max
 close to the work area's, so a window you sized that big came back maximized, its size lost."
   (if (memq fullscreen '(maximized fullboth fullwidth fullheight))
       (set-frame-parameter frame 'fullscreen fullscreen)
-    (puthash frame geometry drgnx-persist--unmaximize)
+    (puthash frame (cons geometry 0) drgnx-persist--unmaximize)
     (add-hook 'window-size-change-functions #'drgnx-persist--unmaximize)
     (add-hook 'pre-command-hook #'drgnx-persist--refit-done)))
 
 (defun drgnx-persist--unmaximize (frame)
   "FRAME, restored as neither maximized nor full screen, was maximized by the window manager: it is given back its
-`fullscreen' nil and its saved geometry (`drgnx-persist--place-frame'), once.  Until the first command."
-  (when-let* ((g (gethash frame drgnx-persist--unmaximize))
-              ((frame-parameter frame 'fullscreen)))
-    (remhash frame drgnx-persist--unmaximize)
-    (set-frame-parameter frame 'fullscreen nil)
-    (drgnx-persist--place-frame frame g)))
+`fullscreen' nil, then, once the window manager has unmaximized it (to a size of its own choosing, which can come
+after ours), its saved geometry (`drgnx-persist--place-frame'), again whenever a later answer takes it away.  Until the
+first command; three tries at most."
+  (when-let* ((at (gethash frame drgnx-persist--unmaximize)))
+    (let ((g (car at)) (tries (cdr at)))
+      (cond ((frame-parameter frame 'fullscreen) (set-frame-parameter frame 'fullscreen nil))
+            ((and (= (frame-text-width frame) (nth 2 g)) (= (frame-text-height frame) (nth 3 g))))
+            ((>= tries 3) (remhash frame drgnx-persist--unmaximize))
+            (t (puthash frame (cons g (1+ tries)) drgnx-persist--unmaximize)
+               (drgnx-persist--place-frame frame g))))))
 
 (defun drgnx-persist--refit-done ()
   "The first command after a restore: the window's sizes are yours from now on, nothing is put back any more."
