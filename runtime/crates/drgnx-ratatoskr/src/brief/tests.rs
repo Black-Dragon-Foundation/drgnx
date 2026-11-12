@@ -195,6 +195,20 @@ async fn a_brief_says_what_the_merge_checks_and_how_to_pass() {
             rule("tidy", "advice"),
         ],
         test_globs: vec!["test/**".into()],
+        procedures: vec![
+            vordr::pack::Procedure {
+                name: "red-first".into(),
+                roles: vec!["implement".into()],
+                text: "Write the failing test, run it, commit it.".into(),
+                ..Default::default()
+            },
+            vordr::pack::Procedure {
+                name: "merging".into(),
+                roles: vec!["merge".into()],
+                text: "Resolve by both sides' intent.".into(),
+                ..Default::default()
+            },
+        ],
         ..Pack::default()
     };
     db.write(meta(Class::System), move |tx| {
@@ -221,6 +235,16 @@ async fn a_brief_says_what_the_merge_checks_and_how_to_pass() {
         assert!(g.contains(want), "no {want:?} in\n{g}");
     }
     assert!(!g.contains("tidy") && !g.contains("- review"), "{g}");
+    // the procedures by name, and the task's role's (an implement task) in full
+    assert!(
+        g.contains("procedure_get") && g.contains("red-first, merging"),
+        "{g}"
+    );
+    assert!(
+        g.contains("Write the failing test, run it, commit it."),
+        "{g}"
+    );
+    assert!(!g.contains("Resolve by both sides' intent."), "{g}");
     assert!(
         text.contains("## The gates (what the merge checks)"),
         "{text}"

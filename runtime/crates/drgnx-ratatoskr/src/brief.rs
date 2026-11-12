@@ -215,8 +215,9 @@ fn satisfy(id: &str) -> &'static str {
 }
 
 /// The Gates block of PACK: its name, each rule that gates the merge (`enforced`, `checked`) with what it checks and
-/// how to satisfy it, and the pack's test globs (what counts as a test).  None: empty.
-fn gates_block(pack: Option<&vordr::pack::Pack>) -> String {
+/// how to satisfy it, the pack's test globs (what counts as a test), its procedures by name and, in full, those for
+/// ROLE (the task's).  None: empty.
+fn gates_block(pack: Option<&vordr::pack::Pack>, role: &str) -> String {
     let Some(p) = pack else {
         return String::new();
     };
@@ -238,6 +239,24 @@ fn gates_block(pack: Option<&vordr::pack::Pack>) -> String {
             "Tests are the paths {}.\n",
             p.test_globs.join(", ")
         ));
+    }
+    if !p.procedures.is_empty() {
+        let names: Vec<&str> = p.procedures.iter().map(|x| x.name.as_str()).collect();
+        out.push_str(&format!(
+            "Procedures (read one with `procedure_get`): {}.\n",
+            names.join(", ")
+        ));
+        for x in p
+            .procedures
+            .iter()
+            .filter(|x| x.roles.iter().any(|r| r == role))
+        {
+            out.push_str(&format!(
+                "\n### Procedure: {}\n\n{}\n",
+                x.name,
+                x.text.trim_end()
+            ));
+        }
     }
     out
 }
@@ -377,7 +396,16 @@ fn gather(
         (BriefPart::BaseBranch, base),
         (BriefPart::Interfaces, interfaces(conn, ent.n)?),
         (BriefPart::Check, check),
-        (BriefPart::Gates, gates_block(pack.as_ref())),
+        (
+            BriefPart::Gates,
+            gates_block(
+                pack.as_ref(),
+                ent.data
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or("implement"),
+            ),
+        ),
         (BriefPart::Findings, FINDINGS.to_owned()),
         (BriefPart::ViewPath, view),
     ];

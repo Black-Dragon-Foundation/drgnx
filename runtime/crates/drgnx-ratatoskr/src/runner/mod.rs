@@ -717,13 +717,36 @@ pub(crate) fn route(front: &Front, role: &str) -> Vec<String> {
     }
 }
 
-/// The profile TASK gets an agent of: the one it was reassigned to, else its role's first.
+/// The paths a task's BODY names: its backticked words with a `/` in them (what a pack's path routes match).
+pub(crate) fn body_paths(body: &str) -> Vec<&str> {
+    body.split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|w| w.contains('/') && !w.contains(char::is_whitespace))
+        .collect()
+}
+
+/// The profile TASK gets an agent of: the one it was reassigned to (or its plan line named), else the first its job's
+/// pack routes its role (and its body's paths) to, else its role's route in the settings.
 pub(crate) fn profile_of(front: &Front, data: &Map<String, Value>, task: &Task) -> String {
+    let role = task.row.role.as_deref().unwrap_or("implement");
     data_for(data, "profiles", &task.row.id)
         .and_then(Value::as_str)
         .map(str::to_owned)
+        .or_else(|| {
+            let pack: vordr::pack::Pack = serde_json::from_value(data.get("pack")?.clone()).ok()?;
+            let body = data
+                .get("tasks")?
+                .as_array()?
+                .iter()
+                .find(|t| t.get("n").and_then(Value::as_i64) == Some(task.row.n))
+                .and_then(|t| t.get("body"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            pack.profiles_for(role, &body_paths(body))?.first().cloned()
+        })
         .unwrap_or_else(|| {
-            route(front, task.row.role.as_deref().unwrap_or("implement"))
+            route(front, role)
                 .into_iter()
                 .next()
                 .unwrap_or_else(|| "claude".into())
@@ -1260,11 +1283,42 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
             let text = tokio::fs::read_to_string(f)
                 .await
                 .map_err(|e| invalid(format!("{}: {e}", f.display())))?;
-            crate::orch::policy::read_pack(&text)
-                .map_err(|e| invalid(format!("{}: {e}", f.display())))?
+            let mut pack = crate::orch::policy::read_pack(&text)
+                .map_err(|e| invalid(format!("{}: {e}", f.display())))?;
+            // the procedures' text, read beside the pack and frozen with it
+            let dir = f.parent().unwrap_or(Path::new("."));
+            for p in &mut pack.procedures {
+                let at = dir.join(&p.path);
+                p.text = tokio::fs::read_to_string(&at)
+                    .await
+                    .map_err(|e| invalid(format!("procedure {}: {}: {e}", p.name, at.display())))?;
+                if p.text.len() > crate::orch::policy::PROCEDURE_CAP {
+                    return Err(invalid(format!(
+                        "procedure {}: {} is over {} bytes",
+                        p.name,
+                        at.display(),
+                        crate::orch::policy::PROCEDURE_CAP
+                    )));
+                }
+            }
+            pack
         }
         None => crate::orch::policy::default_pack(),
     };
+    // a task's plan line narrows its role's route in the pack, never widens it
+    for t in &tasks {
+        if let Some(p) = &t.profile
+            && let Some(allowed) = pack.profiles_for(&t.role, &body_paths(&t.body))
+            && !allowed.contains(p)
+        {
+            return Err(invalid(format!(
+                "task {}: profile {p} is not one the pack routes {} work to ({})",
+                t.n,
+                t.role,
+                allowed.join(", ")
+            )));
+        }
+    }
     // a task's profile, which a plan an agent wrote may name, goes through the check `job/reassign` and Say make
     for t in &tasks {
         if let Some(p) = &t.profile
@@ -1302,7 +1356,13 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
         .map(|r| {
             (
                 (*r).to_owned(),
-                json!(route(front, r).first().cloned().unwrap_or_default()),
+                // the pack's route for the role first, then the settings'
+                json!(
+                    pack.profiles_for(r, &[])
+                        .and_then(|p| p.first().cloned())
+                        .or_else(|| route(front, r).first().cloned())
+                        .unwrap_or_default()
+                ),
             )
         })
         .collect();
@@ -2198,6 +2258,72 @@ pub(crate) mod graph_plan_tests {
         assert_eq!(read(&f).await, None, "nothing before the approval");
         approve_job(&f, &user(), &id, None).await.unwrap();
         assert_eq!(read(&f).await, Some(crate::orch::policy::default_pack()));
+    }
+
+    /// Pure (D): a temp store.  A plan under a pack with `:models` and `:procedures`: the procedures' text is read
+    /// beside the pack and frozen in the proposal; a task runs on its role's (and its paths') first profile; a plan
+    /// line's `**Profile:**` narrows that, and one outside the role's profiles is refused.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_pack_routes_roles_and_carries_its_procedures() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        set_profiles(
+            &f,
+            json!({"sonnet": {"command": ["claude-agent-acp"]}, "opus": {"command": ["claude-agent-acp"]}}),
+        )
+        .await;
+        std::fs::create_dir(dir.path().join("procedures")).unwrap();
+        std::fs::write(
+            dir.path().join("procedures/red-first.md"),
+            "Write the failing test first.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("pack.eld"),
+            "(:name \"t\" :version 1 :rules ((:id \"red-first\" :kind \"enforced\" :doc \"d\"))
+              :models ((:role \"implement\" :profiles (\"sonnet\" \"opus\"))
+                       (:role \"implement\" :paths (\"runtime/*\") :profiles (\"opus\")))
+              :procedures ((:name \"red-first\" :path \"procedures/red-first.md\" :roles (\"implement\"))))\n",
+        )
+        .unwrap();
+        let plan = |profile: &str| {
+            format!(
+                "# P\n\n**Pack:** pack.eld\n\n### Task 1: a\n\nTouch `wb/a.el`.\n\n### Task 2: b\n\nTouch \
+                 `runtime/x.rs`.\n{profile}\n"
+            )
+        };
+        let propose_file = |text: String| {
+            let f = &f;
+            let dir = dir.path().to_owned();
+            async move {
+                let file = dir.join("plan.md");
+                std::fs::write(&file, text).unwrap();
+                let p: ProposeParams = serde_json::from_value(
+                    json!({"plan": file.to_string_lossy(), "repo": dir.to_string_lossy()}),
+                )
+                .unwrap();
+                propose(f, &user(), p).await
+            }
+        };
+        let refused = propose_file(plan("\n**Profile:** sonnet")).await;
+        let why = refused.expect_err("refused").message;
+        assert!(why.contains("task 2") && why.contains("sonnet"), "{why}");
+        let s = propose_file(plan("")).await.unwrap();
+        let l = load(&f, &s.id, false).await.unwrap().unwrap();
+        let data = data_of(&l.job);
+        assert_eq!(
+            data["pack"]["procedures"][0]["text"],
+            json!("Write the failing test first.\n")
+        );
+        assert_eq!(data["routes"]["implement"], json!("sonnet"));
+        let task = |n: i64| {
+            l.tasks
+                .iter()
+                .find(|t| t.row.id == format!("{}#{n}", s.id))
+                .unwrap()
+        };
+        assert_eq!(profile_of(&f, &data, task(1)), "sonnet");
+        assert_eq!(profile_of(&f, &data, task(2)), "opus");
     }
 
     /// Pure (D): a temp store.  A task's named profile is the job's reassignment for it, which `profile_of` answers.

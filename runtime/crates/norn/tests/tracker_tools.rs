@@ -1084,8 +1084,8 @@ mod tools {
     #[test]
     fn default_session_lists_23() {
         // the 23, the four job tools (Task 15), `report_submit` and the two plan tools (Task 21), `extensions_suggest`,
-        // `huddle_reply`
-        assert_eq!(tools_for(ToolSets::default()).len(), 32);
+        // `huddle_reply`, `procedure_get`
+        assert_eq!(tools_for(ToolSets::default()).len(), 33);
         assert_eq!(tools().len(), 23);
     }
 
@@ -1093,12 +1093,13 @@ mod tools {
     #[test]
     fn tracker_off_lists_18() {
         let off = tools_for(ToolSets { tracker: false });
-        assert_eq!(off.len(), 27);
+        assert_eq!(off.len(), 28);
         for name in [
             "settings_get",
             "settings_change",
             "extensions_suggest",
             "huddle_reply",
+            "procedure_get",
         ] {
             assert!(off.iter().any(|t| t.name() == name), "{name}");
         }

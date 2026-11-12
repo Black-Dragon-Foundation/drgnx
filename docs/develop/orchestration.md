@@ -59,7 +59,19 @@ merge, `routing` and `advice` don't), `:test-globs` (test files; `*` matches acr
 languages whose build reds count when they name a symbol the task adds), `:batch-size`, the `:author-check`,
 `:rule-tests` and `:push-tiers` commands (`(:name N :dir D :run (ARG …))`), `:groups` (the command that lists the
 groups a range affects; `%r` is the range), `:no-cache`, `:shared-paths` (clean merges there still need intent
-notes) and `:context-share`.
+notes), `:context-share`, `:procedures` (`(:name N :path P :roles (ROLE …))`, P relative to the pack's file) and
+`:models` (`(:role R :paths (GLOB …) :profiles (PROFILE …))`).
+
+**Procedures.** A procedure is a short provider-neutral write-up (executing a plan, red first, debugging, merging by
+intent). Its text is read beside the pack when the plan is proposed (at most 8 KiB; a missing file refuses the
+proposal) and frozen with the pack. Every agent has the tool `procedure_get {name?}` (norn `tools::procedure`): the
+job's procedure by name, or their names. A brief's Gates part names them and carries in full those whose `:roles` hold
+the task's role. drgnx-default has none.
+
+**Routing by role.** A task runs on the first profile its job's pack routes its role to; a route with `:paths` wins for a
+task whose body names a matching path (a backticked word with a `/`). A plan line `**Profile:** NAME` (or a graph
+plan's task profile) narrows that: one outside the role's profiles refuses the proposal. A role the pack doesn't route
+runs on the settings' route (`drgnx-agents-routes`), as before; a reassignment (`job/reassign`) still wins.
 
 drgnx ships `etc/orch/drgnx-default.eld`: red first, the author check and affected groups, with no project's
 commands (any project's: its author check is the task's own tests at the tip). The push gate needs a project's own
