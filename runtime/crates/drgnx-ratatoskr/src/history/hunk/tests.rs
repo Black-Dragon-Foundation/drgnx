@@ -75,7 +75,7 @@ fn fx() -> (Fx, OpId) {
         .batch(
             "b1",
             &[ch(4, "alpha beta\n", "agent:s9#1")],
-            &hash("one\nalpha beta\ntwo\n"),
+            Some(&hash("one\nalpha beta\ntwo\n")),
             1,
             5.0,
         )
@@ -84,7 +84,7 @@ fn fx() -> (Fx, OpId) {
         .batch(
             "b1",
             &[ch(9, "ZZ", "user")],
-            &hash("one\nalphaZZ beta\ntwo\n"),
+            Some(&hash("one\nalphaZZ beta\ntwo\n")),
             1,
             6.0,
         )
@@ -167,7 +167,9 @@ fn a_chats_hunk_in_a_buffer_is_applied_by_the_editors_batch() {
         })
         .collect();
     assert_eq!(
-        f.hub.batch("b1", &changes, &hash(KEPT), 1, 201.0).unwrap(),
+        f.hub
+            .batch("b1", &changes, Some(&hash(KEPT)), 1, 201.0)
+            .unwrap(),
         BatchReply::Ok
     );
     assert_eq!(f.hub.text(&f.tree, "a.txt").unwrap().as_deref(), Some(KEPT));

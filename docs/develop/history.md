@@ -289,8 +289,10 @@ tracked}`: a gitignored file, a credentials file, a personal-notes file and a fo
 `tracked: false` with the reason. `history/batch {buffer_id, changes, region_hash, version}` applies changes (character
 offsets in the document's LF text) as the origin's peer (`user`, or `agent:<session>#<step>` for a change merged in or a
 paired chat's write: the record's cause carries the session and its step; an `agent:` origin without the step is
-refused) and answers `{ok}` or `{resync: true}` when the SHA-256 of the document's text differs from `region_hash`; more
-than 1 MiB inserted is refused as `split-required`. `history/resync {buffer_id, text, version}` replaces the document's
+refused) and answers `{ok}` or `{resync: true}` when the SHA-256 of the document's text differs from `region_hash`.
+`region_hash` is optional: the editor sends it only for a text of at most 256 KiB, and without it the hub checks nothing
+and never reads the document's whole text (the batch costs the edit, at any size). More than 1 MiB inserted is refused
+as `split-required`. `history/resync {buffer_id, text, version}` replaces the document's
 text as the user's change; `version` is the buffer's version once the change is in (the editor's drain counter; a resync
 is a drain of its own), kept with the tracked buffer: the editor's frames of the file name it as `doc_version`;
 `history/unregister {buffer_id}` stops tracking.
@@ -307,14 +309,15 @@ document leaves memory between 5 and 6 minutes after its last use).
 (on `find-file-hook`, and for every open file buffer when a hub connects; a hook never opens a connection). Nidhogg then
 records each change to the buffer's text in a ring, outside the command's own work. The timer `history-drain` (every
 0.1 s, through `drgnx-timer-*`) does nothing unless `nidhogg-history-pending-p`; otherwise it sends each tracked buffer's
-ring as `history/batch`es with the SHA-256 of the buffer's whole text. A change that inserts more than 1 MiB is split into
-pieces of at most a quarter of that many characters, and batches are filled up to the cap. The hub checks every batch
-against the hash of the buffer's whole text. Nidhogg makes it (`nidhogg-buffer-sha256`: exactly the bytes `secure-hash`
-hashed of the buffer with `utf-8-unix`, narrowing ignored). A buffer over 256 K characters is drained only after 0.3 s of
-idleness (its changes wait in the ring meanwhile), and its text is copied (about 5 ms at 20 MB) and hashed on a worker
-thread (`nidhogg-buffer-sha256-async`): its batches go when the hash lands, its ring waits until then, and a `resync` in
-between drops that drain (the whole text goes instead). A buffer under that size is hashed at once, as is a drain asked
-for by `drgnx-history-drain-now`. With the workers off the same job runs on the main thread. When the hub answers
+ring as `history/batch`es, at once at any size. A change that inserts more than 1 MiB is split into pieces of at most a
+quarter of that many characters, and batches are filled up to the cap. A batch carries the SHA-256 of the buffer's whole
+text only while that text is at most `drgnx-history-large-size` bytes (256 KiB, counted in bytes:
+`drgnx-history--text-bytes`), and the hub checks such a batch against it. Nidhogg makes the hash
+(`nidhogg-buffer-sha256`: exactly the bytes `secure-hash` hashed of the buffer with `utf-8-unix`, narrowing ignored) at
+about 4 ms a MB on the main thread, so the bound keeps it within a millisecond. A larger buffer's batches carry none and
+go on the same tick (large files v2, stage 0; there was an idle gate and a worker's hash before). **Known gap:** above the
+bound a change the hook missed that leaves the text the same size goes unnoticed (a size change is caught by Nidhogg's
+ring, which then drains `resync`), until large files v2's digest and scrub. When the hub answers
 `resync` (or Nidhogg drains the symbol `resync`), the ring is dropped and the whole text goes as `history/resync`. A hub
 that goes drops every registration; the next connection registers the buffers again. After a drain that sent changes,
 `drgnx-history-drained-functions` runs with `(BUFFER COUNTER CHANGES)`: the buffer, the number of its drains that sent

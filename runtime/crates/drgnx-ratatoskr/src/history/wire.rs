@@ -307,10 +307,11 @@ pub async fn batch(f: &Front, _: &Caller, p: w::BatchParams) -> Result<w::BatchR
     let file = hub.buffer_file(&id);
     // the time is read here: a blocking thread does not carry the virtual clock
     let now = crate::clock::wall_secs();
-    let reply = crate::clock::blocking(move || hub.batch(&id, &changes, &hash, version, now))
-        .await
-        .map_err(|e| internal(e.to_string()))?
-        .map_err(failed)?;
+    let reply =
+        crate::clock::blocking(move || hub.batch(&id, &changes, hash.as_deref(), version, now))
+            .await
+            .map_err(|e| internal(e.to_string()))?
+            .map_err(failed)?;
     if by_agent && let Some(file) = file {
         let file = crate::work::presence::true_name(&file.to_string_lossy());
         f.core.buffers.changed(&[file]);
