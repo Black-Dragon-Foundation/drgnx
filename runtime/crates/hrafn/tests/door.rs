@@ -293,14 +293,12 @@ fn filtered_names_conversion_attributes() {
 
 /// A marker script: appends its name to `marker` and passes stdin through (a clean or smudge filter must answer).
 fn marker_script(dir: &Path, name: &str, marker: &Path) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let p = dir.join(name);
-    std::fs::write(
+    drgnx_exe::write(
         &p,
         format!("#!/bin/sh\necho {name} >> '{}'\ncat\n", marker.display()),
     )
     .unwrap();
-    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
     p
 }
 

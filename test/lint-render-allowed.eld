@@ -44,4 +44,5 @@
  (:file "modules/extra/drgnx-debug-toolbar.el" :in drgnx-debug-toolbar--show :what erase-buffer :kind document :why "the toolbar card's one line of buttons, drawn again only when the session's state, the session count or the keys changed")
  (:file "modules/extra/drgnx-debug-bisect.el" :in drgnx-debug-bisect--render :what erase-buffer :kind document :why "the bisect card (a head, a dot per state, the result and its actions: a handful of rows the hub built) is drawn when a bisect starts and again, at most ten times a second, as its runs end")
  (:file "modules/extra/drgnx-debug-bisect.el" :in drgnx-debug-bisect-show-step :what erase-buffer :kind document :why "the breaking change's diff is drawn when the user asks for it")
+ (:file "modules/extra/drgnx-debug-origin.el" :in drgnx-debug-origin--render :what erase-buffer :kind document :why "the origin trail's card (a head and a row per link, the hub's rows) is drawn when the user asks and once per replayed level")
  (:file "modules/tools/drgnx-search-edit.el" :in drgnx-search-edit--faces :what erase-buffer :kind document :why "a hidden buffer holding one line to fontify, never shown"))

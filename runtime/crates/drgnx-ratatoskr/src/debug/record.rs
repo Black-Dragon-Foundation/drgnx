@@ -123,6 +123,10 @@ pub struct RunInfo {
 /// The runs, by id.
 pub trait Runs: Send + Sync {
     fn run(&self, id: &str) -> Option<RunInfo>;
+    /// What run ID recorded at its stop INDEX (the capture: frames, scopes), when it has that stop.
+    fn capture(&self, _id: &str, _index: u64) -> Option<Value> {
+        None
+    }
 }
 
 /// A run: its record (`<run>.json`, and the Urdr record's data).
@@ -937,6 +941,10 @@ impl Records {
 }
 
 impl Runs for Records {
+    fn capture(&self, id: &str, index: u64) -> Option<Value> {
+        self.reader(id)?.stop(index).map(|(_, c)| c)
+    }
+
     fn run(&self, id: &str) -> Option<RunInfo> {
         let meta = self.read_meta(id)?;
         let r = self.reader(id)?;

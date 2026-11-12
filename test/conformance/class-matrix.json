@@ -65,6 +65,7 @@
   "debug/control": ["user"],
   "debug/evaluate": ["user"],
   "debug/expand": ["user"],
+  "debug/origin": ["user"],
   "debug/fork": ["user"],
   "debug/fork/drop": ["user"],
   "debug/fork/run": ["user"],

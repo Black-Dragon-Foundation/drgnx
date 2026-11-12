@@ -91,6 +91,8 @@ struct Fixture {
 
 const N: u32 = 40;
 const POINT: u32 = 21;
+/// The point's stop in the fixture's run (after every hit before it, before every hit after).
+const AT: u64 = 100_000;
 
 /// A project of FILE with TEXT (and a `.env`), a run of CONFIG recorded as if: the probe `shortfall` on PROBE_LINE
 /// printing VALUE(i) for i in 0..N, a breakpoint stop at the POINT-th pass of POINT_LINE, one at END_LINE.
@@ -101,17 +103,17 @@ fn fixture(
     lines: (u32, u32, u32),
     value: impl Fn(u32) -> String,
 ) -> Fixture {
-    fixture_at(file, text, config, lines, value, POINT)
+    fixture_at(file, text, config, lines, value, (N, POINT))
 }
 
-/// [`fixture`] with the point's stop at pass POINT of its line.
+/// [`fixture`] with N passes of the probe and the point's stop at pass POINT of its line.
 fn fixture_at(
     file: &str,
     text: &str,
     config: impl Fn(&Path) -> Value,
     lines: (u32, u32, u32),
     value: impl Fn(u32) -> String,
-    point: u32,
+    (n, point): (u32, u32),
 ) -> Fixture {
     pin_hub();
     let d = tempfile::tempdir_in("/tmp").unwrap();
@@ -130,16 +132,16 @@ fn fixture_at(
     let resolved = config(&root);
     let path = root.join(file).display().to_string();
     let (probe_line, point_line, end_line) = lines;
-    let hits = (0..N)
+    let hits = (0..n)
         .map(|i| RunHit {
             probe: "shortfall".into(),
             thread: "1".into(),
             value: value(i),
-            // the point's stop is seq 100: the passes before it come before
+            // the passes before the point's stop come before it
             seq: if i + 1 < point {
                 u64::from(i) + 1
             } else {
-                101 + u64::from(i)
+                AT + 1 + u64::from(i)
             },
             t_ms: 0,
         })
@@ -169,7 +171,7 @@ fn fixture_at(
         }),
         hash_seed: Some(0),
         to_stop_ms: Some(100),
-        stops: vec![stop(100, point_line, point), stop(500, end_line, 1)],
+        stops: vec![stop(AT, point_line, point), stop(5 * AT, end_line, 1)],
         probes: vec![RunProbe {
             id: "shortfall".into(),
             path: path.clone(),
@@ -212,7 +214,7 @@ impl Fixture {
     fn ask(&self, until: Until, resolved: Value) -> Ask {
         Ask {
             run: "r1".into(),
-            at: At::Stop(100),
+            at: At::Stop(AT),
             change: Change::Nothing,
             until,
             confirm: false,
@@ -344,19 +346,17 @@ for (let i = 0; i < 40; i++) {
 const done = 1;
 "#;
 
+fn js_config(root: &Path) -> Value {
+    json!({"type": "pwa-node", "request": "launch", "name": "Stock", "program": root.join("stock.js"),
+           "cwd": root, "console": "internalConsole"})
+}
+
 #[tokio::test]
 #[ignore = "live: the adapter image with bwrap"]
 async fn a_js_fork_replays_its_run_sealed() {
-    let f = fixture(
-        "stock.js",
-        JS,
-        |root| {
-            json!({"type": "pwa-node", "request": "launch", "name": "Stock", "program": root.join("stock.js"),
-                   "cwd": root, "console": "internalConsole"})
-        },
-        (3, 7, 9),
-        |i| ((i * 7) % 13).to_string(),
-    );
+    let f = fixture("stock.js", JS, js_config, (3, 7, 9), |i| {
+        ((i * 7) % 13).to_string()
+    });
     let v = f.fork(f.ask(Until::NextStop, f.resolved.clone())).await;
     assert_eq!(v["state"], json!("done"), "{v}");
     assert_eq!(
@@ -382,7 +382,7 @@ async fn a_python_trace_sees_its_injected_env_and_file() {
         .forks
         .trace(
             "r1",
-            100,
+            AT,
             f.resolved.clone(),
             |tree: &Path| vec![("TRACE_AT".into(), tree.display().to_string())],
             vec![("in/given.txt".into(), b"origin-17".to_vec())],
@@ -402,6 +402,88 @@ async fn a_python_trace_sees_its_injected_env_and_file() {
         crate::clock::sleep(Duration::from_millis(50)).await;
     }
     assert!(!tree.exists(), "{} is still there", tree.display());
+}
+
+/// D3's replay through these forks: the trace's tree gets the tracer, its records are read back as the project's.
+struct Traces {
+    forks: Forks,
+    resolved: Value,
+    root: PathBuf,
+}
+
+impl super::origin::Replay for Traces {
+    fn trace(
+        &self,
+        run: &str,
+        stop: u64,
+        watch: Vec<String>,
+    ) -> BoxFut<'static, Result<super::origin::Traced, String>> {
+        let (forks, resolved, root, run) = (
+            self.forks.clone(),
+            self.resolved.clone(),
+            self.root.clone(),
+            run.to_owned(),
+        );
+        Box::pin(async move {
+            let t = forks
+                .trace(
+                    &run,
+                    stop,
+                    resolved,
+                    move |tree: &Path| super::origin::trace_env(tree, &watch),
+                    super::origin::trace_files(),
+                )
+                .await?;
+            super::origin::read_trace(&t.path, &root)
+        })
+    }
+}
+
+#[tokio::test]
+#[ignore = "live: the adapter image with bwrap"]
+async fn a_python_trail_is_traced_in_sealed_replays() {
+    // the origin fixture, stopped at its first pass of `return shortfall` (line 16)
+    let text = include_str!("../../tests/fixtures/origin/stock.py");
+    let f = fixture_at(
+        "stock.py",
+        text,
+        py_config,
+        (15, 16, 23),
+        |_| "16".into(),
+        (1, 1),
+    );
+    let r = Traces {
+        forks: f.forks.clone(),
+        resolved: f.resolved.clone(),
+        root: f.root.clone(),
+    };
+    let t = super::origin::trail(&r, "r1", AT, "shortfall", 3, Vec::new, |_| {})
+        .await
+        .unwrap();
+    let got: Vec<(u32, &str, Option<&str>, u32)> = t
+        .links
+        .iter()
+        .map(|l| (l.level, l.target.as_str(), l.value.as_deref(), l.line))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (1, "shortfall", Some("16"), 15),
+            (2, "self.min", Some("10"), 4),
+            (2, "self.qty", Some("2"), 3),
+            (2, "item.reserve", Some("8"), 10),
+        ],
+        "{:#?}",
+        t.links
+    );
+    // the links name the project's file, not the trace's tree, and are traced
+    let file = f.root.join("stock.py").display().to_string();
+    assert!(
+        t.links.iter().all(|l| l.path == file && l.traced),
+        "{:#?}",
+        t.links
+    );
+    assert!(t.note.is_none());
 }
 
 #[tokio::test]
@@ -714,14 +796,14 @@ async fn debug_fork_start() {
         py_config,
         (5, 8, 24),
         |i| ((i * 7) % 13).to_string(),
-        1,
+        (N, 1),
     );
     let mut took = vec![];
     for _ in 0..10 {
         let t0 = crate::clock::now();
         let g = f
             .forks
-            .trace("r1", 100, f.resolved.clone(), |_: &Path| vec![], vec![])
+            .trace("r1", AT, f.resolved.clone(), |_: &Path| vec![], vec![])
             .await
             .unwrap();
         took.push(t0.elapsed());
@@ -735,4 +817,54 @@ async fn debug_fork_start() {
         p95.as_secs_f64() * 1000.0,
         took[took.len() - 1].as_secs_f64() * 1000.0
     );
+}
+
+/// A replay to a late pass (spec §19.9's fork start, for a point deep in a loop): pass 200 of 300 within 6 s, where a
+/// stop per pass would take about 50 s. The adapter counts the passes (`hitCondition`), and the fork's landing is
+/// checked against the run's probe hits before it.
+async fn a_late_pass(
+    file: &str,
+    text: &str,
+    config: impl Fn(&Path) -> Value,
+    lines: (u32, u32, u32),
+) {
+    let f = fixture_at(
+        file,
+        text,
+        config,
+        lines,
+        |i| ((i * 7) % 13).to_string(),
+        (300, 200),
+    );
+    let t0 = crate::clock::now();
+    let v = f.fork(f.ask(Until::NextStop, f.resolved.clone())).await;
+    let took = t0.elapsed();
+    assert_eq!(v["state"], json!("done"), "{v}");
+    assert_eq!(
+        v["matched"],
+        json!({"matched": 199, "of": 199, "first": null}),
+        "{v}"
+    );
+    println!(
+        "{file}: a fork to pass 200 in {} ms (budget 6000)",
+        took.as_millis()
+    );
+    assert!(
+        took < Duration::from_secs(6),
+        "a fork to pass 200 took {took:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "timing: live, the adapter image with bwrap"]
+async fn a_python_fork_to_a_late_pass_is_quick() {
+    let text = PY.replace("range(40)", "range(300)");
+    a_late_pass("stock.py", &text, py_config, (5, 8, 24)).await;
+}
+
+#[tokio::test]
+#[ignore = "timing: live, the adapter image with bwrap"]
+async fn a_js_fork_to_a_late_pass_is_quick() {
+    let text = JS.replace("i < 40", "i < 300");
+    a_late_pass("stock.js", &text, js_config, (3, 7, 9)).await;
 }

@@ -12,7 +12,7 @@
           (file (expand-file-name "f.el" root))
           (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
           (s (progn (write-region "(defun f ()\n  (list 1\n        2))\n" nil file nil 'silent)
-                    (drgnx-ui-start "drgnx" "1400x800" 30)))
+                    (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)))
           (,sess (drgnx-ui-own-session (plist-get s :name))))
      (unwind-protect
          (progn
@@ -37,7 +37,8 @@
     (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "M-j")))
     (let ((before (drgnx-live-mod--q sess "(sort (mapcar #'window-pixel-edges (window-list nil 'nomini)) (lambda (a b) (or (< (car a) (car b)) (and (= (car a) (car b)) (< (cadr a) (cadr b))))))")))
       (drgnx-ui-measure sess (list (list :keys "C-k z")))
-      (should (= 1 (drgnx-live-mod--q sess "(length (window-list nil 'nomini))")))
+      ;; one editor window; the status bar is the frame's, not an area zen hides
+      (should (= 1 (drgnx-live-mod--q sess "(length (seq-remove (lambda (w) (eq (window-parameter w 'drgnx-role) 'statusbar)) (window-list nil 'nomini)))")))
       (drgnx-ui-measure sess (list (list :keys "C-k z")))
       (should (equal before (drgnx-live-mod--q sess "(sort (mapcar #'window-pixel-edges (window-list nil 'nomini)) (lambda (a b) (or (< (car a) (car b)) (and (= (car a) (car b)) (< (cadr a) (cadr b))))))"))))))
 
@@ -45,7 +46,7 @@
   (drgnx-live-mod--with sess
     (drgnx-ui-measure sess (list (list :keys "C-S-`")))
     (should (equal (drgnx-live-mod--q sess "(list (eq (selected-window) (drgnx-wb-area-window 'panel)) (drgnx-wb-area-tab 'panel) (with-current-buffer (window-buffer (selected-window)) major-mode))")
-                   '(t terminal eshell-mode)))
+                   '(t terminal drgnx-term-mode)))   ; drgnx's own terminal, on the session's hub
     ;; Emacs 31 caches "no project here" (the chrome asked when the file opened): forget it after git init.
     (drgnx-live-mod--q sess "(progn (call-process \"git\" nil nil nil \"-C\" (file-name-directory (buffer-file-name (window-buffer (drgnx-wb-editor-window)))) \"init\" \"-q\") (when (fboundp 'project--clear-cache) (project--clear-cache)) (select-window (drgnx-wb-editor-window)) t)")
     ;; C-S-f is View: Search (VS Code's Ctrl+Shift+F): the Search view, the cursor in its Find field; RET searches.

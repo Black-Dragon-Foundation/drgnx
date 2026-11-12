@@ -133,6 +133,13 @@ gave different answers twice (flaky) or could not be judged. **Show Step** opens
 step, **Revert Step** opens the revert card (nothing changes until you apply it) and **Ask the Agent** tells that
 agent what broke; **Narrow** finds the hunks of the change that make it fail. `RET` on an action runs it.
 
+**Where Did This Come From?** (Alt-click a name at a recorded stop, or the palette) shows, for a Python program, the
+chain that gave a value: the line that last set it, with the values of what it was computed from, then where each of
+those came from, up to three levels. The hub replays the recorded run to that stop with a small tracer on, one replay
+a level, so the chain is exact; a change made inside a call (`items.append(x)`) shows as "changed inside
+`list.append`". `RET` on a link opens it as a past stop. Python older than 3.12 has no tracing hook: the card then
+lists the assignments to the name in the files that ran, labelled "candidates, not traced".
+
 ## Indent guides
 
 Thin vertical guides at each indentation level of code and YAML, on graphical frames, drawn by indent-bars (stipples,

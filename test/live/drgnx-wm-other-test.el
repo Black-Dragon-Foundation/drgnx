@@ -53,7 +53,7 @@ and a way to call an asynchronous function whose answer lands in `drgnx-wmt-resu
 
 (defun drgnx-wm-other--start (compositor monitors saved)
   "Start a daemon session under COMPOSITOR with MONITORS outputs, its layout file SAVED; return the session."
-  (let* ((s (drgnx-ui-start "drgnx" "1280x800" 60 t monitors compositor))
+  (let* ((s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1280x800") 60 t monitors compositor))
          (sess (drgnx-ui-own-session (plist-get s :name))))
     (drgnx-wm-other--eval sess (format "(progn (setq drgnx-persist-file %S) %s)" saved drgnx-wm-other--session-lisp))
     sess))

@@ -37,7 +37,7 @@ use runstav::methods::exec::{
 use runstav::wire::{Error, ErrorCode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -519,6 +519,29 @@ impl Default for Runner {
 /// The job folder's file with the job's facts (`vordr::facts::Facts`), written before it is queued.
 const FACTS: &str = "facts.json";
 
+/// The job folder's list of the protected files its sandbox made empty in its tree (`sandbox::note_missing`).
+const STUBS: &str = "stubs";
+
+/// The job folder's tree as its key read it at submit ([`Snap`]).
+const SNAP: &str = "snap.json";
+
+/// The job folder's files that changed in its tree while it ran, one a line, when its facts went for it.
+const MOVED: &str = "moved";
+
+/// The job folder's facts once its tree moved while it ran: no one's evidence, never reused.
+const FACTS_MOVED: &str = "facts.moved.json";
+
+/// What a job's result and a gate's note say of a run whose tree moved while it ran (FILES, [`Runner::moved`]).
+pub fn moved_line(files: &[String]) -> String {
+    if files.is_empty() {
+        return "its tree moved while it ran: no facts kept".into();
+    }
+    format!(
+        "its tree moved while it ran ({}): no facts kept; a file a run writes belongs in .gitignore",
+        some_paths(files)
+    )
+}
+
 /// The Emacs build and the Rust toolchain on this machine (`emacs`, `rustc`, `cargo` `--version`'s first lines, `none`
 /// for one that is missing), read once: as `core/drgnx-affected.el`'s stamp.
 pub(crate) fn env_stamp() -> &'static str {
@@ -546,25 +569,26 @@ pub(crate) fn env_stamp() -> &'static str {
 /// SPEC's facts at submit: its tree's key (the hardened capture of `sleipnir::sync::capture`: the commit's tree, plus
 /// the overlay's input key when anything is uncommitted), this machine's env stamp (with a container job's image), the
 /// platform and the selector.  None outside a git tree.
-async fn facts_of(spec: &ExecSpec) -> Option<vordr::facts::Facts> {
+async fn facts_of(spec: &ExecSpec) -> Option<(vordr::facts::Facts, Snap)> {
     let cwd = spec.cwd.clone();
     let argv = spec.argv.clone();
     let env = spec.user.env.clone();
     let image = spec.container.as_ref().map(|c| c.image.clone());
     crate::clock::blocking(move || {
-        let (top, tree_key) = tree_key_at(&cwd)?;
+        let (top, tree_key, snap) = tree_key_at(&cwd)?;
         let rel = cwd.strip_prefix(&top).ok()?.to_string_lossy().into_owned();
         let mut stamp = env_stamp().to_string();
         if let Some(i) = image {
             stamp.push_str("\nimage ");
             stamp.push_str(&i);
         }
-        Some(vordr::facts::Facts {
+        let facts = vordr::facts::Facts {
             tree_key,
             env_stamp: stamp,
             platform: local_platform(),
             selector: vordr::facts::selector(&rel, &argv, &env),
-        })
+        };
+        Some((facts, snap))
     })
     .await
     .ok()
@@ -576,9 +600,81 @@ pub(crate) fn local_platform() -> String {
     format!("{}-{}/local", std::env::consts::OS, std::env::consts::ARCH)
 }
 
-/// The git tree holding CWD and its key now (the commit's tree, plus the overlay's input key when anything is
-/// uncommitted).  Blocking.
-fn tree_key_at(cwd: &Path) -> Option<(PathBuf, String)> {
+/// A tree as a job's key read it: the commit's tree and each uncommitted path with its content's hash (none for a
+/// deleted one).  Kept in the job's folder ([`SNAP`]) so its end can name what moved ([`Snap::moved`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Snap {
+    tree: String,
+    files: BTreeMap<String, Option<String>>,
+}
+
+impl Snap {
+    fn of(inputs: &sleipnir::sync::capture::Inputs) -> Snap {
+        use sleipnir::sync::capture::Entry;
+        let files = inputs
+            .manifest
+            .iter()
+            .map(|e| {
+                let hash = match e {
+                    Entry::File { sha256, .. } => {
+                        Some(sha256.iter().map(|b| format!("{b:02x}")).collect())
+                    }
+                    Entry::Deleted { .. } => None,
+                };
+                (String::from_utf8_lossy(e.path()).into_owned(), hash)
+            })
+            .collect();
+        Snap {
+            tree: inputs.tree.clone(),
+            files,
+        }
+    }
+
+    /// The paths that differ between this snap and NOW, in git TOP: the commits' trees' changes, then an uncommitted
+    /// path changed, added or gone; sorted, each once.  Blocking.
+    fn moved(&self, now: &Snap, top: &Path) -> Vec<String> {
+        let mut out = std::collections::BTreeSet::new();
+        if self.tree != now.tree
+            && let Ok(o) = std::process::Command::new("git")
+                .args([
+                    "diff-tree",
+                    "-r",
+                    "--name-only",
+                    "-z",
+                    &self.tree,
+                    &now.tree,
+                ])
+                .current_dir(top)
+                .output()
+        {
+            out.extend(
+                o.stdout
+                    .split(|b| *b == 0)
+                    .filter(|p| !p.is_empty())
+                    .map(|p| String::from_utf8_lossy(p).into_owned()),
+            );
+        }
+        for path in self.files.keys().chain(now.files.keys()) {
+            if self.files.get(path) != now.files.get(path) {
+                out.insert(path.clone());
+            }
+        }
+        out.into_iter().collect()
+    }
+}
+
+/// PATHS for a reader: the first five, then how many more.
+fn some_paths(paths: &[String]) -> String {
+    let shown = paths.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+    match paths.len() {
+        n if n > 5 => format!("{shown} and {} more", n - 5),
+        _ => shown,
+    }
+}
+
+/// The git tree holding CWD, its key now (the commit's tree, plus the overlay's input key when anything is
+/// uncommitted) and the tree as read.  Blocking.
+fn tree_key_at(cwd: &Path) -> Option<(PathBuf, String, Snap)> {
     let top = cwd
         .ancestors()
         .find(|d| d.join(".git").exists())?
@@ -587,7 +683,8 @@ fn tree_key_at(cwd: &Path) -> Option<(PathBuf, String)> {
     let overlay =
         (!inputs.manifest.is_empty()).then(|| sleipnir::sync::capture::input_key(&inputs));
     let key = vordr::facts::tree_key(&inputs.tree, overlay.as_deref());
-    Some((top, key))
+    let snap = Snap::of(&inputs);
+    Some((top, key, snap))
 }
 
 fn now() -> f64 {
@@ -683,7 +780,7 @@ impl Runner {
     pub async fn start_or_reuse(&self, spec: ExecSpec) -> Result<(String, bool), Refusal> {
         let i = self.inner()?.clone();
         let facts = facts_of(&spec).await;
-        if let Some(f) = &facts
+        if let Some((f, _)) = &facts
             && vordr::facts::cacheable(&f.selector, &self.no_cache.lock().unwrap())
             && let Some(id) = i.green_with(f)
         {
@@ -702,6 +799,14 @@ impl Runner {
     /// stamp the runner's name); none for a job outside a git tree, a server, or an unknown job.
     pub fn facts(&self, id: &str) -> Option<vordr::facts::Facts> {
         self.inner.get()?.facts(id)
+    }
+
+    /// Job ID's tree moved while it ran: the files that changed (maybe none known) and the facts it had at submit.
+    pub fn moved(&self, id: &str) -> Option<(Vec<String>, vordr::facts::Facts)> {
+        let i = self.inner.get()?;
+        let files = i.moved(id)?;
+        let text = std::fs::read(i.dir(id).join(FACTS_MOVED)).ok()?;
+        Some((files, serde_json::from_slice(&text).ok()?))
     }
 
     /// What job ID is (its command, folder, kind and image), as saved when it started; none when it is unknown.
@@ -866,6 +971,12 @@ impl Inner {
         serde_json::from_str(&text).ok()
     }
 
+    /// The files [`MOVED`] names, when job ID's tree moved while it ran.
+    fn moved(&self, id: &str) -> Option<Vec<String>> {
+        let text = std::fs::read_to_string(self.dir(id).join(MOVED)).ok()?;
+        Some(text.lines().map(String::from).collect())
+    }
+
     fn facts(&self, id: &str) -> Option<vordr::facts::Facts> {
         let text = std::fs::read(self.dir(id).join(FACTS)).ok()?;
         let mut f: vordr::facts::Facts = serde_json::from_slice(&text).ok()?;
@@ -1009,11 +1120,11 @@ impl Inner {
         self.start_with(spec, facts).await
     }
 
-    /// Start SPEC, its FACTS (computed at submit) kept in the job's folder.
+    /// Start SPEC, its FACTS (computed at submit, with the tree they read) kept in the job's folder.
     async fn start_with(
         self: Arc<Self>,
         spec: ExecSpec,
-        facts: Option<vordr::facts::Facts>,
+        facts: Option<(vordr::facts::Facts, Snap)>,
     ) -> Result<String, Refusal> {
         if spec.argv.is_empty() || spec.argv[0].is_empty() {
             return Err(refusal("a job needs a command"));
@@ -1022,8 +1133,9 @@ impl Inner {
         let id = self.new_id();
         let dir = self.dir(&id);
         std::fs::create_dir_all(&dir).map_err(|e| setup(format!("{}: {e}", dir.display())))?;
-        if let Some(f) = &facts {
+        if let Some((f, snap)) = &facts {
             let _ = std::fs::write(dir.join(FACTS), serde_json::to_vec(f).unwrap_or_default());
+            let _ = std::fs::write(dir.join(SNAP), serde_json::to_vec(snap).unwrap_or_default());
         }
         // The user's servers (no time box: the editor's, which run for days) never queue: they start at once and count
         // only in the memory the machine shows.  Every other job enters the queue.
@@ -1553,7 +1665,8 @@ impl Inner {
                 setup("the static drgnx-key was not found next to the hub: a keyed container job can't get its keys")
             })?;
         let bin = dir.join("drgnx-key");
-        std::fs::copy(&from, &bin)
+        // the container runs this copy: its write descriptor kept out of the hub's other forks (drgnx-exe)
+        drgnx_exe::copy(&from, &bin)
             .map_err(|e| setup(format!("drgnx-key for the job ({}): {e}", from.display())))?;
         Ok(KeySocket {
             socket: None,
@@ -1634,6 +1747,10 @@ impl Inner {
                     ro_files: Vec::new(),
                     gateway_url_env: Vec::new(),
                 };
+                // the protected files the launch makes empty to pin them go at the job's end (`finish`), before its
+                // tree's key is read again: they were never the agent's
+                crate::sandbox::note_missing(&dir.join(STUBS), &worktree, &plan.protected_ro)
+                    .map_err(|e| setup(format!("the job's stub list: {e}")))?;
                 // a keyed job reads drgnx-key (the file alone) and reaches its key socket (the path alone)
                 let shape = SessionShape {
                     sid: sid.clone(),
@@ -1963,24 +2080,32 @@ impl Inner {
         }
         let Some(meta) = self.meta(id) else { return };
         let dir = self.dir(id);
+        crate::sandbox::remove_made(&dir.join(STUBS));
         // a job here ran on its tree as it was while it ran (a runner's ran on the inputs frozen at its submit): when
         // the tree's key moved since the submit, its facts go, so it is no one's evidence and never reused
         if meta.machine.as_deref().is_none_or(|m| m == "local")
             && let Some(f) = self.facts(id)
         {
             let cwd = PathBuf::from(&meta.cwd);
-            let now = crate::clock::blocking(move || tree_key_at(&cwd).map(|(_, k)| k))
-                .await
+            let key = f.tree_key.clone();
+            let before: Option<Snap> = std::fs::read(dir.join(SNAP))
                 .ok()
-                .flatten();
-            // the commit's tree: files left uncommitted while it ran (a session's own, a run's outputs) are no move
-            let commit = |k: &str| k.split('+').next().unwrap_or_default().to_owned();
-            if now.as_deref().map(commit) != Some(commit(&f.tree_key)) {
+                .and_then(|t| serde_json::from_slice(&t).ok());
+            // the files that changed: what a user adds to .gitignore when a run writes them
+            let moved = crate::clock::blocking(move || {
+                let (top, now, snap) = tree_key_at(&cwd)?;
+                (now != key).then(|| before.map(|b| b.moved(&snap, &top)).unwrap_or_default())
+            })
+            .await
+            .ok()
+            .flatten();
+            if let Some(files) = moved {
                 tracing::info!(
-                    "job {id}: its tree moved while it ran ({} → {now:?}): no facts kept",
-                    f.tree_key
+                    "job {id}: its tree moved while it ran ({}): no facts kept",
+                    some_paths(&files)
                 );
-                let _ = std::fs::rename(dir.join(FACTS), dir.join("facts.moved.json"));
+                let _ = std::fs::rename(dir.join(FACTS), dir.join(FACTS_MOVED));
+                let _ = std::fs::write(dir.join(MOVED), files.join("\n"));
             }
         }
         let exit = unit::read_exit(&dir);
@@ -2001,6 +2126,9 @@ impl Inner {
         // rows that ran over several attempts: the split first
         if let Ok(line) = std::fs::read_to_string(dir.join(SPLIT)) {
             summary.lines.insert(0, line);
+        }
+        if let Some(files) = self.moved(id) {
+            summary.lines.push(moved_line(&files));
         }
         // what a runner returned, and where it went
         if let Ok(text) = std::fs::read_to_string(dir.join(RETURNED)) {

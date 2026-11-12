@@ -126,6 +126,20 @@ window manager places the window then); the size is cut to the work area, from t
     (and (proper-list-p g) (= (length g) 4) (seq-every-p #'integerp g)
          (seq-every-p (lambda (n) (<= (abs n) 20000)) g) (> (nth 2 g) 0) (> (nth 3 g) 0) g)))
 
+(defun drgnx-persist--under-p (window ancestor)
+  "Non-nil when WINDOW is ANCESTOR or in its subtree."
+  (while (and window (not (eq window ancestor))) (setq window (window-parent window)))
+  (eq window ancestor))
+
+(defun drgnx-persist--main-window ()
+  "The window whose tree is saved: `window-main-window', except on a frame without side windows, where that is the
+root and holds the status bar's row (the bar is across the frame): there it is the editor groups' smallest common
+window, so the state brings back no stray group in the bar's place."
+  (let* ((groups (drgnx-groups-list)) (w (car groups)))
+    (while (and w (not (seq-every-p (lambda (g) (drgnx-persist--under-p g w)) groups)))
+      (setq w (window-parent w)))
+    (if (and w (not (window-with-parameter 'window-side nil nil 'nomini))) w (window-main-window))))
+
 (defun drgnx-persist--workbench-state (frame)
   (with-selected-frame (or frame (selected-frame))
     (let ((dock (car (drgnx-wb--dock-windows))))
@@ -134,7 +148,7 @@ window manager places the window then); the size is cut to the work area, from t
             :panel (drgnx-persist--area 'panel)
             :right (drgnx-persist--area 'right)
             :roots (and (fboundp 'drgnx-explorer-chosen-roots) (drgnx-explorer-chosen-roots))
-            :main (window-state-get (window-main-window) t)
+            :main (window-state-get (drgnx-persist--main-window) t)
             :groups (mapcar (lambda (g) (list :tabs (or (nth 2 (assq g drgnx-persist--pending))   ; still loading
                                                         (delq nil (mapcar #'buffer-file-name (drgnx-chrome-tabs g))))
                                               :shown (buffer-file-name (window-buffer g))

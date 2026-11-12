@@ -827,11 +827,10 @@ const INFO_ENFORCES: &str = "if [ \"$1\" = info ]; then echo '{\"host\":{\"cgrou
 /// is pulled or run.
 #[tokio::test]
 async fn a_container_job_whose_caps_podman_cannot_enforce_is_refused() {
-    use std::os::unix::fs::PermissionsExt;
     let d = tempfile::tempdir().unwrap();
     let fake = d.path().join("podman");
     let ran = d.path().join("ran");
-    std::fs::write(
+    drgnx_exe::write(
         &fake,
         format!(
             "#!/bin/sh\nif [ \"$1\" = info ]; then echo '{{\"host\":{{\"cgroupVersion\":\"v2\",\
@@ -841,7 +840,6 @@ async fn a_container_job_whose_caps_podman_cannot_enforce_is_refused() {
         ),
     )
     .unwrap();
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
     let r = Runner::default();
     r.open(
         d.path().join("exec"),
@@ -857,16 +855,12 @@ async fn a_container_job_whose_caps_podman_cannot_enforce_is_refused() {
 
 #[tokio::test]
 async fn a_container_job_runs_the_fixed_podman_line() {
-    use std::os::unix::fs::PermissionsExt;
     let d = tempfile::tempdir().unwrap();
     // a stand-in for podman: it enforces limits, the image is "present", and `run` prints the line it was given
     let fake = d.path().join("podman");
-    std::fs::write(
-        &fake,
+    drgnx_exe::write(&fake,
         format!("#!/bin/sh\n{INFO_ENFORCES}if [ \"$1\" = image ]; then exit 0; fi\nprintf '%s\\n' \"$@\"\n"),
-    )
-    .unwrap();
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    ).unwrap();
     let r = Runner::default();
     r.open(
         d.path().join("exec"),
@@ -1433,7 +1427,6 @@ fn info_net(version: &str, rootless: bool) -> String {
 /// `run -i` sends its READY (from `D/ready`) and then reads until its stdin closes, or (with `D/die`) exits 4 at once;
 /// the job's `run` sleeps.  Answers the hooks with it and a relay binary folder.
 fn net_hooks(d: &Path, info: &str) -> Hooks {
-    use std::os::unix::fs::PermissionsExt;
     let mut ready = Vec::new();
     drgnx_px::frame::encode(&drgnx_px::frame::Frame::ready(net::LISTEN), &mut ready);
     std::fs::write(d.join("ready"), ready).unwrap();
@@ -1444,7 +1437,7 @@ fn net_hooks(d: &Path, info: &str) -> Hooks {
     }
     let fake = d.join("podman");
     let d = d.display();
-    std::fs::write(
+    drgnx_exe::write(
         &fake,
         format!(
             "#!/bin/sh\n{info}case \"$1\" in\n  image|import|rmi) exit 0 ;;\n  ps|images) echo '[]'; exit 0 ;;\n  rm) for a in \"$@\"; do n=$a; done; echo \"rm $n\" >> {d}/ran; exit 0 ;;\nesac\n\
@@ -1453,7 +1446,6 @@ fn net_hooks(d: &Path, info: &str) -> Hooks {
         ),
     )
     .unwrap();
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
     Hooks {
         podman: Some(fake),
         px_dir: Some(px),
@@ -1873,6 +1865,60 @@ async fn a_job_whose_tree_moved_under_it_keeps_no_facts() {
     ended(&r, &b).await;
 }
 
+#[tokio::test]
+async fn an_edit_left_uncommitted_while_a_job_ran_moves_its_tree() {
+    let d = tempfile::tempdir().unwrap();
+    let w = d.path().join("w");
+    repo_with_a_commit(&w);
+    let r = open(d.path());
+    let edited = spec(
+        Starter::User,
+        &w,
+        "echo 'test a ... ok'; echo changed > a.txt",
+        Duration::from_secs(30),
+    );
+    let (a, _) = r.start_or_reuse(edited).await.unwrap();
+    let row = ended(&r, &a).await;
+    assert_eq!(row.status, ExecStatus::Done);
+    assert_eq!(
+        r.facts(&a),
+        None,
+        "a tracked file changed while it ran: no facts"
+    );
+}
+
+/// A job whose run writes files git doesn't ignore keeps no facts, and its result names them, so the user sees what
+/// belongs in .gitignore; the facts it had at submit stay for the gate's note.
+#[tokio::test]
+async fn a_moved_job_names_the_files_that_changed() {
+    let d = tempfile::tempdir().unwrap();
+    let w = d.path().join("w");
+    repo_with_a_commit(&w);
+    std::fs::write(w.join("a.txt"), "uncommitted\n").unwrap();
+    let r = open(d.path());
+    let writes = spec(
+        Starter::User,
+        &w,
+        "echo 'test a ... ok'; for n in 1 2 3 4 5 6; do echo x > out$n.log; done; rm a.txt",
+        Duration::from_secs(30),
+    );
+    let (a, _) = r.start_or_reuse(writes).await.unwrap();
+    ended(&r, &a).await;
+    assert_eq!(r.facts(&a), None);
+    let (files, facts) = r.moved(&a).expect("its tree moved");
+    assert_eq!(
+        files,
+        [
+            "a.txt", "out1.log", "out2.log", "out3.log", "out4.log", "out5.log", "out6.log"
+        ]
+    );
+    assert!(facts.tree_key.contains('+'), "{}", facts.tree_key);
+    let line = "its tree moved while it ran (a.txt, out1.log, out2.log, out3.log, out4.log and 2 more): no facts \
+                kept; a file a run writes belongs in .gitignore";
+    let lines = r.done(&a).expect("ended").summary.lines;
+    assert!(lines.iter().any(|l| l == line), "{lines:?}");
+}
+
 /// A git repository at DIR with one commit; answers its tree id.
 fn repo_with_a_commit(dir: &Path) -> String {
     let git = |args: &[&str]| {
@@ -2044,14 +2090,12 @@ async fn a_tasks_jobs_are_its_evidence() {
 /// A stand-in for `drgnx-key` at D/fake-key: `exec NAME=VAR… -- CMD…` runs CMD with TOKEN set to VALUE (what the
 /// real one would have read from the key socket), and says whether its socket is there.
 fn fake_key(d: &Path, value: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let bin = d.join("fake-key");
     let script = format!(
         "#!/bin/sh\ntest -S \"$DRGNX_KEY_SOCK\" && echo socket-there\n\
          while [ \"$1\" != -- ]; do shift; done; shift\nTOKEN='{value}' exec \"$@\"\n"
     );
-    std::fs::write(&bin, script).unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    drgnx_exe::write(&bin, script).unwrap();
     bin
 }
 
@@ -2137,13 +2181,12 @@ async fn a_keyed_job_without_drgnx_key_is_refused() {
 /// the hub the job is refused.
 #[tokio::test]
 async fn a_keyed_container_job_reads_its_keys_through_its_sidecar() {
-    use std::os::unix::fs::PermissionsExt;
     let d = tempfile::tempdir().unwrap();
     let h = net_hooks(d.path(), &info_net("5.4.2", true));
     // podman's arguments recorded, then the stand-in
     std::fs::rename(d.path().join("podman"), d.path().join("podman-real")).unwrap();
     let rec = d.path().join("podman");
-    std::fs::write(
+    drgnx_exe::write(
         &rec,
         format!(
             "#!/bin/sh\necho \"$*\" >> {0}/args\nexec {0}/podman-real \"$@\"\n",
@@ -2151,7 +2194,6 @@ async fn a_keyed_container_job_reads_its_keys_through_its_sidecar() {
         ),
     )
     .unwrap();
-    std::fs::set_permissions(&rec, std::fs::Permissions::from_mode(0o755)).unwrap();
     let px = h.px_dir.clone().unwrap();
     let r = Runner::default();
     r.open(d.path().join("exec"), h);

@@ -70,6 +70,18 @@ pub struct Target {
     pub steps: Vec<String>,
     /// The run's event order of the point: its hits before it are the ones compared.
     pub seq: Option<u64>,
+    /// How many probe hits the run had before it reached the line's pass (when it stopped there): where the adapter
+    /// counts the passes, the fork's landing must have had as many.
+    pub before: Option<usize>,
+    /// The run's breakpoint stop at the line's pass (when it stopped there).
+    pub landing: Option<u64>,
+    /// What the run recorded at that stop (its capture: frames, scopes), which the adapter's landing must match.
+    pub recorded: Option<Value>,
+}
+
+/// RUN's probe hits before its event INDEX.
+fn hits_before(run: &RunInfo, index: u64) -> usize {
+    run.hits.iter().filter(|h| h.seq < index).count()
 }
 
 /// Why a fork is not made, or what it asks first.
@@ -136,6 +148,9 @@ pub fn check(run: &RunInfo, at: &At, linux: bool, confirmed: bool) -> Result<Tar
                     hit: *hit,
                     steps: vec![],
                     seq: stop.map(|s| s.index),
+                    before: stop.map(|s| hits_before(run, s.index)),
+                    landing: stop.map(|s| s.index),
+                    recorded: None,
                 },
                 stop.map(|s| s.t_ms),
             )
@@ -162,6 +177,9 @@ pub fn check(run: &RunInfo, at: &At, linux: bool, confirmed: bool) -> Result<Tar
                     hit: from.bp_hit.unwrap_or(1),
                     steps: stop.steps.clone(),
                     seq: Some(stop.index),
+                    before: Some(hits_before(run, from.index)),
+                    landing: Some(from.index),
+                    recorded: None,
                 },
                 Some(stop.t_ms),
             )
@@ -453,6 +471,129 @@ async fn next_of(
 
 impl Drive {
     /// Every configured session gets PATH's breakpoints BPS.
+    /// Whether a probe sits on the fork line (read at each pass, so the fork stops at each).
+    fn probe_on_line(&self) -> bool {
+        self.probes
+            .iter()
+            .any(|p| p.path == self.target.path && p.line == self.target.line)
+    }
+
+    /// The breakpoint field that stops at the target's pass, and its text. js-debug counts a `hitCondition` by
+    /// pausing at every pass (about 30 ms each in a fork); a condition with a counter runs inside V8 without a pause.
+    fn pass_condition(&self) -> (&'static str, String) {
+        let n = self.target.hit;
+        if super::probes::lang(&self.start.adapter_id) == super::probes::Lang::Js {
+            (
+                "condition",
+                // a registered symbol as the key: no name of the program's own can clash with it, and it is not
+                // enumerated by `Object.keys(globalThis)` or `for … in`
+                format!(
+                    "(globalThis[Symbol.for('drgnx.forkPass')] = (globalThis[Symbol.for('drgnx.forkPass')] || 0) + 1) === {n}"
+                ),
+            )
+        } else {
+            ("hitCondition", n.to_string())
+        }
+    }
+
+    /// Whether the adapter with CAPS counts the fork line's passes (the field of [`Self::pass_condition`]).
+    fn adapter_counts(&self, caps: &Value) -> bool {
+        let cap = match self.pass_condition().0 {
+            "condition" => "supportsConditionalBreakpoints",
+            _ => "supportsHitConditionalBreakpoints",
+        };
+        self.target.hit > 1
+            && !self.probe_on_line()
+            && caps.get(cap).and_then(Value::as_bool).unwrap_or(false)
+    }
+
+    /// The adapter's count landed the fork: it must have had the run's probe hits before that pass.
+    /// The adapter's count landed the fork at STOP: it must have had the run's probe hits before that pass, the
+    /// run's stack there (names and lines), and, where no probe hit says which pass it is, the run's plain locals.
+    fn landed(&self, t: &Tree, stop: &Stop) -> Result<(), String> {
+        let not = |why: String| {
+            Err(format!(
+                "the adapter stopped at pass {} of line {} by its own count, but that is not the run's pass: {why}",
+                self.target.hit, self.target.line
+            ))
+        };
+        if let Some(want) = self.target.before
+            && t.hits.len() != want
+        {
+            return not(format!(
+                "the run had {want} probe hits before it, the fork {}",
+                t.hits.len()
+            ));
+        }
+        let Some(rec) = &self.target.recorded else {
+            return Ok(());
+        };
+        let stack = |frames: &[Value]| -> Vec<String> {
+            frames
+                .iter()
+                .map(|f| {
+                    format!(
+                        "{}:{}",
+                        f.get("name").and_then(Value::as_str).unwrap_or("?"),
+                        f.get("line").and_then(Value::as_u64).unwrap_or(0)
+                    )
+                })
+                .collect()
+        };
+        let then = stack(
+            rec.get("frames")
+                .and_then(Value::as_array)
+                .map_or(&[][..], |v| v),
+        );
+        let now = stack(&stop.frames);
+        let n = then.len().min(now.len());
+        if then[..n] != now[..n] {
+            return not(format!(
+                "the run's stack there was {}, the fork's {}",
+                then[..n].join(" < "),
+                now[..n].join(" < ")
+            ));
+        }
+        if !t.hits.is_empty() || self.target.before.is_some_and(|b| b > 0) {
+            return Ok(());
+        }
+        // no probe hit tells the passes apart: the plain locals the run recorded must be the fork's
+        let plain = |vars: &[Value]| -> Vec<(String, String)> {
+            vars.iter()
+                .filter(|v| {
+                    v.get("variablesReference")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0)
+                        == 0
+                })
+                .filter_map(|v| {
+                    Some((
+                        v.get("name")?.as_str()?.to_owned(),
+                        v.get("value")?.as_str()?.to_owned(),
+                    ))
+                })
+                .collect()
+        };
+        let recorded_vars: Vec<Value> = rec
+            .get("scopes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find_map(|s| s.get("variables").and_then(Value::as_array).cloned())
+            .unwrap_or_default();
+        let fork_vars = plain(&locals(stop));
+        for (name, was) in plain(&recorded_vars) {
+            if let Some((_, is)) = fork_vars.iter().find(|(n, _)| *n == name)
+                && *is != was
+            {
+                return not(format!(
+                    "{name} was {was} in the run there, {is} in the fork"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     async fn set_bps(&self, t: &mut Tree, all: &[SourceBps]) {
         t.bps = all.to_vec();
         for s in t.sessions.iter().filter(|s| !s.ended && !s.caps.is_null()) {
@@ -618,6 +759,22 @@ pub async fn drive(d: Drive) -> Result<Outcome, String> {
         Some((&d.target.path, d.target.line)),
         &[],
     );
+    // the adapter counts the passes where it can and no probe needs reading at each (fit drops the field where the
+    // adapter cannot; the fork then counts)
+    if d.target.hit > 1 && !d.probe_on_line() {
+        let (field, text) = d.pass_condition();
+        for s in start
+            .breakpoints
+            .iter_mut()
+            .filter(|s| s.path == d.target.path)
+        {
+            for b in s.breakpoints.iter_mut() {
+                if b.get("line") == Some(&json!(d.target.line)) && b.get("logMessage").is_none() {
+                    b[field] = json!(text);
+                }
+            }
+        }
+    }
     t.bps = start.breakpoints.clone();
     let c = d.launcher.connect().await?;
     t.add(start, c);
@@ -641,6 +798,10 @@ async fn reach_and_run(d: &Drive, t: &mut Tree) -> Result<Outcome, String> {
             Next::Stopped(i, s) => {
                 let (path, line) = top(&s);
                 if path == d.target.path && line == d.target.line {
+                    if d.adapter_counts(&t.sessions[i].caps) {
+                        d.landed(t, &s)?;
+                        break (i, s);
+                    }
                     count += 1;
                     d.read_probe(t, i, &s, &path, line).await;
                     if count >= d.target.hit {

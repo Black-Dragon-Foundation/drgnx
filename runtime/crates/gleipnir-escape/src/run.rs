@@ -1126,7 +1126,8 @@ fn run_sandboxed(opts: &Opts, row: &Row, control: bool) -> Result<(Fixture, RunD
     let prep = setup(&mut fx, row, false)?;
     let bin = fx.path("bin");
     let probe_copy = bin.join("gleipnir-probe");
-    std::fs::copy(&opts.probe, &probe_copy).map_err(|e| format!("copy the probe: {e}"))?;
+    // run at once: copied through drgnx-exe, never held open for writing by another thread's fork
+    drgnx_exe::copy(&opts.probe, &probe_copy).map_err(|e| format!("copy the probe: {e}"))?;
     let path = match &prep.path_dir {
         Some(d) => format!("{}:/usr/bin:/bin", d.display()),
         None => "/usr/bin:/bin".to_string(),

@@ -975,6 +975,10 @@ impl Front {
             | Params::DebugBisectStates(_)) => crate::debug::bisect_wire::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
+            // where a value came from (`debug/origin`)
+            p @ Params::DebugOrigin(_) => crate::debug::origin_wire::serve(self, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
             // the Extensions view's catalog (`extensions/*`)
             p @ (Params::ExtensionsSearch(_)
             | Params::ExtensionsDetails(_)

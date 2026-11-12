@@ -26,7 +26,9 @@ pub struct DebugBisectState {
 
 /// What makes a state bad: `test` (ARGV fails: exit 0 good, 125 skip, 1–127 bad, as `git bisect run`), `exit` (ARGV
 /// exits with CODE: bad; 0 or another code: good; 125 skip).  BUILD, when given, runs first: its failure skips the
-/// state.  `exception` and `probe` (Python and JS) replay the run in a what-if fork (spec §19.3).
+/// state.  `exception` and `probe` (Python and JS) run RUN's configuration in each state (spec §19.3's plain run in a
+/// slot): `exception` is bad when it raises at AT (`path:line`, relative to the project), `probe` when CONDITION is true
+/// at AT at least once; a run the time box cut, or a probe line that never ran, skips the state.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct DebugPredicate {
     pub kind: String,
@@ -39,8 +41,8 @@ pub struct DebugPredicate {
     /// Each run's time box, in seconds (default 600).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timebox_s: Option<u64>,
-    /// `exception` and `probe`: the recorded run to replay, and what to watch for (a place `path:line`, or a probe's
-    /// condition).
+    /// `exception` and `probe`: the recorded run whose configuration runs, the place (`path:line`) and a probe's
+    /// condition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -142,6 +144,25 @@ fn check_bisect(p: &DebugBisect) -> Result<(), Error> {
             if pr.run.is_none() {
                 return Err(invalid("predicate.run", "the recorded run to replay"));
             }
+            let place = pr.at.as_deref().and_then(|a| a.rsplit_once(':'));
+            let ok = place.is_some_and(|(path, line)| {
+                !path.is_empty()
+                    && !path.starts_with('/')
+                    && !path.split('/').any(|c| c == "..")
+                    && line.parse::<u32>().is_ok_and(|n| n > 0)
+            });
+            if !ok {
+                return Err(invalid(
+                    "predicate.at",
+                    "the place to watch: PATH:LINE, the path relative to the project",
+                ));
+            }
+            if pr.kind == "probe" && pr.condition.as_deref().is_none_or(str::is_empty) {
+                return Err(invalid(
+                    "predicate.condition",
+                    "the probe's condition: the state is bad when it is true there",
+                ));
+            }
         }
         _ => return Err(invalid("predicate.kind", "test, exit, exception or probe")),
     }
@@ -228,5 +249,31 @@ mod tests {
             (m.decode)(&bad).err().and_then(|e| e.path).as_deref(),
             Some("good")
         );
+        // the replayed predicates: a place PATH:LINE, and a probe's condition
+        let ok = json!({"root": "/p", "good": {"kind": "commit", "id": "abc123"},
+                        "predicate": {"kind": "probe", "run": "r1", "at": "app/stock.py:15", "condition": "x < 0"}});
+        assert!((m.decode)(&ok).is_ok());
+        for (pred, path) in [
+            (json!({"kind": "exception", "run": "r1"}), "predicate.at"),
+            (
+                json!({"kind": "exception", "run": "r1", "at": "stock.py"}),
+                "predicate.at",
+            ),
+            (
+                json!({"kind": "exception", "run": "r1", "at": "/abs/stock.py:3"}),
+                "predicate.at",
+            ),
+            (
+                json!({"kind": "probe", "run": "r1", "at": "stock.py:3"}),
+                "predicate.condition",
+            ),
+        ] {
+            let bad = json!({"root": "/p", "good": {"kind": "commit", "id": "abc123"}, "predicate": pred});
+            assert_eq!(
+                (m.decode)(&bad).err().and_then(|e| e.path).as_deref(),
+                Some(path),
+                "{bad}"
+            );
+        }
     }
 }
