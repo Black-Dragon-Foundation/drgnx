@@ -572,22 +572,22 @@ colour under the pointer where the row draws a `mouse-face')."
 (defun drgnx-topline--build-pixels (buffer pixels drawn)
   "The items for BUFFER on a graphical frame PIXELS wide: the design's title row (see above).  The search box is
 centred between the left items and the right ones as the design has them, both chips included (`1 needs you',
-`2 agents'), whether or not they show: a chip that comes or goes never moves it (a debug session's Paused chip moves
-it only when the right end then outgrows that room).  It is left out when it would touch the sides; the controls sit
+`2 agents'), whether or not they show: a chip that comes or goes never moves it.  A paused debug session's chip adds
+its width to that room (with no session the row is as without the debug module).  It is left out when it would touch the sides; the controls sit
 8 px from the right edge."
   (let* ((measure (drgnx-statusbar--measure-fn nil 'tab-bar))
          (left (delq nil (list (drgnx-topline--mark-pixels buffer) (drgnx-topline--branch-chip buffer))))
-         (right (append (drgnx-topline--paused-pill) (drgnx-topline--pills) (and drawn (drgnx-topline--control-buttons))
+         (paused (drgnx-topline--paused-pill))
+         (right (append paused (drgnx-topline--pills) (and drawn (drgnx-topline--control-buttons))
                         (list (drgnx-topline--pixel-gap 'drgnx-topline-end (drgnx-topline--edge-px 8) nil))))
          (left-px (drgnx-topline--width left measure))
          (right-px (drgnx-topline--width right measure))
          (search (drgnx-topline--search-box))
          (search-px (if search (funcall measure (nth 2 search)) 0))
-         ;; the design's right end: both chips, then the controls
-         (room-px (max right-px
-                       (drgnx-topline--width (append (drgnx-topline--pills 1 2) (and drawn (drgnx-topline--control-buttons))
-                                                     (list (drgnx-topline--pixel-gap 'drgnx-topline-end (drgnx-topline--edge-px 8) nil)))
-                                             measure)))
+         ;; the design's right end: Paused while a session is, both chips, then the controls
+         (room-px (drgnx-topline--width (append paused (drgnx-topline--pills 1 2) (and drawn (drgnx-topline--control-buttons))
+                                                (list (drgnx-topline--pixel-gap 'drgnx-topline-end (drgnx-topline--edge-px 8) nil)))
+                                        measure))
          (gap (drgnx-topline--px 10))
          (start (+ left-px gap (/ (- pixels left-px gap search-px gap room-px) 2)))
          (search (and search (>= start (+ left-px (drgnx-topline--px 10)))

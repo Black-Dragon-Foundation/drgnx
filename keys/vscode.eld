@@ -113,7 +113,8 @@
         (debug-step-out "S-<f11>")
         (debug-stop "S-<f5>")
         (debug-restart "C-S-<f5>")
-        (debug-pause "<f6>" :map drgnx-debug-session-map)
+        ;; not VS Code's F6: in a terminal F6 is the fallback's chord prefix (drgnx-tty-chord-prefix), free everywhere
+        (debug-pause :none "the toolbar; the palette")
         (debug-disconnect :none "the toolbar (an attach session); the palette")
         (debug-show-stop :none "the title row's Paused chip; the palette")
         (debug-pick-session :none "the toolbar's session chip; the palette")
