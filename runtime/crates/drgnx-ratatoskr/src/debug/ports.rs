@@ -216,10 +216,10 @@ pub fn owned(port: u16, groups: &[i32]) -> Result<bool, String> {
         if !ours {
             return Err(match pid {
                 Some(pid) => format!(
-                    "port {port} of the session's block is held by process {pid}, not the session's: the session ends"
+                    "port {port} is held by process {pid}, not the session's adapter or program: the session ends"
                 ),
                 None => format!(
-                    "port {port} of the session's block is held by a process that is not the session's: the session ends"
+                    "port {port} is held by a process that is not the session's adapter or program: the session ends"
                 ),
             });
         }

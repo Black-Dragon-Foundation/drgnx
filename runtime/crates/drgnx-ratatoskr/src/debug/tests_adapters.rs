@@ -153,10 +153,48 @@ fn the_command_line_fills_in_program_python_tools_and_port() {
     assert!(e.contains("port"), "{e}");
 }
 
+/// The picker gives a port the kernel handed out (never freed and bound again here: another test could take it in
+/// between).
 #[test]
-fn a_free_port_is_on_this_machine() {
+fn a_free_port_is_an_ephemeral_one() {
     let p = adapters::free_port().unwrap();
-    assert!(p > 0);
-    std::net::TcpListener::bind(("127.0.0.1", p)).expect("free again once the hub let go of it");
+    assert!(p >= 1024, "{p}");
+}
+
+/// The hub frees the port it picked so the TCP adapter can bind it, and another process can take it first: the hub
+/// connects only once the listener is the adapter's (its process group), and a stranger's is an error at once, never
+/// connected to (it would be sent the launch's arguments).
+#[tokio::test]
+async fn a_tcp_adapters_port_taken_by_a_stranger_is_never_connected_to() {
+    let stranger = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    stranger.set_nonblocking(true).unwrap();
+    let port = stranger.local_addr().unwrap().port();
+    let dir = tempfile::tempdir().unwrap();
+    let l = super::wire::Spawned {
+        argv: vec!["/bin/sh".into(), "-c".into(), "exec sleep 30".into()],
+        env: vec![("PATH".into(), "/usr/bin:/bin".into())],
+        cwd: dir.path().to_path_buf(),
+        port: Some(port),
+    };
+    let e = match crate::clock::timeout(
+        std::time::Duration::from_secs(20),
+        super::Launcher::connect(&l),
+    )
+    .await
+    .expect("the stranger is an error at once, not after the wait")
+    {
+        Ok(_) => panic!("connected to the stranger's listener"),
+        Err(e) => e,
+    };
+    assert!(
+        e.contains(&port.to_string()) && e.contains("not the session's"),
+        "{e}"
+    );
+    assert!(
+        stranger
+            .accept()
+            .is_err_and(|e| e.kind() == std::io::ErrorKind::WouldBlock),
+        "the hub connected to the stranger"
+    );
     let _ = json!(null);
 }

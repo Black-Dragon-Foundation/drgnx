@@ -182,8 +182,10 @@ js-debug, delve, lldb-dap), how to find it and how to start it:
 - `:find`: `(:path "dlv")` (an executable on `PATH`), `(:tools "js-debug/src/dapDebugServer.js")` (a file in drgnx's
   tools folder) or `(:python-module "debugpy")` (in the tools venv, `venv/lib/python*/site-packages`).
 - `:start`: `(:stdio ARGV)` or `(:tcp ARGV)`, where `{program}`, `{python}`, `{tools}` and `{port}` are filled in; a
-  TCP adapter gets a free port on 127.0.0.1 picked by the hub (`adapters::free_port`; another local process could take
-  it first, and DAP has no authentication: spec §9.5).
+  TCP adapter gets a free port on 127.0.0.1 picked by the hub (`adapters::free_port`). The hub frees it for the adapter
+  to bind, so another local process could take it first, and DAP has no authentication (spec §9.5): the hub connects
+  only once the port's listener is in the adapter's process group (`blocked::wait_owned`, `ports::owned`: /proc on
+  Linux, lsof on macOS), and a stranger's listener ends the start at once, never connected to.
 
 - `:install` (Debug: Install Adapter, `debug/install`, `debug/install.rs`): `(:url U :sha256 H :into DIR [:root R])`
   or `(:into DIR :platforms ((:platform "linux-x64" :url U :sha256 H) …))` (the platform keys are `linux-x64`,
@@ -271,7 +273,7 @@ roots `debug/trust` called trusted and each root's last started configuration.
 
 Adapters start in the root with the shell's environment (`env/set`), each in its own process group: a stdio adapter
 over pipes; a TCP adapter with stdin on `/dev/null`, on a free port of 127.0.0.1 that the hub connects to within 5 s
-(`LISTEN_WITHIN`), with a child session (`startDebugging`) on a second connection to the same port. They are found on
+(`LISTEN_WITHIN`) once the adapter itself listens there, with a child session (`startDebugging`) on a second connection to the same port. They are found on
 `PATH` or in `<data>/debug-adapters` (debugpy in its `venv/`). `debugServer` connects to 127.0.0.1 and starts nothing.
 An adapter that goes on its own ends its session with the end of its stderr in the reason.
 

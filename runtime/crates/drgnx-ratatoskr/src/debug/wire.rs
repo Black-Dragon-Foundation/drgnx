@@ -922,7 +922,12 @@ impl Launcher for Spawned {
             .await
             .map_err(|e| format!("{program}: {e}"))?;
             if let Some(port) = self.port {
-                let s = connect_tcp(SocketAddr::from(([127, 0, 0, 1], port))).await;
+                // the hub freed the port for the adapter, so another process could have taken it: connected only once
+                // the listener is the adapter's (its process group), never a stranger's
+                let s = match super::blocked::wait_owned(port, child.id(), LISTEN_WITHIN).await {
+                    Ok(()) => connect_tcp(SocketAddr::from(([127, 0, 0, 1], port))).await,
+                    Err(e) => Err(e),
+                };
                 return match s {
                     Ok(s) => Ok(over_tcp(s, Box::new(child))),
                     Err(e) => {
