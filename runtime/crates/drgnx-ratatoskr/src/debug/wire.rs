@@ -543,7 +543,7 @@ pub(super) async fn connect_tcp(addr: SocketAddr) -> Result<tokio::net::TcpStrea
 }
 
 /// A TCP connection to ADDR, waiting up to WITHIN for something to listen.
-pub(super) async fn connect_tcp_within(
+async fn connect_tcp_within(
     addr: SocketAddr,
     within: Duration,
 ) -> Result<tokio::net::TcpStream, String> {
