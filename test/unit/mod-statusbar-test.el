@@ -447,9 +447,10 @@ follow it when the fonts change."
             (should-not (string-match-p "Ln " (drgnx-statusbar-mode-line)))))))))
 
 (ert-deftest drgnx-statusbar/the-bar-asks-for-a-redraw-when-point-moves-or-the-text-changes ()
-  (let ((calls 0) (drgnx-statusbar--last (make-vector 4 nil)))
+  (let ((calls 0) (drgnx-statusbar--last (make-vector 6 nil)))
     (cl-letf (((symbol-function 'force-mode-line-update) (lambda (&optional all) (should-not all) (cl-incf calls))))
       (with-temp-buffer
+        (text-mode)                                    ; a buffer whose bar shows the position
         (insert "one\ntwo\nthree\n")
         (goto-char (point-min))
         (drgnx-statusbar--post-command)
@@ -493,6 +494,40 @@ follow it when the fonts change."
         (drgnx-statusbar--editor-changed (current-buffer))
         (should all)))))
 
+(ert-deftest drgnx-statusbar/a-move-the-bar-does-not-show-asks-for-no-redraw ()
+  "A buffer whose bar shows no position (the Work map, help: `special-mode'): a move asks for nothing; a change of
+its text, its selection or its mode still does."
+  (let ((calls 0) (drgnx-statusbar--last (make-vector 6 nil)))
+    (cl-letf (((symbol-function 'force-mode-line-update) (lambda (&optional _) (cl-incf calls))))
+      (with-temp-buffer
+        (special-mode)
+        (let ((inhibit-read-only t)) (insert "one\ntwo\nthree\n"))
+        (goto-char (point-min))
+        (set-window-buffer (selected-window) (current-buffer))
+        (drgnx-statusbar--post-command)
+        (should (= calls 1))
+        (forward-line 1) (set-window-point (selected-window) (point))
+        (drgnx-statusbar--post-command)                ; point moved: the bar shows no position
+        (forward-line 1) (set-window-point (selected-window) (point))
+        (drgnx-statusbar--post-command)
+        (should (= calls 1))
+        (let ((inhibit-read-only t)) (insert "x"))     ; the text changed
+        (drgnx-statusbar--post-command)
+        (should (= calls 2))
+        (set-mark (point)) (activate-mark)             ; the mark became active
+        (setq calls 0)
+        (drgnx-statusbar--post-command)
+        (should (= calls 1))
+        (deactivate-mark)
+        (drgnx-statusbar--post-command)
+        (text-mode)                                    ; another mode: its bar shows the position
+        (setq calls 0)
+        (drgnx-statusbar--post-command)
+        (should (= calls 1))
+        (forward-line -1) (set-window-point (selected-window) (point))
+        (drgnx-statusbar--post-command)                ; and a move redraws it
+        (should (= calls 2))))))
+
 (ert-deftest drgnx-statusbar/the-full-bar-follows-the-editor-at-once ()
   ;; Two windows, one buffer: the store's `editor-changed' (the `now' lane) asks for every bar at once, and the
   ;; next draw puts the full bar in the new editor window.  The bus's idle flush is never run here.
@@ -527,7 +562,7 @@ follow it when the fonts change."
   (let ((src (with-temp-buffer
                (insert-file-contents (expand-file-name "modules/ui/drgnx-statusbar.el" drgnx-dir))
                (buffer-string)))
-        (posted nil) (drgnx-statusbar--last (make-vector 4 nil)))
+        (posted nil) (drgnx-statusbar--last (make-vector 6 nil)))
     (should-not (string-match-p "statusbar-window-changed" src))
     (should-not (string-match-p "drgnx-signal-post" src))
     (drgnx-test-with-state
@@ -1511,7 +1546,7 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
 
 (ert-deftest drgnx-statusbar/keycast-redraws-every-bar-after-each-command ()
   "Keycast's text changes with every command, even one that moves nothing: while it is on, each command redraws."
-  (let ((all 0) (drgnx-statusbar--last (make-vector 5 nil)) (keycast-mode-line-mode nil))
+  (let ((all 0) (drgnx-statusbar--last (make-vector 6 nil)) (keycast-mode-line-mode nil))
     (cl-letf (((symbol-function 'force-mode-line-update) (lambda (&optional a) (when a (setq all (1+ all)))))
               ((symbol-function 'drgnx-signal-post) #'ignore))
       (with-temp-buffer

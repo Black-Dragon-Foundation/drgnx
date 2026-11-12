@@ -3327,7 +3327,9 @@ minibuffer-only frame is no workbench frame).
 on the first redraw, `C-x o` between two windows of one buffer included, in every frame. `drgnx-statusbar--mru-editor-p`
 is `(eq W (drgnx-state-editor-window (window-frame W)))` and `drgnx-statusbar-source-window` falls back to
 `drgnx-state-editor-window`; the bar keeps no window of its own and posts nothing to the bus. Its post-command check
-compares the buffer, point, change tick and mark only. Its git read stays on the bus's idle `editor-changed`. Its
+compares the buffer, its major mode, point, change tick and mark only, and point only where the buffer's bar shows the
+position (`drgnx-statusbar--wanted-p`, worked out once per buffer and mode): a move in the Work map, Magit or help asks
+for no redraw, which laid out the bar again for nothing (about 800 objects a map key, 2026-11-12). Its git read stays on the bus's idle `editor-changed`. Its
 debounced refresh is the layer timer `statusbar-refresh` (`drgnx-timer-soon`, owner `:core`, cancelled when the mode
 turns off); a slow entry of another package is refreshed by `statusbar-misc-slow` (owner `ui/face`; "Memo clients"
 above). Each window's bar is the memo `statusbar-bar` on six epochs, which `drgnx-statusbar-setup` activates. Tests: `drgnx-statusbar/` in `test/unit/mod-statusbar-test.el`; `drgnx-statusbar-ui/` in
