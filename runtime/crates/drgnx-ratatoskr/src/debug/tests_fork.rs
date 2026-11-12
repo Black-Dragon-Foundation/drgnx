@@ -188,6 +188,8 @@ fn a_step_stop_is_its_breakpoint_stop_then_the_recorded_steps() {
             before: Some(0),
             landing: Some(7),
             recorded: None,
+            varying: None,
+            anyway: false,
         }
     );
     let t = fork::check(&run(), &At::Stop(12), true, false).unwrap();
@@ -310,6 +312,8 @@ fn target(hit: u32, steps: &[&str]) -> Target {
         before: None,
         landing: None,
         recorded: None,
+        varying: None,
+        anyway: false,
     }
 }
 
@@ -478,14 +482,17 @@ async fn js_debug_counts_the_passes_in_a_condition() {
 }
 
 /// A run without probes: the adapter's landing is checked against what the run recorded at that stop, its stack and
-/// its plain locals. Landing on another pass (`i` is 5, the run had 2) fails loudly; the same pass goes on.
+/// its plain locals. Where the run recorded other passes of the line, only the locals that change from pass to pass
+/// count (`i`; the clock's `t` does not), and landing on another pass fails. Without them a differing local may be an
+/// unreplayed value: the fork stops, saying so, and goes on when the user forks at this pass anyway.
 #[tokio::test(start_paused = true)]
 async fn without_probes_the_landing_is_checked_against_the_recorded_stop() {
     let recorded = json!({"frames": [{"id": 1, "name": "f", "line": 20}],
                           "scopes": [{"scope": {"name": "Locals"},
                                       "variables": [{"name": "i", "value": "2", "variablesReference": 0},
+                                                    {"name": "t", "value": "1.0", "variablesReference": 0},
                                                     {"name": "item", "value": "<Item at 0x1>", "variablesReference": 11}]}]});
-    let script = |i: &str| {
+    let script = |i: &str, t: &str, goes_on: bool| {
         let mut caps = caps();
         caps["supportsHitConditionalBreakpoints"] = json!(true);
         let mut s = launch(
@@ -497,48 +504,96 @@ async fn without_probes_the_landing_is_checked_against_the_recorded_stop() {
         );
         // the object's address differs from the run's: only plain values are compared
         s.extend(stopped_at(20, "breakpoint", json!([{"name": "i", "value": i, "variablesReference": 0},
+                                                      {"name": "t", "value": t, "variablesReference": 0},
                                                       {"name": "item", "value": "<Item at 0x9>", "variablesReference": 11}])));
+        if goes_on {
+            s.push(json!({"expect": "evaluate", "args": {"expression": THREAD}, "ok": {"result": "140"}}));
+            s.push(json!({"expect": "setBreakpoints", "args": {"source": {"path": PY}, "breakpoints": []}, "ok": {"breakpoints": []}}));
+            s.push(cont());
+            s.extend(exited(0));
+        } else {
+            s.push(json!({"expect": "terminate", "ok": {}}));
+            s.push(json!({"event": "terminated"}));
+            s.push(json!({"expect": "disconnect", "ok": {}}));
+            s.push(json!({"die": true}));
+        }
         s
     };
-    let drive = |m: Arc<Mocks>| {
-        let mut d = counted_drive(m, 0);
+    let drive = |s: Vec<Value>, varying: Option<&[&str]>, anyway: bool| {
+        let mut d = counted_drive(Mocks::with(vec![s]), 0);
         d.probes = vec![];
         d.target.recorded = Some(recorded.clone());
-        d
+        d.target.varying = varying.map(|v| v.iter().map(|n| (*n).to_owned()).collect());
+        d.target.anyway = anyway;
+        fork::drive(d)
     };
-    // the wrong pass
-    let mut s = script("5");
-    s.push(json!({"expect": "terminate", "ok": {}}));
-    s.push(json!({"event": "terminated"}));
-    s.push(json!({"expect": "disconnect", "ok": {}}));
-    s.push(json!({"die": true}));
-    let e = fork::drive(drive(Mocks::with(vec![s]))).await.unwrap_err();
+    let iv: &[&str] = &["i"];
+    // the run recorded the line's passes: `i` changes from pass to pass, so another `i` is another pass
+    let e = drive(script("5", "9.5", false), Some(iv), false)
+        .await
+        .unwrap_err();
     assert!(
         e.contains("not the run's pass") && e.contains("i was 2 in the run there, 5 in the fork"),
         "{e}"
     );
-    // the run's pass
-    let mut s = script("2");
-    s.push(json!({"expect": "evaluate", "args": {"expression": THREAD}, "ok": {"result": "140"}}));
-    s.push(json!({"expect": "setBreakpoints", "args": {"source": {"path": PY}, "breakpoints": []}, "ok": {"breakpoints": []}}));
-    s.push(cont());
-    s.extend(exited(0));
-    let out = fork::drive(drive(Mocks::with(vec![s]))).await.unwrap();
+    assert!(!e.contains(fork::MAY_BE_UNREPLAYED), "{e}");
+    // the run's pass, the clock's value apart: it goes on
+    let out = drive(script("2", "9.5", true), Some(iv), false)
+        .await
+        .unwrap();
     assert_eq!(out.end, End::Exit { code: Some(0) });
-    // a stack that is not the run's fails too
-    let mut d = drive(Mocks::with(vec![{
-        let mut s = script("2");
-        s.push(json!({"expect": "terminate", "ok": {}}));
-        s.push(json!({"event": "terminated"}));
-        s.push(json!({"expect": "disconnect", "ok": {}}));
-        s.push(json!({"die": true}));
-        s
-    }]));
+    // no record of other passes: the clock's value stops it, saying it may be unreplayed
+    let e = drive(script("2", "9.5", false), None, false)
+        .await
+        .unwrap_err();
+    assert!(
+        e.contains("t was 1.0 in the run there, 9.5 in the fork")
+            && e.contains(fork::MAY_BE_UNREPLAYED)
+            && e.contains("fork at this pass anyway"),
+        "{e}"
+    );
+    // and the user forks at this pass anyway
+    let out = drive(script("2", "9.5", true), None, true).await.unwrap();
+    assert_eq!(out.end, End::Exit { code: Some(0) });
+    // a stack that is not the run's fails, anyway or not
+    let mut d = counted_drive(Mocks::with(vec![script("2", "1.0", false)]), 0);
+    d.probes = vec![];
     d.target.recorded = Some(json!({"frames": [{"name": "g", "line": 20}], "scopes": []}));
+    d.target.anyway = true;
     let e = fork::drive(d).await.unwrap_err();
     assert!(
         e.contains("the run's stack there was g:20, the fork's f:20"),
         "{e}"
+    );
+}
+
+/// The locals that tell a line's passes apart: those every recorded pass has, whose values are not all the same.
+#[test]
+fn varying_locals_are_those_that_change_between_the_runs_passes() {
+    let cap = |i: &str, t: &str, k: &str| {
+        json!({"scopes": [{"variables": [{"name": "i", "value": i, "variablesReference": 0},
+                                         {"name": "t", "value": t, "variablesReference": 0},
+                                         {"name": "k", "value": k, "variablesReference": 0},
+                                         {"name": "o", "value": format!("<O at {i}>"), "variablesReference": 4}]}]})
+    };
+    assert_eq!(fork::varying(&[cap("1", "5.0", "x")]), None);
+    assert_eq!(
+        fork::varying(&[
+            cap("1", "5.0", "x"),
+            cap("2", "5.0", "x"),
+            cap("3", "5.5", "x")
+        ]),
+        Some(vec!["i".to_owned(), "t".to_owned()])
+    );
+    // a local only some passes have does not tell them apart
+    let mut partial = cap("2", "5.0", "x");
+    partial["scopes"][0]["variables"]
+        .as_array_mut()
+        .unwrap()
+        .remove(0);
+    assert_eq!(
+        fork::varying(&[cap("1", "5.0", "x"), partial]),
+        Some(vec![])
     );
 }
 
@@ -783,6 +838,8 @@ async fn js_debugs_child_session_is_where_it_stops() {
             before: None,
             landing: None,
             recorded: None,
+            varying: None,
+            anyway: false,
         },
         probes: vec![],
         change: Change::Nothing,

@@ -60,6 +60,8 @@ pub struct Ask {
     pub until: Until,
     /// The user said yes to a slow replay.
     pub confirm: bool,
+    /// The user said to fork at this pass anyway (a local differed that may come from an unreplayed source).
+    pub anyway: bool,
     pub resolved: Value,
 }
 
@@ -275,6 +277,7 @@ impl Forks {
                 change: Change::Nothing,
                 until: Until::Here,
                 confirm: true,
+                anyway: false,
                 resolved,
             };
             me.drive(&run, &ask, &tree, &extra).await?;
@@ -431,6 +434,61 @@ impl Forks {
         Ok(e.view.clone())
     }
 
+    /// Fork ID's view (what `debug-fork` last said of it).
+    pub fn view(&self, id: &str) -> Result<Value, String> {
+        lock(&self.inner.forks)
+            .get(id)
+            .map(|e| e.view.clone())
+            .ok_or_else(|| format!("no fork {id}"))
+    }
+
+    /// Fork ID is agent session AGENT's (D4): its view says so.
+    pub fn mark(&self, id: &str, agent: &str) {
+        self.publish(id, json!({"agent": agent}));
+    }
+
+    /// A partner agent's fix checked (D4): FILES (paths relative to the project, texts) written into a fresh tree of
+    /// RUN's launch snapshot, and RUN's configuration (RESOLVED) run there sealed to the end, WATCH watched, LIMIT the
+    /// time box ([`Forks::run_in`]).  The tree goes after.
+    pub fn check_fix(
+        &self,
+        run: &str,
+        resolved: Value,
+        files: &[(String, String)],
+        watch: Watch,
+        limit: Duration,
+    ) -> BoxFut<'static, Result<RunEnd, String>> {
+        let me = self.clone();
+        let run_id = run.to_owned();
+        let files = files.to_vec();
+        Box::pin(async move {
+            for (rel, _) in &files {
+                relative(rel)?;
+            }
+            let info = me
+                .inner
+                .runs
+                .run(&run_id)
+                .ok_or_else(|| format!("no recorded run {run_id}"))?;
+            let id = me.next_id("x");
+            let tree = me.inner.trees.make(&info, &id).await?;
+            let r = async {
+                for (rel, text) in &files {
+                    let at = tree.join(rel);
+                    if let Some(dir) = at.parent() {
+                        std::fs::create_dir_all(dir).map_err(|e| format!("{rel}: {e}"))?;
+                    }
+                    std::fs::write(&at, text).map_err(|e| format!("{rel}: {e}"))?;
+                }
+                me.run_in(&run_id, resolved, tree.clone(), watch, limit)
+                    .await
+            }
+            .await;
+            me.inner.trees.remove(&tree).await;
+            r
+        })
+    }
+
     /// The forks' ids and runs.
     pub fn list(&self) -> Vec<(String, String)> {
         lock(&self.inner.forks)
@@ -456,7 +514,12 @@ impl Forks {
     }
 
     fn failed(&self, id: &str, why: String) {
-        self.publish(id, json!({"state": "failed", "error": why}));
+        // a landing that may differ only by an unreplayed value: the user may fork at this pass anyway
+        let anyway = why.contains(fork::MAY_BE_UNREPLAYED);
+        self.publish(
+            id,
+            json!({"state": "failed", "error": why, "anyway": anyway}),
+        );
     }
 
     async fn prepare(&self, id: &str) {
@@ -538,6 +601,15 @@ impl Forks {
         target_t.recorded = target
             .landing
             .and_then(|i| self.inner.runs.capture(&run.id, i));
+        // the run's own passes of the line tell which locals change from pass to pass
+        let passes: Vec<Value> = run
+            .stops
+            .iter()
+            .filter(|s| s.path == target.path && s.line == target.line)
+            .filter_map(|s| self.inner.runs.capture(&run.id, s.index))
+            .collect();
+        target_t.varying = fork::varying(&passes);
+        target_t.anyway = ask.anyway;
         let probes: Vec<_> = run
             .probes
             .iter()
@@ -579,11 +651,11 @@ impl Forks {
             later,
         })
         .await?;
-        Ok(self.view(run, &target, &out, root, tree))
+        Ok(self.render(run, &target, &out, root, tree))
     }
 
     /// The What-if tab's view of OUT, paths shown in the user's project.
-    fn view(
+    fn render(
         &self,
         run: &RunInfo,
         target: &fork::Target,

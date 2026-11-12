@@ -106,7 +106,8 @@ step, a triangle for an exception), and one lane per probe. Click a stop (or `RE
 a past stop, to open it read-only: the file as it ran under a banner (it says "not what ran" when
 the file was unsaved at the start), the stop's line marked with its variables, and the stack and variables as they
 were in a window beside it. `Alt →` past the newest stop, **Back to Live** (the palette) or the banner's button returns.
-Recorded runs hold your program's values, so they stay yours: agents cannot read them. They are kept 14 days (a pinned
+Recorded runs hold your program's values: an agent reads them only as the matrix's `debug.read` row lets it (Cautious asks
+first). They are kept 14 days (a pinned
 run, or one for an open task, longer), at most 2 GB per project, oldest first. Probes need an adapter with logpoints
 (debugpy and the JavaScript debugger take 2000 values a second, the rest 200, and delve and codelldb stop and resume
 the program for each one; values past the rate are thinned and counted).
@@ -119,10 +120,24 @@ far the copy did what the run did before the point, and the first value that dif
 values after the point, then and now, and how each side went on. For a code what-if the fork's copy opens first
 (**Open Fork** finds this file there); edit it and **Run Fork**; **Take Fork's Change…** shows each file it changed
 as a diff and puts the fork's text into your buffer (undoable, not saved). **Drop Fork** removes one.
+A fork checks that it reached the run's pass: the same stack, and the values that change from pass to pass. When the
+run passed the line only once, any value that differs stops the fork, since it may be the clock or a random number
+(the fork replays Python's hash seed, nothing else); the tab says which value, and **Fork Anyway** forks at that pass
+regardless.
 The copy cannot reach the network or write outside itself; your `.env` files are read in place, never copied. Python
 (debugpy) and JavaScript (js-debug) only: Go and native programs need `ptrace`, which the sandbox never allows, and
 macOS forks wait for a sandbox rule of their own. A run whose configuration resolves differently now (an input, a
 setting, launch.json) is refused, and a point the run took over a minute to reach asks first.
+
+**Debugging with an agent.** Ask an agent to debug this with you and it works beside you, under the permissions
+matrix's `debug.*` rows ([security.md](security.md#the-permissions-matrix)): it reads your sessions and recorded runs,
+adds probes and breakpoints (ringed in the agent's colour; the tooltip says which agent set them, and it removes only
+its own), forks what-ifs, and, where the matrix allows, evaluates or steps in your live session. If you step first,
+its step is refused: yours wins. It writes down hypotheses with their evidence; **Show Investigation** lists them
+(open, confirmed, rejected) and **Explain Investigation…** asks it to tell the story in its chat. A fix is offered only
+after it ran in a fresh fork of the run and passed (the program ended cleanly without the failure): **Review Agent's
+Fix** shows its diff against your buffers with the hypothesis' evidence, and **Accept Agent's Fix** puts it in your
+buffers as the agent's change in the edit history (undoable, not saved).
 
 **Find the Change That Broke It…** (the palette) answers "which change broke it?". Pick a state where it worked (a
 commit, a recorded run's start, one of your saves or an agent's step) and a command that fails now, such as a test

@@ -1,0 +1,27 @@
+{"scenario": "debug/partner-agent-under-balanced", "requires": ["v1", "test-hooks"], "doc": "Gated (B). Under the Balanced preset a partner agent's evaluate in the user's live session asks first (debug.live-eval: a card, the call refused until the user answers), its read of the sessions is allowed (none run here), its hypothesis is a debug_hypothesis record of its session with the debug-investigation event, and a step asks (debug.drive). Pattern B: each call's turn, idle with an agent entry, gates the reads."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-matrix (:preset balanced)))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:a", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 102, "method": "agents/send", "params": {"id": "$a", "text": "call:debug_live {\"debug_session\": \"d1\", \"op\": \"evaluate\", \"epoch\": 1, \"expr\": \"total\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 102, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "for i in $(seq 300); do grep -q 'call: debug.live-eval needs the user.s yes' $STATE/hub/transcripts/$a.jsonl && exit 0; sleep 0.1; done; grep -o 'call:[^\"]*' $STATE/hub/transcripts/$a.jsonl >&2; exit 1"], "expect_code": 0}
+{"do": "sql_expect", "sql": "select count(*) from card where kind = 'matrix' and state = 'open' and title like 'debug.live-eval%'", "rows": [[1]]}
+{"do": "send", "conn": "c", "json": {"id": 104, "method": "agents/send", "params": {"id": "$a", "text": "call:debug_read {\"what\": \"sessions\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 104, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "for i in $(seq 300); do grep -q 'call: {.*sessions.*\\[\\]' $STATE/hub/transcripts/$a.jsonl && exit 0; sleep 0.1; done; grep -o 'call:[^\"]*' $STATE/hub/transcripts/$a.jsonl >&2; exit 1"], "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 106, "method": "agents/send", "params": {"id": "$a", "text": "call:debug_hypothesis {\"root\": \"$ROOT/work\", \"title\": \"reserve goes negative\", \"state\": \"open\", \"evidence\": [\"run r1 stop 4\"]}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 106, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "for i in $(seq 300); do grep -q 'call: {.*hypothesis' $STATE/hub/transcripts/$a.jsonl && exit 0; sleep 0.1; done; grep -o 'call:[^\"]*' $STATE/hub/transcripts/$a.jsonl >&2; exit 1"], "expect_code": 0}
+{"do": "expect", "conn": "e", "json": {"event": "debug-investigation", "data": {"root": "$ROOT/work", "hypothesis": {"title": "reserve goes negative", "state": "open", "agent": "$a", "evidence": ["run r1 stop 4"]}}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select count(*) from entity where kind = 'debug_hypothesis' and status = 'open' and json_extract(data, '$.agent') = '$a'", "rows": [[1]]}
+{"do": "send", "conn": "c", "json": {"id": 108, "method": "agents/send", "params": {"id": "$a", "text": "call:debug_live {\"debug_session\": \"d1\", \"op\": \"next\", \"epoch\": 1}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 108, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "for i in $(seq 300); do grep -q 'call: debug.drive needs the user.s yes' $STATE/hub/transcripts/$a.jsonl && exit 0; sleep 0.1; done; grep -o 'call:[^\"]*' $STATE/hub/transcripts/$a.jsonl >&2; exit 1"], "expect_code": 0}

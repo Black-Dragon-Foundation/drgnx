@@ -77,6 +77,68 @@ pub struct Target {
     pub landing: Option<u64>,
     /// What the run recorded at that stop (its capture: frames, scopes), which the adapter's landing must match.
     pub recorded: Option<Value>,
+    /// The plain locals whose values change from pass to pass at the line in the run's own records ([`varying`]):
+    /// `None` when the run recorded fewer than two passes there.
+    pub varying: Option<Vec<String>>,
+    /// The user said to fork at this pass anyway when a local differs that may come from a source the fork does not
+    /// replay.
+    pub anyway: bool,
+}
+
+/// The words a landing refused over an unreplayed local carries: the hub offers "fork at this pass anyway".
+pub const MAY_BE_UNREPLAYED: &str = "it may come from a source the fork does not replay";
+
+/// VARS' plain values (no children: an object's text holds its address, which differs between runs), by name.
+fn plain_locals(vars: &[Value]) -> Vec<(String, String)> {
+    vars.iter()
+        .filter(|v| {
+            v.get("variablesReference")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                == 0
+        })
+        .filter_map(|v| {
+            Some((
+                v.get("name")?.as_str()?.to_owned(),
+                v.get("value")?.as_str()?.to_owned(),
+            ))
+        })
+        .collect()
+}
+
+/// The first scope's variables of CAPTURE (a recorded stop).
+fn captured_locals(capture: &Value) -> Vec<Value> {
+    capture
+        .get("scopes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find_map(|s| s.get("variables").and_then(Value::as_array).cloned())
+        .unwrap_or_default()
+}
+
+/// The plain locals that tell passes apart at a line: of CAPTURES (the run's recorded stops there, two or more), the
+/// names every capture has whose values are not all the same (loop counters, accumulators). `None` with fewer.
+pub fn varying(captures: &[Value]) -> Option<Vec<String>> {
+    if captures.len() < 2 {
+        return None;
+    }
+    let all: Vec<Vec<(String, String)>> = captures
+        .iter()
+        .map(|c| plain_locals(&captured_locals(c)))
+        .collect();
+    let mut names: Vec<String> = all[0]
+        .iter()
+        .filter(|(n, v)| {
+            all[1..].iter().all(|o| o.iter().any(|(m, _)| m == n))
+                && all[1..]
+                    .iter()
+                    .any(|o| o.iter().any(|(m, w)| m == n && w != v))
+        })
+        .map(|(n, _)| n.clone())
+        .collect();
+    names.sort();
+    Some(names)
 }
 
 /// RUN's probe hits before its event INDEX.
@@ -151,6 +213,8 @@ pub fn check(run: &RunInfo, at: &At, linux: bool, confirmed: bool) -> Result<Tar
                     before: stop.map(|s| hits_before(run, s.index)),
                     landing: stop.map(|s| s.index),
                     recorded: None,
+                    varying: None,
+                    anyway: false,
                 },
                 stop.map(|s| s.t_ms),
             )
@@ -180,6 +244,8 @@ pub fn check(run: &RunInfo, at: &At, linux: bool, confirmed: bool) -> Result<Tar
                     before: Some(hits_before(run, from.index)),
                     landing: Some(from.index),
                     recorded: None,
+                    varying: None,
+                    anyway: false,
                 },
                 Some(stop.t_ms),
             )
@@ -507,7 +573,6 @@ impl Drive {
             && caps.get(cap).and_then(Value::as_bool).unwrap_or(false)
     }
 
-    /// The adapter's count landed the fork: it must have had the run's probe hits before that pass.
     /// The adapter's count landed the fork at STOP: it must have had the run's probe hits before that pass, the
     /// run's stack there (names and lines), and, where no probe hit says which pass it is, the run's plain locals.
     fn landed(&self, t: &Tree, stop: &Stop) -> Result<(), String> {
@@ -557,37 +622,36 @@ impl Drive {
         if !t.hits.is_empty() || self.target.before.is_some_and(|b| b > 0) {
             return Ok(());
         }
-        // no probe hit tells the passes apart: the plain locals the run recorded must be the fork's
-        let plain = |vars: &[Value]| -> Vec<(String, String)> {
-            vars.iter()
-                .filter(|v| {
-                    v.get("variablesReference")
-                        .and_then(Value::as_i64)
-                        .unwrap_or(0)
-                        == 0
-                })
-                .filter_map(|v| {
-                    Some((
-                        v.get("name")?.as_str()?.to_owned(),
-                        v.get("value")?.as_str()?.to_owned(),
-                    ))
-                })
-                .collect()
-        };
-        let recorded_vars: Vec<Value> = rec
-            .get("scopes")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .find_map(|s| s.get("variables").and_then(Value::as_array).cloned())
-            .unwrap_or_default();
-        let fork_vars = plain(&locals(stop));
-        for (name, was) in plain(&recorded_vars) {
-            if let Some((_, is)) = fork_vars.iter().find(|(n, _)| *n == name)
-                && *is != was
+        // no probe hit tells the passes apart: the locals do. Where the run recorded the line's passes, only the
+        // locals that change from pass to pass are compared, and a difference is a wrong pass. Without that record
+        // any plain local is compared, but a difference may be a clock or random value the fork does not replay:
+        // it stops, saying so, until the user forks at this pass anyway.
+        let fork_vars = plain_locals(&locals(stop));
+        for (name, was) in plain_locals(&captured_locals(rec)) {
+            if self
+                .target
+                .varying
+                .as_ref()
+                .is_some_and(|v| !v.contains(&name))
             {
+                continue;
+            }
+            let Some((_, is)) = fork_vars.iter().find(|(n, _)| *n == name) else {
+                continue;
+            };
+            if *is == was {
+                continue;
+            }
+            if self.target.varying.is_some() {
                 return not(format!(
                     "{name} was {was} in the run there, {is} in the fork"
+                ));
+            }
+            if !self.target.anyway {
+                return not(format!(
+                    "{name} was {was} in the run there, {is} in the fork; {MAY_BE_UNREPLAYED} (the clock, random \
+                     numbers), since the run has no other pass of this line to compare: fork at this pass anyway to \
+                     go on"
                 ));
             }
         }

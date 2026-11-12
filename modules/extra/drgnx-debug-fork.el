@@ -41,6 +41,9 @@
 
 (defvar drgnx-debug-fork-last nil "The id of the fork made last.")
 
+(defvar drgnx-debug-fork--asks (make-hash-table :test #'equal)
+  "Each fork's ask, by id: (RUN AT CHANGE UNTIL), for Fork Anyway.  Dropped with the fork.")
+
 (defun drgnx-debug-fork--read-change ()
   "Ask what the fork changes: a plist for `debug/fork''s :change, or nil for nothing."
   (pcase (completing-read "Fork from here: " '("Set a value…" "Edit the code" "Nothing (replay the run)") nil t)
@@ -58,9 +61,11 @@
     ("a probe's next hit" (list :probe (read-string "Probe: ")))
     (_ "stop")))
 
-(defun drgnx-debug-fork (run at &optional change until)
+(defun drgnx-debug-fork (run at &optional change until anyway)
   "Fork recorded RUN at AT (`drgnx-debug-fork-point-function''s form), with CHANGE, running UNTIL: its id.
-Interactively the point is the one being shown, and the change and the end are asked."
+ANYWAY: fork at this pass even when a local differs from the run's that may come from a value the fork does not
+replay (what Fork Anyway sends).  Interactively the point is the one being shown, and the change and the end are
+asked."
   (interactive
    (let ((here (and drgnx-debug-fork-point-function (funcall drgnx-debug-fork-point-function))))
      (unless here (user-error "No recorded run is shown here: fork from a stop of a recorded run"))
@@ -69,6 +74,7 @@ Interactively the point is the one being shown, and the change and the end are a
     (while (not result)
       (let ((r (drgnx-hub-call-sync "debug/fork"
                                     (append (list :run run :at at :until (or until "stop") :confirm (if confirm t :false))
+                                            (when anyway (list :anyway t))
                                             (when change (list :change change))
                                             (when inputs (list :inputs (vconcat inputs)))))))
         (cond
@@ -81,8 +87,19 @@ Interactively the point is the one being shown, and the change and the end are a
           (setq inputs (append inputs (delq nil (mapcar #'drgnx-debug-launch--ask (append (plist-get r :needs) nil))))))
          (t (user-error "The hub made no fork")))))
     (setq drgnx-debug-fork-last result)
+    (puthash result (list run at change until) drgnx-debug-fork--asks)
     (message "Fork %s: replaying the run…" result)
     result))
+
+(defun drgnx-debug-fork-anyway (fork)
+  "FORK failed over a local that may differ only because the fork does not replay it (the clock, random numbers):
+fork at that pass again, anyway.  The new fork's id."
+  (interactive (list (drgnx-debug-fork--read-fork)))
+  (let ((v (gethash fork drgnx-debug-fork--views)) (ask (gethash fork drgnx-debug-fork--asks)))
+    (unless (and (equal (plist-get v :state) "failed") (eq (plist-get v :anyway) t))
+      (user-error "Fork %s did not stop over a value it may not replay" fork))
+    (unless ask (user-error "Fork %s was not made here: fork from the run again" fork))
+    (apply #'drgnx-debug-fork (append ask (list t)))))
 
 (defun drgnx-debug-fork--read-fork ()
   "A fork's id: the last one, or asked among the hub's."
@@ -102,6 +119,7 @@ Interactively the point is the one being shown, and the change and the end are a
   (interactive (list (drgnx-debug-fork--read-fork)))
   (drgnx-hub-call-sync "debug/fork/drop" (list :fork fork))
   (remhash fork drgnx-debug-fork--views)
+  (remhash fork drgnx-debug-fork--asks)
   (when-let* ((b (get-buffer (drgnx-debug-fork--buffer-name fork)))) (kill-buffer b)))
 
 (defun drgnx-debug-fork--tree (fork)
@@ -144,7 +162,9 @@ Interactively the point is the one being shown, and the change and the end are a
     (insert (propertize (format "What if: fork %s of run %s" (plist-get v :fork) (plist-get v :run))
                         'face 'drgnx-debug-fork-heading) "\n")
     (pcase (plist-get v :state)
-      ("failed" (insert "The fork failed: " (or (plist-get v :error) "?") "\n"))
+      ("failed" (insert "The fork failed: " (or (plist-get v :error) "?") "\n")
+       (when (eq (plist-get v :anyway) t)
+         (insert "The value may differ only because the fork does not replay it: Fork Anyway forks at this pass.\n")))
       ("editing" (insert "Edit the fork's tree (Open Fork), then Run Fork.\n  " (or (plist-get v :tree) "") "\n"))
       ((or "preparing" "running") (insert "Replaying the run…\n"))
       ("done"

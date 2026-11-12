@@ -278,6 +278,7 @@ fn ask(change: Change) -> Ask {
         change,
         until: Until::Exit,
         confirm: false,
+        anyway: false,
         resolved: resolved(),
     }
 }
@@ -681,4 +682,69 @@ fn a_plain_run_takes_only_a_tree_strictly_under_the_slots_root() {
     ] {
         assert!(super::fork_wire::in_slots(&slots, &bad).is_err(), "{bad:?}");
     }
+}
+
+/// D4's fix check: the fix's files go into a fresh tree of the run's launch snapshot, the run's configuration runs
+/// there to its end with the predicate's watch, and the tree goes; a file outside the tree is refused before anything
+/// runs.
+#[tokio::test(start_paused = true)]
+async fn a_fix_is_run_in_a_fresh_tree_with_its_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("x1/w");
+    let py = tree.join("stock.py").display().to_string();
+    let s = plain(
+        &tree,
+        json!({"supportsConfigurationDoneRequest": true,
+               "exceptionBreakpointFilters": [{"filter": "raised", "label": "Raised"}]}),
+        vec![
+            json!({"expect": "setExceptionBreakpoints", "args": {"filters": ["raised"]}, "ok": {}}),
+        ],
+        vec![
+            json!({"event": "exited", "body": {"exitCode": 0}}),
+            json!({"event": "terminated"}),
+            json!({"expect": "disconnect", "ok": {}}),
+            json!({"die": true}),
+        ],
+    );
+    let (f, _, trees, _) = setup_in(vec![s], dir.path());
+    let files = vec![("stock.py".to_owned(), "fixed = True\n".to_owned())];
+    let watch = Watch::Exception {
+        path: "stock.py".into(),
+        line: 9,
+    };
+    let end = f
+        .check_fix(
+            "r1",
+            resolved(),
+            &files,
+            watch.clone(),
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (end.exit, end.exception_at, end.timed_out),
+        (Some(0), None, false)
+    );
+    assert_eq!(std::fs::read_to_string(&py).unwrap(), "fixed = True\n");
+    assert!(trees.removed.lock().unwrap().contains(&tree));
+    let bad = vec![("../escape.py".to_owned(), "x".to_owned())];
+    let e = f
+        .check_fix("r1", resolved(), &bad, watch, Duration::from_secs(60))
+        .await
+        .unwrap_err();
+    assert!(e.contains("not a path inside the tree"), "{e}");
+}
+
+/// A fork an agent made says whose it is in its view, which `view` reads back.
+#[tokio::test(start_paused = true)]
+async fn a_forks_view_names_the_agent_that_made_it() {
+    let (f, _, _, _) = setup(vec![]);
+    assert!(f.view("f9").unwrap_err().contains("no fork f9"));
+    let Made::Fork(id) = f.fork(ask(Change::Nothing)).unwrap() else {
+        panic!("no fork")
+    };
+    f.mark(&id, "s1");
+    let v = f.view(&id).unwrap();
+    assert_eq!(v["agent"], json!("s1"));
 }

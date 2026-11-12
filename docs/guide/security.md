@@ -432,6 +432,19 @@ Three rows are about the agent's own browser, which runs inside its sandbox ([ag
   It asks in every preset, Autonomous included, and an Allow you write for it still asks: no setting turns this
   card off.
 
+Five rows are about debugging with an agent ([editing.md](editing.md#debugging)); its forks are sealed, so a fork
+with network would use the `network` row:
+
+- **`debug.read`**: read your debug sessions and recorded runs (their values included). Cautious asks; the others
+  allow it.
+- **`debug.probe`**: add or remove its own probes and breakpoints. Cautious asks; Balanced allows it for managers and
+  workers and asks for chats; Autonomous allows it.
+- **`debug.fork`**: replay a recorded run in a sealed fork, change a value, and check a fix in a fresh fork. Cautious
+  asks; the others allow it.
+- **`debug.live-eval`**: evaluate an expression in your live session. Cautious never; the others ask.
+- **`debug.drive`**: step or continue your live session. Cautious never; Balanced asks; Autonomous allows it. Your
+  own step wins: an agent's step after yours is refused.
+
 A session's project and plan are those of the task it works on (a plan run's, or the task it was started with).
 A chat started in a project (the Agents panel, Review Branch) sees the project read-only (a linked worktree's
 repository too, so it can run `git log` and `git diff`) and writes only a scratch folder of its own; with `chat.project-read` set to Never for it, such a start is refused (start the chat without a
