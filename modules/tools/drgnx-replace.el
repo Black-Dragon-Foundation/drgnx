@@ -2010,6 +2010,10 @@ text is sent too: the hub empties the rows and stops the search before.  The mat
     (setq text "" drgnx-replace--status "This file: the view was not opened from a file"))
   (let ((off (prog1 drgnx-replace--carry (setq drgnx-replace--carry nil))))
     (setq drgnx-replace--searching t drgnx-replace--grow nil)
+    ;; Symbol's and Meaning's first patch is their first window whole, in one reset (the hub holds the files until
+    ;; it is full): drawn at the next pass, with no burst to wait a frame for
+    (when (and (memq (drgnx-replace--opt :mode) '(symbol meaning)) (not (drgnx-replace--pattern-p)))
+      (setq drgnx-view-patch-hurry t))
     (drgnx-replace--send-buffers)
     (drgnx-replace--hub-call
      "search/run"

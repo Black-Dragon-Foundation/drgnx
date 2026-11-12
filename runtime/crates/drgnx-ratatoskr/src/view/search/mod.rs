@@ -821,6 +821,49 @@ impl Views {
             .is_some()
     }
 
+    /// One file's matches (and the file as read) kept in VIEW's search ID with nothing sent: an index mode's first
+    /// window goes whole ([`Views::grep_first`]). The run's rows so far, or none when VIEW's search is not search ID
+    /// any more.
+    fn grep_hold(
+        &self,
+        conn: u64,
+        view: &str,
+        id: u64,
+        file: String,
+        ms: Vec<Match>,
+        read: Option<Read>,
+    ) -> Option<usize> {
+        self.greps.with(conn, view, id, |run| {
+            let ns: Vec<u32> = (run.next..).take(ms.len()).collect();
+            run.next += ms.len() as u32;
+            run.files.push(Found::new(file, ms, ns, read));
+            run.files_changed();
+            rows_total(run)
+        })
+    }
+
+    /// VIEW's search ID begins in the editor with the files held ([`Views::grep_hold`]): its model and its first
+    /// window in one reset, which the view draws at once (a reset alone would be drawn empty, and rows after it would
+    /// wait for the view's throttle); false when VIEW's search is not search ID any more.
+    fn grep_first(&self, f: &Front, conn: u64, view: &str, id: u64) -> bool {
+        self.greps
+            .with(conn, view, id, |run| {
+                let mut store = lock(&self.store);
+                store.forget_windows(conn, view);
+                for k in keys(&store, conn, view) {
+                    store.restart(&k);
+                }
+                let (model, patches) = whole_patches(&mut store, conn, view, run);
+                if let Some(m) = model {
+                    f.send_to(conn, "view-model", super::Store::model_data(m));
+                }
+                for patch in patches {
+                    f.send_to(conn, "view-patch", json!(patch));
+                }
+            })
+            .is_some()
+    }
+
     /// The thread's hand-over of one file's matches and the file as it read it (dropped when VIEW's search is not
     /// search ID any more).
     #[allow(clippy::too_many_arguments)]
@@ -1083,8 +1126,7 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
         r.sort = p.sort;
     });
     // a new search's model (no files yet, its window from the start) and its rows' reset. An index mode's go with its
-    // first rows: sent now, the reset would be drawn alone one frame on, and the rows that came after it would wait
-    // for the view's throttle (`drgnx-view-delay`) rather than share its frame, as Text's first file does
+    // first window, in one reset the view draws at once ([`Views::grep_first`])
     let index = !matches!(mode, Mode::Text | Mode::Pattern(_));
     if !count && !index {
         views.grep_start(f, conn, &view, id);
@@ -1097,8 +1139,9 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
         crate::clock::spawn("search:modes", async move {
             let Some(f) = front.upgrade() else { return };
             let views = &f.core.views;
-            let mut started = count;
-            // each file as it is read, in the order shown: the first rows wait for the first file only
+            // each file as it is read, in the order shown: held until the first window is full (or the files end),
+            // then each as it comes
+            let mut holding = !count;
             let found = modes::found(
                 &f,
                 &root,
@@ -1110,13 +1153,17 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
                     }
                 },
                 |file, ms, read| {
-                    if !started {
-                        started = true;
-                        if !views.grep_start(&f, conn, &view, id) {
-                            return false;
-                        }
+                    if !holding {
+                        return views.grep_batch(&f, conn, &view, id, file, ms, read);
                     }
-                    views.grep_batch(&f, conn, &view, id, file, ms, read)
+                    match views.grep_hold(conn, &view, id, file, ms, read) {
+                        None => false,
+                        Some(rows) if rows >= WINDOW => {
+                            holding = false;
+                            views.grep_first(&f, conn, &view, id)
+                        }
+                        Some(_) => true,
+                    }
                 },
             )
             .await;
@@ -1125,7 +1172,7 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
                 Ok(false) => return,
                 Err(e) => Some(e),
             };
-            if !started && !views.grep_start(&f, conn, &view, id) {
+            if holding && !views.grep_first(&f, conn, &view, id) {
                 return;
             }
             views.grep_done(&f, conn, &view, id, error);
