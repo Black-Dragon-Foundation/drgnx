@@ -113,6 +113,7 @@ fn the_host_starts_under_its_layer() {
         write: vec![b.join("wt")],
         read: vec![data.clone()],
         net: NetCell::ProviderOnly,
+        sockets: vec![],
         browser: None,
     };
     let sb = Sandbox::detect(Tier::Full, helper_at(Path::new(RATATOSKR)), None)
@@ -269,6 +270,7 @@ fn launch_with(agent: &str, probe: bool) -> Launched {
         write: vec![b.join("wt")],
         read,
         net: NetCell::ProviderOnly,
+        sockets: vec![],
         browser: Some(sandbox::BrowserShape {
             program: data.join("fake-chromium.sh"),
             kind: drgnx_ratatoskr::browser::resolve::Kind::Full,

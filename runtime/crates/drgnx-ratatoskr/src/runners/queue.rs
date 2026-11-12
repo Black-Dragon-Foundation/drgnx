@@ -1940,8 +1940,8 @@ impl Queue {
         forseti::reservation(&needs, eff, &m, &ends).filter(|r| r.at > now)
     }
 
-    /// The machines that might take JOB (QJOB in the queue): this machine (none for a keyed job: its keys reach a
-    /// runner's job only, and it never runs without them), then every runner but a `shared` one its overlay may not
+    /// The machines that might take JOB (QJOB in the queue): this machine (a keyed job's keys reach it through the
+    /// hub's key socket, `exec::keys`), then every runner but a `shared` one its overlay may not
     /// reach (the second value says why). Each runner's transfer counts its overlay's bytes unless an attempt there
     /// synced these inputs before. With FIT a runner whose last `ready` has no room for the job's need now is passed
     /// by too (the third value: why it waits there): the hub offers only what fits.
@@ -1953,26 +1953,23 @@ impl Queue {
     ) -> (Vec<Candidate>, Option<String>, Option<WaitReason>) {
         // the job's runs on every machine: each candidate's estimate reads them, with what placement learned
         let history = st.history_of(&forseti::history_key(&job.spec));
-        let mut cands = vec![];
-        if job.spec.keys.is_empty() {
-            cands.push(Candidate {
-                name: LOCAL.into(),
-                local: true,
-                trust: RunnerTrust::Mine,
-                keys_allowed: vec![],
-                os: Os::Linux,
-                features: job.spec.features.clone(),
-                state: RunnerState::Ready,
-                accept: Accept::All,
-                link_bps: None,
-                missing_bytes: 0,
-                start_s: 0.0,
-                wait_s: 0.0,
-                speed: 1.0,
-                history: history.clone(),
-                cloud: None,
-            });
-        }
+        let mut cands = vec![Candidate {
+            name: LOCAL.into(),
+            local: true,
+            trust: RunnerTrust::Mine,
+            keys_allowed: vec![],
+            os: Os::Linux,
+            features: job.spec.features.clone(),
+            state: RunnerState::Ready,
+            accept: Accept::All,
+            link_bps: None,
+            missing_bytes: 0,
+            start_s: 0.0,
+            wait_s: 0.0,
+            speed: 1.0,
+            history: history.clone(),
+            cloud: None,
+        }];
         let need = need_of(job);
         let (mut held_off, mut no_room) = (None, None);
         for (name, r) in &st.runners {
@@ -2039,7 +2036,6 @@ impl Queue {
         let Some(q) = st.jobs.get(&id) else {
             return;
         };
-        let keyed = !job.spec.keys.is_empty();
         let (mut cands, held_off, no_room) = Self::candidates(st, job, q, true);
         let ctx = PlaceCtx {
             eff,
@@ -2127,15 +2123,6 @@ impl Queue {
             Placed::There(name, e, warm) => self.offer(st, job, eff, &name, (e, warm), now),
             Placed::Wait(r) => {
                 let why = forseti::place::why_here(job, &cands, &ctx).or(held_off);
-                if keyed {
-                    let base = "waits for a runner: its keys reach no job on this machine";
-                    q.waiting = Some(match (why, &r) {
-                        (Some(w), _) => format!("{base} ({})", w.trim_start_matches("runs here: ")),
-                        (None, WaitReason::NoRunner) => base.to_string(),
-                        (None, r) => format!("{base} ({})", wait_text(r)),
-                    });
-                    return;
-                }
                 // trust alone keeps it off every runner: the design's "runs here: …" words say why
                 if let Some(why) = why {
                     q.waiting = Some(why);
@@ -4375,6 +4362,32 @@ mod tests {
         let rows = st.history_of(&key);
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert_eq!((rows[0].machine.as_str(), rows[0].wall_s), (LOCAL, 42.0));
+    }
+
+    // [D] pure: a keyed job runs here as any other does (the hub's key socket hands it its keys): with no runner it
+    // starts here; with this machine full, it goes to a runner that may get its keys
+    #[tokio::test]
+    async fn a_keyed_job_runs_here_too() {
+        let keyed = |id: &str| {
+            let mut j = job(id, Priority::P3, 64);
+            j.spec.keys = vec!["TOKEN".into()];
+            j.spec.trust = JobTrust::PrivateKeys;
+            j.place.keys = vec!["TOKEN".into()];
+            j
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        q.submit(keyed("x1"), 100);
+        assert_eq!(q.tick(100).starts, vec!["x1".to_string()]);
+        assert_eq!(q.row("x1").unwrap().machine.as_deref(), Some(LOCAL));
+        // busy here: a runner of the user's own takes it
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        add(&q, "r1", 600);
+        hello(&q, "r1", true, 100);
+        q.submit(keyed("x2"), 100);
+        assert!(q.tick(100).starts.is_empty());
+        assert_eq!(q.row("x2").unwrap().machine.as_deref(), Some("r1"));
     }
 
     // [D] pure: the design's table, row by row
