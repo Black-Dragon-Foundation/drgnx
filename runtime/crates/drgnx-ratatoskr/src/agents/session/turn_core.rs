@@ -67,6 +67,9 @@ pub(crate) enum TurnEvent {
     Exited,
     /// The shell is about to hand turn TURN's prompt to the agent (`Session::turn`).
     Sending { turn: u64 },
+    /// Turn TURN's prompt line is on its way to the agent: a `session/cancel` sent from now on reaches it after the
+    /// prompt.  A cancel decided between `Sending` and this waited for it.
+    Written { turn: u64 },
 }
 
 /// Why the agent's process ends.
@@ -166,6 +169,11 @@ pub(crate) struct TurnCore {
     unsent: Option<Queued>,
     /// The agent was told to cancel this turn.
     cancelling: bool,
+    /// The turn whose prompt the shell is handing to the agent (after `Sending`, before `Written`): the shell awaits
+    /// in between (the tree's snapshot), and a `session/cancel` written then would reach the agent before its prompt.
+    unwritten: Option<u64>,
+    /// A cancel that waits for that turn's `Written`, and whether a Stop's deadline is armed with it.
+    cancel_on_write: Option<(u64, bool)>,
     /// A Stop armed its deadline for this turn.
     stopped: bool,
     /// The process is being ended (a kill, a Stop's deadline): no turn starts, and unless the hub is ending, no prompt
@@ -195,6 +203,8 @@ impl Default for TurnCore {
             turn: 0,
             unsent: None,
             cancelling: false,
+            unwritten: None,
+            cancel_on_write: None,
             stopped: false,
             killed: false,
             ending: false,
@@ -328,11 +338,12 @@ impl TurnCore {
                 self.hold = false;
                 self.stopped = true;
                 let mut fx = self.cancel();
-                fx.extend([
-                    E::Persist,
-                    E::Announce,
-                    E::ArmStopDeadline { turn: self.turn },
-                ]);
+                fx.extend([E::Persist, E::Announce]);
+                // the deadline runs from the cancel: one still waiting for the prompt's line arms it at `Written`
+                match &mut self.cancel_on_write {
+                    Some((turn, deadline)) if *turn == self.turn => *deadline = true,
+                    _ => fx.push(E::ArmStopDeadline { turn: self.turn }),
+                }
                 fx
             }
             TurnEvent::Kill {
@@ -373,9 +384,30 @@ impl TurnCore {
                 // the turn is still to send: not put back by the hub's end, not on a process being ended; from now on
                 // its prompt is the agent's, and no longer on disk
                 if turn == self.turn && !self.killed && self.unsent.take().is_some() {
+                    self.unwritten = Some(turn);
                     vec![E::Prompt { turn }, E::Persist]
                 } else {
                     Vec::new()
+                }
+            }
+            TurnEvent::Written { turn } => {
+                if self.unwritten == Some(turn) {
+                    self.unwritten = None;
+                }
+                match self.cancel_on_write {
+                    Some((t, deadline)) if t == turn => {
+                        self.cancel_on_write = None;
+                        // a kill since ends the process anyway; a later turn has its own cancel
+                        if self.killed || turn != self.turn {
+                            return Vec::new();
+                        }
+                        let mut fx = vec![E::CancelTurn];
+                        if deadline {
+                            fx.push(E::ArmStopDeadline { turn });
+                        }
+                        fx
+                    }
+                    _ => Vec::new(),
                 }
             }
             TurnEvent::PermissionAsked {
@@ -578,7 +610,12 @@ impl TurnCore {
     fn cancel(&mut self) -> Vec<TurnEffect> {
         self.cancelling = true;
         let mut fx = self.cancel_held();
-        fx.push(TurnEffect::CancelTurn);
+        if self.unwritten == Some(self.turn) {
+            // the prompt's line is not out yet: the cancel goes after it, at `Written`
+            self.cancel_on_write = Some((self.turn, false));
+        } else {
+            fx.push(TurnEffect::CancelTurn);
+        }
         fx
     }
 
