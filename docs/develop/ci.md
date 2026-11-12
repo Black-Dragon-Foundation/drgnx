@@ -178,7 +178,7 @@ proven on CI:
 |---|---|---|
 | `linux` (Runtime) | the workspace tests with `drgnx-ratatoskr/test-hooks`: forseti, sleipnir's pure rows, the hub's lib and `runners_orders`, the repo-wide rules (`real_time_in_tests`, `hub_reads_its_clock`), and the rows of `tests/macos.rs` that need no sshd | yes |
 | `android` | `forseti` and the hub (with the cloud code) type-check for `aarch64-linux-android` with the other pure-Rust crates; `forseti` and `sleipnir --no-default-features --features proto,sync` (the shape jobq and the Android door take) also pass clippy `-D warnings` on their test builds | yes |
-| `macos` (Runtime) | the same workspace tests as `linux` on macOS 27, so `tests/macos.rs` runs there, then its sshd row (below) | yes |
+| `macos` (Runtime) | the same workspace tests as `linux` on macOS 27, so `tests/macos.rs` runs there, then its sshd row (below). **The hub's lib does not run on macOS yet**: its test binary ends in a SIGABRT a few seconds in (below, "macOS") | yes |
 | `fleet` | the fake runners (`test/runners/`): the spike's checks and linger over ssh | no: on demand only (`only=rt-fleet`) |
 
 `fleet` stays on demand because its checks have never run on CI: the fake runner (systemd as PID 1 and rootless podman
@@ -214,7 +214,9 @@ key that may log in as the runner user, adds a `Host drgnx-sshd-test` entry to `
 Mac the same way. The key handover (Lisp, `test/unit/runners-client-test.el`) runs in the `macos` tier of
 `drgnx-tiers.yml`, which runs the whole unit suite.
 
-The hub's lib tests end in a SIGABRT on macOS with no message, so none of them have run there yet. Until they pass,
+The hub's lib tests end in a SIGABRT on macOS with no message, so most of them have never run there: in every run so
+far about a hundred tests finished, the last of them just before or among `agents::rewind::live`'s (the first module
+whose tests run live mock sessions, with snapshots and forks). Until they pass,
 a failed workspace step is followed by a diagnostic one: the hub's lib again with `--test-threads 1`, whose last
 `test … ...` line (libtest prints a test's name before it runs it on one thread) names the test running when the
 process died, written to the job's summary. The step goes once the lib passes on macOS.
