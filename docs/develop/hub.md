@@ -82,7 +82,7 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   file. A file read or written on a task's path never runs on a worker, since a slow disk (or a stderr nobody reads)
   would hold it: a session's files are written in order by `disk::Ordered` on the blocking pool (a failed write is
   logged), a resume reads the session's meta, transcript, queue and wheel there, a folder an agent works in is looked
-  at there, and stderr's warnings go through a queue of their own that drops lines when full and says how many. The
+  at there, an MCP session's owner is looked up in `/proc` and its sockets and directory removed there, and stderr's warnings go through a queue of their own that drops lines when full and says how many. The
   tests make the file a FIFO nobody reads (`attach_tests.rs`, `log_tests.rs`). The
   cargo feature `test-hooks` (off in the binary install.sh builds) holds the test-only surfaces: the `__test_flood`
   method, `__test_matrix_ask {action, who, session?, plan?, facts?}` (the matrix gate asked as the hub's own callers
