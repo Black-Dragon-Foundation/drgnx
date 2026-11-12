@@ -254,11 +254,11 @@ impl Platform for LinuxPlatform {
             },
             job: id.clone(),
             net: hub_allow.is_some(),
+            keys,
             runner: Some(RunnerMounts {
                 writes_tree: meta.spec.writes_tree,
                 target: dir.join("target"),
                 caches: vec![],
-                keys,
             }),
         };
         let container = podman::name_of(&ra.name_prefix, id).map_err(|r| r.message)?;

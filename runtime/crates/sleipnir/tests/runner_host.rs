@@ -263,11 +263,11 @@ fn podman_run(id: &str, source: &Path, target: &Path, memory: &str, cmd: &[&str]
         subdir: PathBuf::new(),
         job: id.into(),
         net: false,
+        keys: None,
         runner: Some(RunnerMounts {
             writes_tree: false,
             target: target.to_path_buf(),
             caches: vec![],
-            keys: None,
         }),
     };
     let ra = RunnerArgs::runner(PREFIX, "hubtest", &slices::job_slice(ROOT, id).unwrap());
