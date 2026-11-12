@@ -413,6 +413,9 @@ fn rows_view(m: &vegvisir::Model, width: u32) -> View {
         layout: Some(l),
         sent,
         co: Coalescer::default(),
+        outline: render::Outline::Auto,
+        marks: NewMarks::default(),
+        new_wake: None,
     }
 }
 
@@ -491,7 +494,7 @@ fn every_order_deltas_then_resync_converge() {
         .map(|n| {
             let core = core_with(n);
             let v = rows_view(core.model(), 226);
-            view_rows(core.model(), &v, &env(), &Cols, 0)
+            view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new())
         })
         .collect();
     assert!(
@@ -757,5 +760,177 @@ fn chain_golden_matches_vegvisir() {
     assert!(
         have == text,
         "the map model or a chain moved: UPDATE_VEGVISIR_GOLDEN=1 writes the golden again"
+    );
+}
+
+/// [D] The map's model carries what the editor reads on the rows path besides the cards: an agent's plan steps, edits,
+/// reads, last conclusion, spend and minutes (the review panel's summary), the agents it overlaps (the huddle key),
+/// and the plans as a list (the Board's scope: the plans on the selection's chain).
+#[test]
+fn map_model_carries_review_fields_overlaps_and_plans() {
+    let f = vegvisir::model::Fields {
+        progress: Some((2, 5)),
+        edits: Some((3, 40, 2)),
+        reads: Some(7),
+        conclusion: Some("tests pass".into()),
+        spend: Some("$0.40".into()),
+        minutes: Some(12),
+        ..vegvisir::model::Fields::default()
+    };
+    let got = model::card_fields(&f);
+    for want in [
+        json!(["done", 2]),
+        json!(["steps", 5]),
+        json!(["edit_files", 3]),
+        json!(["edit_plus", 40]),
+        json!(["edit_minus", 2]),
+        json!(["reads", 7]),
+        json!(["conclusion", "tests pass"]),
+        json!(["spend", "$0.40"]),
+        json!(["minutes", 12]),
+    ] {
+        assert!(got.contains(&want), "{want} in {got:?}");
+    }
+    let mut core = core_with(2);
+    core.step(Event::Card(CardFact {
+        id: "c1".into(),
+        kind: CardKind::Clash,
+        about: vec!["agent:s1".into(), "agent:s2".into()],
+        text: "both edit a.rs".into(),
+        open: true,
+    }));
+    let v = rows_view(core.model(), 226);
+    let d = model::doc(core.model(), v.layout.as_ref().expect("laid out"), &v.sent);
+    let fields = d.nodes["agent:s1"]["fields"].as_array().expect("fields");
+    assert!(
+        fields.contains(&json!(["overlaps", "agent:s2"])),
+        "{fields:?}"
+    );
+    // the plans: those of the 30-agent fixture the view shows
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::thirty() {
+        core.step(e);
+    }
+    let v = rows_view(core.model(), 376);
+    let d = model::doc(core.model(), v.layout.as_ref().expect("laid out"), &v.sent);
+    let shown: Vec<String> = v
+        .sent
+        .iter()
+        .filter(|id| id.0.starts_with("plan:"))
+        .map(|id| id.0.clone())
+        .collect();
+    assert!(!shown.is_empty(), "the fixture shows plans");
+    let mut plans = d.lists["plans"].clone();
+    plans.sort();
+    assert_eq!(plans, shown);
+    assert!(
+        d.descriptor["lists"]
+            .as_array()
+            .is_some_and(|l| l.contains(&json!("plans")))
+    );
+}
+
+/// [D] An open huddle is a needs-you entry of the map: the strip says "huddle: CLASH", `g N` reaches the first of its
+/// agents the view shows, and its agents are not marked as needing you (a huddle that talks waits for nobody); a
+/// decided or closed one leaves.
+#[test]
+fn open_huddle_is_on_the_strip_and_the_needs_you_list() {
+    let mut core = core_with(2);
+    let who = ["s1".to_owned(), "s2".to_owned()];
+    core.step(Event::Card(huddle_card(
+        "h1",
+        Some("both edit a.rs"),
+        &who,
+        true,
+    )));
+    let v = rows_view(core.model(), 226);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new());
+    assert!(
+        rows[0].text.contains("huddle: both edit a.rs"),
+        "{}",
+        rows[0].text
+    );
+    let d = model::doc(core.model(), v.layout.as_ref().expect("laid out"), &v.sent);
+    assert_eq!(d.lists["needs-you"], vec!["agent:s1"]);
+    assert!(
+        core.model().items().values().all(|it| !it.needs_you),
+        "a huddle marks nobody"
+    );
+    core.step(Event::Card(huddle_card(
+        "h1",
+        Some("both edit a.rs"),
+        &who,
+        false,
+    )));
+    let v = rows_view(core.model(), 226);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new());
+    assert!(!rows[0].text.contains("huddle:"), "{}", rows[0].text);
+}
+
+/// [D] The outline the user asks for (`work/map/set {outline}`): on, the map is the outline even where the layout
+/// fits; off, the cards even where it does not; auto (the default) the outline only where it does not fit.
+#[test]
+fn outline_follows_the_users_choice() {
+    let core = core_with(3);
+    let mut v = rows_view(core.model(), 226);
+    assert!(v.layout.as_ref().expect("laid out").fits);
+    let outlined = |v: &View| {
+        view_rows(core.model(), v, &env(), &Cols, 0, &BTreeSet::new())
+            .0
+            .iter()
+            .any(|r| r.key.starts_with("outline:"))
+    };
+    assert!(!outlined(&v), "auto, and it fits: the cards");
+    v.outline = render::Outline::On;
+    assert!(outlined(&v), "on: the outline");
+    let thirty = core_with(30);
+    let mut narrow = rows_view(thirty.model(), 40);
+    assert!(!narrow.layout.as_ref().expect("laid out").fits);
+    narrow.outline = render::Outline::Off;
+    assert!(
+        !view_rows(thirty.model(), &narrow, &env(), &Cols, 0, &BTreeSet::new())
+            .0
+            .iter()
+            .any(|r| r.key.starts_with("outline:")),
+        "off: the cards"
+    );
+    assert_eq!(outline_of("on"), Some(render::Outline::On));
+    assert_eq!(outline_of("off"), Some(render::Outline::Off));
+    assert_eq!(outline_of("auto"), Some(render::Outline::Auto));
+    assert_eq!(outline_of("sideways"), None);
+}
+
+/// [D] A conclusion that changes marks its card new for 4 s of the hub's clock, the first one an item gets too; an
+/// item seen for the first time marks nothing (a view opened on old work); the mark leaves at 4 s, and the wake asked
+/// for is the oldest mark's end.
+#[test]
+fn a_new_conclusion_is_marked_for_four_seconds() {
+    let id = ItemId("agent:s1".into());
+    let mut n = NewMarks::default();
+    let c = |s: Option<&str>| BTreeMap::from([(id.clone(), s.map(str::to_owned))]);
+    assert_eq!(
+        n.note(c(Some("one")), 1_000),
+        None,
+        "first seen: nothing new"
+    );
+    assert!(n.ids().is_empty());
+    assert_eq!(n.note(c(Some("one")), 2_000), None, "unchanged");
+    assert_eq!(
+        n.note(c(Some("two")), 3_000),
+        Some(4_000),
+        "changed: new until 7000"
+    );
+    assert!(n.ids().contains(&id));
+    assert_eq!(n.note(c(Some("two")), 6_999), Some(1));
+    assert!(n.ids().contains(&id));
+    assert_eq!(n.note(c(Some("two")), 7_000), None, "4 s on: gone");
+    assert!(n.ids().is_empty());
+    let other = ItemId("agent:s2".into());
+    let mut n = NewMarks::default();
+    assert_eq!(n.note(BTreeMap::from([(other.clone(), None)]), 0), None);
+    assert_eq!(
+        n.note(BTreeMap::from([(other.clone(), Some("first".into()))]), 10),
+        Some(4_000),
+        "a first conclusion is new"
     );
 }

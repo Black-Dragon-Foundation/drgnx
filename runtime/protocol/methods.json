@@ -38128,6 +38128,13 @@
               }
             ]
           },
+          "outline": {
+            "description": "The form a rows view is drawn in: `on` the outline, `off` the cards, `auto` (where none was asked) the outline\nonly where the cards do not fit.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "selected": {
             "description": "The selection moved (a map key).",
             "type": [

@@ -1582,7 +1582,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `work/flow/subscribe` | user | `{detail?: string, job?: string, map: string, rules?: boolean, view: string}` | `{hub: natnum}` | no |
 | `work/hunks` | user | `{path: string, session: Id}` | `{diff: string}` | no |
 | `work/map/close` | user | `{view: string}` | `boolean` | no |
-| `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
+| `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, outline?: string, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
 | `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, rows?: boolean, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `MapFrame \| MapRows` | no |
 | `work/trail/close` | user | `{view: string}` | `boolean` | no |
 | `work/trail/subscribe` | user | `{lanes?: [{label: string, session: string}], session?: string, view: string}` | `{hub: natnum}` | no |
@@ -2363,11 +2363,23 @@ and version it last sent (`view::Store`'s models, `view::model`), and sends what
   {selected}` moves it, `{clear: true}` drops it; neither changes the model.
 
 The Work map's model (`work::map::model`): scheme `links`; the chain kinds `came-from`, `edits`, `reads`, `runs-on`;
-search over `label` and `task`; the lists `team`, `needs-you`, `outline` (`vegvisir::nav`); classes `selected`,
-`match`, `chain`, `dim` (the editor's faces by index); flags `needs-you`, `warn`, `live`; forms `graph` and `outline`
-(up and down walk the outline). Each node is an item the view shows, with its `nav` links, `then`, `parent`, and the
-fields `label`, `state`, `task` and its card's rect `x y w h` in layout units. Rows: `test/conformance/view-model/`,
-`work/map-set-clear-drops-selected`.
+search over `label` and `task`; the lists `team`, `needs-you`, `outline` (`vegvisir::nav`) and `plans` (the plans
+the view shows: the Board's scope is those on the selection's chain); classes `selected`, `match`, `chain`, `dim` (the
+editor's faces by index); flags `needs-you`, `warn`, `live`; forms `graph` and `outline` (up and down walk the outline).
+Each node is an item the view shows, with its `nav` links, `then`, `parent`, and the fields `label`, `state`, `task`,
+its card's rect `x y w h` in layout units, what the review panel's summary reads (`done` of `steps`, `edit_files`
+`edit_plus` `edit_minus`, `reads`, `conclusion`, `spend`, `minutes`; each when known, `work::map::model::card_fields`)
+and `overlaps`, the agents it overlaps (ids, space-separated: the huddle key). Rows: `test/conformance/view-model/`,
+`work/map-set-clear-drops-selected`; unit: `work::map::tests::map_model_carries_review_fields_overlaps_and_plans`.
+
+A rows view is drawn in the form `work/map/set {outline}` asks: `on` the outline, `off` the cards, `auto` (until one is
+asked) the outline only where the cards do not fit or in a terminal; a new form is drawn at once, laid out as it is.
+An open huddle (`runner::huddle`, waiting for the user or going on) is a needs-you card of every map, `huddle: CLASH`
+about its two agents (`work::map::huddle_card`, kind `huddle`): on the strip and in the `needs-you` list, marking
+neither agent. A conclusion that changed since the view was last drawn marks its card `new` for 4 s of the hub's
+clock (`NewMarks`; an item seen for the first time marks nothing); one wake per view draws it again when the oldest
+mark leaves. Unit: `outline_follows_the_users_choice`, `open_huddle_is_on_the_strip_and_the_needs_you_list`,
+`a_new_conclusion_is_marked_for_four_seconds`.
 
 ### Fitting: text to a pixel width
 

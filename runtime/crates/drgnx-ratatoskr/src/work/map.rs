@@ -372,6 +372,80 @@ struct View {
     /// The items the editor's frame holds.
     sent: BTreeSet<ItemId>,
     co: Coalescer,
+    /// The form the user asked for (`work/map/set {outline}`): the outline, the cards, or the outline where they do
+    /// not fit.
+    outline: render::Outline,
+    /// The cards with a new conclusion, and when (the hub's clock).
+    marks: NewMarks,
+    /// When the wake that takes the oldest mark off fires (ms of the hub's clock), while one is asked.
+    new_wake: Option<u64>,
+}
+
+/// How long a new conclusion is marked on its card, in ms of the hub's clock.
+const NEW_MS: u64 = 4_000;
+
+/// A view's new conclusions: the conclusion each item it shows had when last drawn, and since when one that changed
+/// is marked.
+#[derive(Default)]
+pub(crate) struct NewMarks {
+    seen: BTreeMap<ItemId, Option<String>>,
+    at: BTreeMap<ItemId, u64>,
+}
+
+impl NewMarks {
+    /// The view's items' CONCLUSIONS at NOW (ms): an item whose conclusion changed since it was last seen (not one
+    /// seen for the first time, nor one that lost its conclusion) is marked; marks older than [`NEW_MS`] leave.  The
+    /// ms until the oldest mark leaves, while there is one.
+    pub(crate) fn note(
+        &mut self,
+        conclusions: BTreeMap<ItemId, Option<String>>,
+        now: u64,
+    ) -> Option<u64> {
+        for (id, c) in &conclusions {
+            if c.is_some() && self.seen.get(id).is_some_and(|old| old != c) {
+                self.at.insert(id.clone(), now);
+            }
+        }
+        self.seen = conclusions;
+        self.at
+            .retain(|id, t| now < t.saturating_add(NEW_MS) && self.seen.contains_key(id));
+        self.at
+            .values()
+            .map(|t| t.saturating_add(NEW_MS) - now)
+            .min()
+    }
+
+    /// The items marked now.
+    pub(crate) fn ids(&self) -> BTreeSet<ItemId> {
+        self.at.keys().cloned().collect()
+    }
+}
+
+/// The form a `work/map/set {outline}` word asks for, or none for a word it does not know.
+fn outline_of(word: &str) -> Option<render::Outline> {
+    match word {
+        "on" => Some(render::Outline::On),
+        "off" => Some(render::Outline::Off),
+        "auto" => Some(render::Outline::Auto),
+        _ => None,
+    }
+}
+
+/// The open (OPEN) or ended huddle ID about CLASH between the sessions PARTICIPANTS, as the map's needs-you card:
+/// `huddle: CLASH` (its id when it names no clash), about the two agents.
+pub(crate) fn huddle_card(
+    id: &str,
+    clash: Option<&str>,
+    participants: &[String],
+    open: bool,
+) -> CardFact {
+    CardFact {
+        id: format!("huddle:{id}"),
+        kind: CardKind::Huddle,
+        about: participants.iter().map(|p| format!("agent:{p}")).collect(),
+        text: format!("huddle: {}", clash.unwrap_or(id)),
+        open,
+    }
 }
 
 #[derive(Default)]
@@ -382,6 +456,8 @@ struct Inner {
     next_seq: u64,
     /// The cards open at the last read (a card gone from the list is settled).
     open_cards: BTreeSet<String>,
+    /// The open huddles' cards, by huddle id: a view opened later is seeded with them.
+    huddles: BTreeMap<String, CardFact>,
 }
 
 /// The hub's Work map (see the module).
@@ -517,14 +593,16 @@ fn frame_items(m: &vegvisir::Model, v: &ViewState, l: &Layout) -> Vec<vegvisir::
         .collect()
 }
 
-/// The rows of view V (its layout and the items it shows) of model M in one display class: ENV, measured with FONTS;
-/// NOW is the wall clock's second (the job chips).
+/// The rows of view V (its layout and the items it shows, in the form its user asked for) of model M in one display
+/// class: ENV, measured with FONTS; NOW is the wall clock's second (the job chips); NEW the items with a new
+/// conclusion.
 fn view_rows(
     m: &vegvisir::Model,
     v: &View,
     env: &ViewEnv,
     fonts: &dyn Measure,
     now: u64,
+    new: &BTreeSet<ItemId>,
 ) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let Some(l) = v.layout.as_ref() else {
         return (Vec::new(), Vec::new());
@@ -544,14 +622,13 @@ fn view_rows(
         .as_ref()
         .map(|s| m.chain(s).edges)
         .unwrap_or_default();
-    let new = BTreeSet::new();
     let scene = render::Scene {
         items: &items,
         edges: &edges,
         layout: l,
-        new: &new,
+        new,
         chain: &chain,
-        outline: render::Outline::Auto,
+        outline: v.outline,
         now,
     };
     let palette = Palette(env.palette.clone());
@@ -888,6 +965,28 @@ impl Map {
         }
     }
 
+    /// Huddle ID about CLASH between the sessions PARTICIPANTS opened or changed (OPEN), or ended: every map's strip
+    /// and needs-you list follow it (`huddle_card`).
+    pub fn huddle(
+        self: &Arc<Self>,
+        id: &str,
+        clash: Option<&str>,
+        participants: &[String],
+        open: bool,
+    ) {
+        let card = huddle_card(id, clash, participants, open);
+        let mut g = lock(&self.inner);
+        if open {
+            g.huddles.insert(id.to_owned(), card.clone());
+        } else if g.huddles.remove(id).is_none() {
+            return;
+        }
+        let keys: Vec<String> = g.spaces.keys().cloned().collect();
+        for k in keys {
+            self.feed(&mut g, &k, vec![Event::Card(card.clone())]);
+        }
+    }
+
     /// The store's records read again (asks, specs, plans, tasks, their links, open cards) and each workspace's
     /// "based on" pairs.
     fn store(
@@ -1188,11 +1287,24 @@ impl Map {
     /// Rows view V (KEY) of space SP: first its model (`view-model`, what changed since its editor's replica was last
     /// sent one), then to each display class its editor sent an env for the rows built in that class and the patch
     /// from what it holds (`view::Views::publish_built`), naming the model's version.
-    fn publish(&self, sp: &Space, v: &View, key: &ViewKey) {
+    /// A conclusion that changed since V was last drawn marks its card new for [`NEW_MS`]; one wake of the hub's
+    /// clock draws the view again when the oldest mark leaves.
+    fn publish(&self, sp: &Space, v: &mut View, key: &ViewKey) {
         if !v.rows || !v.shown {
             return;
         }
         let m = sp.core.model();
+        let conclusions = v
+            .sent
+            .iter()
+            .filter_map(|id| {
+                m.item(id)
+                    .map(|it| (id.clone(), it.fields.conclusion.clone()))
+            })
+            .collect();
+        let at = self.now_ms();
+        let wake = v.marks.note(conclusions, at);
+        let new = v.marks.ids();
         let doc = v.layout.as_ref().map(|l| model::doc(m, l, &v.sent));
         #[cfg(test)]
         {
@@ -1214,9 +1326,31 @@ impl Map {
             let k3 = (key.conn, key.view.clone(), class);
             f.core
                 .views
-                .publish_built(&f, &k3, |env, fonts| view_rows(m, v, env, fonts, now));
+                .publish_built(&f, &k3, |env, fonts| view_rows(m, v, env, fonts, now, &new));
         }
         Self::publish_detail(&f, m, v, key, None);
+        if let Some(ms) = wake
+            && v.new_wake.is_none_or(|w| w > at.saturating_add(ms))
+        {
+            v.new_wake = Some(at.saturating_add(ms));
+            f.core.map.new_wake(key.clone(), ms);
+        }
+    }
+
+    /// In MS, draw rows view KEY again: its oldest new mark has left.
+    fn new_wake(self: &Arc<Self>, key: ViewKey, ms: u64) {
+        let me = self.clone();
+        crate::clock::spawn("map:new", async move {
+            crate::clock::sleep(Duration::from_millis(ms)).await;
+            let mut g = lock(&me.inner);
+            let Inner { spaces, views, .. } = &mut *g;
+            if let Some(v) = views.get_mut(&key)
+                && let Some(sp) = spaces.get(&v.space)
+            {
+                v.new_wake = None;
+                me.publish(sp, v, &key);
+            }
+        });
     }
 
     /// The Detail panel beside rows view V (KEY): its rows for V's selection, to each class its editor sent an env
@@ -1371,8 +1505,10 @@ impl Map {
                 self.coalesce(&mut g, &key, Some(CoIn::User), now);
             }
             None => {
-                let v = &g.views[&key];
-                if let Some(sp) = g.spaces.get(&v.space) {
+                let Inner { spaces, views, .. } = &mut *g;
+                if let Some(v) = views.get_mut(&key)
+                    && let Some(sp) = spaces.get(&v.space)
+                {
                     self.publish(sp, v, &key);
                 }
             }
@@ -1479,6 +1615,7 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapSubs
     sp.roots = roots;
     let mut seed = records;
     seed.extend(Map::card_events(&mut g, cards));
+    seed.extend(g.huddles.values().cloned().map(Event::Card));
     seed.push(Event::Refs(refs));
     seed.push(Event::Machines(machines));
     for (snap, kids) in &sessions {
@@ -1506,6 +1643,9 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapSubs
         layout: None,
         sent: BTreeSet::new(),
         co: Coalescer::default(),
+        outline: render::Outline::Auto,
+        marks: NewMarks::default(),
+        new_wake: None,
     };
     let frame = Map::frame(sp.core.model(), &mut v);
     if !v.rows {
@@ -1515,7 +1655,7 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapSubs
     // a rows view: its model (a reset), then its rows to each class it has an env for (the first patch of each a
     // reset)
     f.core.views.model_restart(c.conn_id, &p.view);
-    map.publish(sp, &v, &key);
+    map.publish(sp, &mut v, &key);
     let version = v.version;
     g.views.insert(key, v);
     Ok(MapSubscribed::Rows(MapRows {
@@ -1555,6 +1695,17 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
     }
     if p.clear {
         v.selected = None;
+    }
+    // the form the user asked for draws at once, laid out as it is
+    let mut reform = false;
+    if let Some(word) = &p.outline {
+        let o = outline_of(word).ok_or_else(|| Error {
+            code: ErrorCode::InvalidParams,
+            message: format!("outline is on, off or auto, not {word:?}"),
+            path: Some("outline".into()),
+        })?;
+        reform = o != v.outline;
+        v.outline = o;
     }
     let moved = p.selected.is_some() || p.clear;
     let space = v.space.clone();
@@ -1602,11 +1753,14 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
     }
     if relayout {
         f_map.coalesce(&mut g, &key, Some(CoIn::User), now);
-    } else if moved {
-        f_map.coalesce(&mut g, &key, Some(CoIn::Key), now);
-        // a rows view draws its new chain's edges (the tiles and lanes on it)
-        if let Some(v) = g.views.get(&key)
-            && let Some(sp) = g.spaces.get(&v.space)
+    } else if moved || reform {
+        if moved {
+            f_map.coalesce(&mut g, &key, Some(CoIn::Key), now);
+        }
+        // a rows view draws its new chain's edges (the tiles and lanes on it), or its new form
+        let Inner { spaces, views, .. } = &mut *g;
+        if let Some(v) = views.get_mut(&key)
+            && let Some(sp) = spaces.get(&v.space)
         {
             f_map.publish(sp, v, &key);
         }

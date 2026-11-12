@@ -414,6 +414,10 @@ pub struct MapSet {
     /// Nothing is selected any more (Esc, or the selection went with no item left to take it).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub clear: bool,
+    /// The form a rows view is drawn in: `on` the outline, `off` the cards, `auto` (where none was asked) the outline
+    /// only where the cards do not fit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<String>,
 }
 
 /// `work/map/set`'s answer: the view's version after it.
