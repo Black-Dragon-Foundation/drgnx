@@ -63,6 +63,7 @@
   "debug/compare": ["user"],
   "debug/configs": ["user"],
   "debug/control": ["user"],
+  "debug/origin": ["user"],
   "debug/fork": ["user"],
   "debug/fork/drop": ["user"],
   "debug/fork/run": ["user"],

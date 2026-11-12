@@ -40,6 +40,8 @@ pub struct Hub {
     pub(super) forks: OnceLock<super::fork_hub::Forks>,
     /// The bisects over the edit history (`debug/bisect*`).
     pub(super) bisects: super::bisect_wire::Bisects,
+    /// The origin trails (`debug/origin`).
+    pub(super) origins: super::origin_wire::Origins,
 }
 
 impl Hub {
@@ -65,6 +67,10 @@ impl Hub {
     /// The front, once it is in its `Arc`: a bisect's jobs outlive the call that started it.
     pub fn bind(&self, front: &Arc<Front>) {
         self.bisects.bind(front);
+        self.origins
+            .set_replay(Arc::new(super::origin_wire::ForkReplay {
+                front: Arc::downgrade(front),
+            }));
     }
 
     pub(super) fn is_trusted(&self, root: &str) -> bool {

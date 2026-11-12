@@ -1,7 +1,7 @@
-//! Files the hub writes and then runs.
+//! drgnx-exe: files a program writes or copies and then runs.
 //!
 //! On Linux, `execve` of a file that any process holds open for writing fails with ETXTBSY.  A child forked by
-//! another thread copies the hub's file table, the write descriptor included, and keeps it until its own `exec`
+//! another thread copies the process's file table, the write descriptor included, and keeps it until its own `exec`
 //! closes it: so a file written here and run at once can fail to start.  A rename keeps the same file, so it does
 //! not help.  [`private_fds`] does the writing on a thread with its own file table (`unshare(CLONE_FILES)`), which
 //! no other thread's fork copies.  That table starts as a copy of the process's, so the thread closes all but 0, 1
@@ -13,7 +13,7 @@ use std::path::Path;
 
 /// F's result, F run with descriptors no other thread's fork can copy: on Linux on a thread of its own with its
 /// own file table (an error if it can't have one), which starts with only 0, 1 and 2: F opens what it uses; elsewhere
-/// (no ETXTBSY on exec) here.  A descriptor F leaves open is closed when the thread ends.
+/// (no `unshare`) here.  A descriptor F leaves open is closed when the thread ends.
 pub fn private_fds<T: Send>(f: impl FnOnce() -> T + Send) -> std::io::Result<T> {
     #[cfg(target_os = "linux")]
     {
@@ -42,7 +42,7 @@ pub fn private_fds<T: Send>(f: impl FnOnce() -> T + Send) -> std::io::Result<T> 
 }
 
 /// PATH made (or replaced) with CONTENTS, mode 0755, its write descriptor never in a table another fork copies.
-pub fn write_executable(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+pub fn write(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
     let contents = contents.as_ref();
     private_fds(|| {
         let _ = std::fs::remove_file(path);
@@ -55,14 +55,19 @@ pub fn write_executable(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Res
     })?
 }
 
-#[cfg(test)]
+/// FROM copied to TO as `std::fs::copy` does (mode included), TO's write descriptor never in a table another fork
+/// copies.
+pub fn copy(from: &Path, to: &Path) -> std::io::Result<u64> {
+    private_fds(|| std::fs::copy(from, to))?
+}
+
+// Linux's: elsewhere nothing here differs from std
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
 
     /// The private table starts with none of the process's descriptors above 2 (a pipe another thread closes while F
     /// runs ends at once); the process keeps its own.
-    #[cfg(target_os = "linux")]
     #[test]
     fn the_private_table_holds_none_of_the_process_descriptors() {
         use std::os::fd::AsRawFd;
@@ -77,9 +82,12 @@ mod tests {
         assert!(open(), "descriptor {fd} is still open here");
     }
 
-    #[test]
-    fn an_executable_written_here_starts_while_other_threads_fork() {
+    /// Each of 300 files, written (or copied) and run at once while 4 threads fork all along, starts: none is busy.
+    fn starts_while_other_threads_fork(make: impl Fn(&Path, &Path)) {
+        use std::sync::atomic::{AtomicBool, Ordering};
         let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("src");
+        std::fs::write(&src, b"#!/bin/sh\nexit 0\n").unwrap();
         let stop = AtomicBool::new(false);
         std::thread::scope(|s| {
             for _ in 0..4 {
@@ -92,7 +100,7 @@ mod tests {
             let mut busy = 0;
             for i in 0..300 {
                 let p = d.path().join(format!("x{i}"));
-                write_executable(&p, b"#!/bin/sh\nexit 0\n").unwrap();
+                make(&src, &p);
                 match std::process::Command::new(&p).status() {
                     Ok(st) => assert!(st.success(), "{st}"),
                     Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => busy += 1,
@@ -101,6 +109,20 @@ mod tests {
             }
             stop.store(true, Ordering::Relaxed);
             assert_eq!(busy, 0, "{busy} of 300 failed to start: ETXTBSY");
+        });
+    }
+
+    #[test]
+    fn a_file_written_here_starts_while_other_threads_fork() {
+        starts_while_other_threads_fork(|_, p| write(p, b"#!/bin/sh\nexit 0\n").unwrap());
+    }
+
+    #[test]
+    fn a_file_copied_here_starts_while_other_threads_fork() {
+        use std::os::unix::fs::PermissionsExt;
+        starts_while_other_threads_fork(|src, p| {
+            std::fs::set_permissions(src, std::fs::Permissions::from_mode(0o755)).unwrap();
+            copy(src, p).unwrap();
         });
     }
 }

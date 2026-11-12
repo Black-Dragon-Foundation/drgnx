@@ -88,7 +88,6 @@ pub mod doctor;
 pub mod editor;
 pub mod embed;
 pub mod eval_cli;
-pub mod exe;
 pub mod exec;
 pub mod extensions;
 pub mod forecast;

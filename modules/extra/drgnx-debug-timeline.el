@@ -246,9 +246,15 @@ replaces that one's."
 (defvar drgnx-debug-timeline--stops nil "The strip's stops (plists, `debug/run/get''s), in order.")
 (defvar drgnx-debug-timeline--current nil "The stop (its `index') shown in the past stop's buffer, or nil: live.")
 
-(defvar drgnx-debug-past-mode-map (make-sparse-keymap)
+(declare-function drgnx-debug-origin-click-value "drgnx-debug-origin" (event))
+
+(defvar drgnx-debug-past-mode-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m [M-mouse-1] #'drgnx-debug-origin-click-value)
+    m)
   "Keys of the strip and a past stop (key profiles: `:map drgnx-debug-past-mode-map'): `Alt ←' / `Alt →' move between
-stops there, and only there (elsewhere they keep their own commands).")
+stops there, and only there (elsewhere they keep their own commands).  Alt-click on a name asks where its value came
+from (`drgnx-debug-origin').")
 
 (define-minor-mode drgnx-debug-past-mode
   "On in the strip and a past stop's buffers: their keys (`drgnx-debug-past-mode-map')."

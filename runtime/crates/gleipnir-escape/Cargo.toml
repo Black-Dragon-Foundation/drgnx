@@ -10,6 +10,7 @@ publish = false
 # Normal dependencies, not dev ones: the whole crate is test tooling. It never turns on gleipnir's `test-hooks`
 # (docs/develop/gleipnir.md, "Proving it"); `escape-fixture` only exposes the proxy's upstream connector.
 [dependencies]
+drgnx-exe = { path = "../drgnx-exe", version = "0.1.0" }  # the probe's copy, run at once, never busy (ETXTBSY)
 gleipnir = { path = "../gleipnir", version = "0.1.0", features = ["escape-fixture"] }
 draugr = { path = "../draugr", version = "0.1.0" }
 serde.workspace = true

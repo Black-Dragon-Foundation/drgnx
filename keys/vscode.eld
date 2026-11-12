@@ -113,7 +113,8 @@
         (debug-step-out "S-<f11>")
         (debug-stop "S-<f5>")
         (debug-restart "C-S-<f5>")
-        (debug-pause "<f6>" :map drgnx-debug-session-map)
+        ;; not VS Code's F6: in a terminal F6 is the fallback's chord prefix (drgnx-tty-chord-prefix), free everywhere
+        (debug-pause :none "the toolbar; the palette")
         (debug-disconnect :none "the toolbar (an attach session); the palette")
         (debug-show-stop :none "the title row's Paused chip; the palette")
         (debug-pick-session :none "the toolbar's session chip; the palette")
@@ -133,6 +134,8 @@
         (debug-bisect-ask-agent :none "the card's Ask the Agent")
         (debug-bisect-narrow :none "the card's Narrow")
         (debug-bisect-cancel :none "the card's Cancel")
+        (debug-origin :none "the palette; Alt-click a name at a recorded stop")
+        (debug-origin-open "RET" :map drgnx-debug-origin-card-mode-map)
         (debug-install-adapter :none "the palette")
         (toggle-indent-guides :none "the palette")
         (toggle-smooth-scrolling :none "the palette")
