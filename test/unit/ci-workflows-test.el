@@ -95,6 +95,11 @@ there, so what a job does includes them (and theirs)."
                              (drgnx-ci-test--job tiers "bins-linux"))))
     (drgnx-ci-test--has (drgnx-ci-test--job tiers "bins-linux")
                         "uses: ./drgnx/.github/actions/build-test-bins" "name: drgnx-test-bins-linux" "retention-days: 1")
+    ;; the test hub `bin/drgnx test --ui' builds: drgnx-term beside Ratatoskr, so the GUI tier's terminal rows open one
+    (drgnx-ci-test--has (drgnx-ci-test--job tiers "bins-linux") "test/container/zig.sh linux"
+                        "runtime/crates/ghostty-vt-sys/fetch.sh" "term: \"true\"" "drgnx/runtime/target/debug/drgnx-term")
+    (drgnx-ci-test--has (drgnx-ci-test--action "build-test-bins") "-p drgnx-term --bins")
+    (drgnx-ci-test--has (drgnx-ci-test--action "fetch-test-bins") "\"$t/drgnx-term\"")
     (drgnx-ci-test--has (drgnx-ci-test--job tiers "macos") "uses: ./drgnx/.github/actions/build-test-bins"
                         "brew install ripgrep\n" "rustup toolchain install stable --profile minimal"
                         "test/container/nidhogg.sh macos")

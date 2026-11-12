@@ -650,13 +650,16 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--audit | --a
     case "$resdir" in *:*) echo "drgnx: DRGNX_PERF_RESULTS must not be under a directory with ':' (it is mounted with -v): $resdir" >&2; return 2 ;; esac
     args+=(-v "$resdir:/out" -e "DRGNX_PERF_RESULTS=/out/$(basename "$res")")
   fi
-  # Ratatoskr for the client's binary tests: one in this checkout is seen at /src, any other is mounted read-only
+  # the GUI tier's hub (`test_hub'), built here on the host; the run inside builds nothing
+  if [ "$tier" = ui ]; then test_hub || return 1; args+=(-e DRGNX_TEST_HUB_BUILD=0); fi
+  # Ratatoskr for the client's binary tests: one in this checkout is seen at /src, any other's directory is mounted
+  # read-only (ratatoskr-mock and drgnx-term live beside it)
   if [ -n "${DRGNX_RATATOSKR_BIN:-}" ] && [ -x "$DRGNX_RATATOSKR_BIN" ]; then
-    local rbin; rbin="$(cd "$(dirname "$DRGNX_RATATOSKR_BIN")" && pwd -P)/$(basename "$DRGNX_RATATOSKR_BIN")"
+    local rdir rbin; rdir="$(cd "$(dirname "$DRGNX_RATATOSKR_BIN")" && pwd -P)"; rbin="$rdir/$(basename "$DRGNX_RATATOSKR_BIN")"
     case "$rbin" in
       "$(cd "$here" && pwd -P)"/*) args+=(-e "DRGNX_RATATOSKR_BIN=/src/${rbin#"$(cd "$here" && pwd -P)"/}") ;;
       *:*) echo "drgnx: DRGNX_RATATOSKR_BIN must not contain ':' (it is mounted with -v): $rbin" >&2; return 2 ;;
-      *) args+=(-v "$rbin:/opt/ratatoskr/ratatoskr:ro" -e DRGNX_RATATOSKR_BIN=/opt/ratatoskr/ratatoskr) ;;
+      *) args+=(-v "$rdir:/opt/ratatoskr:ro" -e "DRGNX_RATATOSKR_BIN=/opt/ratatoskr/$(basename "$rbin")") ;;
     esac
   fi
   # huginn's dump example for the differential test: always mounted read-only, wherever it was built
@@ -1018,6 +1021,41 @@ test_stress() { # N [--load K] [--ui|--tty|--scenario [ARGS…]] — the selecte
   run_in_tmp stress_run "$n" "$load" "$@"
 }
 
+test_hub() { # the GUI and live tiers' hub: Ratatoskr (test hooks), ratatoskr-mock and drgnx-term from this checkout
+  # (docs/develop/harness.md, "The test hub"). DRGNX_RATATOSKR_BIN already set to a binary (CI builds its own): used as
+  # it is. DRGNX_TEST_HUB_BUILD=0: nothing is built (a run inside the test container: the host built it). Otherwise
+  # libghostty-vt's pinned tarballs are fetched when missing (as install does: fetch.sh), the three binaries are built
+  # (cargo builds nothing when they are current), and DRGNX_RATATOSKR_BIN names the hub; 1 with a message when they
+  # cannot be. The cargo: the install's, else the one on PATH; DRGNX_TEST_CARGO, a command run from the checkout's root
+  # that adds --locked and the manifest itself (a wrapper that builds in a container), stands in for it.
+  if [ -n "${DRGNX_RATATOSKR_BIN:-}" ] && [ -x "$DRGNX_RATATOSKR_BIN" ]; then
+    [ -x "$(dirname "$DRGNX_RATATOSKR_BIN")/drgnx-term" ] ||
+      echo "drgnx: no drgnx-term beside $DRGNX_RATATOSKR_BIN: the terminal rows cannot open a terminal" >&2
+    return 0
+  fi
+  [ "${DRGNX_TEST_HUB_BUILD:-1}" = 0 ] && return 0
+  local cargo=() own=() envs=() l
+  if [ -n "${DRGNX_TEST_CARGO:-}" ]; then
+    cargo=("$DRGNX_TEST_CARGO")
+  else
+    rt_toolchain || return 1
+    cargo=("$RT_CARGO"); own=(--locked --manifest-path runtime/Cargo.toml); envs=("PATH=${RT_CARGO%/*}:$PATH")
+    for l in ${RT_ENV[@]+"${RT_ENV[@]}"}; do envs+=("$l"); done
+    # the zig install.sh recorded (drgnx-term's engine is built with it), as `drgnx runtime build'
+    if [[ -f "$(drgnx_dir data)/zig-path" ]]; then
+      l="$(head -n 1 "$(drgnx_dir data)/zig-path")"
+      if [[ "$l" == /* && -x "$l" ]]; then envs[0]="PATH=${l%/*}:${envs[0]#PATH=}"; fi
+    fi
+  fi
+  bash "$here/runtime/crates/ghostty-vt-sys/fetch.sh" >&2 ||
+    { echo "drgnx: libghostty-vt's pinned tarballs could not be fetched (runtime/crates/ghostty-vt-sys/fetch.sh)" >&2; return 1; }
+  echo "drgnx: the test hub: building Ratatoskr (test hooks), ratatoskr-mock and drgnx-term (nothing when current)" >&2
+  (cd "$here" && env ${envs[@]+"${envs[@]}"} "${cargo[@]}" build ${own[@]+"${own[@]}"} \
+     -p drgnx-ratatoskr -p domr -p drgnx-term --bins --features drgnx-ratatoskr/test-hooks) >&2 ||
+    { echo "drgnx: the test hub did not build (above); DRGNX_RATATOSKR_BIN names another, DRGNX_TEST_HUB_BUILD=0 runs without" >&2; return 1; }
+  export DRGNX_RATATOSKR_BIN="$here/runtime/target/debug/ratatoskr"
+}
+
 cmd_test() {
   # huginn's dump example, when this checkout has built it (cargo build -p huginn --example dump): the differential test
   # is on the must-run list, so a full run without it fails; CI sets the variable itself
@@ -1059,6 +1097,7 @@ cmd_test() {
     --install) shift; test_install "$@" ;;
     --tty) test_tty ;;
     --ui) if [ "${2:-}" = --compositor ]; then ui_compositor_ok "${3:-}" || exit 2; export DRGNX_UI_COMPOSITOR="$3"; fi
+          test_hub || exit 1
           run_in_tmp ui_exec test-ui ;;
     --bootstrap) shift; test_bootstrap "$@" ;;
     --scenario) shift; run_in_tmp ui_exec test-scenario "$@" ;;
