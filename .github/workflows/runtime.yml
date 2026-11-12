@@ -1129,11 +1129,7 @@ jobs:
             cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-px --bin drgnx-px --target "$arch-unknown-linux-musl"
           env "CARGO_TARGET_${l}_LINKER=rust-lld" "CARGO_TARGET_${l}_RUSTFLAGS=-C link-self-contained=yes" \
             cargo build --locked --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key --target "$arch-unknown-linux-musl"
-      # The pure-Rust crates' tests through clippy on darwin: only clippy's test build shows code that is dead on macOS
-      # (gate review M21). Whatever the tests said, so neither hides the other.
-      - name: clippy on darwin (the pure-Rust crates)
-        if: ${{ !cancelled() }}
-        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -p heimdall -- -D warnings
+      # (clippy on darwin runs in conformance 1/2: here it was cut at this job's 45 minutes)
       - id: prune
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.setup.outputs.target-hit != 'true' && steps.test.outcome == 'success' }}
         run: |
@@ -1152,7 +1148,7 @@ jobs:
           key: ${{ steps.setup.outputs.registry-key }}
 
   # The conformance suite in two halves (domr --shard K/2: every other row, so both take about as long), each against
-  # its own debug build; the Seatbelt escape rows with the first half.
+  # its own debug build; the Seatbelt escape rows and clippy on darwin with the first half.
   macos-conformance:
     name: conformance ${{ matrix.shard }}/2 (macOS 27)
     if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
@@ -1207,6 +1203,12 @@ jobs:
             --probe runtime/target/debug/gleipnir-probe \
             --rows runtime/crates/gleipnir-escape/rows/macos --rows runtime/crates/gleipnir-escape/rows/any \
             --require-all --report "$RUNNER_TEMP/escape/escape-macos.json"
+      # The pure-Rust crates' tests through clippy on darwin: only clippy's test build shows code that is dead on macOS
+      # (gate review M21). In the shorter conformance half (about 20 minutes), not the tests job, whose cargo test
+      # alone takes 30 of its 45. Whatever the rows said, so neither hides the other.
+      - name: clippy on darwin (the pure-Rust crates)
+        if: ${{ !cancelled() && matrix.shard == 1 }}
+        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -p heimdall -- -D warnings
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ always() && matrix.shard == 1 }}
         with:
