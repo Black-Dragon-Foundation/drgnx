@@ -210,6 +210,27 @@ as projects the user selected in, cleared by the module's teardown.")
                                             :op (list :op "add-function" :name (string-trim name)))
                   #'drgnx-debug--answered))
 
+(defun drgnx-debug-hover-eldoc (_callback)
+  "Nothing, for the echo area: an expression is evaluated only when the mouse rests on it (quick help's card asks
+`drgnx-debug-hover-doc' instead, `drgnx-quickhelp-fuller-functions')."
+  nil)
+
+(defun drgnx-debug-hover-doc (callback)
+  "The data tip of the expression at point (the selection when point is in it) for quick help's card: evaluated
+in the stopped session of this project (`hover'), CALLBACK given \"EXPR = VALUE  (TYPE)\" when it comes, or nil
+on an error.  Nil (nothing asked) without a stopped session or an expression."
+  (when-let* ((s (drgnx-debug--session "stopped"))
+              (expr (if (and (use-region-p) (<= (region-beginning) (point) (region-end)))
+                        (buffer-substring-no-properties (region-beginning) (region-end))
+                      (let ((mark-active nil)) (drgnx-debug--expression-at-point)))))
+    (drgnx-hub-call "debug/evaluate" (list :session (plist-get s :id) :expr expr :context "hover")
+                    (lambda (r error)
+                      (funcall callback
+                               (unless error
+                                 (format "%s = %s%s" expr (plist-get r :result)
+                                         (if-let* ((ty (plist-get r :type))) (format "  (%s)" ty) ""))))))
+    t))
+
 (defun drgnx-debug--expression-at-point ()
   "The active region's text, else the symbol at point with the member chain before it (`self.items'); nil if none."
   (if (use-region-p)
@@ -245,6 +266,10 @@ console's tab shows without taking the focus."
                      :setup (lambda ()
                               (drgnx-debug-mode 1)
                               (add-hook 'drgnx-hub-event-functions #'drgnx-debug-fork--event)
+                              ;; data tips: quick help's card asks the fuller one when the mouse rests on an expression
+                              (add-hook 'eldoc-documentation-functions #'drgnx-debug-hover-eldoc)
+                              (drgnx-module-alist-put 'drgnx-quickhelp-fuller-functions
+                                                      'drgnx-debug-hover-eldoc 'drgnx-debug-hover-doc)
                               (pcase-dolist (`(,id ,title ,fn ,doc)
                                              '((debug-start "Start Debugging…" drgnx-debug-start-or-continue "Start a session, or continue the stopped one")
                                                (debug-breakpoint "Toggle Breakpoint" drgnx-debug-gutter-toggle "A breakpoint on this line, or none")

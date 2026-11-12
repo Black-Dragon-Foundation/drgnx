@@ -488,6 +488,11 @@ Methods (runstav `methods::debug`, the user class; served by `view::debug::serve
 - `debug/children {session, reference, epoch?}` → `{variables: [{name, value, type?, reference?}]}`: a value's
   children while its stop (EPOCH, default the current one) lasts; after it, the error says the stop is over.
   (Copy Value uses `clipboard` when the adapter has `supportsClipboardContext`).
+- Data tips (the mouse): quick help's hover already waits for the mouse to rest, drops an older request and gives
+  up after a second. extra/debug puts `drgnx-debug-hover-eldoc` on `eldoc-documentation-functions` (it never
+  answers: the echo area evaluates nothing) and pairs it in `drgnx-quickhelp-fuller-functions` with
+  `drgnx-debug-hover-doc`, which only the card asks: `debug/evaluate` (`hover`) of the expression there in the
+  project's stopped session, answered as `EXPR = VALUE  (TYPE)`.
 - `debug/breakpoints`' ops `filter {adapter, name, enabled}` (kept per adapter type and sent to its sessions at once),
   `enable-all {enabled}`, `toggle-all` (all off when any is on, else all on: Toggle All Breakpoints) and `remove-all`
   (function breakpoints too).

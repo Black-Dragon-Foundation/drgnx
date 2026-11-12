@@ -69,6 +69,9 @@ stop on an exception is red, with a card under the line saying what was raised (
 `eval`, opens read-only from the debugger). Set `drgnx-debug-focus-on-stop` to bring Emacs to the front on a stop.
 While stopped, the function's variables show their values at the ends of the lines that set them (a value that changed
 since the last stop in amber); a file edited since its save shows none, and `drgnx-debug-inline-values` turns them off.
+Rest the mouse on an expression (`self.items`, or inside a selection for the selection) and quick help's card shows its
+value and type in the stopped frame (`drgnx-quickhelp-hover`, `drgnx-quickhelp-delay`); **Debug: Show Value at
+Point** does it from the keyboard, in the echo area.
 While the session is stopped the same command continues; **Toggle Breakpoint**, **Step Over**, **Step Into**,
 **Step Out** and **Stop Debugging** do what they say. If you used dape, **Convert dape Configurations…** (the palette)
 turns your `dape-configs` into launch configurations once (dape itself is no longer needed).
