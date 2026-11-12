@@ -171,14 +171,14 @@ hub's row, keeps the selection's face on it, and no old patch lands after the re
                   (cond ((not (equal text "QN AN BN")) (format "the map shows %S, not the new hub's row" text))
                         ((not (equal (drgnx-work-map-rows-test--selected-at) '("agent:a" t)))
                          (format "the selection's face: %S" (drgnx-work-map-rows-test--selected-at)))))))))
-  ;; the client's half: a rows view subscribes again with `rows' when the hub is back
+  ;; the client's half: a view subscribes again when the hub is back
   (let ((drgnx-work-client--views (make-hash-table :test #'equal)) (asked nil))
     (cl-letf (((symbol-function 'drgnx-work-client--call) (lambda (method params _cb) (push (cons method params) asked) t)))
       (drgnx-work-client-open "w1" (list :id "w1" :roots '("/r/")))
       (setq asked nil)
       (drgnx-work-client-connected)
       (should (equal "work/map/subscribe" (car (car asked))))
-      (should (eq t (plist-get (cdr (car asked)) :rows)))
+      (should (equal "w1" (plist-get (cdr (car asked)) :view)))
       ;; its answer is the hub's id: the view is live
       (drgnx-work-client--subscribed "w1" (drgnx-work-client--view-gen (drgnx-work-client--get "w1")) (list :hub 9 :version 1) nil)
       (should (equal "live" (drgnx-work-client-status "w1"))))))
@@ -334,7 +334,7 @@ its tab line, the map marked."
               (with-current-buffer buf
                 (should drgnx-view-patch)
                 (should (equal "rows-ws" (drgnx-view-patch-view drgnx-view-patch)))
-                (should (eq t (plist-get (cdr (assoc "work/map/subscribe" asked)) :rows)))
+                (should (equal "rows-ws" (plist-get (cdr (assoc "work/map/subscribe" asked)) :view)))
                 (should (string-search "Map" (substring-no-properties drgnx-work-map--lens))))
             (kill-buffer buf)))))))
 

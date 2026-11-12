@@ -4793,96 +4793,6 @@
       },
       "doc": "the user gives back the wheel of a session in a worktree of its own: the editor saves its buffers there and answers agents/wheel/saved with the files left unsaved",
       "name": "wheel-save"
-    },
-    {
-      "data": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "description": "The data of `work-map`: what changed in one view since version `base`.",
-        "properties": {
-          "base": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "changed": {
-            "default": [],
-            "description": "Items new or changed, whole.",
-            "items": true,
-            "type": "array"
-          },
-          "chips": {
-            "items": true,
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "edges": {
-            "description": "Every edge between the items shown, when the edge set changed.",
-            "items": true,
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "entered": {
-            "default": [],
-            "description": "Ids that arrived live: they fade in at their place in `places`.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "full": {
-            "description": "A full frame (a relayout): `changed` is every item shown, `layout` the new one.",
-            "type": "boolean"
-          },
-          "layout": true,
-          "needs_you": {
-            "items": true,
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "places": {
-            "description": "The free places the arrivals took (id → rect), and their forms."
-          },
-          "removed": {
-            "default": [],
-            "description": "Ids no longer shown: they fade out and leave their place empty.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "stale": {
-            "description": "The view is hidden and its frame is out of date: shown again, it gets a full frame.",
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "version": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "view": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "view",
-          "version",
-          "base"
-        ],
-        "title": "WorkMap",
-        "type": "object"
-      },
-      "doc": "what changed in one Work map view since its version base, to that view's connection only (work/map/subscribe): at most one delta per 100 ms, a full frame on a relayout, a stale mark for a hidden view",
-      "name": "work-map"
     }
   ],
   "methods": [
@@ -38143,7 +38053,7 @@
             ]
           },
           "shown": {
-            "description": "False: hidden (no deltas, one stale mark); true again: a full frame.",
+            "description": "False: hidden (nothing is sent); true again: its model and rows drawn anew (the model a reset).",
             "type": [
               "boolean",
               "null"
@@ -38190,7 +38100,7 @@
       "classes": [
         "user"
       ],
-      "doc": "open (or open again) one map view of this connection: the answer is its full frame, and work-map events follow, to this connection only; with rows, its rows come as view-patch per display class instead",
+      "doc": "open (or open again) one map view of this connection: its model comes as view-model (a reset first) and its rows as view-patch per display class, to this connection only; the answer is the hub's id and the view's version",
       "name": "work/map/subscribe",
       "params": {
         "$defs": {
@@ -38249,7 +38159,7 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`work/map/subscribe`'s params: one map view of this connection (VIEW is the editor's id for it), the workspace it\nshows, and how.",
+        "description": "`work/map/subscribe`'s params: one map view of this connection (VIEW is the editor's id for it), the workspace it\nshows, and how. Its rows come as `view-patch` per display class (`view/env`), the first a reset.",
         "properties": {
           "collapsed": {
             "default": [],
@@ -38280,10 +38190,6 @@
               "null"
             ]
           },
-          "rows": {
-            "description": "Rows: the view's rows come as `view-patch` per display class (`view/env`), the first a reset, and no\n`work-map` event comes; the width is the env's (`width_units` is ignored). The answer is `{hub, version}`.",
-            "type": "boolean"
-          },
           "selected": {
             "description": "The selected item: a quiet reflow that would move its chain waits for the user.",
             "type": [
@@ -38295,7 +38201,7 @@
             "type": "string"
           },
           "width_units": {
-            "description": "The drawing width, in units of 4 px.",
+            "description": "The drawing width, in units of 4 px, until the view's GUI classes sent a `view/env` (then theirs).",
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
@@ -38313,84 +38219,27 @@
         "type": "object"
       },
       "result": {
-        "$defs": {
-          "MapFrame": {
-            "additionalProperties": false,
-            "description": "A map view's full frame: `work/map/subscribe`'s answer.",
-            "properties": {
-              "chips": {
-                "default": [],
-                "description": "The mission chips (the machines' load).",
-                "items": true,
-                "type": "array"
-              },
-              "edges": {
-                "default": [],
-                "description": "The edges between them.",
-                "items": true,
-                "type": "array"
-              },
-              "items": {
-                "default": [],
-                "description": "The items the view shows, each with its kind, label, flags and card fields.",
-                "items": true,
-                "type": "array"
-              },
-              "layout": {
-                "description": "Rows, positions and forms, lanes, ports and bands, in units of 4 px."
-              },
-              "needs_you": {
-                "default": [],
-                "description": "The needs-you strip.",
-                "items": true,
-                "type": "array"
-              },
-              "version": {
-                "description": "The frame's version; every `work-map` after it names the version it applies to (`base`).",
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              }
-            },
-            "required": [
-              "version",
-              "layout"
-            ],
-            "type": "object"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/map/subscribe`'s answer: the view's patches name this hub and start from a reset.",
+        "properties": {
+          "hub": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
           },
-          "MapRows": {
-            "additionalProperties": false,
-            "description": "`work/map/subscribe`'s answer to a rows view: its patches name this hub and start from a reset.",
-            "properties": {
-              "hub": {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              },
-              "version": {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              }
-            },
-            "required": [
-              "hub",
-              "version"
-            ],
-            "type": "object"
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
           }
         },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "anyOf": [
-          {
-            "$ref": "#/$defs/MapFrame"
-          },
-          {
-            "$ref": "#/$defs/MapRows"
-          }
+        "required": [
+          "hub",
+          "version"
         ],
-        "description": "`work/map/subscribe`'s answer: the full frame, or (`rows`) the hub's instance id and the view's version.",
-        "title": "MapSubscribed"
+        "title": "MapRows",
+        "type": "object"
       },
       "writes": false
     },

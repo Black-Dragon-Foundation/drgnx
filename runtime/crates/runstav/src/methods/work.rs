@@ -8,8 +8,8 @@
 //! The presence model: `agents/presence/subscribe`, `agents/presence/get` and the event `agent-presence` (who is in
 //! which file, at which line, now). The `agents/` names keep clear of `presence/set`, the user's own away state.
 //!
-//! The Work map: `work/map/subscribe`, `work/map/set`, `work/map/close` and the event `work-map`, per (connection,
-//! view), sent to that connection only.
+//! The Work map: `work/map/subscribe`, `work/map/set`, `work/map/close`, per (connection, view); its model and rows
+//! (`view-model`, `view-patch`) go to that connection only.
 
 use super::{Empty, invalid, method};
 use crate::registry::Method;
@@ -269,13 +269,13 @@ pub struct MapFilters {
 }
 
 /// `work/map/subscribe`'s params: one map view of this connection (VIEW is the editor's id for it), the workspace it
-/// shows, and how.
+/// shows, and how. Its rows come as `view-patch` per display class (`view/env`), the first a reset.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MapSubscribe {
     pub view: String,
     pub workspace: Workspace,
-    /// The drawing width, in units of 4 px.
+    /// The drawing width, in units of 4 px, until the view's GUI classes sent a `view/env` (then theirs).
     pub width_units: u32,
     #[serde(default)]
     pub density: MapDensity,
@@ -287,24 +287,12 @@ pub struct MapSubscribe {
     /// The selected item: a quiet reflow that would move its chain waits for the user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<String>,
-    /// Rows: the view's rows come as `view-patch` per display class (`view/env`), the first a reset, and no
-    /// `work-map` event comes; the width is the env's (`width_units` is ignored). The answer is `{hub, version}`.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub rows: bool,
     /// The form the user asked for (`work/map/set {outline}`, sent again by the editor): `on`, `off` or `auto`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outline: Option<String>,
 }
 
-/// `work/map/subscribe`'s answer: the full frame, or (`rows`) the hub's instance id and the view's version.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(untagged)]
-pub enum MapSubscribed {
-    Frame(MapFrame),
-    Rows(MapRows),
-}
-
-/// `work/map/subscribe`'s answer to a rows view: its patches name this hub and start from a reset.
+/// `work/map/subscribe`'s answer: the view's patches name this hub and start from a reset.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MapRows {
@@ -373,28 +361,6 @@ pub struct FlowSubscribe {
     pub rules: bool,
 }
 
-/// A map view's full frame: `work/map/subscribe`'s answer.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct MapFrame {
-    /// The frame's version; every `work-map` after it names the version it applies to (`base`).
-    pub version: u64,
-    /// The items the view shows, each with its kind, label, flags and card fields.
-    #[serde(default, deserialize_with = "null_as_empty")]
-    pub items: Vec<serde_json::Value>,
-    /// The edges between them.
-    #[serde(default, deserialize_with = "null_as_empty")]
-    pub edges: Vec<serde_json::Value>,
-    /// Rows, positions and forms, lanes, ports and bands, in units of 4 px.
-    pub layout: serde_json::Value,
-    /// The needs-you strip.
-    #[serde(default, deserialize_with = "null_as_empty")]
-    pub needs_you: Vec<serde_json::Value>,
-    /// The mission chips (the machines' load).
-    #[serde(default, deserialize_with = "null_as_empty")]
-    pub chips: Vec<serde_json::Value>,
-}
-
 /// `work/map/set`'s params: what changes in one view (each absent field stays).
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -408,7 +374,7 @@ pub struct MapSet {
     pub width_units: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub density: Option<MapDensity>,
-    /// False: hidden (no deltas, one stale mark); true again: a full frame.
+    /// False: hidden (nothing is sent); true again: its model and rows drawn anew (the model a reset).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shown: Option<bool>,
     /// The selection moved (a map key).
@@ -435,42 +401,6 @@ pub struct MapVersion {
 #[serde(deny_unknown_fields)]
 pub struct MapClose {
     pub view: String,
-}
-
-/// The data of `work-map`: what changed in one view since version `base`.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WorkMap {
-    pub view: String,
-    pub version: u64,
-    pub base: u64,
-    /// A full frame (a relayout): `changed` is every item shown, `layout` the new one.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub full: bool,
-    /// Items new or changed, whole.
-    #[serde(default, deserialize_with = "null_as_empty")]
-    pub changed: Vec<serde_json::Value>,
-    /// Ids no longer shown: they fade out and leave their place empty.
-    #[serde(default, deserialize_with = "null_as_empty")]
-    pub removed: Vec<String>,
-    /// Ids that arrived live: they fade in at their place in `places`.
-    #[serde(default, deserialize_with = "null_as_empty")]
-    pub entered: Vec<String>,
-    /// The free places the arrivals took (id → rect), and their forms.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub places: Option<serde_json::Value>,
-    /// Every edge between the items shown, when the edge set changed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub edges: Option<Vec<serde_json::Value>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub layout: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub needs_you: Option<Vec<serde_json::Value>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub chips: Option<Vec<serde_json::Value>>,
-    /// The view is hidden and its frame is out of date: shown again, it gets a full frame.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stale: Option<bool>,
 }
 
 /// The longest view id, in bytes.
@@ -744,9 +674,9 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_conclusions,
         ),
         method!(
-            "work/map/subscribe", WorkMapSubscribe(MapSubscribe) -> MapSubscribed,
+            "work/map/subscribe", WorkMapSubscribe(MapSubscribe) -> MapRows,
             classes: [User], writes: false,
-            doc: "open (or open again) one map view of this connection: the answer is its full frame, and work-map events follow, to this connection only; with rows, its rows come as view-patch per display class instead",
+            doc: "open (or open again) one map view of this connection: its model comes as view-model (a reset first) and its rows as view-patch per display class, to this connection only; the answer is the hub's id and the view's version",
             check: check_map_subscribe,
         ),
         method!(

@@ -408,7 +408,6 @@ fn rows_view(m: &vegvisir::Model, width: u32) -> View {
         state,
         shown: true,
         selected: None,
-        rows: true,
         version: 1,
         layout: Some(l),
         sent,
@@ -568,10 +567,9 @@ fn log(map: &Map) -> Vec<&'static str> {
         .clone()
 }
 
-/// [A] A rows view gets its rows as patches for a full frame and a delta, and never a `work-map` event (a hidden one
-/// gets no stale mark either: its editor hid it).
+/// [A] A view gets its model and rows for a relayout and a delta; hidden, it gets nothing (its editor hid it).
 #[test]
-fn rows_subscriber_gets_no_work_map_event() {
+fn a_hidden_view_gets_nothing() {
     let (map, mut g, key) = rows_map(2, 226);
     map.send_full(&mut g, &key);
     map.send_delta(
@@ -582,10 +580,18 @@ fn rows_subscriber_gets_no_work_map_event() {
             ..Delta::default()
         },
     );
-    map.stale(&mut g, &key);
-    let sent = log(&map);
-    assert!(!sent.contains(&"work-map"), "{sent:?}");
-    assert_eq!(sent, ["model", "rows", "model", "rows"]);
+    assert_eq!(log(&map), ["model", "rows", "model", "rows"]);
+    g.views.get_mut(&key).expect("the view").shown = false;
+    map.send_full(&mut g, &key);
+    map.send_delta(
+        &mut g,
+        &key,
+        Delta {
+            changed: vec![ItemId("agent:s1".into())],
+            ..Delta::default()
+        },
+    );
+    assert_eq!(log(&map), ["model", "rows", "model", "rows"]);
 }
 
 /// [D] A rows view's model goes before the rows built from it, for a full frame and for a delta.

@@ -278,11 +278,6 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "who is in a file now changed: its entries, at most once per file per 100 ms, to the connections that asked (agents/presence/subscribe)"
         ),
         event!(
-            "work-map",
-            crate::methods::work::WorkMap,
-            "what changed in one Work map view since its version base, to that view's connection only (work/map/subscribe): at most one delta per 100 ms, a full frame on a relayout, a stale mark for a hidden view"
-        ),
-        event!(
             "exec-done",
             crate::methods::exec::ExecDone,
             "a job ended: its status, exit and summary"
@@ -531,7 +526,6 @@ mod tests {
                     "plugin",
                     "runners/need-keys",
                     "agent-presence",
-                    "work-map",
                     // agent system part 3
                     "agent-buffer",
                     // agent system part 5
@@ -590,7 +584,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 60);
+        assert_eq!(events().len(), 59);
         // names only: a value-shaped name is no key name, and nothing but `names` is taken
         let need = event("runners/need-keys").unwrap();
         assert_eq!(

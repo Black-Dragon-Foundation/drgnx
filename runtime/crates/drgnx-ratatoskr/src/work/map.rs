@@ -1,6 +1,6 @@
 //! The Work map (docs/develop/hub.md, "The Work map"): the hub feeds `vegvisir` from its sources and sends each map
-//! view, per (connection, view), what changed (`work/map/subscribe`, `work/map/set`, `work/map/close`; the event
-//! `work-map`, by `Front::send_to` only).
+//! view, per (connection, view), its model and rows (`work/map/subscribe`, `work/map/set`, `work/map/close`; the
+//! events `view-model` and `view-patch`, to that connection only).
 //!
 //! [`Coalescer`] is the pure part (design §11.3 step 5): per view, field changes go out at most once per
 //! [`FIELDS_EVERY`]; a live arrival takes a free place and fades in, a departure fades out and leaves its place empty,
@@ -10,7 +10,6 @@
 
 use crate::dispatch::Caller;
 use crate::front::Front;
-use crate::settings::agents::Editors;
 use drgnx_rows::fit::Measure;
 use drgnx_rows::svg::Palette;
 use drgnx_rows::{ImageId, Row};
@@ -18,8 +17,8 @@ use runstav::methods::agents::{SessionStatus, Snapshot};
 use runstav::methods::timeline::StepClass;
 use runstav::methods::view::{Display, ViewEnv};
 use runstav::methods::work::{
-    Machine, MapClose, MapDensity, MapFilters, MapFrame, MapRows, MapSet, MapSubscribe,
-    MapSubscribed, MapVersion, PresenceMode, WorkMap, Workspace,
+    Machine, MapClose, MapDensity, MapFilters, MapRows, MapSet, MapSubscribe, MapVersion,
+    PresenceMode, Workspace,
 };
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
@@ -61,7 +60,7 @@ pub enum CoIn {
 pub enum CoOut {
     /// Send the gathered delta: its new items take a free place and fade in, its removed ones fade out.
     Send { delta: Delta },
-    /// Lay the view out and send a full frame: the user's own change (`user`), or the quiet reflow, which the shell
+    /// Lay the view out and draw it anew: the user's own change (`user`), or the quiet reflow, which the shell
     /// answers with [`CoIn::Held`] instead when it would move the selection's chain.
     Reflow { user: bool },
     /// Give me [`CoIn::Now`] at this time.
@@ -365,11 +364,9 @@ struct View {
     state: ViewState,
     shown: bool,
     selected: Option<ItemId>,
-    /// Its rows come as `view-patch` per display class (`work/map/subscribe`'s `rows`), never as `work-map`.
-    rows: bool,
     version: u64,
     layout: Option<Layout>,
-    /// The items the editor's frame holds.
+    /// The items the view shows.
     sent: BTreeSet<ItemId>,
     co: Coalescer,
     /// The form the user asked for (`work/map/set {outline}`): the outline, the cards, or the outline where they do
@@ -479,11 +476,10 @@ pub struct Map {
     inner: Mutex<Inner>,
     /// Whether any view is open (read on every session snapshot).
     open: AtomicBool,
-    editors: OnceLock<Arc<Editors>>,
     /// The front, for a session a step or presence names before its first snapshot reached the map.
     front: OnceLock<Weak<Front>>,
     origin: OnceLock<tokio::time::Instant>,
-    /// What went out, in order (`work-map`, `rows`): tests read it.
+    /// What went out, in order (`model`, `rows`): tests read it.
     #[cfg(test)]
     log: Mutex<Vec<&'static str>>,
 }
@@ -567,32 +563,7 @@ pub(crate) fn job_fact(row: &runstav::methods::exec::ExecRow, keys: Vec<String>)
     }
 }
 
-/// The edges between items the frame holds.
-fn edges_among(m: &vegvisir::Model, sent: &BTreeSet<ItemId>) -> Vec<Value> {
-    m.edges()
-        .into_iter()
-        .filter(|e| sent.contains(&e.from) && sent.contains(&e.to))
-        .map(|e| json!(e))
-        .collect()
-}
-
-/// The machines' load, the strip's mission chips.
-fn chips(m: &vegvisir::Model) -> Vec<Value> {
-    m.items()
-        .values()
-        .filter(|it| it.kind == Kind::Machine)
-        .map(|it| {
-            let (used, total) = it.fields.slots.unwrap_or((0, 0));
-            let mut chip = json!({"kind": "machine", "item": it.id, "label": it.label, "used": used, "total": total});
-            if let Some(cost) = it.fields.runner.as_ref().and_then(|r| r.cost.as_ref()) {
-                chip["cost"] = json!(cost);
-            }
-            chip
-        })
-        .collect()
-}
-
-/// The items a full frame of LAYOUT shows: those it places, and those of a collapsed layer (drawn as its count).
+/// The items a view laid out by LAYOUT shows: those it places, and those of a collapsed layer (drawn as its count).
 fn frame_items(m: &vegvisir::Model, v: &ViewState, l: &Layout) -> Vec<vegvisir::Item> {
     let narrowed = v.filters.focus.is_some() || v.filters.overlaps;
     m.items()
@@ -710,17 +681,6 @@ impl Map {
     fn now_ms(&self) -> u64 {
         let origin = *self.origin.get_or_init(crate::clock::now);
         u64::try_from(crate::clock::now().duration_since(origin).as_millis()).unwrap_or(u64::MAX)
-    }
-
-    fn send(&self, conn: u64, data: &WorkMap) {
-        #[cfg(test)]
-        self.log
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push("work-map");
-        if let Some(e) = self.editors.get() {
-            e.send_to(conn, "work-map", json!(data));
-        }
     }
 
     // ---- the sources ----
@@ -1084,7 +1044,6 @@ impl Map {
                     self.coalesce(g, &view, Some(CoIn::Delta(delta)), now)
                 }
                 Effect::Relayout { view } => self.coalesce(g, &view, Some(CoIn::User), now),
-                Effect::Stale { view } => self.stale(g, &view),
             }
         }
     }
@@ -1148,34 +1107,6 @@ impl Map {
             .any(|id| prev.at.get(id) != next.at.get(id))
     }
 
-    /// A hidden view's frame went stale.
-    fn stale(&self, g: &mut Inner, key: &ViewKey) {
-        let Some(v) = g.views.get_mut(key) else {
-            return;
-        };
-        // a rows view's editor hid it itself: no mark, no patch until it is shown again
-        if v.rows {
-            return;
-        }
-        v.version += 1;
-        let data = WorkMap {
-            view: key.view.clone(),
-            version: v.version,
-            base: v.version - 1,
-            full: false,
-            changed: Vec::new(),
-            removed: Vec::new(),
-            entered: Vec::new(),
-            places: None,
-            edges: None,
-            layout: None,
-            needs_you: None,
-            chips: None,
-            stale: Some(true),
-        };
-        self.send(key.conn, &data);
-    }
-
     /// The gathered DELTA to VIEW: arrivals at free places, departures leaving theirs empty, nothing else moved.
     fn send_delta(&self, g: &mut Inner, key: &ViewKey, delta: Delta) {
         let Inner { spaces, views, .. } = g;
@@ -1190,7 +1121,7 @@ impl Map {
         }
         let m = sp.core.model();
         let narrowed = v.state.filters.focus.is_some() || v.state.filters.overlaps;
-        let mut items = Vec::new();
+        let mut shows = false;
         let mut new = Vec::new();
         for id in &delta.changed {
             let Some(it) = m.item(id) else { continue };
@@ -1200,7 +1131,7 @@ impl Map {
                 if !v.sent.contains(id) {
                     new.push(id.clone());
                 }
-                items.push(it);
+                shows = true;
             }
         }
         let gone: Vec<ItemId> = delta
@@ -1209,59 +1140,20 @@ impl Map {
             .filter(|id| v.sent.contains(*id))
             .cloned()
             .collect();
-        if items.is_empty() && gone.is_empty() && !delta.edges && !delta.needs_you {
+        if !shows && gone.is_empty() && !delta.edges && !delta.needs_you {
             return;
         }
         let next = layout::place_live(&v.state, prev, &new, &gone);
-        let entered: Vec<ItemId> = new
-            .iter()
-            .filter(|id| next.at.contains_key(*id))
-            .cloned()
-            .collect();
-        let places = (!entered.is_empty()).then(|| {
-            json!(
-                entered
-                    .iter()
-                    .map(|id| (
-                        id.as_str(),
-                        json!({"rect": next.at[id], "form": next.form.get(id)})
-                    ))
-                    .collect::<BTreeMap<_, _>>()
-            )
-        });
         v.sent.extend(new);
         for id in &gone {
             v.sent.remove(id);
         }
         v.layout = Some(next);
         v.version += 1;
-        if v.rows {
-            self.publish(sp, v, key);
-            return;
-        }
-        let machines = items.iter().any(|it| it.kind == Kind::Machine);
-        let data = WorkMap {
-            view: key.view.clone(),
-            version: v.version,
-            base: v.version - 1,
-            full: false,
-            changed: items.iter().map(|it| json!(it)).collect(),
-            removed: gone.iter().map(|id| id.0.clone()).collect(),
-            entered: entered.iter().map(|id| id.0.clone()).collect(),
-            places,
-            edges: (delta.edges || !entered.is_empty() || !gone.is_empty())
-                .then(|| edges_among(m, &v.sent)),
-            layout: None,
-            needs_you: delta
-                .needs_you
-                .then(|| m.needs_you().iter().map(|n| json!(n)).collect()),
-            chips: machines.then(|| chips(m)),
-            stale: None,
-        };
-        self.send(key.conn, &data);
+        self.publish(sp, v, key);
     }
 
-    /// VIEW laid out again: a full frame.
+    /// VIEW laid out again and drawn anew.
     fn send_full(&self, g: &mut Inner, key: &ViewKey) {
         let Inner { spaces, views, .. } = g;
         let Some(v) = views.get_mut(key) else {
@@ -1273,28 +1165,8 @@ impl Map {
         if !v.shown {
             return;
         }
-        let m = sp.core.model();
-        let frame = Self::frame(m, v);
-        if v.rows {
-            self.publish(sp, v, key);
-            return;
-        }
-        let data = WorkMap {
-            view: key.view.clone(),
-            version: v.version,
-            base: v.version - 1,
-            full: true,
-            changed: frame.items,
-            removed: Vec::new(),
-            entered: Vec::new(),
-            places: None,
-            edges: Some(frame.edges),
-            layout: Some(frame.layout),
-            needs_you: Some(frame.needs_you),
-            chips: Some(frame.chips),
-            stale: None,
-        };
-        self.send(key.conn, &data);
+        Self::relayout(sp.core.model(), v);
+        self.publish(sp, v, key);
     }
 
     /// Rows view V (KEY) of space SP: first its model (`view-model`, what changed since its editor's replica was last
@@ -1303,7 +1175,7 @@ impl Map {
     /// A conclusion that changed since V was last drawn marks its card new for [`NEW_MS`]; one wake of the hub's
     /// clock draws the view again when the oldest mark leaves.
     fn publish(&self, sp: &Space, v: &mut View, key: &ViewKey) {
-        if !v.rows || !v.shown {
+        if !v.shown {
             return;
         }
         let m = sp.core.model();
@@ -1448,11 +1320,7 @@ impl Map {
 
     fn near_in(g: &Inner, conn: u64) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
-        for (_, v) in g
-            .views
-            .iter()
-            .filter(|(k, v)| k.conn == conn && v.rows && v.shown)
-        {
+        for (_, v) in g.views.iter().filter(|(k, v)| k.conn == conn && v.shown) {
             let (Some(sel), Some(sp)) = (v.selected.as_ref(), g.spaces.get(&v.space)) else {
                 continue;
             };
@@ -1485,7 +1353,7 @@ impl Map {
                 view: map_view.to_owned(),
             };
             let g = lock(&self.inner);
-            if let Some(v) = g.views.get(&key).filter(|v| v.rows && v.shown)
+            if let Some(v) = g.views.get(&key).filter(|v| v.shown)
                 && let Some(sp) = g.spaces.get(&v.space)
             {
                 Self::publish_detail(f, sp.core.model(), v, &key, Some(&k3.2));
@@ -1501,9 +1369,6 @@ impl Map {
         let Some(v) = g.views.get_mut(&key) else {
             return;
         };
-        if !v.rows {
-            return;
-        }
         match width.filter(|w| *w != v.state.width_units) {
             Some(w) => {
                 v.state.width_units = w;
@@ -1528,22 +1393,15 @@ impl Map {
         }
     }
 
-    /// V laid out again from model M: its next version's full frame (V's layout, frame and version follow it).
-    fn frame(m: &vegvisir::Model, v: &mut View) -> MapFrame {
+    /// V laid out again from model M: its next version (V's layout, items shown and version follow it).
+    fn relayout(m: &vegvisir::Model, v: &mut View) {
         let l = layout::layout(m, &v.state, v.layout.as_ref());
-        let items = frame_items(m, &v.state, &l);
-        v.sent = items.iter().map(|it| it.id.clone()).collect();
+        v.sent = frame_items(m, &v.state, &l)
+            .into_iter()
+            .map(|it| it.id)
+            .collect();
         v.version += 1;
-        let frame = MapFrame {
-            version: v.version,
-            items: items.iter().map(|it| json!(it)).collect(),
-            edges: edges_among(m, &v.sent),
-            layout: json!(l),
-            needs_you: m.needs_you().iter().map(|n| json!(n)).collect(),
-            chips: chips(m),
-        };
         v.layout = Some(l);
-        frame
     }
 
     /// Connection CONN is gone: its views with it.
@@ -1575,12 +1433,12 @@ impl Map {
     }
 }
 
-/// `work/map/subscribe`: VIEW of CALLER's connection opens (again) on its workspace; the answer is its full frame.
-pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapSubscribed, Error> {
+/// `work/map/subscribe`: VIEW of CALLER's connection opens (again) on its workspace: its model (a reset), then its rows
+/// to each class it has an env for (the first patch of each a reset); the answer is the hub's id and its version.
+pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapRows, Error> {
     // the form the user asked for, kept by the editor across subscriptions
     let outline = outline_param(p.outline.as_deref())?.unwrap_or(render::Outline::Auto);
     let map = &f.core.map;
-    let _ = map.editors.set(f.editors.clone());
     let roots: Vec<PathBuf> = p
         .workspace
         .roots
@@ -1606,12 +1464,8 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapSubs
         conn: c.conn_id,
         view: p.view.clone(),
     };
-    // a rows view's width is its GUI classes' (`view/env`), the given one until they sent one
-    let width = if p.rows {
-        rows_width(&f.core.views.envs(c.conn_id, &p.view)).unwrap_or(p.width_units)
-    } else {
-        p.width_units
-    };
+    // the view's width is its GUI classes' (`view/env`), the given one until they sent one
+    let width = rows_width(&f.core.views.envs(c.conn_id, &p.view)).unwrap_or(p.width_units);
     let state = ViewState {
         width_units: width,
         density: density(p.density),
@@ -1653,7 +1507,6 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapSubs
         state,
         shown: true,
         selected: p.selected.map(ItemId),
-        rows: p.rows,
         version: 0,
         layout: None,
         sent: BTreeSet::new(),
@@ -1662,25 +1515,19 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapSubs
         marks: NewMarks::default(),
         new_wake: None,
     };
-    let frame = Map::frame(sp.core.model(), &mut v);
-    if !v.rows {
-        g.views.insert(key, v);
-        return Ok(MapSubscribed::Frame(frame));
-    }
-    // a rows view: its model (a reset), then its rows to each class it has an env for (the first patch of each a
-    // reset)
+    Map::relayout(sp.core.model(), &mut v);
     f.core.views.model_restart(c.conn_id, &p.view);
     map.publish(sp, &mut v, &key);
     let version = v.version;
     g.views.insert(key, v);
-    Ok(MapSubscribed::Rows(MapRows {
+    Ok(MapRows {
         hub: f.core.views.hub(),
         version,
-    }))
+    })
 }
 
-/// `work/map/set`: VIEW changes; the user's own change relayouts at once (a `work-map` full frame); the answer is the
-/// view's version after it.
+/// `work/map/set`: VIEW changes; the user's own change relayouts at once (drawn anew); the answer is the view's
+/// version after it.
 pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
     let map = &f.core.map;
     let key = ViewKey {
@@ -1731,9 +1578,9 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
         && shown != v.shown
     {
         v.shown = shown;
-        // a hidden view drops what it gathered; shown again, it gets one full frame (and a model reset)
+        // a hidden view drops what it gathered; shown again, it is drawn anew (and its model a reset)
         v.co = Coalescer::default();
-        if !shown && v.rows {
+        if !shown {
             f.core.views.model_hidden(c.conn_id, &p.view);
         }
         ops.push(ViewOp::Shown {
@@ -1749,7 +1596,7 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
             effects.extend(sp.core.step(Event::View(op)));
         }
     }
-    // one full frame for the user's change, however many parts it had
+    // one relayout for the user's change, however many parts it had
     let mut relayout = false;
     for e in effects {
         match e {
@@ -1758,7 +1605,6 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
                 f_map.coalesce(&mut g, &view, Some(CoIn::Delta(delta)), now)
             }
             Effect::Relayout { view } => f_map.coalesce(&mut g, &view, Some(CoIn::User), now),
-            Effect::Stale { view } => f_map.stale(&mut g, &view),
         }
     }
     if relayout {
@@ -1767,7 +1613,7 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
         if moved {
             f_map.coalesce(&mut g, &key, Some(CoIn::Key), now);
         }
-        // a rows view draws its new chain's edges (the tiles and lanes on it), or its new form
+        // the view draws its new chain's edges (the tiles and lanes on it), or its new form
         let Inner { spaces, views, .. } = &mut *g;
         if let Some(v) = views.get_mut(&key)
             && let Some(sp) = spaces.get(&v.space)

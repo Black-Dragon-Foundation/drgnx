@@ -17,7 +17,7 @@
 (defvar drgnx-work-space-command-ids)
 
 (ert-deftest drgnx-work-space/module-off-closes-views-and-kills-buffers ()
-  ;; with Sjá the map subscribes with `rows'; turned off, the module closes the view and the buffer goes
+  ;; with Sjá the map subscribes; turned off, the module closes the view and the buffer goes
   (drgnx-test-require-nidhogg (fboundp 'nidhogg-view--call) "nidhogg-view--call")
   (let (calls name)
     (cl-letf (((symbol-function 'drgnx-work-client--call)
@@ -25,7 +25,7 @@
       (drgnx-test-with-modules '(tools/work-space) :strict t
                                (setq name (buffer-name (drgnx-work-space-open (list :id "workspace:000000000002" :roots (list temporary-file-directory)))))
                                (should (get-buffer name))
-                               (should (eq t (plist-get (cdr (assoc "work/map/subscribe" calls)) :rows)))))
+                               (should (assoc "work/map/subscribe" calls))))
     (should-not (get-buffer name))
     (should (assoc "work/map/close" calls))
     (should-not (drgnx-work-client-views))))
@@ -34,15 +34,15 @@
   ;; an Emacs without Sjá cannot show the hub's rows: the map says so, opens no view, and goes with the module
   (let (calls name)
     (cl-letf (((symbol-function 'drgnx-work-client--call)
-               (lambda (method params &rest _) (push (cons method params) calls) t))
-              ((symbol-function 'drgnx-work-map-rows-p) #'ignore))
+               (lambda (method params &rest _) (push (cons method params) calls) t)))
       (drgnx-test-with-modules '(tools/work-space) :strict t
-                               (let ((buf (drgnx-work-space-open (list :id "workspace:000000000003" :roots (list temporary-file-directory)) t)))
-                                 (setq name (buffer-name buf))
-                                 (with-current-buffer buf (drgnx-view-draw-now drgnx-view))
-                                 (should (string-search "needs Sjá" (with-current-buffer buf (buffer-string))))
-                                 (should-not calls)
-                                 (should-not (drgnx-work-client-views)))))
+                               (cl-letf (((symbol-function 'drgnx-work-map-rows-p) #'ignore))
+                                 (let ((buf (drgnx-work-space-open (list :id "workspace:000000000003" :roots (list temporary-file-directory)) t)))
+                                   (setq name (buffer-name buf))
+                                   (with-current-buffer buf (drgnx-view-draw-now drgnx-view))
+                                   (should (string-search "needs Sjá" (with-current-buffer buf (buffer-string))))
+                                   (should-not calls)
+                                   (should-not (drgnx-work-client-views))))))
     (should-not (get-buffer name))))
 
 (defun drgnx-work-space-test--bound-ids (profile)

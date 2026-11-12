@@ -66,9 +66,8 @@ reach the same facts compare equal.
 
 | Effect | When |
 |---|---|
-| `Delta { view, delta }` | a fact changed what a **shown** view shows: the ids changed and removed (removed: gone, or finished without "show finished"), and whether the edges, the structure (an item came, went, or changed block or parent) or the needs-you strip changed |
-| `Stale { view }` | the same for a **hidden** view, once, until it is shown again |
-| `Relayout { view }` | the user opened, changed or showed the view: lay it out and send a full frame |
+| `Delta { view, delta }` | a fact changed what a **shown** view shows: the ids changed and removed (removed: gone, or finished without "show finished"), and whether the edges, the structure (an item came, went, or changed block or parent) or the needs-you strip changed; a **hidden** view gets none |
+| `Relayout { view }` | the user opened, changed or showed the view: lay it out and draw it anew |
 
 Live events never return `Relayout`: the hub's coalescing decides when accumulated structural changes reflow
 (design §11.3). Deltas carry ids only; the hub reads the items from `Core::model()`.
@@ -492,7 +491,7 @@ Module `tools/work-space` (`modules/tools/drgnx-work-space.el`; the map buffer's
 and keeps no copy of the map. The map's rows come as `view-patch` events and its model goes to Sjá (the hub builds both:
 "The rows (`vegvisir::render`)", above).
 
-- One view per map buffer, keyed by the map view's id. `drgnx-work-client-open` subscribes with `rows: true`;
+- One view per map buffer, keyed by the map view's id. `drgnx-work-client-open` subscribes (`work/map/subscribe`);
   `-set` sends `work/map/set` (hidden or shown, filters, collapsed layers, width, density, the selection, the outline)
   and keeps every field but `shown` for the next subscription; `-set-then` takes a callback for the hub's answer, which
   comes after the patches the change made (one connection, in order); `-close` sends `work/map/close`. Every call goes on

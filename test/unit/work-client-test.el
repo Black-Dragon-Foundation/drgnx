@@ -23,7 +23,8 @@ status changes in `said' ((VIEW . STATUS) …, newest first)."
     (pcase-let ((`(,method ,params ,_) (car asked)))
       (should (equal "work/map/subscribe" method))
       (should (equal "v1" (plist-get params :view)))
-      (should (eq t (plist-get params :rows)))
+      ;; the hub has only rows views: it refuses a field it does not know
+      (should-not (plist-member params :rows))
       (should (equal 100 (plist-get params :width_units)))
       (should (equal "roomy" (plist-get params :density))))
     (should (equal "subscribing" (drgnx-work-client-status "v1")))))

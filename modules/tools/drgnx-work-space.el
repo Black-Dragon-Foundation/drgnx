@@ -313,7 +313,7 @@ selects; nothing is approved, pushed, merged or answered."
       (get-buffer-create "*drgnx work rules*")))
 
 (defun drgnx-work-space-sync-shown ()
-  "Tell the hub which maps a window shows now: a hidden one gets no deltas, a shown one a full frame.  Runs on the
+  "Tell the hub which maps a window shows now: a hidden one gets nothing, a shown one is drawn anew.  Runs on the
 workbench state store's window events (and by hand in tests); only calls the hub when a map's shown state changed."
   (dolist (buffer (drgnx-work-map-buffers))
     (when-let* ((id (buffer-local-value 'drgnx-work-space--view buffer))
