@@ -40,10 +40,11 @@ pub struct DebugConfigs {
 /// One configuration of `debug/configs`' list.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct DebugConfig {
-    /// `launch:N`, `user:N` or `default:ADAPTER:N`: what `debug/start` takes.
+    /// `launch:N`, `user:N`, `default:ADAPTER:N` or `compound:N` (launch.json's compounds, after its
+    /// configurations): what `debug/start` takes.
     pub id: String,
     pub name: String,
-    /// `launch`, `user` or `default`.
+    /// `launch`, `user`, `default` or `compound` (whose type and request are empty).
     pub source: String,
     #[serde(rename = "type")]
     pub ty: String,
@@ -108,13 +109,16 @@ pub struct DebugAnswer {
 }
 
 /// `debug/start`'s answer: the session, or what must come first: `"trust"`, or the inputs to ask
-/// (`[{input: {id, kind, description, default, options, password}} | "pickProcess"]`).
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+/// (`[{input: {id, kind, description, default, options, password}} | "pickProcess"]`). A compound's start answers
+/// every member's session in SESSIONS, in the compound's order (SESSION is the first).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct DebugStarted {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub needs: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sessions: Vec<String>,
 }
 
 /// `debug/control`: OP on SESSION (on THREAD, else the stopped one): `continue`, `pause`, `next`, `step-in`,

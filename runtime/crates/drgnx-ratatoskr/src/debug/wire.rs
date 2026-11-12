@@ -187,6 +187,14 @@ async fn configs(front: &Front, p: DebugConfigs) -> Result<DebugConfigList, Erro
                 needs_trust,
             ));
         }
+        for i in launch::listed(&f.compounds) {
+            out.push(entry(
+                format!("compound:{i}"),
+                "compound",
+                &f.compounds[i],
+                needs_trust,
+            ));
+        }
     }
     for (i, c) in p.user.iter().enumerate() {
         out.push(entry(
@@ -220,10 +228,10 @@ pub(super) fn config_of(p: &DebugStart, table: &Table) -> Result<(Value, Vec<Val
     let (kind, n) = p
         .config
         .split_once(':')
-        .ok_or_else(|| bad("config", "launch:N, user:N or default:N"))?;
+        .ok_or_else(|| bad("config", "launch:N, user:N, default:N or compound:N"))?;
     let n: usize = n
         .parse()
-        .map_err(|_| bad("config", "launch:N, user:N or default:N"))?;
+        .map_err(|_| bad("config", "launch:N, user:N, default:N or compound:N"))?;
     let gone = || bad("config", format!("no configuration {}", p.config));
     match kind {
         "launch" => {
@@ -360,9 +368,13 @@ fn launcher(
 async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugStarted, Error> {
     if !front.debug.is_trusted(&p.root) {
         return Ok(DebugStarted {
-            session: None,
             needs: Some(json!("trust")),
+            ..DebugStarted::default()
         });
+    }
+    if let Some(n) = p.config.strip_prefix("compound:") {
+        let n = n.to_owned();
+        return Box::pin(start_compound(front, caller, p, &n)).await;
     }
     let table = table(&p.adapters)?;
     let (config, inputs) = config_of(&p, &table)?;
@@ -375,8 +387,8 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
     let needs = launch::needs(&config, &inputs, &answers).map_err(err)?;
     if !needs.is_empty() {
         return Ok(DebugStarted {
-            session: None,
             needs: Some(Value::Array(needs.iter().map(need_json).collect())),
+            ..DebugStarted::default()
         });
     }
     launch::check_answers(&config, &inputs, &answers).map_err(|e| bad("inputs", e))?;
@@ -449,7 +461,132 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
         .insert(p.root, p.config);
     Ok(DebugStarted {
         session: Some(id),
-        needs: None,
+        ..DebugStarted::default()
+    })
+}
+
+/// Start launch.json's compound N: the inputs of all its members are asked first, its own `preLaunchTask` runs once,
+/// then each member starts as `launch:I` (with its own tasks), in the compound's order. A member that fails stops the
+/// ones started. With `stopAll`, the end of one stops the others.
+async fn start_compound(
+    front: &Front,
+    caller: &Caller,
+    p: DebugStart,
+    n: &str,
+) -> Result<DebugStarted, Error> {
+    let gone = || bad("config", format!("no configuration {}", p.config));
+    let n: usize = n.parse().map_err(|_| gone())?;
+    let (file, error) = read_launch(&p.root);
+    if let Some(e) = error {
+        return Err(err(format!(
+            "{}:{}:{}: {}",
+            e.path, e.line, e.col, e.message
+        )));
+    }
+    let f = file.ok_or_else(gone)?;
+    let compound = f.compounds.get(n).cloned().ok_or_else(gone)?;
+    let members = launch::compound_members(&compound, &f.configs).map_err(err)?;
+    let answers: HashMap<String, String> = p
+        .inputs
+        .iter()
+        .map(|a| (a.id.clone(), a.value.clone()))
+        .collect();
+    let mut needs: Vec<Value> = vec![];
+    for &i in &members {
+        let config = launch::for_platform(&f.configs[i], Os::this());
+        for need in launch::needs(&config, &f.inputs, &answers).map_err(err)? {
+            let j = need_json(&need);
+            if !needs.contains(&j) {
+                needs.push(j);
+            }
+        }
+    }
+    if !needs.is_empty() {
+        return Ok(DebugStarted {
+            needs: Some(Value::Array(needs)),
+            ..DebugStarted::default()
+        });
+    }
+    let vars = vars(front, &p);
+    let subst = |s: &str| match launch::substitute(&Value::String(s.to_owned()), &vars, &answers)? {
+        Value::String(s) => Ok(s),
+        _ => Ok(s.to_owned()),
+    };
+    let steps = super::tasks::before_launch(Path::new(&p.root), &compound, Os::this(), &subst)
+        .map_err(err)?;
+    super::tasks::run(&steps, &front.shell_env.vars_os())
+        .await
+        .map_err(err)?;
+    let d = front.debug.debug(front).clone();
+    let mut ids: Vec<String> = vec![];
+    for &i in &members {
+        let one = DebugStart {
+            config: format!("launch:{i}"),
+            ..p.clone()
+        };
+        match Box::pin(start(front, caller, one)).await {
+            Ok(DebugStarted {
+                session: Some(id), ..
+            }) => ids.push(id),
+            other => {
+                for id in &ids {
+                    let _ = d
+                        .control(
+                            id,
+                            Op::Stop {
+                                kill_debuggee: None,
+                            },
+                        )
+                        .await;
+                }
+                return match other {
+                    Err(e) => Err(e),
+                    Ok(_) => Err(err(format!(
+                        "compound {}: {} did not start",
+                        text(&compound, "name"),
+                        text(&f.configs[i], "name")
+                    ))),
+                };
+            }
+        }
+    }
+    if launch::stop_all(&compound) && ids.len() > 1 {
+        let ids = ids.clone();
+        crate::clock::spawn("debug:compound-stop-all", async move {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(ids.len());
+            for id in &ids {
+                let (d, id, tx) = (d.clone(), id.clone(), tx.clone());
+                crate::clock::spawn("debug:compound-member", async move {
+                    d.wait_end(&id).await;
+                    let _ = tx.send(()).await;
+                });
+            }
+            drop(tx);
+            // the first to end stops the rest
+            if rx.recv().await.is_some() {
+                for id in &ids {
+                    let _ = d
+                        .control(
+                            id,
+                            Op::Stop {
+                                kill_debuggee: None,
+                            },
+                        )
+                        .await;
+                }
+            }
+        });
+    }
+    front
+        .debug
+        .last
+        .lock()
+        .expect("debug last")
+        .insert(p.root.clone(), p.config.clone());
+    Ok(DebugStarted {
+        session: ids.first().cloned(),
+        sessions: ids,
+        ..DebugStarted::default()
     })
 }
 

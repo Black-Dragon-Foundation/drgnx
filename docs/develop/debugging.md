@@ -126,6 +126,14 @@ read for variables again and an `args` item stays one argument. It knows all of 
 through a short table of VS Code names (`python.defaultInterpreterPath` → `debug-python-interpreter`). Paths are true
 names (symlinks resolved). An unknown variable, setting or folder is an error that names it.
 
+`compounds` are listed after the configurations as `compound:N` (by `presentation` as configurations are; source
+`compound`, empty type and request). Starting one (`wire::start_compound`) resolves its `configurations` by name
+(`launch::compound_members`; `{name, folder}` is read by its name, one folder here; an unknown name is an error naming
+the compound), asks every member's inputs at once, runs the compound's own `preLaunchTask`, then starts each member as
+`launch:I` with its own tasks, in order. A member that fails stops those started and is the start's error. The answer
+carries `sessions` (all, in order) and `session` (the first). With `stopAll` (off unless set, as in VS Code) the first
+member to end stops the others.
+
 `debugServer` connects to this machine only (a port, or `localhost:N`). The fields drgnx reads itself
 (`presentation`, `preLaunchTask`, `postDebugTask`, `debugServer`, `internalConsoleOptions`, `serverReadyAction`) are
 not passed to the adapter; every other field is.

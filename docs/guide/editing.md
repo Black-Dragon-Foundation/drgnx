@@ -53,7 +53,8 @@ re-indented on save. A formatter that is not installed, or fails, leaves the fil
 VS Code uses work here: debugpy for Python, the JavaScript/TypeScript debugger, delve for Go, CodeLLDB or lldb-dap for
 C, C++ and Rust. It offers the project's configurations: those of `.vscode/launch.json` (read as VS Code reads it,
 comments, `${…}` variables, `inputs` and platform sections included), your own in the setting `debug.configurations`,
-and a default for the file's language when there is neither. A configuration's `preLaunchTask` (and `postDebugTask`)
+and a default for the file's language when there is neither. A launch.json `compounds` entry starts its
+configurations together (its own `preLaunchTask` first; with `stopAll`, stopping one stops them all). A configuration's `preLaunchTask` (and `postDebugTask`)
 runs from `.vscode/tasks.json` first; a failing task stops the start and says why. The first start in a folder asks
 you to trust it (**Trust This Folder**): an untrusted folder's configurations never run.
 

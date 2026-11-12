@@ -101,6 +101,39 @@ pub fn listed(configs: &[Value]) -> Vec<usize> {
     v.into_iter().map(|(_, _, i)| i).collect()
 }
 
+/// COMPOUND's configurations, as indices into CONFIGS in the compound's order: each named by its `name` (a string, or
+/// `{name, folder}`: one folder here, so the name decides). A name not in CONFIGS, or none, is an error naming the
+/// compound.
+pub fn compound_members(compound: &Value, configs: &[Value]) -> Result<Vec<usize>, String> {
+    let title = compound.get("name").and_then(Value::as_str).unwrap_or("");
+    let names: Vec<&str> = compound
+        .get("configurations")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|c| c.as_str().or_else(|| c.get("name")?.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+    if names.is_empty() {
+        return Err(format!("compound {title} names no configuration"));
+    }
+    names
+        .into_iter()
+        .map(|n| {
+            configs
+                .iter()
+                .position(|c| c.get("name").and_then(Value::as_str) == Some(n))
+                .ok_or_else(|| format!("compound {title}: no configuration named {n}"))
+        })
+        .collect()
+}
+
+/// Whether stopping one of COMPOUND's sessions stops the others (`stopAll`; off unless set, as in VS Code).
+pub fn stop_all(compound: &Value) -> bool {
+    compound.get("stopAll").and_then(Value::as_bool) == Some(true)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Os {
     Linux,

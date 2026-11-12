@@ -12004,7 +12004,7 @@
             "description": "One configuration of `debug/configs`' list.",
             "properties": {
               "id": {
-                "description": "`launch:N`, `user:N` or `default:ADAPTER:N`: what `debug/start` takes.",
+                "description": "`launch:N`, `user:N`, `default:ADAPTER:N` or `compound:N` (launch.json's compounds, after its\nconfigurations): what `debug/start` takes.",
                 "type": "string"
               },
               "name": {
@@ -12018,7 +12018,7 @@
                 "type": "string"
               },
               "source": {
-                "description": "`launch`, `user` or `default`.",
+                "description": "`launch`, `user`, `default` or `compound` (whose type and request are empty).",
                 "type": "string"
               },
               "type": {
@@ -13184,7 +13184,7 @@
       },
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`debug/start`'s answer: the session, or what must come first: `\"trust\"`, or the inputs to ask\n(`[{input: {id, kind, description, default, options, password}} | \"pickProcess\"]`).",
+        "description": "`debug/start`'s answer: the session, or what must come first: `\"trust\"`, or the inputs to ask\n(`[{input: {id, kind, description, default, options, password}} | \"pickProcess\"]`). A compound's start answers\nevery member's session in SESSIONS, in the compound's order (SESSION is the first).",
         "properties": {
           "needs": true,
           "session": {
@@ -13192,6 +13192,12 @@
               "string",
               "null"
             ]
+          },
+          "sessions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "title": "DebugStarted",

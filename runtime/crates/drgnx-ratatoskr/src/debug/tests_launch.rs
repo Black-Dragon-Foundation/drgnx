@@ -335,3 +335,27 @@ fn a_debugpy_child_connects_to_its_parent_adapter() {
         None
     );
 }
+
+/// A compound names its configurations by name (or `{name, folder}`), in its order; an unknown name, or none, is an
+/// error that names the compound.
+#[test]
+fn a_compound_names_its_configurations() {
+    let configs = vec![
+        json!({"name": "Server", "type": "debugpy", "request": "launch"}),
+        json!({"name": "Client", "type": "pwa-node", "request": "launch"}),
+    ];
+    let both =
+        json!({"name": "Both", "configurations": ["Client", {"name": "Server", "folder": "app"}]});
+    assert_eq!(launch::compound_members(&both, &configs), Ok(vec![1, 0]));
+    let bad = json!({"name": "Bad", "configurations": ["Client", "Nope"]});
+    let e = launch::compound_members(&bad, &configs).unwrap_err();
+    assert!(e.contains("Bad") && e.contains("Nope"), "{e}");
+    let none = json!({"name": "Empty", "configurations": []});
+    assert!(
+        launch::compound_members(&none, &configs)
+            .unwrap_err()
+            .contains("Empty")
+    );
+    assert!(launch::stop_all(&json!({"stopAll": true})));
+    assert!(!launch::stop_all(&both));
+}
