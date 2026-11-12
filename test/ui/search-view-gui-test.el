@@ -67,7 +67,7 @@ temp dir; print where."
            (drgnx-wb--sections nil) (drgnx-wb--areas (copy-tree drgnx-wb--areas))
            (drgnx-view-patch--buffers (make-hash-table :test #'equal))
            (drgnx-view-model--views (make-hash-table :test #'equal))
-           (drgnx-view-patch--hooked nil) (drgnx-view-old-path nil)
+           (drgnx-view-patch--hooked nil)
            (drgnx-view-patch-send-function #'ignore) (drgnx-view-env-send-function #'ignore)
            (drgnx-hub--events nil) (drgnx-search-ui-test--calls nil) (drgnx-search-ui-test--version 0)
            (drgnx-replace-view "search-ui-test") (drgnx-search-context t)

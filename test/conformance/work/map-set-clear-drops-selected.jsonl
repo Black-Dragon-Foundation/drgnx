@@ -10,7 +10,7 @@
 {"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
 {"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "m", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 8, 8]], "cell": [8, 17], "width_px": 1000, "palette": [["accent", "#123456"], ["edge", "#654321"]], "epoch": 1}}}
 {"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
-{"do": "send", "conn": "e", "json": {"id": 3, "method": "work/map/subscribe", "params": {"view": "m", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250, "rows": true}}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "work/map/subscribe", "params": {"view": "m", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250}}}
 {"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "m", "hub": "$capture:hub", "base": 0, "version": 1}}, "within_ms": 10000}
 {"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "m", "hub": "$hub", "model": 1, "ops": [{"reset": "$any"}]}}, "within_ms": 10000}
 {"do": "expect", "conn": "e", "json": {"id": 3, "result": {"hub": "$hub", "version": "$number"}}, "within_ms": 10000}

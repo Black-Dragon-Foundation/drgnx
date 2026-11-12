@@ -272,6 +272,8 @@ pub struct ModulesParams {
 pub const LIST_LIMIT_MAX: u32 = 20_000;
 /// The most sections one `extensions/list` names.
 pub const SECTIONS_MAX: usize = 8;
+/// The most generations one `extensions/list` carries.
+pub const GENERATIONS_MAX: usize = 256;
 
 /// One section of the list: a search, its header's title.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -300,6 +302,34 @@ pub struct ListParams {
     /// The ids that wait for a restart (the editor knows them).
     #[serde(default)]
     pub restart: Vec<String>,
+    /// The package generations, newest first (the editor reads them from disk): a Generations section ends the list.
+    #[serde(default)]
+    pub generations: Vec<Generation>,
+}
+
+/// One package generation as the Generations section shows it.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct Generation {
+    pub n: u32,
+    #[serde(default)]
+    pub time: String,
+    #[serde(default)]
+    pub note: Option<String>,
+    /// What differs from the generation before it ("magit 4.1 → 4.2", "+name", "-name").
+    #[serde(default)]
+    pub differs: Vec<String>,
+    /// A running session still uses it.
+    #[serde(default)]
+    pub in_use: bool,
+    /// The packages the next start uses.
+    #[serde(default)]
+    pub current: bool,
+    /// Its size on disk, as the editor writes it ("2.1M").
+    #[serde(default)]
+    pub size: Option<String>,
+    /// A note the newest generation carries (this file system copies the packages twice per change).
+    #[serde(default)]
+    pub copies: Option<String>,
 }
 
 /// A kind's glyph in a graphical and in a terminal class.
@@ -360,8 +390,11 @@ pub(crate) fn methods() -> Vec<Method> {
                 if p.view.is_empty() || p.view.len() > super::view::VIEW_MAX {
                     return Err(invalid("view", "a view id of 1 to 64 bytes"));
                 }
-                if p.sections.is_empty() || p.sections.len() > SECTIONS_MAX {
-                    return Err(invalid("sections", "1 to 8 sections"));
+                if (p.sections.is_empty() && p.generations.is_empty()) || p.sections.len() > SECTIONS_MAX {
+                    return Err(invalid("sections", "1 to 8 sections (none: generations only)"));
+                }
+                if p.generations.len() > GENERATIONS_MAX {
+                    return Err(invalid("generations", "at most 256 generations"));
                 }
                 for (i, s) in p.sections.iter().enumerate() {
                     if s.search.query.chars().count() > QUERY_MAX {

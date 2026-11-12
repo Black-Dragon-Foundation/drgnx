@@ -54,7 +54,6 @@
 (defvar drgnx-agents--sessions)
 (defvar drgnx-agent-panel--loaded)
 (defvar drgnx-agent-panel--entries)
-(defvar drgnx-view-old-path)
 
 (defun drgnx-panel-replay--chunks ()
   "The recording's chunks, as one-line texts."
@@ -84,12 +83,10 @@
 (defun drgnx-panel-replay--entries ()
   (length (drgnx-agent-session-entries drgnx-panel-replay--mirror)))
 
-(defun drgnx-panel-replay-up (bin &optional old)
+(defun drgnx-panel-replay-up (bin)
   "Start a hub of BIN and the mock agent, wait for the prefix, open the panel on the session; the panel's buffer.
-OLD: the panel draws every row itself and the mirror copies its transcript per update (`drgnx-view-old-path', the
-paired `panel-replay-old'); else the panel inserts the rows the hub builds."
+The panel inserts the rows the hub builds."
   (require 'drgnx-view)
-  (setq drgnx-view-old-path (and old t))
   (require 'drgnx-agents-mirror)
   (require 'drgnx-hub-client)
   (require 'drgnx-modules)
@@ -237,7 +234,6 @@ the panel's row patches, HUB_ROWS the hub's rows it holds at the end."
   (setq drgnx-panel-replay--hub nil drgnx-panel-replay--mirror nil drgnx-panel-replay--panel nil
         drgnx-agents--sessions (seq-remove #'drgnx-agent-session-remote drgnx-agents--sessions))
   (drgnx-modules-set-enabled 'tools/agent-panel drgnx-panel-replay--module)
-  (setq drgnx-view-old-path nil)
   (when drgnx-panel-replay--dir
     (ignore-errors (delete-directory drgnx-panel-replay--dir t))
     (setq drgnx-panel-replay--dir nil))

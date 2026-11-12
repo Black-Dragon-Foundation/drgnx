@@ -27,9 +27,10 @@
 (declare-function drgnx-agents-editor-here-show "drgnx-agents-editor-here")
 (defvar tab-line-tabs-function)
 (declare-function drgnx-hub-call "drgnx-hub-client")
-(declare-function drgnx-work-nav-chain "drgnx-work-detail")
 (declare-function drgnx-work-map-buffers "drgnx-work-map")
-(declare-function drgnx-work-map--state "drgnx-work-map")
+(declare-function drgnx-work-map--sja "drgnx-work-map")
+(declare-function drgnx-work-map-chain-agents "drgnx-work-map")
+(declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
 (declare-function drgnx-work-map-select "drgnx-work-map")
 (declare-function drgnx-work-space-open "drgnx-work-space")
 (declare-function drgnx-work-space-workspace "drgnx-work-space")
@@ -130,13 +131,6 @@ not a local one (`drgnx-work-code-local-dir')."
   "The hub session id of the map item ID (\"agent:SID\" or \"agent:SID/TOOL\"), or nil."
   (when (string-prefix-p "agent:" id) (car (split-string (substring id (length "agent:")) "/"))))
 
-(defun drgnx-work-code--chain-sids (state sel)
-  "The hub session ids on SEL's chain, SEL's own first: a selected agent, or the agents a file or branch came from."
-  (let (out)
-    (dolist (id (cons (cdr sel) (nth 0 (drgnx-work-nav-chain state sel))))
-      (when-let* ((sid (drgnx-work-code--sid id))) (cl-pushnew sid out :test #'equal)))
-    (nreverse out)))
-
 (defun drgnx-work-code--file-item (id)
   "The map item ID \"file:REPO/REL\" as (REPO REL), or nil."
   (when (string-prefix-p "file:" id)
@@ -222,13 +216,12 @@ anything else (it is the hub's word) is passed over.  The buffer, when the hub a
                      (t (message "Work: %s is no plain local file in the agent's folder" (car paths)) nil))))))
     result))
 
-(cl-defun drgnx-work-code-open-file (state sel &key beside agents)
-  "Open the file SEL (\"file:REPO/REL\") of STATE at the agent's line: AGENTS' (hub session ids), else the agents on SEL's
-chain, else the most recent one's; at the top with \"file only\" when no line is known.  Returns the buffer when the hub
-answered at once."
+(cl-defun drgnx-work-code-open-file (sel &key beside agents)
+  "Open the file SEL (\"file:REPO/REL\") at the agent's line: of AGENTS (hub session ids, the agents on SEL's chain),
+the most recent one's; at the top with \"file only\" when no line is known.  Returns the buffer when the hub answered at
+once."
   (pcase-let ((`(,repo ,rel) (or (drgnx-work-code--file-item (cdr sel)) (user-error "Not a file"))))
-    (let ((sids (or agents (and state (drgnx-work-code--chain-sids state sel)))))  ; no STATE: the map's rows path
-      (drgnx-work-code--open-paths (drgnx-work-code--paths repo rel sids) sids beside))))
+    (drgnx-work-code--open-paths (drgnx-work-code--paths repo rel agents) agents beside)))
 
 ;;;; The files picker
 
@@ -298,15 +291,16 @@ answered at once."
       (setq drgnx-work-files--rows (nreverse drgnx-work-files--rows))
       (goto-char (point-min)))))
 
-(defun drgnx-work-code--selected-sid (state sel)
-  "The session whose files SEL stands for: an agent, a subagent's parent, or the first agent a branch came from."
-  (or (drgnx-work-code--sid (cdr sel))
-      (car (drgnx-work-code--chain-sids state sel))))
+(defun drgnx-work-code--selected-sid (sel agents)
+  "The session whose files SEL stands for: an agent, a subagent's parent, or the first of AGENTS (the hub session ids
+on SEL's chain: the agents a branch or a file came from)."
+  (or (drgnx-work-code--sid (cdr sel)) (car agents)))
 
-(defun drgnx-work-code-files (state sel &optional no-display)
-  "The files picker of the agent SEL stands for in STATE: its edited files with `+N −M', one hint key each.  Shown in
-the popup lane unless NO-DISPLAY.  Returns the picker buffer, filled when the hub answered at once."
-  (let* ((sid (or (drgnx-work-code--selected-sid state sel) (user-error "Select an agent or its branch first")))
+(defun drgnx-work-code-files (sel agents &optional no-display)
+  "The files picker of the agent SEL stands for (AGENTS: the session ids on its chain): its edited files with `+N −M',
+one hint key each.  Shown in the popup lane unless NO-DISPLAY.  Returns the picker buffer, filled when the hub answered
+at once."
+  (let* ((sid (or (drgnx-work-code--selected-sid sel agents) (user-error "Select an agent or its branch first")))
          (buffer (get-buffer-create (format "*drgnx work files: %s*" (drgnx-work-code--agent-name sid)))))
     (with-current-buffer buffer
       (drgnx-work-files-mode)
@@ -323,9 +317,8 @@ the popup lane unless NO-DISPLAY.  Returns the picker buffer, filled when the hu
 (defun drgnx-work-code-files-command ()
   "The files picker of the selected agent (or branch)."
   (interactive)
-  (let ((state (drgnx-work-map--state)))
-    (unless (and state (bound-and-true-p drgnx-work-map--selection)) (user-error "Nothing is selected"))
-    (select-window (display-buffer (drgnx-work-code-files state drgnx-work-map--selection t)))))
+  (let ((sel (or (bound-and-true-p drgnx-work-map--selection) (user-error "Nothing is selected"))))
+    (select-window (display-buffer (drgnx-work-code-files sel (drgnx-work-map-chain-agents) t)))))
 
 ;;;; Who is here
 
@@ -378,7 +371,7 @@ the popup lane unless NO-DISPLAY.  Returns the picker buffer, filled when the hu
   (when-let* ((map (or (car (drgnx-work-map-buffers)) (drgnx-work-space-open nil t)))
               (id (format "file:%s/%s" repo rel)))
     (with-current-buffer map
-      (when-let* ((state (drgnx-work-map--state)) ((drgnx-work-client-item state id)))
+      (when-let* ((h (drgnx-work-map--sja)) ((nidhogg-view-get h 'kind id)))
         (drgnx-work-map-select (cons 'file id))))
     (pop-to-buffer map)))
 
@@ -450,11 +443,12 @@ window configuration is saved first."
   (drgnx-work-code--diff-layout
    (mapcar (lambda (p) (drgnx-work-code--diff-buffer p (gethash p diffs ""))) files)))
 
-(defun drgnx-work-code-diffs (state sel)
-  "Open the files the agent SEL stands for in STATE edited, each as its diff against the base its worktree was cut
-from (`work/hunks'): one window per file, three side by side at most, the rest as tabs in the third.  The window
-configuration is saved first; \\[drgnx-work-diff-quit] puts it back.  Returns the diff buffers when the hub answered at once."
-  (let* ((sid (or (drgnx-work-code--selected-sid state sel) (user-error "Select an agent or its branch first")))
+(defun drgnx-work-code-diffs (sel agents)
+  "Open the files the agent SEL stands for (AGENTS: the session ids on its chain) edited, each as its diff against the
+base its worktree was cut from (`work/hunks'): one window per file, three side by side at most, the rest as tabs in the
+third.  The window configuration is saved first; \\[drgnx-work-diff-quit] puts it back.  Returns the diff buffers
+when the hub answered at once."
+  (let* ((sid (or (drgnx-work-code--selected-sid sel agents) (user-error "Select an agent or its branch first")))
          (result nil))
     (condition-case err
         (drgnx-hub-call
@@ -476,9 +470,8 @@ configuration is saved first; \\[drgnx-work-diff-quit] puts it back.  Returns th
 (defun drgnx-work-code-diffs-command ()
   "The diffs of the selected agent (or branch)."
   (interactive)
-  (let ((state (drgnx-work-map--state)))
-    (unless (and state (bound-and-true-p drgnx-work-map--selection)) (user-error "Nothing is selected"))
-    (drgnx-work-code-diffs state drgnx-work-map--selection)))
+  (let ((sel (or (bound-and-true-p drgnx-work-map--selection) (user-error "Nothing is selected"))))
+    (drgnx-work-code-diffs sel (drgnx-work-map-chain-agents))))
 
 (defun drgnx-work-code--diff-buffers ()
   (seq-filter (lambda (b) (eq (buffer-local-value 'major-mode b) 'drgnx-work-diff-mode)) (buffer-list)))

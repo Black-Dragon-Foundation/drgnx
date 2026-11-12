@@ -82,18 +82,18 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   strings are built once per agent (the symbol at its line, or `drgnx-agents-editor-line-symbol-function`; the
   name is kept per (modification tick, line) in `drgnx-agents-editor-line--names`: a saved local file asks the hub's
   outline once per line, `search/symbol-at` in [hub.md](hub.md), and shows no name until it answers; a modified or
-  remote buffer runs `add-log-current-defun` once per tick and line; only `drgnx-view-old-path` runs it every frame;
+  remote buffer runs `add-log-current-defun` once per tick and line;
   the plan entry, else the step title, truncated to 40 columns; `%` doubled); redisplay only picks the entry nearest the window's point, so the same string object comes back until the
   next frame. `drgnx-chrome-short-breadcrumb-functions` shortens the breadcrumb to the file name while the line shows.
   `drgnx-agents-editor-line-probe` times the build and a provider call (the probe for `agents-line-tick`; the verdict
   waits for the gate).
 - **Badges, the status segment, who is here (`drgnx-agents-editor-here.el`):** the workspace presence
-  (`agents/presence/subscribe`, then the `agent-presence` event, one `FilePresence` per file) is cached by file name.
-  Each event rebuilds three things from the cache, none in redisplay: the badge string per user path
-  (files: agents with a `pending`, `write` or `edit` entry, three marks with their initials then `+N`; folders: every
-  ancestor up to the root, one mark per agent), the who-is-here rows (each session's newest entry) and the status
-  string (eight marks, `+N`). A file in a linked worktree lands on the user's tree through the main checkout its
-  `.git` file names plus the entry's `rel`; it is shown only when that checkout is a workspace root. In the Explorer
+  (`agents/presence/subscribe`) is the hub's view model `agents-here` (below). Three things are made from it, none in
+  redisplay: the badge string per user path (files: agents with a `pending`, `write` or `edit` entry, three marks with
+  their initials then `+N`; folders: every ancestor up to the root, one mark per agent), the who-is-here rows (each
+  session's newest entry) and the status string (eight marks, `+N`). A file in a linked worktree lands on the user's
+  tree (the hub works that out); it is shown only when that checkout is a workspace root. Without Sjá nothing of
+  this is shown. In the Explorer
   the hub puts the ordinals on the row (`drgnx-agents-here`, hub.md "The Explorer's listing as a tree") and
   `drgnx-agents-editor-here--explorer-badge`, on `drgnx-explorer-badge-functions`, makes the badge (the Explorer of a
   remote root, listed in Lisp, shows none); the status bar through `drgnx-statusbar-define-segment` and `agents-here` set after
@@ -108,8 +108,7 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   identity's mark and face. Its keys are registry commands on the mode's map, so the profiles bind them:
   `agents-here-follow` (RET), `agents-here-panel` (`o`, `drgnx-agent-panel-open` with the hub's session id) and
   `agents-here-quit` (`q`). The list is plain text drawn once per call; teardown kills it.
-  **From the hub's view model** (the default with Sjá; `drgnx-view-old-path`, or an Emacs without Sjá, keeps the
-  cache above): the subscription names the view `agents-here` and first sends `view/env` for its one class, `data`
+  **The hub's view model:** the subscription names the view `agents-here` and first sends `view/env` for its one class, `data`
   (the rows are data, never drawn). The hub builds the model and the rows (`drgnx-ratatoskr`'s
   `work/presence/here.rs`): a node `a:SESSION` per agent (its newest entry; fields `session`, `ordinal`, `mode`,
   `file`, `line`; the list `agents` in ordinal order) and `p:PATH`, of kind `file` or `folder`, per file an agent is
@@ -119,7 +118,7 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   whose `drgnx-view-patch-apply-function` keeps the keys they name; `drgnx-agents-editor-here--take` (a timer of 0 s)
   draws the buffer, so the model the patch names goes into Sjá, and reads the model: the badge of each path named
   and, when an `a:` row changed, the who-is-here rows and the status string. An edit costs the nodes it names, not a
-  rebuild, and `agent-presence` is left to the cursors. A new hub's reset replaces everything held. The list window
+  rebuild; `agent-presence` is left to the cursors. A new hub's reset replaces everything held. The list window
   is drawn here from the model's agents, since an ordinal's mark and face are this frame's.
 - **Follow (`drgnx-agents-follow.el`):** `drgnx-agents-follow-start SESSION [HERE]` asks the hub `agents/follow {view,
   session}` (view ids `follow:N`, one follow at a time; the hub is asked again on every connection) and sets

@@ -307,6 +307,21 @@ A stamp already on the virtual clock (H ahead of the real one) stays."
       (drgnx-test-with-clock () (cancel-timer (run-at-time 5 nil #'ignore)))
       (should reset))))
 
+(ert-deftest drgnx-test-clock/the-reset-cancels-a-layer-timer-from-before-the-body-on-the-real-list ()
+  ;; the reset at the end drops every layer entry; one started before the body has its timer on the real list, so the
+  ;; reset runs once the real lists are back: that timer goes with its entry, never left pending past the test
+  (require 'drgnx-timer)
+  (let ((key '(clock-fixture-test . before)) tm)
+    (unwind-protect
+        (progn
+          (drgnx-timer-start key 60 #'ignore :owner :core)
+          (setq tm (drgnx-timer--entry-timer (gethash key drgnx-timer--table)))
+          (drgnx-test-with-clock (:allow-pending t) nil)
+          (should-not (drgnx-timer-active-p key))
+          (should-not (memq tm timer-list)))
+      (drgnx-timer-cancel key)
+      (when (timerp tm) (cancel-timer tm)))))
+
 (ert-deftest drgnx-test-clock/contract-1-the-seams-read-the-virtual-clock ()
   (cl-letf (((symbol-function 'drgnx-timer--now) (lambda () 'real))
             ((symbol-function 'drgnx-timer--idle-time) (lambda () 'real))

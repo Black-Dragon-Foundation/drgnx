@@ -27,8 +27,8 @@
 (declare-function drgnx-state-dir "drgnx-paths")
 (declare-function drgnx-file-write-text "drgnx-file")
 (declare-function drgnx-work-map--card-face "drgnx-work-map")
-(declare-function drgnx-work-map--state "drgnx-work-map")
-(declare-function drgnx-work-map--field "drgnx-work-map")
+(declare-function drgnx-work-map--sja "drgnx-work-map")
+(declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
 (declare-function drgnx-work-lens-map-buffer "drgnx-work-board")
 (declare-function drgnx-work-lens-string "drgnx-work-map")
 (declare-function drgnx-work-trail--agent-sid "drgnx-work-trail")
@@ -118,22 +118,25 @@ hunk's lines with their newlines.  What comes before the first `@@' line is left
 ;;;; Rows
 
 (defun drgnx-work-review--summary (map-buffer session)
-  "Where the plan stands, what the agent did and what it spent, from the map's card of SESSION."
-  (let* ((state (and (buffer-live-p map-buffer) (drgnx-work-map--state map-buffer)))
-         (item (and state (drgnx-work-client-item state (concat "agent:" session)))))
-    (if (null item)
+  "Where the plan stands, what the agent did and what it spent, from the card of SESSION in MAP-BUFFER's model (Sjá:
+the fields `done' `steps' `edit_files' `edit_plus' `edit_minus' `reads' `conclusion' `spend' `minutes')."
+  (let ((h (and (buffer-live-p map-buffer) (with-current-buffer map-buffer (drgnx-work-map--sja))))
+        (id (concat "agent:" session)))
+    (if (not (and h (nidhogg-view-get h 'kind id)))
         "the map holds no card for this agent\n"
-      (let* ((f (lambda (k) (drgnx-work-map--field item k))) (p (funcall f :progress)) (e (funcall f :edits)))
-        (concat (format "plan:   %s\n" (if p (format "%d of %d steps done" (car p) (cadr p)) "no plan steps recorded"))
+      (let* ((f (lambda (k) (nidhogg-view-get h 'field k id))) (done (funcall f "done")) (files (funcall f "edit_files")))
+        (concat (format "plan:   %s\n" (if done (format "%d of %d steps done" done (funcall f "steps")) "no plan steps recorded"))
                 (format "did:    %s\n"
                         (mapconcat #'identity
-                                   (delq nil (list (and e (format "edits %d files (+%d −%d)" (nth 0 e) (nth 1 e) (nth 2 e)))
-                                                   (and (funcall f :reads) (format "reads %d" (funcall f :reads)))
-                                                   (and (funcall f :conclusion) (format "last: %s" (funcall f :conclusion)))))
+                                   (delq nil (list (and files (format "edits %d files (+%d −%d)" files (funcall f "edit_plus")
+                                                                      (funcall f "edit_minus")))
+                                                   (and (funcall f "reads") (format "reads %d" (funcall f "reads")))
+                                                   (and (funcall f "conclusion") (format "last: %s" (funcall f "conclusion")))))
                                    " · "))
                 (format "spent:  %s\n"
                         (mapconcat #'identity
-                                   (delq nil (list (funcall f :spend) (and (funcall f :minutes) (format "%d min" (funcall f :minutes)))))
+                                   (delq nil (list (funcall f "spend")
+                                                   (and (funcall f "minutes") (format "%d min" (funcall f "minutes")))))
                                    " · ")))))))
 
 (defun drgnx-work-review--build-keys ()

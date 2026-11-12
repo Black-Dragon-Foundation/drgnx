@@ -3060,8 +3060,7 @@ version and the commit, as JSON in FILE."
     (write-region (concat (json-serialize doc) "\n") nil file nil 'silent)))
 
 (defconst drgnx-perf-run-workers-seeded
-  '(explorer-git-rows quick-open-typing quick-open-typing-old agents-line-motion agents-line-motion-old
-                      presence-burst presence-burst-old)
+  '(explorer-git-rows quick-open-typing agents-line-motion presence-burst)
   "The off-the-main-thread workloads with allocation, CPU and rows budgets (the render offload measured them).")
 
 (defconst drgnx-perf-run-unseeded

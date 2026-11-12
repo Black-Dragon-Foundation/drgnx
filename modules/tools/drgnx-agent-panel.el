@@ -20,8 +20,8 @@
 ;; transcript and the `(:rows-end)' row (`drgnx-agent-panel--apply-rows').  The header, the chips, the strip, the cards
 ;; and the composer stay the panel's own rows.  Which step types are open, the rows opened by hand and how far back the
 ;; rows go are told to the hub (`agents/panel/look').  The entries still come (the cards, the pins and the step at
-;; point read them), but draw nothing.  Behind `drgnx-view-old-path', or made while the hub is down, the panel draws
-;; every row itself, as before.
+;; point read them), but draw nothing.  A panel made while the hub is down draws
+;; every row itself.
 ;; See docs/guide/agent-panel.md.
 
 ;;; Code:
@@ -274,8 +274,8 @@ folds under it."
 ;;;; The hub's rows
 
 (defun drgnx-agent-panel--rows-p ()
-  "Whether this panel's transcript is the hub's rows (not `drgnx-view-old-path')."
-  (and drgnx-view-patch (not drgnx-view-old-path) t))
+  "Whether this panel's transcript is the hub's rows (it is not when the panel was made while the hub was down)."
+  (and drgnx-view-patch t))
 
 (defun drgnx-agent-panel--rows-after ()
   "The panel's own row the transcript's first row goes after: the last of those above the transcript."
@@ -484,7 +484,7 @@ change only with a plan or a finished edit."
       (drgnx-agent-panel-cards-note-entries (current-buffer) touched from-slice))))
 
 (defun drgnx-agent-panel--take-entries-old (pairs from-slice)
-  "`drgnx-agent-panel--take-entries' behind `drgnx-view-old-path': every row drawn here."
+  "`drgnx-agent-panel--take-entries' of a panel made while the hub is down: every row drawn here."
   (let (touched block-keys)
     (seq-doseq (pair pairs)
       (let ((idx (elt pair 0)) (e (elt pair 1)))
@@ -623,7 +623,7 @@ signal when no hub serves)."
               drgnx-agent-panel--open (make-hash-table :test #'equal))
         (drgnx-view-attach 'agent-panel)
         (drgnx-agent-panel-steps-init)
-        (when (and (not drgnx-view-old-path) (drgnx-agent-panel--hub-up-p)) (drgnx-agent-panel--rows-attach session))
+        (when (drgnx-agent-panel--hub-up-p) (drgnx-agent-panel--rows-attach session))
         (drgnx-agent-panel--reconcile)
         (drgnx-agent-panel--ask "agents/list" nil
                                 (lambda (r _err)

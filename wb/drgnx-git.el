@@ -328,7 +328,7 @@ The look is a peek: a late sentinel is no use of ROOT, and a stamp would evict a
           (when again (drgnx-git-refresh root)))))))
 
 ;;;; On the rows path: the hub's letters (Sjá)
-;; With the hub up (and `drgnx-view-old-path' off, and Sjá in this Emacs) a repository's status is read by the hub
+;; With the hub up (and Sjá in this Emacs) a repository's status is read by the hub
 ;; (`git/letters'), which sends a hub-fed view of its own per repository the rows `f:PATH' (a letter per changed
 ;; path, ignored ones included), `d:FOLDER' (a mark per shown folder holding a change; only the folders
 ;; `drgnx-git-shown-functions' name are worked out) and `branch'.  The view lives in a buffer no window shows (its env
@@ -346,7 +346,6 @@ The look is a peek: a late sentinel is no use of ROOT, and a stamp would evict a
 (declare-function drgnx-view-env-unregister "drgnx-view-env" (view))
 (defvar drgnx-hub--events)
 (defvar drgnx-hub-event-functions)
-(defvar drgnx-view-old-path)
 (defvar drgnx-view-patch)
 
 (defvar drgnx-git-shown-functions nil
@@ -359,9 +358,8 @@ marks (the Explorer's roots and open folders).")
 (defvar drgnx-git--letters-views (make-hash-table :test #'equal) "View id → its root.")
 
 (defun drgnx-git--hub-ready-p ()
-  "Non-nil when the status is read by the hub: not `drgnx-view-old-path', Sjá in this Emacs, the hub connected."
-  (and (not (bound-and-true-p drgnx-view-old-path)) (fboundp 'nidhogg-view--call)
-       (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events)))
+  "Non-nil when the status is read by the hub: Sjá in this Emacs, the hub connected."
+  (and (fboundp 'nidhogg-view--call) (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events)))
 
 (defun drgnx-git--letters-buffer (root)
   "ROOT's letters buffer, or nil: a cache read."

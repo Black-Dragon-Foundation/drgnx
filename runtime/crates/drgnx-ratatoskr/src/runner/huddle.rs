@@ -728,6 +728,12 @@ async fn save(front: &Front, h: &Huddle) {
         })
         .await;
     front.broadcast("huddle", data);
+    // the Work map's strip and needs-you list carry it while it waits for the user or goes on
+    let open = !matches!(h.state, HuddleState::Decided | HuddleState::Closed);
+    front
+        .core
+        .map
+        .huddle(&h.id, h.clash.as_deref(), &h.participants, open);
 }
 
 /// The card of an agreed or split huddle H.

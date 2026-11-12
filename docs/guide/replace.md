@@ -375,8 +375,7 @@ makes the hub send a reset and drop the old search's late rows, and the editor d
 base.  `search-run-done` ends the search and gives the count the status line shows; the status line shows
 "Searching…" until then.  Typing in the Replace field is `search/grep-replace`: the hub patches the previews and
 nothing is searched again.  Symbol mode (the language server's edits) keeps rows of Emacs's own (the `replace-results`
-view type), and the view changes between the two with each search; `drgnx-view-old-path` has no Search path of its
-own any more (plan sja-complete S2 removed the Lisp text engine).  The file watches stay Lisp: a listed file that changes on disk is searched again through the hub after half a second.  The hub reads the disk, so before each search, and half a second after an edit, the view sends it the text of each
+view type), and the view changes between the two with each search.  The file watches stay Lisp: a listed file that changes on disk is searched again through the hub after half a second.  The hub reads the disk, so before each search, and half a second after an edit, the view sends it the text of each
 buffer under the folder that has unsaved edits (`search/buffer`, only what changed since): the hub searches that text
 in place of the file, also when the file on disk has no match, and the search shown takes it at once.  Those matches
 are rows like any other, with tick boxes, in the model Next Match walks and Replace All writes.  A buffer over 4 MiB,

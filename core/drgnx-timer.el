@@ -88,7 +88,6 @@ owner, keeps its entry until one of those.")
 (defvar-local drgnx-timer--buffer-keys nil
   "Keys whose timers this buffer may own; `drgnx-timer--buffer-killed' cancels those it still owns.")
 (put 'drgnx-timer--buffer-keys 'permanent-local t)
-
 (defcustom drgnx-timer-failure-limit 3
   "A timer that would run again (repeating, a poll, idle steps) stops after this many failures in a row."
   :type 'natnum :group 'drgnx)
@@ -137,11 +136,12 @@ module symbol: its current run token, `:gone' when it has no run.  A buffer or a
           (t (eq (drgnx-timer--entry-token entry) (alist-get owner drgnx-modules--runs))))))
 
 (defun drgnx-timer--drop (entry)
-  "Cancel ENTRY's timers and take it out of the table, if it is still its key's entry."
+  "Cancel ENTRY's timers and take it out of the table, if it is still its key's entry.
+A timer that is a test's stub (not a timer: the test runs its function itself) has nothing to cancel."
   (let ((timer (drgnx-timer--entry-timer entry)) (chain (drgnx-timer--entry-chain entry))
         (key (drgnx-timer--entry-key entry)))
-    (when timer (cancel-timer timer))
-    (when chain (cancel-timer chain))
+    (when (timerp timer) (cancel-timer timer))
+    (when (timerp chain) (cancel-timer chain))
     (when (eq (gethash key drgnx-timer--table) entry) (remhash key drgnx-timer--table))))
 
 (defun drgnx-timer--buffer-killed ()
@@ -249,7 +249,8 @@ An entry that cannot be cancelled (its timer is a test's stub, not a timer) neve
   "Run ENTRY: the function of every layer timer (so `list-timers' shows one function, and the key names it).
 In order: a timer whose key holds another entry now (replaced, or cancelled while it was ripe) does nothing; an
 owner that is gone drops the entry without calling FN; a one-shot leaves the table before FN runs, so FN may start
-its key again; then FN runs (`drgnx-timer--call'), with ENTRY in `drgnx-timer--firing'."
+its key again, and takes its own Emacs timer with it (`drgnx-timer--drop'), so an entry fired before its time
+leaves nothing pending; then FN runs (`drgnx-timer--call'), with ENTRY in `drgnx-timer--firing'."
   (let ((key (drgnx-timer--entry-key entry)) (drgnx-timer--firing entry))
     (when (eq (gethash key drgnx-timer--table) entry)
       (if (not (drgnx-timer--live-p entry))
@@ -260,7 +261,7 @@ its key again; then FN runs (`drgnx-timer--call'), with ENTRY in `drgnx-timer--f
                 ((eq kind 'poll) (drgnx-timer--fire-poll entry))
                 ((eq kind 'steps) (drgnx-timer--fire-steps entry))
                 (t (let ((once (not (drgnx-timer--entry-repeat entry))))
-                     (when once (remhash key drgnx-timer--table))
+                     (when once (drgnx-timer--drop entry))
                      (drgnx-timer--call entry once)))))))))
 
 (defun drgnx-timer--debugger-p ()
@@ -406,7 +407,7 @@ See docs/develop/core.md, \"Timers\"."
                             1e6))))
     (if (and left (> left drgnx-timer--slack))
         (setf (drgnx-timer--entry-timer entry) (run-at-time left nil #'drgnx-timer--fire entry))
-      (remhash (drgnx-timer--entry-key entry) drgnx-timer--table)
+      (drgnx-timer--drop entry)
       (drgnx-timer--call entry nil))))
 
 ;;;; Soon
@@ -446,7 +447,7 @@ idleness.  A call on a key that holds another kind of timer replaces it.  OWNER,
 (defun drgnx-timer--fire-soon (entry)
   "ENTRY's timer is due: note when this run began (with a MIN-INTERVAL), leave the table, run FN."
   (let ((key (drgnx-timer--entry-key entry)))
-    (remhash key drgnx-timer--table)
+    (drgnx-timer--drop entry)
     (when (drgnx-timer--entry-min-interval entry)
       (let ((last (gethash key drgnx-timer--last-run)))
         (if last

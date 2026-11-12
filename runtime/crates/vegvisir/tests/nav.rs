@@ -1,10 +1,9 @@
 //! The map's navigation for the native view model (pure, [D]): the links, `then` and the walking orders, against the
-//! editor's own navigation on the 30-agent fixture and on small scenarios.
+//! editor's former navigation on the 30-agent fixture and on small scenarios.
 //!
-//! The golden (`tests/golden/nav-thirty-1600.json`) was recorded from the editor's navigation
-//! (`drgnx-work-nav-move`, `drgnx-work-nav-chain`, `drgnx-work-map--outline-ids`, `drgnx-work-nav--team`) over the
-//! frame in `tests/golden/nav-thirty-1600-frame.json`, which `UPDATE_VEGVISIR_GOLDEN=1 cargo test -p vegvisir --test
-//! nav` writes from this crate's layout of the fixture.
+//! The golden (`tests/golden/nav-thirty-1600.json`) was recorded from the editor's former Lisp navigation (removed
+//! when the hub took the map's drawing) over the frame in `tests/golden/nav-thirty-1600-frame.json`, which
+//! `UPDATE_VEGVISIR_GOLDEN=1 cargo test -p vegvisir --test nav` writes from this crate's layout of the fixture.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;

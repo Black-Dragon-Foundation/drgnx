@@ -2,6 +2,7 @@
 //! sections (a search each, in order), the hub runs them and builds the list: a header row `section:NAME` ("Title
 //! (N)") and each row's line (glyph, name, version, the state's chip, "restart to use"), then its summary line unless
 //! dense. A row an earlier section holds is not shown again; Installed leaves out the rows that wait in Updates. The
+//! generations the editor sends end the list as a Generations section (rows `gen:N`, the model's `gen` field). The
 //! model (a `tree`: a `section` node per header, a node per row under it, the list `order`) goes first, then the rows
 //! to every class of the view; a class that gets its env later is built from the request kept per (connection,
 //! view). Only the glyphs depend on the class (a terminal's ASCII form).
@@ -35,6 +36,8 @@ pub struct Built {
     pub dense: bool,
     pub glyphs: Vec<w::Glyph>,
     pub restart: HashSet<String>,
+    /// The Generations section that ends the list, newest first (none: no section).
+    pub generations: Vec<w::Generation>,
 }
 
 /// The lists, one per (connection, view).
@@ -93,6 +96,7 @@ pub fn build(p: &w::ListParams, found: Vec<(u32, Vec<w::Row>)>) -> (Built, Vec<w
         dense: p.dense,
         glyphs: p.glyphs.clone(),
         restart: p.restart.iter().cloned().collect(),
+        generations: p.generations.clone(),
     };
     (built, totals)
 }
@@ -156,6 +160,10 @@ fn glyph<'a>(b: &'a Built, r: &w::Row, display: Display) -> Option<&'a str> {
         w::Kind::Module => "module",
         _ => "package",
     };
+    kind_glyph(b, kind, display)
+}
+
+fn kind_glyph<'a>(b: &'a Built, kind: &str, display: Display) -> Option<&'a str> {
     let g = b.glyphs.iter().find(|g| g.kind == kind)?;
     Some(if display == Display::Tty {
         &g.tty
@@ -211,7 +219,63 @@ pub fn rows(b: &Built, display: Display) -> Vec<Row> {
             }
         }
     }
+    generation_rows(b, display, &mut out);
     out
+}
+
+/// The Generations section: its header, then per generation its line (number, time, note, in use or current, size),
+/// what differs from the one before it and the copies note, as lines under it.  A span names `gen:N` (no extension
+/// id: the extension commands act on none of these).
+fn generation_rows(b: &Built, display: Display, out: &mut Vec<Row>) {
+    if b.generations.is_empty() {
+        return;
+    }
+    let mut h = RowBuilder::new("section:generations");
+    h.push(
+        &format!("Generations ({})", b.generations.len()),
+        Some("bold"),
+    );
+    let end = h.pos();
+    h.prop(0, end, "drgnx-work-id", json!("section:generations"));
+    out.push(h.finish());
+    let line = |key: String, id: &str, text: &str| {
+        let mut l = RowBuilder::new(key);
+        l.push(&format!("    {text}"), Some("shadow"));
+        let end = l.pos();
+        l.prop(0, end, "drgnx-work-id", json!(id));
+        l.finish()
+    };
+    for g in &b.generations {
+        let id = format!("gen:{}", g.n);
+        let mut l = RowBuilder::new(id.clone());
+        if let Some(glyph) = kind_glyph(b, "package", display) {
+            l.push(glyph, None).push(" ", None);
+        }
+        l.push(&format!("#{}", g.n), Some("bold"));
+        if !g.time.is_empty() {
+            l.push(&format!("  {}", g.time), None);
+        }
+        if let Some(note) = &g.note {
+            l.push(&format!("  {note}"), None);
+        }
+        if g.in_use {
+            l.push("  ", None).push("in use", Some("drgnx-status-warn"));
+        } else if g.current {
+            l.push("  ", None).push("current", Some("drgnx-status-ok"));
+        }
+        if let Some(size) = &g.size {
+            l.push(&format!("  {size}"), None);
+        }
+        let end = l.pos();
+        l.prop(0, end, "drgnx-work-id", json!(id));
+        out.push(l.finish());
+        if !g.differs.is_empty() {
+            out.push(line(format!("{id}/2"), &id, &g.differs.join(" · ")));
+        }
+        if let Some(copies) = &g.copies {
+            out.push(line(format!("{id}/3"), &id, copies));
+        }
+    }
 }
 
 /// BUILT's model: a `tree` of a `section` node per header and a node per row under it (the row's kind), with what
@@ -266,6 +330,30 @@ pub fn doc(b: &Built) -> Doc {
                 json!({"id": r.id, "kind": word(r.kind), "flags": 0, "parent": sid, "fields": fields}),
             );
             order.push(r.id.clone());
+        }
+    }
+    let total = total
+        + if b.generations.is_empty() {
+            0
+        } else {
+            1 + b.generations.len()
+        };
+    if !b.generations.is_empty() && order.len() + 1 + b.generations.len() <= MODEL_WINDOW {
+        let sid = "section:generations".to_owned();
+        d.nodes.insert(
+            sid.clone(),
+            json!({"id": sid, "kind": "section", "flags": 1,
+                   "fields": [["label", "Generations"], ["section", "generations"], ["count", b.generations.len()]]}),
+        );
+        order.push(sid.clone());
+        for g in &b.generations {
+            let id = format!("gen:{}", g.n);
+            d.nodes.insert(
+                id.clone(),
+                json!({"id": id, "kind": "generation", "flags": 0, "parent": sid,
+                       "fields": [["label", format!("#{}", g.n)], ["gen", g.n], ["section", "generations"]]}),
+            );
+            order.push(id);
         }
     }
     if total > order.len() {

@@ -239,10 +239,11 @@ the card says so and has no Install."
         (should (string-search "Not checked: lost-dep" card))
         (should (string-search "[Install]" card)))
       ;; the list knows the row, the hub cannot answer for it
-      (let ((drgnx-extensions-list--rows (make-hash-table :test 'equal)))
-        (puthash "pkg:ghost" (list :id "pkg:ghost" :kind 'package :name "ghost" :state 'available :source "melpa"
-                                   :signed 'unsigned-archive)
-                 drgnx-extensions-list--rows)
+      (cl-letf (((symbol-function 'drgnx-extensions-list-row)
+                 (lambda (id)
+                   (and (equal id "pkg:ghost")
+                        (list :id "pkg:ghost" :kind 'package :name "ghost" :state 'available :source "melpa"
+                              :signed 'unsigned-archive)))))
         (drgnx-extensions-trust-before-install "pkg:ghost" #'ignore)
         (let ((card (drgnx-extensions-trust-test--card "ghost")))
           (should (string-search "Could not check what ghost needs" card))

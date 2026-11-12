@@ -88,7 +88,6 @@
      (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
            (drgnx-view-model--views (make-hash-table :test #'equal))
            (drgnx-view-patch--hooked nil)
-           (drgnx-view-old-path nil)
            (drgnx-view-patch-send-function #'ignore)
            (view (format "wtn-test-%d" (cl-incf drgnx-work-trail-nav-test--n))))
        (with-temp-buffer
@@ -174,6 +173,42 @@ the steps it rests on in the chain class; open on it opens the conclusion with i
       (should (equal "it holds" (plist-get (car opened) :text))))
     (drgnx-work-trail--nav 'up)
     (should (equal "step:2" (drgnx-view-nav-selection)))))
+
+(ert-deftest drgnx-work-trail-nav/l-goes-through-the-lit-steps-and-L-to-their-conclusion ()
+  "Pattern D: on a selected conclusion `l' puts point on the first step it rests on, again on the next, then round;
+the selection stays.  On a selected step `L' selects the conclusion that rests on it.  On anything else each says
+what to select."
+  (drgnx-work-trail-nav-test--with #'drgnx-work-trail-mode (drgnx-work-trail-nav-test--trail)
+                                   (drgnx-work-trail-nav-test--trail-rows)
+    (should-error (drgnx-work-trail-show-steps) :type 'user-error)          ; nothing selected
+    (drgnx-view-nav 'select "conc:1")
+    (let ((at (lambda () (get-text-property (point) drgnx-view-patch-id-prop))))
+      (drgnx-work-trail-show-steps)
+      (should (equal "step:1" (funcall at)))
+      (drgnx-work-trail-show-steps)
+      (should (equal "step:2" (funcall at)))
+      (drgnx-work-trail-show-steps)
+      (should (equal "step:1" (funcall at)))
+      (should (equal "conc:1" (drgnx-view-nav-selection))))
+    (should-error (drgnx-work-trail-show-conclusions) :type 'user-error)    ; a conclusion is no step
+    (drgnx-view-nav 'select "step:2")
+    (drgnx-work-trail-show-conclusions)
+    (should (equal "conc:1" (drgnx-view-nav-selection)))))
+
+(ert-deftest drgnx-work-trail-nav/without-sja-a-trail-and-the-timeline-say-so ()
+  "Pattern D: in an Emacs without Sjá (its map not on the hub's rows) a trail and the Timeline say the map needs Sjá
+and ask the hub nothing."
+  (let ((map (generate-new-buffer " *wtn-map*")) (asked nil) trail timeline)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-work-client--call) (lambda (method &rest _) (push method asked) t))
+                  ((symbol-function 'drgnx-hub-call) (lambda (method &rest _) (push method asked) t))
+                  ((symbol-function 'drgnx-work-map-rows-p) #'ignore))
+          (with-current-buffer map (drgnx-work-map-mode))
+          (setq trail (drgnx-work-trail-open map "s1") timeline (drgnx-work-timeline-open map))
+          (dolist (b (list trail timeline))
+            (should (string-search "needs Sjá" (with-current-buffer b (buffer-string)))))
+          (should-not asked))
+      (dolist (b (list map trail timeline)) (when (buffer-live-p b) (kill-buffer b))))))
 
 ;; A trail of 2,000 steps, as the hub sends it: a window of 500 of them in `steps'.
 
