@@ -89,6 +89,20 @@ pub const BUILD_DEVICE_WRITES: &[&str] = &["/dev/dtracehelper", "/dev/tty"];
 /// The metadata a build's tools stat beyond [`LINKS`]: the true names of the temporary folders.
 pub const BUILD_METADATA: &[&str] = &["/private/tmp", "/private/var/tmp"];
 
+/// A build's `/bin/sh` here-documents, as regexes: bash 3.2 ignores TMPDIR for them and makes `sh-thd*` directly in
+/// `/private/var/tmp` or `/private/tmp` (by true name), reads it back and unlinks it. A build may read and write those
+/// names there and nothing else of either folder (the user's ruling, 2026-11-11); the files are bash's own (`O_EXCL`,
+/// mode 0600).
+pub const BUILD_HEREDOCS: &[&str] = &[
+    "^/private/tmp/sh-thd[^/]*$",
+    "^/private/var/tmp/sh-thd[^/]*$",
+];
+
+/// The folders [`BUILD_HEREDOCS`] are in, `file-write-data` on the folder itself only: bash takes a folder for its
+/// here-documents only if `access(W_OK)` says it is writable (macOS CI round 21: without it bash fell back to the
+/// read-only working directory). No data is written to a folder; making, removing or renaming in it stays denied.
+pub const BUILD_HEREDOC_DIRS: &[&str] = &["/private/tmp", "/private/var/tmp"];
+
 /// The mach services a build asks: the group membership the xcrun shims check, and the per-user folder's helper.
 pub const BUILD_SERVICES: &[&str] = &[
     "com.apple.system.opendirectoryd.membership",
@@ -98,8 +112,8 @@ pub const BUILD_SERVICES: &[&str] = &[
 /// What a Mac runner's build job may use beyond a session's profile (spike S2; docs/develop/gleipnir.md, "The build
 /// addition"): every sysctl read, the whole Xcode app read-only when the developer dir is in one (xcodebuild, which
 /// make's shim runs, loads its SharedFrameworks), the account's per-user folder read and written (clang's module
-/// cache, the compilers' temporary files), [`BUILD_DEVICES`], [`BUILD_DEVICE_WRITES`], [`BUILD_METADATA`] and
-/// [`BUILD_SERVICES`]. Never part of a session's profile.
+/// cache, the compilers' temporary files), [`BUILD_DEVICES`], [`BUILD_DEVICE_WRITES`], [`BUILD_METADATA`],
+/// [`BUILD_SERVICES`] and [`BUILD_HEREDOCS`]. Never part of a session's profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MacBuild {
     /// The account's per-user folder by true name (`getconf DARWIN_USER_DIR`'s parent, under `/private/var/folders`).
@@ -138,7 +152,7 @@ impl Default for MacContext {
 /// 5. reads: [`SYSTEM_READ`], the developer dir (with `loopback`, an Xcode one's `../SharedFrameworks` too),
 ///    (shared) [`DNS_FILES`], `read`, `write`, `home`, `run`, `tmp`;
 /// 6. [`DEVICES`], each by name; for a build ([`MacBuild`]), its addition: every sysctl, [`BUILD_DEVICES`],
-///    [`BUILD_DEVICE_WRITES`] and [`BUILD_SERVICES`] (its per-user folder and Xcode app are in steps 5 and 8, its
+///    [`BUILD_DEVICE_WRITES`], [`BUILD_SERVICES`] and [`BUILD_HEREDOCS`] (its per-user folder and Xcode app are in steps 5 and 8, its
 ///    [`BUILD_METADATA`] in step 4);
 /// 7. [`SYSTEM_HIDDEN`] denied;
 /// 8. writes: `write`, `home` when `rw`, `tmp`;
@@ -350,7 +364,7 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
 }
 
 /// The build addition's own rules (the paths are in the reads, writes and metadata): every sysctl, the build's devices
-/// and services.
+/// and services, and its here-documents ([`BUILD_HEREDOCS`]).
 fn out_build(push: &mut impl FnMut(Option<String>)) -> Result<(), Refusal> {
     push(Some("(allow sysctl-read)".into()));
     push(rule("allow", "file-read*", "literal", BUILD_DEVICES)?);
@@ -361,6 +375,18 @@ fn out_build(push: &mut impl FnMut(Option<String>)) -> Result<(), Refusal> {
         BUILD_DEVICE_WRITES,
     )?);
     push(rule("allow", "mach-lookup", "global-name", BUILD_SERVICES)?);
+    push(rule(
+        "allow",
+        "file-read* file-write*",
+        "regex",
+        BUILD_HEREDOCS,
+    )?);
+    push(rule(
+        "allow",
+        "file-write-data",
+        "literal",
+        BUILD_HEREDOC_DIRS,
+    )?);
     Ok(())
 }
 
@@ -910,7 +936,7 @@ mod tests {
             is(r, "allow", &["file-read*"]) && args(r, "literal") == BUILD_DEVICES
         });
         let dw = one(&rs, "device writes", |r| {
-            is(r, "allow", &["file-write-data"])
+            is(r, "allow", &["file-write-data"]) && args(r, "literal") == BUILD_DEVICE_WRITES
         });
         assert_eq!(args(&rs[dw], "literal"), BUILD_DEVICE_WRITES);
         let svc = one(&rs, "the build's services", |r| {
@@ -944,6 +970,65 @@ mod tests {
             !session.contains("(subpath \"/Applications/Xcode.app\")")
                 && !session.contains(USER_DIR)
         );
+    }
+
+    /// [D] A build's /bin/sh here-documents: bash 3.2 ignores TMPDIR for them and makes `sh-thd*` in /private/tmp or
+    /// /private/var/tmp, so a build may read and write those names there, directly in those folders, and nothing else
+    /// of either; a session may not.
+    #[test]
+    fn a_build_makes_only_its_here_documents_in_tmp() {
+        let p = try_prof(spec(isolated()), &build()).unwrap();
+        let forms = own(&p);
+        let rs = rules(&forms);
+        let hd = one(&rs, "the here-documents", |r| {
+            is(r, "allow", &["file-read*", "file-write*"]) && !args(r, "regex").is_empty()
+        });
+        let res = args(&rs[hd], "regex");
+        assert_eq!(res, BUILD_HEREDOCS);
+        // each is `^<folder>/sh-thd[^/]*$`: a name directly in the folder
+        let matches = |re: &str, s: &str| {
+            let prefix = re
+                .strip_prefix('^')
+                .and_then(|r| r.strip_suffix("[^/]*$"))
+                .expect("^<prefix>[^/]*$");
+            s.strip_prefix(prefix)
+                .is_some_and(|rest| !rest.contains('/'))
+        };
+        let any = |s: &str| res.iter().any(|re| matches(re, s));
+        for ok in [
+            "/private/tmp/sh-thd.a1b2",
+            "/private/var/tmp/sh-thd-1794375920",
+        ] {
+            assert!(any(ok), "{ok}");
+        }
+        for no in [
+            "/private/tmp/other",
+            "/private/tmp/sh-thd.d/inside",
+            "/private/tmp/x/sh-thd1",
+            "/tmp/sh-thd1",
+            "/private/var/folders/sh-thd1",
+        ] {
+            assert!(!any(no), "{no}");
+        }
+        // the folders themselves only `file-write-data` (bash's access check), by name
+        let dirs = one(&rs, "the here-documents' folders", |r| {
+            is(r, "allow", &["file-write-data"]) && args(r, "literal") == BUILD_HEREDOC_DIRS
+        });
+        // the rest of /tmp stays out: no other rule names either folder for writing
+        for r in &rs {
+            if is(r, "allow", &["file-write*"]) {
+                let (sub, lit) = (args(r, "subpath"), args(r, "literal"));
+                for a in sub.iter().chain(&lit) {
+                    assert!(
+                        !a.starts_with("/private/tmp") && !a.starts_with("/private/var/tmp"),
+                        "{a}"
+                    );
+                }
+            }
+        }
+        let net = one(&rs, "no network", |r| is(r, "deny", &["network*"]));
+        assert!(hd < net && dirs < net);
+        assert!(!prof(spec(isolated())).contains("sh-thd"));
     }
 
     /// [D] A build's per-user folder must be absolute, canonical and outside the users' homes.
