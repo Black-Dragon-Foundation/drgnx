@@ -1103,7 +1103,7 @@ jobs:
             name=$(printf '%s\n' "$last" | sed -E 's/^test (.*) \.\.\. .*$/\1/')
             if [ -n "$name" ]; then
               echo "--- $name alone"
-              cargo test --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --lib -- --exact "$name" --nocapture --test-threads 1
+              cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --lib -- --exact "$name" --nocapture --test-threads 1
               echo "- $name alone: exit $?" >> "$GITHUB_STEP_SUMMARY"
             fi
           fi
