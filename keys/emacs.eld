@@ -151,6 +151,8 @@
         (debug-set-value "e")
         (debug-copy-value "w")
         (debug-copy-expression "W")
+        (debug-break-on-value-change :none "a variable's right-click menu; the palette")
+        (debug-breakpoint-trigger :none "a breakpoint's right-click menu; the palette")
         (debug-add-to-watch "a")
         (debug-view-memory "m")
         (debug-memory-next "n")

@@ -217,6 +217,33 @@ fn no_font_file_measures_through_the_editor() {
     assert_eq!(fit::width(&s, "ui", "aa"), 12.0);
 }
 
+/// A grapheme cluster is as wide as its first char, and a cut never splits one: with no font file (macOS) the editor
+/// answers each char alone, where a lone combining mark, a ZWJ and the emoji it joins each have a width the drawn
+/// cluster does not.
+#[test]
+fn a_cluster_is_as_wide_as_its_first_char() {
+    let mut s = FontSet::new();
+    s.set_role("ui", None, 7.0);
+    s.glyphs(&[
+        ("ui".into(), 'e', 6.0),
+        ("ui".into(), '\u{301}', 5.0),
+        ("ui".into(), '\u{1F469}', 14.0),
+        ("ui".into(), '\u{200D}', 3.0),
+        ("ui".into(), '\u{1F4BB}', 14.0),
+        ("ui".into(), ELLIPSIS, 6.0),
+    ]);
+    assert_eq!(fit::width(&s, "ui", "e\u{301}e"), 12.0);
+    assert_eq!(
+        fit::width(&s, "ui", "\u{1F469}\u{200D}\u{1F4BB} e"),
+        14.0 + 7.0 + 6.0
+    );
+    // four clusters (24 px) in 28 px: the budget 18 less the ellipsis leaves room for two whole ones
+    assert_eq!(
+        fit::fit(&s, "ui", "e\u{301}e\u{301}e\u{301}e\u{301}", 28.0),
+        "e\u{301}e\u{301}…"
+    );
+}
+
 #[test]
 fn tty_uses_emacs_width_table() {
     // unicode-width: 'a' 1, '漢' 2; Emacs's table makes '→' (U+2192, ambiguous) 2 and '漢' 1

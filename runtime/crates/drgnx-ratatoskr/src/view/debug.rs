@@ -21,8 +21,8 @@ use crate::front::Front;
 use model::{Bps, FETCH_CAP, Filter, Input, Line, Opened, SessionView, Tree, Var, Want};
 use runstav::methods::Params;
 use runstav::methods::debug::{
-    DebugChild, DebugChildList, DebugChildren, DebugEvaluate, DebugEvaluated, DebugExpand,
-    DebugSetValue, DebugValue, DebugView, DebugWatch,
+    DebugChild, DebugChildList, DebugChildren, DebugDataBreakpoint, DebugDataBreakpoints,
+    DebugEvaluate, DebugEvaluated, DebugExpand, DebugSetValue, DebugValue, DebugView, DebugWatch,
 };
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
@@ -206,6 +206,7 @@ fn bps_of(d: &Debug, root: &str, snaps: &[Snap]) -> Bps {
         filters,
         functions,
         files,
+        data: d.data_lists(root),
     }
 }
 
@@ -701,6 +702,56 @@ async fn set_value(f: &Front, c: &Caller, p: DebugSetValue) -> Result<DebugValue
     })
 }
 
+/// `debug/data-breakpoint`: a session's data breakpoints; `add` names the variable by its container and name, or by
+/// a variable node of the view (its parent's reference and its label).
+async fn data_breakpoint(
+    f: &Front,
+    c: &Caller,
+    p: DebugDataBreakpoint,
+) -> Result<DebugDataBreakpoints, Error> {
+    let d = f.debug.debug(f).clone();
+    let (session, target) = match (&p.view, &p.node) {
+        (Some(view), Some(node)) if p.op == "add" => {
+            let dv = &f.core.views.debugs;
+            let (shown, line, parent) = dv
+                .line(c.conn_id, view, node)
+                .ok_or_else(|| err(format!("no node {node}")))?;
+            if line.kind != "var" {
+                return Err(err("not a variable"));
+            }
+            let reference = parent
+                .as_ref()
+                .and_then(|l| field(l, "reference"))
+                .and_then(Value::as_i64)
+                .ok_or_else(|| err("this variable has no container to watch it in"))?;
+            let sid = shown.ok_or_else(|| err("no session is shown"))?;
+            (sid, Some((reference, line.label.clone())))
+        }
+        _ => {
+            let sid = p.session.clone().unwrap_or_default();
+            let target = p.reference.zip(p.name.clone());
+            (sid, target)
+        }
+    };
+    let breakpoints = match p.op.as_str() {
+        "add" => {
+            let (reference, name) = target.ok_or_else(|| err("no variable to watch"))?;
+            d.add_data_breakpoint(&session, reference, &name, p.access_type.clone())
+                .await
+        }
+        "remove" => {
+            d.remove_data_breakpoint(&session, p.data_id.as_deref().unwrap_or_default())
+                .await
+        }
+        _ => d.data_breakpoints(&session),
+    }
+    .map_err(err)?;
+    Ok(DebugDataBreakpoints {
+        session,
+        breakpoints,
+    })
+}
+
 /// `debug/evaluate`: an expression in a stopped session's frame.
 async fn evaluate(f: &Front, p: DebugEvaluate) -> Result<DebugEvaluated, Error> {
     let d = f.debug.debug(f).clone();
@@ -767,6 +818,7 @@ pub async fn serve(
         Params::DebugExpand(p) => answer(expand(front, caller, p).await),
         Params::DebugWatch(p) => answer(watch(front, p)),
         Params::DebugSetValue(p) => answer(set_value(front, caller, p).await),
+        Params::DebugDataBreakpoint(p) => answer(data_breakpoint(front, caller, p).await),
         Params::DebugEvaluate(p) => answer(evaluate(front, p).await),
         Params::DebugChildren(p) => answer(children(front, p).await),
         other => return Err(Box::new(other)),

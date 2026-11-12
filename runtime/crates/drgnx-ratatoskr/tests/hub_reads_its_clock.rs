@@ -37,11 +37,13 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// A file that is test code as a whole: the clock itself, and the `tests.rs` / `tests/` files of a module.
+/// A file that is test code as a whole: the clock itself, and the `tests.rs` / `*_tests.rs` / `tests/` files of a
+/// module (each included under `#[cfg(test)]`).
 fn exempt(rel: &str) -> bool {
     rel == "clock.rs"
         || rel.starts_with("clock/")
         || rel.ends_with("/tests.rs")
+        || rel.ends_with("_tests.rs")
         || rel == "tests.rs"
         || rel.contains("/tests/")
 }
@@ -157,8 +159,13 @@ const RAW_SPAWNS: &[(&str, usize, &str)] = &[
     ),
     (
         "server.rs",
+        1,
+        "the accept loop: a connection's writes are serving steps (its spawn is stall.rs's)",
+    ),
+    (
+        "stall.rs",
         3,
-        "the accept loops and the connections: a connection's writes are serving steps",
+        "the watchdog's heartbeat, and stall::spawn: the connections and a session's run and turns, named for it",
     ),
     ("agents/mod.rs", 1, "the hub's shutdown"),
     (
@@ -172,8 +179,8 @@ const RAW_SPAWNS: &[(&str, usize, &str)] = &[
     ("agents/wake.rs", 1, "a job end's wake"),
     (
         "agents/session.rs",
-        5,
-        "a session's run, turns and permission asks",
+        2,
+        "a session's permission asks (its run and turns: stall::spawn)",
     ),
     ("runner/tick.rs", 2, "a plan task's start and fallback"),
     ("runner/review.rs", 1, "a plan review's work"),

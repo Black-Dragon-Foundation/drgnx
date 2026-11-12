@@ -11,6 +11,7 @@
 
 #[cfg(test)]
 pub(crate) mod attach_tests;
+mod disk;
 pub(crate) mod panel;
 pub(crate) mod rows;
 pub(crate) mod turn_core;
@@ -1030,6 +1031,8 @@ pub struct Session {
     state: Mutex<State>,
     /// Transcripts and the held queue on disk (none in unit tests).
     store: Option<transcript::Store>,
+    /// The writes to those files, in order, off the hub's workers.
+    disk: disk::Disk,
     /// Step snapshots: a turn's tree is taken before its prompt goes, and the tree at a hold on its wheel (none: the
     /// hub has no state folder).
     snap: Option<crate::timeline::Snap>,
@@ -2009,14 +2012,13 @@ pub(crate) async fn open_with(
             .iter()
             .map(|(name, value)| json!({"name": name, "value": value}))
             .collect();
-        store.save_meta(
-            &s.id,
-            &json!({"about": s.about, "document": s.document, "env": env}),
-        );
+        let meta = json!({"about": s.about, "document": s.document, "env": env});
+        let (store, sid) = (store.clone(), s.id.clone());
+        s.disk.push(move || store.save_meta(&sid, &meta));
     }
     lock(&s.state).core.ready(false);
     hub.insert(s.clone());
-    tokio::spawn(s.clone().run(rx, done));
+    crate::stall::spawn("session:run", s.clone().run(rx, done));
     if let Some(db) = hub.db() {
         insert_row(db, &s).await;
     }
@@ -2446,6 +2448,7 @@ fn assemble(
         gated: AtomicU64::new(0),
         state: Mutex::new(State::new()),
         store: front.dirs.get().map(|d| transcript::Store::new(&d.hub)),
+        disk: disk::Disk::default(),
         snap: crate::timeline::Snap::of(front),
         steps,
         flow,
@@ -2968,7 +2971,7 @@ pub(crate) async fn relaunch(
         }
     }
     hub.insert(s.clone());
-    tokio::spawn(s.clone().run(rx, done));
+    crate::stall::spawn("session:run", s.clone().run(rx, done));
     s.changed();
     if waiting {
         s.close_when_idle();
@@ -3808,37 +3811,48 @@ impl Session {
             .await;
     }
 
-    /// The entries not yet in the transcript file, written (redacted) now; a turn not yet sent to the agent waits.
+    /// The entries not yet in the transcript file, written (redacted) next, off the hub's workers ([`disk`]); a turn
+    /// not yet sent to the agent waits.  Queued under the state's lock, so the ranges land in order.
     fn flush_transcript(&self) {
         let Some(store) = &self.store else { return };
-        let fresh: Vec<(u64, Entry)> = {
-            let mut st = lock(&self.state);
-            let to = st
-                .unsent_at
-                .unwrap_or(st.entries.len())
-                .min(st.entries.len());
-            let from = st.flushed.min(to);
-            st.flushed = to;
-            st.entries[from..to]
-                .iter()
-                .enumerate()
-                .map(|(i, e)| ((from + i) as u64, e.clone()))
-                .collect()
-        };
-        if let Err(e) = store.append(&self.id, &fresh) {
-            tracing::warn!(sid = self.id, "transcript not written: {e}");
-        }
+        let mut st = lock(&self.state);
+        let to = st
+            .unsent_at
+            .unwrap_or(st.entries.len())
+            .min(st.entries.len());
+        let from = st.flushed.min(to);
+        st.flushed = to;
+        let fresh: Vec<(u64, Entry)> = st.entries[from..to]
+            .iter()
+            .enumerate()
+            .map(|(i, e)| ((from + i) as u64, e.clone()))
+            .collect();
+        let (store, sid) = (store.clone(), self.id.clone());
+        self.disk.push(move || {
+            if let Err(e) = store.append(&sid, &fresh) {
+                tracing::warn!(sid, "transcript not written: {e}");
+            }
+        });
     }
 
     /// The held queue and the pause, kept for a restart, with a turn's prompt that has not reached the agent at its
-    /// front ([`TurnCore::kept`]).  Written under the state's lock: two writes from different tasks (a turn's end, the
-    /// hub's end) land in the order of the states they read, so the file ends as the last.
+    /// front ([`TurnCore::kept`]).  Queued under the state's lock: two writes from different tasks (a turn's end, the
+    /// hub's end) land in the order of the states they read, so the file ends as the last.  Written off the hub's
+    /// workers ([`disk`]).
     fn persist_queue(&self) {
         let Some(store) = &self.store else { return };
         let st = lock(&self.state);
-        if let Err(e) = store.save_queue(&self.id, &st.core.kept(), st.core.paused()) {
-            tracing::warn!(sid = self.id, "queue not kept: {e}");
-        }
+        let (store, sid, kept, paused) = (
+            store.clone(),
+            self.id.clone(),
+            st.core.kept(),
+            st.core.paused(),
+        );
+        self.disk.push(move || {
+            if let Err(e) = store.save_queue(&sid, &kept, paused) {
+                tracing::warn!(sid, "queue not kept: {e}");
+            }
+        });
     }
 
     fn schedule(self: &Arc<Self>) {
@@ -4154,6 +4168,9 @@ impl Session {
                 }
                 Event::Update { update, .. } => {
                     if let Ok(v) = serde_json::to_value(&update) {
+                        // the turn's stages at debug (a flaky row's log names where it stopped): the kind only
+                        let kind = v.get("sessionUpdate").and_then(Value::as_str).unwrap_or("");
+                        tracing::debug!(sid = %self.id, kind, "turn: an update read");
                         // a switch to a mode the lock refuses ends the session, as one reported at its start does
                         if let Some(plock::LockBroken(why)) =
                             plock::refused_mode_switch(self.locked_as, self.lock_held, &v)
@@ -4226,11 +4243,13 @@ impl Session {
                             }
                         }
                         self.drain_steps();
+                        let tool_ended = stepped.is_some();
                         if let Some(s) = stepped {
                             // the pause after a tool call: the turn ends here, the queue waits
                             self.perform(s);
                         }
                         self.schedule();
+                        tracing::debug!(sid = %self.id, kind, tool_ended, "turn: the update applied");
                     }
                 }
                 Event::Request(Incoming::Permission(req, resp)) => {
@@ -4358,6 +4377,8 @@ impl Session {
                     self.perform(stepped);
                     self.drain_steps();
                     self.flush_transcript();
+                    // landed before a resume of the exited session reads them
+                    self.disk.written().await;
                     self.schedule();
                 }
             }
@@ -5089,14 +5110,17 @@ impl Session {
         }
     }
 
-    /// The hold on the wheel, kept for a restart.
+    /// The hold on the wheel, kept for a restart (queued under the state's lock, written off the hub's workers).
     fn persist_wheel(&self) {
         let Some(store) = &self.store else { return };
         let st = lock(&self.state);
         let held = st.wheel != Wheel::Free;
-        if let Err(e) = store.save_wheel(&self.id, held, st.wheel_base.as_deref()) {
-            tracing::warn!(sid = self.id, "the wheel's hold not kept: {e}");
-        }
+        let (store, sid, base) = (store.clone(), self.id.clone(), st.wheel_base.clone());
+        self.disk.push(move || {
+            if let Err(e) = store.save_wheel(&sid, held, base.as_deref()) {
+                tracing::warn!(sid, "the wheel's hold not kept: {e}");
+            }
+        });
     }
 
     /// What the supervisor reads of this session.
@@ -5455,6 +5479,8 @@ impl Session {
         self.closed.store(true, Ordering::SeqCst);
         self.flush_transcript();
         self.persist_queue();
+        // landed before the session that follows (a rewind's, a rotation's) reads them
+        self.disk.written().await;
         let _ = self.conn.close_session(&self.acp).await;
         draugr::kill_group(self.conn.pid(), STOP_GRACE, &draugr::RealSignaller).await;
     }
@@ -5982,7 +6008,7 @@ impl Session {
         self.persist_queue();
         self.flush_transcript();
         self.changed();
-        tokio::spawn(self.clone().turn(turn, item));
+        crate::stall::spawn("session:turn", self.clone().turn(turn, item));
     }
 
     /// One turn of ITEM, and what follows it: the stop entry, the steps closed, the transcript written, the next
@@ -5993,6 +6019,7 @@ impl Session {
             .turn_step(TurnEvent::Sending { turn })
             .fx
             .contains(&TurnEffect::Prompt { turn });
+        tracing::debug!(sid = %self.id, turn, send, "turn: sending");
         if !send {
             return;
         }
@@ -6000,12 +6027,14 @@ impl Session {
         // once that step is written, it could already hold the turn's first write
         if let Some(s) = &self.snap {
             let tree = s.before_turn(&self.id, &self.cwd).await;
+            tracing::debug!(sid = %self.id, turn, taken = tree.is_some(), "turn: the snapshot before it");
             lock(&self.state).before = tree;
         }
         // its entry is the agent's now: in the transcript file first, then off the queue on disk (a hub that dies
-        // between the two runs the prompt again at the next start; it never loses it)
+        // between the two runs the prompt again at the next start; it never loses it), both landed before it goes
         self.flush_transcript();
         self.persist_queue();
+        self.disk.written().await;
         // `RATATOSKR_TEST_ASK_DELAY_MS` (test-hooks): the turn's step is out but its ask not yet told, for a scenario
         // that must wait for the ask rather than the step
         #[cfg(feature = "test-hooks")]
@@ -6040,6 +6069,7 @@ impl Session {
         let blocks = serde_json::from_value(json!([block])).unwrap_or_default();
         // a Stop since `Sending` waited for the prompt's line: its cancel goes after it (`Written`)
         let sent = self.conn.send_prompt(&self.acp, blocks, None);
+        tracing::debug!(sid = %self.id, turn, ok = sent.is_ok(), "turn: the prompt written");
         self.turn_event(TurnEvent::Written { turn });
         let out = match sent {
             Ok(answer) => answer.await,
@@ -6186,6 +6216,8 @@ impl Session {
             self.persist_queue();
         }
         self.flush_transcript();
+        // landed before the hub exits
+        self.disk.written().await;
         draugr::kill_group(
             self.conn.pid(),
             Duration::from_secs(1),

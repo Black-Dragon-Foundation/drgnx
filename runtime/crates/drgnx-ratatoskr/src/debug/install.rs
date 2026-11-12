@@ -160,6 +160,7 @@ pub async fn install(
                 argv,
                 cwd: tools.to_path_buf(),
                 env: vec![],
+                background: None,
             };
             fs::create_dir_all(tools).map_err(|e| io_err(tools, e))?;
             let mut steps = vec![];

@@ -258,6 +258,8 @@ pub struct Bps {
     pub filters: Vec<Filter>,
     pub functions: Vec<Value>,
     pub files: Vec<(String, Vec<Value>)>,
+    /// Each session's data breakpoints: (session, the store's view of one).
+    pub data: Vec<(String, Value)>,
 }
 
 /// Everything one view is built from.
@@ -1085,6 +1087,7 @@ impl<'a> Cx<'a> {
                     continue;
                 };
                 let line = b.get("line").and_then(Value::as_u64).unwrap_or(0);
+                let column = b.get("column").and_then(Value::as_u64);
                 let text = |k: &str| b.get(k).and_then(Value::as_str).map(str::to_owned);
                 let verified = b.get("verified").and_then(Value::as_bool) == Some(true);
                 let mut fields = vec![
@@ -1093,16 +1096,29 @@ impl<'a> Cx<'a> {
                     ("line", json!(line)),
                     ("verified", json!(i64::from(verified))),
                 ];
+                if let Some(c) = column {
+                    fields.push(("column", json!(c)));
+                }
                 if let Some(m) = text("message") {
                     fields.push(("message", json!(m)));
+                }
+                let trigger = b.get("triggered_by").and_then(Value::as_u64);
+                let waits =
+                    trigger.filter(|_| b.get("waiting").and_then(Value::as_bool) == Some(true));
+                if let Some(t) = trigger {
+                    fields.push(("triggered_by", json!(t)));
                 }
                 self.push(Line {
                     id: format!("b:{bid}"),
                     parent: parent.clone(),
                     depth: 1,
                     kind: "breakpoint",
-                    label: format!("{}:{line}", basename(path)),
-                    detail: text("condition").or(text("log")).or(text("hit")),
+                    label: bp_label(path, line, column),
+                    detail: waits
+                        .map(|t| format!("waits for {}", bp_name(&bps.files, t)))
+                        .or(text("condition"))
+                        .or(text("log"))
+                        .or(text("hit")),
                     ticked: Some(b.get("enabled").and_then(Value::as_bool) != Some(false)),
                     dim: !verified,
                     fields,
@@ -1110,5 +1126,61 @@ impl<'a> Cx<'a> {
                 });
             }
         }
+        for (session, d) in &bps.data {
+            let text = |k: &str| d.get(k).and_then(Value::as_str).unwrap_or_default();
+            let verified = d.get("verified").and_then(Value::as_bool) == Some(true);
+            let mut fields = vec![
+                ("session", json!(session)),
+                ("data_id", json!(text("data_id"))),
+                ("verified", json!(i64::from(verified))),
+            ];
+            if !text("message").is_empty() {
+                fields.push(("message", json!(text("message"))));
+            }
+            self.push(Line {
+                id: format!("d:{session}:{}", text("data_id")),
+                parent: parent.clone(),
+                depth: 1,
+                kind: "data",
+                label: text("description").to_owned(),
+                detail: Some(
+                    match text("access_type") {
+                        "read" => "read",
+                        "readWrite" => "read or write",
+                        _ => "write",
+                    }
+                    .to_owned(),
+                ),
+                dim: !verified,
+                fields,
+                ..Line::default()
+            });
+        }
     }
+}
+
+/// Breakpoint ID as the view names it (`file:line`), from FILES.
+/// A breakpoint's name: `file:line`, `file:line:col` for an inline one.
+fn bp_label(path: &str, line: u64, column: Option<u64>) -> String {
+    match column {
+        Some(c) => format!("{}:{line}:{c}", basename(path)),
+        None => format!("{}:{line}", basename(path)),
+    }
+}
+
+fn bp_name(files: &[(String, Vec<Value>)], id: u64) -> String {
+    files
+        .iter()
+        .find_map(|(path, list)| {
+            list.iter()
+                .find(|b| b.get("id").and_then(Value::as_u64) == Some(id))
+                .map(|b| {
+                    bp_label(
+                        path,
+                        b.get("line").and_then(Value::as_u64).unwrap_or(0),
+                        b.get("column").and_then(Value::as_u64),
+                    )
+                })
+        })
+        .unwrap_or_else(|| format!("breakpoint {id}"))
 }

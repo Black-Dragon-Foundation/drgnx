@@ -73,6 +73,13 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   the newest 7 kept, written by tracing-appender's non-blocking worker). Warnings and errors also go to stderr, behind
   `<4>` / `<3>` when `JOURNAL_STREAM` is set (the journal under systemd). `DRGNX_RATATOSKR_LOG` takes a `Targets`
   string (`info`, the default; `warn,drgnx_ratatoskr::conn=debug`). The cap, keys and params are never logged. The
+  stall watchdog (`stall.rs`) watches the runtime's two async workers: a task beats every 50 ms, and a plain thread
+  warns `the runtime stalled` when a beat is later than the threshold or a named task's poll has run that long, with
+  every poll in progress (thread, task name, how long) and, on Linux, each worker's kernel state, wait channel and
+  syscall from `/proc`. `DRGNX_RATATOSKR_STALL_MS` sets the threshold; without it the watchdog runs at 250 ms in a
+  `test-hooks` build (conformance, the perf and UI runs) and is off in the installed hub, whose idle wakeups it would
+  multiply; it is always off on the virtual clock. `DRGNX_RATATOSKR_STALL_FILE` also appends each report to that
+  file. The
   cargo feature `test-hooks` (off in the binary install.sh builds) holds the test-only surfaces: the `__test_flood`
   method, `__test_matrix_ask {action, who, session?, plan?, facts?}` (the matrix gate asked as the hub's own callers
   ask it, answered `{gate, card?, why?}`: the browser card rows raise their cards with it), `--idle-tick-ms N` (the
@@ -1389,11 +1396,13 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/bisect/cancel` | user | `{bisect: string}` | `boolean` | no |
 | `debug/bisect/narrow` | user | `{bisect: string}` | `boolean` | no |
 | `debug/bisect/states` | user | `{good?: {id: string, kind: string}, root: string}` | `{states: [any]}` | no |
-| `debug/breakpoints` | user | `{op?: {adapter?: string, condition?: string, enabled?: boolean, hit?: string, id?: natnum, line?: natnum, log?: string, name?: string, op: string, path?: string}, path?: string, root: string}` | `DebugBreakpointsView` | no |
+| `debug/breakpoint-locations` | user | `{line: natnum, path: string, session: string}` | `{locations: [BreakpointLocation]}` | no |
+| `debug/breakpoints` | user | `{op?: {adapter?: string, column?: natnum, condition?: string, enabled?: boolean, hit?: string, id?: natnum, line?: natnum, log?: string, name?: string, op: string, path?: string, triggered_by?: natnum}, path?: string, root: string}` | `DebugBreakpointsView` | no |
 | `debug/children` | user | `{epoch?: natnum, reference: integer, session: string}` | `{variables: [DebugChild]}` | no |
 | `debug/compare` | user | `{fork: string, run: string}` | `DebugForkView` | no |
 | `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
 | `debug/control` | user | `{op: string, session: string, thread?: integer}` | `boolean` | no |
+| `debug/data-breakpoint` | user | `{access_type?: string, data_id?: string, name?: string, node?: string, op: string, reference?: integer, session?: string, view?: string}` | `{breakpoints: [any], session: string}` | no |
 | `debug/evaluate` | user | `{context: string, expr: string, frame?: integer, session: string}` | `{epoch?: natnum, reference?: integer, result: string, type?: string}` | no |
 | `debug/expand` | user | `{node: string, open: boolean, view: string}` | `boolean` | no |
 | `debug/fork` | user | `{anyway?: boolean, at: {hit?: natnum, line?: natnum, path?: string, stop?: natnum}, change?: {code?: boolean, value?: {path: [string], text: string}}, confirm?: boolean, inputs?: [{id: string, value: string}], run: string, until?: DebugForkUntil}` | `{ask?: string, fork?: string, needs?: any}` | no |
@@ -2418,6 +2427,12 @@ mark leaves. Unit: `outline_follows_the_users_choice`, `open_huddle_is_on_the_st
 A builder fits each label to its segment's width with `drgnx_rows::fit` (the terminal: `fit_tty`, in columns). The
 hub sums the advances of the font file Emacs uses for the role (`view/env`'s `fonts`), read with skrifa, and trims
 with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an estimate: no shaping, kerning or hinting.
+
+- **Per grapheme cluster.** A cluster (a letter and its combining marks, an emoji ZWJ sequence, a flag) counts its
+  first char's advance, and a cut never splits one. The marks and joined chars after it are drawn into that glyph;
+  asked of the editor one by one (no font file, as on macOS) each had a width of its own, and the combining and ZWJ
+  labels were cut 21 to 35 px short. A cluster the font draws wider than its first char (an unjoined ZWJ sequence)
+  runs over, and the fit guard measures it.
 
 - **Measured against Emacs.** `test/ui/rows-fit-gui-test.el` compares the sums (`test/fixtures/rows-fit-sums.eld`,
   written by `drgnx-rows`' `fit_sums`) with `string-pixel-width` for 40-char Latin, digit and punctuation strings in

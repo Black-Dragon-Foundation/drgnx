@@ -81,6 +81,7 @@ pub(super) fn opts(front: &Front) -> Opts {
     );
     o.probes = Some(state.join("debug-probes"));
     o.store = graph(front.writer.clone());
+    o.key = super::runkey::os();
     let writer = front.writer.clone();
     o.task_open = Arc::new(move |task: String| {
         let w = writer.clone();
@@ -226,6 +227,17 @@ pub async fn serve(
     _caller: &Caller,
     p: Params,
 ) -> Result<Result<Value, Error>, Box<Params>> {
+    if matches!(
+        p,
+        Params::DebugRunsList(_)
+            | Params::DebugRunGet(_)
+            | Params::DebugRunStop(_)
+            | Params::DebugRunPin(_)
+    ) && let Ok(r) = records(front)
+    {
+        // a keyring unlocked since the hub started: the runs read from now on
+        let _ = r.unlock().await;
+    }
     Ok(match p {
         Params::DebugProbeOp(p) => answer(probe_op(front, p).await),
         Params::DebugRunsList(p) => answer(list(front, p)),

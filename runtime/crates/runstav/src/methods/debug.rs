@@ -181,6 +181,33 @@ pub struct DebugTrust {
     pub trusted: bool,
 }
 
+/// `debug/breakpoint-locations`: where on PATH's LINE SESSION's adapter can stop (inline breakpoints).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugBreakpointLocations {
+    pub session: String,
+    pub path: String,
+    pub line: u32,
+}
+
+/// One place a breakpoint can go: LINE and COLUMN (1-based, in characters), to END_LINE and END_COLUMN when it covers a
+/// range.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct BreakpointLocation {
+    pub line: u32,
+    pub column: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_column: Option<u32>,
+}
+
+/// `debug/breakpoint-locations`' answer: the LOCATIONS in the adapter's order; none when it cannot say
+/// (`supportsBreakpointLocationsRequest`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugBreakpointLocationsList {
+    pub locations: Vec<BreakpointLocation>,
+}
+
 /// `debug/source`: the text of SESSION's source REF (a frame whose source has no file: `sourceReference`).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct DebugSource {
@@ -268,7 +295,8 @@ pub struct DebugBreakpoints {
 
 /// One change to the breakpoint store, by id: `add` (PATH, LINE; the breakpoint already on that line if any),
 /// `remove` (ID), `edit` (ID and the fields given; an empty text clears one), `move` (ID, LINE: the saved line),
-/// `add-function` (NAME, CONDITION) and `remove-function` (NAME).
+/// `add-function` (NAME, CONDITION), `remove-function` (NAME) and `trigger` (ID is triggered by TRIGGERED_BY: sent to
+/// a session only once it has stopped on that breakpoint; none: a plain breakpoint again).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct DebugBreakpointOp {
     pub op: String,
@@ -291,6 +319,13 @@ pub struct DebugBreakpointOp {
     /// `filter`'s adapter type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapter: Option<String>,
+    /// `trigger`'s triggering breakpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triggered_by: Option<u64>,
+    /// `add`'s and `move`'s column (1-based, in characters): an inline breakpoint. `move` without one keeps the
+    /// breakpoint's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<u32>,
 }
 
 /// The operations `debug/breakpoints` knows; `filter` turns exception filter NAME of adapters of type ADAPTER on or
@@ -303,6 +338,7 @@ pub const BP_OPS: &[&str] = &[
     "move",
     "add-function",
     "remove-function",
+    "trigger",
     "filter",
     "enable-all",
     "toggle-all",
@@ -433,6 +469,79 @@ pub struct DebugBreakpointsView {
     pub added: Option<u64>,
 }
 
+/// `debug/data-breakpoint`: a session's data breakpoints (Break on Value Change). `add` watches variable NAME of the
+/// container REFERENCE in SESSION (or the variable NODE of the Run and Debug view VIEW), for ACCESS_TYPE (`write`
+/// by default; `read`, `readWrite` where the adapter has them); `remove` drops DATA_ID; `list` changes nothing. They
+/// last as long as the session.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugDataBreakpoint {
+    pub op: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_id: Option<String>,
+}
+
+/// `debug/data-breakpoint`'s answer: SESSION's data breakpoints, `{data_id, description, access_type?, verified,
+/// message?}` in order.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugDataBreakpoints {
+    pub session: String,
+    pub breakpoints: Vec<Value>,
+}
+
+fn check_data_bp(p: &DebugDataBreakpoint) -> Result<(), Error> {
+    let need = |k: &str, ok: bool| {
+        if ok {
+            Ok(())
+        } else {
+            Err(invalid(k, "required by this op"))
+        }
+    };
+    for (k, v) in [
+        ("session", &p.session),
+        ("name", &p.name),
+        ("view", &p.view),
+        ("node", &p.node),
+        ("data_id", &p.data_id),
+    ] {
+        if let Some(t) = v {
+            check_text(k, t)?;
+        }
+    }
+    if let Some(a) = &p.access_type
+        && !["read", "write", "readWrite"].contains(&a.as_str())
+    {
+        return Err(invalid("access_type", "read, write or readWrite"));
+    }
+    match p.op.as_str() {
+        "add" => {
+            let by_ref = p.session.is_some() && p.reference.is_some() && p.name.is_some();
+            let by_node = p.view.is_some() && p.node.is_some();
+            need(
+                "session, reference and name (or view and node)",
+                by_ref || by_node,
+            )
+        }
+        "remove" => {
+            need("session", p.session.is_some())?;
+            need("data_id", p.data_id.is_some())
+        }
+        "list" => need("session", p.session.is_some()),
+        _ => Err(invalid("op", "one of add, remove, list")),
+    }
+}
+
 /// `debug/run-to-cursor`: SESSION stops once at PATH's LINE (a breakpoint for it alone), continuing if it is stopped.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct DebugRunToCursor {
@@ -499,6 +608,15 @@ fn check_source(p: &DebugSource) -> Result<(), Error> {
     Ok(())
 }
 
+fn check_breakpoint_locations(p: &DebugBreakpointLocations) -> Result<(), Error> {
+    check_text("session", &p.session)?;
+    check_text("path", &p.path)?;
+    if p.line == 0 {
+        return Err(invalid("line", "1-based"));
+    }
+    Ok(())
+}
+
 fn check_install(p: &DebugInstall) -> Result<(), Error> {
     check_text("adapter", &p.adapter)
 }
@@ -524,7 +642,7 @@ fn check_breakpoints(p: &DebugBreakpoints) -> Result<(), Error> {
     if !BP_OPS.contains(&op.op.as_str()) {
         return Err(invalid(
             "op.op",
-            "one of add, remove, edit, move, add-function, remove-function, filter, enable-all, toggle-all, remove-all",
+            "one of add, remove, edit, move, add-function, remove-function, trigger, filter, enable-all, toggle-all, remove-all",
         ));
     }
     for (k, v) in [
@@ -548,7 +666,7 @@ fn check_breakpoints(p: &DebugBreakpoints) -> Result<(), Error> {
             check_path("op.path", op.path.as_deref().unwrap_or_default())?;
             need("op.line", op.line.is_some_and(|l| l > 0))
         }
-        "remove" | "edit" => need("op.id", op.id.is_some()),
+        "remove" | "edit" | "trigger" => need("op.id", op.id.is_some()),
         "filter" => {
             check_text("op.adapter", op.adapter.as_deref().unwrap_or_default())?;
             check_text("op.name", op.name.as_deref().unwrap_or_default())?;
@@ -669,6 +787,12 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_run_to,
         ),
         method!(
+            "debug/data-breakpoint", DebugDataBreakpoint(DebugDataBreakpoint) -> DebugDataBreakpoints,
+            classes: [User], writes: false,
+            doc: "a session's data breakpoints (Break on Value Change): watch a variable as the adapter's dataBreakpointInfo names it, or drop one; they last as long as the session",
+            check: check_data_bp,
+        ),
+        method!(
             "debug/select", DebugSelect(DebugSelect) -> bool,
             classes: [User], writes: false,
             doc: "show a frame of a session's stop: its scopes and variables are fetched in the same stop, and debug-frame names its line",
@@ -715,6 +839,12 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "a project's trust changed: a project never told trusted runs no configuration, and revoking trust stops its sessions",
             check: check_trust,
+        ),
+        method!(
+            "debug/breakpoint-locations", DebugBreakpointLocations(DebugBreakpointLocations) -> DebugBreakpointLocationsList,
+            classes: [User], writes: false,
+            doc: "where on a line the session's adapter can stop (inline breakpoints), in characters; none when it cannot say",
+            check: check_breakpoint_locations,
         ),
         method!(
             "debug/source", DebugSource(DebugSource) -> DebugSourceText,

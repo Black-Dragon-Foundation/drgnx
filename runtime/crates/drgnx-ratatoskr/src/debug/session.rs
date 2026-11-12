@@ -184,6 +184,8 @@ pub struct Stop {
     pub scopes: Vec<ScopeVars>,
     /// An exception stop's `exceptionInfo` body (when the adapter has the request).
     pub exception: Option<Value>,
+    /// The adapter's ids of the breakpoints it stopped on (`hitBreakpointIds`).
+    pub hit: Vec<i64>,
 }
 
 /// How a session ended.
@@ -689,6 +691,11 @@ impl Session {
                     frame: 0,
                     scopes: vec![],
                     exception: None,
+                    hit: body
+                        .get("hitBreakpointIds")
+                        .and_then(Value::as_array)
+                        .map(|a| a.iter().filter_map(Value::as_i64).collect())
+                        .unwrap_or_default(),
                 };
                 let exception = stop.reason == "exception"
                     && self

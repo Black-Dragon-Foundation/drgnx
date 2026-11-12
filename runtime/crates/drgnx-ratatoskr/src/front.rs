@@ -943,6 +943,7 @@ impl Front {
             | Params::DebugTrust(_)
             | Params::DebugInstall(_)
             | Params::DebugSource(_)
+            | Params::DebugBreakpointLocations(_)
             | Params::DebugBreakpoints(_)
             | Params::DebugRunToCursor(_)) => crate::debug::wire::serve(self, &caller, p)
                 .await
@@ -952,6 +953,7 @@ impl Front {
             | Params::DebugExpand(_)
             | Params::DebugWatch(_)
             | Params::DebugSetValue(_)
+            | Params::DebugDataBreakpoint(_)
             | Params::DebugEvaluate(_)
             | Params::DebugChildren(_)) => crate::view::debug::serve(self, &caller, p)
                 .await

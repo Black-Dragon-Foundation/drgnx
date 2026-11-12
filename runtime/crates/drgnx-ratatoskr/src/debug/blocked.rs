@@ -443,7 +443,7 @@ fn local(port: u16) -> SocketAddr {
 /// Waits (at most WITHIN) until PORT listens with every listener in GROUP (a process the hub started leads its own):
 /// the hub connects to it, or starts a program that will, only then. A stranger's listener (the probe and the bind
 /// are apart) is an error at once, never connected to.
-async fn wait_owned(port: u16, group: i32, within: Duration) -> Result<(), String> {
+pub(super) async fn wait_owned(port: u16, group: i32, within: Duration) -> Result<(), String> {
     let deadline = crate::clock::now() + within;
     loop {
         let owned = crate::clock::blocking(move || super::ports::owned(port, &[group]))
@@ -454,11 +454,25 @@ async fn wait_owned(port: u16, group: i32, within: Duration) -> Result<(), Strin
         }
         if crate::clock::now() >= deadline {
             return Err(format!(
-                "nothing listened on port {port} of the session's block within {} s",
+                "nothing listened on port {port} within {} s",
                 within.as_secs()
             ));
         }
         crate::clock::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// E (the adapter's port never listened) with what says why: whether the adapter (process PID) still runs, and the
+/// end of its stderr (a sandbox's refusal shows there).
+pub(super) fn why_not_listening(e: String, pid: i32, stderr: &str) -> String {
+    // SAFETY: kill(2) with signal 0 only asks whether the process exists.
+    let alive = unsafe { libc::kill(pid, 0) } == 0;
+    let state = if alive { "still runs" } else { "had exited" };
+    let stderr = stderr.trim();
+    if stderr.is_empty() {
+        format!("{e} (the adapter {state}, nothing on its stderr)")
+    } else {
+        format!("{e} (the adapter {state}; its stderr ends:\n{stderr})")
     }
 }
 
@@ -496,7 +510,11 @@ impl Launcher for Blocked {
             let connected =
                 match wait_owned(self.plan.port, adapter_pid, DEBUGGEE_LISTEN_WITHIN).await {
                     Ok(()) => super::wire::connect_tcp(local(self.plan.port)).await,
-                    Err(e) => Err(e),
+                    Err(e) => Err(why_not_listening(
+                        e,
+                        adapter_pid,
+                        &pair.adapter.stderr_tail(),
+                    )),
                 };
             let s = match connected {
                 Ok(s) => s,

@@ -146,8 +146,16 @@ task with its platform section merged over it and its strings through the same v
 label or a list) runs first, depth first in the order given, each task once; a cycle (`a → b → a`) or an unknown
 label is an error that names it. A `shell` task (also one without a `type`) runs its command line in `/bin/sh -c`,
 each `args` item quoted for the shell; a `process` task runs `command` and `args` as they are, never split.
-`options.cwd` (relative: under the root) and `options.env` apply. `isBackground` tasks (watchers that never end) are
-refused. The steps run one at a time before the adapter starts (so a TCP adapter's free port is picked after the
+`options.cwd` (relative: under the root) and `options.env` apply. An `isBackground` task (a watcher that never ends)
+runs until a line of its output (stdout and stderr merged through `sh -c 'exec "$@" 2>&1'`, terminal escapes removed)
+matches its problem matcher's `background.endsPattern`, after its `beginsPattern` unless `activeBegin`; the matcher is
+the task's own object (string or `{regexp}` patterns, Rust `regex` syntax) or `$tsc-watch`, the one named matcher
+drgnx carries. Without an end pattern it is refused, naming the task (and any matcher drgnx does not know); a
+background `postDebugTask` is refused too. `tasks::run` answers the background steps' `Watch`es: `wire::keep_watches`
+sends their later lines to the sessions' Debug Console and drops them when every session they started for has ended,
+which sends SIGTERM to the task's process group (SIGKILL 2 s later). Background steps always run in the hub, never in
+a tab, even from a frame: the hub must read their output, and a terminal tab's output reaches it only as drawn
+screens. The steps run one at a time before the adapter starts (so a TCP adapter's free port is picked after the
 build); the first that fails stops the rest and the start, and the error gives its exit status and the end of its
 output (2,000 bytes of stdout, then stderr's tail). `${defaultBuildTask}` is the label of the task whose `group` is
 `{"kind": "build", "isDefault": true}`.
@@ -174,8 +182,10 @@ js-debug, delve, lldb-dap), how to find it and how to start it:
 - `:find`: `(:path "dlv")` (an executable on `PATH`), `(:tools "js-debug/src/dapDebugServer.js")` (a file in drgnx's
   tools folder) or `(:python-module "debugpy")` (in the tools venv, `venv/lib/python*/site-packages`).
 - `:start`: `(:stdio ARGV)` or `(:tcp ARGV)`, where `{program}`, `{python}`, `{tools}` and `{port}` are filled in; a
-  TCP adapter gets a free port on 127.0.0.1 picked by the hub (`adapters::free_port`; another local process could take
-  it first, and DAP has no authentication: spec §9.5).
+  TCP adapter gets a free port on 127.0.0.1 picked by the hub (`adapters::free_port`). The hub frees it for the adapter
+  to bind, so another local process could take it first, and DAP has no authentication (spec §9.5): the hub connects
+  only once the port's listener is in the adapter's process group (`blocked::wait_owned`, `ports::owned`: /proc on
+  Linux, lsof on macOS), and a stranger's listener ends the start at once, never connected to.
 
 - `:install` (Debug: Install Adapter, `debug/install`, `debug/install.rs`): `(:url U :sha256 H :into DIR [:root R])`
   or `(:into DIR :platforms ((:platform "linux-x64" :url U :sha256 H) …))` (the platform keys are `linux-x64`,
@@ -186,7 +196,8 @@ js-debug, delve, lldb-dap), how to find it and how to start it:
   (only its `:root` folder, when given) replaces `<data>/debug-adapters/DIR` whole through `DIR.partial` and `DIR.old`,
   so any failure leaves the folder as it was. debugpy goes into the tools venv (made first if missing) with `pip
   install --require-hashes --no-deps`. A system package is never run: the error names its command. js-debug and
-  CodeLLDB are pinned archives (CodeLLDB is built in, untested, started from its `extension/adapter/codelldb`).
+  CodeLLDB are pinned archives (CodeLLDB started from its `extension/adapter/codelldb`; tested live in the adapter
+  image, which carries the same pinned `.vsix`).
 
 `debug/configs` marks a configuration whose adapter is not found here with `missing` `{adapter, name, install,
 command?}` (`wire::missing_of`; `install` is `download`, `pip`, `system` with its command, or `none`; a `debugServer`
@@ -208,6 +219,12 @@ root>.json`, written atomically. If the file is damaged, it is moved aside to `�
     So two editors toggling one file never undo each other.
   - Every change raises the file's version.
   - The line held is the saved line: the editor keeps a moved line as a draft and sends `move` on save.
+  - **Inline breakpoints** have a `column` (1-based, in characters on the wire; `add` and `move` take one, a `move`
+    without one keeps the breakpoint's). One at another column of a line, or one without a column on the same line,
+    is its own breakpoint; `add` at an existing line and column answers that one's id in `added`. The hub turns the
+    column into the adapter's UTF-16 units (`columnsStartAt1`) from the line's text on disk when it is set
+    (`breakpoints::col_of`, read off the workers), keeps both, and sends `{line, column}`. The view shows `column`
+    in characters; the Breakpoints rows are named `file:line:col` with a field `column`.
 - **What each session made of a breakpoint:** its adapter id, verified, message and line. These come from the
   `setBreakpoints` answer, read in the order sent, and from `breakpoint` events by adapter id.
   - A breakpoint shows verified when any session verified it.
@@ -219,6 +236,17 @@ root>.json`, written atomically. If the file is damaged, it is moved aside to `�
 - **Exception filters:** the ones chosen are remembered per adapter type; otherwise the adapter's defaults.
 - **Run to Cursor:** a breakpoint for one session only. It is never shown or saved, and goes at that session's next
   stop or end. The registry then sends the file again.
+- **Triggered breakpoints** (`Op::Trigger {id, by}`, `triggered_by` in the saved store): left out of a session's
+  `send_list` until that session stops on the trigger. `Store::hit(session, hitBreakpointIds)` maps the adapter's
+  ids back through `bound` and arms what they trigger for that session alone; the registry sends those files again at
+  the stop. A session's arming goes when it ends; the view's `waiting` is true while no session has armed it.
+  Removing a trigger makes what it held plain again (`drain_touched` names those files to send).
+- **Data breakpoints** (`debug/data-breakpoint {op: add|remove|list, session, reference, name | view, node,
+  access_type?, data_id?}`): `dataBreakpointInfo` names the variable (no `dataId`: refused with the adapter's
+  `description`), then the session's whole list goes in `setDataBreakpoints`. `access_type` is `write` when absent,
+  as VS Code's Break on Value Change sends it: lldb-dap's own default also stops on reads, before the value changes. They live in the store per session
+  (`data_add`, `data_answer`, `data_view`), never saved, and go when it ends; the Run and Debug view lists them under
+  Breakpoints (`kind: "data"`). Adapters without `supportsDataBreakpoints` are refused.
 
 The registry starts each session with the store's breakpoints, and sends a changed file to every session of the
 root at once. It tells the editors with the `debug-breakpoints` event: the file's view, with its root. The editors use `debug/breakpoints` (`{root, path?, op?}`: an operation by id, answered with the file's view) and
@@ -246,13 +274,16 @@ roots `debug/trust` called trusted and each root's last started configuration.
   `stop-and-kill`, `disconnect`), `debug/select {session, thread?, frame}`, and `debug/trust {root, trusted}`, whose
   revocation stops the root's sessions.
 - `debug/source {session, ref}`: the adapter's `source` request for a frame with no file, answered `{text, mime?}`.
+- `debug/breakpoint-locations {session, path, line}`: the adapter's `breakpointLocations` for the line, answered
+  `{locations: [{line, column, end_line?, end_column?}]}` with columns turned back into characters from the file's
+  lines (`breakpoints::chars_of`); empty when the adapter lacks `supportsBreakpointLocationsRequest`.
 - `debug/install {adapter, adapters?}`: the adapter's `:install` entry carried out (see Adapters); the answer says what
   was installed. A system package's, an adapter without an entry and an unknown id are errors (conformance
   `debug/install-refusals`; the downloads are the unit tests' `debug::tests_install`, from local files).
 
 Adapters start in the root with the shell's environment (`env/set`), each in its own process group: a stdio adapter
 over pipes; a TCP adapter with stdin on `/dev/null`, on a free port of 127.0.0.1 that the hub connects to within 5 s
-(`LISTEN_WITHIN`), with a child session (`startDebugging`) on a second connection to the same port. They are found on
+(`LISTEN_WITHIN`) once the adapter itself listens there, with a child session (`startDebugging`) on a second connection to the same port. They are found on
 `PATH` or in `<data>/debug-adapters` (debugpy in its `venv/`). `debugServer` connects to 127.0.0.1 and starts nothing.
 An adapter that goes on its own ends its session with the end of its stderr in the reason.
 
@@ -696,13 +727,34 @@ Every session the hub starts is recorded (`debug/record.rs`, `Records`; the hub'
   the run says so); the rest are thinned and counted; a fork's run keeps every hit. "Probe the Result"
   (`probes::next_line`) places the probe on the next line that runs, past continuation lines, blanks and comments. A
   project's probes are kept in `<state>/debug-probes/<xxh3 of root>.json`.
-- **The run file** (`debug/runfile.rs`): `<state>/debug/runs/<run>.drun`, `DRUN1\n`, then blocks (u32 raw length, u32
-  compressed length, zstd) of JSON-lines frames, 64 KB raw each; `<run>.drun.idx` indexes blocks, stops and each
-  probe's hits. Each stop's capture (threads, the stack, the selected frame's scopes and variables) is cut to 64 KB:
+- **The run file** (`debug/runfile.rs`): `<state>/debug/runs/<run>.drun`, `DRUN2\n` and a 32-byte salt, then blocks
+  (u32 raw length, u32 sealed length, the sealed zstd bytes) of JSON-lines frames, 64 KB raw each; `<run>.drun.idx`
+  (sealed JSON) indexes blocks, stops and each probe's hits. Each stop's capture (threads, the stack, the selected frame's scopes and variables) is cut to 64 KB:
   the last scope's variables first, then frames past the selected one, then threads. A file holds 64 MB: past that
   the oldest hits go (rewritten to three quarters), never a stop.
 - **The record** (`<run>.json`, `RunMeta`) is also an Urdr entity of kind `debug_run` (`norn::write::debug`), written
-  in order on one task, `recording` then `ended`.
+  in order on one task, `recording` then `ended`. Its `start` (the launch's resolved configuration and inputs) is
+  sealed on disk (`{"sealed": hex(salt, nonce, sealed JSON)}`) and left out of the entity; the rest (ids, root, times,
+  size, pinned, task) stays plain, which is what retention reads.
+- **Sealed at rest** (`debug/runkey.rs`, spec §19.2): one 32-byte key in the user's keyring; each file's key is
+  HKDF-SHA256 of it with the file's salt; every block, the index and the start are ChaCha20-Poly1305 (`ring`) with a
+  random nonce in front and the piece's name as associated data. A rewrite under the cap keeps the salt (new nonces).
+  `Records::unlock` reads the key at the hub's start and before each `debug/run*` call, never making one;
+  `begin` makes it on the first recording, in an unlocked keyring only. No key: `begin` records nothing and
+  broadcasts `debug-recording-off {session, root, why}` (the timeline says it once per reason); reads answer "cannot
+  be read until the keyring unlocks"; a file under another key (the keyring lost its key) answers "cannot be read";
+  `prune` needs no key. The key, derived keys, salts and nonces are never logged; key bytes are `Zeroizing`.
+  - **Linux**: the Secret Service's calls are made one by one over zbus 6 (tokio, `default-features = false`,
+    `proxy` only; the `service` and `p2p` features are for the tests' fake), not through a client crate: the
+    `secret-service` crate runs any Prompt it is handed (its `create_item`), and the hub never prompts. The calls are
+    `ReadAlias("default")` (`/`: no default collection, which counts as no keyring, since making one would prompt),
+    the collection's `Locked`, `OpenSession("plain")` (the session bus is the boundary), `SearchItems` / `GetSecret`,
+    `CreateItem`, and `Dismiss` on a prompt handed back. Never `Unlock`, `CreateCollection` or `Prompt`:
+    `debug::tests_runkey` serves a fake Secret Service on a socket pair that records every call and fails if one of
+    those three is made.
+  - **macOS**: the login keychain's generic password `drgnx` / `debug-runs` (`security-framework`), with
+    `SecKeychain::disable_user_interaction` held around each call: locked is `errSecInteractionNotAllowed`, never a
+    dialog. `debug::tests_keychain` runs on the macOS runners against a throwaway keychain (unlocked, then locked).
 - **Retention** (`Records::prune`, after every run's end): 14 days, except pinned runs and runs whose task is open,
   then 2 GB per project, oldest first; a pruned run's file, snapshot ref and entity go.
 - **Ordering**: `RunHit.seq` and `RunStop.index` come from one counter, so "the hits before stop k" is
