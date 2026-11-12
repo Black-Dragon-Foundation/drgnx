@@ -61,7 +61,7 @@ pub fn priority_of(starter: &Starter, background: bool, from: Origin) -> Priorit
         Origin::Upkeep => Priority::P5,
         Origin::Request => match starter {
             Starter::User => Priority::P1,
-            Starter::Session(_) => Priority::P3,
+            Starter::Session(_) | Starter::Sealed(_) => Priority::P3,
         },
     }
 }

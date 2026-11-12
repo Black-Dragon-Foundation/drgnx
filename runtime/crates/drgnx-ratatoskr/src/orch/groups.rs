@@ -3,24 +3,30 @@
 //!
 //! The batch's combined commit is the line's HEAD with each member's tip merged in order (`git merge-tree` and
 //! `git commit-tree`: no worktree, no ref).  The pack's groups command runs in a detached worktree of the line's HEAD
-//! (the base's own tool and `test/affected.eld`) over HEAD..combined; each group it names runs at the combined commit
-//! through the queue as the user's job, its end recorded as evidence of the batch (`batch:JOB@TREE`).
+//! (the base's own tool and `test/affected.eld`) over HEAD..combined, as a gate run in its time box; each group it
+//! names runs at the combined commit as a gate run, its end recorded as evidence of the batch (`batch:JOB@TREE`).
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use runstav::methods::exec::ExecStatus;
 use vordr::batch::Ready;
 use vordr::groups::{Outcome, command, judge, parse};
 use vordr::pack::{Check, Pack};
+use vordr::rows::Class;
 
 use crate::front::Front;
-use crate::orch::gates::{git, run_of, start};
+use crate::orch::gates::{gate_sid, git, run_of, start};
 
 /// The groups each combined tree needs, by tree key (the command runs once per tree).
 #[derive(Default)]
 pub struct Listed {
     by_tree: Mutex<HashMap<String, Vec<Check>>>,
+    /// The listing job running for a tree.
+    running: Mutex<HashMap<String, String>>,
+    /// A tree's listings that ended without groups: class and what the run said, oldest first.
+    ends: Mutex<HashMap<String, Vec<(Class, String)>>>,
 }
 
 /// What the groups say about a batch.
@@ -68,34 +74,168 @@ pub fn combined(dir: &Path, batch: &[Ready]) -> Result<(String, String, String),
     Ok((head, prev, tree))
 }
 
-/// The groups the line's own tool names for HEAD..COMMIT: TEMPLATE run in a detached worktree of HEAD beside DIR.
-/// Blocking.
-fn list(dir: &Path, template: &[String], head: &str, commit: &str) -> Result<Vec<Check>, String> {
-    let argv = command(template, &format!("{head}..{commit}"));
-    let Some((prog, args)) = argv.split_first() else {
-        return Ok(Vec::new());
-    };
-    let wt = dir.with_file_name(format!(
+/// The groups command's time box: the line's tool reads a diff and prints JSON.
+const LISTING_TIMEBOX_S: u64 = 300;
+
+/// The file in the listing's tree the groups command's output goes to (its log keeps its errors).
+const LISTING_OUT: &str = ".drgnx-groups.json";
+
+/// The runs in EVIDENCE made with this machine's env stamp, here (`vordr::gates::current`).
+fn here(evidence: &[vordr::evidence::Evidence]) -> Vec<vordr::evidence::Evidence> {
+    vordr::gates::current(
+        evidence,
+        crate::exec::env_stamp(),
+        &crate::exec::local_platform(),
+    )
+}
+
+/// The listing's tree for COMMIT beside the line's tree DIR.
+fn listing_tree(dir: &Path, commit: &str) -> PathBuf {
+    dir.with_file_name(format!(
         "{}.groups-{}",
         dir.file_name().and_then(|n| n.to_str()).unwrap_or("line"),
         &commit[..commit.len().min(12)]
-    ));
-    let w = wt.to_string_lossy().into_owned();
-    git(dir, &["worktree", "add", "-q", "--detach", &w, head])?;
-    let out = std::process::Command::new(wt.join(prog))
-        .args(args)
-        .current_dir(&wt)
-        .output();
-    let _ = git(dir, &["worktree", "remove", "--force", &w]);
-    let out = out.map_err(|e| format!("{}: {e}", argv.join(" ")))?;
-    if !out.status.success() {
-        return Err(format!(
-            "{}: {}",
-            argv.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+    ))
+}
+
+/// The exec parameters of the groups command TEMPLATE over RANGE in the detached tree WT: the line's own program,
+/// its output to [`LISTING_OUT`], in its time box, on this machine (the hub reads the file).
+fn listing_params(wt: &Path, template: &[String], range: &str) -> serde_json::Value {
+    let argv = command(template, range);
+    let mut sh = vec![
+        "sh".to_owned(),
+        "-c".to_owned(),
+        format!("\"$0\" \"$@\" > {LISTING_OUT}"),
+    ];
+    if let Some((prog, args)) = argv.split_first() {
+        sh.push(wt.join(prog).to_string_lossy().into_owned());
+        sh.extend(args.iter().cloned());
     }
-    parse(&String::from_utf8_lossy(&out.stdout))
+    serde_json::json!({"argv": sh, "cwd": wt.to_string_lossy(), "timebox_s": LISTING_TIMEBOX_S, "local_only": true})
+}
+
+/// How a listing run ended (STATUS, EXIT, the output file's TEXT): its groups, or the class of a run without them.
+fn listing_end(
+    status: ExecStatus,
+    exit: Option<i32>,
+    text: Option<&str>,
+) -> Result<Vec<Check>, Class> {
+    match status {
+        ExecStatus::TimedOut => Err(Class::Timeout),
+        ExecStatus::Lost | ExecStatus::Infra => Err(Class::Infra),
+        ExecStatus::Done if exit == Some(0) => text.and_then(|t| parse(t).ok()).ok_or(Class::Error),
+        _ => Err(Class::Error),
+    }
+}
+
+/// Whether the listings that ended without groups (ENDS: class and what the run said, oldest first) hold the batch:
+/// an error at once (the same command fails the same way), a timeout or the machine's end the second time.
+fn listing_hold(ends: &[(Class, String)]) -> Option<String> {
+    let (class, said) = ends.last()?;
+    if *class == Class::Error {
+        return Some(format!("the groups command failed (error): {said}"));
+    }
+    (ends.len() >= 2).then(|| {
+        format!(
+            "the groups command ended twice without its groups ({}): {said}",
+            vordr::redfirst::class_word(Some(*class))
+        )
+    })
+}
+
+/// The groups the line's own tool names for HEAD..COMMIT (TREE the combined tree key): the pack's command runs as a
+/// gate run in a detached worktree of HEAD beside DIR, in an agent's sandbox and its time box.  Ok(Err(gate)) while
+/// it runs, or when its ends hold the batch.
+async fn listing(
+    front: &Front,
+    dir: &Path,
+    template: &[String],
+    head: &str,
+    commit: &str,
+    tree: &str,
+) -> Result<Result<Vec<Check>, Gate>, String> {
+    let wt = listing_tree(dir, commit);
+    let running = front.groups.running.lock().unwrap().get(tree).cloned();
+    if let Some(id) = running {
+        let Some(done) = front.core.exec.done(&id) else {
+            return Ok(Err(Gate::Wait(
+                "the batch's groups are being listed".into(),
+            )));
+        };
+        front.groups.running.lock().unwrap().remove(tree);
+        let text = std::fs::read_to_string(wt.join(LISTING_OUT)).ok();
+        let end = listing_end(done.status, done.exit, text.as_deref());
+        let (d, w) = (dir.to_owned(), wt.clone());
+        let _ = crate::clock::blocking(move || remove_tree(&d, &w)).await;
+        match end {
+            Ok(g) => {
+                front.groups.ends.lock().unwrap().remove(tree);
+                return Ok(Ok(g));
+            }
+            Err(class) => {
+                let said = front.core.exec.log_slice(&id, 0, 3).join(" / ");
+                let hold = {
+                    let mut ends = front.groups.ends.lock().unwrap();
+                    let e = ends.entry(tree.to_owned()).or_default();
+                    e.push((class, said));
+                    listing_hold(e)
+                };
+                if let Some(why) = hold {
+                    return Ok(Err(Gate::Hold(why, tree.to_owned())));
+                }
+            }
+        }
+    }
+    let (d, w, h) = (dir.to_owned(), wt.clone(), head.to_owned());
+    crate::clock::blocking(move || {
+        git(
+            &d,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                &w.to_string_lossy(),
+                &h,
+            ],
+        )
+        .map(|_| ())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let params =
+        serde_json::from_value(listing_params(&wt, template, &format!("{head}..{commit}")))
+            .map_err(|e| e.to_string())?;
+    let gate = crate::exec::Sealed {
+        label: gate_sid("groups", &wt),
+        tree: wt.clone(),
+    };
+    match crate::exec::start_sealed(front, &gate, params).await {
+        Ok(s) => {
+            front
+                .groups
+                .running
+                .lock()
+                .unwrap()
+                .insert(tree.to_owned(), s.id);
+            Ok(Err(Gate::Wait(
+                "the batch's groups are being listed".into(),
+            )))
+        }
+        Err(e) => {
+            let d = dir.to_owned();
+            let _ = crate::clock::blocking(move || remove_tree(&d, &wt)).await;
+            Err(e.message)
+        }
+    }
+}
+
+/// Remove the listing's detached tree WT of the line's tree DIR.  Blocking.
+fn remove_tree(dir: &Path, wt: &Path) {
+    let _ = git(
+        dir,
+        &["worktree", "remove", "--force", &wt.to_string_lossy()],
+    );
 }
 
 /// The groups gate of JOB's BATCH (in the job's tree DIR, HEAD its line) under PACK: pass when the pack runs no
@@ -125,9 +265,30 @@ pub async fn gate(
                 head.clone(),
                 commit.clone(),
             );
-            let g = crate::clock::blocking(move || list(&d, &t, &h, &c))
-                .await
-                .map_err(|e| e.to_string())??;
+            let g = match listing(front, &d, &t, &h, &c, &tree).await? {
+                Ok(g) => g,
+                Err(Gate::Hold(why, tree)) => {
+                    // the user may waive a held listing too
+                    let members: Vec<String> = batch.iter().map(|m| m.task.clone()).collect();
+                    let waivers = front
+                        .writer
+                        .db
+                        .read(move |c| {
+                            let mut w = Vec::new();
+                            for t in &members {
+                                w.extend(norn::read::evidence::of_task(c, t)?);
+                            }
+                            Ok(w)
+                        })
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    if vordr::gates::waived(&waivers, &tree).is_some() {
+                        return Ok(Gate::Pass);
+                    }
+                    return Ok(Gate::Hold(why, tree));
+                }
+                Err(gate) => return Ok(gate),
+            };
             front
                 .groups
                 .by_tree
@@ -159,6 +320,8 @@ pub async fn gate(
         tracing::info!("batch {key}: waived by the user: {why}");
         return Ok(Gate::Pass);
     }
+    // a group counts a run made with this machine's toolchain, here
+    let evidence = here(&evidence);
     // a row that failed, then passed on the same tree holds the batch: flakes are fixed at the cause
     let flakes = vordr::gates::flake_holds(pack, &evidence);
     if !flakes.is_empty() {
@@ -190,7 +353,9 @@ pub async fn gate(
         }
         Outcome::Missing(missing) => {
             for g in &missing {
-                start(front, &key, dir, &commit, &tree, &run_of(g)).await?;
+                if let Some(why) = start(front, &key, dir, &commit, &tree, &run_of(g)).await? {
+                    return Ok(Gate::Hold(format!("the group {}: {why}", g.name), tree));
+                }
             }
             let names: Vec<&str> = missing.iter().map(|g| g.name.as_str()).collect();
             Ok(Gate::Wait(format!(
@@ -221,7 +386,7 @@ pub(crate) async fn follow(front: &Front, title: &str, data: serde_json::Value) 
 }
 
 /// The batch's RED groups run again at the line's HEAD and at each member's tip merged alone onto it (in parallel,
-/// one round: `vordr::reruns`).  Rows red at the line hold it (a followup); tips red alone go back; every tip green
+/// one round: `vordr::reruns`; a one-member batch's tip alone is its own tree, so a second run there).  Rows red at the line hold it (a followup); tips red alone go back; every tip green
 /// alone, the later one goes back (an interaction red).  KNOWN rows (frozen) never count.
 #[allow(clippy::too_many_arguments)]
 async fn reruns(
@@ -234,7 +399,7 @@ async fn reruns(
     tree: &str,
     known: &(dyn Fn(&str) -> bool + Sync),
 ) -> Result<Gate, String> {
-    use vordr::gates::{State, selector_of, state};
+    use vordr::gates::{State, selector_of, state_after};
     use vordr::reruns::{Verdict, verdict};
     // (task, commit, tree): the line's first ("" its task), then each tip alone
     let (d, h, b) = (dir.to_owned(), head.to_owned(), batch.to_vec());
@@ -266,11 +431,16 @@ async fn reruns(
         })
         .await
         .map_err(|e| e.to_string())?;
+    let evidence: Vec<_> = evidence.iter().map(|e| here(e)).collect();
     let mut rows: Vec<Option<Vec<String>>> = Vec::new();
+    // a one-member batch's tip alone is the batch's tree: its red groups run there once more first (a pass then is a
+    // flake, which holds at the next look; a second fail is the tip's red)
+    let alone_again = batch.len() == 1;
     for (i, (_, commit, t)) in runs.iter().enumerate() {
         let mut failed: Option<Vec<String>> = Some(Vec::new());
+        let need = if i > 0 && alone_again { 2 } else { 1 };
         for g in red {
-            match state(&evidence[i], t, &selector_of(g)) {
+            match state_after(&evidence[i], t, &selector_of(g), need) {
                 State::Green => {}
                 State::Red(r) => {
                     if let Some(f) = failed.as_mut() {
@@ -278,7 +448,12 @@ async fn reruns(
                     }
                 }
                 State::Missing => {
-                    start(front, &keys[i], dir, commit, t, &run_of(g)).await?;
+                    if let Some(why) = start(front, &keys[i], dir, commit, t, &run_of(g)).await? {
+                        return Ok(Gate::Hold(
+                            format!("the group {}: {why}", g.name),
+                            t.clone(),
+                        ));
+                    }
                     failed = None;
                 }
             }
@@ -331,7 +506,59 @@ async fn reruns(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use runstav::methods::exec::ExecStatus;
     use std::process::Command;
+    use vordr::rows::Class;
+
+    #[test]
+    fn the_groups_listing_is_a_time_boxed_run_whose_timeout_is_no_red() {
+        // the line's tool runs as a gate run: its own time box, this machine only, its output to a file in its tree
+        let p = listing_params(
+            Path::new("/w/line.groups-ab"),
+            &["bin/affected".into(), "%r".into()],
+            "h..c",
+        );
+        assert_eq!(p["timebox_s"], serde_json::json!(LISTING_TIMEBOX_S));
+        assert_eq!(p["local_only"], serde_json::json!(true));
+        assert_eq!(p["cwd"], serde_json::json!("/w/line.groups-ab"));
+        let argv: Vec<String> = serde_json::from_value(p["argv"].clone()).unwrap();
+        assert_eq!(argv[..2], ["sh", "-c"]);
+        assert_eq!(
+            argv[2..],
+            [
+                format!("\"$0\" \"$@\" > {LISTING_OUT}"),
+                "/w/line.groups-ab/bin/affected".into(),
+                "h..c".into()
+            ]
+        );
+        // how it ended: its groups, or the class of a run without them
+        let text = r#"{"groups": [{"id": "unit", "dir": "", "run": ["bin/drgnx", "test"]}]}"#;
+        assert_eq!(
+            listing_end(ExecStatus::Done, Some(0), Some(text)).map(|g| g.len()),
+            Ok(1)
+        );
+        assert_eq!(
+            listing_end(ExecStatus::TimedOut, None, None),
+            Err(Class::Timeout)
+        );
+        assert_eq!(listing_end(ExecStatus::Lost, None, None), Err(Class::Infra));
+        assert_eq!(
+            listing_end(ExecStatus::Done, Some(2), Some("")),
+            Err(Class::Error)
+        );
+        assert_eq!(
+            listing_end(ExecStatus::Done, Some(0), Some("not json")),
+            Err(Class::Error)
+        );
+        // a timeout or the machine's end lists again once, then holds; an error holds at once
+        let end = |c| (c, String::from("said"));
+        assert_eq!(listing_hold(&[end(Class::Timeout)]), None);
+        assert!(
+            listing_hold(&[end(Class::Timeout), end(Class::Infra)])
+                .is_some_and(|w| w.contains("twice") && w.contains("infra"))
+        );
+        assert!(listing_hold(&[end(Class::Error)]).is_some_and(|w| w.contains("(error): said")));
+    }
 
     fn sh(dir: &Path, args: &[&str]) -> String {
         let out = Command::new("git")

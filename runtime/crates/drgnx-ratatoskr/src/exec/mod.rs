@@ -50,6 +50,20 @@ use unit::Meta;
 pub enum Starter {
     Session(String),
     User,
+    /// The hub, for a command it doesn't trust (a gate's rerun of an agent's command, a bisect's predicate): run in
+    /// the Session launch shape, sealed to its tree, under this label (`sealed-` and letters, digits, `-`, `_`), which
+    /// no session holds: its events name no session, so they reach no agent ([`start_sealed`]).
+    Sealed(String),
+}
+
+impl Starter {
+    /// The agent session the job belongs to (its events and wake go there); none for the user's or a sealed job.
+    pub fn session(&self) -> Option<String> {
+        match self {
+            Starter::Session(s) => Some(s.clone()),
+            Starter::User | Starter::Sealed(_) => None,
+        }
+    }
 }
 
 /// What a job's output is read as.
@@ -352,6 +366,9 @@ fn write_infra(dir: &Path, reason: &str) {
 #[derive(Serialize, Deserialize)]
 struct Pending {
     session: Option<String>,
+    /// A sealed job's label ([`Starter::Sealed`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sealed: Option<String>,
     cwd: PathBuf,
     worktree: Option<PathBuf>,
     argv: Vec<String>,
@@ -367,9 +384,10 @@ struct Pending {
 impl Pending {
     fn of(spec: &ExecSpec) -> Pending {
         Pending {
-            session: match &spec.starter {
-                Starter::Session(s) => Some(s.clone()),
-                Starter::User => None,
+            session: spec.starter.session(),
+            sealed: match &spec.starter {
+                Starter::Sealed(l) => Some(l.clone()),
+                _ => None,
             },
             cwd: spec.cwd.clone(),
             worktree: spec.worktree.clone(),
@@ -384,7 +402,10 @@ impl Pending {
 
     fn into_spec(self) -> ExecSpec {
         ExecSpec {
-            starter: self.session.map_or(Starter::User, Starter::Session),
+            starter: match (self.sealed, self.session) {
+                (Some(l), _) => Starter::Sealed(l),
+                (None, s) => s.map_or(Starter::User, Starter::Session),
+            },
             cwd: self.cwd,
             worktree: self.worktree,
             argv: self.argv,
@@ -530,13 +551,7 @@ async fn facts_of(spec: &ExecSpec) -> Option<vordr::facts::Facts> {
     let env = spec.user.env.clone();
     let image = spec.container.as_ref().map(|c| c.image.clone());
     crate::clock::blocking(move || {
-        let top = cwd
-            .ancestors()
-            .find(|d| d.join(".git").exists())?
-            .to_path_buf();
-        let inputs = sleipnir::sync::capture::capture(&top, &[]).ok()?;
-        let overlay =
-            (!inputs.manifest.is_empty()).then(|| sleipnir::sync::capture::input_key(&inputs));
+        let (top, tree_key) = tree_key_at(&cwd)?;
         let rel = cwd.strip_prefix(&top).ok()?.to_string_lossy().into_owned();
         let mut stamp = env_stamp().to_string();
         if let Some(i) = image {
@@ -544,15 +559,34 @@ async fn facts_of(spec: &ExecSpec) -> Option<vordr::facts::Facts> {
             stamp.push_str(&i);
         }
         Some(vordr::facts::Facts {
-            tree_key: vordr::facts::tree_key(&inputs.tree, overlay.as_deref()),
+            tree_key,
             env_stamp: stamp,
-            platform: format!("{}-{}/local", std::env::consts::OS, std::env::consts::ARCH),
+            platform: local_platform(),
             selector: vordr::facts::selector(&rel, &argv, &env),
         })
     })
     .await
     .ok()
     .flatten()
+}
+
+/// This machine's platform in a job's facts: `OS-ARCH/local`.
+pub(crate) fn local_platform() -> String {
+    format!("{}-{}/local", std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// The git tree holding CWD and its key now (the commit's tree, plus the overlay's input key when anything is
+/// uncommitted).  Blocking.
+fn tree_key_at(cwd: &Path) -> Option<(PathBuf, String)> {
+    let top = cwd
+        .ancestors()
+        .find(|d| d.join(".git").exists())?
+        .to_path_buf();
+    let inputs = sleipnir::sync::capture::capture(&top, &[]).ok()?;
+    let overlay =
+        (!inputs.manifest.is_empty()).then(|| sleipnir::sync::capture::input_key(&inputs));
+    let key = vordr::facts::tree_key(&inputs.tree, overlay.as_deref());
+    Some((top, key))
 }
 
 fn now() -> f64 {
@@ -944,7 +978,7 @@ impl Inner {
             .filter(|c| c.is_dir())
             .ok_or_else(|| refusal(format!("{} is not a folder", spec.cwd.display())))?;
         match (&spec.starter, spec.worktree.take()) {
-            (Starter::Session(_), Some(wt)) => {
+            (Starter::Session(_) | Starter::Sealed(_), Some(wt)) => {
                 let wt = std::fs::canonicalize(&wt)
                     .map_err(|_| refusal(format!("{} is not a folder", wt.display())))?;
                 if !cwd.starts_with(&wt) {
@@ -956,7 +990,7 @@ impl Inner {
                 }
                 spec.worktree = Some(wt);
             }
-            (Starter::Session(_), None) => {
+            (Starter::Session(_) | Starter::Sealed(_), None) => {
                 return Err(refusal("a session's job needs its worktree"));
             }
             (Starter::User, _) => spec.worktree = Some(cwd.clone()),
@@ -1030,10 +1064,7 @@ impl Inner {
     fn enqueue(&self, id: &str, dir: &Path, spec: &ExecSpec) -> Result<(), Refusal> {
         let _ = dir;
         let started = now();
-        let session = match &spec.starter {
-            Starter::Session(s) => Some(s.clone()),
-            Starter::User => None,
-        };
+        let session = spec.starter.session();
         self.save_meta(&Meta {
             id: id.to_string(),
             session: session.clone(),
@@ -1101,10 +1132,7 @@ impl Inner {
         }
         Submit {
             id: id.to_string(),
-            session: match &spec.starter {
-                Starter::Session(s) => Some(s.clone()),
-                Starter::User => None,
-            },
+            session: spec.starter.session(),
             own: spec.priority(),
             spec: fspec,
             place,
@@ -1528,17 +1556,21 @@ impl Inner {
                 (s, None)
             }
             // the conformance lane has no sandbox for a job: its jobs run as the user's do
-            Starter::Session(_) if unsandboxed_for_tests(&self.hooks) => (
+            Starter::Session(_) | Starter::Sealed(_) if unsandboxed_for_tests(&self.hooks) => (
                 plain_spec(&spec, agent_plain_env(&self.hooks.shell_env)),
                 None,
             ),
-            Starter::Session(sid) => {
+            // a sealed job's label keys its sandbox's folders as a session's id does
+            Starter::Session(sid) | Starter::Sealed(sid) => {
                 let worktree = spec
                     .worktree
                     .clone()
                     .ok_or_else(|| refusal("a session's job needs its worktree"))?;
                 // the lock's protected files stay read-only for a job as for the session itself
+                // the variables the start named (a sealed rerun's test selector; a session's job names none),
+                // then the key socket's, last, so a named variable never redirects it
                 let mut env = tool_env(&self.hooks.shell_env);
+                env.extend(spec.user.env.iter().cloned());
                 env.extend(key_env.clone());
                 let plan = LaunchPlan {
                     argv: spec.argv.iter().map(OsString::from).collect(),
@@ -1654,10 +1686,7 @@ impl Inner {
         let started = now();
         let mut meta = Meta {
             id: id.to_string(),
-            session: match &spec.starter {
-                Starter::Session(s) => Some(s.clone()),
-                Starter::User => None,
-            },
+            session: spec.starter.session(),
             kind: spec.kind.name().to_string(),
             argv: spec.argv.clone(),
             cwd: spec.cwd.display().to_string(),
@@ -1886,6 +1915,26 @@ impl Inner {
         }
         let Some(meta) = self.meta(id) else { return };
         let dir = self.dir(id);
+        // a job here ran on its tree as it was while it ran (a runner's ran on the inputs frozen at its submit): when
+        // the tree's key moved since the submit, its facts go, so it is no one's evidence and never reused
+        if meta.machine.as_deref().is_none_or(|m| m == "local")
+            && let Some(f) = self.facts(id)
+        {
+            let cwd = PathBuf::from(&meta.cwd);
+            let now = crate::clock::blocking(move || tree_key_at(&cwd).map(|(_, k)| k))
+                .await
+                .ok()
+                .flatten();
+            // the commit's tree: files left uncommitted while it ran (a session's own, a run's outputs) are no move
+            let commit = |k: &str| k.split('+').next().unwrap_or_default().to_owned();
+            if now.as_deref().map(commit) != Some(commit(&f.tree_key)) {
+                tracing::info!(
+                    "job {id}: its tree moved while it ran ({} → {now:?}): no facts kept",
+                    f.tree_key
+                );
+                let _ = std::fs::rename(dir.join(FACTS), dir.join("facts.moved.json"));
+            }
+        }
         let exit = unit::read_exit(&dir);
         let status = match std::fs::read_to_string(dir.join("why")).as_deref() {
             Ok("stopped") => ExecStatus::Stopped,
@@ -2670,6 +2719,43 @@ async fn decide_session_job(
 }
 
 pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Error> {
+    start_as(f, c, p, None).await
+}
+
+/// A job the hub starts for a command it doesn't trust (`orch::gates`' runs: the command an agent ran, or the pack's
+/// over a tree an agent wrote; a bisect's predicate).  It runs in an agent's sandbox (the Session launch shape) with
+/// the tree TREE its only writable folder, on this machine, as [`Starter::Sealed`] `sealed-LABEL`: no session holds
+/// it, so its events reach no agent; the hub's own decision, so no matrix cell is asked.
+pub struct Sealed {
+    /// Letters, digits, `-` and `_`: the job's sandbox folders are keyed by it.
+    pub label: String,
+    pub tree: PathBuf,
+}
+
+/// `exec/start` of the sealed job S, made by the hub (P names no priority, keys or network).
+pub async fn start_sealed(f: &Front, s: &Sealed, mut p: StartParams) -> Result<Started, Error> {
+    if s.label.is_empty()
+        || !s
+            .label
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(crate::agents::session::invalid(
+            "label",
+            "a sealed job's label: letters, digits, - and _",
+        ));
+    }
+    // a runner elsewhere would not run it in this sandbox
+    p.local_only = Some(true);
+    start_as(f, &crate::runner::user(), p, Some(s)).await
+}
+
+async fn start_as(
+    f: &Front,
+    c: &Caller,
+    p: StartParams,
+    gate: Option<&Sealed>,
+) -> Result<Started, Error> {
     // the hub sets an agent's job's priority; only the user's connections choose one
     if c.sid.is_some() && p.priority.is_some() {
         return Err(crate::agents::session::invalid(
@@ -2677,9 +2763,17 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
             "only the user's connections set a job's priority (background lowers it)",
         ));
     }
-    // an agent's job never changes the user's packages: the hub's rule, whatever the sandbox would let through
-    if c.sid.is_some() {
+    // an agent's job never changes the user's packages: the hub's rule, whatever the sandbox would let through (a
+    // gate's run is an agent's command)
+    if c.sid.is_some() || gate.is_some() {
         let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
+        // nor pushes: a push goes through the session's shell tool, where the push gate and the matrix see it
+        if crate::orch::push::parse(&argv.join(" ")) != crate::orch::push::Parsed::NotPush {
+            return Err(error(
+                ErrorCode::NotAllowed,
+                "argv: a job never pushes; push from your shell tool, where the push gate judges each ref it sends",
+            ));
+        }
         if let Some(why) = packages::changes_packages(&argv) {
             return Err(error(
                 ErrorCode::NotAllowed,
@@ -2727,14 +2821,16 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         .map(|c| PathBuf::from(c.as_str()))
         .ok_or_else(|| error(ErrorCode::InvalidParams, "cwd: the folder the job runs in"))?;
     // A session's job works in the session's own worktree (or a folder inside it), whatever folder the request names.
-    let worktree = match &c.sid {
-        Some(sid) => Some(f.core.agents.worktree(sid).ok_or_else(|| {
+    // A gate's run works in its detached tree.
+    let worktree = match (gate, &c.sid) {
+        (Some(g), _) => Some(g.tree.clone()),
+        (None, Some(sid)) => Some(f.core.agents.worktree(sid).ok_or_else(|| {
             error(
                 ErrorCode::NotAllowed,
                 format!("session {sid} is not held by this hub"),
             )
         })?),
-        None => None,
+        (None, None) => None,
     };
     let cwd = match &worktree {
         Some(wt) => confined(&cwd, wt)?,
@@ -2797,7 +2893,10 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         ));
     }
     let spec = ExecSpec {
-        starter: c.sid.clone().map_or(Starter::User, Starter::Session),
+        starter: match gate {
+            Some(g) => Starter::Sealed(format!("sealed-{}", g.label)),
+            None => c.sid.clone().map_or(Starter::User, Starter::Session),
+        },
         cwd,
         worktree,
         argv: p.argv.iter().map(|a| a.to_string()).collect(),

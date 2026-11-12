@@ -1245,7 +1245,10 @@ async fn merge(
                     );
                 }
             };
-            match git.merge_into(&job_tree, &tree, message.as_deref()).await {
+            match git
+                .merge_into(&job_tree, &tree, message.as_deref(), None)
+                .await
+            {
                 Ok(runner::git::MergeOutcome::Merged) => {
                     if let Some(d) = f.dirs.get() {
                         let h = &f.core.history;

@@ -34,7 +34,11 @@ At submit the hub records what a job runs on in its folder's `facts.json` (`vord
 - **selector:** the folder relative to the tree's top, the command, and `DRGNX_TEST_SELECTOR` / `DRGNX_TEST_ONLY` when
   the job sets them.
 
-A job outside a git tree, and a user's server, has no facts and is never evidence. `Runner::start_or_reuse` answers the
+A job on this machine runs on its tree as it is while it runs, so at its end the hub reads the tree's key again: when
+its commit's tree moved since the submit (a commit while the job waited or ran; files left uncommitted in the
+tree while it ran are no move), the facts go (`facts.moved.json`) and the job is no
+one's evidence and never reused (unit test `a_job_whose_tree_moved_under_it_keeps_no_facts`). A runner's job ran on
+the inputs frozen at its submit. A job outside a git tree, and a user's server, has no facts and is never evidence. `Runner::start_or_reuse` answers the
 newest **green** job with equal facts instead of running again (exit 0, no failed row, not on a `shared` runner); a red
 is never reused, and a selector holding one of the rule pack's `no-cache` words (`Runner::set_no_cache`) always runs.
 
@@ -48,6 +52,14 @@ exit, or none), and the gates' own `author-check`, `group`, `full-run`, `review`
 The hub task `orch::evidence::run` records every job that ends whose session works on a task (the session's
 snapshot names it) as that task's `red` or `green`. A job without facts, or one a `shared` runner ran, is never
 evidence. Any matching job counts: a gate never asks for a second run of a tree it has a record for.
+
+**A run without a test result** (its only failing row is `(job)`: a non-zero exit with no failing test is `error`,
+out of time `timeout`, the machine's `infra`) is neither red nor green to any gate (`vordr::evidence::no_result`):
+red first, the author check, the groups and the push gate read it as no run. A gate that would start that run again
+(`vordr::evidence::no_rerun`) holds instead on an `error` (the same command on the same tree fails the same way): "CMD
+failed without a test result (error): the first lines of its output"; an `infra` or `timeout` end it starts once more,
+and holds after the second ("ran twice without a test result"). A run with failing tests and a `timeout` `(job)` row
+is a red. Row `vordr::redfirst::a_run_that_failed_without_a_test_result_is_no_run_anywhere`.
 `orch/evidence {task}` (the user's connections) answers a task's records, oldest first.
 
 ## The rule pack
@@ -83,20 +95,34 @@ the pack, so the user approves it with the plan, and the approval records it as 
 ## The gates before a merge
 
 Once the merge gate allows a task, before the `BeforeCommit` hooks, `orch::gates::before_merge` reads the job's rule
-pack and the task's evidence and runs, in order:
+pack and the task's evidence and runs, in order, on the tip the merge gate checked (`RunGit::checked_tip`, never the
+branch read again); the queue places that tip and the merge takes it only when it is still the checked one (unit test
+`the_merge_takes_only_the_tip_the_gates_judged`):
 
 - **Trailers** (`trailers` on): no commit in base..tip has a `Co-authored-by` line, a "Generated with …" line, or a
   `…-by:` trailer naming a model or its maker (`vordr::gates::trailers`).
 - **Red first** (below).
 - **The author check** (`author-check` on): each of the pack's `:author-check` commands and `:rule-tests` (the rule
   tests alone when only `rule-tests` is on) passed at the tip's tree; its run is the newest job at the tip's tree key
-  with the command's selector (`vordr::gates::state`).
+  with the command's selector, made with this machine's env stamp and platform now (`vordr::gates::current`: an old
+  green after a toolchain bump, or a runner's, is no run; unit test `only_runs_with_this_machines_stamp_and_platform_count`).
 
-A run a gate needs that the hub can make, it starts through the queue as the user's job and waits for
-(`orch::gates::Runs`): an author check at the tip; for red first, the task's own test command (the newest job the
-task ran inside its tree: its folder, command and image) at the test commit, or the red's command at the tip. Each
-runs in a detached worktree of its commit beside the task's tree (uncommitted files in the task's tree are never part
-of it), which goes when the job ends. The job's end is the task's
+A run a gate needs that the hub can make, it starts through the queue and waits for (`orch::gates::Runs`): an author
+check at the tip; for red first, the task's own test command (the newest job the task ran inside its tree: its folder,
+command and image, and the test selector variables its selector names, so the rerun's selector is the job's:
+`vordr::facts::selector_env`) at the test commit, or the red's command at the tip. Each runs in a detached worktree of
+its commit beside the task's tree (uncommitted files in the task's tree are never part of it), which goes when the job
+ends. A run is claimed in the same step as the check that none is in flight (`Runs::claim`), so two gates asking at
+once (two pushes) start it once (unit test `a_run_is_claimed_once_until_it_ends`). The watcher that settles them
+settles every ended run again when it falls behind the job events (`Runs::take_ended`).
+
+**Runs the gates start** are an agent's command, or the pack's over the tree an agent wrote, so they run as an agent's
+job does, as a **sealed job** (`exec::start_sealed`, starter `Starter::Sealed`): in the session's launch shape, on
+this machine, with the detached tree the only folder they can write, the network a session's job has (the provider
+proxy, nothing else) and an agent's package rule; never with the user's environment. Its label is `sealed-gate-` and
+the tree's folder name; a sealed job names no session in its meta, queue record or events, so it wakes no agent and
+asks no matrix cell (the gate's run is the hub's decision). Other hub runs of untrusted commands (a bisect's
+predicate) use the same starter. Unit test `a_sealed_job_names_no_session_and_stays_sealed_in_the_queue`. Row `runner/a-gate-run-keeps-the-agents-sandbox`. The job's end is the task's
 evidence like any other; the next tick looks again. A hold is a `gate` card on the task (key `gates`, `tip` its tree
 key) saying what is wrong; a red-first wait with no run of the task's tests to repeat is a hold too. Its actions:
 **Check again**, **Tell the agent** (the task goes back to its agent with the card's words), **Waive once…** (with a
@@ -106,7 +132,9 @@ reason) and **Drop the task**.
 reason; it passes red first and the author check for that tip only (a new tip needs a new waiver), never the
 trailers. Like the matrix's `always_never`, this is a hard rule below every grant: the store's guard for kind
 `evidence` (`norn::write::evidence::register`) takes a `waiver:` record only from the user's connection and every
-other record only from the hub, so no cell, preset, manager grant or agent tool can write one.
+other record only from the hub, so no cell, preset, manager grant or agent tool can write one. The same guard keeps
+the other records the gates read from agents: a job's `rule_pack` is written with the user's approval or by the hub,
+a `followup` by the hub (the user closes it) (unit test `no_agent_writes_a_rule_pack_or_a_followup`).
 
 **`gate-wait`.** While a task has a gate's run in flight (`Runs::waiting`) the supervisor's `silent` and `lease`
 rules don't hold for its session: the hub is working, not the agent. (The gates run while the task is `in-review`,
@@ -145,7 +173,8 @@ A task whose gates passed is **ready** (`orch::queue`, in memory: after a restar
 gates pass again). The next **batch** is the earliest ready tasks, up to the pack's `:batch-size`, leaving out a task
 whose tip conflicts with an earlier member's (`git merge-tree`): it waits for the next batch, after the earlier one
 merged. A batch stays until its members merged or left the job's review (dropped, sent back, a card); members merge
-one at a time in readiness order, each `--no-ff`. A member whose merge onto the line would cleanly join shared files
+one at a time in readiness order, each `--no-ff`. A batch forms outside the queue's lock (its conflict check is git
+per pair; unit test `a_batch_forms_without_holding_the_queues_lock`). A member whose merge onto the line would cleanly join shared files
 both sides changed since they parted goes back to its agent, told to merge the line in with a note per file. A job
 with no rule pack merges as before, each task as it passes.
 
@@ -159,17 +188,25 @@ green (`orch::groups`, `vordr::groups`):
   commit-tree`: no worktree, no ref moves). Its tree key is the batch's: the same members in any order give the same
   tree, and so do the later members once the first merged, so their turn reuses the runs.
 - **The groups** come from the base's own tool: the command runs in a detached worktree of the line's HEAD with `%r`
-  = `HEAD..COMBINED` (its `test/affected.eld`, never the batch's); listed once per tree.
-- **Each group** runs at the combined commit through the queue as the user's job (a detached worktree that goes when
-  the job ends); its end is evidence of `batch:JOB@TREE`.
-- **Green:** every group's newest run at the tree passed, or failed only rows the base's `test/frozen.eld` lists.
+  = `HEAD..COMBINED` (its `test/affected.eld`, never the batch's); listed once per tree. It runs as a gate run (an
+  agent's sandbox, on this machine) in a time box of 300 s, its output to `.drgnx-groups.json` in that tree; the gate
+  waits while it runs. A listing without groups is never red: a timeout or the machine's end (`timeout`, `infra`)
+  lists once more and holds the second time; a non-zero exit or output that isn't the JSON (`error`) holds at once,
+  with the run's first log lines. The user may waive the hold. Unit test
+  `the_groups_listing_is_a_time_boxed_run_whose_timeout_is_no_red`.
+- **Each group** runs at the combined commit as a gate run (a detached worktree that goes when the job ends); its end
+  is evidence of `batch:JOB@TREE`.
+- **Green:** every group's newest run at the tree (made with this machine's env stamp and platform now) passed, or failed only rows the base's `test/frozen.eld` lists.
   Any other red goes to the reruns (next section).
 
 ## Reruns, interaction reds, flakes
 
 When a batch's groups are red, the red groups run again in parallel, once (never a bisection), at the line's HEAD
 and at each member's tip merged alone onto it (`orch::groups`, judged by `vordr::reruns::verdict`). Each run is
-evidence of `batch:JOB@TREE` for its own tree. The gate waits until every rerun is in; then:
+evidence of `batch:JOB@TREE` for its own tree. A one-member batch's tip alone is the batch's own tree, so there its
+red groups run once more (`vordr::gates::state_after` with two runs): a pass then is a flake (below: a hold, a
+`followup` and the card), a second fail is the tip's red, so the tip goes back. The gate waits until every rerun is
+in; then:
 
 - **The line itself is red:** no tip is blamed. The batch is held on a `gate` card and a `followup` entity (one open
   per title) records the line's failing rows.
@@ -184,10 +221,17 @@ the cause, never listed. A held batch's card offers `Waive once…`, which the g
 ## The push gate
 
 Under a pack with `push-gate` on, a job's agent asking to push (the matrix's `push.ci` or `push.main`) is refused
-until each of the pack's `:push-tiers` has a green run on the exact commit's tree (the agent's `HEAD`) with the env
-stamp the hub has now, on Linux (`vordr::push::judge`, `orch::push`). Runs on another tree, env stamp or platform
-never count. The refusal names the missing tiers, which start through the queue as evidence of `push:JOB@TREE`, or the
-red tiers with their rows; the agent asks again once they are green. A push the gate lets through still meets the
+until each of the pack's `:push-tiers` has a green run on the tree of each commit the push sends, with the env stamp
+the hub has now, on Linux (`vordr::push::judge`, `orch::push`). Runs on another tree, env stamp or platform never
+count. The gate reads the command (`orch::push::parse`): `git` and its global options (`-C DIR`, `-c K=V`,
+`--no-pager`, …), each push in a list of commands (`;`, `&&`, `|`), and the source of each refspec (`+SRC:DST`; none
+named: `HEAD`). A command it can't read is refused, never let by: a shell or another program around the push (`sh -c`,
+`env`, `xargs`), a substitution or quote, another repository (`--git-dir`), every branch at once (`--all`,
+`--mirror`, `--tags`). The refusal names each ref with its commit and the missing tiers, which start through the
+queue as evidence of `push:JOB@TREE`, or the red tiers with their rows; the agent asks again once they are green. A
+job (`exec/start`, `job_start`) of a session, or a sealed job, never pushes: its start is refused (row
+`exec/an-agent-job-never-pushes`). Unit tests `a_push_is_read_with_its_global_options_and_the_refs_it_sends`,
+`the_refusal_names_the_refs_it_judged`. A push the gate lets through still meets the
 matrix, so the push itself stays the user's. A pack whose push gate names no tiers doesn't read, and the gate refuses
 every push of a job recorded with one.
 
@@ -199,8 +243,8 @@ every push of a job recorded with one.
 2. A hub job at the test commit's tree (its tree key) failed rows of class `assert`. A `build` row counts only when
    the pack's `:compile-fail-reds` has its language (cargo's `build` rows are Rust, an ERT row Emacs Lisp) and it
    names a symbol the task's non-test change adds (an item or field of a Rust file above its `#[cfg(test)]`, an Emacs
-   Lisp definition). A `timeout`, `error` or `infra` row is not a red. A test commit whose tests pass at it (the
-   implementation came with them) is held.
+   Lisp definition). A `timeout`, `error` or `infra` row is not a red, and a run with no other failing row is no run
+   ("Evidence"). A test commit whose tests pass at it (the implementation came with them) is held.
 3. A job with the same selector and env stamp at the tip passed the same rows (for a build red: failed none).
 4. The test commit's test lines (a test path's added lines, a Rust file's below its `#[cfg(test)]`) are still at the
    tip: a deleted one that isn't added back holds the task.

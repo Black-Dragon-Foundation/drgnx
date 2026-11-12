@@ -40,6 +40,26 @@ pub fn selector(rel_cwd: &str, argv: &[String], env: &[(String, String)]) -> Str
     out
 }
 
+/// The test selector variables SELECTOR names for the command ARGV run in REL_CWD (as [`selector`] wrote them), or
+/// none when SELECTOR isn't that command's.
+pub fn selector_env(selector_text: &str, rel_cwd: &str, argv: &[String]) -> Vec<(String, String)> {
+    let head = selector(rel_cwd, argv, &[]);
+    let Some(rest) = selector_text.strip_prefix(&head) else {
+        return Vec::new();
+    };
+    let env: Vec<(String, String)> = rest
+        .split('\n')
+        .skip(1)
+        .filter_map(|l| l.split_once('='))
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+    if selector(rel_cwd, argv, &env) == selector_text {
+        env
+    } else {
+        Vec::new()
+    }
+}
+
 /// The variables that narrow what a test command runs.
 pub const SELECTOR_VARS: &[&str] = &["DRGNX_TEST_SELECTOR", "DRGNX_TEST_ONLY"];
 
@@ -54,6 +74,22 @@ pub fn cacheable(selector: &str, no_cache: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A rerun of a job carries the test selector variables its selector names, so the rerun's selector is the
+    /// job's (its evidence lands where the gate looks).
+    #[test]
+    fn a_selectors_variables_are_read_back() {
+        let argv = vec!["sh".to_string(), "-c".to_string(), "a\nb".to_string()];
+        let env = vec![
+            ("DRGNX_TEST_SELECTOR".to_string(), "^a/\\|^b/".to_string()),
+            ("DRGNX_TEST_ONLY".to_string(), "x".to_string()),
+        ];
+        let s = selector("sub", &argv, &env);
+        assert_eq!(selector_env(&s, "sub", &argv), env);
+        assert!(selector_env(&selector("", &argv, &[]), "", &argv).is_empty());
+        // a selector that isn't this command's: none
+        assert!(selector_env(&s, "sub", &argv[..2]).is_empty());
+    }
 
     #[test]
     fn keys_and_selectors() {

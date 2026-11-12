@@ -5,7 +5,7 @@
 //! language), a job with the same selector and env stamp at the tip passed the same rows, and the test commit's test
 //! lines are unchanged at the tip.  A task whose approved body says `**Red:** none (reason)` passes on that line.
 
-use crate::evidence::Evidence;
+use crate::evidence::{Evidence, no_result};
 use crate::pack::Pack;
 use crate::rows::{Class, JOB_ROW, Row, Verdict};
 
@@ -38,7 +38,7 @@ pub enum Decision {
     Hold(String),
 }
 
-fn class_word(c: Option<Class>) -> &'static str {
+pub fn class_word(c: Option<Class>) -> &'static str {
     match c {
         Some(Class::Assert) => "assert",
         Some(Class::Build) => "build",
@@ -82,7 +82,7 @@ pub fn decide(pack: &Pack, inputs: &Inputs, evidence: &[Evidence]) -> Decision {
     let failed = |r: &&Row| r.verdict == Verdict::Fail && r.name != JOB_ROW;
     let at_test: Vec<&Evidence> = evidence
         .iter()
-        .filter(|e| e.facts.tree_key == inputs.test_key)
+        .filter(|e| e.facts.tree_key == inputs.test_key && no_result(e).is_none())
         .collect();
     let Some(red) = at_test
         .iter()
@@ -142,6 +142,7 @@ pub fn decide(pack: &Pack, inputs: &Inputs, evidence: &[Evidence]) -> Decision {
         e.facts.tree_key == inputs.tip_key
             && e.facts.selector == red.facts.selector
             && e.facts.env_stamp == red.facts.env_stamp
+            && no_result(e).is_none()
     }) else {
         return Decision::Wait(format!(
             "no run at the tip {} with the red run's selector and env",
@@ -444,6 +445,61 @@ mod tests {
             is_pass(&decide(&pack(), &inputs(), &e)),
             "{:?}",
             decide(&pack(), &inputs(), &e)
+        );
+    }
+
+    #[test]
+    fn a_run_that_failed_without_a_test_result_is_no_run_anywhere() {
+        // exit 1 and no row (class error), out of time, or lost: the job's own row only, neither red nor green
+        let alone = |class| vec![Row::fail(JOB_ROW, class, vec![])];
+        for class in [Class::Error, Class::Timeout, Class::Infra] {
+            let e = [ev("T", alone(class))];
+            assert!(
+                matches!(decide(&pack(), &inputs(), &e), Decision::Wait(_)),
+                "{class:?}: {:?}",
+                decide(&pack(), &inputs(), &e)
+            );
+            let e = [
+                ev("T", vec![Row::fail("t-one", Class::Assert, vec![])]),
+                ev("P", alone(class)),
+            ];
+            assert!(
+                matches!(decide(&pack(), &inputs(), &e), Decision::Wait(_)),
+                "{class:?} at the tip: {:?}",
+                decide(&pack(), &inputs(), &e)
+            );
+            assert_eq!(
+                crate::gates::state(&[ev("P", alone(class))], "P", "s"),
+                crate::gates::State::Missing
+            );
+        }
+        // the gate starts it again: an `infra` or `timeout` end once more (it can pass), an `error` never (the same
+        // command on the same tree fails the same way)
+        use crate::evidence::no_rerun;
+        assert_eq!(no_rerun(&[ev("P", alone(Class::Infra))], "P", "s"), None);
+        assert_eq!(no_rerun(&[ev("P", alone(Class::Timeout))], "P", "s"), None);
+        assert_eq!(
+            no_rerun(
+                &[ev("P", alone(Class::Infra)), ev("P", alone(Class::Timeout))],
+                "P",
+                "s"
+            ),
+            Some((Class::Timeout, "x".into()))
+        );
+        assert_eq!(
+            no_rerun(&[ev("P", alone(Class::Error))], "P", "s"),
+            Some((Class::Error, "x".into()))
+        );
+        // another tree or command is another run
+        assert_eq!(no_rerun(&[ev("P", alone(Class::Error))], "Q", "s"), None);
+        // a red with a named row besides the job's own (tests failed, then the time ran out) is a red
+        let both = vec![
+            Row::fail("t-one", Class::Assert, vec![]),
+            Row::fail(JOB_ROW, Class::Timeout, vec![]),
+        ];
+        assert_eq!(
+            crate::gates::state(&[ev("P", both)], "P", "s"),
+            crate::gates::State::Red(vec!["t-one".into(), JOB_ROW.into()])
         );
     }
 

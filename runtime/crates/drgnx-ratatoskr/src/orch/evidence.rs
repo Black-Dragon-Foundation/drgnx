@@ -65,7 +65,17 @@ pub async fn run(front: Arc<Front>, mut rx: tokio::sync::broadcast::Receiver<Job
     loop {
         let done = match rx.recv().await {
             Ok(JobEvent::Done(d)) => d,
-            Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Ok(_) => continue,
+            // events were dropped: the gates' runs whose jobs ended meanwhile are settled now (a session's own job
+            // missed here is no one's evidence; its next run is)
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                tracing::warn!("the evidence watcher missed {n} job events");
+                let ended = |id: &str| front.core.exec.done(id).is_some();
+                for (id, run) in front.orch.take_ended(ended) {
+                    settle(&front, &id, run).await;
+                }
+                continue;
+            }
             Err(_) => return,
         };
         // a run a gate started is its task's

@@ -535,15 +535,23 @@ impl HubGit {
     /// Merge exactly the tip the gate checked into the tree at JOB_TREE (`merge --no-ff`).  A branch that moved
     /// since the check, or one the gate did not clear, is refused; a conflict is aborted and listed.
     pub async fn merge(&self, job_tree: &Path, tree: &TaskTree) -> Result<MergeOutcome, GitError> {
-        self.merge_with(job_tree, tree, None).await
+        self.merge_with(job_tree, tree, None, None).await
     }
 
-    /// [`Self::merge`] with MESSAGE as the merge commit's message (a `before-commit` hook's change).
+    /// The tip the gate checked and cleared for BRANCH, if any: the commit the hub's gates judge.
+    pub fn checked_tip(&self, branch: &str) -> Option<String> {
+        let c = self.checked.lock().unwrap();
+        c.get(branch).filter(|c| c.cleared).map(|c| c.tip.clone())
+    }
+
+    /// [`Self::merge`] with MESSAGE as the merge commit's message (a `before-commit` hook's change); with JUDGED (the
+    /// commit the hub's gates judged), refused unless the checked tip is that commit.
     pub async fn merge_with(
         &self,
         job_tree: &Path,
         tree: &TaskTree,
         message: Option<&str>,
+        judged: Option<&str>,
     ) -> Result<MergeOutcome, GitError> {
         let branch_ref = format!("refs/heads/{}", tree.branch);
         let now = self
@@ -552,6 +560,14 @@ impl HubGit {
             .trim()
             .to_owned();
         let checked = self.checked.lock().unwrap().get(&tree.branch).cloned();
+        if let (Some(j), Some(c)) = (judged, &checked)
+            && j != c.tip
+        {
+            return Err(err(
+                "merge",
+                "the checked tip is not the one the gates judged",
+            ));
+        }
         match checked {
             Some(c) if c.cleared && c.tip == now => {}
             Some(c) if c.tip != now => {
@@ -948,8 +964,13 @@ impl RunGit for HubGit {
         job_tree: &'a Path,
         tree: &'a TaskTree,
         message: Option<&'a str>,
+        judged: Option<&'a str>,
     ) -> GitFuture<'a, MergeOutcome> {
-        Box::pin(HubGit::merge_with(self, job_tree, tree, message))
+        Box::pin(HubGit::merge_with(self, job_tree, tree, message, judged))
+    }
+
+    fn checked_tip(&self, branch: &str) -> Option<String> {
+        HubGit::checked_tip(self, branch)
     }
 }
 
