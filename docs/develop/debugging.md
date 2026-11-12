@@ -588,12 +588,16 @@ user's buffers and accepts it through `drgnx-history-with-origin "agent:SID#fix-
 as the agent's step. The gutter and the probe column ring an agent's marks in `drgnx-debug-agent-ring` (inheriting
 `drgnx-agent-1`) and name the agent in the tooltip.
 
-Tests: `debug::tests_agent` (each row gates its tool, the user's step wins, a fix passes only a clean exit without the
-failure), the fork hub's `a_fix_is_run_in_a_fresh_tree_with_its_files` and `a_forks_view_names_the_agent_that_made_it`,
+Tests: `debug::tests_agent` (each row gates its tool, the user's step wins, an agent removes only its own marks
+(`may_remove`), a fix passes only a clean exit without the failure, and one that still fails is not offered
+(`offer`)), the fork hub's `a_fix_is_run_in_a_fresh_tree_with_its_files` and `a_forks_view_names_the_agent_that_made_it`,
 norn's `each_debugger_tool_reaches_the_hub_as_its_session`, `a_hypothesis_is_recorded_changed_by_its_agent_only` and
 `debug_rows_per_preset`, `test/unit/debug-investigation-test.el`, and the conformance scenarios
-`debug/partner-agent-under-cautious` and `debug/partner-agent-under-balanced`. The tools' schemas are held to
-`BUDGET_DEBUG` (5,000 bytes) in `tools_schema`.
+`debug/partner-agent-under-cautious` (Never: a reason, no card), `debug/partner-agent-under-balanced` (Ask: a card)
+and `debug/partner-agent-investigates` (the mock adapter, Autonomous: the agent reads the stop, cannot remove the
+user's breakpoint, sets its own, which the editors get with its agent, and its step read before the user's step is
+refused while its step at the new stop runs). The tools' schemas are held to `BUDGET_DEBUG` (5,000 bytes; 3,791 when
+it was set) in `tools_schema`.
 
 ## Which change broke it: bisect over the edit history (spec §19.6)
 

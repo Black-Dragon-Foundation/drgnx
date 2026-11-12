@@ -118,6 +118,31 @@ pub fn passes(p: &Predicate, end: &RunEnd) -> Result<(), String> {
     }
 }
 
+/// Whether session SID may remove a mark whose owner is OWNER (none: the user's): only its own.
+pub fn may_remove(what: &str, owner: Option<&str>, sid: &str) -> Result<(), String> {
+    if owner == Some(sid) {
+        Ok(())
+    } else {
+        Err(format!("{what} is not yours: only your own are removed"))
+    }
+}
+
+/// The `debug-investigation` data offering the fix ARGS (`debug_fix`'s) of session SID for ROOT, or why it is not
+/// offered: only a run END that passes P is.
+pub fn offer(
+    p: &Predicate,
+    end: &RunEnd,
+    args: &Value,
+    root: &str,
+    sid: &str,
+) -> Result<Value, String> {
+    passes(p, end)?;
+    Ok(
+        json!({"root": root, "fix": {"hypothesis": args.get("hypothesis"), "run": args.get("run"), "agent": sid,
+              "passed": true, "files": args.get("files"), "predicate": args.get("predicate"), "exit": end.exit}}),
+    )
+}
+
 fn arg<'a>(args: &'a Value, k: &str) -> Result<&'a str, String> {
     args.get(k)
         .and_then(Value::as_str)
@@ -261,27 +286,25 @@ async fn probe(f: &Front, sid: &str, args: &Value) -> Result<Value, String> {
         "remove" => {
             let id = arg(args, "id")?;
             if let Some(n) = id.strip_prefix('b').and_then(|n| n.parse::<u64>().ok()) {
-                if d.breakpoint_owner(root, n).as_deref() != Some(sid) {
-                    return Err(format!(
-                        "breakpoint {id} is not yours: only your own are removed"
-                    ));
-                }
+                may_remove(
+                    &format!("breakpoint {id}"),
+                    d.breakpoint_owner(root, n).as_deref(),
+                    sid,
+                )?;
                 d.breakpoints(root, Some(super::breakpoints::Op::Remove { id: n }), None)
                     .await;
                 return Ok(json!({"removed": id}));
             }
             let rec = d.records().ok_or("runs are not recorded")?;
             let path = rec.probes(root, |s| {
-                if s.list()
-                    .iter()
-                    .find(|p| p.id == id)
-                    .and_then(|p| p.agent.as_deref())
-                    != Some(sid)
-                {
-                    return Err(format!(
-                        "probe {id} is not yours: only your own are removed"
-                    ));
-                }
+                may_remove(
+                    &format!("probe {id}"),
+                    s.list()
+                        .iter()
+                        .find(|p| p.id == id)
+                        .and_then(|p| p.agent.as_deref()),
+                    sid,
+                )?;
                 s.apply(super::probes::Op::Remove { id: id.to_owned() })
                     .map(|(p, _)| p)
             })?;
@@ -437,7 +460,7 @@ async fn hypothesis(f: &Front, sid: &str, args: &Value) -> Result<Value, String>
 }
 
 async fn fix(f: &Front, sid: &str, args: &Value) -> Result<Value, String> {
-    let hyp = arg(args, "hypothesis")?.to_owned();
+    arg(args, "hypothesis")?;
     let run = arg(args, "run")?.to_owned();
     let p = predicate(args.get("predicate").unwrap_or(&Value::Null))?;
     let files: Vec<(String, String)> = args
@@ -462,17 +485,12 @@ async fn fix(f: &Front, sid: &str, args: &Value) -> Result<Value, String> {
     let end = forks(f)
         .check_fix(&run, resolved, &files, p.watch.clone(), FIX_LIMIT)
         .await?;
-    let verdict = passes(&p, &end);
-    let root = info.root.clone();
-    if let Err(why) = verdict {
-        return Ok(json!({"passed": false, "why": why, "offered": false}));
-    }
     // only a fix that passed in a fresh fork is offered: the editor shows it as a card
-    f.editors.broadcast(
-        "debug-investigation",
-        json!({"root": root, "fix": {"hypothesis": hyp, "run": run, "agent": sid, "passed": true,
-               "files": files.iter().map(|(p, t)| json!({"path": p, "text": t})).collect::<Vec<_>>(),
-               "predicate": args.get("predicate"), "exit": end.exit}}),
-    );
-    Ok(json!({"passed": true, "offered": true}))
+    match offer(&p, &end, args, &info.root, sid) {
+        Err(why) => Ok(json!({"passed": false, "why": why, "offered": false})),
+        Ok(data) => {
+            f.editors.broadcast("debug-investigation", data);
+            Ok(json!({"passed": true, "offered": true}))
+        }
+    }
 }
