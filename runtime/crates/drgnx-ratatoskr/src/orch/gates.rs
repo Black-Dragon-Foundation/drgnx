@@ -292,14 +292,15 @@ pub fn cleanup(run: &Run) {
     }
 }
 
-/// The gates before task TID (number N) of JOB at TREE merges: trailers, red first, the author check.  A job approved
-/// without a rule pack passes.
+/// The gates before task TID (number N) of JOB at TREE merges: trailers, red first, the author check, judged at
+/// JUDGED (the tip the merge gate checked; none: the branch as it is).  A job approved without a rule pack passes.
 pub async fn before_merge(
     front: &Front,
     job: &str,
     tid: &str,
     n: i64,
     tree: &TaskTree,
+    judged: Option<&str>,
     data: &Map<String, Value>,
 ) -> Result<Decision, String> {
     let (j, t) = (job.to_owned(), tid.to_owned());
@@ -317,7 +318,8 @@ pub async fn before_merge(
     let Some(pack) = pack else {
         return Ok(Decision::Pass("the job has no rule pack".into()));
     };
-    let (top, base, tip) = (tree.path.clone(), tree.base.clone(), tree.branch.clone());
+    let tip = judged.map_or_else(|| tree.branch.clone(), str::to_owned);
+    let (top, base) = (tree.path.clone(), tree.base.clone());
     let body = crate::orch::red_first::body_of(data, n);
     let p = pack.clone();
     let (tip_commit, found, unnoted, inputs, commits) = crate::clock::blocking(move || {

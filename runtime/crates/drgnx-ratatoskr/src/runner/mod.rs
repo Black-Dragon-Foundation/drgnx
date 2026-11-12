@@ -532,13 +532,18 @@ pub trait RunGit: std::marker::Send + Sync {
     }
     /// The gate's card for BRANCH was answered yes: its checked tip may merge.
     fn clear_gate(&self, _branch: &str) {}
+    /// The tip the gate checked and cleared for BRANCH: the commit the hub's gates judge (none: they read the branch).
+    fn checked_tip(&self, _branch: &str) -> Option<String> {
+        None
+    }
     /// Merge exactly the tip the gate checked into the job's tree (`merge --no-ff`), with MESSAGE as its commit message
-    /// (none: `Merge BRANCH`).
+    /// (none: `Merge BRANCH`); with JUDGED, only when the checked tip is that commit.
     fn merge_into<'a>(
         &'a self,
         _job_tree: &'a Path,
         _tree: &'a TaskTree,
         _message: Option<&'a str>,
+        _judged: Option<&'a str>,
     ) -> GitFuture<'a, git::MergeOutcome> {
         Box::pin(async {
             Err(GitError {

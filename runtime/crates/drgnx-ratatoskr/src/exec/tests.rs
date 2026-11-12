@@ -1864,6 +1864,30 @@ async fn a_jobs_result_keeps_classified_rows() {
     assert_eq!(row_of(&result_rows(d.path(), &id), "(job)").1, "error");
 }
 
+/// A job ran on whatever its tree held while it ran: when the tree's key at its end isn't the key at its submit (a
+/// commit while it waited or ran), its facts go, so it is no one's evidence and is never reused.
+#[tokio::test]
+async fn a_job_whose_tree_moved_under_it_keeps_no_facts() {
+    let d = tempfile::tempdir().unwrap();
+    let w = d.path().join("w");
+    repo_with_a_commit(&w);
+    let r = open(d.path());
+    let moved = spec(
+        Starter::User,
+        &w,
+        "echo 'test a ... ok'; echo b > b.txt; git add b.txt; \
+         git -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -qm two",
+        Duration::from_secs(30),
+    );
+    let (a, _) = r.start_or_reuse(moved.clone()).await.unwrap();
+    let row = ended(&r, &a).await;
+    assert_eq!(row.status, ExecStatus::Done);
+    assert_eq!(r.facts(&a), None, "the tree moved: no facts");
+    let (b, reused) = r.start_or_reuse(moved).await.unwrap();
+    assert!(!reused && b != a);
+    ended(&r, &b).await;
+}
+
 /// A git repository at DIR with one commit; answers its tree id.
 fn repo_with_a_commit(dir: &Path) -> String {
     let git = |args: &[&str]| {

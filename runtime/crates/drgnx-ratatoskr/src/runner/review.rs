@@ -1125,9 +1125,19 @@ impl PlanHooks {
                 // the gates on the hub's own records (docs/develop/orchestration.md): trailers, red first, the
                 // author check; a run they wait for ends as the task's evidence and the next tick looks again
                 use vordr::redfirst::Decision;
-                match crate::orch::gates::before_merge(front, job, tid, t.row.n, &tree, &data)
-                    .await
-                    .map_err(internal)?
+                // the gates judge the tip the merge gate checked, and only that tip merges
+                let judged = git.checked_tip(&tree.branch);
+                match crate::orch::gates::before_merge(
+                    front,
+                    job,
+                    tid,
+                    t.row.n,
+                    &tree,
+                    judged.as_deref(),
+                    &data,
+                )
+                .await
+                .map_err(internal)?
                 {
                     Decision::Pass(_) => {}
                     Decision::Wait(_) => return Ok(()),
@@ -1156,7 +1166,16 @@ impl PlanHooks {
                 // the merge queue: batches of the pack's size, members one at a time in readiness order
                 use crate::orch::queue::Turn;
                 match self
-                    .queue_turn(front, job, tid, &l, &data, &tree, &job_tree)
+                    .queue_turn(
+                        front,
+                        job,
+                        tid,
+                        &l,
+                        &data,
+                        &tree,
+                        &job_tree,
+                        judged.as_deref(),
+                    )
                     .await?
                 {
                     Turn::Merge => {}
@@ -1172,7 +1191,10 @@ impl PlanHooks {
                 front.core.runs.set_busy(tid, Some("merging"));
                 changed(front, job).await;
                 let old = crate::timeline::snapshot::head_of(&job_tree);
-                match git.merge_into(&job_tree, &tree, message.as_deref()).await {
+                match git
+                    .merge_into(&job_tree, &tree, message.as_deref(), judged.as_deref())
+                    .await
+                {
                     Ok(super::git::MergeOutcome::Merged) => {
                         if let Some(d) = front.dirs.get() {
                             let h = &front.core.history;
@@ -1232,6 +1254,7 @@ impl PlanHooks {
         data: &Map<String, Value>,
         tree: &TaskTree,
         job_tree: &Path,
+        judged: Option<&str>,
     ) -> Result<crate::orch::queue::Turn, Error> {
         use crate::orch::queue::{Entry, Turn, turn};
         let j = job.to_owned();
@@ -1253,11 +1276,14 @@ impl PlanHooks {
             })
             .map(|x| x.row.id.clone())
             .collect();
-        let tip = tick::git(&tree.path, &["rev-parse", &tree.branch])
-            .await
-            .map_err(git_error)?
-            .trim()
-            .to_owned();
+        let tip = match judged {
+            Some(t) => t.to_owned(),
+            None => tick::git(&tree.path, &["rev-parse", &tree.branch])
+                .await
+                .map_err(git_error)?
+                .trim()
+                .to_owned(),
+        };
         let (f, dir, j, t) = (
             front.clone(),
             job_tree.to_path_buf(),

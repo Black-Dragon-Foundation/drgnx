@@ -34,7 +34,11 @@ At submit the hub records what a job runs on in its folder's `facts.json` (`vord
 - **selector:** the folder relative to the tree's top, the command, and `DRGNX_TEST_SELECTOR` / `DRGNX_TEST_ONLY` when
   the job sets them.
 
-A job outside a git tree, and a user's server, has no facts and is never evidence. `Runner::start_or_reuse` answers the
+A job on this machine runs on its tree as it is while it runs, so at its end the hub reads the tree's key again: when
+its commit's tree moved since the submit (a commit while the job waited or ran; files left uncommitted in the
+tree while it ran are no move), the facts go (`facts.moved.json`) and the job is no
+one's evidence and never reused (unit test `a_job_whose_tree_moved_under_it_keeps_no_facts`). A runner's job ran on
+the inputs frozen at its submit. A job outside a git tree, and a user's server, has no facts and is never evidence. `Runner::start_or_reuse` answers the
 newest **green** job with equal facts instead of running again (exit 0, no failed row, not on a `shared` runner); a red
 is never reused, and a selector holding one of the rule pack's `no-cache` words (`Runner::set_no_cache`) always runs.
 
@@ -91,7 +95,9 @@ the pack, so the user approves it with the plan, and the approval records it as 
 ## The gates before a merge
 
 Once the merge gate allows a task, before the `BeforeCommit` hooks, `orch::gates::before_merge` reads the job's rule
-pack and the task's evidence and runs, in order:
+pack and the task's evidence and runs, in order, on the tip the merge gate checked (`RunGit::checked_tip`, never the
+branch read again); the queue places that tip and the merge takes it only when it is still the checked one (unit test
+`the_merge_takes_only_the_tip_the_gates_judged`):
 
 - **Trailers** (`trailers` on): no commit in base..tip has a `Co-authored-by` line, a "Generated with …" line, or a
   `…-by:` trailer naming a model or its maker (`vordr::gates::trailers`).

@@ -524,13 +524,7 @@ async fn facts_of(spec: &ExecSpec) -> Option<vordr::facts::Facts> {
     let env = spec.user.env.clone();
     let image = spec.container.as_ref().map(|c| c.image.clone());
     crate::clock::blocking(move || {
-        let top = cwd
-            .ancestors()
-            .find(|d| d.join(".git").exists())?
-            .to_path_buf();
-        let inputs = sleipnir::sync::capture::capture(&top, &[]).ok()?;
-        let overlay =
-            (!inputs.manifest.is_empty()).then(|| sleipnir::sync::capture::input_key(&inputs));
+        let (top, tree_key) = tree_key_at(&cwd)?;
         let rel = cwd.strip_prefix(&top).ok()?.to_string_lossy().into_owned();
         let mut stamp = env_stamp().to_string();
         if let Some(i) = image {
@@ -538,7 +532,7 @@ async fn facts_of(spec: &ExecSpec) -> Option<vordr::facts::Facts> {
             stamp.push_str(&i);
         }
         Some(vordr::facts::Facts {
-            tree_key: vordr::facts::tree_key(&inputs.tree, overlay.as_deref()),
+            tree_key,
             env_stamp: stamp,
             platform: format!("{}-{}/local", std::env::consts::OS, std::env::consts::ARCH),
             selector: vordr::facts::selector(&rel, &argv, &env),
@@ -547,6 +541,20 @@ async fn facts_of(spec: &ExecSpec) -> Option<vordr::facts::Facts> {
     .await
     .ok()
     .flatten()
+}
+
+/// The git tree holding CWD and its key now (the commit's tree, plus the overlay's input key when anything is
+/// uncommitted).  Blocking.
+fn tree_key_at(cwd: &Path) -> Option<(PathBuf, String)> {
+    let top = cwd
+        .ancestors()
+        .find(|d| d.join(".git").exists())?
+        .to_path_buf();
+    let inputs = sleipnir::sync::capture::capture(&top, &[]).ok()?;
+    let overlay =
+        (!inputs.manifest.is_empty()).then(|| sleipnir::sync::capture::input_key(&inputs));
+    let key = vordr::facts::tree_key(&inputs.tree, overlay.as_deref());
+    Some((top, key))
 }
 
 fn now() -> f64 {
@@ -1771,6 +1779,26 @@ impl Inner {
         }
         let Some(meta) = self.meta(id) else { return };
         let dir = self.dir(id);
+        // a job here ran on its tree as it was while it ran (a runner's ran on the inputs frozen at its submit): when
+        // the tree's key moved since the submit, its facts go, so it is no one's evidence and never reused
+        if meta.machine.as_deref().is_none_or(|m| m == "local")
+            && let Some(f) = self.facts(id)
+        {
+            let cwd = PathBuf::from(&meta.cwd);
+            let now = crate::clock::blocking(move || tree_key_at(&cwd).map(|(_, k)| k))
+                .await
+                .ok()
+                .flatten();
+            // the commit's tree: files left uncommitted while it ran (a session's own, a run's outputs) are no move
+            let commit = |k: &str| k.split('+').next().unwrap_or_default().to_owned();
+            if now.as_deref().map(commit) != Some(commit(&f.tree_key)) {
+                tracing::info!(
+                    "job {id}: its tree moved while it ran ({} → {now:?}): no facts kept",
+                    f.tree_key
+                );
+                let _ = std::fs::rename(dir.join(FACTS), dir.join("facts.moved.json"));
+            }
+        }
         let exit = unit::read_exit(&dir);
         let status = match std::fs::read_to_string(dir.join("why")).as_deref() {
             Ok("stopped") => ExecStatus::Stopped,
