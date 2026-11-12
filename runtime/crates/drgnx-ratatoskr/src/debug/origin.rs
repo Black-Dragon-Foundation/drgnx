@@ -5,8 +5,16 @@
 //! call of a method on a watched value (`items.append(x)`) is a link "changed inside `list.append`".  Python older than
 //! 3.12 gets the static candidates instead: the assignments to the name in the files asked, found with Hrafn's
 //! grammar, labelled "candidates, not traced".
+//!
+//! Other languages (JavaScript, TypeScript, Go, C, Rust, Java: by the stop's file) are traced by logpoints instead: the
+//! lines that store to the asked names are found with Hrafn's grammar for the language ([`stores`]), each gets one
+//! logpoint in the sealed replay that logs what the line reads, and the last of them to log before the stop is the
+//! link.  A line's value is logged only when what it stores is a pure read (no call, no `new`, no increment), so the
+//! logpoint never runs the program's code twice; a store through an alias, or in a file that is neither the stop's nor
+//! on its stack, is not seen (the card says so).
 
 use super::BoxFut;
+use super::record::{RunHit, RunProbe};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -154,6 +162,14 @@ pub trait Replay: Send + Sync {
         stop: u64,
         watch: Vec<String>,
     ) -> BoxFut<'static, Result<Traced, String>>;
+
+    /// RUN replayed to its stop STOP with PROBES (paths in the project) set: their hits, in order.
+    fn probe(
+        &self,
+        run: &str,
+        stop: u64,
+        probes: Vec<RunProbe>,
+    ) -> BoxFut<'static, Result<Vec<RunHit>, String>>;
 }
 
 /// The tracer's files written into DIR (`<tree>/.drgnx-origin`): the folder to put first on `PYTHONPATH`.
@@ -232,6 +248,12 @@ pub async fn trail(
     sources: impl Fn() -> Vec<(String, String)>,
     mut on_level: impl FnMut(&[Link]),
 ) -> Result<Trail, String> {
+    let files = sources();
+    if let Some(lang) = files.first().and_then(|(p, _)| lang_of(p))
+        && lang != hrafn::Lang::Python
+    {
+        return probed_trail(replay, run, stop, question, depth, lang, &files, on_level).await;
+    }
     let mut links: Vec<Link> = Vec::new();
     let mut asked: Vec<String> = Vec::new();
     let mut questions = vec![question.to_owned()];
@@ -272,6 +294,323 @@ pub async fn trail(
         questions = next;
     }
     Ok(Trail { links, note: None })
+}
+
+/// The trail of a language without a tracer: per level, the lines storing to its questions in FILES get logpoints in
+/// one replay (see the module's doc).
+#[allow(clippy::too_many_arguments)]
+async fn probed_trail(
+    replay: &dyn Replay,
+    run: &str,
+    stop: u64,
+    question: &str,
+    depth: u32,
+    lang: hrafn::Lang,
+    files: &[(String, String)],
+    mut on_level: impl FnMut(&[Link]),
+) -> Result<Trail, String> {
+    let mut links: Vec<Link> = Vec::new();
+    let mut asked: Vec<String> = Vec::new();
+    let mut questions = vec![question.to_owned()];
+    for level in 1..=depth.clamp(1, DEPTH_MAX) {
+        asked.extend(questions.iter().cloned());
+        let lines: Vec<(String, Vec<StoreLine>)> = questions
+            .iter()
+            .map(|q| (q.clone(), stores(lang, files, q)))
+            .collect();
+        // one logpoint a line, whichever questions it answers
+        let mut probes: Vec<(RunProbe, StoreLine)> = Vec::new();
+        for s in lines.iter().flat_map(|(_, s)| s) {
+            if !probes
+                .iter()
+                .any(|(_, o)| o.path == s.path && o.line == s.line)
+            {
+                let p = RunProbe {
+                    id: format!("origin-{}", probes.len() + 1),
+                    path: s.path.clone(),
+                    line: s.line,
+                    expr: probe_expr(&s.logged()),
+                };
+                probes.push((p, s.clone()));
+            }
+        }
+        if probes.is_empty() {
+            break;
+        }
+        let hits = replay
+            .probe(run, stop, probes.iter().map(|(p, _)| p.clone()).collect())
+            .await?;
+        let mut found: Vec<Link> = Vec::new();
+        for (q, of_q) in &lines {
+            let last = hits
+                .iter()
+                .filter_map(|h| {
+                    let (_, s) = probes.iter().find(|(p, _)| p.id == h.probe)?;
+                    of_q.iter()
+                        .any(|o| o.path == s.path && o.line == s.line)
+                        .then_some((h, s))
+                })
+                .max_by_key(|(h, _)| h.seq);
+            if let Some((h, s)) = last {
+                found.push(s.link(q, level, &h.value));
+            }
+        }
+        on_level(&found);
+        let mut next: Vec<String> = Vec::new();
+        for l in &found {
+            for q in follow(l) {
+                if !asked.contains(&q) && !next.contains(&q) {
+                    next.push(q);
+                }
+            }
+        }
+        links.extend(found);
+        next.truncate(WIDTH_MAX);
+        if next.is_empty() {
+            break;
+        }
+        questions = next;
+    }
+    Ok(Trail {
+        links,
+        note: Some(PROBED.into()),
+    })
+}
+
+/// What a trail traced by logpoints cannot see, said on its card.
+pub const PROBED: &str = "traced by logpoints: a store through another name, or in a file off the stop's stack, is not seen";
+
+/// The language of PATH's code, by its extension.
+pub fn lang_of(path: &str) -> Option<hrafn::Lang> {
+    use hrafn::Lang;
+    let ext = Path::new(path).extension()?.to_str()?;
+    Some(match ext {
+        "py" => Lang::Python,
+        "js" | "mjs" | "cjs" | "jsx" => Lang::JavaScript,
+        "ts" | "mts" | "cts" => Lang::TypeScript,
+        "tsx" => Lang::Tsx,
+        "go" => Lang::Go,
+        "c" | "h" => Lang::C,
+        "rs" => Lang::Rust,
+        "java" => Lang::Java,
+        _ => return None,
+    })
+}
+
+/// Separates the values one logpoint logs (the unit separator: never in a value the adapters print).
+const SEP: char = '\u{1f}';
+
+/// A logpoint expression logging EXPRS in order, SEP between: [`super::probes::log_message`] puts the whole in one
+/// `{…}`, so the inner ones close and reopen it.
+fn probe_expr(exprs: &[String]) -> String {
+    exprs.join(&format!("}}{SEP}{{"))
+}
+
+/// A line that stores to a question: its TARGET as written, what it reads (OPERANDS, sorted), and its stored
+/// expression when that is a pure read of a plain store (its value is then logged last).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoreLine {
+    pub path: String,
+    pub line: u32,
+    pub target: String,
+    pub operands: Vec<String>,
+    pub pure: Option<String>,
+}
+
+impl StoreLine {
+    /// What its logpoint logs: the operands, then the value when pure.
+    fn logged(&self) -> Vec<String> {
+        let mut v = self.operands.clone();
+        v.extend(self.pure.clone());
+        if v.is_empty() {
+            // a line that reads nothing (a literal not pure enough to log): it still says it ran
+            v.push("0".into());
+        }
+        v
+    }
+
+    /// The link this line makes for QUESTION at LEVEL from its logpoint's VALUE.
+    fn link(&self, question: &str, level: u32, value: &str) -> Link {
+        let parts: Vec<&str> = value.split(SEP).collect();
+        let operands: Vec<(String, String)> = self
+            .operands
+            .iter()
+            .zip(&parts)
+            // a value that is code, not data (a function, a class)
+            .filter(|(_, v)| {
+                !(v.starts_with('ƒ') || v.starts_with("class ") || v.starts_with("func"))
+            })
+            .map(|(k, v)| (k.clone(), (*v).to_owned()))
+            .collect();
+        let value = self
+            .pure
+            .as_ref()
+            .and_then(|_| parts.get(self.operands.len()))
+            .map(|v| (*v).to_owned());
+        Link {
+            level,
+            question: question.to_owned(),
+            target: self.target.clone(),
+            value,
+            path: self.path.clone(),
+            line: self.line,
+            func: String::new(),
+            operands,
+            inside: None,
+            traced: true,
+        }
+    }
+}
+
+/// The lines of FILES (in LANG) that store to QUESTION: a plain name's assignments and declarations, or (dotted) a
+/// store to its attribute on any object; plain or compound; in file order.
+pub fn stores(lang: hrafn::Lang, files: &[(String, String)], question: &str) -> Vec<StoreLine> {
+    use hrafn::Lang;
+    use hrafn::structural::Pattern;
+    let (target, attr) = match question.rsplit_once('.') {
+        Some((_, attr)) => ("$O.".to_owned() + attr, Some(attr)),
+        None => (question.to_owned(), None),
+    };
+    let mut forms: Vec<(String, bool)> = ["=", "+=", "-=", "*=", "/=", "|=", "&="]
+        .iter()
+        .map(|op| (format!("{target} {op} $V"), *op == "="))
+        .collect();
+    if attr.is_none() {
+        let decls: &[&str] = match lang {
+            Lang::JavaScript | Lang::TypeScript | Lang::Tsx => {
+                &["const {t} = $V", "let {t} = $V", "var {t} = $V"]
+            }
+            Lang::Go => &["{t} := $V", "var {t} = $V", "var {t} $TY = $V"],
+            Lang::Rust => &["let {t} = $V;", "let mut {t} = $V;", "let {t}: $TY = $V;"],
+            Lang::C | Lang::Java => &["$TY {t} = $V;"],
+            _ => &[],
+        };
+        forms.extend(decls.iter().map(|d| (d.replace("{t}", question), true)));
+    }
+    let patterns: Vec<(Pattern, bool)> = forms
+        .iter()
+        .filter_map(|(f, plain)| Some((Pattern::new(lang, f, None).ok()?, *plain)))
+        .collect();
+    let mut out: Vec<StoreLine> = Vec::new();
+    for (path, text) in files {
+        let mut found: Vec<StoreLine> = Vec::new();
+        for (p, plain) in &patterns {
+            for m in p.find(text.as_bytes()).unwrap_or_default() {
+                if found.iter().any(|s| s.line == m.line) {
+                    continue;
+                }
+                let v = m.captures.get("V").cloned().unwrap_or_default();
+                let target = match (attr, m.captures.get("O")) {
+                    (Some(a), Some(o)) => format!("{o}.{a}"),
+                    _ => question.to_owned(),
+                };
+                found.push(StoreLine {
+                    path: path.clone(),
+                    line: m.line,
+                    target,
+                    operands: reads(&v),
+                    pure: (*plain && is_pure(&v)).then(|| v.trim().to_owned()),
+                });
+            }
+        }
+        found.sort_by_key(|s| s.line);
+        out.extend(found);
+    }
+    out
+}
+
+/// The names and member paths EXPR reads (`item.min`), sorted: not the called ones, not keywords or literals.
+fn reads(expr: &str) -> Vec<String> {
+    const NOT: &[&str] = &[
+        "new",
+        "this",
+        "true",
+        "false",
+        "null",
+        "undefined",
+        "nil",
+        "None",
+        "typeof",
+        "instanceof",
+        "await",
+        "yield",
+        "async",
+        "function",
+        "return",
+        "in",
+        "of",
+        "void",
+        "delete",
+        "self",
+        "Some",
+        "Ok",
+        "Err",
+        "as",
+        "mut",
+    ];
+    let b = expr.as_bytes();
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'$';
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'"' || c == b'\'' || c == b'`' {
+            // a string literal: skipped whole
+            i += 1;
+            while i < b.len() && b[i] != c {
+                i += if b[i] == b'\\' { 2 } else { 1 };
+            }
+            i += 1;
+            continue;
+        }
+        let starts =
+            word(c) && !c.is_ascii_digit() && (i == 0 || (b[i - 1] != b'.' && !word(b[i - 1])));
+        if !starts {
+            i += 1;
+            continue;
+        }
+        let from = i;
+        loop {
+            while i < b.len() && word(b[i]) {
+                i += 1;
+            }
+            if i + 1 < b.len() && b[i] == b'.' && word(b[i + 1]) && !b[i + 1].is_ascii_digit() {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        let name = &expr[from..i];
+        let called = expr[i..].trim_start().starts_with('(');
+        let first = name.split('.').next().unwrap_or_default();
+        if called || NOT.contains(&name) {
+            continue;
+        }
+        // `this.min` is a read, plain `this` is not
+        if NOT.contains(&first) && !matches!(first, "this" | "self") {
+            continue;
+        }
+        if !out.iter().any(|o| o == name) {
+            out.push(name.to_owned());
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Whether logging EXPR again runs nothing of the program: no call, construction, increment or assignment.
+fn is_pure(expr: &str) -> bool {
+    let e = expr
+        .replace("==", "")
+        .replace("!=", "")
+        .replace("<=", "")
+        .replace(">=", "");
+    !(e.contains('(')
+        || e.contains("++")
+        || e.contains("--")
+        || e.contains('=')
+        || e.contains("<-")
+        || ["new ", "await ", "yield "].iter().any(|k| e.contains(k)))
 }
 
 /// A trail: its links by level, and a note (why it is only candidates).

@@ -1015,6 +1015,17 @@ as trees, a slot moved between them, hunks, the card), `verdandi`'s `tests/mater
 - **Python older than 3.12** (the records file names the version and holds nothing else): the static candidates, the
   assignments to the name in the files of the stop and its stack as they ran (the launch snapshot), found with
   Hrafn's grammar (`$O.attr = $V`, `name = $V` and the augmented forms), labelled "candidates, not traced".
+- **Other languages** (JavaScript, TypeScript, Go, C, Rust, Java, by the stop's file: `origin::lang_of`) have no
+  tracer; their trail is traced by logpoints (`origin::probed_trail`). Per level, `origin::stores` finds the lines that
+  store to each question in the stop's and its stack's files with Hrafn's grammar for the language: assignments
+  (plain and compound), `$O.attr = $V` for a dotted question, and the language's declarations (`const`/`let`/`var`,
+  `:=` and `var`, `let`/`let mut`, `TYPE name = …`). Each line gets one logpoint (a line takes one breakpoint) in a
+  replay to the stop (`Replay::probe`, the trace with probes: `fork_hub::Forks::trace`'s PROBES go before the run's
+  own, and `TraceTree::hits` holds theirs), logging what the line reads (`origin::reads`: the names and member paths
+  not called) and, when what it stores is a pure read of a plain store (`origin::is_pure`: no call, `new`, increment
+  or assignment), that value too, joined by the unit separator. Values are never logged by running a call again. The
+  last line to log before the stop is the link, its reads the next level's questions. The card's note says what it
+  cannot see (`origin::PROBED`): a store through another name, or in a file off the stop's stack.
 - **The replay** is the `origin::Replay` trait, set when the hub binds (`origin_wire::ForkReplay`): a sealed trace
   of the run (`fork_wire::trace`, spec §19.3), ended at the stop, with the tracer's files written into the trace's
   tree (`origin::trace_files`) and its environment (`origin::trace_env`); the records are read back with their files
@@ -1030,5 +1041,7 @@ past stop's buffer) asks for the name at point, the card inserts the hub's rows,
 (`debug-origin-open`) opens it as a past stop. Tests: `debug::tests_origin` (golden trails on
 `tests/fixtures/origin/stock.py` run by python3 under the tracer: three levels with attribute stores, a change inside
 `list.append`, the 3.11 candidates, lenient parsing, the card), `debug::tests_fork_live`'s
-`a_python_trail_is_traced_in_sealed_replays` (live: debugpy in Gleipnir, three levels through real traces),
+`a_python_trail_is_traced_in_sealed_replays` (live: debugpy in Gleipnir, three levels through real traces) and
+`a_js_trail_is_traced_by_logpoints_in_sealed_replays` (live: js-debug, `tests/fixtures/origin/stock.js`), the
+stores' unit tests (JavaScript, Go),
 `test/unit/debug-origin-test.el`.
