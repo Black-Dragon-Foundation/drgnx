@@ -41,6 +41,8 @@
 (defvar drgnx-extensions-review)
 (declare-function drgnx-extensions-details-open "drgnx-extensions-details")
 (declare-function drgnx-extensions-details-forget-generations "drgnx-extensions-details")
+(declare-function drgnx-extensions-details-generations "drgnx-extensions-details")
+(declare-function drgnx-extensions-details-copies-note "drgnx-extensions-details")
 (defvar drgnx-extensions-jobs-changed-functions)
 (defvar drgnx-extensions-recommended)
 (defvar drgnx-packages-off)
@@ -439,10 +441,31 @@ or nil when the list is not the hub-fed view or the model has no such row."
                 :signed (intern (funcall f "signed")) :source (funcall f "source")
                 :version (funcall f "version") :latest (funcall f "latest")))))))
 
+(defun drgnx-extensions-list--generation-params ()
+  "The generations as `extensions/list' sends them, newest first (`drgnx-extensions-details-generations'); the
+newest carries the copies note."
+  (when (fboundp 'drgnx-extensions-details-generations)
+    (let ((first t))
+      (vconcat
+       (mapcar (lambda (g)
+                 (prog1 (append (list :n (plist-get g :n) :time (or (plist-get g :time) "")
+                                      :differs (vconcat (plist-get g :differs))
+                                      :in_use (if (plist-get g :in-use) t :false)
+                                      :current (if (plist-get g :current) t :false))
+                                (and (plist-get g :note) (list :note (plist-get g :note)))
+                                (and (plist-get g :size) (list :size (file-size-human-readable (plist-get g :size))))
+                                (let ((c (and first (drgnx-extensions-details-copies-note)))) (and c (list :copies c))))
+                   (setq first nil)))
+               (drgnx-extensions-details-generations))))))
+
 (defun drgnx-extensions-list--list-params ()
-  "The params of `extensions/list': the sections shown now, each with the rows loaded of it, the density, the glyphs
-and the rows that wait for a restart."
-  (let ((sections (if (drgnx-extensions-list--typed-p) '(search) drgnx-extensions-list--sections-order)))
+  "The params of `extensions/list': the sections shown now, each with the rows loaded of it, the density, the glyphs,
+the rows that wait for a restart and the generations, which end the list when nothing is typed (with `@generations'
+typed, they are the list)."
+  (let* ((gens-only (memq 'generations (plist-get (drgnx-extensions-list--parsed) :local)))
+         (sections (cond (gens-only nil)
+                         ((drgnx-extensions-list--typed-p) '(search))
+                         (t drgnx-extensions-list--sections-order))))
     (list :view drgnx-extensions-list-view
           :sections (vconcat
                      (mapcar (lambda (s)
@@ -456,7 +479,10 @@ and the rows that wait for a restart."
           :glyphs (vconcat (mapcar (lambda (k) (list :kind (symbol-name k) :gui (or (drgnx-face-glyph k) "")
                                                      :tty (or (cdr (alist-get k (append drgnx-face-glyphs drgnx-ui--default-glyphs))) "")))
                                    '(package plugin module)))
-          :restart (vconcat drgnx-extensions-list--restart))))
+          :restart (vconcat drgnx-extensions-list--restart)
+          :generations (if (or gens-only (not (drgnx-extensions-list--typed-p)))
+                           (or (drgnx-extensions-list--generation-params) [])
+                         []))))
 
 (defun drgnx-extensions-list--ask (&optional _view)
   "Ask the hub for the list's rows, without waiting; the answer's totals go to `drgnx-extensions-list--listed'.  Also
@@ -546,6 +572,16 @@ the env's resubscribe."
     (when (and drgnx-view-patch (drgnx-view-patch-handle drgnx-view-patch) (not (equal id (drgnx-view-nav-selection))))
       (drgnx-view-nav 'select id))
     id))
+
+(defun drgnx-extensions-list-gen-at-point ()
+  "The generation of the row at point in the hub-fed list: the model's `gen' field of that row, made the selection;
+nil off a generation's row or outside the list."
+  (when-let* ((drgnx-view-patch) (h (drgnx-view-patch-handle drgnx-view-patch))
+              (id (or (get-text-property (point) 'drgnx-work-id)
+                      (and (> (point) (point-min)) (get-text-property (1- (point)) 'drgnx-work-id))))
+              (n (nidhogg-view-get h 'field "gen" id)))
+    (unless (equal id (drgnx-view-nav-selection)) (drgnx-view-nav 'select id))
+    (if (stringp n) (string-to-number n) n)))
 
 (defun drgnx-extensions-list--name (id)
   "The name part of the row id ID (`pkg:magit' → \"magit\")."

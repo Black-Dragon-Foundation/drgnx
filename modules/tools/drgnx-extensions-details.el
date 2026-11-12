@@ -27,6 +27,7 @@
 (declare-function drgnx-extensions-list--trust "drgnx-extensions-list")
 (declare-function drgnx-extensions-show-log "drgnx-extensions-list")
 (declare-function drgnx-extensions-list-row "drgnx-extensions-list" (id))
+(declare-function drgnx-extensions-list-gen-at-point "drgnx-extensions-list")
 (defvar drgnx-extensions-list--root)
 (defvar drgnx-extensions-project-global-text)
 (declare-function drgnx-extensions-list-note-root "drgnx-extensions-list")
@@ -260,38 +261,12 @@ trust card for a source that does not sign."
   (and drgnx-extensions-details--copies
        "This file system copies the packages twice per change (the staging copy and the generation)."))
 
-(defun drgnx-extensions-details-generation-keys ()
-  "The list's keys for the Generations section: its header, then `(gen . N)' for each generation."
-  (when-let* ((gens (drgnx-extensions-details-generations)))
-    (cons (cons 'section 'generations) (mapcar (lambda (g) (cons 'gen (plist-get g :n))) gens))))
-
-(defun drgnx-extensions-details-generation-row (n)
-  "The text of the row of generation N."
-  (let ((g (cl-find n (drgnx-extensions-details-generations) :key (lambda (g) (plist-get g :n)))))
-    (propertize
-     (if (null g)
-         (format "generation %s\n" n)
-       (concat (format "%s #%d  %s" (drgnx-face-glyph 'package) n (or (plist-get g :time) ""))
-               (if (plist-get g :note) (format "  %s" (plist-get g :note)) "")
-               (cond ((plist-get g :in-use) (propertize "  in use" 'face 'drgnx-status-warn))
-                     ((plist-get g :current) (propertize "  current" 'face 'drgnx-status-ok))
-                     (t ""))
-               (if (plist-get g :size) (format "  %s" (file-size-human-readable (plist-get g :size))) "")
-               "\n"
-               (if (plist-get g :differs)
-                   (concat "    " (propertize (string-join (plist-get g :differs) " · ") 'face 'shadow) "\n")
-                 "")
-               (if-let* ((note (and (eql n (plist-get (car (drgnx-extensions-details-generations)) :n))
-                                    (drgnx-extensions-details-copies-note))))
-                   (concat "    " (propertize note 'face 'shadow) "\n")
-                 "")))
-     'drgnx-extensions-gen n)))
-
 (defun drgnx-extensions-rollback (&optional n)
-  "Roll the packages back to generation N (at point, else asked): a background job; a restart then uses them."
+  "Roll the packages back to generation N (the list's generation row at point, else asked): a background job; a
+restart then uses them."
   (interactive)
   (unless (fboundp 'drgnx-extensions-jobs-run) (user-error "The job layer is not available (its module is off)"))
-  (let ((n (or n (get-text-property (point) 'drgnx-extensions-gen)
+  (let ((n (or n (and (fboundp 'drgnx-extensions-list-gen-at-point) (drgnx-extensions-list-gen-at-point))
                (string-to-number
                 (completing-read "Roll back to generation: "
                                  (mapcar (lambda (g) (number-to-string (plist-get g :n))) (drgnx-extensions-details-generations))

@@ -14380,6 +14380,65 @@
             },
             "type": "object"
           },
+          "Generation": {
+            "description": "One package generation as the Generations section shows it.",
+            "properties": {
+              "copies": {
+                "default": null,
+                "description": "A note the newest generation carries (this file system copies the packages twice per change).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "current": {
+                "default": false,
+                "description": "The packages the next start uses.",
+                "type": "boolean"
+              },
+              "differs": {
+                "default": [],
+                "description": "What differs from the generation before it (\"magit 4.1 → 4.2\", \"+name\", \"-name\").",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "in_use": {
+                "default": false,
+                "description": "A running session still uses it.",
+                "type": "boolean"
+              },
+              "n": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "note": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "size": {
+                "default": null,
+                "description": "Its size on disk, as the editor writes it (\"2.1M\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "time": {
+                "default": "",
+                "type": "string"
+              }
+            },
+            "required": [
+              "n"
+            ],
+            "type": "object"
+          },
           "Glyph": {
             "description": "A kind's glyph in a graphical and in a terminal class.",
             "properties": {
@@ -14517,6 +14576,14 @@
             "default": false,
             "description": "One line per row (no summary line).",
             "type": "boolean"
+          },
+          "generations": {
+            "default": [],
+            "description": "The package generations, newest first (the editor reads them from disk): a Generations section ends the list.",
+            "items": {
+              "$ref": "#/$defs/Generation"
+            },
+            "type": "array"
           },
           "glyphs": {
             "default": [],

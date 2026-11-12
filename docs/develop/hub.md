@@ -1393,7 +1393,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `explorer/subscribe` | user | `{around?: AbsPath, compact?: boolean, exclude?: [string], expanded?: [AbsPath], indent?: natnum, only?: [AbsPath], roots: [AbsPath], view: string, window?: natnum}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
-| `extensions/list` | user | `{dense?: boolean, glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
+| `extensions/list` | user | `{dense?: boolean, generations?: [{copies?: string, current?: boolean, differs?: [string], in_use?: boolean, n: natnum, note?: string, size?: string, time?: string}], glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
 | `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
 | `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
 | `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
@@ -3994,7 +3994,12 @@ and never reaches the network here: the refresh job (`drgnx extensions refresh`)
   `dense` a shadowed `ID/2` line with summary, source and trust) and the model (a tree: section nodes with `label`,
   `section`, `count`; row nodes with `label`, `name`, `state`, `signed`, `source`, `section`, `version`, `latest`),
   publishes both to the `extensions` view of that connection, and answers each section's `{name, total, loaded}`. The
-  last list per connection is kept to rebuild on a resync, dropped when the connection goes.
+  editor also sends the package generations it reads from disk (`generations`, newest first, at most 256: `n`, `time`,
+  `note`, `differs`, `in_use`, `current`, `size`, `copies`); they end the list as a Generations section (header
+  `section:generations`, a row `gen:N` with glyph, number, time, note, "in use" or "current" and size, then `gen:N/2`
+  for what differs and `gen:N/3` for the copies note; model nodes of kind `generation` with `label` and `gen`).
+  Roll Back Packages reads the selected row's `gen`. With `@generations` typed the editor sends no sections and the
+  generations alone. The last list per connection is kept to rebuild on a resync, dropped when the connection goes.
 - **Classes:** `extensions/search` and `extensions/details` are open to agents; `extensions/rows`,
   `extensions/list` and `extensions/modules` are the user's.
 

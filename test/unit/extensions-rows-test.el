@@ -174,6 +174,63 @@ Updates count."
       (should (equal (plist-get section :name) "installed"))
       (should (= (plist-get (plist-get section :search) :limit) 400)))))
 
+(defconst drgnx-extensions-rows-test--gens
+  (list (list :n 4 :time "2026-11-12 10:00" :note "update magit" :differs '("magit 4.1 → 4.2") :current t :size 2048)
+        (list :n 3 :time "2026-11-11 09:00"))
+  "Two generations, newest first, as `drgnx-extensions-details-generations' gives them.")
+
+(ert-deftest drgnx-extensions-list/rollback-reads-the-selected-generation ()
+  "The Generations section is the hub's: `extensions/list' sends the generations (at the end of the list, or alone
+under `@generations'), and Roll Back Packages on a generation's row reads its `gen' from the model, the row made the
+selection.  Off a generation's row it asks."
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
+  (let ((jobs nil))
+    (cl-letf (((symbol-function 'drgnx-extensions-details-generations) (lambda () drgnx-extensions-rows-test--gens))
+              ((symbol-function 'drgnx-extensions-details-copies-note) #'ignore)
+              ((symbol-function 'drgnx-extensions-jobs-run) (lambda (&rest a) (push a jobs)))
+              ((symbol-function 'completing-read) (lambda (&rest _) "3")))
+      (drgnx-extensions-rows-test--with-list calls
+        (let ((gens (append (plist-get (nth 1 (car calls)) :generations) nil)))
+          (should (equal (mapcar (lambda (g) (plist-get g :n)) gens) '(4 3)))
+          (should (equal (plist-get (car gens) :differs) ["magit 4.1 → 4.2"]))
+          (should (eq (plist-get (car gens) :current) t)))
+        (drgnx-view-model-event
+         (list :view "extensions" :hub 7 :base 0 :version 2 :reset t
+               :model (json-serialize
+                       (list :ops
+                             (vector
+                              (list :reset
+                                    (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"]
+                                                            :lists ["order"] :classes ["selected" "match" "dim"]
+                                                            :flags ["expanded"] :forms [] :start "order")
+                                          :nodes (vector
+                                                  (list :id "section:updates" :kind "section" :flags 1
+                                                        :fields [["label" "Updates"] ["section" "updates"]])
+                                                  (list :id "pkg:a" :kind "package" :flags 0 :parent "section:updates"
+                                                        :fields [["label" "a"] ["name" "a"] ["state" "update"]])
+                                                  (list :id "section:generations" :kind "section" :flags 1
+                                                        :fields [["label" "Generations"] ["section" "generations"]])
+                                                  (list :id "gen:4" :kind "generation" :flags 0
+                                                        :parent "section:generations" :fields [["label" "#4"] ["gen" 4]]))
+                                          :edges []
+                                          :lists (vector (list :name "order" :ids ["section:updates" "pkg:a"
+                                                                                   "section:generations" "gen:4"])))))))))
+        (drgnx-view-apply-patch
+         (list :view "extensions" :class "unshown" :hub 7 :base 1 :version 2 :env_epoch 0 :model 2
+               :ops (list (list :reset (list (drgnx-extensions-rows-test--row "section:updates" "Updates (1)")
+                                             (drgnx-extensions-rows-test--row "pkg:a" "a 1.0  update to 1.1" "pkg:a")
+                                             (drgnx-extensions-rows-test--row "section:generations" "Generations (1)")
+                                             (drgnx-extensions-rows-test--row "gen:4" "#4  2026-11-12 10:00"))))))
+        (drgnx-view-draw-now drgnx-view)
+        (goto-char (point-min))
+        (search-forward "#4")
+        (drgnx-extensions-rollback)
+        (should (equal jobs '((rollback 4))))
+        (should (equal "gen:4" (drgnx-view-nav-selection)))
+        (goto-char (point-min))
+        (drgnx-extensions-rollback)
+        (should (equal (car jobs) '(rollback 3)))))))
+
 (ert-deftest drgnx-extensions-list/without-sja-the-list-shows-the-notice ()
   "An Emacs without Sjá: the list's buffer says so, asks the hub nothing and has no model."
   (let ((calls nil))
