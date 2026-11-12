@@ -264,3 +264,78 @@ fn the_card_follows_the_events() {
     );
     assert!(text(&g).contains("the good state fails too: pick an earlier good state"));
 }
+
+#[test]
+fn a_replayed_predicate_watches_its_place_and_judges_the_run() {
+    use super::bisect::Outcome;
+    use super::bisect_wire::{outcome_of, watch_of};
+    use super::fork::{RunEnd, Watch};
+    use runstav::methods::debug_bisect::DebugPredicate;
+    let p = |kind: &str, at: &str, condition: Option<&str>| DebugPredicate {
+        kind: kind.into(),
+        argv: vec![],
+        code: None,
+        build: vec![],
+        timebox_s: None,
+        run: Some("r1".into()),
+        at: Some(at.into()),
+        condition: condition.map(str::to_owned),
+    };
+    assert_eq!(
+        watch_of(&p("exception", "app/stock.py:15", None)).unwrap(),
+        Watch::Exception {
+            path: "app/stock.py".into(),
+            line: 15
+        }
+    );
+    assert_eq!(
+        watch_of(&p("probe", "stock.py:3", Some("x < 0"))).unwrap(),
+        Watch::Probe {
+            path: "stock.py".into(),
+            line: 3,
+            expr: "x < 0".into()
+        }
+    );
+    assert!(watch_of(&p("probe", "stock.py:x", Some("c"))).is_err());
+    let end = |exception: bool, values: &[&str], timed_out: bool| RunEnd {
+        exception_at: exception.then(|| ("stock.py".into(), 15)),
+        probe_values: values.iter().map(|v| (*v).to_owned()).collect(),
+        exit: (!timed_out).then_some(0),
+        timed_out,
+    };
+    // an exception at the place: bad; the run ended without it: good; the time box: skip
+    assert_eq!(
+        outcome_of("exception", &end(true, &[], false)),
+        Outcome::Bad
+    );
+    assert_eq!(
+        outcome_of("exception", &end(false, &[], false)),
+        Outcome::Good
+    );
+    assert!(matches!(
+        outcome_of("exception", &end(false, &[], true)),
+        Outcome::Skip(_)
+    ));
+    // a probe's condition true once (Python's True, JS's true): bad; never: good
+    assert_eq!(
+        outcome_of("probe", &end(false, &["False", "True"], false)),
+        Outcome::Bad
+    );
+    assert_eq!(
+        outcome_of("probe", &end(false, &["false", "true"], true)),
+        Outcome::Bad
+    );
+    assert_eq!(
+        outcome_of("probe", &end(false, &["False", "False"], false)),
+        Outcome::Good
+    );
+    // the line never ran (the state moved it), or the run was cut before it was true: no answer
+    assert!(matches!(
+        outcome_of("probe", &end(false, &[], false)),
+        Outcome::Skip(_)
+    ));
+    assert!(matches!(
+        outcome_of("probe", &end(false, &["False"], true)),
+        Outcome::Skip(_)
+    ));
+}
