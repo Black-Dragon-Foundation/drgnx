@@ -164,6 +164,21 @@ pub fn write_tracer(dir: &Path) -> std::io::Result<PathBuf> {
     Ok(dir.to_owned())
 }
 
+/// RECS' files as the project's: a file under TREE (the replay's copy, as named or as resolved) is named under ROOT.
+pub fn rebase(recs: &mut [Rec], tree: &Path, root: &Path) {
+    let real = std::fs::canonicalize(tree).ok();
+    for r in recs {
+        let file = Path::new(&r.file);
+        let rel = file
+            .strip_prefix(tree)
+            .ok()
+            .or_else(|| real.as_deref().and_then(|t| file.strip_prefix(t).ok()));
+        if let Some(rel) = rel {
+            r.file = root.join(rel).to_string_lossy().into_owned();
+        }
+    }
+}
+
 /// The environment that turns the tracer on: `PYTHONPATH` (DIR first, then BASE's) and `DRGNX_ORIGIN`.
 pub fn env(dir: &Path, root: &Path, watch: &[String], base: Option<&str>) -> Vec<(String, String)> {
     let mut path = dir.to_string_lossy().into_owned();

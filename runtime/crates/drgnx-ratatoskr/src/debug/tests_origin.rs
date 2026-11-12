@@ -187,6 +187,32 @@ fn records_are_read_leniently_and_the_last_store_wins() {
 }
 
 #[test]
+fn a_replays_files_are_named_as_the_projects() {
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("trace-1");
+    std::fs::create_dir_all(tree.join("pkg")).unwrap();
+    let real = std::fs::canonicalize(&tree).unwrap();
+    let mut recs = origin::parse(&format!(
+        "{{\"seq\":1,\"kind\":\"store\",\"target\":\"a\",\"file\":\"{}/pkg/m.py\",\"line\":1}}\n\
+         {{\"seq\":2,\"kind\":\"store\",\"target\":\"b\",\"file\":\"{}/x.py\",\"line\":2}}\n\
+         {{\"seq\":3,\"kind\":\"store\",\"target\":\"c\",\"file\":\"/usr/lib/python3/os.py\",\"line\":3}}\n",
+        tree.display(),
+        real.display()
+    ));
+    origin::rebase(&mut recs, &tree, Path::new("/work/proj"));
+    let files: Vec<&str> = recs.iter().map(|r| r.file.as_str()).collect();
+    // the tree as the replay named it and as the interpreter resolved it; a file outside it stays
+    assert_eq!(
+        files,
+        vec![
+            "/work/proj/pkg/m.py",
+            "/work/proj/x.py",
+            "/usr/lib/python3/os.py"
+        ]
+    );
+}
+
+#[test]
 fn the_card_shows_each_link_by_level() {
     use serde_json::json;
     let s = json!({"expr": "shortfall", "n": 4, "stop": 3, "state": "done", "links": [
