@@ -291,15 +291,24 @@ session gets a block of ports and its launch configuration becomes an attach the
 (`debug/ports.rs`, `debug/blocked.rs`):
 
 - **The block** (`ports::Blocks`): 8 ports cut from 47000–48999, below macOS's ephemeral range (49152), so the system
-  never hands one out for an outgoing connection. Before a block is given out each port is bound once on 127.0.0.1,
-  ::1 and 0.0.0.0 and let go; a block with a port another process holds is passed over (the macOS runner had 47610
-  taken now and then), and when none is free the session is refused, naming the range. The block goes back when the
-  session's launcher is dropped.
+  never hands one out for an outgoing connection. A block is claimed machine-wide: an exclusive `flock` on
+  `block-FIRST` in `/private/tmp/drgnx-debug-ports/` (`/tmp/…` on Linux; made 1777, each file 0666, so every hub on
+  the machine, another account's or a test hub, sees it; an existing directory that is not sticky is refused, since
+  a held lock file could be deleted and its name locked again). The lock is held for the session's life and goes
+  with the process. Under it each port is bound once on 127.0.0.1, ::1 and 0.0.0.0 and let go; a block locked
+  elsewhere or with a port another process holds is passed over (the macOS runner had 47610 taken now and then), and
+  when none is free the session is refused, naming the range. The block goes back when the session's launcher is
+  dropped. Linux's reduced tier has no loopback flag, so no blocks.
+- **Whose listener:** the probe and the adapter's own bind are apart, so before the hub connects to a block port, or
+  starts a program that will, it checks that every listener on it is in the process group of the adapter or program
+  it started there (`ports::owned`: `lsof` on macOS, `/proc/net/tcp*` and the processes' descriptors on Linux). A
+  stranger's listener ends the session with a message naming the port and process; the hub never connects to it.
+  (`lsof` sees this account's processes only: another account's listener makes the adapter's own bind fail instead.)
 - **debugpy:** the adapter listens for the hub on the block's first port (`debugpy.adapter --host 127.0.0.1 --port
   A`); the attach has `listen: {host, port: B}` and `subProcess`; the hub starts the program as `python -m debugpy
   --connect 127.0.0.1:B --configure-subProcess BOOL (PROGRAM | -m MODULE) ARGS…`. debugpy connects once without
-  retrying, so the hub starts it once B listens: it probes B with a connection debugpy drops (it logs "Failed to
-  accept incoming server connection" and goes on listening) and gives up after 30 s, stopping the adapter.
+  retrying, so the hub starts it once B listens, the listener checked to be the adapter's (no probe connection), and
+  gives up after 30 s, stopping the adapter.
   Subprocesses connect to B too.
 - **js-debug:** the hub starts `node RUNTIME-ARGS… --inspect-brk=127.0.0.1:B PROGRAM ARGS…`, which waits at its first
   line, then the adapter (`dapDebugServer.js A`), and attaches to B with `autoAttachChildProcesses` and
@@ -308,10 +317,15 @@ session gets a block of ports and its launch configuration becomes an attach the
   runs by then (holding `configurationDone` for the answer deadlocks): a child started before the bootloader is there
   would run without a debugger. So `etc/debug-node-preload.js`, first in `NODE_OPTIONS`, makes `child_process`'s
   spawn, fork and exec functions wait for it first (`DRGNX_DEBUG_WAIT_BOOTLOADER`, set unless
-  `autoAttachChildProcesses` is off), at most 5 s, in 5 ms sleeps between which V8 runs the inspector's messages.
+  `autoAttachChildProcesses` is off), in 5 ms sleeps between which V8 runs the inspector's messages, at most 30 s (a
+  5 s cap ran out once on a loaded machine); past it the child starts without the debugger and stderr says so.
   Children (`startDebugging`) are second connections to A. A child's `inspector.open(0)` goes through the preload
-  too: it takes the block's next port, claimed with an O_EXCL file under `TMP/drgnx-debug-ports/` (so the block caps the children at six), and drops
-  an inherited `--inspect-brk` from forked children's `execArgv`. The preload is written into each session's tmp.
+  too: it takes the block's next port, claimed with an O_EXCL file under `TMP/drgnx-debug-ports/`, and drops an
+  inherited `--inspect-brk` from forked children's `execArgv`. The preload is written into each session's tmp.
+- **A seventh child** (the block has six ports for children), or a child whose port another process holds, runs
+  without the debugger: its inspector stays closed (the sandbox allows no other port), stderr says
+  `drgnx: process PID runs without the debugger: …`, and `TMP/drgnx-debug-ports/refused-PID` records it. The program
+  goes on; the children that got ports keep their breakpoints.
 - TMPDIR is the session's tmp for the program (js-debug's inspector socket lands there). Its stdout is drained: the
   adapters send what it prints as output events (debugpy with `redirectOutput`; js-debug the console's calls).
 - The hub owns both processes: they get the session's signals, and once the adapter is gone the program is killed.
@@ -319,4 +333,52 @@ session gets a block of ports and its launch configuration becomes an attach the
 
 The live tests (`debug/tests_blocked_live.rs`, ignored by default) run both adapters through the hub's sessions in
 the adapter image: each program starts a child at once (js-debug forks on its first line), the breakpoint is in the
-child, and while it is stopped every TCP listener in the container is one of the block's ports.
+child, and while it is stopped every TCP listener in the container is one of the block's ports; a third gives a
+js-debug program a block of three ports, so its second child runs without the debugger and says so. The block's own
+tests (`debug/tests_ports.rs`) include two processes claiming in one lock directory (the test binary runs itself as
+the second) and a stranger's listener on the adapter's port (`debug/tests_blocked.rs`).
+
+## Recorded runs: probes, the stop timeline (spec §19.2)
+
+Every session the hub starts is recorded (`debug/record.rs`, `Records`; the hub's records are made in
+`debug/runs_wire.rs` from `<state>`):
+
+- **The launch snapshot**: `begin` writes the root's tree into the checkpoints' shadow repository
+  (`timeline::snapshot::take_kept`, the files as on disk, with the editor's unsaved list kept beside it) and keeps it
+  as `refs/drgnx/debug/<run>`, so a past stop shows the file that ran. A Python launch gets `PYTHONHASHSEED` (the
+  run's, kept in the record) so a replay hashes the same.
+- **Probes** (`debug/probes.rs`): logpoints whose message is `"\u{1e}drgnx:<probe>:{<thread>}:{<expr>}"`. Python's
+  thread is `threading.get_ident()` and its value `repr(expr)`; the others send no thread. Output events carry no
+  thread, so it rides in the marker. `Records::output` takes those lines out of the console text and records them as
+  hits. Probes are appended after the user's breakpoints in every `setBreakpoints` (a line with a user breakpoint gets
+  no probe), and `breakpoints::fit` drops them for an adapter without `supportsLogPoints`, so a probe never becomes a
+  stop. Caps per second (`probes::cap`): 2000 for debugpy and js-debug, 200 for the rest (which stop to probe, and
+  the run says so); the rest are thinned and counted; a fork's run keeps every hit. "Probe the Result"
+  (`probes::next_line`) places the probe on the next line that runs, past continuation lines, blanks and comments. A
+  project's probes are kept in `<state>/debug-probes/<xxh3 of root>.json`.
+- **The run file** (`debug/runfile.rs`): `<state>/debug/runs/<run>.drun`, `DRUN1\n`, then blocks (u32 raw length, u32
+  compressed length, zstd) of JSON-lines frames, 64 KB raw each; `<run>.drun.idx` indexes blocks, stops and each
+  probe's hits. Each stop's capture (threads, the stack, the selected frame's scopes and variables) is cut to 64 KB:
+  the last scope's variables first, then frames past the selected one, then threads. A file holds 64 MB: past that
+  the oldest hits go (rewritten to three quarters), never a stop.
+- **The record** (`<run>.json`, `RunMeta`) is also an Urdr entity of kind `debug_run` (`norn::write::debug`), written
+  in order on one task, `recording` then `ended`.
+- **Retention** (`Records::prune`, after every run's end): 14 days, except pinned runs and runs whose task is open,
+  then 2 GB per project, oldest first; a pruned run's file, snapshot ref and entity go.
+- **Ordering**: `RunHit.seq` and `RunStop.index` come from one counter, so "the hits before stop k" is
+  `seq < index`. `bp_hit` counts the stops at that line, this one included; `steps` are the step ops since the last
+  breakpoint stop. `RunInfo` and `trait Runs` are what a fork (spec §19.3) reads.
+
+Methods (runstav `methods::debug_runs`, the user class only: agents are refused, which is `debug.read`'s gate):
+`debug/probe/op {root, op?}` (add, result, remove, edit) → the project's probes; `debug/runs/list {root}`;
+`debug/run/get {run, from?, count?, current?}` → a page of stops, each probe's lane (at most 2000 hits) and `strip`,
+the timeline's rows (`debug/strip.rs`, the hub's rows: a head, the stops, a lane per probe with a sparkline);
+`debug/run/stop {run, stop, file?}` → the capture and the file's text from the snapshot (`not_what_ran` when it was
+unsaved at the start); `debug/run/pin {run, pinned}`. Events: `debug-run {run, n, root, session, name, state, stops, hits,
+thinned, dropped, stops_to_probe, outcome, stop}` at the start, each stop and the end; `debug-probe-hits {run, hits}`, batched every 50 ms.
+
+The editor's half, `drgnx-debug-timeline.el`: the probe column (`drgnx-margins-claim 'debug-probe … :order 1`, after
+the breakpoint column; an SVG ring with a dot, `◉` or `o` on a terminal), the values at a line's end (throttled to 10
+a second), the strip buffer (it only inserts the hub's rows: a face or property the editor does not know is dropped),
+and past stops (`drgnx-debug-past-mode`'s keys, the past buffer with the snapshot's text and the banner, the variables
+buffer). Tests: `debug::tests_probes`, `debug::tests_record`, `test/unit/debug-timeline-test.el`.

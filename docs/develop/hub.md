@@ -1377,9 +1377,14 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/breakpoints` | user | `{op?: {condition?: string, enabled?: boolean, hit?: string, id?: natnum, line?: natnum, log?: string, name?: string, op: string, path?: string}, path?: string, root: string}` | `DebugBreakpointsView` | no |
 | `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
 | `debug/control` | user | `{op: string, session: string, thread?: integer}` | `boolean` | no |
+| `debug/probe/op` | user | `{op?: {enabled?: boolean, expr?: string, id?: string, language?: string, line?: natnum, op: string, path?: string, text?: string}, root: string}` | `{added?: string, path?: string, probes: [any], root: string}` | no |
 | `debug/run-to-cursor` | user | `{line: natnum, path: string, session: string}` | `boolean` | no |
+| `debug/run/get` | user | `{count?: natnum, current?: natnum, from?: natnum, run: string}` | `DebugRunView` | no |
+| `debug/run/pin` | user | `{pinned: boolean, run: string}` | `boolean` | no |
+| `debug/run/stop` | user | `{file?: string, run: string, stop: natnum}` | `{capture: any, run: string, snapshot?: string, source: any, stop: any}` | no |
+| `debug/runs/list` | user | `{root: string}` | `{runs: [any]}` | no |
 | `debug/select` | user | `{frame: integer, session: string, thread?: integer}` | `boolean` | no |
-| `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, root: string, selection?: string, user?: [JsonObject]}` | `{needs?: any, session?: string}` | no |
+| `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, root: string, selection?: string, unsaved?: [string], user?: [JsonObject]}` | `{needs?: any, session?: string}` | no |
 | `debug/trust` | user | `{root: string, trusted: boolean}` | `boolean` | no |
 | `decisions/effects` | user | `{decision: string}` | `{commits?: [string], decision: string, label: string, later_hunks?: [Hunk]}` | no |
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no |
