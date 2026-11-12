@@ -26,7 +26,7 @@ use runstav::methods::work::{
 };
 use runstav::registry::Class;
 use runstav::wire::Error;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use vegvisir::trail::{self, Zone};
@@ -297,6 +297,20 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
             let row = norn::read::jobs::job(c, &job)?;
             // the budget scope the runner books the run's spend under
             let plan = row.as_ref().map(crate::runner::plan_scope);
+            // the run's facts its first start recorded (`runner::tick::run_facts`) and the user's order
+            let data = row
+                .as_ref()
+                .and_then(|j| j.data.clone())
+                .unwrap_or_default();
+            let meta = (
+                data.get("agents")
+                    .and_then(Value::as_u64)
+                    .and_then(|n| u32::try_from(n).ok()),
+                data.get("order")
+                    .and_then(Value::as_array)
+                    .is_some_and(|a| !a.is_empty()),
+                data.get("base").and_then(Value::as_str).map(str::to_owned),
+            );
             let title = row
                 .and_then(|j| j.title.or(j.plan))
                 .unwrap_or_else(|| job.clone());
@@ -308,7 +322,23 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
                 let card = cards.iter().find(|k| {
                     k.task.as_deref() == Some(row.id.as_str()) && k.kind.as_deref() == Some("gate")
                 });
+                // where its tree started and the commits the merge gate checked (`orch::gates::before_merge`)
+                let of = |bucket: &str| data.get(bucket).and_then(|b| b.get(&row.id));
+                let commits = of("commits")
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .map(|c| flow::CommitFact {
+                                sha: c["sha"].as_str().unwrap_or_default().to_owned(),
+                                subject: c["subject"].as_str().unwrap_or_default().to_owned(),
+                                tests: c["tests"].as_bool().unwrap_or(false),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 tasks.push(flow::TaskFacts {
+                    base: of("bases").and_then(Value::as_str).map(str::to_owned),
+                    commits,
                     held: card.map(|k| k.title.clone().unwrap_or_default()),
                     card: card.map(|k| k.id),
                     evidence: norn::read::evidence::of_task(c, &row.id)?,
@@ -320,10 +350,11 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
                     queue: flow::Queue::None,
                 });
             }
-            Ok(Some((job, title, plan, pack, tasks)))
+            Ok(Some((job, title, plan, pack, tasks, meta)))
         })
         .await;
-    let Ok(Some((job, title, plan, pack, mut tasks))) = read else {
+    let Ok(Some((job, title, plan, pack, mut tasks, (agents_at_once, ordered, base)))) = read
+    else {
         return flow::Flow::default();
     };
     let (ready, batch) = (f.queue.ready(&job), f.queue.batch(&job));
@@ -400,6 +431,9 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
         push,
         machines: f.core.map.machines_of(conn, map),
         cost: plan.and_then(|p| plan_cost(&f.core.budgets, &p)),
+        agents: agents_at_once,
+        ordered,
+        base,
     }
 }
 

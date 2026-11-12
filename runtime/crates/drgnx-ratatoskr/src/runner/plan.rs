@@ -1,5 +1,5 @@
-//! Reading a plan file as a job: `# Title`, `**Repo:** path`, `### Task N: title` headings with `**Role:**` and `**Depends:** Task M`
-//! lines in their bodies, `**Won't build:** subject` lines for the decision log, a `**Pack:** file` line for the rule
+//! Reading a plan file as a job: `# Title`, `**Repo:** path`, `### Task N: title` headings with `**Role:**`,
+//! `**Depends:** Task M` and `**Profile:** name` (within the pack's routes) lines in their bodies, `**Won't build:** subject` lines for the decision log, a `**Pack:** file` line for the rule
 //! pack.
 
 use std::path::{Path, PathBuf};
@@ -121,7 +121,11 @@ pub fn read(text: &str, file: &Path) -> Plan {
                     .map(task_numbers)
                     .unwrap_or_default(),
                 body: b.trim().to_owned(),
-                profile: None,
+                // a plan line names the profile within the pack's routes (`**Profile:** opus`)
+                profile: lines_after(&b, "**Profile:**")
+                    .next()
+                    .and_then(|p| p.split_whitespace().next())
+                    .map(str::to_owned),
                 model: None,
             });
         }

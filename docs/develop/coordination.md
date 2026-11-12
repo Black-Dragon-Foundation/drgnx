@@ -535,6 +535,8 @@ same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 21 tools, or th
   (`[{session, text}]`, cleaned and cut to 280 characters); at most 3 a session. Each change goes to the editors as a
   `card` event (`Hub::card_event`); `Sessions::end` calls `session_ended`, which drops the session's quotes and
   withdraws a card left with none.
+- `procedure_get` (`tools/procedure.rs`, every agent's): the session's job's rule-pack procedure by `name`, or the
+  names there are; the text is the pack's as the job's approval froze it (`orchestration.md`, "The rule pack").
 - `hello` keeps its first text item and adds a second one and `structuredContent.brief`; `record_decision` takes
   `about: [id]`.
 - `task_read find` ranks by words (FTS) and says `vectors: "behind N"` while entities in the caller's scope (its
@@ -724,7 +726,9 @@ proposal).
   carries them); the third failure is a `review` card. **No verdict:** a `review` card. A reviewer that is lost (the job
   stopped, the hub restarted) is started again, three times.
 - **Merge.** One merge at a time per job, in a task of its own (the task shows `merging`). The job's branch is checked
-  out in `<runs root>/<job>/_job`. The reviewer's pass is written as `accepted` review marks for every changed file at
+  out in `<runs root>/<job>/_job`, made by one caller at a time (`review::branch_tree`; the manager's merges too: two
+  `worktree add`s at once had the loser remove the winner's folder, leaving it registered but missing), and made again
+  after a `worktree prune` when git still lists it but its folder is gone. The reviewer's pass is written as `accepted` review marks for every changed file at
   its current diff hash (unless the job's gate is `review+accept`: then only the user's marks count and the task waits).
   `RunGit::merge_gate` answers: `Allow` merges exactly the checked tip (`merge_into`: `merge --no-ff`); `Never` is a
   `review` card; `Ask(card)` (CI or build files changed) waits for the matrix card: answered yes, the next tick

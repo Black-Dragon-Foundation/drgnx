@@ -1377,9 +1377,15 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/breakpoints` | user | `{op?: {condition?: string, enabled?: boolean, hit?: string, id?: natnum, line?: natnum, log?: string, name?: string, op: string, path?: string}, path?: string, root: string}` | `DebugBreakpointsView` | no |
 | `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
 | `debug/control` | user | `{op: string, session: string, thread?: integer}` | `boolean` | no |
+| `debug/install` | user | `{adapter: string, adapters?: [JsonObject]}` | `string` | no |
+| `debug/probe/op` | user | `{op?: {enabled?: boolean, expr?: string, id?: string, language?: string, line?: natnum, op: string, path?: string, text?: string}, root: string}` | `{added?: string, path?: string, probes: [any], root: string}` | no |
 | `debug/run-to-cursor` | user | `{line: natnum, path: string, session: string}` | `boolean` | no |
+| `debug/run/get` | user | `{count?: natnum, current?: natnum, from?: natnum, run: string}` | `DebugRunView` | no |
+| `debug/run/pin` | user | `{pinned: boolean, run: string}` | `boolean` | no |
+| `debug/run/stop` | user | `{file?: string, run: string, stop: natnum}` | `{capture: any, run: string, snapshot?: string, source: any, stop: any}` | no |
+| `debug/runs/list` | user | `{root: string}` | `{runs: [any]}` | no |
 | `debug/select` | user | `{frame: integer, session: string, thread?: integer}` | `boolean` | no |
-| `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, root: string, selection?: string, user?: [JsonObject]}` | `{needs?: any, session?: string}` | no |
+| `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, root: string, selection?: string, unsaved?: [string], user?: [JsonObject]}` | `{needs?: any, session?: string}` | no |
 | `debug/trust` | user | `{root: string, trusted: boolean}` | `boolean` | no |
 | `decisions/effects` | user | `{decision: string}` | `{commits?: [string], decision: string, label: string, later_hunks?: [Hunk]}` | no |
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no |
@@ -4568,7 +4574,9 @@ own store write whether the job is still `proposed` (`norn::write::jobs::withdra
 the store's writes are one at a time, so of the two exactly one holds: an approval that lands between a status read
 and the withdrawal runs on, never stopped (every order tested). `job/stop` (the editor's and the card's reject)
 decides in its write the same way (`stop_job`): a proposal is withdrawn and marked never approved, any other job is
-stopped unmarked, so an approval that landed first can still be resumed; the budget pause (`pause_running`) and
+stopped unmarked, so an approval that landed first can still be resumed. It answers only once the job's work in
+flight ended (`Runs::settled`: a start still writing its task's tree, a merge, each clearing its own busy mark), so
+nothing of the job writes after the answer, and an agent such a start made is ended with the rest; the budget pause (`pause_running`) and
 `job/resume` (`resume_job`) read the status in their own write too (every order tested). A say has at
 most one live job: when its proposal starts (the Autonomous preset at once, or the user's `job/approve`, which the
 withdrawal finds), the planning is done: the session is stopped and forgotten, the latest 64 such sessions remember

@@ -158,6 +158,8 @@ pub enum BriefPart {
     Interfaces,
     /// The check to run before reporting.
     Check,
+    /// What the merge checks under the job's rule pack, and how to satisfy each (empty without a pack).
+    Gates,
     /// How to record what the agent establishes (findings with sources, decisions).
     Findings,
     /// The view's path, for an agent without drgnx's tools.

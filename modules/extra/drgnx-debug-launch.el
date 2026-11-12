@@ -244,5 +244,33 @@ result is saved in settings.el; the ones that cannot be are named."
                          (mapconcat (lambda (f) (format "%s (%s)" (car f) (cdr f))) (cdr r) ", "))
                ""))))
 
+;;;; Install
+
+(defun drgnx-debug-launch-installable (&optional table)
+  "The built-in adapters of TABLE (default etc/debug-adapters.eld) drgnx can install, as (NAME . ID), read as data."
+  (let ((r (drgnx-file-read (or table (expand-file-name "etc/debug-adapters.eld" drgnx-dir)))))
+    (unless (eq (plist-get r :status) 'ok)
+      (user-error "etc/debug-adapters.eld does not read: %s" (or (plist-get (plist-get r :problem) :text)
+                                                                 (plist-get r :status))))
+    (delq nil (mapcar (lambda (a)
+                        (when (and (plist-get a :install) (not (plist-get a :not-built-in)))
+                          (cons (plist-get a :name) (plist-get a :id))))
+                      (plist-get r :data)))))
+
+(defun drgnx-debug-install-adapter (id)
+  "Install the debug adapter ID: its pinned download, checked against its sha256, into drgnx's tools folder
+(debugpy into the tools venv, its hash required).  An adapter from a system package names its command instead."
+  (interactive
+   (let ((all (drgnx-debug-launch-installable)))
+     (list (cdr (assoc (completing-read "Install adapter: " all nil t) all)))))
+  (message "Installing %s…" id)
+  (drgnx-hub-call "debug/install"
+                  (append (list :adapter id)
+                          (when drgnx-debug-adapters
+                            (list :adapters (vconcat (mapcar #'drgnx-debug-launch--adapter drgnx-debug-adapters)))))
+                  (lambda (r e)
+                    (if e (message "%s: %s" id e) (message "Installed %s: %s" id r)))
+                  :deadline 600))
+
 (provide 'drgnx-debug-launch)
 ;;; drgnx-debug-launch.el ends here
