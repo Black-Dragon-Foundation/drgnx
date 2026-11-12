@@ -35,9 +35,10 @@
          (unwind-protect
              (progn (set-window-buffer (selected-window) buf)
                     (with-current-buffer buf (drgnx-debug-gutter-mode 1) ,@body))
-           (with-current-buffer buf (set-buffer-modified-p nil) (drgnx-debug-gutter-mode -1))
+           (when (buffer-live-p buf)
+             (with-current-buffer buf (set-buffer-modified-p nil) (drgnx-debug-gutter-mode -1))
+             (kill-buffer buf))
            (set-window-buffer (selected-window) was)
-           (kill-buffer buf)
            (delete-directory dir t))))))
 
 (ert-deftest drgnx-debug-gutter/a-file-opens-when-no-hub-runs ()
@@ -182,7 +183,8 @@ character, not in the column; again there removes it.  The line's own toggle lea
 
 (ert-deftest drgnx-debug-gutter/inline-candidates-while-stopped ()
   "While this project's session is stopped, each line with a breakpoint shows faint dots where the adapter can stop
-(`debug/breakpoint-locations', two or more on the line), but not where one already is; a click on a dot adds an
+(`debug/breakpoint-locations', two or more on the line), but not where one already is (a line breakpoint holds the
+first); a click on a dot adds an
 inline breakpoint there.  None with the setting off, or once the session runs."
   (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0)
         (debug-gutter-test--locations (vector (list :line 2 :column 1) (list :line 2 :column 3) (list :line 2 :column 6))))
@@ -197,12 +199,12 @@ inline breakpoint there.  None with the setting off, or once the session runs."
                                                                                :state "stopped"))))
         (should (equal (cdr (assoc "debug/breakpoint-locations" debug-gutter-test--calls))
                        (list :session "s1" :path buffer-file-name :line 2)))
-        (should (equal (funcall cands) '(1 3 6)))
+        (should (equal (funcall cands) '(3 6)))
         (let ((o (seq-find (lambda (o) (and (overlay-get o 'drgnx-debug-candidate) (= (overlay-start o) (+ (pos-bol 2) 2))))
                            (overlays-in (point-min) (point-max)))))
           (funcall (overlay-get o 'drgnx-debug-candidate)))
         (should (equal (debug-gutter-test--inline) '((2 3 "●"))))
-        (should (equal (funcall cands) '(1 6)))
+        (should (equal (funcall cands) '(6)))
         (let ((drgnx-debug-inline-breakpoint-candidates nil))
           (drgnx-debug-gutter--event "debug-state" (list :sessions (vector (list :id "s1" :root (drgnx-debug-launch-root)
                                                                                  :state "stopped"))))
@@ -261,6 +263,19 @@ inline breakpoint there.  None with the setting off, or once the session runs."
       (should (equal (debug-gutter-test--marks) '((6 . bp))))
       (revert-buffer t t t)                 ; auto-revert's way: the modes stay
       (should (equal (debug-gutter-test--marks) '((5 . bp)))))))
+
+(ert-deftest drgnx-debug-gutter/a-killed-buffer-releases-the-hooks ()
+  "Killing a file's buffer with the column on turns the column off first: the margin's window hooks and the column's
+global hooks go with the last column."
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0))
+    (debug-gutter-test--with 3
+      (drgnx-debug-gutter-toggle 2)
+      (should (memq #'drgnx-debug-gutter--restring drgnx-margins-changed-functions))
+      (set-buffer-modified-p nil)
+      (kill-buffer)
+      (should-not (memq #'drgnx-debug-gutter--restring drgnx-margins-changed-functions))
+      (should-not (memq #'drgnx-debug-gutter--event drgnx-hub-event-functions))
+      (should-not (memq #'drgnx-margins--window-buffer-changed window-buffer-change-functions)))))
 
 (ert-deftest drgnx-debug-gutter/a-new-major-mode-turns-the-column-off-cleanly ()
   "A revert that sets the major mode again (`normal-mode') kills the buffer's locals: the column turns off first, its

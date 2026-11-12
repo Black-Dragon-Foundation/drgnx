@@ -582,14 +582,17 @@ and `drgnx-debug-inline-breakpoint-candidates' is on; else none."
                                 (drgnx-debug-gutter--candidates-put line (plist-get r :locations)))))))))))
 
 (defun drgnx-debug-gutter--candidates-put (line locations)
-  "Faint dots on LINE at LOCATIONS' columns (the adapter's, two or more) that hold no inline breakpoint."
-  (let ((taken (delq nil (mapcar (lambda (b) (and (eql (plist-get b :line) line) (plist-get b :column)))
-                                 drgnx-debug-gutter--bps)))
-        (cols (delete-dups (delq nil (mapcar (lambda (l) (and (memql (plist-get l :line) (list nil line))
-                                                              (plist-get l :column)))
-                                             (append locations nil)))))
-        (bol (car (drgnx-debug-gutter--line-bounds line)))
-        (file buffer-file-name))
+  "Faint dots on LINE at LOCATIONS' columns (the adapter's, two or more) that hold no breakpoint: an inline one at
+its column, a line breakpoint at the first (it stops at the line's first statement, so that dot would be the same)."
+  (let* ((on-line (seq-filter (lambda (b) (eql (plist-get b :line) line)) drgnx-debug-gutter--bps))
+         (cols (sort (delete-dups (delq nil (mapcar (lambda (l) (and (memql (plist-get l :line) (list nil line))
+                                                                     (plist-get l :column)))
+                                                    (append locations nil))))
+                     #'<))
+         (taken (append (and (seq-find (lambda (b) (null (plist-get b :column))) on-line) (list (car cols)))
+                        (delq nil (mapcar (lambda (b) (plist-get b :column)) on-line))))
+         (bol (car (drgnx-debug-gutter--line-bounds line)))
+         (file buffer-file-name))
     (when (cdr cols)
       (dolist (col cols)
         (unless (memql col taken)
@@ -1021,9 +1024,10 @@ opens its menu.")
   "Whether some buffer has the column."
   (seq-some (lambda (b) (buffer-local-value 'drgnx-debug-gutter-mode b)) (buffer-list)))
 
-(defun drgnx-debug-gutter--major-mode-change ()
-  "`change-major-mode-hook': the buffer's locals are about to go (a new major mode, `normal-mode' in a revert), so the
-column turns off first, releasing its margin claim and the hooks; the module's `find-file-hook' turns it on again."
+(defun drgnx-debug-gutter--off ()
+  "`change-major-mode-hook' and `kill-buffer-hook': the buffer's locals are about to go (a new major mode,
+`normal-mode' in a revert; the buffer itself), so the column turns off first, releasing its margin claim and, with
+the last column, the global hooks; after a new major mode the module's `find-file-hook' turns it on again."
   (drgnx-debug-gutter-mode -1))
 
 (define-minor-mode drgnx-debug-gutter-mode
@@ -1033,7 +1037,8 @@ column turns off first, releasing its margin claim and the hooks; the module's `
       (progn
         (add-hook 'after-save-hook #'drgnx-debug-gutter--saved nil t)
         (add-hook 'after-revert-hook #'drgnx-debug-gutter--reverted nil t)
-        (add-hook 'change-major-mode-hook #'drgnx-debug-gutter--major-mode-change nil t)
+        (add-hook 'change-major-mode-hook #'drgnx-debug-gutter--off nil t)
+        (add-hook 'kill-buffer-hook #'drgnx-debug-gutter--off nil t)
         (add-hook 'drgnx-margins-changed-functions #'drgnx-debug-gutter--restring)
         (add-hook 'drgnx-hub-event-functions #'drgnx-debug-gutter--event)
         (add-hook 'pre-redisplay-functions #'drgnx-debug-gutter--pool-update nil t)
@@ -1044,7 +1049,8 @@ column turns off first, releasing its margin claim and the hooks; the module's `
         (drgnx-debug-gutter--claim))
     (remove-hook 'after-save-hook #'drgnx-debug-gutter--saved t)
     (remove-hook 'after-revert-hook #'drgnx-debug-gutter--reverted t)
-    (remove-hook 'change-major-mode-hook #'drgnx-debug-gutter--major-mode-change t)
+    (remove-hook 'change-major-mode-hook #'drgnx-debug-gutter--off t)
+    (remove-hook 'kill-buffer-hook #'drgnx-debug-gutter--off t)
     (remove-hook 'pre-redisplay-functions #'drgnx-debug-gutter--pool-update t)
     (remove-hook 'window-scroll-functions #'drgnx-debug-gutter--pool-scrolled t)
     (drgnx-debug-gutter--pool-clear)

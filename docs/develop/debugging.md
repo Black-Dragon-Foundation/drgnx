@@ -349,9 +349,10 @@ only).
   adapter bound elsewhere (`bound_line`) sits on that line.
 - `drgnx-debug-gutter-show`: `auto` (while the file has breakpoints or a session runs in its project, from
   `debug-state`), `always` or `never`.
-- A new major mode (`normal-mode` in a revert that does not keep the modes) would kill the column's locals and
-  leave its margin claim's window hooks behind: `change-major-mode-hook` turns the column off first, and the
-  module's `find-file-hook` (which a revert runs) turns it on again. The tests visit `a.py` with no mode lookup, so
+- A new major mode (`normal-mode` in a revert that does not keep the modes), or killing the buffer, would drop the
+  column's locals and leave its margin claim's window hooks and its global hooks behind: `change-major-mode-hook`
+  and `kill-buffer-hook` turn the column off first, and the module's `find-file-hook` (which a revert runs) turns it
+  on again. The tests visit `a.py` with no mode lookup, so
   python-mode's first use does not leave `after-load` forms in the leak census.
 - Mouse: `mouse-1` in the column toggles (`drgnx-debug-gutter-toggle`), a drag from a mark moves it
   (`drgnx-debug-gutter-drag`: `move` to its saved line plus the lines dragged; `down-mouse-1` there selects no
@@ -367,8 +368,10 @@ only).
 - Candidates (`drgnx-debug-inline-breakpoint-candidates`, on): while this project's session is stopped, each line
   with a breakpoint asks `debug/breakpoint-locations {session, path, line}` → `{locations: [{line, column, …}]}`
   (again at each `debug-state` and redraw; an older answer is dropped by a generation count) and, when there are two
-  or more, puts a faint `○` (`drgnx-debug-breakpoint-candidate`) at each column without an inline breakpoint; a
-  click adds one there.
+  or more, puts a faint `○` (`drgnx-debug-breakpoint-candidate`) at each column without an inline breakpoint, and
+  not at the first when the line has a line breakpoint (it stops at the line's first statement: the same place); a
+  click adds one there. `test/unit/debug-hub-test.el` runs this, and the console's groups, against the real hub and its
+  `debug-mock` adapter (a test-hooks build in `DRGNX_RATATOSKR_BIN`).
 - The prompt (`drgnx-debug-gutter-edit`) starts from the field's text; an empty answer clears it (an `edit` op with
   `""`), and on a line without a breakpoint a non-empty answer adds one with that field.
 - The hover dot: with the pointer over the column, a line without a mark shows a faint dot ("Click to add a
