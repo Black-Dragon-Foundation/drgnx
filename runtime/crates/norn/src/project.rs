@@ -44,8 +44,13 @@ pub(crate) type GitAnswer = Result<Option<String>, String>;
 
 /// git ARGS in DIR, blocking: its whole output; `Ok(None)` when it ran and failed, or DIR is not a folder; an error
 /// naming git when git is not the trusted one, cannot start, or takes over [`GIT_TIMEOUT`] (it is killed): no answer
-/// is never read as a "no". `draugr::git`'s overrides, no terminal, stdin closed, a minimal environment.
+/// is never read as a "no". `draugr::git`'s overrides, no terminal, stdin closed, a minimal environment. With the
+/// `test-hooks` feature, the hub's seam `DRGNX_TEST_GIT=<program>` runs PROGRAM instead (a git that hangs).
 pub(crate) fn git(dir: &Path, args: &[&str]) -> GitAnswer {
+    #[cfg(feature = "test-hooks")]
+    if let Some(program) = std::env::var_os("DRGNX_TEST_GIT") {
+        return git_at(Path::new(&program), dir, args, GIT_TIMEOUT);
+    }
     let program = draugr::git::git_program().map_err(|e| {
         format!(
             "git {} in {}: no trusted git: {e}",

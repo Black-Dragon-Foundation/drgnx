@@ -606,10 +606,13 @@ stays the truth for a setting; the store records its history as entities of kind
   git command, the folder and what was seen (how long the start took; whether git was still running, or had ended
   with its output still held open elsewhere). No caller reads that as "no project": the hub's callers that answer a
   request (a job's placement and its project's settings, a session's launch and its hooks, a proposal, a plan
-  run's step, `tasks/write`, the graph's writes, a session's scope, the coordination tools' caller) answer the
-  error; search turns the project's search off, a hook point runs without the project's hooks for that one point,
-  a task's scope and the manager's budget go without the project, each with a warning in the log, and nothing is
-  kept, so the next look asks git again; the migration stops as busy and tries again on the next tick. It is
+  run's step, `tasks/write`, the graph's writes, a session's scope, the coordination tools' caller, a search, whose
+  error the Search view shows on its state line) answer the error. A hook point fails closed: a project's hooks can
+  be guards, so the step behind it (at the seam, the adapter's `before_tool` and Codex's, a hub tool's server) is
+  refused, the agent is told why and the chat shows it; only the seam's row that a hub tool is hooked at its server
+  (a note, not a guard) is left out, with a warning. A task's scope, the manager's budget and the tracker's head go
+  without the project with a warning in the log. Nothing is kept, so the next look asks git again; the migration
+  stops as busy and tries again on the next tick. It is
   blocking: it never runs on an async worker or under the writer's lock.
   - `root` is the main repository's top-level: a linked worktree's common git dir is the main `.git`, so worktrees
     share their repository's project. `slug` is its folder name.

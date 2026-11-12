@@ -93,7 +93,16 @@ pub async fn run(front: &Front, sid: &str, args: &Value) -> Value {
     };
     let session = front.core.agents.find(sid).ok();
     let site = match &session {
-        Some(s) => s.hook_site(At::Adapter).await,
+        Some(s) => match s.hook_site(At::Adapter).await {
+            Ok(site) => site,
+            Err(e) => {
+                return json!({"hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": s.hooks_unread(call.step_name(), &e),
+                }});
+            }
+        },
         None => Site {
             at: At::Adapter,
             session: sid.to_owned(),

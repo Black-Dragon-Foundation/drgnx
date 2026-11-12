@@ -391,16 +391,11 @@ impl Hub {
             .collect())
     }
 
-    /// The checkout `drgnx-search-base` names for ROOT's project, when it does.
-    async fn base_for(front: &Front, root: &Path) -> Option<PathBuf> {
-        let names = match Self::project_names(root).await {
-            Ok(n) => n,
-            Err(e) => {
-                tracing::warn!("search: no base checkout for {}: {e}", root.display());
-                return None;
-            }
-        };
-        names
+    /// The checkout `drgnx-search-base` names for ROOT's project, when it does; `Err` (naming git) when the project
+    /// cannot be read.
+    async fn base_for(front: &Front, root: &Path) -> Result<Option<PathBuf>, String> {
+        let names = Self::project_names(root).await?;
+        Ok(names
             .iter()
             .find_map(|p| {
                 front
@@ -409,11 +404,12 @@ impl Hub {
                     .filter(|(_, seen)| *seen)
                     .map(|(v, _)| v)
             })
-            .and_then(|v| v.as_str().map(PathBuf::from))
+            .and_then(|v| v.as_str().map(PathBuf::from)))
     }
 
-    /// The project's globs: the file (in ROOT, the base checkout), narrowed by what the editor sent for the project.
-    async fn config_for(&self, front: &Front, root: &Path) -> Config {
+    /// The project's globs: the file (in ROOT, the base checkout), narrowed by what the editor sent for the project;
+    /// `Err` (naming git) when the project cannot be read: never the global settings in its place.
+    async fn config_for(&self, front: &Front, root: &Path) -> Result<Config, String> {
         let mut cfg = match config_file(root) {
             Ok(c) => c,
             Err(why) => {
@@ -421,25 +417,13 @@ impl Hub {
                     "search: {}/.drgnx/search.eld cannot be read ({why}): the project's search is off",
                     root.display()
                 );
-                return Config {
+                return Ok(Config {
                     off: true,
                     ..Config::default()
-                };
+                });
             }
         };
-        let names = match Self::project_names(root).await {
-            Ok(n) => n,
-            Err(e) => {
-                tracing::warn!(
-                    "search: {}: {e}: the project's search is off",
-                    root.display()
-                );
-                return Config {
-                    off: true,
-                    ..Config::default()
-                };
-            }
-        };
+        let names = Self::project_names(root).await?;
         let get = |name: &str| -> Option<Value> {
             names.iter().find_map(|p| {
                 front
@@ -465,7 +449,7 @@ impl Hub {
         if get("drgnx-search-off").and_then(|v| v.as_bool()) == Some(true) {
             cfg.off = true;
         }
-        cfg
+        Ok(cfg)
     }
 
     /// The open project whose id is ID, without opening one (a reader of its watcher, `search/files`). None when it is
@@ -498,7 +482,10 @@ impl Hub {
         {
             embedders.push(b);
         }
-        let base = Self::base_for(front, &real).await;
+        // a project that cannot be read is an error the user sees (the Search view's state line), never a search
+        // with the global settings or off; nothing is opened, the next call asks git again
+        let unread = |e: String| internal(format!("search: {e}"));
+        let base = Self::base_for(front, &real).await.map_err(unread)?;
         // another base is another project too: it is opened again (and its base rebuilt)
         let sig = embedders
             .iter()
@@ -514,7 +501,8 @@ impl Hub {
         }
         let config = self
             .config_for(front, base.as_deref().unwrap_or(&real))
-            .await;
+            .await
+            .map_err(unread)?;
         let project = Arc::new(
             Project::open(ProjectSpec {
                 root: real.clone(),

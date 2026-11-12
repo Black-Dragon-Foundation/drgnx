@@ -5185,32 +5185,25 @@ impl Session {
         self.tool_hub.front()
     }
 
-    /// Where a `before-tool` point of this session runs AT: its project, folder, role, profile, job and task.
-    pub(crate) async fn hook_site(&self, at: crate::hook_points::At) -> crate::hook_points::Site {
+    /// Where a `before-tool` point of this session runs AT: its project, folder, role, profile, job and task. `Err`
+    /// (naming git) when its project cannot be read: the step behind the point is refused ([`Self::hooks_unread`]),
+    /// never run with fewer hooks, since a project's hooks can be guards; nothing is kept, the next point asks again.
+    pub(crate) async fn hook_site(
+        &self,
+        at: crate::hook_points::At,
+    ) -> Result<crate::hook_points::Site, String> {
         let project = match self.project.get() {
             Some(p) => p.clone(),
             None => {
-                let found = match ActionCtx::of_session(&self.scopes, &self.id).project {
-                    Some(p) => Ok(Some(p)),
-                    None => crate::graph::project_of(&self.cwd)
-                        .await
-                        .map(|p| p.map(|r| r.id)),
+                let p = match ActionCtx::of_session(&self.scopes, &self.id).project {
+                    Some(p) => Some(p),
+                    None => crate::graph::project_of(&self.cwd).await?.map(|r| r.id),
                 };
-                match found {
-                    Ok(p) => {
-                        let _ = self.project.set(p.clone());
-                        p
-                    }
-                    // this point runs without the project's hooks, the log says why, and nothing is kept: the next
-                    // point asks git again
-                    Err(e) => {
-                        tracing::warn!(sid = %self.id, "a hook point's project: {e}");
-                        None
-                    }
-                }
+                let _ = self.project.set(p.clone());
+                p
             }
         };
-        crate::hook_points::Site {
+        Ok(crate::hook_points::Site {
             at,
             session: self.id.clone(),
             project,
@@ -5221,7 +5214,21 @@ impl Session {
             profile: Some(self.profile.clone()),
             job: self.job.clone(),
             task: self.task.clone(),
+        })
+    }
+
+    /// STEP refused because its hook point's project could not be read (WHY, from [`Self::hook_site`]): the chat
+    /// shows it and the log has it; the answer is the refusal the agent gets.
+    pub(crate) fn hooks_unread(self: &Arc<Self>, step: &str, why: &str) -> String {
+        let text = crate::hook_points::unread_project(step, why);
+        tracing::warn!(sid = %self.id, "{text}");
+        {
+            let mut rest = Map::new();
+            rest.insert("text".into(), json!(text));
+            lock(&self.state).push(EntryType::Error, rest);
         }
+        self.changed();
+        text
     }
 
     /// The tool call TOOL of a permission request as the hooks see it, with what this session folded of the same
@@ -5302,11 +5309,23 @@ impl Session {
         };
         let call = self.tool_call_info(tool);
         if call.kind == "other" && points::hub_tool_name(call.name.as_deref()) {
-            let site = self.hook_site(At::Seam).await;
-            points::hub_tool_at_the_seam(&front, &site, &call).await;
+            // only the seam's row that says so: the step's hooks run (or refuse it) at the hub's server
+            match self.hook_site(At::Seam).await {
+                Ok(site) => points::hub_tool_at_the_seam(&front, &site, &call).await,
+                Err(e) => {
+                    tracing::warn!(sid = %self.id, "a hub tool's seam row is not written: {e}")
+                }
+            }
             return SeamHooks::Today;
         }
-        let site = self.hook_site(At::Seam).await;
+        let site = match self.hook_site(At::Seam).await {
+            Ok(site) => site,
+            Err(e) => {
+                let why = self.hooks_unread(call.step_name(), &e);
+                self.steer_in(why);
+                return SeamHooks::Answer(pick_reject(options));
+            }
+        };
         let Some(prepared) = points::prepare(&front.core.plugins, &site, &call) else {
             return SeamHooks::Today;
         };
