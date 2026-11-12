@@ -184,8 +184,10 @@ fn a_step_stop_is_its_breakpoint_stop_then_the_recorded_steps() {
             hit: 2,
             steps: vec!["next".into(), "next".into()],
             seq: Some(9),
-            // the run's probe hits before its breakpoint stop (none here)
+            // the run's probe hits before its breakpoint stop (none here), and that stop
             before: Some(0),
+            landing: Some(7),
+            recorded: None,
         }
     );
     let t = fork::check(&run(), &At::Stop(12), true, false).unwrap();
@@ -306,6 +308,8 @@ fn target(hit: u32, steps: &[&str]) -> Target {
         steps: steps.iter().map(|s| s.to_string()).collect(),
         seq: None,
         before: None,
+        landing: None,
+        recorded: None,
     }
 }
 
@@ -443,7 +447,7 @@ async fn js_debug_counts_the_passes_in_a_condition() {
     let mut caps = caps();
     caps["supportsConditionalBreakpoints"] = json!(true);
     caps["supportsHitConditionalBreakpoints"] = json!(true);
-    let cond = "(globalThis.__drgnxForkPass = (globalThis.__drgnxForkPass || 0) + 1) === 3";
+    let cond = "(globalThis[Symbol.for('drgnx.forkPass')] = (globalThis[Symbol.for('drgnx.forkPass')] || 0) + 1) === 3";
     let mut s = launch(
         caps,
         vec![
@@ -470,6 +474,71 @@ async fn js_debug_counts_the_passes_in_a_condition() {
     assert_eq!(
         log.commands().iter().filter(|c| **c == "continue").count(),
         1
+    );
+}
+
+/// A run without probes: the adapter's landing is checked against what the run recorded at that stop, its stack and
+/// its plain locals. Landing on another pass (`i` is 5, the run had 2) fails loudly; the same pass goes on.
+#[tokio::test(start_paused = true)]
+async fn without_probes_the_landing_is_checked_against_the_recorded_stop() {
+    let recorded = json!({"frames": [{"id": 1, "name": "f", "line": 20}],
+                          "scopes": [{"scope": {"name": "Locals"},
+                                      "variables": [{"name": "i", "value": "2", "variablesReference": 0},
+                                                    {"name": "item", "value": "<Item at 0x1>", "variablesReference": 11}]}]});
+    let script = |i: &str| {
+        let mut caps = caps();
+        caps["supportsHitConditionalBreakpoints"] = json!(true);
+        let mut s = launch(
+            caps,
+            vec![
+                json!({"expect": "setBreakpoints", "args": {"source": {"path": PY}, "breakpoints": [{"line": 20, "hitCondition": "3"}]},
+                        "ok": {"breakpoints": [{"verified": true}]}}),
+            ],
+        );
+        // the object's address differs from the run's: only plain values are compared
+        s.extend(stopped_at(20, "breakpoint", json!([{"name": "i", "value": i, "variablesReference": 0},
+                                                      {"name": "item", "value": "<Item at 0x9>", "variablesReference": 11}])));
+        s
+    };
+    let drive = |m: Arc<Mocks>| {
+        let mut d = counted_drive(m, 0);
+        d.probes = vec![];
+        d.target.recorded = Some(recorded.clone());
+        d
+    };
+    // the wrong pass
+    let mut s = script("5");
+    s.push(json!({"expect": "terminate", "ok": {}}));
+    s.push(json!({"event": "terminated"}));
+    s.push(json!({"expect": "disconnect", "ok": {}}));
+    s.push(json!({"die": true}));
+    let e = fork::drive(drive(Mocks::with(vec![s]))).await.unwrap_err();
+    assert!(
+        e.contains("not the run's pass") && e.contains("i was 2 in the run there, 5 in the fork"),
+        "{e}"
+    );
+    // the run's pass
+    let mut s = script("2");
+    s.push(json!({"expect": "evaluate", "args": {"expression": THREAD}, "ok": {"result": "140"}}));
+    s.push(json!({"expect": "setBreakpoints", "args": {"source": {"path": PY}, "breakpoints": []}, "ok": {"breakpoints": []}}));
+    s.push(cont());
+    s.extend(exited(0));
+    let out = fork::drive(drive(Mocks::with(vec![s]))).await.unwrap();
+    assert_eq!(out.end, End::Exit { code: Some(0) });
+    // a stack that is not the run's fails too
+    let mut d = drive(Mocks::with(vec![{
+        let mut s = script("2");
+        s.push(json!({"expect": "terminate", "ok": {}}));
+        s.push(json!({"event": "terminated"}));
+        s.push(json!({"expect": "disconnect", "ok": {}}));
+        s.push(json!({"die": true}));
+        s
+    }]));
+    d.target.recorded = Some(json!({"frames": [{"name": "g", "line": 20}], "scopes": []}));
+    let e = fork::drive(d).await.unwrap_err();
+    assert!(
+        e.contains("the run's stack there was g:20, the fork's f:20"),
+        "{e}"
     );
 }
 
@@ -712,6 +781,8 @@ async fn js_debugs_child_session_is_where_it_stops() {
             steps: vec![],
             seq: None,
             before: None,
+            landing: None,
+            recorded: None,
         },
         probes: vec![],
         change: Change::Nothing,

@@ -26,6 +26,10 @@ drgnx-ratatoskr lib write_tree_before_cost
 drgnx-ratatoskr lib git_scope_lists_at_a_checkouts_size release
 drgnx-ratatoskr lib large_file_blame_times
 drgnx-ratatoskr lib regroup_ten_thousand_time release
+# live: need the debug adapter image with bwrap (debugpy, js-debug), so they read red in the plain Rust image
+drgnx-ratatoskr lib debug_fork_start
+drgnx-ratatoskr lib a_python_fork_to_a_late_pass_is_quick
+drgnx-ratatoskr lib a_js_fork_to_a_late_pass_is_quick
 norn plugin_hooks timing_before_tool_cost_per_call release
 urdr lib a_lone_write_waits_max_wait_for_company
 verdandi timing undone_by_scan_cost_by_later_deletes

@@ -441,8 +441,11 @@ What-if tab shows it beside the run. Linux only for now; other hosts refuse with
   beyond the run's. A point the run took more than 60 s to reach asks first. `drive` sets a breakpoint on the point's
   line and the probes' logpoints (a plain breakpoint wins on a shared line, and the probe there is read by
   `evaluate`), reaches the line's pass (the adapter counts where it can and no probe sits on the line: debugpy's
-  `hitCondition`, for js-debug a condition with a counter that V8 runs, since its `hitCondition` pauses at every pass;
-  the landing must have had the run's probe hits before it, else the fork fails naming both counts; otherwise the
+  `hitCondition`, for js-debug a condition with a counter that V8 runs (under `Symbol.for('drgnx.forkPass')`, a key no program
+  name can clash with), since its `hitCondition` pauses at every pass;
+  the landing must have had the run's probe hits before it and the stack the run recorded at that stop (names and
+  lines), and, where no probe hit tells the passes apart, the run's plain locals there (values without children),
+  else the fork fails naming both sides; otherwise the
   hub counts, stopping and continuing at each pass), repeats the steps, reads the thread's id
   expression, applies the change (`setExpression` when the adapter has it and the variable an `evaluateName`, else
   `setVariable`), takes the point's breakpoint away and runs until the next stop, the end, or a probe's next hit.
