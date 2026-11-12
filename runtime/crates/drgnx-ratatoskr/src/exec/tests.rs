@@ -310,6 +310,7 @@ fn a_job_whose_process_is_gone_is_lost() {
         machine: None,
         priority: None,
         relay: None,
+        keyed: false,
     };
     std::fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -387,27 +388,6 @@ fn a_job_reaching_a_pinned_host_stays_here() {
     );
     assert_eq!(pinned_host(&[], &pins), None);
     assert_eq!(pinned_host(&hosts(&["registry.corp:443"]), &[]), None);
-}
-
-/// [D] pure: a job with keys runs only on a runner, and one reaching a pinned name only here: both is refused with
-/// the reason, never queued where nothing can take it.
-#[test]
-fn a_keyed_job_reaching_a_pinned_host_is_refused() {
-    let pins = vec![("registry.corp".to_string(), "10.0.0.5".parse().unwrap())];
-    let v = |h: &[&str]| h.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    let why = keyed_and_pinned(&v(&["TOKEN"]), &v(&["registry.corp:443"]), &pins).expect("refused");
-    assert!(
-        why.contains("registry.corp:443") && why.contains("runner"),
-        "{why}"
-    );
-    assert_eq!(
-        keyed_and_pinned(&[], &v(&["registry.corp:443"]), &pins),
-        None
-    );
-    assert_eq!(
-        keyed_and_pinned(&v(&["TOKEN"]), &v(&["crates.io:443"]), &pins),
-        None
-    );
 }
 
 /// [D] pure: `rows` reaches the queue as the job's suite; a run here takes every row in place of `{rows}`, and a
@@ -543,6 +523,7 @@ fn a_job_without_a_time_box_has_no_deadline() {
         machine: None,
         priority: None,
         relay: None,
+        keyed: false,
     };
     // the timer path has nothing to wait for
     assert_eq!(meta.time_left(), None);
@@ -1143,6 +1124,7 @@ async fn a_queued_job_can_be_stopped_and_survives_a_restart() {
         machine: None,
         priority: None,
         relay: None,
+        keyed: false,
     };
     std::fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
     let pending = Pending::of(&spec(
@@ -1235,6 +1217,7 @@ async fn a_queued_pending_json_is_read_once() {
         machine: None,
         priority: None,
         relay: None,
+        keyed: false,
     };
     std::fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
     let pending = Pending::of(&agents(d.path(), "echo older"));
@@ -1562,6 +1545,7 @@ fn running_meta(id: &str, relay: Option<&str>, pid: i32, start_time: Option<u64>
         machine: Some(queue::LOCAL.into()),
         priority: None,
         relay: relay.map(str::to_string),
+        keyed: false,
     }
 }
 
@@ -2012,4 +1996,94 @@ async fn a_tasks_jobs_are_its_evidence() {
     let oid = r.start(off).await.unwrap();
     ended(&r, &oid).await;
     assert!(crate::orch::evidence::of_job(&r, &oid, "task:J#1").is_none());
+}
+
+/// A stand-in for `drgnx-key` at D/fake-key: `exec NAME=VAR… -- CMD…` runs CMD with TOKEN set to VALUE (what the
+/// real one would have read from the key socket), and says whether its socket is there.
+fn fake_key(d: &Path, value: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = d.join("fake-key");
+    let script = format!(
+        "#!/bin/sh\ntest -S \"$DRGNX_KEY_SOCK\" && echo socket-there\n\
+         while [ \"$1\" != -- ]; do shift; done; shift\nTOKEN='{value}' exec \"$@\"\n"
+    );
+    std::fs::write(&bin, script).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+/// [D] A keyed job runs here through drgnx-key with its key socket in DRGNX_KEY_SOCK; whatever it prints of its key
+/// (on stdout or stderr, whole or split across writes) reaches its log, its result and its rows only masked; the
+/// socket is gone once it ended.
+#[tokio::test]
+async fn a_keyed_jobs_output_reaches_its_log_only_redacted() {
+    let d = tempfile::tempdir().unwrap();
+    let value = "kv-Zr81q3";
+    let r = Runner::default();
+    r.open(
+        d.path().join("exec"),
+        Hooks {
+            key_bin: Some(fake_key(d.path(), value)),
+            ..hooks()
+        },
+    );
+    r.queue().unwrap().keys().take([(
+        "TOKEN".to_string(),
+        secrecy::SecretString::from(value.to_string()),
+    )]);
+    let mut s = spec(
+        Starter::User,
+        d.path(),
+        "echo \"out=$TOKEN.\"; echo \"err=$TOKEN.\" >&2; printf 'split=%s' \"${TOKEN%???}\"; sleep 0.2; \
+         printf '%s.\\n' \"${TOKEN#??????}\"; echo end",
+        Duration::from_secs(30),
+    );
+    s.place.keys = vec!["TOKEN".into()];
+    let id = r.start(s).await.unwrap();
+    let row = ended(&r, &id).await;
+    assert_eq!(row.status, ExecStatus::Done);
+    let log = std::fs::read_to_string(d.path().join("exec").join(&id).join("log")).unwrap();
+    let mask = "*".repeat(value.len());
+    assert!(log.contains("socket-there"), "{log}");
+    assert!(!log.contains(value), "{log}");
+    for line in [
+        format!("out={mask}."),
+        format!("err={mask}."),
+        format!("split={mask}."),
+    ] {
+        assert!(log.contains(&line), "{line} in {log}");
+    }
+    assert!(log.ends_with("end\n"), "{log}");
+    let result =
+        std::fs::read_to_string(d.path().join("exec").join(&id).join("result.json")).unwrap();
+    assert!(
+        !result.contains(value) && result.contains(&mask),
+        "{result}"
+    );
+    let dir = d.path().join("exec").join(&id);
+    assert!(!dir.join("key.sock").exists());
+}
+
+/// [D] A keyed job is refused at start when drgnx-key isn't next to the hub, saying so.
+#[tokio::test]
+async fn a_keyed_job_without_drgnx_key_is_refused() {
+    let d = tempfile::tempdir().unwrap();
+    let r = Runner::default();
+    r.open(
+        d.path().join("exec"),
+        Hooks {
+            key_bin: Some(d.path().join("nowhere")),
+            ..hooks()
+        },
+    );
+    let mut s = spec(Starter::User, d.path(), "true", Duration::from_secs(30));
+    s.place.keys = vec!["TOKEN".into()];
+    let e = match r.start(s).await {
+        Err(e) => e.message,
+        Ok(id) => {
+            let row = ended(&r, &id).await;
+            r.log_slice(&id, 0, 5).join("\n") + &format!(" {:?}", row.status)
+        }
+    };
+    assert!(e.contains("drgnx-key was not found"), "{e}");
 }

@@ -821,6 +821,9 @@ pub struct SessionShape {
     pub write: Vec<PathBuf>,
     pub read: Vec<PathBuf>,
     pub net: crate::agents::launch::NetCell,
+    /// More Unix sockets the program may connect to, each a path in the session dir (a keyed job's key socket,
+    /// `exec::keys`): the path alone, never its folder.
+    pub sockets: Vec<PathBuf>,
     pub browser: Option<BrowserShape>,
 }
 
@@ -1358,6 +1361,7 @@ pub fn session_spec(
     // served by the session's provider proxy (`agents::net`), bound before the spawn
     let proxy = run.join(paths::SESSION_PROXY_SOCKET);
     let mut sockets = vec![hub];
+    sockets.extend(shape.sockets.iter().cloned());
     let mut vars: Vec<(String, String)> = vec![
         ("PATH".into(), path),
         ("HOME".into(), ctx.home.to_string_lossy().into_owned()),

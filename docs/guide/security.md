@@ -520,8 +520,9 @@ project).
   is reachable from the Mac as usual.
 - **Keyed jobs** (`job.keys`): a job naming keys may name only those on the project's `drgnx-runners-job-keys` list,
   and an agent's needs the matrix's `job.keys` too (ask under Cautious and Balanced; allowed for the manager and workers
-  under Autonomous; never for chat). The values reach the job on a runner of yours in memory only, are never sent to a
-  `shared` runner, and are masked in the log the hub keeps ([runners.md](runners.md#keys)).
+  under Autonomous; never for chat). The values reach the job in memory only, on a runner of yours or on this machine
+  (through a socket of the job's own, the only one beside it an agent's job may reach), are never sent to a `shared`
+  runner, and are masked in the log the hub keeps ([runners.md](runners.md#keys)).
 
 ### Answering a browser card
 

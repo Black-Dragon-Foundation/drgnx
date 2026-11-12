@@ -212,10 +212,13 @@ jobs:
       - if: ${{ !cancelled() }}
         run: cargo test --locked --no-fail-fast --workspace --doc --features drgnx-ratatoskr/test-hooks,drgnx-px/test-hooks
       # the test-hooks binary and the harness for the steps below
-      # (+ gleipnir-probe and gleipnir-escape, the escape suite's two binaries: glibc builds, so the same ones run on a VM)
+      # (+ gleipnir-probe and gleipnir-escape, the escape suite's two binaries: glibc builds, so the same ones run on a VM;
+      # + drgnx-key beside the hub, which a keyed job here runs in front of its command)
       - id: build
         if: ${{ !cancelled() }}
-        run: cargo build --locked -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
+        run: |
+          cargo build --locked -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
+          cargo build --locked -p sleipnir --no-default-features --bin drgnx-key
       # gleipnir's test hooks (landlock_omit, abi_cap) must never be on in a build without --features (review M5).
       # The inverted form: the forward `cargo tree` does not show gleipnir's feature even when it is on (Task 0).
       # `shell: bash` adds pipefail (a failed `cargo tree` fails the step), and the tree must name gleipnir at all, so
@@ -594,6 +597,7 @@ jobs:
       - id: build
         run: |
           cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
+          cargo build --locked --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key
           rustup target add x86_64-unknown-linux-musl
           cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-px --bin drgnx-px --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd
           cp runtime/target/fwd/x86_64-unknown-linux-musl/debug/drgnx-px runtime/target/debug/drgnx-px-x86_64-linux-musl
@@ -1163,9 +1167,11 @@ jobs:
         with:
           nidhogg: "true"
       # (+ gleipnir-probe and gleipnir-escape for the Seatbelt rows below). The tests job runs `eitri` and `draugr` on
-      # macOS (their O_NOFOLLOW_ANY, xcode-select-link and CLOEXEC-loop paths).
+      # macOS (their O_NOFOLLOW_ANY, xcode-select-link and CLOEXEC-loop paths). + drgnx-key beside the hub (keyed jobs).
       - id: build
-        run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
+        run: |
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
+          cargo build --locked --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key
       # the hooks/* rows load the fixture plugins from runtime/target/plugin-fixtures, which brokkr's test support
       # installs; in one job the unit tests did that first, here one test of it does
       - name: the plugin fixtures

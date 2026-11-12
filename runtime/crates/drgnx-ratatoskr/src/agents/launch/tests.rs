@@ -72,6 +72,7 @@ impl Fx {
             write: vec![self.p("wt")],
             read: vec![],
             net,
+            sockets: vec![],
             browser: None,
         }
     }
@@ -400,6 +401,7 @@ fn a_plain_chat_works_in_a_scratch_dir_with_no_home() {
         write: vec![scratch.clone()],
         read: vec![],
         net: NetCell::ProviderOnly,
+        sockets: vec![],
         browser: None,
     };
     let spec = fx.spec(&fx.plan(".claude"), &shape);
@@ -626,6 +628,7 @@ fn a_worktree_under_the_hub_run_root_launches_with_only_the_run_root_opened() {
         write: vec![wt.clone()],
         read: vec![],
         net: NetCell::ProviderOnly,
+        sockets: vec![],
         browser: None,
     };
     let plan = fx.plan(".claude");
@@ -1053,6 +1056,7 @@ fn the_cdp_secret_is_never_in_argv_or_logs() {
     let secret = crate::browser::Secret([0xc3; 32]);
     let hex = secret.hex();
     let shape = SessionShape {
+        sockets: vec![],
         browser: Some(crate::sandbox::BrowserShape {
             program,
             kind: crate::browser::resolve::Kind::Full,
@@ -1132,6 +1136,7 @@ fn a_replayed_launch_sees_the_recording_and_its_scratch_dir() {
         write: vec!["/w/t".into()],
         read: vec!["/w/r".into()],
         net: NetCell::ProviderOnly,
+        sockets: vec![],
         browser: None,
     };
     let dirs = crate::recording::ReplayDirs {
