@@ -218,6 +218,10 @@ kept once made."
                                                       :nodes (vconcat (nreverse nodes)) :edges []
                                                       :lists (vector (list :name "order" :ids (vconcat (nreverse order))))))))))))
 
+     (defvar drgnx-perf-extensions--answer-later nil
+       "Non-nil while a key is timed: `extensions/list' is answered after it, as the hub's answer is its own event.")
+     (defvar drgnx-perf-extensions--asked nil "The (PARAMS CALLBACK) of the lists asked while answers wait, newest first.")
+
      (defun drgnx-perf-extensions--hub-answer-list (params callback)
        "Answer `extensions/list' as the hub would: the model, then a rows reset to the list's class, then the totals."
        (let* ((m0 (apply #'+ (memory-use-counts))) (t0 (float-time))
@@ -239,7 +243,10 @@ kept once made."
      (defun drgnx-perf-extensions--hub (method params callback &rest _)
        "Stands for `drgnx-hub-call': answers from memory at once (the draw is what these rows time)."
        (pcase method
-         ("extensions/list" (drgnx-perf-extensions--hub-answer-list params callback))
+         ("extensions/list" (if drgnx-perf-extensions--answer-later
+                                ;; the hub answers on its own event, after the key that asked
+                                (push (list params callback) drgnx-perf-extensions--asked)
+                              (drgnx-perf-extensions--hub-answer-list params callback)))
          ("extensions/recommended" (funcall callback nil nil)) ; the hub holds the set
          ("extensions/search"
           (let* ((answer (drgnx-perf-extensions--search params))
@@ -354,21 +361,31 @@ same for the view and for the package menu."
 
      (defun drgnx-perf-extensions--scroll-ms (n)
        "Scroll the list N pages down and N up: each key's milliseconds (the command, the list's own `post-command-hook'
-and the redisplay; a next page it asks for is drawn after, in slices timed apart).  (KEYS . SLICES)."
+and the redisplay).  A next page a key asks for is answered after the key, as the hub's answer is its own event; its
+apply (the stub's build left out) and the draws it arms are timed apart, as slices.  (KEYS . SLICES)."
        (let ((buf (drgnx-perf-extensions--list)) times)
-         (setq drgnx-perf-extensions--slices nil)
+         (setq drgnx-perf-extensions--slices nil drgnx-perf-extensions--asked nil)
          (with-current-buffer buf (goto-char (point-min)))
          (advice-add 'drgnx-view--draw-buffer :around #'drgnx-perf-extensions--time-slice)
          (unwind-protect
              (dotimes (i (* 2 n))
-               (push (drgnx-perf-extensions--ms
-                      (lambda ()
-                        (with-current-buffer buf
-                          (condition-case nil (if (< i n) (scroll-up-command) (scroll-down-command)) (error nil))
-                          (drgnx-perf-extensions--local-post-command))
-                        (redisplay t)))
+               (setq drgnx-perf-extensions--answer-later t)
+               (push (unwind-protect
+                         (drgnx-perf-extensions--ms
+                          (lambda ()
+                            (with-current-buffer buf
+                              (condition-case nil (if (< i n) (scroll-up-command) (scroll-down-command)) (error nil))
+                              (drgnx-perf-extensions--local-post-command))
+                            (redisplay t)))
+                       (setq drgnx-perf-extensions--answer-later nil))
                      times)
+               (dolist (a (nreverse (prog1 drgnx-perf-extensions--asked (setq drgnx-perf-extensions--asked nil))))
+                 (setq drgnx-perf-extensions--hub-ms 0)
+                 (let ((t0 (float-time)))
+                   (apply #'drgnx-perf-extensions--hub-answer-list a)
+                   (push (- (* 1000 (- (float-time) t0)) drgnx-perf-extensions--hub-ms) drgnx-perf-extensions--slices)))
                (drgnx-perf-extensions--settle buf))
+           (setq drgnx-perf-extensions--answer-later nil drgnx-perf-extensions--asked nil)
            (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf-extensions--time-slice))
          (cons (nreverse times) drgnx-perf-extensions--slices)))
 
@@ -628,8 +645,10 @@ and the redisplay; a next page it asks for is drawn after, in slices timed apart
                         (let ((text (substring drgnx-perf-extensions--word 0 (1+ k))))
                           (push (drgnx-perf-extensions--ms (lambda () (with-current-buffer "*Packages*" (package-menu-filter-by-name text)) (redisplay t))) times)))
                       times))
+              ;; the same rows as the view's scroll ("e"), not the few the typed word left
               (scroll (let ((times nil) (n (drgnx-perf-extensions--size 'scroll)))
-                        (with-current-buffer "*Packages*" (goto-char (point-min)))
+                        (with-current-buffer "*Packages*" (package-menu-filter-by-name "e") (goto-char (point-min)))
+                        (redisplay t)
                         (dotimes (i (* 2 n))
                           (push (drgnx-perf-extensions--ms (lambda () (with-current-buffer "*Packages*" (condition-case nil (if (< i n) (scroll-up-command) (scroll-down-command)) (error nil)) (drgnx-perf-extensions--local-post-command)) (redisplay t))) times))
                         times)))
