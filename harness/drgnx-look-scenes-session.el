@@ -356,7 +356,7 @@ hub is started first and the shot waits for them (a session starts no hub: witho
                                         (with-current-buffer b
                                           (save-excursion (goto-char (point-min)) (search-forward "Makefile" nil t)))))))
 
-(declare-function drgnx-jobs--recount "drgnx-jobs")
+(declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function flymake-start "flymake")
 (declare-function flymake-make-diagnostic "flymake")
 (defvar drgnx-jobs--running)
@@ -405,8 +405,11 @@ counted from the hub), the file's problems (`drgnx-look-scene--problems') and it
       (flymake-mode 1)
       (flymake-start)
       (drgnx-look-scene--eglot)))
+  ;; the hub's `job/status', handed to tools/jobs as its own recount does (the module provides the feature name the
+  ;; deleted Lisp jobs runtime had, so nothing here declares from it)
   (drgnx-look-scene--try "jobs"
-    (drgnx-jobs--recount)
+    (drgnx-hub-call "job/status" nil
+                    (lambda (r e) (unless e (funcall 'drgnx-jobs-note-jobs (append (plist-get r :jobs) nil)))))
     (drgnx-look-scene--until 15 "the status bar's job (the seeded run)" (lambda () (eql drgnx-jobs--running 1))))
   (drgnx-look-scene--answer))
 
