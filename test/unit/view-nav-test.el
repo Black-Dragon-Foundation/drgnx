@@ -119,6 +119,58 @@ the match its own; the search cleared, nothing is dim."
         (drgnx-view-nav-class-step drgnx-view)
         (should-not (overlays-in (point-min) (point-max)))))))
 
+;; the perf row `view-select-dim' (2026-11-13): max 53 ms over its 50 budget from GC pauses, the class step allocating
+;; 244k objects a key, most of it `overlays-at' lists and a closure per row, three per row, to find the run at a row's
+;; edges.  The rows go in or out of their runs a stretch of consecutive rows at a time.
+(ert-deftest drgnx-view-nav/dimming-many-rows-touches-their-run-once ()
+  "Pattern D: 200 one-node rows, a search that matches the first: rows 2-200 go into one dim run with a handful of
+overlay calls, not a few per row; clearing the search takes them out the same way."
+  (drgnx-view-nav-test--with
+    (let* ((ids (mapcar (lambda (i) (format "n%03d" i)) (number-sequence 1 200))) (calls 0)
+           (count (lambda (&rest _) (cl-incf calls))))
+      (drgnx-view-model-event
+       (list :view view :hub 7 :base 1 :version 2 :reset t
+             :model (json-serialize
+                     (list :ops (vector (list :reset
+                                              (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"]
+                                                                      :lists ["order"] :classes ["selected" "match" "dim"]
+                                                                      :start "order")
+                                                    :nodes (vconcat (mapcar (lambda (id) (list :id id :kind "var"
+                                                                                               :fields (vector (vector "label" id))))
+                                                                            ids))
+                                                    :edges []
+                                                    :lists (vector (list :name "order" :ids (vconcat ids))))))))))
+      (drgnx-view-apply-patch
+       (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 1 :model 2
+             :ops (list (list :reset (mapcar (lambda (id) (list :key id :text (concat "row " id)
+                                                                :props (list (list 0 (+ 4 (length id)) "drgnx-work-id" id))))
+                                             ids)))))
+      (drgnx-view-draw-now drgnx-view)
+      (let ((runs (lambda () (cl-count-if (lambda (o) (overlay-get o 'drgnx-view-dim-run))
+                                          (overlays-in (point-min) (point-max))))))
+        (dolist (f '(overlays-at overlays-in make-overlay move-overlay)) (advice-add f :before count))
+        (unwind-protect
+            (progn
+              (nidhogg-view-set h 'search "n001")
+              (drgnx-view-nav-class-step drgnx-view)
+              (should (= 1 (funcall runs)))
+              (should (<= calls 8))
+              (setq calls 0)
+              (nidhogg-view-set h 'search nil)
+              (drgnx-view-nav-class-step drgnx-view)
+              (should (= 0 (funcall runs)))
+              (should (<= calls 8))
+              ;; again, as the perf row's keys do: the step's tables are the last step's, cleared; its vector cells
+              ;; are Sjá's changes (two per node) and a few
+              (nidhogg-view-set h 'search "n001")
+              (drgnx-view-nav-class-step drgnx-view)
+              (nidhogg-view-set h 'search nil)
+              (garbage-collect)
+              (let ((was (nth 2 (memory-use-counts))))
+                (drgnx-view-nav-class-step drgnx-view)
+                (should (<= (- (nth 2 (memory-use-counts)) was) (+ (* 2 200) 64)))))
+          (dolist (f '(overlays-at overlays-in make-overlay move-overlay)) (advice-remove f count)))))))
+
 (defun drgnx-view-nav-test--drawn ()
   "What a redisplay of this buffer would show: its text ticks and its overlays with their properties."
   (list (buffer-modified-tick) (buffer-chars-modified-tick)
