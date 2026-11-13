@@ -188,6 +188,26 @@ pub fn card_withdraw(tx: &mut WTx<'_>, id: i64, now: f64) -> Result<bool, CoordE
     Ok(true)
 }
 
+/// The hub starts: every open `matrix` card a session's request waits on (`data.session` set) is withdrawn.  The hub
+/// that asked is gone with its sessions' agents, so nobody waits on the answer; a resumed session that asks again gets
+/// a new card.  A matrix card with no session (a job's spending limit) stays.  How many.
+pub fn withdraw_orphaned_matrix_cards(tx: &mut WTx<'_>, now: f64) -> Result<usize, CoordError> {
+    let ids: Vec<i64> = {
+        let mut st = tx.sql().prepare(
+            "select id from card where kind = 'matrix' and state = 'open' \
+             and json_extract(data, '$.session') is not null order by id",
+        )?;
+        st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?
+    };
+    let mut n = 0;
+    for id in ids {
+        if card_withdraw(tx, id, now)? {
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
 /// `drgnx-coord-card-set`: change card `id`'s title, data and/or state.  A change of state (a reopened card) leaves a
 /// `card` event.
 pub fn card_set(tx: &mut WTx<'_>, id: i64, set: CardSet, now: f64) -> Result<(), CoordError> {
@@ -408,6 +428,43 @@ mod tests {
         assert!(!card_withdraw(&mut tx, settled, 6.0).unwrap());
         assert_eq!(state(&mut tx, settled), "settled");
         assert_eq!(kinds(tx.sql()), ["card", "card", "card", "card"]);
+    }
+
+    /// Pure (D): at a hub's start the open matrix cards of sessions' requests go (nobody waits any more); a matrix
+    /// card with no session, an ask card and a settled card stay.
+    #[test]
+    fn a_hub_start_withdraws_the_session_matrix_cards_only() {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        let matrix = |tx: &mut WTx<'_>, data: Value| {
+            card_create(
+                tx,
+                NewCard {
+                    kind: Some("matrix".into()),
+                    title: Some("t".into()),
+                    data: Some(data),
+                    ..NewCard::default()
+                },
+                1.0,
+            )
+            .unwrap()
+        };
+        let asked = matrix(&mut tx, json!({"action": "code.edit", "session": "s-1"}));
+        let limit = matrix(&mut tx, json!({"action": "spend", "session": null}));
+        let settled = matrix(&mut tx, json!({"action": "code.edit", "session": "s-2"}));
+        assert!(card_settle(&mut tx, settled, "allow", 2.0).unwrap());
+        let question = card_create(&mut tx, card("ask"), 3.0).unwrap();
+        assert_eq!(withdraw_orphaned_matrix_cards(&mut tx, 4.0).unwrap(), 1);
+        let state = |tx: &mut WTx<'_>, id: i64| -> String {
+            tx.sql()
+                .query_row("select state from card where id = ?1", [id], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(state(&mut tx, asked), "withdrawn");
+        assert_eq!(state(&mut tx, limit), "open");
+        assert_eq!(state(&mut tx, settled), "settled");
+        assert_eq!(state(&mut tx, question), "open");
+        assert_eq!(withdraw_orphaned_matrix_cards(&mut tx, 5.0).unwrap(), 0);
     }
 
     #[test]

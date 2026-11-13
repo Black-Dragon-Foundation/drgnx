@@ -1959,7 +1959,10 @@ What the core keeps:
   the card before the exit. A request the matrix decides on after its turn was cancelled or ended is answered
   cancelled at once: the agent no longer waits on it. A matrix card that no request waits on any more after such a
   cancel is withdrawn (`Withdraw`: `norn::write::cards::card_withdraw`, state `withdrawn` with a `card` event), so it
-  leaves the open cards and the needs-you lists; a card the user settled first stays settled.
+  leaves the open cards and the needs-you lists; a card the user settled first stays settled. A hub that crashed took
+  its sessions' agents with it, so at the next start, before any session resumes, every open matrix card with a
+  session (`norn::write::cards::withdraw_orphaned_matrix_cards`) is withdrawn the same way; a resumed session that
+  asks again gets a new card, and a matrix card with no session (a job's spending limit) stays.
 - One event pair is armed at a time; the timer's tick sends it. While the hub ends none is armed or sent: the shell
   reads the snapshot when it sends a pair, so one sent then could show the session's own exit, and an editor that read
   it before its connection's end of file would keep that reason instead of the hub's.

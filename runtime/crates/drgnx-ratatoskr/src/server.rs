@@ -326,6 +326,30 @@ pub async fn run(args: ServeArgs) -> Exit {
         .settings
         .open(paths::config_dir(&env), runtime.clone());
     front.refresh_settings().await;
+    // the matrix cards an earlier hub's sessions waited on: nobody waits any more (before any session resumes, so a
+    // card a resumed session raises is never taken for one of them)
+    {
+        let at = crate::clock::wall_secs();
+        let caller = crate::dispatch::Caller {
+            class: runstav::registry::Class::Service,
+            sid: None,
+            job: None,
+            conn_id: 0,
+        };
+        match front
+            .writer
+            .write(&caller, "cards/withdraw", move |tx| {
+                norn::write::cards::withdraw_orphaned_matrix_cards(tx, at)
+            })
+            .await
+        {
+            Ok(n) if n > 0 => {
+                tracing::info!("{n} matrix cards of an earlier hub's sessions withdrawn")
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("matrix cards of an earlier hub not withdrawn: {e:?}"),
+        }
+    }
     // the sessions recorded before this start: resumed (their profiles are in the settings now), queues delivered
     // (in the background: a slow agent never delays serving)
     // The jobs a hub before this one left running are watched again first (a session resumed then knows it waits),
