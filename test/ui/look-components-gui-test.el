@@ -136,3 +136,36 @@ and a button in the UI text role's; under Glitnir a button's corner is rounded (
 
 (provide 'look-components-gui-test)
 ;;; look-components-gui-test.el ends here
+
+(drgnx-look-gui-deftest drgnx-ui-look-components/a-focused-button-has-the-focus-ring ()
+  "A button given the focus (`drgnx-ui-button' with FOCUS, a card's default) shows the theme's focus ring just inside
+its edge, at its middle, on either side; the button beside it without the focus shows its fill there."
+  (skip-unless (display-graphic-p))
+  (drgnx-uitest-bare-frame)
+  (let ((buf (get-buffer-create "*look-components-focus*")))
+    (unwind-protect
+        (progn
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme 'drgnx-dark t)
+          (switch-to-buffer buf)
+          (erase-buffer)
+          (insert "\n " (drgnx-ui-button "Write File" #'ignore :face 'drgnx-ui-button-primary :focus t) "\n\n")
+          (insert " " (drgnx-ui-button "Write File" #'ignore :face 'drgnx-ui-button-primary) "\n")
+          (goto-char (point-min))
+          (drgnx-test-wait-presented)
+          (let* ((frame (selected-frame)) (s (drgnx-uitest-device-scale frame)) (edges (window-inside-pixel-edges))
+                 (snap (drgnx-uitest-snapshot))
+                 (focus (drgnx-look-components-ui-test--rgb (drgnx-look-token 'focus 'dark)))
+                 (fill (drgnx-look-components-ui-test--rgb (drgnx-look-token 'accent-fill 'dark))))
+            (when-let* ((dir (getenv "DRGNX_UI_EVIDENCE")) ((file-directory-p dir)))
+              (copy-file (plist-get (drgnx-uitest-capture (make-temp-file "focus" t)) :root)
+                         (expand-file-name (format "focus-ring-s%s.png" (drgnx-pixels-scale frame)) dir) t))
+            (pcase-dolist (`(,n ,want) `((1 ,focus) (2 ,fill)))
+              (goto-char (point-min))
+              (search-forward "Write" nil t n)
+              (let* ((start (posn-x-y (posn-at-point (1+ (line-beginning-position)))))
+                     (x (round (* s (+ (car edges) (car start) 1))))
+                     (y (round (+ (* s (+ (cadr edges) (cdr start))) (/ (line-pixel-height) 2.0)))))
+                (should (equal (list n want) (list n (drgnx-uitest-pixel snap x y))))))))
+      (mapc #'disable-theme custom-enabled-themes)
+      (kill-buffer buf))))

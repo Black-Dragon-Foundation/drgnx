@@ -16,7 +16,7 @@ use drgnx_ratatoskr::debug::session::{ScopeVars, Stop};
 use drgnx_ratatoskr::view::debug::model::{
     Bps, Input, Opened, PAGE_CAP, SessionView, Tree, Var, chunks, doc, lines,
 };
-use drgnx_ratatoskr::view::debug::rows::rows;
+use drgnx_ratatoskr::view::debug::rows::{Room, rows};
 use drgnx_ratatoskr::view::explorer::RowLook;
 use serde_json::{Value, json};
 
@@ -137,13 +137,19 @@ fn debug_step_variables() {
     let (mut old_lines, mut prev) = lines(&input(&first, &bps, &opened, &HashMap::new()));
     let mut old_doc = doc(&old_lines);
     let mut runs = Vec::new();
+    let fonts = drgnx_rows::fit::FontSet::new();
+    let room = Room {
+        width: 640,
+        cell: None,
+        fonts: &fonts,
+    };
     for epoch in 1..=120u64 {
         let t = Instant::now();
         let s = [session(a_stop(epoch, locals(epoch)))];
         let (ls, cur) = lines(&input(&s, &bps, &opened, &prev));
         let d = doc(&ls);
         let ops = d.diff(&old_doc);
-        let (rs, _images) = rows(&ls, &gui);
+        let (rs, _images) = rows(&ls, &gui, &room);
         runs.push(t.elapsed());
         assert!(!ops.is_empty() && rs.len() > 300);
         assert!(ls.iter().filter(|l| l.changed).count() == 10);
@@ -201,7 +207,13 @@ fn held(pages: usize) -> (f64, [f64; 4], usize) {
         gui: Some((12, 16, 6)),
         one_root: false,
     };
-    let (rs, _images) = rows(&ls, &gui);
+    let fonts = drgnx_rows::fit::FontSet::new();
+    let room = Room {
+        width: 640,
+        cell: None,
+        fonts: &fonts,
+    };
+    let (rs, _images) = rows(&ls, &gui, &room);
     let after = live();
     assert!(rs.len() == ls.len() && cur.len() >= pages.min(PAGE_CAP) * 100);
     let n = ls.len();

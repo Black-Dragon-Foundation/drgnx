@@ -495,15 +495,21 @@ fn sections_close_and_the_model_follows_the_lines() {
 }
 
 /// The rows: a variable is `name: value` in the value's role (a number, a string), a changed value in the changed
-/// face; an openable node's chevron is an image on a graphical display and `▸` / `▾` on a terminal, indented two
-/// columns a level; a breakpoint has its tick box; every row names its node (`drgnx-work-id`).
+/// face, no type; an openable node's chevron is an image on a graphical display and `▸` / `▾` on a terminal, indented
+/// two columns a level; a breakpoint is its dot and file with its line at the right edge (debugging.html `.dv`); a
+/// value too long for the row ends in `…`; every row names its node (`drgnx-work-id`).
 #[test]
-fn rows_draw_names_values_chevrons_and_ticks() {
-    use super::rows::rows;
+fn rows_draw_names_values_chevrons_and_places() {
+    use super::rows::{Room, rows};
     use crate::view::explorer::RowLook;
     let mut s = session(
         2,
-        vec![v("n", "5", 0), v("s", "'hi'", 0), v("obj", "Obj", 3)],
+        vec![
+            v("n", "5", 0),
+            v("s", "'hi'", 0),
+            v("obj", "Obj", 3),
+            v("long", &"x".repeat(80), 0),
+        ],
     );
     s.tree.kids.insert("v:s1:Locals/obj".into(), vec![]);
     let prev = HashMap::from([("v:s1:Locals/n".to_owned(), "4".to_owned())]);
@@ -528,7 +534,14 @@ fn rows_draw_names_values_chevrons_and_ticks() {
         gui: None,
         one_root: false,
     };
-    let (rs, images) = rows(&ls, &tty);
+    let fonts = drgnx_rows::fit::FontSet::new();
+    // a terminal 40 columns of 10 px
+    let room = Room {
+        width: 400,
+        cell: Some(10),
+        fonts: &fonts,
+    };
+    let (rs, images) = rows(&ls, &tty, &room);
     assert!(images.is_empty());
     let row = |id: &str| rs.iter().find(|r| r.key == id).unwrap().clone();
     let n = row("v:s1:Locals/n");
@@ -538,7 +551,14 @@ fn rows_draw_names_values_chevrons_and_ticks() {
     assert!(st.runs.iter().any(|r| r.2 == "drgnx-debug-view-string"));
     assert_eq!(row("v:s1:Locals/obj").text, "    ▸ obj: Obj");
     assert_eq!(row("v:s1:Locals").text, "  ▾ Locals");
-    assert_eq!(row("b:1").text, "    [ ] ● a.py:3".replace("[ ]", "[x]"));
+    let bp = row("b:1");
+    assert_eq!(bp.text, "    ● a.py 3");
+    // the line against the right edge: 400 px less its column and a column of room
+    assert_eq!(bp.stops, vec![(10, 380)]);
+    assert!(bp.runs.iter().any(|r| r.2 == "drgnx-debug-view-place"));
+    let long = row("v:s1:Locals/long");
+    assert!(long.text.ends_with('…'), "{}", long.text);
+    assert!(long.text.chars().count() <= 40);
     assert!(
         n.props
             .iter()
@@ -548,7 +568,7 @@ fn rows_draw_names_values_chevrons_and_ticks() {
         gui: Some((12, 16, 6)),
         one_root: false,
     };
-    let (rs, images) = rows(&ls, &gui);
+    let (rs, images) = rows(&ls, &gui, &room);
     assert_eq!(images.len(), 2, "the two chevrons, each once");
     let obj = rs.iter().find(|r| r.key == "v:s1:Locals/obj").unwrap();
     assert_eq!(obj.images.len(), 1);

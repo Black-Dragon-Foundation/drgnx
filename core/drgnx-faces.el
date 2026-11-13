@@ -72,6 +72,9 @@ subtle does not (3.8:1 on the dark selection, 4.3 on the light); in high contras
   "A chip of something fine, on the ok tint: a remote branch, DONE." :group 'drgnx-look)
 (defface drgnx-chip-warn '((t :inherit (warning drgnx-selected-quiet)))
   "A chip to look at, on the warn tint: a tag, a warning." :group 'drgnx-look)
+(defface drgnx-tint-warn '((t :inherit drgnx-selected-quiet))
+  "A warning callout's background, the warn tint, under text in its own colour (look.css `.warn')."
+  :group 'drgnx-look)
 (defface drgnx-chip-error '((t :inherit (error drgnx-selected-quiet)))
   "A chip of something wrong, on the error tint: an error." :group 'drgnx-look)
 

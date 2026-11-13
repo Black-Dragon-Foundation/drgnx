@@ -54,9 +54,42 @@ as keycaps, drawn with the page (never computed in redisplay)."
       (debug-memory-test--answer calls "abc" 5)
       (with-current-buffer "*Memory: order.buf*"
         (should (memq 'drgnx-debug-memory--header header-line-format))
+        ;; as shown: the properties kept (a bare symbol's string would show plain, no icon or alignment)
+        (should (eq (car header-line-format) :eval))
         (let ((h drgnx-debug-memory--header))
           (should (string-match-p "Memory: order\\.buf +0x1000 · 8 bytes" h))
-          (should (string-match-p "PgUp.*PgDn.*F2" h)))))))
+          (should (string-match-p "PgUp.*PgDn.*F2" h))
+          ;; debugging-extras.html: the braces icon first, the keycaps at the right edge
+          (should (string-prefix-p (drgnx-look-icon 'braces 'drgnx-text-muted 14) (substring h 1)))
+          (let ((gap (get-text-property (1- (string-search "PgUp" h)) 'display h)))
+            (unless (eq (car-safe gap) 'space)
+              (setq gap (get-text-property (- (string-search "PgUp" h) 2) 'display h)))
+            (should (eq (car-safe (plist-get (cdr gap) :align-to)) '-))))))))
+
+(ert-deftest drgnx-debug-memory/the-byte-at-point-is-ringed ()
+  "The byte at point (its two hex digits) is ringed in the selection (debugging-extras.html `.mem .ed2'): F2 writes
+from it; off a byte, no ring."
+  (debug-memory-test--with
+    (drgnx-debug-memory-open "s1" "0x1000" "buf")
+    (debug-memory-test--answer calls "hello")
+    (with-current-buffer "*Memory: buf*"
+      (goto-char (point-min))
+      (search-forward "65")
+      (goto-char (match-beginning 0))
+      (drgnx-debug-memory--ring)
+      (let ((o drgnx-debug-memory--cursor))
+        (should (overlay-buffer o))
+        (should (equal (buffer-substring-no-properties (overlay-start o) (overlay-end o)) "65"))
+        (should (eq (overlay-get o 'face) 'drgnx-debug-memory-cursor)))
+      (forward-char 1)
+      (drgnx-debug-memory--ring)
+      (should (equal (buffer-substring-no-properties (overlay-start drgnx-debug-memory--cursor)
+                                                     (overlay-end drgnx-debug-memory--cursor))
+                     "65"))
+      (goto-char (point-min))
+      (drgnx-debug-memory--ring)
+      (should-not (overlay-buffer drgnx-debug-memory--cursor))
+      (should (memq #'drgnx-debug-memory--ring post-command-hook)))))
 
 (ert-deftest drgnx-debug-memory/pages-and-writes ()
   "The next and previous pages (never before the reference); a write at the byte under point sends the bytes typed

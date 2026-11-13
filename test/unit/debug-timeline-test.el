@@ -208,13 +208,20 @@ once for the same reason; nothing asks."
       (unwind-protect
           (progn
             (drgnx-debug-timeline--event "debug-recording-off"
-                                         (list :session "d1" :root "/p" :why "the keyring is locked; it unlocks when you log in"))
+                                         (list :session "d1" :root "/p" :short "keyring locked"
+                                               :why "the keyring is locked; it unlocks when you log in"))
             (drgnx-debug-timeline--event "debug-recording-off"
-                                         (list :session "d2" :root "/p" :why "the keyring is locked; it unlocks when you log in"))
-            (should (equal said '("Debug: this session is not recorded: the keyring is locked; it unlocks when you log in")))
-            (drgnx-debug-timeline--event "debug-recording-off" (list :session "d3" :root "/p" :why "no keyring"))
-            (should (equal (car said) "Debug: this session is not recorded: no keyring")))
-        (setq drgnx-debug-timeline--off-said nil)))))
+                                         (list :session "d2" :root "/p" :short "keyring locked"
+                                               :why "the keyring is locked; it unlocks when you log in"))
+            ;; a few words; the whole reason (a keyring's raw error) is the status segment's tooltip
+            (should (equal said '("Debug: not recorded: keyring locked")))
+            (should (equal (drgnx-debug-timeline-unrecorded "d2") "the keyring is locked; it unlocks when you log in"))
+            (drgnx-debug-timeline--event "debug-recording-off"
+                                         (list :session "d3" :root "/p" :short "no keyring"
+                                               :why "org.freedesktop.DBus.Error.ServiceUnknown: The name is not activatable"))
+            (should (equal (car said) "Debug: not recorded: no keyring"))
+            (should (string-match-p "ServiceUnknown" (drgnx-debug-timeline-unrecorded "d3"))))
+        (setq drgnx-debug-timeline--off-said nil drgnx-debug-timeline--unrecorded nil)))))
 
 (ert-deftest drgnx-debug-timeline/off-leaves-nothing ()
   (debug-timeline-test--with

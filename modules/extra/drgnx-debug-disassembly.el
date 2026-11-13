@@ -10,6 +10,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'drgnx-icons)
 
 (declare-function drgnx-hub-call "drgnx-hub-client" (method params callback &rest keys))
 (declare-function drgnx-debug--session "drgnx-debug" (&optional state))
@@ -27,8 +28,19 @@
 (defface drgnx-debug-disassembly-address '((t :inherit drgnx-text-subtle)) "An instruction's address."
   :group 'drgnx-debug)
 (defface drgnx-debug-disassembly-bytes '((t :inherit drgnx-text-disabled)) "An instruction's bytes." :group 'drgnx-debug)
-(defface drgnx-debug-disassembly-source '((t :inherit drgnx-text-subtle))
-  "The source line instructions came from, above them." :group 'drgnx-debug)
+(defface drgnx-debug-disassembly-source '((t :inherit (italic drgnx-text-subtle)))
+  "The source line instructions came from, above them (debugging-extras.html `.dis .src')." :group 'drgnx-debug)
+(defface drgnx-debug-disassembly-mnemonic '((t :inherit font-lock-keyword-face))
+  "An instruction's mnemonic (`.dis .op')." :group 'drgnx-debug)
+(defface drgnx-debug-disassembly-register '((t :inherit font-lock-constant-face))
+  "A register in an instruction's operands (`.dis .rg')." :group 'drgnx-debug)
+(defface drgnx-debug-disassembly-symbol '((t :inherit font-lock-function-name-face))
+  "A symbol in an instruction's operands (`.dis .sy')." :group 'drgnx-debug)
+
+(defconst drgnx-debug-disassembly--register-re
+  (concat "\\`\\(?:[re]?[abcd]x\\|[re]?[sd]il?\\|[re]?[sb]pl?\\|r[0-9]+[dwb]?\\|[abcd][lh]\\|[xyz]mm[0-9]+\\|[re]?ip"
+          "\\|[xwvqdsbh][0-9]+\\|[xw]zr\\|sp\\|lr\\|fp\\|pc\\|[cdefgs]s\\)\\'")
+  "A register's name: x86-64's and arm64's.")
 (defface drgnx-debug-disassembly-place '((t :inherit drgnx-text-disabled)) "A source row's file and line."
   :group 'drgnx-debug)
 (defface drgnx-debug-disassembly-step '((t :inherit drgnx-chip-warn))
@@ -65,13 +77,16 @@
 (defun drgnx-debug-disassembly--header ()
   "The header: the frame and the session; the chip while the step keys step one instruction."
   (let ((s (seq-find (lambda (s) (equal (plist-get s :id) drgnx-debug-disassembly--session)) drgnx-debug--sessions)))
-    (concat " " (propertize "Disassembly" 'face 'bold) "  "
+    (concat " " (drgnx-look-icon 'terminal 'drgnx-text-muted 14) " " (propertize "Disassembly" 'face 'bold) "  "
             (propertize (string-join (delq nil (list (plist-get drgnx-debug-disassembly--frame :name)
                                                      (plist-get s :name)))
                                      " · ")
                         'face 'drgnx-text-subtle)
+            ;; the chip against the right edge (debugging-extras.html: the header's `.chip.warn')
             (when (eq (selected-window) (get-buffer-window (current-buffer)))
-              (concat "  " (propertize " instruction step " 'face 'drgnx-debug-disassembly-step))))))
+              (let ((chip " instruction step "))
+                (concat (propertize " " 'display `(space :align-to (- right ,(1+ (string-width chip)))))
+                        (propertize chip 'face 'drgnx-debug-disassembly-step)))))))
 
 (defun drgnx-debug-disassembly--state (session)
   "SESSION's plist in the last `debug-state'."
@@ -146,6 +161,22 @@
       (when (zerop (forward-line (1- line)))
         (string-trim (buffer-substring-no-properties (point) (line-end-position)))))))
 
+(defun drgnx-debug-disassembly--colour (text)
+  "Instruction TEXT with its mnemonic, registers and symbols in their faces; numbers and punctuation plain."
+  (let ((s (copy-sequence text)) (start 0))
+    (when (string-match "\\`[ \t]*\\([[:alnum:]._]+\\)" s)
+      (add-face-text-property (match-beginning 1) (match-end 1) 'drgnx-debug-disassembly-mnemonic t s)
+      (setq start (match-end 1)))
+    (while (string-match "[[:alpha:]_.$][[:alnum:]_.$@]*" s start)
+      (let ((word (match-string 0 s)) (b (match-beginning 0)) (e (match-end 0)))
+        (unless (and (> b 0) (string-match-p "[0-9]" (substring s (1- b) b)))   ; the x of 0x8 is a number's
+          (add-face-text-property b e (if (string-match-p drgnx-debug-disassembly--register-re (downcase word))
+                                          'drgnx-debug-disassembly-register
+                                        'drgnx-debug-disassembly-symbol)
+                                  t s))
+        (setq start e)))
+    s))
+
 (defun drgnx-debug-disassembly--draw (instructions)
   "Draw INSTRUCTIONS: a source row where the place changes, then each one's address, bytes and text."
   (let ((inhibit-read-only t) (place nil) (at (drgnx-debug-disassembly--line-address)))
@@ -154,16 +185,18 @@
       (let ((path (plist-get i :path)) (line (plist-get i :line)))
         (when (and path line (not (equal place (cons path line))))
           (setq place (cons path line))
-          (insert (propertize (concat "  " (or (drgnx-debug-disassembly--source-line path line) ""))
-                              'face 'drgnx-debug-disassembly-source)
-                  "  " (propertize (format "%s:%d" (file-name-nondirectory path) line)
-                                   'face 'drgnx-debug-disassembly-place)
-                  "\n"))
+          ;; the source row: italic, its place against the right edge (`.dis .src')
+          (let ((where (propertize (format "%s:%d" (file-name-nondirectory path) line)
+                                   'face 'drgnx-debug-disassembly-place)))
+            (insert (propertize (concat "  " (or (drgnx-debug-disassembly--source-line path line) ""))
+                                'face 'drgnx-debug-disassembly-source)
+                    (propertize " " 'display `(space :align-to (- right ,(1+ (string-width where)))))
+                    where "\n")))
         (insert (propertize (concat (propertize (format "%-18s" (plist-get i :address))
                                                 'face 'drgnx-debug-disassembly-address)
                                     (propertize (format "%-24s" (or (plist-get i :bytes) ""))
                                                 'face 'drgnx-debug-disassembly-bytes)
-                                    (plist-get i :instruction))
+                                    (drgnx-debug-disassembly--colour (or (plist-get i :instruction) "")))
                             'drgnx-debug-disassembly-address (drgnx-debug-disassembly--address (plist-get i :address))
                             'help-echo (plist-get i :symbol))
                 "\n")))

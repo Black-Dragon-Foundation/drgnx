@@ -17,6 +17,7 @@
 (require 'drgnx-debug-fork (expand-file-name "drgnx-debug-fork" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-timeline (expand-file-name "drgnx-debug-timeline" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-bisect (expand-file-name "drgnx-debug-bisect" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-debug-share (expand-file-name "drgnx-debug-share" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-investigation
          (expand-file-name "drgnx-debug-investigation" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-origin (expand-file-name "drgnx-debug-origin" (file-name-directory (macroexp-file-name))))
@@ -138,6 +139,7 @@ the toolbar's cards go too."
   (drgnx-debug-disassembly--teardown)
   (drgnx-debug-session-mode -1)
   (drgnx-debug-timeline-mode -1)
+  (when-let* ((card (get-buffer drgnx-debug-share-buffer))) (kill-buffer card))
   (drgnx-debug-bisect-events-mode -1)
   (drgnx-debug-origin-events-mode -1)
   (drgnx-debug-select-config-forget)
@@ -226,6 +228,17 @@ as projects the user selected in, cleared by the module's teardown.")
                                             :op (list :op "add-function" :name (string-trim name)))
                   #'drgnx-debug--answered))
 
+(defface drgnx-debug-tip-name '((t :inherit font-lock-function-name-face))
+  "A data tip's expression (debugging-extras.html `.dtip .vn')." :group 'drgnx)
+(defface drgnx-debug-tip-number '((t :inherit font-lock-constant-face))
+  "A data tip's value that is a number (`.vc')." :group 'drgnx)
+(defface drgnx-debug-tip-string '((t :inherit font-lock-string-face))
+  "A data tip's value that is a string (`.vs')." :group 'drgnx)
+(defface drgnx-debug-tip-value '((t :inherit default))
+  "A data tip's other values." :group 'drgnx)
+(defface drgnx-debug-tip-type '((t :inherit (drgnx-ui-caption drgnx-text-subtle)))
+  "A data tip's type, after the value (`.ty')." :group 'drgnx)
+
 (defun drgnx-debug-hover-eldoc (_callback)
   "Nothing, for the echo area: an expression is evaluated only when the mouse rests on it (quick help's card asks
 `drgnx-debug-hover-doc' instead, `drgnx-quickhelp-fuller-functions')."
@@ -241,11 +254,21 @@ on an error.  Nil (nothing asked) without a stopped session or an expression."
                       (let ((mark-active nil)) (drgnx-debug--expression-at-point)))))
     (drgnx-hub-call "debug/evaluate" (list :session (plist-get s :id) :expr expr :context "hover")
                     (lambda (r error)
-                      (funcall callback
-                               (unless error
-                                 (format "%s = %s%s" expr (plist-get r :result)
-                                         (if-let* ((ty (plist-get r :type))) (format "  (%s)" ty) ""))))))
+                      (if error
+                          (funcall callback nil)
+                        (funcall callback (drgnx-debug--tip-text expr (plist-get r :result) (plist-get r :type))
+                                 :thing expr :drgnx-data-tip t))))
     t))
+
+(defun drgnx-debug--tip-text (expr value type)
+  "The data tip of EXPR: its name, VALUE coloured as what it is (a string, a number) and TYPE quiet after it
+\(debugging-extras.html `.dtip')."
+  (let ((value (format "%s" value)))
+    (concat (propertize expr 'face 'drgnx-debug-tip-name) " = "
+            (propertize value 'face (cond ((string-match-p "\\`[\"']" value) 'drgnx-debug-tip-string)
+                                          ((string-match-p "\\`-?[0-9][0-9._xXa-fA-FeE+-]*\\'" value) 'drgnx-debug-tip-number)
+                                          (t 'drgnx-debug-tip-value)))
+            (if (and type (not (equal type ""))) (concat "  " (propertize type 'face 'drgnx-debug-tip-type)) ""))))
 
 (defun drgnx-debug--expression-at-point ()
   "The active region's text, else the symbol at point with the member chain before it (`self.items'); nil if none."
@@ -351,8 +374,14 @@ console's tab shows without taking the focus."
                                                           :map 'drgnx-debug-console-mode-map :when in-console))))
                               ;; Run and Debug: the sidebar view the hub builds (drgnx-debug-view.el); its row keys in
                               ;; its own map
+                              ;; the island header names the view (debugging.html `.ph'); the section shows the
+                              ;; view's own header: Start and the configuration (`.cfg')
+                              (drgnx-module-alist-put 'drgnx-wb-island-views 'debug
+                                                      '(:title "Run and Debug"
+                                                               :buttons ((file-cog "Open launch.json" run-and-debug
+                                                                                   . debug-open-launch-json))))
                               (drgnx-wb-define-section 'run-and-debug :view 'debug :slot 0 :title " RUN AND DEBUG"
-                                                       :buffer #'drgnx-debug-view--buffer)
+                                                       :own-header t :buffer #'drgnx-debug-view--buffer)
                               (let ((in-view (lambda () (derived-mode-p 'drgnx-debug-view-mode))))
                                 (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-view-commands)
                                   (if (memq id drgnx-debug-view-global-commands)
@@ -377,6 +406,13 @@ console's tab shows without taking the focus."
                               (drgnx-debug-timeline-mode 1)
                               (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-timeline-commands)
                                 (drgnx-command-define id :category "Debug" :title title :command fn :doc doc))
+                              ;; sending a run: Send Run…, its card, Open Sent Run… (drgnx-debug-share.el)
+                              (let ((in-card (lambda () (derived-mode-p 'drgnx-debug-share-mode))))
+                                (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-share-commands)
+                                  (if (memq id '(debug-send-run debug-open-sent-run))
+                                      (drgnx-command-define id :category "Debug" :title title :command fn :doc doc)
+                                    (drgnx-command-define id :category "Debug" :title title :command fn :doc doc
+                                                          :map 'drgnx-debug-share-mode-map :when in-card))))
                               ;; which change broke it: bisect over the edit history (drgnx-debug-bisect.el)
                               (drgnx-debug-bisect-events-mode 1)
                               (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-bisect-commands)
