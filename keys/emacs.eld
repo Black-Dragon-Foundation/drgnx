@@ -309,6 +309,7 @@
         (ai-ask :none "in the palette")
         (ai-choose :none "in the palette")
         (ai-load-keys :none "drgnx open runs it once per start; the palette")
+        (ai-remove-key :none "the palette; a rare, deliberate command")
         (onboarding :none "Help → Welcome; the palette")
         (onboarding-environment :none "the Welcome list; the palette")
         (onboarding-look-and-keys :none "the Welcome list; the palette")

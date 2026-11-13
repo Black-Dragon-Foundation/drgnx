@@ -282,6 +282,10 @@ key you gave onboarding works in the drgnx app; in a terminal (`drgnx onboard`, 
 environment variable. The one exception is `drgnx secrets` (below), which you run on a terminal to carry your keys
 to another machine.
 
+**AI: Remove Key…** (`drgnx-ai-remove-key`) deletes a provider's key: drgnx's item in the Keychain or keyring, this
+Emacs's copy, and the hub's, which forgets it at once (`gateway/revoke-key`; a request after it finds no key). It asks
+first. A key in your environment (`OPENROUTER_API_KEY`) stays where you put it: unset it yourself.
+
 ### Keys on a second machine
 
 `drgnx secrets export` puts the keys your keyring holds for the providers that take one (OpenRouter, Anthropic, any
