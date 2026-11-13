@@ -113,7 +113,7 @@ What the agent changed and what it asks sit under the transcript as cards.
 
 - **Diff cards:** one for each hunk of each file the agent edited (flat, with a border). A header over it names the
   file, the lines and which hunk it is ("215–217 · hunk 1 of 1"), with **Reject** and **Accept** at the right; each line
-  shows its number (the new file's; a removed line, the old file's). `a` accepts the hunk: it writes
+  shows its number (the new file's; a removed line, the old file's). In a narrow panel the file name, then the hunk label, give way so Reject and Accept stay inside the edge, and long lines are cut to the panel's width. `a` accepts the hunk: it writes
   the review mark the merge gate compares, and nothing is merged. `D` rejects it: the file goes back to pending and the
   agent is told, in a queued message, to take it back. The panel never writes to an agent's worktree and keeps no queue
   of its own; both keys are the review view's own functions (module `tools/work-space`).

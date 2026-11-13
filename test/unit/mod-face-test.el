@@ -92,6 +92,15 @@ too, no stubs — and turned off after, strictly: the state after equals the sta
                                        (should (equal default-frame-alist frame-alist)))
                                    (kill-buffer b)))))))
 
+(ert-deftest drgnx-face/an-inline-problem-is-cut-to-the-window ()
+  "M12f-A10-4: an end-of-line problem chip never runs past the window (it would wrap onto a second screen line): its
+text is cut with an ellipsis to the room left after the line's end; a window with room keeps it whole."
+  (should (equal "short" (drgnx-face--eol-fit "short" 20 60)))
+  (let ((cut (drgnx-face--eol-fit (make-string 80 ?x) 20 60)))
+    (should (<= (string-width cut) (- 60 20 4)))
+    (should (string-suffix-p "…" cut)))
+  (should (<= (string-width (drgnx-face--eol-fit (make-string 80 ?x) 58 60)) 8)))   ; never nothing at all
+
 (ert-deftest drgnx-face/on-again-sets-up-what-it-did-first ()
   ;; the flags a teardown clears: on again, the module waits for flymake again and owns the dividers again
   (drgnx-face-test--with

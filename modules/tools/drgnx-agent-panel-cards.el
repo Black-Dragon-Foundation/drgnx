@@ -21,6 +21,7 @@
 (require 'drgnx-pixels)
 (require 'drgnx-ui-kit)                 ; the buttons
 
+(declare-function drgnx-agent-panel--width "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel--key-at "drgnx-agent-panel")
 (declare-function drgnx-agent-panel-explain-note-always "drgnx-agent-panel-explain")
 (defvar drgnx-agent-panel--session)
@@ -106,9 +107,16 @@ box would cut the card's ring."
     (define-key map [mouse-1] command)
     (propertize label 'face face 'mouse-face 'drgnx-hover 'keymap map 'help-echo help)))
 
+(defun drgnx-agent-panel-cards--columns ()
+  "How many code columns a card line has in this panel (the panel's width less the card's 12 px either side and the line
+number), or 100 when the width is not known."
+  (if-let* ((w (drgnx-agent-panel--width)))
+      (max 8 (min 100 (- (/ (- w (* 2 (drgnx-px 12))) (max 1 (frame-char-width))) 6)))
+    100))
+
 (defun drgnx-agent-panel-cards--numbered (header body)
   "BODY's lines (a hunk's, under HEADER \"@@ -A,B +C,D @@\") as (TEXT . FACE): each after its line number (the new
-file's, a removed line the old file's), FACE the panel's code face for its kind."
+file's, a removed line the old file's), FACE the panel's code face for its kind, cut to the panel's width."
   (let ((old (if (string-match "-\\([0-9]+\\)" header) (string-to-number (match-string 1 header)) 1))
         (new (if (string-match "\\+\\([0-9]+\\)" header) (string-to-number (match-string 1 header)) 1)))
     (mapcar (lambda (l)
@@ -117,7 +125,7 @@ file's, a removed line the old file's), FACE the panel's code face for its kind.
                 (cons (concat (format "%4d " n)
                               (truncate-string-to-width (concat (if (memq c '(?+ ?-)) (string c) " ")
                                                                 (if (memq c '(?+ ?- ?\s)) (substring l 1) l))
-                                                        100 nil nil "…"))
+                                                        (drgnx-agent-panel-cards--columns) nil nil "…"))
                       (pcase c (?+ 'drgnx-agent-panel-added) (?- 'drgnx-agent-panel-removed) (_ 'drgnx-agent-panel-context)))))
             body)))
 
@@ -137,10 +145,24 @@ per run of one face, so its several faces would cut the ring; each card line is 
                               "  "
                               (drgnx-agent-panel-cards--action "Accept" #'drgnx-agent-panel-accept 'drgnx-accent
                                                                "a: keep the change")))
-             (head (concat " " (drgnx-look-icon 'file-code 'drgnx-text-muted) " "
-                           (propertize (drgnx-agent-panel--one-line path 50) 'face 'bold) " "
-                           (propertize (format "%d–%d · hunk %d of %d" start (+ start (max 0 (1- len))) (1+ i) (length hunks))
-                                       'face 'drgnx-agent-panel-subtle)
+             (room (let ((w (drgnx-agent-panel--width))) (and w (- w (string-pixel-width actions) (drgnx-px 20)))))
+             (label (propertize (format "%d–%d · hunk %d of %d" start (+ start (max 0 (1- len))) (1+ i) (length hunks))
+                                'face 'drgnx-agent-panel-subtle))
+             (icon (concat " " (drgnx-look-icon 'file-code 'drgnx-text-muted) " "))
+             ;; in a narrow panel the name gives way, then the label, so Reject and Accept stay inside the edge
+             (name (let ((cols 50) (name (propertize (drgnx-agent-panel--one-line path 50) 'face 'bold)))
+                     (while (and room (> cols 8)
+                                 (> (+ (string-pixel-width icon) (string-pixel-width name) (string-pixel-width label)
+                                       (string-pixel-width " "))
+                                    room)
+                                 (progn (setq cols (- cols 4))
+                                        (setq name (propertize (drgnx-agent-panel--one-line path cols) 'face 'bold)))))
+                     name))
+             (label (if (and room (> (+ (string-pixel-width icon) (string-pixel-width name) (string-pixel-width label)
+                                        (string-pixel-width " "))
+                                     room))
+                        "" label))
+             (head (concat icon name " " label
                            (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width actions) (drgnx-px 20))))))
                            actions "\n"))
              (lines (drgnx-agent-panel-cards--numbered header body)) (n (length lines)) (k -1))

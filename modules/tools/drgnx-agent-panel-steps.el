@@ -332,7 +332,8 @@ changed lays its strip out again."
             (let ((width (window-body-width w t)))
               (unless (eql width drgnx-agent-panel--strip-width)
                 (setq drgnx-agent-panel--strip-width width)
-                (when (drgnx-view-p drgnx-view) (drgnx-view-dirty drgnx-view (list (list :strip))))))))))))
+                (when (drgnx-view-p drgnx-view)
+                  (drgnx-view-dirty drgnx-view (cons (list :strip) (and (fboundp 'drgnx-agent-panel-cards-keys) (drgnx-agent-panel-cards-keys)))))))))))))
 
 (defun drgnx-agent-panel--strip-row ()
   "The disclosure strip (agent-panel.html `.disc'): \"Open:\" and a pill for each step type, the open ones raised, a
