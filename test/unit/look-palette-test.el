@@ -84,7 +84,8 @@ or M-S-f.  Alone, a capital is its letter (`G', as the mockups draw `D drop')."
 (ert-deftest drgnx-look-palette/echo-area-remap-on-and-off ()
   "Pattern D: the echo area's buffer and every minibuffer draw `default' as the gap surface while the module is on;
 off, the buffers have no such entry and the hook is gone."
-  (let ((echo (get-buffer-create " *Echo Area 0*")) (mini (get-buffer-create " *Minibuf-look-test*")))
+  (let* ((made (not (get-buffer " *Echo Area 0*")))
+         (echo (get-buffer-create " *Echo Area 0*")) (mini (get-buffer-create " *Minibuf-look-test*")))
     (unwind-protect
         (progn
           (drgnx-look-echo-area-on)
@@ -98,6 +99,7 @@ off, the buffers have no such entry and the hook is gone."
           (should-not (memq 'drgnx-look--minibuffer-inactive-gap minibuffer-inactive-mode-hook))
           (with-current-buffer echo (should-not (assq 'default face-remapping-alist))))
       (drgnx-look-echo-area-off)
+      (when made (kill-buffer echo))
       (kill-buffer mini))))
 
 (ert-deftest drgnx-look-palette/sort-reads-the-history-once ()

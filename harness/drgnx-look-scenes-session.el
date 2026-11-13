@@ -478,6 +478,20 @@ look-scenes' types them)."
     (drgnx-look-scene--show (current-buffer)))
   (drgnx-look-scene--answer))
 
+(defun drgnx-look-scene-org ()
+  "An Org buffer as magit.html's right-hand card: headings in the UI font, TODO chips, tags right-aligned by pixel."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--try "org"
+    (drgnx-wb-focus-editor)
+    (let ((file (expand-file-name "gateway.org" drgnx-look-scene--project)))
+      (with-temp-file file
+        (insert "* Gateway: replies after close  :core:\n** DONE Reproduce the failure  :test:\n"
+                "** NEXT Queue replies to a dead client  :core:agent:\nKeep replies for a client that went away.\n"
+                "** Timings\n| run | before | after |\n"))
+      (find-file file)
+      (goto-char (point-min))))
+  (drgnx-look-scene--answer))
+
 (defun drgnx-look-scene-shell-heredoc ()
   "The user's case: a shell script with a Python heredoc (the package faces of sh-script)."
   (drgnx-look-scene--theme 'drgnx-dark)

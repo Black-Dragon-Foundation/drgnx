@@ -383,7 +383,8 @@ terminal window on one daemon, a transient in one leaves the other alone.
 - **Completion** (corfu, when you have it) draws its popup (corfu, when you have it) as a floating child frame of the
   terminal window, as in a graphical window. A child frame with a border draws it with box-drawing characters
   (`┌ ─ ┐ │ └ ┘`) while every terminal on the daemon writes UTF-8, and with `+ - |` as soon as one does not. The border
-  glyphs are one shared table, so the choice follows the terminals that are connected.
+  glyphs are one shared table, so the choice follows the terminals that are connected. The border between side-by-side
+  windows follows the same choice (`│`, or `|`).
 - **A terminal that does not write UTF-8** (a window started with `LANG=C`) cannot show `×`, `●`, `›`, `▾`, `▸` or
   `│`. drgnx draws ASCII marks in their place in that window only (`x`, `*`, `>`, `v`, `>`, `|`), in the tab line,
   the breadcrumb, the Explorer and the docks' headings, instead of Emacs's `\u00D7` escapes. A UTF-8 terminal is not

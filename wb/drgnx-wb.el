@@ -73,15 +73,25 @@ not the header line's.  FILLED: STRING already reaches the edge."
 (defface drgnx-wb-section '((t :inherit (drgnx-text-muted drgnx-ui-caption) :weight semibold))
   "A dock section's title (window-dark.html `.sec': 12 px, semibold, muted)." :group 'drgnx)
 
-(defun drgnx-wb-section-header (title)
-  "A dock section's header, window-dark.html `.sec': the chevron and TITLE (nil: a section without one, such as a
-pane kind defined with no `:title') in `drgnx-wb-section', on the island's surface.  Hiding the sidebar is on the
-island header's ⋯ (`drgnx-wb-island-menu')."
+(defvar drgnx-wb--section-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m [header-line mouse-1] #'drgnx-wb-section-click)
+    (define-key m [mouse-1] #'drgnx-wb-section-click)
+    m)
+  "The keymap of a dock section's header: a click folds or unfolds the section.")
+
+(defun drgnx-wb-section-header (title &optional collapsed)
+  "A dock section's header, window-dark.html `.sec': the chevron (down, or right when COLLAPSED) and TITLE (nil: a
+section without one, such as a pane kind defined with no `:title') in `drgnx-wb-section', on the island's surface.  A
+click on it folds or unfolds the section (`drgnx-wb-section-click').  Hiding the sidebar is on the island header's ⋯
+\(`drgnx-wb-island-menu')."
   (let ((room (lambda (px) (if (display-graphic-p) (propertize " " 'display `(space :width (,(drgnx-px px))))  " "))))
-    (drgnx-wb-bar (concat (funcall room 6)
-                          (let ((chevron (drgnx-look-icon 'chevron-down 'drgnx-wb-section 14)))
-                            (if (string-empty-p chevron) "" (concat chevron (funcall room 4))))
-                          (drgnx-wb--heading (string-trim-left (or title "")))))))
+    (propertize
+     (drgnx-wb-bar (concat (funcall room 6)
+                           (let ((chevron (drgnx-look-icon (if collapsed 'chevron-right 'chevron-down) 'drgnx-wb-section 14)))
+                             (if (string-empty-p chevron) (if collapsed "> " "") (concat chevron (funcall room 4))))
+                           (drgnx-wb--heading (string-trim-left (or title "")))))
+     'local-map drgnx-wb--section-map 'pointer 'hand)))
 
 (defun drgnx-wb--heading (title)
   "TITLE in the section face, keeping the faces and properties it has."
@@ -525,12 +535,86 @@ foot.  Only UI-row buffers (`drgnx-wb-rows-setup'); a second call changes nothin
                     ((> over 0)))
           (ignore-errors (adjust-window-trailing-edge w (- over) nil t)))))))
 
+(defvar drgnx-wb--collapsed nil
+  "Alist NAME → whether dock section NAME is folded, once it was toggled; before that its `:collapsed' decides.")
+
+(defun drgnx-wb-section-collapsed-p (name)
+  "Non-nil when dock section NAME is folded to its header: toggled so, else defined `:collapsed'."
+  (if-let* ((c (assq name drgnx-wb--collapsed))) (cdr c)
+    (and (plist-get (alist-get name drgnx-wb--sections) :collapsed) t)))
+
+(defun drgnx-wb--section-title (name)
+  "Dock section NAME's title as the dock shows it now."
+  (let ((title (plist-get (alist-get name drgnx-wb--sections) :title))) (if (functionp title) (funcall title) title)))
+
+(defun drgnx-wb--collapsed-buffer (name)
+  "The one-line buffer a folded section shows: its header, clickable (the window has no header line then).  Made
+anew each time, with the title as it is now."
+  (let ((buf-name (format " *drgnx-section-%s*" name)))
+    (when (get-buffer buf-name) (kill-buffer buf-name))
+    (with-current-buffer (get-buffer-create buf-name)
+      (insert (drgnx-wb-section-header (drgnx-wb--section-title name) t))
+      (setq-local cursor-type nil truncate-lines t mode-line-format nil header-line-format nil)
+      (goto-char (point-min))
+      (current-buffer))))
+
+(defun drgnx-wb--fold-window (w name)
+  "Fold W, dock section NAME's window, to its header: the header as a one-line buffer, the window one row tall."
+  (unless (window-parameter w 'drgnx-folded)
+    (let ((window-resize-pixelwise t) (window-min-height 1)
+          (before (window-pixel-height w)))
+      (set-window-parameter w 'drgnx-folded (list (window-buffer w) before))
+      (set-window-dedicated-p w nil)
+      (set-window-parameter w 'header-line-format nil)
+      (set-window-buffer w (drgnx-wb--collapsed-buffer name))
+      (set-window-dedicated-p w t)
+      (let ((delta (- (drgnx-wb--row-px (window-frame w)) (window-body-height w t))))
+        (when (< delta 0)
+          (ignore-errors (window-resize w delta nil nil t)))))))
+
+(defun drgnx-wb--unfold-window (w name)
+  "Give W, folded dock section NAME's window, its buffer, its header line and its height back."
+  (when-let* ((saved (window-parameter w 'drgnx-folded)))
+    (let ((window-resize-pixelwise t))
+      (set-window-parameter w 'drgnx-folded nil)
+      (set-window-dedicated-p w nil)
+      (set-window-buffer w (funcall (plist-get (alist-get name drgnx-wb--sections) :buffer)))
+      (set-window-dedicated-p w t)
+      (unless (plist-get (alist-get name drgnx-wb--sections) :own-header)
+        (set-window-parameter w 'header-line-format (drgnx-wb-section-header (drgnx-wb--section-title name))))
+      (let ((delta (- (cadr saved) (window-pixel-height w))))
+        (when (> delta 0) (ignore-errors (window-resize w delta nil nil t))))
+      (when-let* ((fn (plist-get (alist-get name drgnx-wb--sections) :on-show))) (funcall fn w)))))   ; it draws again
+
+(defun drgnx-wb--apply-collapsed (&optional frame)
+  "Fold or unfold each dock section window on FRAME to match `drgnx-wb-section-collapsed-p'."
+  (dolist (w (drgnx-wb--dock-windows frame))
+    (when-let* ((name (window-parameter w 'drgnx-section)))
+      (cond ((and (drgnx-wb-section-collapsed-p name) (not (window-parameter w 'drgnx-folded)))
+             (drgnx-wb--fold-window w name))
+            ((and (not (drgnx-wb-section-collapsed-p name)) (window-parameter w 'drgnx-folded))
+             (drgnx-wb--unfold-window w name))))))
+
+(defun drgnx-wb-toggle-section (name)
+  "Fold dock section NAME to its header, or unfold it."
+  (setf (alist-get name drgnx-wb--collapsed) (not (drgnx-wb-section-collapsed-p name)))
+  (drgnx-wb--apply-collapsed)
+  (drgnx-wb-fit-sections))
+
+(defun drgnx-wb-section-click (event)
+  "A click on a dock section's header: fold or unfold that section."
+  (interactive "e")
+  (when-let* ((w (posn-window (event-start event))) ((window-live-p w))
+              (name (window-parameter w 'drgnx-section)))
+    (drgnx-wb-toggle-section name)))
+
 (defun drgnx-wb--fit-window (w)
   "Make dock section window W as tall as its buffer's rows and its header (VS Code's Open Editors), at most its
 section's `:fit' fraction of the frame, where it holds whole rows and scrolls; no rows: the header and the one text
 line Emacs keeps in a live window.  Its bottom
 edge moves (the section below takes the rest).  A second call changes nothing."
   (when-let* (((window-live-p w))
+              ((not (window-parameter w 'drgnx-folded)))
               (frame (window-frame w))
               (cap (plist-get (alist-get (window-parameter w 'drgnx-section) drgnx-wb--sections) :fit))
               (row (drgnx-wb--row-px frame))
@@ -593,7 +677,8 @@ them sets the line)."
 (defun drgnx-wb-define-section (name &rest spec)
   "Define dock section NAME: SPEC is (:slot N :title STRING-OR-FUNCTION-RETURNING-ONE
 :buffer FUNCTION-RETURNING-A-BUFFER :height FRACTION-OF-THE-DOCK :fit FRACTION: as tall as the buffer's
-lines, at most that fraction of the frame (`drgnx-wb-fit-sections') :own-header t: no section header, the
+lines, at most that fraction of the frame (`drgnx-wb-fit-sections') :collapsed t: folded to its header until
+it is toggled (`drgnx-wb-toggle-section', a click on the header) :own-header t: no section header, the
 buffer's own header line shows :on-show FUNCTION-OF-THE-WINDOW
 :on-focus FUNCTION-OF-THE-WINDOW, run when `drgnx-wb-focus-section' focuses it,
 :view SYMBOL, the sidebar view the section belongs to, default `explorer').
@@ -684,6 +769,7 @@ It is `explorer' unless another view with sections was chosen (a stale choice fa
           ;; again when its body changes size: the header line's height is known after the first redisplay
           (with-current-buffer (window-buffer w) (add-hook 'window-size-change-functions #'drgnx-wb--fit-window nil t))
           (drgnx-wb--fit-window w)))
+      (drgnx-wb--apply-collapsed)
       (drgnx-wb-island-refresh)
       (unless (eq (selected-window) selected) (select-window selected 'norecord))
       (pcase-dolist (`(,name . ,spec) drgnx-wb--sections)
@@ -770,6 +856,7 @@ Nil, and nothing shown, when the frame has no editor window (the daemon's initia
 The section's :on-focus function then gets its window (the Search view puts point in its query field)."
   (let ((spec (alist-get name drgnx-wb--sections)))
     (if spec (drgnx-wb-show-view (or (plist-get spec :view) 'explorer)) (drgnx-wb-show-sidebar))
+    (when (drgnx-wb-section-collapsed-p name) (drgnx-wb-toggle-section name))   ; focusing a folded section opens it
     (let ((w (drgnx-wb-section-window name)))
       (select-window w)
       (when-let* ((fn (plist-get spec :on-focus))) (funcall fn w)))))

@@ -117,12 +117,26 @@ attributes the user set, as the face's override spec."
         (should (equal "Setting Sans" (plist-get r :family)))
         (should (eq 'setting (plist-get r :source))))
       (should (equal "Setting Sans" (face-attribute 'drgnx-ui-text :family nil)))
-      ;; only the attribute that differs from the default is in the override
-      (should (equal '((t :family "Setting Sans")) (get 'drgnx-ui-text 'face-override-spec))))
+      ;; the theme hides the defface spec, so the role's size and weight ride in the override with the family
+      (should (equal '((t :family "Setting Sans" :height 97 :weight regular)) (get 'drgnx-ui-text 'face-override-spec))))
     ;; the setting back to its default: the override goes, the theme shows again
     (drgnx-look-fonts-apply)
-    (should-not (get 'drgnx-ui-text 'face-override-spec))
+    (should (equal '((t :height 97 :weight regular)) (get 'drgnx-ui-text 'face-override-spec)))   ; the role's defaults only
     (should (equal "Theme Sans" (face-attribute 'drgnx-ui-text :family nil)))))
+
+(ert-deftest drgnx-look-fonts/a-type-face-a-theme-styles-keeps-its-roles-family ()
+  "LOOK-TYPE-FACES-UNDER-THEME-1: a theme that styles a type face without a family (only a colour) leaves the role's
+family, size and weight on it."
+  (drgnx-look-fonts-test--clean
+    (deftheme drgnx-fonts-test "A theme that styles the heading's colour only.")
+    (custom-theme-set-faces 'drgnx-fonts-test '(drgnx-ui-heading ((t :foreground "#aa0000"))))
+    (provide-theme 'drgnx-fonts-test)
+    (enable-theme 'drgnx-fonts-test)
+    (drgnx-look-fonts-apply)
+    (let ((want (plist-get (drgnx-look-fonts-resolve 'ui-heading) :family)))
+      (should (stringp want))
+      (should (equal want (face-attribute 'drgnx-ui-heading :family nil)))
+      (should (equal "#aa0000" (face-attribute 'drgnx-ui-heading :foreground nil))))))
 
 (ert-deftest drgnx-look-fonts/customize-and-lisp-win-and-say-so ()
   "Pattern D: a `custom-set-faces' entry and a `set-face-attribute' that the config did: drgnx leaves the face,

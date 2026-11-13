@@ -22,6 +22,17 @@
 up-right, up-left)."
   (mapcar (lambda (slot) (glyph-char (display-table-slot table slot))) drgnx-tty-popups-box-slots))
 
+(ert-deftest drgnx-tty-popups/the-vertical-border-is-a-line-or-ascii ()
+  "M12f-A10-5: the border between side-by-side windows in a terminal is │ where the terminal writes UTF-8, | where it
+does not; turning the module off gives Emacs's own back."
+  (let ((standard-display-table (make-display-table)))
+    (drgnx-tty-popups--borders nil)
+    (should (eql ?│ (glyph-char (display-table-slot standard-display-table 'vertical-border))))
+    (drgnx-tty-popups--borders t)
+    (should (eql ?| (glyph-char (display-table-slot standard-display-table 'vertical-border))))
+    (drgnx-tty-popups--unset-borders)
+    (should-not (display-table-slot standard-display-table 'vertical-border))))
+
 (ert-deftest drgnx-tty-popups/borders-follow-the-coding-system ()
   ;; a UTF-8 terminal draws a child frame's border with box-drawing characters, any other with ASCII
   (drgnx-tty-popups-test--terminal 'utf-8-unix

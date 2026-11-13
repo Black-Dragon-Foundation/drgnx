@@ -763,9 +763,9 @@ mode) or is code, text or configuration."
 screen never shows Emacs's raw mode line."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
-(defcustom drgnx-statusbar-other-modes '(special-mode)
+(defcustom drgnx-statusbar-other-modes '(special-mode dired-mode)
   "Major modes (and the modes derived from them) whose buffers get the bar of `drgnx-statusbar-other': Magit's,
-Help's and the other read-only buffers that are not files."
+Help's and the other read-only buffers that are not files, and Dired's."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
 (defcustom drgnx-statusbar-other '(mode misc)

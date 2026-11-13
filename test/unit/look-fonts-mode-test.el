@@ -77,7 +77,7 @@ nil takes them away, leaving the table as it was."
 (ert-deftest drgnx-look-fonts/preview-debounced ()
   "Pattern D, on the manual clock: five changes of a role setting inside 300 ms write the faces once."
   (drgnx-test-with-clock ()
-    (let ((n 0))
+    (let ((n 0) (drgnx-modules--runs (list (cons 'ui/look 'run))))
       (cl-letf (((symbol-function 'drgnx-module-running-p) (lambda (_) t))
                 ((symbol-function 'drgnx-look-fonts-apply) (lambda (&rest _) (cl-incf n))))
         (dotimes (_ 5)
@@ -86,6 +86,18 @@ nil takes them away, leaving the table as it was."
         (should (= 0 n))
         (drgnx-test-advance 0.3)
         (should (= 1 n))))))
+
+(ert-deftest drgnx-look-fonts/the-preview-timer-belongs-to-ui-look ()
+  "LOOK-PREVIEW-DEBOUNCE-OWNER-1: the pending preview is ui/look's: cancelling that module's timers (its teardown)
+means the faces are not written."
+  (drgnx-test-with-clock ()
+    (let ((n 0) (drgnx-modules--runs (list (cons 'ui/look 'run))))
+      (cl-letf (((symbol-function 'drgnx-module-running-p) (lambda (_) t))
+                ((symbol-function 'drgnx-look-fonts-apply) (lambda (&rest _) (cl-incf n))))
+        (drgnx-look-fonts--settings-apply)
+        (drgnx-timer-cancel-owner 'ui/look)
+        (drgnx-test-advance 0.5)
+        (should (= 0 n))))))
 
 (ert-deftest drgnx-look-fonts/fallbacks-name-the-role ()
   "Pattern D: a role whose family is not installed is reported with the family it wanted and the one it got."

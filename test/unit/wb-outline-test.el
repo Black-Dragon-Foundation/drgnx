@@ -12,7 +12,7 @@
   (declare (indent 1))
   `(drgnx-test-with-state
      (drgnx-test-with-clock (:allow-pending t)
-       (let ((drgnx-wb--sections nil)
+       (let ((drgnx-wb--sections nil) (drgnx-wb--collapsed (list (cons 'outline nil)))   ; open: these test the Outline, not its fold
              (,src (generate-new-buffer "outline-src.el")))
          (delete-other-windows)
          (with-current-buffer ,src
