@@ -723,6 +723,8 @@ fn chip_line(it: &Item) -> Line {
             .map(|(a, b)| format!("{a}/{b}"))
             .into_iter()
             .collect(),
+        // a branch whose agent runs somewhere shows that as its tag (a chip of its own), else its edits
+        Kind::Branch if f.tag.is_some() => Vec::new(),
         Kind::Branch => f
             .edits
             .map(|e| format!("edits {}", e.0))
@@ -747,6 +749,10 @@ fn chip_line(it: &Item) -> Line {
         &it.label
     };
     l.push(format!(" {name}"), None);
+    if let (Kind::Branch, Some(tag)) = (it.kind, f.tag.as_ref()) {
+        l.push(" ", None)
+            .push(format!(" {tag} "), Some("drgnx-work-chip"));
+    }
     if runner.is_some_and(|r| r.mac) {
         l.push(" macOS", Some("drgnx-runners-os"));
     }

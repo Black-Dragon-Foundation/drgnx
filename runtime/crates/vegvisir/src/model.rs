@@ -664,6 +664,7 @@ impl Model {
                 let name = self.names.name(y).trim_start_matches("branch:");
                 let (repo, short) = name.split_once('/').unwrap_or(("", name));
                 fields.repo = Some(repo.to_string());
+                fields.tag = self.branch_tag(y);
                 let set = self.branch_set(y);
                 if !set.is_empty() {
                     let (p, m) = set.iter().fold((0, 0), |(p, m), &(_, a, b)| (p + a, m + b));
@@ -701,6 +702,25 @@ impl Model {
             shared: d.shared,
             fields,
         }
+    }
+
+    /// A branch's chip tag: the machine its agent runs on, abbreviated, and the slot it holds there (`desk 3`).
+    fn branch_tag(&self, b: Sym) -> Option<String> {
+        let owner = self
+            .facts
+            .sessions
+            .iter()
+            .filter(|(_, s)| s.parent.is_none() && s.branch == Some(b))
+            .min_by(|x, y| {
+                (x.1.fact.seq, self.names.name(*x.0)).cmp(&(y.1.fact.seq, self.names.name(*y.0)))
+            })?
+            .1;
+        let machine = owner.fact.machine.as_deref()?;
+        let short = if machine == "desktop" { "desk" } else { machine };
+        Some(match owner.fact.slot {
+            Some(n) => format!("{short} {n}"),
+            None => short.to_owned(),
+        })
     }
 
     /// A branch's changed files with counts, against its recorded base (for its chip).
