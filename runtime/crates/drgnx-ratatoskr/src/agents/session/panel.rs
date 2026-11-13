@@ -326,6 +326,8 @@ async fn verdict(s: &Arc<Session>, tool: &Value) -> Value {
     };
     // advice before the gate: a code commit before the task's red
     if let Some(reason) = crate::orch::advice::at_seam(&front, &site, &call, s.cwd()).await {
+        // the agent will try the commit again once its red is in: no loop (design §7)
+        s.call_advised(tool);
         return json!({"outcome": "deny", "reason": reason});
     }
     let out = points::before_tool(&front, &site, &call, None).await;

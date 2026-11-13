@@ -42,7 +42,7 @@ use runstav::registry::Class;
 use runstav::types::RequestId;
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Map, Value, json};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -199,6 +199,8 @@ struct State {
     last_update: f64,
     /// Tool calls started this turn, by title and command, and the most any one was repeated.
     cmd_counts: HashMap<String, u32>,
+    /// The commands the hub's advice denied this turn: they count toward no `repeat`, retried or not (design §7).
+    advised: HashSet<String>,
     max_repeat: u32,
     /// Tokens the finished turns used.
     tokens: u64,
@@ -241,6 +243,15 @@ enum LiveOut {
 type Diffs = Vec<(String, Option<String>, String)>;
 
 /// A tool call entry's ACP status (absent: pending).
+/// The `repeat` rule's key of a tool call: its title and its input, as the agent sent them.
+fn cmd_key(title: Option<&str>, raw_input: Option<&Value>) -> String {
+    format!(
+        "{}\n{}",
+        title.unwrap_or(""),
+        raw_input.map(Value::to_string).unwrap_or_default()
+    )
+}
+
 fn call_status(rest: &Map<String, Value>) -> crate::work::presence::CallStatus {
     use crate::work::presence::CallStatus;
     match rest.get("status").and_then(Value::as_str) {
@@ -358,6 +369,7 @@ impl State {
             minted: 0,
             last_update: now(),
             cmd_counts: HashMap::new(),
+            advised: HashSet::new(),
             max_repeat: 0,
             tokens: 0,
             turn_cost: 0.0,
@@ -574,6 +586,17 @@ impl State {
         true
     }
 
+    /// The hub's advice denied TOOL (a `toolCall`): its command counts toward no `repeat`, now or when retried.
+    fn call_advised(&mut self, tool: &Value) {
+        let key = cmd_key(
+            tool.get("title").and_then(Value::as_str),
+            tool.get("rawInput"),
+        );
+        self.cmd_counts.remove(&key);
+        self.max_repeat = self.cmd_counts.values().copied().max().unwrap_or(0);
+        self.advised.insert(key);
+    }
+
     fn wait_end(&mut self) {
         if !self.permissions.is_empty() {
             return;
@@ -652,6 +675,7 @@ impl State {
     fn begin_turn(&mut self, item: &Queued) {
         self.last_update = now();
         self.cmd_counts.clear();
+        self.advised.clear();
         self.max_repeat = 0;
         self.open = None;
         self.text(EntryType::User, &item.text, None);
@@ -916,15 +940,12 @@ impl State {
                         c.mcp = true;
                         self.mcp_begun.push((c.key, n));
                     }
-                    let command = self.entries[idx].rest.get("rawInput").map(Value::to_string);
-                    let key = format!(
-                        "{}\n{}",
-                        title.as_deref().unwrap_or(""),
-                        command.unwrap_or_default()
-                    );
-                    let n = self.cmd_counts.entry(key).or_insert(0);
-                    *n += 1;
-                    self.max_repeat = self.max_repeat.max(*n);
+                    let key = cmd_key(title.as_deref(), self.entries[idx].rest.get("rawInput"));
+                    if !self.advised.contains(&key) {
+                        let n = self.cmd_counts.entry(key).or_insert(0);
+                        *n += 1;
+                        self.max_repeat = self.max_repeat.max(*n);
+                    }
                 }
                 if matches!(status.as_deref(), Some("completed" | "failed")) {
                     if self.cur.as_ref().and_then(|c| c.tool_id.as_deref()) == Some(id) {
@@ -4576,6 +4597,11 @@ impl Session {
 
     /// TOOL's call was refused by the hub (at the seam, or at the adapter's `_drgnx/before_tool`): the step its
     /// `tool_call` opened ends now.
+    /// The hub's advice denied TOOL: its command counts toward no `repeat` ([`State::call_advised`]).
+    pub(crate) fn call_advised(&self, tool: &Value) {
+        lock(&self.state).call_advised(tool);
+    }
+
     pub(crate) fn refused_step_ends(self: &Arc<Self>, tool: Option<&Value>) {
         let id = tool
             .and_then(|t| t.get("toolCallId"))
@@ -8024,6 +8050,30 @@ mod tests {
         assert!(s.fx.contains(&TurnEffect::CancelTurn) && st.core.paused());
         let again = st.turn_step(TurnEvent::ToolCompleted);
         assert!(again.fx.is_empty(), "the hold cancels once");
+    }
+
+    #[test]
+    fn an_advised_commit_and_its_retries_count_toward_no_repeat() {
+        // [D] design §7: the hub's advice (a code commit before the task's red) denies the call, and the agent tries
+        // it again once its red is in: that commit is not the loop `repeat` watches for; another command still is
+        let call = |id: &str, command: &str| {
+            json!({"sessionUpdate": "tool_call", "toolCallId": id, "title": "Bash", "kind": "execute",
+                   "status": "pending", "rawInput": {"command": command}})
+        };
+        let mut st = State::new();
+        st.apply(&upd(call("t1", "git commit -m fix")));
+        assert_eq!(st.max_repeat, 1);
+        st.call_advised(&json!({"toolCallId": "t1", "title": "Bash",
+                                "rawInput": {"command": "git commit -m fix"}}));
+        assert_eq!(st.max_repeat, 0);
+        for id in ["t2", "t3", "t4"] {
+            st.apply(&upd(call(id, "git commit -m fix")));
+        }
+        assert_eq!(st.max_repeat, 0);
+        for id in ["t5", "t6"] {
+            st.apply(&upd(call(id, "cargo test")));
+        }
+        assert_eq!(st.max_repeat, 2);
     }
 
     #[test]

@@ -283,7 +283,9 @@ when the session's hooks subscribe, which fails open on a timeout) gets a soft d
 while the task has no red evidence and the commit changes code: tracked changes against `HEAD` outside the pack's
 test globs, under a pack that gates on `red-first` (`orch::advice`). The deny's words say the merge will hold it and to
 commit and run the failing tests first; a commit of tests alone, a task with a red, or a pack without the rule pass.
-It runs before the hooks, and anything it can't read lets the step through. It is advice that saves wasted work: the
+It runs before the hooks, and anything it can't read lets the step through. The advised commit counts toward no
+`repeat` in that turn, nor do its retries (`State::call_advised`): trying it again once the red is in is not a loop.
+It is advice that saves wasted work: the
 gate at the merge is the same for every provider, and a provider without hooks meets it there.
 
 ## Policy from the base
