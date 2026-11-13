@@ -59,6 +59,8 @@ const BUTTON: &str = "drgnx-work-flow-button";
 const BUTTON_PRI: &str = "drgnx-work-flow-button-primary";
 const KEY_PRI: &str = "drgnx-work-flow-key-primary";
 const BUTTON_KEY: &str = "drgnx-work-flow-button-key";
+/// The detail's action rows, logical px (`.detail .acts`: 24 px buttons, 6 px apart).
+const ACT_ROW: f32 = 30.0;
 /// A card's fill (drgnx-work-flow.el: the panel's surface), and the text faces on it.
 const CARD: &str = "drgnx-work-flow-card";
 const CARD_TEXT: &str = "drgnx-work-flow-card-text";
@@ -1512,12 +1514,14 @@ pub(crate) fn detail_tile(
             "Check again"
         };
         let mut act = RowBuilder::new("d:act");
+        strut(&mut act, env, ACT_ROW);
         button(&mut act, first, "r", true);
         act.push(" ", None);
         button(&mut act, "Tell the agent", "s", false);
         out.push(act.finish());
     }
     let mut act = RowBuilder::new("d:act2");
+    strut(&mut act, env, ACT_ROW);
     if t.card.is_some() {
         button(&mut act, "Waive once", "w", false);
         act.push(" ", None);
@@ -2542,13 +2546,39 @@ mod tests {
         assert!(rows[0].text.ends_with("Detail"), "{}", rows[0].text);
     }
 
+    /// [D] The detail's action rows are the mockup's (`.detail .acts`: 24 px buttons, 6 px apart): 30 logical px each,
+    /// by a strut first on the row, so the buttons' boxes have room for their pad; a terminal has none.
+    #[test]
+    fn the_detail_s_action_rows_are_tall_enough_for_the_buttons() {
+        for scale in [1.0, 2.0] {
+            let (rows, _) = detail_tile(&flow(), "task:J#5", &env(scale));
+            for key in ["d:act", "d:act2"] {
+                let r = rows.iter().find(|r| r.key == key).expect(key);
+                assert_eq!(
+                    r.spaces.first().copied(),
+                    Some((0, 1, (30.0 * scale).round() as u32)),
+                    "{key} at scale {scale}"
+                );
+            }
+        }
+        let mut tty = env(1.0);
+        tty.display = Display::Tty;
+        let (rows, _) = detail_tile(&flow(), "task:J#5", &tty);
+        assert!(
+            rows.iter()
+                .filter(|r| r.key.starts_with("d:act"))
+                .all(|r| r.spaces.is_empty())
+        );
+    }
+
     #[test]
     fn the_detail_s_actions_are_buttons_the_first_one_primary() {
         // hub-orchestration.html `.acts`: `.btn.pri` Run the red, then `.btn`s; the primary's key in its own colour
         let (rows, _) = detail_tile(&flow(), "task:J#5", &env(1.0));
+        // the row's faces after its strut (the 1 px space in the text's face)
         let faces = |key: &str| -> Vec<&str> {
             let r = rows.iter().find(|r| r.key == key).expect(key);
-            r.runs.iter().map(|r| r.2.as_str()).collect()
+            r.runs.iter().skip(1).map(|r| r.2.as_str()).collect()
         };
         let act = faces("d:act");
         assert_eq!(act[..3], [BUTTON_PRI, KEY_PRI, BUTTON_PRI], "{act:?}");
