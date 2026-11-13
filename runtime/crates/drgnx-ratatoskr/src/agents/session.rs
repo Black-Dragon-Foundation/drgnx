@@ -2798,10 +2798,16 @@ pub(crate) async fn relaunch(
         ));
     };
     let store = front.dirs.get().map(|d| transcript::Store::new(&d.hub));
-    let meta = store
-        .as_ref()
-        .map(|s| s.load_meta(&sid))
-        .unwrap_or(Value::Null);
+    // the session's files are read off the hub's workers (a read that waits on the disk holds none: [`crate::disk`])
+    let meta = match store.clone() {
+        Some(s) => {
+            let id = sid.clone();
+            crate::clock::blocking(move || s.load_meta(&id))
+                .await
+                .unwrap_or(Value::Null)
+        }
+        None => Value::Null,
+    };
     let ident = Ident {
         id: sid.clone(),
         name,
@@ -2928,10 +2934,25 @@ pub(crate) async fn relaunch(
     if fresh && let Some(db) = hub.db() {
         insert_row(db, &s).await;
     }
-    // the queue on disk as it was, with what the agent is told at its front
-    let (queue, paused) = match &s.store {
+    // the transcript, the queue (with what the agent is told at its front) and the wheel's hold on disk as they were,
+    // read off the hub's workers
+    let kept = match s.store.clone() {
         Some(store) => {
-            let entries = store.load(&sid);
+            let id = sid.clone();
+            crate::clock::blocking(move || {
+                (
+                    store.load(&id),
+                    store.load_queue(&id),
+                    store.load_wheel(&id),
+                )
+            })
+            .await
+            .ok()
+        }
+        None => None,
+    };
+    let (queue, paused, wheel) = match kept {
+        Some((entries, (queue, paused), wheel)) => {
             // its steps go on from its last in the step table: an entry's `step` is that table's seq
             let last = last_step(&front.writer.db, &sid).await;
             let mut st = lock(&s.state);
@@ -2939,9 +2960,9 @@ pub(crate) async fn relaunch(
             st.entries = entries;
             st.steps_begun = st.steps_begun.max(last);
             drop(st);
-            store.load_queue(&sid)
+            (queue, paused, Some(wheel))
         }
-        None => Default::default(),
+        None => (Default::default(), false, None),
     };
     // a fork's first words come through the core's reattach, after the queue the swap kept
     let (resume_told, reattach_told) = if reattach {
@@ -2953,9 +2974,7 @@ pub(crate) async fn relaunch(
         .core
         .resume(queue, paused || hold, resume_told);
     // the user held its wheel when the hub ended: still held, from the same snapshot
-    if let Some(store) = &s.store
-        && let (true, base) = store.load_wheel(&sid)
-    {
+    if let Some((true, base)) = wheel {
         let mut st = lock(&s.state);
         st.wheel = Wheel::Held;
         st.wheel_base = base;

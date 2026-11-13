@@ -216,6 +216,7 @@ fn run() -> RunInfo {
             expr: "shortfall".into(),
         }],
         hits: vec![hit("16", 3), hit("12", 6), hit("9", 7)],
+        imported: false,
     }
 }
 
@@ -463,6 +464,7 @@ async fn a_trace_reaches_its_stop_with_the_env_and_files_it_was_given() {
                 ".drgnx-origin/sitecustomize.py".into(),
                 b"import tracer\n".to_vec(),
             )],
+            vec![],
         )
         .await
         .unwrap();
@@ -488,6 +490,7 @@ async fn a_trace_reaches_its_stop_with_the_env_and_files_it_was_given() {
             resolved(),
             |_: &Path| vec![],
             vec![("../x".into(), vec![])],
+            vec![],
         )
         .await
         .unwrap_err();
@@ -497,7 +500,7 @@ async fn a_trace_reaches_its_stop_with_the_env_and_files_it_was_given() {
     let mut r = resolved();
     r["program"] = json!("/p/other.py");
     let e = f
-        .trace("r1", 2, r, |_: &Path| vec![], vec![])
+        .trace("r1", 2, r, |_: &Path| vec![], vec![], vec![])
         .await
         .unwrap_err();
     assert!(e.contains("differently"), "{e}");

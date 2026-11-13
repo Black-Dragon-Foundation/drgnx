@@ -219,7 +219,11 @@ probes are saved the same way. If the file is damaged, it is moved aside to `…
 - **Operations by id** (`Op`): add, remove, edit, move, add or remove a function breakpoint.
   - Adding a line that already has a breakpoint gives that one. Removing or editing one that is gone is no change.
     So two editors toggling one file never undo each other.
-  - Every change raises the file's version.
+  - Every change raises the file's version: an operation, and whatever changes what the file's view shows without
+    one (an adapter's `setBreakpoints` answer or `breakpoint` event, what was sent to a session, a hit arming a
+    triggered breakpoint, a session's end). The call's answer and the `debug-breakpoints` event travel on different
+    connections and the editor takes the newer version, so a view taken before verification never greys out the dots
+    after it (`what_the_adapter_makes_of_a_breakpoint_raises_its_files_version`).
   - The line held is the saved line: the editor keeps a moved line as a draft and sends `move` on save.
   - **Inline breakpoints** have a `column` (1-based, in characters on the wire; `add` and `move` take one, a `move`
     without one keeps the breakpoint's). One at another column of a line, or one without a column on the same line,
@@ -304,6 +308,18 @@ roots `debug/trust` called trusted and each root's last started configuration.
   `instructionPointerReference`. At most 500 instructions (`DISASSEMBLE_MAX`; more is `invalid-params`); answered
   `{instructions: [{address, bytes?, instruction, symbol?, path?, line?, end_line?}]}`. Refused with words without
   `supportsDisassembleRequest`; `debug-state`'s caps carry it and `supportsInstructionBreakpoints`.
+- `debug/hot-reload {session, path}` (`debug/hot_reload.rs`, spec §19.7 D8, Python first): the stopped program takes
+  the saved file's changed function bodies. DAP has no code-replace request, so it is for debugpy sessions only (the
+  adapter type `debugpy` or `python`; others are refused with words). One `evaluate` (context `clipboard`, so nothing
+  is truncated) in the selected frame runs `etc/debug-hot-reload.py` with `exec` in a namespace of its own (the frame's
+  locals untouched): it compiles the file, walks its code objects by qualified name, and sets `__code__` on each live
+  function of that module (module level, classes, static and class methods) whose code changed and whose free
+  variables match; nothing at module level runs again. Its answer comes back as JSON hex-encoded in a string, so no
+  repr quoting reaches the hub: `{patched: [qualname], skipped: [{name, why}], restarted}`. `why` is `its closure
+  changed` or `new: it exists from the next run`. Frames already running keep their old code (jurigged's limit): where
+  the adapter has `supportsRestartFrame` the selected frame restarts (`restarted: true`), else the change applies from
+  the next call (debugpy today). Refused while the program runs. Tests: row `debug/hot-reload` (mock), live
+  `debugpy_hot_reloads_a_saved_function`.
 - These and `debug/breakpoint-locations` read the session's capabilities: asked before the adapter has given them
   (the session is starting) they are refused, so the editors offer them once `debug-state` shows the capability.
   In Lisp, `drgnx-debug-can-p (SESSION CAP)` (drgnx-debug-launch.el) reads a `debug-state` session's `caps`: the
@@ -849,7 +865,8 @@ Methods (runstav `methods::debug_runs`, the user class only: agents are refused,
 `debug/run/get {run, from?, count?, current?}` → a page of stops, each probe's lane (at most 2000 hits) and `strip`,
 the timeline's rows (`debug/strip.rs`, the hub's rows: a head, the stops, a lane per probe with a sparkline);
 `debug/run/stop {run, stop, file?}` → the capture and the file's text from the snapshot (`not_what_ran` when it was
-unsaved at the start); `debug/run/pin {run, pinned}`. Events: `debug-run {run, n, root, session, name, state, stops, hits,
+unsaved at the start); `debug/run/pin {run, pinned}`; `debug/run/export {run, path}` → `{path, code, bytes}` and
+`debug/run/import {root, path, code}` → `{run}` (sending a run, below). Events: `debug-run {run, n, root, session, name, state, stops, hits,
 thinned, dropped, stops_to_probe, outcome, stop}` at the start, each stop and the end; `debug-probe-hits {run, hits}`, batched every 50 ms.
 
 The editor's half, `drgnx-debug-timeline.el`: the probe column (`drgnx-margins-claim 'debug-probe … :order 1`, after
@@ -857,6 +874,21 @@ the breakpoint column; an SVG ring with a dot, `◉` or `o` on a terminal), the 
 a second), the strip buffer (it only inserts the hub's rows: a face or property the editor does not know is dropped),
 and past stops (`drgnx-debug-past-mode`'s keys, the past buffer with the snapshot's text and the banner, the variables
 buffer). Tests: `debug::tests_probes`, `debug::tests_record`, `test/unit/debug-timeline-test.el`.
+
+### Sending a run (spec §19.7 D9)
+
+`debug/record/share.rs`. An ended run and the files that ran (its launch snapshot's tree, as a git pack) go into one file
+sealed under a key made for it: `DRSHARE1\n`, a salt, then the zstd stream in pieces of at most 1 MiB, each sealed with
+ChaCha20-Poly1305 bound to its number and whether it is the last (so a piece cannot be dropped, moved or cut off). The
+stream's records are a kind byte and a length: the run's record (its start opened), each frame of its file, the pack;
+at most 512 MB before compression. The answer's `code` is the key in base32 (52 letters, groups of four): it is shown
+once and stored nowhere, and the hub sends nothing. Import opens the pieces, puts the pack into the recipient's shadow
+repository through `git index-pack --strict` (git's fsck of every object), keeps the tree as the run's ref, moves the
+paths under the sender's project to the recipient's, and writes the frames into a new run file under the recipient's
+keyring key. The run's record has `imported {at, n}`; it is kept 14 days from the import, and it is read-only:
+`fork::check` refuses it, since its launch (program, arguments, environment) is the sender's and opening a file never
+runs it. Tests: `debug::tests_record_sealed` (sent and opened), `debug::record::share` (codes, paths),
+`debug::tests_fork` (refused).
 
 ## What-if forks (spec §19.3)
 
@@ -1046,6 +1078,17 @@ as trees, a slot moved between them, hunks, the card), `verdandi`'s `tests/mater
 - **Python older than 3.12** (the records file names the version and holds nothing else): the static candidates, the
   assignments to the name in the files of the stop and its stack as they ran (the launch snapshot), found with
   Hrafn's grammar (`$O.attr = $V`, `name = $V` and the augmented forms), labelled "candidates, not traced".
+- **Other languages** (JavaScript, TypeScript, Go, C, Rust, Java, by the stop's file: `origin::lang_of`) have no
+  tracer; their trail is traced by logpoints (`origin::probed_trail`). Per level, `origin::stores` finds the lines that
+  store to each question in the stop's and its stack's files with Hrafn's grammar for the language: assignments
+  (plain and compound), `$O.attr = $V` for a dotted question, and the language's declarations (`const`/`let`/`var`,
+  `:=` and `var`, `let`/`let mut`, `TYPE name = …`). Each line gets one logpoint (a line takes one breakpoint) in a
+  replay to the stop (`Replay::probe`, the trace with probes: `fork_hub::Forks::trace`'s PROBES go before the run's
+  own, and `TraceTree::hits` holds theirs), logging what the line reads (`origin::reads`: the names and member paths
+  not called) and, when what it stores is a pure read of a plain store (`origin::is_pure`: no call, `new`, increment
+  or assignment), that value too, joined by the unit separator. Values are never logged by running a call again. The
+  last line to log before the stop is the link, its reads the next level's questions. The card's note says what it
+  cannot see (`origin::PROBED`): a store through another name, or in a file off the stop's stack.
 - **The replay** is the `origin::Replay` trait, set when the hub binds (`origin_wire::ForkReplay`): a sealed trace
   of the run (`fork_wire::trace`, spec §19.3), ended at the stop, with the tracer's files written into the trace's
   tree (`origin::trace_files`) and its environment (`origin::trace_env`); the records are read back with their files
@@ -1061,5 +1104,7 @@ past stop's buffer) asks for the name at point, the card inserts the hub's rows,
 (`debug-origin-open`) opens it as a past stop. Tests: `debug::tests_origin` (golden trails on
 `tests/fixtures/origin/stock.py` run by python3 under the tracer: three levels with attribute stores, a change inside
 `list.append`, the 3.11 candidates, lenient parsing, the card), `debug::tests_fork_live`'s
-`a_python_trail_is_traced_in_sealed_replays` (live: debugpy in Gleipnir, three levels through real traces),
+`a_python_trail_is_traced_in_sealed_replays` (live: debugpy in Gleipnir, three levels through real traces) and
+`a_js_trail_is_traced_by_logpoints_in_sealed_replays` (live: js-debug, `tests/fixtures/origin/stock.js`), the
+stores' unit tests (JavaScript, Go),
 `test/unit/debug-origin-test.el`.

@@ -2230,9 +2230,14 @@ $DRGNX_RATATOSKR_BIN, with `ratatoskr-mock' beside it) for the workload, give it
 its transcript.  A turn is over when its `stop' entry is in the mirror: the hub sends a session's state at most
 every 50 ms, so a turn can go by with no busy status in between and the status cannot tell it."
   (concat
-   ;; the session's environment is the harness's allowlist: the binary's name goes in the form
+   ;; the session's environment is the harness's allowlist: the binary's name and the stall reports' file go in the form
    "(progn (defvar drgnx-perf--hub-bin nil \"The Ratatoskr binary.\") (setq drgnx-perf--hub-bin "
    (prin1-to-string (getenv "DRGNX_RATATOSKR_BIN")) ") "
+   "(defvar drgnx-perf--hub-stall-env nil \"The hub's stall watchdog settings (\\\"VAR=VALUE\\\" strings).\") "
+   "(setq drgnx-perf--hub-stall-env '"
+   (prin1-to-string (mapcan (lambda (v) (and (getenv v) (list (concat v "=" (getenv v)))))
+                            '("DRGNX_RATATOSKR_STALL_FILE" "DRGNX_RATATOSKR_STALL_MS")))
+   ") "
    (prin1-to-string
     '(progn
        (require 'drgnx-agents-mirror)
@@ -2292,6 +2297,7 @@ at the wait's return held that."
                     (current-buffer)))
            (let ((process-environment (append (list (concat "DRGNX_CONFIG_DIR=" config) "RATATOSKR_SUPERVISOR=none"
                                                     (concat "DRGNX_DIR=" (directory-file-name drgnx-dir)))
+                                              drgnx-perf--hub-stall-env
                                               process-environment)))
              (setq drgnx-perf--hub
                    (make-process :name "ratatoskr" :noquery t :connection-type 'pipe

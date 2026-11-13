@@ -14,9 +14,10 @@ use runstav::methods::debug::{
     BreakpointLocation, CompletionTarget, DebugBreakpointLocations, DebugBreakpointLocationsList,
     DebugBreakpointOp, DebugBreakpoints, DebugBreakpointsView, DebugCompletionList,
     DebugCompletions, DebugConfig, DebugConfigList, DebugConfigs, DebugControl, DebugDisassemble,
-    DebugDisassembly, DebugFileError, DebugInstall, DebugMemory, DebugMemoryWritten, DebugMissing,
-    DebugReadMemory, DebugRunToCursor, DebugSelect, DebugSource, DebugSourceText, DebugStart,
-    DebugStarted, DebugTrust, DebugWriteMemory, DisassembledInstruction,
+    DebugDisassembly, DebugFileError, DebugHotReload, DebugHotReloaded, DebugInstall, DebugMemory,
+    DebugMemoryWritten, DebugMissing, DebugReadMemory, DebugRunToCursor, DebugSelect, DebugSource,
+    DebugSourceText, DebugStart, DebugStarted, DebugTrust, DebugWriteMemory,
+    DisassembledInstruction,
 };
 use runstav::types::JsonObject;
 use runstav::wire::{Error, ErrorCode};
@@ -885,6 +886,15 @@ async fn instruction_breakpoints(
     serde_json::from_value(v).map_err(|e| err(e.to_string()))
 }
 
+/// Hot reload: the saved file's functions into the stopped Python program (`super::hot_reload`).
+async fn hot_reload(front: &Front, p: DebugHotReload) -> Result<DebugHotReloaded, Error> {
+    let d = front.debug.debug(front);
+    let v = super::hot_reload::hot_reload(d, &p.session, &p.path)
+        .await
+        .map_err(err)?;
+    serde_json::from_value(v).map_err(|e| err(e.to_string()))
+}
+
 /// The disassembly view's instructions: the adapter's `disassemble` (symbols resolved), its fields as the view
 /// names them; refused when it has none.
 async fn disassemble(front: &Front, p: DebugDisassemble) -> Result<DebugDisassembly, Error> {
@@ -1148,6 +1158,7 @@ pub async fn serve(
         Params::DebugBreakpointLocations(p) => answer(breakpoint_locations(front, p).await),
         Params::DebugCompletions(p) => answer(completions(front, p).await),
         Params::DebugDisassemble(p) => answer(disassemble(front, p).await),
+        Params::DebugHotReload(p) => answer(hot_reload(front, p).await),
         Params::DebugReadMemory(p) => answer(read_memory(front, p).await),
         Params::DebugWriteMemory(p) => answer(write_memory(front, p).await),
         Params::DebugBreakpoints(p) => answer(breakpoints(front, p).await),

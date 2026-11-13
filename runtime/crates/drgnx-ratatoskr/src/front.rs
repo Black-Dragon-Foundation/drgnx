@@ -946,6 +946,7 @@ impl Front {
             | Params::DebugBreakpointLocations(_)
             | Params::DebugCompletions(_)
             | Params::DebugDisassemble(_)
+            | Params::DebugHotReload(_)
             | Params::DebugReadMemory(_)
             | Params::DebugWriteMemory(_)
             | Params::DebugBreakpoints(_)
@@ -972,7 +973,9 @@ impl Front {
             | Params::DebugRunsList(_)
             | Params::DebugRunGet(_)
             | Params::DebugRunStop(_)
-            | Params::DebugRunPin(_)) => crate::debug::runs_wire::serve(self, &caller, p)
+            | Params::DebugRunPin(_)
+            | Params::DebugRunExport(_)
+            | Params::DebugRunImport(_)) => crate::debug::runs_wire::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
             // bisect over the edit history (`debug/bisect*`)

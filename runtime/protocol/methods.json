@@ -12981,6 +12981,78 @@
       "classes": [
         "user"
       ],
+      "doc": "the stopped Python program takes a saved file's changed function bodies (frames running keep their old code unless the adapter restarts the frame)",
+      "name": "debug/hot-reload",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/hot-reload`: SESSION's stopped Python program takes PATH's changed function bodies as saved (D8).",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "path"
+        ],
+        "title": "DebugHotReload",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "HotReloadSkip": {
+            "description": "What a hot reload could not take, and why.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "why"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/hot-reload`'s answer: the functions PATCHED (qualified names), those SKIPPED, and whether the selected\nframe RESTARTED with the new code (else running frames keep the old code until their next call).",
+        "properties": {
+          "patched": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "restarted": {
+            "type": "boolean"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/$defs/HotReloadSkip"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "patched",
+          "skipped",
+          "restarted"
+        ],
+        "title": "DebugHotReloaded",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "install an adapter from its pinned download (checked against its sha256) or into the tools venv with its hash required; a system package's command is named, never run: what was installed",
       "name": "debug/install",
       "params": {
@@ -13298,6 +13370,57 @@
       "classes": [
         "user"
       ],
+      "doc": "send a recorded run: it and the files that ran, sealed into one file under a one-time key; the answer's share code opens it and is shown once, never stored (the hub sends nothing)",
+      "name": "debug/run/export",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/run/export`: run RUN (ended) sealed into the file PATH (absolute; replaced) under a one-time key, for the user\nto send: the file, its size and the share code that opens it. The code is shown once and never stored.",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "run": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "path"
+        ],
+        "title": "DebugRunExport",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "What `debug/run/export` made.",
+        "properties": {
+          "bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "code": {
+            "description": "52 letters and digits in groups of four: the only way to open the file.",
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "code",
+          "bytes"
+        ],
+        "title": "DebugRunExported",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a recorded run for the stop timeline: a page of its stops and each probe's values over them",
       "name": "debug/run/get",
       "params": {
@@ -13370,6 +13493,50 @@
           "more"
         ],
         "title": "DebugRunView",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "add a run someone sent (its file and share code) to a project's runs: read-only, its stops readable, its program never run here",
+      "name": "debug/run/import",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/run/import`: the run someone sent (the file PATH, opened with CODE) added to project ROOT's runs, read-only\n(never run here: no forks); its paths are moved under ROOT.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "path",
+          "code"
+        ],
+        "title": "DebugRunImport",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "The run `debug/run/import` added.",
+        "properties": {
+          "run": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "title": "DebugRunImported",
         "type": "object"
       },
       "writes": false

@@ -31,6 +31,15 @@ impl Replay for Direct {
             Ok(Traced::Records(run_traced(&dir, script, &watch)))
         })
     }
+
+    fn probe(
+        &self,
+        _run: &str,
+        _stop: u64,
+        _probes: Vec<super::record::RunProbe>,
+    ) -> BoxFut<'static, Result<Vec<super::record::RunHit>, String>> {
+        Box::pin(async { Err("Python is traced, never probed".into()) })
+    }
 }
 
 fn run_traced(dir: &Path, script: &str, watch: &[String]) -> Vec<origin::Rec> {
@@ -244,4 +253,53 @@ fn the_card_shows_each_link_by_level() {
     );
     assert_eq!(c[1].text, "Python 3.11: candidates, not traced");
     assert!(c[2].text.ends_with("a.py 1  candidate"));
+}
+
+#[test]
+fn a_js_files_stores_name_their_target_reads_and_pure_value() {
+    let text = include_str!("../../tests/fixtures/origin/stock.js");
+    let files = vec![("/p/stock.js".to_owned(), text.to_owned())];
+    let lang = origin::lang_of("/p/stock.js").unwrap();
+    let got: Vec<(u32, String, Vec<String>, Option<String>)> =
+        origin::stores(lang, &files, "shortfall")
+            .into_iter()
+            .chain(origin::stores(lang, &files, "item.reserve"))
+            .map(|s| (s.line, s.target, s.operands, s.pure))
+            .collect();
+    assert_eq!(
+        got,
+        vec![
+            (
+                16,
+                "shortfall".into(),
+                vec!["item.min".into(), "item.qty".into(), "item.reserve".into()],
+                Some("item.min - item.qty + item.reserve".into())
+            ),
+            (5, "this.reserve".into(), vec![], Some("0".into())),
+            (11, "item.reserve".into(), vec![], Some("8".into())),
+        ]
+    );
+    // a call is never logged again: no value, only what it reads
+    let item = origin::stores(lang, &files, "item");
+    assert_eq!(item.len(), 1, "{item:?}");
+    assert_eq!((item[0].line, item[0].pure.clone()), (10, None));
+}
+
+#[test]
+fn a_go_files_stores_are_assignments_and_short_declarations() {
+    let text = "package main\n\nfunc f(a int, b []int) int {\n\tx := a + len(b)\n\tx += b[0]\n\tx = a\n\treturn x\n}\n";
+    let files = vec![("/p/m.go".to_owned(), text.to_owned())];
+    let lang = origin::lang_of("/p/m.go").unwrap();
+    let got: Vec<(u32, Vec<String>, Option<String>)> = origin::stores(lang, &files, "x")
+        .into_iter()
+        .map(|s| (s.line, s.operands, s.pure))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (4, vec!["a".into(), "b".into()], None),
+            (5, vec!["b".into()], None),
+            (6, vec!["a".into()], Some("a".into())),
+        ]
+    );
 }

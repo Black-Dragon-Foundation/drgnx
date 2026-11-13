@@ -16,6 +16,8 @@
 //! Run files hold the program's values unredacted: they are the user's, read only through the user-class `debug/run*`
 //! methods.
 
+pub mod share;
+
 use super::Sink;
 use super::probes::{self, Probes, Rate};
 use super::runfile::{self, Reader, RunFile};
@@ -119,6 +121,8 @@ pub struct RunInfo {
     pub stops: Vec<RunStop>,
     pub probes: Vec<RunProbe>,
     pub hits: Vec<RunHit>,
+    /// A run someone sent ([`share`]): its program is theirs, so it is never run here (no forks).
+    pub imported: bool,
 }
 
 /// The runs, by id.
@@ -188,6 +192,16 @@ pub struct RunMeta {
     pub fork: bool,
     #[serde(default)]
     pub size: u64,
+    /// A run someone sent ([`share`]): read-only here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported: Option<Imported>,
+}
+
+/// When a sent run was added, and its number where it was recorded.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Imported {
+    pub at: f64,
+    pub n: u64,
 }
 
 /// Where a run's record goes besides its file: the Urdr record (kind `debug_run`).
@@ -1070,6 +1084,7 @@ impl Runs for Records {
             stops: r.index.stops.clone(),
             probes: meta.probes,
             hits,
+            imported: meta.imported.is_some(),
         })
     }
 }

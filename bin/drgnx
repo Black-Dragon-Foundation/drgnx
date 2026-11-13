@@ -633,7 +633,7 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--audit | --a
   # the run-control variables go in with their values when set: a narrowed run stays narrow, the files run at once
   # (CI: the runner's cores), a failed file reruns once, wall clock is skipped, the perf run's results and factors,
   # the sessions' monitor size, count and scales
-  local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_WORK_DB_GATE NIDHOGG_TEST_CLOCK NIDHOGG_TEST_SEED NIDHOGG_WORKERS DRGNX_TEST_HUB_CHAOS DRGNX_TEST_GATE_SWAP DRGNX_TEST_ONLY DRGNX_TEST_SHUFFLE DRGNX_TEST_LEAKS DRGNX_TEST_AUDIT DRGNX_TEST_AUDIT_ALL DRGNX_TEST_AUDIT_FAIL DRGNX_NIDHOGG_STRICT DRGNX_PERF_RESULTS
+  local v pass=(DRGNX_RATATOSKR_STALL_MS DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_WORK_DB_GATE NIDHOGG_TEST_CLOCK NIDHOGG_TEST_SEED NIDHOGG_WORKERS DRGNX_TEST_HUB_CHAOS DRGNX_TEST_GATE_SWAP DRGNX_TEST_ONLY DRGNX_TEST_SHUFFLE DRGNX_TEST_LEAKS DRGNX_TEST_AUDIT DRGNX_TEST_AUDIT_ALL DRGNX_TEST_AUDIT_FAIL DRGNX_NIDHOGG_STRICT DRGNX_PERF_RESULTS
                 DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_PERF_MACHINE DRGNX_PERF_WORKERS DRGNX_PERF_LANDED
                 DRGNX_PERF_WATCHDOG DRGNX_PERF_PROFILE DRGNX_UITEST_SETTLE_SCALE DRGNX_UITEST_TICK DRGNX_UI_TEST_TIMEOUT
                 DRGNX_UI_SIZE DRGNX_UI_MONITORS DRGNX_UI_SCALE DRGNX_UI_SCALES)
@@ -649,6 +649,14 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--audit | --a
     resdir="$(dirname "$res")"; mkdir -p "$resdir"; resdir="$(cd "$resdir" && pwd -P)"
     case "$resdir" in *:*) echo "drgnx: DRGNX_PERF_RESULTS must not be under a directory with ':' (it is mounted with -v): $resdir" >&2; return 2 ;; esac
     args+=(-v "$resdir:/out" -e "DRGNX_PERF_RESULTS=/out/$(basename "$res")")
+  fi
+  # the hub's stall reports (DRGNX_RATATOSKR_STALL_FILE, a file on the host) reach the host the same way, through /stall
+  if [ -n "${DRGNX_RATATOSKR_STALL_FILE:-}" ]; then
+    local stall="$DRGNX_RATATOSKR_STALL_FILE" stalldir
+    case "$stall" in /*) ;; *) stall="$PWD/$stall" ;; esac
+    stalldir="$(dirname "$stall")"; mkdir -p "$stalldir"; stalldir="$(cd "$stalldir" && pwd -P)"
+    case "$stalldir" in *:*) echo "drgnx: DRGNX_RATATOSKR_STALL_FILE must not be under a directory with ':' (it is mounted with -v): $stalldir" >&2; return 2 ;; esac
+    args+=(-v "$stalldir:/stall" -e "DRGNX_RATATOSKR_STALL_FILE=/stall/$(basename "$stall")")
   fi
   # the GUI tier's hub (`test_hub'), built here on the host; the run inside builds nothing
   if [ "$tier" = ui ]; then test_hub || return 1; args+=(-e DRGNX_TEST_HUB_BUILD=0); fi

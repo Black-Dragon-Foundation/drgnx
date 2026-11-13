@@ -230,3 +230,64 @@ async fn with_the_key_gone_runs_cannot_be_read_and_prune_still_works() {
     assert_eq!(rec2.prune(now).await, [run]);
     assert!(files(&d.path().join("runs")).is_empty());
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_sent_run_opens_with_its_code_read_only_under_the_other_keyring() {
+    let d = tempfile::tempdir().unwrap();
+    let (_, dbg, run) = record_one(&d.path().join("a"), memory(|_| {})).await;
+    assert!(!run.is_empty(), "the run was recorded");
+    let rec = dbg.records().unwrap();
+    let out = d.path().join("run.drgnx-run");
+    let sent = rec.export_run(&run, &out).await;
+    assert!(sent.is_ok(), "{sent:?}");
+    let sent = sent.unwrap();
+    // a code of 52 base32 letters in groups of four; the file holds nothing in plain text
+    assert_eq!(sent.code.replace('-', "").len(), 52, "{}", sent.code);
+    assert!(!has(&std::fs::read(&out).unwrap(), MARKER));
+    // another hub, another keyring, another project
+    let b = d.path().join("b");
+    let root_b = b.join("proj2");
+    std::fs::create_dir_all(&root_b).unwrap();
+    let ev2 = Arc::new(Events::default());
+    let dbg2 = Debug::new(ev2, Arc::new(NoTerms));
+    let mut opts = Opts::new(b.join("runs"), b.join("checkpoints"));
+    opts.key = memory(|_| {});
+    let rec2 = dbg2.record_into(opts);
+    let root2 = root_b.to_string_lossy().into_owned();
+    let wrong = rec2.import_run(&root2, &out, "AAAA").await;
+    assert!(
+        wrong.as_ref().is_err_and(|e| e.contains("share code")),
+        "{wrong:?}"
+    );
+    let got = rec2
+        .import_run(&root2, &out, &sent.code.to_lowercase())
+        .await;
+    assert!(got.is_ok(), "{got:?}");
+    let id = got.unwrap();
+    let info = rec2.run(&id).unwrap();
+    assert_eq!(info.root, root2);
+    let stop = &info.stops[0];
+    // its paths are the recipient's project's
+    assert_eq!(stop.path, root_b.join("app.py").display().to_string());
+    assert_eq!(
+        rec2.past_stop(&id, stop.index, None).unwrap()["capture"]["scopes"][0]["variables"][0]["value"],
+        MARKER
+    );
+    let meta = rec2.list(&root2);
+    assert_eq!(meta.len(), 1);
+    assert!(meta[0].imported.is_some(), "{:?}", meta[0]);
+    // the files that ran came along: the snapshot is the recipient's now
+    let snap = info.snapshot.expect("the launch snapshot");
+    assert_eq!(snap.source, root_b);
+    let text =
+        crate::timeline::snapshot::blob(&snap.checkpoints, &snap.source, &snap.tree, "app.py")
+            .unwrap();
+    assert_eq!(text, b"x = 1\n");
+    // nothing of it is in plain text in the recipient's runs either
+    for (name, bytes) in files(&b.join("runs")) {
+        assert!(
+            !has(&bytes, MARKER),
+            "{name} holds the marker in plain text"
+        );
+    }
+}

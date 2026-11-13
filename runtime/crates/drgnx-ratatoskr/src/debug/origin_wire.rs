@@ -58,6 +58,7 @@ impl Replay for ForkReplay {
                 stop,
                 move |t: &Path| origin::trace_env(t, &watch),
                 origin::trace_files(),
+                vec![],
             )
             .await?;
             let (path, root2) = (tree.path.clone(), root);
@@ -66,6 +67,21 @@ impl Replay for ForkReplay {
                 .map_err(|e| e.to_string())?;
             drop(tree);
             got
+        })
+    }
+
+    fn probe(
+        &self,
+        run: &str,
+        stop: u64,
+        probes: Vec<super::record::RunProbe>,
+    ) -> BoxFut<'static, Result<Vec<super::record::RunHit>, String>> {
+        let (front, run) = (self.front.upgrade(), run.to_owned());
+        Box::pin(async move {
+            let front = front.ok_or("the hub is stopping")?;
+            let tree = super::fork_wire::trace(front, run, stop, |_: &Path| vec![], vec![], probes)
+                .await?;
+            Ok(tree.hits.clone())
         })
     }
 }

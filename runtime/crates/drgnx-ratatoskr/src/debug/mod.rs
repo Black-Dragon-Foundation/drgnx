@@ -22,6 +22,7 @@ pub mod fork_hub;
 pub mod fork_mux;
 pub mod fork_seal;
 pub mod fork_wire;
+pub mod hot_reload;
 pub mod inline;
 pub mod install;
 pub mod launch;
@@ -1169,6 +1170,14 @@ impl Debug {
             .sessions
             .get(id)
             .and_then(|e| e.stop.clone())
+    }
+
+    /// Session ID's adapter type (`initialize`'s `adapterID`).
+    pub fn adapter_of(&self, id: &str) -> Option<String> {
+        lock(&self.inner.state)
+            .sessions
+            .get(id)
+            .map(|e| e.start.adapter_id.clone())
     }
 
     /// The handle of session ID, for the views' requests (variables, evaluate …).

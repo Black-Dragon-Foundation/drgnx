@@ -79,7 +79,11 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   syscall from `/proc`. `DRGNX_RATATOSKR_STALL_MS` sets the threshold; without it the watchdog runs at 250 ms in a
   `test-hooks` build (conformance, the perf and UI runs) and is off in the installed hub, whose idle wakeups it would
   multiply; it is always off on the virtual clock. `DRGNX_RATATOSKR_STALL_FILE` also appends each report to that
-  file. The
+  file. A file read or written on a task's path never runs on a worker, since a slow disk (or a stderr nobody reads)
+  would hold it: a session's files are written in order by `disk::Ordered` on the blocking pool (a failed write is
+  logged), a resume reads the session's meta, transcript, queue and wheel there, a folder an agent works in is looked
+  at there, an MCP session's owner is looked up in `/proc` and its sockets and directory removed there, and stderr's warnings go through a queue of their own that drops lines when full and says how many. The
+  tests make the file a FIFO nobody reads (`attach_tests.rs`, `log_tests.rs`). The
   cargo feature `test-hooks` (off in the binary install.sh builds) holds the test-only surfaces: the `__test_flood`
   method, `__test_matrix_ask {action, who, session?, plan?, facts?}` (the matrix gate asked as the hub's own callers
   ask it, answered `{gate, card?, why?}`: the browser card rows raise their cards with it), `--idle-tick-ms N` (the
@@ -1410,12 +1414,15 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/fork` | user | `{anyway?: boolean, at: {hit?: natnum, line?: natnum, path?: string, stop?: natnum}, change?: {code?: boolean, value?: {path: [string], text: string}}, confirm?: boolean, inputs?: [{id: string, value: string}], run: string, until?: DebugForkUntil}` | `{ask?: string, fork?: string, needs?: any}` | no |
 | `debug/fork/drop` | user | `{fork: string}` | `boolean` | no |
 | `debug/fork/run` | user | `{fork: string}` | `boolean` | no |
+| `debug/hot-reload` | user | `{path: string, session: string}` | `{patched: [string], restarted: boolean, skipped: [HotReloadSkip]}` | no |
 | `debug/install` | user | `{adapter: string, adapters?: [JsonObject]}` | `string` | no |
 | `debug/origin` | user | `{depth?: natnum, expr: string, run: string, stop: natnum}` | `{origin: string}` | no |
 | `debug/probe/op` | user | `{op?: {enabled?: boolean, expr?: string, id?: string, language?: string, line?: natnum, op: string, path?: string, text?: string}, root: string}` | `{added?: string, path?: string, probes: [any], root: string}` | no |
 | `debug/read-memory` | user | `{count: natnum, offset?: integer, reference: string, session: string}` | `{address: string, data: string, unreadable?: natnum}` | no |
 | `debug/run-to-cursor` | user | `{line: natnum, path: string, session: string}` | `boolean` | no |
+| `debug/run/export` | user | `{path: string, run: string}` | `{bytes: natnum, code: string, path: string}` | no |
 | `debug/run/get` | user | `{count?: natnum, current?: natnum, from?: natnum, run: string}` | `DebugRunView` | no |
+| `debug/run/import` | user | `{code: string, path: string, root: string}` | `{run: string}` | no |
 | `debug/run/pin` | user | `{pinned: boolean, run: string}` | `boolean` | no |
 | `debug/run/stop` | user | `{file?: string, run: string, stop: natnum}` | `{capture: any, run: string, snapshot?: string, source: any, stop: any}` | no |
 | `debug/runs/list` | user | `{root: string}` | `{runs: [any]}` | no |

@@ -135,6 +135,38 @@ pub struct DebugRunPin {
     pub pinned: bool,
 }
 
+/// `debug/run/export`: run RUN (ended) sealed into the file PATH (absolute; replaced) under a one-time key, for the user
+/// to send: the file, its size and the share code that opens it. The code is shown once and never stored.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugRunExport {
+    pub run: String,
+    pub path: String,
+}
+
+/// What `debug/run/export` made.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugRunExported {
+    pub path: String,
+    /// 52 letters and digits in groups of four: the only way to open the file.
+    pub code: String,
+    pub bytes: u64,
+}
+
+/// `debug/run/import`: the run someone sent (the file PATH, opened with CODE) added to project ROOT's runs, read-only
+/// (never run here: no forks); its paths are moved under ROOT.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugRunImport {
+    pub root: String,
+    pub path: String,
+    pub code: String,
+}
+
+/// The run `debug/run/import` added.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugRunImported {
+    pub run: String,
+}
+
 fn check_text(path: &str, s: &str) -> Result<(), Error> {
     if s.is_empty() || s.len() > TEXT_MAX {
         return Err(invalid(path, "a non-empty text of at most 4096 bytes"));
@@ -215,6 +247,20 @@ fn check_pin(p: &DebugRunPin) -> Result<(), Error> {
     check_run(&p.run)
 }
 
+fn check_export(p: &DebugRunExport) -> Result<(), Error> {
+    check_run(&p.run)?;
+    check_abs("path", &p.path)
+}
+
+fn check_import(p: &DebugRunImport) -> Result<(), Error> {
+    check_abs("root", &p.root)?;
+    check_abs("path", &p.path)?;
+    if p.code.is_empty() || p.code.len() > 128 {
+        return Err(invalid("code", "a share code"));
+    }
+    Ok(())
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -224,10 +270,22 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_probe_op,
         ),
         method!(
+            "debug/run/export", DebugRunExport(DebugRunExport) -> DebugRunExported,
+            classes: [User], writes: false,
+            doc: "send a recorded run: it and the files that ran, sealed into one file under a one-time key; the answer's share code opens it and is shown once, never stored (the hub sends nothing)",
+            check: check_export,
+        ),
+        method!(
             "debug/run/get", DebugRunGet(DebugRunGet) -> DebugRunView,
             classes: [User], writes: false,
             doc: "a recorded run for the stop timeline: a page of its stops and each probe's values over them",
             check: check_get,
+        ),
+        method!(
+            "debug/run/import", DebugRunImport(DebugRunImport) -> DebugRunImported,
+            classes: [User], writes: false,
+            doc: "add a run someone sent (its file and share code) to a project's runs: read-only, its stops readable, its program never run here",
+            check: check_import,
         ),
         method!(
             "debug/run/pin", DebugRunPin(DebugRunPin) -> bool,
@@ -263,6 +321,8 @@ mod tests {
             "debug/run/get",
             "debug/run/stop",
             "debug/run/pin",
+            "debug/run/export",
+            "debug/run/import",
         ] {
             let m = registry::find(name).unwrap_or_else(|| panic!("{name} is not registered"));
             assert!(m.allows(Class::User), "{name}");

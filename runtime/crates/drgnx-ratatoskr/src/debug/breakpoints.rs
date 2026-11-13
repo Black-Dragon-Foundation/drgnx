@@ -2,8 +2,8 @@
 //!
 //! The editors change it by operations on a breakpoint's id (`Op`), so two editors toggling one file never undo each
 //! other: adding a line that already has a breakpoint gives that one, and removing or editing one that is gone is no
-//! change. Each file has a version that goes up on every change. A breakpoint's line is the saved line: the editor
-//! keeps a moved line as a draft and sends `Op::Move` on save.
+//! change. Each file has a version that goes up on every change to its view, the adapters' answers included. A
+//! breakpoint's line is the saved line: the editor keeps a moved line as a draft and sends `Op::Move` on save.
 //!
 //! Each session's adapter answers `setBreakpoints` with its own `Breakpoint`s; the store keeps what each session made
 //! of each breakpoint (its adapter id, verified, message, line) and shows a breakpoint verified when any session
@@ -427,6 +427,16 @@ impl Store {
         })
     }
 
+    /// What [`Store::view`] returns for PATH changed without an operation (an adapter's answer or event, a session's
+    /// stop or end): its version goes up, so a view taken before (the `debug/breakpoints` answer and the
+    /// `debug-breakpoints` event travel on different connections) is passed over by the editor, never shown after it.
+    fn touch(&mut self, path: &str) {
+        if let Some(f) = self.data.files.get_mut(path) {
+            f.version += 1;
+            self.save();
+        }
+    }
+
     fn bump(&mut self, path: &str, id: Option<u64>) -> Option<Change> {
         let f = self.data.files.entry(path.to_owned()).or_default();
         f.version += 1;
@@ -606,6 +616,9 @@ impl Store {
                     paths.insert(p.clone());
                 }
             }
+        }
+        for p in &paths {
+            self.touch(p);
         }
         paths.into_iter().collect()
     }
@@ -882,10 +895,14 @@ impl Store {
         }
         rows.sort_by_key(|r| (r.0, r.1));
         let out = rows.iter().map(|r| source_bp(r.0, r.2)).collect();
-        self.sent.insert(
-            (session.to_owned(), path.to_owned()),
-            rows.iter().map(|r| r.1).collect(),
-        );
+        let ids: Vec<u64> = rows.iter().map(|r| r.1).collect();
+        if self
+            .sent
+            .insert((session.to_owned(), path.to_owned()), ids.clone())
+            != Some(ids)
+        {
+            self.touch(path);
+        }
         out
     }
 
@@ -920,6 +937,7 @@ impl Store {
         for (id, b) in ids.into_iter().zip(bps) {
             self.take(session, id, b);
         }
+        self.touch(path);
     }
 
     /// SESSION's `breakpoint` event (BODY); the path of the breakpoint it changed.
@@ -936,7 +954,9 @@ impl Store {
         } else {
             self.take(session, id, b);
         }
-        self.find(id).map(|(p, _)| p)
+        let path = self.find(id).map(|(p, _)| p)?;
+        self.touch(&path);
+        Some(path)
     }
 
     /// Run to Cursor: a breakpoint on PATH's LINE for SESSION alone; the path to send again.
@@ -968,6 +988,27 @@ impl Store {
 
     /// SESSION ended: what it made of the breakpoints goes; the paths whose Run to Cursor it held.
     pub fn ended(&mut self, session: &str) -> Vec<String> {
+        // the files whose view it was in: what it verified, sent and armed
+        let mut seen: BTreeSet<String> = self
+            .sent
+            .keys()
+            .filter(|(s, _)| s == session)
+            .map(|(_, p)| p.clone())
+            .collect();
+        let ids: Vec<u64> = self
+            .bound
+            .keys()
+            .chain(self.armed.iter())
+            .filter(|(s, _)| s == session)
+            .map(|(_, id)| *id)
+            .collect();
+        seen.extend(
+            ids.into_iter()
+                .filter_map(|id| self.find(id).map(|(p, _)| p)),
+        );
+        for p in &seen {
+            self.touch(p);
+        }
         self.bound.retain(|(s, _), _| s != session);
         self.sent.retain(|(s, _), _| s != session);
         self.caps.remove(session);

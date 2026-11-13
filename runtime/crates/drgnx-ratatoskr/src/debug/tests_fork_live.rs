@@ -180,6 +180,7 @@ fn fixture_at(
             expr: "shortfall".into(),
         }],
         hits,
+        imported: false,
     };
     let path_env = std::env::var("PATH").unwrap();
     let env = runstav::paths::Env::new(
@@ -391,6 +392,7 @@ async fn a_python_trace_sees_its_injected_env_and_file() {
             f.resolved.clone(),
             |tree: &Path| vec![("TRACE_AT".into(), tree.display().to_string())],
             vec![("in/given.txt".into(), b"origin-17".to_vec())],
+            vec![],
         )
         .await
         .unwrap();
@@ -437,9 +439,25 @@ impl super::origin::Replay for Traces {
                     resolved,
                     move |tree: &Path| super::origin::trace_env(tree, &watch),
                     super::origin::trace_files(),
+                    vec![],
                 )
                 .await?;
             super::origin::read_trace(&t.path, &root)
+        })
+    }
+
+    fn probe(
+        &self,
+        run: &str,
+        stop: u64,
+        probes: Vec<super::record::RunProbe>,
+    ) -> BoxFut<'static, Result<Vec<super::record::RunHit>, String>> {
+        let (forks, resolved, run) = (self.forks.clone(), self.resolved.clone(), run.to_owned());
+        Box::pin(async move {
+            let t = forks
+                .trace(&run, stop, resolved, |_: &Path| vec![], vec![], probes)
+                .await?;
+            Ok(t.hits.clone())
         })
     }
 }
@@ -489,6 +507,53 @@ async fn a_python_trail_is_traced_in_sealed_replays() {
         t.links
     );
     assert!(t.note.is_none());
+}
+
+#[tokio::test]
+#[ignore = "live: the adapter image with bwrap"]
+async fn a_js_trail_is_traced_by_logpoints_in_sealed_replays() {
+    // the JS origin fixture, stopped at its first pass of `return shortfall` (line 17)
+    let text = include_str!("../../tests/fixtures/origin/stock.js");
+    let f = fixture_at(
+        "stock.js",
+        text,
+        js_config,
+        (16, 17, 22),
+        |_| "16".into(),
+        (1, 1),
+    );
+    let r = Traces {
+        forks: f.forks.clone(),
+        resolved: f.resolved.clone(),
+        root: f.root.clone(),
+    };
+    let file = f.root.join("stock.js").display().to_string();
+    let sources = || vec![(file.clone(), text.to_owned())];
+    let t = super::origin::trail(&r, "r1", AT, "shortfall", 3, sources, |_| {}).await;
+    assert!(t.is_ok(), "{t:?}");
+    let t = t.unwrap();
+    let got: Vec<(u32, &str, Option<&str>, u32)> = t
+        .links
+        .iter()
+        .map(|l| (l.level, l.target.as_str(), l.value.as_deref(), l.line))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (1, "shortfall", Some("16"), 16),
+            (2, "this.min", Some("10"), 4),
+            (2, "this.qty", Some("2"), 3),
+            (2, "item.reserve", Some("8"), 11),
+        ],
+        "{:#?}",
+        t.links
+    );
+    assert!(
+        t.links.iter().all(|l| l.path == file && l.traced),
+        "{:#?}",
+        t.links
+    );
+    assert_eq!(t.note.as_deref(), Some(super::origin::PROBED));
 }
 
 #[tokio::test]
@@ -810,7 +875,14 @@ async fn debug_fork_start() {
         let t0 = crate::clock::now();
         let g = f
             .forks
-            .trace("r1", AT, f.resolved.clone(), |_: &Path| vec![], vec![])
+            .trace(
+                "r1",
+                AT,
+                f.resolved.clone(),
+                |_: &Path| vec![],
+                vec![],
+                vec![],
+            )
             .await
             .unwrap();
         took.push(t0.elapsed());

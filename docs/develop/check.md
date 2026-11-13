@@ -128,7 +128,8 @@ skips is not a pass nobody sees.
 
 - **`DRGNX_TEST_NO_TIMING=1`** leaves out the tests tagged `:timing` (they assert wall-clock bounds: a hung child
   given up on, a lock waited for, a cost in milliseconds) and lists them as skipped, reason `wall clock: not run in
-  CI`. A shared runner is not a place to judge them; `bin/drgnx check` runs them alone (job 3 above). The tests that
+  CI` (a selector naming a test no file defines lists none, and the run fails with "matched 0 tests"). A shared
+  runner is not a place to judge them; `bin/drgnx check` runs them alone (job 3 above). The tests that
   bound a child or a lock *outside* drgnx (a real hung `git`, a lock held by another process) keep a generous wall
   bound and carry the tag; a give-up that is a `drgnx-timer-*` timer is tested on virtual time instead
   (`drgnx-test-with-clock`) and needs no tag.
