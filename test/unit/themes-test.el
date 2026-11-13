@@ -270,13 +270,19 @@ dropped on purpose (`drgnx-themes-test--dropped-on-purpose')."
 (provide 'themes-test)
 ;; Look step 7: the problems at a line's end are chips (window-dark.html `.diag')
 (ert-deftest drgnx-themes/end-of-line-diagnostics-are-chips ()
-  "A diagnostic shown at the line's end is a chip in its kind's colour on its tint, in the caption role."
+  "A diagnostic shown at the line's end is a chip in its kind's colour on its tint, in the caption role: Emacs's own
+Flymake's faces and Flymake 1.4's (ELPA, what drgnx installs: `flymake-error-inline' …), declared here as 1.4 does."
   (require 'flymake)
+  (dolist (f '(flymake-error-inline flymake-warning-inline flymake-note-inline))
+    (unless (facep f) (custom-declare-face f '((t)) "Flymake 1.4's face, for the test.")))
   (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
     (drgnx-themes-test--with theme
       (pcase-dolist (`(,face ,fg ,bg) '((flymake-error-echo-at-eol error error-tint)
                                         (flymake-warning-echo-at-eol warn warn-tint)
-                                        (flymake-note-echo-at-eol info info-tint)))
+                                        (flymake-note-echo-at-eol info info-tint)
+                                        (flymake-error-inline error error-tint)
+                                        (flymake-warning-inline warn warn-tint)
+                                        (flymake-note-inline info info-tint)))
         (unless (eq variant 'hc)
           (should (equal (list face (drgnx-look-token fg variant) (drgnx-look-token bg variant))
                          (list face (drgnx-face-color face :foreground 'gui)
@@ -315,7 +321,8 @@ its row taller) and nothing asks for the key."
   (cl-letf (((symbol-function 'featurep) (let ((real (symbol-function 'featurep)))
                                            (lambda (f &optional sub) (or (eq f 'glitnir) (funcall real f sub))))))
     (dolist (fit '(t nil))
-      (let ((drgnx-theme--box-fit fit))
+      ;; boxes that take no pad (the pad's own test is the next one): the probe would ask this Emacs
+      (let ((drgnx-theme--box-fit fit) (drgnx-theme--box-fit-pad nil))
         (dolist (variant '(dark light hc))
           (let* ((specs (drgnx-theme--specs variant))
                  (box (lambda (face) (plist-get (cdar (cadr (assq face specs))) :box))))

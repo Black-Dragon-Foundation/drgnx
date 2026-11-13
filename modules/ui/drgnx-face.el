@@ -17,6 +17,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-face-state)
 (require 'drgnx-ui-kit)                     ; the glyph table and `drgnx-face-glyph' live in core
+(require 'drgnx-icons)                      ; `drgnx-look-icon', `drgnx-px'
 (require 'drgnx-frame-kind)
 (require 'drgnx-large-file)
 (defvar scroll-bar-mode)
@@ -455,6 +456,27 @@ the current line across the full width.  On `after-change-major-mode-hook'."
              (setq drgnx-face--flymake-waiting nil)
              (when (drgnx-face--flymake-ready-p) (drgnx-face--apply-inline-problems)))))))
 
+(declare-function flymake-diagnostic-type "flymake")
+(declare-function flymake--severity "flymake")
+(declare-function flymake--lookup-type-property "flymake")
+
+(defun drgnx-face--eol-icon (format diag destination face-prop)
+  "Flymake's text for DIAG at DESTINATION by FORMAT, its own function: at a line's end (`:eol', Flymake 1.4's
+`:inline-…') a chip as window-dark.html's `.diag', opening with its kind's icon (`circle-x' for an error,
+`triangle-alert' for a warning, `info' for a note) in the chip's face, then a 5 px gap; elsewhere as Flymake makes it."
+  (let ((text (funcall format diag destination face-prop)))
+    (if (not (and face-prop (memq destination '(:eol :inline-eol :inline-short :inline-fancy))))
+        text
+      (let* ((type (flymake-diagnostic-type diag))
+             (severity (flymake--severity type))
+             (face (flymake--lookup-type-property type face-prop 'flymake-error)))
+        (concat (drgnx-look-icon (cond ((>= severity (flymake--severity :error)) 'circle-x)
+                                       ((>= severity (flymake--severity :warning)) 'triangle-alert)
+                                       (t 'info))
+                                 face 14)
+                (propertize " " 'face face 'display `(space :width (,(drgnx-px 5))))
+                text)))))
+
 (defvar drgnx-face--line-spacing-saved nil
   "(VALUE) the default `line-spacing' this module replaced, to give back when the setting returns to nil.")
 
@@ -575,6 +597,8 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
                         :command #'drgnx-face-preferences
                         :doc "How drgnx looks: the frame, status bar, top line, quick help, start page (Customize)")
   (drgnx-module-define-key 'global-map [remap menu-bar-open] #'drgnx-face-menu)   ; F10: the menu as text while the bar is hidden
+  ;; window-dark.html `.diag': a problem at a line's end opens with its icon
+  (advice-add 'flymake--format-diagnostic :around #'drgnx-face--eol-icon)
   (drgnx-close-setup)                   ; Esc and q close panes (drgnx-close.el)
   (drgnx-statusbar-setup)               ; the status bar (drgnx-statusbar.el)
   (drgnx-quickhelp-setup)               ; quick help (drgnx-quickhelp.el)

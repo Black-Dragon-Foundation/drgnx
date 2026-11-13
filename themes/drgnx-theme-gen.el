@@ -374,9 +374,11 @@ above and below, the face's background between (Nidhogg's compositor).  Asked on
          (flymake-note-echo :foreground ,(c 'info))
          (flymake-end-of-line-diagnostics-face :foreground ,(c 'subtle))
          ;; a problem at the line's end is a chip of its kind (window-dark.html `.diag'): text-high, never growing
-         ;; the line; high contrast rings it instead of the tint
+         ;; the line; high contrast rings it instead of the tint.  Emacs's own Flymake's faces and Flymake 1.4's (ELPA,
+         ;; what drgnx installs), whose old names are only aliases
          ,@(cl-loop for (face . kind) in '((flymake-error-echo-at-eol . error) (flymake-warning-echo-at-eol . warn)
-                                           (flymake-note-echo-at-eol . info))
+                                           (flymake-note-echo-at-eol . info) (flymake-error-inline . error)
+                                           (flymake-warning-inline . warn) (flymake-note-inline . info))
                     collect `(,face :inherit drgnx-ui-caption :foreground ,(c kind)
                                     ,@(if hc '(:box (:line-width (-1 . -1)))
                                         `(:background ,(c (intern (format "%s-tint" kind)))
