@@ -2155,11 +2155,32 @@ async fn launch(
     sid: &str,
     cwd: &Path,
     attach: &Attach,
+    plan: (Option<&str>, Option<&str>, &[(String, String)]),
+) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
+    // the session's MCP session is opened first (below); a launch that fails after that, at any step, closes the one
+    // it opened: its socket and dir go with it, not only when `prepare` fails
+    let opened = front.mcp.socket_of(sid).is_none();
+    let out = launch_steps(front, profile, role, sid, cwd, attach, plan, opened).await;
+    if out.is_err() && opened {
+        let _ = front.mcp.close(sid).await;
+    }
+    out
+}
+
+/// [`launch`]'s steps; OPENED: this launch opens the session's MCP session.
+#[allow(clippy::too_many_arguments)]
+async fn launch_steps(
+    front: &Front,
+    profile: &AgentProfile,
+    role: Role,
+    sid: &str,
+    cwd: &Path,
+    attach: &Attach,
     (task, job, module_env): (Option<&str>, Option<&str>, &[(String, String)]),
+    opened: bool,
 ) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
     // the session's MCP session first: a sandboxed gateway profile's token is registered on its gateway.sock, which
-    // needs it.  A launch refused before the spawn closes the one it opened (its socket and dir go with it)
-    let opened = front.mcp.socket_of(sid).is_none();
+    // needs it
     // a Codex session whose hooks subscribe to a kind: its socket serves `before_tool`, which its lock's managed hook
     // calls
     if opened && profile.provider() == Some(crate::settings::profiles::Provider::Codex) {
@@ -2179,12 +2200,7 @@ async fn launch(
     let mcp = bridge(front, profile, who_of(role, profile), sid, cwd, task, job).await;
     let prep = match prepare(front, profile, role, sid, cwd, job, module_env).await {
         Ok(p) => p,
-        Err(e) => {
-            if opened && !mcp.is_empty() {
-                let _ = front.mcp.close(sid).await;
-            }
-            return Err(e);
-        }
+        Err(e) => return Err(e),
     };
     // the provider proxy the spec's relay reaches, bound before the spawn; a start that fails below drops it, and its
     // socket with it.  So are the browser's web proxy and CDP broker, for a session with the browser
