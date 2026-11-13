@@ -40,7 +40,8 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | debug-edges-scroll | debug-gutter-baseline's file and keys with 200 edges in the window's `glitnir-edges` (Nidhogg's edges: one every 50 lines, three lines down with two bends and an arrow; its check needs Nidhogg's `glitnir--edges`) | input latency; p50 at most the larger of 5 % and 0.3 ms over debug-gutter-baseline in the same run |
 | debug-breakpoint-click | F9 then `<down>`, 20 times: each a `debug/breakpoints` add answered at once and the column redrawn | input latency |
 | debug-step-line | the 12k-line fixture, then F10 120 times: each one `debug-frame` (a step's stop, sent to the starting editor) for the next line, the arrow and band moved, point placed, the window scrolled only when the line left it | input latency; within 16 ms p95 (spec §5) |
-| debug-inline | the 12k-line fixture stopped at line 200, then F10 120 times: each one `debug-inline` as the hub sends it for a step (twelve lines' values, two changed), the lines that keep values updated in place, the next added, the oldest gone | input latency; within 2 ms p95 (spec §8, §12) |
+| debug-inline | the 12k-line fixture with five breakpoints (three on the lines shown), the column and the overview ruler on, stopped at line 200, then F10 120 times: each one `debug-inline` as the hub sends it for a step (twelve lines' values, two changed), the lines that keep values updated in place, the next added, the oldest gone | input latency; within 2 ms p95 (spec §8, §12) |
+| debug-inline-heavy | debug-inline in the fixture with 200 breakpoints (one every 60 lines): the column's hover pool and the ruler's 200 marks drawn again with each step | input latency; within 4 ms p95 |
 | debug-toolbar-show | F8 120 times, alternating a `debug-state` with one stopped session and one with none: the toolbar's card shown and hidden (made once, then reused), the status bar's segment and the Paused chip with it | input latency; within 5 ms p95 (spec §12) |
 | debug-step-variables | the Run and Debug view (no hub: the hub's model and rows from the workload) with 300 variables and a 10,000-element list in 100 chunks, then F10 120 times: each a step's model diff and rows patch, ten values changed, drawn | input latency; within 30 ms p95 with the hub's half, the bench `debug_view` (spec §7) |
 | debug-expand-chunks | the view on a hub (`$DRGNX_RATATOSKR_BIN`, a test-hooks build) whose mock adapter (`ratatoskr debug-mock`) is stopped with 300 variables and a 10,000-element list, open on its 100 chunks; F8 100 times: the next chunk opened from its row (`debug/expand`, the adapter's page, the hub's rows), drawn in the key's command | input latency; within 15 ms p95 (spec §7) |
@@ -245,6 +246,13 @@ the desktop's perf island, p50 of 60 keys, two runs):
 - Against its own baseline (three pinned runs): debug-ruler-baseline 4.4, 4.4, 4.4 ms and debug-ruler-scroll 4.7, 4.5,
   4.6 ms, so the ruler adds 0.1–0.3 ms, inside the rule. Nidhogg's `nhwl_ruler_add` lays the band and one bar a mark
   at each publish; it is left as it is.
+
+## The debug rows' breakpoints
+
+Every row of the debug setup (`drgnx-perf-run--debug-setup-form`) starts with an empty breakpoint store, and a row that
+needs breakpoints sets its own in `:each`. The store used to carry over from one row to the next, so debug-inline drew
+whatever the row before it left: 1.8–1.9 ms p95 when it ran first in a session, 2.2–2.4 ms after the ruler rows (their
+200 breakpoints, the column and the ruler), while a step that changes nothing read 1.3 ms either way (2026-11-13).
 
 ## Budgets
 
