@@ -1,0 +1,45 @@
+# Weekly and on demand: does Codex's upstream Seatbelt base profile still equal gleipnir's base.sbpl? The file is
+# public and read over HTTPS: no secret. A difference fails the run and, on a scheduled run, opens (or comments on) one
+# issue. docs/develop/ci.md
+name: SBPL upstream
+
+on:
+  schedule:
+    - cron: "17 5 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diff:
+    name: Diff base.sbpl against Codex
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Fetch Codex's file and compare
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/upstream.sbpl" \
+            https://raw.githubusercontent.com/openai/codex/main/codex-rs/sandboxing/src/seatbelt_base_policy.sbpl
+          bash .github/ci/sbpl-upstream.sh runtime/crates/gleipnir/src/sbpl/base.sbpl "$RUNNER_TEMP/upstream.sbpl"
+
+  # A scheduled run that fails must not sit unseen: one issue, or a comment on the open one. Scheduled runs only.
+  alert:
+    name: Alert on a changed or unreadable upstream
+    needs: diff
+    if: ${{ always() && github.event_name == 'schedule' && needs.diff.result != 'success' && needs.diff.result != 'skipped' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULT: ${{ needs.diff.result }}
+        run: |
+          title="Codex's Seatbelt base profile changed"
+          n=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          body="The weekly diff of gleipnir's base.sbpl against Codex's upstream file ended $RESULT: $RUN. Re-check base.sbpl (docs/develop/gleipnir.md)."
+          if [ -n "$n" ]; then gh issue comment "$n" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"; fi

@@ -8,12 +8,14 @@
 //!
 //! - `manifest`: the types and `read`.
 //! - `reserved`: the names only built-in packs may use.
+//! - `builtin`: the built-in packs' manifests, compiled in.
 //! - `check`: the schema checks, the command rules and the claim rules.
 //! - `highlights`: the `highlights.scm` predicate subset.
 //! - `job`: the pack job's grammar half: fetch, hash, build, load check, query check, stage (Task 2a).
 //! - `translate`: `highlights.scm` into the queries of Emacs's font-lock (the generic mode, Task 3g).
 //! - `dir`: a pack folder, checked (`ratatoskr packs check`).
 
+pub mod builtin;
 pub mod check;
 pub mod dir;
 pub mod highlights;

@@ -156,6 +156,39 @@ pub struct Install {
     pub system: Option<String>,
 }
 
+impl Install {
+    /// The recipe as the hub reads it (`debug/install.rs`): a JSON object with the keys of the `.eld` form, unset ones left out.
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut m = serde_json::Map::new();
+        for (k, v) in [
+            ("url", &self.url),
+            ("sha256", &self.sha256),
+            ("into", &self.into),
+            ("root", &self.root),
+            ("pip", &self.pip),
+            ("hash", &self.hash),
+            ("system", &self.system),
+        ] {
+            if let Some(v) = v {
+                m.insert(k.into(), v.clone().into());
+            }
+        }
+        if !self.platforms.is_empty() {
+            let rows = self.platforms.iter().map(|p| {
+                let mut r = serde_json::Map::new();
+                r.insert("platform".into(), p.platform.clone().into());
+                r.insert("url".into(), p.url.clone().into());
+                if let Some(h) = &p.sha256 {
+                    r.insert("sha256".into(), h.clone().into());
+                }
+                serde_json::Value::Object(r)
+            });
+            m.insert("platforms".into(), rows.collect());
+        }
+        serde_json::Value::Object(m)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Platform {
@@ -206,6 +239,10 @@ pub struct Docs {
     pub line: Option<String>,
     #[serde(default)]
     pub block: Option<String>,
+    /// What documents a top-level definition itself (Rust: its `///` lines); the others take their form's doc.
+    #[serde(default)]
+    pub top: Vec<DocMember>,
+    /// What documents a member of a container.
     #[serde(default)]
     pub members: Vec<DocMember>,
 }

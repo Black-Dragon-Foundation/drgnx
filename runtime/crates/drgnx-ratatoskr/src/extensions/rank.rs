@@ -65,6 +65,7 @@ fn keeps(e: &Entry, f: &w::Filters, ids: Option<&HashSet<&str>>) -> bool {
         && (!f.disabled || row.state == w::State::Off)
         && (!f.builtin || row.kind == w::Kind::Emacs)
         && (!f.plugins || row.kind == w::Kind::Plugin)
+        && (!f.packs || row.kind == w::Kind::Pack)
         && (!f.unsigned || row.signed == w::Signed::UnsignedArchive)
         && f.kind.is_none_or(|k| row.kind == k)
         && f.archive.as_ref().is_none_or(|a| row.source == *a)
@@ -130,6 +131,7 @@ mod tests {
                 latest: None,
                 downloads: (downloads > 0).then_some(downloads),
                 why: Vec::new(),
+                layers: Vec::new(),
             },
             keywords.iter().map(|k| k.to_string()).collect(),
             Detail::default(),

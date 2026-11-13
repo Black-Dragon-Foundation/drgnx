@@ -47,8 +47,10 @@ pub const PROTECTED_FILES: [&str; 2] = [".envrc", "mise.toml"];
 /// The largest Claude settings file read for deny/ask rules, in bytes.
 const SETTINGS_MAX: u64 = 1_048_576;
 
-/// Codex's lock is unproven until the sandboxed launch and the laundering rows pass on it: flip it then.
-const CODEX_LOCK_PROVEN: bool = false;
+/// Codex's lock was unproven until the sandboxed launch and the laundering rows passed on it. They do (2026-11-13, a
+/// `ctr.sh --sandbox` container, full tier, mock agents: `pair/native-edit-blocked-codex`, `pair/proof-codex` and the
+/// four `manager/laundering::*` rows): proven.
+const CODEX_LOCK_PROVEN: bool = true;
 
 /// DeepSeek Harness's lock is unproven until the drgnx ask plugin its overlay inserts ships in the installed `dsh`
 /// (the fork's `@deepseek-ai/dsh-acp-drgnx-ask`, resolvable from its profile), a sandboxed launch row passes on it, and

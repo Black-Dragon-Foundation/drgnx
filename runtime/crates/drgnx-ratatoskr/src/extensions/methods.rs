@@ -140,6 +140,7 @@ impl Hub {
     /// Where the files are; the hub calls this once at start.
     pub fn configure(&self, env: &Env) {
         let _ = self.files.set(Arc::new(RealFiles::new(env)));
+        lock(&self.cache).show_packs(true);
     }
 
     fn files(&self) -> Result<Arc<RealFiles>, Error> {
@@ -313,11 +314,9 @@ impl Hub {
     pub async fn fact(&self, id: &str) -> Option<norn::tools::extensions::ExtensionFact> {
         let index = self.index().await.ok()?;
         let row = &index.entry(id)?.row;
-        matches!(row.kind, w::Kind::Package | w::Kind::Plugin).then(|| {
-            norn::tools::extensions::ExtensionFact {
-                name: row.name.clone(),
-                source: row.source.clone(),
-            }
+        suggestible(row.kind).then(|| norn::tools::extensions::ExtensionFact {
+            name: row.name.clone(),
+            source: row.source.clone(),
         })
     }
 
@@ -330,6 +329,12 @@ impl Hub {
                 .collect(),
         })
     }
+}
+
+/// Whether an agent may suggest a row of KIND: a package or a plugin. A language pack is installed only by the user
+/// (its page, `drgnx packs sync`), so `pack:NAME` is outside what `extensions_suggest` names.
+pub(super) fn suggestible(kind: w::Kind) -> bool {
+    matches!(kind, w::Kind::Package | w::Kind::Plugin)
 }
 
 pub async fn serve(

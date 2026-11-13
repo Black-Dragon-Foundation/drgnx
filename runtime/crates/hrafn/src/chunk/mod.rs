@@ -6,9 +6,11 @@
 
 mod definers;
 mod elisp;
+mod engine;
 mod merge;
 mod outline;
 mod refs;
+mod registry;
 mod text;
 mod ts;
 

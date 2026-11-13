@@ -189,6 +189,16 @@ holds (METHOD . PARAMS) of every call, in order."
       (delete-directory dir t))))
 
 
+(ert-deftest debug-launch/the-default-table-is-the-file-and-the-packs-adapters ()
+  ;; the language adapters moved into their packs: the doctor and the installer still see them
+  (let ((ids (mapcar #'cdr (drgnx-debug-launch-installable))))
+    (dolist (id '("debugpy" "js-debug" "delve" "codelldb")) (should (member id ids))))
+  (require 'drgnx-doctor)
+  (let ((rows (drgnx-doctor--debug-adapters)))
+    (dolist (id '("debugpy" "js-debug" "delve" "lldb-dap" "gdb" "codelldb"))
+      (should (seq-find (lambda (r) (equal (plist-get r :id) id)) rows)))
+    (should-not (seq-find (lambda (r) (equal (plist-get r :id) "cpptools")) rows))))     ; not built in
+
 (defun debug-launch-test--missing-configs (missing)
   "A `debug/configs' answer with one configuration whose adapter is MISSING."
   `(("debug/configs" (:configs [(:id "launch:0" :name "Go" :source "launch" :type "go" :needs_trust :false

@@ -14,4 +14,5 @@
  :servers ((:id "intelephense" :modes (php-ts-mode php-mode) :command ("intelephense" "--stdio") :find (:path "intelephense"))
   (:id "phpactor" :modes (php-ts-mode php-mode) :command ("phpactor" "language-server") :find (:path "phpactor")))
  :format (:config-files (".php-cs-fixer.php"))
+ :adapters ((:id "xdebug" :name "PHP (xdebug)" :types ("php") :not-built-in t))
  :license "GPL-3.0-or-later" :maintainers ("drgnx"))
