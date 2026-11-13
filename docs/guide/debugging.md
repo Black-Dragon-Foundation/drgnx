@@ -149,8 +149,12 @@ runs use a new key.
 **Sending a run.** **Send Run…** writes an ended run, with the files as they were when it started, into one encrypted
 file, after a card reminds you that it holds your program's values unencrypted to whoever opens it. drgnx shows a
 share code once (52 letters and digits): the file opens only with it, and drgnx keeps no copy of it, so note it
-before you close the card. drgnx sends nothing itself: send the file however you like, and the code another way.
-**Open Sent Run…** adds a run someone sent you to your project's runs, encrypted under your own keyring's key, with its
+before you close the card with **I've Noted It** (closing it any other way asks first). The card's text cannot be copied
+with the region commands; **Copy Code** puts the code on the clipboard (never in the kill ring) and clears the
+clipboard 60 seconds later if it still holds the code. drgnx sends nothing itself: send the file (`.drgnx-run`)
+however you like, and the code another way.
+**Open Sent Run…** asks for the file and the code (hidden as you type it, and kept in no history), then adds the run
+someone sent you to your project's runs, encrypted under your own keyring's key, with its
 paths moved to your project. You can read its stops and timeline; it is never run on your machine (no forks), since
 its program and settings are the sender's. It is kept 14 days from when you opened it.
 

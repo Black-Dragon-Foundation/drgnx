@@ -259,6 +259,24 @@ replaces that one's."
 (defvar drgnx-debug-timeline--root-shown nil "The project whose newest run the strip follows.")
 (defvar drgnx-debug-timeline--stops nil "The strip's stops (plists, `debug/run/get''s), in order.")
 (defvar drgnx-debug-timeline--current nil "The stop (its `index') shown in the past stop's buffer, or nil: live.")
+(defvar drgnx-debug-timeline--meta nil "The strip's run's record (`debug/run/get''s `run').")
+
+(defun drgnx-debug-timeline-sent-p (run)
+  "Non-nil when RUN is the strip's run and someone sent it (its record says `imported'): read-only, never forked."
+  (and run (equal run drgnx-debug-timeline--run) (equal (plist-get drgnx-debug-timeline--meta :id) run)
+       (plist-get drgnx-debug-timeline--meta :imported) t))
+
+(defun drgnx-debug-timeline--sent-line ()
+  "The strip's header line for a sent run: the Sent chip, its number where it was recorded, until when it is kept."
+  (let ((imported (plist-get drgnx-debug-timeline--meta :imported)))
+    (concat " " (propertize (format "Run %s" (plist-get drgnx-debug-timeline--meta :n)) 'face 'bold)
+            " " (propertize " Sent " 'face 'drgnx-chip-accent)
+            (propertize (format " run %s where it was recorded · read-only" (plist-get imported :n))
+                        'face 'drgnx-text-muted)
+            (if (numberp (plist-get imported :at))
+                (propertize (format-time-string " · kept until %-d %b" (+ (plist-get imported :at) (* 14 86400)))
+                            'face 'drgnx-text-subtle)
+              ""))))
 
 (declare-function drgnx-debug-origin-click-value "drgnx-debug-origin" (event))
 
@@ -306,7 +324,10 @@ the editor does not know is dropped, never interned."
   "Insert VIEW's strip rows (`debug/run/get''s answer) in the strip's buffer."
   (with-current-buffer (get-buffer-create drgnx-debug-timeline-buffer)
     (unless (derived-mode-p 'drgnx-debug-strip-mode) (drgnx-debug-strip-mode))
-    (setq drgnx-debug-timeline--stops (append (plist-get view :stops) nil))
+    (setq drgnx-debug-timeline--stops (append (plist-get view :stops) nil)
+          drgnx-debug-timeline--meta (plist-get view :run))
+    (setq header-line-format (and (drgnx-debug-timeline-sent-p drgnx-debug-timeline--run)
+                                  (drgnx-debug-timeline--sent-line)))
     (let ((inhibit-read-only t) (at (point)))
       (erase-buffer)
       (seq-doseq (row (plist-get view :strip))
@@ -358,7 +379,9 @@ the editor does not know is dropped, never interned."
 
 (defun drgnx-debug-timeline--banner (n total stop not-what-ran)
   "The header line of stop N of TOTAL (STOP's plist), NOT-WHAT-RAN when the file was unsaved at the launch."
-  (concat (propertize (format " Stop %d of %d · %s · as it ran " n total (plist-get stop :reason))
+  (concat (propertize (if (drgnx-debug-timeline-sent-p drgnx-debug-timeline--run)
+                          (format " Sent run · stop %d of %d · files as they ran · read-only " n total)
+                        (format " Stop %d of %d · %s · as it ran " n total (plist-get stop :reason)))
                       'face 'drgnx-debug-past-banner)
           (and not-what-ran
                (propertize " not what ran: this file was unsaved in the editor at the launch "
@@ -562,7 +585,8 @@ a session was not recorded (`debug-recording-off': the keyring is locked or abse
     (clrhash drgnx-debug-timeline--probes)
     (clrhash drgnx-debug-timeline--values)
     (setq drgnx-debug-timeline--runs nil drgnx-debug-timeline--run nil drgnx-debug-timeline--stops nil
-          drgnx-debug-timeline--current nil drgnx-debug-timeline--root-shown nil drgnx-debug-timeline--off-said nil)))
+          drgnx-debug-timeline--current nil drgnx-debug-timeline--root-shown nil drgnx-debug-timeline--off-said nil
+          drgnx-debug-timeline--meta nil)))
 
 (defconst drgnx-debug-timeline-commands
   '((debug-probe "Add Probe…" drgnx-debug-probe-add "Record an expression each time this line runs, without stopping")

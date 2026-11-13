@@ -1028,6 +1028,7 @@ The commands of modules that need no installed package are in it, the later stag
                               debug-breakpoint-enable debug-run-to-cursor debug-step-over debug-step-in debug-step-out
                               debug-stop debug-timeline-back debug-timeline-forward debug-timeline-open ; recorded runs' maps
                               debug-bisect-act ; the bisect card's RET
+                              debug-share-cancel ; the Send Run card's Esc
                               debug-origin-open ; the origin card's RET
                               debug-restart debug-pause ; the toolbar's
                               debug-view debug-view-next debug-view-previous debug-view-expand debug-view-collapse

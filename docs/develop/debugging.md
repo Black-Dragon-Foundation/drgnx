@@ -890,6 +890,18 @@ keyring key. The run's record has `imported {at, n}`; it is kept 14 days from th
 runs it. Tests: `debug::tests_record_sealed` (sent and opened), `debug::record::share` (codes, paths),
 `debug::tests_fork` (refused).
 
+The editor's half is `modules/extra/drgnx-debug-share.el`. Send Run… shows the card first and calls
+`debug/run/export` only on Write File; the answer's code is held only in the card's state and text
+(`drgnx-debug-share-mode`: undo off, `buffer-auto-save-file-name` and `desktop-save-buffer` nil,
+`filter-buffer-substring-function` gives nothing, the region commands remapped to a refusal), and both are wiped by
+`kill-buffer-hook` as the card closes. Copy Code sets only the CLIPBOARD selection and starts a core-owned timer that
+clears it after 60 s when the selection's sha256 is still the code's. Open Sent Run… reads the code with
+`read-passwd` and calls `debug/run/import`, then shows the strip. The strip keeps its run's record
+(`drgnx-debug-timeline--meta`); `drgnx-debug-timeline-sent-p` reads its `imported`, which draws the strip's Sent
+header line and the past stop's "Sent run" banner, and makes Fork from Here refuse in the editor before it asks
+anything. Tests: `test/unit/debug-share-test.el` (the card before any write, cancel, a refusal, the code left in no
+buffer, history or ring, closing before noting, the clipboard's 60 s, import, no fork of a sent run).
+
 ## What-if forks (spec §19.3)
 
 A fork replays a recorded run in a sealed copy up to a point, changes a value or the code there, and runs on; the
