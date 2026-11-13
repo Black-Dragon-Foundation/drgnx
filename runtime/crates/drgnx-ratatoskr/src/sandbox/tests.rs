@@ -481,7 +481,10 @@ fn the_hub_owned_cli_homes_are_open_inside_the_closed_state_dir_and_nothing_besi
             ctx.open_inside_closed
         );
     }
-    assert!(!ctx.open_inside_closed.contains(&agents), "never the folder above");
+    assert!(
+        !ctx.open_inside_closed.contains(&agents),
+        "never the folder above"
+    );
     assert!(
         !ctx.open_inside_closed.contains(&agents.join("other")),
         "{:?}",
@@ -539,18 +542,38 @@ fn the_locks_config_toml_in_a_hub_home_stays_read_only_inside_the_session() {
         browser: None,
     };
     let scratch = crate::agents::launch::scratch_dir(&env, "S5").unwrap();
-    let built = session_spec(&env, &ctx, &plan, &shape, &scratch, Tier::Full, Target::LinuxBwrap)
-        .unwrap_or_else(|r| panic!("refused: {r}"));
-    let bind = built.spec.binds.iter().find(|b| b.dest == config).expect("bound at its path");
+    let built = session_spec(
+        &env,
+        &ctx,
+        &plan,
+        &shape,
+        &scratch,
+        Tier::Full,
+        Target::LinuxBwrap,
+    )
+    .unwrap_or_else(|r| panic!("refused: {r}"));
+    let bind = built
+        .spec
+        .binds
+        .iter()
+        .find(|b| b.dest == config)
+        .expect("bound at its path");
     assert_eq!(bind.mode, Mode::Ro);
-    assert_eq!(fs::read_to_string(&bind.source).unwrap(), "default_yolo = false\n");
+    assert_eq!(
+        fs::read_to_string(&bind.source).unwrap(),
+        "default_yolo = false\n"
+    );
     // no write grant covers it, and the home's own state folders are the only writes there
     assert!(
         built.spec.write.iter().all(|w| !config.starts_with(w)),
         "{:?}",
         built.spec.write
     );
-    assert!(built.spec.write.contains(&home.join("sessions")), "{:?}", built.spec.write);
+    assert!(
+        built.spec.write.contains(&home.join("sessions")),
+        "{:?}",
+        built.spec.write
+    );
     // the spec as built validates (it was refused as "inside a closed directory")
     validate(built.spec, &ctx, Target::LinuxBwrap).unwrap_or_else(|r| panic!("refused: {r}"));
 }

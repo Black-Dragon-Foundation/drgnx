@@ -396,6 +396,8 @@ The argv, in this order (`argv_golden_shared` and `argv_golden_isolated` pin it)
 --unshare-all --unshare-user [--share-net] --disable-userns --die-with-parent --new-session --clearenv
 --ro-bind /usr /usr
 --ro-bind-try /etc /etc  (and /opt /nix /gnu /var/lib/flatpak)
+--tmpfs /etc  then, per top-level host entry: --ro-bind /etc/X /etc/X, or --symlink TARGET /etc/X for a link
+                  (instead of the line above, for a root a bind lands under at a path the host lacks)
 --symlink usr/bin /bin   (where the host's /bin is a link; else --ro-bind-try /bin /bin; also lib lib64 sbin)
 --dev /dev --proc /proc --tmpfs /tmp --tmpfs /run --tmpfs /var/tmp
 --ro-bind-try RESOLVER RESOLVER                  where /etc/resolv.conf leads under /run
@@ -407,6 +409,18 @@ The argv, in this order (`argv_golden_shared` and `argv_golden_isolated` pin it)
 --ro-bind-fd N /run/gleipnir/helper              the helper, last
 --chdir DIR -- /run/gleipnir/helper INNER-ARGS --spec-fd 3 -- COMMAND…
 ```
+
+**A private system root.** A bind under a system-read root (`/etc`, `/opt`, …) at a path the host does not have, such as
+Codex's lock file `/etc/codex/requirements.toml`, cannot be made inside a read-only bind of the host's directory
+(bwrap: "Can't mkdir parents … Read-only file system"), and the host is never written. For such a root only,
+`open_sources` lists the host's top-level entries (`private_roots`): the argv makes the root an empty tmpfs and puts
+each entry back, a link as the same link with the same target (never followed), a file or directory as a read-only
+bind of its own path. An entry that holds a missing bind path (the host's `/etc/codex`) is left out, so what the session
+binds there is all it sees. An entry that is not a file, directory or link, or a listing that cannot be read, refuses
+the launch with the entry's name: there is no partial root. Binds to paths that exist, and every spec without a bind
+under a system root, keep the plain read-only bind (the golden argvs are unchanged). Landlock still handles writes
+everywhere and grants none under `/etc`, so the tmpfs cannot be written from inside
+(`a_read_only_bind_under_etc_is_never_a_write_root`).
 
 Why each part:
 

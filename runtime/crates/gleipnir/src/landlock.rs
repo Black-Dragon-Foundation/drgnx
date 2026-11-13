@@ -969,6 +969,45 @@ mod tests {
         assert!(d.tcp_connect_ports.is_empty() && d.tcp_bind_ports.is_empty());
     }
 
+    /// A read-only bind under `/etc` (Codex's lock file, with `/etc` a private tmpfs for it) never makes `/etc`
+    /// writable: no write root covers it, so Landlock, which handles writes everywhere, refuses them there.
+    #[test]
+    fn a_read_only_bind_under_etc_is_never_a_write_root() {
+        let mut s = fixture(Net::Shared);
+        s.binds.push(bind(
+            Mode::Ro,
+            "/scratch/S1/lock/0-requirements.toml",
+            "/etc/codex/requirements.toml",
+        ));
+        let p = plan(s, Target::LinuxBwrap, Tier::Full);
+        assert!(
+            p.write_roots
+                .iter()
+                .all(|w| !w.starts_with("/etc") && !Path::new("/etc").starts_with(w)),
+            "{:?}",
+            p.write_roots
+        );
+        assert_eq!(p.read_roots, paths(&["/"]));
+        // and in the rule set per ABI: the rules at or above `/etc` give no write, remove or create right
+        let d = rules_for_abi(&p, 6);
+        for r in d
+            .path_rules
+            .iter()
+            .filter(|r| r.path.starts_with("/etc") || Path::new("/etc").starts_with(&r.path))
+        {
+            assert!(
+                r.allow
+                    .iter()
+                    .all(|a| matches!(a, FsRight::Execute | FsRight::ReadFile | FsRight::ReadDir)),
+                "{r:?}"
+            );
+        }
+        assert!(
+            d.handled_fs.contains(&FsRight::WriteFile),
+            "writes are handled, so denied unless allowed"
+        );
+    }
+
     #[test]
     fn full_roots_are_the_inside_paths() {
         let mut s = fixture(Net::Shared);
